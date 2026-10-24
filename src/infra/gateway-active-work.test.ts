@@ -4,22 +4,26 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { GatewaySuspendPrepareResultSchema } from "../../packages/gateway-protocol/src/index.js";
 import type { EmbeddedAgentQueueHandle } from "../agents/embedded-agent-runner/run-state.js";
 import {
-  clearActiveEmbeddedRun,
-  setActiveEmbeddedRun,
-} from "../agents/embedded-agent-runner/runs.js";
-import {
-  clearCommandLane,
-  enqueueCommandInLane,
-  setCommandLaneConcurrency,
-} from "../process/command-queue.js";
+  clearTestEmbeddedRun as clearActiveEmbeddedRun,
+  createEmbeddedRunHandle,
+  registerTestEmbeddedRun as setActiveEmbeddedRun,
+} from "../agents/embedded-agent-runner/runs.test-support.js";
+import { createQueueTestRun } from "../auto-reply/reply/queue.test-helpers.js";
+import { scheduleFollowupDrain } from "../auto-reply/reply/queue/drain.js";
+import { enqueueFollowupRun } from "../auto-reply/reply/queue/enqueue.js";
+import { clearFollowupQueue } from "../auto-reply/reply/queue/state.js";
+import { isFollowupRunAborted, type FollowupRun } from "../auto-reply/reply/queue/types.js";
+import { enqueueCommandInLane, setCommandLaneConcurrency } from "../process/command-queue.js";
 import {
   resetGatewayWorkAdmission,
   tryBeginGatewayRootWorkAdmission,
 } from "../process/gateway-work-admission.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import {
   createGatewayActiveWorkSnapshot,
   waitForGatewayActiveWork,
 } from "./gateway-active-work.js";
+import { inspectors } from "./gateway-suspend-coordinator.test-support.js";
 import { beginLifecycleWriteCustody } from "./lifecycle-write-custody.js";
 
 const activeRuns = new Map<string, EmbeddedAgentQueueHandle>();
@@ -66,6 +70,72 @@ describe("waitForGatewayActiveWork", () => {
     },
   );
 
+  it.each(["complete", "cancel"] as const)(
+    "reports debounced followup work until its source can %s",
+    async (outcome) => {
+      vi.useFakeTimers();
+      const key = `gateway-active-work-debounce-${outcome}`;
+      const run = createQueueTestRun({ prompt: "queued work", messageId: key });
+      run.run.sessionKey = key;
+      const cancellation = new AbortController();
+      run.abortSignal = cancellation.signal;
+      const started = createDeferredCore();
+      const release = createDeferredCore();
+      const execute = vi.fn(async () => {
+        started.resolve();
+        await release.promise;
+      });
+      const notifyCancellation = vi.fn();
+      const runFollowup = async (source: FollowupRun) => {
+        if (isFollowupRunAborted(source)) {
+          notifyCancellation();
+          return;
+        }
+        await execute();
+      };
+      const settings = { mode: "followup", debounceMs: 500 } as const;
+      try {
+        expect(enqueueFollowupRun(key, run, settings, "message-id", runFollowup, false)).toBe(true);
+        // Unscheduled backlog is dormant; the scheduled debounce below owns work.
+        expect((await waitForGatewayActiveWork(0)).drained).toBe(true);
+        scheduleFollowupDrain(key, runFollowup);
+        expect((await waitForGatewayActiveWork(0)).drained).toBe(false);
+        expect(execute).not.toHaveBeenCalled();
+
+        if (outcome === "cancel") {
+          cancellation.abort();
+        } else {
+          await vi.advanceTimersByTimeAsync(500);
+          await started.promise;
+          expect((await waitForGatewayActiveWork(0)).drained).toBe(false);
+          release.resolve();
+        }
+        await run.controllerInput!.settlement.promise;
+        await run.controllerInput!.claim?.settlement.promise;
+        await vi.advanceTimersByTimeAsync(0);
+        expect((await waitForGatewayActiveWork(0)).drained).toBe(true);
+        if (outcome === "cancel") {
+          expect(notifyCancellation).toHaveBeenCalledOnce();
+          expect(execute).not.toHaveBeenCalled();
+        } else {
+          expect(notifyCancellation).not.toHaveBeenCalled();
+          expect(execute).toHaveBeenCalledOnce();
+          // Retained dedupe expiry is housekeeping, not runnable work.
+          const duplicate = createQueueTestRun({ prompt: "queued work", messageId: key });
+          duplicate.run.sessionKey = key;
+          expect(enqueueFollowupRun(key, duplicate, settings, "message-id", runFollowup)).toBe(
+            false,
+          );
+          expect((await waitForGatewayActiveWork(0)).drained).toBe(true);
+        }
+      } finally {
+        release.resolve();
+        clearFollowupQueue(key);
+        await run.controllerInput?.settlement.promise;
+      }
+    },
+  );
+
   it.each([
     { agentRuns: 1, acpRuns: 0, mediaRuns: 0, kind: "agent-run" },
     { agentRuns: 0, acpRuns: 1, mediaRuns: 0, kind: "acp-run" },
@@ -73,23 +143,14 @@ describe("waitForGatewayActiveWork", () => {
   ] as const)(
     "reports native $kind ownership alongside background processes",
     ({ agentRuns, acpRuns, mediaRuns, kind }) => {
-      const snapshot = createGatewayActiveWorkSnapshot({
-        getQueueSize: () => 0,
-        getPendingReplies: () => 0,
-        getEmbeddedRuns: () => 0,
-        getBackgroundExecSessions: () => 1,
-        getCronRuns: () => 0,
-        getAgentRuns: () => agentRuns,
-        getAcpRuns: () => acpRuns,
-        getMediaRuns: () => mediaRuns,
-        getRootRequests: () => 0,
-        getSessionAdmissions: () => 0,
-        getSessionMutations: () => 0,
-        getChatRuns: () => 0,
-        getQueuedTurns: () => 0,
-        getTerminalPersistence: () => 0,
-        getTerminalSessions: () => 0,
-      });
+      const snapshot = createGatewayActiveWorkSnapshot(
+        inspectors({
+          getBackgroundExecSessions: () => 1,
+          getAgentRuns: () => agentRuns,
+          getAcpRuns: () => acpRuns,
+          getMediaRuns: () => mediaRuns,
+        }),
+      );
       expect(snapshot.idle).toBe(false);
       expect(snapshot.counts).toMatchObject({
         backgroundExecSessions: 1,
@@ -114,12 +175,7 @@ describe("waitForGatewayActiveWork", () => {
 
   it("returns the final canonical blockers when its deadline expires", async () => {
     const sessionId = "probe-gateway-active-work-timeout";
-    const handle: EmbeddedAgentQueueHandle = {
-      queueMessage: async () => {},
-      isStreaming: () => true,
-      isCompacting: () => false,
-      abort: () => {},
-    };
+    const handle = createEmbeddedRunHandle();
     activeRuns.set(sessionId, handle);
     setActiveEmbeddedRun(sessionId, handle);
 
@@ -155,10 +211,12 @@ describe("waitForGatewayActiveWork", () => {
   });
 
   it("names the command lane holding queued work", async () => {
-    const lane = "session:shutdown-queued-owner";
+    const lane = "shutdown-queued-owner";
+    const cancellation = new AbortController();
+    const reason = new Error("queued owner stopped");
     setCommandLaneConcurrency(lane, 0);
-    const queued = enqueueCommandInLane(lane, async () => {});
-    const rejected = expect(queued).rejects.toThrow("cleared");
+    const queued = enqueueCommandInLane(lane, async () => {}, { abortSignal: cancellation.signal });
+    const rejected = expect(queued).rejects.toBe(reason);
     try {
       const result = await waitForGatewayActiveWork(0);
       expect(result.snapshot.blockers).toContainEqual({
@@ -167,7 +225,7 @@ describe("waitForGatewayActiveWork", () => {
         message: `1 queued or active operation(s): ${lane} (active=0, queued=1)`,
       });
     } finally {
-      clearCommandLane(lane);
+      cancellation.abort(reason);
       await rejected;
     }
   });

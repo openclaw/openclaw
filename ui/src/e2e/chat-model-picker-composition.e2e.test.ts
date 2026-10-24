@@ -1,43 +1,66 @@
+import type { Page } from "playwright";
 import { expect, it } from "vitest";
+import { captureControlUiE2eFailureDiagnostics } from "../test-helpers/control-ui-e2e-diagnostics.ts";
+import { installControlUiE2eRendererStallProbe } from "../test-helpers/control-ui-e2e-renderer-stall.ts";
+import { installMockGateway } from "./chat-flow.test-support.ts";
 import {
-  captureUiProof,
-  createChatFlowE2eSuite,
-  installMockGateway,
-} from "./chat-flow.test-support.ts";
+  polledAttribute,
+  polledCount,
+  polledText,
+  polledVisible,
+} from "./chat-presentation.test-support.ts";
+import { modelAuthStatus, modelPicker } from "./chat-runtime-fixtures.test-support.ts";
+import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
-const suite = createChatFlowE2eSuite();
+const compositionScenario = {
+  agentModel: "openai/gpt-5.5",
+  models: [
+    { id: "gpt-5.5", name: "GPT-5.5", provider: "openai" },
+    { id: "claude-sonnet-4-6", name: "Claude Sonnet 4.6", provider: "anthropic" },
+  ],
+};
+let compositionFixture: {
+  page: Page;
+  gateway: Awaited<ReturnType<typeof installMockGateway>>;
+};
+const suite = createControlUiE2eSuite({
+  name: "Control UI mocked Gateway E2E",
+  unavailableMessage: (executablePath) =>
+    `Playwright Chromium is not installed or cannot start at ${executablePath}. Run \`pnpm --dir ui exec playwright install --with-deps chromium\`, set PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH to a compatible browser, or set OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM=1 only when intentionally skipping this lane.`,
+  resources: {
+    run: async () => {
+      const context = await suite.newBrowserContext({});
+      const page = await context.newPage();
+      await installControlUiE2eRendererStallProbe(page);
+      try {
+        const gateway = await installMockGateway(page, compositionScenario);
+        compositionFixture = { page, gateway };
+        await page.goto(`${suite.server.baseUrl}chat`);
+      } catch (error) {
+        await captureControlUiE2eFailureDiagnostics(page, {
+          error: error instanceof Error ? error : new Error(String(error)),
+          label: "Model search composition setup",
+        });
+        throw error;
+      }
+    },
+  },
+});
+const accountLabel = "Sign in with ChatGPT";
+const catalog = (
+  models: { id: string; name: string; provider: string }[],
+  authProfileId: string,
+) => ({
+  models,
+  accountSelection: { kind: "shared", authProfileId, label: accountLabel },
+});
+const authStatus = (profileId: string, email: string) =>
+  modelAuthStatus([{ profileId, type: "oauth", status: "ok", displayName: accountLabel, email }]);
 
 suite.define(() => {
   it("refreshes the mounted composer's account identity after an auth publication", async () => {
     await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
       const models = [{ id: "shared-alpha", name: "Shared Alpha", provider: "openai" }];
-      const catalog = (authProfileId: string) => ({
-        models,
-        accountSelection: {
-          kind: "shared",
-          authProfileId,
-          label: "Sign in with ChatGPT",
-        },
-      });
-      const authStatus = (profileId: string, email: string) => ({
-        ts: 1,
-        providers: [
-          {
-            provider: "openai",
-            displayName: "OpenAI",
-            status: "ok",
-            profiles: [
-              {
-                profileId,
-                type: "oauth",
-                status: "ok",
-                displayName: "Sign in with ChatGPT",
-                email,
-              },
-            ],
-          },
-        ],
-      });
       const inventory = (authProfileId: string, label: string) => ({
         profileId: "test-person",
         accounts: [
@@ -49,26 +72,25 @@ suite.define(() => {
         agentModel: "openai/shared-alpha",
         models,
         methodResponses: {
-          "models.list": catalog("openai:previous"),
+          "models.list": catalog(models, "openai:previous"),
           "models.authStatus": authStatus("openai:previous", "previous@example.test"),
           "users.listModelAccounts": inventory("openai:old-alternate", "Old alternate"),
         },
       });
       await page.goto(`${suite.server.baseUrl}chat`);
-      const picker = page.locator(".agent-chat__input .chat-controls__model-picker").first();
-      await expect.poll(() => picker.locator("[data-chat-model-provider-toggle]").count()).toBe(1);
-      await picker.locator("[data-chat-model-select]").click();
+      const { picker, trigger, search } = modelPicker(page);
+      await trigger.click();
+      await polledCount(picker.locator("[data-chat-model-provider-toggle]")).toBe(1);
       const account = picker.locator(".chat-controls__account-selection");
-      await expect.poll(() => account.textContent()).toContain("previous@example.test");
+      await polledText(account).toContain("previous@example.test");
       const accountToggle = picker.locator("[data-chat-account-group-toggle]");
       await accountToggle.click();
       const oldAlternate = picker.locator(
         '[data-chat-account-option="account:openai:old-alternate"]',
       );
-      await expect.poll(() => oldAlternate.isVisible()).toBe(true);
-      await captureUiProof(suite, page, "model-account-auth-refresh", "before-publication.png");
+      await polledVisible(oldAlternate).toBe(true);
 
-      await gateway.setMethodResponse("models.list", catalog("openai:replacement"));
+      await gateway.setMethodResponse("models.list", catalog(models, "openai:replacement"));
       await gateway.setMethodResponse(
         "models.authStatus",
         authStatus("openai:replacement", "replacement@example.test"),
@@ -83,20 +105,19 @@ suite.define(() => {
         modelCatalogChanged: true,
       });
       await gateway.waitForRequest("models.list", { after: catalogReads });
-      try {
-        await expect.poll(() => account.textContent()).toContain("replacement@example.test");
-        expect(await account.textContent()).not.toContain("previous@example.test");
-        expect(await picker.getAttribute("open")).not.toBeNull();
-        await accountToggle.click();
-        await expect
-          .poll(() =>
-            picker.locator('[data-chat-account-option="account:openai:new-alternate"]').isVisible(),
-          )
-          .toBe(true);
-        expect(await oldAlternate.count()).toBe(0);
-      } finally {
-        await captureUiProof(suite, page, "model-account-auth-refresh", "after-publication.png");
-      }
+      await polledText(account).toContain("replacement@example.test");
+      expect(await account.textContent()).not.toContain("previous@example.test");
+      expect(await picker.getAttribute("open")).not.toBeNull();
+      await accountToggle.click();
+      const newAlternate = picker.locator(
+        '[data-chat-account-option="account:openai:new-alternate"]',
+      );
+      await polledVisible(newAlternate).toBe(true);
+      await search.fill("Old alternate");
+      await polledVisible(picker.locator("[data-chat-model-search-empty]")).toBe(true);
+      expect(await oldAlternate.count()).toBe(0);
+      await search.fill("New alternate");
+      await polledVisible(newAlternate).toBe(true);
     });
   });
 
@@ -115,53 +136,24 @@ suite.define(() => {
           agentModel: "openai/shared-alpha",
           models,
           methodResponses: {
-            "models.list": {
-              models,
-              accountSelection: {
-                kind: "shared",
-                authProfileId: "openai:siwc",
-                label: "Sign in with ChatGPT",
-              },
-            },
-            "models.authStatus": {
-              ts: 1,
-              providers: [
-                {
-                  provider: "openai",
-                  displayName: "OpenAI",
-                  status: "ok",
-                  profiles: [
-                    {
-                      profileId: "openai:siwc",
-                      type: "oauth",
-                      status: "ok",
-                      displayName: "Sign in with ChatGPT",
-                      email: "long-account-name+siwc@example.test",
-                    },
-                  ],
-                },
-              ],
-            },
+            "models.list": catalog(models, "openai:siwc"),
+            "models.authStatus": authStatus("openai:siwc", "long-account-name+siwc@example.test"),
           },
         });
         await page.goto(`${suite.server.baseUrl}chat`);
-        const picker = page.locator(".agent-chat__input .chat-controls__model-picker").first();
-        const trigger = picker.locator("[data-chat-model-select]");
-        const alpha = picker.locator('[data-chat-model-option="openai/shared-alpha"]');
-        const beta = picker.locator('[data-chat-model-option="anthropic/shared-beta"]');
+        const { picker, trigger, search, option } = modelPicker(page);
+        const alpha = option("openai/shared-alpha");
+        const beta = option("anthropic/shared-beta");
         const openai = picker.locator(
           '[data-chat-model-provider-group="openai"] [data-chat-model-provider-toggle]',
         );
-        await expect
-          .poll(() => picker.locator("[data-chat-model-provider-toggle]").count())
-          .toBe(2);
+        await page.locator(".agent-chat__composer-combobox textarea").click();
         await trigger.click();
+        await polledCount(picker.locator("[data-chat-model-provider-toggle]")).toBe(2);
         const auth = picker.locator(
           '[data-chat-model-provider="openai"] .chat-controls__auth-meta',
         );
-        await expect
-          .poll(() => auth.textContent())
-          .toContain("long-account-name+siwc@example.test");
+        await polledText(auth).toContain("long-account-name+siwc@example.test");
         await auth.waitFor({ state: "visible" });
         const toggleContentsRight = await openai.evaluate((button) =>
           Math.max(...Array.from(button.children, (child) => child.getBoundingClientRect().right)),
@@ -169,8 +161,7 @@ suite.define(() => {
         const authBox = await auth.boundingBox();
         expect(toggleContentsRight).toBeLessThanOrEqual(authBox!.x);
         await openai.click({ trial: true });
-        await captureUiProof(suite, page, "model-account-identity", `${width}.png`);
-        await expect.poll(() => alpha.isVisible()).toBe(true);
+        await polledVisible(alpha).toBe(true);
         expect(await beta.isVisible()).toBe(false);
         expect(await openai.getAttribute("aria-expanded")).toBe("true");
         await expect
@@ -178,32 +169,31 @@ suite.define(() => {
           .toBeGreaterThanOrEqual(minimumTarget);
         await openai.focus();
         await page.keyboard.press("Enter");
-        await expect.poll(() => alpha.isVisible()).toBe(false);
+        await polledVisible(alpha).toBe(false);
         await page.keyboard.press("Enter");
-        await expect.poll(() => alpha.isVisible()).toBe(true);
+        await polledVisible(alpha).toBe(true);
         expect(await beta.isVisible()).toBe(false);
-        const search = picker.locator("[data-chat-model-search]");
         await search.fill("shared");
-        await expect.poll(() => beta.isVisible()).toBe(true);
-        expect(await openai.getAttribute("aria-expanded")).toBe("true");
-        await search.fill("shared-beta");
-        await captureUiProof(suite, page, "model-id-search", `${width}.png`);
-        expect(await beta.isVisible()).toBe(true);
-        expect(await alpha.isVisible()).toBe(false);
-        await search.fill("ANTHROPIC/SHARED-BETA");
-        expect(await beta.isVisible()).toBe(true);
-        expect(await alpha.isVisible()).toBe(false);
+        await polledVisible(beta).toBe(true);
+        for (const query of ["shared-beta", "ANTHROPIC/SHARED-BETA"]) {
+          await search.fill(query);
+          expect({ beta: await beta.isVisible(), alpha: await alpha.isVisible() }).toEqual({
+            beta: true,
+            alpha: false,
+          });
+        }
         await search.press("ControlOrMeta+A");
         await search.press("Backspace");
         expect(await search.inputValue()).toBe("");
+        await polledAttribute(openai, "aria-expanded").toBe("true");
         expect(await alpha.isVisible()).toBe(true);
         expect(await beta.isVisible()).toBe(false);
         await openai.click();
-        await expect.poll(() => alpha.isVisible()).toBe(false);
+        await polledVisible(alpha).toBe(false);
         await search.press("Escape");
-        await expect.poll(() => picker.getAttribute("open")).toBeNull();
+        await polledAttribute(picker, "open").toBeNull();
         await trigger.click();
-        await expect.poll(() => alpha.isVisible()).toBe(false);
+        await polledVisible(alpha).toBe(false);
         expect(await openai.getAttribute("aria-expanded")).toBe("false");
         expect(await search.inputValue()).toBe("");
         await search.fill("shared");
@@ -211,34 +201,31 @@ suite.define(() => {
         await search.press("Enter");
         const patch = await gateway.waitForRequest("sessions.patch");
         expect(patch.params).toMatchObject({ model: "anthropic/shared-beta" });
-        await expect.poll(() => picker.getAttribute("open")).toBeNull();
+        await polledAttribute(picker, "open").toBeNull();
         await trigger.click();
-        await expect.poll(() => beta.isVisible()).toBe(true);
+        await polledVisible(beta).toBe(true);
         expect(await alpha.isVisible()).toBe(false);
       });
     },
   );
 
   for (const composition of ["active", "keyCode229", "none"] as const) {
-    it.each(["Enter", "Escape", "ArrowDown", "ArrowUp"])(
+    it.for(["Enter", "Escape", "ArrowDown", "ArrowUp"])(
       `respects ${composition} composition ownership for model-search %s`,
-      async (key) => {
-        await suite.withPage({}, async ({ page }) => {
-          const gateway = await installMockGateway(page, {
-            agentModel: "openai/gpt-5.5",
-            models: [
-              { id: "gpt-5.5", name: "GPT-5.5", provider: "openai" },
-              { id: "claude-sonnet-4-6", name: "Claude Sonnet 4.6", provider: "anthropic" },
-            ],
-          });
-          await page.goto(`${suite.server.baseUrl}chat`);
-          const picker = page.locator(".agent-chat__input .chat-controls__model-picker").first();
-          const trigger = picker.locator("[data-chat-model-select]");
-          await expect.poll(() => picker.locator("[data-chat-model-option]").count()).toBe(2);
-          await expect.poll(() => trigger.getAttribute("aria-disabled")).toBe("false");
+      async (key, testContext) => {
+        const runCase = async ({ page }: { page: Page }) => {
+          const gateway =
+            composition === "none"
+              ? await installMockGateway(page, compositionScenario)
+              : compositionFixture.gateway;
+          if (composition === "none") {
+            await page.goto(`${suite.server.baseUrl}chat`);
+          }
+          const { picker, trigger, search } = modelPicker(page);
+          await polledAttribute(trigger, "aria-disabled").toBe("false");
           await trigger.click();
+          await polledCount(picker.locator("[data-chat-model-option]")).toBe(1);
           await page.mouse.move(0, 0);
-          const search = picker.locator("[data-chat-model-search]");
           const query = key.startsWith("Arrow") ? "" : "anthropic";
           if (key.startsWith("Arrow")) {
             for (const toggle of await picker
@@ -249,9 +236,12 @@ suite.define(() => {
             }
           }
           await search.fill(query);
+          await polledCount(picker.locator("[data-chat-model-option]")).toBe(
+            key.startsWith("Arrow") ? 2 : 1,
+          );
           await search.focus();
           // This exercises browser event ownership, not a native OS IME candidate window.
-          const { prevented, highlightedBefore, highlightedAfter } = await search.evaluate(
+          const { prevented, highlightedBefore } = await search.evaluate(
             (input, args) => {
               const previousHighlight = input.getAttribute("aria-activedescendant");
               const event = new KeyboardEvent("keydown", {
@@ -266,7 +256,6 @@ suite.define(() => {
               return {
                 prevented: event.defaultPrevented,
                 highlightedBefore: previousHighlight,
-                highlightedAfter: input.getAttribute("aria-activedescendant"),
               };
             },
             { key, composition },
@@ -278,7 +267,7 @@ suite.define(() => {
             expect.soft(prevented).toBe(false);
             expect.soft(await picker.getAttribute("open")).not.toBeNull();
             expect.soft(await search.inputValue()).toBe(query);
-            expect.soft(highlightedAfter).toBe(highlightedBefore);
+            expect.soft(await search.getAttribute("aria-activedescendant")).toBe(highlightedBefore);
             expect.soft(await gateway.getRequests("sessions.patch")).toEqual([]);
           } else {
             expect(prevented).toBe(true);
@@ -294,11 +283,64 @@ suite.define(() => {
                 await search.press("Escape");
                 expect(await picker.getAttribute("open")).toBeNull();
               } else {
-                expect(highlightedAfter).not.toBe(highlightedBefore);
+                await polledAttribute(search, "aria-activedescendant").not.toBe(highlightedBefore);
               }
             }
           }
-        });
+          if (composition !== "none") {
+            // Dismissal resets query/highlight; provider disclosure deliberately survives it.
+            await search.fill("");
+            const otherProvider = picker.locator(
+              '[data-chat-model-provider-group="anthropic"] [data-chat-model-provider-toggle]',
+            );
+            if ((await otherProvider.getAttribute("aria-expanded")) === "true") {
+              await otherProvider.focus();
+              await otherProvider.press("Enter");
+            }
+            await trigger.click();
+            await polledAttribute(picker, "open").toBeNull();
+          }
+        };
+        if (composition === "none") {
+          await suite.withPage({}, runCase);
+          return;
+        }
+        const { page } = compositionFixture;
+        let failedClose: Promise<void> | undefined;
+        const closeAfterFailure = (error: unknown) => {
+          failedClose ??= (async () => {
+            await captureControlUiE2eFailureDiagnostics(page, {
+              error: error instanceof Error ? error : new Error(String(error)),
+              label: "Model search composition",
+            });
+            await suite.closeBrowserContext(page.context());
+          })();
+          return failedClose;
+        };
+        // The page belongs to the suite; native case cancellation must still close it.
+        const onAbort = () => void closeAfterFailure(testContext.signal.reason).catch(() => {});
+        testContext.signal.addEventListener("abort", onAbort, { once: true });
+        try {
+          await suite.runScenario(testContext, {
+            run: async () => {
+              try {
+                await runCase({ page });
+              } catch (error) {
+                void closeAfterFailure(error).catch(() => {});
+                throw error;
+              }
+            },
+            close: async () => {
+              const failure = testContext.task.result?.errors?.[0];
+              if (failure !== undefined) {
+                await closeAfterFailure(failure);
+              }
+              await failedClose;
+            },
+          });
+        } finally {
+          testContext.signal.removeEventListener("abort", onAbort);
+        }
       },
     );
   }

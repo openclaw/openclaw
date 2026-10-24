@@ -28,9 +28,7 @@ background services, plus the SDK helpers those surfaces depend on. Part of the
 | `api.registerMemoryPromptSupplement(builder)`     | Additive memory-adjacent prompt section                                |
 | `api.registerMemoryPromptPreparation(prepare)`    | Async preparation for a memory-adjacent prompt section                 |
 | `api.registerMemoryCorpusSupplement(adapter)`     | Additive memory search/read corpus                                     |
-| `api.registerHostedMediaResolver(resolver)`       | Resolver for browser-style hosted media URLs                           |
 | `api.registerMcpServerConnectionResolver(...)`    | Per-requester MCP transport (`url`/`headers`) for a static server name |
-| `api.registerTextTransforms(transforms)`          | Plugin-owned prompt/message compatibility text rewrites                |
 | `api.registerConfigMigration(migrate)`            | Lightweight config migration run before plugin runtime loads           |
 | `api.registerMigrationProvider(provider)`         | Importer for `openclaw migrate`                                        |
 | `api.registerAutoEnableProbe(probe)`              | Config check that can auto-enable this plugin                          |
@@ -178,6 +176,9 @@ side of the host/worker boundary:
   for snapshot reads. `runEngineWorkerWrite` selects the extra PostgreSQL worker
   envelope using the kernel's transaction callback; SQLite executes the operation
   directly. Keep the kernel's own write-transaction API atomic on both engines.
+  `jsonPathValue(connection, value, path, kind)` projects an object-member JSON
+  path as text, a number, or JSON text. It preserves SQLite's `json_extract`
+  statement and bindings and selects the PostgreSQL expression for that engine.
 
 The worker entrypoint exports the `EngineConnection`, `StoreSchema`, and
 `DatabaseEngineAdapter` types; it does not export a PostgreSQL connection
@@ -185,6 +186,21 @@ constructor. Open physical connections through `openEngineStore`. A store
 without registered PostgreSQL DDL stays on SQLite; a selected PostgreSQL store that
 fails admission never falls back. See [Database engines](/reference/database-engines)
 for configuration, supported stores, durability, anchors, and observation events.
+
+Experimental search capabilities use the same worker entrypoint. Call
+`admitStoreSearch` with an admitted store and its existing index declarations to
+bind `TextIndex` and `VectorIndex` handles. `FullTextCapability` supplies native
+Kysely expressions; `VectorCapability` owns native candidate queries and derived
+index maintenance. Callers retain filters, limits, chronology, snippets' display
+bounds, and scoring policy. The adapter's existing capability labels remain
+diagnostic metadata. SQLite retains its L2 candidate selection and cosine
+reranking, with the memory owner's exact fallback when native vectors are
+unavailable. PostgreSQL uses native full-text and exact vector retrieval.
+`fullText.rank(index, query, { postgres: { normalization: 0 } })` selects
+unnormalized cover density; omitting the option retains document-length
+normalization (`2`). SQLite ignores PostgreSQL rank options. Feature owners
+calibrate native ranks for their scoring policy; the capability does not promise
+SQLite ranking equivalence.
 
 ### Owned stdio processes
 
@@ -440,14 +456,8 @@ Use `close` for terminal cleanup or selected-error diagnostics; it does not prov
 delivery. Keep successful-response activity on `finish`, with the caller's
 success-status check, so an aborted request cannot report healthy activity.
 
-Older Bun HTTP transports use native response completion because their raw socket
-operations do not flush the HTTP response. OpenClaw detects the native HTTP
-`destroySoon` implementation introduced by Bun's Node compatibility rework rather
-than relying on version labels shared by different canary builds. Queued HEAD
-rejections on newer Bun wait for response socket assignment, including builds
-without HTTP response-finish diagnostics. Older Bun can still report client
-connection resets during large outstanding uploads, even after delivering the
-complete error.
+Queued HEAD rejections on supported Bun wait for response socket assignment,
+including builds without HTTP response-finish diagnostics.
 
 Gateway HTTP requests run in order on each connection, including their response
 lifetimes. A closing connection cannot admit later requests or upgrades. Queued
@@ -666,7 +676,10 @@ Contract notes:
   requester. OpenClaw never falls back to another requester's credentials.
 
 Memory prompt supplement builders receive optional `agentId`,
-`agentSessionKey`, and `sandboxed` context. Memory corpus supplement `search`
+`agentSessionKey`, `sandboxed`, and `projectKey` context. `projectKey` is the
+host-resolved repository identity for the current run, or absent outside a
+repository. The host only resolves it; a memory plugin that stores project
+scope decides whether and how to ask the agent to annotate writes with it. Memory corpus supplement `search`
 and `get` calls receive optional `agentId` and `sandboxed` context. Plugins with
 agent-owned storage should resolve that storage for each call instead of
 capturing one global path during registration. If an agent id is required but

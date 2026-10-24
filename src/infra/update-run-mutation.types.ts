@@ -1,5 +1,10 @@
 import type { SqliteWorkerCommand } from "./sqlite-worker-contract.js";
 import type {
+  InterruptedUpdateSettlement,
+  InterruptedUpdateSettlementResult,
+} from "./update-run-interruption-contract.js";
+import type { UpdateRunReconciliationOperations } from "./update-run-reconciliation.types.js";
+import type {
   CreateUpdateRunInput,
   FinishUpdateRunInput,
   UpdateRunDiagnostics,
@@ -68,3 +73,11 @@ export type UpdateRunWriteOperations = {
 };
 
 export type UpdateRunWriteCommand = SqliteWorkerCommand<UpdateRunWriteOperations>;
+
+export type UpdateRunWorkerOperations = UpdateRunWriteOperations &
+  UpdateRunReconciliationOperations & {
+    "updateRuns.reconcileInterrupted": {
+      input: InterruptedUpdateSettlement;
+      output: InterruptedUpdateSettlementResult;
+    };
+  };

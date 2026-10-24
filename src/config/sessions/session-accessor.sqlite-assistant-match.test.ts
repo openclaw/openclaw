@@ -6,7 +6,7 @@ import { admitSqliteSchema } from "../../infra/sqlite-schema-facts.js";
 import { resolveZstdCodec } from "../../infra/zstd-codec.js";
 import { findAssistantTranscriptEventInDatabase } from "./session-accessor.sqlite-read.js";
 import type { SessionTranscriptEventMatch } from "./session-history-read.types.js";
-import { findTranscriptEventMatchingInDatabase } from "./session-transcript-match.js";
+import { findTranscriptEventMatchingInDatabase } from "./session-transcript-match-read.js";
 import { prepareTranscriptPayload, type TranscriptPayloadRecord } from "./transcript-payload.js";
 import { deriveTranscriptPredicateFields } from "./transcript-predicate-fields.js";
 

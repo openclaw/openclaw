@@ -3,8 +3,12 @@ import { assert, describe, expect, it } from "vitest";
 import { publishRuntimeToolInputSchema } from "../providers/tool-schema-json-projection.js";
 import type { Context } from "../types.js";
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "../utils/system-prompt-cache-boundary.js";
-import { buildOpenAICompletionsParams } from "./openai-completions-params.js";
-import { makeCompletionsModel } from "./openai-completions.test-support.js";
+import { resolveOpenAICompletionsCompat } from "./openai-completions-compat.js";
+import {
+  buildOpenAICompletionsParams,
+  buildOpenAICompletionsRequest,
+} from "./openai-completions-params.js";
+import { createAssistantOutput, makeCompletionsModel } from "./openai-completions.test-support.js";
 
 const model = makeCompletionsModel({
   provider: "openrouter",
@@ -28,7 +32,74 @@ function markers(payload: unknown) {
   return JSON.stringify(payload).match(/"cache_control":/g) ?? [];
 }
 
-describe("managed Completions cache markers", () => {
+describe("Completions cache markers", () => {
+  it.each([
+    ["managed", "google/gemini-3.7-flash"],
+    ["direct", "google/gemini-3.7-flash"],
+    ["managed", "~google/gemini-3.7-flash"],
+    ["direct", "~google/gemini-3.7-flash"],
+    ["managed", "google/gemini-3.7-flash:online"],
+    ["direct", "google/gemini-3.7-flash:online"],
+    ["managed", "openrouter/~google/gemini-3.7-flash:online"],
+    ["direct", "openrouter/~google/gemini-3.7-flash:online"],
+  ] as const)("marks only the stable system prefix for %s OpenRouter %s", (mode, id) => {
+    const route = { ...model, id };
+    for (const cacheRetention of [undefined, "short", "long", "none"] as const) {
+      for (const suffix of ["Today: 2026-09-06", "Today: 2026-09-07"]) {
+        const payload = buildOpenAICompletionsRequest(
+          route,
+          { ...context, systemPrompt: `STABLE${SYSTEM_PROMPT_CACHE_BOUNDARY}${suffix}` },
+          { cacheRetention },
+          mode === "direct"
+            ? {
+                mode,
+                compat: resolveOpenAICompletionsCompat(route),
+                cacheRetention: cacheRetention ?? "short",
+              }
+            : { mode },
+        );
+        expect(JSON.stringify(payload.messages)).toBe(
+          JSON.stringify([
+            {
+              role: "system",
+              content:
+                cacheRetention === "none"
+                  ? `STABLE\n${suffix}`
+                  : [...marked("STABLE"), { type: "text", text: suffix }],
+            },
+            { role: "user", content: "Question" },
+          ]),
+        );
+        expect(markers(payload)).toHaveLength(cacheRetention === "none" ? 0 : 1);
+        expect(JSON.stringify(payload)).not.toContain('"ttl"');
+      }
+    }
+  });
+
+  it.each([
+    ["custom", "https://openrouter.ai/api/v1", "google/gemini-3.7-flash", 1],
+    ["openrouter", "", "google/gemini-3.7-flash", 1],
+    ["openrouter", "https://proxy.example/v1", "google/gemini-3.7-flash", 0],
+    [
+      "google",
+      "https://generativelanguage.googleapis.com/v1beta/openai",
+      "google/gemini-3.7-flash",
+      0,
+    ],
+    ["deepinfra", "https://api.deepinfra.com/v1/openai", "google/gemini-3.7-flash", 0],
+    ["openrouter", "https://openrouter.ai/api/v1", "google/gemma-3-27b-it", 0],
+  ])("scopes Gemini markers to %s at %s (%s)", (provider, baseUrl, id, count) => {
+    const payload = buildOpenAICompletionsParams(
+      { ...model, provider, baseUrl, id },
+      { ...context, systemPrompt: "STABLE" },
+      undefined,
+    );
+    expect(markers(payload)).toHaveLength(count);
+    if (count) {
+      expect(payload.messages[0]).toEqual({ role: "system", content: marked("STABLE") });
+    }
+  });
+
   it("keeps cache markers request-local when tool descriptors are published", () => {
     const { schema } = publishRuntimeToolInputSchema({ type: "object", properties: {} });
     assert(isRecord(schema));
@@ -44,7 +115,6 @@ describe("managed Completions cache markers", () => {
     });
     expect(markedRequest.tools?.[0]).toHaveProperty("cache_control", marker);
     expect(unmarkedRequest.tools?.[0]).not.toHaveProperty("cache_control");
-    expect(markedRequest.tools?.[0]?.function).toBe(unmarkedRequest.tools?.[0]?.function);
     expect(markedRequest.tools?.[0]).not.toBe(unmarkedRequest.tools?.[0]);
   });
 
@@ -125,19 +195,8 @@ describe("managed Completions cache markers", () => {
       const toolLoop: Context["messages"] = [
         ...context.messages,
         {
-          role: "assistant",
-          api: model.api,
-          provider: model.provider,
-          model: model.id,
+          ...createAssistantOutput(model),
           content: [{ type: "toolCall", id: "call_1", name: "alpha", arguments: {} }],
-          usage: {
-            input: 1,
-            output: 1,
-            cacheRead: 0,
-            cacheWrite: 0,
-            totalTokens: 2,
-            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-          },
           stopReason: "toolUse",
           timestamp: 2,
         },

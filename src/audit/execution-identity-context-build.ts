@@ -155,6 +155,23 @@ export function buildExecutionIdentityContext(
     createdAt: fixed.createdAt,
     trustDomain: { kind: "gateway-cell", domainRef, state: "present" },
     invoker,
+    ...(envelope.representedSubject
+      ? {
+          representedSubject: {
+            state: "present",
+            principal: {
+              kind: "person",
+              domainRef,
+              principalRef: hmacRef(
+                db,
+                "principal",
+                `${domainRef}:person`,
+                envelope.representedSubject.rawPrincipalRef,
+              ),
+            },
+          },
+        }
+      : {}),
     ingress: {
       kind: envelope.ingress.kind,
       boundary: ensureBoundedExecutionIdentityRef(envelope.ingress.boundary, "ingress boundary"),

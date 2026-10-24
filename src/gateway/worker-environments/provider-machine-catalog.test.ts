@@ -158,6 +158,34 @@ describe("provider metadata in-flight ownership", () => {
     expect(warn).not.toHaveBeenCalled();
   });
 
+  it("retries a failed section while joining the sibling's pending warmup work", async () => {
+    const { catalog, provider, warn } = fixture();
+    const systems = createDeferred<readonly { id: string; label: string }[]>();
+    const reported = createDeferred();
+    const failure = new Error("machine metadata unavailable");
+    const listMachineOptions = vi.fn().mockRejectedValueOnce(failure).mockResolvedValue(choices);
+    const listOperatingSystems = vi.fn(() => systems.promise);
+    warn.mockImplementation(() => reported.resolve());
+    Object.assign(provider, { listMachineOptions, listOperatingSystems });
+    catalog.warmMachineShape("production");
+    await expect(catalog.listMachineOptions("production")).rejects.toBe(failure);
+
+    try {
+      catalog.warmMachineShape("production");
+      expect(listMachineOptions).toHaveBeenCalledTimes(2);
+      expect(listOperatingSystems).toHaveBeenCalledOnce();
+      await expect(catalog.listMachineOptions("production")).resolves.toEqual(choices);
+      expect(listMachineOptions).toHaveBeenCalledTimes(2);
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      systems.resolve(choices);
+      await reported.promise;
+    }
+    expect(warn).toHaveBeenCalledExactlyOnceWith(
+      "Worker machine catalog warmup failed for profile production",
+    );
+  });
+
   it.each(["machines", "systems"] as const)("retries a rejected %s flight", async (section) => {
     const { pending, hook, read } = discoveryFixture(section);
     const settled = Promise.allSettled([read(), read()]);

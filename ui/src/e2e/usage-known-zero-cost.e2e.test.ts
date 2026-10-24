@@ -1,9 +1,5 @@
-import { writeFile } from "node:fs/promises";
-import path from "node:path";
 import { expect, it } from "vitest";
 import { createRecordedCostUsage } from "../pages/usage/test-helpers/recorded-cost.test-support.ts";
-import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
-import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { installUsageOverviewGateway as installMockGateway } from "./usage-overview-fixture.test-support.ts";
 
@@ -13,7 +9,6 @@ const suite = createControlUiE2eSuite({
   unavailableMessage: (executablePath) =>
     `Playwright Chromium is not available at ${executablePath}`,
 });
-const recordVisuals = process.env.OPENCLAW_UI_E2E_RECORD === "1";
 
 suite.define(() => {
   it("shows the recorded cost hint through ordinary Usage filters", async () => {
@@ -41,18 +36,6 @@ suite.define(() => {
       },
       "usage.status": { updatedAt, providers: [] },
     };
-    const artifactDir = recordVisuals
-      ? createControlUiE2eArtifactDir("usage-known-zero-cost", suite.artifactDir)
-      : null;
-    const observations: Array<{
-      stage: string;
-      query: string;
-      hint: string;
-      value: string;
-      labels: string[];
-      visible: boolean;
-    }> = [];
-    const screenshots: string[] = [];
     await suite.withPage(
       {
         locale: "en-US",
@@ -62,10 +45,7 @@ suite.define(() => {
       },
       async ({ page }) => {
         await page.clock.setFixedTime(new Date(updatedAt));
-        const gateway = await installMockGateway(page, {
-          communityInviteDismissed: true,
-          methodResponses: responses,
-        });
+        const gateway = await installMockGateway(page, { methodResponses: responses });
         await page.goto(`${suite.server.baseUrl}usage`);
         const query = page.locator(".usage-query-input");
         const hintButton = page.locator("#usage-summary-hint-average-cost");
@@ -102,30 +82,9 @@ suite.define(() => {
             .toBe(true);
           await expect.poll(() => tooltip.isVisible()).toBe(true);
           await expect.poll(() => hintContent.isVisible()).toBe(true);
-          if (artifactDir && ["mixed", "known-zero"].includes(step.stage)) {
-            const screenshot = path.join(artifactDir, `${step.stage}.png`);
-            await writeFile(
-              screenshot,
-              await takeControlUiViewportScreenshot(page, tooltip, [
-                hintButton,
-                hintContent,
-                value,
-              ]),
-            );
-            screenshots.push(screenshot);
-          }
-          const observed = {
-            stage: step.stage,
-            query: await query.inputValue(),
-            hint: (await hintContent.textContent())?.trim() ?? "",
-            value: (await value.textContent())?.trim() ?? "",
-            labels: (await page.locator(".session-bar-title").allTextContents()).toSorted(),
-            visible: await tooltip.isVisible(),
-          };
-          observations.push(observed);
-          if (step.stage !== "known-zero") {
-            expect(observed.hint).toBe(step.stage === "positive" ? normalHint : missingHint);
-          }
+          expect((await hintContent.textContent())?.trim() ?? "", step.stage).toBe(
+            ["known-zero", "positive"].includes(step.stage) ? normalHint : missingHint,
+          );
           await hintButton.press("Escape");
           await expect
             .poll(() => tooltip.evaluate((element) => element.matches(":popover-open")))
@@ -135,18 +94,6 @@ suite.define(() => {
         const requests = await gateway.getRequests();
         expect(requests.some(({ method }) => method === "sessions.usage")).toBe(true);
         expect(requests.some(({ method }) => method === "usage.status")).toBe(true);
-        const record = {
-          observations,
-          screenshots,
-          requests: requests.map(({ method }) => method),
-        };
-        if (artifactDir) {
-          await writeFile(path.join(artifactDir, "receipts.json"), JSON.stringify(record, null, 2));
-        }
-        expect(
-          observations.find(({ stage }) => stage === "known-zero")?.hint,
-          "USAGE_KNOWN_ZERO_BROWSER",
-        ).toBe(normalHint);
       },
     );
   });

@@ -81,7 +81,12 @@ export function registerArchiveCancellationTests({
       endedReason: "subagent-killed",
       outcome: { status: "error", error: "manual kill" },
       suppressAnnounceReason: "killed",
-      killReconciliation: { killedAt: now - 5 * 60_000, taskCancellationAccepted: true },
+      // The requester already knows; exercise direct archive retirement.
+      killReconciliation: {
+        killedAt: now - 5 * 60_000,
+        taskCancellationAccepted: true,
+        suppressTaskDelivery: true,
+      },
       cleanupHandled: true,
       cleanupCompletedAt: now - 5 * 60_000,
       archiveAtMs: now,

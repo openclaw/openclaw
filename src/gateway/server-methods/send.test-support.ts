@@ -1,5 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { vi } from "vitest";
+import { vi, type Mock } from "vitest";
 import { jsonResult } from "../../agents/tools/common.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
@@ -7,14 +7,18 @@ import {
   createChannelTestPluginBase,
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
-import { createMessageActionClientForTests } from "./send.test-helpers.js";
+import {
+  createMessageActionClientForTests,
+  createTelegramSourceSendRequest,
+  messageActionClientForTests,
+} from "./send.test-helpers.js";
 import type { GatewayClient, GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
 
-export const makeContext = (): GatewayRequestContext =>
-  ({
-    dedupe: new Map(),
-    getRuntimeConfig: () => ({}),
-  }) as unknown as GatewayRequestContext;
+export function makeContext(
+  getRuntimeConfig: GatewayRequestContext["getRuntimeConfig"] = () => ({}),
+) {
+  return { dedupe: new Map(), getRuntimeConfig } as unknown as GatewayRequestContext;
+}
 
 export function createMessageMethodTestDriver(getHandlers: () => GatewayRequestHandlers) {
   async function invokeGatewayMessageMethod(params: {
@@ -22,67 +26,42 @@ export function createMessageMethodTestDriver(getHandlers: () => GatewayRequestH
     client?: GatewayClient | null;
     requestId?: string;
     request: Record<string, unknown>;
-    respond: ReturnType<typeof vi.fn>;
+    respond: Mock;
     context: GatewayRequestContext;
+    sessionMutationCommitGuard?: () => void;
   }) {
-    const sendHandlers = getHandlers();
-    await expectDefined(
-      sendHandlers[params.method],
-      `sendHandlers.${params.method} test invariant`,
-    )({
+    const handler = expectDefined(getHandlers()[params.method], params.method);
+    await handler({
       params: params.request as never,
       respond: params.respond as never,
       context: params.context,
+      sessionMutationCommitGuard: params.sessionMutationCommitGuard,
       req: { type: "req", id: params.requestId ?? "1", method: params.method },
       client: params.client ?? null,
       isWebchatConnect: () => false,
     });
   }
 
-  async function runSend(params: Record<string, unknown>) {
-    return await runSendWithClient(params);
-  }
-
-  async function runSendWithClient(
+  async function runMethod(
+    method: "send" | "poll" | "message.action",
     params: Record<string, unknown>,
     client?: { connect?: { scopes?: string[] }; internal?: Record<string, unknown> } | null,
     context: GatewayRequestContext = makeContext(),
     sessionMutationCommitGuard?: () => void,
   ) {
     const respond = vi.fn();
-    const sendHandlers = getHandlers();
-    await expectDefined(sendHandlers.send, "sendHandlers.send test invariant").call(sendHandlers, {
-      params: params as never,
+    await invokeGatewayMessageMethod({
+      method,
+      request: params,
       respond,
       context,
       sessionMutationCommitGuard,
-      req: { type: "req", id: "1", method: "send" },
       client: (client ?? null) as never,
-      isWebchatConnect: () => false,
     });
     return { respond };
   }
 
-  async function runPoll(params: Record<string, unknown>) {
-    return await runPollWithClient(params);
-  }
-
-  async function runPollWithClient(
-    params: Record<string, unknown>,
-    client?: { connect?: { scopes?: string[] } } | null,
-  ) {
-    const respond = vi.fn();
-    const sendHandlers = getHandlers();
-    await expectDefined(sendHandlers.poll, "sendHandlers.poll test invariant").call(sendHandlers, {
-      params: params as never,
-      respond,
-      context: makeContext(),
-      req: { type: "req", id: "1", method: "poll" },
-      client: (client ?? null) as never,
-      isWebchatConnect: () => false,
-    });
-    return { respond };
-  }
+  const runSendWithClient = runMethod.bind(null, "send");
 
   async function runMessageActionRequest(
     params: Record<string, unknown>,
@@ -91,44 +70,16 @@ export function createMessageMethodTestDriver(getHandlers: () => GatewayRequestH
         scopes?: string[];
         client?: { id: string; mode: string };
       };
-      internal?: {
-        agentRuntimeIdentity?: {
-          kind: "agentRuntime";
-          agentId: string;
-          sessionKey: string;
-          messageActionContext?: {
-            expiresAtMs: number;
-            sessionId?: string;
-            sourceReplySessionKey?: string;
-            sourceReplyFinal?: boolean;
-            sourceReplyToolCallId?: string;
-            requesterAccountId?: string;
-            requesterSenderId?: string;
-            requesterSenderName?: string;
-            requesterSenderUsername?: string;
-            requesterSenderE164?: string;
-            toolContext?: Record<string, unknown>;
-          };
-        };
-      };
+      internal?: ReturnType<typeof messageActionClientForTests>["internal"];
     } | null,
     context: GatewayRequestContext = makeContext(),
   ) {
-    const respond = vi.fn();
-    const effectiveClient = createMessageActionClientForTests(params, client);
-    const sendHandlers = getHandlers();
-    await expectDefined(
-      sendHandlers["message.action"],
-      'sendHandlers["message.action"] test invariant',
-    )({
-      params: params as never,
-      respond,
+    return runMethod(
+      "message.action",
+      params,
+      createMessageActionClientForTests(params, client) as never,
       context,
-      req: { type: "req", id: "1", method: "message.action" },
-      client: (effectiveClient ?? null) as never,
-      isWebchatConnect: () => false,
-    });
-    return { respond };
+    );
   }
 
   async function runTelegramTerminalAction(params: {
@@ -145,38 +96,25 @@ export function createMessageMethodTestDriver(getHandlers: () => GatewayRequestH
     const sessionKey = params.sessionKey ?? "agent:main:telegram:direct:chat-123";
     return runMessageActionRequest(
       {
-        channel: "telegram",
-        action: "send",
-        params: {
-          to: "chat-123",
-          message: params.message,
-        },
+        ...createTelegramSourceSendRequest("chat-123", params.message, params.idempotencyKey),
+        toolContext: undefined,
         sessionKey,
         sessionId: params.sessionId,
-        agentId: "main",
-        idempotencyKey: params.idempotencyKey,
       },
-      {
-        internal: {
-          agentRuntimeIdentity: {
-            kind: "agentRuntime",
-            agentId: "main",
-            sessionKey,
-            messageActionContext: {
-              expiresAtMs: Date.now() + 60_000,
-              sessionId: params.sessionId,
-              sourceReplySessionKey: params.sourceReplySessionKey,
-              sourceReplyFinal: params.sourceReplyFinal ?? true,
-              sourceReplyToolCallId: params.toolCallId,
-              toolContext: {
-                currentChannelProvider: "telegram",
-                currentChannelId: "chat-123",
-                currentSourceTurnId: params.sourceTurnId,
-              },
-            },
+      messageActionClientForTests(sessionKey, {
+        messageActionContext: {
+          expiresAtMs: Date.now() + 60_000,
+          sessionId: params.sessionId,
+          sourceReplySessionKey: params.sourceReplySessionKey,
+          sourceReplyFinal: params.sourceReplyFinal ?? true,
+          sourceReplyToolCallId: params.toolCallId,
+          toolContext: {
+            currentChannelProvider: "telegram",
+            currentChannelId: "chat-123",
+            currentSourceTurnId: params.sourceTurnId,
           },
         },
-      },
+      }),
       params.context,
     );
   }
@@ -184,17 +122,14 @@ export function createMessageMethodTestDriver(getHandlers: () => GatewayRequestH
   return {
     invokeGatewayMessageMethod,
     runTelegramTerminalAction,
-    runSend,
+    runSend: runSendWithClient,
     runSendWithClient,
-    runPoll,
-    runPollWithClient,
+    runPoll: runMethod.bind(null, "poll"),
     runMessageActionRequest,
   };
 }
 
-export function createMessageMethodPluginFixtures(mocks: {
-  getChannelPlugin: ReturnType<typeof vi.fn>;
-}) {
+export function createMessageMethodPluginFixtures(mocks: { getChannelPlugin: Mock }) {
   function registerMessageThreadAddressingPlugin(id: ChannelPlugin["id"]): void {
     const plugin: ChannelPlugin = {
       ...createChannelTestPluginBase({ id }),
@@ -209,22 +144,19 @@ export function createMessageMethodPluginFixtures(mocks: {
     );
   }
 
-  function registerMessageActionPlugin(params: {
+  function registerMessageActionPlugin({
+    id = "telegram",
+    action = "send",
+    chatType = "direct",
+    threading,
+    registrySuffix = "message-action",
+  }: {
     id?: ChannelPlugin["id"];
     action?: "send" | "sendAttachment";
-    messageId?: string;
     chatType?: "direct" | "group";
     threading?: ChannelPlugin["threading"];
-    registrySuffix: string;
-  }): ChannelPlugin {
-    const {
-      id = "telegram",
-      action = "send",
-      messageId,
-      chatType = "direct",
-      threading,
-      registrySuffix,
-    } = params;
+    registrySuffix?: string;
+  } = {}): ChannelPlugin {
     const plugin: ChannelPlugin = {
       ...createChannelTestPluginBase({
         id,
@@ -234,7 +166,7 @@ export function createMessageMethodPluginFixtures(mocks: {
       actions: {
         describeMessageTool: () => ({ actions: [action] }),
         supportsAction: ({ action: requestedAction }) => requestedAction === action,
-        handleAction: async () => jsonResult({ ok: true, ...(messageId ? { messageId } : {}) }),
+        handleAction: async () => jsonResult({ ok: true }),
       },
       ...(threading ? { threading } : {}),
     };
@@ -248,3 +180,6 @@ export function createMessageMethodPluginFixtures(mocks: {
 
   return { registerMessageThreadAddressingPlugin, registerMessageActionPlugin };
 }
+
+export type MessageMethodDriver = ReturnType<typeof createMessageMethodTestDriver>;
+export type MessageMethodPlugins = ReturnType<typeof createMessageMethodPluginFixtures>;

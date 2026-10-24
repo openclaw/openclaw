@@ -40,6 +40,7 @@ type WorkerNodeProvisioningOptions = Pick<
   | "saveError"
 > &
   Pick<ReturnType<typeof createWorkerProviderOwnerLifecycle>, "failBootstrap"> & {
+    ownerSignal: AbortSignal;
     commitReady: WorkerCredentialBroker["commitReady"];
   };
 
@@ -272,6 +273,7 @@ export function createWorkerNodeProvisioning(options: WorkerNodeProvisioningOpti
     record: WorkerEnvironmentRecord,
     lease: NodeLease,
     provider: WorkerProvider,
+    workSignal: AbortSignal,
     patch: { leaseId: string; sharedHost: boolean; desktop: WorkerLease["desktop"] | null },
     preparedInstallation?: WorkerInstallationArtifact | Promise<WorkerInstallationArtifact>,
     cancellation?: ReturnType<typeof createWorkerProvisionCancellation>,
@@ -313,7 +315,7 @@ export function createWorkerNodeProvisioning(options: WorkerNodeProvisioningOpti
       if (!options.ensureNodeWorkerBundle) {
         throw new Error("Device worker bundle installer is unavailable");
       }
-      const artifact = await prepareBundle(await preparedInstallation, cancellation?.signal);
+      const artifact = await prepareBundle(await preparedInstallation, workSignal);
       assertCurrent();
       if (preparation && artifact.tarballSha256 !== preparation.artifacts.workerArchiveSha256) {
         throw new Error("Worker bundle differs from its admitted preparation");
@@ -329,7 +331,7 @@ export function createWorkerNodeProvisioning(options: WorkerNodeProvisioningOpti
         deviceId: lease.node.deviceId,
         artifact,
         prewarm,
-        signal: cancellation?.signal,
+        signal: workSignal,
         assertCurrent,
       });
       assertCurrent();
@@ -350,12 +352,16 @@ export function createWorkerNodeProvisioning(options: WorkerNodeProvisioningOpti
           deviceId: lease.node.deviceId,
           workspace: preparedWorkspace,
           assertCurrent,
-          signal: cancellation?.signal,
+          signal: workSignal,
         });
         assertCurrent();
       }
     } catch (error) {
       await cancellation?.settleStopIntent();
+      if (options.ownerSignal.aborted) {
+        // Owner shutdown leaves this allocation for restart recovery.
+        throw error;
+      }
       return await options.failBootstrap(record, lease.leaseId, provider, error, nodePatch);
     }
     return options.commitReady(

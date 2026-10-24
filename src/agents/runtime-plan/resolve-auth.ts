@@ -8,7 +8,6 @@ import { resolveProviderModelAuthPolicy } from "../model-auth-policy.js";
 import { getApiKeyForModelCore } from "../model-auth.js";
 import { providerModelRouteAcceptsAuthMode } from "../provider-model-route-auth.js";
 import { shouldForceDirectAuthFallbackModelResolve } from "./credential-scoped-model.js";
-import { sameAgentRuntimeAuthModelRoute } from "./model-route.js";
 import {
   canRunPreparedAgentRuntimeAuthAttempt,
   preparedAgentRuntimeProfileAttemptHasCandidate,
@@ -26,6 +25,33 @@ type PreparedRuntimeAuthAttemptResolution<Model, Auth> = Readonly<{
   plan: AgentRuntimeAuthPlan;
   auth: Auth;
 }>;
+
+function normalizeRouteBaseUrl(value: string): string {
+  return value.replace(/\/+$/u, "");
+}
+
+function sameCompatibleRuntimeIds(
+  left: readonly string[] | undefined,
+  right: readonly string[] | undefined,
+): boolean {
+  if (left === right) {
+    return true;
+  }
+  if (!left || !right) {
+    return false;
+  }
+  const leftIds = new Set(left);
+  const rightIds = new Set(right);
+  if (leftIds.size !== rightIds.size) {
+    return false;
+  }
+  for (const id of leftIds) {
+    if (!rightIds.has(id)) {
+      return false;
+    }
+  }
+  return true;
+}
 
 function listDistinctPreparedRuntimeAuthAttempts(
   attempts: readonly PreparedAgentRuntimeAuthAttempt[],
@@ -45,7 +71,19 @@ function listDistinctPreparedRuntimeAuthAttempts(
       if (!route || !previousRoute) {
         return !route && !previousRoute;
       }
-      return sameAgentRuntimeAuthModelRoute(route, previousRoute);
+      // Compare the complete secret-free identity of the prepared model routes.
+      return (
+        route.provider.trim().toLowerCase() === previousRoute.provider.trim().toLowerCase() &&
+        route.modelId === previousRoute.modelId &&
+        route.api === previousRoute.api &&
+        route.authRequirement === previousRoute.authRequirement &&
+        route.requestTransportOverrides === previousRoute.requestTransportOverrides &&
+        sameCompatibleRuntimeIds(
+          route.runtimePolicy?.compatibleIds,
+          previousRoute.runtimePolicy?.compatibleIds,
+        ) &&
+        normalizeRouteBaseUrl(route.baseUrl) === normalizeRouteBaseUrl(previousRoute.baseUrl)
+      );
     });
   });
 }
@@ -53,7 +91,7 @@ function listDistinctPreparedRuntimeAuthAttempts(
 /** Resolves one complete prepared route/profile tuple without crossing retries mid-flight. */
 export async function resolvePreparedRuntimeAuthAttempts<Model, Auth>(params: {
   attempts: readonly PreparedAgentRuntimeAuthAttempt[];
-  store: AuthProfileStore;
+  store?: AuthProfileStore;
   modelId: string;
   model: Model;
   materializeModel(input: {
@@ -70,11 +108,14 @@ export async function resolvePreparedRuntimeAuthAttempts<Model, Auth>(params: {
 }): Promise<PreparedRuntimeAuthAttemptResolution<Model, Auth>> {
   const hasAvailableCandidate = (attempt: PreparedAgentRuntimeAuthAttempt) =>
     attempt.kind !== "profile" ||
-    preparedAgentRuntimeProfileAttemptHasCandidate({
-      attempt,
-      store: params.store,
-      modelId: params.modelId,
-    });
+    Boolean(
+      params.store &&
+      preparedAgentRuntimeProfileAttemptHasCandidate({
+        attempt,
+        store: params.store,
+        modelId: params.modelId,
+      }),
+    );
   let firstError: unknown;
   let priorProfileAttempted = false;
   for (const attempt of listDistinctPreparedRuntimeAuthAttempts(params.attempts)) {

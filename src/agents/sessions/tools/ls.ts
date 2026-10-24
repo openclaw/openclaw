@@ -3,6 +3,7 @@ import { racePromiseWithAbortSignal } from "../../../infra/abort-signal.js";
 import type { DirectoryEntry } from "../../../infra/directory-entries.js";
 import { toErrorObject } from "../../../infra/errors.js";
 import type { AgentTool } from "../../runtime/index.js";
+import { bindAgentToolReplaySafety } from "../../tool-replay-safety.js";
 import { toolResultFitsBudget, type ToolResultBudget } from "../../tool-result-limits.js";
 import { assertFileToolNotAborted } from "./file-tool-abort.js";
 import { normalizePositiveLimit } from "./limits.js";
@@ -49,7 +50,7 @@ export function createLsTool(
 ): AgentTool<typeof lsSchema, LsToolDetails> {
   const ops = options?.operations ?? defaultLsOperations;
   const resolvePath = options?.operations ? resolveToCwd : resolveLocalPathToCwd;
-  return wrapToolDefinition<typeof lsSchema, LsToolDetails>({
+  const tool = wrapToolDefinition<typeof lsSchema, LsToolDetails>({
     name: "ls",
     label: "ls",
     description:
@@ -119,4 +120,5 @@ export function createLsTool(
       );
     },
   });
+  return options?.operations ? tool : bindAgentToolReplaySafety(tool, "bounded-read");
 }

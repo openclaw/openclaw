@@ -3,6 +3,7 @@ import {
   openExistingOpenClawStateWriter,
   type ExistingOpenClawStateWriter,
 } from "../state/openclaw-state-db-existing-write.js";
+import { isPostgresSqlConnection } from "./sql-connection.js";
 import { setSqliteBusyTimeout } from "./sqlite-busy-timeout.js";
 import { isSqliteLockError } from "./sqlite-error-diagnostics.js";
 import {
@@ -46,8 +47,9 @@ export function withUpdateRunWriteAdmission<T>(
       facts: undefined,
       ...(stage === "commit" ? { deadlineMs: SQLITE_WORKER_ADMISSION_DEADLINE_MS } : {}),
     });
-  // Required update evidence retains its retry policy; each attempt obtains fresh admission.
-  return retrySqliteWorkerAdmission(() => operation(assertCurrent), { maxAttempts: Infinity });
+  // A slow host policy snapshot can exceed every commit grant. Repeating it
+  // forever rewrites the same database without ever recording progress.
+  return retrySqliteWorkerAdmission(() => operation(assertCurrent), { maxAttempts: 3 });
 }
 
 export function recordUpdateRunMutationInWorker(
@@ -87,7 +89,7 @@ export function recordUpdateRunMutationInWorker(
     return writer().run(({ db }) => {
       entered = true;
       // The longer wait is for BEGIN only; mutation and commit keep the normal lock budget.
-      if (busyTimeoutMs > OPENCLAW_SQLITE_BUSY_TIMEOUT_MS) {
+      if (!isPostgresSqlConnection(db) && busyTimeoutMs > OPENCLAW_SQLITE_BUSY_TIMEOUT_MS) {
         setSqliteBusyTimeout(db, OPENCLAW_SQLITE_BUSY_TIMEOUT_MS);
       }
       if (input.requireNoRecovery) {

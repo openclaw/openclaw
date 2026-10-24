@@ -1,8 +1,11 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { toUSVString } from "node:util";
 import { ok } from "@openclaw/normalization-core/result";
-import { readSqliteDatabaseWriteTokenForPath } from "../../infra/sqlite-database-admission.js";
-import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
+import {
+  getSqliteDatabaseAdmissionIdentityForPath,
+  readSqliteDatabaseWriteTokenForPath,
+} from "../../infra/sqlite-database-admission.js";
+import { runWithAsyncStore } from "../../shared/async-store.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import type { AgentDatabaseGenerationClaim } from "../../state/openclaw-agent-execution-admission-contract.js";
 import { resolveTimestamp } from "./lifecycle-timestamps.js";
@@ -61,7 +64,7 @@ export async function withSessionEntryWriterReads<T>(
       parent: writerReads.getStore(),
     };
     try {
-      return await writerReads.run(context, run);
+      return await runWithAsyncStore(writerReads, context, run);
     } finally {
       context.active = false;
     }
@@ -129,8 +132,8 @@ function eligible(request: Selection): request is Selection & { sessionKeys: rea
 }
 
 function captureTarget(database: Database, sessionKey: string): FileTarget | undefined {
-  const identity = readDatabasePathIdentitySync(database.path);
-  if (!identity.key.startsWith("file:")) {
+  const identity = getSqliteDatabaseAdmissionIdentityForPath(database.path);
+  if (!identity?.key.startsWith("file:")) {
     return undefined;
   }
   return {
@@ -138,22 +141,19 @@ function captureTarget(database: Database, sessionKey: string): FileTarget | und
     database: {
       kind: "file",
       physicalIdentity: identity.key.slice("file:".length),
-      nativeLocation: identity.canonicalPath,
+      nativeLocation: database.path,
       birthtime: identity.birthtime,
     },
   };
 }
 
-/** The actor owner admits committed facts; callers keep their own live assertions. */
+/** Borrow immutable committed facts; callers own edits and live-authority assertions. */
 export function readRetainedSessionEntryFacts(
   database: Database,
   request: Selection,
   nativeOwner?: AgentDatabaseGenerationClaim,
 ): SessionEntryCohortResult | undefined {
   if (!eligible(request)) {
-    return undefined;
-  }
-  if (!readSqliteDatabaseWriteTokenForPath(database.path)) {
     return undefined;
   }
   nativeOwner?.assertCurrent();

@@ -143,15 +143,13 @@ struct StatusMenuHeaderView: View {
                 }
             }
 
-            if voiceWakeSupported {
-                self.capabilityButton(
-                    title: String(localized: "Voice Wake"),
-                    symbol: "mic.fill",
-                    enabled: self.state.swabbleEnabled)
-                {
-                    let binding = MicRefreshSupport.voiceWakeBinding(for: self.state)
-                    binding.wrappedValue.toggle()
-                }
+            self.capabilityButton(
+                title: String(localized: "Voice Wake"),
+                symbol: "mic.fill",
+                enabled: self.state.swabbleEnabled)
+            {
+                let binding = MicRefreshSupport.voiceWakeBinding(for: self.state)
+                binding.wrappedValue.toggle()
             }
         }
     }

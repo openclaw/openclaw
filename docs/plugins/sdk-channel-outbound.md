@@ -45,12 +45,34 @@ The required options are:
 The monitor serializes admissions so append backoff cannot invert a lane. The
 default bounded append delays are `0`, `100`, and `300` ms; exhaustion rejects
 the transport callback instead of dispatching an event that was not made
-durable. At claim time it decodes the versioned payload, re-runs `inspect`, and
-rejects an id or lane mismatch before delivery. Set optional `inspectAsync(raw, context)` when inspection needs asynchronous
+durable. At claim time it decodes the versioned payload and normally re-runs
+`inspect`, rejecting an id or lane mismatch before delivery. Monitors may
+[reuse fresh admission facts](/plugins/sdk-channel-plugins/durable-ingress)
+when claim inspection neither prepares delivery data nor authorizes effects.
+Set optional `inspectAsync(raw, context)` when inspection needs asynchronous
 preparation. Supporting hosts prefer it over `inspect` in both admission and
 claim validation. Keep `inspect` as a synchronous fallback for older hosts, which
 ignore the companion. Both callbacks must derive the same identity and lane.
 The standard raw-event convenience monitor retains its synchronous inspection contract.
+
+Optional `prepareAdmission(raw, { facts, receivedAt, signal })` runs inside the
+same admission order, after inspection and before payload serialization. Return
+`{ raw: replacement, assertCurrent }` to bind a prepared replacement to its live
+policy authority, or `undefined` for ordinary admission. The monitor reinspects
+the replacement and refuses changed event IDs or lanes. Policy-protected
+singletons use `queue.enqueueAuthorized`; batches require
+`queue.enqueueBatchAuthorized(events, { assertCurrent })`. The native queue
+checks this assertion at transaction and commit. Protected intake never falls
+back to an unguarded or fused append-and-claim method on an older external queue;
+unprotected queues retain their existing compatibility path.
+
+Channel plugins can await `prepareChannelIngressEvent(raw, context)` from
+`openclaw/plugin-sdk/channel-ingress-runtime` inside this callback to run
+`before_channel_ingress` policies, then validate its unknown replacement through
+their provider decoder. Pass `{ channelId, accountId, signal }`; an absent result
+means no registered handlers. A present result contains `{ event, assertCurrent }`.
+Preserve the host assertion through enqueue, and never log the unsanitized value
+or substitute the original payload after a policy error.
 
 Asynchronous inspection stays inside the existing admission order. Shutdown and `waitForIdle()` join
 accepted inspections and their durable appends, including pending claim inspection
@@ -64,6 +86,15 @@ duplicates. `context.isNew` is `true` if and only if this admission inserted the
 `(queue_name, event_id)` row. It does not indicate claim ownership or eventual
 delivery. If retention previously pruned the row, a later admission may insert
 it again and report `isNew: true`.
+
+Pass an existing transport batch to `admitBatch(rawEvents)`. The core queue commits
+all inspected events in one worker request, with set-based inserts and durable
+deduplication; results preserve input order and the first payload for each event
+ID. Acknowledgments run after that commit, before the drain can dispatch the batch.
+If an acknowledgment fails, the committed rows remain recoverable and transport
+replays deduplicate normally. This does not add a buffering or coalescing window.
+Plugin-supplied queues can implement optional `enqueueBatch(events)` with the same
+atomic contract; queues exposing only `enqueue` retain individual admission.
 
 `deliver` receives `onAdopted`, `onDeferred`, `onAdoptionFinalizing`, `onFailed`,
 `onCancelled`, `onAbandoned`, and `abortSignal`. Use `onFailed` for delivery

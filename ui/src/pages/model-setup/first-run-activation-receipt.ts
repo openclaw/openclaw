@@ -3,6 +3,7 @@ import { sha256 } from "@noble/hashes/sha2.js";
 import { bytesToHex } from "@noble/hashes/utils.js";
 import { gatewayCredentialScope } from "@openclaw/gateway-client/browser";
 import type { ApplicationContext } from "../../app/context.ts";
+import { listen } from "../../lib/reactive/listener.ts";
 import { getSafeLocalStorage } from "../../local-storage.ts";
 import { activationTimeoutForKind, type ModelSetupWizardRecovery } from "./state.ts";
 
@@ -24,10 +25,10 @@ export function subscribeFirstRunActivationCleared(
     }
   };
   receiptClearedListeners.add(listener);
-  window.addEventListener("storage", onStorage);
+  const stopStorage = listen(window, "storage", { handleEvent: onStorage });
   return () => {
     receiptClearedListeners.delete(listener);
-    window.removeEventListener("storage", onStorage);
+    stopStorage();
   };
 }
 

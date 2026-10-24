@@ -1,5 +1,3 @@
-import { inspectModelReference } from "../commands/models/model-reference-validation.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { digestClawValue } from "./digest.js";
 import type {
   ClawAddCapabilityChange,
@@ -30,8 +28,6 @@ export function clawAgentCapabilityChange(
   settings: ClawOpenClawProfile["agent"],
 ): ClawAddCapabilityChange | undefined {
   const effect = {
-    ...(settings.model ? { model: settings.model } : {}),
-    ...(settings.subagents ? { subagents: settings.subagents } : {}),
     ...(settings.sandbox ? { sandbox: settings.sandbox } : {}),
     ...(settings.tools ? { tools: settings.tools } : {}),
     ...(settings.memory ? { memory: settings.memory } : {}),
@@ -46,53 +42,9 @@ export function clawAgentCapabilityChange(
     path: "agent",
     action: "create",
     reason:
-      settings.model || settings.subagents
-        ? "The new agent declares model, delegation, sandbox, tool, memory-search, or recurring heartbeat configuration."
-        : "The new agent declares sandbox, tool, memory-search, or recurring heartbeat capabilities.",
+      "The new agent declares sandbox, tool, memory-search, or recurring heartbeat capabilities.",
     effect,
   });
-}
-
-export function clawAgentConfigurationNotices(
-  agent: ClawOpenClawProfile["agent"],
-  config: OpenClawConfig,
-  agentIds: ReadonlySet<string>,
-): ClawDiagnostic[] {
-  const notices: ClawDiagnostic[] = [];
-  const notice = (code: string, path: string, message: string) => {
-    notices.push({
-      level: "warning",
-      phase: "plan",
-      code,
-      path: `$.profiles.openclaw.agent.${path}`,
-      message,
-    });
-  };
-  for (const [index, target] of (agent.subagents?.allowAgents ?? []).entries()) {
-    if (!agentIds.has(target)) {
-      notice(
-        "delegation_target_unresolved",
-        `subagents.allowAgents[${index}]`,
-        `Delegation target ${JSON.stringify(target)} is not in the local agent roster; it will be applied as declared. Install that agent before delegating to it.`,
-      );
-    }
-  }
-  const refs = agent.model ? [agent.model.primary, ...(agent.model.fallbacks ?? [])] : [];
-  for (const [index, ref] of refs.entries()) {
-    const slash = ref.indexOf("/");
-    const inspection = inspectModelReference({
-      cfg: config,
-      ref: { provider: ref.slice(0, slash), model: ref.slice(slash + 1) },
-    });
-    if (inspection.status !== "known") {
-      notice(
-        "model_not_in_catalog",
-        index === 0 ? "model.primary" : `model.fallbacks[${index - 1}]`,
-        `Model ${JSON.stringify(ref)} is not in the local model catalog; it will be applied as declared. Configure it before running the agent.`,
-      );
-    }
-  }
-  return notices;
 }
 
 function blocker(code: string, path: string, message: string): ClawDiagnostic {
@@ -123,38 +75,6 @@ export function findClawExtensionPackageCollisions(params: {
   }
 
   return collisions;
-}
-
-function extensionCapabilityChange(params: {
-  extension: ClawOpenClawExtension;
-  preflight: ClawPackagePreflightResult;
-}): ClawAddCapabilityChange {
-  const effect = {
-    id: params.extension.id,
-    source: params.extension.source,
-    ref: params.extension.ref,
-    version: params.extension.version,
-    expectedFormat: params.extension.format,
-    detectedFormat: params.preflight.detectedFormat ?? "unresolved",
-    integrity: params.preflight.integrity ?? "unresolved",
-    mapped: params.preflight.mapped ?? [],
-    unavailable: params.preflight.unavailable ?? [],
-    adapterIdentity: params.preflight.adapterIdentity ?? "unresolved",
-    ...(params.preflight.installId ? { installId: params.preflight.installId } : {}),
-    ...(params.preflight.warning ? { riskWarning: params.preflight.warning } : {}),
-  };
-  const change = {
-    kind: "package" as const,
-    id: `extension:${params.extension.id}`,
-    path: `openclaw.extensions.${params.extension.id}`,
-    action: params.preflight.action === "reuse" ? ("reuse" as const) : ("install" as const),
-    reason:
-      params.preflight.action === "reuse"
-        ? "The OpenClaw profile requires access to an existing native extension."
-        : "The OpenClaw profile requires installation of native extension content or executable code.",
-    effect,
-  };
-  return clawAddCapabilityChange(change);
 }
 
 export async function planClawExtensions(params: {
@@ -197,7 +117,10 @@ export async function planClawExtensions(params: {
         preflight.installId &&
         preflight.action &&
         preflight.detectedFormat &&
-        preflight.adapterIdentity,
+        preflight.adapterIdentity &&
+        preflight.declaredCapabilities &&
+        preflight.capabilityGrants &&
+        preflight.capabilityGrantsByPluginId,
       );
     const incompleteProvenance =
       preflight.ok && !completeProvenance
@@ -241,6 +164,13 @@ export async function planClawExtensions(params: {
       ...(preflight.integrity ? { integrity: preflight.integrity } : {}),
       ...(preflight.installId ? { installId: preflight.installId } : {}),
       ...(preflight.action ? { ownerAction: preflight.action } : {}),
+      ...(preflight.declaredCapabilities
+        ? { declaredCapabilities: preflight.declaredCapabilities }
+        : {}),
+      ...(preflight.capabilityGrants ? { capabilityGrants: preflight.capabilityGrants } : {}),
+      ...(preflight.capabilityGrantsByPluginId
+        ? { capabilityGrantsByPluginId: preflight.capabilityGrantsByPluginId }
+        : {}),
       requirementState,
       mapped: preflight.mapped ?? [],
       unavailable: preflight.unavailable ?? [],
@@ -262,6 +192,13 @@ export async function planClawExtensions(params: {
         ...(preflight.integrity ? { integrity: preflight.integrity } : {}),
         ...(preflight.installId ? { installId: preflight.installId } : {}),
         ...(preflight.action ? { ownerAction: preflight.action } : {}),
+        ...(preflight.declaredCapabilities
+          ? { declaredCapabilities: preflight.declaredCapabilities }
+          : {}),
+        ...(preflight.capabilityGrants ? { capabilityGrants: preflight.capabilityGrants } : {}),
+        ...(preflight.capabilityGrantsByPluginId
+          ? { capabilityGrantsByPluginId: preflight.capabilityGrantsByPluginId }
+          : {}),
         requirementState,
         ...(preflight.requirements ? { prerequisites: preflight.requirements } : {}),
         ...(completeProvenance
@@ -286,7 +223,35 @@ export async function planClawExtensions(params: {
       blocked: extensionPlan.blocked,
       ...(diagnostic ? { reason: diagnostic.message } : {}),
     });
-    capabilityChanges.push(extensionCapabilityChange({ extension, preflight }));
+    const effect = {
+      id: extension.id,
+      source: extension.source,
+      ref: extension.ref,
+      version: extension.version,
+      expectedFormat: extension.format,
+      detectedFormat: preflight.detectedFormat ?? "unresolved",
+      integrity: preflight.integrity ?? "unresolved",
+      mapped: preflight.mapped ?? [],
+      unavailable: preflight.unavailable ?? [],
+      adapterIdentity: preflight.adapterIdentity ?? "unresolved",
+      declaredCapabilities: preflight.declaredCapabilities ?? {},
+      capabilityGrants: preflight.capabilityGrants ?? {},
+      capabilityGrantsByPluginId: preflight.capabilityGrantsByPluginId ?? {},
+      ...(preflight.installId ? { installId: preflight.installId } : {}),
+      ...(preflight.warning ? { riskWarning: preflight.warning } : {}),
+    };
+    const change = {
+      kind: "package" as const,
+      id: `extension:${extension.id}`,
+      path: `openclaw.extensions.${extension.id}`,
+      action: preflight.action === "reuse" ? ("reuse" as const) : ("install" as const),
+      reason:
+        preflight.action === "reuse"
+          ? "The OpenClaw profile requires access to an existing native extension."
+          : "The OpenClaw profile requires installation of native extension content or executable code.",
+      effect,
+    };
+    capabilityChanges.push(clawAddCapabilityChange(change));
   }
 
   return { extensions, actions, capabilityChanges, requirements, blockers };

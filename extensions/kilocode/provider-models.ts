@@ -92,40 +92,11 @@ function parseReasoning(entry: GatewayModelEntry): boolean {
   return params.includes("reasoning") || params.includes("include_reasoning");
 }
 
-function toModelDefinition(entry: GatewayModelEntry): ModelDefinitionConfig {
-  const fallbackCost = entry.id === KILOCODE_DEFAULT_MODEL_ID ? KILOCODE_DEFAULT_COST : undefined;
-  return {
-    id: entry.id,
-    name: entry.name || entry.id,
-    reasoning: parseReasoning(entry),
-    input: parseModality(entry),
-    cost: {
-      input: toPricePerMillion(entry.pricing.prompt, fallbackCost?.input),
-      output: toPricePerMillion(entry.pricing.completion, fallbackCost?.output),
-      cacheRead: toPricePerMillion(entry.pricing.input_cache_read),
-      cacheWrite: toPricePerMillion(entry.pricing.input_cache_write),
-    },
-    // The primary provider window bounds real requests; the catalog-wide value can be larger.
-    contextWindow:
-      asPositiveSafeInteger(entry.top_provider?.context_length) ??
-      asPositiveSafeInteger(entry.context_length) ??
-      KILOCODE_DEFAULT_CONTEXT_WINDOW,
-    maxTokens:
-      asPositiveSafeInteger(entry.top_provider?.max_completion_tokens) ??
-      KILOCODE_DEFAULT_MAX_TOKENS,
-  };
-}
-
 function buildStaticCatalog(): ModelDefinitionConfig[] {
-  return KILOCODE_MODEL_CATALOG.map((model) => ({
-    id: model.id,
-    name: model.name,
-    reasoning: model.reasoning,
-    input: model.input,
-    cost: KILOCODE_DEFAULT_COST,
-    contextWindow: model.contextWindow ?? KILOCODE_DEFAULT_CONTEXT_WINDOW,
-    maxTokens: model.maxTokens ?? KILOCODE_DEFAULT_MAX_TOKENS,
-  }));
+  return buildManifestModelProviderConfig({
+    providerId: "kilocode",
+    catalog: KILOCODE_MANIFEST_CATALOG,
+  }).models;
 }
 
 function asGatewayModelEntry(value: unknown): GatewayModelEntry {
@@ -139,42 +110,6 @@ function asGatewayModelEntry(value: unknown): GatewayModelEntry {
   return entry as GatewayModelEntry;
 }
 
-function readGatewayModelRows(body: unknown): readonly unknown[] {
-  const data = (body as { data?: unknown } | undefined)?.data;
-  if (!Array.isArray(data)) {
-    throw new Error("Kilocode model list: malformed JSON response");
-  }
-  return data;
-}
-
-function projectKilocodeModels(rows: readonly unknown[]): ModelDefinitionConfig[] {
-  const models: ModelDefinitionConfig[] = [];
-  const discoveredIds = new Set<string>();
-  for (const rawEntry of rows) {
-    const id = readLiveModelCatalogStringField(rawEntry, "id");
-    try {
-      const entry = asGatewayModelEntry(rawEntry);
-      if (
-        !id ||
-        discoveredIds.has(id) ||
-        entry.architecture?.output_modalities?.includes("image")
-      ) {
-        continue;
-      }
-      models.push(toModelDefinition(entry));
-      discoveredIds.add(id);
-    } catch {
-      // A malformed row must not hide a later valid row with the same id.
-    }
-  }
-  for (const staticModel of models.length > 0 ? buildStaticCatalog() : []) {
-    if (!discoveredIds.has(staticModel.id)) {
-      models.unshift(staticModel);
-    }
-  }
-  return models;
-}
-
 export async function discoverKilocodeModels(
   options: { discoveryMode?: "strict" } = {},
 ): Promise<ModelDefinitionConfig[]> {
@@ -186,17 +121,67 @@ export async function discoverKilocodeModels(
     models: buildStaticCatalog(),
     timeoutMs: DISCOVERY_TIMEOUT_MS,
     ttlMs: 0,
-    readRows: readGatewayModelRows,
+    readRows(body: unknown): readonly unknown[] {
+      const data = (body as { data?: unknown } | undefined)?.data;
+      if (!Array.isArray(data)) {
+        throw new Error("Kilocode model list: malformed JSON response");
+      }
+      return data;
+    },
     policy: ssrfPolicyFromHttpBaseUrlAllowedHostname(KILOCODE_BASE_URL),
     auditContext: "kilocode.model_discovery",
-    projectRows: projectKilocodeModels,
+    projectRows(rows: readonly unknown[]): ModelDefinitionConfig[] {
+      const models: ModelDefinitionConfig[] = [];
+      const discoveredIds = new Set<string>();
+      for (const rawEntry of rows) {
+        const id = readLiveModelCatalogStringField(rawEntry, "id");
+        try {
+          const entry = asGatewayModelEntry(rawEntry);
+          if (
+            !id ||
+            discoveredIds.has(id) ||
+            entry.architecture?.output_modalities?.includes("image")
+          ) {
+            continue;
+          }
+          const fallbackCost =
+            entry.id === KILOCODE_DEFAULT_MODEL_ID ? KILOCODE_DEFAULT_COST : undefined;
+          models.push({
+            id: entry.id,
+            name: entry.name || entry.id,
+            reasoning: parseReasoning(entry),
+            input: parseModality(entry),
+            cost: {
+              input: toPricePerMillion(entry.pricing.prompt, fallbackCost?.input),
+              output: toPricePerMillion(entry.pricing.completion, fallbackCost?.output),
+              cacheRead: toPricePerMillion(entry.pricing.input_cache_read),
+              cacheWrite: toPricePerMillion(entry.pricing.input_cache_write),
+            },
+            // The primary provider window bounds real requests; the catalog-wide value can be larger.
+            contextWindow:
+              asPositiveSafeInteger(entry.top_provider?.context_length) ??
+              asPositiveSafeInteger(entry.context_length) ??
+              KILOCODE_DEFAULT_CONTEXT_WINDOW,
+            maxTokens:
+              asPositiveSafeInteger(entry.top_provider?.max_completion_tokens) ??
+              KILOCODE_DEFAULT_MAX_TOKENS,
+          });
+          discoveredIds.add(id);
+        } catch {
+          // A malformed row must not hide a later valid row with the same id.
+        }
+      }
+      for (const staticModel of models.length > 0 ? buildStaticCatalog() : []) {
+        if (!discoveredIds.has(staticModel.id)) {
+          models.unshift(staticModel);
+        }
+      }
+      return models;
+    },
   });
   return provider.models;
 }
 
 export function buildKilocodeModelDefinition(): ModelDefinitionConfig {
-  return {
-    ...KILOCODE_DEFAULT_MODEL,
-    input: [...KILOCODE_DEFAULT_MODEL.input],
-  };
+  return KILOCODE_DEFAULT_MODEL;
 }

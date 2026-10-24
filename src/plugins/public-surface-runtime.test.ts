@@ -1,4 +1,3 @@
-/** Verifies public-surface runtime artifact loading for bundled plugins. */
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -12,88 +11,74 @@ import {
   resolveBundledPluginSourcePublicSurfacePath,
   resolvePluginRootPublicSurfacePath,
 } from "./public-surface-runtime.js";
-import { createTestPluginRegistry } from "./registry-runtime.test-helpers.js";
+import { writeArtifact } from "./public-surface.test-support.js";
+import { createEmptyPluginRegistry } from "./registry-empty.js";
 import { withPluginRuntimeRegistryScope } from "./runtime/gateway-request-scope.js";
 import { createPluginRecord } from "./status.test-helpers.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+afterEach(() => vi.restoreAllMocks());
 const noBundledPluginOverrideEnv = {
   ...process.env,
   OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
   OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
 } satisfies NodeJS.ProcessEnv;
+function resolveBundled(
+  rootDir: string,
+  overrides: Partial<Parameters<typeof resolveBundledPluginPublicSurfacePath>[0]> = {},
+) {
+  return resolveBundledPluginPublicSurfacePath({
+    rootDir,
+    dirName: "demo",
+    artifactBasename: "api.js",
+    ...overrides,
+  });
+}
+function resolveSource(sourceRoot: string, artifactBasename: string, dirName = "demo") {
+  return resolveBundledPluginSourcePublicSurfacePath({ sourceRoot, dirName, artifactBasename });
+}
 
 describe("bundled plugin public surface runtime", () => {
-  it.each([
-    { name: "absent artifact", entry: "index.js", artifacts: [], expected: null },
-    {
-      name: "JavaScript entry with a dist artifact",
-      entry: "index.js",
-      artifacts: ["provider-policy-api.ts", "dist/provider-policy-api.js"],
-      expected: "dist/provider-policy-api.js",
-    },
-    {
-      name: "nested TypeScript entry",
-      entry: "src/index.ts",
-      artifacts: [
-        "src/provider-policy-api.ts",
-        "src/provider-policy-api.js",
-        "provider-policy-api.js",
-      ],
-      expected: "src/provider-policy-api.ts",
-    },
+  it.each<[string, string, string[], string | null]>([
+    ["absent artifact", "index.js", [], null],
+    ["JavaScript dist", "index.js", ["api.ts", "dist/api.js"], "dist/api.js"],
+    ["nested TypeScript", "src/index.ts", ["src/api.ts", "src/api.js", "api.js"], "src/api.ts"],
   ])(
-    "checks captured artifact paths once while preserving precedence ($name)",
-    async (testCase) => {
+    "checks captured artifact paths once while preserving precedence (%s)",
+    async (_name, entry, artifacts, expected) => {
       const rootDir = tempDirs.make("openclaw-public-surface-probes-");
-      const source = path.join(rootDir, testCase.entry);
-      for (const relativePath of [testCase.entry, ...testCase.artifacts]) {
-        const filename = path.join(rootDir, relativePath);
-        fs.mkdirSync(path.dirname(filename), { recursive: true });
-        fs.writeFileSync(filename, "export default {};\n");
+      const source = path.join(rootDir, entry);
+      for (const relativePath of [entry, ...artifacts]) {
+        writeArtifact(path.join(rootDir, relativePath), "export default {};\n");
       }
       const cache = createPluginCache();
-      const builder = createTestPluginRegistry();
+      const registry = createEmptyPluginRegistry();
       const record = createPluginRecord({
         id: "captured-path-probes",
         rootDir,
         source,
         origin: "global",
       });
-      builder.registry.plugins.push(record);
-      const instance = new PluginInstance(record.id, { record, registry: builder.registry });
+      registry.plugins.push(record);
+      const instance = new PluginInstance(record.id, { record, registry });
       try {
         withPluginCache(cache, () => {
           bindPluginInstanceModuleLoader({ instance, origin: record.origin, source, rootDir });
-          instance.run(() =>
-            builder.createApi(record, { config: {} }).registerProvider({
-              id: record.id,
-              label: "Captured path probes",
-              auth: [],
-            }),
-          );
         });
-        expect(builder.registry.providers[0]?.provider.id).toBe(record.id);
         const hasSource = vi.spyOn(instance, "hasModuleSource");
-        try {
-          const resolved = withPluginRuntimeRegistryScope(builder.registry, () =>
-            withPluginCache(cache, () =>
-              resolvePluginRootPublicSurfacePath({
-                pluginRoot: rootDir,
-                pluginId: record.id,
-                artifactBasename: "provider-policy-api.js",
-              }),
-            ),
-          );
-          expect(resolved).toBe(
-            testCase.expected === null ? null : path.join(rootDir, testCase.expected),
-          );
-          const paths = hasSource.mock.calls.map(([filename]) => filename);
-          expect(paths.length).toBeGreaterThan(0);
-          expect(paths).toHaveLength(new Set(paths).size);
-        } finally {
-          hasSource.mockRestore();
-        }
+        const resolved = withPluginRuntimeRegistryScope(registry, () =>
+          withPluginCache(cache, () =>
+            resolvePluginRootPublicSurfacePath({
+              pluginRoot: rootDir,
+              pluginId: record.id,
+              artifactBasename: "api.js",
+            }),
+          ),
+        );
+        expect(resolved).toBe(expected === null ? null : path.join(rootDir, expected));
+        const paths = hasSource.mock.calls.map(([filename]) => filename);
+        expect(paths.length).toBeGreaterThan(0);
+        expect(paths).toHaveLength(new Set(paths).size);
       } finally {
         await instance.dispose();
         await retirePluginCache(cache);
@@ -108,41 +93,18 @@ describe("bundled plugin public surface runtime", () => {
     ["dist-runtime", "state-retention"],
   ])("retains %s/%s entrypoints after externalization", (dist, surface) => {
     const rootDir = tempDirs.make("openclaw-retained-doctor-");
-    const retained = path.join(rootDir, dist, surface, "demo.js");
-    fs.mkdirSync(path.dirname(retained), { recursive: true });
-    fs.writeFileSync(retained, "export const legacyConfigRules = [];\n");
-    const params = { rootDir, dirName: "demo", env: noBundledPluginOverrideEnv };
-
-    expect(
-      resolveBundledPluginPublicSurfacePath({
-        ...params,
-        artifactBasename: `${surface}-api.js`,
-      }),
-    ).toBe(retained);
-    expect(
-      resolveBundledPluginPublicSurfacePath({
-        ...params,
-        bundledPluginsDir: path.join(rootDir, dist, "extensions"),
-        artifactBasename: `${surface}-api.js`,
-      }),
-    ).toBe(retained);
+    const retained = writeArtifact(path.join(rootDir, dist, surface, "demo.js"));
+    const params = { artifactBasename: `${surface}-api.js`, env: noBundledPluginOverrideEnv };
+    const resolve = (overrides: Partial<Parameters<typeof resolveBundled>[1]> = {}) =>
+      resolveBundled(rootDir, { ...params, ...overrides });
+    expect(resolve()).toBe(retained);
+    expect(resolve({ bundledPluginsDir: path.join(rootDir, dist, "extensions") })).toBe(retained);
     for (const artifactBasename of ["doctor-contract-api.js", "api.js"]) {
-      expect(resolveBundledPluginPublicSurfacePath({ ...params, artifactBasename })).toBeNull();
+      expect(resolve({ artifactBasename })).toBeNull();
     }
-    expect(
-      resolveBundledPluginPublicSurfacePath({
-        ...params,
-        artifactBasename: `${surface}-api.js`,
-        bundledPluginsDir: tempDirs.make("openclaw-foreign-plugins-"),
-      }),
-    ).toBeNull();
-    expect(
-      resolveBundledPluginPublicSurfacePath({
-        ...params,
-        artifactBasename: `${surface}-api.js`,
-        env: { ...noBundledPluginOverrideEnv, OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" },
-      }),
-    ).toBeNull();
+    expect(resolve({ bundledPluginsDir: tempDirs.make("openclaw-foreign-plugins-") })).toBeNull();
+    const disabled = { ...noBundledPluginOverrideEnv, OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" };
+    expect(resolve({ env: disabled })).toBeNull();
   });
 
   it("exports the canonical public surface source extension list", () => {
@@ -162,40 +124,21 @@ describe("bundled plugin public surface runtime", () => {
     const alias = path.join(parent, "root-alias");
     const entrySource = path.join(root, "index.js");
     const publicSurface = path.join(root, "api.js");
-    fs.mkdirSync(root);
-    fs.writeFileSync(entrySource, "export default {};\n");
-    fs.writeFileSync(publicSurface, "export {};\n");
+    writeArtifact(entrySource, "export default {};\n");
+    writeArtifact(publicSurface);
     fs.symlinkSync(root, alias, process.platform === "win32" ? "junction" : "dir");
     vi.spyOn(process, "platform", "get").mockReturnValue("win32");
 
-    expect(
-      resolvePluginRootPublicSurfacePath({
-        pluginRoot: alias,
-        entrySource,
-        artifactBasename: "api.js",
-      }),
-    ).toBe(publicSurface);
+    const params = { pluginRoot: alias, entrySource, artifactBasename: "api.js" };
+    expect(resolvePluginRootPublicSurfacePath(params)).toBe(publicSurface);
   });
 
   it.each(["my-ngc:nvidia", "../outside", "..\\outside", ".", ".."])(
     "continues rejecting %s as an actual bundled plugin directory",
     (dirName) => {
       const rootDir = tempDirs.make("openclaw-public-surface-runtime-");
-
-      expect(() =>
-        resolveBundledPluginSourcePublicSurfacePath({
-          sourceRoot: rootDir,
-          dirName,
-          artifactBasename: "provider-policy-api.js",
-        }),
-      ).toThrow(/must be a single directory/);
-      expect(() =>
-        resolveBundledPluginPublicSurfacePath({
-          rootDir,
-          dirName,
-          artifactBasename: "provider-policy-api.js",
-        }),
-      ).toThrow(/must be a single directory/);
+      expect(() => resolveSource(rootDir, "api.js", dirName)).toThrow(/must be a single directory/);
+      expect(() => resolveBundled(rootDir, { dirName })).toThrow(/must be a single directory/);
     },
   );
 
@@ -260,20 +203,12 @@ describe("bundled plugin public surface runtime", () => {
 
   it("prefers source public surfaces over stale auto-resolved dist artifacts in source checkouts", () => {
     const packageRoot = tempDirs.make("openclaw-public-surface-runtime-");
-    const sourceModulePath = path.join(packageRoot, "extensions", "demo", "api.ts");
-    const staleDistModulePath = path.join(packageRoot, "dist", "extensions", "demo", "api.js");
-    fs.mkdirSync(path.dirname(sourceModulePath), { recursive: true });
-    fs.mkdirSync(path.dirname(staleDistModulePath), { recursive: true });
-    fs.writeFileSync(sourceModulePath, "export const marker = 'source';\n", "utf8");
-    fs.writeFileSync(staleDistModulePath, "export const marker = 'stale-dist';\n", "utf8");
-
+    const sourceModulePath = writeArtifact(path.join(packageRoot, "extensions", "demo", "api.ts"));
+    writeArtifact(path.join(packageRoot, "dist", "extensions", "demo", "api.js"));
     expect(
-      resolveBundledPluginPublicSurfacePath({
-        rootDir: packageRoot,
+      resolveBundled(packageRoot, {
         bundledPluginsDir: path.join(packageRoot, "dist", "extensions"),
         bundledPluginsDirMode: "auto",
-        dirName: "demo",
-        artifactBasename: "api.js",
         env: noBundledPluginOverrideEnv,
       }),
     ).toBe(sourceModulePath);
@@ -300,37 +235,23 @@ describe("bundled plugin public surface runtime", () => {
 
   it("falls back from an incomplete package dist-runtime override to packaged dist", () => {
     const packageRoot = tempDirs.make("openclaw-public-surface-runtime-");
-    const distModulePath = path.join(packageRoot, "dist", "extensions", "demo", "api.js");
-    fs.mkdirSync(path.dirname(distModulePath), { recursive: true });
-    fs.writeFileSync(distModulePath, "export const marker = 'dist';\n", "utf8");
+    const distModulePath = writeArtifact(
+      path.join(packageRoot, "dist", "extensions", "demo", "api.js"),
+    );
 
     const runtimeBundledPluginsDir = path.join(packageRoot, "dist-runtime", "extensions");
     fs.mkdirSync(path.join(runtimeBundledPluginsDir, "demo"), { recursive: true });
 
-    expect(
-      resolveBundledPluginPublicSurfacePath({
-        rootDir: packageRoot,
-        bundledPluginsDir: runtimeBundledPluginsDir,
-        dirName: "demo",
-        artifactBasename: "api.js",
-      }),
-    ).toBe(distModulePath);
+    expect(resolveBundled(packageRoot, { bundledPluginsDir: runtimeBundledPluginsDir })).toBe(
+      distModulePath,
+    );
   });
 
   it("allows plugin-local nested artifact paths", () => {
     const sourceRoot = tempDirs.make("openclaw-local-public-surface-");
     for (const artifactBasename of ["src/outbound-adapter.js", "./test-api.js"]) {
-      const modulePath = path.resolve(sourceRoot, "demo", artifactBasename);
-      fs.mkdirSync(path.dirname(modulePath), { recursive: true });
-      fs.writeFileSync(modulePath, "export {};\n");
-
-      expect(
-        resolveBundledPluginSourcePublicSurfacePath({
-          sourceRoot,
-          dirName: "demo",
-          artifactBasename,
-        }),
-      ).toBe(modulePath);
+      const modulePath = writeArtifact(path.resolve(sourceRoot, "demo", artifactBasename));
+      expect(resolveSource(sourceRoot, artifactBasename)).toBe(modulePath);
     }
   });
 
@@ -344,13 +265,7 @@ describe("bundled plugin public surface runtime", () => {
       "C:outside.js",
       "src/C:outside.js",
     ]) {
-      expect(() =>
-        resolveBundledPluginSourcePublicSurfacePath({
-          sourceRoot,
-          dirName: "demo",
-          artifactBasename,
-        }),
-      ).toThrow(/must stay plugin-local/);
+      expect(() => resolveSource(sourceRoot, artifactBasename)).toThrow(/must stay plugin-local/);
     }
   });
 });

@@ -177,6 +177,8 @@ class SubagentRunManager extends SubagentLaunchManager {
     childAgentId?: string;
     reason?: string;
     suppressTaskDelivery?: boolean;
+    /** A withdrawn queued input never owned the session's active execution metadata. */
+    suppressSessionEffects?: boolean;
     session?: SubagentKillSession;
     withdrawQueuedReservation?: () => void;
     assertCurrent?: () => void;
@@ -290,7 +292,6 @@ class SubagentRunManager extends SubagentLaunchManager {
         mutateSubagentRuns(
           [...runIds],
           (rows) => {
-            assertSelectedCurrent();
             updated = 0;
             entriesByChildSessionKey.clear();
             queuedCollectorRunIds.length = 0;
@@ -319,7 +320,6 @@ class SubagentRunManager extends SubagentLaunchManager {
                 // it receives the same reconciliation tombstone as a direct kill.
                 continue;
               }
-              assertCurrent();
               const wasYielded = entry.pauseReason === "sessions_yield";
               const wasQueuedCollector = entry.collect && entry.execution.status === "queued";
               const collectorLaunchInFlight =
@@ -343,6 +343,7 @@ class SubagentRunManager extends SubagentLaunchManager {
                     : entry.execution.lifecycleGeneration,
                 restartRecovery: undefined,
                 suppressSessionEffects:
+                  markParams.suppressSessionEffects ||
                   resolveSubagentChildAuthority(entry).status === "legacy-unverified"
                     ? true
                     : existingKillIntent && currentKillLifecycle

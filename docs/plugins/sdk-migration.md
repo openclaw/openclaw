@@ -18,6 +18,54 @@ guide](/plugins/sdk-migration/sqlite-async). The final compatibility day is
 a Plugin SDK major version. The tables cover every affected member and its
 awaited or prepared replacement.
 
+## MCP result compatibility window
+
+OpenClaw's session and node MCP clients use the split MCP SDK v2 packages while
+continuing to negotiate legacy MCP. The published plugin boundary retains its
+MCP SDK v1 result shapes for one stable-release window: the first stable release
+containing this migration. Replacing those shapes with v2 types is scheduled for
+the following stable release; no calendar date is assigned yet.
+
+The affected contracts are `SessionMcpRuntime.callTool`, `listTools`,
+`listResourceTemplates`, and `getPrompt` from
+`openclaw/plugin-sdk/agent-harness-runtime`, its
+`prepareHarnessNativeMcpAppPreview.toolResult` input, and the runtime accepted by
+`openclaw/plugin-sdk/codex-mcp-projection`. Keep the existing v1 types when
+implementing these adapters during the compatibility window. Ordinary plugins
+that register tools or MCP connection resolvers do not need a new dependency.
+
+Host results cross this boundary losslessly. An incompatible result throws an
+error with `code: "MCP_SDK_RESULT_UNREPRESENTABLE"` and the MCP method name rather
+than dropping fields. This includes non-object `structuredContent` (arrays,
+scalars, or null), output schemas without `type: "object"`, non-object
+`properties` or non-string-array `required` in an output schema, scalar or null
+values in a tool's input/output schema `properties`, and nested fields that the
+v1 result schemas would discard.
+Metadata, resource content, prompt messages, and pagination cursors are preserved
+when representable.
+
+When the next stable release adopts v2 result types, import result and client
+types from `@modelcontextprotocol/client`, schema validators from
+`@modelcontextprotocol/core`, and the AJV adapter from
+`@modelcontextprotocol/client/validators/ajv`. Treat `structuredContent` as
+`unknown` and narrow it before reading properties; preserve JSON Schema values
+without assuming every property schema is an object. For example:
+
+```ts
+import type { CallToolResult } from "@modelcontextprotocol/client";
+
+function readSummary(result: CallToolResult): string | undefined {
+  const value = result.structuredContent;
+  if (value && typeof value === "object" && "summary" in value) {
+    return typeof value.summary === "string" ? value.summary : undefined;
+  }
+  return undefined;
+}
+```
+
+The compatibility window does not enable modern protocol serving or change MCP
+server configuration.
+
 ## What changed
 
 Several wide-open import surfaces used to let plugins reach almost anything
@@ -51,11 +99,11 @@ The latter retirement received explicit SDK-owner approval on September 30,
   load. Follow the [import path mappings](/plugins/sdk-migration/import-paths) before upgrading.
 </Warning>
 
-OpenClaw does not remove or reinterpret documented plugin behavior in the same
-change that introduces a replacement. Breaking contract changes go through a
-compatibility adapter, diagnostics, docs, and a deprecation window first. That
-applies to SDK imports, manifest fields, setup APIs, hooks, and runtime
-registration behavior.
+OpenClaw's default compatibility policy preserves documented plugin behavior
+through a compatibility adapter, diagnostics, docs, and a deprecation window.
+That applies to SDK imports, manifest fields, setup APIs, hooks, and runtime
+registration behavior. The three session-controller changes below are explicit
+exceptions with immediate enforcement and no compatibility aliases or window.
 
 `ChatCommandDefinition.category` retains the `"docks"` value accepted by the
 2026.8.1 SDK. Command lists display these legacy definitions under **Tools**.
@@ -94,6 +142,65 @@ probes. Use `rethrowIncognitoSessionError(error)` before treating other failures
 as an absent session or an uncertain probe; it also recognizes nested refusals.
 The deprecated synchronous contracts for durable sessions remain available
 through 2026-12-31 and are removed in the first January 2027 stable release.
+
+### Session-keyed harness registration
+
+The session-controller cutover changes standalone session-keyed
+`setActiveEmbeddedRun(...)` registration immediately, with no compatibility
+window. Register native runs from the host-provided, admitted harness attempt.
+Calling the function without that admission throws
+`AgentHarnessPreflightError`, with code
+`SESSION_CONTROLLER_ADMISSION_REQUIRED` and migration guidance.
+
+A hosted call inherits the host's captured operation; passing a session key,
+agent ID, or a plugin-created operation does not obtain admission. Host-owned
+detached work can carry a session key for policy, but cannot own that session's
+turn, queue, or Stop. See [Harness attempt runtime](/plugins/sdk-agent-harness/attempt-runtime)
+for the supported registration and cleanup path. Registration accepts only the
+five public identity arguments and returns a cleanup function bound to that
+exact run. The optional `replyOperation` refers to the same admitted controller
+and retains its documented tool-authority methods; it does not authorize
+standalone registration. Host admission state and native attachment records
+stay private to the host.
+
+### Gateway session control
+
+`GatewayRequestHandlerOptions.context` no longer exposes the mutable
+`chatAbortControllers` or `chatQueuedTurns` maps. The session controller owns
+admission, queued input, and Stop; plugin handlers cannot register or cancel work
+by changing shared maps. Reading either removed property fails with code
+`PLUGIN_CAPABILITY_REMOVED` and the exact capability name.
+
+Keep `api.registerGatewayMethod(...)` for plugin methods. To compose existing
+session operations from an authenticated handler, declare
+`contracts: { gatewayMethodDispatch: ["authenticated-request"] }` in the plugin
+manifest and import `dispatchGatewayMethod` from
+`openclaw/plugin-sdk/gateway-method-runtime`. Use `chat.send` to submit input,
+`chat.abort` with `{ sessionKey, runId? }` to cancel a chat run, or
+`sessions.abort` with `{ key, runId?, clearQueued? }` for session cancellation.
+These calls retain the current caller's authority and the target method's
+authorization; the declaration does not grant additional scopes. Use
+`agent.wait` to await a run, and `sessions.list` for activity observations.
+Bundled or trusted official plugins can also use `api.runtime.gateway.request`,
+session facts, and subscriptions; those runtime capabilities retain their
+existing trust restriction.
+See [Gateway runtime](/plugins/sdk-runtime/gateway-and-nodes#session-control)
+for the supported read and control paths.
+
+### Agent turn start observation
+
+`AgentTurnStartOwner.observe()` now returns `startDeadlineAtMs` instead of
+`expiresAtMs`. The old property has no alias; reading it fails with code
+`PLUGIN_CAPABILITY_REMOVED`. Update consumers of the `onStartOwner` callback
+exposed through `context.createAgentTurnFacade` to inspect the new field.
+
+A finite `startDeadlineAtMs` is the controller's deadline for execution to
+start. `null` means a live controller-owned wait has no finite start deadline;
+an absent field means no controller deadline is available yet. An `undefined`
+observation means the captured owner is no longer current. Stop watching for
+start once `executionStarted` is true. This field does not extend execution
+authority or describe the run's execution timeout. Other API fields named
+`expiresAtMs` retain their existing contracts.
 
 ### Session and command preparation
 
@@ -239,6 +346,7 @@ The anchors from the single-page version still resolve here.
 
 [Removed surfaces and replacements](/plugins/sdk-migration/removed-surfaces) — what was removed, and the replacement for each legacy API.
 
+- [Heartbeat executor and wake helpers](/plugins/sdk-migration/removed-surfaces#heartbeat-executor-and-wake-helpers)
 - <a id="removed-compatibility-surfaces"></a>[Removed compatibility surfaces](/plugins/sdk-migration/removed-surfaces#removed-compatibility-surfaces)
 - <a id="process-global-api-provider-publication"></a>[Process-global API-provider publication](/plugins/sdk-migration/removed-surfaces#process-global-api-provider-publication)
 - <a id="deactivate-hook-alias"></a>[Deactivate hook alias](/plugins/sdk-migration/removed-surfaces#deactivate-hook-alias)

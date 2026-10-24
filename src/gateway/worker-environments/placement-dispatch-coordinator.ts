@@ -60,7 +60,12 @@ export function coordinateWorkerPlacementDispatch(
     Parameters<typeof ensureWorkerSessionPlacement>[0],
     "placements" | "environments" | "redispatchPlacement"
   > & { warn: (message: string) => void },
-): WorkerPlacementDispatchService & {
+): Omit<WorkerPlacementDispatchService, "resumeProvisioning"> & {
+  resumeProvisioning(
+    placement: WorkerProvisioningDispatchPlacement,
+    reconcileEnvironmentCore: Parameters<WorkerPlacementDispatchService["resumeProvisioning"]>[1],
+    signal?: AbortSignal,
+  ): ReturnType<WorkerPlacementDispatchService["resumeProvisioning"]>;
   ensurePlacement(
     params: Omit<
       Parameters<typeof ensureWorkerSessionPlacement>[0],
@@ -490,7 +495,7 @@ export function coordinateWorkerPlacementDispatch(
       environmentId === undefined
         ? runReconciliation(() => service.reconcileActive(undefined, tryRecovery))
         : runReconciliation(() => service.reconcileActive(environmentId, waitRecovery), false),
-    resumeProvisioning: (placement, reconcileEnvironmentCore) => {
+    resumeProvisioning: (placement, reconcileEnvironmentCore, callerSignal) => {
       const inFlight = pendingOperations(placement.sessionId).find(
         (pending) => pending.kind === "recovery" && isDeepStrictEqual(pending.request, placement),
       );
@@ -507,7 +512,7 @@ export function coordinateWorkerPlacementDispatch(
       let providerSettlement = Promise.resolve();
       let providerPending = false;
       const tracked = trackPlacementOperation(async (report) => {
-        await admission.ready;
+        await racePromiseWithAbortSignal(admission.ready, callerSignal);
         return await service.resumeProvisioning(
           placement,
           async (signal) => {
@@ -524,26 +529,31 @@ export function coordinateWorkerPlacementDispatch(
           },
           report,
           (runRecovery) =>
-            admitDispatch(placement, async (signal, assertSessionCurrent) => {
-              try {
-                signal?.throwIfAborted();
-                assertSessionCurrent?.();
-                const recovered = await runRecovery(signal);
-                assertSessionCurrent?.();
-                if (providerPending) {
-                  foreground.resolve(recovered);
+            admitDispatch(
+              placement,
+              async (signal, assertSessionCurrent) => {
+                try {
+                  signal?.throwIfAborted();
+                  assertSessionCurrent?.();
+                  const recovered = await runRecovery(signal);
+                  assertSessionCurrent?.();
+                  if (providerPending) {
+                    foreground.resolve(recovered);
+                  }
+                  return recovered;
+                } catch (error) {
+                  if (providerPending) {
+                    foreground.reject(error);
+                  }
+                  throw error;
+                } finally {
+                  // Foreground timeout does not release this session's provider ownership.
+                  await providerSettlement;
                 }
-                return recovered;
-              } catch (error) {
-                if (providerPending) {
-                  foreground.reject(error);
-                }
-                throw error;
-              } finally {
-                // Foreground timeout does not release this session's provider ownership.
-                await providerSettlement;
-              }
-            }),
+              },
+              undefined,
+              callerSignal,
+            ),
         );
       });
       void admission.hold(tracked.operation);

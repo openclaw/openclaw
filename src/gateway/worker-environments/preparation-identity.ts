@@ -1,10 +1,11 @@
-import { createHash } from "node:crypto";
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { stableStringify } from "@openclaw/normalization-core/stable-stringify";
 import { NODE_WORKER_WORKSPACE_PREPARE_COMMAND } from "../../infra/node-commands.js";
 import type { WorkerProfile } from "../../plugins/types.js";
 import type { EnvironmentRecipe } from "./environment-recipe.js";
 import {
   WorkerPreparationTargetSchema,
+  type WorkerEmptyPreparationIdentity,
   type WorkerPreparationArtifacts,
   type WorkerProjectPreparationIdentity,
 } from "./preparation-identity.schema.js";
@@ -12,8 +13,14 @@ import type { WorkerProjectSnapshot } from "./workspace-git-base.js";
 
 export type WorkerProviderPreparedIntent = {
   providerId: string;
-  profileSnapshot: WorkerProfile;
-  preparationKey?: string;
+  profileSnapshot: WorkerProfile &
+    (
+      | {
+          project?: WorkerProjectSnapshot & { preparation?: WorkerProjectPreparationIdentity };
+          runtimePreparation?: never;
+        }
+      | { project?: never; runtimePreparation: WorkerEmptyPreparationIdentity }
+    );
 };
 
 export function createWorkerPreparationIdentity(params: {
@@ -66,8 +73,7 @@ export function createWorkerPreparationIdentity(params: {
     project: params.project ? { key: params.project.key } : { source: "empty" },
     workspaceProtocol: NODE_WORKER_WORKSPACE_PREPARE_COMMAND,
   };
-  const digest = (value: unknown) =>
-    createHash("sha256").update(stableStringify(value)).digest("hex");
+  const digest = (value: unknown) => sha256Hex(stableStringify(value));
   // Ready workers still bind exact runtime, profile and commit facts; reusable
   // disks only need compatible setup and boot inputs.
   return {

@@ -88,7 +88,7 @@ export {
   type SessionTranscriptCatalogPage,
 } from "../gateway/session-transcript-catalog.js";
 
-/** @deprecated Await readSessionTranscriptCatalogTitleAsync. Final compatibility day: 2026-12-31. */
+/** @deprecated Await readSessionTranscriptCatalogTitleAsync. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
 export function readSessionTranscriptCatalogTitle(
   params: Parameters<typeof readLegacySessionTranscriptCatalogTitle>[0],
 ): string | undefined {
@@ -151,7 +151,8 @@ export async function appendSessionYieldContext(
     appendSessionTranscriptReport(target, {
       kind: "custom",
       customTypes: [],
-      selectReport: () => buildSessionsYieldContextMessage(message),
+      selectReport: () =>
+        buildSessionsYieldContextMessage(message, { nativeInterruptMarker: true }),
     }),
   );
   if (!result.ok) {
@@ -164,8 +165,11 @@ export type SessionTranscriptRawDeltaParams = SessionTranscriptTargetParams &
   SessionTranscriptRawDeltaLimits;
 export type { SessionTranscriptRawDeltaResult };
 
-/** Scoped target and bounds for one active-path visible-message page. */
-export type SessionTranscriptVisibleMessageDeltaParams = SessionTranscriptTargetParams &
+/** Scoped target, bounds, and fresh-cursor start for one active-path visible-message page. */
+export type SessionTranscriptVisibleMessageDeltaParams = Pick<
+  SessionTranscriptTargetParams,
+  "agentId" | "sessionId" | "sessionKey" | "storePath"
+> &
   SessionTranscriptVisibleMessageDeltaLimits;
 
 /** Generation-aware outcome for one bounded visible-message read. */
@@ -174,7 +178,7 @@ export type SessionTranscriptVisibleMessageDeltaResult =
       kind: "page";
       /** Opaque cursor positioned after the last returned visible message. */
       cursor: string;
-      /** Ordered active-path message entries selected for this page. */
+      /** Ordered active-path message entries selected for this page, oldest first. */
       entries: SessionTranscriptMessageEntry[];
       /** True when another visible message remains after this page. */
       hasMore: boolean;
@@ -185,15 +189,24 @@ export type SessionTranscriptVisibleMessageDeltaResult =
     }
   | {
       kind: "reset";
-      /** Fresh opaque bootstrap cursor for the current visible generation. */
+      /** Fresh opaque cursor; it begins where the read's `start` mode selects. */
       cursor: string;
-      /** Stable discontinuity that invalidated the supplied cursor. */
+      /**
+       * Stable discontinuity that invalidated the supplied cursor:
+       * `anchor_missing` (the last returned entry left the active path, for example
+       * after a branch change or rewrite), `anchor_moved` (it changed position),
+       * `generation_mismatch` (the transcript was replaced), `invalid_cursor`
+       * (malformed or altered), `scope_mismatch` (another agent or session), or
+       * `session_reset` (reset-window cursors only: a newer same-session reset
+       * closed the window being drained).
+       */
       reason:
         | "anchor_missing"
         | "anchor_moved"
         | "generation_mismatch"
         | "invalid_cursor"
-        | "scope_mismatch";
+        | "scope_mismatch"
+        | "session_reset";
     }
   | { kind: "unavailable"; reason: "projection_rebuilding" }
   | { kind: "missing" };
@@ -203,7 +216,10 @@ export type SessionTranscriptMessageEntry = {
   entryId: string;
   /** Parent id after active-branch normalization; null when this is a visible root. */
   parentId: string | null;
-  /** Ordered read metadata for this full transcript read, not a resumable cursor. */
+  /**
+   * Ordered read metadata, not a resumable cursor. Delta reads report the one-based
+   * active-path message ordinal; full reads report the original transcript line.
+   */
   seq: number;
   /** Agent message payload as persisted by the runtime. */
   message: AgentMessage;
@@ -213,6 +229,8 @@ export type SessionTranscriptMessageEntry = {
   createdAt?: string;
   /** Message idempotency key, when the persisted message has one. */
   idempotencyKey?: string;
+  /** Entry id this message replaced when a transcript rewrite re-appended it. */
+  supersedesEntryId?: string;
 };
 
 export type SessionTranscriptTarget = SessionTranscriptIdentity & {
@@ -344,13 +362,16 @@ export async function readSessionTranscriptRawDelta(
   );
 }
 
-/** Reads one bounded active-path page that resumes appends and resets after discontinuities. */
+/**
+ * Reads one bounded active-path page that resumes appends and resets after discontinuities.
+ * `start: "reset-window"` begins fresh cursors at the latest reset's retained tail.
+ */
 export async function readSessionTranscriptVisibleMessageDelta(
   params: SessionTranscriptVisibleMessageDeltaParams,
 ): Promise<SessionTranscriptVisibleMessageDeltaResult> {
-  const { cursor, maxBytes, maxMessages, ...target } = params;
+  const { cursor, maxBytes, maxMessages, start, ...target } = params;
   const scope = bindSessionTranscriptStoreScope(target);
-  normalizeVisibleDeltaLimits({ maxBytes, maxMessages });
+  normalizeVisibleDeltaLimits({ maxBytes, maxMessages, start });
   let result: import("../config/sessions/session-accessor.sqlite-contract.js").SessionTranscriptVisibleMessageDeltaResult;
   try {
     result = await withSessionTranscriptDeltaReader(scope, (reader) =>
@@ -358,6 +379,7 @@ export async function readSessionTranscriptVisibleMessageDelta(
         ...(cursor !== undefined ? { cursor } : {}),
         ...(maxBytes !== undefined ? { maxBytes } : {}),
         ...(maxMessages !== undefined ? { maxMessages } : {}),
+        ...(start !== undefined ? { start } : {}),
       }),
     );
   } catch (error) {
@@ -552,7 +574,7 @@ export async function appendSessionTranscriptMessageByIdentityStrict<TMessage>(
   params: SessionTranscriptAppendMessageParams<TMessage> & {
     runId?: string;
     updateMode?: SessionTranscriptUpdateMode;
-    /** @deprecated Use preparation.prepareMessage outside the transaction. Final compatibility day: 2026-12-31. */
+    /** @deprecated Use preparation.prepareMessage outside the transaction. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
     prepareMessageAfterIdempotencyCheck?: (message: TMessage) => TMessage | undefined;
     /** Awaited after duplicate detection; undefined suppresses a fresh append. */
     prepareMessageAfterIdempotencyCheckAsync?: (message: TMessage) => Promise<TMessage | undefined>;
@@ -659,7 +681,7 @@ export async function publishSessionTranscriptUpdateByIdentity(
 
 /**
  * Runs transcript work under the write lock for the resolved scoped target.
- * @deprecated Use withSessionTranscriptWrite and preparation options. Final compatibility day: 2026-12-31.
+ * @deprecated Use withSessionTranscriptWrite and preparation options. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release.
  */
 export async function withSessionTranscriptWriteLock<T>(
   params: SessionTranscriptWriteLockParams,
@@ -731,6 +753,7 @@ function projectVisibleMessageEntry(entry: {
   }
   const createdAt = readNonEmptyString(event.timestamp);
   const idempotencyKey = readNonEmptyString(message.idempotencyKey);
+  const supersedesEntryId = readNonEmptyString(event.supersedesEntryId);
   return [
     {
       entryId,
@@ -740,6 +763,7 @@ function projectVisibleMessageEntry(entry: {
       role: message.role,
       ...(createdAt ? { createdAt } : {}),
       ...(idempotencyKey ? { idempotencyKey } : {}),
+      ...(supersedesEntryId ? { supersedesEntryId } : {}),
     },
   ];
 }

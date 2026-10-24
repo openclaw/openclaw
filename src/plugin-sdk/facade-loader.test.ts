@@ -1,6 +1,3 @@
-/**
- * Tests bundled plugin facade loader resolution and activation checks.
- */
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -31,65 +28,40 @@ const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "
 const trustedBundledPluginFixtureRoots: string[] = [];
 let trustedPluginIdCounter = 0;
 
-function captureThrownError(run: () => unknown): Error {
-  try {
-    run();
-  } catch (error) {
-    if (error instanceof Error) {
-      return error;
-    }
-    throw error;
-  }
-  throw new Error("Expected function to throw");
-}
-
-type TrustedBundledPluginFixture = {
-  bundledPluginsDir: string;
-  pluginId: string;
-  pluginRoot: string;
-};
-
 function nextTrustedPluginId(prefix: string): string {
   return `${prefix}${trustedPluginIdCounter++}`;
 }
 
-function createTrustedBundledPluginsRoot(kind: "dist" | "dist-runtime" = "dist"): string {
-  const rootDir = path.join(packageRoot, kind, "extensions");
-  fs.mkdirSync(rootDir, { recursive: true });
-  return rootDir;
-}
+const writeFixturePackageJson = (pluginRoot: string) =>
+  fs.writeFileSync(path.join(pluginRoot, "package.json"), '{"type":"module"}\n');
 
-function writeFixturePackageJson(
-  pluginRoot: string,
-  pluginId: string,
-  type: "commonjs" | "module" = "module",
-): void {
-  writeJsonFile(path.join(pluginRoot, "package.json"), {
-    name: `@openclaw/${pluginId}`,
-    version: "0.0.0",
-    type,
-  });
-}
-
-function createBundledPluginFixture(params: {
-  prefix: string;
-  marker: string;
-  kind?: "dist" | "dist-runtime";
-  pluginId?: string;
-}): TrustedBundledPluginFixture {
-  const bundledPluginsDir = createTrustedBundledPluginsRoot(params.kind);
-  const pluginId = params.pluginId ?? nextTrustedPluginId(params.prefix);
+function createPluginFixture(files: (pluginId: string) => Record<string, string>, source = false) {
+  const bundledPluginsDir = path.join(packageRoot, ...(source ? [] : ["dist"]), "extensions");
+  const pluginId = nextTrustedPluginId("openclaw-facade-fixture-");
   const pluginRoot = path.join(bundledPluginsDir, pluginId);
   fs.mkdirSync(pluginRoot, { recursive: true });
   trustedBundledPluginFixtureRoots.push(pluginRoot);
-  writeFixturePackageJson(pluginRoot, pluginId);
-  fs.writeFileSync(
-    path.join(pluginRoot, "api.js"),
-    `export const marker = ${JSON.stringify(params.marker)};\n`,
-    "utf8",
-  );
+  writeFixturePackageJson(pluginRoot);
+  process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledPluginsDir;
+  for (const [name, content] of Object.entries(files(pluginId))) {
+    fs.writeFileSync(path.join(pluginRoot, name), content, "utf8");
+  }
   return { bundledPluginsDir, pluginId, pluginRoot };
 }
+
+function createMarkerFixture(marker: string, source = false) {
+  return createPluginFixture(
+    () => ({
+      [source ? "api.ts" : "api.js"]: `export const marker = ${JSON.stringify(marker)};\n`,
+    }),
+    source,
+  );
+}
+const loadFixture = (pluginId: string) =>
+  loadBundledPluginPublicSurfaceModuleSyncCore<{ marker: string }>({
+    dirName: pluginId,
+    artifactBasename: "api.js",
+  });
 
 function createBundledChannelConfigFixtures(): string {
   const bundledPluginsDir = path.join(
@@ -104,7 +76,7 @@ function createBundledChannelConfigFixtures(): string {
   ] as const) {
     const pluginRoot = path.join(bundledPluginsDir, pluginId);
     fs.mkdirSync(pluginRoot, { recursive: true });
-    writeFixturePackageJson(pluginRoot, pluginId);
+    writeFixturePackageJson(pluginRoot);
     fs.writeFileSync(
       path.join(pluginRoot, "config-api.js"),
       [
@@ -118,63 +90,18 @@ function createBundledChannelConfigFixtures(): string {
   return bundledPluginsDir;
 }
 
-function createPackageSourcePluginFixture(params: {
-  prefix: string;
-  marker: string;
-}): TrustedBundledPluginFixture {
-  const bundledPluginsDir = path.join(packageRoot, "extensions");
-  const pluginId = nextTrustedPluginId(params.prefix);
-  const pluginRoot = path.join(bundledPluginsDir, pluginId);
-  fs.mkdirSync(pluginRoot, { recursive: true });
-  trustedBundledPluginFixtureRoots.push(pluginRoot);
-  writeFixturePackageJson(pluginRoot, pluginId);
-  fs.writeFileSync(
-    path.join(pluginRoot, "api.ts"),
-    `export const marker = ${JSON.stringify(params.marker)};\n`,
-    "utf8",
-  );
-  return { bundledPluginsDir, pluginId, pluginRoot };
-}
-
-function createCircularPluginFixture(prefix: string): TrustedBundledPluginFixture {
-  const bundledPluginsDir = createTrustedBundledPluginsRoot();
-  const pluginId = nextTrustedPluginId(prefix);
-  const pluginRoot = path.join(bundledPluginsDir, pluginId);
-  fs.mkdirSync(pluginRoot, { recursive: true });
-  trustedBundledPluginFixtureRoots.push(pluginRoot);
-  writeFixturePackageJson(pluginRoot, pluginId);
-  fs.writeFileSync(
-    path.join(pluginRoot, "facade.mjs"),
-    [
+function createCircularPluginFixture() {
+  return createPluginFixture((pluginId) => ({
+    "facade.mjs": [
       `const loadBundledPluginPublicSurfaceModuleSyncCore = globalThis.${FACADE_LOADER_GLOBAL};`,
-      `if (typeof loadBundledPluginPublicSurfaceModuleSyncCore !== "function") {`,
-      '  throw new Error("missing facade loader test loader");',
-      "}",
       `export const marker = loadBundledPluginPublicSurfaceModuleSyncCore({ dirName: ${JSON.stringify(
         pluginId,
       )}, artifactBasename: "api.js" }).marker;`,
       "",
     ].join("\n"),
-    "utf8",
-  );
-  fs.writeFileSync(
-    path.join(pluginRoot, "helper.js"),
-    ['import { marker } from "./facade.mjs";', "export const circularMarker = marker;", ""].join(
-      "\n",
-    ),
-    "utf8",
-  );
-  fs.writeFileSync(
-    path.join(pluginRoot, "api.js"),
-    ['import "./helper.js";', 'export const marker = "circular-ok";', ""].join("\n"),
-    "utf8",
-  );
-  return { bundledPluginsDir, pluginId, pluginRoot };
-}
-
-function writeJsonFile(filePath: string, value: unknown): void {
-  fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  fs.writeFileSync(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+    "helper.js": 'import { marker } from "./facade.mjs";\nexport const circularMarker = marker;\n',
+    "api.js": 'import "./helper.js";\nexport const marker = "circular-ok";\n',
+  }));
 }
 
 afterEach(() => {
@@ -192,10 +119,7 @@ describe("plugin-sdk facade loader", () => {
     const method = function (this: unknown) {
       return this;
     };
-    const original = {
-      value: 1,
-      method,
-    };
+    const original = { value: 1, method };
     const prototype = { inherited: true };
     Object.setPrototypeOf(original, prototype);
     const symbol = Symbol("receiver");
@@ -270,36 +194,27 @@ describe("plugin-sdk facade loader", () => {
   });
 
   it("falls back to package source surfaces when an override dir lacks a bundled plugin", () => {
-    const fixture = createPackageSourcePluginFixture({
-      prefix: "openclaw-facade-loader-source-fallback-",
-      marker: "source-fallback",
-    });
+    const fixture = createMarkerFixture("source-fallback", true);
     process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = createTempDirSync("openclaw-facade-loader-empty-");
 
-    const loaded = loadBundledPluginPublicSurfaceModuleSyncCore<{
-      marker: string;
-    }>({
-      dirName: fixture.pluginId,
-      artifactBasename: "api.js",
-    });
-
-    expect(loaded.marker).toBe("source-fallback");
+    expect(loadFixture(fixture.pluginId).marker).toBe("source-fallback");
   });
 
   it("keeps bundled facade loads disabled when bundled plugins are disabled", () => {
     process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS = "1";
     delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
 
-    const error = captureThrownError(() =>
+    const load = () =>
       loadBundledPluginPublicSurfaceModuleSyncCore({
         dirName: "browser",
         artifactBasename: "browser-maintenance.js",
-      }),
-    );
+      });
 
-    expect(error).toBeInstanceOf(MissingPublicSurfaceError);
-    expect(error.message).toBe(
-      "Unable to resolve bundled plugin public surface browser/browser-maintenance.js",
+    expect(load).toThrow(MissingPublicSurfaceError);
+    expect(load).toThrow(
+      new MissingPublicSurfaceError(
+        "Unable to resolve bundled plugin public surface browser/browser-maintenance.js",
+      ),
     );
   });
 
@@ -310,35 +225,23 @@ describe("plugin-sdk facade loader", () => {
     fs.mkdirSync(boundaryRoot, { recursive: true });
     fs.writeFileSync(outsidePath, 'export const marker = "outside";\n', "utf8");
 
-    const error = captureThrownError(() =>
+    const load = () =>
       loadFacadeModuleAtLocationSync({
         location: { modulePath: outsidePath, boundaryRoot },
         trackedPluginId: "boundary-failure",
-      }),
-    );
+      });
 
-    expect(error).toBeInstanceOf(Error);
-    expect(error).not.toBeInstanceOf(MissingPublicSurfaceError);
-    expect(error.message).toBe(
-      `Unable to open bundled plugin public surface ${outsidePath}: outside plugin root`,
+    expect(load).toThrow(
+      new Error(`Unable to open bundled plugin public surface ${outsidePath}: outside plugin root`),
     );
+    expect(load).not.toThrow(MissingPublicSurfaceError);
   });
 
   it("shares loaded facade ids with facade-runtime", () => {
-    const fixture = createBundledPluginFixture({
-      prefix: "openclaw-facade-loader-ids-",
-      marker: "identity-check",
-    });
-    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = fixture.bundledPluginsDir;
+    const fixture = createMarkerFixture("identity-check");
 
-    const first = loadBundledPluginPublicSurfaceModuleSyncCore<{ marker: string }>({
-      dirName: fixture.pluginId,
-      artifactBasename: "api.js",
-    });
-    const second = loadBundledPluginPublicSurfaceModuleSyncCore<{ marker: string }>({
-      dirName: fixture.pluginId,
-      artifactBasename: "api.js",
-    });
+    const first = loadFixture(fixture.pluginId);
+    const second = loadFixture(fixture.pluginId);
 
     expect(first).toBe(second);
     expect(first.marker).toBe("identity-check");
@@ -375,17 +278,11 @@ describe("plugin-sdk facade loader", () => {
   });
 
   it("breaks circular facade re-entry during module evaluation", () => {
-    const fixture = createCircularPluginFixture("openclaw-facade-loader-circular-");
-    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = fixture.bundledPluginsDir;
+    const fixture = createCircularPluginFixture();
     (globalThis as typeof globalThis & Record<string, unknown>)[FACADE_LOADER_GLOBAL] =
       loadBundledPluginPublicSurfaceModuleSyncCore;
 
-    const loaded = loadBundledPluginPublicSurfaceModuleSyncCore<{ marker: string }>({
-      dirName: fixture.pluginId,
-      artifactBasename: "api.js",
-    });
-
-    expect(loaded.marker).toBe("circular-ok");
+    expect(loadFixture(fixture.pluginId).marker).toBe("circular-ok");
   });
 
   it("loads a facade when Windows reports the root and module through physical aliases", () => {

@@ -45,6 +45,8 @@ The diagnostics archive excludes secrets, tokens, raw chat payloads, and raw log
 
 The archive's config summary counts agent, plugin, and channel entries declared in the saved file. Shared channel settings and `$include` directives are excluded from those counts. Diagnostics do not expand included files.
 
+In sanitized config and snapshots, map keys recognized as private identifiers (such as phone numbers, email addresses, user/chat IDs, and tokens) become opaque numbered placeholders. Known private config maps, including per-DM overrides (`dms`), also hide identifiers without a recognizable text pattern. Repeated identifier keys share a placeholder within the archive; ordinary field names remain intact. Placeholders contain no hash or recoverable portion of the identifier.
+
 ## Failed update recovery
 
 Interactive update recovery uses this same handoff after the updater releases its maintenance state. It starts from the captured update failure. It defers fresh Doctor checks and archive collection to the repair agent, so checks against the broken installation do not delay the handoff. The agent starts in the operator's captured working directory, or their OS home if that directory was removed or became inaccessible. Absolute installation selectors still identify the state, config, and default workspace to repair, even when the state directory cannot be accessed or created.
@@ -55,7 +57,7 @@ The prompt preserves the original error, before and after versions, and recorded
 
 Updates using `--yes`, JSON output, or a session without a TTY never start a repair agent. They save triage diagnostics and print the explicit opt-in command `openclaw triage --run --update-result <path>`. Managed handoff updates and foreground `gateway run` startup failures also collect diagnostics only. Initial argument, ownership, and installation refusals retain their existing output. Standalone diagnostics preserve a pending failed-update notification as context. Embedded validation selects current ledger history through the resolution owner. These reads do not consume the notification or create a state database. Delivery routes and continuation instructions are excluded.
 
-Use `--update-result <path>` to include an updater's saved failure artifact. Triage reads at most 8 KiB of valid UTF-8 JSON and validates the failure record. Its printed embedded handoff command uses a sanitized support export, so it remains usable after a temporary updater input is deleted. Interactive handoffs with a captured failure defer fresh diagnostics. JSON and forced non-interactive runs still collect them.
+Use `--update-result <path>` to include an updater's saved failure artifact. Triage requires a regular file (or a symlink to one), rejects FIFOs without waiting for a writer, and reads at most 8 KiB of valid UTF-8 JSON before validating the failure record. Its printed embedded handoff command uses a sanitized support export, so it remains usable after a temporary updater input is deleted. Interactive handoffs with a captured failure defer fresh diagnostics. JSON and forced non-interactive runs still collect them.
 
 The repair prompt directs the agent to preserve migrated state, investigate before rolling back or restarting, and verify the intended installation plus Gateway health and RPC connectivity after repair. A successful agent exit does not change the original updater failure into a successful update.
 

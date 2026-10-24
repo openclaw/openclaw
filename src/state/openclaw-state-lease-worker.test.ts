@@ -3,18 +3,18 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
-  createSqliteWorkerOperationAdmission,
-  withSqliteWorkerOperationAdmission,
+  createSqliteWorkerOperationAdmission as createAdmission,
+  withSqliteWorkerOperationAdmission as withAdmission,
 } from "../infra/sqlite-worker-operation-admission.js";
 import type { OpenClawStateDatabase } from "./openclaw-state-db-contract.js";
 import { leaseHeartbeatState } from "./openclaw-state-lease-heartbeat-shared.js";
-import { executeOpenClawStateLeaseCommand } from "./openclaw-state-lease-worker.js";
+import { executeOpenClawStateLeaseCommand as executeLease } from "./openclaw-state-lease-worker.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
 
 it.each(["renewed", "replaced", "expired", "refused"] as const)(
-  "verifies lease state after host admission without pinning the WAL (%s)",
+  "verifies without pinning WAL (%s)",
   (change) => {
     let now = 10_000;
     vi.spyOn(Date, "now").mockImplementation(() => now);
@@ -22,7 +22,9 @@ it.each(["renewed", "replaced", "expired", "refused"] as const)(
     const db = new DatabaseSync(databasePath);
     const peer = new DatabaseSync(databasePath);
     const identity = { scope: "synthetic", key: "verify", owner: "original" };
-    const observation = new BigInt64Array(new SharedArrayBuffer(48));
+    const observation = new BigInt64Array(
+      new SharedArrayBuffer((leaseHeartbeatState.ownerFence + 1) * BigInt64Array.BYTES_PER_ELEMENT),
+    );
     const database: OpenClawStateDatabase = {
       db,
       path: databasePath,
@@ -43,7 +45,7 @@ it.each(["renewed", "replaced", "expired", "refused"] as const)(
     `);
     peer.exec("PRAGMA busy_timeout=0");
     let checkpoint: unknown;
-    const admission = createSqliteWorkerOperationAdmission(
+    const admission = createAdmission(
       (request, grant) => {
         expect(request).toEqual({
           stage: "transaction",
@@ -71,24 +73,19 @@ it.each(["renewed", "replaced", "expired", "refused"] as const)(
       return "ok";
     });
     const verify = () =>
-      withSqliteWorkerOperationAdmission(admission, () =>
-        executeOpenClawStateLeaseCommand(
-          { type: "stateLease.verify", input: { identity } },
-          database,
-        ),
+      withAdmission(admission, () =>
+        executeLease({ type: "stateLease.verify", input: { identity } }, database),
       );
     try {
       if (change === "renewed") {
         expect(verify()).toBe(30_000);
-        expect(Atomics.load(observation, leaseHeartbeatState.expiresAt)).toBe(30_000n);
       } else {
-        expect(verify).toThrow(
-          expect.objectContaining({
-            code: change === "refused" ? "closed" : "OPENCLAW_STATE_LEASE_LOST",
-          }),
-        );
-        expect(Atomics.load(observation, leaseHeartbeatState.expiresAt)).toBe(0n);
+        const code = change === "refused" ? "closed" : "OPENCLAW_STATE_LEASE_LOST";
+        expect(verify).toThrow(expect.objectContaining({ code }));
       }
+      expect(Atomics.load(observation, leaseHeartbeatState.expiresAt)).toBe(
+        change === "renewed" ? 30_000n : 0n,
+      );
       if (change !== "refused") {
         expect(checkpoint).toMatchObject({ busy: 0, log: 0, checkpointed: 0 });
       } else {

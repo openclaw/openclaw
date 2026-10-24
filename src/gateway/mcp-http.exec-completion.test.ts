@@ -12,12 +12,9 @@ import { waitForExecScope } from "../agents/bash-process-registry.js";
 import { testing as cliBackendsTesting } from "../agents/cli-backends.test-support.js";
 import { buildDefaultTestCliBackend } from "../agents/cli-runner.test-helpers.js";
 import * as cliExecution from "../agents/cli-runner/execute.js";
-import { createCliRunCurrentAssertion } from "../agents/cli-runner/execution-target.js";
+import { setRawCliBackendForPrepareTest } from "../agents/cli-runner/prepare-mcp.test-support.js";
 import { prepareCliRunContext } from "../agents/cli-runner/prepare.js";
-import {
-  resetCliRunnerPrepareTestDeps,
-  setCliRunnerPrepareTestDeps,
-} from "../agents/cli-runner/prepare.test-support.js";
+import * as preparation from "../agents/cli-runner/prepare.test-support.js";
 import type { PreparedCliRunContext } from "../agents/cli-runner/types.js";
 import "../auto-reply/dispatch.js";
 import { prewarmConfigDrivenReplyRuntime } from "../auto-reply/reply/get-reply-from-config.runtime.js";
@@ -30,31 +27,21 @@ import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { getProcessSupervisor } from "../process/supervisor/index.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
-import {
-  createOpenClawTestState,
-  type OpenClawTestState,
-} from "../test-utils/openclaw-test-state.js";
+import * as testState from "../test-utils/openclaw-test-state.js";
 import { closeMcpLoopbackServer, ensureMcpLoopbackServer } from "./mcp-http.js";
-import { getActiveMcpLoopbackRuntime } from "./mcp-http.loopback-runtime.js";
-
-type McpResponse = {
-  result?: {
-    tools?: Array<{ name: string }>;
-    content?: Array<{ type: string; text?: string }>;
-    isError?: boolean;
-  };
-};
+import * as mcp from "./mcp-http.test-support.js";
 
 type ToolSurface = { native: string[] | undefined; mcp: string[] };
-let state: OpenClawTestState;
+let state: testState.OpenClawTestState;
 let config: OpenClawConfig;
 const contexts: PreparedCliRunContext[] = [];
 const admissions: PreparedAgentRunAdmission[] = [];
 const receipts: sessionEvents.SessionEventReceipt[] = [];
 const sessionKeys: string[] = [];
+const workspacePath = (name: string) => path.join(state.workspaceDir, name);
 
 beforeAll(async () => {
-  state = await createOpenClawTestState({
+  state = await testState.createOpenClawTestState({
     prefix: "openclaw-mcp-exec-completion-",
     layout: "state-only",
     env: {
@@ -85,28 +72,16 @@ beforeAll(async () => {
   setRuntimeConfigSnapshot(config);
   openOpenClawStateDatabase();
   setActivePluginRegistry(createEmptyPluginRegistry());
-  cliBackendsTesting.setDepsForTest({
-    resolvePluginSetupCliBackend: () => undefined,
-    resolveRuntimeCliBackends: () => [
-      {
-        ...buildDefaultTestCliBackend({ bundleMcp: true }),
-        id: "claude-cli",
-        autoSelectAuthProfile: false,
-        nativeToolMode: "selectable",
-        toolAvailabilityEnforcement: "execution-args",
-        hostOwnedTools: ["exec", "process", "apply_patch"],
-        resolveExecutionArgs: ({ baseArgs }) => baseArgs,
-      },
-    ],
+  setRawCliBackendForPrepareTest({
+    ...buildDefaultTestCliBackend({ bundleMcp: true }),
+    id: "claude-cli",
+    autoSelectAuthProfile: false,
+    nativeToolMode: "selectable",
+    toolAvailabilityEnforcement: "execution-args",
+    hostOwnedTools: ["exec", "process", "apply_patch"],
+    resolveExecutionArgs: ({ baseArgs }) => baseArgs,
   });
-  setCliRunnerPrepareTestDeps({
-    isWorkspaceBootstrapPending: async () => false,
-    makeBootstrapWarn: () => () => {},
-    resolveBootstrapContextForRun: async () => ({ bootstrapFiles: [], contextFiles: [] }),
-    resolveOpenClawReferencePaths: async () => ({ docsPath: null, sourcePath: null }),
-    prepareClaudeCliSkillsPlugin: async () => ({ args: [], cleanup: async () => {} }),
-    loadManifestModelCatalog: () => [],
-  });
+  mcp.setMinimalCliPrepareDeps(preparation.setCliRunnerPrepareTestDeps);
   const enqueue = sessionEvents.enqueueSessionEventForHost;
   vi.spyOn(sessionEvents, "enqueueSessionEventForHost").mockImplementation((...args) => {
     const receipt = enqueue(...args);
@@ -118,58 +93,28 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-  for (const receipt of receipts) {
-    receipt.cancel();
-  }
+  receipts.forEach((receipt) => receipt.cancel());
   await Promise.all(sessionKeys.map((sessionKey) => waitForExecScope(sessionKey)));
   await Promise.all(receipts.map((receipt) => receipt.settled));
   for (const context of contexts) {
     await context.preparedBackend.cleanup?.();
   }
-  for (const admission of admissions) {
-    admission.close();
-  }
+  admissions.forEach((admission) => admission.close());
   await closeMcpLoopbackServer();
-  resetCliRunnerPrepareTestDeps();
+  preparation.resetCliRunnerPrepareTestDeps();
   cliBackendsTesting.resetDepsForTest();
   vi.restoreAllMocks();
   await state?.cleanup();
 });
 
-function connectPreparedTurn(context: PreparedCliRunContext, signal: AbortSignal) {
-  const runtime = expectDefined(getActiveMcpLoopbackRuntime(), "isolated MCP runtime");
-  const token = expectDefined(context.preparedBackend.env?.OPENCLAW_MCP_TOKEN, "CLI grant");
-  const captureKey = `capture-${context.params.runId}`;
-  context.preparedBackend.mcpClientGrantCapture?.activate(
-    captureKey,
-    createCliRunCurrentAssertion(context.params),
-  );
-  return async (
-    method: "tools/list" | "tools/call",
-    args?: Record<string, unknown>,
-    toolName = "exec",
-  ) => {
-    const response = await fetch(`http://127.0.0.1:${runtime.port}/mcp`, {
-      method: "POST",
-      signal,
-      headers: {
-        authorization: `Bearer ${token}`,
-        "content-type": "application/json",
-        "x-openclaw-cli-capture-key": captureKey,
-      },
-      body: JSON.stringify({
-        jsonrpc: "2.0",
-        id: 1,
-        method,
-        ...(method === "tools/call" ? { params: { name: toolName, arguments: args } } : {}),
-      }),
-    });
-    return { status: response.status, body: (await response.json()) as McpResponse };
-  };
+async function connectPreparedTurn(context: PreparedCliRunContext, signal: AbortSignal) {
+  const { rpc } = await mcp.connectPreparedCliTurn(context, signal);
+  return (method: "tools/list" | "tools/call", args?: Record<string, unknown>, name = "exec") =>
+    rpc(method, method === "tools/call" ? { name, arguments: args ?? {} } : undefined);
 }
 
 async function readToolSurface(context: PreparedCliRunContext, signal: AbortSignal) {
-  const response = await connectPreparedTurn(context, signal)("tools/list");
+  const response = await (await connectPreparedTurn(context, signal))("tools/list");
   expect(response.status).toBe(200);
   return {
     native: context.params.cliToolAvailability?.native,
@@ -179,14 +124,16 @@ async function readToolSurface(context: PreparedCliRunContext, signal: AbortSign
   } satisfies ToolSurface;
 }
 
-it.for([
-  { name: "unrestricted native tools", toolsAllow: undefined },
-  { name: "a finite caller cap", toolsAllow: ["exec", "process", "session_status"] },
+it.for<[string, string, string, string, string[] | undefined]>([
+  ["no caller cap", "exec-full", "text", "completed", undefined],
+  ["a finite caller cap", "exec-capped", "text", "failed", ["exec", "process", "session_status"]],
+  ["an empty CLI final", "exec-empty", "empty", "failed", undefined],
+  ["a failed CLI final", "exec-failed", "failed", "failed", undefined],
 ])(
-  "retains the CLI surface and enforces completion effects with $name",
-  async (source, { signal }) => {
-    const sessionId = source.toolsAllow ? "exec-capped" : "exec-full";
+  "retains the CLI surface and enforces completion effects with %s",
+  async ([, sessionId, terminal, expectedStatus, toolsAllow], { signal }) => {
     const sessionKey = `agent:main:${sessionId}`;
+    const session = { agentId: "main", sessionKey, sessionId };
     sessionKeys.push(sessionKey);
     const entry = {
       sessionId,
@@ -202,14 +149,10 @@ it.for([
     const original = await prepareCliRunContext({
       preparedRunAdmission: admission,
       config,
-      agentId: "main",
-      sessionKey,
-      sessionId,
+      ...session,
       sessionEntry: entry,
       sessionTarget: {
-        agentId: "main",
-        sessionKey,
-        sessionId,
+        ...session,
         storePath: resolveSessionStorePathCore(config.session?.store, { agentId: "main" }),
       },
       sessionFile: state.path(`${sessionId}.jsonl`),
@@ -221,19 +164,18 @@ it.for([
       prompt: "Run the background command and continue after completion.",
       skillsSnapshot: { prompt: "", skills: [] },
       senderIsOwner: true,
-      toolsAllow: source.toolsAllow,
+      toolsAllow,
       runId,
       timeoutMs: 60_000,
       abortSignal: signal,
     });
     contexts.push(original);
     const normalSurface = await readToolSurface(original, signal);
-    expect(normalSurface.mcp).toContain("exec");
-    expect(normalSurface.mcp).toContain("session_status");
-    expect(normalSurface.native).toEqual(source.toolsAllow ? [] : undefined);
-    if (source.toolsAllow) {
-      expect(normalSurface.mcp).toEqual(["exec", "process", "session_status"]);
-    }
+    // Ordinary managed Claude turns already use the mediated surface completions require.
+    expect(normalSurface).toEqual({
+      native: [],
+      mcp: toolsAllow ?? expect.arrayContaining(["exec", "session_status"]),
+    });
 
     const completionSurfaces: ToolSurface[] = [];
     // Replace only native model I/O; event dispatch, admission, CLI preparation and MCP stay real.
@@ -244,7 +186,7 @@ it.for([
         expect(wake.params.sessionKey).toBe(sessionKey);
         expect(wake.params.prompt).toContain("exec-completion-proof");
         completionSurfaces.push(await readToolSurface(wake, signal));
-        const call = connectPreparedTurn(wake, signal);
+        const call = await connectPreparedTurn(wake, signal);
         const launches = vi.spyOn(getProcessSupervisor(), "spawn");
         const allowedName = `allowed-${sessionId}.txt`;
         const deniedName = `denied-${sessionId}.txt`;
@@ -252,14 +194,11 @@ it.for([
           const allowed = await call("tools/call", {
             command: `node -e "require('node:fs').writeFileSync('${allowedName}', 'allowed')"`,
           });
-          expect(allowed.status).toBe(200);
-          expect(allowed.body.result?.isError).toBe(false);
-          expect(await fs.readFile(path.join(state.workspaceDir, allowedName), "utf8")).toBe(
-            "allowed",
-          );
+          expect(allowed).toMatchObject({ status: 200, body: { result: { isError: false } } });
+          expect(await fs.readFile(workspacePath(allowedName), "utf8")).toBe("allowed");
           expect(launches).toHaveBeenCalledOnce();
           launches.mockClear();
-          if (source.toolsAllow) {
+          if (toolsAllow) {
             const forbidden = await call(
               "tools/call",
               { input: `*** Begin Patch\n*** Add File: ${deniedName}\n+forbidden\n*** End Patch` },
@@ -270,7 +209,7 @@ it.for([
               isError: true,
               content: [{ type: "text", text: "Tool not available: apply_patch" }],
             });
-            await expect(fs.stat(path.join(state.workspaceDir, deniedName))).rejects.toMatchObject({
+            await expect(fs.stat(workspacePath(deniedName))).rejects.toMatchObject({
               code: "ENOENT",
             });
             await updateSessionEntry({ agentId: "main", sessionKey }, () => ({
@@ -279,21 +218,25 @@ it.for([
             const revoked = await call("tools/call", {
               command: `node -e "require('node:fs').writeFileSync('${deniedName}', 'forbidden')"`,
             });
-            expect(revoked.status).toBe(401);
-            expect(revoked.body).toEqual({ error: "unauthorized" });
+            expect(revoked).toEqual({ status: 401, body: { error: "unauthorized" } });
             expect(launches).not.toHaveBeenCalled();
-            await expect(fs.stat(path.join(state.workspaceDir, deniedName))).rejects.toMatchObject({
+            await expect(fs.stat(workspacePath(deniedName))).rejects.toMatchObject({
               code: "ENOENT",
             });
           }
         } finally {
           launches.mockRestore();
         }
-        return { text: "Completion observed." };
+        if (terminal === "failed") {
+          throw new Error("Synthetic CLI provider failure.");
+        }
+        return { text: terminal === "empty" ? "" : "Completion observed." };
       });
     const receiptIndex = receipts.length;
     try {
-      const response = await connectPreparedTurn(original, signal)("tools/call", {
+      const response = await (
+        await connectPreparedTurn(original, signal)
+      )("tools/call", {
         command: "echo exec-completion-proof",
         background: true,
       });
@@ -307,15 +250,18 @@ it.for([
       await withinTest(waitForExecScope(sessionKey), signal);
       const receipt = expectDefined(receipts[receiptIndex], "background exec completion");
       await expect(withinTest(receipt.accepted, signal)).resolves.toEqual({ ok: true });
-      await expect(withinTest(receipt.settled, signal)).resolves.toMatchObject({
-        status: "completed",
-        executionStarted: true,
-      });
+      const outcome = await withinTest(receipt.settled, signal);
+      expect(outcome).toMatchObject({ status: expectedStatus, executionStarted: true });
+      if (expectedStatus === "failed") {
+        expect(outcome.error).toBeTruthy();
+        expect(outcome).toMatchObject({ delivered: false, deliveryAttempted: false });
+      }
+      if (toolsAllow) {
+        expect(outcome.error).toContain("Session event permissions were restricted");
+      }
       expect(completionSurfaces).toEqual([normalSurface]);
     } finally {
-      for (const receipt of receipts.slice(receiptIndex)) {
-        receipt.cancel();
-      }
+      receipts.slice(receiptIndex).forEach((receipt) => receipt.cancel());
       await Promise.all(receipts.slice(receiptIndex).map((receipt) => receipt.settled));
       execute.mockRestore();
     }

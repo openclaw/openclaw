@@ -155,15 +155,6 @@ function withTalkBaseTtsSpeakerSelectionCompat(
       }),
     );
   }
-  for (const [key, value] of Object.entries(baseTts)) {
-    if (key === "providers") {
-      continue;
-    }
-    const record = asOptionalRecord(value);
-    if (record) {
-      next[key] = withSpeakerSelectionCompat(record);
-    }
-  }
   return next;
 }
 
@@ -343,7 +334,7 @@ function readTalkCatalog(
             { inheritRequestScope: false },
           ),
         );
-        if ((!expired || !retained.snapshot) && !lifetime?.aborted) {
+        if (!lifetime?.aborted) {
           retained.snapshot = snapshot;
         }
         if (!expired) {
@@ -562,6 +553,9 @@ async function buildTalkCatalog(
           }
           if (capabilities?.voicesByModel) {
             entry.voicesByModel = capabilities.voicesByModel;
+          }
+          if (capabilities?.modelFamilySettings) {
+            entry.modelFamilySettings = capabilities.modelFamilySettings;
           }
           if (provider.aliases?.length) {
             entry.aliases = [...provider.aliases];

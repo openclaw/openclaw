@@ -23,7 +23,6 @@
 }
 
 .picker-select__chevron {
-  margin-inline-start: var(--space-2);
   font-size: var(--control-ui-text-sm);
   color: var(--muted);
 }
@@ -70,7 +69,6 @@
   color: color-mix(in srgb, var(--text) 80%, var(--accent));
 }
 
-.picker-select [slot="start"],
 .picker-select__leading {
   display: inline-flex;
   align-items: center;
@@ -104,8 +102,7 @@
   white-space: normal;
 }
 
-.picker-select__option:is(:state(current), :state(selected), [data-active], [aria-selected="true"])
-  .picker-select__description {
+.picker-select__option:is([data-active], [aria-selected="true"]) .picker-select__description {
   color: inherit;
 }
 

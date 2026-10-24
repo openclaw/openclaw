@@ -39,12 +39,9 @@ export function getDeliveryQueueEntryStatus(queueName: string, id: string, state
 }
 
 /** Seed exact queue rows, including legacy and terminal states outside live admission. */
-export function seedDeliveryQueueEntry(
-  params: UpsertDeliveryQueueEntryParams,
-  context?: DeliveryQueueStateContext,
-): boolean {
+export function seedDeliveryQueueEntry(params: UpsertDeliveryQueueEntryParams): boolean {
   return upsertDeliveryQueueEntryInDatabase(
     params,
-    openOpenClawStateDatabase({ env: resolveDeliveryQueueStateEnv(params.stateDir, context) }),
+    openOpenClawStateDatabase({ env: resolveDeliveryQueueStateEnv(params.stateDir) }),
   );
 }

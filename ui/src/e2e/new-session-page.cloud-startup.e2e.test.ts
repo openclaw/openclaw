@@ -1,11 +1,15 @@
+import type { Page } from "playwright";
 import { expect, it } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { controlUiE2eBuiltModuleRequest } from "./control-ui-built-module.test-support.ts";
+import { holdModuleResponse } from "./control-ui-e2e-suite.test-support.ts";
 import {
+  pollDisabled,
+  pollAttribute,
+  pollCount,
+  pollValue,
   ONE_PIXEL_PNG_B64,
   SESSION_LIST_DEFAULTS,
-  WORKSPACE,
   controlUiSessionPath,
   createCloudAgentsListResponse,
   createNewSessionPageE2eSuite,
@@ -16,24 +20,41 @@ import {
   replaceGatewayClient,
   waitForCommittedChatRoute,
 } from "./new-session-page.test-support.ts";
+import {
+  cloudWorkspaceResponses,
+  disableComposerStorage,
+  expectNoRequests,
+} from "./new-session-startup-family.test-support.ts";
+
 const suite = createNewSessionPageE2eSuite();
+const cloudAgents = createCloudAgentsListResponse();
+
+async function chooseCloud(page: Page) {
+  await page.locator("#new-session-where-trigger").click();
+  await page.locator('[data-value="cloud:aws"]').click();
+}
+
+async function openCloudPage(page: Page, overrides: Record<string, unknown>) {
+  const gateway = await installMockGateway(page, {
+    workspaceGit: true,
+    methodResponses: {
+      ...cloudWorkspaceResponses(),
+      ...overrides,
+    },
+  });
+  await page.goto(`${suite.server.baseUrl}new`);
+  await gateway.waitForRequest("environments.list");
+  return gateway;
+}
 
 suite.define(() => {
   it("clears cloud placement when the selected agent changes", async () => {
-    const context = await suite.browser.newContext({ locale: "en-US", serviceWorkers: "block" });
-    const page = await context.newPage();
-    const gateway = await installMockGateway(page, {
-      workspaceGit: true,
-      methodResponses: {
+    await suite.withPage({ locale: "en-US", serviceWorkers: "block" }, async ({ page }) => {
+      const gateway = await openCloudPage(page, {
         "agents.list": {
+          ...cloudAgents,
           agents: [
-            {
-              id: "cloud",
-              identity: { name: "Cloud" },
-              name: "Cloud",
-              workspace: WORKSPACE,
-              workspaceGit: true,
-            },
+            ...cloudAgents.agents,
             {
               id: "local",
               identity: { name: "Local" },
@@ -42,55 +63,27 @@ suite.define(() => {
               workspaceGit: false,
             },
           ],
-          defaultId: "cloud",
-          mainKey: "main",
-          scope: "agent",
         },
-        "environments.list": {
-          environments: [],
-          profiles: [{ id: "aws", providerId: "crabbox" }],
-        },
-        "worktrees.branches": {
-          branches: [{ kind: "local", name: "main" }],
-          defaultBranch: "main",
-          repositoryStatus: "git",
-        },
-      },
-    });
-
-    try {
-      await page.goto(`${suite.server.baseUrl}new`);
-      await gateway.waitForRequest("environments.list");
-      await page.locator("#new-session-where-trigger").click();
-      await page
-        .locator(".oc-popover.new-session-page__where-popover")
-        .getByRole("button", { name: "aws", exact: true })
-        .click();
+      });
+      await chooseCloud(page);
       const trigger = page.locator("#new-session-where-trigger");
-      await expect.poll(() => trigger.getAttribute("data-cloud-profile")).toBe("aws");
-
+      await pollAttribute(trigger, "data-cloud-profile").toBe("aws");
       await gateway.setMethodResponse("environments.list", { environments: [], profiles: [] });
       const profileRequests = (await gateway.getRequests("environments.list")).length;
       await replaceGatewayClient(page);
       await expect
         .poll(async () => (await gateway.getRequests("environments.list")).length)
         .toBeGreaterThan(profileRequests);
-      await expect.poll(() => trigger.getAttribute("data-cloud-profile")).toBe("aws");
+      await pollAttribute(trigger, "data-cloud-profile").toBe("aws");
       await pollLocatorText(trigger.locator(".new-session-page__trigger-label")).toBe("aws");
-      await expect
-        .poll(() => page.getByRole("button", { name: "Start session" }).isDisabled())
-        .toBe(true);
+      await pollDisabled(page.getByRole("button", { name: "Start session" })).toBe(true);
       await trigger.click();
-      await expect
-        .poll(() =>
-          page
-            .locator(".oc-popover.new-session-page__where-popover")
-            .locator('[data-value="cloud:aws"]')
-            .isDisabled(),
-        )
-        .toBe(true);
+      await pollDisabled(
+        page
+          .locator(".oc-popover.new-session-page__where-popover")
+          .locator('[data-value="cloud:aws"]'),
+      ).toBe(true);
       await page.keyboard.press("Escape");
-
       const agentPicker = page.locator(".new-session-page__select--agent openclaw-agent-select");
       await agentPicker.locator(".agent-select__trigger").click();
       await agentPicker
@@ -98,49 +91,19 @@ suite.define(() => {
         .filter({ hasText: "Local" })
         .click();
       await page.getByRole("heading", { name: "Local" }).waitFor();
-      await expect.poll(() => trigger.getAttribute("data-cloud-profile")).toBeNull();
-      await expect.poll(() => page.locator("#new-session-checkout-trigger").count()).toBe(0);
-    } finally {
-      await context.close();
-    }
+      await pollAttribute(trigger, "data-cloud-profile").toBeNull();
+      await pollCount(page.locator("#new-session-checkout-trigger")).toBe(0);
+    });
   });
 
   it("restores an unconfirmed cloud turn after reload and checks delivery without replay", async () => {
-    const context = await suite.browser.newContext({ locale: "en-US", serviceWorkers: "block" });
-    const page = await context.newPage();
-    const recoveryRuntimeLoad = createDeferred();
-    const sessionKey = "agent:cloud:reload-recovery";
-    const message = "resume this cloud task after reload";
-    const gateway = await installMockGateway(page, {
-      workspaceGit: true,
-      methodResponses: {
-        "agents.list": createCloudAgentsListResponse(),
-        "environments.list": {
-          environments: [],
-          profiles: [{ id: "aws", providerId: "crabbox" }],
-        },
-        "worktrees.branches": {
-          branches: [{ kind: "local", name: "main" }],
-          defaultBranch: "main",
-          repositoryStatus: "git",
-        },
+    await suite.withPage({ locale: "en-US", serviceWorkers: "block" }, async ({ page }) => {
+      const sessionKey = "agent:cloud:reload-recovery";
+      const message = "resume this cloud task after reload";
+      const gateway = await openCloudPage(page, {
         "sessions.create": { key: sessionKey },
         "sessions.dispatch": {
-          ok: true,
-          key: sessionKey,
-          sessionId: "session-reload-recovery",
-          placement: {
-            state: "active",
-            generation: 1,
-            createdAtMs: 1,
-            updatedAtMs: 2,
-            stateChangedAtMs: 2,
-            environmentId: "worker-reload-recovery",
-            activeOwnerEpoch: 1,
-            workerBundleHash: "a".repeat(64),
-            workspaceBaseManifestRef: "manifest-reload-recovery",
-            remoteWorkspaceDir: "/workspace",
-          },
+          placement: { state: "active", generation: 1 },
         },
         "sessions.list": {
           count: 1,
@@ -154,30 +117,9 @@ suite.define(() => {
           sessionId: "session-reload-recovery",
           sessionInfo: { hasActiveRun: false, key: sessionKey, status: "done" },
         },
-      },
-    });
-
-    try {
-      await page.goto(`${suite.server.baseUrl}new`);
-      await gateway.waitForRequest("environments.list");
-      await page.locator("#new-session-where-trigger").click();
-      await page
-        .locator(".oc-popover.new-session-page__where-popover")
-        .getByRole("button", { name: "aws", exact: true })
-        .click();
-      await page.evaluate(() => {
-        const originalSetItem = sessionStorage.setItem.bind(sessionStorage);
-        Storage.prototype.setItem = function (key: string, value: string) {
-          if (
-            key.startsWith("openclaw.new-session.session-placement-recovery.v1:") ||
-            key.startsWith("openclaw.control-ui-e2e.")
-          ) {
-            originalSetItem(key, value);
-            return;
-          }
-          throw new DOMException("composer storage disabled", "SecurityError");
-        };
       });
+      await chooseCloud(page);
+      await disableComposerStorage(page);
       await gateway.deferNext("sessions.send");
       await page.locator(".new-session-page__message").fill(message);
       await pastePng(page.locator(".new-session-page__message"));
@@ -192,69 +134,44 @@ suite.define(() => {
         code: "UNAVAILABLE",
         message: "send outcome unknown",
       });
-      const startupError = await evaluateControlUiContext(
+      await expect
+        .poll(() =>
+          evaluateControlUiContext(
+            page,
+            (application, key) => application.placementStartup.get(key),
+            sessionKey,
+          ),
+        )
+        .toMatchObject({ phase: "failed", error: expect.stringContaining("send outcome unknown") });
+      const recoveryRuntime = await holdModuleResponse(
         page,
-        (application, key) =>
-          new Promise<string>((resolve) => {
-            const placementStartup = application.placementStartup;
-            let settled = false;
-            const subscription: { stop?: () => void } = {};
-            const resolveFailed = () => {
-              const status = placementStartup.get(key);
-              if (settled || status?.phase !== "failed") {
-                return;
-              }
-              settled = true;
-              subscription.stop?.();
-              resolve(status.error ?? "");
-            };
-            subscription.stop = placementStartup.subscribe(resolveFailed);
-            if (settled) {
-              subscription.stop();
-            } else {
-              resolveFailed();
-            }
-          }),
-        sessionKey,
+        controlUiE2eBuiltModuleRequest("ui/src/app/session-placement-startup.runtime.ts"),
       );
-      expect(startupError).toContain("send outcome unknown");
-      let recoveryRuntimeRequested = false;
-      const recoveryRuntimeRequest = controlUiE2eBuiltModuleRequest(
-        "ui/src/app/session-placement-startup.runtime.ts",
-      );
-      await page.route(recoveryRuntimeRequest, async (route) => {
-        recoveryRuntimeRequested = true;
-        await recoveryRuntimeLoad.promise;
-        await route.continue();
-      });
       const reload = page.reload();
-      await expect.poll(() => recoveryRuntimeRequested).toBe(true);
+      await recoveryRuntime.request;
       await expect
         .poll(() =>
           evaluateControlUiContext(page, (application) => application.gateway.snapshot.phase),
         )
         .toBe("connected");
       expect(await gateway.getRequests("sessions.send")).toHaveLength(0);
-      recoveryRuntimeLoad.resolve();
+      recoveryRuntime.release();
       await reload;
       await waitForCommittedChatRoute(page);
       expect(page.url()).toContain(controlUiSessionPath(sessionKey));
       const retainedTurn = page.locator(".chat-group.user", { hasText: message });
+      const followUpMessage = "Wait behind the unconfirmed initial turn";
       const checkDelivery = page.getByRole("button", { name: "Check delivery", exact: true });
       await checkDelivery.waitFor({ state: "visible" });
       await expectPastedPngImage(retainedTurn.locator("img.chat-message-image"));
       const followUp = page.locator(".agent-chat__composer-combobox textarea");
-      await expect.poll(() => followUp.isDisabled()).toBe(false);
-      await followUp.fill("Wait behind the unconfirmed initial turn");
+      await pollDisabled(followUp).toBe(false);
+      await followUp.fill(followUpMessage);
       await followUp.press("Enter");
-      await page
-        .locator(".chat-queue__item", { hasText: "Wait behind the unconfirmed initial turn" })
-        .waitFor();
+      await page.locator(".chat-queue__item", { hasText: followUpMessage }).waitFor();
       expect(await gateway.getRequests("chat.send")).toHaveLength(0);
-
       const historyCount = (await gateway.getRequests("chat.history")).length;
       await checkDelivery.click();
-      // Background history loads may arrive before this action's request.
       await expect
         .poll(async () => (await gateway.getRequests("chat.history")).slice(historyCount))
         .toContainEqual(
@@ -269,8 +186,6 @@ suite.define(() => {
         );
       await pollLocatorText(page.getByRole("alert")).toContain("No matching user message");
       await expectPastedPngImage(retainedTurn.locator("img.chat-message-image"));
-
-      // Gateway user-turn recording uses the admitted client key plus :user.
       await gateway.setHistoryMessages([
         {
           role: "user",
@@ -285,37 +200,19 @@ suite.define(() => {
         },
       ]);
       await checkDelivery.click();
-      await expect.poll(() => checkDelivery.count()).toBe(0);
-      await expect.poll(() => retainedTurn.count()).toBe(1);
-      await expect.poll(() => retainedTurn.locator(".chat-send-status").count()).toBe(0);
+      await pollCount(checkDelivery).toBe(0);
+      await pollCount(retainedTurn).toBe(1);
+      await pollCount(retainedTurn.locator(".chat-send-status")).toBe(0);
       expect(await gateway.waitForRequest("chat.send")).toMatchObject({
-        params: { sessionKey, message: "Wait behind the unconfirmed initial turn" },
+        params: { sessionKey, message: followUpMessage },
       });
-      expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
-      expect(await gateway.getRequests("sessions.dispatch")).toHaveLength(0);
-      expect(await gateway.getRequests("sessions.send")).toHaveLength(0);
-    } finally {
-      recoveryRuntimeLoad.resolve();
-      await context.close();
-    }
+      await expectNoRequests(gateway, "sessions.create", "sessions.dispatch", "sessions.send");
+    });
   });
 
   it("reconciles an accepted turn added while disconnected without locking the new-session page", async () => {
-    const context = await suite.browser.newContext({ locale: "en-US", serviceWorkers: "block" });
-    const page = await context.newPage();
-    const gateway = await installMockGateway(page, {
-      workspaceGit: true,
-      methodResponses: {
-        "agents.list": createCloudAgentsListResponse(),
-        "environments.list": {
-          environments: [],
-          profiles: [{ id: "aws", providerId: "crabbox" }],
-        },
-        "worktrees.branches": {
-          branches: [{ kind: "local", name: "main" }],
-          defaultBranch: "main",
-          repositoryStatus: "git",
-        },
+    await suite.withPage({ locale: "en-US", serviceWorkers: "block" }, async ({ page }) => {
+      const gateway = await openCloudPage(page, {
         "chat.history": {
           messages: [
             {
@@ -326,18 +223,9 @@ suite.define(() => {
           ],
           sessionId: "session-offline-recovery",
         },
-      },
-    });
-
-    try {
-      await page.goto(`${suite.server.baseUrl}new`);
-      await gateway.waitForRequest("environments.list");
+      });
       const recoveryIdentity = await evaluateControlUiContext(page, async (application) => {
-        const gatewaySnapshot = application.gateway;
-        const gatewayUrl = gatewaySnapshot.connection.gatewayUrl;
-        if (!gatewayUrl) {
-          throw new Error("Gateway recovery identity is unavailable");
-        }
+        const gatewayUrl = application.gateway.connection.gatewayUrl;
         const digest = await crypto.subtle.digest(
           "SHA-256",
           new TextEncoder().encode("e2e-device-token"),
@@ -352,7 +240,6 @@ suite.define(() => {
           `${frame(legacyScope)}:${frame(sessionKey)}`;
         return { gatewayUrl, legacyScope, storageKey };
       });
-
       await gateway.setOnline(false);
       await expect
         .poll(() =>
@@ -377,7 +264,6 @@ suite.define(() => {
           }),
         );
       }, recoveryIdentity);
-
       await gateway.setOnline(true);
       expect(await gateway.waitForRequest("chat.history")).toMatchObject({
         params: { sessionKey: "agent:cloud:offline-recovery", limit: 1000 },
@@ -391,24 +277,13 @@ suite.define(() => {
           ),
         )
         .toHaveLength(0);
-      expect(await gateway.getRequests("sessions.send")).toHaveLength(0);
-      expect(await gateway.getRequests("sessions.dispatch")).toHaveLength(0);
-      await expect.poll(() => page.locator(".new-session-page__message").inputValue()).toBe("");
-      await page.locator("#new-session-where-trigger").click();
-      await page
-        .locator(".oc-popover.new-session-page__where-popover")
-        .getByRole("button", { name: "aws", exact: true })
-        .click();
+      await expectNoRequests(gateway, "sessions.send", "sessions.dispatch");
+      await pollValue(page.locator(".new-session-page__message")).toBe("");
+      await chooseCloud(page);
       await page.locator(".new-session-page__message").fill("start another cloud task");
-      await expect
-        .poll(() => page.getByRole("button", { name: "Start session" }).isDisabled())
-        .toBe(false);
+      await pollDisabled(page.getByRole("button", { name: "Start session" })).toBe(false);
       await gateway.setOnline(false);
-      await expect
-        .poll(() => page.getByRole("button", { name: "Start session" }).isDisabled())
-        .toBe(true);
-    } finally {
-      await context.close();
-    }
+      await pollDisabled(page.getByRole("button", { name: "Start session" })).toBe(true);
+    });
   });
 });

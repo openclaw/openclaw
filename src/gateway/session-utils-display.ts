@@ -1,5 +1,10 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
+  SESSION_DASHBOARD_ROW_FIELDS,
+  SESSION_ROW_DETAIL_FIELDS,
+  SESSION_SIDEBAR_ROW_FIELDS,
+} from "../../packages/gateway-protocol/src/session-row-fields.js";
+import {
   buildSubagentSessionListReadIndex,
   getSubagentSessionRuntimeMs,
   getSubagentSessionStartedAt,
@@ -37,6 +42,19 @@ export function resolveGatewaySessionDisplayName(key: string, entry?: SessionEnt
     return groupTitle;
   }
   const channel = sessionDeliveryChannel(entry) ?? parsed?.channel;
+  const origin = sessionDeliveryOrigin(entry);
+  const privateTelegramTopicTitle =
+    channel === "telegram" &&
+    !isGroupSession &&
+    origin?.provider === "telegram" &&
+    origin.chatType === "direct" &&
+    origin.threadId != null &&
+    normalizeOptionalString(entry?.topicName) !== undefined
+      ? buildGroupDisplayTitle({ topicName: entry?.topicName })
+      : undefined;
+  if (privateTelegramTopicTitle !== undefined) {
+    return privateTelegramTopicTitle;
+  }
   const id = parsed?.id;
   const compactGroupFallback =
     isGroupSession && channel
@@ -65,7 +83,6 @@ export function resolveGatewaySessionDisplayName(key: string, entry?: SessionEnt
   if (parseAgentSessionKey(key)?.rest.startsWith("dashboard:")) {
     return undefined;
   }
-  const origin = sessionDeliveryOrigin(entry);
   const originLabel = origin?.label;
   const normalizedOriginFrom = normalizeOptionalString(origin?.from);
   const routeIdentityTail = normalizedOriginFrom?.split(":").at(-1);
@@ -128,6 +145,7 @@ export function projectGatewaySessionRunState(params: {
     GatewaySessionRow,
     | "status"
     | "lastRunError"
+    | "suppressErrorNotice"
     | "subagentRunState"
     | "hasActiveSubagentRun"
     | "startedAt"
@@ -136,6 +154,7 @@ export function projectGatewaySessionRunState(params: {
   > = {
     status: entry?.status,
     lastRunError: entry?.lastRunError,
+    suppressErrorNotice: entry?.suppressErrorNotice,
     subagentRunState: undefined,
     hasActiveSubagentRun: subagentRun || hasActiveSubagentRun ? hasActiveSubagentRun : undefined,
     startedAt: entry?.startedAt,
@@ -217,4 +236,26 @@ export function projectGatewaySessionActiveRun(
     hasActiveRun: active?.active,
     status: active?.active ? (active.status ?? "running") : status,
   };
+}
+
+/** Shape the wire row after recipient-specific fields have been prepared. */
+export function applyGatewaySessionRowMode(
+  row: GatewaySessionRow,
+  rowMode: GatewaySessionRow["rowMode"],
+): void {
+  if (rowMode === "dashboard" || rowMode === "sidebar") {
+    const fields =
+      rowMode === "sidebar" ? SESSION_SIDEBAR_ROW_FIELDS : SESSION_DASHBOARD_ROW_FIELDS;
+    for (const field of Object.keys(row)) {
+      if (!fields.has(field)) {
+        Reflect.deleteProperty(row, field);
+      }
+    }
+    row.rowMode = rowMode;
+  } else if (rowMode === "compact") {
+    for (const field of SESSION_ROW_DETAIL_FIELDS) {
+      delete row[field];
+    }
+    row.rowMode = "compact";
+  }
 }

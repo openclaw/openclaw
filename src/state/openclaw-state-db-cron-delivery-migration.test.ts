@@ -1,36 +1,60 @@
-import { copyFileSync, mkdirSync, renameSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, renameSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync, StatementSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
-import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import {
+  observeHostDataSql,
+  observeSqliteReadSql,
+} from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { ensureCronRunReceiptSchema } from "../cron/store/run-receipt-store.js";
+import { resolveClientCredentialStorePath } from "../infra/client-credential-paths.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import { runSqliteSchemaReadSnapshotSync } from "../infra/sqlite-pinned-read-snapshot.js";
 import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
-import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
+import { requireNativeSqliteDatabase as nativeDatabase } from "../test-utils/native-sqlite.js";
 import { preflightOpenClawDatabaseSchemas } from "./openclaw-database-preflight.js";
-import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
+import { OPENCLAW_STATE_SCHEMA_VERSION as SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
+import { expectRow, expectRows } from "./openclaw-state-db-fixtures.test-support.js";
 import { openOpenClawStateReadOnlyLocation } from "./openclaw-state-db-read-connection.js";
-import { readStateSchemaContentVersion } from "./openclaw-state-db-schema-version.js";
+import { readStateSchemaContentVersion as readVersion } from "./openclaw-state-db-schema-version.js";
 import {
-  closeOpenClawStateDatabaseForTest,
-  openOpenClawStateDatabase,
-  repairOpenClawStateDatabaseSchema,
+  closeOpenClawStateDatabaseForTest as closeState,
+  openOpenClawStateDatabase as openState,
+  repairOpenClawStateDatabaseSchema as repairSchema,
 } from "./openclaw-state-db.js";
+import {
+  addPreCutoverClientCredentialTablesForTest,
+  withStateMigrationBackupForTest,
+} from "./openclaw-state-schema.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => {
-  closeOpenClawStateDatabaseForTest();
+  closeState();
   vi.restoreAllMocks();
 });
 
+function observeReads<T>(run: (queries: string[]) => T): T {
+  const reads = observeSqliteReadSql(StatementSync.prototype);
+  try {
+    return run(reads.queries);
+  } finally {
+    reads.restore();
+  }
+}
+
+function expectReceipt(db: EngineConnection, expected: Record<string, string>) {
+  expectRows(db, `SELECT ${Object.keys(expected).join(", ")} FROM cron_run_receipts`, [expected]);
+}
+
 function legacyReceiptDatabase() {
   const options = { env: { OPENCLAW_STATE_DIR: tempDirs.make("cron-delivery-migration-") } };
-  const database = openOpenClawStateDatabase(options);
+  const database = openState(options);
   ensureCronRunReceiptSchema(database.db);
   const databasePath = database.path;
-  closeOpenClawStateDatabaseForTest();
+  closeState();
   const legacy = new DatabaseSync(databasePath);
+  addPreCutoverClientCredentialTablesForTest(legacy);
   legacy.exec(`
     ALTER TABLE cron_run_receipts DROP COLUMN delivery_attempt_state;
     INSERT INTO cron_run_receipts (
@@ -50,148 +74,142 @@ function legacyReceiptDatabase() {
 
 it.each(["managed transaction", "implicit snapshot"] as const)(
   "keeps a reader's %s version until the migrated catalog becomes visible",
-  (kind) => {
+  async (kind) => {
     const { options, databasePath } = legacyReceiptDatabase();
-    const reader = openOpenClawStateReadOnlyLocation(databasePath, databasePath);
-    const { db } = reader.database;
-    try {
-      const migrateWhileReading = () => {
-        expect(db.prepare("SELECT receipt_id FROM cron_run_receipts").get()).toEqual({
-          receipt_id: "legacy-receipt",
-        });
-        expect(readStateSchemaContentVersion(db)).toBe(19);
-        const writer = openOpenClawStateDatabase(options);
-        expect(readStateSchemaContentVersion(writer.db)).toBe(OPENCLAW_STATE_SCHEMA_VERSION);
-        const observation = observeSqliteReadSql(StatementSync.prototype);
-        try {
-          expect(readStateSchemaContentVersion(db)).toBe(19);
-          expect(observation.queries).toEqual([]);
-        } finally {
-          observation.restore();
-        }
-        expect(() => db.prepare("SELECT delivery_attempt_state FROM cron_run_receipts")).toThrow(
-          /no such column/iu,
-        );
-      };
-      if (kind === "managed transaction") {
-        runSqliteDeferredTransactionSync(db, migrateWhileReading);
-      } else {
-        runSqliteSchemaReadSnapshotSync(requireNativeSqliteDatabase(db), migrateWhileReading);
-      }
-      const observation = observeSqliteReadSql(StatementSync.prototype);
+    await withStateMigrationBackupForTest(options, () => {
+      const reader = openOpenClawStateReadOnlyLocation(databasePath, databasePath);
+      const { db } = reader.database;
       try {
-        expect(readStateSchemaContentVersion(db)).toBe(OPENCLAW_STATE_SCHEMA_VERSION);
-        expect(observation.queries).toEqual([]);
+        const migrateWhileReading = () => {
+          expectRow(db, "SELECT receipt_id FROM cron_run_receipts", {
+            receipt_id: "legacy-receipt",
+          });
+          expect(readVersion(db)).toBe(19);
+          const writer = openState(options);
+          expect(readVersion(writer.db)).toBe(SCHEMA_VERSION);
+          observeReads((queries) => {
+            expect(readVersion(db)).toBe(19);
+            // Managed reads qualify the retained catalog once after sibling DDL.
+            const qualificationQueries =
+              kind === "managed transaction"
+                ? [
+                    "PRAGMA schema_version",
+                    "PRAGMA user_version",
+                    "SELECT type, name, tbl_name, sql FROM main.sqlite_schema WHERE type IN ('table', 'view', 'index', 'trigger')",
+                    'select "value_json" from "config_machine_state" where "state_key" = ?',
+                  ]
+                : [];
+            expect(queries).toEqual(qualificationQueries);
+            expect(readVersion(db)).toBe(19);
+            expect(queries).toEqual(qualificationQueries);
+          });
+          expect(() => db.prepare("SELECT delivery_attempt_state FROM cron_run_receipts")).toThrow(
+            /no such column/iu,
+          );
+        };
+        if (kind === "managed transaction") {
+          runSqliteDeferredTransactionSync(db, migrateWhileReading);
+        } else {
+          runSqliteSchemaReadSnapshotSync(nativeDatabase(db), migrateWhileReading);
+        }
+        observeReads((queries) => {
+          expect(readVersion(db)).toBe(SCHEMA_VERSION);
+          expect(queries).toEqual([]);
+        });
+        expectReceipt(db, { delivery_attempt_state: "unknown" });
       } finally {
-        observation.restore();
+        reader.close();
       }
-      expect(db.prepare("SELECT delivery_attempt_state FROM cron_run_receipts").get()).toEqual({
-        delivery_attempt_state: "unknown",
-      });
-    } finally {
-      reader.close();
-    }
+    });
   },
 );
 
 it.each(["runtime open", "doctor repair"] as const)(
-  "%s preserves legacy receipt uncertainty and refuses a schema-19 downgrade",
+  "captured %s preserves legacy receipt uncertainty and refuses a schema-19 downgrade",
   async (entry) => {
-    const { options } = legacyReceiptDatabase();
-    const migration = observeSqliteReadSql(StatementSync.prototype);
-    let database: ReturnType<typeof openOpenClawStateDatabase>;
-    try {
-      if (entry === "doctor repair") {
-        expect(repairOpenClawStateDatabaseSchema(options).warnings).toEqual([]);
+    const { options, databasePath } = legacyReceiptDatabase();
+    const queries: string[] = [];
+    const migration = observeHostDataSql((sql, database) => {
+      if (database?.location() === databasePath) {
+        queries.push(sql);
       }
-      database = openOpenClawStateDatabase(options);
-      const integrityChecks = migration.queries.filter((sql) =>
-        /^PRAGMA integrity_check\s*;?$/iu.test(sql),
-      );
-      if (entry === "runtime open") {
-        expect(integrityChecks).toHaveLength(1);
-      } else {
-        expect(integrityChecks.length).toBeGreaterThan(0);
+    });
+    try {
+      await withStateMigrationBackupForTest(options, () => {
+        if (entry === "doctor repair") {
+          expect(repairSchema(options).warnings).toEqual([]);
+        }
+        openState(options);
+      });
+      const integrityChecks = queries.filter((sql) => /^PRAGMA integrity_check\s*;?$/iu.test(sql));
+      expect(integrityChecks).toHaveLength(entry === "runtime open" ? 1 : 0);
+      if (entry === "doctor repair") {
+        expect(queries).toContain("PRAGMA quick_check;");
       }
     } finally {
       migration.restore();
     }
+    const database = openState(options);
     const { db } = database;
-    expect(
-      db.prepare("SELECT receipt_id, status, delivery_attempt_state FROM cron_run_receipts").all(),
-    ).toEqual([
-      { receipt_id: "legacy-receipt", status: "running", delivery_attempt_state: "unknown" },
-    ]);
-    expect(db.prepare("PRAGMA user_version").get()).toEqual({
-      user_version: OPENCLAW_STATE_SCHEMA_VERSION,
+    expectReceipt(db, {
+      receipt_id: "legacy-receipt",
+      status: "running",
+      delivery_attempt_state: "unknown",
     });
-    expect(db.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
+    expectRow(db, "PRAGMA user_version", { user_version: SCHEMA_VERSION });
+    expectRow(db, "PRAGMA integrity_check", { integrity_check: "ok" });
     db.exec("UPDATE cron_run_receipts SET delivery_attempt_state = 'started'");
     // Reuse remains valid while a sibling is live; final close requires readmission.
     const survivingReader = openOpenClawStateReadOnlyLocation(database.path, database.path);
-    closeOpenClawStateDatabaseForTest();
+    closeState();
     // Final close retires admission; the cold reopen precedes the warm-borrow observation.
-    openOpenClawStateDatabase(options);
-    const observation = observeSqliteReadSql(StatementSync.prototype);
+    openState(options);
     try {
-      expect(
-        openOpenClawStateDatabase(options)
-          .db.prepare("SELECT delivery_attempt_state FROM cron_run_receipts")
-          .get(),
-      ).toEqual({ delivery_attempt_state: "started" });
-      expect(
-        observation.queries.filter((sql) =>
-          /(?:sqlite_(?:schema|master)|pragma_(?:table|index|foreign_key)|\bPRAGMA\s+(?:user_version|schema_version|integrity_check|quick_check|foreign_key_check|table_info|table_xinfo|index_list|index_info|index_xinfo)\b|\bFROM\s+"?schema_meta\b|state\.schema\.contentVersion)/iu.test(
-            sql,
+      observeReads((readQueries) => {
+        expectReceipt(openState(options).db, { delivery_attempt_state: "started" });
+        expect(
+          readQueries.filter((sql) =>
+            /(?:sqlite_(?:schema|master)|pragma_(?:table|index|foreign_key)|\bPRAGMA\s+(?:user_version|schema_version|integrity_check|quick_check|foreign_key_check|table_info|table_xinfo|index_list|index_info|index_xinfo)\b|\bFROM\s+"?schema_meta\b|state\.schema\.contentVersion)/iu.test(
+              sql,
+            ),
           ),
-        ),
-      ).toEqual([]);
+        ).toEqual([]);
+      });
     } finally {
-      observation.restore();
       survivingReader.close();
     }
-    closeOpenClawStateDatabaseForTest();
+    closeState();
     const preflight = await preflightOpenClawDatabaseSchemas({
       env: options.env,
       scope: "state",
       supportedVersions: { state: 19, agent: 23 },
     });
-    expect(preflight.incompatible).toEqual([
-      expect.objectContaining({
-        kind: "state",
-        foundVersion: OPENCLAW_STATE_SCHEMA_VERSION,
-        supportedVersion: 19,
-      }),
+    expect(preflight.incompatible).toMatchObject([
+      { kind: "state", foundVersion: SCHEMA_VERSION, supportedVersion: 19 },
     ]);
   },
 );
 
-it("rolls receipt migration back with schema publication failure", () => {
+it("rolls receipt migration back with schema publication failure", async () => {
   const { options, databasePath } = legacyReceiptDatabase();
   const legacy = new DatabaseSync(databasePath);
   legacy.exec(`CREATE TRIGGER refuse_schema_publication BEFORE UPDATE ON schema_meta
     BEGIN SELECT RAISE(ABORT, 'fixture publication refusal'); END;`);
   legacy.close();
-  expect(() => openOpenClawStateDatabase(options)).toThrow("fixture publication refusal");
-  const after = new DatabaseSync(databasePath, { readOnly: true });
-  try {
-    expect(after.prepare("PRAGMA user_version").get()).toEqual({ user_version: 19 });
-    expect(after.prepare("SELECT receipt_id, status FROM cron_run_receipts").all()).toEqual([
-      { receipt_id: "legacy-receipt", status: "running" },
-    ]);
-    expect(
-      after
-        .prepare(
-          "SELECT 1 FROM pragma_table_info('cron_run_receipts') WHERE name = 'delivery_attempt_state'",
-        )
-        .get(),
-    ).toBeUndefined();
-  } finally {
-    after.close();
-  }
+  await expect(withStateMigrationBackupForTest(options, () => openState(options))).rejects.toThrow(
+    "fixture publication refusal",
+  );
+  using after = new DatabaseSync(databasePath, { readOnly: true });
+  expectRow(after, "PRAGMA user_version", { user_version: 19 });
+  expectReceipt(after, { receipt_id: "legacy-receipt", status: "running" });
+  expectRow(
+    after,
+    "SELECT 1 FROM pragma_table_info('cron_run_receipts') WHERE name = 'delivery_attempt_state'",
+    undefined,
+  );
 });
 
-it("opens databases with early cron tables before creating cron indexes", () => {
+it("refuses an unversioned cron-only catalog without adopting its data", () => {
   const stateDir = tempDirs.make("early-cron-migration-");
   const databasePath = path.join(stateDir, "state", "openclaw.sqlite");
   mkdirSync(path.dirname(databasePath), { recursive: true });
@@ -220,26 +238,18 @@ it("opens databases with early cron tables before creating cron indexes", () => 
   const projectedJobJson = JSON.stringify({ delivery: { threadId: 1008013 } });
   db.exec(`
     CREATE TABLE cron_jobs (
-      store_key TEXT NOT NULL,
-      job_id TEXT NOT NULL,
+      store_key TEXT NOT NULL, job_id TEXT NOT NULL,
       name TEXT NOT NULL DEFAULT '',
       schedule_kind TEXT NOT NULL DEFAULT 'manual',
       payload_kind TEXT NOT NULL DEFAULT 'message',
-      delivery_thread_id TEXT,
-      job_json TEXT NOT NULL,
-      updated_at INTEGER NOT NULL,
-      PRIMARY KEY (store_key, job_id)
+      delivery_thread_id TEXT, job_json TEXT NOT NULL,
+      updated_at INTEGER NOT NULL, PRIMARY KEY (store_key, job_id)
     );
   `);
   db.prepare(
-    `INSERT INTO cron_jobs (store_key, job_id, job_json, updated_at)
-       VALUES (?, ?, ?, ?)`,
+    "INSERT INTO cron_jobs (store_key, job_id, job_json, updated_at) VALUES (?, ?, ?, ?)",
   ).run(path.join(stateDir, "cron", "jobs.json"), "legacy-job", jobJson, 456);
-  db.prepare(
-    `INSERT INTO cron_jobs (
-       store_key, job_id, name, schedule_kind, payload_kind, delivery_thread_id, job_json, updated_at
-     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-  ).run(
+  db.prepare("INSERT INTO cron_jobs VALUES (?, ?, ?, ?, ?, ?, ?, ?)").run(
     path.join(stateDir, "cron", "jobs.json"),
     "already-projected-job",
     "Already projected",
@@ -249,34 +259,15 @@ it("opens databases with early cron tables before creating cron indexes", () => 
     projectedJobJson,
     456,
   );
+  const rows = db.prepare("SELECT * FROM cron_jobs ORDER BY job_id").all();
+  const catalogSql = "SELECT type,name,sql FROM sqlite_schema ORDER BY type,name";
+  const catalog = db.prepare(catalogSql).all();
   db.close();
-
-  const database = openOpenClawStateDatabase({
-    env: { OPENCLAW_STATE_DIR: stateDir },
-  });
-
-  expect(
-    database.db
-      .prepare(
-        `SELECT name, enabled, payload_kind, agent_id, job_json
-           FROM cron_jobs
-          WHERE job_id = ?`,
-      )
-      .get("legacy-job"),
-  ).toEqual({
-    enabled: 1,
-    agent_id: "agent-a",
-    name: "Legacy job",
-    payload_kind: "agentTurn",
-    job_json: jobJson,
-  });
-  expect(
-    database.db
-      .prepare(
-        `SELECT json_extract(job_json, '$.delivery.threadId') AS delivery_thread_id
-           FROM cron_jobs
-          WHERE job_id = ?`,
-      )
-      .get("already-projected-job"),
-  ).toEqual({ delivery_thread_id: 1008013 });
+  const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
+  expect(() => openState(options)).toThrow(/Unrecognized native bootstrap database/);
+  using preserved = new DatabaseSync(databasePath, { readOnly: true });
+  expectRow(preserved, "PRAGMA user_version", { user_version: 0 });
+  expectRows(preserved, "SELECT * FROM cron_jobs ORDER BY job_id", rows);
+  expectRows(preserved, catalogSql, catalog);
+  expect(existsSync(resolveClientCredentialStorePath(options.env))).toBe(false);
 });

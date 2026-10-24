@@ -1,10 +1,10 @@
 import type { Model } from "@openclaw/llm-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { readTransportDiagnosticLabel } from "../utils/provider-error.js";
 import { resolveModelPayloadDebugMode } from "./model-transport-debug.js";
 import { RESPONSE_FAILED_NO_DETAILS_MESSAGE } from "./openai-responses-contracts.js";
 import { log } from "./openai-transport-shared.js";
-import { redactIdentifier, redactSensitiveText, sha256Hex } from "./transport-utils.js";
+import { redactIdentifier, sha256Hex } from "./transport-utils.js";
 
 function stringifyUnknown(value: unknown): string {
   if (typeof value === "string") {
@@ -136,26 +136,6 @@ function summarizeResponsesTools(tools: unknown): string {
   return `count=${tools.length}${shown ? ` ${label}=${shown}` : ""}`;
 }
 
-function stringifyRedactedPayload(value: unknown): string {
-  try {
-    const encoded = JSON.stringify(value, (key, child) =>
-      key === "encrypted_content" ? "<opaque data omitted>" : child,
-    );
-    if (!encoded) {
-      return "<empty>";
-    }
-    const redacted = redactSensitiveText(encoded);
-    return redacted.length > 8000 ? `${truncateUtf16Safe(redacted, 8000)}…<truncated>` : redacted;
-  } catch {
-    return "<unserializable>";
-  }
-}
-
-function stringifyRedactedEvent(value: unknown): string {
-  const redacted = stringifyRedactedPayload(value);
-  return redacted.length > 2000 ? `${truncateUtf16Safe(redacted, 2000)}…<truncated>` : redacted;
-}
-
 type ResponsesFailedNoDetailsObservation = ReturnType<
   typeof buildResponsesFailedNoDetailsObservation
 >;
@@ -231,48 +211,6 @@ function collectResponseFailedIdentifierHashes(input: unknown): string[] {
   return out;
 }
 
-function redactResponseFailedDiagnosticValue(input: unknown): unknown {
-  const seen = new WeakSet<object>();
-  const redact = (value: unknown, key: string, depth: number): unknown => {
-    if (typeof value === "string" || typeof value === "number") {
-      return key && isResponseFailedIdentifierKey(key)
-        ? redactIdentifier(String(value), { len: 12 })
-        : value;
-    }
-    if (depth > 6 || !value || typeof value !== "object") {
-      return value;
-    }
-    if (seen.has(value)) {
-      return "<circular>";
-    }
-    seen.add(value);
-    if (Array.isArray(value)) {
-      return value.slice(0, 16).map((item) => redact(item, key, depth + 1));
-    }
-    const out: Record<string, unknown> = {};
-    for (const [childKey, child] of Object.entries(value)) {
-      out[childKey] = redact(child, childKey, depth + 1);
-    }
-    return out;
-  };
-  return redact(input, "", 0);
-}
-
-function buildResponsesFailedFailureFields(
-  response: Record<string, unknown> | undefined,
-): Record<string, unknown> {
-  if (!response) {
-    return {};
-  }
-  const fields: Record<string, unknown> = {};
-  for (const key of RESPONSE_FAILED_FAILURE_FIELD_KEYS) {
-    if (response[key] !== undefined && response[key] !== null) {
-      fields[key] = response[key];
-    }
-  }
-  return fields;
-}
-
 function buildResponsesFailedNoDetailsObservation(
   event: Record<string, unknown>,
   model: Model,
@@ -280,34 +218,25 @@ function buildResponsesFailedNoDetailsObservation(
     ? event.response
     : undefined,
 ) {
-  const failureFields = redactResponseFailedDiagnosticValue(
-    buildResponsesFailedFailureFields(response),
-  ) as Record<string, unknown>;
+  const failureFieldNames = RESPONSE_FAILED_FAILURE_FIELD_KEYS.filter(
+    (key) => response?.[key] !== undefined && response[key] !== null,
+  );
   const metadataKeys = isRecord(response?.metadata)
     ? Object.keys(response.metadata).toSorted()
     : [];
-  const responsePreview = {
-    id: stringifyUnknown(response?.id),
-    status: stringifyUnknown(response?.status),
-    model: stringifyUnknown(response?.model),
-    object: stringifyUnknown(response?.object),
-    failureFields,
-    metadataKeys,
-  };
   return {
     event: "openai_responses_response_failed_without_details" as const,
     provider: model.provider,
     api: model.api,
     transportModel: model.id,
     providerRuntimeFailureKind: "no_error_details" as const,
-    responseId: responsePreview.id,
-    responseStatus: responsePreview.status,
-    responseModel: responsePreview.model,
-    responseObject: responsePreview.object,
+    responseId: stringifyUnknown(response?.id),
+    responseStatus: stringifyUnknown(response?.status),
+    responseModel: stringifyUnknown(response?.model),
+    responseObject: stringifyUnknown(response?.object),
     metadataKeys,
     requestIdHashes: collectResponseFailedIdentifierHashes(event),
-    failureFieldsPreview: stringifyRedactedEvent(failureFields),
-    responsePreview: stringifyRedactedEvent(responsePreview),
+    failureFieldNames,
   };
 }
 
@@ -321,7 +250,7 @@ function summarizeResponsesFailedNoDetailsObservation(
     `responseStatus=${safeDebugValue(observation.responseStatus || undefined)} ` +
     `responseModel=${safeDebugValue(observation.responseModel || undefined)} ` +
     `requestIds=${requestIds || "none"} metadataKeys=${metadataKeys || "none"} ` +
-    `failureFields=${observation.failureFieldsPreview}`
+    `failureFields=${observation.failureFieldNames.join(",") || "none"}`
   );
 }
 
@@ -421,28 +350,54 @@ export function summarizeResponsesPayload(params: unknown): string {
         : "none"
     }`,
   ];
-  if (resolveModelPayloadDebugMode() === "full-redacted") {
-    parts.push(`payload=${stringifyRedactedPayload(record)}`);
-  }
   return parts.join(" ");
 }
 
-export function summarizeOpenAITransportError(error: unknown): string {
-  if (!error || typeof error !== "object") {
-    return `type=${typeof error} message=${safeDebugValue(error)}`;
-  }
-  const record = error as Record<string, unknown>;
+export function summarizeOpenAITransportError(error: unknown, signal?: AbortSignal): string {
+  const record = isRecord(error) ? error : undefined;
   const cause =
-    record.cause && typeof record.cause === "object"
+    record?.cause && typeof record.cause === "object"
       ? (record.cause as Record<string, unknown>)
       : undefined;
-  return [
-    `name=${safeDebugValue(record.name)}`,
-    `status=${safeDebugValue(record.status)}`,
-    `code=${safeDebugValue(record.code)}`,
-    `type=${safeDebugValue(record.type)}`,
-    `causeName=${safeDebugValue(cause?.name)}`,
-    `causeCode=${safeDebugValue(cause?.code)}`,
-    `message=${error instanceof Error ? error.message : safeDebugValue(error)}`,
-  ].join(" ");
+  const parts = record
+    ? [
+        `name=${safeDebugValue(readTransportDiagnosticLabel(record.name))}`,
+        `status=${safeDebugValue(readTransportDiagnosticLabel(record.status))}`,
+        `code=${safeDebugValue(readTransportDiagnosticLabel(record.code))}`,
+        `type=${safeDebugValue(readTransportDiagnosticLabel(record.type))}`,
+        `causeName=${safeDebugValue(readTransportDiagnosticLabel(cause?.name))}`,
+        `causeCode=${safeDebugValue(readTransportDiagnosticLabel(cause?.code))}`,
+      ]
+    : [`type=${typeof error}`];
+  if (signal?.aborted) {
+    const reason = isRecord(signal.reason) ? signal.reason : undefined;
+    let abortReason = reason?.name === "TimeoutError" ? "request_deadline" : "caller_abort";
+    // Only classify the request signal; provider errors can echo message/tool content.
+    switch (reason?.code ?? reason?.name) {
+      case "LlmIdleTimeoutError":
+        abortReason = "idle_timeout";
+        break;
+      case "LlmNoProgressError":
+        abortReason = "no_progress";
+        break;
+      case "FirstStreamEventTimeoutError":
+        abortReason = "first_event_timeout";
+        break;
+      case "OPENCLAW_SESSION_WATCHDOG":
+        abortReason = "session_watchdog";
+        break;
+      case "degenerate_output":
+        abortReason = "degenerate_output";
+        break;
+      case "OPENCLAW_RESTART_ABORT":
+      case "ERR_STALE_GATEWAY_LIFECYCLE":
+        abortReason = "restart";
+        break;
+      case "AGENT_RUN_SUPERSEDED_ABORT":
+        abortReason = "superseded";
+        break;
+    }
+    parts.push(`abortReason=${abortReason}`);
+  }
+  return parts.join(" ");
 }

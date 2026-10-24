@@ -4,16 +4,23 @@ import { resolveStateDir } from "../config/state-dir.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import type { OpenClawAgentDatabaseOptions } from "../state/openclaw-agent-db-contract.js";
+import { withOpenClawAgentDatabaseWrite } from "../state/openclaw-agent-db-write.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.js";
 import type { AgentDatabaseRequestExecutionSource } from "../state/openclaw-agent-execution-admission-contract.js";
 import type {
   AgentDatabaseExecutionFileIdentity,
   AgentDatabaseOperations,
 } from "../state/openclaw-agent-execution-contract.js";
-import { captureOpenClawAgentDatabaseExecution } from "../state/openclaw-agent-execution.js";
+import { captureOpenClawAgentDatabasePreparationExecution } from "../state/openclaw-agent-execution.js";
 import { runOpenClawAgentWorkerWrite } from "../state/openclaw-agent-write-admission.js";
-import type { SessionCostUsageRollupSnapshot } from "./session-cost-usage-cache.kernel.js";
+import { getOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
+import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "../state/openclaw-state-db-contract.js";
+import {
+  retireLegacySessionCostUsageCacheInDatabase,
+  type SessionCostUsageRollupSnapshot,
+} from "./session-cost-usage-cache.kernel.js";
 import { isSessionActorUsageRefreshRunning } from "./session-cost-usage-memory.js";
+import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
 import { readDatabasePathIdentitySync, resolveDatabasePathKey } from "./sqlite-worker-identity.js";
 import { createSqliteWorkerOperationAdmission } from "./sqlite-worker-operation-admission.js";
 
@@ -67,9 +74,9 @@ function createCacheWriter(options: ReturnType<typeof captureCacheDatabaseOption
         nativeLocation: observed.canonicalPath,
       }
     : undefined;
-  // Missing stores retain their creation witness; existing stores borrow at writer admission.
+  // Missing stores join their preparation owner; existing stores borrow at writer admission.
   let execution = observed.key.startsWith("path:")
-    ? captureOpenClawAgentDatabaseExecution(options, { expectedCreationIdentity: observed })
+    ? captureOpenClawAgentDatabasePreparationExecution(options)
     : undefined;
   let prepared = false;
   return {
@@ -82,9 +89,7 @@ function createCacheWriter(options: ReturnType<typeof captureCacheDatabaseOption
         options,
         async () => {
           source.assertCurrent();
-          execution ??= captureOpenClawAgentDatabaseExecution(options, {
-            expectedIdentity,
-          });
+          execution ??= captureOpenClawAgentDatabasePreparationExecution(options, expectedIdentity);
           if (!prepared) {
             await execution.prepare(source, signal);
             prepared = true;
@@ -107,9 +112,7 @@ function createCacheWriter(options: ReturnType<typeof captureCacheDatabaseOption
         options,
         async () => {
           source.assertCurrent();
-          execution ??= captureOpenClawAgentDatabaseExecution(options, {
-            expectedIdentity,
-          });
+          execution ??= captureOpenClawAgentDatabasePreparationExecution(options, expectedIdentity);
           if (!prepared) {
             await execution.prepare(source, signal);
             prepared = true;
@@ -134,23 +137,42 @@ function createCacheWriter(options: ReturnType<typeof captureCacheDatabaseOption
   };
 }
 
-export async function deleteSessionCostUsageRollupsExcept(params: {
+export async function retireLegacySessionCostUsageCache(params: {
   agentId?: string;
   env?: NodeJS.ProcessEnv;
   databasePath?: string;
-  liveKeys: ReadonlySet<string>;
-  rows: readonly SessionCostUsageRollupSnapshot[];
 }): Promise<void> {
-  const existing = params.rows.filter((row) => !params.liveKeys.has(row.key));
-  const writer = createCacheWriter(
-    captureCacheDatabaseOptions({
-      agentId: normalizeAgentId(params.agentId),
-      env: params.env,
-      ...(params.databasePath ? { path: params.databasePath } : {}),
-    }),
-  );
+  const options = captureCacheDatabaseOptions({
+    agentId: normalizeAgentId(params.agentId),
+    env: params.env,
+    ...(params.databasePath ? { path: params.databasePath } : {}),
+  });
+  const maintenance = getOpenClawDatabaseMaintenanceScope();
+  if (maintenance?.ownsSchemaMaintenance) {
+    // Doctor retains the native owner; ordinary worker admission cannot borrow it.
+    await withOpenClawAgentDatabaseWrite(options, ({ db, path }) =>
+      runSqliteImmediateTransactionSync(
+        db,
+        () => {
+          maintenance.assertAdmission();
+          retireLegacySessionCostUsageCacheInDatabase(db);
+        },
+        {
+          busyTimeoutMs: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
+          databaseLabel: path,
+          operationLabel: "session-cost-usage.legacy.retire",
+          withCommit: (commit) => {
+            maintenance.assertAdmission();
+            commit();
+          },
+        },
+      ),
+    );
+    return;
+  }
+  const writer = createCacheWriter(options);
   try {
-    await writer.write("usageCache.prune", existing);
+    await writer.write("usageCache.retireLegacy", undefined);
   } finally {
     await writer.close();
   }

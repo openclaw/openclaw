@@ -1,50 +1,29 @@
-// Verifies ClawHub client authentication, URL, retry, timeout, and body bounds.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
-import { fetchClawHubJson } from "./clawhub-client.js";
+import { fetchClawHubJson, type ClawHubFetchOptions } from "./clawhub-client.js";
+import { retryClawHubRead } from "./clawhub-retry.js";
 import { fetchClawHubSkillVerification, searchClawHubSkills } from "./clawhub-skills.js";
+import { captureClawHubResponse } from "./clawhub.test-support.js";
 
-function createStalledBodyResponse(params: {
-  headers: HeadersInit;
-  firstChunk: Uint8Array;
-  status?: number;
-  statusText?: string;
-}): {
-  response: Response;
-  cancel: ReturnType<typeof vi.fn>;
-} {
+const search = (options: ClawHubFetchOptions) =>
+  searchClawHubSkills({ query: "calendar", ...options });
+
+function createStalledBodyResponse(firstChunk: string, init: ResponseInit = {}) {
   const cancel = vi.fn();
   const body = new ReadableStream<Uint8Array>({
     start(controller) {
-      controller.enqueue(params.firstChunk);
+      controller.enqueue(new TextEncoder().encode(firstChunk));
     },
-    cancel(reason) {
-      cancel(reason);
-    },
+    cancel,
   });
   return {
-    response: new Response(body, {
-      status: params.status ?? 200,
-      statusText: params.statusText,
-      headers: params.headers,
-    }),
+    response: new Response(body, init),
     cancel,
   };
-}
-
-function malformedUtf8(prefix: string, suffix: string): ArrayBuffer {
-  const prefixBytes = new TextEncoder().encode(prefix);
-  const suffixBytes = new TextEncoder().encode(suffix);
-  const buffer = new ArrayBuffer(prefixBytes.byteLength + 1 + suffixBytes.byteLength);
-  const bytes = new Uint8Array(buffer);
-  bytes.set(prefixBytes);
-  bytes[prefixBytes.byteLength] = 0xff;
-  bytes.set(suffixBytes, prefixBytes.byteLength + 1);
-  return buffer;
 }
 
 async function writeConfigFile(configPath: string, contents: string) {
@@ -52,44 +31,17 @@ async function writeConfigFile(configPath: string, contents: string) {
   await fs.writeFile(configPath, contents, "utf8");
 }
 
-async function withWindowsAppData(run: (root: string) => Promise<void>) {
-  await withTestDir({ prefix: "openclaw-clawhub-appdata-" }, async (appDataRoot) => {
-    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
-    setTestEnvValue("APPDATA", appDataRoot);
-    deleteTestEnvValue("XDG_CONFIG_HOME");
-    try {
-      await run(appDataRoot);
-    } finally {
-      platformSpy.mockRestore();
-    }
-  });
-}
-
 describe("clawhub client", () => {
   const originalEnv = captureEnv(["APPDATA", "HOME", "XDG_CONFIG_HOME"]);
 
   async function searchAuthorizationHeader(): Promise<string | null> {
-    let authorization: string | null = null;
-    await expect(
-      searchClawHubSkills({
-        query: "calendar",
-        fetchImpl: async (_input, init) => {
-          authorization = new Headers(init?.headers).get("Authorization");
-          return new Response(JSON.stringify({ results: [] }), {
-            status: 200,
-            headers: { "content-type": "application/json" },
-          });
-        },
-      }),
-    ).resolves.toStrictEqual([]);
-    return authorization;
-  }
-
-  async function expectSearchUsesAuthToken(expectedToken: string): Promise<void> {
-    await expect(searchAuthorizationHeader()).resolves.toBe(`Bearer ${expectedToken}`);
+    const request = captureClawHubResponse(() => Response.json({ results: [] }));
+    await expect(search({})).resolves.toStrictEqual([]);
+    return new Headers(request.init()?.headers).get("Authorization");
   }
 
   afterEach(() => {
+    vi.restoreAllMocks();
     delete process.env.OPENCLAW_CLAWHUB_URL;
     delete process.env.CLAWHUB_TOKEN;
     delete process.env.CLAWHUB_AUTH_TOKEN;
@@ -102,11 +54,15 @@ describe("clawhub client", () => {
 
   it.each([
     ["without a token", JSON.stringify({})],
-    ["with malformed JSON", "{"],
+    ["with malformed JSON", '{"token":"fixture-malformed-secret", invalid}'],
   ])(
     "does not fall back to a legacy token when the canonical config exists %s",
-    async (_, contents) => {
-      await withWindowsAppData(async (appDataRoot) => {
+    async (description, contents) => {
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      await withTestDir({ prefix: "openclaw-clawhub-appdata-" }, async (appDataRoot) => {
+        vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+        setTestEnvValue("APPDATA", appDataRoot);
+        deleteTestEnvValue("XDG_CONFIG_HOME");
         await Promise.all([
           writeConfigFile(path.join(appDataRoot, "clawhub", "config.json"), contents),
           writeConfigFile(
@@ -115,6 +71,13 @@ describe("clawhub client", () => {
           ),
         ]);
         await expect(searchAuthorizationHeader()).resolves.toBeNull();
+        if (description === "with malformed JSON") {
+          expect(warn).toHaveBeenCalledExactlyOnceWith(
+            "ClawHub sign-in configuration could not be loaded; repair it or sign in again. Continuing without a saved token.",
+          );
+        } else {
+          expect(warn).not.toHaveBeenCalled();
+        }
       });
     },
   );
@@ -123,64 +86,57 @@ describe("clawhub client", () => {
     "falls back to XDG_CONFIG_HOME for ClawHub request auth on macOS",
     async () => {
       await withTestDir({ prefix: "openclaw-clawhub-home-" }, async (fakeHome) => {
-        await withTestDir({ prefix: "openclaw-clawhub-xdg-" }, async (xdgRoot) => {
-          const configPath = path.join(xdgRoot, "clawhub", "config.json");
-          const homedirSpy = vi.spyOn(os, "homedir").mockReturnValue(fakeHome);
-          setTestEnvValue("XDG_CONFIG_HOME", xdgRoot);
-          try {
-            await writeConfigFile(configPath, JSON.stringify({ token: "fixture-xdg-token" }));
-
-            await expectSearchUsesAuthToken("fixture-xdg-token");
-          } finally {
-            homedirSpy.mockRestore();
-          }
-        });
+        const xdgRoot = path.join(fakeHome, "xdg");
+        vi.spyOn(os, "homedir").mockReturnValue(fakeHome);
+        setTestEnvValue("XDG_CONFIG_HOME", xdgRoot);
+        await writeConfigFile(
+          path.join(xdgRoot, "clawhub", "config.json"),
+          '{"token":"fixture-xdg-token"}',
+        );
+        await expect(searchAuthorizationHeader()).resolves.toBe("Bearer fixture-xdg-token");
       });
     },
   );
 
   it("uses a valid Retry-After hint when RateLimit-Reset is malformed", async () => {
     process.env.CLAWHUB_CONFIG_PATH = path.join(os.tmpdir(), "openclaw-no-clawhub-config");
-    await expect(
-      searchClawHubSkills({
-        query: "calendar",
-        fetchImpl: async () =>
-          new Response("Rate limit exceeded", {
-            status: 429,
-            headers: {
-              "RateLimit-Reset": "invalid",
-              "Retry-After": "7",
-            },
-          }),
-      }),
-    ).rejects.toThrow(/Rate limit exceeded \(resets in 7s\) Sign in for higher rate limits\.$/);
+    captureClawHubResponse(
+      () =>
+        new Response("Rate limit exceeded", {
+          status: 429,
+          headers: { "RateLimit-Reset": "invalid", "Retry-After": "7" },
+        }),
+    );
+    await expect(search({})).rejects.toThrow(
+      /Rate limit exceeded \(resets in 7s\) Sign in for higher rate limits\.$/,
+    );
   });
 
   it.each(["GET", "POST"] as const)(
     "replays a pre-header timeout only for %s reads",
     async (method) => {
       let attempts = 0;
+      vi.spyOn(globalThis, "fetch").mockImplementation(async (_input, init) => {
+        attempts += 1;
+        if (attempts > 1) {
+          return new Response('{"recovered":true}');
+        }
+        return await new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener(
+            "abort",
+            () => {
+              const reason: unknown = init.signal?.reason;
+              reject(reason instanceof Error ? reason : new Error("Expected a timeout Error"));
+            },
+            { once: true },
+          );
+        });
+      });
       const result = fetchClawHubJson({
         path: "/timeout",
         method,
         skipAuth: true,
         timeoutMs: 5,
-        fetchImpl: async (_input, init) => {
-          attempts += 1;
-          if (attempts > 1) {
-            return new Response('{"recovered":true}');
-          }
-          return await new Promise<Response>((_resolve, reject) => {
-            init?.signal?.addEventListener(
-              "abort",
-              () => {
-                const reason: unknown = init.signal?.reason;
-                reject(reason instanceof Error ? reason : new Error("Expected a timeout Error"));
-              },
-              { once: true },
-            );
-          });
-        },
       });
       if (method === "GET") {
         await expect(result).resolves.toEqual({ recovered: true });
@@ -193,54 +149,34 @@ describe("clawhub client", () => {
   );
 
   it("rejects malformed UTF-8 in otherwise valid ClawHub JSON", async () => {
-    await expect(
-      searchClawHubSkills({
-        query: "calendar",
-        fetchImpl: async () =>
-          new Response(malformedUtf8('{"results":[{"slug":"', '"}]}'), {
-            status: 200,
-            headers: { "content-type": "application/json" },
-          }),
-      }),
-    ).rejects.toThrow("ClawHub /api/v1/search returned malformed JSON");
+    captureClawHubResponse(
+      () =>
+        new Response(
+          Buffer.concat([
+            Buffer.from('{"results":[{"slug":"'),
+            Buffer.from([0xff]),
+            Buffer.from('"}]}'),
+          ]),
+        ),
+    );
+    await expect(search({})).rejects.toThrow("ClawHub /api/v1/search returned malformed JSON");
   });
 
-  it("times out and cancels stalled successful ClawHub JSON bodies", async () => {
-    const stalled = createStalledBodyResponse({
-      firstChunk: new TextEncoder().encode('{"results":['),
-      headers: { "content-type": "application/json" },
-    });
-
-    await expect(
-      searchClawHubSkills({
-        query: "calendar",
-        timeoutMs: 5,
-        fetchImpl: async () => stalled.response,
-      }),
-    ).rejects.toThrow(/ClawHub \/api\/v1\/search response stalled after 5ms/);
-    expect(stalled.cancel).toHaveBeenCalledTimes(1);
-    expect(stalled.cancel.mock.calls[0]?.[0]).toBeInstanceOf(Error);
-  });
-
-  it("times out and cancels stalled ClawHub error bodies", async () => {
+  it.each([
+    { status: 200, error: "ClawHub /api/v1/search response stalled after 5ms" },
+    { status: 500, error: "ClawHub /api/v1/search failed (500): Server Error" },
+  ])("times out and cancels stalled $status bodies", async ({ status, error }) => {
     const stalledResponses: ReturnType<typeof createStalledBodyResponse>[] = [];
-
-    await expect(
-      searchClawHubSkills({
-        query: "calendar",
-        timeoutMs: 5,
-        fetchImpl: async () => {
-          const stalled = createStalledBodyResponse({
-            firstChunk: new TextEncoder().encode("partial error"),
-            headers: { "content-type": "text/plain", "retry-after": "0" },
-            status: 500,
-            statusText: "Server Error",
-          });
-          stalledResponses.push(stalled);
-          return stalled.response;
-        },
-      }),
-    ).rejects.toThrow("ClawHub /api/v1/search failed (500): Server Error");
+    vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
+      const stalled = createStalledBodyResponse(status === 200 ? '{"results":[' : "partial error", {
+        headers: { "content-type": "text/plain", "retry-after": "0" },
+        status,
+        statusText: status === 500 ? "Server Error" : undefined,
+      });
+      stalledResponses.push(stalled);
+      return stalled.response;
+    });
+    await expect(search({ timeoutMs: 5 })).rejects.toThrow(error);
     for (const stalled of stalledResponses) {
       expect(stalled.cancel).toHaveBeenCalledTimes(1);
     }
@@ -248,57 +184,104 @@ describe("clawhub client", () => {
     expect(finalResponse?.cancel.mock.calls[0]?.[0]).toBeInstanceOf(Error);
   });
 
-  it.each([{ kind: "verification", maxMiB: 64, requestPath: "/api/v1/skills/weather/verify" }])(
-    "bounds oversized $kind JSON and cancels the stream",
-    async ({ kind, maxMiB, requestPath }) => {
-      const cancel = vi.fn();
-      const chunk = new Uint8Array(512 * 1024).fill("x".charCodeAt(0));
-      let emitted = 0;
-      const body = new ReadableStream<Uint8Array>({
-        pull(controller) {
-          if (emitted >= (maxMiB + 1) * 2) {
-            controller.close();
-            return;
-          }
-          emitted += 1;
-          controller.enqueue(chunk);
-        },
-        cancel() {
-          cancel();
-        },
-      });
-      const fetchImpl = async () =>
-        new Response(body, { status: 200, headers: { "content-type": "application/json" } });
-      const result =
-        kind === "verification"
-          ? fetchClawHubSkillVerification({ slug: "weather", fetchImpl })
-          : searchClawHubSkills({ query: "calendar", fetchImpl });
+  it("bounds oversized verification JSON and cancels the stream", async () => {
+    const cancel = vi.fn();
+    const chunk = new Uint8Array(512 * 1024).fill("x".charCodeAt(0));
+    let emitted = 0;
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (emitted >= 65 * 2) {
+          controller.close();
+          return;
+        }
+        emitted += 1;
+        controller.enqueue(chunk);
+      },
+      cancel,
+    });
+    captureClawHubResponse(
+      () =>
+        new Response(body, {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+    );
+    const result = fetchClawHubSkillVerification({ slug: "weather" });
 
-      await expect(result).rejects.toThrow(
-        `ClawHub ${requestPath} response exceeded ${maxMiB * 1024 * 1024} bytes`,
-      );
-      // Cancel at the cap before allocating a contiguous copy of the oversized body.
-      expect(cancel).toHaveBeenCalledTimes(1);
-    },
-  );
+    await expect(result).rejects.toThrow(
+      `ClawHub /api/v1/skills/weather/verify response exceeded ${64 * 1024 * 1024} bytes`,
+    );
+    expect(cancel).toHaveBeenCalledTimes(1);
+  });
 
   it("bounds oversized ClawHub error bodies to a short collapsed snippet", async () => {
-    const oversized = "boom ".repeat(64 * 1024); // ~320 KiB error body
-    let error: unknown;
-    try {
-      await searchClawHubSkills({
-        query: "calendar",
-        fetchImpl: async () =>
-          new Response(oversized, { status: 500, headers: { "retry-after": "0" } }),
-      });
-    } catch (caught) {
-      error = caught;
-    }
+    vi.spyOn(globalThis, "fetch").mockImplementation(
+      async () =>
+        new Response("boom ".repeat(64 * 1024), { status: 500, headers: { "retry-after": "0" } }),
+    );
+    const error = await search({}).catch((caught: unknown) => caught);
     expect(error).toBeInstanceOf(Error);
     const message = (error as Error).message;
     expect(message.startsWith("ClawHub /api/v1/search failed (500): ")).toBe(true);
     expect(message.endsWith("…")).toBe(true);
-    // prefix + 400-char snippet + "…" stays far below the raw ~320 KiB body.
     expect(message.length).toBeLessThanOrEqual(500);
   });
+});
+
+function retryResponse(first: Response | Error, retryRateLimit = false) {
+  const delays: number[] = [];
+  const request = vi.fn(async () => ({ response: new Response("ok") }));
+  request.mockImplementationOnce(async () => {
+    if (first instanceof Error) {
+      throw first;
+    }
+    return { response: first };
+  });
+  const result = retryClawHubRead(request, {
+    retryRateLimit,
+    disposeRetry: async ({ response }) => {
+      await response.body?.cancel();
+    },
+    sleep: async (ms) => {
+      delays.push(ms);
+    },
+  });
+  return { result, request, delays };
+}
+
+it.each([
+  ["ignores fractional delay-seconds", "1.5", 1_000],
+  ["honors a valid HTTP-date", "Tue, 02 Mar 2027 23:59:35 GMT", 5_000],
+] as const)("Retry-After %s through the shared parser", async (_name, retryAfter, delay) => {
+  vi.useFakeTimers();
+  vi.setSystemTime(new Date("2027-03-02T23:59:30.000Z"));
+  try {
+    const { result, delays } = retryResponse(
+      new Response("limited", {
+        status: 503,
+        headers: { "Retry-After": retryAfter },
+      }),
+    );
+    expect(await (await result).response.text()).toBe("ok");
+    expect(delays).toEqual([delay]);
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+it("does not retry permanent certificate failures", async () => {
+  const failure = new TypeError("fetch failed", { cause: { code: "CERT_HAS_EXPIRED" } });
+  const { result, request, delays } = retryResponse(failure);
+  await expect(result).rejects.toBe(failure);
+  expect(request).toHaveBeenCalledTimes(1);
+  expect(delays).toEqual([]);
+});
+
+it("does not retry 429 unless the caller enables rate-limit retries", async () => {
+  const defaults = retryResponse(new Response("limited", { status: 429 }));
+  expect((await defaults.result).response.status).toBe(429);
+  expect(defaults.request).toHaveBeenCalledTimes(1);
+  const optedIn = retryResponse(new Response("limited", { status: 429 }), true);
+  expect(await (await optedIn.result).response.text()).toBe("ok");
+  expect(optedIn.request).toHaveBeenCalledTimes(2);
 });

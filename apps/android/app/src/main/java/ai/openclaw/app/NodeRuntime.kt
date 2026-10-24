@@ -5333,8 +5333,17 @@ class NodeRuntime internal constructor(
       applyVoiceWakeWords(payloadJson)
     }
     if (operatorConnected && (event == "config.changed" || event == "chat.metadata.changed")) {
-      refreshModelCatalog()
-      refreshProviderModels()
+      val change = if (event == "chat.metadata.changed") parseJsonParamsObject(payloadJson) else null
+      val changedAgentId = change.nonBlankString("agentId")
+      val affectsSelectedAgent = changedAgentId == null || selectedChatAgentId == null || changedAgentId.equals(selectedChatAgentId, ignoreCase = true)
+      // Usage publications do not change catalogs; retain auth and selection invalidation.
+      if (
+        change.boolean("modelSelectionChanged") ||
+        (affectsSelectedAgent && (change?.get("modelCatalogChanged") != JsonPrimitive(false) || change.boolean("authChanged")))
+      ) {
+        refreshModelCatalog()
+        refreshProviderModels()
+      }
     }
     if (event == "config.changed" || event == GatewayEvent.UsersPrefsChanged.rawValue) {
       // Config changes invalidate the snapshot; profile changes are targeted by

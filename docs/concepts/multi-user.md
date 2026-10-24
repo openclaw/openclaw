@@ -26,8 +26,9 @@ controls signed-in people. None of those settings creates a public link.
 
 The session creator or a Gateway admin can explicitly enable **Public access**.
 Anyone with the normal thread URL can then read existing and future conversation
-text without signing in, while tools, reasoning, files, images, widgets, hidden
-messages, and internal metadata remain excluded. **Log in** returns to that same
+text, shared images, saved inline widgets, and tool-step summaries without signing
+in, while tool results, reasoning, file downloads, hidden messages, and internal
+metadata remain excluded. **Log in** returns to that same
 thread with the person's existing permissions. Assigning a different owner does
 not transfer publication authority. Disabling public access stops anonymous
 reads; enabling it again makes the same normal URL readable. Previously revoked
@@ -45,6 +46,13 @@ Every session carries up to three layers of attribution:
 - **Participants** (history): authenticated people, channel senders, and requesting agents whose accepted input targets the session. The session's own agent and passive viewers are never recorded. New-identity admission is bounded at 32 records per session. Repair can preserve larger existing histories. Participation is recorded best-effort in the background, so it never delays a turn.
 
 Gateway profile display names and avatars are resolved from the current profile when session rows are returned. Agent actors resolve from the configured agent identity. Participant aggregates do not store display labels, so renaming a profile or agent updates the ownership UI without rewriting participant history.
+
+For `sessions_create`, the selected human remains the session's creator and access
+principal, while the opening message identifies the agent as its author. This
+creator record does not prove that the person authored or approved the operation.
+When audit collection is enabled, operation receipts can separately record the
+selected authority subject. A new agent-initiated execution records the agent
+invoker separately from the represented person.
 
 ## Assigning an owner
 
@@ -213,13 +221,16 @@ another mention. After five minutes, it refreshes cached results in the backgrou
 without hiding the people you can already select. Switching sessions, profiles,
 or connections clears that cache. Results older than 30 minutes are discarded.
 The picker shows placeholders for uncached searches, an empty message when nobody
-matches, and **Retry** if a search without usable cached results fails.
+matches, and **Retry** if a search without usable cached results fails temporarily.
+Permission, profile-verification, and unsupported-conversation rejections clear
+cached people and show guidance instead of Retry. Follow that guidance to restore
+your access or choose a supported conversation.
 **Will notify** reuses the selected person's photo, with initials while it loads or
 when the photo is unavailable.
 
 Selected mentions render as distinct person references in the transcript. Hover, focus, or tap a reference to open the same information card used in the sidebar: current name and avatar, observed presence and connection details, visible watched and recent sessions, and the Activity link. The original message label and copied text stay unchanged. Cards follow explicit profile merges; ordinary unselected `@name` text does not become a person reference.
 
-The picker includes known Gateway profiles eligible to read the session, including people who are offline. Its online indicator is only a connection hint, not an eligibility requirement. Sign in with a durable Gateway profile to use human mentions. A mention adds personal discovery involvement, not authored participation or Git contributor credit. It never adds session membership, changes visibility, or grants access. The Gateway rechecks the recipient's current access when creating and displaying it.
+The picker includes known Gateway profiles eligible to read the session, including people who are offline. Its online indicator is only a connection hint, not an eligibility requirement. Sign in with a durable Gateway profile to use human mentions. Guests with session-only permissions can select eligible people in existing conversations they are allowed to write in. A mention adds personal discovery involvement, not authored participation or Git contributor credit. It never adds session membership, changes visibility, or grants access. The Gateway rechecks the recipient's current access when creating and displaying it.
 
 Mentions work for ordinary messages, queued or steered input, and the first message of a new session, including a remotely placed session. They are unavailable in incognito, Goal, catalog, suggestion-only, command-send, or terminal-launch modes. If selected mentions remain after switching to an unsupported mode, the composer blocks the send. It asks you to remove them, or to return to a normal chat. It does not silently discard selected recipients.
 
@@ -239,9 +250,12 @@ The Inbox works without browser notification permission. For optional alerts whi
 
 ## Agent-spawned sessions
 
-In a turn steered by several people, `sessions_spawn` requires `user` (the requester's verified `requester_profile.id`)
-and the child acts with that person's retained authority. This selection does not
-change the session's model account or the creator and owner rules below.
+`sessions_spawn` defaults to the active execution's requester, including after
+collaborative steering. An explicit `user` selects an authenticated participant
+whose source authority remains current; the child carries that person's requester
+facts and resolves current destination policy at admission. Selection leaves the
+parent execution unchanged and does not change the session's model account or the
+creator and owner rules below.
 
 Sessions an agent creates with `sessions_spawn` (`visible: true`) normally retain the requesting agent as their immutable creator. A required sandbox instead preserves the parent's creator provenance as an isolation policy. If the active human requester matches the requesting session's verified human owner, a new visible child assigns that person as its initial owner. A different owner, an unlinked requester, or a system-triggered spawn explicitly assigns the requesting agent as owner, even when sandbox policy retained human creator provenance. The sidebar shows the current owner's profile or configured agent identity rather than an internal session key. The assignment follows the same [owner and personal-context rules](/concepts/multi-user#assigning-an-owner); sharing and visibility authority remains anchored on the creator.
 

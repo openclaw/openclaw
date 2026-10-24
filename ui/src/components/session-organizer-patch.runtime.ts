@@ -1,3 +1,4 @@
+import { isSessionDisplayMetadataPatch } from "../lib/sessions/patch.ts";
 import { resolveUiSessionRowAgentId } from "../lib/sessions/session-key.ts";
 import type {
   SidebarSessionMutationResult,
@@ -44,6 +45,7 @@ export async function patchSession(
     !requireSessionMutationAccess(host, scope, {
       method: "sessions.patch",
       params: requestParams,
+      allowDeferred: isSessionDisplayMetadataPatch(patch),
       sessionScope: refresh.sessionScope,
       session,
     })
@@ -76,11 +78,12 @@ export async function patchSession(
       }
       return "failed";
     }
-    // Unpin from any surface (menu, pin button, drag) retires the session's
-    // persisted zone slot; leaving it would resurrect stale synced entries.
-    // Archiving implicitly unpins server-side (sessions-patch clears
-    // pinnedAt), so it retires the slot too.
-    if (patch.pinned === false || (patch.archived === true && session.pinned)) {
+    if ("queued" in patched) {
+      return "completed";
+    }
+    // Personal pin references are independent of the shared session's pinnedAt.
+    // Retire this profile's reference only after the archive commits.
+    if (patch.pinned === false || patch.archived === true) {
       host.pruneSidebarSessionEntry(session.key);
     }
     if (!refresh.deferListRefresh && host.sidebarSessionStatusFilter() !== "active") {

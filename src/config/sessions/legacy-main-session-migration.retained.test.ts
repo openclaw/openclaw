@@ -41,13 +41,9 @@ it("migrates active legacy-main rows without admitting retained retired database
   closeOpenClawAgentDatabasesForTest();
   const { DatabaseSync } = requireNodeSqlite();
   for (const pathname of [activePath, ordinaryPath, ...retiredPaths]) {
-    const db = new DatabaseSync(pathname);
-    try {
-      db.exec("ALTER TABLE session_windows DROP COLUMN row_transcript_json");
-      db.exec("ALTER TABLE session_windows DROP COLUMN row_transcript_updated_at");
-    } finally {
-      db.close();
-    }
+    using db = new DatabaseSync(pathname);
+    db.exec("ALTER TABLE session_windows DROP COLUMN row_transcript_json");
+    db.exec("ALTER TABLE session_windows DROP COLUMN row_transcript_updated_at");
   }
   for (const [index, agentId] of retiredIds.entries()) {
     const operationId = `retain-${agentId}`;
@@ -73,19 +69,15 @@ it("migrates active legacy-main rows without admitting retained retired database
     env,
     operation: "retained legacy-main migration fixture",
     run: async (authority) => {
-      const configuredAgentDatabaseTargets = resolveConfiguredAgentDatabaseTargets(cfg, { env });
-      const preparedDiscovery = prepareAgentDatabaseMigrationDiscovery({
+      const targets = {
         env,
-        configuredAgentDatabaseTargets,
-      });
+        configuredAgentDatabaseTargets: resolveConfiguredAgentDatabaseTargets(cfg, { env }),
+      };
+      const preparedDiscovery = prepareAgentDatabaseMigrationDiscovery(targets);
       expect(
         preparedDiscovery.discovery.retainedTargets.map((target) => target.path).toSorted(),
       ).toEqual(retiredPaths.toSorted());
-      await migrateLegacyMediaPersistence({
-        env,
-        configuredAgentDatabaseTargets,
-        preparedDiscovery,
-      });
+      await migrateLegacyMediaPersistence({ ...targets, preparedDiscovery });
       await runDoctorSessionSqlite({ cfg, env, allAgents: true, mode: "import" }, authority);
       await closeOpenClawAgentDatabasesAsync();
       closeOpenClawAgentDatabasesForTest();
@@ -96,12 +88,11 @@ it("migrates active legacy-main rows without admitting retained retired database
         beforePersistentApply: () => authority.assertCurrent(),
       });
       expect(result.complete).toBe(true);
-      expect(
-        readClaim({ databaseAgentId: "owner", databasePath: activePath, key: "agent:owner:chat" }),
-      ).toBeDefined();
-      expect(
-        readClaim({ databaseAgentId: "owner", databasePath: activePath, key: "agent:owner:other" }),
-      ).toBeDefined();
+      for (const key of ["agent:owner:chat", "agent:owner:other"]) {
+        expect(
+          readClaim({ databaseAgentId: "owner", databasePath: activePath, key }),
+        ).toBeDefined();
+      }
       for (const [index, pathname] of retiredPaths.entries()) {
         expect(fs.readFileSync(pathname)).toEqual(retainedBytes[index]);
         expect(result.warnings).toContain(

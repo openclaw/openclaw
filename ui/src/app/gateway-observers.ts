@@ -9,7 +9,7 @@ import { invalidateCronCatalog } from "../lib/cron/catalog.ts";
 import { invalidateModelAuthStatusRequests } from "../lib/model-auth-request-state.ts";
 import {
   clearModelCatalogCache,
-  beginModelCatalogRead,
+  beginModelCatalogSnapshot,
   publishModelCatalogResult,
   type ModelCatalogRead,
   type ModelCatalogReadScope,
@@ -122,6 +122,10 @@ export function createGatewayMetadataObserver(
       return value;
     },
     synchronize(previous: ApplicationGatewaySnapshot, next: ApplicationGatewaySnapshot): boolean {
+      if (next.phase !== "connected") {
+        target = undefined;
+        read = undefined;
+      }
       const connectionChanged = previous.client !== next.client || previous.hello !== next.hello;
       if (
         previous.client &&
@@ -153,7 +157,7 @@ export function createGatewayMetadataObserver(
             ? resolveUiConversationIdentity({ hello }, target.sessionKey, target.agentId)
             : {}
           : undefined;
-      read = target ? beginModelCatalogRead(client, scope) : undefined;
+      read = target ? beginModelCatalogSnapshot(client, scope) : undefined;
       return true;
     },
     receive(

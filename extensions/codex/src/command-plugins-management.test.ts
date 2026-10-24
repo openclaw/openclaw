@@ -1,39 +1,67 @@
-// Codex tests cover command plugins management plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import type { v2 } from "./app-server/protocol.js";
+import type { CodexPluginConfigEntry } from "./command-plugin-config.js";
 import { handleCodexPluginsSubcommand } from "./command-plugins-management.js";
 import {
   buttonCommands,
   fakeCtx,
   inMemoryIO,
   pluginRuntime,
+  pluginCatalog,
   pluginSummary,
   presentationButtons,
   type CodexPluginsManagementRuntime,
 } from "./command-plugins-management.test-support.js";
 
+const localPluginId = "security-review@company-tools";
+
+function command(
+  args: string[],
+  io = inMemoryIO(),
+  runtime: CodexPluginsManagementRuntime = pluginRuntime(),
+  ctx = fakeCtx,
+) {
+  return handleCodexPluginsSubcommand(ctx, args, io, runtime);
+}
+
+function makePolicy(
+  pluginName: string,
+  marketplaceName = "company-tools",
+  enabled = false,
+  restrictions?: CodexPluginConfigEntry["allow_destructive_actions"],
+) {
+  return {
+    enabled,
+    marketplaceName,
+    pluginName,
+    ...(restrictions === undefined ? {} : { allow_destructive_actions: restrictions }),
+  };
+}
+const configuredPlugin = (enabled = true) =>
+  makePolicy("google-calendar", "openai-curated", enabled);
+
+function app(id: string, name: string, installUrl: string): v2.AppSummary {
+  return { id, name, description: null, installUrl, category: null };
+}
+function installingApps(appsNeedingAuth: v2.AppSummary[], setupAllowed = true) {
+  return pluginRuntime({
+    marketplacePath: "/repo/marketplace.json",
+    setupAllowed,
+    install: async () => ({ authPolicy: "ON_INSTALL", appsNeedingAuth }),
+  });
+}
+
 describe("Codex /codex plugins subcommand", () => {
   it("lists effective disabled status when the global plugin switch is off", async () => {
-    const io = inMemoryIO(
-      {
-        "google-calendar": {
-          enabled: true,
-          marketplaceName: "openai-curated",
-          pluginName: "google-calendar",
-        },
-      },
-      { enabled: false },
-    );
+    const io = inMemoryIO({ "google-calendar": configuredPlugin(true) }, { enabled: false });
 
-    const result = await handleCodexPluginsSubcommand(fakeCtx, ["list"], io);
+    const result = await command(["list"], io);
     expect(result.text).toContain("OFF  google-calendar");
     expect(result.text).toContain("Global codexPlugins.enabled is off");
   });
 
   it("renders the plugins menu as portable slash-command buttons", async () => {
-    const io = inMemoryIO();
-
-    const result = await handleCodexPluginsSubcommand(fakeCtx, ["menu"], io);
+    const result = await command(["menu"]);
 
     expect(result.text).toContain("/codex plugins list");
     expect(buttonCommands(result)).toEqual([
@@ -47,69 +75,38 @@ describe("Codex /codex plugins subcommand", () => {
     ]);
   });
 
-  it("renders enable and disable target pickers from effective plugin state", async () => {
+  it.each([
+    ["enable", "google-calendar"],
+    ["disable", "notion"],
+  ])("renders the %s target picker from effective plugin state", async (verb, name) => {
     const io = inMemoryIO({
-      "google-calendar": {
-        enabled: false,
-        marketplaceName: "openai-curated",
-        pluginName: "google-calendar",
-      },
-      notion: {
-        enabled: true,
-        marketplaceName: "openai-curated",
-        pluginName: "notion",
-      },
+      "google-calendar": configuredPlugin(false),
+      notion: makePolicy("notion", "openai-curated", true),
     });
-
-    const enableResult = await handleCodexPluginsSubcommand(fakeCtx, ["enable"], io);
-    expect(enableResult.text).toContain("/codex plugins enable google-calendar");
-    expect(buttonCommands(enableResult)).toEqual([
-      "/codex plugins enable google-calendar",
-      "/codex plugins menu",
-    ]);
-
-    const disableResult = await handleCodexPluginsSubcommand(fakeCtx, ["disable"], io);
-    expect(disableResult.text).toContain("/codex plugins disable notion");
-    expect(buttonCommands(disableResult)).toEqual([
-      "/codex plugins disable notion",
-      "/codex plugins menu",
-    ]);
+    const result = await command([verb], io);
+    const expected = `/codex plugins ${verb} ${name}`;
+    expect(result.text).toContain(expected);
+    expect(buttonCommands(result)).toEqual([expected, "/codex plugins menu"]);
   });
 
   it("enables and disables a configured plugin and reflects the change in subsequent reads", async () => {
-    const io = inMemoryIO({
-      "google-calendar": {
-        enabled: true,
-        marketplaceName: "openai-curated",
-        pluginName: "google-calendar",
-      },
-    });
+    const io = inMemoryIO({ "google-calendar": configuredPlugin(true) });
 
-    const disabled = await handleCodexPluginsSubcommand(
-      fakeCtx,
-      ["disable", "google-calendar"],
-      io,
-    );
+    const disabled = await command(["disable", "google-calendar"], io);
     expect(disabled.text).toContain("disabled");
     expect(io.current()["google-calendar"]?.enabled).toBe(false);
 
-    const enabled = await handleCodexPluginsSubcommand(fakeCtx, ["enable", "google-calendar"], io);
+    const enabled = await command(["enable", "google-calendar"], io);
     expect(enabled.text).toContain("enabled");
     expect(io.currentConfig().enabled).toBe(true);
     expect(io.current()["google-calendar"]?.enabled).toBe(true);
   });
 
   it("rejects enable and disable from non-owner non-admin callers", async () => {
-    const io = inMemoryIO({
-      "google-calendar": {
-        enabled: true,
-        marketplaceName: "openai-curated",
-        pluginName: "google-calendar",
-      },
-    });
+    const io = inMemoryIO({ "google-calendar": configuredPlugin(true) });
     const ctx = { ...fakeCtx, senderIsOwner: false, gatewayClientScopes: ["operator.write"] };
 
-    const result = await handleCodexPluginsSubcommand(ctx, ["disable", "google-calendar"], io);
+    const result = await command(["disable", "google-calendar"], io, undefined, ctx);
     expect(result.text).toContain("Only an owner or operator.admin");
     expect(io.current()["google-calendar"]?.enabled).toBe(true);
   });
@@ -126,14 +123,19 @@ describe("Codex /codex plugins subcommand", () => {
       },
     };
     await expect(
-      handleCodexPluginsSubcommand(ctx, ["disable", "calendar"], {
-        ...io,
-        mutate: async (update, assertCurrent) => {
-          ownerCurrent = false;
-          ctx.assertOwnerCurrent = () => {};
-          await io.mutate(update, assertCurrent);
+      command(
+        ["disable", "calendar"],
+        {
+          ...io,
+          mutate: async (update, assertCurrent) => {
+            ownerCurrent = false;
+            ctx.assertOwnerCurrent = () => {};
+            await io.mutate(update, assertCurrent);
+          },
         },
-      }),
+        undefined,
+        ctx,
+      ),
     ).rejects.toThrow("Command owner was revoked");
     expect(io.current().calendar?.enabled).toBe(true);
   });
@@ -148,19 +150,14 @@ describe("Codex /codex plugins subcommand", () => {
         return { authPolicy: "ON_USE", appsNeedingAuth: [] };
       },
     });
-    const result = await handleCodexPluginsSubcommand(
-      {
-        ...fakeCtx,
-        assertOwnerCurrent: () => {
-          if (!ownerCurrent) {
-            throw new Error("Command owner was revoked");
-          }
-        },
+    const result = await command(["install", localPluginId], io, runtime, {
+      ...fakeCtx,
+      assertOwnerCurrent: () => {
+        if (!ownerCurrent) {
+          throw new Error("Command owner was revoked");
+        }
       },
-      ["install", "security-review@company-tools"],
-      io,
-      runtime,
-    );
+    });
     expect(runtime.install).toHaveBeenCalledOnce();
     expect(result.text).toContain("was installed in Codex but could not be authorized in OpenClaw");
     expect(result.text).toContain("Command owner was revoked");
@@ -174,12 +171,7 @@ describe("Codex /codex plugins subcommand", () => {
       remotePluginId: "plugins~Plugin_11111111111111111111111111111111",
     });
 
-    const result = await handleCodexPluginsSubcommand(
-      fakeCtx,
-      ["install", "security-review@workspace-directory"],
-      io,
-      runtime,
-    );
+    const result = await command(["install", "security-review@workspace-directory"], io, runtime);
 
     expect(runtime.install).toHaveBeenCalledWith({
       remoteMarketplaceName: "workspace-directory",
@@ -203,8 +195,7 @@ describe("Codex /codex plugins subcommand", () => {
         mustShowInstallationInterstitial: policy,
       });
 
-      const result = await handleCodexPluginsSubcommand(
-        fakeCtx,
+      const result = await command(
         ["install", "security-review@workspace-directory"],
         inMemoryIO(),
         runtime,
@@ -218,34 +209,17 @@ describe("Codex /codex plugins subcommand", () => {
 
   it("preserves existing curated authorization when discovery reports the openai-api-curated wire alias", async () => {
     const marketplace = "openai-api-curated";
-    const io = inMemoryIO({
-      github: {
-        enabled: false,
-        marketplaceName: "openai-curated",
-        pluginName: "github",
-        allow_destructive_actions: "ask",
-      },
-    });
+    const io = inMemoryIO({ github: makePolicy("github", "openai-curated", false, "ask") });
     const runtime = pluginRuntime({
       marketplace,
       pluginName: "github",
       remotePluginId: "plugins~Plugin_github_opaque",
     });
 
-    const result = await handleCodexPluginsSubcommand(
-      fakeCtx,
-      ["install", `github@${marketplace}`],
-      io,
-      runtime,
-    );
+    const result = await command(["install", `github@${marketplace}`], io, runtime);
 
     expect(io.current()).toEqual({
-      github: {
-        enabled: true,
-        marketplaceName: "openai-curated",
-        pluginName: "github",
-        allow_destructive_actions: "ask",
-      },
+      github: makePolicy("github", "openai-curated", true, "ask"),
     });
     expect(runtime.install).toHaveBeenCalledWith({
       remoteMarketplaceName: marketplace,
@@ -254,90 +228,49 @@ describe("Codex /codex plugins subcommand", () => {
     expect(result.text).toContain("bundle was installed in Codex");
   });
 
-  it("preserves an already active plugin reported under another curated wire alias", async () => {
-    const io = inMemoryIO();
-    const remotePluginId = "plugins~Plugin_github_opaque";
-    const runtime = {
-      ...pluginRuntime({ pluginName: "github", remotePluginId }),
-      list: vi.fn(async (params: v2.PluginListParams) => {
-        const active = Boolean(params.marketplaceKinds);
-        const marketplace = active ? "openai-curated-remote" : "openai-curated";
-        return {
-          marketplaces: [
-            {
-              name: marketplace,
-              plugins: [
-                pluginSummary("github", marketplace, {
-                  remotePluginId,
-                  installed: active,
-                  enabled: active,
-                  mustShowInstallationInterstitial: true,
-                }),
-              ],
-            },
-          ],
-          marketplaceLoadErrors: [],
-          featuredPluginIds: [],
-        } satisfies v2.PluginListResponse;
-      }),
-    } satisfies CodexPluginsManagementRuntime;
-
-    const result = await handleCodexPluginsSubcommand(
-      fakeCtx,
-      ["install", "github@openai-curated"],
-      io,
-      runtime,
-    );
-
-    expect(runtime.install).not.toHaveBeenCalled();
-    expect(io.current()).toHaveProperty("github@openai-curated");
-    expect(result.text).toContain("bundle was already installed in Codex");
-  });
-
-  it("retains administrator restrictions when curated wire aliases are deduplicated", async () => {
-    const remotePluginId = "plugins~Plugin_github_opaque";
-    const runtime = {
-      ...pluginRuntime({ pluginName: "github", remotePluginId }),
-      list: vi.fn(async (params: v2.PluginListParams) => {
-        const restricted = Boolean(params.marketplaceKinds);
-        const marketplace = restricted ? "openai-curated-remote" : "openai-curated";
-        return {
-          marketplaces: [
-            {
-              name: marketplace,
-              plugins: [
-                pluginSummary("github", marketplace, {
-                  remotePluginId,
-                  ...(restricted ? { availability: "DISABLED_BY_ADMIN" } : {}),
-                }),
-              ],
-            },
-          ],
-          marketplaceLoadErrors: [],
-          featuredPluginIds: [],
-        } satisfies v2.PluginListResponse;
-      }),
-    } satisfies CodexPluginsManagementRuntime;
-
-    const result = await handleCodexPluginsSubcommand(
-      fakeCtx,
-      ["install", "github@openai-curated"],
-      inMemoryIO(),
-      runtime,
-    );
-
-    expect(runtime.install).not.toHaveBeenCalled();
-    expect(result.text).toContain("unavailable or disabled");
-  });
+  it.each(["active", "restricted"] as const)(
+    "preserves %s policy across curated wire aliases",
+    async (mode) => {
+      const io = inMemoryIO();
+      const remotePluginId = "plugins~Plugin_github_opaque";
+      const runtime = {
+        ...pluginRuntime({ pluginName: "github", remotePluginId }),
+        list: vi.fn(async (params: v2.PluginListParams) => {
+          const supplemental = Boolean(params.marketplaceKinds);
+          const marketplace = supplemental ? "openai-curated-remote" : "openai-curated";
+          return pluginCatalog(
+            [
+              pluginSummary("github", marketplace, {
+                remotePluginId,
+                ...(mode === "active"
+                  ? {
+                      installed: supplemental,
+                      enabled: supplemental,
+                      mustShowInstallationInterstitial: true,
+                    }
+                  : supplemental
+                    ? { availability: "DISABLED_BY_ADMIN" }
+                    : {}),
+              }),
+            ],
+            marketplace,
+          );
+        }),
+      } satisfies CodexPluginsManagementRuntime;
+      const result = await command(["install", "github@openai-curated"], io, runtime);
+      expect(runtime.install).not.toHaveBeenCalled();
+      if (mode === "active") {
+        expect(io.current()).toHaveProperty("github@openai-curated");
+        expect(result.text).toContain("bundle was already installed in Codex");
+      } else {
+        expect(result.text).toContain("unavailable or disabled");
+      }
+    },
+  );
 
   it("rejects a curated alias when the canonical config slot belongs to another plugin", async () => {
     const io = inMemoryIO({
-      "github@openai-curated": {
-        enabled: false,
-        marketplaceName: "company-tools",
-        pluginName: "security-review",
-        allow_destructive_actions: true,
-      },
+      "github@openai-curated": makePolicy("security-review", "company-tools", false, true),
     });
     const runtime = pluginRuntime({
       marketplace: "openai-curated-remote",
@@ -345,12 +278,7 @@ describe("Codex /codex plugins subcommand", () => {
       remotePluginId: "plugins~Plugin_github_opaque",
     });
 
-    const result = await handleCodexPluginsSubcommand(
-      fakeCtx,
-      ["install", "github@openai-curated-remote"],
-      io,
-      runtime,
-    );
+    const result = await command(["install", "github@openai-curated-remote"], io, runtime);
 
     expect(result.text).toContain("points to a different plugin identity");
     expect(runtime.install).not.toHaveBeenCalled();
@@ -359,71 +287,40 @@ describe("Codex /codex plugins subcommand", () => {
 
   it("rejects a mismatched install identity without breaking exact legacy lifecycle keys", async () => {
     const io = inMemoryIO({
-      "security-review@company-tools": {
-        enabled: false,
-        marketplaceName: "another-marketplace",
-        pluginName: "different-plugin",
-        allow_destructive_actions: true,
-      },
+      "security-review@company-tools": makePolicy(
+        "different-plugin",
+        "another-marketplace",
+        false,
+        true,
+      ),
     });
     const runtime = pluginRuntime({
       marketplacePath: "/repo/company/.agents/plugins/marketplace.json",
     });
 
-    const installed = await handleCodexPluginsSubcommand(
-      fakeCtx,
-      ["install", "security-review@company-tools"],
-      io,
-      runtime,
-    );
-    const enabled = await handleCodexPluginsSubcommand(
-      fakeCtx,
-      ["enable", "security-review@company-tools"],
-      io,
-    );
+    const installed = await command(["install", localPluginId], io, runtime);
+    const enabled = await command(["enable", localPluginId], io);
     expect(installed.text).toContain("points to a different plugin identity");
     expect(enabled.text).toContain("enabled in openclaw.json");
     expect(enabled.text).toContain("Takes effect on your next message.");
     expect(runtime.install).not.toHaveBeenCalled();
-    expect(io.current()["security-review@company-tools"]).toEqual({
-      enabled: true,
-      marketplaceName: "another-marketplace",
-      pluginName: "different-plugin",
-      allow_destructive_actions: true,
-    });
+    expect(io.current()[localPluginId]).toEqual(
+      makePolicy("different-plugin", "another-marketplace", true, true),
+    );
   });
 
   it("rejects duplicate legacy policies before installation or qualified enablement", async () => {
     const io = inMemoryIO({
-      first: {
-        enabled: false,
-        marketplaceName: "company-tools",
-        pluginName: "security-review",
-        allow_destructive_actions: false,
-      },
-      second: {
-        enabled: false,
-        marketplaceName: "company-tools",
-        pluginName: "security-review@company-tools",
-        allow_destructive_actions: true,
-      },
+      first: makePolicy("security-review", "company-tools", false, false),
+      second: makePolicy("security-review@company-tools", "company-tools", false, true),
     });
     const runtime = pluginRuntime({
       marketplacePath: "/repo/company/.agents/plugins/marketplace.json",
     });
 
-    const installed = await handleCodexPluginsSubcommand(
-      fakeCtx,
-      ["install", "security-review@company-tools"],
-      io,
-      runtime,
-    );
-    const enabled = await handleCodexPluginsSubcommand(
-      fakeCtx,
-      ["enable", "security-review@company-tools"],
-      io,
-    );
-    const enabledDirect = await handleCodexPluginsSubcommand(fakeCtx, ["enable", "first"], io);
+    const installed = await command(["install", localPluginId], io, runtime);
+    const enabled = await command(["enable", localPluginId], io);
+    const enabledDirect = await command(["enable", "first"], io);
 
     expect(installed.text).toContain("Multiple configured Codex plugins match");
     expect(enabled.text).toContain("Multiple configured Codex plugins match");
@@ -436,19 +333,11 @@ describe("Codex /codex plugins subcommand", () => {
 
   it("rejects direct legacy enablement when another plugin occupies its canonical slot", async () => {
     const io = inMemoryIO({
-      security: {
-        enabled: false,
-        marketplaceName: "company-tools",
-        pluginName: "security-review",
-      },
-      "security-review@company-tools": {
-        enabled: false,
-        marketplaceName: "different-tools",
-        pluginName: "another-plugin",
-      },
+      security: makePolicy("security-review", "company-tools", false),
+      "security-review@company-tools": makePolicy("another-plugin", "different-tools", false),
     });
 
-    const result = await handleCodexPluginsSubcommand(fakeCtx, ["enable", "security"], io);
+    const result = await command(["enable", "security"], io);
 
     expect(result.text).toContain("points to a different plugin identity");
     expect(io.current().security?.enabled).toBe(false);
@@ -460,30 +349,20 @@ describe("Codex /codex plugins subcommand", () => {
     const runtime = pluginRuntime({ marketplacePath: "/repo/marketplace.json" });
     const denied = { ...fakeCtx, senderIsOwner: false, gatewayClientScopes: ["operator.write"] };
 
-    const rejected = await handleCodexPluginsSubcommand(
-      denied,
-      ["install", "security-review@company-tools"],
-      io,
-      runtime,
-    );
+    const rejected = await command(["install", localPluginId], io, runtime, denied);
     expect(rejected.text).toContain("Only an owner or operator.admin");
     expect(runtime.workspaceDir).not.toHaveBeenCalled();
     expect(runtime.list).not.toHaveBeenCalled();
     expect(runtime.install).not.toHaveBeenCalled();
 
-    const allowed = await handleCodexPluginsSubcommand(
-      {
-        ...fakeCtx,
-        senderIsOwner: false,
-        gatewayClientScopes: ["operator.admin"],
-        assertOwnerCurrent: () => {
-          throw new Error("Caller is not a channel owner");
-        },
+    const allowed = await command(["install", localPluginId], io, runtime, {
+      ...fakeCtx,
+      senderIsOwner: false,
+      gatewayClientScopes: ["operator.admin"],
+      assertOwnerCurrent: () => {
+        throw new Error("Caller is not a channel owner");
       },
-      ["install", "security-review@company-tools"],
-      io,
-      runtime,
-    );
+    });
     expect(allowed.text).toContain("bundle was installed in Codex");
     expect(runtime.install).toHaveBeenCalledOnce();
   });
@@ -497,12 +376,7 @@ describe("Codex /codex plugins subcommand", () => {
       }),
     });
 
-    const result = await handleCodexPluginsSubcommand(
-      fakeCtx,
-      ["install", "security-review@company-tools"],
-      io,
-      runtime,
-    );
+    const result = await command(["install", localPluginId], io, runtime);
 
     expect(result.text).toContain("workspace administrator rejected installation");
     expect(io.currentConfig()).toEqual({ enabled: false, plugins: {} });
@@ -510,28 +384,11 @@ describe("Codex /codex plugins subcommand", () => {
 
   it("keeps the completed installation but withholds a setup URL when current app access cannot be confirmed", async () => {
     const io = inMemoryIO();
-    const runtime = pluginRuntime({
-      marketplacePath: "/repo/marketplace.json",
-      setupAllowed: false,
-      install: vi.fn(async () => ({
-        authPolicy: "ON_INSTALL",
-        appsNeedingAuth: [
-          {
-            id: "github",
-            name: "GitHub",
-            description: null,
-            installUrl: "https://chatgpt.com/apps/github/connector_github",
-            category: null,
-          },
-        ],
-      })),
-    });
-    const result = await handleCodexPluginsSubcommand(
-      fakeCtx,
-      ["install", "security-review@company-tools"],
-      io,
-      runtime,
+    const runtime = installingApps(
+      [app("github", "GitHub", "https://chatgpt.com/apps/github/connector_github")],
+      false,
     );
+    const result = await command(["install", localPluginId], io, runtime);
     expect(result.text).toContain("setup permissions could not be confirmed");
     expect(result.text).toContain("/codex plugins status security-review@company-tools");
     expect(result.text).not.toContain("https://chatgpt.com/apps/");
@@ -546,53 +403,25 @@ describe("Codex /codex plugins subcommand", () => {
     "https://chatgpt.com/\u0000apps/github/github",
   ])("gives a manual setup path without exposing unsafe or missing URL %j", async (installUrl) => {
     const io = inMemoryIO();
-    const runtime = pluginRuntime({
-      marketplacePath: "/repo/marketplace.json",
-      install: vi.fn(async () => ({
-        authPolicy: "ON_INSTALL",
-        appsNeedingAuth: [
-          { id: "github", name: "GitHub", description: null, installUrl, category: null },
-        ],
-      })),
-    });
+    const runtime = installingApps([app("github", "GitHub", installUrl)]);
 
-    const result = await handleCodexPluginsSubcommand(
-      fakeCtx,
-      ["install", "security-review@company-tools"],
-      io,
-      runtime,
-    );
+    const result = await command(["install", localPluginId], io, runtime);
 
     expect(result.text).toContain("GitHub: ChatGPT setup/manage link unavailable");
     expect(result.text).toContain("In Codex CLI, run /apps and select this app");
     expect(presentationButtons(result).some((button) => button.action?.type === "url")).toBe(false);
-    if (installUrl) {
-      expect(result.text).not.toContain(installUrl);
-    }
+    expect(result.text).not.toContain(installUrl);
     expect(io.current()["security-review@company-tools"]?.enabled).toBe(true);
   });
 
   it("bounds app setup output and accounts for apps beyond the displayed links", async () => {
-    const runtime = pluginRuntime({
-      marketplacePath: "/repo/marketplace.json",
-      install: vi.fn(async () => ({
-        authPolicy: "ON_INSTALL",
-        appsNeedingAuth: Array.from({ length: 7 }, (_, index) => ({
-          id: `app-${index}`,
-          name: `App ${index}`,
-          description: null,
-          installUrl: `https://chatgpt.com/apps/app-${index}/app-${index}`,
-          category: null,
-        })),
-      })),
-    });
-
-    const result = await handleCodexPluginsSubcommand(
-      fakeCtx,
-      ["install", "security-review@company-tools"],
-      inMemoryIO(),
-      runtime,
+    const runtime = installingApps(
+      Array.from({ length: 7 }, (_, index) =>
+        app(`app-${index}`, `App ${index}`, `https://chatgpt.com/apps/app-${index}/app-${index}`),
+      ),
     );
+
+    const result = await command(["install", localPluginId], inMemoryIO(), runtime);
 
     const buttons = presentationButtons(result).filter((button) => button.action?.type === "url");
     expect(buttons?.map((button) => button.label)).toEqual([
@@ -610,12 +439,7 @@ describe("Codex /codex plugins subcommand", () => {
   it("rejects unsafe or ambiguous marketplace identifiers before contacting Codex", async () => {
     const runtime = pluginRuntime({ marketplacePath: "/repo/marketplace.json" });
 
-    const result = await handleCodexPluginsSubcommand(
-      fakeCtx,
-      ["install", "../plugin@company-tools"],
-      inMemoryIO(),
-      runtime,
-    );
+    const result = await command(["install", "../plugin@company-tools"], inMemoryIO(), runtime);
 
     expect(result.text).toContain("Invalid plugin identifier");
     expect(runtime.list).not.toHaveBeenCalled();
@@ -623,14 +447,10 @@ describe("Codex /codex plugins subcommand", () => {
 
   it("escapes configured plugin fields before listing them in chat", async () => {
     const io = inMemoryIO({
-      "google-calendar": {
-        enabled: true,
-        marketplaceName: "openai-curated",
-        pluginName: "google-calendar_@team_*name*",
-      },
+      "google-calendar": makePolicy("google-calendar_@team_*name*", "openai-curated", true),
     });
 
-    const result = await handleCodexPluginsSubcommand(fakeCtx, ["list"], io);
+    const result = await command(["list"], io);
     expect(result.text).toContain("ON   google-calendar");
     expect(result.text).toContain("openclaw.json");
     expect(result.text).toContain("/codex plugins status <name>@<marketplace>");
@@ -640,26 +460,17 @@ describe("Codex /codex plugins subcommand", () => {
   });
 
   it("reports when a target plugin is not configured rather than silently no-oping", async () => {
-    const io = inMemoryIO();
-    const result = await handleCodexPluginsSubcommand(fakeCtx, ["disable", "chrome_@ops"], io);
+    const result = await command(["disable", "chrome_@ops"]);
     expect(result.text).toContain("not configured");
     expect(result.text).toContain("chrome＿＠ops");
     expect(result.text).not.toContain("@ops");
   });
 
-  it("returns usage when list, menu, enable, or disable receives the wrong arity", async () => {
-    const io = inMemoryIO();
-    const listResult = await handleCodexPluginsSubcommand(fakeCtx, ["list", "chrome"], io);
-    expect(listResult.text).toContain("Usage: /codex plugins list");
-
-    const menuResult = await handleCodexPluginsSubcommand(fakeCtx, ["menu", "extra"], io);
-    expect(menuResult.text).toContain("Usage: /codex plugins menu");
-
-    const extraResult = await handleCodexPluginsSubcommand(
-      fakeCtx,
-      ["enable", "google-calendar", "extra"],
-      io,
-    );
-    expect(extraResult.text).toContain("Usage: /codex plugins enable <name>");
+  it.each([
+    { args: ["list", "chrome"], usage: "list" },
+    { args: ["menu", "extra"], usage: "menu" },
+    { args: ["enable", "google-calendar", "extra"], usage: "enable <name>" },
+  ])("returns usage for invalid $args", async ({ args, usage }) => {
+    expect((await command(args)).text).toContain(`Usage: /codex plugins ${usage}`);
   });
 });

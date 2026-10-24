@@ -53,7 +53,6 @@ export type CommandOperator = {
   text: string;
   span: SourceSpan;
   fromCommandId: string;
-  toCommandId: string;
   parentCommandId?: string;
 };
 
@@ -73,7 +72,6 @@ export type CommandRisk = { text: string; span: SourceSpan } & (
   | {
       kind: "dynamic-argument";
       command: string;
-      argumentIndex: number;
     }
   | { kind: "eval" }
   | { kind: "source"; command: string }

@@ -16,7 +16,6 @@ import type { MidTurnPrecheckRequest } from "./midturn-precheck.js";
 import {
   PREEMPTIVE_OVERFLOW_ERROR_TEXT,
   buildPrePromptContextBudgetStatus,
-  formatPrePromptPrecheckLog,
   shouldPreemptivelyCompactBeforePrompt,
 } from "./preemptive-compaction.js";
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
@@ -226,13 +225,6 @@ export async function prepareEmbeddedAttemptPromptPreflight(input: {
     ...(unwindowedMessages ? { unwindowedMessageCount: unwindowedMessages.length } : {}),
   };
   const contextBudgetStatus = buildPrePromptContextBudgetStatus(precheckSummary);
-  log.debug(
-    formatPrePromptPrecheckLog({
-      ...precheckSummary,
-      ...(attempt.sessionKey ? { sessionKey: attempt.sessionKey } : {}),
-      ...(attempt.sessionFile ? { sessionFile: attempt.sessionFile } : {}),
-    }),
-  );
   const checkpointPressure = preemptiveCompaction.compactionReplay;
   if (
     checkpointPressure &&

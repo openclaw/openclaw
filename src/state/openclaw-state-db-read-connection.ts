@@ -1,7 +1,7 @@
 import path from "node:path";
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { getSqliteRuntimeCapabilities } from "../infra/bun-sqlite-library.js";
-import { requireNativeDatabaseFile } from "../infra/database-engine/physical-facts.js";
+import { getPostgresPhysicalFacts } from "../infra/database-engine/physical-facts.js";
 import { enableNodeSqliteKyselyStatementCache } from "../infra/kysely-sync-cache-state.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
@@ -35,7 +35,7 @@ import {
 import {
   assertStateFileSnapshotAllowed,
   isStatePostgres,
-  openStatePostgresReadConnection,
+  openExistingStatePostgresConnection,
 } from "./openclaw-state-db-engine.js";
 import { openTrackedStateDatabaseResult } from "./openclaw-state-db-handle.js";
 import {
@@ -46,8 +46,10 @@ import { assertStateReadSchemaForPolicy } from "./openclaw-state-db-read-schema.
 import { isExistingOpenClawStateSchema } from "./openclaw-state-db-schema-policy.js";
 import {
   admitStateSchemaFacts,
+  PostgresSchemaAdmissionUnavailableError,
   type StateSchemaContentVersionRowReader,
 } from "./openclaw-state-db-schema-version.js";
+import { postgresStateReadSnapshot } from "./openclaw-state-postgres-snapshot-context.js";
 import type { OpenClawStateReadOnlyDatabase } from "./openclaw-state-read.types.js";
 
 export type OpenClawStateReadConnection = {
@@ -56,8 +58,7 @@ export type OpenClawStateReadConnection = {
     retain(): {
       location: string;
       cleanupRoot?: string;
-      assertCurrent(): void;
-      release(): void;
+      release(): Promise<void>;
     };
   };
   close: (retain?: boolean) => boolean;
@@ -259,15 +260,14 @@ export function readOpenClawStateReadOnlyLocation<T>(
   let closeAdmission: (() => void) | undefined;
   let result!: OpenClawStateSettledRead<T>;
   try {
-    if (openStateSchemaReadAdmission) {
-      if (isPostgresSqlConnection(opened.database.db)) {
-        requireNativeDatabaseFile("postgres", "repair");
-      }
+    if (openStateSchemaReadAdmission && !isPostgresSqlConnection(opened.database.db)) {
       closeAdmission = openStateSchemaReadAdmission(opened.database.db);
     }
     // Scope and path policy are authority, not ordinary schema SQL failure.
     const existingSchema = isExistingOpenClawStateSchema(pathname, opened.database.db);
     try {
+      let operationStarted = false;
+      const snapshot = postgresStateReadSnapshot.getStore();
       const read = () =>
         runSqliteReadOperationSync(opened.database.db, () => {
           admitStateSchemaFacts(opened.database.db, pathname);
@@ -278,14 +278,47 @@ export function readOpenClawStateReadOnlyLocation<T>(
             undefined,
             readContentVersionRow,
           );
+          operationStarted = true;
           return operation(opened.database);
         });
-      result = {
-        status: "available",
-        value: isPostgresSqlConnection(opened.database.db)
-          ? opened.database.db.runTransaction(read, undefined, true)
-          : read(),
-      };
+      const readTransaction = () =>
+        isPostgresSqlConnection(opened.database.db)
+          ? opened.database.db.runTransaction(
+              () => {
+                if (snapshot?.path === pathname) {
+                  // sqlite-allow-raw: PostgreSQL imports the retained worker's MVCC snapshot before any read.
+                  opened.database.db.exec(
+                    `SET TRANSACTION SNAPSHOT '${snapshot.snapshot.replaceAll("'", "''")}'`,
+                  );
+                }
+                return read();
+              },
+              undefined,
+              true,
+            )
+          : read();
+      let value: T;
+      try {
+        value = readTransaction();
+      } catch (error) {
+        if (
+          !(error instanceof PostgresSchemaAdmissionUnavailableError) ||
+          operationStarted ||
+          snapshot?.path === pathname ||
+          !isPostgresSqlConnection(opened.database.db) ||
+          !opened.database.db.isOpen ||
+          opened.database.db.isTransaction
+        ) {
+          throw error;
+        }
+        // A sibling can publish schema after BEGIN. Refresh only after rollback,
+        // before caller work, and without replacing an imported MVCC snapshot.
+        if (!getPostgresPhysicalFacts(opened.database.db)) {
+          throw error;
+        }
+        value = readTransaction();
+      }
+      result = { status: "available", value };
     } catch (error) {
       if (!isPostgresSqlConnection(opened.database.db) && isSqliteCorruptionError(error)) {
         invalidateOpenClawStateRuntimeIntegrity(opened.database.db);
@@ -421,7 +454,7 @@ function openStateReadConnectionResult(
       if (checkSchemaPolicy) {
         isExistingOpenClawStateSchema(pathname);
       }
-      const postgres = openStatePostgresReadConnection(pathname, expectedIdentity);
+      const postgres = openExistingStatePostgresConnection(pathname, expectedIdentity);
       if (postgres) {
         return { status: "available", value: postgres };
       }
@@ -453,12 +486,13 @@ function openStateReadConnectionResult(
   const db = native.database;
   let closed = false;
   let closing = false;
+  let snapshotReaders = 0;
   const database = {
     db,
     path: pathname,
     afterClose: (): undefined => {
       releaseToken?.();
-      if (snapshot && !snapshot.cleanup()) {
+      if (snapshot && snapshotReaders === 0 && !snapshot.cleanup()) {
         throw new SnapshotCleanupIncompleteError("Shared-state snapshot cleanup is incomplete.");
       }
       return undefined;
@@ -469,19 +503,30 @@ function openStateReadConnectionResult(
     snapshotSource: snapshot
       ? {
           retain() {
-            const assertCurrent = () => {
-              if (closing || closed) {
-                throw new Error("Shared-state snapshot source is closing or closed");
-              }
-            };
-            assertCurrent();
+            if (closing || closed) {
+              throw new Error("Shared-state snapshot source is closing or closed");
+            }
+            const release = retainSnapshotTempDirectory(
+              snapshot.cleanupRoot ?? path.dirname(snapshot.location),
+            );
+            snapshotReaders++;
+            let released = false;
             return {
               location: snapshot.location,
               cleanupRoot: snapshot.cleanupRoot,
-              assertCurrent,
-              release: retainSnapshotTempDirectory(
-                snapshot.cleanupRoot ?? path.dirname(snapshot.location),
-              ),
+              async release() {
+                if (!released) {
+                  released = true;
+                  release();
+                  snapshotReaders--;
+                }
+                // The synchronous reader closes first; its last async child removes the bytes.
+                if (closed && snapshotReaders === 0 && !(await snapshot.cleanupAsync())) {
+                  throw new SnapshotCleanupIncompleteError(
+                    "Shared-state snapshot cleanup is incomplete.",
+                  );
+                }
+              },
             };
           },
         }

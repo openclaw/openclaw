@@ -34,7 +34,7 @@ export function createOfflineDeviceNode(nowMs = Date.now()) {
       diskAvailableBytes: Math.round(1.2 * 1024 ** 4),
       updatedAtMs: nowMs - 27 * 86_400_000,
     },
-  };
+  } satisfies DevicesProps["nodes"][number];
 }
 
 export const deviceDesktopEnvironments: EnvironmentSummary[] = [
@@ -43,7 +43,13 @@ export const deviceDesktopEnvironments: EnvironmentSummary[] = [
 
 export function createDevicesViewProps(overrides: Partial<DevicesProps> = {}): DevicesProps {
   return {
+    connected: true,
     loading: false,
+    configRead: { scope: () => undefined, value: () => undefined },
+    execApprovalsRead: { scope: () => undefined, value: () => undefined },
+    inventoryRead: () => undefined,
+    inventoryScope: {},
+    onReloadInventory: () => undefined,
     nodes: [],
     presence: [],
     gatewayVersion: null,
@@ -55,6 +61,7 @@ export function createDevicesViewProps(overrides: Partial<DevicesProps> = {}): D
       pending: [],
       paired: [],
     },
+    devicesDeciding: [],
     canPairDevice: true,
     canManagePairing: true,
     canAdmin: true,

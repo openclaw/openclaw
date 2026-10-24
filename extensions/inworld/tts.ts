@@ -193,14 +193,12 @@ export async function inworldTTS(params: {
 export async function listInworldVoices(params: {
   apiKey: string;
   baseUrl?: string;
-  language?: string;
   timeoutMs?: number;
 }): Promise<SpeechVoiceOption[]> {
   const { MAX_AUDIO_BYTES } = await import("openclaw/plugin-sdk/media-runtime");
   const INWORLD_VOICES_BODY_MAX_BYTES = MAX_AUDIO_BYTES;
   const baseUrl = normalizeInworldBaseUrl(params.baseUrl);
-  const langParam = params.language ? `?languages=${encodeURIComponent(params.language)}` : "";
-  const url = `${baseUrl}/voices/v1/voices${langParam}`;
+  const url = `${baseUrl}/voices/v1/voices`;
   const { fetchWithSsrFGuard } = await import("openclaw/plugin-sdk/ssrf-runtime");
 
   const { response, release } = await fetchWithSsrFGuard({

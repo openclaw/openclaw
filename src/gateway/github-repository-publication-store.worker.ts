@@ -115,13 +115,20 @@ export function insertRepositoryGitHubPublicationInDatabase(
   assertCurrent();
   ensureRepositoryGitHubPublicationSchema(db);
   checked(row);
-  const inserted = executeSqliteQuerySync(
+  const inserted = executeSqliteQueryTakeFirstSync(
     db,
     query(db)
       .insertInto(table)
       .values(row)
-      .onConflict((conflict) => conflict.doNothing()),
+      .onConflict((conflict) => conflict.doNothing())
+      .returningAll(),
   );
+  if (inserted) {
+    assertCurrent();
+    githubPublicationReceipts.stageRow(db, "repository", inserted);
+    deferSharedGitHubPublicationChanged(db, inserted);
+    return inserted;
+  }
   const stored = executeSqliteQueryTakeFirstSync(
     db,
     query(db)
@@ -147,6 +154,7 @@ export function insertRepositoryGitHubPublicationInDatabase(
         "identity_login",
         "title",
         "body",
+        "draft",
         "claim_id",
         "run_id",
         "placement_generation",
@@ -166,10 +174,6 @@ export function insertRepositoryGitHubPublicationInDatabase(
   }
   checked(stored);
   assertCurrent();
-  if (inserted.numAffectedRows === 1n) {
-    githubPublicationReceipts.stageRow(db, "repository", stored);
-    deferSharedGitHubPublicationChanged(db, stored);
-  }
   return stored;
 }
 
@@ -248,18 +252,9 @@ export function writeRepositoryGitHubPublicationInDatabase(
   instanceId: string,
   executionId: string,
   values: Partial<RepositoryGitHubPublicationRow>,
-  requireAction: boolean,
-  authority: { assertCustody: () => void; assertCurrent: () => void },
 ) {
   const { db } = database;
   // The execution CAS retains result custody after workspace admission ends.
-  if (requireAction) {
-    authority.assertCustody();
-    authority.assertCurrent();
-    if (!row.checkpoint_ref || !row.checkpoint_digest || !row.workspace_tree) {
-      throw new Error("GitHub publication requires its accepted checkpoint.");
-    }
-  }
   const updated = executeSqliteQueryTakeFirstSync(
     db,
     query(db)
@@ -301,10 +296,6 @@ export function writeRepositoryGitHubPublicationInDatabase(
   );
   if (!updated) {
     throw new Error("GitHub publication execution is no longer current.");
-  }
-  if (requireAction) {
-    authority.assertCustody();
-    authority.assertCurrent();
   }
   return changed(db, updated);
 }

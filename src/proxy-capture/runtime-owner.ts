@@ -1,6 +1,9 @@
 import { writeSync } from "node:fs";
 import { serialize } from "node:v8";
-import { collectNestedErrorCandidates } from "../infra/error-graph-internal.js";
+import {
+  collectNestedErrorCandidates,
+  throwSettledAggregate,
+} from "../infra/error-graph-internal.js";
 import { SqliteWorkerError } from "../infra/sqlite-worker-contract.js";
 import { reserveSqliteWorkerInputPreparation } from "../infra/sqlite-worker-store.js";
 import { redactRegisteredSecretValues } from "../logging/secret-redaction-registry.js";
@@ -440,7 +443,7 @@ export function resolveCaptureOwnerForTransport(
 
 // Legacy finalization settles legacy work synchronously. Worker-backed claims
 // retain their lifecycle owner and end the shared session when they also close.
-/** @deprecated Use finalizeDebugProxyCaptureAsync to drain asynchronous capture work. Final compatibility day: 2026-12-31. */
+/** @deprecated Use finalizeDebugProxyCaptureAsync to drain asynchronous capture work. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
 export function finalizeDebugProxyCapture(
   resolved?: DebugProxySettings,
   deps: DebugProxyCaptureRuntimeDeps = {},
@@ -747,12 +750,7 @@ export function finalizeDebugProxyCaptureAsync(
   }
   return (session.finishing = Promise.allSettled(owners.map(closeCaptureOwnerAsync)).then(
     (results) => {
-      const errors = results.flatMap((result) =>
-        result.status === "rejected" ? [result.reason] : [],
-      );
-      if (errors.length) {
-        throw new AggregateError(errors, "Capture finalization failed.");
-      }
+      throwSettledAggregate(results, "Capture finalization failed.");
     },
   ));
 }

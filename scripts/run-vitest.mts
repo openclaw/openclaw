@@ -26,6 +26,7 @@ import { createVitestCacheSlots, resolveVitestCacheRoot } from "./lib/vitest-cac
 import {
   hasNonRunVitestSubcommand,
   collectVitestFileFilters,
+  replaceVitestFileFilters,
   resolveBooleanModeFlag,
   resolveExplicitVitestMode,
   vitestOptionConsumesNextArg,
@@ -213,8 +214,11 @@ export function resolveBoundedVitestInvocations(
       `--shard=${index + 1}/${E2E_TEST_PROCESS_COUNT}`,
     ]);
   }
-  const chunks = options.gatewayServerTargetChunks ?? createGatewayServerTestTargetChunks(cwd);
-  return chunks.length > 1 ? chunks.map((targets) => insertVitestTargets(argv, targets)) : [argv];
+  const chunks =
+    options.gatewayServerTargetChunks ?? createGatewayServerTestTargetChunks(cwd, argv, env);
+  return chunks.length > 1
+    ? chunks.map((targets) => replaceVitestFileFilters(argv, targets))
+    : [argv];
 }
 
 /**
@@ -864,6 +868,8 @@ export function spawnWatchedVitestProcess({
   const testCommand = nativeBunFiles
     ? resolveNativeBunTestCommand(
         validateNativeBunTestFiles(nativeBunFiles, spawnParams.cwd ?? process.cwd()),
+        undefined,
+        env,
       )
     : directNodeArgs
       ? resolveVitestTestCommand(directNodeArgs, env)
@@ -1209,7 +1215,7 @@ export async function runVitest(
     process.exitCode = failedExitCode;
   } finally {
     try {
-      await workers?.dispose().catch((error: unknown) => {
+      await workers?.dispose({ interrupted: Boolean(interrupted) }).catch((error: unknown) => {
         process.exitCode = vitestInfrastructureExitCode(Number(process.exitCode));
         console.error(error);
       });

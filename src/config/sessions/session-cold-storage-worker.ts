@@ -15,13 +15,12 @@ import {
   sqliteSessionIdWriteScope,
   withSqliteDatabaseWriteScope,
 } from "../../infra/sqlite-database-admission.js";
-import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
+import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import type { DB } from "../../state/openclaw-agent-db.generated.js";
 import {
   runOpenClawAgentWriteTransaction,
   type OpenClawAgentDatabase,
-  type OpenClawAgentDatabaseOptions,
 } from "../../state/openclaw-agent-db.js";
 import { readSessionGoalOperationInDatabase } from "./goals-operations.js";
 import { publishEncodedSessionTranscriptArchive } from "./session-accessor.sqlite-archive-artifact.js";
@@ -41,7 +40,6 @@ import {
 } from "./session-cold-storage-codec.js";
 import { readSessionColdStorageProtection } from "./session-cold-storage-eligibility.js";
 import type { SessionColdRestorationGuard } from "./session-cold-storage-guard.types.js";
-import { readSessionColdStorageInventory } from "./session-cold-storage-inventory.js";
 import {
   readSessionAdmissionProtectionKeys,
   selectSessionColdBatch,
@@ -78,7 +76,11 @@ import {
   sqliteSessionTranscriptTurnRebound,
 } from "./session-turn.kernel.js";
 import { resolveSessionWorkStartError } from "./session-work-start.js";
-import { prepareTranscriptPayload, transcriptEventJsonSql } from "./transcript-payload.js";
+import {
+  prepareTranscriptPayload,
+  TRANSCRIPT_INSERT_BATCH_SIZE,
+  transcriptEventJsonSql,
+} from "./transcript-payload.js";
 
 export type SessionColdPreparationWorkerData = {
   type: "sqlite-transcript-archive-v2";
@@ -152,7 +154,7 @@ async function prepareSessionColdArchiveInWorker(
       };
       const opened = withOpenClawAgentDatabaseReadOnly(
         (database) =>
-          runSqliteDeferredTransactionSync(
+          runSqliteReadSnapshotSync(
             database.db,
             () => {
               if (
@@ -402,7 +404,7 @@ export async function prepareSessionColdBatchInWorker(
   if (included.length > 0) {
     const protection = withOpenClawAgentDatabaseReadOnly(
       (database) =>
-        runSqliteDeferredTransactionSync(
+        runSqliteReadSnapshotSync(
           database.db,
           () => [...readSessionAdmissionProtectionKeys(database, included)],
           { databaseLabel: database.path, operationLabel: "cold admission protection" },
@@ -605,6 +607,7 @@ export function mutateSessionColdTranscriptInWorker(
         }
         const session_id = plan.sessionId;
         const insertFts = createSessionTranscriptFtsInserter(database.db, session_id);
+        const ftsRows: Parameters<typeof insertFts>[0][number][] = [];
         withSqliteDatabaseWriteScope(database.db, [sqliteSessionIdWriteScope(session_id)], () => {
           for (const record of records) {
             switch (record.kind) {
@@ -646,15 +649,20 @@ export function mutateSessionColdTranscriptInWorker(
                 );
                 break;
               case "fts":
-                insertFts({
+                ftsRows.push({
                   messageId: record.row.message_id,
                   text: record.row.text,
                   role: record.row.role,
                   timestamp: record.row.timestamp,
                 });
+                if (ftsRows.length === TRANSCRIPT_INSERT_BATCH_SIZE) {
+                  insertFts(ftsRows);
+                  ftsRows.length = 0;
+                }
                 break;
             }
           }
+          insertFts(ftsRows);
           executeSqliteQuerySync(
             database.db,
             db.deleteFrom("session_transcript_cold_archives").where("session_id", "=", session_id),
@@ -680,20 +688,4 @@ export function mutateSessionColdTranscriptInWorker(
     plan.databaseOptions,
     { operationLabel: "session cold storage" },
   );
-}
-
-export function readSessionColdStorageInventoryInWorker(options: OpenClawAgentDatabaseOptions) {
-  const counts = withOpenClawAgentDatabaseReadOnly(readSessionColdStorageInventory, options);
-  return counts.found ? counts.value : readSessionColdStorageInventory();
-}
-
-export function readSessionColdMetadataInWorker(
-  options: OpenClawAgentDatabaseOptions,
-  sessionId: string,
-) {
-  const result = withOpenClawAgentDatabaseReadOnly(
-    (database) => readSessionColdTranscript(database.db, sessionId),
-    options,
-  );
-  return result.found ? result.value : undefined;
 }

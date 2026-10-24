@@ -1,5 +1,4 @@
 import fs from "node:fs";
-import fsp from "node:fs/promises";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { tryReadJsonSync } from "../infra/json-files.js";
@@ -59,33 +58,10 @@ export function listManagedPluginNpmProjectsSync(npmRoot: string): ManagedNpmPro
   return readManagedProjects(listPluginNpmProjectCandidatesSync(npmRoot), npmRoot);
 }
 
-/** Async variant of project-level managed npm root discovery. */
-async function listManagedPluginNpmProjectRoots(npmRoot: string): Promise<string[]> {
-  const projectsDir = resolvePluginNpmProjectsDir(npmRoot);
-  try {
-    return readManagedProjects(
-      (await fsp.readdir(projectsDir, { withFileTypes: true }))
-        .filter((entry) => entry.isDirectory())
-        .map((entry) => path.join(projectsDir, entry.name)),
-      npmRoot,
-    ).map(({ projectRoot }) => projectRoot);
-  } catch (error) {
-    if (isNotFoundPathError(error)) {
-      return [];
-    }
-    throw error;
-  }
-}
-
 /** Returns the root npm install plus all managed project npm roots. */
 export function listManagedPluginNpmRootsSync(npmRoot: string): string[] {
   return [
     npmRoot,
     ...listManagedPluginNpmProjectsSync(npmRoot).map(({ projectRoot }) => projectRoot),
   ];
-}
-
-/** Async variant of managed npm root discovery. */
-export async function listManagedPluginNpmRoots(npmRoot: string): Promise<string[]> {
-  return [npmRoot, ...(await listManagedPluginNpmProjectRoots(npmRoot))];
 }

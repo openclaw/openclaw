@@ -21,6 +21,8 @@ export type SpawnedRunMetadata = {
 };
 
 export type SpawnedToolContext = DelegatedToolPolicyContext & {
+  /** Host-verified current requester, used only to scope Git credit from main. */
+  gitContributorProfileId?: string;
   agentGroupId?: string | null;
   agentGroupChannel?: string | null;
   agentGroupSpace?: string | null;
@@ -30,6 +32,8 @@ export type SpawnedToolContext = DelegatedToolPolicyContext & {
   requesterThinkingLevel?: ThinkLevel;
   /** Effective parent-turn model; saved preferences may describe a later turn. */
   requesterModel?: ModelRef;
+  /** Prepared by tool-policy resolution so building the spawn schema reads no session store; unset uses session-key shape. */
+  requesterIsSubagent?: boolean;
   sessionPermissionPolicy?: PreparedSessionPermissionPolicy;
 };
 

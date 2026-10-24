@@ -1,52 +1,68 @@
-/** Observe layout changes, never scrolling or animation frames. */
-export class BackgroundFadeLayout {
-  private observer: ResizeObserver | null = null;
-  private targets: Element[] = [];
-  constructor(private readonly host: HTMLElement) {}
+import { onSettled } from "solid-js";
+import type { SessionBackgroundLayoutTarget } from "./session-background-layout-context.tsx";
 
-  update(enabled: boolean) {
-    if (!enabled) {
-      this.disconnect();
-      return;
-    }
-    const parent = this.host.parentElement;
-    const composer = parent?.querySelector<HTMLElement>(".agent-chat__input");
-    const welcome = parent?.querySelector<HTMLElement>(".agent-chat__welcome");
-    const targets = [parent, composer, welcome].filter((node): node is HTMLElement =>
-      Boolean(node),
-    );
-    if (
-      targets.length !== this.targets.length ||
-      targets.some((node, index) => node !== this.targets[index])
-    ) {
-      this.disconnect();
-      this.targets = targets;
-      if (typeof ResizeObserver !== "undefined") {
-        this.observer = new ResizeObserver(() => this.measure());
-        targets.forEach((node) => this.observer?.observe(node));
+/** Observe layout changes, never scrolling or animation frames. */
+export function createBackgroundFadeLayout(host: HTMLElement) {
+  let observer: ResizeObserver | null = null;
+  let targets: Element[] = [];
+  let layoutTargets: readonly SessionBackgroundLayoutTarget[] = [];
+  onSettled(() => {
+    observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(measure);
+    targets.forEach((node) => observer?.observe(node));
+    return disconnect;
+  });
+
+  function findTarget(kind: SessionBackgroundLayoutTarget["kind"]) {
+    let first: HTMLElement | undefined;
+    for (const target of layoutTargets) {
+      if (target.kind !== kind || !host.parentElement?.contains(target.element)) {
+        continue;
+      }
+      if (
+        !first ||
+        first.compareDocumentPosition(target.element) & Node.DOCUMENT_POSITION_PRECEDING
+      ) {
+        first = target.element;
       }
     }
-    this.measure();
+    return first;
   }
 
-  private measure() {
-    const parent = this.host.parentElement;
-    const composer = parent?.querySelector<HTMLElement>(".agent-chat__input");
-    const origin = this.host.getBoundingClientRect();
+  function update(enabled: boolean, registered: readonly SessionBackgroundLayoutTarget[] = []) {
+    layoutTargets = registered;
+    if (!enabled) {
+      disconnect();
+      return;
+    }
+    const parent = host.parentElement;
+    const composer = findTarget("composer");
+    const welcome = findTarget("welcome");
+    const next = [parent, composer, welcome].filter((node): node is HTMLElement => Boolean(node));
+    if (next.length !== targets.length || next.some((node, index) => node !== targets[index])) {
+      disconnect();
+      targets = next;
+      targets.forEach((node) => observer?.observe(node));
+    }
+    measure();
+  }
+
+  function measure() {
+    const composer = findTarget("composer");
+    const origin = host.getBoundingClientRect();
     const box = composer?.getBoundingClientRect();
-    const scroll = parent?.querySelector<HTMLElement>(".new-session-page__scroll")?.scrollTop ?? 0;
+    const scroll = findTarget("scroll")?.scrollTop ?? 0;
     const end = box
       ? Math.max(0, box.top - origin.top + scroll + box.height / 2)
       : origin.height * 0.55;
     const value = Math.round(end) + "px";
-    if (this.host.style.getPropertyValue("--session-background-fade-end") !== value) {
-      this.host.style.setProperty("--session-background-fade-end", value);
+    if (host.style.getPropertyValue("--session-background-fade-end") !== value) {
+      host.style.setProperty("--session-background-fade-end", value);
     }
   }
 
-  disconnect() {
-    this.observer?.disconnect();
-    this.observer = null;
-    this.targets = [];
+  function disconnect() {
+    observer?.disconnect();
+    targets = [];
   }
+  return { update };
 }

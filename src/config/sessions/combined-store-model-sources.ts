@@ -28,6 +28,7 @@ export function createSessionModelSources(
   diagnostics: string[],
   preparedAgentIds: ReadonlySet<string> | undefined,
   readQualifiedParent: GatewaySessionLineageReader,
+  isExcludedOwner: (agentId: string, storePath: string) => boolean,
 ) {
   const physicalStores = new Map<
     string,
@@ -72,6 +73,9 @@ export function createSessionModelSources(
             // Stored qualified lineage retains its owner before a main alias collapses.
             const parsed = parseAgentSessionKey(parentKey);
             const agentId = normalizeAgentId(parsed?.agentId ?? logicalAgentId);
+            if (isExcludedOwner(agentId, target.storePath)) {
+              return { key: parentKey, value: undefined };
+            }
             const refusal = readAgentDatabaseAdmissionRefusal(agentId);
             if (refusal) {
               const message = `${refusal.reason}\n${refusal.repairHint}`;

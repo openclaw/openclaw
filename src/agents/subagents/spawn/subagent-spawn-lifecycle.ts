@@ -24,14 +24,16 @@ export async function recordSubagentSessionSetup(params: {
       sessionKey: params.childSessionKey,
       agentId: params.targetAgentId,
       entry: params.childEntry,
+      spawned: { runId: params.childRunId, requesterSessionKey: params.requesterSessionKey },
+    });
+  } else {
+    await recordSubagentSpawned({
+      childSessionKey: params.childSessionKey,
+      childRunId: params.childRunId,
+      requesterSessionKey: params.requesterSessionKey,
+      agentId: params.targetAgentId,
     });
   }
-  await recordSubagentSpawned({
-    childSessionKey: params.childSessionKey,
-    childRunId: params.childRunId,
-    requesterSessionKey: params.requesterSessionKey,
-    agentId: params.targetAgentId,
-  });
   return () =>
     recordSessionParticipantBestEffort({
       promptedAt: params.promptedAt,

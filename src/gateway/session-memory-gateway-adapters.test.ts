@@ -3,6 +3,7 @@ import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../config/runtime-snapshot.js";
+import type { InternalSessionEntry } from "../config/sessions.js";
 import { patchSessionEntryCore } from "../config/sessions/session-accessor.sqlite-entry.js";
 import { persistSessionTranscriptTurn } from "../config/sessions/session-accessor.transcript-turn.js";
 import type { SessionActor } from "../config/sessions/session-actor-contract.js";
@@ -11,7 +12,10 @@ import {
   runWithSessionActorStorage,
   type SessionActorStorageBinding,
 } from "../config/sessions/session-actor-storage-binding.js";
-import type { SessionActorStorageAuthority } from "../config/sessions/session-actor-storage-contract.js";
+import type {
+  SessionActorStorageAuthority,
+  SessionActorStorageCommand,
+} from "../config/sessions/session-actor-storage-contract.js";
 import {
   captureSessionEntryMetadataRead,
   captureSessionEntrySourceAssertion,
@@ -61,6 +65,24 @@ const siblingKey = "agent:main:dashboard:incognito-sibling";
 const otherKey = "agent:work:dashboard:incognito-other";
 const authority: SessionActorStorageAuthority = { assertCurrent() {}, authorize() {} };
 const actors: SessionActor[] = [];
+const sessionScope = { agentId: "main", sessionKey, sessionId: sessionKey, env };
+
+async function retainedMediaPolicy(selection: Parameters<typeof resolveAssistantMediaPolicy>[0]) {
+  const value = await resolveAssistantMediaPolicy(selection);
+  return { value, [Symbol.dispose]: () => value?.placementRead?.release() };
+}
+
+async function patch(actor: SessionActor, fields: Partial<InternalSessionEntry>) {
+  await mutate(actor, {
+    type: "session.entry.patch",
+    input: { operation: { kind: "fields", patch: fields } },
+  });
+}
+
+async function mutate(actor: SessionActor, command: SessionActorStorageCommand) {
+  const result = await actor.storage!.mutate(command, authority);
+  expect(result.kind).toBe("committed");
+}
 
 afterEach(async () => {
   await Promise.all(actors.splice(0).map((actor) => actor.release()));
@@ -85,23 +107,19 @@ async function fixture(key = sessionKey) {
     },
   );
   actors.push(actor);
-  const result = await actor.storage!.mutate(
-    {
-      type: "session.entry.create",
-      input: {
-        entry: {
-          sessionId: key,
-          createdAt: 1,
-          updatedAt: 1,
-          incognito: true,
-          category: "original",
-          sessionRoot: "/synthetic/workspace",
-        },
+  await mutate(actor, {
+    type: "session.entry.create",
+    input: {
+      entry: {
+        sessionId: key,
+        createdAt: 1,
+        updatedAt: 1,
+        incognito: true,
+        category: "original",
+        sessionRoot: "/synthetic/workspace",
       },
     },
-    authority,
-  );
-  expect(result.kind).toBe("committed");
+  });
   const binding: SessionActorStorageBinding = {
     actor,
     authority,
@@ -131,27 +149,15 @@ it("reads current memory rows without acquiring sessions or opening an absent ow
   await fixture(otherKey);
   expect(read()).toMatchObject({ entry: { category: "original" }, members: [] });
   expect(escapedAssertion).toThrow("no longer retained");
-  const patched = await actor.storage!.mutate(
-    {
-      type: "session.entry.patch",
-      input: { operation: { kind: "fields", patch: { category: "updated" } } },
-    },
-    authority,
-  );
-  expect(patched.kind).toBe("committed");
+  await patch(actor, { category: "updated" });
   expect(read()).toMatchObject({ entry: { category: "updated" } });
   const member = { identityId: "viewer@example.test", addedBy: "owner", addedAt: 2 };
-  const added = await actor.storage!.mutate(
-    { type: "session.collaboration.add", input: { params: member } },
-    authority,
-  );
-  expect(added.kind).toBe("committed");
+  await mutate(actor, { type: "session.collaboration.add", input: { params: member } });
   expect(read()).toMatchObject({ members: [member] });
-  const removed = await actor.storage!.mutate(
-    { type: "session.collaboration.remove", input: { identityId: member.identityId } },
-    authority,
-  );
-  expect(removed.kind).toBe("committed");
+  await mutate(actor, {
+    type: "session.collaboration.remove",
+    input: { identityId: member.identityId },
+  });
   expect(read()).toMatchObject({ members: [] });
   expect(read(siblingKey)).toMatchObject({ entry: { sessionId: siblingKey } });
   expect(read(otherKey)).toMatchObject({ entry: { sessionId: otherKey } });
@@ -172,14 +178,7 @@ it("retains detached planning data and rejects effects after the selected actor 
         sessionRoot: "/synthetic/workspace",
       });
       escapedAssertion = assertCurrent;
-      const patched = await actor.storage!.mutate(
-        {
-          type: "session.entry.patch",
-          input: { operation: { kind: "fields", patch: { category: "updated" } } },
-        },
-        authority,
-      );
-      expect(patched.kind).toBe("committed");
+      await patch(actor, { category: "updated" });
       expect(loaded.entry?.category).toBe("original");
       assertCurrent();
       owner.closeSession(sessionKey);
@@ -233,23 +232,9 @@ it("rechecks metadata only at response and honors the caller's allowed metadata 
   );
   try {
     expect(read.isCurrentAtResponse()).toBe(true);
-    const title = await actor.storage!.mutate(
-      {
-        type: "session.entry.patch",
-        input: { operation: { kind: "fields", patch: { displayName: "Changed title" } } },
-      },
-      authority,
-    );
-    expect(title.kind).toBe("committed");
+    await patch(actor, { displayName: "Changed title" });
     expect(read.isCurrentAtResponse()).toBe(true);
-    const category = await actor.storage!.mutate(
-      {
-        type: "session.entry.patch",
-        input: { operation: { kind: "fields", patch: { category: "another-category" } } },
-      },
-      authority,
-    );
-    expect(category.kind).toBe("committed");
+    await patch(actor, { category: "another-category" });
     expect(read.isCurrentAtResponse()).toBe(false);
     expect(read.isCurrent()).toBe(true);
     owner.close();
@@ -304,32 +289,15 @@ it("uses current actor media policy for unbound incognito reads and refuses clos
   const { actor, owner } = await fixture();
   const requestAuth = { authMethod: "token" as const, operatorScopes: ["operator.admin"] };
   const selection = { config: cfg, sessionKey, agentId: "main", requestAuth };
-  using policyRead = {
-    value: await resolveAssistantMediaPolicy(selection),
-    [Symbol.dispose]() {
-      this.value?.placementRead?.release();
-    },
-  };
+  using policyRead = await retainedMediaPolicy(selection);
   const policy = policyRead.value;
   expect(policy?.session).toEqual({ sessionKey, agentId: "main", sessionId: sessionKey });
   expect(policy?.localRoots).toContain("/synthetic/workspace");
-  const changed = await actor.storage!.mutate(
-    {
-      type: "session.entry.patch",
-      input: { operation: { kind: "fields", patch: { sessionRoot: "/synthetic/changed" } } },
-    },
-    authority,
-  );
-  expect(changed.kind).toBe("committed");
+  await patch(actor, { sessionRoot: "/synthetic/changed" });
   expect(() => assertAssistantMediaPolicyCurrent(selection, policy!, false, requestAuth)).toThrow(
     "Media access changed",
   );
-  using currentRead = {
-    value: await resolveAssistantMediaPolicy(selection),
-    [Symbol.dispose]() {
-      this.value?.placementRead?.release();
-    },
-  };
+  using currentRead = await retainedMediaPolicy(selection);
   const current = currentRead.value;
   expect(current?.localRoots).toContain("/synthetic/changed");
   expect(() =>
@@ -353,17 +321,14 @@ it("retains the memory transcript source through managed media reads and refuses
   expect(await withManagedImageSessionRead(params, async () => "unexpected")).toBeNull();
   expect(memorySessionActorOwners.list()).toEqual([]);
   const { owner } = await fixture();
-  await persistSessionTranscriptTurn(
-    { agentId: "main", sessionKey, sessionId: sessionKey, env },
-    {
-      messages: [
-        {
-          eventId: "media-message",
-          message: { role: "assistant", content: "Media", __openclaw: { id: "media-message" } },
-        },
-      ],
-    },
-  );
+  await persistSessionTranscriptTurn(sessionScope, {
+    messages: [
+      {
+        eventId: "media-message",
+        message: { role: "assistant", content: "Media", __openclaw: { id: "media-message" } },
+      },
+    ],
+  });
   await withManagedImageSessionRead(params, async (scope, assertCurrent) => {
     expect(scope.sessionId).toBe(sessionKey);
     const messages = await readSessionMessagesMatchingIdAsync(scope, "media-message");

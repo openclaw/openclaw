@@ -13,6 +13,7 @@ const RETIRED_NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURES = [
   "node-worker-supervisor-v5",
 ] as const;
 export const NODE_WORKER_BUNDLE_RETENTION_VERSION = 1;
+export const NODE_WORKER_BUNDLE_PREFETCH_VERSION = 1;
 export const NODE_WORKER_BUNDLE_STATUS_VERSION = 1;
 export const NODE_WORKER_PORTAL_STREAM_VERSION = 1;
 export const NODE_WORKER_ENVIRONMENT_SESSION_VERSION = 1;
@@ -83,6 +84,7 @@ const WorkerHost = z
       capacity: CapacitySnapshot,
       bundlePrewarm: z.literal(WORKER_BUNDLE_PREWARM_VERSION).optional(),
       bundleRetention: z.literal(NODE_WORKER_BUNDLE_RETENTION_VERSION).optional(),
+      bundlePrefetch: z.literal(NODE_WORKER_BUNDLE_PREFETCH_VERSION).optional(),
       bundleStatus: z.literal(NODE_WORKER_BUNDLE_STATUS_VERSION).optional(),
       portalStream: z.literal(NODE_WORKER_PORTAL_STREAM_VERSION).optional(),
       environmentSession: z.literal(NODE_WORKER_ENVIRONMENT_SESSION_VERSION).optional(),
@@ -148,22 +150,17 @@ export function formatNodeRunnerInventoryIssue(
     : `device worker node ${nodeId} requires an update before it can host sessions; run ${issue.updateCommand}, then reconnect it (for a headless node, run ${issue.headlessReconnectCommand})`;
 }
 
-class NodeRunnerUpdateRequiredError extends Error {
-  readonly code = "node_runner_update_required";
-
-  constructor(nodeId: string) {
-    super(formatNodeRunnerInventoryIssue(nodeId, NODE_RUNNER_UPDATE_REQUIRED_ISSUE));
-    this.name = "NodeRunnerUpdateRequiredError";
-  }
-}
-
 export function createNodeRunnerInventoryIssueError(
   nodeId: string,
   issue: NodeRunnerInventoryIssue,
 ): Error {
+  const error = new Error(formatNodeRunnerInventoryIssue(nodeId, issue));
   return issue.code === "update-required"
-    ? new NodeRunnerUpdateRequiredError(nodeId)
-    : new Error(formatNodeRunnerInventoryIssue(nodeId, issue));
+    ? Object.assign(error, {
+        code: "node_runner_update_required",
+        name: "NodeRunnerUpdateRequiredError",
+      })
+    : error;
 }
 
 /** Worker execution requires captured policy and the current assignment prompt context. */

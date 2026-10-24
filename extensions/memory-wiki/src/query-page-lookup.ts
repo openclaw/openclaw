@@ -1,5 +1,7 @@
 import path from "node:path";
+import type { QueryableWikiPage } from "./query-scoring.js";
 import { normalizeLookupKey } from "./query-shared-memory.js";
+import { WIKI_PAGE_GROUPS } from "./wiki-page-kinds.js";
 
 type LookupPage = { relativePath: string; id?: string | undefined };
 
@@ -29,60 +31,49 @@ export function resolveQueryableWikiPageByLookup<Page extends LookupPage>(
   return pages.find((page) => page.id === key) ?? null;
 }
 
+function isExactWikiPagePath(lookup: string): boolean {
+  const [directory, ...pageSegments] = lookup.split("/");
+  return (
+    WIKI_PAGE_GROUPS.some(({ dir }) => dir === directory) &&
+    pageSegments.length > 0 &&
+    pageSegments.every((segment) => segment && segment !== "." && segment !== "..") &&
+    lookup.endsWith(".md") &&
+    path.posix.basename(lookup) !== "index.md"
+  );
+}
+
 /**
- * Resolves only the path-shaped tiers of resolveQueryableWikiPageByLookup from the file
- * listing, reading candidates one at a time in tier then path order until one is valid and
- * visible. A hit is exactly the page the full-vault read would return because both walk the
- * same sorted listing and the full read keeps listing order. Pages matched only by ID, and
- * every miss, return null so the caller keeps the full read; the compiled digest cannot
- * prove which pages carry an ID since the last compile.
+ * Resolves a wiki_get lookup to the page a read of the whole vault would pick: the exact
+ * path, then the path tiers from the listing in listing order, then every page. The caller
+ * supplies the reads so the whole-vault read can run off the calling thread.
  */
-async function findQueryableWikiPageByPathLookup<Page extends LookupPage>(params: {
-  files: string[];
+export async function resolveQueryableWikiPageForLookup(params: {
   lookup: string;
-  readPage: (relativePath: string) => Promise<Page | null>;
-  canReadPage: (page: Page) => boolean;
-}): Promise<Page | null> {
+  listFiles: () => Promise<string[]>;
+  readPages: (relativePaths: string[]) => Promise<QueryableWikiPage[]>;
+  canReadPage: (page: QueryableWikiPage) => boolean;
+}): Promise<QueryableWikiPage | null> {
   const key = normalizeLookupKey(params.lookup);
-  const tiers = createPathLookupMatchers(key);
-  const candidatePaths = new Set(tiers.flatMap((matches) => params.files.filter(matches)));
-  for (const candidatePath of candidatePaths) {
-    const page = await params.readPage(candidatePath);
+  if (isExactWikiPagePath(key)) {
+    const [page] = await params.readPages([key]);
     if (page && params.canReadPage(page)) {
       return page;
     }
   }
-  return null;
-}
-
-/**
- * Resolves a wiki_get lookup to the page a read of the whole vault would pick, reading as
- * few pages as possible: the exact path, then the path tiers from the listing, then every
- * page. One listing serves both the path tiers and the full read.
- */
-export async function resolveQueryableWikiPageForLookup<Page extends LookupPage>(params: {
-  lookup: string;
-  readExactPage: () => Promise<Page | null>;
-  listFiles: () => Promise<string[]>;
-  readPages: (relativePaths: string[]) => Promise<Page[]>;
-  canReadPage: (page: Page) => boolean;
-}): Promise<Page | null> {
-  const exactPage = await params.readExactPage();
-  if (exactPage && params.canReadPage(exactPage)) {
-    return resolveQueryableWikiPageByLookup([exactPage], params.lookup);
-  }
   const files = await params.listFiles();
-  const pathPage = await findQueryableWikiPageByPathLookup({
-    files,
-    lookup: params.lookup,
-    readPage: async (relativePath) => (await params.readPages([relativePath]))[0] ?? null,
-    canReadPage: params.canReadPage,
-  });
-  return (
-    pathPage ??
-    resolveQueryableWikiPageByLookup(
-      (await params.readPages(files)).filter(params.canReadPage),
-      params.lookup,
-    )
+  // Read path tiers in listing order before falling back to IDs. The digest cannot
+  // prove which pages carry an ID after the last compile, so ID lookup reads all pages.
+  const candidatePaths = new Set(
+    createPathLookupMatchers(key).flatMap((matches) => files.filter(matches)),
+  );
+  for (const candidatePath of candidatePaths) {
+    const [page] = await params.readPages([candidatePath]);
+    if (page && params.canReadPage(page)) {
+      return page;
+    }
+  }
+  return resolveQueryableWikiPageByLookup(
+    (await params.readPages(files)).filter(params.canReadPage),
+    key,
   );
 }

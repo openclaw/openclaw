@@ -1,9 +1,92 @@
 # Solid 2 idioms
 
-Use this when writing or auditing rendering consumers. The installed rc.14
+Use this when writing or auditing rendering consumers. The installed rc.16
 `solid-js/CHEATSHEET.md`, `solid-js/types/client/flow.d.ts`, and
 `@solidjs/signals/dist/types/` own the API contract; Solid 1 examples are not a
 substitute. Examples below abbreviate code from the named OpenClaw modules.
+
+## Replace rendering controllers
+
+Replace a rendering controller with `createThing(deps)`, called inside the owning
+component or Solid root. Return accessors and actions. Local interaction state
+belongs in signals; structured local drafts belong in `createStore` with its
+draft setter and `reconcile` for keyed updates. Derive values with `createMemo`,
+never effects that copy state. Domain owners stay plain TypeScript; their
+synchronous decisions do not become signals or stores.
+
+Replace `hostConnected`/`hostDisconnected` with owner-scoped setup and cleanup in
+the same function. Signals replace `requestUpdate`. For example, this local
+disclosure replaces a controller's mutable `open`, key listener, and host update:
+
+```ts
+import { createMemo, createSignal, onSettled } from "solid-js";
+import { listen } from "./listener.ts";
+
+function createDisclosure(trigger: () => HTMLElement, label: () => string) {
+  const [open, setOpen] = createSignal(false);
+  const accessibleLabel = createMemo(() => `${label()}: ${open() ? "open" : "closed"}`);
+  onSettled(() =>
+    listen(trigger(), "keydown", (event) => {
+      if (event instanceof KeyboardEvent && event.key === "Escape") {
+        setOpen(false);
+      }
+    }),
+  );
+  return { open, accessibleLabel, toggle: () => setOpen((value) => !value) };
+}
+```
+
+Prefer JSX handlers. When native capture/options or an external target requires
+an imperative listener, `lib/reactive/listener.ts` returns teardown for the
+owning `onSettled` callback, split-effect apply phase, or explicit lifetime.
+`lib/solid-native-listener.ts` remains the owned ref factory for native bubbling
+through custom-element boundaries. Ref callbacks capture nodes; they must not
+create cleanup registrations. Use refs instead of `querySelector`; retain
+deliberate xterm, noVNC, PDF, and canvas islands as ref-owned regions.
+JSX handlers can still fire on a detached node retained by another owner. Use
+explicit listener teardown when late events could observe replacement props.
+
+Remove `untrack` unless a read deliberately must not subscribe; explain
+non-obvious snapshots. Delete the old controller, host adapter wiring, and
+test-only exports together. Keep an adapter only while `git grep` shows real
+callers. Tests assert public behavior and cleanup, not controller internals.
+
+Keep routes, keyboard/focus behavior, tags, selectors, and lazy boundaries.
+Keep each PR focused and reduce production LOC. When refactoring lifecycles,
+report before/after controller-pattern references, `createEffect`, `untrack`,
+native listener registrations, and LOC for touched production files.
+
+## Choose the primitive
+
+Start from the narrowest primitive that expresses the data's owner and lifetime:
+
+| Data                                                                             | Primitive                                                                                            |
+| -------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| Authoritative domain state (Gateway store, sessions, caches, mutation authority) | Plain TypeScript owner; never a signal. Read it through a projection.                                |
+| An owner's snapshot in a view                                                    | `projectOwner`/`projectSource` (`lib/reactive/projection.ts`), narrowed with memos                   |
+| A cheap value derived from props or signals                                      | An accessor `() => …` or a JSX expression                                                            |
+| An expensive or shared derivation                                                | `createMemo` (with `equals` only for immutable values)                                               |
+| Local interaction state (open, hovered, active tab)                              | `createSignal`                                                                                       |
+| A local draft that resets or reconciles from a source                            | Writable derivation `createSignal(() => source())`, with the reset policy commented                  |
+| Structured or keyed local state                                                  | `createStore` with draft setters; `reconcile(rows, "id")` for keyed lists                            |
+| A keyed collection derived from async or owner data                              | `createProjection(fn, initial, { key: "id" })`                                                       |
+| An expected value shown before a mutation settles                                | `createOptimistic`/`createOptimisticStore` inside `action`                                           |
+| Count-only repetition                                                            | `<Repeat count={n}>`                                                                                 |
+| Browser document title                                                           | `createDocumentTitle(title)` from `lib/reactive/document-title.ts`                                   |
+| Resize notifications for owned elements                                          | `createResizeObserver(() => [element], callback)` from `lib/reactive/observers.ts`                   |
+| Visibility notifications for owned elements                                      | `createIntersectionObserver(() => [element], callback, options)` from the same module                |
+| Periodic work while a reactive cadence is enabled                                | `createInterval(callback, () => enabled() ? milliseconds : undefined)` from `lib/reactive/timers.ts` |
+| Restartable event-driven delay or feedback reset                                 | `createTimeout(callback, milliseconds)`; call `schedule()` or `cancel()`                             |
+| Browser media capability                                                         | `createMediaQuery(query, fallback)` from `lib/reactive/platform.ts`                                  |
+| Document visibility                                                              | `createDocumentVisibility()` from `lib/reactive/platform.ts`; polling policy stays with its owner    |
+| One owned pointer gesture                                                        | `createPointerDrag()` from `lib/reactive/pointer-drag.ts`; caller keeps geometry and commit policy   |
+
+`createMemo(fn, { lazy: true })` defers the first computation until something
+reads it and disposes it when nothing observes it; `createSignal(v, { unobserved })`
+fires when the last subscriber leaves. Reach for them in new adapters that must
+release upstream work with their last reader. Keep the existing `projectSource`
+contract (read-through, revision equality, scope replacement) rather than
+reimplementing it piecemeal.
 
 ## Derive values; effects perform work
 
@@ -29,23 +112,21 @@ return <SanitizedHtml tag="pre" html={markup()} />;
 
 Use `createSignal` for local interaction state, such as whether a disclosure is
 open. A writable derivation (`createSignal(() => source())`) fits a local draft
-that deliberately resets or reconciles when its source changes. rc.14 re-derives
+that deliberately resets or reconciles when its source changes. Solid re-derives
 from the locally written previous value: explain the reset policy, rather than
 using it to mirror owner state. Gateway decisions and synchronous domain state
 remain in their existing TypeScript owners.
 
 Split effects into tracked preparation and imperative application. For example,
-`components/solid/tabs.tsx` collects options and items in compute, then calls the
-plain tabs controller's `sync()` after DOM bindings. That controller integration
-is an effect; calculating which tab is selected is a derivation.
+`lib/reactive/shadow-styles.ts` tracks the style list, binds it to the external
+shadow root in apply, and returns the binding's disposal. That DOM integration
+is an effect; calculating the style list is a derivation.
 
 ```ts
-createEffect(
-  () => props.title,
-  (title) => {
-    element.title = title;
-  },
-);
+createEffect(getStyles, (styles) => {
+  const binding = bindShadowStyles(getElement(), styles);
+  return () => binding.dispose();
+});
 ```
 
 An apply callback is untracked and unowned. Capture all reactive facts in
@@ -94,12 +175,15 @@ inside a stable callback when the parent may replace the handler:
 A local lifetime-stable function can be bound directly. Dynamic elements use
 runtime prop spreads, which can update handlers; do not add wrappers solely for
 that case. Native capture/options and events stopped by an enclosing native
-boundary still need the owned listener/ref pattern. Dashed events use
-`onWa-select`, not `onWaSelect`. Prefer the existing owned primitive to `wa-*`.
+boundary still need the owned listener/ref pattern. Dashed events keep their
+exact names, such as `onOverlay-after-show` in
+[Menu](../../../../ui/src/components/solid/menu.tsx).
 
 Commit-on-change inputs need special care: unrelated props refreshes must not
-rewrite the DOM draft. Memoize the committed owner value before binding `value`
-(see the Settings input incident in [lessons](lessons.md)). Do not use a second
+rewrite the DOM draft. Memoize the committed owner value and bind it through the
+`lib/reactive/live-value.ts` ref factory (see [lessons](lessons.md)). Native JSX
+attributes can share a compiled effect: a memo alone does not prevent an equal
+`value` assignment when an ARIA or disabled binding changes. Do not use a second
 signal to synchronize that value. Controlled inputs that publish every keystroke
 have a different contract; preserve composition, caret, and undo behavior.
 
@@ -165,7 +249,7 @@ identities. Never serialize a store proxy as the authoritative data model;
 
 ## Key lists by the lifetime you intend
 
-rc.14 callback arguments depend on `For`'s keying mode:
+rc.16 callback arguments depend on `For`'s keying mode:
 
 | Mode                        | Item          | Index    | Lifetime               |
 | --------------------------- | ------------- | -------- | ---------------------- |
@@ -207,7 +291,7 @@ control flow, not just the resulting markup.
 
 ## Async values and mutations
 
-rc.14 has **no `createAsync` export**. Pure async reads are computations returning
+rc.16 has **no `createAsync` export**. Pure async reads are computations returning
 a Promise or AsyncIterable. Read all reactive dependencies before the first
 `await`; later reads are untracked.
 
@@ -231,7 +315,8 @@ existing owners: do not replace them merely to remove a loading flag.
 
 Place `Loading` around the data-dependent slot, preserving surrounding chrome.
 Once content has rendered, revalidation retains it. `on={identity()}` re-arms
-fallback on dependency changes; it is not a key and does not remount children.
+fallback on dependency changes; pass the value, not `on={() => identity()}`.
+It is not a key and does not remount children.
 Keep all reads of that pending data under the boundary, or an outside hold can
 prevent its fallback from appearing.
 
@@ -242,6 +327,18 @@ Do not call either from a pure read. A "saving" process indicator is a local
 optimistic flag or an existing owner's mutation state, not inferred from every
 read's pending status.
 
+Refresh a derived store at its root (`await refresh(details)`), then read its
+nested value; a nested object is not a refresh target. Return-form object
+derivations can omit the seed (`createProjection(() => owner.readDetails())`);
+if supplied, the seed must be complete. Array derivations retain their `[]`
+seed. These remain presentation stores, not replacements for domain owners.
+
+`createDeferred(fn)` is for a deliberate lagging view: its first answer suspends
+like a memo, but subsequent refetches keep the previous answer without holding
+the rest of the screen. `isPending` still reports the refetch. Use it only when
+showing stale content is intended; ordinary `createMemo` keeps its existing
+transition contract.
+
 For presentation mutations, `action(function* (...) { yield ownerMutation(); })`
 keeps Solid's transition context across async work; plain `await` does not.
 `createOptimistic`/`createOptimisticStore` can display an expected value until
@@ -249,6 +346,76 @@ settlement, then reconcile with the owner. These APIs do not replace write
 admission, rollback policy, target capture, or stale-result authority. Keep the
 owner's visible error/retry outcome and catch async rendering errors with
 `Errored` rather than an invented `.error` field on a read accessor.
+
+## Context, components, and children
+
+`createContext<T>()` without a default is the canonical form: `useContext`
+returns `T` and throws `ContextNotFoundError` outside a provider, so don't add a
+`useX()` wrapper whose only job is to rethrow. Use a default only for primitive
+fallbacks (theme, locale). The context itself is the provider:
+`<ThemeContext value={theme()}>`. Create subtree-owned state in its provider;
+module scope is shared across server requests and should hold constants.
+OpenClaw's application state remains in plain TypeScript owners reached through
+`useApplication()`; a provider passes those owners without taking their authority.
+
+Type components with `Component<P>`, `VoidComponent<P>`, `ParentComponent<P>`,
+or `FlowComponent<P, C>`; renderer-neutral children are `Element` from
+`solid-js`. Resolve children once with `children(() => props.children)` when a
+component must inspect or reuse them; otherwise render `props.children`
+directly.
+
+## Classes, attributes, and refs
+
+Compose classes with the array/object form,
+`class={["badge", props.class, { "badge--muted": muted() }]}`. Never build
+class strings with template literals, `.filter(Boolean).join(" ")`, or
+concatenation: the array form keeps each condition reactive and composable.
+Built-in attributes are lowercase (`tabindex`, not `tabIndex`); boolean
+attributes are presence/absence (`muted={false}` removes it).
+
+Refs are functions. Compose several with an array, `ref={[autofocus, tooltip(opts)]}`;
+a bare `let el` inside that array is never assigned (that rewrite only works for
+a single `ref`). Reusable DOM behavior is a two-phase directive factory: create
+primitives in the owned setup phase, return an unowned callback that only
+captures the node and writes to it.
+
+## Dev diagnostics are bug reports
+
+Treat these rc.16 dev warnings as real defects, not noise:
+
+- **Top-level reactive read in a component body.** The body runs once. Read in
+  JSX, a memo, or an accessor.
+- **Write under an owned scope.** Writing a signal or store from a memo, an
+  effect compute phase, or a component body throws in dev. `untrack` doesn't
+  help, because the guard checks the owner, not tracking. Move the write to an
+  event handler, `onSettled`, or effect apply, or derive instead of writing.
+- **`STRICT_READ_UNTRACKED`.** A value read in an effect apply callback or at
+  the top of a flow callback (`For`, `Show`, `Match`) is frozen. Read it in the
+  compute phase, JSX, or a memo.
+- **`LOADING_ON_OUTSIDE_HOLD`.** The same pending data is read outside the
+  `Loading` boundary, so its fallback can never show. Move the read under the
+  boundary.
+
+`onSettled` also works inside an event handler: it defers follow-up work
+(focus, measurement) until the transition that handler started has settled.
+
+## Effects: the rare cases
+
+`createEffect(compute, apply)` is the only effect form. Its options cover the
+common edge cases without extra primitives: `{ defer: true }` skips the initial
+run, and the object form `createEffect(compute, { effect, error })` routes
+async failures to `error`, replacing Solid 1's `onError`/`catchError`.
+`createRenderEffect` exists for render-phase bindings like the runtime's own;
+feature code uses `createEffect`. `createTrackedEffect` and `createReaction` are
+escape hatches for library internals, not for views.
+
+## Tests
+
+Reactive primitives need an owner: wrap ad hoc test code in
+`createRoot((dispose) => …)` and dispose it. Call `flush()` before asserting on
+a value you just wrote. For an async computation, `await resolve(() => value())`
+waits for it to settle instead of polling. Assert snapshots of stores with
+`snapshot(store)`, not the proxy.
 
 ## Audit and lint without fighting the contract
 

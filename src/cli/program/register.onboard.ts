@@ -64,34 +64,25 @@ function resolveRecommendationAgentOption(command: Command): string | undefined 
   );
 }
 
-function extractCliFlags(cliOption: string): string[] {
-  return cliOption
+// Provider manifests can add auth flags; keep duplicate CLI aliases out of Commander.
+const seenCliFlags = new Set<string>();
+const ONBOARD_AUTH_FLAGS: ReturnType<typeof resolveProviderOnboardAuthFlags> = [];
+for (const flag of resolveProviderOnboardAuthFlags()) {
+  const cliFlags = flag.cliOption
     .split(/[ ,|]+/)
     .filter((part) => part.startsWith("-"))
     .map((part) => {
       const equalsIndex = part.indexOf("=");
       return equalsIndex === -1 ? part : part.slice(0, equalsIndex);
     });
-}
-
-function resolveOnboardAuthFlags() {
-  // Provider manifests can add auth flags; keep duplicate CLI aliases out of Commander.
-  const seenCliFlags = new Set<string>();
-  const flags: ReturnType<typeof resolveProviderOnboardAuthFlags> = [];
-  for (const flag of resolveProviderOnboardAuthFlags()) {
-    const cliFlags = extractCliFlags(flag.cliOption);
-    if (cliFlags.some((cliFlag) => seenCliFlags.has(cliFlag))) {
-      continue;
-    }
-    for (const cliFlag of cliFlags) {
-      seenCliFlags.add(cliFlag);
-    }
-    flags.push(flag);
+  if (cliFlags.some((cliFlag) => seenCliFlags.has(cliFlag))) {
+    continue;
   }
-  return flags;
+  for (const cliFlag of cliFlags) {
+    seenCliFlags.add(cliFlag);
+  }
+  ONBOARD_AUTH_FLAGS.push(flag);
 }
-
-const ONBOARD_AUTH_FLAGS = resolveOnboardAuthFlags();
 
 export function registerOnboardAuthOptions(command: Command): Command {
   command
@@ -120,7 +111,14 @@ export function registerOnboardAuthOptions(command: Command): Command {
   return command
     .option("--custom-base-url <url>", "Custom provider base URL")
     .option("--custom-api-key <key>", "Custom provider API key (optional)")
-    .option("--custom-model-id <id>", "Custom provider model ID")
+    .option(
+      "--custom-no-auth",
+      "Use no auth for a custom OpenAI Chat Completions endpoint (sends no Authorization header)",
+    )
+    .option(
+      "--custom-model-id <id>",
+      "Custom provider model ID (omit to discover OpenAI-compatible endpoint models)",
+    )
     .option("--custom-provider-id <id>", "Custom provider ID (optional; auto-derived by default)")
     .option(
       "--custom-compatibility <mode>",
@@ -184,17 +182,18 @@ export function registerOnboardRuntimeOptions(
     .option("--import-secrets", "Import supported secrets during onboarding migration", false);
 }
 
-export async function resolveOnboardCommandOptions(
+export async function runOnboardCommand(
   opts: Record<string, unknown>,
   command: Command,
   runtime: RuntimeEnv,
-): Promise<OnboardOptions | false> {
+): Promise<void> {
   if (opts.customImageInput === true && opts.customTextInput === true) {
     const { rejectOnboardingOption } = await import("../../commands/onboard-options.js");
     const message = "Use either --custom-image-input or --custom-text-input, not both.";
-    return rejectOnboardingOption({ json: opts.json === true }, runtime, message);
+    rejectOnboardingOption({ json: opts.json === true }, runtime, message);
+    return;
   }
-  return {
+  const onboardingOptions: OnboardOptions = {
     workspace: readStringValue(opts.workspace),
     agentName: readStringValue(opts.agentName),
     team: opts.team === true ? true : undefined,
@@ -215,6 +214,7 @@ export async function resolveOnboardCommandOptions(
     cloudflareAiGatewayGatewayId: opts.cloudflareAiGatewayGatewayId as string | undefined,
     customBaseUrl: opts.customBaseUrl as string | undefined,
     customApiKey: opts.customApiKey as string | undefined,
+    customNoAuth: opts.customNoAuth as boolean | undefined, // SAFETY: Commander parses valueless flags as boolean | undefined.
     customModelId: opts.customModelId as string | undefined,
     customProviderId: opts.customProviderId as string | undefined,
     customCompatibility: opts.customCompatibility as OnboardOptions["customCompatibility"],
@@ -248,6 +248,8 @@ export async function resolveOnboardCommandOptions(
     importSecrets: Boolean(opts.importSecrets),
     json: Boolean(opts.json),
   };
+  const { setupWizardCommand } = await import("../../commands/onboard.js");
+  await setupWizardCommand(onboardingOptions, runtime);
 }
 
 export function registerOnboardFlowOptions(command: Command): Command {
@@ -396,16 +398,7 @@ export function registerOnboardCommand(program: Command): void {
         );
         return;
       }
-      const onboardingOptions = await resolveOnboardCommandOptions(
-        opts as Record<string, unknown>,
-        commandRuntime,
-        defaultRuntime,
-      );
-      if (!onboardingOptions) {
-        return;
-      }
-      const { setupWizardCommand } = await import("../../commands/onboard.js");
-      await setupWizardCommand(onboardingOptions, defaultRuntime);
+      await runOnboardCommand(opts as Record<string, unknown>, commandRuntime, defaultRuntime);
     });
   });
 }

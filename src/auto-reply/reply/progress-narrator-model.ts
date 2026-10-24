@@ -1,10 +1,11 @@
-import { runIsolatedCompletion } from "../../agents/isolated-completion.js";
-import { prepareUtilityCompletionForAgent } from "../../agents/utility-completion.js";
+import {
+  prepareUtilityCompletionForAgent,
+  runUtilityCompletion,
+} from "../../agents/utility-completion.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import { compactProgressText } from "../../shared/text-truncate.js";
 
-const NARRATION_TIMEOUT_MS = 10_000;
 const NOTES_IN_PROMPT = 15;
 const USER_MESSAGE_PROMPT_CHARS = 500;
 
@@ -53,23 +54,19 @@ export async function generateNarrationWithUtilityModel(params: {
   cfg: OpenClawConfig;
   prepared: NonNullable<Awaited<ReturnType<typeof prepareNarrationModel>>>;
   input: ProgressNarrationInput;
-  abortSignal?: AbortSignal;
+  abortSignal: AbortSignal;
+  timeoutMs: number;
 }): Promise<{ text: string | null; error?: string }> {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), NARRATION_TIMEOUT_MS);
-  const signal = params.abortSignal
-    ? AbortSignal.any([params.abortSignal, controller.signal])
-    : controller.signal;
   try {
-    signal.throwIfAborted();
-    const result = await runIsolatedCompletion({
+    params.abortSignal.throwIfAborted();
+    const result = await runUtilityCompletion({
       ...params.prepared,
       purpose: "progress-narration",
       config: params.cfg,
       systemPrompt: NARRATION_SYSTEM_PROMPT,
       prompt: buildNarrationUserPrompt(params.input),
-      timeoutMs: NARRATION_TIMEOUT_MS,
-      abortSignal: signal,
+      timeoutMs: params.timeoutMs,
+      abortSignal: params.abortSignal,
       answerTokenBudget: 4_096,
       streamParams: { temperature: 0.3 },
     });
@@ -78,7 +75,5 @@ export async function generateNarrationWithUtilityModel(params: {
   } catch (err) {
     logVerbose(`progress-narrator: completion failed: ${String(err)}`);
     return { text: null, error: String(err) };
-  } finally {
-    clearTimeout(timeout);
   }
 }

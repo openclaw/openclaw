@@ -1,5 +1,8 @@
 import {
   aggregateRuntimeParityCacheUsage,
+  formatCacheMisses,
+  formatRuntimeCacheCount,
+  formatRuntimeCacheHitPercent,
   summarizeRuntimeParityCacheUsage,
 } from "./agentic-parity-cache-usage.js";
 import type {
@@ -12,8 +15,11 @@ import {
 } from "./agentic-parity.js";
 import { pushQaReportListSection, type QaReportScenario } from "./report.js";
 import type { RuntimeId } from "./runtime-id.js";
+import type { RuntimeParityCacheDiagnostics } from "./runtime-parity-cache-diagnostics.js";
 import {
   compareRuntimeWallClockMs,
+  formatRuntimeSpeedComparison,
+  formatRuntimeWallClockMs,
   summarizeRuntimeParityTiming,
 } from "./runtime-parity-timing.js";
 import type { RuntimeParityDrift, RuntimeParityResult } from "./runtime-parity.js";
@@ -23,8 +29,6 @@ import {
   resolveRuntimeParityUsagePolicy,
   runtimeParityCellStatus,
 } from "./runtime-parity.js";
-
-export { renderQaRuntimeParityMarkdownReport } from "./agentic-parity-runtime-markdown.js";
 
 // Historical summaries may omit run provenance. Validate labels only when it is present.
 type QaParityRunBlock = {
@@ -162,43 +166,10 @@ function formatPercent(value: number) {
   return `${(value * 100).toFixed(1)}%`;
 }
 
-function describeLiveUsageFailure(scenarioName: string, scenario: QaRuntimeParityScenarioReport) {
-  const missing = [
-    scenario.openclawTokens > 0
-      ? undefined
-      : `${scenario.openclawStatus === "pass" ? "openclaw" : "openclaw failed"}=0`,
-    scenario.codexTokens > 0
-      ? undefined
-      : `${scenario.codexStatus === "pass" ? "codex" : "codex failed"}=0`,
-  ].filter((entry): entry is string => Boolean(entry));
-  if (missing.length === 0) {
-    return undefined;
-  }
-  return `${scenarioName} missing live assistant-message usage (${missing.join(", ")}).`;
-}
-
 function requiredCoverageStatus(
   scenario: QaRuntimeParitySuiteScenario | undefined,
 ): "pass" | "fail" | "skip" | "missing" {
   return scenario ? normalizeScenarioStatus(scenario.status) : "missing";
-}
-
-type StructuredQaParityLabel = {
-  provider: string;
-  model: string;
-};
-
-// Display labels are not provider/model provenance identifiers.
-function parseStructuredLabelRef(label: string): StructuredQaParityLabel | null {
-  const trimmed = label.trim();
-  const separatorMatch = /^([a-z0-9][a-z0-9-]*)[/:]([a-z0-9][a-z0-9._-]*)$/.exec(trimmed);
-  if (!separatorMatch) {
-    return null;
-  }
-  return {
-    provider: separatorMatch[1] ?? "",
-    model: separatorMatch[2] ?? "",
-  };
 }
 
 // Reject swapped candidate/baseline artifacts while accepting historical missing provenance.
@@ -213,10 +184,16 @@ function verifySummaryLabelMatch(params: {
   if (!runProvider || !runModel) {
     return;
   }
-  const labelRef = parseStructuredLabelRef(params.label);
-  if (!labelRef) {
+  // Display labels are not provider/model provenance identifiers.
+  const trimmed = params.label.trim();
+  const separatorMatch = /^([a-z0-9][a-z0-9-]*)[/:]([a-z0-9][a-z0-9._-]*)$/.exec(trimmed);
+  if (!separatorMatch) {
     return;
   }
+  const labelRef = {
+    provider: separatorMatch[1] ?? "",
+    model: separatorMatch[2] ?? "",
+  };
   const normalizedRunModel = runModel.toLowerCase();
   const normalizedRunModelName = runModelName?.toLowerCase();
   const normalizedLabelModel = labelRef.model;
@@ -228,36 +205,19 @@ function verifySummaryLabelMatch(params: {
   ) {
     return;
   }
-  throw new QaParityLabelMismatchError({
-    role: params.role,
-    label: params.label,
-    runProvider,
-    runModel,
-  });
-}
-
-class QaParityLabelMismatchError extends Error {
-  readonly role: "candidate" | "baseline";
-  readonly label: string;
-  readonly runProvider: string;
-  readonly runModel: string;
-
-  constructor(params: {
-    role: "candidate" | "baseline";
-    label: string;
-    runProvider: string;
-    runModel: string;
-  }) {
-    super(
-      `${params.role} summary run.primaryProvider=${params.runProvider} and run.primaryModel=${params.runModel} do not match --${params.role}-label=${params.label}. ` +
+  throw Object.assign(
+    new Error(
+      `${params.role} summary run.primaryProvider=${runProvider} and run.primaryModel=${runModel} do not match --${params.role}-label=${params.label}. ` +
         `Check that the --candidate-summary / --baseline-summary paths weren't swapped.`,
-    );
-    this.name = "QaParityLabelMismatchError";
-    this.role = params.role;
-    this.label = params.label;
-    this.runProvider = params.runProvider;
-    this.runModel = params.runModel;
-  }
+    ),
+    {
+      name: "QaParityLabelMismatchError",
+      role: params.role,
+      label: params.label,
+      runProvider,
+      runModel,
+    },
+  );
 }
 
 export function buildQaAgenticParityComparison(params: {
@@ -514,13 +474,21 @@ export function buildQaRuntimeParityReport(params: {
         `${scenario.name} drift=${parity.drift}${parity.driftDetails ? ` (${parity.driftDetails})` : ""}.`,
       );
     }
-    const usageFailure =
-      requiresLiveUsage && runtimeParityUsage.expectation === "assistant-message-required"
-        ? describeLiveUsageFailure(scenario.name, reportScenario)
-        : undefined;
-    if (usageFailure) {
-      failures.push(usageFailure);
-      return { ...reportScenario, status: "fail" };
+    if (requiresLiveUsage && runtimeParityUsage.expectation === "assistant-message-required") {
+      const missing = [
+        reportScenario.openclawTokens > 0
+          ? undefined
+          : `${reportScenario.openclawStatus === "pass" ? "openclaw" : "openclaw failed"}=0`,
+        reportScenario.codexTokens > 0
+          ? undefined
+          : `${reportScenario.codexStatus === "pass" ? "codex" : "codex failed"}=0`,
+      ].filter((entry): entry is string => Boolean(entry));
+      if (missing.length > 0) {
+        failures.push(
+          `${scenario.name} missing live assistant-message usage (${missing.join(", ")}).`,
+        );
+        return { ...reportScenario, status: "fail" };
+      }
     }
     return reportScenario;
   });
@@ -555,4 +523,112 @@ export function buildQaRuntimeParityReport(params: {
       "Wall-clock timings cover each complete QA runtime cell, including gateway, model, and tool execution; they are not provider-reported turn durations.",
     ],
   };
+}
+
+function formatRuntimeCacheMisses(diagnostics: RuntimeParityCacheDiagnostics | undefined): string {
+  if (!diagnostics) {
+    return "N/A";
+  }
+  return formatCacheMisses(
+    diagnostics.cacheTelemetryTurns === 0 ? null : diagnostics.cacheMisses,
+    diagnostics.unmeasuredPostWarmTurns,
+    "uncached input",
+  );
+}
+
+export function renderQaRuntimeParityMarkdownReport(report: QaRuntimeParityReport): string {
+  const lines = [
+    `# OpenClaw Runtime Parity Report — ${report.runtimePair[0]} vs ${report.runtimePair[1]}`,
+    "",
+    `- Compared at: ${report.comparedAt}`,
+    `- Provider mode: ${report.providerMode ?? "unknown"}`,
+    `- Primary model: ${report.primaryModel ?? "unknown"}`,
+    `- Verdict: ${report.pass ? "pass" : "fail"}`,
+    "",
+    "## Aggregate Metrics",
+    "",
+    "| Metric | Value |",
+    "| --- | ---: |",
+    `| Total scenarios | ${report.totalScenarios} |`,
+    `| Passed scenarios | ${report.passedScenarios} |`,
+    `| Failed scenarios | ${report.failedScenarios} |`,
+    `| No drift | ${report.driftCounts.none} |`,
+    `| Text-only drift | ${report.driftCounts["text-only"]} |`,
+    `| Tool-call-shape drift | ${report.driftCounts["tool-call-shape"]} |`,
+    `| Tool-result-shape drift | ${report.driftCounts["tool-result-shape"]} |`,
+    `| Structural drift | ${report.driftCounts.structural} |`,
+    `| Failure-mode drift | ${report.driftCounts["failure-mode"]} |`,
+    "",
+    "## Prompt Cache",
+    "",
+    "| Runtime | Gross input | Uncached input | Cached input | Cache writes | Output | Total tokens | Cache hit |",
+    "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+    `| openclaw | ${formatRuntimeCacheCount(report.usage.openclaw?.grossInputTokens)} | ${formatRuntimeCacheCount(report.usage.openclaw?.uncachedInputTokens)} | ${formatRuntimeCacheCount(report.usage.openclaw?.cachedInputTokens)} | ${formatRuntimeCacheCount(report.usage.openclaw?.cacheWriteTokens)} | ${formatRuntimeCacheCount(report.usage.openclaw?.outputTokens)} | ${formatRuntimeCacheCount(report.usage.openclaw?.totalTokens)} | ${formatRuntimeCacheHitPercent(report.usage.openclaw?.cacheHitPercent)} |`,
+    `| codex | ${formatRuntimeCacheCount(report.usage.codex?.grossInputTokens)} | ${formatRuntimeCacheCount(report.usage.codex?.uncachedInputTokens)} | ${formatRuntimeCacheCount(report.usage.codex?.cachedInputTokens)} | ${formatRuntimeCacheCount(report.usage.codex?.cacheWriteTokens)} | ${formatRuntimeCacheCount(report.usage.codex?.outputTokens)} | ${formatRuntimeCacheCount(report.usage.codex?.totalTokens)} | ${formatRuntimeCacheHitPercent(report.usage.codex?.cacheHitPercent)} |`,
+    "",
+    "## Runtime Timing",
+    "",
+    "| Runtime | Total wall time | p50 per scenario | p90 per scenario |",
+    "| --- | ---: | ---: | ---: |",
+    `| openclaw | ${formatRuntimeWallClockMs(report.timing.openclaw.totalWallClockMs)} | ${formatRuntimeWallClockMs(report.timing.openclaw.p50WallClockMs)} | ${formatRuntimeWallClockMs(report.timing.openclaw.p90WallClockMs)} |`,
+    `| codex | ${formatRuntimeWallClockMs(report.timing.codex.totalWallClockMs)} | ${formatRuntimeWallClockMs(report.timing.codex.p50WallClockMs)} | ${formatRuntimeWallClockMs(report.timing.codex.p90WallClockMs)} |`,
+    "",
+    `- Faster runtime: ${formatRuntimeSpeedComparison(report.timing)}`,
+    "",
+  ];
+  if (report.timing.bootstrap) {
+    lines.push(
+      "## Gateway Bootstrap (Excluded From Runtime Timing)",
+      "",
+      "| Runtime | Total bootstrap | p50 per scenario | p90 per scenario |",
+      "| --- | ---: | ---: | ---: |",
+      `| openclaw | ${formatRuntimeWallClockMs(report.timing.bootstrap.openclaw.totalWallClockMs)} | ${formatRuntimeWallClockMs(report.timing.bootstrap.openclaw.p50WallClockMs)} | ${formatRuntimeWallClockMs(report.timing.bootstrap.openclaw.p90WallClockMs)} |`,
+      `| codex | ${formatRuntimeWallClockMs(report.timing.bootstrap.codex.totalWallClockMs)} | ${formatRuntimeWallClockMs(report.timing.bootstrap.codex.p50WallClockMs)} | ${formatRuntimeWallClockMs(report.timing.bootstrap.codex.p90WallClockMs)} |`,
+      "",
+    );
+  }
+  if (report.failures.length > 0) {
+    pushQaReportListSection(lines, "Gate Failures", report.failures);
+  }
+  lines.push("## Scenario Comparison", "");
+  for (const scenario of report.scenarios) {
+    const usageNotApplicable = scenario.runtimeParityUsage.expectation === "not-applicable";
+    const openclawTokens = usageNotApplicable ? "N/A" : String(scenario.openclawTokens);
+    const codexTokens = usageNotApplicable ? "N/A" : String(scenario.codexTokens);
+    lines.push(`### ${scenario.name}`, "");
+    lines.push(`- status: ${scenario.status}`);
+    lines.push(`- drift: ${scenario.drift}`);
+    lines.push(
+      `- openclaw: ${scenario.openclawStatus} (${scenario.openclawToolCalls} tool calls, ${openclawTokens} tokens)`,
+    );
+    lines.push(
+      `- codex: ${scenario.codexStatus} (${scenario.codexToolCalls} tool calls, ${codexTokens} tokens)`,
+    );
+    lines.push(
+      `- wall time: openclaw ${formatRuntimeWallClockMs(scenario.openclawWallClockMs)}; codex ${formatRuntimeWallClockMs(scenario.codexWallClockMs)}; ${formatRuntimeSpeedComparison(scenario)}`,
+    );
+    if (
+      scenario.openclawBootstrapWallClockMs !== undefined ||
+      scenario.codexBootstrapWallClockMs !== undefined
+    ) {
+      lines.push(
+        `- gateway bootstrap (excluded): openclaw ${formatRuntimeWallClockMs(scenario.openclawBootstrapWallClockMs ?? null)}; codex ${formatRuntimeWallClockMs(scenario.codexBootstrapWallClockMs ?? null)}`,
+      );
+    }
+    lines.push(
+      `- prompt cache: openclaw ${formatRuntimeCacheHitPercent(scenario.openclawUsage?.cacheHitPercent)} (${formatRuntimeCacheCount(scenario.openclawUsage?.cachedInputTokens)} cached, ${formatRuntimeCacheCount(scenario.openclawUsage?.uncachedInputTokens)} uncached input); codex ${formatRuntimeCacheHitPercent(scenario.codexUsage?.cacheHitPercent)} (${formatRuntimeCacheCount(scenario.codexUsage?.cachedInputTokens)} cached, ${formatRuntimeCacheCount(scenario.codexUsage?.uncachedInputTokens)} uncached input)`,
+    );
+    lines.push(
+      `- post-warm cache misses: openclaw ${formatRuntimeCacheMisses(scenario.openclawCacheDiagnostics)}; codex ${formatRuntimeCacheMisses(scenario.codexCacheDiagnostics)}`,
+    );
+    if (scenario.runtimeParityUsage.expectation === "not-applicable") {
+      lines.push(`- assistant-message usage: N/A (${scenario.runtimeParityUsage.reason})`);
+    }
+    if (scenario.driftDetails) {
+      lines.push(`- details: ${scenario.driftDetails}`);
+    }
+    lines.push("");
+  }
+  pushQaReportListSection(lines, "Notes", report.notes);
+  return lines.join("\n");
 }

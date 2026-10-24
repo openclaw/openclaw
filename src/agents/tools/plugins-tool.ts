@@ -7,6 +7,8 @@ import { boundedJsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
 import type { PluginRuntimeApplication } from "../../plugins/lifecycle.js";
 import type { listManagedPlugins } from "../../plugins/management-service.js";
 import { formatSelectedEntry } from "../../plugins/reload-entry-guidance.js";
+import { resolveReplyRunForCurrentSessionId } from "../../sessions/session-controller.identity.js";
+import { findSessionControllerOperationByRunId } from "../../sessions/session-controller.queries.js";
 import { captureAgentPluginRuntimeRefresh } from "../plugin-runtime-refresh.js";
 import { stringEnum } from "../schema/typebox.js";
 import { jsonResult, readToolStringParam, ToolInputError, type AnyAgentTool } from "./common.js";
@@ -117,6 +119,12 @@ export function createPluginsTool(options?: {
   onYield?: SessionsYieldCallback;
 }): AnyAgentTool {
   const runtimeRefresh = captureAgentPluginRuntimeRefresh();
+  let operation = options?.runId ? findSessionControllerOperationByRunId(options.runId) : undefined;
+  // Callers without a run ID capture only a unique current owner, never a later replacement.
+  if (options?.runId === undefined && options?.sessionId) {
+    const current = resolveReplyRunForCurrentSessionId(options.sessionId);
+    operation = current.kind === "one" ? current.operation : undefined;
+  }
   const requestOwners = captureExecRequestOwners({
     runId: options?.runId,
     sessionId: options?.sessionId,
@@ -143,12 +151,22 @@ export function createPluginsTool(options?: {
           request = {};
           break;
         case "reloadAndResume": {
-          const { handoffPluginReload } = await import("./plugins-reload-handoff.js");
-          return await handoffPluginReload({
+          const { handoffSessionTool } = await import("./session-tool-handoff.js");
+          const reloadRequest = { plugins: [{ pluginId: required("pluginId") }], ...consent };
+          return await handoffSessionTool({
             ...options,
+            name: "Plugin reload",
+            operation,
             requestOwners,
             signal,
-            request: { plugins: [{ pluginId: required("pluginId") }], ...consent },
+            run: ({ assertCurrent, signal: handoffSignal }) =>
+              callAgentToolGatewayRequest({
+                method: "plugins.reload",
+                params: reloadRequest,
+                sessionMutationCommitGuard: assertCurrent,
+                signal: handoffSignal,
+                timeoutMs: null,
+              }),
             formatResult: (payload) => JSON.stringify(pluginsToolResult(payload).details),
           });
         }

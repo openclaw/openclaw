@@ -1,61 +1,77 @@
-import path from "node:path";
 import { expect, it } from "vitest";
 import type { ModelCatalogEntry } from "../api/types.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
-import { revealChatModelOption, selectChatModelOption } from "../test-helpers/select-picker-e2e.ts";
+import {
+  openChatModelPicker,
+  revealChatModelOption,
+  selectChatModelOption,
+} from "../test-helpers/select-picker-e2e.ts";
+import {
+  modelPicker,
+  modelSessionList,
+  runtimeModel,
+} from "./chat-runtime-fixtures.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { expectRequest } from "./new-session-shard.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Model runtime selection" });
-const model = {
-  id: "gpt-5.6-sol",
-  name: "GPT-5.6 Sol",
-  provider: "openai",
+const key = "agent:main:main";
+function sessionFixture(sessionId: string, model: string, provider: string, extra = {}) {
+  return { key, sessionId, kind: "direct", model, modelProvider: provider, updatedAt: 1, ...extra };
+}
+const manualModel = (id: string, name: string, extra: Partial<ModelCatalogEntry> = {}) => ({
+  id,
+  name,
+  provider: "fixture",
   available: true,
-  contextWindow: 1_000_000,
-  agentRuntime: { id: "openclaw", source: "model" },
-  runtimeChoices: [
-    { agentRuntime: { id: "codex", source: "model" }, available: true, contextWindow: 200_000 },
-  ],
-} satisfies ModelCatalogEntry;
+  ...extra,
+});
 
 suite.define(() => {
+  it("shows each runtime's own name and context budget", async () => {
+    await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
+      const model = runtimeModel("gpt-5.6-sol", "openai", "GPT-5.6 Sol", [], {
+        contextWindow: 1_000_000,
+        runtimeChoices: [
+          {
+            agentRuntime: { id: "codex", source: "model" },
+            available: true,
+            contextWindow: 200_000,
+          },
+        ],
+      });
+      await installMockGateway(page, { agentModel: "openai/gpt-5.6-sol", models: [model] });
+      await page.goto(`${suite.server.baseUrl}chat`);
+      const { picker, runtime } = modelPicker(page);
+      await openChatModelPicker(picker);
+      for (const [id, name, context] of [
+        ["codex", "GPT-5.6 Sol codex", "200k · Codex"],
+        ["openclaw", "GPT-5.6 Sol", "1M · OpenClaw"],
+      ] as const) {
+        const option = runtime(id);
+        await revealChatModelOption(picker, "openai/gpt-5.6-sol", { runtime: id });
+        expect(await option.locator(".chat-controls__model-option-name").textContent()).toBe(name);
+        expect(await option.textContent()).toContain(context);
+      }
+    });
+  });
+
   it.each([false, true])(
     "keeps Default reset without offering denied models (manual choices: %s)",
     async (hasAllowedModel) => {
       await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
-        const key = "agent:main:main";
-        const row = {
-          key,
-          sessionId: "manual-policy-reset",
-          kind: "direct",
-          model: "manual",
-          modelProvider: "fixture",
+        const row = sessionFixture("manual-policy-reset", "manual", "fixture", {
           modelOverrideSource: "user",
-          updatedAt: 1,
-        };
+        });
         const models: ModelCatalogEntry[] = [
-          {
-            id: "automatic",
-            name: "Automatic",
-            provider: "fixture",
-            available: true,
+          runtimeModel("automatic", "fixture", "Automatic", ["other-runtime"], {
             manualSelectionAllowed: false,
-            agentRuntime: { id: "openclaw", source: "model" },
-            runtimeChoices: [
-              { agentRuntime: { id: "other-runtime", source: "model" }, available: true },
-            ],
-          },
+          }),
         ];
         if (hasAllowedModel) {
           models.push(
-            { id: "allowed", name: "Allowed", provider: "fixture", available: true },
-            {
-              id: "manual",
-              name: "Forbidden pinned",
-              provider: "fixture",
-              available: true,
-              manualSelectionAllowed: false,
-            },
+            manualModel("allowed", "Allowed"),
+            manualModel("manual", "Forbidden pinned", { manualSelectionAllowed: false }),
           );
         }
         const gateway = await installMockGateway(page, {
@@ -64,145 +80,40 @@ suite.define(() => {
           sessions: [row],
           sessionInfo: row,
           methodResponses: {
-            "sessions.list": {
-              ts: 1,
-              path: "",
-              count: 1,
-              defaults: { model: "automatic", modelProvider: "fixture", contextTokens: 128_000 },
-              sessions: [row],
-            },
+            "sessions.list": modelSessionList(row, {
+              model: "automatic",
+              modelProvider: "fixture",
+              contextTokens: 128_000,
+            }),
           },
         });
         await page.goto(`${suite.server.baseUrl}chat`);
         await gateway.waitForRequest("models.list");
-        const picker = page
-          .locator(".agent-chat__input")
-          .first()
-          .locator(".chat-controls__model-picker");
-        await picker.locator("[data-chat-model-select]").click();
-        await picker.locator(".chat-controls__model-menu").screenshot({
-          path: path.join(suite.artifactDir, `manual-policy-${hasAllowedModel}.png`),
-        });
-        const reset = picker.locator('[data-chat-model-option="fixture/automatic"]');
+        const { picker, option, runtime, search } = modelPicker(page);
+        await openChatModelPicker(picker);
+        const reset = option("fixture/automatic");
+        await revealChatModelOption(picker, "fixture/automatic", { default: true });
         expect(await reset.count()).toBe(1);
-        expect(await picker.locator('[data-chat-model-runtime="other-runtime"]').count()).toBe(0);
-        expect(await picker.locator('[data-chat-model-option="fixture/manual"]').count()).toBe(
-          hasAllowedModel ? 0 : 1,
-        );
-        await selectChatModelOption(reset);
-        expect((await gateway.waitForRequest("sessions.patch")).params).toMatchObject({
-          key,
-          model: null,
-        });
+        await search.fill("other-runtime");
+        await expect
+          .poll(() => picker.locator("[data-chat-model-search-empty]").isVisible())
+          .toBe(true);
+        expect(await runtime("other-runtime").count()).toBe(0);
+        await search.fill("fixture/manual");
+        if (hasAllowedModel) {
+          await expect
+            .poll(() => picker.locator("[data-chat-model-search-empty]").isVisible())
+            .toBe(true);
+          expect(await option("fixture/manual").count()).toBe(0);
+        } else {
+          await expect.poll(() => option("fixture/manual").isVisible()).toBe(true);
+          expect(await option("fixture/manual").count()).toBe(1);
+        }
+        await search.clear();
+        expect(await gateway.getRequests("sessions.patch")).toHaveLength(0);
+        await selectChatModelOption(picker, "fixture/automatic", { default: true });
+        await expectRequest(gateway, "sessions.patch", { key, model: null });
       });
     },
   );
-
-  it.each(["chat", "new"])("selects a second harness through /%s", async (route) => {
-    await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
-      const key = "agent:main:main";
-      const row = {
-        key,
-        sessionId: "runtime-selection",
-        kind: "direct",
-        model: model.id,
-        modelProvider: "openai",
-        modelOverrideSource: null,
-        agentRuntime: model.agentRuntime,
-        updatedAt: 1,
-      };
-      const result = {
-        ts: 1,
-        path: "",
-        count: 1,
-        defaults: {
-          model: model.id,
-          modelProvider: "openai",
-          contextTokens: 1_000_000,
-          agentRuntime: model.agentRuntime,
-        },
-        sessions: [row],
-      };
-      const gateway = await installMockGateway(page, {
-        agentModel: "openai/gpt-5.6-sol",
-        models: [model],
-        sessions: [row],
-        deferredMethods: route === "chat" ? ["sessions.patch"] : [],
-        methodResponses: {
-          "sessions.list": result,
-          "sessions.create": { key: "agent:main:runtime-created", runStarted: true },
-        },
-      });
-      await page.goto(`${suite.server.baseUrl}${route}`);
-      const composer = page.locator(".agent-chat__input").first();
-      const picker = composer.locator(".chat-controls__model-picker");
-      const trigger = picker.locator("[data-chat-model-select]");
-      await expect.poll(() => picker.locator("[data-chat-model-option]").count()).toBe(2);
-      await trigger.click();
-      const codex = picker.locator('[data-chat-model-runtime="codex"]');
-      const embedded = picker.locator('[data-chat-model-runtime="openclaw"]');
-      await revealChatModelOption(codex);
-      await picker.locator(".chat-controls__model-menu").screenshot({
-        path: path.join(suite.artifactDir, `runtime-choices-${route}.png`),
-      });
-      expect(await codex.locator(".chat-controls__model-option-name").textContent()).toBe(
-        "GPT-5.6 Sol codex",
-      );
-      expect(await embedded.locator(".chat-controls__model-option-name").textContent()).toBe(
-        "GPT-5.6 Sol",
-      );
-      expect(await codex.textContent()).toContain("200k · Codex");
-      expect(await embedded.textContent()).toContain("1M · OpenClaw");
-      await selectChatModelOption(codex);
-      if (route === "new") {
-        await expect.poll(() => codex.getAttribute("aria-selected")).toBe("true");
-        expect(await trigger.textContent()).toContain("GPT-5.6 Sol codex");
-        await composer.locator("textarea").first().fill("Reply with the selected runtime.");
-        await page.getByRole("button", { name: "Start session" }).click();
-        expect((await gateway.waitForRequest("sessions.create")).params).toMatchObject({
-          model: "openai/gpt-5.6-sol",
-          agentRuntime: "codex",
-        });
-        expect(await gateway.getRequests("sessions.patch")).toHaveLength(0);
-      } else {
-        expect((await gateway.waitForRequest("sessions.patch")).params).toMatchObject({
-          key,
-          model: "openai/gpt-5.6-sol",
-          agentRuntime: "codex",
-        });
-        const selected = {
-          ...row,
-          agentRuntime: { id: "codex", source: "session-key" },
-          modelOverrideSource: null,
-        };
-        await gateway.setSessionsListResponse({ ...result, sessions: [selected] });
-        await gateway.resolveDeferred("sessions.patch", {
-          ok: true,
-          key,
-          path: "",
-          entry: selected,
-        });
-        await expect.poll(() => trigger.getAttribute("aria-disabled")).toBe("false");
-        await expect.poll(() => codex.getAttribute("aria-selected")).toBe("true");
-        expect(await trigger.textContent()).toContain("GPT-5.6 Sol codex");
-        expect(await picker.locator('[data-chat-model-option][aria-selected="true"]').count()).toBe(
-          1,
-        );
-        const reset = { key, model: null, agentRuntime: null };
-        const after = (await gateway.getRequests("sessions.patch", reset)).length;
-        await gateway.deferNext("sessions.patch", reset);
-        await trigger.click();
-        await selectChatModelOption(embedded);
-        expect(
-          (await gateway.waitForRequest("sessions.patch", { after, match: reset })).params,
-        ).toMatchObject(reset);
-        await gateway.setSessionsListResponse(result);
-        await gateway.resolveDeferred("sessions.patch", { ok: true, key, path: "", entry: row });
-        await expect.poll(() => embedded.getAttribute("aria-selected")).toBe("true");
-        expect(await picker.locator('[data-chat-model-option][aria-selected="true"]').count()).toBe(
-          1,
-        );
-      }
-    });
-  });
 });

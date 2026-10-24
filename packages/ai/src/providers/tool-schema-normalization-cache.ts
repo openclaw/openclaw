@@ -16,6 +16,8 @@ type SchemaCacheEntry<T> = {
 
 let preparedSchemas: ReadonlyMap<object, PreparedToolSchemaNormalization> | undefined;
 
+const MAX_CACHE_ENTRIES_PER_SCHEMA = 8;
+
 /** Only synchronous conversion owns these fresh projections; no facts survive its return. */
 export function withPreparedToolSchemaNormalization<T>(
   schemas: ReadonlyMap<object, PreparedToolSchemaNormalization>,
@@ -30,7 +32,7 @@ export function withPreparedToolSchemaNormalization<T>(
   }
 }
 
-function createBoundedSchemaCache<T>(maxEntries: number) {
+function createBoundedSchemaCache<T>() {
   const schemas = new WeakMap<object, Array<SchemaCacheEntry<T>>>();
   return {
     get(source: object, key: string): T | undefined {
@@ -40,7 +42,10 @@ function createBoundedSchemaCache<T>(maxEntries: number) {
       const entries = schemas.get(source) ?? [];
       schemas.set(
         source,
-        [{ key, value }, ...entries.filter((entry) => entry.key !== key)].slice(0, maxEntries),
+        [{ key, value }, ...entries.filter((entry) => entry.key !== key)].slice(
+          0,
+          MAX_CACHE_ENTRIES_PER_SCHEMA,
+        ),
       );
       return value;
     },
@@ -48,14 +53,14 @@ function createBoundedSchemaCache<T>(maxEntries: number) {
 }
 
 /** Prepared variants cannot evict direct callers' identity-preserving cache entries. */
-export function createToolSchemaNormalizationCache<T>(maxEntries: number) {
-  const directCache = createBoundedSchemaCache<T>(maxEntries);
+export function createToolSchemaNormalizationCache<T>() {
+  const directCache = createBoundedSchemaCache<T>();
   const preparedCache = createBoundedSchemaCache<{
     inputJson: string;
     inputTruncated: boolean;
     outputJson: string;
     truncated: boolean;
-  }>(maxEntries);
+  }>();
   return {
     get(source: object, key: string): T | undefined {
       const prepared = preparedSchemas?.get(source);

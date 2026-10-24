@@ -17,6 +17,7 @@ export async function beginCodexAttemptSettlement(
   const { state: resourceState } = resources;
   const { connection } = resources.prompt.context.runtime;
   const { params, runAbortController, appServer } = connection;
+  const { toolBridge } = resources.prompt.context.attemptTools;
   const { state, deadlines, settlementExpired } = turnRuntime;
   const { drainNotificationQueue } = notifications;
   const { activeProjector, activeTurnId } = activeTurn;
@@ -82,6 +83,7 @@ export async function beginCodexAttemptSettlement(
             return new Map();
           }
         };
+        state.readRetainedNativeCommands = readRetainedNativeCommands;
       } catch (error) {
         embeddedAgentLog.debug("could not confirm retained native commands", {
           threadId: resourceState.thread.threadId,
@@ -91,6 +93,9 @@ export async function beginCodexAttemptSettlement(
       // Native exit may arrive while the inventory RPC is pending.
       await drainNotificationQueue();
     }
+    activeProjector.prepareTerminalToolResultCheckpoint(toolBridge.telemetry, {
+      readRetainedNativeCommands: () => readRetainedNativeCommands?.() ?? new Map(),
+    });
     await closeProjection();
     await activeProjector.settlement.drain();
   });

@@ -8,9 +8,24 @@ import type { EngineConnection } from "../infra/sql-connection.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { agentProvenancePublication } from "./agent-provenance-publication.js";
 import type { AgentProvenance } from "./agent-provenance.types.js";
+import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 import type { DB as OpenClawStateKyselyDatabase } from "./openclaw-state-db.generated.js";
+import type { WorkerOperationHandlers } from "./worker-operation-registry.js";
 
 type AgentProvenanceDatabase = Pick<OpenClawStateKyselyDatabase, "agent_provenance">;
+
+export const agentProvenanceReadOperations = {
+  "agentProvenance.readBatch": (input: { agentIds: readonly string[] }, db) => ({
+    type: "agentProvenance.readBatch" as const,
+    records: tableExists(db, "agent_provenance")
+      ? readAgentProvenanceBatchInDatabase(db, input.agentIds)
+      : [],
+  }),
+  "agentProvenance.list": (_input: undefined, db) => ({
+    type: "agentProvenance.list" as const,
+    records: tableExists(db, "agent_provenance") ? listAgentProvenanceInDatabase(db) : [],
+  }),
+} satisfies WorkerOperationHandlers<EngineConnection>;
 
 export function recordAgentProvenanceInDatabase(
   database: EngineConnection,

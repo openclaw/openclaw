@@ -9,14 +9,10 @@ import {
 import { createDeferredCore } from "../shared/deferred.js";
 import { captureEnv } from "../test-utils/env.js";
 import { rewriteUpdateFlagArgv } from "./argv.js";
-import {
-  resolveGatewayCatalogCommandPath,
-  resolveGatewayRunPreBootstrapOptions,
-} from "./gateway-run-argv.js";
+import { resolveGatewayCommandPath } from "./gateway-run-argv.js";
 import {
   isGatewayRunFastPathArgv,
   resolveMissingPluginCommandMessage,
-  shouldStartProxyForCli,
   shouldUseRootHelpFastPath,
 } from "./run-main-policy.js";
 import { runCli } from "./run-main.js";
@@ -34,9 +30,9 @@ const sqliteAdmission = vi.hoisted(() => ({
   initialize: vi.fn<() => Promise<void>>().mockResolvedValue(),
   selectGatewayEnvironment: vi.fn<() => Promise<boolean>>().mockResolvedValue(true),
 }));
-vi.mock("../infra/bun-sqlite-library.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../infra/bun-sqlite-library.js")>()),
-  initializeSqliteRuntimeCapabilities: sqliteAdmission.initialize,
+vi.mock("../infra/sqlite-runtime-initialize.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/sqlite-runtime-initialize.js")>()),
+  initializeSqliteRuntime: sqliteAdmission.initialize,
 }));
 vi.mock("./gateway-cli/run.js", () => ({ runGatewayCommand }));
 // Keep Commander parsing independent of native startup; run-main.exit and
@@ -156,30 +152,6 @@ describe("Gateway argv boundaries", () => {
     expect(isGatewayRunFastPathArgv(cliArgs("gateway", "--unknown"))).toBe(false);
     expect(isGatewayRunFastPathArgv(cliArgs("gateway", "--update-canary=true"))).toBe(false);
   });
-
-  it("resolves destructive flags after root options without consuming option values", () => {
-    expect(
-      resolveGatewayRunPreBootstrapOptions(
-        cliArgs("--log-level", "debug", "gateway", "run", "--force", "--reset"),
-      ),
-    ).toEqual({ force: true, reset: true });
-    expect(resolveGatewayRunPreBootstrapOptions(cliArgs("gateway", "--token", "--force"))).toEqual({
-      force: false,
-      reset: false,
-    });
-  });
-
-  it.each([
-    { args: ["--", "gateway", "--force"], commandPath: ["gateway", "--force"] },
-    { args: ["gateway", "--", "run", "--force"], commandPath: ["gateway", "run"] },
-    { args: ["gateway", "run", "--", "--reset"], commandPath: ["gateway", "run"] },
-  ])("preserves literal commands without destructive flags: $args", ({ args, commandPath }) => {
-    const argv = cliArgs(...args);
-    expect(resolveGatewayCatalogCommandPath(argv)).toEqual(commandPath);
-    const options = resolveGatewayRunPreBootstrapOptions(argv);
-    expect(options?.force).not.toBe(true);
-    expect(options?.reset).not.toBe(true);
-  });
 });
 
 describe("root startup policy", () => {
@@ -192,16 +164,6 @@ describe("root startup policy", () => {
     },
   ])("rewrites only a root update flag: $args", ({ args, expected }) => {
     expect(rewriteUpdateFlagArgv(cliArgs(...args))).toEqual(cliArgs(...expected));
-  });
-
-  it("skips proxy startup before SQLite maintenance", () => {
-    expect(shouldStartProxyForCli(cliArgs("doctor", "--state-sqlite", "compact", "--json"))).toBe(
-      false,
-    );
-    expect(shouldStartProxyForCli(cliArgs("doctor", "--state-sqlite=compact", "--json"))).toBe(
-      false,
-    );
-    expect(shouldStartProxyForCli(cliArgs("doctor", "--lint"))).toBe(true);
   });
 
   it("uses root help only for root invocations and aliases", () => {
@@ -251,11 +213,12 @@ describe("plugin command policy", () => {
 });
 
 it("keeps post-root log levels out of the gateway command path", () => {
+  expect(resolveGatewayCommandPath(cliArgs("gateway", "--log-level", "debug", "run"))).toEqual([
+    "gateway",
+    "run",
+  ]);
   expect(
-    resolveGatewayCatalogCommandPath(cliArgs("gateway", "--log-level", "debug", "run")),
-  ).toEqual(["gateway", "run"]);
-  expect(
-    resolveGatewayCatalogCommandPath(
+    resolveGatewayCommandPath(
       cliArgs("gateway", "--log-level=debug", "restart-handoff", "capabilities"),
     ),
   ).toEqual(["gateway", "restart-handoff"]);

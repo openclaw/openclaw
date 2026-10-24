@@ -39,7 +39,7 @@ Override in `~/.openclaw/openclaw.json`:
 }
 ```
 
-Per-agent override: `agents.entries.*.workspace`. To keep `main` at an existing shared root in a multi-agent roster, pin `agents.entries.main.workspace` to that root explicitly; changing `agents.defaults.workspace` alone sets the base for unpinned entries.
+Per-agent override: `agents.entries.*.workspace`. To keep `main` at an existing shared root in a multi-agent roster, pin `agents.entries.main.workspace` to that root explicitly; changing `agents.defaults.workspace` alone sets the base for unpinned entries. For an unpinned system agent in an explicit roster, `openclaw doctor --fix` copies its files into one workspace and pins it ([Agent roster migration](/gateway/doctor/config-migrations#agent-roster-migration)).
 
 Run workspace selection rejects an explicitly supplied blank or invalid agent ID. Omit the selector to use configured ownership, or supply the intended agent ID.
 
@@ -139,6 +139,11 @@ before updating; current Doctor leaves that file untouched. See the
 ## Git backup (recommended, private)
 
 Treat the workspace as private memory. Put it in a **private** git repo so it is backed up and recoverable.
+
+Git is optional. An empty `.git` directory is treated as a non-Git workspace and
+left untouched. Partial Git metadata or a linked worktree whose metadata is missing
+still blocks Git operations with checkout-preservation guidance; repair the original
+repository metadata before retrying.
 
 Run these steps on the machine where the Gateway runs (that is where the workspace lives).
 

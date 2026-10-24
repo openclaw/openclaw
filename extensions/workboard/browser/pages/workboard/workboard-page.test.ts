@@ -1,10 +1,10 @@
 import "../../test/dom.setup.ts";
 import { expectDefined } from "@openclaw/normalization-core";
+import { createDeferred } from "openclaw/plugin-sdk/concurrency-runtime";
 import type {
   ControlUiAgentPickerProps,
   ControlUiComponents,
 } from "openclaw/plugin-sdk/control-ui";
-import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createGatewaySession,
@@ -67,51 +67,47 @@ it("loads, refreshes, and searches cards through the plugin's authenticated host
   expect(page.workboard.state.query).toBe("");
 });
 
-it.each(["writer"])(
-  "keeps scope %s recoverable after the roster shrinks to one agent",
-  async (scope) => {
-    const page = mountPage();
-    page.cards([
-      createWorkboardCard({ id: "main-card", title: "Main agent task", agentId: "main" }),
-      createWorkboardCard({ id: "writer-card", title: "Writer agent task", agentId: "writer" }),
-    ]);
-    page.fixture.connection.connected = true;
-    page.fixture.notify();
-    await afterWorkboardUpdate(() =>
-      expect(page.container.querySelectorAll(".workboard-card")).toHaveLength(2),
-    );
-    page.fixture.host.agents.setScope(scope);
-    page.agents([{ id: "main" }]);
-    await page.fixture.host.agents.refresh();
-    await afterWorkboardUpdate(() =>
-      expect(page.container.querySelectorAll(".workboard-card")).toHaveLength(1),
-    );
-    expect(page.container.textContent).toContain(
-      scope === "main" ? "Main agent task" : "Writer agent task",
-    );
-    const picker = expectDefined(
-      page.container.querySelector<HTMLElement & ControlUiAgentPickerProps>(
-        ".workboard-agent-filter [data-test-agent-picker]",
-      ),
-      "desktop scope picker",
-    );
-    expect(picker.value).toBe(scope);
-    expect(picker.options).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ value: scope, label: scope }),
-        expect.objectContaining({ value: "", label: "All agents" }),
-      ]),
-    );
-    picker.onSelect("");
-    await afterWorkboardUpdate(() =>
-      expect(page.container.querySelectorAll(".workboard-card")).toHaveLength(2),
-    );
-    expect(page.container.textContent).toContain("Main agent task");
-    expect(page.container.textContent).toContain("Writer agent task");
-    expect(page.fixture.host.agents.scopeId).toBeNull();
-    expect(page.container.querySelector(".workboard-scope")).toBeNull();
-  },
-);
+it("keeps scope writer recoverable after the roster shrinks to one agent", async () => {
+  const scope = "writer";
+  const page = mountPage();
+  page.cards([
+    createWorkboardCard({ id: "main-card", title: "Main agent task", agentId: "main" }),
+    createWorkboardCard({ id: "writer-card", title: "Writer agent task", agentId: "writer" }),
+  ]);
+  page.fixture.connection.connected = true;
+  page.fixture.notify();
+  await afterWorkboardUpdate(() =>
+    expect(page.container.querySelectorAll(".workboard-card")).toHaveLength(2),
+  );
+  page.fixture.host.agents.setScope(scope);
+  page.agents([{ id: "main" }]);
+  await page.fixture.host.agents.refresh();
+  await afterWorkboardUpdate(() =>
+    expect(page.container.querySelectorAll(".workboard-card")).toHaveLength(1),
+  );
+  expect(page.container.textContent).toContain("Writer agent task");
+  const picker = expectDefined(
+    page.container.querySelector<HTMLElement & ControlUiAgentPickerProps>(
+      ".workboard-agent-filter [data-test-agent-picker]",
+    ),
+    "desktop scope picker",
+  );
+  expect(picker.value).toBe(scope);
+  expect(picker.options).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({ value: scope, label: scope }),
+      expect.objectContaining({ value: "", label: "All agents" }),
+    ]),
+  );
+  picker.onSelect("");
+  await afterWorkboardUpdate(() =>
+    expect(page.container.querySelectorAll(".workboard-card")).toHaveLength(2),
+  );
+  expect(page.container.textContent).toContain("Main agent task");
+  expect(page.container.textContent).toContain("Writer agent task");
+  expect(page.fixture.host.agents.scopeId).toBeNull();
+  expect(page.container.querySelector(".workboard-scope")).toBeNull();
+});
 
 it("clears filters without changing the global agent context", async () => {
   const page = mountPage();
@@ -240,99 +236,91 @@ it("suspends the session summary when its page is hidden and resumes on return",
   );
 });
 
-it.each([
-  {
-    link: "subagent:workboard-default-writer",
-    key: "agent:writer:subagent:workboard-default-writer",
-  },
-])(
-  "resolves an open $link card independently of the filtered session roster",
-  async ({ link, key }) => {
-    const page = mountPage();
-    const session = createGatewaySession({ key, agentId: "writer" });
-    const primaryRows = [createGatewaySession({ key: "global", agentId: "main", kind: "global" })];
-    const observe = observeSessions(page, { sessions: [session], hasMore: false });
-    Object.assign(page.fixture.host.sessions, { rows: primaryRows });
-    const card = createWorkboardCard({ agentId: "main", sessionKey: link });
-    page.cards([card]);
-    page.workboard.state.detailCardId = card.id;
-    page.fixture.connection.connected = true;
-    page.fixture.notify();
+it("resolves an open subagent:workboard-default-writer card independently of the filtered session roster", async () => {
+  const link = "subagent:workboard-default-writer";
+  const key = "agent:writer:subagent:workboard-default-writer";
+  const page = mountPage();
+  const session = createGatewaySession({ key, agentId: "writer" });
+  const primaryRows = [createGatewaySession({ key: "global", agentId: "main", kind: "global" })];
+  const observe = observeSessions(page, { sessions: [session], hasMore: false });
+  Object.assign(page.fixture.host.sessions, { rows: primaryRows });
+  const card = createWorkboardCard({ agentId: "main", sessionKey: link });
+  page.cards([card]);
+  page.workboard.state.detailCardId = card.id;
+  page.fixture.connection.connected = true;
+  page.fixture.notify();
 
-    await openSessionTab(page);
-    await afterWorkboardUpdate(() =>
-      expect(page.fixture.host.components.mountSessionSummary).toHaveBeenCalledWith(
-        expect.any(HTMLElement),
-        expect.objectContaining({ session: { sessionKey: key, agentId: "writer" } }),
-      ),
-    );
-    expect(observe).toHaveBeenCalledWith(
-      expect.objectContaining({
-        search: link,
-        archived: "all",
-        limit: 2,
-        includeGlobal: false,
-        includeUnknown: false,
-      }),
-      expect.any(Function),
-    );
-    expect(page.fixture.host.sessions.rows).toEqual(primaryRows);
-    expect(page.fixture.host.sessions.refresh).not.toHaveBeenCalled();
-    expectDefined(openSessionButton(page.container), "open resolved session").click();
-    expect(page.fixture.host.sessions.open).toHaveBeenCalledWith({
-      sessionKey: key,
-      agentId: "writer",
-    });
-  },
-);
+  await openSessionTab(page);
+  await afterWorkboardUpdate(() =>
+    expect(page.fixture.host.components.mountSessionSummary).toHaveBeenCalledWith(
+      expect.any(HTMLElement),
+      expect.objectContaining({ session: { sessionKey: key, agentId: "writer" } }),
+    ),
+  );
+  expect(observe).toHaveBeenCalledWith(
+    expect.objectContaining({
+      search: link,
+      archived: "all",
+      limit: 2,
+      includeGlobal: false,
+      includeUnknown: false,
+    }),
+    expect.any(Function),
+  );
+  expect(page.fixture.host.sessions.rows).toEqual(primaryRows);
+  expect(page.fixture.host.sessions.refresh).not.toHaveBeenCalled();
+  expectDefined(openSessionButton(page.container), "open resolved session").click();
+  expect(page.fixture.host.sessions.open).toHaveBeenCalledWith({
+    sessionKey: key,
+    agentId: "writer",
+  });
+});
 
-it.each(["unknown"] as const)(
-  "keeps a bare %s link unresolved despite an ambient roster owner",
-  async (key) => {
-    const page = mountPage();
-    const ambient = createGatewaySession({ key, kind: key, agentId: "main" });
-    const exact = createGatewaySession({ key: "agent:writer:existing", agentId: "writer" });
-    Object.assign(page.fixture.host.sessions, { rows: [ambient, exact] });
-    const observe = observeSessions(page, { sessions: [ambient], hasMore: false });
-    const card = createWorkboardCard({ agentId: "writer", sessionKey: key });
-    page.cards([card]);
-    page.fixture.connection.connected = true;
-    page.fixture.notify();
+it("keeps a bare unknown link unresolved despite an ambient roster owner", async () => {
+  const key = "unknown";
+  const page = mountPage();
+  const ambient = createGatewaySession({ key, kind: key, agentId: "main" });
+  const exact = createGatewaySession({ key: "agent:writer:existing", agentId: "writer" });
+  Object.assign(page.fixture.host.sessions, { rows: [ambient, exact] });
+  const observe = observeSessions(page, { sessions: [ambient], hasMore: false });
+  const card = createWorkboardCard({ agentId: "writer", sessionKey: key });
+  page.cards([card]);
+  page.fixture.connection.connected = true;
+  page.fixture.notify();
 
-    await afterWorkboardUpdate(() =>
-      expect(page.container.querySelector(".workboard-card")?.textContent).toContain("Unknown"),
-    );
-    expect(openSessionButton(page.container)).toBeUndefined();
-    expect(page.container.querySelector('button[aria-label="Stop session"]')).toBeNull();
-    expectDefined(
-      page.container.querySelector<HTMLButtonElement>('button[aria-label="View details"]'),
-      "open unresolved card details",
-    ).click();
-    await afterWorkboardUpdate(() =>
-      expect(
-        page.container
-          .querySelector(".workboard-detail .workboard-session-badge")
-          ?.textContent?.trim(),
-      ).toBe("Ambiguous"),
-    );
+  await afterWorkboardUpdate(() =>
+    expect(page.container.querySelector(".workboard-card")?.textContent).toContain("Unknown"),
+  );
+  expect(openSessionButton(page.container)).toBeUndefined();
+  expect(page.container.querySelector('button[aria-label="Stop session"]')).toBeNull();
+  expectDefined(
+    page.container.querySelector<HTMLButtonElement>('button[aria-label="View details"]'),
+    "open unresolved card details",
+  ).click();
+  await afterWorkboardUpdate(() =>
     expect(
-      page.container.querySelector(".workboard-detail__session-row")?.getAttribute("title"),
-    ).toBe("Edit the card to select an exact session");
-    expect(observe).not.toHaveBeenCalled();
-    expect(page.fixture.host.components.mountSessionSummary).not.toHaveBeenCalled();
-    expect(openSessionButton(page.container)).toBeUndefined();
-    expectDefined(
-      page.container.querySelector<HTMLButtonElement>(
-        '.workboard-detail button[aria-label="Edit card"]',
-      ),
-      "recover the unresolved link",
-    ).click();
-    await afterWorkboardUpdate(() => expect(sessionPicker(page.container)).toBeDefined());
-    const select = expectDefined(sessionPicker(page.container), "session link editor");
-    expect(select.value).toBe(key);
-    expect(select.options.map((option) => option.value)).toContain(exact.key);
-  },
-);
+      page.container
+        .querySelector(".workboard-detail .workboard-session-badge")
+        ?.textContent?.trim(),
+    ).toBe("Ambiguous"),
+  );
+  expect(
+    page.container.querySelector(".workboard-detail__session-row")?.getAttribute("title"),
+  ).toBe("Edit the card to select an exact session");
+  expect(observe).not.toHaveBeenCalled();
+  expect(page.fixture.host.components.mountSessionSummary).not.toHaveBeenCalled();
+  expect(openSessionButton(page.container)).toBeUndefined();
+  expectDefined(
+    page.container.querySelector<HTMLButtonElement>(
+      '.workboard-detail button[aria-label="Edit card"]',
+    ),
+    "recover the unresolved link",
+  ).click();
+  await afterWorkboardUpdate(() => expect(sessionPicker(page.container)).toBeDefined());
+  const select = expectDefined(sessionPicker(page.container), "session link editor");
+  expect(select.value).toBe(key);
+  expect(select.options.map((option) => option.value)).toContain(exact.key);
+});
 
 it.each([
   {
@@ -500,6 +488,10 @@ it("shows independent metadata and linked-session failures together", async () =
 
 it("keeps page failures visible in the board editor and prioritizes its save failure", async () => {
   const page = mountPage({ boardId: "planning" });
+  const failedSave = createDeferred<unknown>();
+  const retriedSave = createDeferred<unknown>();
+  const successfulSave = createDeferred<unknown>();
+  let saves = 0;
   const request = expectDefined(page.request.getMockImplementation(), "request implementation");
   page.request.mockImplementation(async (method, params) => {
     if (method === "agents.list") {
@@ -512,7 +504,7 @@ it("keeps page failures visible in the board editor and prioritizes its save fai
       };
     }
     if (method === "workboard.boards.upsert") {
-      throw new Error("Board update denied");
+      return [failedSave, retriedSave, successfulSave][saves++]!.promise;
     }
     return request(method, params);
   });
@@ -524,12 +516,50 @@ it("keeps page failures visible in the board editor and prioritizes its save fai
       "Agent metadata temporarily unavailable",
     );
   });
+  const name = expectDefined(
+    form.querySelector<HTMLInputElement>(".workboard-board-draft__name input"),
+    "board name",
+  );
+  name.value = "Release planning";
+  name.dispatchEvent(new Event("input", { bubbles: true }));
   form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+  form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+  expect(saves).toBe(1);
+  await afterWorkboardUpdate(() => {
+    expect(name.disabled).toBe(true);
+    expect(form.querySelector<HTMLButtonElement>('button[type="submit"]')?.disabled).toBe(true);
+  });
+  failedSave.reject(new Error("Board update denied"));
   await afterWorkboardUpdate(() => {
     expect(visibleToast(page.container)?.querySelector('[role="alert"]')?.textContent).toBe(
       "Board update denied",
     );
   });
+  expect(name.value).toBe("Release planning");
+  expectDefined(
+    visibleToast(page.container)?.querySelector<HTMLButtonElement>("button"),
+    "dismiss save error",
+  ).click();
+  form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+  await afterWorkboardUpdate(() => {
+    expect(saves).toBe(2);
+    expect(name.disabled).toBe(true);
+    expect(visibleToast(page.container)?.querySelector('[role="alert"]')?.textContent).toBe(
+      "Agent metadata temporarily unavailable",
+    );
+  });
+  expect(name.value).toBe("Release planning");
+  retriedSave.reject(new Error("Board update denied"));
+  await afterWorkboardUpdate(() => {
+    expect(visibleToast(page.container)?.querySelector('[role="alert"]')?.textContent).toBe(
+      "Board update denied",
+    );
+  });
+  form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+  successfulSave.resolve({ board: { id: "planning", name: "Release planning" } });
+  await afterWorkboardUpdate(() =>
+    expect(page.container.querySelector(".workboard-board-draft")).toBeNull(),
+  );
 });
 
 it.each(["canWrite", "connected"] as const)(
@@ -725,69 +755,55 @@ describe("selection reconciliation", () => {
     },
   );
 
-  it.each(["detail"])(
-    "keeps a default-agent card's %s and draft when selecting its scope without metadata",
-    async (surface) => {
-      const page = mountPage();
-      const card = createWorkboardCard({ title: "Default-agent card" });
-      page.cards([card]);
-      page.fixture.connection.assistantAgentId = "research";
-      vi.mocked(page.fixture.host.agents.refresh).mockRejectedValue(
-        new Error("Agent metadata unavailable"),
-      );
-      page.fixture.connection.connected = true;
-      page.fixture.notify();
-      await afterWorkboardUpdate(() =>
-        expect(page.container.querySelector(".workboard-card")?.textContent).toContain(card.title),
-      );
-      page.container.querySelector<HTMLButtonElement>('button[aria-label="View details"]')!.click();
-      await afterWorkboardUpdate(() =>
-        expect(page.container.querySelector(".workboard-detail")).not.toBeNull(),
-      );
-      if (surface === "editor") {
-        page.container
-          .querySelector<HTMLButtonElement>('.workboard-detail button[aria-label="Edit card"]')!
-          .click();
-        await afterWorkboardUpdate(() =>
-          expect(page.container.querySelector(".workboard-draft")).not.toBeNull(),
-        );
-      }
-      const selector = surface === "editor" ? ".workboard-draft__title" : ".workboard-detail__note";
-      const input = page.container.querySelector<HTMLInputElement | HTMLTextAreaElement>(selector)!;
-      input.value = "Keep this draft";
-      input.dispatchEvent(new InputEvent("input", { bubbles: true }));
-      expect(page.fixture.host.agents.defaultId).toBeNull();
-      page.fixture.host.agents.setScope("research");
-      await Promise.resolve();
+  it("keeps a default-agent card's detail and draft when selecting its scope without metadata", async () => {
+    const page = mountPage();
+    const card = createWorkboardCard({ title: "Default-agent card" });
+    page.cards([card]);
+    page.fixture.connection.assistantAgentId = "research";
+    vi.mocked(page.fixture.host.agents.refresh).mockRejectedValue(
+      new Error("Agent metadata unavailable"),
+    );
+    page.fixture.connection.connected = true;
+    page.fixture.notify();
+    await afterWorkboardUpdate(() =>
+      expect(page.container.querySelector(".workboard-card")?.textContent).toContain(card.title),
+    );
+    page.container.querySelector<HTMLButtonElement>('button[aria-label="View details"]')!.click();
+    await afterWorkboardUpdate(() =>
+      expect(page.container.querySelector(".workboard-detail")).not.toBeNull(),
+    );
+    const selector = ".workboard-detail__note";
+    const input = page.container.querySelector<HTMLInputElement | HTMLTextAreaElement>(selector)!;
+    input.value = "Keep this draft";
+    input.dispatchEvent(new InputEvent("input", { bubbles: true }));
+    expect(page.fixture.host.agents.defaultId).toBeNull();
+    page.fixture.host.agents.setScope("research");
+    await Promise.resolve();
 
-      expect(
-        page.container.querySelector<HTMLInputElement | HTMLTextAreaElement>(selector)?.value,
-      ).toBe("Keep this draft");
-      expect(page.container.querySelector(".workboard-board")?.textContent).toContain(card.title);
-      expect(page.fixture.host.agents.scopeId).toBe("research");
-    },
-  );
+    expect(
+      page.container.querySelector<HTMLInputElement | HTMLTextAreaElement>(selector)?.value,
+    ).toBe("Keep this draft");
+    expect(page.container.querySelector(".workboard-board")?.textContent).toContain(card.title);
+    expect(page.fixture.host.agents.scopeId).toBe("research");
+  });
 
-  it.each([{ scope: "main", visible: false }])(
-    "keeps only overlays inside scope $scope",
-    async ({ scope, visible }) => {
-      const page = mountPage();
-      page.workboard.state.cards = [createWorkboardCard({ id: "writer-card", agentId: "writer" })];
-      page.fixture.host.agents.setScope("writer");
-      await Promise.resolve();
-      Object.assign(page.workboard.state, {
-        detailCardId: "writer-card",
-        detailCommentBody: "Draft comment",
-        draftOpen: true,
-        editingCardId: "writer-card",
-      });
-      page.fixture.host.agents.setScope(scope);
-      await Promise.resolve();
-      expect(page.workboard.state.detailCardId).toBe(visible ? "writer-card" : null);
-      expect(page.workboard.state.detailCommentBody).toBe(visible ? "Draft comment" : "");
-      expect(page.workboard.state.draftOpen).toBe(visible);
-    },
-  );
+  it("keeps only overlays inside scope main", async () => {
+    const page = mountPage();
+    page.workboard.state.cards = [createWorkboardCard({ id: "writer-card", agentId: "writer" })];
+    page.fixture.host.agents.setScope("writer");
+    await Promise.resolve();
+    Object.assign(page.workboard.state, {
+      detailCardId: "writer-card",
+      detailCommentBody: "Draft comment",
+      draftOpen: true,
+      editingCardId: "writer-card",
+    });
+    page.fixture.host.agents.setScope("main");
+    await Promise.resolve();
+    expect(page.workboard.state.detailCardId).toBe(null);
+    expect(page.workboard.state.detailCommentBody).toBe("");
+    expect(page.workboard.state.draftOpen).toBe(false);
+  });
 
   it("preserves a new-card draft across board navigation", async () => {
     const page = mountPage({ boardId: "ops" });
@@ -797,6 +813,26 @@ describe("selection reconciliation", () => {
     expect(page.workboard.state.draftOpen).toBe(true);
     expect(page.workboard.state.draftTitle).toBe("New operations task");
   });
+});
+
+it("titles the unfiltered page as all boards and a selected board by name", async () => {
+  const page = mountPage({ connected: true });
+  const request = expectDefined(page.request.getMockImplementation(), "request implementation");
+  page.request.mockImplementation(async (method, params) =>
+    method === "workboard.cards.list"
+      ? {
+          cards: [],
+          boards: [
+            { id: "planning", name: "Planning", total: 0, active: 0, archived: 0, byStatus: {} },
+          ],
+        }
+      : request(method, params),
+  );
+  page.fixture.notify();
+  const title = () => page.container.querySelector(".workboard-page-title")?.textContent?.trim();
+  await afterWorkboardUpdate(() => expect(title()).toBe("All boards"));
+  page.navigate("planning");
+  await afterWorkboardUpdate(() => expect(title()).toBe("Planning"));
 });
 
 it("saves explicit appearance clearing without sending legacy null values", async () => {

@@ -9,10 +9,6 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 const LIVE_E2E_WORKFLOW_PATH = ".github/workflows/openclaw-live-and-e2e-checks-reusable.yml";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-function readNulSeparatedArgs(filePath: string): string[] {
-  return readFileSync(filePath, "utf8").split("\0").filter(Boolean);
-}
-
 function workflowSteps() {
   return parse(readFileSync(LIVE_E2E_WORKFLOW_PATH, "utf8")).jobs.validate_special_e2e
     .steps as Array<{
@@ -33,48 +29,22 @@ describe.skipIf(process.platform !== "linux")("OpenShell hosted bootstrap", () =
   });
 
   it.each([
-    {
-      name: "success",
-      curlExit: 0,
-      checksumExit: 0,
-      installExit: 0,
-      calls: "download\nverify\ninstall\nversion\n",
-    },
-    {
-      name: "partial download",
-      curlExit: 28,
-      checksumExit: 0,
-      installExit: 0,
-      calls: "download\n",
-    },
-    {
-      name: "checksum failure",
-      curlExit: 0,
-      checksumExit: 1,
-      installExit: 0,
-      calls: "download\nverify\n",
-    },
-    {
-      name: "install failure",
-      curlExit: 0,
-      checksumExit: 0,
-      installExit: 42,
-      calls: "download\nverify\ninstall\n",
-    },
-  ])("verifies the OpenShell package before installation and cleans it on $name", (scenario) => {
-    const installStep = expectDefined(
-      workflowSteps().find((step) => step.name === "Install OpenShell CLI"),
-      "OpenShell install step",
-    );
-    const run = expectDefined(installStep.run, "OpenShell install command");
-    const root = tempDirs.make("openclaw-openshell-package-");
-    const result = spawnSync(
-      "bash",
-      [
-        "--noprofile",
-        "--norc",
-        "-c",
-        `
+    ["success", 0, 0, 0, "download\nverify\ninstall\nversion\n"],
+    ["partial download", 28, 0, 0, "download\n"],
+    ["checksum failure", 0, 1, 0, "download\nverify\n"],
+    ["install failure", 0, 0, 42, "download\nverify\ninstall\n"],
+  ] as const)(
+    "verifies the OpenShell package before installation and cleans it on %s",
+    (_name, curlExit, checksumExit, installExit, calls) => {
+      const installStep = expectDefined(
+        workflowSteps().find((step) => step.name === "Install OpenShell CLI"),
+        "OpenShell install step",
+      );
+      const run = expectDefined(installStep.run, "OpenShell install command");
+      const root = tempDirs.make("openclaw-openshell-package-");
+      const read = (file: string) => readFileSync(join(root, file), "utf8");
+      const args = (command: string) => read(`${command}-args`).split("\0").filter(Boolean);
+      const fixture = `
 curl() {
   printf '%s\\0' "$@" > "$RUNNER_TEMP/curl-args"
   local output=""
@@ -105,53 +75,41 @@ openshell() {
   [[ "$*" == --version ]] || return 99
   printf 'version\\n' >> "$RUNNER_TEMP/calls"
 }
-${run}`,
-      ],
-      {
+${run}`;
+      const result = spawnSync("bash", ["--noprofile", "--norc", "-c", fixture], {
         encoding: "utf8",
         timeout: 5_000,
         env: {
           PATH: process.env.PATH,
           RUNNER_TEMP: root,
-          CURL_EXIT: String(scenario.curlExit),
-          CHECKSUM_EXIT: String(scenario.checksumExit),
-          INSTALL_EXIT: String(scenario.installExit),
+          CURL_EXIT: String(curlExit),
+          CHECKSUM_EXIT: String(checksumExit),
+          INSTALL_EXIT: String(installExit),
         },
-      },
-    );
-    expect(result.error).toBeUndefined();
-    expect(result.status, result.stderr).toBe(
-      scenario.curlExit || scenario.checksumExit || scenario.installExit,
-    );
-    expect(readFileSync(join(root, "calls"), "utf8")).toBe(scenario.calls);
-    const packagePath = readFileSync(join(root, "package-path"), "utf8");
-    expect(readNulSeparatedArgs(join(root, "curl-args"))).toEqual([
-      "-LsSf",
-      "--connect-timeout",
-      "10",
-      "--max-time",
-      "120",
-      "-o",
-      packagePath,
-      "https://github.com/NVIDIA/OpenShell/releases/download/v0.0.116/openshell_0.0.116-1_amd64.deb",
-    ]);
-    if (scenario.curlExit === 0) {
-      expect(readNulSeparatedArgs(join(root, "checksum-args"))).toEqual(["--check", "-"]);
-      expect(readFileSync(join(root, "checksum-input"), "utf8")).toBe(
-        `883b5223399dd30a2b33b7f76817fd81295d610ce6f2d04a0266fc7cfbf87575  ${packagePath}\n`,
-      );
-    }
-    if (scenario.curlExit === 0 && scenario.checksumExit === 0) {
-      expect(readNulSeparatedArgs(join(root, "install-args"))).toEqual([
-        "env",
-        "DEBIAN_FRONTEND=noninteractive",
-        "apt-get",
-        "install",
-        "-y",
+      });
+      expect(result.error).toBeUndefined();
+      expect(result.status, result.stderr).toBe(curlExit || checksumExit || installExit);
+      expect(read("calls")).toBe(calls);
+      const packagePath = read("package-path");
+      expect(args("curl")).toEqual([
+        ..."-LsSf --connect-timeout 10 --max-time 120 -o".split(" "),
         packagePath,
+        "https://github.com/NVIDIA/OpenShell/releases/download/v0.1.3/openshell_0.1.3-1_amd64.deb",
       ]);
-      expect(readFileSync(join(root, "installed-bytes"), "utf8")).toBe("fixture package");
-    }
-    expect(existsSync(packagePath)).toBe(false);
-  });
+      if (curlExit === 0) {
+        expect(args("checksum")).toEqual(["--check", "-"]);
+        expect(read("checksum-input")).toBe(
+          `64000b75aaf7d23763ad43aef6d9d6386325cba7bb636a64539a13ce98f88108  ${packagePath}\n`,
+        );
+      }
+      if (curlExit === 0 && checksumExit === 0) {
+        expect(args("install")).toEqual([
+          ..."env DEBIAN_FRONTEND=noninteractive apt-get install -y".split(" "),
+          packagePath,
+        ]);
+        expect(read("installed-bytes")).toBe("fixture package");
+      }
+      expect(existsSync(packagePath)).toBe(false);
+    },
+  );
 });

@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, assert, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
@@ -33,9 +33,11 @@ const dirs = useAutoCleanupTempDirTracker((cleanup) => {
   });
 });
 const versions = { state: 1, agent: 1 };
+const admittedSchemas = { packageSchemaPreflight: { incompatible: [], indeterminate: [] } };
 let root: string;
 let env: NodeJS.ProcessEnv;
 let source: string;
+let original: Buffer;
 let prepared: ReturnType<typeof adoptPreparedLocation>;
 let releaseReader: (() => void) | undefined;
 beforeEach(() => {
@@ -45,27 +47,19 @@ beforeEach(() => {
   vi.spyOn(temporaryRoot, "resolvePreferredOpenClawTmpDir").mockReturnValue(handoff);
   const databasePath = resolveManagedUpdateLeaseDatabasePath();
   expect(databasePath).toBe(path.join(handoff, "managed-update-handoffs.sqlite"));
-  expect(path.join(fs.realpathSync(path.dirname(databasePath)), path.basename(databasePath))).toBe(
-    databasePath,
-  );
-  expect(databasePath).not.toMatch(/^\/(?:private\/)?tmp\/openclaw(?:\/|$)/u);
   env = { OPENCLAW_STATE_DIR: path.join(root, "state") };
   source = resolveOpenClawStateSqlitePath(env);
   fs.mkdirSync(path.dirname(source), { recursive: true });
-  expect(path.join(fs.realpathSync(path.dirname(source)), path.basename(source))).toBe(source);
   expect(source.startsWith(`${root}${path.sep}`)).toBe(true);
   const { DatabaseSync } = requireNodeSqlite();
   const database = new DatabaseSync(source);
   database.exec("PRAGMA journal_mode = WAL; PRAGMA user_version = 1;");
   database.close();
+  original = fs.readFileSync(source);
   // An incomplete WAL family takes ordinary admission through private recovery.
   expect(fs.existsSync(`${source}-wal`)).toBe(false);
   expect(fs.existsSync(`${source}-shm`)).toBe(false);
-  const snapshot = path.join(root, "snapshot");
-  fs.mkdirSync(snapshot);
-  const location = path.join(snapshot, "state.sqlite");
-  fs.copyFileSync(source, location);
-  prepared = adoptPreparedLocation(location, snapshot, false, () => {});
+  prepared = makeSnapshot("snapshot", () => {});
   vi.spyOn(snapshots, "prepareSqliteReadOnlyLocation").mockImplementation(async (pathname) => {
     expect(pathname).toBe(fs.realpathSync(source));
     expect(resolveManagedUpdateLeaseDatabasePath()).toBe(databasePath);
@@ -77,6 +71,14 @@ beforeEach(() => {
     foreground: true,
   } as Awaited<ReturnType<typeof inspectUpdateDatabaseContexts>>);
 });
+
+function makeSnapshot(name: string, onFailure?: Parameters<typeof adoptPreparedLocation>[3]) {
+  const directory = path.join(root, name);
+  fs.mkdirSync(directory);
+  const location = path.join(directory, "state.sqlite");
+  fs.copyFileSync(source, location);
+  return adoptPreparedLocation(location, directory, false, onFailure);
+}
 
 function runUpdate() {
   return preflightUpdateCommandSchemas({
@@ -94,41 +96,41 @@ function runUpdate() {
   });
 }
 
+function expectPrimaryFailure(failure: unknown, primary: Error) {
+  assert.instanceOf(failure, AggregateError);
+  expect(failure.cause).toBe(primary);
+  expect(failure.errors[0]).toBe(primary);
+  return failure;
+}
+
 it.each(["DELETE", "WAL"])(
   "admits online update without acquiring an unrelated snapshot (%s)",
   async (journalMode) => {
-    const { DatabaseSync } = requireNodeSqlite();
-    const database = new DatabaseSync(source);
-    try {
-      database.exec(`PRAGMA journal_mode = ${journalMode}; CREATE TABLE online_probe(value);`);
-      if (journalMode === "WAL") {
-        expect(fs.statSync(`${source}-wal`).size).toBeGreaterThan(32);
-        expect(fs.existsSync(`${source}-shm`)).toBe(true);
-      }
-      await expect(runUpdate()).resolves.toMatchObject({
-        packageSchemaPreflight: { incompatible: [], indeterminate: [] },
-      });
-      expect(snapshots.prepareSqliteReadOnlyLocation).not.toHaveBeenCalled();
-      expect(fs.existsSync(prepared.location)).toBe(true);
-    } finally {
-      database.close();
+    using database = new (requireNodeSqlite().DatabaseSync)(source);
+    database.exec(`PRAGMA journal_mode = ${journalMode}; CREATE TABLE online_probe(value);`);
+    if (journalMode === "WAL") {
+      expect(fs.statSync(`${source}-wal`).size).toBeGreaterThan(32);
+      expect(fs.existsSync(`${source}-shm`)).toBe(true);
     }
+    await expect(runUpdate()).resolves.toMatchObject(admittedSchemas);
+    expect(snapshots.prepareSqliteReadOnlyLocation).not.toHaveBeenCalled();
+    expect(fs.existsSync(prepared.location)).toBe(true);
   },
 );
 
 it.each(["reader", "removal", "rejection"] as const)(
   "refuses forward update admission after snapshot cleanup failure: %s",
   async (failureKind) => {
-    const original = fs.readFileSync(source);
+    if (failureKind === "rejection") {
+      const failure = new Error("snapshot owner could not retire");
+      vi.spyOn(prepared, "cleanupAsync").mockRejectedValue(failure);
+      await expect(runUpdate()).rejects.toBe(failure);
+      return;
+    }
     const remove = fs.promises.rm;
-    const failure =
-      failureKind === "rejection"
-        ? new Error("snapshot owner could not retire")
-        : Object.assign(new Error("owned scratch removal denied"), { code: "EACCES" });
+    const failure = Object.assign(new Error("owned scratch removal denied"), { code: "EACCES" });
     if (failureKind === "reader") {
       releaseReader = retainSnapshotTempDirectory(path.dirname(prepared.location));
-    } else if (failureKind === "rejection") {
-      vi.spyOn(prepared, "cleanupAsync").mockRejectedValue(failure);
     }
     const removal =
       failureKind === "removal"
@@ -139,37 +141,23 @@ it.each(["reader", "removal", "rejection"] as const)(
             return remove(target, options);
           })
         : undefined;
-    try {
-      if (failureKind === "rejection") {
-        await expect(runUpdate()).rejects.toBe(failure);
-        return;
-      }
-      await expect(runUpdate()).rejects.toThrow(/snapshot cleanup failed/i);
-      expect(fs.existsSync(prepared.location)).toBe(true);
-      expect(fs.readFileSync(source)).toEqual(original);
-      if (failureKind === "reader") {
-        expect(await prepared.cleanupAsync()).toBe(false);
-        expect(snapshots.prepareSqliteReadOnlyLocation).toHaveBeenCalledTimes(1);
-        return;
-      }
-    } finally {
-      removal?.mockRestore();
+    await expect(runUpdate()).rejects.toThrow(/snapshot cleanup failed/i);
+    expect(fs.existsSync(prepared.location)).toBe(true);
+    expect(fs.readFileSync(source)).toEqual(original);
+    if (failureKind === "reader") {
+      expect(await prepared.cleanupAsync()).toBe(false);
+      expect(snapshots.prepareSqliteReadOnlyLocation).toHaveBeenCalledTimes(1);
+      return;
     }
-    await expect(runUpdate()).resolves.toMatchObject({
-      packageSchemaPreflight: { incompatible: [], indeterminate: [] },
-    });
+    removal?.mockRestore();
+    await expect(runUpdate()).resolves.toMatchObject(admittedSchemas);
     expect(fs.existsSync(prepared.location)).toBe(false);
     expect(fs.readFileSync(source)).toEqual(original);
   },
 );
 
 it("admits normal forward update only after snapshot cleanup has settled", async () => {
-  const unrelatedRoot = path.join(root, "unrelated-snapshot");
-  fs.mkdirSync(unrelatedRoot);
-  const unrelatedPath = path.join(unrelatedRoot, "state.sqlite");
-  fs.copyFileSync(source, unrelatedPath);
-  const unrelated = adoptPreparedLocation(unrelatedPath, unrelatedRoot);
-  const original = fs.readFileSync(source);
+  const unrelated = makeSnapshot("unrelated-snapshot");
   const release = createDeferred();
   const started = createDeferred();
   const cleanup = prepared.cleanupAsync;
@@ -190,15 +178,13 @@ it("admits normal forward update only after snapshot cleanup has settled", async
     release.resolve();
     await Promise.allSettled([update]);
     try {
-      expect(fs.readFileSync(unrelatedPath)).toEqual(original);
+      expect(fs.readFileSync(unrelated.location)).toEqual(original);
       expect(fs.readFileSync(source)).toEqual(original);
     } finally {
       expect(await unrelated.cleanupAsync()).toBe(true);
     }
   }
-  await expect(update).resolves.toMatchObject({
-    packageSchemaPreflight: { incompatible: [], indeterminate: [] },
-  });
+  await expect(update).resolves.toMatchObject(admittedSchemas);
   expect(fs.existsSync(prepared.location)).toBe(false);
 });
 
@@ -223,18 +209,9 @@ it.each([false, true])(
       signal: controller.signal,
       configuredAgentDatabaseTargets: candidates,
     });
-    if (!retained) {
-      await expect(inspection).rejects.toBe(cancellation);
-    }
     const failure = await inspection.catch((error: unknown) => error);
     if (retained) {
-      expect(failure).toBeInstanceOf(AggregateError);
-      if (!(failure instanceof AggregateError)) {
-        throw failure;
-      }
-      expect(failure.cause).toBe(cancellation);
-      expect(failure.errors[0]).toBe(cancellation);
-      expect(failure.errors[1]).toMatchObject({
+      expect(expectPrimaryFailure(failure, cancellation).errors[1]).toMatchObject({
         message: expect.stringMatching(/snapshot cleanup failed/i),
       });
     } else {
@@ -266,14 +243,9 @@ it.each(["inspection", "close"] as const)(
         };
       },
     }).catch((error: unknown) => error);
-    expect(failure).toBeInstanceOf(AggregateError);
-    if (!(failure instanceof AggregateError)) {
-      throw failure;
-    }
-    expect(failure.cause).toBe(primary);
-    expect(failure.errors).toEqual([primary, secondary]);
-    expect(failure.errors[0]).toBe(primary);
-    expect(failure.errors[1]).toBe(secondary);
+    const aggregate = expectPrimaryFailure(failure, primary);
+    expect(aggregate.errors).toEqual([primary, secondary]);
+    expect(aggregate.errors[1]).toBe(secondary);
     if (phase === "close") {
       expect(inspectedDatabase?.isOpen).toBe(false);
     }

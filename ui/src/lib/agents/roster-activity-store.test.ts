@@ -34,7 +34,7 @@ function createStore(
       return subscribe();
     }
     if (method === "sessions.groups.list") {
-      return { names: [], sectionOrder: [] };
+      return { groups: [], sectionOrder: [] };
     }
     if (method === "sessions.list") {
       return (params as { archived?: string })?.archived === "all"
@@ -140,7 +140,7 @@ describe("roster activity lifecycle", () => {
         return { subscribed: true };
       }
       if (method === "sessions.groups.list") {
-        return { names: [], sectionOrder: [] };
+        return { groups: [], sectionOrder: [] };
       }
       if (method === "sessions.list") {
         return { ...result(""), sessions: [row] };

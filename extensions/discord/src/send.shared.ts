@@ -16,9 +16,9 @@ import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtim
 import { isDiscordThreadChannelType } from "./channel-type.js";
 import { chunkDiscordTextWithMode } from "./chunk.js";
 import { createDiscordClient, resolveDiscordRest, type DiscordClientOpts } from "./client.js";
-import { createChannelMessage } from "./internal/api.messages.js";
-import { createUserDmChannel, getChannel, RequestClient } from "./internal/discord.js";
-import { parseAndResolveRecipient, type DiscordRecipient } from "./recipient-resolution.js";
+import { createChannelMessage, getChannel } from "./internal/api.messages.js";
+import { createUserDmChannel } from "./internal/api.users.js";
+import { DiscordError, RequestClient } from "./internal/rest.js";
 import { resolveDiscordReplyMessageId, type DiscordReplyReference } from "./reply-reference.js";
 import type { DiscordRetryRunner } from "./retry.js";
 import {
@@ -31,6 +31,8 @@ import {
 } from "./send.message-request.js";
 import { fetchChannelPermissionsDiscord } from "./send.permissions.js";
 import { DiscordSendError, type DiscordOutboundMediaOpts } from "./send.types.js";
+import type { DiscordTarget } from "./target-parsing.js";
+import { parseAndResolveDiscordTarget } from "./target-resolver.js";
 
 const DISCORD_TEXT_LIMIT = 2000;
 const DISCORD_MAX_STICKERS = 3;
@@ -116,43 +118,10 @@ function normalizeDiscordPollInput(input: PollInput): RESTAPIPoll {
   };
 }
 
-function readDiscordErrorNumber(value: unknown, finiteNumbers = false) {
-  if (typeof value === "number") {
-    return !finiteNumbers || Number.isFinite(value) ? value : undefined;
-  }
-  return typeof value === "string" && /^\d+$/.test(value) ? Number(value) : undefined;
-}
-
-function getDiscordErrorCode(err: unknown) {
-  if (!err || typeof err !== "object") {
-    return undefined;
-  }
-  const candidate =
-    "code" in err && err.code !== undefined
-      ? err.code
-      : "rawError" in err && err.rawError && typeof err.rawError === "object"
-        ? (err.rawError as { code?: unknown }).code
-        : undefined;
-  return readDiscordErrorNumber(candidate);
-}
-
-function getDiscordErrorStatus(err: unknown) {
-  if (!err || typeof err !== "object") {
-    return undefined;
-  }
-  const candidate =
-    "status" in err && err.status !== undefined
-      ? err.status
-      : "statusCode" in err && err.statusCode !== undefined
-        ? err.statusCode
-        : undefined;
-  return readDiscordErrorNumber(candidate, true);
-}
-
 function isDiscordUploadTooLargeError(err: unknown) {
   return (
-    getDiscordErrorCode(err) === DISCORD_UPLOAD_TOO_LARGE ||
-    getDiscordErrorStatus(err) === DISCORD_UPLOAD_TOO_LARGE_STATUS
+    err instanceof DiscordError &&
+    (err.discordCode === DISCORD_UPLOAD_TOO_LARGE || err.status === DISCORD_UPLOAD_TOO_LARGE_STATUS)
   );
 }
 
@@ -172,14 +141,14 @@ async function buildDiscordSendError(
     hasMedia: boolean;
   },
 ) {
-  if (err instanceof DiscordSendError) {
+  if (!(err instanceof DiscordError)) {
     return err;
   }
-  const code = getDiscordErrorCode(err);
+  const code = err.discordCode;
   if (code === DISCORD_CANNOT_DM) {
     return new DiscordSendError(
       `discord dm failed: user blocks dms or privacy settings disallow it (code=${code})`,
-      { kind: "dm-blocked", discordCode: code, status: getDiscordErrorStatus(err) },
+      { kind: "dm-blocked", discordCode: code, status: err.status },
     );
   }
   if (code !== DISCORD_MISSING_PERMISSIONS) {
@@ -202,10 +171,8 @@ async function buildDiscordSendError(
     /* ignore permission probe errors */
   }
 
-  const status = getDiscordErrorStatus(err);
-  const apiDetails = [`code=${code}`, status != null ? `status=${status}` : undefined]
-    .filter(Boolean)
-    .join(" ");
+  const status = err.status;
+  const apiDetails = `code=${code} status=${status}`;
   const probeSummary = resolveRequiredDiscordSendPermissions(probedChannelType, ctx.hasMedia).join(
     "/",
   );
@@ -226,7 +193,7 @@ async function buildDiscordSendError(
 
 async function resolveChannelId(
   rest: RequestClient,
-  recipient: DiscordRecipient,
+  recipient: Pick<DiscordTarget, "kind" | "id">,
   request: DiscordRequest,
 ): Promise<{ channelId: string; dm?: boolean }> {
   if (recipient.kind === "channel") {
@@ -244,9 +211,11 @@ async function resolveDiscordTargetChannelId(
   opts: DiscordClientOpts & { cfg: OpenClawConfig },
 ): Promise<{ channelId: string; dm?: boolean }> {
   const cfg = requireRuntimeConfig(opts.cfg, "Discord target channel resolution");
-  const recipient = await parseAndResolveRecipient(raw, cfg, opts.accountId, {
-    defaultKind: "channel",
-  });
+  const recipient = await parseAndResolveDiscordTarget(
+    raw,
+    { cfg, accountId: opts.accountId },
+    { defaultKind: "channel" },
+  );
   const { rest, request } = createDiscordClient(opts);
   return await resolveChannelId(rest, recipient, request);
 }

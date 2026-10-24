@@ -113,12 +113,13 @@ export function executePluginStateOperation(
       if (keys.length > 10_000) {
         throw invalidInput("Plugin state operations accept at most 10000 lookup keys.");
       }
-      const missing = new Map<string, { index: number; key: string }>();
+      const missing = new Map<string, ReturnType<typeof requireScope> & { key: string }>();
       for (const { store: index, key: rawKey } of keys) {
-        const { options, view } = requireScope(index);
+        const scope = requireScope(index);
+        const { options, view } = scope;
         const key = toUSVString(validateKey(rawKey, "lookup"));
         if (!view.scanned && !view.entries.has(key)) {
-          missing.set(JSON.stringify([options.namespace, key]), { index, key });
+          missing.set(JSON.stringify([options.namespace, key]), { ...scope, key });
         }
       }
       const requested = [...missing.values()];
@@ -127,20 +128,14 @@ export function executePluginStateOperation(
           (database) =>
             selectPluginStateBatchRows(
               database,
-              requested.map(({ index, key }) => ({
-                ...requireScope(index).options,
-                key,
-              })),
+              requested.map(({ options, key }) => ({ ...options, key })),
               Date.now(),
             ),
           () => [],
         );
-        for (const [position, { index, key }] of requested.entries()) {
+        for (const [position, { view, key }] of requested.entries()) {
           const row = rows[position];
-          requireScope(index).view.entries.set(
-            key,
-            row ? rowToEntry(row, "lookup", store.path) : undefined,
-          );
+          view.entries.set(key, row ? rowToEntry(row, "lookup", store.path) : undefined);
         }
       }
       // SAFETY: Positional results retain the plugin's selected namespace value types.

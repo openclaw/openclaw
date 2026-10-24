@@ -41,15 +41,6 @@ function readOpenedTab(result: unknown): {
   return { targetId, aliases: [...new Set(aliases)], profile, ownership };
 }
 
-export function stripBrowserOpenInternalMetadata(value: unknown): unknown {
-  const record = asNullableRecord(value);
-  if (!record) {
-    return value;
-  }
-  const { ownership: _ownership, resolvedProfile: _resolvedProfile, ...agentVisible } = record;
-  return agentVisible;
-}
-
 export function createBrowserToolSessionTabs(params: {
   agentId?: string;
   sessionKey?: string;

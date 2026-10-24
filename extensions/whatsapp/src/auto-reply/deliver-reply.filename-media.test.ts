@@ -1,9 +1,9 @@
+import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
 // WhatsApp tests prove filename-derived media facts reach native delivery.
 import { describe, expect, it, vi } from "vitest";
 import { createAcceptedWhatsAppSendResult } from "../inbound/send-result.test-helper.js";
 import { createTestWebInboundMessage } from "../inbound/test-message.test-helper.js";
 import type { AdmittedWebInboundMessage } from "../inbound/types.js";
-import { loadWebMedia } from "../media.js";
 import { createWhatsAppReplyTransportContext, deliverWebReply } from "./deliver-reply.js";
 
 const hoisted = vi.hoisted(() => ({
@@ -17,7 +17,10 @@ vi.mock("openclaw/plugin-sdk/media-runtime", async () => {
   return { ...actual, transcodeAudioBufferToOpus: hoisted.transcodeAudioBufferToOpus };
 });
 
-vi.mock("../media.js", () => ({ loadWebMedia: vi.fn() }));
+vi.mock("openclaw/plugin-sdk/web-media", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/web-media")>()),
+  loadWebMedia: vi.fn(),
+}));
 
 describe("WhatsApp filename-only media delivery", () => {
   it.each([
@@ -75,7 +78,6 @@ describe("WhatsApp filename-only media delivery", () => {
         maxMediaBytes: 1024 * 1024,
         textLimit: 200,
         replyLogger: { info: vi.fn(), warn: vi.fn() },
-        skipLog: true,
       });
 
       expect(sendMedia).toHaveBeenCalledOnce();

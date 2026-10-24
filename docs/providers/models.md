@@ -43,6 +43,7 @@ Pick a provider, authenticate, then set the default model as `provider/model`.
 - [OpenRouter](/providers/openrouter)
 - [Qianfan](/providers/qianfan)
 - [Qwen](/providers/qwen)
+- [Requesty](/providers/requesty)
 - [Runway](/providers/runway)
 - [StepFun](/providers/stepfun)
 - [Synthetic](/providers/synthetic)

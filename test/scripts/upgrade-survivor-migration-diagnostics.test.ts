@@ -586,6 +586,12 @@ it.each(invalidIntegrityCases)(
 
 it("publishes bounded and redacted Gateway, Cron, native recovery, and update failures", () => {
   const f = fixture();
+  for (const name of ["doctor-lint.json", "doctor-lint.err"]) {
+    fs.writeFileSync(
+      path.join(f.artifacts, name),
+      `Doctor database check failed: token=${secret}\n`,
+    );
+  }
   write(path.join(f.artifacts, "update-noop.json"), {
     status: "error",
     reason: "second update failed",
@@ -631,6 +637,9 @@ it("publishes bounded and redacted Gateway, Cron, native recovery, and update fa
       "\n",
   );
   const report = capture(f);
+  for (const name of ["doctor-lint.json", "doctor-lint.err"]) {
+    expect(report.logs[name]).toContain("Doctor database check failed");
+  }
   for (const name of nativeRecoveryLogs) {
     expect(report.logs[name]).toContain("native-recovery-probe");
     expect(JSON.parse(report.logs[name])).toMatchObject({

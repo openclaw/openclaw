@@ -28,6 +28,18 @@ import { invokeNodeClaudeCliRun } from "./node-agent-cli-runtime.js";
 import { NodeRegistry } from "./node-registry.js";
 import { makeClient } from "./node-registry.test-helpers.js";
 
+function invoke(overrides: Partial<Parameters<typeof invokeNodeClaudeCliRun>[0]> = {}) {
+  return invokeNodeClaudeCliRun({
+    nodeId: "node-1",
+    argv: ["-p"],
+    stdin: "hello",
+    timeoutMs: 10_000,
+    idleTimeoutMs: 1_000,
+    onProgress: () => {},
+    ...overrides,
+  });
+}
+
 describe("invokeNodeClaudeCliRun", () => {
   beforeEach(() => {
     mocks.get.mockReset();
@@ -46,16 +58,7 @@ describe("invokeNodeClaudeCliRun", () => {
   it("fails closed when Gateway node command policy denies the agent run", async () => {
     mocks.isNodeCommandAllowed.mockReturnValue({ ok: false, reason: "denyCommands" });
 
-    await expect(
-      invokeNodeClaudeCliRun({
-        nodeId: "node-1",
-        argv: ["-p"],
-        stdin: "hello",
-        timeoutMs: 10_000,
-        idleTimeoutMs: 1_000,
-        onProgress: () => {},
-      }),
-    ).resolves.toEqual({
+    await expect(invoke()).resolves.toEqual({
       ok: false,
       error: {
         code: "PERMISSION_DENIED",
@@ -70,30 +73,21 @@ describe("invokeNodeClaudeCliRun", () => {
     mocks.isNodeCommandAllowed.mockReturnValue({ ok: true });
     mocks.invoke.mockResolvedValue({ ok: true });
 
-    await expect(
-      invokeNodeClaudeCliRun({
-        nodeId: "node-1",
-        argv: ["-p"],
-        stdin: "hello",
-        env: { CLAUDE_CODE_OAUTH_TOKEN: "selected-node-token" },
-        clearEnv: ["ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"],
-        timeoutMs: 10_000,
-        idleTimeoutMs: 1_000,
-        onProgress: () => {},
-      }),
-    ).resolves.toEqual({ ok: true });
+    const credentials = {
+      env: { CLAUDE_CODE_OAUTH_TOKEN: "selected-node-token" },
+      clearEnv: ["ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"],
+    };
+    await expect(invoke(credentials)).resolves.toEqual({ ok: true });
     expect(mocks.resolveNodeCommandAllowlist).toHaveBeenCalledOnce();
-    expect(mocks.invoke).toHaveBeenCalledOnce();
-    expect(mocks.invoke).toHaveBeenCalledWith(
-      expect.objectContaining({
-        expectedConnId: "conn-1",
-        expectedPairingGeneration: "generation-1",
-        params: expect.objectContaining({
-          env: { CLAUDE_CODE_OAUTH_TOKEN: "selected-node-token" },
-          clearEnv: ["ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"],
-        }),
-      }),
-    );
+    expect(mocks.invoke.mock.calls).toMatchObject([
+      [
+        {
+          expectedConnId: "conn-1",
+          expectedPairingGeneration: "generation-1",
+          params: credentials,
+        },
+      ],
+    ]);
   });
 
   it("withholds private history revoked while node pairing is pending", async () => {
@@ -104,6 +98,7 @@ describe("invokeNodeClaudeCliRun", () => {
       return pairing.promise;
     });
     const registry = new NodeRegistry({ resolveCurrentPairingState });
+    const pairingIdentity = { identity: "identity-a", generation: "generation-1" };
     const transport = { send: vi.fn(() => false), sendRaw: vi.fn(() => false) };
     registry.registerTransport(
       makeClient("conn-1", "node-1", [], { commands: ["agent.cli.claude.run.v1"] }),
@@ -122,14 +117,9 @@ describe("invokeNodeClaudeCliRun", () => {
         throw revoked;
       }
     });
-    const invocation = invokeNodeClaudeCliRun({
-      nodeId: "node-1",
-      argv: ["-p"],
+    const invocation = invoke({
       stdin: "private conversation history",
       assertReadable,
-      timeoutMs: 10_000,
-      idleTimeoutMs: 1_000,
-      onProgress: () => {},
     });
     try {
       await Promise.race([pairingEntered.promise, invocation]);
@@ -137,13 +127,13 @@ describe("invokeNodeClaudeCliRun", () => {
       expect(assertReadable).not.toHaveBeenCalled();
       expect(transport.send).not.toHaveBeenCalled();
       readable = false;
-      pairing.resolve({ identity: "identity-a", generation: "generation-1" });
+      pairing.resolve(pairingIdentity);
       await expect(invocation).rejects.toBe(revoked);
       expect(assertReadable).toHaveBeenCalledOnce();
       expect(transport.send).not.toHaveBeenCalled();
       expect(transport.sendRaw).not.toHaveBeenCalled();
     } finally {
-      pairing.resolve({ identity: "identity-a", generation: "generation-1" });
+      pairing.resolve(pairingIdentity);
       registry.unregister("conn-1");
     }
   });

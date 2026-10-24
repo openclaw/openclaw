@@ -16,6 +16,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CODEX_INFERENCE_GENERATION_KEY } from "./inference-context.js";
 import { createCodexInferenceModelBinding } from "./inference-dispatch.js";
 import { createCodexInferenceProxy, type CodexInferenceProxy } from "./inference-proxy.js";
+import { MAX_BODY_BYTES } from "./inference-upload.js";
 import { codexNativeSubagentMonitorRuntime } from "./native-subagent-monitor.js";
 import {
   createClient,
@@ -174,7 +175,7 @@ describe("inference HTTP transport ownership", () => {
       await readBody(response);
       await upload.closed;
     };
-    const parent = register("parent");
+    const parent = await register("parent");
     const input = [
       { role: "developer", content: "exact environment λ\n".repeat(16000) },
       { role: "user", content: "parent task" },
@@ -187,7 +188,7 @@ describe("inference HTTP transport ownership", () => {
       input,
     });
     parent.release();
-    const fork = proxy.context.fork({
+    const fork = await proxy.context.fork({
       sourceThreadId: "parent",
       threadId: "fork",
       signal: new AbortController().signal,
@@ -234,7 +235,7 @@ describe("inference HTTP transport ownership", () => {
           resolveModelThreadId: codexNativeSubagentMonitorRuntime.resolveModelThreadId,
         }),
       });
-      const parent = proxy.context.register({
+      const parent = await proxy.context.register({
         threadId: "parent-thread",
         text: "private parent prefix",
         signal: new AbortController().signal,
@@ -243,7 +244,7 @@ describe("inference HTTP transport ownership", () => {
       if (earlyCleanup) {
         parent.release();
       }
-      const fork = proxy.context.fork({
+      const fork = await proxy.context.fork({
         sourceThreadId: "parent-thread",
         threadId: "fork-thread",
         signal: new AbortController().signal,
@@ -317,7 +318,7 @@ describe("inference HTTP transport ownership", () => {
   );
 
   it("preserves guarded TLS, length, auth and SSE when rewriting zstd requests", async () => {
-    const registration = proxy.context.register({
+    const registration = await proxy.context.register({
       threadId: "root",
       text: "synthetic root context",
       signal: new AbortController().signal,
@@ -367,7 +368,7 @@ describe("inference HTTP transport ownership", () => {
   });
 
   it("preserves unchanged compressed native request bytes", async () => {
-    const registration = proxy.context.register({
+    const registration = await proxy.context.register({
       threadId: "root",
       text: "",
       signal: new AbortController().signal,
@@ -430,6 +431,42 @@ describe("inference HTTP transport ownership", () => {
     expect((await received.promise).toString()).toBe(JSON.stringify(JSON.parse(source.toString())));
     await Promise.all([upload.closed, waitForUpstreamClose()]);
   });
+
+  it.each([
+    // A small zstd frame can decode past the limit; a fresh connection cannot make it fit.
+    [
+      "decodes",
+      () => zstdCompressSync(Buffer.alloc(MAX_BODY_BYTES + 1, 32)),
+      { "content-encoding": "zstd" },
+    ],
+    // An uncompressed upload overflows mid-stream; the refusal must arrive instead of a reset.
+    ["uploads", () => Buffer.alloc(MAX_BODY_BYTES + 1, 32), {}],
+  ] as const)(
+    "rejects a request that %s past the body limit as a terminal size error",
+    async (_kind, body, headers) => {
+      let forwarded = false;
+      handle = (_req, res) => {
+        forwarded = true;
+        res.end("synthetic completion");
+      };
+      const upload = post(body(), headers);
+      const response = await upload.response;
+      // Native Codex retries 5xx and unmapped statuses; a 400 surfaces as a terminal invalid request.
+      expect(response.statusCode).toBe(400);
+      expect(response.headers["content-type"]).toBe("application/json");
+      expect(JSON.parse((await readBody(response)).toString())).toEqual({
+        type: "error",
+        status: 400,
+        error: {
+          type: "invalid_request_error",
+          code: "request_too_large",
+          message: expect.stringContaining("Request exceeds the maximum size"),
+        },
+      });
+      expect(forwarded).toBe(false);
+      await upload.closed;
+    },
+  );
 
   it("runs a 17th guarded HTTP inference before the first 16 responses complete", async () => {
     const waiting: ServerResponse[] = [];

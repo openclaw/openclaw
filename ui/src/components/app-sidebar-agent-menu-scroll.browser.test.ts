@@ -36,20 +36,47 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar agent menu scrolling
       const list = row.parentElement!.getBoundingClientRect();
       return bounds.top >= list.top - 1 && bounds.bottom <= list.bottom + 1;
     };
+    const menuShown = () =>
+      new Promise<void>((resolve) => {
+        const onShown = (event: Event) => {
+          if (event.target !== sidebar.querySelector(".sidebar-agent-menu")) {
+            return;
+          }
+          sidebar.removeEventListener("overlay-after-show", onShown, true);
+          resolve();
+        };
+        sidebar.addEventListener("overlay-after-show", onShown, true);
+        onTestFinished(() => sidebar.removeEventListener("overlay-after-show", onShown, true));
+      });
 
-    trigger.click();
+    const clickedMenuShown = menuShown();
+    await page.elementLocator(trigger).click();
     await expect.poll(() => activeRow()?.dataset.value).toBe("agent:agent-39");
     await expect.poll(() => document.activeElement).toBe(activeRow());
+    // Focus settles before the opening animation and selected-row reveal.
+    await clickedMenuShown;
     await expect.poll(selectedAgentIsVisible).toBe(true);
+    expect(sidebar.querySelector(".sidebar-agent-menu [role=searchbox]")).toBeNull();
+    expect(sidebar.querySelectorAll('.sidebar-agent-menu [data-value^="agent:"]')).toHaveLength(40);
+    expect(sidebar.querySelector('.sidebar-agent-menu [data-value="scope:all"]')).not.toBeNull();
     await userEvent.keyboard("{Escape}");
     await expect.poll(() => sidebar.querySelector(".sidebar-agent-menu")).toBeNull();
 
     const input = document.createElement("input");
     document.body.append(input);
     input.focus();
+    const hoveredMenuShown = menuShown();
     await page.elementLocator(trigger).hover();
     await expect.poll(() => activeRow()?.dataset.value).toBe("agent:agent-39");
+    await hoveredMenuShown;
     await expect.poll(selectedAgentIsVisible).toBe(true);
     expect(document.activeElement).toBe(input);
+
+    trigger.focus();
+    await userEvent.keyboard("{Enter}");
+    await expect.poll(() => document.activeElement).toBe(activeRow());
+    await userEvent.keyboard("{Escape}");
+    await expect.poll(() => sidebar.querySelector(".sidebar-agent-menu")).toBeNull();
+    expect(document.activeElement).toBe(trigger);
   });
 });

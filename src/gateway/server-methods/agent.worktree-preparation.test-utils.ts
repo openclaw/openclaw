@@ -2,6 +2,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { withinTest } from "../../../test/helpers/promise.js";
 import type { InternalSessionEntry } from "../../config/sessions.js";
+import { rpcSourceTesting } from "../../sessions/session-lifecycle-admission.test-support.js";
 import { AsyncWorkScope } from "../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import {
@@ -69,7 +70,7 @@ describe("gateway agent worktree preparation", () => {
         expect(mockCallArg(respond, 0, 1)).toMatchObject({ runId, sessionKey, status: "accepted" });
         await vi.advanceTimersByTimeAsync(10);
         await withinTest(preparing.promise, signal);
-        expect(context.chatAbortControllers.has(runId)).toBe(true);
+        expect(rpcSourceTesting.has(runId)).toBe(true);
         expect(context.dedupe.get(`agent:${runId}`)?.payload).toMatchObject({
           runId,
           sessionKey,
@@ -86,7 +87,7 @@ describe("gateway agent worktree preparation", () => {
         await vi.advanceTimersByTimeAsync(10);
         await withinTest(execution.drain(), signal);
       }
-      expect(context.chatAbortControllers.has(runId)).toBe(false);
+      expect(rpcSourceTesting.has(runId)).toBe(false);
       expect(context.dedupe.get(`agent:${runId}`)?.payload).toMatchObject({
         runId,
         status: outcome,

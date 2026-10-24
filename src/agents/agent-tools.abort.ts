@@ -1,7 +1,6 @@
 import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { createAbortError } from "../infra/abort-signal.js";
 /**
- * Abort-signal wrapping for agent tools.
  * Combines per-call cancellation with run-level aborts while preserving
  * identity-backed metadata on wrapped tools.
  */
@@ -72,11 +71,11 @@ export function raceWithAbortSignal<T>(
 function isTurnYieldCall(tool: AnyAgentTool, args: unknown): boolean {
   return (
     tool.name === "sessions_yield" ||
-    (tool.name === "plugins" && asOptionalObjectRecord(args)?.action === "reloadAndResume")
+    (tool.name === "plugins" && asOptionalObjectRecord(args)?.action === "reloadAndResume") ||
+    (tool.name === "github_publish" && asOptionalObjectRecord(args)?.action === "prepare_pr")
   );
 }
 
-/** Wrap a tool so every execute call observes the supplied run abort signal. */
 export function wrapToolWithAbortSignal(
   tool: AnyAgentTool,
   abortSignal?: AbortSignal,

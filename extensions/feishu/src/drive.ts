@@ -5,6 +5,7 @@ import {
 } from "openclaw/plugin-sdk/error-runtime";
 import { readPositiveIntegerParam } from "openclaw/plugin-sdk/param-readers";
 import type { OpenClawPluginToolContext } from "openclaw/plugin-sdk/plugin-entry";
+import { Type } from "typebox";
 import type { OpenClawPluginApi } from "../runtime-api.js";
 import { assertFeishuApiSuccess } from "./api-response.js";
 import { cleanupAmbientCommentTypingReaction } from "./comment-reaction.js";
@@ -18,11 +19,110 @@ import {
   type FeishuDriveCommentReply,
 } from "./comment-shared.js";
 import { parseFeishuCommentTarget, type CommentFileType } from "./comment-target.js";
-import { FeishuDriveSchema, type FeishuDriveParams } from "./drive-schema.js";
 import { withFeishuMessageDispatch } from "./send-context.js";
-import { createFeishuToolClient } from "./tool-account.js";
 import { registerFeishuTool } from "./tool-registration.js";
 import { feishuExternalToolResult as jsonResult, unknownToolActionResult } from "./tool-result.js";
+
+const FileType = Type.Union([
+  Type.Literal("doc"),
+  Type.Literal("docx"),
+  Type.Literal("sheet"),
+  Type.Literal("bitable"),
+  Type.Literal("folder"),
+  Type.Literal("file"),
+  Type.Literal("mindnote"),
+  Type.Literal("shortcut"),
+]);
+
+const DriveCommentFileType = Type.Union([
+  Type.Literal("doc"),
+  Type.Literal("docx"),
+  Type.Literal("sheet"),
+  Type.Literal("file"),
+  Type.Literal("slides"),
+]);
+
+const FeishuDriveSchema = Type.Union([
+  Type.Object({
+    action: Type.Literal("list"),
+    folder_token: Type.Optional(
+      Type.String({ description: "Folder token (optional, omit for root directory)" }),
+    ),
+    page_size: Type.Optional(
+      Type.Integer({
+        minimum: 1,
+        maximum: 200,
+        description: "Items per folder page (1-200; requires folder_token)",
+      }),
+    ),
+    page_token: Type.Optional(
+      Type.String({
+        description: "Continuation token from a prior list result (requires the same folder_token)",
+      }),
+    ),
+  }),
+  Type.Object({
+    action: Type.Literal("info"),
+    file_token: Type.String({ description: "File or folder token" }),
+    type: FileType,
+  }),
+  Type.Object({
+    action: Type.Literal("create_folder"),
+    name: Type.String({ description: "Folder name" }),
+    folder_token: Type.Optional(
+      Type.String({ description: "Parent folder token (optional, omit for root)" }),
+    ),
+  }),
+  Type.Object({
+    action: Type.Literal("move"),
+    file_token: Type.String({ description: "File token to move" }),
+    type: FileType,
+    folder_token: Type.String({ description: "Target folder token" }),
+  }),
+  Type.Object({
+    action: Type.Literal("delete"),
+    file_token: Type.String({ description: "File token to delete" }),
+    type: FileType,
+  }),
+  Type.Object({
+    action: Type.Literal("list_comments"),
+    file_token: Type.String({ description: "Document token" }),
+    file_type: Type.Optional(DriveCommentFileType),
+    page_size: Type.Optional(Type.Integer({ minimum: 1, maximum: 100, description: "Page size" })),
+    page_token: Type.Optional(Type.String({ description: "Comment page token" })),
+  }),
+  Type.Object({
+    action: Type.Literal("list_comment_replies"),
+    file_token: Type.String({ description: "Document token" }),
+    file_type: Type.Optional(DriveCommentFileType),
+    comment_id: Type.String({ description: "Comment id" }),
+    page_size: Type.Optional(Type.Integer({ minimum: 1, maximum: 100, description: "Page size" })),
+    page_token: Type.Optional(Type.String({ description: "Reply page token" })),
+  }),
+  Type.Object({
+    action: Type.Literal("add_comment"),
+    file_token: Type.String({ description: "Document token" }),
+    file_type: Type.Optional(
+      Type.Union([Type.Literal("doc"), Type.Literal("docx")], {
+        description: "Document type. Defaults to docx when omitted.",
+      }),
+    ),
+    content: Type.String({ description: "Comment text content" }),
+    block_id: Type.Optional(
+      Type.String({
+        description:
+          "Optional docx block id for a local comment. Omit to create a full-document comment.",
+      }),
+    ),
+  }),
+  Type.Object({
+    action: Type.Literal("reply_comment"),
+    file_token: Type.String({ description: "Document token" }),
+    file_type: Type.Optional(DriveCommentFileType),
+    comment_id: Type.String({ description: "Comment id" }),
+    content: Type.String({ description: "Reply text content" }),
+  }),
+]);
 
 type FeishuExplorerRootFolderMetaResponse = {
   code: number;
@@ -201,56 +301,6 @@ async function getRootFileInfo(client: Lark.Client, fileToken: string) {
   return file;
 }
 
-async function getFileInfo(
-  client: Lark.Client,
-  fileToken: string,
-  type: Extract<FeishuDriveParams, { action: "info" }>["type"],
-) {
-  if (type === "shortcut") {
-    // The metadata API does not accept shortcut as a document type. Keep the existing
-    // root-list behavior so the advertised shortcut info contract does not regress.
-    return getRootFileInfo(client, fileToken);
-  }
-
-  let res: Awaited<ReturnType<Lark.Client["drive"]["meta"]["batchQuery"]>>;
-  try {
-    res = await client.drive.meta.batchQuery({
-      data: {
-        request_docs: [{ doc_token: fileToken, doc_type: type }],
-        with_url: true,
-      },
-    });
-  } catch (error) {
-    if (extractFeishuApiErrorMeta(error).feishuCode === 99991672) {
-      // Existing read-only apps may not have the newer metadata scope. Preserve their
-      // root-file lookup while allowing scoped apps to resolve files in any shared folder.
-      return getRootFileInfo(client, fileToken);
-    }
-    throw error;
-  }
-  if (res.code === 99991672) {
-    return getRootFileInfo(client, fileToken);
-  }
-  assertFeishuApiSuccess(res);
-
-  const file = res.data?.metas?.find(
-    (meta) => meta.doc_token === fileToken || meta.request_doc_info?.doc_token === fileToken,
-  );
-  if (!file) {
-    throw new Error(`File not found: ${fileToken}`);
-  }
-
-  return {
-    token: file.doc_token,
-    name: file.title,
-    type: file.doc_type,
-    url: file.url,
-    created_time: file.create_time,
-    modified_time: file.latest_modify_time,
-    owner_id: file.owner_id,
-  };
-}
-
 async function createFolder(client: Lark.Client, name: string, folderToken?: string) {
   // Feishu supports using folder_token="0" as the root folder.
   // We *try* to resolve the real root token (explorer API), but fall back to "0"
@@ -316,75 +366,6 @@ async function addComment(
   };
 }
 
-async function replyComment(
-  client: Lark.Client,
-  params: {
-    file_token: string;
-    file_type: CommentFileType;
-    comment_id: string;
-    content: string;
-  },
-): Promise<{ success: true; reply_id?: string } & Record<string, unknown>> {
-  const url = `/open-apis/drive/v1/files/${encodeURIComponent(params.file_token)}/comments/${encodeURIComponent(
-    params.comment_id,
-  )}/replies`;
-  const query = { file_type: params.file_type };
-  try {
-    const response = await withFeishuMessageDispatch(() =>
-      requestDriveApi<FeishuDriveApiResponse<Record<string, unknown>>>({
-        client,
-        method: "POST",
-        url,
-        query,
-        data: {
-          content: {
-            elements: [
-              {
-                type: "text_run",
-                text_run: {
-                  text: params.content,
-                },
-              },
-            ],
-          },
-        },
-      }),
-    );
-    if (response.code === 0) {
-      return {
-        success: true,
-        ...response.data,
-      };
-    }
-    console.warn(
-      `[feishu_drive] replyComment failed ` +
-        `comment=${params.comment_id} file_type=${params.file_type} ` +
-        `code=${response.code ?? "unknown"} ` +
-        `msg=${response.msg ?? "unknown"} log_id=${response.log_id ?? "unknown"}`,
-    );
-    throw new FeishuReplyCommentError({
-      message: response.msg ?? "Feishu Drive reply comment failed",
-      feishuCode: response.code,
-      feishuMsg: response.msg,
-      feishuLogId: response.log_id,
-    });
-  } catch (error) {
-    if (
-      error instanceof FeishuReplyCommentError ||
-      error instanceof PlatformMessageNotDispatchedError
-    ) {
-      throw error;
-    }
-    const meta = extractFeishuApiErrorMeta(error);
-    console.warn(
-      `[feishu_drive] replyComment threw ` +
-        `comment=${params.comment_id} file_type=${params.file_type} ` +
-        `error=${formatFeishuApiError(error, { includeConfigParams: true })}`,
-    );
-    throw new FeishuReplyCommentError(meta);
-  }
-}
-
 export async function deliverCommentThreadText(
   client: Lark.Client,
   params: {
@@ -446,10 +427,65 @@ export async function deliverCommentThreadText(
     );
   } else {
     try {
-      return {
-        delivery_mode: "reply_comment",
-        ...(await replyComment(client, params)),
-      };
+      const url = `/open-apis/drive/v1/files/${encodeURIComponent(params.file_token)}/comments/${encodeURIComponent(
+        params.comment_id,
+      )}/replies`;
+      const query = { file_type: params.file_type };
+      try {
+        const response = await withFeishuMessageDispatch(() =>
+          requestDriveApi<FeishuDriveApiResponse<Record<string, unknown>>>({
+            client,
+            method: "POST",
+            url,
+            query,
+            data: {
+              content: {
+                elements: [
+                  {
+                    type: "text_run",
+                    text_run: {
+                      text: params.content,
+                    },
+                  },
+                ],
+              },
+            },
+          }),
+        );
+        if (response.code === 0) {
+          return {
+            delivery_mode: "reply_comment",
+            success: true,
+            ...response.data,
+          };
+        }
+        console.warn(
+          `[feishu_drive] replyComment failed ` +
+            `comment=${params.comment_id} file_type=${params.file_type} ` +
+            `code=${response.code ?? "unknown"} ` +
+            `msg=${response.msg ?? "unknown"} log_id=${response.log_id ?? "unknown"}`,
+        );
+        throw new FeishuReplyCommentError({
+          message: response.msg ?? "Feishu Drive reply comment failed",
+          feishuCode: response.code,
+          feishuMsg: response.msg,
+          feishuLogId: response.log_id,
+        });
+      } catch (error) {
+        if (
+          error instanceof FeishuReplyCommentError ||
+          error instanceof PlatformMessageNotDispatchedError
+        ) {
+          throw error;
+        }
+        const meta = extractFeishuApiErrorMeta(error);
+        console.warn(
+          `[feishu_drive] replyComment threw ` +
+            `comment=${params.comment_id} file_type=${params.file_type} ` +
+            `error=${formatFeishuApiError(error, { includeConfigParams: true })}`,
+        );
+        throw new FeishuReplyCommentError(meta);
+      }
     } catch (error) {
       if (!(error instanceof FeishuReplyCommentError) || error.feishuCode !== 1069302) {
         throw error;
@@ -482,20 +518,59 @@ export function registerFeishuDriveTools(api: OpenClawPluginApi) {
     description:
       "Feishu cloud storage operations. Actions: list, info, create_folder, move, delete, list_comments, list_comment_replies, add_comment, reply_comment",
     parameters: FeishuDriveSchema,
-    createExecute(ctx, cfg) {
-      const defaultAccountId = ctx.agentAccountId;
+    createExecute(ctx, _cfg, createClient) {
       return async (p) => {
-        const client = createFeishuToolClient({
-          cfg,
-          executeParams: p,
-          defaultAccountId,
-          requiredTool: { family: "drive", label: "Drive" },
-        });
+        const client = createClient(p, "Drive");
         switch (p.action) {
           case "list":
             return jsonResult(await listFolder(client, p));
-          case "info":
-            return jsonResult(await getFileInfo(client, p.file_token, p.type));
+          case "info": {
+            const { file_token: fileToken, type } = p;
+            if (type === "shortcut") {
+              // The metadata API does not accept shortcut as a document type. Keep the existing
+              // root-list behavior so the advertised shortcut info contract does not regress.
+              return jsonResult(await getRootFileInfo(client, fileToken));
+            }
+
+            let res: Awaited<ReturnType<Lark.Client["drive"]["meta"]["batchQuery"]>>;
+            try {
+              res = await client.drive.meta.batchQuery({
+                data: {
+                  request_docs: [{ doc_token: fileToken, doc_type: type }],
+                  with_url: true,
+                },
+              });
+            } catch (error) {
+              if (extractFeishuApiErrorMeta(error).feishuCode === 99991672) {
+                // Existing read-only apps may not have the newer metadata scope. Preserve their
+                // root-file lookup while allowing scoped apps to resolve files in any shared folder.
+                return jsonResult(await getRootFileInfo(client, fileToken));
+              }
+              throw error;
+            }
+            if (res.code === 99991672) {
+              return jsonResult(await getRootFileInfo(client, fileToken));
+            }
+            assertFeishuApiSuccess(res);
+
+            const file = res.data?.metas?.find(
+              (meta) =>
+                meta.doc_token === fileToken || meta.request_doc_info?.doc_token === fileToken,
+            );
+            if (!file) {
+              throw new Error(`File not found: ${fileToken}`);
+            }
+
+            return jsonResult({
+              token: file.doc_token,
+              name: file.title,
+              type: file.doc_type,
+              url: file.url,
+              created_time: file.create_time,
+              modified_time: file.latest_modify_time,
+              owner_id: file.owner_id,
+            });
+          }
           case "create_folder":
             return jsonResult(await createFolder(client, p.name, p.folder_token));
           case "move":

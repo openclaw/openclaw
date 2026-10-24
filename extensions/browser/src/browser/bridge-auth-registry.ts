@@ -4,7 +4,6 @@
  * Dynamic sandbox/host ports need auth lookup without persisting tokens in
  * config files, so callers store credentials only for the current process.
  */
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { BrowserControlAuth } from "./control-auth.js";
 
 const authByPort = new Map<number, BrowserControlAuth>();
@@ -13,10 +12,7 @@ export function setBridgeAuthForPort(port: number, auth: BrowserControlAuth): vo
   if (!Number.isFinite(port) || port <= 0) {
     return;
   }
-  authByPort.set(port, {
-    token: normalizeOptionalString(auth.token),
-    password: normalizeOptionalString(auth.password),
-  });
+  authByPort.set(port, auth);
 }
 
 export function getBridgeAuthForPort(port: number): BrowserControlAuth | undefined {

@@ -8,7 +8,7 @@ import type { ImageDescriptionRequest } from "./types.js";
 
 export const API_KEY_FIELD = ["api", "Key"].join("") as "apiKey";
 const REQUIRE_API_KEY_FIELD = ["require", "ApiKey"].join("");
-export const SET_RUNTIME_API_KEY_FIELD = ["setRuntime", "ApiKey"].join("");
+const SET_RUNTIME_API_KEY_FIELD = ["setRuntime", "ApiKey"].join("");
 
 const imageRuntimeMocks = vi.hoisted(() => ({
   completeMock: vi.fn(),

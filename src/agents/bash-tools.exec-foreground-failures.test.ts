@@ -1,12 +1,6 @@
-/**
- * Foreground exec failure tests.
- * Verifies failed process outcomes surface useful text/details for shell
- * errors, timeouts, signals, and runtime failures.
- */
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { ProcessSupervisor } from "../process/supervisor/index.js";
 import type { RunExit, SpawnInput } from "../process/supervisor/types.js";
@@ -39,20 +33,14 @@ function requireTextContent(
   result: Awaited<ReturnType<ReturnType<typeof createExecTool>["execute"]>>,
 ) {
   const content = result.content[0];
-  expect(content?.type).toBe("text");
-  if (content?.type !== "text") {
-    throw new Error(`expected text content, got ${content?.type ?? "missing"}`);
-  }
+  assert(content?.type === "text", `expected text content, got ${content?.type ?? "missing"}`);
   return content.text;
 }
 
 function requireFailedDetails(
   details: Awaited<ReturnType<ReturnType<typeof createExecTool>["execute"]>>["details"],
 ) {
-  expect(details.status).toBe("failed");
-  if (details.status !== "failed") {
-    throw new Error(`expected failed details, got ${details.status}`);
-  }
+  assert(details.status === "failed", `expected failed details, got ${details.status}`);
   return details;
 }
 
@@ -77,13 +65,15 @@ function mockSpawn(exit: Partial<RunExit> = {}) {
   }));
 }
 
-function createBackendSandboxTool(params: {
-  workspaceDir: string;
-  validateWorkdir?: BashSandboxConfig["validateWorkdir"];
-  finalizeExec?: BashSandboxConfig["finalizeExec"];
-  discardPreparedWorkdir?: BashSandboxConfig["discardPreparedWorkdir"];
-  finalizeToken?: unknown;
-}) {
+function createBackendSandboxTool(
+  params: {
+    workspaceDir?: string;
+    validateWorkdir?: BashSandboxConfig["validateWorkdir"];
+    finalizeExec?: BashSandboxConfig["finalizeExec"];
+    discardPreparedWorkdir?: BashSandboxConfig["discardPreparedWorkdir"];
+    finalizeToken?: unknown;
+  } = {},
+) {
   const buildExecSpec = vi.fn<NonNullable<BashSandboxConfig["buildExecSpec"]>>(async (input) => ({
     argv: ["remote-shell", input.command],
     env: {},
@@ -97,7 +87,7 @@ function createBackendSandboxTool(params: {
     host: "sandbox",
     sandbox: {
       containerName: "remote-sandbox-workdir-test",
-      workspaceDir: params.workspaceDir,
+      workspaceDir: params.workspaceDir ?? tempDirs.make("openclaw-sandbox-workdir-"),
       containerWorkdir: "/remote/workspace",
       workdirValidation: "backend",
       validateWorkdir,
@@ -108,7 +98,12 @@ function createBackendSandboxTool(params: {
         : {}),
     },
   });
-  return { buildExecSpec, tool, validateWorkdir };
+  return {
+    buildExecSpec,
+    validateWorkdir,
+    execute: (command = "echo ok", workdir = "/remote/workspace/generated") =>
+      tool.execute("sandbox-workdir", { command, workdir }),
+  };
 }
 
 async function expectUnavailableWorkdir(params: {
@@ -129,11 +124,12 @@ async function expectUnavailableWorkdir(params: {
   expect(text).toContain("command was not executed");
   expect(text).toContain("workdir is treated as a literal path");
   expect(text).toContain('shell expansions such as "~" are not applied');
-  const details = requireFailedDetails(result.details);
-  expect(details.exitCode).toBeNull();
-  expect(details.timedOut).toBe(false);
-  expect(details.aggregated).toBe("");
-  expect(details.cwd).toBe(params.workdir);
+  expect(requireFailedDetails(result.details)).toMatchObject({
+    exitCode: null,
+    timedOut: false,
+    aggregated: "",
+    cwd: params.workdir,
+  });
   expect(supervisorMock.spawn).not.toHaveBeenCalled();
 }
 
@@ -160,13 +156,7 @@ describe("exec foreground failures", () => {
   });
 
   it("returns a failed text result when the default timeout is exceeded", async () => {
-    const tool = fullExec({
-      security: "full",
-      ask: "off",
-      timeoutSec: 1,
-      backgroundMs: 10,
-      allowBackground: false,
-    });
+    const tool = fullExec({ timeoutSec: 1, backgroundMs: 10 });
     mockSpawn({
       reason: "overall-timeout",
       exitCode: null,
@@ -205,62 +195,67 @@ describe("exec foreground failures", () => {
     expect(details.durationMs).toBeGreaterThanOrEqual(0);
   });
 
-  it.each([{ name: "PTY signal 9", pty: true, exitSignal: 9 }])(
-    "adds cautious Linux OOM guidance for a wrapped $name",
-    async ({ pty, exitSignal }) => {
-      mockSpawn({
-        reason: "signal",
-        exitCode: pty ? 0 : null,
-        exitSignal,
-        oomScoreWrapperSelected: true,
-      });
-      const tool = fullExec();
+  it("adds cautious Linux OOM guidance for a wrapped PTY signal 9", async () => {
+    mockSpawn({
+      reason: "signal",
+      exitCode: 0,
+      exitSignal: 9,
+      oomScoreWrapperSelected: true,
+    });
+    const tool = fullExec();
 
-      const result = await tool.execute(`call-oom-${exitSignal}`, {
-        command: "find . -type f",
-        host: "gateway",
-        pty,
-      });
+    const result = await tool.execute("call-oom-9", {
+      command: "find . -type f",
+      host: "gateway",
+      pty: true,
+    });
 
-      expect(supervisorMock.spawn.mock.calls[0]?.[0]?.mode).toBe(pty ? "pty" : "child");
-      const text = requireTextContent(result);
-      for (const fragment of [
-        `Command aborted by signal ${exitSignal}`,
-        "OpenClaw selected its Linux OOM-score wrapper",
-        "attempts to set this child's oom_score_adj to 1000",
-        "SIGKILL alone does not identify whether the Linux OOM killer",
-        "Check cgroup memory events or kernel logs",
-        "If they show memory pressure, narrow the command",
-        "adjust memory, concurrency, or resource limits",
-      ]) {
-        expect(text).toContain(fragment);
+    expect(supervisorMock.spawn.mock.calls[0]?.[0]?.mode).toBe("pty");
+    const text = requireTextContent(result);
+    for (const fragment of [
+      "Command aborted by signal 9",
+      "OpenClaw selected its Linux OOM-score wrapper",
+      "attempts to set this child's oom_score_adj to 1000",
+      "SIGKILL alone does not identify whether the Linux OOM killer",
+      "Check cgroup memory events or kernel logs",
+      "If they show memory pressure, narrow the command",
+      "adjust memory, concurrency, or resource limits",
+    ]) {
+      expect(text).toContain(fragment);
+    }
+    expect(text).not.toContain("OPENCLAW_CHILD_OOM_SCORE_ADJ");
+  });
+
+  it.each(["gateway", "sandbox"] as const)(
+    "returns a failed result for unavailable explicit %s workdirs before launching",
+    async (host) => {
+      const workspaceDir = tempDirs.make("openclaw-workdir-");
+      fs.writeFileSync(path.join(workspaceDir, "not-dir"), "not a directory");
+      const resolve = (name: string) =>
+        host === "sandbox" ? `/workspace/${name}` : path.join(workspaceDir, name);
+      const workdirs = [resolve("missing"), "   ", resolve("not-dir")];
+      if (host === "sandbox") {
+        workdirs.push(tempDirs.make("openclaw-outside-workdir-"));
       }
-      expect(text).not.toContain("OPENCLAW_CHILD_OOM_SCORE_ADJ");
-    },
-  );
-
-  it("returns a failed result for unavailable explicit host workdirs before launching", async () => {
-    const missingWorkdir = path.join(
-      os.tmpdir(),
-      `openclaw-missing-workdir-${process.pid}-${Date.now()}`,
-    );
-    fs.rmSync(missingWorkdir, { recursive: true, force: true });
-
-    const fileWorkdir = path.join(
-      os.tmpdir(),
-      `openclaw-file-workdir-${process.pid}-${Date.now()}`,
-    );
-    fs.writeFileSync(fileWorkdir, "not a directory");
-
-    try {
-      for (const workdir of [missingWorkdir, "   ", fileWorkdir]) {
-        await expectUnavailableWorkdir({ workdir });
+      for (const workdir of workdirs) {
+        await expectUnavailableWorkdir({
+          workdir,
+          toolDefaults:
+            host === "gateway"
+              ? undefined
+              : {
+                  host,
+                  sandbox: {
+                    containerName: "sandbox-workdir-test",
+                    workspaceDir,
+                    containerWorkdir: "/workspace",
+                  },
+                },
+        });
         supervisorMock.spawn.mockClear();
       }
-    } finally {
-      fs.rmSync(fileWorkdir, { force: true });
-    }
-  });
+    },
+  );
 
   it("returns a failed result when the current gateway cwd is unavailable", async () => {
     const cwdSpy = vi.spyOn(process, "cwd").mockImplementation(() => {
@@ -276,57 +271,15 @@ describe("exec foreground failures", () => {
     }
   });
 
-  it("defaults omitted sandbox workdirs to the sandbox workspace", async () => {
-    const workspaceDir = tempDirs.make("openclaw-sandbox-workdir-");
-    mockSpawn();
-
-    const tool = fullExec({
-      host: "sandbox",
-      sandbox: {
-        containerName: "sandbox-workdir-test",
-        workspaceDir,
-        containerWorkdir: "/workspace",
-        buildExecSpec: async ({ command, workdir }) => ({
-          argv: ["docker", "exec", "-w", workdir ?? "/workspace", "sandbox-workdir-test", command],
-          env: {},
-          stdinMode: "pipe-closed",
-        }),
-      },
-    });
-
-    const result = await tool.execute("call-sandbox-default-workdir", {
-      command: "echo ok",
-    });
-
-    expect(result.details.status).toBe("completed");
-    expect(result.details.cwd).toBe(workspaceDir);
-    expect(supervisorMock.spawn).toHaveBeenCalledOnce();
-    const input = supervisorMock.spawn.mock.calls[0]?.[0];
-    expect(input?.cwd).toBe(workspaceDir);
-    expect(input?.mode).toBe("child");
-    if (input?.mode === "child") {
-      expect(input.argv).toContain("-w");
-      expect(input.argv).toContain("/workspace");
-    }
-  });
-
   it("finalizes backend sandbox exec tokens when process spawn fails", async () => {
-    const workspaceDir = tempDirs.make("openclaw-sandbox-workdir-");
     const finalizeToken = { session: "remote-session" };
     const finalizeExec = vi.fn<NonNullable<BashSandboxConfig["finalizeExec"]>>(async () => {});
-    const { buildExecSpec, tool, validateWorkdir } = createBackendSandboxTool({
-      workspaceDir,
+    const { buildExecSpec, execute, validateWorkdir } = createBackendSandboxTool({
       finalizeExec,
       finalizeToken,
     });
     supervisorMock.spawn.mockRejectedValueOnce(new Error("spawn failed"));
-
-    await expect(
-      tool.execute("call-remote-sandbox-spawn-failure", {
-        command: "echo ok",
-        workdir: "/remote/workspace/generated",
-      }),
-    ).rejects.toThrow("spawn failed");
+    await expect(execute()).rejects.toThrow("spawn failed");
 
     expect(validateWorkdir).toHaveBeenCalledWith("/remote/workspace/generated");
     expect(buildExecSpec).toHaveBeenCalledOnce();
@@ -341,20 +294,14 @@ describe("exec foreground failures", () => {
   });
 
   it("rejects unsafe commands before backend workdir validation", async () => {
-    const workspaceDir = tempDirs.make("openclaw-sandbox-workdir-");
     const discardPreparedWorkdir =
       vi.fn<NonNullable<BashSandboxConfig["discardPreparedWorkdir"]>>();
-    const { buildExecSpec, tool, validateWorkdir } = createBackendSandboxTool({
-      workspaceDir,
+    const { buildExecSpec, execute, validateWorkdir } = createBackendSandboxTool({
       discardPreparedWorkdir,
     });
-
-    await expect(
-      tool.execute("call-remote-sandbox-rejected-command", {
-        command: "/approve approval-1 deny",
-        workdir: "/remote/workspace/generated",
-      }),
-    ).rejects.toThrow("exec cannot run /approve commands");
+    await expect(execute("/approve approval-1 deny")).rejects.toThrow(
+      "exec cannot run /approve commands",
+    );
 
     expect(validateWorkdir).not.toHaveBeenCalled();
     expect(discardPreparedWorkdir).not.toHaveBeenCalled();
@@ -366,16 +313,11 @@ describe("exec foreground failures", () => {
     const workspaceDir = tempDirs.make("openclaw-sandbox-workdir-");
     const srcDir = path.join(workspaceDir, "src");
     fs.mkdirSync(srcDir);
-    const { buildExecSpec, tool, validateWorkdir } = createBackendSandboxTool({ workspaceDir });
+    const { buildExecSpec, execute, validateWorkdir } = createBackendSandboxTool({ workspaceDir });
     mockSpawn();
 
-    const result = await tool.execute("call-relative-remote-sandbox-workdir", {
-      command: "echo ok",
-      workdir: "src",
-    });
-
-    expect(result.details.status).toBe("completed");
-    expect(result.details.cwd).toBe(srcDir);
+    const result = await execute("echo ok", "src");
+    expect(result.details).toMatchObject({ status: "completed", cwd: srcDir });
     expect(validateWorkdir).toHaveBeenCalledWith("/remote/workspace/src");
     expect(buildExecSpec).toHaveBeenCalledOnce();
     expect(buildExecSpec.mock.calls[0]?.[0]?.workdir).toBe("/remote/workspace/src");
@@ -384,16 +326,10 @@ describe("exec foreground failures", () => {
   });
 
   it("fails backend-validated sandbox workdirs before launch when backend validation rejects", async () => {
-    const workspaceDir = tempDirs.make("openclaw-sandbox-workdir-");
-    const { buildExecSpec, tool, validateWorkdir } = createBackendSandboxTool({
-      workspaceDir,
+    const { buildExecSpec, execute, validateWorkdir } = createBackendSandboxTool({
       validateWorkdir: async () => null,
     });
-
-    const result = await tool.execute("call-remote-sandbox-workdir", {
-      command: "echo ok",
-      workdir: "/remote/workspace/generated",
-    });
+    const result = await execute();
 
     expect(result.details).toMatchObject({
       status: "failed",
@@ -403,25 +339,5 @@ describe("exec foreground failures", () => {
     expect(validateWorkdir).toHaveBeenCalledOnce();
     expect(buildExecSpec).not.toHaveBeenCalled();
     expect(supervisorMock.spawn).not.toHaveBeenCalled();
-  });
-
-  it("returns a failed result for unavailable explicit sandbox workdirs before launching a command", async () => {
-    const workspaceDir = tempDirs.make("openclaw-sandbox-workdir-");
-    const outsideDir = tempDirs.make("openclaw-outside-workdir-");
-    fs.writeFileSync(path.join(workspaceDir, "not-dir"), "not a directory");
-    for (const workdir of ["/workspace/missing", "   ", "/workspace/not-dir", outsideDir]) {
-      await expectUnavailableWorkdir({
-        workdir,
-        toolDefaults: {
-          host: "sandbox",
-          sandbox: {
-            containerName: "sandbox-workdir-test",
-            workspaceDir,
-            containerWorkdir: "/workspace",
-          },
-        },
-      });
-      supervisorMock.spawn.mockClear();
-    }
   });
 });

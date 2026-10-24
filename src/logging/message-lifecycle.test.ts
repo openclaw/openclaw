@@ -50,7 +50,7 @@ describe("createDiagnosticMessageLifecycle", () => {
         {
           sessionId: "initial-session",
           sessionKey: "cron:job",
-          state: "processing",
+          state: "waiting",
           reason: undefined,
         },
       ],

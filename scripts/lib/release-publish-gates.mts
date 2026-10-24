@@ -66,7 +66,7 @@ export function evaluateReleasePublishGates(input: {
       "publish-inputs",
       false,
       error instanceof Error ? error.message : String(error),
-      "Reseal publication inputs for the exact release source and npm selector without waivers.",
+      "Reseal publication inputs for the exact release source and npm selector.",
     );
   }
   const rerunGroup = scalar(field(manifest, "rerunGroup"));
@@ -137,7 +137,7 @@ export function evaluateReleasePublishGates(input: {
   const knownFlakyJobs = field(field(manifest, "validationInputs"), "knownFlakyJobsJson");
   let selectedLanesError =
     waived || (knownFlakyJobs !== undefined && knownFlakyJobs !== "[]")
-      ? "Release waiver and known-flaky inputs are no longer accepted."
+      ? "Runtime waiver and known-flaky inputs are no longer accepted."
       : "";
   try {
     validateReleaseManifestAdvisoryJobs(manifest);
@@ -148,7 +148,7 @@ export function evaluateReleasePublishGates(input: {
     "selected-lanes",
     selectedLanesError === "",
     selectedLanesError,
-    "Use authenticated Full Release Validation evidence with every selected lane passing and no waivers.",
+    "Use successful Full Release Validation evidence evaluated under checked-in release-tooling policy.",
   );
   if (consumer === "stable-closeout") {
     for (const gate of gates) {

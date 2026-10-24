@@ -1,4 +1,4 @@
-import { handleToolExecutionEnd } from "./embedded-agent-subscribe.handlers.tools.completion.js";
+import { prepareToolExecutionEnd } from "./embedded-agent-subscribe.handlers.tools.completion.js";
 import { handleToolExecutionStart } from "./embedded-agent-subscribe.handlers.tools.start.js";
 import type { EmbeddedAgentSubscribeContext } from "./embedded-agent-subscribe.handlers.types.js";
 import { recordEmbeddedToolTrajectoryEvent } from "./embedded-agent-subscribe.trajectory.js";
@@ -23,7 +23,8 @@ type EmbeddedToolLifecycleParams<T> = {
   replaySafe?: boolean;
   hideFromChannelProgress?: boolean;
   execute: (onImplementationStart: () => void) => Promise<T>;
-  onTerminal?: (terminal: ToolTerminal) => void | Promise<void>;
+  /** Accept display activity before publication; false discards stale presentation only. */
+  onTerminal?: (terminal: ToolTerminal) => void | false | Promise<void | false>;
 };
 
 export function createEmbeddedToolLifecycleRunner(
@@ -44,10 +45,7 @@ export function createEmbeddedToolLifecycleRunner(
     recordEmbeddedToolTrajectoryEvent(ctx, startEvent, undefined);
     await handleToolExecutionStart(ctx, startEvent);
     let executionStarted = false;
-    const finishToolLifecycle = async (
-      isError: boolean,
-      result: unknown,
-    ): Promise<ToolTerminal> => {
+    const finishToolLifecycle = async (isError: boolean, result: unknown): Promise<void> => {
       const wasExecuted = executionStarted;
       ctx.flushAssistantStream();
       const endEvent: Extract<AgentEvent, { type: "tool_execution_end" }> = {
@@ -61,14 +59,17 @@ export function createEmbeddedToolLifecycleRunner(
       };
       const readSanitizedResult = prepareToolResult(result);
       recordEmbeddedToolTrajectoryEvent(ctx, endEvent, readSanitizedResult);
-      const terminal = await handleToolExecutionEnd(ctx, endEvent, readSanitizedResult);
-      return {
+      const terminal = await prepareToolExecutionEnd(ctx, endEvent, readSanitizedResult);
+      const accepted = await toolParams.onTerminal?.({
         result,
         readSanitizedResult,
         isError: terminal.isError,
         executedArguments: terminal.executedArguments ?? toolParams.args,
         effectReceipt: terminal.effectReceipt,
-      };
+      });
+      if (accepted !== false) {
+        await terminal.publishPresentation();
+      }
     };
     let completedResult: T;
     try {
@@ -81,12 +82,10 @@ export function createEmbeddedToolLifecycleRunner(
       if (trustedNoStart) {
         markToolExecutionNotStarted(result);
       }
-      const terminal = await finishToolLifecycle(true, result);
-      await toolParams.onTerminal?.(terminal);
+      await finishToolLifecycle(true, result);
       throw error;
     }
-    const terminal = await finishToolLifecycle(false, completedResult);
-    await toolParams.onTerminal?.(terminal);
+    await finishToolLifecycle(false, completedResult);
     return completedResult;
   };
 }

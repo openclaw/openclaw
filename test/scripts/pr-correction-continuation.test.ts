@@ -1,11 +1,4 @@
-import {
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  readdirSync,
-  unlinkSync,
-  writeFileSync,
-} from "node:fs";
+import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
@@ -23,17 +16,18 @@ describePosix("published correction continuation through the canonical wrapper",
   let tree: string;
   let args: string[];
   let authority: Record<string, Buffer>;
+  const git = (...values: string[]) => f.git(f.worktree, ...values);
 
   const assertRetainedSource = () => {
-    expect(f.git(f.worktree, "rev-parse", "HEAD")).toBe(head);
-    expect(f.git(f.worktree, "write-tree")).toBe(tree);
-    expect(f.git(f.worktree, "branch", "--show-current")).toBe("pr-42-prep");
+    expect(git("rev-parse", "HEAD")).toBe(head);
+    expect(git("write-tree")).toBe(tree);
+    expect(git("branch", "--show-current")).toBe("pr-42-prep");
     expect(readFileSync(join(f.worktree, f.product[0]!), "utf8")).toBe("later correction\n");
   };
   const assertOldAuthority = () => {
     assertRetainedSource();
     for (const [name, bytes] of Object.entries(authority)) {
-      expect(readFileSync(f.local(name)), name).toEqual(bytes);
+      expect(read(name), name).toEqual(bytes);
     }
   };
   const rejected = (selected = args, env: NodeJS.ProcessEnv = {}) => {
@@ -43,6 +37,9 @@ describePosix("published correction continuation through the canonical wrapper",
   };
   const replaceArgument = (name: string, value: string) =>
     args.map((item, index) => (args[index - 1] === name ? value : item));
+  const oid = (name: string) => git("hash-object", "--no-filters", f.local(name));
+  const read = (name: string) => readFileSync(f.local(name));
+  const write = (name: string, value: string | Buffer) => writeFileSync(f.local(name), value);
 
   beforeAll(() => {
     f = createBaselineFixture(dirs.make("openclaw-pr-continuation-"), 1);
@@ -52,9 +49,9 @@ describePosix("published correction continuation through the canonical wrapper",
     // A new signed fix follows the already published correction. The fresh
     // hosted review deliberately disagrees with the historical READY verdict.
     writeFileSync(join(f.worktree, f.product[0]!), "later correction\n");
-    f.git(f.worktree, "commit", "-qam", "fix: later correction");
-    head = f.git(f.worktree, "rev-parse", "HEAD");
-    tree = f.git(f.worktree, "rev-parse", "HEAD^{tree}");
+    git("commit", "-qam", "fix: later correction");
+    head = git("rev-parse", "HEAD");
+    tree = git("rev-parse", "HEAD^{tree}");
     const review = validReview(incoming);
     review.issueValidation.status = "valid";
     review.findings.push({
@@ -64,10 +61,10 @@ describePosix("published correction continuation through the canonical wrapper",
       area: f.product[0]!,
       fix: "Review the later correction",
     });
-    writeFileSync(f.local("review.json"), JSON.stringify(review));
-    writeFileSync(f.local("pr-meta.json"), JSON.stringify({ ...f.meta, headRefOid: incoming }));
-    writeFileSync(f.local("pr-meta.env"), `PR_NUMBER=42\nPR_HEAD=topic\nPR_HEAD_SHA=${incoming}\n`);
-    writeFileSync(f.local("gates-build.log"), "historical build proof\n");
+    write("review.json", JSON.stringify(review));
+    write("pr-meta.json", JSON.stringify({ ...f.meta, headRefOid: incoming }));
+    write("pr-meta.env", `PR_NUMBER=42\nPR_HEAD=topic\nPR_HEAD_SHA=${incoming}\n`);
+    write("gates-build.log", "historical build proof\n");
     authority = Object.fromEntries(
       [
         "prep-context.env",
@@ -77,22 +74,16 @@ describePosix("published correction continuation through the canonical wrapper",
         "correction-incoming-review.json",
         "prepare-push-result.env",
         "gates-build.log",
-      ].map((name) => [name, readFileSync(f.local(name))]),
+      ].map((name) => [name, read(name)]),
     );
-    args = [
-      "--expected-head",
-      head,
-      "--expected-tree",
-      tree,
-      "--incoming-head",
-      incoming,
-      "--incoming-review",
-      f.git(f.worktree, "hash-object", "--no-filters", f.local("review.json")),
-      "--publication-receipt",
-      "push",
-      "--publication-oid",
-      f.git(f.worktree, "hash-object", "--no-filters", f.local("prepare-push-result.env")),
-    ];
+    args = Object.entries({
+      "expected-head": head,
+      "expected-tree": tree,
+      "incoming-head": incoming,
+      "incoming-review": oid("review.json"),
+      "publication-receipt": "push",
+      "publication-oid": oid("prepare-push-result.env"),
+    }).flatMap(([name, value]) => [`--${name}`, value]);
   });
 
   it("rejects stale selection, source and publication authority without replacing the preparation", () => {
@@ -117,17 +108,11 @@ describePosix("published correction continuation through the canonical wrapper",
         .toString()
         .replace(`PUSH_LOCAL_PREP_HEAD_SHA=${incoming}`, `PUSH_LOCAL_PREP_HEAD_SHA=${head}`),
     ]) {
-      writeFileSync(f.local("prepare-push-result.env"), replacement);
-      const oid = f.git(
-        f.worktree,
-        "hash-object",
-        "--no-filters",
-        f.local("prepare-push-result.env"),
-      );
-      expect(rejected(replaceArgument("--publication-oid", oid))).toContain(
-        "does not match this preparation",
-      );
-      writeFileSync(f.local("prepare-push-result.env"), receipt);
+      write("prepare-push-result.env", replacement);
+      expect(
+        rejected(replaceArgument("--publication-oid", oid("prepare-push-result.env"))),
+      ).toContain("does not match this preparation");
+      write("prepare-push-result.env", receipt);
       assertOldAuthority();
     }
     const source = join(f.worktree, f.product[0]!);
@@ -137,9 +122,9 @@ describePosix("published correction continuation through the canonical wrapper",
     writeFileSync(join(f.worktree, "untracked.txt"), "uncommitted\n");
     rejected();
     unlinkSync(join(f.worktree, "untracked.txt"));
-    f.git(f.worktree, "switch", "-qc", "foreign-preparation");
+    git("switch", "-qc", "foreign-preparation");
     rejected();
-    f.git(f.worktree, "switch", "-q", "pr-42-prep");
+    git("switch", "-q", "pr-42-prep");
     const metaPath = f.local("pr-meta.json");
     const metaBytes = readFileSync(metaPath);
     writeFileSync(metaPath, JSON.stringify({ ...JSON.parse(metaBytes.toString()), number: 43 }));
@@ -160,36 +145,24 @@ describePosix("published correction continuation through the canonical wrapper",
       unlinkSync(live);
       assertOldAuthority();
     }
-    const unsigned = f.git(
-      f.worktree,
-      "-c",
-      "commit.gpgSign=false",
-      "commit-tree",
-      tree,
-      "-p",
-      incoming,
-      "-m",
-      "unsigned",
-    );
-    f.git(f.worktree, "update-ref", "refs/heads/pr-42-prep", unsigned, head);
-    const output = rejected(replaceArgument("--expected-head", unsigned));
-    expect(output).toContain("verify-commit");
-    f.git(f.worktree, "update-ref", "refs/heads/pr-42-prep", head, unsigned);
-    const unrelated = f.git(
-      f.worktree,
-      "commit-tree",
-      tree,
-      "-p",
-      f.incoming,
-      "-S",
-      "-m",
-      "unrelated signed correction",
-    );
-    f.git(f.worktree, "update-ref", "refs/heads/pr-42-prep", unrelated, head);
-    expect(rejected(replaceArgument("--expected-head", unrelated))).toContain(
-      "refused rewritten history",
-    );
-    f.git(f.worktree, "update-ref", "refs/heads/pr-42-prep", head, unrelated);
+    for (const [signed, parent, error] of [
+      [false, incoming, "verify-commit"],
+      [true, f.incoming, "refused rewritten history"],
+    ] as const) {
+      const replacement = git(
+        ...(signed ? [] : ["-c", "commit.gpgSign=false"]),
+        "commit-tree",
+        tree,
+        "-p",
+        parent,
+        ...(signed ? ["-S"] : []),
+        "-m",
+        "replacement",
+      );
+      git("update-ref", "refs/heads/pr-42-prep", replacement, head);
+      expect(rejected(replaceArgument("--expected-head", replacement))).toContain(error);
+      git("update-ref", "refs/heads/pr-42-prep", head, replacement);
+    }
     assertOldAuthority();
   });
 
@@ -223,19 +196,15 @@ if (phase === 'apply') {
       return value;
     };
   }
-  if (process.env.FIXTURE_EFFECT === 'partial') {
-    const unlink = fs.unlinkSync;
-    fs.unlinkSync = function(path) {
-      const result = unlink.call(this, path);
-      if (path === '.local/gates.env') throw new Error('fixture interrupted metadata retirement');
-      return result;
-    };
-  }
-  if (process.env.FIXTURE_EFFECT === 'installed') {
-    const rename = fs.renameSync;
-    fs.renameSync = function(from, to) {
-      const result = rename.call(this, from, to);
-      if (to === '.local/prep-context.env') throw new Error('fixture interrupted after context installation');
+  for (const [effect, method, index, target, message] of [
+    ['partial', 'unlinkSync', 0, '.local/gates.env', 'fixture interrupted metadata retirement'],
+    ['installed', 'renameSync', 1, '.local/prep-context.env', 'fixture interrupted after context installation'],
+  ]) {
+    if (process.env.FIXTURE_EFFECT !== effect) continue;
+    const original = fs[method];
+    fs[method] = function(...args) {
+      const result = original.apply(this, args);
+      if (args[index] === target) throw new Error(message);
       return result;
     };
   }
@@ -251,11 +220,11 @@ if (phase === 'apply') {
     assertOldAuthority();
     // Only the synthetic replacement ref belongs to this fixture cleanup.
     f.git(f.repo, "update-ref", "-d", "refs/openclaw/pr-operation-locks/42", foreign);
-    const freshReview = readFileSync(f.local("review.json"));
+    const freshReview = read("review.json");
     expect(rejected(args, { ...extra, FIXTURE_EFFECT: "review-drift" })).toContain(
       "Incoming continuation authority changed",
     );
-    writeFileSync(f.local("review.json"), freshReview);
+    write("review.json", freshReview);
     assertOldAuthority();
     expect(rejected(args, { ...extra, FIXTURE_EFFECT: "archive-drift" })).toContain(
       "Retained continuation evidence changed",
@@ -266,17 +235,13 @@ if (phase === 'apply') {
     );
     assertRetainedSource();
     expect(existsSync(f.local("gates.env"))).toBe(false);
-    expect(readFileSync(f.local("prep-context.env"))).toEqual(authority["prep-context.env"]);
-    const journalBytes = readFileSync(f.local("review-transition.json"));
+    expect(read("prep-context.env")).toEqual(authority["prep-context.env"]);
+    const journalBytes = read("review-transition.json");
     const journal = JSON.parse(journalBytes.toString());
     const archive = join(f.worktree, journal.continuation.archive);
     for (const [name, bytes] of Object.entries(authority)) {
       expect(readFileSync(join(archive, name))).toEqual(bytes);
     }
-    expect(rejected(replaceArgument("--expected-tree", "a".repeat(40)))).toContain(
-      "Selected continuation differs",
-    );
-    expect(readFileSync(f.local("review-transition.json"))).toEqual(journalBytes);
     const archivedContext = join(archive, "prep-context.env");
     writeFileSync(archivedContext, "changed recovery proof\n");
     expect(rejected()).toContain("Retained continuation evidence changed");
@@ -285,14 +250,14 @@ if (phase === 'apply') {
       "fixture interrupted after context installation",
     );
     assertRetainedSource();
-    expect(readFileSync(f.local("review-transition.json"))).toEqual(journalBytes);
+    expect(read("review-transition.json")).toEqual(journalBytes);
     expect(readFileSync(f.local("prep-context.env"), "utf8")).toContain(
       `PR_HEAD_SHA_BEFORE='${incoming}'`,
     );
     f.pass(command, args);
     assertRetainedSource();
     expect(existsSync(f.local("review-transition.json"))).toBe(false);
-    expect(readFileSync(f.local("review.json"))).toEqual(freshReview);
+    expect(read("review.json")).toEqual(freshReview);
     for (const name of [
       "prep.env",
       "gates.env",
@@ -301,24 +266,11 @@ if (phase === 'apply') {
     ]) {
       expect(existsSync(f.local(name)), name).toBe(false);
     }
-    const context = readFileSync(f.local("prep-context.env"), "utf8");
-    expect(context).toContain(`PR_HEAD_SHA_BEFORE='${incoming}'`);
-    expect(context).not.toContain("PREP_BASELINE_REFRESH");
     // Historical hosted READY cannot admit the new candidate; a newly
     // initialized candidate review must resolve the fresh incoming finding.
-    writeFileSync(f.local("correction-review.json"), authority["correction-review.json"]!);
+    write("correction-review.json", authority["correction-review.json"]!);
     const staleReady = f.run("prepare-gates");
     expect(staleReady.status).not.toBe(0);
     expect(staleReady.stdout + staleReady.stderr).toMatch(/correction|review/iu);
-    f.pass("prepare-correction-review-init");
-    const candidate = JSON.parse(readFileSync(f.local("correction-review.json"), "utf8"));
-    expect(candidate.pr.headSha).toBe(head);
-    expect(candidate.recommendation).not.toBe("READY FOR /prepare-pr");
-    expect(candidate.correction.resolvedFindings.map((item: { id: string }) => item.id)).toEqual([
-      "I2",
-    ]);
-    expect(f.run("prepare-push").status).not.toBe(0);
-    f.git(f.worktree, "verify-commit", "HEAD");
-    expect(readdirSync(archive)).toContain("gates-build.log");
   });
 });

@@ -1,4 +1,5 @@
 import path from "node:path";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   ErrorCodes,
   GatewayErrorDetailCodes,
@@ -43,6 +44,7 @@ import {
 } from "../task-suggestion-registry.js";
 import { handleChatSend } from "./chat-send-handler.js";
 import { listWorkerProfiles } from "./environments.profiles.js";
+import { respondError } from "./response.js";
 import {
   retainForwardedSessionMutationAuthorization,
   withSessionMutationCommitGuard,
@@ -260,11 +262,8 @@ async function createSuggestedTaskSession(
   if (!sessionResponse.ok) {
     return await fail(sessionKey, sessionResponse.error);
   }
-  const { payload } = sessionResponse;
-  const key =
-    payload && typeof payload === "object" && typeof (payload as { key?: unknown }).key === "string"
-      ? (payload as { key: string }).key
-      : undefined;
+  const payload = asOptionalRecord(sessionResponse.payload);
+  const key = typeof payload?.key === "string" ? payload.key : undefined;
   if (!key) {
     return await fail(
       sessionKey,
@@ -289,17 +288,11 @@ async function createSuggestedTaskSession(
     if (sendError) {
       return await fail(key, sendError);
     }
-  } else {
-    const result = payload as { runError?: unknown; runStarted?: unknown };
-    if (result.runStarted !== true) {
-      const runMessage =
-        result.runError &&
-        typeof result.runError === "object" &&
-        typeof (result.runError as { message?: unknown }).message === "string"
-          ? (result.runError as { message: string }).message
-          : "initial task did not start";
-      return await fail(key, errorShape(ErrorCodes.UNAVAILABLE, runMessage));
-    }
+  } else if (payload?.runStarted !== true) {
+    const runError = asOptionalRecord(payload?.runError);
+    const runMessage =
+      typeof runError?.message === "string" ? runError.message : "initial task did not start";
+    return await fail(key, errorShape(ErrorCodes.UNAVAILABLE, runMessage));
   }
   return finishSuggestedTaskAcceptance({ ...params, sessionKey: key });
 }
@@ -425,11 +418,7 @@ export const taskSuggestionsHandlers: GatewayRequestHandlers = {
     validateTaskSuggestionsCreateParams,
     ({ params, respond, context }) => {
       if (!path.isAbsolute(params.cwd)) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, "task suggestion cwd must be absolute"),
-        );
+        respondError(respond, ErrorCodes.INVALID_REQUEST, "task suggestion cwd must be absolute");
         return;
       }
       const requestedAgentId = params.agentId ? normalizeAgentId(params.agentId) : undefined;
@@ -479,13 +468,10 @@ export const taskSuggestionsHandlers: GatewayRequestHandlers = {
       // clients always send local; retain this wire contract for those callers.
       const mode = params.mode ?? "worktree";
       if (params.cwd !== undefined && (mode !== "worktree" || !path.isAbsolute(params.cwd))) {
-        respond(
-          false,
-          undefined,
-          errorShape(
-            ErrorCodes.INVALID_REQUEST,
-            "task suggestion cwd correction requires worktree mode and an absolute repository path",
-          ),
+        respondError(
+          respond,
+          ErrorCodes.INVALID_REQUEST,
+          "task suggestion cwd correction requires worktree mode and an absolute repository path",
         );
         return;
       }
@@ -516,24 +502,17 @@ export const taskSuggestionsHandlers: GatewayRequestHandlers = {
       if (mode === "cloud") {
         const profiles = listWorkerProfiles(options.context);
         if (profiles.length === 0) {
-          respond(
-            false,
-            undefined,
-            errorShape(ErrorCodes.INVALID_REQUEST, "no cloud worker profiles configured"),
-          );
+          respondError(respond, ErrorCodes.INVALID_REQUEST, "no cloud worker profiles configured");
           return;
         }
         cloudProfileId = params.cloudProfileId;
         if (!cloudProfileId || !profiles.some((profile) => profile.id === cloudProfileId)) {
-          respond(
-            false,
-            undefined,
-            errorShape(
-              ErrorCodes.INVALID_REQUEST,
-              cloudProfileId
-                ? `unknown cloud worker profile: ${cloudProfileId}`
-                : "cloudProfileId is required for cloud mode",
-            ),
+          respondError(
+            respond,
+            ErrorCodes.INVALID_REQUEST,
+            cloudProfileId
+              ? `unknown cloud worker profile: ${cloudProfileId}`
+              : "cloudProfileId is required for cloud mode",
           );
           return;
         }
@@ -549,13 +528,10 @@ export const taskSuggestionsHandlers: GatewayRequestHandlers = {
         return;
       }
       if (acceptance.status !== "claimed") {
-        respond(
-          false,
-          undefined,
-          errorShape(
-            acceptance.status === "accepting" ? ErrorCodes.UNAVAILABLE : ErrorCodes.INVALID_REQUEST,
-            `task suggestion cannot be accepted: ${acceptance.status}`,
-          ),
+        respondError(
+          respond,
+          acceptance.status === "accepting" ? ErrorCodes.UNAVAILABLE : ErrorCodes.INVALID_REQUEST,
+          `task suggestion cannot be accepted: ${acceptance.status}`,
         );
         return;
       }

@@ -3,7 +3,7 @@ import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import { resolveStateDir } from "../config/state-dir.js";
 import { assertExistingDatabaseIdentity } from "../infra/sqlite-worker-identity.js";
-import { waitForAgentDatabasePreparation } from "./agent-database-preparation-context.js";
+import { waitForAgentDatabaseWriteAdmission } from "./agent-database-preparation-context.js";
 import type {
   OpenClawAgentDatabase,
   OpenClawAgentDatabaseOptions,
@@ -32,7 +32,7 @@ export async function withOpenClawAgentDatabaseWrite<T>(
   options.env.OPENCLAW_STATE_DIR = resolveStateDir(options.env);
   const pathname = resolveOpenClawAgentSqlitePath(options);
   options.path = pathname;
-  const preparation = waitForAgentDatabasePreparation(options.agentId, {
+  const preparation = waitForAgentDatabaseWriteAdmission(options.agentId, {
     env: options.env,
     signal,
   });

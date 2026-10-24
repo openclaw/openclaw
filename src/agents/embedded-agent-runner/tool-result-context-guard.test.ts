@@ -5,6 +5,7 @@ import { Type } from "typebox";
 import { describe, expect, it, vi } from "vitest";
 import type { ContextEngine } from "../../context-engine/types.js";
 import { sanitizeToolUseResultPairing } from "../session-transcript-repair.js";
+import { estimateMessageTokenPressure } from "../sessions/context-token-pressure.js";
 import { convertToLlm } from "../sessions/messages.js";
 import {
   castAgentMessage,
@@ -14,9 +15,11 @@ import { makeProviderModelFixture } from "../test-helpers/provider-model-fixture
 import { formatContextLimitTruncationNotice } from "./context-truncation-notice.js";
 import { normalizeMessagesForLlmBoundary } from "./run/attempt-llm-boundary.js";
 import { MidTurnPrecheckSignal } from "./run/midturn-precheck.js";
-import { checkMidTurnPrecheck } from "./run/preemptive-compaction.js";
 import {
-  createMessageCharEstimateCache,
+  checkMidTurnPrecheck,
+  resolveProjectedRequestPressure,
+} from "./run/preemptive-compaction.js";
+import {
   estimateMessageCharsCached,
   getToolResultText as getAllToolResultText,
 } from "./tool-result-char-estimator.js";
@@ -91,6 +94,8 @@ function hook(engine: ContextEngine, options: HookOptions = {}, agent = makeGuar
   };
 }
 
+const textBlock = (text: string) => ({ type: "text" as const, text });
+
 async function pressureCheck(
   agent: ReturnType<typeof makeGuardableAgent>,
   messages: AgentMessage[],
@@ -112,11 +117,15 @@ async function pressureCheck(
 }
 
 describe("installToolResultContextGuard", () => {
-  it("delivers actionable tool text through the real agent loop", async () => {
+  it.each([
+    "Error: missing import;",
+    "(Command exited with code 1)",
+    "Command timed out after 5 seconds.",
+    "Process exited with signal SIGTERM.",
+  ])("delivers the diagnostic %s through the real agent loop", async (diagnostic) => {
     const hint = "Inspect src/fixture.ts before retrying.";
     const preamble = "progress output\n".repeat(400);
-    const sourceTexts = [preamble + "Error: missing import; " + hint];
-    const content = sourceTexts.map((text) => ({ type: "text" as const, text }));
+    const content = [textBlock(preamble + diagnostic + " " + hint)];
     const original = structuredClone(content);
     const requests: Message[][] = [];
     const execute = vi.fn(async () => ({ content, details: { privateReference: "fixture" } }));
@@ -146,19 +155,16 @@ describe("installToolResultContextGuard", () => {
         requests.push(structuredClone(context.messages));
         const result = context.messages.find((message) => message.role === "toolResult");
         const hasHint = result && getAllToolResultText(result).includes(hint);
+        const reason = requests.length === 1 ? "toolUse" : "stop";
         const message = makeAgentAssistantMessage({
           content:
-            requests.length === 1
+            reason === "toolUse"
               ? [{ type: "toolCall", id: "call_diagnostic", name: "diagnostic", arguments: {} }]
-              : [{ type: "text", text: hasHint ? hint : "The diagnostic hint was unavailable." }],
-          stopReason: requests.length === 1 ? "toolUse" : "stop",
+              : [textBlock(hasHint ? hint : "The diagnostic hint was unavailable.")],
+          stopReason: reason,
         });
         const stream = createAssistantMessageEventStream();
-        stream.push({
-          type: "done",
-          reason: message.stopReason === "toolUse" ? "toolUse" : "stop",
-          message,
-        });
+        stream.push({ type: "done", reason, message });
         stream.end();
         return stream;
       },
@@ -190,13 +196,14 @@ describe("installToolResultContextGuard", () => {
     );
     expect(projected).not.toHaveProperty("details");
     expect(
-      estimateMessageCharsCached(projected, createMessageCharEstimateCache()),
+      estimateMessageCharsCached(projected, new WeakMap<AgentMessage, number>()),
     ).toBeLessThanOrEqual(contextWindowTokens);
     expect(getAllToolResultText(projected)).toContain(CONTEXT_LIMIT_TRUNCATION_NOTICE);
+    expect(getAllToolResultText(projected)).toContain(diagnostic);
     expect(getAllToolResultText(projected)).toContain(hint);
     expect(agent.state.messages.at(-1)).toMatchObject({
       role: "assistant",
-      content: [{ type: "text", text: hint }],
+      content: [textBlock(hint)],
       stopReason: "stop",
     });
     expect(agent.state.isStreaming).toBe(false);
@@ -205,10 +212,10 @@ describe("installToolResultContextGuard", () => {
 
   it("omits oversized metadata within the cap", async () => {
     const metadata = { type: "custom", value: "m".repeat(8_192) };
-    const hint = { type: "text", text: "Inspect src/fixture.ts before retrying." };
+    const hint = textBlock("Inspect src/fixture.ts before retrying.");
     const source = castAgentMessage({
       ...makeToolResult("blocks", ""),
-      content: [{ type: "text", text: "x".repeat(6_000) }, metadata, hint],
+      content: [textBlock("x".repeat(6_000)), metadata, hint],
       details: { privateReference: "not model context" },
     });
     const original = structuredClone(source);
@@ -218,7 +225,7 @@ describe("installToolResultContextGuard", () => {
       throw new Error("expected a tool result");
     }
     expect(
-      estimateMessageCharsCached(projected, createMessageCharEstimateCache()),
+      estimateMessageCharsCached(projected, new WeakMap<AgentMessage, number>()),
     ).toBeLessThanOrEqual(8_192);
     expect(source).toEqual(original);
     expect(projected).not.toHaveProperty("details");
@@ -294,6 +301,61 @@ describe("installToolResultContextGuard", () => {
 });
 
 describe("installContextEngineLoopHook", () => {
+  it.each(["live", "deferred"] as const)(
+    "budgets %s assembly in the mid-turn precheck's units",
+    async (mode) => {
+      const systemPrompt = "system rules ".repeat(2_000);
+      const tools = Array.from({ length: 40 }, (_, index) => ({
+        name: `tool_${index}`,
+        description: "Runs a fixture operation with several options. ".repeat(8),
+        parameters: Type.Object({ path: Type.String(), limit: Type.Optional(Type.Number()) }),
+      }));
+      const contextTokenBudget = 64_000;
+      const reserveTokens = 8_000;
+      const filler = () => makeUser("history filler ".repeat(100));
+      let lastAssembled: AgentMessage[] = [];
+      const engine = makeEngine();
+      // Fill the requested budget as tightly as the engine's raw estimate allows.
+      engine.assemble.mockImplementation(async ({ tokenBudget }) => {
+        const messages: AgentMessage[] = [];
+        let tokens = 0;
+        while (tokens + estimateMessageTokenPressure(filler()) <= (tokenBudget ?? 0)) {
+          messages.push(filler());
+          tokens += estimateMessageTokenPressure(filler());
+        }
+        lastAssembled = messages;
+        return { messages, estimatedTokens: tokens };
+      });
+      const { run } = hook(engine, {
+        tokenBudget: contextTokenBudget,
+        reserveTokens: () => reserveTokens,
+        getSystemPrompt: () => systemPrompt,
+        getTools: () => tools,
+        ...(mode === "deferred"
+          ? { deferredTurn: { prompt: "go", availableTools: new Set<string>() } }
+          : {}),
+      });
+      const view = await run([
+        makeUser("first"),
+        makeAssistant("calling a tool"),
+        makeToolResult("call_1", "tool output ".repeat(1_500)),
+      ]);
+      expect(lastAssembled.length).toBeGreaterThan(0);
+      const precheck = (messages: AgentMessage[]) =>
+        resolveProjectedRequestPressure({
+          context: { messages: convertToLlm(messages), systemPrompt, tools },
+          contextTokenBudget,
+          reserveTokens,
+        });
+
+      expect(precheck(view).route).toBe("fits");
+      // One more history item than the budget allows must overflow, so the
+      // budget is tight rather than conservatively small.
+      const pending = view.slice(lastAssembled.length);
+      expect(precheck([...lastAssembled, filler(), ...pending]).route).not.toBe("fits");
+    },
+  );
+
   it.each(["before", "upstream", "afterTurn", "ingestBatch", "ingest", "assemble"] as const)(
     "stops the next provider request when cancelled at %s",
     async (stage) => {
@@ -411,28 +473,22 @@ describe("installContextEngineLoopHook", () => {
   it("keeps original text for ingestion and replays the recorded model projection", async () => {
     const engine = makeEngine();
     const { run } = hook(engine, { getPrePromptMessageCount: () => 0 });
+    const visible = "visible prompt";
+    const projection = "model-only context\n\nvisible prompt";
     const prompt = {
-      ...makeUser("visible prompt"),
-      __openclaw: {
-        modelPromptProjection: { version: 1, text: "model-only context\n\nvisible prompt" },
-      },
+      ...makeUser(visible),
+      __openclaw: { modelPromptProjection: { version: 1, text: projection } },
     };
     const transformed = await run([prompt, makeToolResult("one", "result")]);
-    expect(engine.afterTurn.mock.calls[0]?.[0].messages[0]).toMatchObject({
-      role: "user",
-      content: "visible prompt",
-    });
-    expect(engine.assemble.mock.calls[0]?.[0].messages[0]).toMatchObject({
-      role: "user",
-      content: "visible prompt",
-    });
-    expect(normalizeMessagesForLlmBoundary(transformed)[0]).toMatchObject({
-      role: "user",
-      content: "model-only context\n\nvisible prompt",
-    });
-    expect(JSON.stringify(normalizeMessagesForLlmBoundary(transformed))).not.toContain(
-      "modelPromptProjection",
-    );
+    for (const message of [
+      engine.afterTurn.mock.calls[0]?.[0].messages[0],
+      engine.assemble.mock.calls[0]?.[0].messages[0],
+    ]) {
+      expect(message).toMatchObject({ role: "user", content: visible });
+    }
+    const normalized = normalizeMessagesForLlmBoundary(transformed);
+    expect(normalized[0]).toMatchObject({ role: "user", content: projection });
+    expect(JSON.stringify(normalized)).not.toContain("modelPromptProjection");
   });
 
   it("repairs orphan results from an engine returning its working array", async () => {
@@ -506,10 +562,11 @@ describe("installContextEngineLoopHook", () => {
     "ingests only new messages when afterTurn is absent (batch: %s)",
     async (batch) => {
       const engine = makeEngine();
-      const { run } = hook(
-        { ...engine, afterTurn: undefined, ingestBatch: batch ? engine.ingestBatch : undefined },
-        { isHeartbeat: true },
-      );
+      const { run } = hook({
+        ...engine,
+        afterTurn: undefined,
+        ingestBatch: batch ? engine.ingestBatch : undefined,
+      });
       const first = [makeUser("first"), makeToolResult("one", "result")];
       await run(first);
       const second = [...first, makeUser("second"), makeToolResult("two", "result")];
@@ -519,20 +576,11 @@ describe("installContextEngineLoopHook", () => {
           first.slice(1),
           second.slice(2),
         ]);
-        expect(engine.ingestBatch.mock.calls.map(([params]) => params.isHeartbeat)).toEqual([
-          true,
-          true,
-        ]);
         expect(engine.ingest).not.toHaveBeenCalled();
       } else {
         expect(engine.ingest.mock.calls.map(([params]) => params.message)).toEqual([
           ...first.slice(1),
           ...second.slice(2),
-        ]);
-        expect(engine.ingest.mock.calls.map(([params]) => params.isHeartbeat)).toEqual([
-          true,
-          true,
-          true,
         ]);
       }
       expect(engine.assemble).toHaveBeenCalledTimes(2);

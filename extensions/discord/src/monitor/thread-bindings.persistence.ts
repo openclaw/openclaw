@@ -1,12 +1,13 @@
+import { enqueueKeyedTask } from "openclaw/plugin-sdk/keyed-async-queue";
 import { createPluginStateErrorReporter } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { asOptionalObjectRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { stripUndefinedFields } from "../internal/undefined-fields.js";
 import { getDiscordRuntime } from "../runtime.js";
 import {
   BINDINGS_BY_THREAD_ID,
   PERSIST_BY_ACCOUNT_ID,
   THREAD_BINDINGS_STATE,
-  normalizePersistedBinding,
   openThreadBindingsStore,
   openThreadBindingsStoreAsync,
   removeBindingRecord,
@@ -28,15 +29,7 @@ function snapshotThreadBindingJson(value: unknown): unknown {
 }
 
 export function snapshotThreadBindingMetadata(input: { metadata?: Record<string, unknown> }) {
-  return asOptionalObjectRecord(
-    snapshotThreadBindingJson(input.metadata ? { ...input.metadata } : undefined),
-  );
-}
-
-function toPersistedBindingRecord(record: ThreadBindingRecord): ThreadBindingRecord {
-  return (
-    normalizePersistedBinding(record.threadId, snapshotThreadBindingJson(record)) ?? { ...record }
-  );
+  return asOptionalObjectRecord(snapshotThreadBindingJson(input.metadata));
 }
 
 export function runThreadBindingAccountOperation<T>(
@@ -46,26 +39,11 @@ export function runThreadBindingAccountOperation<T>(
   if (managers.length === 0) {
     return operation();
   }
-  const tails = THREAD_BINDINGS_STATE.accountOperationTails;
-  const predecessors = managers.map((manager) => tails.get(manager) ?? Promise.resolve());
-  const result = Promise.all(predecessors).then(operation);
-  const settled = result.then(
-    () => {},
-    () => {},
-  );
-  // Reserve every account before yielding; shared persistence is acquired only afterward.
-  for (const manager of managers) {
-    tails.set(manager, settled);
-  }
-  // Idle accounts must not retain the completed caller's async context.
-  void settled.then(() => {
-    for (const manager of managers) {
-      if (tails.get(manager) === settled) {
-        tails.delete(manager);
-      }
-    }
+  return enqueueKeyedTask({
+    tails: THREAD_BINDINGS_STATE.accountOperationTails,
+    keys: managers,
+    task: operation,
   });
-  return result;
 }
 
 export function drainThreadBindingAccountOperations(manager: ThreadBindingManager): Promise<void> {
@@ -126,8 +104,7 @@ export async function commitBindingRecord(params: {
       // Preserve the namespace's registration order and bounded eviction recency.
       for (const [key, record] of records) {
         assertCurrent();
-        const persisted = toPersistedBindingRecord(record);
-        await store.register(key, persisted, { assertCurrent });
+        await store.register(key, stripUndefinedFields(record), { assertCurrent });
         committedWrites += 1;
         targetCommitted ||= key === params.bindingKey;
       }
@@ -205,13 +182,13 @@ function persistBindingsSync(update?: {
         throw new Error("Discord synchronous compatibility requires atomic state update");
       }
       const next = update.transform(record);
-      store.update(key, () => toPersistedBindingRecord(next));
+      store.update(key, () => stripUndefinedFields(next));
       updatedRecord = next;
       if (next !== record) {
         setBindingRecord(next);
       }
     } else {
-      store.register(key, toPersistedBindingRecord(record));
+      store.register(key, stripUndefinedFields(record));
     }
   }
   for (const entry of store.entries()) {

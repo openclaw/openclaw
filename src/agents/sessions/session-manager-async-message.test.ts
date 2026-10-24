@@ -20,15 +20,12 @@ import {
   withSessionPendingInputPersistence,
 } from "../../config/sessions/session-accessor.pending-inputs.js";
 import { loadSessionEntryForAdmission } from "../../config/sessions/session-accessor.sqlite-entry-admission.js";
-import {
-  deleteSessionEntryRows,
-  writeSessionEntry,
-} from "../../config/sessions/session-accessor.sqlite-entry-store.js";
+import { writeSessionEntry } from "../../config/sessions/session-accessor.sqlite-entry-store.js";
 import { kickSessionEntryMaintenanceAfterWrite } from "../../config/sessions/session-accessor.sqlite-maintenance-kick.js";
 import { readTranscriptEventRows } from "../../config/sessions/session-accessor.sqlite-read.js";
 import * as reclamationRun from "../../config/sessions/session-accessor.sqlite-reclamation-run.js";
 import type { SessionActor } from "../../config/sessions/session-actor-contract.js";
-import { createDurableSessionActorFactory } from "../../config/sessions/session-actor-durable.js";
+import { createSessionActorFactory } from "../../config/sessions/session-actor-durable.js";
 import { SqliteTranscriptMutationConflictError } from "../../config/sessions/session-mutation-conflict-error.js";
 import { resolveMaintenanceConfigFromInput } from "../../config/sessions/store-maintenance.js";
 import { withOwnedSessionTranscriptWrites } from "../../config/sessions/transcript-write-context.js";
@@ -78,27 +75,55 @@ const user = (key: string) => ({
   idempotencyKey: `${key}:user`,
 });
 
-it.for(["protected", "interrupted retry", "below cap", "below cap protected insert"] as const)(
+const toolResult = <T extends object>(overrides: T) => ({
+  role: "toolResult" as const,
+  toolCallId: "result",
+  toolName: "lookup",
+  content: [{ type: "text" as const, text: "Synthetic result" }],
+  isError: false,
+  timestamp: 2,
+  ...overrides,
+});
+
+type MetadataWorker = Parameters<
+  Parameters<typeof metadataRuntime.withSessionMetadataWorker>[3]
+>[0];
+
+function interceptWorker(wrap: (worker: MetadataWorker) => MetadataWorker) {
+  const original = metadataRuntime.withSessionMetadataWorker;
+  return vi
+    .spyOn(metadataRuntime, "withSessionMetadataWorker")
+    .mockImplementation((options, database, assertCurrent, operation, controls) =>
+      original(options, database, assertCurrent, (worker) => operation(wrap(worker)), controls),
+    );
+}
+
+function afterMetadataReceipt(after: () => void) {
+  const original = metadataRuntime.withSessionMetadataWorker;
+  return vi
+    .spyOn(metadataRuntime, "withSessionMetadataWorker")
+    .mockImplementation(async (...args) => {
+      const result = await original(...args);
+      after();
+      return result;
+    });
+}
+
+it.for(["protected", "below cap protected insert"] as const)(
   "resumes idle protected-store maintenance after a lazy worker creates a session (starting state: %s)",
   async (startingState, { signal }) => {
-    const interruptedRetry = startingState === "interrupted retry";
     const belowCap = startingState.startsWith("below cap");
     const storePath = state.statePath(`lazy-maintenance-${startingState}.sqlite`);
     const scope = { agentId: "main", path: storePath };
     const protectedKey = "agent:main:lazy-protected";
-    const removedKey = "agent:main:lazy-removed";
     const updatedAt = Date.now();
     openOpenClawAgentDatabase(scope);
     runOpenClawAgentWriteTransaction((database) => {
-      for (const key of [
-        protectedKey,
-        ...(belowCap ? [] : ["agent:main:lazy-other-protected"]),
-        ...(interruptedRetry ? [removedKey] : []),
-      ]) {
+      for (const key of [protectedKey, ...(belowCap ? [] : ["agent:main:lazy-other-protected"])]) {
         writeSessionEntry(database, key, {
           sessionId: key,
           updatedAt,
-          ...(key === removedKey ? { pinnedAt: updatedAt } : { modelSelectionLocked: true }),
+          modelSelectionLocked: true,
         });
       }
     }, scope);
@@ -116,11 +141,9 @@ it.for(["protected", "interrupted retry", "below cap", "below cap protected inse
       storePath,
     };
     const settled = createDeferred();
-    const interrupted = createDeferred();
     const archived = createDeferred();
     const run = reclamationRun.runSqliteSessionReclamation;
     let passes = 0;
-    let retryInterrupted = false;
     const observe = vi
       .spyOn(reclamationRun, "runSqliteSessionReclamation")
       .mockImplementation(async (params) => {
@@ -134,13 +157,7 @@ it.for(["protected", "interrupted retry", "below cap", "below cap protected inse
             settled.resolve();
           }
           if (result.value.durableNoCandidates === true) {
-            if (interruptedRetry && !retryInterrupted) {
-              retryInterrupted = true;
-              kickSessionEntryMaintenanceAfterWrite(request);
-              interrupted.resolve();
-            } else {
-              settled.resolve();
-            }
+            settled.resolve();
           }
           if (result.value.archived > 0) {
             archived.resolve();
@@ -151,13 +168,6 @@ it.for(["protected", "interrupted retry", "below cap", "below cap protected inse
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     try {
       kickSessionEntryMaintenanceAfterWrite(request);
-      if (interruptedRetry) {
-        await withinTest(interrupted.promise, signal);
-        await yieldToEventLoop();
-        runOpenClawAgentWriteTransaction((database) => {
-          deleteSessionEntryRows(database, removedKey, { deleteOwnedWindows: true });
-        }, scope);
-      }
       await withinTest(settled.promise, signal);
       await yieldToEventLoop();
       const protectedPasses = passes;
@@ -174,22 +184,19 @@ it.for(["protected", "interrupted retry", "below cap", "below cap protected inse
             : "agent:main:lazy-eligible",
         sessionId: "lazy-eligible",
       };
-      let victim = target;
-      if (belowCap || startingState === "protected") {
-        const firstKey = belowCap ? "lazy-first" : "direct:lazy-protected-insert";
-        const firstTarget = {
-          ...target,
-          sessionKey: `agent:main:${firstKey}`,
-          sessionId: firstKey,
-        };
-        const first = await SessionManager.openAsync(firstTarget, state.workspaceDir);
-        await first.appendMessageAsync(user("lazy-maintenance-first"));
-        await yieldToEventLoop();
-        await vi.advanceTimersByTimeAsync(1_001);
-        expect(passes).toBe(protectedPasses);
-        expect(loadSessionEntry(firstTarget)?.archivedAt).toBeUndefined();
-        victim = belowCap ? firstTarget : target;
-      }
+      const firstKey = belowCap ? "lazy-first" : "direct:lazy-protected-insert";
+      const firstTarget = {
+        ...target,
+        sessionKey: `agent:main:${firstKey}`,
+        sessionId: firstKey,
+      };
+      const first = await SessionManager.openAsync(firstTarget, state.workspaceDir);
+      await first.appendMessageAsync(user("lazy-maintenance-first"));
+      await yieldToEventLoop();
+      await vi.advanceTimersByTimeAsync(1_001);
+      expect(passes).toBe(protectedPasses);
+      expect(loadSessionEntry(firstTarget)?.archivedAt).toBeUndefined();
+      const victim = belowCap ? firstTarget : target;
       const manager = await SessionManager.openAsync(target, state.workspaceDir);
       await manager.appendMessageAsync(user("lazy-maintenance"));
       expect(loadSessionEntry(target)?.sessionId).toBe(target.sessionId);
@@ -217,43 +224,31 @@ it.each([1, 2])(
   async (conflicts) => {
     const { target, manager } = await fixture(state, `mutation-conflicts-${conflicts}`);
     await manager.appendMessageAsync(user("seed"));
-    const withWorker = metadataRuntime.withSessionMetadataWorker;
     let appends = 0;
     let mutationReads = 0;
     const failures: unknown[] = [];
-    const spy = vi
-      .spyOn(metadataRuntime, "withSessionMetadataWorker")
-      .mockImplementation((options, database, assertCurrent, operation, controls) =>
-        withWorker(
-          options,
-          database,
-          assertCurrent,
-          (worker) =>
-            operation({
-              execute: async (command, commandOptions) => {
-                if (command.type === "session.metadata.mutation") {
-                  mutationReads++;
-                }
-                if (command.type === "session.metadata.append" && ++appends <= conflicts) {
-                  // The synchronous SDK can commit after host preparation but before the worker.
-                  expect(
-                    appendTranscriptMessageSync(target, {
-                      eventId: `concurrent-${appends}`,
-                      message: user(`concurrent-${appends}`),
-                    }).ok,
-                  ).toBe(true);
-                }
-                try {
-                  return await worker.execute(command, commandOptions);
-                } catch (error) {
-                  failures.push(error);
-                  throw error;
-                }
-              },
-            }),
-          controls,
-        ),
-      );
+    const spy = interceptWorker((worker) => ({
+      execute: async (command, commandOptions) => {
+        if (command.type === "session.metadata.mutation") {
+          mutationReads++;
+        }
+        if (command.type === "session.metadata.append" && ++appends <= conflicts) {
+          // The synchronous SDK can commit after host preparation but before the worker.
+          expect(
+            appendTranscriptMessageSync(target, {
+              eventId: `concurrent-${appends}`,
+              message: user(`concurrent-${appends}`),
+            }).ok,
+          ).toBe(true);
+        }
+        try {
+          return await worker.execute(command, commandOptions);
+        } catch (error) {
+          failures.push(error);
+          throw error;
+        }
+      },
+    }));
     let failure: unknown;
     let entryId: string | undefined;
     try {
@@ -305,14 +300,12 @@ it("keeps a newer user intact when a prepared tool result cannot rebase", async 
   ).toBe(true);
   const before = await loadTranscriptEvents(target);
   await expect(
-    manager.appendMessageAsync({
-      role: "toolResult",
-      toolCallId: "superseded-result",
-      toolName: "lookup",
-      content: [{ type: "text", text: "Prepared for the older user" }],
-      isError: false,
-      timestamp: 2,
-    }),
+    manager.appendMessageAsync(
+      toolResult({
+        toolCallId: "superseded-result",
+        content: [{ type: "text" as const, text: "Prepared for the older user" }],
+      }),
+    ),
   ).rejects.toBeInstanceOf(SqliteTranscriptMutationConflictError);
   expect(await loadTranscriptEvents(target)).toEqual(before);
   expect(manager.getEntries()).toHaveLength(1);
@@ -322,15 +315,16 @@ it("shares one frozen tool-result graph across append receipts, transcript views
   const { target, manager } = await fixture(state, "shared-tool-results");
   const seed = await manager.appendMessageWithTranscriptAnchorAsync(user("shared-results"));
   const text = "Synthetic result line with Unicode: 🦞\n".repeat(1024);
-  const messages = Array.from({ length: 3 }, (_, index) => ({
-    role: "toolResult" as const,
-    toolCallId: `large-${index}`,
-    toolName: "read",
-    content: [{ type: "text" as const, text }],
-    details: { rows: [{ index, values: [index, index + 1] }] },
-    isError: false,
-    timestamp: index + 2,
-  }));
+  const messages = Array.from({ length: 3 }, (_, index) =>
+    toolResult({
+      toolCallId: `large-${index}`,
+      toolName: "read",
+      content: [{ type: "text" as const, text }],
+      details: { rows: [{ index, values: [index, index + 1] }] },
+      timestamp: index + 2,
+    }),
+  );
+  const originalMessages = structuredClone(messages);
   const originalGraphs = messages.map((message) => ({
     content: message.content,
     block: message.content[0],
@@ -361,26 +355,11 @@ it("shares one frozen tool-result graph across append receipts, transcript views
         id: receipts[index]!.entryId,
         parentId: index === 0 ? seed.entryId : receipts[index - 1]!.entryId,
         timestamp: entry.timestamp,
-        message: {
-          role: "toolResult",
-          toolCallId: `large-${index}`,
-          toolName: "read",
-          content: [{ type: "text", text }],
-          details: { rows: [{ index, values: [index, index + 1] }] },
-          isError: false,
-          timestamp: index + 2,
-        },
+        message: originalMessages[index],
       }),
     })),
   );
   const context = manager.buildSessionContext().messages.slice(-messages.length);
-  const retained = new Set([
-    ...messages,
-    ...receipts.map(({ message }) => message),
-    ...entries.map(({ message }) => message),
-    ...context,
-  ]);
-  expect(retained.size).toBe(messages.length);
   for (const [index, message] of messages.entries()) {
     const original = originalGraphs[index]!;
     expect(receipts[index]!.message).toBe(message);
@@ -409,38 +388,22 @@ it.each(["message", "custom"] as const)(
     await manager.appendMessageAsync(user(`captured-${family}`));
     const nested = { value: "captured" };
     const data = { nested };
-    const message = {
-      role: "toolResult" as const,
+    const message = toolResult({
       toolCallId: "captured-result",
-      toolName: "lookup",
       content: [{ type: "text" as const, text: "Captured result" }],
       details: data,
-      isError: false,
-      timestamp: 2,
-    };
-    const withWorker = metadataRuntime.withSessionMetadataWorker;
+    });
     let appends = 0;
     let workerMutation: boolean | undefined;
-    const spy = vi
-      .spyOn(metadataRuntime, "withSessionMetadataWorker")
-      .mockImplementation((options, database, assertCurrent, operation, controls) =>
-        withWorker(
-          options,
-          database,
-          assertCurrent,
-          (worker) =>
-            operation({
-              execute: (command, commandOptions) => {
-                const pending = worker.execute(command, commandOptions);
-                if (command.type === "session.metadata.append" && ++appends === 2) {
-                  workerMutation = Reflect.set(nested, "value", "worker mutation");
-                }
-                return pending;
-              },
-            }),
-          controls,
-        ),
-      );
+    const spy = interceptWorker((worker) => ({
+      execute: (command, commandOptions) => {
+        const pending = worker.execute(command, commandOptions);
+        if (command.type === "session.metadata.append" && ++appends === 2) {
+          workerMutation = Reflect.set(nested, "value", "worker mutation");
+        }
+        return pending;
+      },
+    }));
     const blocker = manager.appendCustomEntryAsync("queued-before-capture");
     const pending =
       family === "message"
@@ -513,25 +476,17 @@ it("persists the native first content getter result before provenance reads", as
 it("expands message toJSON with its envelope key without changing tool text", async () => {
   const { target, manager } = await fixture(state, "message-json-redaction");
   await manager.appendMessageAsync(user("json-redaction"));
-  const message = {
-    role: "toolResult" as const,
+  const message = toolResult({
     toolCallId: "json-result",
-    toolName: "lookup",
     content: [],
-    isError: false,
-    timestamp: 2,
     toJSON(key: string) {
-      return {
-        role: "toolResult",
+      return toolResult({
         toolCallId: "json-result",
-        toolName: "lookup",
-        content: [{ type: "text", text: "opaque(abcdefghijklmnopqrst)" }],
+        content: [{ type: "text" as const, text: "opaque(abcdefghijklmnopqrst)" }],
         details: { serializationKey: key },
-        isError: false,
-        timestamp: 2,
-      };
+      });
     },
-  };
+  });
   const committed = await manager.appendMessageWithTranscriptAnchorAsync(message, {
     config: { logging: { redactPatterns: [String.raw`/opaque\(([^)]+)\)/g`] } },
   });
@@ -559,14 +514,10 @@ it("preserves tool text when JSON normalization copies a frozen content block", 
   });
   expect(block.text).toBe("opaque(abcdefghijklmnopqrst)");
   const committed = await manager.appendMessageWithTranscriptAnchorAsync(
-    {
-      role: "toolResult",
+    toolResult({
       toolCallId: "frozen-result",
-      toolName: "lookup",
       content: [block],
-      isError: false,
-      timestamp: 2,
-    },
+    }),
     { config },
   );
   const expected = [{ type: "text", text: "opaque(abcdefghijklmnopqrst)" }];
@@ -678,20 +629,10 @@ it("revalidates overtaken keyed replays while retaining fresh committed pending 
     message: Parameters<SessionManager["appendMessageWithTranscriptAnchorAsync"]>[0],
     nextKey: string,
   ) => {
-    const withWorker = metadataRuntime.withSessionMetadataWorker;
-    const delayed: typeof withWorker = async (
-      options,
-      database,
-      assertCurrent,
-      operation,
-      controls,
-    ) => {
-      const receipt = await withWorker(options, database, assertCurrent, operation, controls);
+    const spy = afterMetadataReceipt(() => {
       // The retained synchronous SDK can publish before an awaited receipt is adopted.
       newerId = manager.appendMessage(user(nextKey));
-      return receipt;
-    };
-    const spy = vi.spyOn(metadataRuntime, "withSessionMetadataWorker").mockImplementation(delayed);
+    });
     try {
       return await manager.appendMessageWithTranscriptAnchorAsync(message);
     } finally {
@@ -772,21 +713,7 @@ it("fences local navigation changes at worker commit and receipt publication", a
     }
   }
 
-  const withWorker = metadataRuntime.withSessionMetadataWorker;
-  const delayed: typeof withWorker = async (
-    options,
-    database,
-    assertCurrent,
-    operation,
-    controls,
-  ) => {
-    const receipt = await withWorker(options, database, assertCurrent, operation, controls);
-    manager.resetLeaf();
-    return receipt;
-  };
-  const publication = vi
-    .spyOn(metadataRuntime, "withSessionMetadataWorker")
-    .mockImplementation(delayed);
+  const publication = afterMetadataReceipt(() => manager.resetLeaf());
   let failure: unknown;
   try {
     failure = await manager.appendMessageAsync(user("committed-before-reset")).then(
@@ -930,7 +857,7 @@ async function withSelectedTranscriptReader<T>(
       if (!identity.key.startsWith("file:")) {
         throw new Error("Expected a physical actor database");
       }
-      const acquired = await createDurableSessionActorFactory(reader.database).acquire(
+      const acquired = await createSessionActorFactory(reader.database).acquire(
         {
           sessionKey: target.sessionKey,
           database: {

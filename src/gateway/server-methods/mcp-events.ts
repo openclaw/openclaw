@@ -1,9 +1,10 @@
 import { isDeepStrictEqual } from "node:util";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { isRecord, isStringArray } from "@openclaw/normalization-core/record-coerce";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { MCP_EVENTS_PROTOCOL_VERSION, requestMcpEvent } from "../../agents/mcp-event-request.js";
 import {
   prepareMcpEventConnection,
+  projectMcpEventRequester,
   type McpEventPrincipal,
 } from "../../plugins/service-mcp-events.js";
 import { operatorScopeSatisfied } from "../../shared/operator-scope-compat.js";
@@ -31,8 +32,7 @@ function projectCatalog(value: unknown) {
     if (
       !isRecord(event) ||
       !boundedString(event.name, 256) ||
-      !Array.isArray(event.delivery) ||
-      !event.delivery.every((mode: unknown) => typeof mode === "string") ||
+      !isStringArray(event.delivery) ||
       !(isRecord(event.inputSchema) || typeof event.inputSchema === "boolean") ||
       !(isRecord(event.payloadSchema) || typeof event.payloadSchema === "boolean")
     ) {
@@ -118,15 +118,7 @@ export const mcpEventsHandlers: GatewayRequestHandlers = {
             },
           }
         : {}),
-      ...(requester
-        ? {
-            requester: {
-              requesterSenderId: requester.senderId,
-              messageChannel: requester.channel,
-              agentAccountId: requester.accountId,
-            },
-          }
-        : {}),
+      ...(requester ? { requester: projectMcpEventRequester(requester) } : {}),
     };
     // UI callers without native channel provenance may browse shared connectors,
     // but never borrow another user's requester-scoped OAuth/resolver connection.

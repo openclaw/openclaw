@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import JSON5 from "json5";
 import { z } from "zod";
@@ -192,16 +192,14 @@ export async function resolveEnvironmentRecipe(
     }
     return {
       source: "detected",
-      identity: createHash("sha256")
-        .update(
-          JSON.stringify({
-            version: 2,
-            inputs: Object.entries(inputs).toSorted(([left], [right]) =>
-              left.localeCompare(right, "en"),
-            ),
-          }),
-        )
-        .digest("hex"),
+      identity: sha256Hex(
+        JSON.stringify({
+          version: 2,
+          inputs: Object.entries(inputs).toSorted(([left], [right]) =>
+            left.localeCompare(right, "en"),
+          ),
+        }),
+      ),
       inputs,
       // Corepack auto-pinning must not rewrite the admitted package.json during detection.
       env:

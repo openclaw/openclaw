@@ -117,11 +117,6 @@
   --card-foreground: #1f1d1a;
   --card-highlight: rgba(60, 50, 30, 0.02);
   --popover-foreground: #1f1d1a;
-  --session-hovercard-progress-surface: color-mix(
-    in srgb,
-    var(--card) 50%,
-    var(--panel-strong) 50%
-  );
 
   --panel: #faf9f5;
   --panel-strong: #f3f1e9;

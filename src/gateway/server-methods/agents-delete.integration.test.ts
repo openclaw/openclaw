@@ -10,18 +10,19 @@ import {
   withinTest,
 } from "../../../test/helpers/promise.js";
 import { createAgent } from "../../agents/agent-create.js";
+import { getActiveNativeAttempt } from "../../agents/embedded-agent-runner/run-state.js";
 import {
-  clearActiveEmbeddedRun,
-  resolveEmbeddedAgentRunProgressState,
-  setActiveEmbeddedRun,
-} from "../../agents/embedded-agent-runner/runs.js";
-import { createEmbeddedRunHandle } from "../../agents/embedded-agent-runner/runs.test-support.js";
+  clearTestEmbeddedRun as clearActiveEmbeddedRun,
+  registerTestEmbeddedRun as setActiveEmbeddedRun,
+  createEmbeddedRunHandle,
+} from "../../agents/embedded-agent-runner/runs.test-support.js";
 import {
   captureRuntimeConfigAsyncReader,
   getRuntimeConfig,
   resetConfigRuntimeState,
   withConfigMutationExclusive,
 } from "../../config/config.js";
+import type { SessionEntry } from "../../config/sessions.js";
 import { writeSessionEntry } from "../../config/sessions/session-accessor.sqlite-entry-store.js";
 import {
   patchSessionEntryCore,
@@ -33,7 +34,6 @@ import type {
   NativeBindingClientTestApi,
 } from "../../config/sessions/session-native-binding.test-support.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { CronService } from "../../cron/service.js";
 import { revokeSqliteDatabaseAdmissionsForPath } from "../../infra/sqlite-database-admission.js";
 import { appendSessionTranscriptMessageByIdentity } from "../../plugin-sdk/session-transcript-runtime.js";
 import { createPluginRuntimeMock } from "../../plugin-sdk/test-helpers/plugin-runtime-mock.js";
@@ -41,17 +41,26 @@ import { createPluginStateRuntimeStores } from "../../plugin-state/plugin-state-
 import { registerMemoryCapability } from "../../plugins/memory-state.js";
 import { getPluginRegistryState } from "../../plugins/runtime-state.js";
 import { disposePluginRegistryInstances } from "../../plugins/runtime.js";
+import { withPluginRuntimeGatewayContextResolver } from "../../plugins/runtime/gateway-request-scope.js";
 import { createPluginRecord } from "../../plugins/status.test-helpers.js";
-import { readAgentDeletionJournal } from "../../state/agent-deletion-journal.js";
+import { closeAgentWorkAdmissions } from "../../sessions/session-controller.lifecycle.js";
+import { isSessionRunActive } from "../../sessions/session-controller.queries.js";
 import * as agentDatabases from "../../state/openclaw-agent-db.js";
 import { runOpenClawAgentWriteTransaction } from "../../state/openclaw-agent-db.js";
 import * as agentExecutions from "../../state/openclaw-agent-execution.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../../state/openclaw-state-db-contract.js";
+import { repairOpenClawStateDatabaseSchema } from "../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "../../state/openclaw-state-schema.js";
-import { beginAgentDeletionJournal } from "../../test-utils/agent-deletion-journal.js";
+import {
+  addPreCutoverClientCredentialTablesForTest,
+  withStateMigrationBackupForTest,
+} from "../../state/openclaw-state-schema.test-support.js";
+import {
+  beginAgentDeletionJournal,
+  readAgentDeletionJournal,
+} from "../../test-utils/agent-deletion-journal.js";
 import { loadBundledPluginFacade } from "../../test-utils/bundled-plugin-public-surface.js";
-import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import {
   withOpenClawTestState,
   type OpenClawTestState,
@@ -59,10 +68,15 @@ import {
 import { acquireTestPortBlock } from "../../test-utils/port-claims.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import * as deletionRecovery from "../server-agent-deletion-recovery.js";
-import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { createGatewayMemoryCloseRegistryFactory } from "../server-close.memory.test-support.js";
 import { startGatewayServer } from "../server.js";
 import { connectGatewayClient, disconnectGatewayClient } from "../test-helpers.e2e.js";
+import {
+  createDeletionCron,
+  deletionGatewayEnv,
+  expectDeletedStorage,
+} from "./agents-delete.fixture.test-support.js";
+import type { GatewayContextResolver, GatewayRequestContext } from "./types.js";
 
 const nativeApi = await loadBundledPluginFacade<NativeBindingTestApi & NativeBindingClientTestApi>({
   pluginId: "codex",
@@ -76,20 +90,52 @@ afterEach(async () => {
   scenarioWork = undefined;
 });
 
+function deletionClient(
+  client: Awaited<ReturnType<typeof connectGatewayClient>>,
+  agentId: string,
+  workspace: string,
+) {
+  const rpc: typeof client.request = client.request.bind(client);
+  return {
+    rpc,
+    session: (name: string) =>
+      rpc<{ key: string; sessionId: string }>("sessions.create", {
+        agentId,
+        key: `agent:${agentId}:${name}`,
+      }),
+    delete: (options?: Parameters<typeof rpc>[2]) =>
+      rpc("agents.delete", { agentId, deleteFiles: true }, options),
+    async recreate() {
+      await expect(rpc("agents.create", { name: agentId, workspace })).resolves.toMatchObject({
+        ok: true,
+        agentId,
+      });
+      expect(readAgentDeletionJournal(agentId)).toBeUndefined();
+    },
+  };
+}
+
+function expectDeletionResult(result: unknown, workspace: string) {
+  expect(result).toMatchObject({
+    ok: true,
+    failed: [],
+    removed: expect.arrayContaining([{ path: workspace, method: "trash" }]),
+  });
+  expect(result).not.toHaveProperty("purgeFailed");
+}
+
 async function exerciseLateSessionWritesDuringDeletion(params: {
   state: OpenClawTestState;
-  client: Awaited<ReturnType<typeof connectGatewayClient>>;
+  client: ReturnType<typeof deletionClient>;
   agentId: string;
   workspace: string;
   signal: AbortSignal;
+  resolveGatewayContext: GatewayContextResolver;
 }): Promise<void> {
-  const { state, client, agentId, workspace, signal } = params;
+  const { state, client, agentId, workspace, signal, resolveGatewayContext } = params;
   const databasePath = path.join(state.agentDir(agentId), "openclaw-agent.sqlite");
   const storePath = path.join(state.sessionsDir(agentId), "sessions.json");
-  let session = await client.request<{ key: string; sessionId: string }>("sessions.create", {
-    agentId,
-    key: `agent:${agentId}:late-write-0`,
-  });
+  let session = await client.session("late-write-0");
   // Two cycles cover every held phase before and after same-agent recreation.
   for (let iteration = 0; iteration < 2; iteration += 1) {
     signal.throwIfAborted();
@@ -148,62 +194,41 @@ async function exerciseLateSessionWritesDuringDeletion(params: {
         `iteration ${iteration}, ${checkpoint} must not acquire an executor`,
       ).toHaveLength(capturesBefore);
     };
-    setActiveEmbeddedRun(session.sessionId, handle, session.key, undefined, agentId);
-    // The test owns the deadline while deliberately holding all three deletion phases.
-    const deleting = client.request(
-      "agents.delete",
-      { agentId, deleteFiles: true },
-      { signal, timeoutMs: null },
+    const operation = withPluginRuntimeGatewayContextResolver(resolveGatewayContext, () =>
+      setActiveEmbeddedRun(session.sessionId, handle, session.key, undefined, agentId),
     );
+    let ownerSettled = false;
+    void operation.ownerSettlement.then(() => {
+      ownerSettled = true;
+    });
+    // The test owns the deadline while deliberately holding all three deletion phases.
+    const deleting = client.delete({ signal, timeoutMs: null });
+    const reach = (gate: Promise<void>, message: string) =>
+      withinTest(awaitGateBeforeSettlement(gate, deleting, message), signal);
     void deleting.catch(() => {});
     try {
-      await withinTest(
-        awaitGateBeforeSettlement(aborted.promise, deleting, "deletion did not abort its run"),
-        signal,
-      );
+      await reach(aborted.promise, "deletion did not abort its run");
       expect(readAgentDeletionJournal(agentId)?.phase).toBe("draining");
-      expect(resolveEmbeddedAgentRunProgressState(session.sessionId)).toBeDefined();
+      expect(operation.result).toMatchObject({ kind: "aborted" });
+      expect(getActiveNativeAttempt(session.sessionId)).toBe(handle);
+      expect(ownerSettled).toBe(false);
       await refuseLatePatch("before-run-settlement");
       clearActiveEmbeddedRun(session.sessionId, handle, session.key);
 
-      await withinTest(
-        awaitGateBeforeSettlement(closed.promise, deleting, "deletion did not close its database"),
-        signal,
-      );
+      await reach(closed.promise, "deletion did not close its database");
       expect(readAgentDeletionJournal(agentId)?.phase).toBe("retiring");
       expect(getRuntimeConfig().agents?.entries).toHaveProperty(agentId);
       await refuseLatePatch("after-clean-close-before-config-reload");
       releaseClosed.resolve();
 
-      await withinTest(
-        awaitGateBeforeSettlement(
-          purgeCaptured.promise,
-          deleting,
-          "deletion did not capture its purge executor",
-        ),
-        signal,
-      );
+      await reach(purgeCaptured.promise, "deletion did not capture its purge executor");
       expect(readAgentDeletionJournal(agentId)?.phase).toBe("retiring");
       await refuseLatePatch("during-purge");
       releasePurge.resolve();
-      await expect(
-        withinTest(deleting, signal),
-        `deletion iteration ${iteration}`,
-      ).resolves.toMatchObject({
-        ok: true,
-        failed: [],
-        removed: expect.arrayContaining([{ path: workspace, method: "trash" }]),
-      });
-      expect(await deleting).not.toHaveProperty("purgeFailed");
+      expectDeletionResult(await withinTest(deleting, signal), workspace);
+      expect(ownerSettled).toBe(true);
       expect(readAgentDeletionJournal(agentId)?.cleanupCompleted).toBe(true);
-      for (const pathname of [
-        workspace,
-        state.agentDir(agentId),
-        state.sessionsDir(agentId),
-        databasePath,
-      ]) {
-        await expect(fs.stat(pathname)).rejects.toMatchObject({ code: "ENOENT" });
-      }
+      await expectDeletedStorage(state, agentId, workspace, databasePath);
     } finally {
       clearActiveEmbeddedRun(session.sessionId, handle, session.key);
       releaseClosed.resolve();
@@ -213,17 +238,8 @@ async function exerciseLateSessionWritesDuringDeletion(params: {
       captureCleanup.mockRestore();
       closeDatabase.mockRestore();
     }
-    await expect(
-      client.request("agents.create", { name: agentId, workspace }),
-    ).resolves.toMatchObject({
-      ok: true,
-      agentId,
-    });
-    expect(readAgentDeletionJournal(agentId)).toBeUndefined();
-    session = await client.request<{ key: string; sessionId: string }>("sessions.create", {
-      agentId,
-      key: `agent:${agentId}:late-write-${iteration + 1}`,
-    });
+    await client.recreate();
+    session = await client.session(`late-write-${iteration + 1}`);
     expect(session.sessionId).toBeTruthy();
   }
 }
@@ -234,45 +250,22 @@ it.for(["active", "restart-draining", "legacy-retiring"] as const)(
     await (scenarioWork = withOpenClawTestState(
       {
         label: `agent-delete-${scenario}`,
-        env: {
-          OPENCLAW_TEST_MINIMAL_GATEWAY: "0",
-          OPENCLAW_SKIP_CHANNELS: "1",
-          OPENCLAW_SKIP_GMAIL_WATCHER: "1",
-          OPENCLAW_SKIP_CRON: "1",
-          OPENCLAW_SKIP_CANVAS_HOST: "1",
-          OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
-          OPENCLAW_SKIP_PROVIDERS: "1",
-          OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-        },
+        env: deletionGatewayEnv,
       },
       async (state) => {
         const sharedDatabasePath = resolveOpenClawStateSqlitePath(state.env);
         if (scenario === "legacy-retiring") {
           await fs.mkdir(path.dirname(sharedDatabasePath), { recursive: true });
-          const legacy = new DatabaseSync(sharedDatabasePath);
-          try {
-            // Main's v20 journal predates the nullable deletion phase.
-            legacy.exec(`CREATE TABLE agent_deletion_journal (
-              agent_id TEXT PRIMARY KEY,
-              operation_id TEXT NOT NULL DEFAULT '',
-              agent_dir TEXT NOT NULL,
-              workspace_dir TEXT NOT NULL,
-              sessions_dir TEXT NOT NULL,
-              database_paths_json TEXT NOT NULL DEFAULT '[]',
-              cleanup_paths_json TEXT NOT NULL DEFAULT '[]',
-              created_at INTEGER NOT NULL,
-              cleanup_completed INTEGER NOT NULL DEFAULT 0,
-              delete_files INTEGER NOT NULL DEFAULT 1
-            ) STRICT;`);
-            legacy.exec(OPENCLAW_STATE_SCHEMA_SQL);
-            legacy.exec(`PRAGMA user_version = 20;
+          using legacy = new DatabaseSync(sharedDatabasePath);
+          legacy.exec(OPENCLAW_STATE_SCHEMA_SQL);
+          addPreCutoverClientCredentialTablesForTest(legacy);
+          // v20 used the same journal fields, without the nullable phase.
+          legacy.exec("ALTER TABLE agent_deletion_journal DROP COLUMN phase");
+          legacy.exec(`PRAGMA user_version = 20;
               INSERT INTO schema_meta (meta_key, role, schema_version, created_at, updated_at)
                 VALUES ('primary', 'global', 20, 1, 1);
               INSERT INTO config_machine_state (state_key, value_json, updated_at_ms)
                 VALUES ('state.schema.contentVersion', '20', 1);`);
-          } finally {
-            legacy.close();
-          }
         }
         await state.writeConfig({
           gateway: { mode: "local", auth: { mode: "token", token: "agent-delete-test-token" } },
@@ -281,12 +274,18 @@ it.for(["active", "restart-draining", "legacy-retiring"] as const)(
             defaults: {
               model: "openai/gpt-4.1",
               skipBootstrap: true,
-              heartbeat: { every: "0m" },
             },
             entries: { keeper: { workspace: state.workspaceDir } },
           },
           plugins: { slots: { memory: "none" } },
         });
+        if (scenario === "legacy-retiring") {
+          // Version-only repair leaves the deletion journal's first-use phase column absent.
+          const migrated = await withStateMigrationBackupForTest({ env: state.env }, () =>
+            repairOpenClawStateDatabaseSchema({ env: state.env, versionMigrationOnly: true }),
+          );
+          expect(migrated.warnings).toEqual([]);
+        }
         await captureRuntimeConfigAsyncReader()();
         const workspace = state.path("workspace-doomed");
         const created = await createAgent({ name: "doomed", workspace, skipBootstrap: true });
@@ -296,6 +295,15 @@ it.for(["active", "restart-draining", "legacy-retiring"] as const)(
         const sessionId = "deletion-active-session";
         const sessionKey = `agent:${agentId}:active`;
         const databasePath = path.join(state.agentDir(agentId), "openclaw-agent.sqlite");
+        const writeEntry = (
+          key: string,
+          entry: SessionEntry,
+          previousEntry: SessionEntry | null = null,
+        ) =>
+          runOpenClawAgentWriteTransaction(
+            (database) => writeSessionEntry(database, key, entry, { previousEntry }),
+            { agentId, path: databasePath, env: state.env },
+          );
         const session = {
           sessionId,
           updatedAt: 1,
@@ -303,40 +311,30 @@ it.for(["active", "restart-draining", "legacy-retiring"] as const)(
             ? { agentHarnessId: "codex", lifecycleRevision: "native-binding-generation" }
             : {}),
         };
-        runOpenClawAgentWriteTransaction(
-          (database) => writeSessionEntry(database, sessionKey, session, { previousEntry: null }),
-          { agentId, path: databasePath, env: state.env },
-        );
+        writeEntry(sessionKey, session);
         await fs.mkdir(state.sessionsDir(agentId), { recursive: true });
         await fs.writeFile(
           path.join(state.sessionsDir(agentId), "owned-attachment.txt"),
           "synthetic",
         );
         await fs.writeFile(path.join(workspace, "owned-work.txt"), "synthetic");
-        const scheduler = createTestGatewayScheduler();
-        const cron = new CronService({
-          scheduler,
-          storePath: state.statePath("cron/jobs.json"),
-          cronEnabled: false,
-          log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
-          enqueueSystemEvent: vi.fn(),
-          requestHeartbeat: vi.fn(),
-          runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
-        });
-        const context = createDirectChatContext({ cron, getRuntimeConfig });
+        const { context, stop } = createDeletionCron(state);
         try {
           if (scenario === "active") {
             const claim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
             const hotReloadRecovery = vi.fn(() => {
               throw new Error("Synthetic Gateway hot reload unexpectedly required recovery");
             });
-            const startupRecovery = createDeferred();
+            const startupRecovery = createDeferred<GatewayRequestContext>();
             const resumeDeletions = deletionRecovery.resumeAgentDeletions;
             const recovery = vi
               .spyOn(deletionRecovery, "resumeAgentDeletions")
               .mockImplementation(async (...args) => {
                 const recovering = resumeDeletions(...args);
-                void recovering.then(startupRecovery.resolve, startupRecovery.reject);
+                void recovering.then(
+                  () => startupRecovery.resolve(args[0]),
+                  startupRecovery.reject,
+                );
                 await recovering;
               });
             const server = await startGatewayServer(claim.port, {
@@ -348,7 +346,10 @@ it.for(["active", "restart-draining", "legacy-retiring"] as const)(
             try {
               await server.startupSettled;
               // Recovery starts after sidecar readiness; join it before creating a pending journal.
-              await withinTest(startupRecovery.promise, signal);
+              const { resolveGatewayContext } = await withinTest(startupRecovery.promise, signal);
+              if (!resolveGatewayContext) {
+                throw new Error("Gateway did not publish its runtime context resolver");
+              }
               recovery.mockRestore();
               signal.throwIfAborted();
               const client = await connectGatewayClient({
@@ -356,30 +357,20 @@ it.for(["active", "restart-draining", "legacy-retiring"] as const)(
                 token: "agent-delete-test-token",
                 scopes: ["operator.admin", "operator.read", "operator.write"],
               });
-              const native = nativeApi.createNativeBindingDeletionFixture(
-                createPluginRuntimeMock({
-                  state: createPluginStateRuntimeStores("codex", () => signal.throwIfAborted()),
-                }),
-                { agentId, sessionId, sessionKey },
-              );
+              const operations = deletionClient(client, agentId, workspace);
+              const { rpc } = operations;
+              const binding = (boundId: string, boundKey: string) =>
+                nativeApi.createNativeBindingDeletionFixture(
+                  createPluginRuntimeMock({
+                    state: createPluginStateRuntimeStores("codex", () => signal.throwIfAborted()),
+                  }),
+                  { agentId, sessionId: boundId, sessionKey: boundKey },
+                );
+              const native = binding(sessionId, sessionKey);
               const finishedKey = `agent:${agentId}:finished`;
               const finishedId = "deletion-finished-session";
-              runOpenClawAgentWriteTransaction(
-                (database) =>
-                  writeSessionEntry(
-                    database,
-                    finishedKey,
-                    { ...session, sessionId: finishedId },
-                    { previousEntry: null },
-                  ),
-                { agentId, path: databasePath, env: state.env },
-              );
-              const finishedNative = nativeApi.createNativeBindingDeletionFixture(
-                createPluginRuntimeMock({
-                  state: createPluginStateRuntimeStores("codex", () => signal.throwIfAborted()),
-                }),
-                { agentId, sessionId: finishedId, sessionKey: finishedKey },
-              );
+              writeEntry(finishedKey, { ...session, sessionId: finishedId });
+              const finishedNative = binding(finishedId, finishedKey);
               const nativeClient = await nativeApi.attachNativeBindingDeletionClient(
                 native.store,
                 native.key,
@@ -397,6 +388,57 @@ it.for(["active", "restart-draining", "legacy-retiring"] as const)(
               registry.plugins.push(plugin);
               registry.agentHarnesses.push(registration);
               try {
+                const history = async (key: string) =>
+                  (
+                    await rpc<{ messages: unknown[] }>("chat.history", {
+                      sessionKey: key,
+                    })
+                  ).messages;
+                const inject = async (key: string, message: string) => {
+                  await expect(
+                    rpc("chat.inject", { sessionKey: key, message }),
+                  ).resolves.toMatchObject({ ok: true, messageId: expect.any(String) });
+                  const messages = await history(key);
+                  expect(messages).toContainEqual(
+                    expect.objectContaining({
+                      role: "assistant",
+                      content: [{ type: "text", text: message }],
+                    }),
+                  );
+                  return messages;
+                };
+                const keeperSession = await rpc<{ key: string }>("sessions.create", {
+                  agentId: "keeper",
+                  key: "agent:keeper:injection-isolation",
+                });
+                const selectedMessages = await inject(
+                  sessionKey,
+                  "Accepted before agent deletion.",
+                );
+                const assertInjectionRefused = async (phase: string, reason: string) => {
+                  await expect(
+                    rpc("chat.inject", {
+                      sessionKey,
+                      message: `Refused during ${phase}.`,
+                    }),
+                  ).rejects.toThrow(reason);
+                  await inject(keeperSession.key, `Keeper accepts injection during ${phase}.`);
+                };
+                expect(readAgentDeletionJournal(agentId)).toBeUndefined();
+                const reopen = closeAgentWorkAdmissions({
+                  agentId,
+                  env: state.env,
+                  reason: new Error("Selected agent admission is closed."),
+                });
+                try {
+                  await assertInjectionRefused(
+                    "closed admission",
+                    "Selected agent admission is closed.",
+                  );
+                  expect(await history(sessionKey)).toEqual(selectedMessages);
+                } finally {
+                  reopen();
+                }
                 const readSummaries = sessionInventory.readSessionEntrySummariesInWorker;
                 const inventory = vi
                   .spyOn(sessionInventory, "readSessionEntrySummariesInWorker")
@@ -406,9 +448,7 @@ it.for(["active", "restart-draining", "legacy-retiring"] as const)(
                     }
                     return readSummaries(scope);
                   });
-                await expect(
-                  client.request("agents.delete", { agentId, deleteFiles: true }),
-                ).rejects.toThrow("synthetic inventory failure");
+                await expect(operations.delete()).rejects.toThrow("synthetic inventory failure");
                 inventory.mockRestore();
                 expect(readAgentDeletionJournal(agentId)).toMatchObject({
                   phase: "draining",
@@ -422,21 +462,32 @@ it.for(["active", "restart-draining", "legacy-retiring"] as const)(
                     { sessionKey, message: "refused", idempotencyKey: "pending-deletion" },
                   ],
                 ] as const) {
-                  await expect(client.request(method, params)).rejects.toThrow(
+                  await expect(rpc(method, params)).rejects.toThrow(
                     "deletion cleanup is still pending",
                   );
                 }
+                await assertInjectionRefused(
+                  "pending deletion",
+                  "deletion cleanup is still pending",
+                );
+                // Deleting agents leave the discovery roster while their owners settle.
+                await expect(rpc("chat.history", { sessionKey })).rejects.toThrow(
+                  `Session "${sessionKey}" was not found.`,
+                );
                 const aborted = createDeferred();
                 const handle = createEmbeddedRunHandle({
                   runId: "deletion-active-run",
                   abort: () => aborted.resolve(),
                 });
-                setActiveEmbeddedRun(sessionId, handle, sessionKey, undefined, agentId);
-                const deleting = client.request(
-                  "agents.delete",
-                  { agentId, deleteFiles: true },
-                  { timeoutMs: 10_000 },
+                const operation = withPluginRuntimeGatewayContextResolver(
+                  resolveGatewayContext,
+                  () => setActiveEmbeddedRun(sessionId, handle, sessionKey, undefined, agentId),
                 );
+                let ownerSettled = false;
+                void operation.ownerSettlement.then(() => {
+                  ownerSettled = true;
+                });
+                const deleting = operations.delete({ timeoutMs: 10_000 });
                 try {
                   await withinTest(
                     awaitGateBeforeSettlement(
@@ -447,10 +498,12 @@ it.for(["active", "restart-draining", "legacy-retiring"] as const)(
                     signal,
                   );
                   expect(readAgentDeletionJournal(agentId)?.phase).toBe("draining");
-                  expect(resolveEmbeddedAgentRunProgressState(sessionId)).toBeDefined();
+                  expect(operation.result).toMatchObject({ kind: "aborted" });
+                  expect(getActiveNativeAttempt(sessionId)).toBe(handle);
+                  expect(ownerSettled).toBe(false);
                   const relocatedWorkspace = state.path("workspace-relocated");
                   await expect(
-                    client.request("agents.update", { agentId, workspace: relocatedWorkspace }),
+                    rpc("agents.update", { agentId, workspace: relocatedWorkspace }),
                   ).rejects.toThrow(/deletion cleanup is still pending/);
                   expect(getRuntimeConfig().agents?.entries?.[agentId]?.workspace).toBe(workspace);
                   await expect(fs.stat(relocatedWorkspace)).rejects.toMatchObject({
@@ -459,15 +512,10 @@ it.for(["active", "restart-draining", "legacy-retiring"] as const)(
                   // Cancellation checkpoints remain writable until the retained run settles.
                   await withinTest(
                     withConfigMutationExclusive(async () => {
-                      runOpenClawAgentWriteTransaction(
-                        (database) =>
-                          writeSessionEntry(
-                            database,
-                            sessionKey,
-                            { ...session, updatedAt: 2, label: "aborted" },
-                            { previousEntry: session },
-                          ),
-                        { agentId, path: databasePath, env: state.env },
+                      writeEntry(
+                        sessionKey,
+                        { ...session, updatedAt: 2, label: "aborted" },
+                        session,
                       );
                     }),
                     signal,
@@ -478,37 +526,17 @@ it.for(["active", "restart-draining", "legacy-retiring"] as const)(
                   await deleting;
                   expect(performance.now() - started).toBeLessThan(10_000);
                 }
-                expect(await deleting).toMatchObject({
-                  ok: true,
-                  failed: [],
-                  removed: expect.arrayContaining([{ path: workspace, method: "trash" }]),
-                });
-                expect(await deleting).not.toHaveProperty("purgeFailed");
+                expectDeletionResult(await deleting, workspace);
+                expect(ownerSettled).toBe(true);
                 expect(native.store.lookup(native.key)).toBeUndefined();
                 expect(finishedNative.store.lookup(finishedNative.key)).toBeUndefined();
                 expect(nativeClient.subscribed()).toBe(false);
-                expect(resolveEmbeddedAgentRunProgressState(sessionId)).toBeUndefined();
+                expect(isSessionRunActive(sessionId)).toBe(false);
                 expect(readAgentDeletionJournal(agentId)?.cleanupCompleted).toBe(true);
-                await expect(
-                  client.request("sessions.create", { agentId, key: `agent:${agentId}:gone` }),
-                ).rejects.toThrow();
-                for (const pathname of [
-                  workspace,
-                  state.agentDir(agentId),
-                  state.sessionsDir(agentId),
-                  databasePath,
-                ]) {
-                  await expect(fs.stat(pathname)).rejects.toMatchObject({ code: "ENOENT" });
-                }
-                await expect(
-                  client.request("agents.create", { name: agentId, workspace }),
-                ).resolves.toMatchObject({ ok: true, agentId });
-                expect(readAgentDeletionJournal(agentId)).toBeUndefined();
-
-                const recreatedSession = await client.request<{ key: string; sessionId: string }>(
-                  "sessions.create",
-                  { agentId, key: `agent:${agentId}:recreated` },
-                );
+                await expect(operations.session("gone")).rejects.toThrow();
+                await expectDeletedStorage(state, agentId, workspace, databasePath);
+                await operations.recreate();
+                const recreatedSession = await operations.session("recreated");
                 for (const message of [
                   { role: "user", content: "Remember the synthetic blue preference." },
                   { role: "assistant", content: "The completed turn recorded blue." },
@@ -522,9 +550,7 @@ it.for(["active", "restart-draining", "legacy-retiring"] as const)(
                     message,
                   });
                 }
-                expect(
-                  resolveEmbeddedAgentRunProgressState(recreatedSession.sessionId),
-                ).toBeUndefined();
+                expect(isSessionRunActive(recreatedSession.sessionId)).toBe(false);
                 const memoryConfig: OpenClawConfig = {
                   ...getRuntimeConfig(),
                   memory: {
@@ -589,10 +615,7 @@ it.for(["active", "restart-draining", "legacy-retiring"] as const)(
                   };
                   const memoryLeases = readMemoryLeases();
                   expect(memoryLeases.length).toBeGreaterThan(0);
-                  deletingRecreated = client.request("agents.delete", {
-                    agentId,
-                    deleteFiles: true,
-                  });
+                  deletingRecreated = operations.delete();
                   void deletingRecreated.catch(() => {});
                   await withinTest(
                     awaitGateBeforeSettlement(
@@ -610,26 +633,11 @@ it.for(["active", "restart-draining", "legacy-retiring"] as const)(
                   expect(readAgentDeletionJournal(agentId)?.phase).toBe("draining");
                   expect(readMemoryLeases()).toEqual(memoryLeases);
                   releaseScan.resolve();
-                  await expect(deletingRecreated).resolves.toMatchObject({
-                    ok: true,
-                    failed: [],
-                    removed: expect.arrayContaining([{ path: workspace, method: "trash" }]),
-                  });
-                  expect(await deletingRecreated).not.toHaveProperty("purgeFailed");
+                  expectDeletionResult(await deletingRecreated, workspace);
                   expect(readAgentDeletionJournal(agentId)?.cleanupCompleted).toBe(true);
                   expect(readMemoryLeases()).toEqual([]);
-                  for (const pathname of [
-                    workspace,
-                    state.agentDir(agentId),
-                    state.sessionsDir(agentId),
-                    databasePath,
-                  ]) {
-                    await expect(fs.stat(pathname)).rejects.toMatchObject({ code: "ENOENT" });
-                  }
-                  await expect(
-                    client.request("agents.create", { name: agentId, workspace }),
-                  ).resolves.toMatchObject({ ok: true, agentId });
-                  expect(readAgentDeletionJournal(agentId)).toBeUndefined();
+                  await expectDeletedStorage(state, agentId, workspace, databasePath);
+                  await operations.recreate();
                 } finally {
                   releaseScan.resolve();
                   await Promise.allSettled([deletingRecreated]);
@@ -641,10 +649,11 @@ it.for(["active", "restart-draining", "legacy-retiring"] as const)(
                 }
                 await exerciseLateSessionWritesDuringDeletion({
                   state,
-                  client,
+                  client: operations,
                   agentId,
                   workspace,
                   signal,
+                  resolveGatewayContext,
                 });
                 expect(hotReloadRecovery).not.toHaveBeenCalled();
               } finally {
@@ -676,8 +685,8 @@ it.for(["active", "restart-draining", "legacy-retiring"] as const)(
           }
           await cleanupSessionStateForTest({ stateDir: state.stateDir, rootPath: state.root });
           if (scenario === "legacy-retiring") {
-            const legacy = new DatabaseSync(sharedDatabasePath);
-            try {
+            {
+              using legacy = new DatabaseSync(sharedDatabasePath);
               expect(legacy.prepare("PRAGMA table_info(agent_deletion_journal)").all()).not.toEqual(
                 expect.arrayContaining([expect.objectContaining({ name: "phase" })]),
               );
@@ -686,8 +695,6 @@ it.for(["active", "restart-draining", "legacy-retiring"] as const)(
                 (agent_id, agent_dir, workspace_dir, sessions_dir, created_at)
                 VALUES (?, ?, ?, ?, 1)`)
                 .run(pending.agentId, pending.agentDir, pending.workspaceDir, pending.sessionsDir);
-            } finally {
-              legacy.close();
             }
             revokeSqliteDatabaseAdmissionsForPath(sharedDatabasePath);
           }
@@ -715,14 +722,7 @@ it.for(["active", "restart-draining", "legacy-retiring"] as const)(
           await deletionRecovery.resumeAgentDeletions(context);
           expect(context.logGateway.warn).not.toHaveBeenCalled();
           expect(readAgentDeletionJournal(agentId)?.cleanupCompleted).toBe(true);
-          for (const pathname of [
-            workspace,
-            state.agentDir(agentId),
-            state.sessionsDir(agentId),
-            databasePath,
-          ]) {
-            await expect(fs.stat(pathname)).rejects.toMatchObject({ code: "ENOENT" });
-          }
+          await expectDeletedStorage(state, agentId, workspace, databasePath);
           expect(getRuntimeConfig().agents?.entries).not.toHaveProperty(agentId);
           expect(
             await createAgent({ name: agentId, workspace, skipBootstrap: true }),
@@ -739,24 +739,18 @@ it.for(["active", "restart-draining", "legacy-retiring"] as const)(
           ).resolves.toMatchObject({ sessionId: "recreated-after-recovery" });
           if (scenario === "legacy-retiring") {
             await cleanupSessionStateForTest({ stateDir: state.stateDir, rootPath: state.root });
-            const upgraded = new DatabaseSync(sharedDatabasePath);
-            try {
-              expect(upgraded.prepare("PRAGMA user_version").get()).toEqual({
-                user_version: OPENCLAW_STATE_SCHEMA_VERSION,
-              });
-              expect(upgraded.prepare("PRAGMA table_info(agent_deletion_journal)").all()).toEqual(
-                expect.arrayContaining([
-                  expect.objectContaining({ name: "phase", type: "TEXT", notnull: 0 }),
-                ]),
-              );
-            } finally {
-              upgraded.close();
-            }
+            using upgraded = new DatabaseSync(sharedDatabasePath);
+            expect(upgraded.prepare("PRAGMA user_version").get()).toEqual({
+              user_version: OPENCLAW_STATE_SCHEMA_VERSION,
+            });
+            expect(upgraded.prepare("PRAGMA table_info(agent_deletion_journal)").all()).toEqual(
+              expect.arrayContaining([
+                expect.objectContaining({ name: "phase", type: "TEXT", notnull: 0 }),
+              ]),
+            );
           }
         } finally {
-          cron.stop();
-          await cron.waitForIdle();
-          await scheduler.stop();
+          await stop();
         }
       },
     ));

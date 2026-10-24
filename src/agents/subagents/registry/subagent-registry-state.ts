@@ -9,12 +9,12 @@ import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-w
 import { matchesSubagentChildSessionOwner } from "./subagent-child-owner-match.js";
 import {
   projectSubagentRunForMaintenance,
-  projectSubagentRunForSessionList,
+  shouldPreserveSubagentForMaintenance,
 } from "./subagent-delivery-state.js";
 import {
   getSubagentRunsForChildSession,
   getSubagentSessionReadLookup,
-  immutableSubagentRun,
+  compactSubagentRunForMemory,
   immutableSubagentRunSessionList,
   subagentRuns,
 } from "./subagent-registry-memory.js";
@@ -51,17 +51,20 @@ import type { SubagentRunMaintenanceRecord, SubagentRunRecord } from "./subagent
 
 const persistedSubagentRunsReadCache: SubagentRunsCache<SubagentRunRecord> = {
   state: {},
-  copy: immutableSubagentRun,
+  copy: compactSubagentRunForMemory,
   project: (entry) => entry,
 };
 const persistedSubagentSessionListRunsReadCache: SubagentRunsCache<SubagentRunReadRecord> = {
   state: {},
   copy: immutableSubagentRunSessionList,
-  project: projectSubagentRunForSessionList,
+  project: immutableSubagentRunSessionList,
 };
 const persistedSubagentMaintenanceReadCache: SubagentRunsCache<SubagentRunMaintenanceRecord> = {
   state: {},
-  copy: projectSubagentRunForMaintenance,
+  copy: (entry) =>
+    shouldPreserveSubagentForMaintenance(entry)
+      ? projectSubagentRunForMaintenance(entry)
+      : undefined,
   project: projectSubagentRunForMaintenance,
 };
 
@@ -201,9 +204,8 @@ export type SubagentSessionListReadView = {
 /** A long-lived projection retains its source; registry publications still own the facts. */
 export function createSubagentSessionListReadView(options: {
   env: NodeJS.ProcessEnv;
-  path?: string;
 }): SubagentSessionListReadView {
-  const path = options.path ?? resolveOpenClawStateSqlitePath(options.env);
+  const path = resolveOpenClawStateSqlitePath(options.env);
   const source = prepareOpenClawStateReadSource({ path, env: options.env });
   const cache = persistedSubagentSessionListRunsReadCache;
   const readPersisted = shouldReadPersistedSubagentRuns();
@@ -301,7 +303,13 @@ export async function prepareSubagentRegistrationRows(
 ): Promise<() => ReadonlyMap<string, SubagentRunRecord>> {
   const prepared = await prepareSubagentRunsCache(
     persistedSubagentRunsReadCache,
-    readAllSubagentRunsInWorker,
+    async (source) => {
+      const rows = await readAllSubagentRunsInWorker(source);
+      for (const [runId, entry] of rows) {
+        rows.set(runId, compactSubagentRunForMemory(entry));
+      }
+      return rows;
+    },
     context,
   );
   const runIds = new Set(selectedRunIds);
@@ -388,17 +396,20 @@ export async function withSubagentRunReadSnapshot<S extends SubagentRunReadSelec
 export function prepareSubagentRunsSnapshotForSessions(
   inMemoryRuns: Map<string, SubagentRunRecord>,
   sessionKeys: readonly string[],
+  context?: OpenClawStateWorkerContext,
 ) {
   return prepareSubagentSessionRunReadSnapshot({
     inMemoryRuns,
     sessionKeys,
     fullCache: persistedSubagentRunsReadCache,
+    context,
   });
 }
 
 export async function prepareSubagentRunsSnapshotForRunIds(
   inMemoryRuns: Map<string, SubagentRunRecord>,
   runIds: readonly string[],
+  options: { yieldedChildren?: boolean } = {},
 ): Promise<PreparedSubagentRunsRead> {
   const requested = new Set(runIds.map((runId) => runId.trim()));
   const matches = (entry: SubagentRunReadRecord) =>
@@ -407,11 +418,18 @@ export async function prepareSubagentRunsSnapshotForRunIds(
     inMemoryRuns,
     fullCache: persistedSubagentRunsReadCache,
     compactCache: persistedSubagentSessionListRunsReadCache,
-    readScope: { runIds: requested },
-    select: (snapshot) => ({
-      runIds: [...snapshot.values()].filter(matches).map((entry) => entry.runId),
-      sessionKeys: [],
-    }),
+    readScope: { runIds: requested, yieldedChildren: options.yieldedChildren },
+    select: (snapshot) => {
+      const rows = [...snapshot.values()].filter(matches);
+      return {
+        runIds: rows.map((entry) => entry.runId),
+        sessionKeys: options.yieldedChildren
+          ? rows
+              .filter((entry) => entry.pauseReason === "sessions_yield")
+              .map((entry) => entry.childSessionKey)
+          : [],
+      };
+    },
   });
   return {
     consume(consume) {
@@ -420,6 +438,13 @@ export async function prepareSubagentRunsSnapshotForRunIds(
         for (const runId of selection.runIds) {
           const entry = runs.get(runId);
           if (entry) {
+            selected.set(runId, entry);
+          }
+        }
+        // Announced children of selected yielded runs ride along for observation only.
+        const owners = new Set(selection.sessionKeys);
+        for (const [runId, entry] of runs) {
+          if (owners.has(entry.requesterSessionKey) && !selected.has(runId)) {
             selected.set(runId, entry);
           }
         }
@@ -530,19 +555,6 @@ export function getSubagentRunsSnapshotForChildSession(
   const key = childSessionKey.trim();
   if (!key) {
     return Promise.resolve(new Map());
-  }
-  // Restore publications remain readable while their physical source drains.
-  if (
-    !shouldReadPersistedSubagentRuns() ||
-    (!getActiveOpenClawStateDatabaseReadSnapshot() &&
-      getPersistedSubagentRunsSnapshot(persistedSubagentRunsReadCache))
-  ) {
-    return Promise.resolve(
-      getSubagentRunsSnapshot(inMemoryRuns, persistedSubagentRunsReadCache, {
-        selectCached: (lookup) => lookup.selectChildren(new Set([key])),
-        matches: (entry) => matchesSubagentChildSessionOwner(entry, key, childAgentId),
-      }),
-    );
   }
   return withSubagentRunReadSnapshot(
     inMemoryRuns,

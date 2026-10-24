@@ -2,18 +2,12 @@ import { readFile } from "node:fs/promises";
 import { afterEach, expect, test } from "vitest";
 import { deleteSession, markBackgrounded } from "./bash-process-registry.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
-import { runExecProcess } from "./bash-tools.exec-runtime.js";
+import { runExecFixture } from "./bash-tools.exec-fixture.test-support.js";
+import type { runExecProcess } from "./bash-tools.exec-runtime.js";
 import { createProcessTool } from "./bash-tools.process.js";
+import { coerceEnv } from "./bash-tools.shared.js";
 
-afterEach(() => {
-  resetProcessRegistryForTests();
-});
-
-function currentEnv(): Record<string, string> {
-  return Object.fromEntries(
-    Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] != null),
-  );
-}
+afterEach(resetProcessRegistryForTests);
 
 function shellQuote(value: string): string {
   return `'${value.replaceAll("'", process.platform === "win32" ? "''" : "'\\''")}'`;
@@ -25,38 +19,50 @@ function currentNodeEvalCommand(source: string): string {
   return process.platform === "win32" ? `& ${node} -e ${script}` : `${node} -e ${script}`;
 }
 
-async function startPtySession(command: string) {
-  const processTool = createProcessTool();
-  const run = await runExecProcess({
-    command,
+function startProcess(
+  options: Partial<Parameters<typeof runExecProcess>[0]> & { command: string },
+) {
+  return runExecFixture({
     workdir: process.cwd(),
-    env: currentEnv(),
+    env: coerceEnv(process.env),
     usePty: true,
-    warnings: [],
     maxOutput: 20_000,
     pendingMaxOutput: 20_000,
-    notifyOnExit: false,
     timeoutSec: 5,
+    ...options,
   });
+}
+
+async function startPtySession(
+  source: string,
+  options: Partial<Parameters<typeof runExecProcess>[0]> = {},
+) {
+  const processTool = createProcessTool();
+  const run = await startProcess({ command: currentNodeEvalCommand(source), ...options });
   markBackgrounded(run.session);
   return { processTool, sessionId: run.session.id, run };
 }
 
+async function stopProcess(run: Awaited<ReturnType<typeof runExecProcess>>) {
+  if (!run.session.exited) {
+    run.kill();
+  }
+  await run.promise;
+}
+
 test("exec supports pty output, OPENCLAW_SHELL, send-keys, and submit", async () => {
   const { processTool, sessionId, run } = await startPtySession(
-    currentNodeEvalCommand(
-      [
-        "process.stdout.write(`ok:${process.env.OPENCLAW_SHELL || ''}`);",
-        "const dataEvent=String.fromCharCode(100,97,116,97);",
-        "const submitted=String.fromCharCode(115,117,98,109,105,116,116,101,100);",
-        "let submissions=0;",
-        "process.stdin.on(dataEvent,d=>{",
-        "process.stdout.write(d);",
-        "for(const byte of d){if(byte===10||byte===13)submissions++;}",
-        "if(submissions>=2){process.stdout.write(submitted);process.exit(0);}",
-        "});",
-      ].join(""),
-    ),
+    [
+      "process.stdout.write(`ok:${process.env.OPENCLAW_SHELL || ''}`);",
+      "const dataEvent=String.fromCharCode(100,97,116,97);",
+      "const submitted=String.fromCharCode(115,117,98,109,105,116,116,101,100);",
+      "let submissions=0;",
+      "process.stdin.on(dataEvent,d=>{",
+      "process.stdout.write(d);",
+      "for(const byte of d){if(byte===10||byte===13)submissions++;}",
+      "if(submissions>=2){process.stdout.write(submitted);process.exit(0);}",
+      "});",
+    ].join(""),
   );
 
   await processTool.execute("toolcall", {
@@ -65,10 +71,7 @@ test("exec supports pty output, OPENCLAW_SHELL, send-keys, and submit", async ()
     keys: ["h", "i", "Enter"],
   });
 
-  await processTool.execute("toolcall", {
-    action: "submit",
-    sessionId,
-  });
+  await processTool.execute("toolcall", { action: "submit", sessionId });
 
   await run.promise;
   const poll = await processTool.execute("toolcall", { action: "poll", sessionId });
@@ -83,7 +86,7 @@ test.skipIf(process.platform === "win32")(
   "process send-keys delivers Unicode, raw hex, and control bytes through a real PTY",
   async () => {
     const { processTool, sessionId, run } = await startPtySession(
-      currentNodeEvalCommand(`
+      `
         process.stdin.setRawMode(true);
         const received = [];
         process.stdin.on("data", chunk => {
@@ -94,7 +97,7 @@ test.skipIf(process.platform === "win32")(
           }
         });
         console.log("READY");
-      `),
+      `,
     );
     try {
       await expect.poll(() => run.session.aggregated, { timeout: 5_000 }).toContain("READY");
@@ -113,10 +116,7 @@ test.skipIf(process.platform === "win32")(
         text: `Sent 16 bytes to session ${sessionId}.`,
       });
     } finally {
-      if (!run.session.exited) {
-        run.kill();
-      }
-      await run.promise;
+      await stopProcess(run);
     }
   },
 );
@@ -150,23 +150,16 @@ test("PTY cursor queries and key modes survive output chunk boundaries", async (
     setTimeout(() => process.exit(3), 5000);
   `;
   const warnings: string[] = [];
-  const run = await runExecProcess({
-    command: currentNodeEvalCommand(script),
-    workdir: process.cwd(),
+  const { run, processTool, sessionId } = await startPtySession(script, {
     env: { PATH: process.env.PATH ?? "", TERM: "xterm-256color" },
-    usePty: true,
     warnings,
-    maxOutput: 20_000,
-    pendingMaxOutput: 20_000,
-    notifyOnExit: false,
     timeoutSec: 8,
   });
-  markBackgrounded(run.session);
   try {
     await expect.poll(() => run.session.aggregated, { timeout: 5_000 }).toContain("ARROW_READY");
-    await createProcessTool().execute("arrow", {
+    await processTool.execute("arrow", {
       action: "send-keys",
-      sessionId: run.session.id,
+      sessionId,
       keys: ["Up"],
     });
     const outcome = await run.promise;
@@ -176,10 +169,7 @@ test("PTY cursor queries and key modes survive output chunk boundaries", async (
     expect(outcome.aggregated).toContain("SPLIT=1b5b313b3152");
     expect(outcome.aggregated).toContain("ARROW=1b4f41");
   } finally {
-    if (!run.session.exited) {
-      run.kill();
-      await run.promise;
-    }
+    await stopProcess(run);
     deleteSession(run.session.id);
   }
 });
@@ -198,10 +188,9 @@ test.runIf(process.platform === "linux")(
     const env = { PATH: process.env.PATH ?? "/usr/bin:/bin", ENV: "backend-policy" };
     for (const target of ["child", "pty", "sandbox"] as const) {
       const warnings: string[] = [];
-      const run = await runExecProcess({
+      const run = await startProcess({
         command,
         execCommand: command,
-        workdir: process.cwd(),
         env,
         usePty: target === "pty",
         sandbox:
@@ -220,8 +209,6 @@ test.runIf(process.platform === "linux")(
         warnings,
         maxOutput: 1000,
         pendingMaxOutput: 1000,
-        notifyOnExit: false,
-        timeoutSec: 5,
       });
       expect(await run.promise).toMatchObject({
         status: "completed",

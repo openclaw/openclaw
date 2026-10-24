@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.types.js";
 import { acquireReadOnlyPreparedModelRuntime } from "../agents/prepared-model-runtime.js";
 import { registerPreparedModelRuntimeClose } from "../agents/prepared-model-runtime.lifecycle.js";
@@ -10,26 +11,12 @@ import type {
   PreparedModelRuntimeLease,
 } from "../agents/prepared-model-runtime.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import {
-  getCurrentPluginMetadataSnapshot,
-  withPluginMetadataSnapshotScope,
-} from "../plugins/current-plugin-metadata-snapshot.js";
-import {
-  getPluginCache,
-  getPluginMetadataSnapshotCache,
-  type PluginCache,
-} from "../plugins/plugin-cache.js";
+import { withPluginMetadataSnapshotScope } from "../plugins/current-plugin-metadata-snapshot.js";
+import { getPluginMetadataSnapshotCache } from "../plugins/plugin-cache.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { resolveEffectiveThinkingProfile } from "../plugins/provider-thinking.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { createGatewayMetadataCloseFixture } from "./server-close.metadata.test-support.js";
-
-type BuildObservation = {
-  previous: Promise<void> | undefined;
-  completion: Promise<void>;
-  metadata: PluginMetadataSnapshot | undefined;
-  cache: PluginCache;
-};
 
 function modelConfig(base: OpenClawConfig, provider: string): OpenClawConfig {
   return {
@@ -77,23 +64,19 @@ it(
       policyRoots.set(id, fs.realpathSync(root));
       const marker = fixture.state.path(`${id}-evaluated`);
       markers.set(id, marker);
-      fs.writeFileSync(
-        path.join(root, "package.json"),
-        JSON.stringify({
-          name: id,
-          version: "1.0.0",
-          type: "commonjs",
-          openclaw: { extensions: ["./index.cjs"] },
-        }),
-      );
-      fs.writeFileSync(
-        path.join(root, "openclaw.plugin.json"),
-        JSON.stringify({
-          id,
-          providers: [id],
-          configSchema: { type: "object", properties: {} },
-        }),
-      );
+      const writeJson = (name: string, value: unknown) =>
+        fs.writeFileSync(path.join(root, name), JSON.stringify(value));
+      writeJson("package.json", {
+        name: id,
+        version: "1.0.0",
+        type: "commonjs",
+        openclaw: { extensions: ["./index.cjs"] },
+      });
+      writeJson("openclaw.plugin.json", {
+        id,
+        providers: [id],
+        configSchema: { type: "object", properties: {} },
+      });
       fs.writeFileSync(
         path.join(root, "index.cjs"),
         `require('node:fs').writeFileSync(${JSON.stringify(runtimeMarker)}, 'unexpected'); throw Error('policy runtime must stay cold');`,
@@ -136,16 +119,12 @@ it(
       });
     const gateEntered = createDeferredCore(),
       releaseBuild = createDeferredCore();
-    const leases: PreparedModelRuntimeLease[] = [];
-    const builds: BuildObservation[] = [];
+    let warmA: PreparedModelRuntimeLease | undefined;
     const jobs: Promise<PreparedModelRuntimeLease>[] = [];
-    const closing: Promise<void>[] = [];
+    let closing: Promise<void> | undefined;
     const restorers: Array<() => void> = [];
     try {
-      const aPort = await fixture.reservePort();
-      const aServer = await fixture.start(aPort);
-      const a = fixture.kernels.get(aPort);
-      assert(a);
+      const { server: aServer, kernel: a } = await fixture.startServer();
       const aMetadata = a.getPluginMetadataSnapshot();
       assert(aMetadata);
       const aCache = getPluginMetadataSnapshotCache(aMetadata);
@@ -173,8 +152,7 @@ it(
           () => acquireReadOnlyPreparedModelRuntime(selected, { catalogMode: "static" }),
           { config: selected.config, env: fixture.state.env, trustConfigIdentity: true },
         );
-      const warmA = await acquire(aMetadata, input(warmId, "warm-a"));
-      leases.push(warmA);
+      warmA = await acquire(aMetadata, input(warmId, "warm-a"));
       expect(warmA.snapshot.metadataSnapshot).toBe(aMetadata);
       const warmEntry = warmA.snapshot.modelCatalog.entries.find(
         (entry) => entry.provider === warmId,
@@ -203,29 +181,12 @@ it(
           if (holdNext) {
             holdNext = false;
             expect(params.pluginMetadataSnapshot).toBe(aMetadata);
-            expect(getPluginCache()).toBe(aCache);
             gateEntered.resolve();
             await releaseBuild.promise;
           }
           return prepareStatic(params);
         });
       restorers.push(() => held.mockRestore());
-      const runtimeBuild = await import("../agents/prepared-model-runtime.build.js");
-      const startBuild = runtimeBuild.startSerializedSnapshotBuildBatch;
-      const observed = vi
-        .spyOn(runtimeBuild, "startSerializedSnapshotBuildBatch")
-        .mockImplementation((candidates, completions, ...rest) => {
-          const previous = completions.get(agentDir);
-          const cache = getPluginCache();
-          const metadata = getCurrentPluginMetadataSnapshot({
-            allowScopedSnapshot: true,
-            allowWorkspaceScopedSnapshot: true,
-          });
-          const build = startBuild(candidates, completions, ...rest);
-          builds.push({ previous, completion: build.completion, cache, metadata });
-          return build;
-        });
-      restorers.push(() => observed.mockRestore());
       const modelCloseEntered = createDeferredCore<Error>();
       restorers.push(
         registerPreparedModelRuntimeClose(async (error) => {
@@ -235,32 +196,24 @@ it(
       const first = acquire(aMetadata, input(warmId, "blocked-a"));
       jobs.push(first);
       void first.catch(() => {});
-      await Promise.race([
+      await awaitGateBeforeSettlement(
         gateEntered.promise,
-        first.then(() => {
-          throw new Error("Model build bypassed the real static catalog gate");
-        }),
-      ]);
+        first,
+        "Model build bypassed the real static catalog gate",
+      );
       const queued = acquire(aMetadata, input(coldId, "queued-a"));
       jobs.push(queued);
       void queued.catch(() => {});
-      expect(builds).toHaveLength(2);
-      expect(builds[1]!.previous).toBe(builds[0]!.completion);
-      for (const build of builds) {
-        expect(build.cache).toBe(aCache);
-        expect(build.metadata).toBe(aMetadata);
-      }
       expect(fs.existsSync(markers.get(coldId)!)).toBe(false);
 
       const aClose = aServer.close({ reason: "retire captured queued model metadata" });
-      closing.push(aClose);
+      closing = aClose;
       void aClose.catch(() => {});
-      const shutdownError = await Promise.race([
+      const shutdownError = await awaitGateBeforeSettlement(
         modelCloseEntered.promise,
-        aClose.then(() => {
-          throw new Error("Gateway closed without joining model acquisition");
-        }),
-      ]);
+        aClose,
+        "Gateway closed without joining model acquisition",
+      );
       expect(shutdownError.message).toBe("prepared model runtime process lifetime closed");
       expect(getPluginMetadataSnapshotCache(aMetadata)).toBe(aCache);
       expect(aCache.retirement).toBeUndefined();
@@ -271,7 +224,6 @@ it(
       expect(aCache.retirement).toBeUndefined();
       expect(warmOwner.lifecycle.signal.aborted).toBe(false);
       releaseBuild.resolve();
-      await Promise.all(builds.map(({ completion }) => completion));
       await expect(first).rejects.toBe(shutdownError);
       await expect(queued).rejects.toMatchObject({
         message: `prepared model runtime publication was superseded for ${agentDir}`,
@@ -293,10 +245,8 @@ it(
           await job.value[Symbol.asyncDispose]();
         }
       }
-      for (const lease of leases) {
-        await lease[Symbol.asyncDispose]();
-      }
-      await Promise.allSettled([...builds.map(({ completion }) => completion), ...closing]);
+      await warmA?.[Symbol.asyncDispose]();
+      await Promise.allSettled([closing]);
       for (const restore of restorers.toReversed()) {
         restore();
       }

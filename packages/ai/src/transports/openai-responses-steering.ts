@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import { stableStringify } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ResponseInput } from "openai/resources/responses/responses.js";
@@ -29,8 +30,8 @@ export async function projectResponsesSteeringInput<T extends { input?: Response
   // prefix or settings requires ordinary queued delivery through a new request.
   if (
     !Array.isArray(input) ||
-    stableStringify(settings) !== stableStringify(activeSettings) ||
-    stableStringify(input.slice(0, activeInput.length)) !== stableStringify(activeInput)
+    !isDeepStrictEqual(settings, activeSettings) ||
+    !isDeepStrictEqual(input.slice(0, activeInput.length), activeInput)
   ) {
     return [];
   }

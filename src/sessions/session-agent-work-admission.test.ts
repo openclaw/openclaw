@@ -1,125 +1,111 @@
 import { expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
-import { runExclusiveSqliteSessionWrite } from "../config/sessions/session-accessor.sqlite-scope.js";
+import { runExclusiveSqliteSessionWrite as writeSession } from "../config/sessions/session-accessor.sqlite-scope.js";
 import { readAgentDeletionJournalStatusInWorker } from "../state/agent-deletion-journal.read.js";
+import { admissionGate as gate } from "./session-admission.test-support.js";
 import {
-  beginSessionWorkAdmission,
-  closeAgentWorkAdmissions,
-  closeSessionWorkAdmissions,
+  beginSessionEffect,
+  closeAgentWorkAdmissions as closeAgent,
+  closeSessionControllerAdmission as closeSession,
   collectActiveAgentSessionWorkAdmissions,
-  startAgentWorkAdmissionInterruption,
-  startSessionWorkAdmissionInterruption,
-} from "./session-lifecycle-admission.js";
+  startAgentWorkAdmissionInterruption as interruptAgent,
+  startSessionControllerInterruption as interruptSession,
+} from "./session-controller.lifecycle.js";
 
 // mock-isolation: Admission decisions use controlled journal status without opening SQLite.
 vi.mock("../state/agent-deletion-journal.read.js", () => ({
   readAgentDeletionJournalStatusInWorker: vi.fn(async () => "absent"),
 }));
 
+function fixture(state: string, scope = "agent:worker") {
+  const target = { agentId: "worker", env: { OPENCLAW_STATE_DIR: state } };
+  const session = (id: string) => ({ ...target, scope, identities: [id] });
+  const begin = (id: string, overrides: Partial<Parameters<typeof beginSessionEffect>[0]> = {}) =>
+    beginSessionEffect({ ...session(id), assertAllowed: () => {}, ...overrides });
+  const write = <T>(operation: () => Promise<T>, agentId = "worker") =>
+    writeSession({ ...target, agentId }, operation, "session-entry.patch");
+  return { target, session, begin, write };
+}
+
 it("refuses queued session writes when deletion closes admission before their FIFO turn", async () => {
-  const target = { agentId: "worker", env: { OPENCLAW_STATE_DIR: "/agent-write-admission" } };
-  const entered = createDeferred();
-  const release = createDeferred();
-  const holding = runExclusiveSqliteSessionWrite(
-    target,
-    async () => {
-      entered.resolve();
-      await release.promise;
-    },
-    "session-entry.patch",
-  );
-  await awaitGateBeforeSettlement(entered.promise, holding, "writer did not reserve its FIFO");
+  const { target, write: runWrite } = fixture("/agent-write-admission");
+  const barrier = gate();
+  const holding = runWrite(barrier.wait);
+  await awaitGateBeforeSettlement(barrier.entered, holding, "writer did not reserve its FIFO");
   const write = vi.fn(async () => {});
-  const queued = runExclusiveSqliteSessionWrite(target, write, "session-entry.patch");
+  const queued = runWrite(write);
   const reason = new Error("agent deletion began");
   const refused = expect(queued).rejects.toBe(reason);
-  const reopen = closeAgentWorkAdmissions({ ...target, reason });
+  const reopen = closeAgent({ ...target, reason });
   try {
-    release.resolve();
+    barrier.release();
     await holding;
     await refused;
     expect(write).not.toHaveBeenCalled();
-    await expect(
-      runExclusiveSqliteSessionWrite(
-        { ...target, agentId: "kept" },
-        async () => "saved",
-        "session-entry.patch",
-      ),
-    ).resolves.toBe("saved");
+    await expect(runWrite(async () => "saved", "kept")).resolves.toBe("saved");
   } finally {
-    release.resolve();
+    barrier.release();
     await Promise.allSettled([holding, queued]);
     reopen();
   }
-  await runExclusiveSqliteSessionWrite(target, write, "session-entry.patch");
+  await runWrite(write);
   expect(write).toHaveBeenCalledOnce();
 });
 
 it("fences unseen agent sessions and joins exact admitted work without blocking another state", async () => {
-  const target = { agentId: "worker", env: { OPENCLAW_STATE_DIR: "/agent-admission-state-a" } };
+  const { target, begin } = fixture("/agent-admission-state-a");
   const scope = "agent:worker";
   const interrupted = createDeferred();
-  const active = await beginSessionWorkAdmission({
-    ...target,
-    scope,
-    identities: ["sessionless-run"],
-    assertAllowed: () => {},
-    onInterrupt: () => interrupted.resolve(),
-  });
-  const pendingStarted = createDeferred();
-  const releasePending = createDeferred();
-  const pending = beginSessionWorkAdmission({
-    ...target,
-    scope,
-    identities: ["pending-run"],
-    assertAllowed: async () => {
-      pendingStarted.resolve();
-      await releasePending.promise;
-    },
+  const active = await begin("sessionless-run", { onInterrupt: () => interrupted.resolve() });
+  const releaseActive = createDeferred();
+  const activeWork = active.run(async () => await releaseActive.promise);
+  const pendingBarrier = gate();
+  const pending = begin("pending-run", {
+    assertAllowed: pendingBarrier.wait,
     revalidateAllowed: () => {},
   });
   const reason = new Error("agent deletion began");
   const pendingOutcome = expect(pending).rejects.toBe(reason);
-  await pendingStarted.promise;
-  const reopen = closeAgentWorkAdmissions({ ...target, reason });
-  let other: Awaited<ReturnType<typeof beginSessionWorkAdmission>> | undefined;
+  await pendingBarrier.entered;
+  const reopen = closeAgent({ ...target, reason });
+  let other: Awaited<ReturnType<typeof beginSessionEffect>> | undefined;
   try {
-    await pendingOutcome;
     const onInterrupt = vi.fn();
     await expect(
-      beginSessionWorkAdmission({
-        ...target,
+      begin("new-session", {
         scope: "previously-unseen-store",
-        identities: ["new-session"],
-        assertAllowed: () => {},
         onInterrupt,
       }),
     ).rejects.toBe(reason);
     expect(onInterrupt).not.toHaveBeenCalled();
-    other = await beginSessionWorkAdmission({
-      ...target,
+    other = await begin("same-agent-other-state", {
       env: { OPENCLAW_STATE_DIR: "/agent-admission-state-b" },
-      scope,
-      identities: ["same-agent-other-state"],
-      assertAllowed: () => {},
     });
     expect(collectActiveAgentSessionWorkAdmissions(target).get(scope)).toEqual(
       new Set(["sessionless-run"]),
     );
-    const drain = startAgentWorkAdmissionInterruption({ ...target, reason });
+    const drain = interruptAgent({ ...target, reason });
     await interrupted.promise;
-    let settled = false;
-    void drain.released.then(() => {
-      settled = true;
-    });
-    expect(await active.run(async () => "cancellation checkpoint")).toBe("cancellation checkpoint");
-    expect(settled).toBe(false);
+    const settled = vi.fn();
+    void drain.released.then(settled);
+    const forbiddenWork = vi.fn(async () => {});
+    await expect(active.run(forbiddenWork)).rejects.toBe(reason);
+    expect(forbiddenWork).not.toHaveBeenCalled();
+    expect(settled).not.toHaveBeenCalled();
+    pendingBarrier.release();
+    await pendingOutcome;
     active.release();
+    await Promise.resolve();
+    expect(settled).not.toHaveBeenCalled();
+    releaseActive.resolve();
+    await activeWork;
     await drain.released;
     expect(other.isActive()).toBe(true);
   } finally {
-    releasePending.resolve();
+    pendingBarrier.release();
+    releaseActive.resolve();
     await pending.catch(() => {});
+    await activeWork;
     active.release();
     other?.release();
     reopen();
@@ -127,46 +113,30 @@ it("fences unseen agent sessions and joins exact admitted work without blocking 
 });
 
 it("rejects new agent work after a durable deletion survives restart", async () => {
+  const { begin } = fixture("/agent-admission-restart");
   vi.mocked(readAgentDeletionJournalStatusInWorker).mockResolvedValueOnce("pending");
-  let admitted: Awaited<ReturnType<typeof beginSessionWorkAdmission>> | undefined;
+  const attempt = begin("new-run-after-restart");
   try {
-    await expect(
-      beginSessionWorkAdmission({
-        agentId: "worker",
-        env: { OPENCLAW_STATE_DIR: "/agent-admission-restart" },
-        scope: "agent:worker",
-        identities: ["new-run-after-restart"],
-        assertAllowed: () => {},
-      }).then((lease) => {
-        admitted = lease;
-        return lease;
-      }),
-    ).rejects.toThrow("deletion is in progress");
+    await expect(attempt).rejects.toThrow("deletion is in progress");
   } finally {
-    admitted?.release();
+    (await attempt.catch(() => undefined))?.release();
   }
 });
 
 it.each(["session-first", "agent-first"] as const)(
   "keeps agent deletion refusal ahead of an overlapping session Stop (%s)",
   async (order) => {
-    const target = {
-      agentId: "worker",
-      env: { OPENCLAW_STATE_DIR: "/agent-admission-overlap" },
-      scope: "overlapping-stop.sqlite",
-      identities: ["stopped-session"],
-    };
+    const { session, begin } = fixture("/agent-admission-overlap", "overlapping-stop.sqlite");
+    const target = session("stopped-session");
     const agentReason = new Error("agent deletion is pending");
     const close = [
-      () => closeSessionWorkAdmissions({ ...target, reason: new Error("session stopped") }),
-      () => closeAgentWorkAdmissions({ ...target, reason: agentReason }),
+      () => closeSession({ ...target, reason: new Error("session stopped") }),
+      () => closeAgent({ ...target, reason: agentReason }),
     ];
     const reopen = (order === "session-first" ? close : close.toReversed()).map((stop) => stop());
     const onInterrupt = vi.fn();
     try {
-      await expect(
-        beginSessionWorkAdmission({ ...target, assertAllowed: () => {}, onInterrupt }),
-      ).rejects.toBe(agentReason);
+      await expect(begin("stopped-session", { onInterrupt })).rejects.toBe(agentReason);
       expect(onInterrupt).not.toHaveBeenCalled();
     } finally {
       for (const release of reopen) {
@@ -177,22 +147,13 @@ it.each(["session-first", "agent-first"] as const)(
 );
 
 it("refuses deletion from the target agent's own admitted turn before closing ingress", async () => {
-  const target = { agentId: "worker", env: { OPENCLAW_STATE_DIR: "/agent-admission-self-delete" } };
-  const params = {
-    ...target,
-    scope: "agent:worker",
-    identities: ["self-delete-turn"],
-    assertAllowed: () => {},
-  };
-  const active = await beginSessionWorkAdmission(params);
+  const { target, begin } = fixture("/agent-admission-self-delete");
+  const active = await begin("self-delete-turn");
   try {
     await expect(
-      active.run(async () => closeAgentWorkAdmissions({ ...target, reason: new Error("delete") })),
+      active.run(async () => closeAgent({ ...target, reason: new Error("delete") })),
     ).rejects.toThrow("Cannot delete an agent from its own active turn");
-    const following = await beginSessionWorkAdmission({
-      ...params,
-      identities: ["following-turn"],
-    });
+    const following = await begin("following-turn");
     following.release();
     expect(active.isActive()).toBe(true);
   } finally {
@@ -203,22 +164,18 @@ it("refuses deletion from the target agent's own admitted turn before closing in
 it.each(["agent", "session"] as const)(
   "rechecks %s drain authority between admitted cancellations",
   async (scope) => {
-    const target = {
-      agentId: "worker",
-      env: { OPENCLAW_STATE_DIR: "/agent-admission-revoked" },
-      scope: "agent:worker",
-      identities: ["shared-session"],
-      assertAllowed: () => {},
-    };
+    const { session, begin } = fixture("/agent-admission-revoked");
+    const target = session("shared-session");
     let current = true;
-    const first = await beginSessionWorkAdmission({
-      ...target,
+    const first = await begin("shared-session", {
       onInterrupt: () => {
         current = false;
       },
     });
     const laterInterrupt = vi.fn();
-    const later = await beginSessionWorkAdmission({ ...target, onInterrupt: laterInterrupt });
+    const later = await begin("shared-session", { onInterrupt: laterInterrupt });
+    const releaseCleanup = createDeferred();
+    const cleanup = first.run(async () => await releaseCleanup.promise);
     const assertCurrent = () => {
       if (!current) {
         throw new Error("deletion journal replaced");
@@ -227,17 +184,22 @@ it.each(["agent", "session"] as const)(
     try {
       const drain =
         scope === "agent"
-          ? startAgentWorkAdmissionInterruption({ ...target, assertCurrent })
-          : startSessionWorkAdmissionInterruption({ ...target, assertCurrent });
+          ? interruptAgent({ ...target, assertCurrent })
+          : interruptSession({ ...target, assertCurrent });
       const settled = vi.fn();
       void drain.released.then(settled, settled);
-      await first.run(async () => "cancellation cleanup");
       expect(settled).not.toHaveBeenCalled();
       expect(laterInterrupt).not.toHaveBeenCalled();
       expect(later.isActive()).toBe(true);
       first.release();
+      await Promise.resolve();
+      expect(settled).not.toHaveBeenCalled();
+      releaseCleanup.resolve();
+      await cleanup;
       await expect(drain.released).rejects.toThrow("deletion journal replaced");
     } finally {
+      releaseCleanup.resolve();
+      await cleanup;
       first.release();
       later.release();
     }

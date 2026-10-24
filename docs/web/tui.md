@@ -179,11 +179,17 @@ Session controls:
 Session lifecycle:
 
 - `/new` (spawn a fresh, isolated session under a new key). It does not affect other TUI clients on the old session.
-- `/reset` (reset the current session key in place)
+- `/reset` (reset the current session key in place). `/reset soft [message]` is forwarded to the Gateway, which keeps the transcript and reruns startup; it is not available in local mode.
 - `/abort` (abort the active run)
 - `/stop` (stop the active or queued run)
 - `/settings`
 - `/exit` (or `/quit`)
+
+During Gateway startup, messages and `/new` wait up to five minutes. Stop cancels
+requests that are still waiting for startup admission. Once a request is sent, the
+TUI keeps its response and original deadline; repeated input cannot submit a
+second copy while that response is pending. Stop still asks the Gateway to abort
+active runs.
 
 When the current session is reset, the TUI reports it after refreshing the transcript. This includes resets started by another client.
 

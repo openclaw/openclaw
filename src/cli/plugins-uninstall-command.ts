@@ -15,8 +15,6 @@ export type PluginUninstallOptions = {
   force?: boolean;
   dryRun?: boolean;
   invalidateRuntimeCache?: boolean;
-  /** True when a Claw lifecycle caller already owns the package lease. */
-  clawManaged?: boolean;
   /** Synchronous authority guard at each final plugin/config mutation. */
   beforePersistentApply?: () => void;
 };
@@ -29,17 +27,13 @@ export async function runPluginUninstallCommand(
   if (!opts.dryRun) {
     assertConfigWriteAllowedInCurrentMode();
   }
-  // Claw and system-agent callers retain their closure-bound owner and outer lease.
+  // System-agent callers retain their closure-bound owner and outer lease.
   const gateway =
-    opts.dryRun || opts.clawManaged || opts.beforePersistentApply
-      ? null
-      : await resolvePluginLifecycleGateway();
+    opts.dryRun || opts.beforePersistentApply ? null : await resolvePluginLifecycleGateway();
   const { preparePluginUninstall, uninstallPluginWithPolicy } =
     await import("../plugins/management-uninstall.js");
   const { formatUninstallActionLabels, resolveUninstallChannelConfigKeys } =
     await import("../plugins/uninstall.js");
-  const { collectClawPluginUninstallWarnings } =
-    await import("../plugins/uninstall-claw-references.js");
   const { PromptInputClosedError, promptYesNo } = await import("./prompt.js");
   const keepFiles = Boolean(opts.keepFiles || opts.keepConfig);
   const printPreview = async (preview: PreparedPluginUninstall) => {
@@ -62,12 +56,6 @@ export async function runPluginUninstallCommand(
       );
     }
     runtime.log(`Will remove: ${labels.length ? labels.join(", ") : "(nothing)"}`);
-    for (const warning of await collectClawPluginUninstallWarnings({
-      pluginId: preview.pluginId,
-      installRecord: preview.installRecords[preview.pluginId],
-    })) {
-      runtime.log(theme.warn(warning));
-    }
   };
   const executeLocal = async (
     targetPluginId: string,
@@ -79,7 +67,6 @@ export async function runPluginUninstallCommand(
       pluginId: targetPluginId,
       keepFiles,
       caller: "cli",
-      clawManaged: opts.clawManaged,
       beforePersistentApply: () => {
         assertCurrent();
         opts.beforePersistentApply?.();

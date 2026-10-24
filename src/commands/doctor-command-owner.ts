@@ -1,4 +1,3 @@
-/** Doctor warning for missing command owners on privileged channel commands. */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { note } from "../../packages/terminal-core/src/note.js";
@@ -78,7 +77,6 @@ function resolveConfiguredCommandOwners(cfg: OpenClawConfig): string[] {
   );
 }
 
-/** Returns true when at least one owner sender id is configured. */
 export function hasConfiguredCommandOwners(cfg: OpenClawConfig): boolean {
   return resolveConfiguredCommandOwners(cfg).length > 0;
 }
@@ -128,19 +126,20 @@ export function formatCommandOwnerHint(params: {
   return `Ask the operator to run \`${command} '${owners}'\` in a terminal to make this sender a command owner.`;
 }
 
-/** Emits setup guidance when privileged command ownership is not configured. */
 export function noteCommandOwnerHealth(cfg: OpenClawConfig): void {
   if (hasConfiguredCommandOwners(cfg)) {
     return;
   }
   note(
     [
-      "No command owner is configured.",
+      "No channel command owner is configured.",
       "A command owner is your trusted human operator account, allowed to update OpenClaw with /update, restart the Gateway, change configuration, and approve commands. Chat allowlists do not grant this authority.",
-      `Run ${formatCliCommand("openclaw channels add")} and complete a channel's setup to choose your operator account, including servers and groups without DM pairing.`,
-      "CLI pairing approval records the first command owner. Control UI pairing approval has a separate owner checkbox.",
-      `Fix: set commands.ownerAllowFrom to your channel user id, for example ${formatCliCommand("openclaw config set commands.ownerAllowFrom '[\"telegram:123456789\"]'")}`,
-      "Restart the gateway after changing this if it is already running.",
+      `Local Control UI/WebChat clients with operator.admin already have owner authority; no channel is required. Run ${formatCliCommand("openclaw dashboard")} on the Gateway host and open its link in your browser (use ${formatCliCommand("openclaw dashboard --json")} on a headless host).`,
+      `If the Control UI shows limited access, open Inbox > System > Limited access > Request admin, then run its displayed ${formatCliCommand("openclaw devices approve <requestId>")} command on the Gateway host.`,
+      `For external channels, run ${formatCliCommand("openclaw channels add")} and complete a channel's setup to choose your operator account, including servers and groups without DM pairing.`,
+      "CLI channel pairing approval records the first command owner. Control UI channel-sender approval has a separate owner checkbox.",
+      `For an existing channel sender, set commands.ownerAllowFrom to your channel user id, for example ${formatCliCommand("openclaw config set commands.ownerAllowFrom '[\"telegram:123456789\"]'")}`,
+      "Restart the Gateway after changing commands.ownerAllowFrom if it is already running.",
     ].join("\n"),
     "Command owner",
   );

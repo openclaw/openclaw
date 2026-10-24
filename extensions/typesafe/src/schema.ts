@@ -146,6 +146,7 @@ const Answer = Type.Union([
     objectOptions,
   ),
 ]);
+// System One implementations may add response/usage metadata; answers stay exact.
 const VendorResult = Type.Object(
   {
     model,
@@ -157,10 +158,10 @@ const VendorResult = Type.Object(
         input_tokens: Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER }),
         output_tokens: Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER }),
       },
-      objectOptions,
+      { additionalProperties: true },
     ),
   },
-  objectOptions,
+  { additionalProperties: true },
 );
 export type Evaluation = Static<typeof VendorResult>;
 const resultValidator = Compile(VendorResult);

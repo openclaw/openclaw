@@ -26,12 +26,15 @@ import type { PackageUpdateTransaction } from "../../infra/package-update-swap-c
 import { readExistingStateRootMode } from "../../infra/private-dir-mode.js";
 import {
   readUpdateStateSchemaVersions,
-  resolveUpdateStateContentVersion,
-  updateStateSchemaVersionsMatch,
   type UpdateStateSchemaVersion,
 } from "../../infra/update-candidate-state.js";
+import {
+  resolveUpdateStateContentVersion,
+  updateStateSchemaVersionsMatch,
+} from "../../infra/update-candidate-state.versions.js";
 import type { UpdateDatabaseBackup } from "../../infra/update-database-backup.js";
 import { NativePackageRollbackError } from "../../infra/update-native-package-stage.js";
+import { unsafeUpdateRecovery } from "../../infra/update-recovery.js";
 import { recordUpdateRunStep } from "../../infra/update-run-ledger.js";
 import { assertUpdateRecoveryAdmission } from "../../infra/update-run-recovery-admission.js";
 import { updateRunStepsFromResultStep } from "../../infra/update-run-step.js";
@@ -114,10 +117,7 @@ export async function rollbackFailedUpdate(params: {
     result: {
       ...result,
       status: "error" as const,
-      recovery: {
-        serviceRestartSafe: false as const,
-        reason: "runtime-verification-failed" as const,
-      },
+      recovery: unsafeUpdateRecovery(result.recovery),
     },
     rolledBack: false,
     pendingRecoveryReason,
@@ -168,19 +168,27 @@ export async function rollbackFailedUpdate(params: {
   const port = before?.stopped
     ? (before.servicePort ?? (await resolveUpdatedGatewayRestartPort({ config, serviceEnv: env })))
     : undefined;
-  const failed = (reason: string) => ({
-    result: {
-      ...result,
-      status: "error" as const,
-      rollbackOutcome: result.rollbackOutcome ?? { status: "not-attempted" as const, reason },
-      reason:
-        result.recovery?.serviceRestartSafe === true && result.recovery.packageRollbackVerified
-          ? (params.result.reason ?? reason)
-          : reason,
-    },
-    rolledBack: false,
-    stoppedForRollback,
-  });
+  const failed = (reason: string, dataAtRisk?: string) => {
+    if (dataAtRisk) {
+      result.recovery = unsafeUpdateRecovery(result.recovery, dataAtRisk);
+    }
+    return {
+      result: {
+        ...result,
+        status: "error" as const,
+        rollbackOutcome: result.rollbackOutcome ?? { status: "not-attempted" as const, reason },
+        // Keep the initiating failure when restoration or receipt verification is secondary.
+        reason:
+          (result.recovery?.serviceRestartSafe === true &&
+            result.recovery.packageRollbackVerified) ||
+          reason === "service-definition-rollback-unverified"
+            ? (params.result.reason ?? "update-failed")
+            : reason,
+      },
+      rolledBack: false,
+      stoppedForRollback,
+    };
+  };
   const stateUnchanged = async () => {
     assertCurrent();
     const baseline = params.schemaVersions;
@@ -230,6 +238,8 @@ export async function rollbackFailedUpdate(params: {
   };
   let stoppedForRollback: PreManagedServiceStop | undefined;
   let failureReason = "rollback-state-unverified";
+  let dataAtRisk: "rollback-state-unverified" | "state-migrated-no-rollback" | undefined =
+    "rollback-state-unverified";
   const assertConfigUnchanged = async () => {
     assertCurrent();
     let unchanged = configFiles.every((file) => file.doctorOwned !== false);
@@ -274,6 +284,7 @@ export async function rollbackFailedUpdate(params: {
     assertCurrent();
     if (!unchanged) {
       failureReason = "state-migrated-no-rollback";
+      dataAtRisk = "state-migrated-no-rollback";
       const detail = `Configuration ${configSnapshot.path} or its included files changed after activation; automatic rollback was refused to preserve those edits.`;
       result = {
         ...result,
@@ -332,19 +343,19 @@ export async function rollbackFailedUpdate(params: {
   try {
     assertCurrent();
     if (params.rollbackBlockedReason) {
-      return failed(params.rollbackBlockedReason);
+      return failed(params.rollbackBlockedReason, params.rollbackBlockedReason);
     }
     if (params.definitionRecovery.unverified) {
       return failed("service-definition-rollback-unverified");
     }
     if (!params.schemaVersions) {
-      return failed("rollback-state-unverified");
+      return failed("rollback-state-unverified", "rollback-state-unverified");
     }
     if (!(await stateUnchanged())) {
       // Compatible databases stay in place: update ledger writes alone must
       // not force snapshot restoration or prevent package-only rollback.
       if (!params.databaseBackup || !run || !packageTransaction) {
-        return failed("state-migrated-no-rollback");
+        return failed("state-migrated-no-rollback", "state-migrated-no-rollback");
       }
       let restored: boolean;
       try {
@@ -363,9 +374,10 @@ export async function rollbackFailedUpdate(params: {
         });
       }
       if (!restored || !(await stateUnchanged())) {
-        return failed("state-migrated-no-rollback");
+        return failed("state-migrated-no-rollback", "state-migrated-no-rollback");
       }
     }
+    dataAtRisk = undefined;
     await packageTransaction?.assertRollbackSafe?.();
     assertCurrent();
     const definitionBackup = params.definitionRecovery.backup;
@@ -400,9 +412,11 @@ export async function rollbackFailedUpdate(params: {
       const restore = async () => {
         // Recheck after stop so a final startup migration cannot race the first read.
         failureReason = "rollback-state-unverified";
+        dataAtRisk = "rollback-state-unverified";
         if (!(await stateUnchanged())) {
-          return failed("state-migrated-no-rollback");
+          return failed("state-migrated-no-rollback", "state-migrated-no-rollback");
         }
+        dataAtRisk = undefined;
         failureReason = "source-rollback-failed";
         if (!packageTransaction) {
           throw new Error("The retained package transaction is unavailable.");
@@ -445,13 +459,14 @@ export async function rollbackFailedUpdate(params: {
               endedAtMs: Date.now(),
               detail: restored.advisory?.message ?? restored.stderrTail ?? restored.reason,
             },
-            { env: opts.run.env },
+            opts.run,
           );
         }
         if (restored.exitCode !== 0) {
           return failed(restored.reason ?? "source-rollback-failed");
         }
         failureReason = "rollback-state-unverified";
+        dataAtRisk = "rollback-state-unverified";
         await assertConfigUnchanged();
         // Restore dependencies before the root that selects them.
         for (const file of changedConfigFiles.toReversed()) {
@@ -477,6 +492,7 @@ export async function rollbackFailedUpdate(params: {
         }
         await assertConfigUnchanged();
         assertRestorationCurrent();
+        dataAtRisk = undefined;
         return undefined;
       };
       // Unchanged config needs only the legacy read checks, including read-only
@@ -617,7 +633,7 @@ export async function rollbackFailedUpdate(params: {
           status: "completed",
           endedAtMs: Date.now(),
         },
-        { env: opts.run.env },
+        opts.run,
       );
     }
     failureReason = "restart-unhealthy";
@@ -714,9 +730,9 @@ export async function rollbackFailedUpdate(params: {
     if (run) {
       const endedAtMs = Date.now();
       for (const row of updateRunStepsFromResultStep(step)) {
-        recordUpdateRunStep(run.runId, { ...row, detail, endedAtMs }, { env: run.env });
+        recordUpdateRunStep(run.runId, { ...row, detail, endedAtMs }, run);
       }
     }
-    return failed(failureReason);
+    return failed(failureReason, dataAtRisk);
   }
 }

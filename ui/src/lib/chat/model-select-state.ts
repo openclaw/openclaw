@@ -64,16 +64,6 @@ export type ChatFastModeTarget = Pick<
   "effectiveFastMode" | "fastMode" | "model" | "modelProvider" | "agentRuntime"
 >;
 
-type ChatFastModeSelectStateInput = {
-  catalog: ModelCatalogEntry[];
-  connected: boolean;
-  currentModelOverride: string;
-  fastModeTarget?: ChatFastModeTarget;
-  gatewayAvailable: boolean;
-  loading: boolean;
-  sessionsResult: SessionsListResult | null;
-};
-
 // Preserve existing controls only when the selected request's applicability is unknown.
 const FAST_MODE_PROVIDER_IDS = new Set(["anthropic", "minimax", "minimax-portal", "openai", "xai"]);
 
@@ -91,7 +81,7 @@ function resolveModelOverrideSource(state: ChatModelSelectStateInput) {
 }
 
 export function resolveChatModelOverrideValue(state: ChatModelSelectStateInput): string {
-  const catalog = state.chatModelCatalog ?? [];
+  const catalog = state.chatModelCatalog;
 
   const sharedOverrides = state.modelOverrides;
   if (Object.hasOwn(sharedOverrides, state.sessionKey)) {
@@ -112,7 +102,7 @@ function resolveDefaultModelValue(state: ChatModelSelectStateInput): string {
   const agentDefault = resolvePreferredServerChatModelValue(
     state.agentDefaultModel,
     undefined,
-    state.chatModelCatalog ?? [],
+    state.chatModelCatalog,
   );
   if (agentDefault) {
     return agentDefault;
@@ -120,7 +110,7 @@ function resolveDefaultModelValue(state: ChatModelSelectStateInput): string {
   return resolvePreferredServerChatModelValue(
     state.sessionsResult?.defaults?.model,
     state.sessionsResult?.defaults?.modelProvider,
-    state.chatModelCatalog ?? [],
+    state.chatModelCatalog,
   );
 }
 
@@ -249,8 +239,7 @@ export function chatModelUnavailableMessage(
     : undefined;
 }
 
-export function resolveChatModelSelectState(state: ChatModelSelectStateInput) {
-  const catalog = state.chatModelCatalog ?? [];
+export function prepareChatModelSelectCatalog(catalog: ModelCatalogEntry[]) {
   const availableKeys = new Set(
     catalog.filter((entry) => entry.available !== false).map(catalogModelAvailabilityKey),
   );
@@ -260,7 +249,13 @@ export function resolveChatModelSelectState(state: ChatModelSelectStateInput) {
     (entry) => entry.available !== false || !availableKeys.has(catalogModelAvailabilityKey(entry)),
   );
   const displayLookup = buildCatalogDisplayLookup(pickerCatalog);
-  const options = buildChatModelOptions(pickerCatalog, displayLookup);
+  return { displayLookup, options: buildChatModelOptions(pickerCatalog, displayLookup) };
+}
+
+export function resolveChatModelSelectState(
+  state: ChatModelSelectStateInput,
+  { displayLookup, options } = prepareChatModelSelectCatalog(state.chatModelCatalog),
+) {
   const currentOverride = resolveCatalogChatModelValue(
     resolveChatModelOverrideValue(state),
     options,
@@ -280,6 +275,9 @@ export function resolveChatModelSelectState(state: ChatModelSelectStateInput) {
 export function normalizeChatFastModeInput(raw: string): FastMode | undefined {
   if (raw === "auto" || raw === "ultrafast") {
     return raw;
+  }
+  if (raw === "ultra") {
+    return "ultrafast";
   }
   if (raw === "on") {
     return true;
@@ -377,9 +375,15 @@ function isChatStandardOnlySpeed(
   );
 }
 
-export function resolveChatFastModeSelectState(
-  input: ChatFastModeSelectStateInput,
-): ChatFastModeSelectState {
+export function resolveChatFastModeSelectState(input: {
+  catalog: ModelCatalogEntry[];
+  connected: boolean;
+  currentModelOverride: string;
+  fastModeTarget?: ChatFastModeTarget;
+  gatewayAvailable: boolean;
+  loading: boolean;
+  sessionsResult: SessionsListResult | null;
+}): ChatFastModeSelectState {
   const activeRow = input.fastModeTarget;
   const activeProvider = normalizeChatModelProviderId(activeRow?.modelProvider ?? "") || null;
   const defaultProvider =
@@ -487,8 +491,8 @@ export function resolveChatFastModeSelectState(
   const requestedTier =
     effectiveMode === "ultrafast" ? "ultrafast" : active ? "priority" : undefined;
   const observation = selectedEntries
-    .map(({ runtime }) => runtime?.serviceTierObservation)
-    .find((value) => value && value.requestedTier === requestedTier);
+    .flatMap(({ runtime }) => runtime?.serviceTierObservations ?? [])
+    .find((value) => value.requestedTier === requestedTier);
   return {
     active,
     currentOverride,

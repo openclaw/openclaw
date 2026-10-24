@@ -1,6 +1,5 @@
-import type { reserveReplyAdmissionTicket } from "../../auto-reply/reply/reply-admission-ticket.js";
-import type { ReplyMessageInjectionAttempt } from "../../auto-reply/reply/reply-run-registry.js";
 import type { PrepareAssistantTranscriptMessage } from "../../config/sessions/transcript-assistant-delivery.js";
+import type { ReplyMessageInjectionAttempt } from "../../sessions/session-controller.contracts.js";
 import type { ChatRunTiming } from "../server-chat-state.js";
 import type { RestartSafeChatTerminalState } from "./chat-restart-recovery.js";
 import type { AdmittedChatSend } from "./chat-send-admission.js";
@@ -17,7 +16,6 @@ import type { SkillLibraryRequestOwner } from "./skills-library.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
 export type StartChatDispatchParams = {
-  replyAdmissionTicket: ReturnType<typeof reserveReplyAdmissionTicket>;
   diagnostics: ChatSendDiagnostics;
   admissionStartedAt: number;
   admission: AdmittedChatSend;
@@ -33,8 +31,6 @@ export type StartChatDispatchParams = {
   externalAuthorityAdmission: ChatSendExternalAuthorityAdmission | undefined;
   injection: {
     beginCapturedMessageInjection: () => Promise<ReplyMessageInjectionAttempt | undefined>;
-    messageInjectionAttempt: ReplyMessageInjectionAttempt | undefined;
-    preAckReplyContextPromise: Promise<ChatSendReplyContextFields> | undefined;
     replyContextFieldsPromise: Promise<ChatSendReplyContextFields> | undefined;
   };
   request: NormalizedChatSendRequest;

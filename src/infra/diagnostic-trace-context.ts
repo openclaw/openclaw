@@ -1,7 +1,7 @@
-import { AsyncLocalStorage } from "node:async_hooks";
 import { randomBytes } from "node:crypto";
 import { expectDefined } from "@openclaw/normalization-core";
-import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { AsyncContext } from "../shared/async-context.js";
+import { runWithAsyncStore } from "../shared/async-store.js";
 
 const TRACEPARENT_VERSION = "00";
 const DEFAULT_TRACE_FLAGS = "01";
@@ -27,11 +27,6 @@ type DiagnosticTraceContextInput = Partial<DiagnosticTraceContext> & {
   traceparent?: string;
 };
 
-type DiagnosticTraceScopeState = {
-  marker: symbol;
-  storage: AsyncLocalStorage<DiagnosticTraceContext | undefined>;
-};
-
 function isNonZeroHex(value: string): boolean {
   return !/^0+$/.test(value);
 }
@@ -44,12 +39,7 @@ function randomNonZeroHex(bytes: number): string {
   return value;
 }
 
-function getDiagnosticTraceScopeState(): DiagnosticTraceScopeState {
-  return resolveGlobalSingleton(DIAGNOSTIC_TRACE_SCOPE_STATE_KEY, () => ({
-    marker: DIAGNOSTIC_TRACE_SCOPE_STATE_KEY,
-    storage: new AsyncLocalStorage<DiagnosticTraceContext | undefined>(),
-  }));
-}
+const traceContext = new AsyncContext<DiagnosticTraceContext>(DIAGNOSTIC_TRACE_SCOPE_STATE_KEY);
 
 /** Returns whether a value is a non-zero W3C trace id. */
 export function isValidDiagnosticTraceId(value: unknown): value is string {
@@ -189,7 +179,7 @@ export function freezeDiagnosticTraceContext(
 
 /** Returns the trace context bound to the current async scope. */
 export function getActiveDiagnosticTraceContext(): DiagnosticTraceContext | undefined {
-  return getDiagnosticTraceScopeState().storage.getStore();
+  return traceContext.getStore();
 }
 
 /** Runs a callback with a frozen trace context, or explicitly without a trace. */
@@ -197,7 +187,8 @@ export function runWithDiagnosticTraceContext<T>(
   trace: DiagnosticTraceContext | undefined,
   callback: () => T,
 ): T {
-  return getDiagnosticTraceScopeState().storage.run(
+  return runWithAsyncStore(
+    traceContext,
     trace === undefined ? undefined : freezeDiagnosticTraceContext(trace),
     callback,
   );

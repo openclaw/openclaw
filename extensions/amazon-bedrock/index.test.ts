@@ -486,6 +486,21 @@ describe("amazon-bedrock provider plugin", () => {
   });
 
   describe("service tier", () => {
+    it.each([
+      [{ serviceTier: " PRIORITY ", service_tier: "flex" }, {}, "priority"],
+      [{ serviceTier: null, service_tier: " FLEX " }, {}, "flex"],
+      [{ serviceTier: 42 }, {}, undefined],
+      [{ serviceTier: "priority" }, { serviceTier: { type: "reserved" } }, "reserved"],
+    ] as const)(
+      "preserves tier input precedence and authored payloads: %j",
+      async (params, payload, expected) => {
+        const result = await callBedrockConverse(params, { ...payload });
+        expect(result.capturedPayload).toEqual(
+          expected ? { serviceTier: { type: expected } } : undefined,
+        );
+      },
+    );
+
     it("injects serviceTier for valid snake_case value ('priority')", async () => {
       const result = await callBedrockConverse({ service_tier: "priority" });
       expectPayloadServiceTier(result, "priority");
@@ -858,28 +873,6 @@ describe("amazon-bedrock provider plugin", () => {
 
       expect(sendBedrockCommand).toHaveBeenCalledTimes(2);
       expect(destroyBedrockClient).toHaveBeenCalledTimes(2);
-    });
-
-    it("checks caller cancellation before profile lookup", async () => {
-      const modelId =
-        "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/pre-aborted";
-      const controller = new AbortController();
-      const reason = new Error("cancelled before payload");
-      controller.abort(reason);
-      const provider = await registerWithConfig(undefined);
-
-      await expect(
-        callWrappedStreamWithPayload(
-          provider,
-          modelId,
-          makeAppInferenceProfileDescriptor(modelId),
-          { cacheRetention: "short", signal: controller.signal },
-          buildBedrockCachePayload(),
-        ),
-      ).rejects.toBe(reason);
-
-      expect(sendBedrockCommand).not.toHaveBeenCalled();
-      expect(destroyBedrockClient).not.toHaveBeenCalled();
     });
   });
 });

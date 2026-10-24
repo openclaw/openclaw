@@ -48,7 +48,6 @@ import {
 import {
   GatewayClient,
   isGatewayConnectAssemblyError,
-  prepareGatewayClientDeviceAuth,
   type GatewayClientCloseInfo,
   type GatewayClientOptions,
   type GatewayClientRequestOptions,
@@ -377,15 +376,7 @@ function resolveGatewayConfigPath(env: NodeJS.ProcessEnv): string {
 }
 
 export function buildGatewayConnectionDetails(
-  options: {
-    config?: OpenClawConfig;
-    url?: string;
-    configPath?: string;
-    urlSource?: "cli" | "env";
-    ignoreEnvUrlOverride?: boolean;
-    localPortOverride?: number;
-    serviceTargetUrl?: string;
-  } = {},
+  options: Parameters<typeof buildGatewayConnectionDetailsWithResolvers>[0] = {},
 ): GatewayConnectionDetails {
   return buildGatewayConnectionDetailsWithResolvers(options, {
     getRuntimeConfig: readGatewayDispatchConfig,
@@ -678,29 +669,6 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
         configPath: context.configPath,
       });
     }
-  }
-  try {
-    await prepareGatewayClientDeviceAuth(
-      {
-        url,
-        token,
-        password,
-        edgeAuthHeaders,
-        tlsFingerprint,
-        deviceIdentity,
-        deviceAuthScope,
-        sharedStateMode: opts.sharedStateMode,
-        preparedDeviceAuth: storedAuth ?? undefined,
-        approvalRuntimeToken: opts.approvalRuntimeToken,
-        agentRuntimeIdentityToken: opts.agentRuntimeIdentityToken,
-      },
-      opts.signal,
-    );
-  } catch (error) {
-    if (opts.signal?.aborted) {
-      throw createGatewayRequestAbortError(opts.method);
-    }
-    throw error;
   }
   // A one-shot shared-auth CLI connection cannot match an earlier run's owner.
   // Request admin authority for cancellation; the Gateway still validates it.

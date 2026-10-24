@@ -1,12 +1,7 @@
 import { TwitchClientManager } from "./twitch-client.js";
 import type { ChannelAccountSnapshot, ChannelLogSink } from "./types.js";
 
-type RegistryEntry = {
-  manager: TwitchClientManager;
-  logger: ChannelLogSink;
-};
-
-const registry = new Map<string, RegistryEntry>();
+const registry = new Map<string, TwitchClientManager>();
 
 export function getOrCreateClientManager(
   accountId: string,
@@ -15,31 +10,25 @@ export function getOrCreateClientManager(
 ): TwitchClientManager {
   const existing = registry.get(accountId);
   if (existing) {
-    existing.manager.setStatusSink(statusSink);
-    return existing.manager;
+    existing.setStatusSink(statusSink);
+    return existing;
   }
 
   const manager = new TwitchClientManager(logger, statusSink);
-  registry.set(accountId, { manager, logger });
-
-  logger.info(`Registered client manager for account: ${accountId}`);
+  registry.set(accountId, manager);
   return manager;
 }
 
 export function getClientManager(accountId: string): TwitchClientManager | undefined {
-  return registry.get(accountId)?.manager;
+  return registry.get(accountId);
 }
 
 export async function removeClientManager(accountId: string): Promise<void> {
-  const entry = registry.get(accountId);
-  if (!entry) {
+  const manager = registry.get(accountId);
+  if (!manager) {
     return;
   }
 
   registry.delete(accountId);
-  try {
-    await entry.manager.disconnectAll();
-  } finally {
-    entry.logger.info(`Unregistered client manager for account: ${accountId}`);
-  }
+  await manager.disconnectAll();
 }

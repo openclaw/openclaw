@@ -1,3 +1,4 @@
+import { registerListener } from "../../../src/shared/listeners.ts";
 import type { GatewayEventFrame, GatewayEventListener } from "../api/gateway.ts";
 import type {
   ApplicationContext,
@@ -62,27 +63,17 @@ export function createApplicationGateway(
       return snapshot;
     },
     connect: () => undefined,
-    subscribe(listener: (value: ApplicationGatewaySnapshot) => void) {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
-    },
-    subscribeEvents(listener: GatewayEventListener) {
-      eventListeners.add(listener);
-      return () => eventListeners.delete(listener);
-    },
+    subscribe: (listener: (value: ApplicationGatewaySnapshot) => void) =>
+      registerListener(listeners, listener),
+    subscribeEvents: (listener: GatewayEventListener) => registerListener(eventListeners, listener),
   } as unknown as ApplicationGateway;
   return {
     gateway,
-    publishEvent: (event: GatewayEventFrame) => {
-      for (const listener of eventListeners) {
-        listener(event);
-      }
-    },
+    publishEvent: (event: GatewayEventFrame) =>
+      eventListeners.forEach((listener) => listener(event)),
     publish(this: void, next: ApplicationGatewaySnapshot) {
       snapshot = next;
-      for (const listener of listeners) {
-        listener(snapshot);
-      }
+      listeners.forEach((listener) => listener(snapshot));
     },
   };
 }
@@ -101,15 +92,8 @@ export function createNavigationPreferencesFixture(): ApplicationContext["naviga
     },
     update(patch) {
       snapshot = { ...snapshot, ...patch };
-      for (const listener of listeners) {
-        listener(snapshot);
-      }
+      listeners.forEach((listener) => listener(snapshot));
     },
-    subscribe(listener) {
-      listeners.add(listener);
-      return () => {
-        listeners.delete(listener);
-      };
-    },
+    subscribe: (listener) => registerListener(listeners, listener),
   };
 }

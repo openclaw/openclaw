@@ -196,10 +196,9 @@ export async function bindPreparedAcpThread(params: {
       label: params.label,
       binding: params.preparedBinding,
       sessionCwd: resolveAcpSessionCwd(params.initializedRuntime.initialized.meta),
-      sessionDetails: resolveAcpThreadSessionDetailLines({
-        sessionKey: params.sessionKey,
-        meta: params.initializedRuntime.initialized.meta,
-      }),
+      sessionDetails: resolveAcpThreadSessionDetailLines(
+        params.initializedRuntime.initialized.meta,
+      ),
     }),
   );
   params.assertActive?.();

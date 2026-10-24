@@ -1,11 +1,9 @@
-import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import * as jsonFiles from "../infra/json-files.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import {
   createUpdateRun,
@@ -17,6 +15,7 @@ import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contra
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { cliRecoveryEntrypoints } from "./cli-entrypoint.test-support.js";
+import { runCliProcessChild } from "./cli-process-child.test-helpers.js";
 import { finishUpdateRun, recordUpdateRunDiagnostic } from "./daemon-cli.js";
 import { printResult } from "./update-cli/progress.js";
 
@@ -50,7 +49,7 @@ function fixture() {
   return { stateDir, options, run, result, opts, reportPath };
 }
 
-function finishFromPublishedDriver(
+async function finishFromPublishedDriver(
   runId: string,
   outcome: { status: "failed"; reason: string },
   options: { env: NodeJS.ProcessEnv },
@@ -59,9 +58,8 @@ function finishFromPublishedDriver(
   const entry = resolveRuntimeWorkerUrl(cliRecoveryEntrypoints.daemon);
   // Published managed drivers call this stable export without awaiting it.
   // Their child exits naturally after the finalizer's filesystem work settles.
-  const child = spawn(
-    process.execPath,
-    [
+  const result = await runCliProcessChild({
+    nodeArgs: [
       ...resolveRuntimeWorkerArgv(entry).slice(0, -1),
       "--input-type=module",
       "-e",
@@ -74,29 +72,17 @@ function finishFromPublishedDriver(
         }
       `,
     ],
-    { env: { ...process.env, ...options.env }, stdio: ["ignore", "pipe", "pipe"], timeout: 15_000 },
-  );
-  let stdout = "";
-  let stderr = "";
-  child.stdout.on("data", (chunk: Buffer) => {
-    stdout += chunk.toString();
-    if (stdout.includes("REPORT_LOCK_PRESENT")) {
-      contention?.observed();
-    }
-  });
-  child.stderr.on("data", (chunk: Buffer) => {
-    stderr += chunk.toString();
-  });
-  return new Promise((resolve, reject) => {
-    child.once("error", reject);
-    child.once("close", (code, signal) => {
-      if (code !== 0 || signal) {
-        reject(new Error(`Published driver failed (${code}/${signal}): ${stderr}`));
-      } else {
-        resolve(stderr);
+    nodeArgsPolicy: "caller",
+    env: { ...process.env, ...options.env },
+    timeoutMs: 15_000,
+    onStdout(stdout) {
+      if (stdout.includes("REPORT_LOCK_PRESENT")) {
+        contention?.observed();
       }
-    });
+    },
   });
+  expect(result, result.stderr).toMatchObject({ code: 0, signal: null });
+  return result.stderr;
 }
 
 it("exports the terminal-safe update diagnostic writer for installed-runtime finalization", async () => {
@@ -211,20 +197,15 @@ it.each(["contention observed", "helper wait exhausted"] as const)(
     const { options, run, result, opts, reportPath } = fixture();
     const paused = createDeferred();
     const release = createDeferred();
-    const atomicWrite = jsonFiles.writeTextAtomic;
+    const rename = fs.rename;
     let intercepted = false;
-    vi.spyOn(jsonFiles, "writeTextAtomic").mockImplementation(async (target, body, policy) => {
-      if (target !== reportPath || intercepted) {
-        return atomicWrite(target, body, policy);
+    vi.spyOn(fs, "rename").mockImplementation(async (from, to) => {
+      if (to === reportPath && !intercepted) {
+        intercepted = true;
+        paused.resolve();
+        await release.promise;
       }
-      intercepted = true;
-      return atomicWrite(target, body, {
-        ...policy,
-        beforeRename: async () => {
-          paused.resolve();
-          await release.promise;
-        },
-      });
+      return rename(from, to);
     });
     const foreground = printResult(result, opts);
     await Promise.race([
@@ -256,6 +237,7 @@ it.each(["contention observed", "helper wait exhausted"] as const)(
       await Promise.allSettled([foreground, terminal]);
     }
     await foreground;
+    expect(intercepted).toBe(true);
     const stderr = await terminal;
     if (releaseAfter === "contention observed") {
       expect(stderr).not.toContain("Update report could not be saved:");
@@ -279,11 +261,9 @@ it.each(["terminal", "captured"] as const)(
     expect(getUpdateRun(run.runId, options)?.status).toBe("failed");
     const before = await fs.readFile(reportPath, "utf8");
     closeOpenClawStateDatabaseForTest();
-    const database = new DatabaseSync(resolveOpenClawStateSqlitePath(options.env));
-    try {
+    {
+      using database = new DatabaseSync(resolveOpenClawStateSqlitePath(options.env));
       database.exec(`PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION + 1}`);
-    } finally {
-      database.close();
     }
     expect(() => getUpdateRun(run.runId, options)).toThrow(/newer schema/);
     await printResult(

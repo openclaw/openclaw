@@ -16,10 +16,10 @@ memory adapter contracts that sit on top of them. Part of the
 
 ## Exclusive slots
 
-| Method                                     | What it registers                                                                                                                                                                                                        |
-| ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `api.registerContextEngine(id, factory)`   | Context engine (one active at a time). Use `info.acceptedHostParams` to restrict accepted host-added lifecycle fields, including optional `maintain()` cancellation; undeclared engines receive all current host fields. |
-| `api.registerMemoryCapability(capability)` | Unified memory capability                                                                                                                                                                                                |
+| Method                                     | What it registers                                                                                                                                                                                                                                          |
+| ------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `api.registerContextEngine(id, factory)`   | Context engine (one active at a time). Use `info.acceptedHostParams` to restrict accepted host-added lifecycle fields, including optional `maintain()` cancellation; undeclared engines receive current host fields except opt-in compaction `onProgress`. |
+| `api.registerMemoryCapability(capability)` | Unified memory capability                                                                                                                                                                                                                                  |
 
 To participate in durable admitted turns, context engines must declare
 `currentTurnFence: "before-current-turn-entry-v1"` and
@@ -27,8 +27,10 @@ To participate in durable admitted turns, context engines must declare
 `info.transcriptSemantics`, then implement `commitTurn(...)` as an atomic
 write keyed by `advancementKey` that has no additional effect when repeated. OpenClaw supplies only the inclusive
 accepted turn, from its admitted user entry through its terminal entry; use the
-`readSessionTranscriptVisibleMessageDelta(...)` cursor API to bootstrap or
-rebuild earlier history. Without the full contract, OpenClaw uses the legacy
+`readSessionTranscriptVisibleMessageDelta(...)` cursor API from
+`openclaw/plugin-sdk/context-engine-transcript-runtime` to bootstrap or rebuild
+earlier history (see
+[Context engine transcript cursor](/plugins/sdk-runtime/agent#context-engine-transcript-cursor)). Without the full contract, OpenClaw uses the legacy
 context path for the whole logical turn and its retries, leaves the configured
 engine unchanged, and tries that engine again on the next logical turn.
 
@@ -209,6 +211,14 @@ Capabilities are enforced before provider code runs:
 | Automatic recall  | `candidates` array containing `"trigger"` and/or `"project"`        | `candidates({ kind })` names an undeclared kind                           |
 | Project filtering | `projectFilter: boolean`                                            | non-empty `activeProjectKeys` is supplied when project filtering is false |
 
+The selected memory slot owner can also join `/learn` by declaring
+`learnToolNames` and `learnGuidanceBuilder`. The host checks the declared tools
+against the turn's tool policy and calls the builder with the allowed subset;
+the builder returns guidance lines appended to the `/learn` prompt, or `[]`
+when those tools cannot persist lessons. The host adds a routing rule when
+Skill Workshop is also available. Unselected sidecars cannot contribute these
+fields.
+
 The selected memory slot owner can also declare `recallToolNames`. These are
 the concrete agent tools Active Memory uses for deep recall. A valid explicit
 Active Memory `toolsAllow` list takes precedence, followed by the selected
@@ -266,8 +276,17 @@ type MemoryAudience =
   `conversation` audience for the durable root session.
 - A spawned child inherits its root audience only after the host validates each
   recorded parent key, session ID, and lifecycle revision.
-- Missing, malformed, cross-agent, cyclic, or stale lineage produces no
-  audience. Unknown or missing durable chat type also produces no audience.
+- A child spawned into another agent receives `owner-private` audience for its
+  own agent only when the spawn that crossed agents was owner-attributed and the
+  root is the owner's direct chat. Conversation audience never crosses agents;
+  that lineage produces no audience.
+- Operator-created root sessions record a `direct` chat type at creation, so
+  sessions started later by `sessions_send`, cron, or the `agent` method resolve
+  an audience. The turn's owner status still selects `owner-private` or
+  `conversation`.
+- Missing, malformed, cyclic, or stale lineage produces no audience. Unknown or
+  missing durable chat type also produces no audience. The Gateway logs every
+  denial as `memory_audience_denied` with the session key and reason.
 
 Audience is separate from sandbox policy. A provider can deny sandboxed callers
 even when they have a valid audience. Operator authority is also separate and
@@ -336,6 +355,14 @@ Dreaming is not a provider runtime capability. Selecting another memory plugin c
 still activate Memory Core as a dreaming sidecar under the existing loader policy.
 Explicitly disabling Memory Core prevents that sidecar. The Dreams UI and file-backed
 maintenance methods do not imply that the selected provider implements dreaming.
+
+## Memory host event diagnostics
+
+`readMemoryHostEventRecords` from `openclaw/plugin-sdk/memory-host-events`
+accepts an optional `type` filter. Storage applies it before `limit`, so a
+diagnostic can request the latest `memory.dream.completed` event with `limit: 1`
+without loading unrelated recall history. Omitting `type` preserves the full
+retained event stream.
 
 ## Bundled Memory Core workers
 

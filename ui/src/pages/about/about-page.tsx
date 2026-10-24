@@ -1,4 +1,4 @@
-import { createEffect, createSignal, onCleanup, untrack } from "solid-js";
+import { createMemo, createSignal, onSettled } from "solid-js";
 import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
 import { CONTROL_UI_BUILD_INFO } from "../../build-info.ts";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
@@ -6,6 +6,7 @@ import { copyToClipboard } from "../../lib/clipboard.ts";
 import { projectGateway } from "../../lib/reactive/application.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { t } from "../../lib/reactive/i18n.ts";
+import { createTimeout } from "../../lib/reactive/timers.ts";
 import { AboutView, type AboutCommitCopyState } from "./view.tsx";
 
 declare module "@solidjs/web" {
@@ -22,20 +23,14 @@ const CLAWD_WAVE_MS = 1400;
 
 export function AboutPage() {
   const context = useApplication();
-  const gateway = projectGateway(untrack(() => context.gateway));
-  createEffect(
-    () => context.gateway,
-    (source) => gateway.replaceSource(source),
-  );
+  const gateway = createMemo(() => projectGateway(context.gateway));
   const [copyState, setCopyState] = createSignal<AboutCommitCopyState>("idle");
   const [clawdWaving, setClawdWaving] = createSignal(false);
   let disposed = false;
-  let copyResetTimer: ReturnType<typeof globalThis.setTimeout> | undefined;
-  let waveResetTimer: ReturnType<typeof globalThis.setTimeout> | undefined;
-  onCleanup(() => {
+  const copyReset = createTimeout(() => setCopyState("idle"), COPY_RESULT_VISIBLE_MS);
+  const waveReset = createTimeout(() => setClawdWaving(false), CLAWD_WAVE_MS);
+  onSettled(() => () => {
     disposed = true;
-    globalThis.clearTimeout(copyResetTimer);
-    globalThis.clearTimeout(waveResetTimer);
   });
 
   function pokeClawd() {
@@ -43,10 +38,7 @@ export function AboutPage() {
       return;
     }
     setClawdWaving(true);
-    waveResetTimer = globalThis.setTimeout(() => {
-      waveResetTimer = undefined;
-      setClawdWaving(false);
-    }, CLAWD_WAVE_MS);
+    waveReset.schedule();
   }
 
   async function copyCommit() {
@@ -54,23 +46,19 @@ export function AboutPage() {
     if (!commit || copyState() === "copying") {
       return;
     }
-    globalThis.clearTimeout(copyResetTimer);
-    copyResetTimer = undefined;
+    copyReset.cancel();
     setCopyState("copying");
     const copied = await copyToClipboard(commit, () => !disposed);
     if (disposed) {
       return;
     }
     setCopyState(copied ? "copied" : "error");
-    copyResetTimer = globalThis.setTimeout(() => {
-      copyResetTimer = undefined;
-      setCopyState("idle");
-    }, COPY_RESULT_VISIBLE_MS);
+    copyReset.schedule();
   }
 
   function gatewayVersion() {
-    const snapshot = gateway.read().snapshot;
-    return snapshot.phase === "connected" ? snapshot.hello?.server?.version?.trim() || null : null;
+    const snapshot = gateway().read().snapshot;
+    return snapshot.hello?.server?.version?.trim() || null;
   }
 
   return (

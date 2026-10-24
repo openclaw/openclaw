@@ -24,6 +24,7 @@ import {
 } from "./session-actor-transcript-replica.js";
 import { readRestoredSessionTranscriptInWorker } from "./session-cold-storage-read.js";
 import type { SessionEntryCohortRequest } from "./session-entry-read.types.js";
+import type { SessionTranscriptContextSelection } from "./session-history-read.types.js";
 import type { SessionTranscriptMaintenanceRead } from "./session-transcript-hydration.types.js";
 import {
   resolveSessionTranscriptReadFence,
@@ -54,7 +55,7 @@ import {
 type SessionTranscriptHydrationReader = {
   target: CapturedSessionTranscriptTargetBinding;
   assertCurrent: () => void;
-  read: () => Promise<PreparedSessionTranscriptHydration>;
+  read: (options?: { compaction?: true }) => Promise<PreparedSessionTranscriptHydration>;
   readCohort?: (
     selection: NonNullable<SessionEntryCohortRequest["transcript"]>,
     consume: (prepared: PreparedSessionTranscriptHydration) => void,
@@ -76,7 +77,7 @@ type SessionTranscriptHydrationReader = {
 /** Capture identity before queueing; a missing file remains the creation owner's responsibility. */
 export function prepareSessionTranscriptHydration(
   source: SessionTranscriptRuntimeTarget & { env?: NodeJS.ProcessEnv },
-  limits?: { maxBytes: number; maxEvents: number },
+  limits?: SessionTranscriptContextSelection,
   signal?: AbortSignal,
   lane?: SessionHistoryWorkerLane,
 ): SessionTranscriptHydrationReader {
@@ -86,9 +87,21 @@ export function prepareSessionTranscriptHydration(
     return {
       target: memory.target,
       assertCurrent: memory.assertCurrent,
-      read: async () => {
+      read: async (options) => {
         if (!memory.missing) {
-          return memory.read("session.history.hydrate", { limits });
+          const prepared = await memory.read("session.history.hydrate", { limits });
+          if (options?.compaction && prepared.kind === "bounded") {
+            const { resolveCurrentSessionPrimaryConversation } =
+              await import("./conversation-registry.js");
+            const entry = memory.currentEntry();
+            prepared.compaction = {
+              sessionTarget: memory.target,
+              entry,
+              runtimeEntry: entry,
+              primaryConversation: await resolveCurrentSessionPrimaryConversation(memory.target),
+            };
+          }
+          return prepared;
         }
         memory.assertCurrent();
         return limits
@@ -109,6 +122,16 @@ export function prepareSessionTranscriptHydration(
                 truncated: false,
                 completeActivePath: true,
               },
+              ...(options?.compaction
+                ? {
+                    compaction: {
+                      sessionTarget: memory.target,
+                      entry: undefined,
+                      runtimeEntry: undefined,
+                      primaryConversation: undefined,
+                    },
+                  }
+                : {}),
             }
           : {
               kind: "full",
@@ -127,7 +150,12 @@ export function prepareSessionTranscriptHydration(
           return memory.read("session.history.maintenance", { request });
         }
         memory.assertCurrent();
-        return { kind: "transcript-maintenance" };
+        return {
+          kind: "transcript-maintenance",
+          ...(request.operation === "custom-branch" && request.leafEntryId === null
+            ? { events: [] }
+            : {}),
+        };
       },
       readRecentActiveEvents: async (maxEvents) => {
         if (!memory.missing) {
@@ -146,9 +174,7 @@ export function prepareSessionTranscriptHydration(
     };
   }
   const target = captureSessionTranscriptTargetBinding(source);
-  const contextLimits = limits
-    ? { maxBytes: limits.maxBytes, maxEvents: limits.maxEvents }
-    : undefined;
+  const contextLimits = limits ? { ...limits } : undefined;
   const receipt = resolveSessionTranscriptReadFence(target);
   const admission = receipt ? { ...receipt } : undefined;
   signal?.throwIfAborted();
@@ -195,7 +221,7 @@ export function prepareSessionTranscriptHydration(
     }
   };
   const retainedRead = (selection?: NonNullable<SessionEntryCohortRequest["transcript"]>) => {
-    if (!contextLimits) {
+    if (!contextLimits || "compaction" in contextLimits) {
       return undefined;
     }
     const hot = readOwnedSessionTranscriptState(target);
@@ -231,7 +257,7 @@ export function prepareSessionTranscriptHydration(
     return prepared;
   };
   const retainRead = (prepared: PreparedSessionTranscriptHydration) => {
-    if (prepared.kind !== "bounded" || !contextLimits) {
+    if (prepared.kind !== "bounded" || !contextLimits || "compaction" in contextLimits) {
       return;
     }
     const hot = readOwnedSessionTranscriptState(target);
@@ -249,21 +275,23 @@ export function prepareSessionTranscriptHydration(
       retainSessionActorTranscriptReplica(hot, retained);
     }
   };
-  const read = async (): Promise<PreparedSessionTranscriptHydration> => {
+  const read: SessionTranscriptHydrationReader["read"] = async (options) => {
     signal?.throwIfAborted();
     const retained = retainedRead();
     if (retained) {
       return retained;
     }
     const prepared = await readInOwner<PreparedSessionTranscriptHydration>((owner, resolvedScope) =>
-      owner.readTranscript({ target, resolvedScope, limits: contextLimits, admission }, signal),
+      owner.readTranscript(
+        { target, resolvedScope, limits: contextLimits, admission, ...options },
+        signal,
+      ),
     );
     retainRead(prepared);
     return prepared;
   };
   const readCohort: SessionTranscriptHydrationReader["readCohort"] = contextLimits
     ? (selection, consume) => {
-        const capturedSelection = structuredClone(selection);
         return withSessionTranscriptReadSource(
           target,
           async ({ scope, resolved, owner, expectedIdentity, assertCurrent: assertSource }) => {
@@ -285,7 +313,7 @@ export function prepareSessionTranscriptHydration(
                     assertSource();
                     const assertNative = captureSessionEntryNativeMutationWitness([database]);
                     const prepared =
-                      retainedRead(capturedSelection) ??
+                      retainedRead(selection) ??
                       (await owner.readTranscript(
                         {
                           target: scope,
@@ -293,7 +321,7 @@ export function prepareSessionTranscriptHydration(
                           expectedIdentity,
                           limits: contextLimits,
                           admission,
-                          transcript: capturedSelection,
+                          transcript: selection,
                           preparedEntry: readOwnedSessionTranscriptEntry(target),
                         },
                         signal,

@@ -13,7 +13,7 @@ import { captureSessionTranscriptTargetBinding } from "../config/sessions/transc
 import { withSessionTranscriptWriteAssertion } from "../config/sessions/transcript-write-context.js";
 import type { InternalSessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { runExclusiveSessionLifecycleMutation } from "../sessions/session-lifecycle-admission.js";
+import { runSessionMutation } from "../sessions/session-controller.lifecycle.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { registerOpenClawAgentDatabaseAsyncResource } from "../state/openclaw-agent-db-resources.js";
 import { getSessionRepositoryWorkspaceStore } from "../state/session-repository-workspaces.js";
@@ -205,8 +205,7 @@ export async function runWorkerPlacementSessionBarrier<T>(params: {
     params.getConfig(),
     params,
   );
-  const operation = params.action === "activation" ? "placement-activate" : "placement-recover";
-  return await runExclusiveSessionLifecycleMutation(operation, {
+  return await runSessionMutation({
     scope: target.storePath,
     identities: [params.sessionKey, target.canonicalKey, ...target.storeKeys, params.sessionId],
     signal: params.signal,
@@ -289,17 +288,14 @@ export async function resolveWorkerPlacementSessionTarget(params: {
   const assertRoutingCurrent = captureSessionMutationRouting(params.config, targetChangedError, [
     { ...params, preserveQualifiedAddress: true },
   ]);
-  let active = true;
+  const lifetime = new DisposableStack();
   let retained: ReturnType<typeof retainPreparedSessionEntryPredicate> | undefined;
   let unregister = () => {};
-  const release = () => {
-    if (!active) {
-      return;
-    }
-    active = false;
+  lifetime.defer(() => {
     retained?.release();
     unregister();
-  };
+  });
+  const release = () => lifetime.dispose();
   const retainTarget = (
     target: Awaited<ReturnType<typeof resolveGatewaySessionStoreTargetInWorker>>,
   ) => {
@@ -369,7 +365,17 @@ export async function resolveWorkerPlacementSessionTarget(params: {
       repositoryWorkspaceId: initialEntry.repositoryWorkspaceId,
       deviceFolder: initialEntry.deviceFolder,
     };
-    const acceptWorktree = captureWorktreeRegistryReadGuard(worktreeContext, "source-owner");
+    const acceptWorktree = captureWorktreeRegistryReadGuard(
+      worktreeContext,
+      "source-owner",
+      initialIdentity.worktreeId
+        ? {
+            id: initialIdentity.worktreeId,
+            ownerKind: "session",
+            ownerId: initialTarget.canonicalKey,
+          }
+        : undefined,
+    );
     const worktree =
       initialIdentity.repositoryWorkspaceId || initialIdentity.deviceFolder
         ? undefined
@@ -385,7 +391,7 @@ export async function resolveWorkerPlacementSessionTarget(params: {
       : undefined;
     const resolveBinding = (config = params.config) => {
       assertRoutingCurrent(config);
-      if (!active || retained?.isCurrent() === false) {
+      if (lifetime.disposed || retained?.isCurrent() === false) {
         throw targetChangedError();
       }
       const target = memory ? initialTarget : (params.readTarget?.(config) ?? initialTarget);

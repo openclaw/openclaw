@@ -1,20 +1,16 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { formatErrorMessage } from "../infra/errors.js";
-import type {
-  CliBackendParseJsonlEvent,
-  CliBackendParsedJsonlEvent,
-} from "../plugins/cli-backend.types.js";
+import type { CliBackendParseJsonlEvent } from "../plugins/cli-backend.types.js";
 import type {
   CliJsonlStreamingParserOptions,
   CliOutput,
   CliUsage,
 } from "./cli-output-contracts.js";
 import { normalizeClaudeCliStreamJsonRecord } from "./cli-output-echoed-binary.js";
-import type { CliEventProjectionState } from "./cli-output-events.js";
+import type { CliEventProjectionState, ThinkingTracker } from "./cli-output-events.js";
 import {
   createLeadingTaggedReasoningRouter,
-  createThinkingTracker,
   createToolUseTracker,
   dispatchClaudeCliStreamingToolEvent,
   dispatchClaudeCliThinking,
@@ -97,7 +93,13 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
   // always has a destination; a separate enable flag let it be dropped (#92092).
   const classifyClaudeCommentary =
     Boolean(params.onCommentaryText) && supportsCliJsonlToolEvents(params);
-  const thinkingTracker = createThinkingTracker();
+  const thinkingTracker: ThinkingTracker = {
+    streamedByIndex: new Map(),
+    highestStreamedIndex: Number.NEGATIVE_INFINITY,
+    emittedText: "",
+    nextSyntheticBlockIndex: 0,
+    progressTokens: 0,
+  };
   const claudeStreamJson = isClaudeStreamJsonDialect(params);
   let taggedReasoningRouter = createLeadingTaggedReasoningRouter();
   let currentTaggedReasoningText = "";
@@ -198,36 +200,6 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
       ? ""
       : assistantText.slice(Math.max(currentMessageStart, flushedMessageStart)).trim());
 
-  const handleCustomJsonlEvent = (event: CliBackendParsedJsonlEvent) => {
-    const previousOutput = output;
-    const state: CliEventProjectionState = {
-      assistantText,
-      customThinkingText,
-      sessionId,
-      usage,
-      output,
-      sawCustomJsonlEvent,
-    };
-    projectCliBackendEvent({
-      ...params,
-      event,
-      state,
-      texts,
-      toolTracker,
-    });
-    ({ assistantText, customThinkingText, sessionId, usage, output, sawCustomJsonlEvent } = state);
-    // Custom events carry no message boundaries: a tool start begins the next
-    // final-message segment, so pre-tool narration is never the final message.
-    if (event.kind === "toolStart") {
-      currentMessageStart = assistantText.length;
-    } else if (event.kind === "result" && output && !output.errorText) {
-      // A metadata-only result keeps the earlier result's final message.
-      const prior = previousOutput?.rawFinalText ?? previousOutput?.text.trim();
-      const finalText = event.text?.trim() || (prior ?? finalStreamedMessageText());
-      output = withCliRawFinalText(output, finalText);
-    }
-  };
-
   const accountClaudeJsonlLine = (lineChars: number, partialMessage = false): boolean => {
     if (!partialMessage && ++ordinaryClaudeLines > outputLimits.maxTurnLines) {
       parseErrorText = streamJsonOutputLimitErrorText("lines", outputLimits.maxTurnLines);
@@ -300,7 +272,34 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
       if (event.kind === "result") {
         sawTerminalResult = true;
       }
-      handleCustomJsonlEvent(event);
+      const previousOutput = output;
+      const state: CliEventProjectionState = {
+        assistantText,
+        customThinkingText,
+        sessionId,
+        usage,
+        output,
+        sawCustomJsonlEvent,
+      };
+      projectCliBackendEvent({
+        ...params,
+        event,
+        state,
+        texts,
+        toolTracker,
+      });
+      ({ assistantText, customThinkingText, sessionId, usage, output, sawCustomJsonlEvent } =
+        state);
+      // Custom events carry no message boundaries: a tool start begins the next
+      // final-message segment, so pre-tool narration is never the final message.
+      if (event.kind === "toolStart") {
+        currentMessageStart = assistantText.length;
+      } else if (event.kind === "result" && output && !output.errorText) {
+        // A metadata-only result keeps the earlier result's final message.
+        const prior = previousOutput?.rawFinalText ?? previousOutput?.text.trim();
+        const finalText = event.text?.trim() || (prior ?? finalStreamedMessageText());
+        output = withCliRawFinalText(output, finalText);
+      }
     }
     return true;
   };
@@ -697,7 +696,7 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
         }
       }
       if (
-        !frameBoundedCliJsonlChunk(lineBuffer, chunk, outputLimits.maxPendingLineChars, (line) => {
+        !frameBoundedCliJsonlChunk(lineBuffer, chunk, (line) => {
           handleJsonlLine(line);
           return !parseErrorText;
         })

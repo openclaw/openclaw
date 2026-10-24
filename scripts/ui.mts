@@ -4,15 +4,20 @@ import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { isPidDefinitelyDead } from "../src/shared/pid-alive.ts";
 import { normalizeControlUiBuildInfo } from "../ui/src/build-info-normalizers.ts";
 import { resolveBuildIdentityEnvironment } from "./lib/build-identity.mts";
+import {
+  distArtifactEntryArgs,
+  withDistArtifactOwnership,
+} from "./lib/dist-artifact-ownership.mts";
 import {
   assertRealOutputRoot,
   CONTROL_UI_BUILD_PREFIX,
   controlUiBuildSiblingPid,
 } from "./lib/output-root-guard.mjs";
+import { prepareControlUiSettings } from "./lib/prepare-control-ui-settings.mts";
 import { isRecord } from "./lib/record-shared.mjs";
 import { createPnpmRunnerSpawnSpec } from "./pnpm-runner.mts";
 import { resolveNodePackageBin } from "./run-node-package-bin.mts";
@@ -386,6 +391,26 @@ async function buildAndPublishUi(
   toolCall: UiSpawnCall,
   env: NodeJS.ProcessEnv,
 ): Promise<UiSpawnResult> {
+  const validation = runSpawnCallSync(
+    resolveSpawnCall(
+      process.execPath,
+      [
+        "--import",
+        pathToFileURL(path.join(here, "tsx.mjs")).href,
+        path.join(here, "generate-control-ui-validators.mts"),
+        "--check",
+      ],
+      env,
+      { cwd: repoRoot },
+    ),
+    "Control UI protocol validators",
+  );
+  if (validation.signal || validation.status !== 0) {
+    return validation;
+  }
+  // Prepare before cache input capture: presenter source edits must change the
+  // canonical bytes and inventory even when the UI bundle can otherwise be reused.
+  await prepareControlUiSettings(repoRoot);
   const dist = path.join(repoRoot, "dist");
   const output = path.join(dist, "control-ui");
   fs.mkdirSync(dist, { recursive: true });
@@ -419,10 +444,7 @@ async function buildAndPublishUi(
       script,
     ];
     const cache =
-      env.OPENCLAW_BUILD_CACHE !== "0" &&
-      env.BUILD_ALL_CACHE_ROOT?.trim() &&
-      toolCall.args.length === 2 &&
-      toolCall.args[1] === "build"
+      env.OPENCLAW_BUILD_CACHE !== "0" && toolCall.args.length === 2 && toolCall.args[1] === "build"
         ? await import("./lib/build-artifact-cache.mts")
         : undefined;
     const sourcePluginInventory =
@@ -516,6 +538,7 @@ async function buildAndPublishUi(
       cache?.restoreBuildStepCacheOutputs(cacheState, {
         rootDir: repoRoot,
         artifactRoot: staging,
+        staging: true,
       });
     if (reuseOutput) {
       const { runnerImport } = await import("vite");
@@ -531,7 +554,24 @@ async function buildAndPublishUi(
     const calls: [UiSpawnCall, string][] = [
       ...(!reuseOutput
         ? ([
-            [{ ...toolCall, args: [...toolCall.args, "--outDir", staging] }, "Control UI build"],
+            [
+              {
+                ...toolCall,
+                options: {
+                  ...toolCall.options,
+                  env: {
+                    ...toolCall.options.env,
+                    OPENCLAW_CONTROL_UI_PREPARED_SETTINGS_ROOT: repoRoot,
+                  },
+                },
+                args: distArtifactEntryArgs(
+                  toolCall.args[0]!,
+                  [...toolCall.args.slice(1), "--outDir", staging],
+                  { native: true },
+                ),
+              },
+              "Control UI build",
+            ],
           ] satisfies [UiSpawnCall, string][])
         : []),
       validator("check-control-ui-precompressed-assets.mts", staging),
@@ -543,7 +583,8 @@ async function buildAndPublishUi(
         return result;
       }
     }
-    if (cache && cacheState) {
+    // A cache hit refreshes identity only in staging; its validated seed is immutable.
+    if (cache && cacheState && !reuseOutput) {
       const consumedInputs: string[] = JSON.parse(
         fs.readFileSync(path.join(staging, ".build-inputs.json"), "utf8"),
       );
@@ -648,7 +689,7 @@ export async function runUiCli(argv: string[] = process.argv.slice(2)): Promise<
     exitForSpawnResult(
       rest.some((arg) => arg === "--help" || arg === "-h")
         ? runSpawnCallSync(toolCall, "Control UI build")
-        : await buildAndPublishUi(toolCall, env),
+        : await withDistArtifactOwnership(repoRoot, () => buildAndPublishUi(toolCall, env)),
     );
     return;
   }

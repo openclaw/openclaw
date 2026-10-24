@@ -3,12 +3,15 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { fromMarkdown, type Extension, type Handle } from "mdast-util-from-markdown";
 import { gfmTableFromMarkdown } from "mdast-util-gfm-table";
 import { gfmTable } from "micromark-extension-gfm-table";
+import { hasUnresolvedImageCode } from "./image-code-retention.js";
+import { findUnsettledDefinitionStarts } from "./reference-definition-retention.js";
+import { retainTableParagraph } from "./table-code-retention.js";
 
 export type ReasoningTagTextDelta =
   | { kind: "text"; text: string }
   | { kind: "thinking"; text: string };
 
-const REASONING_TAG_NAMES = [
+export const REASONING_TAG_NAMES = [
   "think",
   "thinking",
   "thought",
@@ -186,9 +189,10 @@ export function findNextLineEnding(text: string, start: number): number {
   return lineFeed === -1 ? carriageReturn : Math.min(carriageReturn, lineFeed);
 }
 
-type PositionedNode = {
+export type PositionedNode = {
   type?: string;
   value?: string;
+  identifier?: string;
   position?: {
     start?: { offset?: number; line?: number };
     end?: { offset?: number; line?: number };
@@ -356,6 +360,8 @@ export function parseMarkdownOwnership(text: string, options?: MarkdownOwnership
       textSpans: [],
       retainStart: 0,
       completedParagraphs: [],
+      definitions: [],
+      unsettledDefinitionStarts: [],
       ...(paragraphs ? { paragraphs } : {}),
     };
   }
@@ -380,13 +386,18 @@ export function parseMarkdownOwnership(text: string, options?: MarkdownOwnership
   const completedParagraphs: MarkdownCompletedParagraph[] = [];
   const regions: MarkdownCodeRegion[] = [];
   const textSpans: Array<[number, number]> = [];
+  const definitions: Array<{ identifier: string; start: number; end: number }> = [];
+  const unsettledDefinitionStarts: number[] = [];
+  let unresolvedImageCodeStart: number | undefined;
   const blocks = tree.children ?? [];
+  let retainStart = blocks.at(-1)?.position?.start?.offset ?? text.length;
   for (let index = 0; index < blocks.length; index += 1) {
     const block = expectDefined(blocks[index], "Markdown block");
     const next = blocks[index + 1]?.position?.start;
     const blockStart = block.position?.start?.offset;
     const endLine = block.position?.end?.line;
     const blockEnd = block.position?.end?.offset;
+    retainStart = retainTableParagraph(retainStart, text.length, block, blocks[index - 1]);
     if (
       paragraphs &&
       block.type === "paragraph" &&
@@ -414,13 +425,28 @@ export function parseMarkdownOwnership(text: string, options?: MarkdownOwnership
       completedParagraphs.push(paragraph);
     }
     const pending: PositionedNode[] = [block];
+    const regionStart = regions.length;
+    let hasReferenceCandidate = false;
+    let hasInlineCode = false;
     while (pending.length > 0) {
       const node = expectDefined(pending.pop(), "Markdown ownership node");
-      if (paragraph && node.type === "text" && node.value?.includes("[")) {
-        paragraph.hasReferenceCandidate = true;
+      if (node.type === "text" && node.value?.includes("[")) {
+        hasReferenceCandidate = true;
+        if (paragraph) {
+          paragraph.hasReferenceCandidate = true;
+        }
       }
+      hasInlineCode ||= node.type === "inlineCode";
       const start = node.position?.start?.offset;
       const end = node.position?.end?.offset;
+      if (
+        node.type === "definition" &&
+        node.identifier !== undefined &&
+        start !== undefined &&
+        end !== undefined
+      ) {
+        definitions.push({ identifier: node.identifier, start, end });
+      }
       if (
         options?.includeText &&
         node.type === "text" &&
@@ -462,14 +488,32 @@ export function parseMarkdownOwnership(text: string, options?: MarkdownOwnership
         pending.push(child);
       }
     }
+    // A later image reference definition can turn inline code into unprotected alt text.
+    if (
+      hasReferenceCandidate &&
+      hasInlineCode &&
+      blockStart !== undefined &&
+      blockEnd !== undefined &&
+      hasUnresolvedImageCode(text, blockStart, blockEnd, regions, regionStart)
+    ) {
+      unresolvedImageCodeStart = blockStart;
+      retainStart = Math.min(retainStart, blockStart);
+    }
+  }
+  if (definitions.length) {
+    unsettledDefinitionStarts.push(...findUnsettledDefinitionStarts(text, definitions));
+    retainStart = Math.min(retainStart, ...unsettledDefinitionStarts);
   }
   regions.sort((left, right) => left.start - right.start);
   return {
     regions,
     codeSpans: regions.map(({ start, end }): [number, number] => [start, end]),
     textSpans,
-    retainStart: tree.children?.at(-1)?.position?.start?.offset ?? text.length,
+    retainStart,
+    ...(unresolvedImageCodeStart === undefined ? {} : { unresolvedImageCodeStart }),
     completedParagraphs,
+    definitions,
+    unsettledDefinitionStarts,
     ...(paragraphs ? { paragraphs } : {}),
   };
 }

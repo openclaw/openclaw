@@ -1,7 +1,7 @@
 /** @jsxImportSource @solidjs/web */
 import { render } from "@solidjs/web";
 import { defineControlUiPlugin, type ControlUiView } from "openclaw/plugin-sdk/control-ui";
-import { createStore, For } from "solid-js";
+import { createMemo, createSignal, createStore, Errored, For, Loading } from "solid-js";
 import type { ClawRouterPool, ClawRouterPoolResult } from "../pool.js";
 import "./control-ui.css";
 
@@ -17,7 +17,6 @@ type TrafficMetric =
 type ViewState = {
   result?: ClawRouterPoolResult;
   busy: boolean;
-  error: string;
   connected: boolean;
   canRead: boolean;
 };
@@ -27,13 +26,12 @@ const mountPool: ControlUiView = (container, initialContext) => {
   let context = initialContext;
   let result: ClawRouterPoolResult | undefined;
   let busy = false;
-  let error = "";
   let generation = 0;
   let available = false;
   let disposed = false;
+  const [completion, setCompletion] = createSignal<Promise<void>>();
   const [view, setView] = createStore<ViewState>({
     busy,
-    error,
     connected: host.connection.connected,
     canRead: host.connection.canRead,
   });
@@ -108,14 +106,20 @@ const mountPool: ControlUiView = (container, initialContext) => {
   const remaining = (value: number | undefined) =>
     value === undefined ? "Not reported" : `${number.format(value)}% free`;
 
-  async function refresh() {
+  function refresh() {
     if (busy || !available) {
       return;
     }
     const id = ++generation;
     busy = true;
-    error = "";
     publish();
+    const pending = readPool(id);
+    void setCompletion(pending);
+    // The view can be retired before its admitted request settles.
+    void pending.catch(() => undefined);
+  }
+
+  async function readPool(id: number) {
     try {
       const next = await host.request<ClawRouterPoolResult>("clawrouter.pool.get");
       if (isCurrent(id)) {
@@ -123,8 +127,11 @@ const mountPool: ControlUiView = (container, initialContext) => {
       }
     } catch (cause) {
       if (isCurrent(id)) {
-        error = host.redact(
-          cause instanceof Error ? cause.message : "Could not load the pool. Try refreshing.",
+        throw new Error(
+          host.redact(
+            cause instanceof Error ? cause.message : "Could not load the pool. Try refreshing.",
+          ),
+          { cause },
         );
       }
     } finally {
@@ -437,6 +444,7 @@ const mountPool: ControlUiView = (container, initialContext) => {
   }
 
   function PoolPage() {
+    const completed = createMemo(() => completion()?.then(() => null) ?? null);
     return (
       <section
         class="clawrouter-pool"
@@ -452,7 +460,7 @@ const mountPool: ControlUiView = (container, initialContext) => {
             class="clawrouter-pool__refresh"
             type="button"
             disabled={view.busy || !view.connected || !view.canRead}
-            onClick={() => void refresh()}
+            onClick={() => refresh()}
           >
             {view.busy ? "Refreshing…" : "Refresh"}
           </button>
@@ -467,11 +475,23 @@ const mountPool: ControlUiView = (container, initialContext) => {
           </p>
         ) : (
           <>
-            {view.error ? (
-              <p class="clawrouter-pool__error" role="alert">
-                {view.error}
-              </p>
-            ) : null}
+            <Loading on={completion()}>
+              <Errored
+                fallback={(error) => (
+                  <p class="clawrouter-pool__error" role="alert">
+                    {(() => {
+                      const failure = error();
+                      return failure instanceof Error ? failure.message : String(failure);
+                    })()}
+                  </p>
+                )}
+              >
+                {completed()}
+                {!view.result && !view.busy ? (
+                  <p class="clawrouter-pool__empty">Refresh to load pool status.</p>
+                ) : null}
+              </Errored>
+            </Loading>
             {view.busy ? (
               <p class="clawrouter-pool__hint" role="status">
                 Loading the latest pool status…
@@ -483,8 +503,6 @@ const mountPool: ControlUiView = (container, initialContext) => {
               <p class="clawrouter-pool__empty" role="status">
                 {host.redact(view.result.message)}
               </p>
-            ) : !view.busy && !view.error ? (
-              <p class="clawrouter-pool__empty">Refresh to load pool status.</p>
             ) : null}
           </>
         )}
@@ -497,7 +515,6 @@ const mountPool: ControlUiView = (container, initialContext) => {
       setView(() => ({
         result,
         busy,
-        error,
         connected: host.connection.connected,
         canRead: host.connection.canRead,
       }));
@@ -511,9 +528,9 @@ const mountPool: ControlUiView = (container, initialContext) => {
       generation += 1;
       busy = false;
       result = undefined;
-      error = "";
+      setCompletion(undefined);
       if (next) {
-        void refresh();
+        refresh();
         return;
       }
     }

@@ -1,7 +1,6 @@
 import {
   createGatewayActiveWorkSnapshot,
   type GatewayActiveWorkBlocker,
-  type GatewayActiveWorkInspectors,
 } from "./gateway-active-work.js";
 import { scheduleGatewayRestart, type ScheduledRestart } from "./restart.js";
 
@@ -20,19 +19,6 @@ type SafeGatewayRestartBlocker = Omit<GatewayActiveWorkBlocker, "kind"> & {
     | "media-generation";
 };
 
-type SafeRestartInspectors = Pick<
-  GatewayActiveWorkInspectors,
-  | "getQueueSize"
-  | "getPendingReplies"
-  | "getEmbeddedRuns"
-  | "getCronRuns"
-  | "getBackgroundExecSessions"
-  | "getRootRequests"
-  | "getAgentRuns"
-  | "getAcpRuns"
-  | "getMediaRuns"
->;
-
 export type SafeGatewayRestartRequestResult = {
   ok: true;
   status: "scheduled" | "deferred" | "coalesced";
@@ -40,9 +26,8 @@ export type SafeGatewayRestartRequestResult = {
   restart: ScheduledRestart;
 };
 
-export function createSafeGatewayRestartPreflight(inspectors: Partial<SafeRestartInspectors> = {}) {
+export function createSafeGatewayRestartPreflight() {
   const snapshot = createGatewayActiveWorkSnapshot({
-    ...inspectors,
     getSessionAdmissions: () => 0,
     getSessionMutations: () => 0,
     getChatRuns: () => 0,
@@ -80,15 +65,13 @@ export function createSafeGatewayRestartPreflight(inspectors: Partial<SafeRestar
 export function scheduleSafeGatewayRestart(
   opts: {
     reason?: string;
-    delayMs?: number;
     skipDeferral?: boolean;
-    inspect?: Partial<SafeRestartInspectors>;
   } = {},
 ): SafeGatewayRestartRequestResult {
-  const preflight = createSafeGatewayRestartPreflight(opts.inspect);
+  const preflight = createSafeGatewayRestartPreflight();
   const skipDeferral = opts.skipDeferral === true;
   const restart = scheduleGatewayRestart({
-    delayMs: opts.delayMs ?? 0,
+    delayMs: 0,
     reason: opts.reason ?? "gateway.restart.safe",
     ...(skipDeferral ? { preservePendingEmitHooksOnDeferralBypass: true, skipDeferral: true } : {}),
   });

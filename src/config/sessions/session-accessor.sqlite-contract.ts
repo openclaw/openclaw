@@ -38,6 +38,13 @@ export type TranscriptEventAppendResult =
   | { appended: false }
   | { appended: true; effectiveParentId?: string | null };
 
+export type TranscriptEventReadOptions = {
+  beforeEventSeq?: number;
+  afterEventSeq?: number;
+  projection?: "reset-boundary";
+  maxEventBytes?: number;
+};
+
 export type CacheTtlProjectionPrefix = {
   anchorIds: string[];
   entries: Record<string, unknown>[];
@@ -73,7 +80,6 @@ export type SqliteSessionReclamationDiagnostics = {
   kind?:
     | "archive-publish-prepare"
     | "archive-publish-record"
-    | "deletion-plan"
     | "entry"
     | "lifecycle-artifacts"
     | "lifecycle-projection-plan"
@@ -94,7 +100,7 @@ export type SqliteSessionReclamationDiagnostics = {
 /** One validated request owns this record until its observed release event. */
 export type SqliteSessionReclamationAdmissionDiagnostics = {
   admissionId: number;
-  releaseCause?: "worker-release" | "worker-exit";
+  releaseCause?: "preliminary-release" | "worker-release" | "worker-exit";
 };
 
 export type SqliteSessionDatabaseAdmissionDiagnostics = {

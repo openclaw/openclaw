@@ -1,387 +1,357 @@
-import { describe, expect, it } from "vitest";
+import { expect, it } from "vitest";
 import {
   SIDEBAR_MIN_WIDTH_PX,
   activatePanel,
   closeSlot,
-  ensureSidebarConversation,
-  fitSidebarLayout,
-  initializeBrowserSidebarWidth,
+  ensureSidebarConversation as withConversation,
+  fitSidebarLayout as fitLayout,
+  initializeBrowserSidebarWidth as initBrowserWidth,
   isSidebarSlotVisible,
-  normalizeSidebarLayout,
+  normalizeSidebarLayout as normalize,
   openSlot,
-  presentNarrowSidebarLayout,
-  promoteSidebarPanel,
+  presentNarrowSidebarLayout as narrow,
+  promoteSidebarPanel as promotePanel,
   reorderPanel,
-  resizeSidebarPanel,
+  resizeSidebarPanel as resizePanel,
   setSidebarDock,
   setSidebarExpanded,
-  toggleSidebarPanelExpanded,
+  toggleSidebarPanelExpanded as toggleExpanded,
   setSidebarOpen,
-  sidebarActivePanel,
-  sidebarMainPanel,
-  sidebarSidePanels,
+  sidebarActivePanel as activePanel,
+  sidebarMainPanel as mainPanel,
+  sidebarSidePanels as sidePanels,
   type SidebarLayout,
+  type SidebarSlotId,
 } from "./sidebar-layout.ts";
+
+type Column = SidebarLayout["columns"][number];
+function column(panels: Column["panels"] = [], extra: Partial<Column> = {}) {
+  return {
+    id: "side-panel-column",
+    side: "right" as const,
+    panels,
+    activePanelId: "",
+    height: 360,
+    width: 480,
+    ...extra,
+  };
+}
+
+function expectVisible(layout: SidebarLayout, shown: SidebarSlotId, hidden?: SidebarSlotId) {
+  expect(isSidebarSlotVisible(layout, shown)).toBe(true);
+  if (hidden) {
+    expect(isSidebarSlotVisible(layout, hidden)).toBe(false);
+  }
+}
+function storedColumn(id: string, panels: { id: string; slot: string }[], extra = {}) {
+  return { id, side: "right", panels, ...extra };
+}
+const tab = <Slot extends string>(slot: Slot, id: string = slot) => ({ id, slot });
 
 function openAll(): SidebarLayout {
   return openSlot(openSlot(openSlot({ columns: [] }, "discussion"), "dashboard"), "detail");
 }
 
-describe("sidebar layout", () => {
-  it.each(["right"] as const)(
-    "restores the original %s split after focusing the side in place",
-    (dock) => {
-      const split = normalizeSidebarLayout(
-        ensureSidebarConversation(setSidebarDock(activatePanel(openAll(), "dashboard"), dock)),
-      );
-      const focused = toggleSidebarPanelExpanded(split, "dashboard");
-      expect(sidebarMainPanel(focused)).toEqual(sidebarMainPanel(split));
-      expect(focused.columns).toEqual(split.columns);
-      expect(isSidebarSlotVisible(focused, "dashboard")).toBe(true);
-      expect(isSidebarSlotVisible(focused, "conversation")).toBe(false);
-      expect(toggleSidebarPanelExpanded(normalizeSidebarLayout(focused), "dashboard")).toEqual(
-        split,
-      );
-      const closed = setSidebarOpen(focused, false);
-      expect(isSidebarSlotVisible(closed, "conversation")).toBe(true);
-      expect(isSidebarSlotVisible(closed, "dashboard")).toBe(false);
-      expect(setSidebarOpen(closed, true)).toEqual(split);
-    },
-  );
-
-  it("expands inactive tabs and exits side focus on normal activation or closing its tab", () => {
-    const split = normalizeSidebarLayout(ensureSidebarConversation(openAll()));
-    const focused = toggleSidebarPanelExpanded(split, "dashboard");
-    expect(sidebarActivePanel(focused)?.slot).toBe("dashboard");
-    expect(sidebarMainPanel(focused)).toEqual(sidebarMainPanel(split));
-    expect(activatePanel(focused, "detail")).toEqual(split);
-    expect(isSidebarSlotVisible(openSlot(focused, "conversation"), "conversation")).toBe(true);
-    const closed = closeSlot(focused, "dashboard");
-    expect(closed.expanded).toBe(false);
-    expect(isSidebarSlotVisible(closed, "conversation")).toBe(true);
-    expect(isSidebarSlotVisible(closed, "detail")).toBe(true);
-    expect(toggleSidebarPanelExpanded(split, "missing")).toEqual(split);
-    expect(toggleSidebarPanelExpanded(split, split.mainPanelId!)).toEqual(split);
-  });
-
-  it("does not hide the main view when stored side focus has no surviving side panel", () => {
-    const layout = normalizeSidebarLayout({
-      columns: [],
-      expanded: true,
-      expandedSide: true,
-      open: true,
-    });
-    expect(isSidebarSlotVisible(layout, "conversation")).toBe(true);
-    expect(layout.expandedSide).toBeUndefined();
-  });
-
-  it("shows a narrow pane's open background panel in place of the main view, and nothing else", () => {
-    const saved = openSlot(openSlot({ columns: [] }, "terminal"), "subagents");
-    const before = structuredClone(saved);
-    const shown = presentNarrowSidebarLayout(saved);
-    expect(isSidebarSlotVisible(shown, "subagents")).toBe(true);
-    expect(isSidebarSlotVisible(shown, "conversation")).toBe(false);
-    // Presentation only: the layout is untouched and the same view comes back each time.
-    expect(saved).toEqual(before);
-    expect(presentNarrowSidebarLayout(saved)).toBe(shown);
-    expect(
-      isSidebarSlotVisible(
-        presentNarrowSidebarLayout(openSlot(saved, "processes")),
-        "conversation",
-      ),
-    ).toBe(false);
-    // Every other state is shown as it is: another panel, a closed side, a focused main view.
-    for (const layout of [
-      openSlot(saved, "terminal"),
-      setSidebarOpen(saved, false),
-      setSidebarExpanded(saved, true),
-      toggleSidebarPanelExpanded(saved, sidebarActivePanel(saved)!.id),
-    ]) {
-      expect(presentNarrowSidebarLayout(layout)).toBe(layout);
-    }
-  });
-
-  it("presents every open mobile panel full-width without changing the saved desktop layout", () => {
-    for (const slot of [
-      "workspace",
-      "terminal",
-      "browser",
-      "dashboard",
-      "subagents",
-      "processes",
-    ] as const) {
-      const saved = openSlot(ensureSidebarConversation({ columns: [] }), slot);
-      const before = structuredClone(saved);
-      const shown = presentNarrowSidebarLayout(saved, { allPanels: true });
-      expect(isSidebarSlotVisible(shown, slot)).toBe(true);
-      expect(isSidebarSlotVisible(shown, "conversation")).toBe(false);
-      expect(presentNarrowSidebarLayout(saved, { allPanels: true })).toBe(shown);
-      expect(saved).toEqual(before);
-      expect(isSidebarSlotVisible(saved, "conversation")).toBe(true);
-      const closed = setSidebarOpen(saved, false);
-      expect(presentNarrowSidebarLayout(closed, { allPanels: true })).toBe(closed);
-    }
-  });
-
-  it("keeps a promoted main view visible when restoring a mobile split", () => {
-    const split = ensureSidebarConversation(openSlot({ columns: [] }, "dashboard"));
-    const promoted = promoteSidebarPanel(split, sidebarActivePanel(split)!.id);
-    expect(sidebarMainPanel(promoted)?.slot).toBe("dashboard");
-    expect(presentNarrowSidebarLayout(promoted, { allPanels: true })).toBe(promoted);
-    expect(isSidebarSlotVisible(promoted, "dashboard")).toBe(true);
-    expect(isSidebarSlotVisible(promoted, "conversation")).toBe(true);
-  });
-
-  it("presents newly selected mobile tools over a promoted main view without changing it", () => {
-    const split = ensureSidebarConversation(openSlot({ columns: [] }, "dashboard"));
-    const promoted = promoteSidebarPanel(split, sidebarActivePanel(split)!.id);
-    for (const slot of ["workspace", "terminal"] as const) {
-      const saved = openSlot(promoted, slot);
-      const before = structuredClone(saved);
-      const shown = presentNarrowSidebarLayout(saved, { allPanels: true });
-      expect(isSidebarSlotVisible(shown, slot)).toBe(true);
-      expect(isSidebarSlotVisible(shown, "dashboard")).toBe(false);
-      expect(sidebarMainPanel(shown)?.slot).toBe("dashboard");
-      expect(saved).toEqual(before);
-    }
-  });
-
-  it("reorders tabs without changing the active surface", () => {
-    const layout = openAll();
-    const [discussion, dashboard, detail] = layout.columns[0]!.panels;
-    const reordered = reorderPanel(layout, discussion!.id, detail!.id, "after");
-
-    expect(reordered.columns[0]?.panels.map((panel) => panel.slot)).toEqual([
-      "dashboard",
-      "detail",
-      "discussion",
-    ]);
-    expect(reordered.columns[0]?.activePanelId).toBe(detail!.id);
-    expect(layout.columns[0]?.panels[0]?.id).toBe(discussion!.id);
-    expect(dashboard?.slot).toBe("dashboard");
-  });
-
-  it("collapses the panel after its final tab closes", () => {
-    const closed = closeSlot(openSlot({ columns: [] }, "detail"), "detail");
-    expect(closed).toEqual({
-      columns: [
-        {
-          browserWidthPending: true,
-          id: "side-panel-column",
-          side: "right",
-          panels: [],
-          activePanelId: "",
-          height: 360,
-          width: 480,
-        },
-      ],
-      open: false,
-    });
-  });
-
-  it("focuses main independently and restores the side selection when reopened", () => {
-    const layout = promoteSidebarPanel(openAll(), "dashboard");
-    const focused = setSidebarExpanded(layout, true);
-    expect(isSidebarSlotVisible(focused, "dashboard")).toBe(true);
-    expect(isSidebarSlotVisible(focused, "conversation")).toBe(false);
-    expect(openSlot(focused, "dashboard")).toEqual(focused);
-
-    const minimized = setSidebarOpen(focused, false);
-    expect(isSidebarSlotVisible(minimized, "dashboard")).toBe(true);
-    const reopened = setSidebarOpen(minimized, true);
-    expect(isSidebarSlotVisible(reopened, "conversation")).toBe(true);
-    expect(sidebarMainPanel(reopened)?.slot).toBe("dashboard");
-    const openedDetail = openSlot(focused, "detail");
-    expect(isSidebarSlotVisible(openedDetail, "detail")).toBe(true);
-    expect(sidebarMainPanel(openedDetail)?.slot).toBe("dashboard");
-    expect(promoteSidebarPanel(focused, "detail").expanded).toBe(false);
-  });
-
-  it("restores conversation when main closes and retains the other side tabs", () => {
-    const layout = promoteSidebarPanel(openAll(), "dashboard");
-    const withoutConversation = closeSlot(layout, "conversation");
-    expect(withoutConversation.open).toBe(false);
-    expect(withoutConversation.columns[0]?.panels).toEqual(layout.columns[0]?.panels);
-
-    const closed = closeSlot(layout, "dashboard");
-    expect(sidebarMainPanel(closed)?.slot).toBe("conversation");
-    expect(sidebarSidePanels(closed).map((panel) => panel.slot)).toEqual(["discussion", "detail"]);
-    expect(sidebarActivePanel(closed)?.slot).toBe("discussion");
-    expect(closed.open).toBe(true);
-    expect(closeSlot(closed, "conversation")).toEqual(closed);
-
-    const finalPanel = closeSlot(
-      promoteSidebarPanel(openSlot({ columns: [] }, "dashboard"), "dashboard"),
-      "dashboard",
+it.each(["dashboard", undefined])(
+  "restores the original right split after focusing the side with panelId=%s",
+  (panelId) => {
+    const split = normalize(
+      withConversation(setSidebarDock(activatePanel(openAll(), "dashboard"), "right")),
     );
-    expect(isSidebarSlotVisible(finalPanel, "conversation")).toBe(true);
-    expect(finalPanel.open).toBe(false);
+    const focused = toggleExpanded(split, panelId);
+    expect(mainPanel(focused)).toEqual(mainPanel(split));
+    expect(focused.columns).toEqual(split.columns);
+    expectVisible(focused, "dashboard", "conversation");
+    expect(toggleExpanded(normalize(focused), panelId)).toEqual(split);
+    const closed = setSidebarOpen(focused, false);
+    expectVisible(closed, "conversation", "dashboard");
+    expect(setSidebarOpen(closed, true)).toEqual(split);
+  },
+);
+
+it.each(["left", "right", "bottom"] as const)(
+  "expands and restores an empty %s container without adding a tool or losing geometry",
+  (dock) => {
+    const opened = setSidebarOpen({ columns: [] }, true);
+    const columnId = opened.columns[0]!.id;
+    const sized = resizePanel(
+      setSidebarDock(resizePanel(opened, columnId, 620), "bottom"),
+      columnId,
+      410,
+    );
+    const split = normalize(withConversation(setSidebarDock(sized, dock)));
+    const before = structuredClone(split);
+    const focused = toggleExpanded(split);
+    expect(focused).toMatchObject({ open: true, expanded: true, expandedSide: true, dock });
+    expect(sidePanels(focused)).toEqual([]);
+    expect(activePanel(focused)).toBeUndefined();
+    expect(mainPanel(focused)).toEqual({ id: "conversation", slot: "conversation" });
+    expect(focused.columns).toEqual(before.columns);
+    expect(split).toEqual(before);
+    const restored = toggleExpanded(normalize(focused));
+    expect(restored).toEqual(before);
+    expect(isSidebarSlotVisible(restored, "conversation")).toBe(true);
+  },
+);
+
+it("retains stored expansion of an empty container and restores the chat", () => {
+  const layout = normalize({
+    columns: [{ id: "side", side: "right", panels: [], width: 620, height: 410 }],
+    expanded: true,
+    expandedSide: true,
+    open: true,
   });
+  expect(layout.expandedSide).toBe(true);
+  expect(sidePanels(layout)).toEqual([]);
+  expect(isSidebarSlotVisible(layout, "conversation")).toBe(false);
+  expect(normalize(layout)).toEqual(layout);
+  const restored = setSidebarExpanded(layout, false);
+  expect(isSidebarSlotVisible(restored, "conversation")).toBe(true);
+  expect(restored.columns[0]).toMatchObject({ width: 620, height: 410 });
+  expect(normalize({ ...layout, open: false }).expandedSide).toBeUndefined();
+});
 
-  it("clamps and fits the single inherited resizable column", () => {
-    const layout = openAll();
-    const columnId = layout.columns[0]!.id;
-    expect(resizeSidebarPanel(layout, columnId, 1).columns[0]?.width).toBe(SIDEBAR_MIN_WIDTH_PX);
-    expect(resizeSidebarPanel(layout, columnId, Number.MAX_VALUE).columns[0]?.width).toBe(1_200);
-    expect(
-      fitSidebarLayout(resizeSidebarPanel(layout, columnId, 1_000), 1_200)?.columns[0]?.width,
-    ).toBe(720);
-    expect(fitSidebarLayout(layout, 560)).toBeNull();
+it("expands inactive tabs and exits side focus on normal activation or closing its tab", () => {
+  const split = normalize(withConversation(openAll()));
+  const focused = toggleExpanded(split, "dashboard");
+  expect(activePanel(focused)?.slot).toBe("dashboard");
+  expect(mainPanel(focused)).toEqual(mainPanel(split));
+  expect(activatePanel(focused, "detail")).toEqual(split);
+  expect(isSidebarSlotVisible(openSlot(focused, "conversation"), "conversation")).toBe(true);
+  const closed = closeSlot(focused, "dashboard");
+  expect(closed.expanded).toBe(false);
+  expectVisible(closed, "conversation");
+  expectVisible(closed, "detail");
+  expect(toggleExpanded(split, "missing")).toEqual(split);
+  expect(toggleExpanded(split, split.mainPanelId!)).toEqual(split);
+});
+
+it("does not hide the main view when stored side focus has no surviving side panel", () => {
+  const layout = normalize({ columns: [], expanded: true, expandedSide: true, open: true });
+  expectVisible(layout, "conversation");
+  expect(layout.expandedSide).toBeUndefined();
+});
+
+it("shows a narrow pane's open background panel in place of the main view, and nothing else", () => {
+  const saved = openSlot(openSlot({ columns: [] }, "terminal"), "subagents");
+  const before = structuredClone(saved);
+  const shown = narrow(saved);
+  expectVisible(shown, "subagents", "conversation");
+  expect(saved).toEqual(before);
+  expect(narrow(saved)).toBe(shown);
+  expect(isSidebarSlotVisible(narrow(openSlot(saved, "processes")), "conversation")).toBe(false);
+  for (const layout of [
+    openSlot(saved, "terminal"),
+    setSidebarOpen(saved, false),
+    setSidebarExpanded(saved, true),
+    toggleExpanded(saved, activePanel(saved)!.id),
+  ]) {
+    expect(narrow(layout)).toBe(layout);
+  }
+});
+
+it.each([false, true])(
+  "presents mobile tools without changing the desktop (promoted=%s)",
+  (promoted) => {
+    const base = withConversation(
+      promoted ? openSlot({ columns: [] }, "dashboard") : { columns: [] },
+    );
+    const layout = promoted ? promotePanel(base, "dashboard") : base;
+    const main = promoted ? "dashboard" : "conversation";
+    const slots: SidebarSlotId[] = promoted
+      ? ["workspace", "terminal"]
+      : ["workspace", "terminal", "browser", "dashboard", "subagents", "processes"];
+    for (const slot of slots) {
+      const saved = openSlot(layout, slot);
+      const before = structuredClone(saved);
+      const shown = narrow(saved, { allPanels: true });
+      expectVisible(shown, slot, main);
+      expect(mainPanel(shown)?.slot).toBe(main);
+      expect(narrow(saved, { allPanels: true })).toBe(shown);
+      expect(saved).toEqual(before);
+      expectVisible(saved, main);
+      const closed = setSidebarOpen(saved, false);
+      expect(narrow(closed, { allPanels: true })).toBe(closed);
+    }
+  },
+);
+
+it("presents Chat over a promoted page on mobile without changing the desktop split", () => {
+  const split = withConversation(openSlot({ columns: [] }, "dashboard"));
+  const promoted = promotePanel(split, activePanel(split)!.id);
+  expect(mainPanel(promoted)?.slot).toBe("dashboard");
+  const mobile = narrow(promoted, { allPanels: true });
+  expectVisible(mobile, "conversation", "dashboard");
+  expect(narrow(promoted)).toBe(promoted);
+  expectVisible(narrow(closeSlot(promoted, "conversation"), { allPanels: true }), "dashboard");
+  expectVisible(promoted, "dashboard");
+  expectVisible(promoted, "conversation");
+});
+
+it("reorders tabs without changing the active surface", () => {
+  const layout = openAll();
+  const [discussion, dashboard, detail] = layout.columns[0]!.panels;
+  const reordered = reorderPanel(layout, discussion!.id, detail!.id, "after");
+
+  expect(reordered.columns[0]?.panels.map((panel) => panel.slot)).toEqual([
+    "dashboard",
+    "detail",
+    "discussion",
+  ]);
+  expect(reordered.columns[0]?.activePanelId).toBe(detail!.id);
+  expect(layout.columns[0]?.panels[0]?.id).toBe(discussion!.id);
+  expect(dashboard?.slot).toBe("dashboard");
+});
+
+it("collapses the panel after its final tab closes", () => {
+  const closed = closeSlot(openSlot({ columns: [] }, "detail"), "detail");
+  expect(closed).toEqual({
+    columns: [column([], { browserWidthPending: true })],
+    open: false,
   });
+});
 
-  it("defers browser sizing in narrow and bottom layouts and preserves manual or legacy widths", () => {
-    const layout = normalizeSidebarLayout(openSlot({ columns: [] }, "browser"));
-    expect(initializeBrowserSidebarWidth(layout, 500, 464)).toEqual(layout);
-    const bottom = setSidebarDock(layout, "bottom");
-    expect(initializeBrowserSidebarWidth(bottom, 1_800, 804)).toEqual(bottom);
-    const resized = normalizeSidebarLayout(resizeSidebarPanel(layout, layout.columns[0]!.id, 480));
-    expect(initializeBrowserSidebarWidth(resized, 1_800, 804)).toEqual(resized);
-    const legacy = normalizeSidebarLayout({
-      columns: [
-        { id: "side", side: "right", panels: [{ id: "browser", slot: "browser" }], width: 480 },
-      ],
-    });
-    expect(initializeBrowserSidebarWidth(legacy, 1_800, 804)).toEqual(legacy);
-    expect(initializeBrowserSidebarWidth(layout, 1_800, 804).columns[0]?.width).toBe(990);
-  });
+it("focuses main independently and restores the side selection when reopened", () => {
+  const layout = promotePanel(openAll(), "dashboard");
+  const focused = setSidebarExpanded(layout, true);
+  expectVisible(focused, "dashboard", "conversation");
+  expect(openSlot(focused, "dashboard")).toEqual(focused);
 
-  it("persists and resizes the same panel at the bottom", () => {
-    const layout = setSidebarDock(openAll(), "bottom");
-    const columnId = layout.columns[0]!.id;
-    const resized = resizeSidebarPanel(layout, columnId, 480);
+  const minimized = setSidebarOpen(focused, false);
+  expectVisible(minimized, "dashboard");
+  const reopened = setSidebarOpen(minimized, true);
+  expectVisible(reopened, "conversation");
+  expect(mainPanel(reopened)?.slot).toBe("dashboard");
+  const openedDetail = openSlot(focused, "detail");
+  expectVisible(openedDetail, "detail");
+  expect(mainPanel(openedDetail)?.slot).toBe("dashboard");
+  expect(promotePanel(focused, "detail").expanded).toBe(false);
+});
 
-    expect(resized.dock).toBe("bottom");
-    expect(resized.columns[0]?.height).toBe(480);
-    expect(resized.columns[0]?.width).toBe(480);
-    expect(fitSidebarLayout(resized, 560)).toEqual(resized);
-  });
+it("restores conversation when main closes and retains the other side tabs", () => {
+  const layout = promotePanel(openAll(), "dashboard");
+  const withoutConversation = closeSlot(layout, "conversation");
+  expect(withoutConversation.open).toBe(false);
+  expect(withoutConversation.columns[0]?.panels).toEqual(layout.columns[0]?.panels);
 
-  it.each([true, false])(
-    "migrates a legacy expanded dashboard with open=%s without changing visible content",
-    (open) => {
-      const layout = normalizeSidebarLayout({
-        columns: [
-          {
-            id: "side-panel-column",
-            side: "right",
-            panels: [
-              { id: "chat", slot: "chat" },
-              { id: "terminal", slot: "terminal" },
-            ],
-            activePanelId: "chat",
-            height: 520,
-            width: 640,
-          },
-        ],
-        dock: "bottom",
-        open,
-        expanded: true,
-      });
-      expect(layout).toEqual({
-        columns: [
-          {
-            id: "side-panel-column",
-            side: "right",
-            panels: [
-              { id: "chat", slot: "dashboard" },
-              { id: "terminal", slot: "terminal" },
-              { id: "conversation", slot: "conversation" },
-            ],
-            activePanelId: open ? "conversation" : "chat",
-            height: 520,
-            width: 640,
-          },
-        ],
-        mainPanelId: open ? "chat" : "conversation",
-        dock: "bottom",
-        open,
-        expanded: true,
-      });
-      expect(isSidebarSlotVisible(layout, "dashboard")).toBe(open);
-      expect(isSidebarSlotVisible(layout, "conversation")).toBe(!open);
-      expect(normalizeSidebarLayout(layout)).toEqual(layout);
-    },
+  const closed = closeSlot(layout, "dashboard");
+  expect(mainPanel(closed)?.slot).toBe("conversation");
+  expect(sidePanels(closed).map((panel) => panel.slot)).toEqual(["discussion", "detail"]);
+  expect(activePanel(closed)?.slot).toBe("discussion");
+  expect(closed.open).toBe(true);
+  expect(closeSlot(closed, "conversation")).toEqual(closed);
+
+  const finalPanel = closeSlot(
+    promotePanel(openSlot({ columns: [] }, "dashboard"), "dashboard"),
+    "dashboard",
   );
+  expectVisible(finalPanel, "conversation");
+  expect(finalPanel.open).toBe(false);
+});
 
-  it("deduplicates slots and repairs untrusted persisted values", () => {
-    expect(normalizeSidebarLayout(null)).toEqual({ columns: [], open: false, expanded: false });
-    expect(normalizeSidebarLayout({ columns: [], open: true })).toEqual({
-      columns: [
-        {
-          id: "side-panel-column",
-          side: "right",
-          panels: [],
-          activePanelId: "",
-          height: 360,
-          width: 480,
-        },
-      ],
-      dock: "right",
-      open: true,
-      expanded: false,
-    });
-    expect(
-      normalizeSidebarLayout({
-        columns: [
-          {
-            id: "review",
-            side: "right",
-            panels: [{ id: "detail", slot: "detail" }],
-          },
-        ],
-      }).columns[0]?.width,
-    ).toBe(480);
-    expect(normalizeSidebarLayout({ columns: "nope" })).toEqual({
-      columns: [],
-      open: false,
-      expanded: false,
-    });
-    expect(
-      normalizeSidebarLayout({
-        columns: [
-          {
-            id: "same",
-            side: "right",
-            panels: [
-              { id: "same-panel", slot: "detail" },
-              { id: "unknown", slot: "unknown" },
-            ],
-            activePanelId: "missing",
-            width: 20,
-          },
-          {
-            id: "same",
-            side: "left",
-            panels: [
-              { id: "same-panel", slot: "discussion" },
-              { id: "duplicate-slot", slot: "detail" },
-            ],
-            activePanelId: "same-panel",
-            width: 50_000,
-          },
-        ],
-        open: false,
-        expanded: true,
-      }),
-    ).toEqual({
-      columns: [
-        {
-          id: "same",
-          side: "right",
-          panels: [
-            { id: "same-panel", slot: "detail" },
-            { id: "same-panel-2", slot: "discussion" },
-            { id: "conversation", slot: "conversation" },
-          ],
-          activePanelId: "same-panel-2",
-          height: 360,
-          width: 1_200,
-        },
-      ],
-      mainPanelId: "conversation",
-      dock: "right",
-      open: false,
+it("clamps and fits the single inherited resizable column", () => {
+  const layout = openAll();
+  const columnId = layout.columns[0]!.id;
+  expect(resizePanel(layout, columnId, 1).columns[0]?.width).toBe(SIDEBAR_MIN_WIDTH_PX);
+  expect(resizePanel(layout, columnId, Number.MAX_VALUE).columns[0]?.width).toBe(1_200);
+  expect(fitLayout(resizePanel(layout, columnId, 1_000), 1_200)?.columns[0]?.width).toBe(720);
+  expect(fitLayout(layout, 560)).toBeNull();
+});
+
+it("defers browser sizing in narrow and bottom layouts and preserves manual or legacy widths", () => {
+  const layout = normalize(openSlot({ columns: [] }, "browser"));
+  expect(initBrowserWidth(layout, 500, 464)).toEqual(layout);
+  const bottom = setSidebarDock(layout, "bottom");
+  expect(initBrowserWidth(bottom, 1_800, 804)).toEqual(bottom);
+  const resized = normalize(resizePanel(layout, layout.columns[0]!.id, 480));
+  expect(initBrowserWidth(resized, 1_800, 804)).toEqual(resized);
+  const legacy = normalize({
+    columns: [storedColumn("side", [tab("browser")], { width: 480 })],
+  });
+  expect(initBrowserWidth(legacy, 1_800, 804)).toEqual(legacy);
+  expect(initBrowserWidth(layout, 1_800, 804).columns[0]?.width).toBe(990);
+});
+
+it("persists and resizes the same panel at the bottom", () => {
+  const layout = setSidebarDock(openAll(), "bottom");
+  const columnId = layout.columns[0]!.id;
+  const resized = resizePanel(layout, columnId, 480);
+
+  expect(resized).toMatchObject({ dock: "bottom", columns: [{ height: 480, width: 480 }] });
+  expect(fitLayout(resized, 560)).toEqual(resized);
+});
+
+it.each([true, false])(
+  "migrates a legacy expanded dashboard with open=%s without changing visible content",
+  (open) => {
+    const legacyColumn = column([], { activePanelId: "chat", height: 520, width: 640 });
+    const legacyPanels = [tab("chat"), tab("terminal")];
+    const layout = normalize({
+      columns: [{ ...legacyColumn, panels: legacyPanels }],
+      dock: "bottom",
+      open,
       expanded: true,
     });
+    expect(layout).toEqual({
+      columns: [
+        {
+          ...legacyColumn,
+          panels: [tab("dashboard", "chat"), tab("terminal"), tab("conversation")],
+          activePanelId: open ? "conversation" : "chat",
+        },
+      ],
+      mainPanelId: open ? "chat" : "conversation",
+      dock: "bottom",
+      open,
+      expanded: true,
+    });
+    expect(isSidebarSlotVisible(layout, "dashboard")).toBe(open);
+    expect(isSidebarSlotVisible(layout, "conversation")).toBe(!open);
+    expect(normalize(layout)).toEqual(layout);
+  },
+);
+
+it("deduplicates slots and repairs untrusted persisted values", () => {
+  for (const input of [null, { columns: "nope" }]) {
+    expect(normalize(input)).toEqual({ columns: [], open: false, expanded: false });
+  }
+  expect(normalize({ columns: [], open: true })).toEqual({
+    columns: [column()],
+    dock: "right",
+    open: true,
+    expanded: false,
+  });
+  expect(
+    normalize({
+      columns: [storedColumn("review", [tab("detail")])],
+    }).columns[0]?.width,
+  ).toBe(480);
+  expect(
+    normalize({
+      columns: [
+        storedColumn("same", [tab("detail", "same-panel"), tab("unknown")], {
+          activePanelId: "missing",
+          width: 20,
+        }),
+        storedColumn("same", [tab("discussion", "same-panel"), tab("detail", "duplicate-slot")], {
+          side: "left",
+          activePanelId: "same-panel",
+          width: 50_000,
+        }),
+      ],
+      open: false,
+      expanded: true,
+    }),
+  ).toEqual({
+    columns: [
+      column(
+        [tab("detail", "same-panel"), tab("discussion", "same-panel-2"), tab("conversation")],
+        { id: "same", activePanelId: "same-panel-2", width: 1_200 },
+      ),
+    ],
+    mainPanelId: "conversation",
+    dock: "right",
+    open: false,
+    expanded: true,
   });
 });

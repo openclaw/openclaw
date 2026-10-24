@@ -31,6 +31,7 @@ import {
   type PluginInstanceHandle,
 } from "../plugins/plugin-instance-scope.js";
 import { getPluginRecordRegistry } from "../plugins/registry-lifecycle.js";
+export { prepareChannelIngressEvent } from "../channels/message/ingress-hooks.js";
 export { channelIngressRoutes } from "../channels/message-access/runtime.js";
 export {
   meetsIdentifierAuthentication,

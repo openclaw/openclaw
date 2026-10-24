@@ -3,14 +3,12 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import SHARED_TOOL_DISPLAY_JSON from "../../../../apps/shared/OpenClawKit/Sources/OpenClawKit/Resources/tool-display.json" with { type: "json" };
 import { unwrapToolCallForDisplay } from "../../../../src/agents/tool-display-call.js";
 import {
-  defaultTitle,
-  normalizeToolDisplayName,
-  resolveToolVerbAndDetailForArgs,
+  resolveToolDetailForArgs,
   type ToolDisplaySpec,
 } from "../../../../src/agents/tool-display-common.js";
 import type { ToolDetailMode } from "../../../../src/agents/tool-display-exec.js";
 import type { ControlUiEmbedSandboxMode } from "../../../../src/gateway/control-ui-bootstrap-contract.js";
-import { resolveToolDisplayIcon } from "./tool-display-icon.ts";
+import { resolveToolDisplayIdentity } from "./tool-display-identity.ts";
 
 const A2UI_PATH = "/__openclaw__/a2ui";
 const CANVAS_HOST_PATH = "/__openclaw__/canvas";
@@ -18,7 +16,7 @@ const CANVAS_CAPABILITY_PATH_PREFIX = "/__openclaw__/cap";
 
 type ToolDisplay = {
   name: string;
-  icon: ReturnType<typeof resolveToolDisplayIcon>;
+  icon: ReturnType<typeof resolveToolDisplayIdentity>["icon"];
   label: string;
   detail?: string;
 };
@@ -41,12 +39,10 @@ export function resolveToolDisplay(params: {
   detailMode?: ToolDetailMode;
 }): ToolDisplay {
   const call = unwrapToolCallForDisplay({ name: params.name, args: params.args });
-  const name = normalizeToolDisplayName(call.name);
+  const { name, label, icon } = resolveToolDisplayIdentity(call.name);
   const key = normalizeLowercaseStringOrEmpty(name);
   const spec = TOOL_MAP[key];
-  const icon = resolveToolDisplayIcon(name);
-  const label = spec?.label ?? spec?.title ?? defaultTitle(name);
-  let { detail } = resolveToolVerbAndDetailForArgs({
+  let detail = resolveToolDetailForArgs({
     toolKey: key,
     args: call.args,
     spec,

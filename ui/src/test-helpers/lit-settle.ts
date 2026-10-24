@@ -11,7 +11,7 @@ type UpdatingElement = { updateComplete: Promise<boolean> };
 // microtask turn between them means no chain resolved into a new render.
 //
 // A settled update alone is not quiescence: it only says that render did not reschedule
-// itself, so a promise chain that calls requestUpdate() at its end can still be in flight.
+// itself, so a promise chain that schedules another render at its end can still be in flight.
 // Keep an unconditional floor of turns for those, and treat the settled check as the part
 // that extends past it, so this drains at least as far as any fixed pump and further when
 // the work needs it.

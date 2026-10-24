@@ -129,6 +129,11 @@ matches you can inspect before choosing one to write.
 | `validate <oc-path>`    | Parse-only; print the structural breakdown (file / section / item / field). |
 | `emit <file>`           | Round-trip a file through parse + emit (byte-fidelity diagnostic).          |
 
+When updating an existing YAML numeric field, `set` accepts finite decimal
+values, including scientific notation such as `1e-7` or `2.5E+3`. You can
+write the numeric `valueText` returned by `resolve` back to the same field.
+Malformed or non-finite numeric values are rejected without changing the file.
+
 ## Global flags
 
 | Flag            | Applies to                       | Purpose                                                                  |
@@ -159,6 +164,9 @@ all four slots:
   other backslash escapes are rejected. The file slot is
   also quote-aware: `oc://"skills/email-drafter"/Tools/$last` treats
   `skills/email-drafter` as a single file path.
+  Use `""` for an empty-string object key in JSONC, JSONL, or YAML, for example
+  `oc://sample.jsonc/""/value`. It is distinct from a missing segment and is not
+  an array index.
 - **Predicates** — `[k=v]`, `[k!=v]`, `[k<v]`, `[k<=v]`, `[k>v]`, `[k>=v]`.
   Numeric operators require both sides to coerce to finite numbers.
 - **Unions** — `{a,b,c}` matches any of the alternatives.
@@ -209,9 +217,12 @@ depending on the per-kind AST shape.
 
 - Markdown frontmatter values and `- key: value` item fields are string
   leaves. Values are literal, including `$1`, `$&`, and `$$`. Markdown
-  insertions append sections, frontmatter keys, or section items and render a
-  standard Markdown format for the changed file. Section bodies are not
-  writable as a whole through `set`.
+  insertions append sections, frontmatter keys, or section items. Edits replace
+  only the selected source range: body edits preserve the original frontmatter,
+  and frontmatter edits preserve the body, including comments, quoting, blank
+  lines, CRLF, and a missing final newline. Frontmatter uses `---` delimiters;
+  `+++` is ordinary body text. Section bodies are not writable as a whole
+  through `set`.
 - JSONC leaf writes coerce the string value to the existing leaf type
   (`string`, finite `number`, `true`/`false`, or `null`). Use `--value-json`
   when a JSONC/JSON/JSONL leaf replacement should parse `<value>` as JSON and
@@ -230,12 +241,13 @@ depending on the per-kind AST shape.
   `yaml` package's document API for map/sequence updates. Malformed YAML
   documents with parser errors are refused before mutation with
   `parse-error`.
+  Leaf replacement through object-valued mapping keys, such as YAML 1.1
+  timestamp keys, is refused with `unresolved` and leaves the file unchanged.
 
 Use `--dry-run` before user-visible writes when the exact bytes matter. JSONC
 and YAML edits patch the existing document (via `jsonc-parser` or the `yaml`
-document API), so untouched bytes usually survive; markdown rebuilds the file
-from its parsed structure on any edit, which can normalize incidental
-formatting outside the changed leaf. Add `--diff` when you want the preview
+document API); Markdown and JSONL edits preserve untouched source ranges.
+Add `--diff` when you want the preview
 as a focused before/after patch instead of the full rendered file.
 The patch records line-ending changes and missing final newlines, so applying
 it produces the same bytes as the write.
@@ -516,6 +528,10 @@ openclaw path emit ./gateway.jsonc --json
 `openclaw path` is TTY-aware: human-readable output on a terminal, JSON when
 stdout is piped or redirected. `--json` and `--human` override the
 auto-detection.
+
+Path/file parse errors and refused patterns in JSON mode write one error object to stdout, with `ok: false`
+and an `error` containing `type: "cli_error"`, the domain `code`, and `message`.
+Human-mode diagnostics remain on stderr. Refusals still return a nonzero exit code.
 
 ## Notes
 

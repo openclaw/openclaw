@@ -1,10 +1,7 @@
-// Verifies default model alias config values and overrides.
-
-import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { applyModelDefaults as applyModelDefaultsWithPolicy } from "./defaults.js";
-import type { ModelProviderConfig, OpenClawConfig } from "./types.js";
+import type { ModelDefinitionConfig, ModelProviderConfig, OpenClawConfig } from "./types.js";
 
 const providerPolicyMocks = vi.hoisted(() => ({
   normalizeProviderConfigForConfigDefaults: vi.fn(
@@ -36,86 +33,51 @@ describe("applyModelDefaults", () => {
     );
   });
 
-  function buildProxyProviderConfig(overrides?: { contextWindow?: number; maxTokens?: number }) {
-    return {
-      models: {
-        providers: {
-          myproxy: {
-            baseUrl: "https://proxy.example/v1",
-            apiKey: "sk-test",
-            api: "openai-completions",
-            models: [
-              {
-                id: "gpt-5.4",
-                name: "GPT-5.2",
-                reasoning: false,
-                input: ["text"],
-                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                contextWindow: overrides?.contextWindow ?? 200_000,
-                maxTokens: overrides?.maxTokens ?? 8192,
-              },
-            ],
-          },
+  function providerConfig(
+    provider: string,
+    model: Partial<ModelDefinitionConfig> = {},
+    defaults: { maxTokens?: number } = {},
+  ) {
+    const config = {
+      baseUrl: "https://proxy.example/v1",
+      apiKey: "sk-test",
+      api: "openai-completions",
+      ...defaults,
+      models: [
+        {
+          id: "gpt-5.4",
+          name: "GPT-5.4",
+          reasoning: false,
+          input: ["text"],
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          ...model,
         },
-      },
-    } satisfies OpenClawConfig;
+      ],
+    };
+    return { models: { providers: { [provider]: config } } } as never;
   }
 
-  function buildMistralProviderConfig(overrides?: {
-    modelId?: string;
-    contextWindow?: number;
-    maxTokens?: number;
-  }) {
-    return {
-      models: {
-        providers: {
-          mistral: {
-            baseUrl: "https://api.mistral.ai/v1",
-            apiKey: "sk-mistral", // pragma: allowlist secret
-            api: "openai-completions",
-            models: [
-              {
-                id: overrides?.modelId ?? "mistral-large-latest",
-                name: "Mistral",
-                reasoning: false,
-                input: ["text", "image"],
-                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                contextWindow: overrides?.contextWindow ?? 262_144,
-                maxTokens: overrides?.maxTokens ?? 262_144,
-              },
-            ],
-          },
-        },
-      },
-    } satisfies OpenClawConfig;
+  function mistralModel(model: Partial<ModelDefinitionConfig> = {}) {
+    return applyModelDefaults(
+      providerConfig("mistral", {
+        id: "mistral-large-latest",
+        name: "Mistral",
+        input: ["text", "image"],
+        contextWindow: 262_144,
+        maxTokens: 262_144,
+        ...model,
+      }),
+    ).models?.providers?.mistral?.models?.[0];
   }
 
-  function buildProviderTokenDefaultsConfig(params: {
-    provider: { maxTokens?: number };
-    model?: { contextWindow?: number; contextTokens?: number; maxTokens?: number };
-  }) {
-    return {
-      models: {
-        providers: {
-          myproxy: {
-            baseUrl: "https://proxy.example/v1",
-            apiKey: "sk-test",
-            api: "openai-completions",
-            ...params.provider,
-            models: [
-              {
-                id: "gpt-5.4",
-                name: "GPT-5.4",
-                reasoning: false,
-                input: ["text"],
-                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                ...params.model,
-              },
-            ],
-          },
-        },
-      },
-    } as never;
+  function defaultModels(
+    models: NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]>["models"],
+  ) {
+    return applyModelDefaults({ agents: { defaults: { models } } }).agents?.defaults?.models;
+  }
+
+  function modelRefs(primary: string, fallbacks = [primary]) {
+    return { model: { primary, fallbacks }, models: { [primary]: {} } };
   }
 
   function buildCustomProviderManifestRegistry() {
@@ -135,9 +97,7 @@ describe("applyModelDefaults", () => {
           modelIdNormalization: {
             providers: {
               myproxy: {
-                aliases: {
-                  latest: "modern-model",
-                },
+                aliases: { latest: "modern-model" },
                 prefixWhenBare: "vendor",
               },
             },
@@ -149,187 +109,92 @@ describe("applyModelDefaults", () => {
   }
 
   it("preserves an authored Sonnet alias when the new default target is also present", () => {
-    const cfg = {
-      agents: {
-        defaults: {
-          models: {
-            "anthropic/claude-sonnet-5": { alias: "Sonnet" },
-            "anthropic/claude-sonnet-5-5": {},
-          },
-        },
-      },
-    } satisfies OpenClawConfig;
-
-    const next = applyModelDefaults(cfg);
-
-    expect(next.agents?.defaults?.models?.["anthropic/claude-sonnet-5"]?.alias).toBe("Sonnet");
-    expect(next.agents?.defaults?.models?.["anthropic/claude-sonnet-5-5"]?.alias).toBeUndefined();
+    const models = {
+      "anthropic/claude-sonnet-5": { alias: "Sonnet" },
+      "anthropic/claude-sonnet-5-5": {},
+    };
+    expect(defaultModels(structuredClone(models))).toEqual(models);
   });
 
   it.each([
     { name: "adds current Google aliases", alias: undefined },
     { name: "respects explicit empty alias disables", alias: "" },
   ])("$name", ({ alias }) => {
-    const cfg = {
-      agents: {
-        defaults: {
-          models: {
-            "google/gemini-4-argon": { alias },
-            "google/gemini-3.8-flash": { alias },
-            "google/gemini-3.5-flash-lite": { alias },
-          },
-        },
-      },
-    } satisfies OpenClawConfig;
-
-    const next = applyModelDefaults(cfg);
-
-    expect(next.agents?.defaults?.models?.["google/gemini-4-argon"]?.alias).toBe(alias ?? "gemini");
-    expect(next.agents?.defaults?.models?.["google/gemini-3.8-flash"]?.alias).toBe(
-      alias ?? "gemini-flash",
-    );
-    expect(next.agents?.defaults?.models?.["google/gemini-3.5-flash-lite"]?.alias).toBe(
-      alias ?? "gemini-flash-lite",
-    );
-  });
-
-  it("normalizes the retired Together default primary and fallback refs", () => {
-    const cfg = {
-      agents: {
-        defaults: {
-          model: {
-            primary: "together/moonshotai/Kimi-K2.5",
-            fallbacks: ["together/moonshotai/Kimi-K2.5", "openai/gpt-5.5"],
-          },
-          models: {
-            "together/moonshotai/Kimi-K2.5": {},
-          },
-        },
-      },
-    } satisfies OpenClawConfig;
-
-    const next = applyModelDefaults(cfg);
-
-    expect(next.agents?.defaults?.model).toEqual({
-      primary: "together/moonshotai/Kimi-K2.6",
-      fallbacks: ["together/moonshotai/Kimi-K2.6", "openai/gpt-5.5"],
-    });
-    expect(next.agents?.defaults?.models).toEqual({
-      "together/moonshotai/Kimi-K2.6": {},
+    expect(
+      defaultModels({
+        "google/gemini-4-argon": { alias },
+        "google/gemini-3.8-flash": { alias },
+        "google/gemini-3.5-flash-lite": { alias },
+      }),
+    ).toEqual({
+      "google/gemini-4-argon": { alias: alias ?? "gemini" },
+      "google/gemini-3.8-flash": { alias: alias ?? "gemini-flash" },
+      "google/gemini-3.5-flash-lite": { alias: alias ?? "gemini-flash-lite" },
     });
   });
 
-  it("normalizes retired Gemini per-agent model refs", () => {
-    const cfg = {
-      agents: {
-        entries: {
-          ops: {
-            model: {
-              primary: "google/gemini-3-pro-preview",
-              fallbacks: ["google/gemini-3-pro-preview"],
-            },
-            models: {
-              "google/gemini-3-pro-preview": {},
-            },
-          },
-        },
-      },
-    } satisfies OpenClawConfig;
-
-    const next = applyModelDefaults(cfg);
-
-    expect(next.agents?.entries?.ops?.model).toEqual({
-      primary: "google/gemini-3.1-pro-preview",
-      fallbacks: ["google/gemini-3.1-pro-preview"],
+  it.each([
+    ["defaults", "together/moonshotai/Kimi-K2.5", "together/moonshotai/Kimi-K2.6"],
+    ["agent", "google/gemini-3-pro-preview", "google/gemini-3.1-pro-preview"],
+  ])("normalizes retired %s model refs", (scope, old, current) => {
+    const extra = scope === "defaults" ? ["openai/gpt-5.5"] : [];
+    const refs = modelRefs(old, [old, ...extra]);
+    const next = applyModelDefaults({
+      agents: scope === "defaults" ? { defaults: refs } : { entries: { ops: refs } },
     });
-    expect(next.agents?.entries?.ops?.models).toEqual({
-      "google/gemini-3.1-pro-preview": {},
-    });
+    const actual = scope === "defaults" ? next.agents?.defaults : next.agents?.entries?.ops;
+    expect([actual?.model, actual?.models]).toEqual([
+      { primary: current, fallbacks: [current, ...extra] },
+      { [current]: {} },
+    ]);
   });
 
   it("normalizes configured provider rows with explicit manifest registry policies", () => {
-    const cfg = buildProxyProviderConfig();
-    const model = expectDefined(
-      cfg.models.providers.myproxy.models[0],
-      "cfg.models.providers.myproxy.models[0] test invariant",
+    const next = applyModelDefaults(
+      providerConfig("myproxy", {
+        id: "latest",
+        name: "Custom latest",
+        contextWindow: 200_000,
+        maxTokens: 8192,
+      }),
+      {
+        manifestRegistry: buildCustomProviderManifestRegistry(),
+      },
     );
-    model.id = "latest";
-    model.name = "Custom latest";
-
-    const next = applyModelDefaults(cfg, {
-      manifestRegistry: buildCustomProviderManifestRegistry(),
-    });
 
     expect(next.models?.providers?.myproxy?.models?.[0]?.id).toBe("vendor/modern-model");
   });
 
   it("leaves an omitted native context window undefined", () => {
-    const cfg = buildProviderTokenDefaultsConfig({ provider: {} });
-
-    const next = applyModelDefaults(cfg);
-    const model = next.models?.providers?.myproxy?.models?.[0];
-
-    expect(model?.reasoning).toBe(false);
-    expect(model?.input).toEqual(["text"]);
-    expect(model?.cost).toEqual({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
+    const model = applyModelDefaults(providerConfig("myproxy")).models?.providers?.myproxy
+      ?.models?.[0];
+    expect(model).toMatchObject({
+      reasoning: false,
+      input: ["text"],
+      maxTokens: 8192,
+    });
     expect(model?.contextWindow).toBeUndefined();
-    expect(model?.maxTokens).toBe(8192);
+    expect(model?.cost).toEqual({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
+  });
+
+  it("inherits only the provider output-token default", () => {
+    const next = applyModelDefaults(providerConfig("myproxy", {}, { maxTokens: 4_096 }));
+    const model = next.models?.providers?.myproxy?.models?.[0];
+    expect([model?.contextWindow, model?.contextTokens, model?.maxTokens]).toEqual([
+      undefined,
+      undefined,
+      4_096,
+    ]);
   });
 
   it.each([
-    {
-      name: "inherits only the provider output-token default",
-      provider: { maxTokens: 4_096 },
-      model: undefined,
-      expected: { contextWindow: undefined, contextTokens: undefined, maxTokens: 4_096 },
-    },
-  ])("$name", ({ provider, model, expected }) => {
-    const cfg = buildProviderTokenDefaultsConfig({ provider, model });
-
-    const next = applyModelDefaults(cfg);
-    const resolved = next.models?.providers?.myproxy?.models?.[0];
-
-    expect({
-      contextWindow: resolved?.contextWindow,
-      contextTokens: resolved?.contextTokens,
-      maxTokens: resolved?.maxTokens,
-    }).toEqual(expected);
-  });
-
-  it("normalizes stale mistral maxTokens that matched the full context window", () => {
-    const cfg = buildMistralProviderConfig();
-
-    const next = applyModelDefaults(cfg);
-    const model = next.models?.providers?.mistral?.models?.[0];
-
-    expect(model?.contextWindow).toBe(262144);
-    expect(model?.maxTokens).toBe(16384);
-  });
-
-  it.each(["constructor"])(
-    "preserves explicit maxTokens for custom mistral model %s",
-    (modelId) => {
-      const cfg = buildMistralProviderConfig({
-        modelId,
-        contextWindow: 128_000,
-        maxTokens: 32_000,
-      });
-
-      const next = applyModelDefaults(cfg);
-
-      expect(next.models?.providers?.mistral?.models?.[0]?.maxTokens).toBe(32_000);
-    },
-  );
-
-  it("keeps the safe fallback for context-sized custom mistral maxTokens", () => {
-    const cfg = buildMistralProviderConfig({
-      modelId: "custom-mistral-model",
-      contextWindow: 128_000,
-      maxTokens: 128_000,
+    { id: "mistral-large-latest", contextWindow: 262_144, maxTokens: 262_144, expected: 16384 },
+    { id: "constructor", contextWindow: 128_000, maxTokens: 32_000, expected: 32_000 },
+    { id: "custom-mistral-model", contextWindow: 128_000, maxTokens: 128_000, expected: 8192 },
+  ])("normalizes Mistral output limits for $id", ({ expected, ...model }) => {
+    expect(mistralModel(model)).toMatchObject({
+      contextWindow: model.contextWindow,
+      maxTokens: expected,
     });
-
-    const next = applyModelDefaults(cfg);
-
-    expect(next.models?.providers?.mistral?.models?.[0]?.maxTokens).toBe(8192);
   });
 });

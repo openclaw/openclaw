@@ -126,15 +126,31 @@ describe("updateSubagentArchiveAtMs", () => {
 });
 
 describe("safeRemoveAttachmentsDir", () => {
+  it("records cleanup failures even when callers do not inspect the result", async () => {
+    const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
+    try {
+      await expect(
+        safeRemoveAttachmentsDir(createRunEntry({ attachmentId: "invalid" })),
+      ).resolves.toBe(false);
+      expect(log).toHaveBeenCalledWith(
+        expect.stringContaining(
+          "Subagent attachment cleanup failed (run-1): Error: invalid subagent attachment identity",
+        ),
+      );
+    } finally {
+      log.mockRestore();
+    }
+  });
+
   it("removes only the generated directory under the host-owned root", async () => {
     const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-attachment-state-"));
     const attachmentId = "2d4a8398-4d5a-4c20-9c16-0a5f6627cf92";
     const childSessionKey = "agent:main:subagent:child";
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
     const attachmentDir = path.join(
       resolveSubagentSessionAttachmentRootDir({
         agentId: "main",
         childSessionKey,
-        env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
       }),
       attachmentId,
     );
@@ -142,7 +158,6 @@ describe("safeRemoveAttachmentsDir", () => {
     await fs.mkdir(attachmentDir, { recursive: true });
     await fs.mkdir(siblingDir, { recursive: true });
     await fs.writeFile(path.join(attachmentDir, "staged.txt"), "staged");
-    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
 
     await expect(
       safeRemoveAttachmentsDir(createRunEntry({ attachmentId, childSessionKey })),

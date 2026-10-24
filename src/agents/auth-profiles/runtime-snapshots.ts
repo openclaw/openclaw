@@ -4,6 +4,9 @@ import path from "node:path";
  * Snapshots are cloned at boundaries so callers cannot mutate shared state.
  */
 import { isDeepStrictEqual } from "node:util";
+import type { DiagnosticWorkerRetainedData } from "../../infra/diagnostic-process-types.js";
+import { pruneMapToMaxSize } from "../../infra/map-size.js";
+import { estimateRetainedDataSize } from "../../infra/retained-data-size.js";
 import { warnPluginSdkDeprecation } from "../../plugins/sdk-deprecation.js";
 import { registerListener } from "../../shared/listeners.js";
 import { cloneAuthProfileStore } from "./clone.js";
@@ -54,6 +57,18 @@ import type {
 } from "./types.js";
 
 const runtimeAuthStoreSnapshots = new Map<string, OwnedRuntimeSnapshot>();
+
+/** Anonymous store sizes only; do not materialize or clone credentials for diagnostics. */
+export function measureRuntimeAuthProfileStores(): DiagnosticWorkerRetainedData[] {
+  return [...runtimeAuthStoreSnapshots.values()].map(({ store }) =>
+    Object.assign(estimateRetainedDataSize([store]), {
+      structure: "catalog-auth" as const,
+      entries: 1,
+      accounts: Object.keys(store.profiles).length,
+      providers: new Set(Object.values(store.profiles).map((profile) => profile.provider)).size,
+    }),
+  );
+}
 
 export const {
   invalidateRuntimeAuthProfileStoreSnapshotsForOwner,
@@ -153,11 +168,7 @@ function recordDeletedSnapshotRevision(key: string): void {
   runtimeAuthStoreSnapshotRevisions.delete(key);
   runtimeAuthStoreDeletedSnapshotRevisions.delete(key);
   runtimeAuthStoreDeletedSnapshotRevisions.set(key, runtimeAuthStoreSnapshotsRevision);
-  while (runtimeAuthStoreDeletedSnapshotRevisions.size > 256) {
-    runtimeAuthStoreDeletedSnapshotRevisions.delete(
-      runtimeAuthStoreDeletedSnapshotRevisions.keys().next().value!,
-    );
-  }
+  pruneMapToMaxSize(runtimeAuthStoreDeletedSnapshotRevisions, 256);
 }
 
 function snapshotMetadataState(entry: OwnedRuntimeSnapshot | undefined) {
@@ -175,10 +186,7 @@ function advanceRuntimeAuthStoreMetadataRevision(key: string): void {
   runtimeAuthStoreMetadataRevisions.delete(key);
   runtimeAuthStoreMetadataRevisions.set(key, runtimeAuthStoreMetadataRevision);
   // Keep unpublished and deleted owners fenced without retaining them indefinitely.
-  while (runtimeAuthStoreMetadataRevisions.size > 256) {
-    const oldestKey = runtimeAuthStoreMetadataRevisions.keys().next().value!;
-    runtimeAuthStoreMetadataRevisions.delete(oldestKey);
-  }
+  pruneMapToMaxSize(runtimeAuthStoreMetadataRevisions, 256);
 }
 
 function recordMetadataRevision(
@@ -269,7 +277,7 @@ export function registerRuntimeAuthProfileStoreMutationListener(
   return registerListener(runtimeAuthStoreMutationListeners, listener);
 }
 
-/** @deprecated Use replaceRuntimeAuthProfileStoreSnapshotsAsync. Final compatibility day: 2026-12-31. */
+/** @deprecated Use replaceRuntimeAuthProfileStoreSnapshotsAsync. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
 export function replaceRuntimeAuthProfileStoreSnapshots(
   entries: Array<{ databasePath?: string; agentDir?: string; store: AuthProfileStore }>,
 ): void {
@@ -303,19 +311,16 @@ function replaceRuntimeAuthProfileStoreSnapshotEntries(
     return {
       databasePath,
       agentDir: path.dirname(databasePath),
-      store: cloneAuthProfileStore(entry.store),
-      owner: cloneRuntimeAuthSharedOwner(
-        runtimeAuthStoreSnapshots.get(databasePath)?.owner ?? {
-          kind: "unresolved",
-          scope: captureAuthProfileOwnerScope(),
-        },
-      ),
-      legacyCandidates: cloneRuntimeAuthProfileLegacyCandidates(
+      store: entry.store,
+      owner: runtimeAuthStoreSnapshots.get(databasePath)?.owner ?? {
+        kind: "unresolved",
+        scope: captureAuthProfileOwnerScope(),
+      },
+      legacyCandidates:
         runtimeAuthStoreSnapshots.get(databasePath)?.legacyCandidates ??
-          captureRuntimeAuthProfileLegacyCandidates(
-            entry.agentDir ?? (entry.databasePath ? path.dirname(databasePath) : undefined),
-          ),
-      ),
+        captureRuntimeAuthProfileLegacyCandidates(
+          entry.agentDir ?? (entry.databasePath ? path.dirname(databasePath) : undefined),
+        ),
     };
   });
   replaceOwnedRuntimeAuthProfileStoreSnapshots(prepared);

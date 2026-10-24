@@ -1,6 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { estimateStringCharsWithMinimumRawWeight } from "@openclaw/normalization-core/cjk-chars";
-import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
+import type { Agent, AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { installToolResultContextGuard } from "./tool-result-context-guard.js";
 import { truncateToolResultMessage } from "./tool-result-truncation.js";
@@ -22,9 +22,7 @@ function toolResult(content: ToolContent): AgentMessage {
 }
 
 function guarded() {
-  const agent: {
-    transformContext?: (messages: AgentMessage[], signal: AbortSignal) => unknown;
-  } = {};
+  const agent: Pick<Agent, "transformContext"> = {};
   onTestFinished(installToolResultContextGuard({ agent, contextWindowTokens: 8_192 }));
   return (source: AgentMessage) =>
     expectDefined(agent.transformContext, "installed guard")(

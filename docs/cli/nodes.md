@@ -59,6 +59,9 @@ openclaw nodes rename --node <id|name|ip> --name <displayName>
 
 These commands manage the node's approved command/capability surface on its paired-device record. Device pairing (`openclaw devices approve`) gates the node's WebSocket `connect` handshake.
 
+Rename/remove confirmations and command errors escape terminal control characters.
+JSON responses preserve the original values.
+
 For manual enrollment, first approve the device request, then restart or rerun
 a node paused on `PAIRING_REQUIRED`. Its reconnect creates the separate request
 shown by `nodes pending`. Approve that node request, whose ID differs from the

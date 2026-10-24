@@ -51,27 +51,20 @@ let server: Server;
 beforeAll(async () => {
   server = createServer((req, res) => {
     const url = new URL(req.url ?? "/", "http://127.0.0.1");
-    if (url.pathname.includes("/auth/")) {
-      if (loopback.authStatus === 200) {
-        writeJson(res, { code: 0, msg: "ok", tenant_access_token: "token", expire: 3600 });
-      } else {
-        writeJson(res, { error: "tenant token rejected" }, loopback.authStatus);
-      }
-      return;
-    }
-    if (url.pathname.endsWith("/settings")) {
-      if (loopback.settingsStatus === 200) {
-        writeJson(res, { code: 0, msg: "ok" });
-      } else {
-        writeJson(res, { error: "settings rejected" }, loopback.settingsStatus);
-      }
-      return;
-    }
-    if (loopback.createStatus === 200) {
-      writeJson(res, { code: 0, msg: "ok", data: { card_id: "card_1" } });
-    } else {
-      writeJson(res, { error: "card create rejected" }, loopback.createStatus);
-    }
+    const [status, payload, error] = url.pathname.includes("/auth/")
+      ? ([
+          loopback.authStatus,
+          { code: 0, msg: "ok", tenant_access_token: "token", expire: 3600 },
+          "tenant token rejected",
+        ] as const)
+      : url.pathname.endsWith("/settings")
+        ? ([loopback.settingsStatus, { code: 0, msg: "ok" }, "settings rejected"] as const)
+        : ([
+            loopback.createStatus,
+            { code: 0, msg: "ok", data: { card_id: "card_1" } },
+            "card create rejected",
+          ] as const);
+    writeJson(res, status === 200 ? payload : { error }, status);
   });
   await new Promise<void>((resolve) => {
     server.listen(0, "127.0.0.1", resolve);
@@ -94,38 +87,11 @@ beforeEach(() => {
 });
 
 describe("feishu streaming card error-path body release", () => {
-  it("cancels the unread tenant-token error body before release", async () => {
-    loopback.authStatus = 500;
-    const session = new FeishuStreamingSession({} as never, {
-      appId: "app_error_token",
-      appSecret: "secret",
-    });
-
-    await expect(session.start("chat_id", "open_id")).rejects.toThrow(
-      "Token request failed with HTTP 500",
-    );
-
-    expect(loopback.releases).toEqual([{ bodyIsNull: false, bodyUsed: true }]);
-  });
-
-  it("cancels the unread create-card error body before release", async () => {
-    loopback.createStatus = 500;
-    const session = new FeishuStreamingSession({} as never, {
-      appId: "app_error_create",
-      appSecret: "secret",
-    });
-
-    await expect(session.start("chat_id", "open_id")).rejects.toThrow(
-      "Create card request failed with HTTP 500",
-    );
-
-    expect(loopback.releases).toEqual([
-      { bodyIsNull: false, bodyUsed: true },
-      { bodyIsNull: false, bodyUsed: true },
-    ]);
-  });
-
-  it("cancels the unread close-settings error body before release", async () => {
+  it.each([
+    ["authStatus", "Token request", 1],
+    ["createStatus", "Create card request", 2],
+    ["settingsStatus", "Close streaming card", 3],
+  ] as const)("cancels unread %s error body before release", async (stage, operation, releases) => {
     const client = {
       im: {
         message: {
@@ -133,22 +99,22 @@ describe("feishu streaming card error-path body release", () => {
         },
       },
     };
-    const session = new FeishuStreamingSession(client as never, {
-      appId: "app_error_close",
-      appSecret: "secret",
-    });
-    await session.start("chat_id", "open_id");
-    loopback.settingsStatus = 500;
-
-    await expect(session.closeWithResult()).rejects.toMatchObject({
-      name: "FeishuStreamingFinalizationError",
-      result: { visibleReplySent: false },
-    });
-
-    expect(loopback.releases).toEqual([
-      { bodyIsNull: false, bodyUsed: true },
-      { bodyIsNull: false, bodyUsed: true },
-      { bodyIsNull: false, bodyUsed: true },
-    ]);
+    const session = new FeishuStreamingSession(
+      (stage === "settingsStatus" ? client : {}) as never,
+      {
+        appId: `app_error_${stage}`,
+        appSecret: "secret",
+      },
+    );
+    if (stage === "settingsStatus") {
+      await session.start("chat_id", "open_id");
+    }
+    loopback[stage] = 500;
+    await expect(
+      stage === "settingsStatus" ? session.closeWithResult() : session.start("chat_id", "open_id"),
+    ).rejects.toThrow(`${operation} failed with HTTP 500`);
+    expect(loopback.releases).toEqual(
+      Array.from({ length: releases }, () => ({ bodyIsNull: false, bodyUsed: true })),
+    );
   });
 });

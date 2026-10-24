@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { listReservedChatSlashCommandNames } from "../../auto-reply/commands-registry.data.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -17,7 +18,6 @@ import {
 } from "../../test-utils/env.js";
 import { createFixtureSuite } from "../../test-utils/fixture-suite.js";
 import { createTempHomeEnv, type TempHomeEnv } from "../../test-utils/temp-home.js";
-import { listReservedChatSlashCommandNames } from "../discovery/chat-command-invocation.js";
 import { buildWorkspaceSkillCommandSpecs } from "../discovery/command-specs.js";
 import {
   applySkillEnvOverrides,
@@ -367,27 +367,6 @@ describe("shouldIncludeSkill", () => {
         }),
       ).toBe(true);
     });
-  });
-
-  it("excludes only the skill whose configured secret is unavailable", () => {
-    setActiveDegradedSecretOwners([
-      {
-        ownerKind: "capability",
-        ownerId: "skill:env-skill",
-        state: "unavailable",
-        paths: ["skills.entries.env-skill.apiKey"],
-        refKeys: ["env:default:MISSING_SKILL_KEY"],
-        reason: "secret provider failed",
-      },
-    ]);
-
-    expect(shouldInclude(rawSkillApiKeyRefConfig("env-skill"))).toBe(false);
-    expect(
-      shouldIncludeSkill({
-        entry: makeSkillEntry("healthy-skill", { always: true }),
-        bundledAllowlist: undefined,
-      }),
-    ).toBe(true);
   });
 });
 

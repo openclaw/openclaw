@@ -1,9 +1,14 @@
 import type { SessionAdmissionDatabaseClaim } from "../../config/sessions/session-accessor.sqlite-entry-admission.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { GatewayContextResolver } from "../../gateway/server-methods/types.js";
-import type { SessionWorkAdmissionLease } from "../../sessions/session-lifecycle-admission.js";
+import type {
+  ReplyOperation,
+  ReplyTurnKind,
+  SessionControllerMailboxClaim,
+} from "../../sessions/session-controller.contracts.js";
+import type { SessionEffectRef } from "../../sessions/session-controller.lifecycle.js";
 import type { AgentDatabaseRequestExecutionSource } from "../../state/openclaw-agent-execution-admission-contract.js";
-import type { ReplyOperation, ReplyTurnKind } from "./reply-run-registry.js";
+import type { createReplyTurnRotationEvidence } from "./reply-turn-rotation.js";
 
 export type ReplyTurnAdmission =
   | {
@@ -18,10 +23,14 @@ export type ReplyTurnAdmission =
       error?: unknown;
       activeOperation?: ReplyOperation;
       sessionEntry?: SessionEntry;
-      lifecycleAdmission?: SessionWorkAdmissionLease;
+      lifecycleAdmission?: SessionEffectRef;
     };
 
 export type ReplyTurnAdmissionParams = {
+  mailboxClaim?: SessionControllerMailboxClaim;
+  rotationEvidence?: ReturnType<typeof createReplyTurnRotationEvidence>;
+  runId?: string;
+  recoveryAdmissionRunId?: string;
   assertRequestCurrent?: () => void;
   onDatabaseRegistration?: AgentDatabaseRequestExecutionSource["onRegistryChange"];
   /** Capture caller-owned selection during admission checks, including the writer-ordered recheck. */

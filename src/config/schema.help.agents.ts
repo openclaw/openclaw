@@ -4,6 +4,8 @@ export const AGENT_FIELD_HELP: Record<string, string> = {
     "Primary accent color used by UI surfaces for emphasis, badges, and visual identity cues. Use high-contrast values that remain readable across light/dark themes.",
   "ui.prefs.accent":
     "Control UI accent: #RRGGBB for a custom color, or 'theme' for the selected theme’s palette. Overrides ui.seamColor; clear it to inherit the configured accent color or theme default.",
+  "ui.prefs.locale":
+    "Language for the Control UI, as a supported locale id such as en, de, or zh-CN. Leave unset to follow the browser or system language. Set it from Settings → Appearance → Language. It does not set the assistant's timezone (agents.defaults.userTimezone).",
   tui: "Terminal UI display settings. Use this section for terminal-only presentation preferences without changing Gateway or other UI behavior.",
   "tui.footer":
     "Terminal UI footer display settings. Keep optional context compact so session, model, goal, and token information stay readable.",
@@ -24,7 +26,7 @@ export const AGENT_FIELD_HELP: Record<string, string> = {
   "plugins.slots.memory":
     'Select the active memory plugin by id, or "none" to disable memory plugins.',
   "plugins.slots.contextEngine":
-    "Selects the active context engine plugin by id so one plugin provides context orchestration behavior.",
+    "Selects the registered context engine ID. Plugins with different plugin and engine IDs declare contextEngineIds in their manifest so OpenClaw can load the owner.",
   "plugins.entries":
     "Per-plugin settings keyed by plugin ID including enablement and plugin-specific runtime configuration payloads. Use this for scoped plugin tuning without changing global loader policy.",
   "plugins.entries.*.enabled":
@@ -79,9 +81,16 @@ export const AGENT_FIELD_HELP: Record<string, string> = {
   "agents.defaults.embeddedAgent.cyberFailover.cooloffMs":
     "How long an unavailable escalation target is skipped for the current session.",
   "agents.defaults.utilityModel":
-    "Optional lower-cost model (provider/model or alias) for short internal tasks such as generated titles and progress narration. Unset derives the primary provider's declared small model when available (otherwise the primary model); set to an empty string to disable utility routing.",
+    "Optional lower-cost model (provider/model, alias, or { primary, fallbacks }) for short internal tasks such as generated titles and progress narration. Utility fallbacks use the same retry, alias resolution, and model-selection policy as configured model fallbacks, independently of model.fallbacks. Unset derives the primary provider's declared small model when available (otherwise the primary model); set to an empty string to disable utility routing.",
+  "agents.defaults.utilityModel.primary": "Primary utility model (provider/model or alias).",
+  "agents.defaults.utilityModel.fallbacks":
+    "Ordered utility fallback models (provider/model or alias), independent of the main model fallback list.",
   "agents.entries.*.utilityModel":
-    "Optional per-agent utility model override for short internal tasks. Overrides agents.defaults.utilityModel.",
+    "Per-agent utility model string or { primary, fallbacks }. Unset inherits agents.defaults.utilityModel. An explicit primary without fallbacks clears inherited fallbacks; an empty string disables utility routing.",
+  "agents.entries.*.utilityModel.primary":
+    "Per-agent utility primary. Omit to inherit the default utility primary.",
+  "agents.entries.*.utilityModel.fallbacks":
+    "Ordered per-agent utility fallback models. An empty list clears inherited utility fallbacks.",
   "agents.defaults.decisionModel":
     "Optional provider/model for typed choices, scores, and boolean probabilities. Unset or empty disables decision calls. Supporting plugins send bounded task evidence to this provider; chat and utility models are unchanged.",
   "agents.entries.*.decisionModel":
@@ -162,11 +171,11 @@ export const AGENT_FIELD_HELP: Record<string, string> = {
   "agents.defaults.compaction.postCompactionSections":
     'Opt-in AGENTS.md H2/H3 section names re-injected after compaction. Leave unset or set [] to disable reinjection. Explicitly set ["Session Startup", "Red Lines"] to enable the legacy default pair.',
   "agents.defaults.compaction.timeoutSeconds":
-    "Seconds a built-in compaction model request may go without progress (default: 180). Each request start and each streamed output token refreshes the window, so a slow request that keeps streaming is not cut off; the complete compaction stops after 10 windows. Plugin-owned compaction receives one window for the complete operation.",
+    "Seconds a built-in compaction model request may go without progress (default: 180). Each request start and each streamed output token refreshes the window, so a slow request that keeps streaming is not cut off; the complete compaction stops after 10 windows. Plugin-owned compaction receives one window unless the engine explicitly declares onProgress in info.acceptedHostParams and reports progress; the same 10-window ceiling applies.",
   "agents.defaults.compaction.model":
     "Optional provider/model or configured bare alias used only for compaction summarization. Bare aliases resolve before dispatch; a configured literal model ID wins if it collides with an alias. Leave unset to keep using the primary agent model.",
   "agents.defaults.compaction.maxActiveTranscriptBytes":
-    'Byte threshold that triggers normal preflight local compaction when the transcript window the model sees (since the latest compaction or reset) reaches this size (bytes or strings like "20mb"). Set to 0 or leave unset to disable. Also caps Codex app-server native rollout transcripts; oversized native threads restart fresh.',
+    'Byte threshold for preflight local compaction in the built-in runtime (bytes or strings like "20mb"). For Codex app-server, bounds fresh-thread history seeds instead: one host summary attempt only when unsummarized history would be omitted, never on ordinary turns or after native /compact. Set to 0 or leave unset to disable. Native rollout-size and token fuses are unchanged.',
   "agents.defaults.compaction.notifyUser":
     "When enabled, sends brief context-maintenance notices to the user: when compaction starts and completes (for example, '🧹 Compacting context...' and '🧹 Compaction complete'), and when a pre-compaction memory flush is exhausted so the reply continues in a degraded state (for example, '⚠️ Memory maintenance temporarily failed; continuing your reply.'). Disabled by default to keep context maintenance silent and non-intrusive.",
   "agents.defaults.compaction.memoryFlush":

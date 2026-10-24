@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import type { ChannelMessageActionContext } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
@@ -120,6 +121,13 @@ async function read(
   return await dispatchChannelMessageAction({ ...context(overrides), params });
 }
 
+async function expectPage(params: Record<string, unknown>, ids: string[], hasMore: boolean) {
+  expect((await read(params))?.details).toMatchObject({
+    messages: ids.map((messageId) => ({ messageId })),
+    hasMore,
+  });
+}
+
 beforeEach(async () => {
   resetTelegramMessageCacheForTest();
   resetPluginStateStoreForTests();
@@ -150,19 +158,16 @@ beforeEach(async () => {
   pluginRecord = createPluginRecord({ id: "telegram", origin: "bundled" });
   owner.registry.plugins.push(pluginRecord);
   const api = owner.createApi(pluginRecord, { config: cfg, registrationMode: "full" });
-  const instance = getPluginInstance(pluginRecord);
-  if (!instance) {
-    throw new Error("Expected the Telegram registrar to own a plugin instance");
-  }
+  const instance = expectDefined(
+    getPluginInstance(pluginRecord),
+    "Missing Telegram plugin instance",
+  );
   const state = api.runtime.state;
   const openKeyedStore: typeof state.openKeyedStore = <T>(
     options: Parameters<typeof state.openKeyedStore>[0],
   ) => {
     const store = state.openKeyedStore<T>(options);
-    const readRange = store.entriesInKeyRange;
-    if (!readRange) {
-      throw new Error("Expected the host to support indexed history reads");
-    }
+    const readRange = expectDefined(store.entriesInKeyRange, "Missing indexed history reads");
     return {
       ...store,
       entriesInKeyRange: async (range: Parameters<typeof readRange>[0]) => {
@@ -200,17 +205,11 @@ describe("Telegram retained history through shared message dispatch", () => {
       agentAccountId: "default",
       currentChannelProvider: "telegram",
     });
-    expect(
-      Value.Check(tool.parameters, {
-        action: "read",
-        channel: "telegram",
-        before: "100",
-        limit: 3,
-      }),
-    ).toBe(true);
-    expect(
-      Value.Check(tool.parameters, { action: "read", channel: "telegram", messageId: "9" }),
-    ).toBe(true);
+    for (const params of [{ before: "100", limit: 3 }, { messageId: "9" }]) {
+      expect(Value.Check(tool.parameters, { action: "read", channel: "telegram", ...params })).toBe(
+        true,
+      );
+    }
     for (const id of [9, 10, 99, 100, 150, 151]) {
       await record(id);
     }
@@ -230,18 +229,9 @@ describe("Telegram retained history through shared message dispatch", () => {
       ],
       hasMore: false,
     });
-    expect((await read({ after: "99", limit: 3 }))?.details).toMatchObject({
-      messages: [{ messageId: "100" }, { messageId: "150" }, { messageId: "151" }],
-      hasMore: false,
-    });
-    expect((await read({ before: "101", after: "8", limit: 2 }))?.details).toMatchObject({
-      messages: [{ messageId: "99" }, { messageId: "100" }],
-      hasMore: true,
-    });
-    expect((await read({ before: "99", after: "8", limit: 2 }))?.details).toMatchObject({
-      messages: [{ messageId: "9" }, { messageId: "10" }],
-      hasMore: false,
-    });
+    await expectPage({ after: "99", limit: 3 }, ["100", "150", "151"], false);
+    await expectPage({ before: "101", after: "8", limit: 2 }, ["99", "100"], true);
+    await expectPage({ before: "99", after: "8", limit: 2 }, ["9", "10"], false);
     await record(9, {
       body: "An attached chart",
       extra: {

@@ -17,12 +17,8 @@ export const packagedDiscoveryProbePath = fileURLToPath(import.meta.url);
 // Keep SDK resolution outside Vitest's aliases while exposing the subprocess entrypoint.
 if (process.argv[1] === packagedDiscoveryProbePath) {
   for (const active of [false, true]) {
-    const rootDir = path.join(
-      process.argv[2]!,
-      "dist",
-      "extensions",
-      active ? "active" : "inventory",
-    );
+    const name = active ? "active" : "inventory";
+    const rootDir = path.join(process.argv[2]!, "dist", "extensions", name);
     fs.mkdirSync(path.join(rootDir, ".setup"), { recursive: true });
     fs.writeFileSync(
       path.join(rootDir, "package.json"),
@@ -50,37 +46,24 @@ if (process.argv[1] === packagedDiscoveryProbePath) {
   });`,
     );
     const cache = createPluginCache();
-    const metadata = withPluginCache(cache, () =>
-      createPluginMetadataSnapshotFixture({
-        plugins: [
-          {
-            id: "packaged-discovery",
-            rootDir,
-            source: runtimeSource,
-            providers: ["packaged-discovery"],
-            providerDiscoverySource: source,
-          },
-        ],
-      }),
-    );
-    const registry = createEmptyPluginRegistry();
-    const record = createPluginRecord({
+    const owner = {
       id: "packaged-discovery",
       rootDir,
       source: runtimeSource,
-      origin: "bundled",
-    });
-    registry.plugins.push(record);
+      origin: "bundled" as const,
+    };
+    const metadata = withPluginCache(cache, () =>
+      createPluginMetadataSnapshotFixture({
+        plugins: [{ ...owner, providers: [owner.id], providerDiscoverySource: source }],
+      }),
+    );
+    const record = createPluginRecord(owner);
+    const registry = { ...createEmptyPluginRegistry(), plugins: [record] };
     const runtime = new PluginInstance(record.id, { record, registry });
     try {
       if (active) {
         withPluginCache(cache, () =>
-          bindPluginInstanceModuleLoader({
-            instance: runtime,
-            origin: "bundled",
-            source: runtimeSource,
-            rootDir,
-          }),
+          bindPluginInstanceModuleLoader({ instance: runtime, ...owner }),
         );
         runtime.loadModule(runtimeSource);
       }
@@ -88,7 +71,7 @@ if (process.argv[1] === packagedDiscoveryProbePath) {
         resolvePluginDiscoveryProvidersRuntime({
           config: {},
           env: {},
-          onlyPluginIds: ["packaged-discovery"],
+          onlyPluginIds: [owner.id],
           pluginMetadataSnapshot: metadata,
           discoveryEntriesOnly: true,
           includeSyntheticAuthProviders: true,

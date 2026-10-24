@@ -10,7 +10,7 @@ const operation = source.match(/^prepare_release\(\) \{[\s\S]*?^\}/m)?.[0];
 assert.ok(operation);
 const quote = value => "'" + String(value).replaceAll("'", "'\\''") + "'";
 
-test("sealing retains executable modes and symlinks and refuses a failed durability barrier", t => {
+test("sealing persists only its tree, retains modes and links, and refuses failed fsyncs", t => {
   const root = mkdtempSync(join(tmpdir(), "team-seal-"));
   t.after(() => {
     spawnSync("chmod", ["-R", "u+w", root]);
@@ -25,13 +25,40 @@ test("sealing retains executable modes and symlinks and refuses a failed durabil
   symlinkSync("nested/data", join(release, "link"));
   writeFileSync(join(bin, "sync"), "#!/bin/sh\nexit 74\n", { mode: 0o755 });
   const args = [new URL("./release-lib.mjs", import.meta.url).pathname, "seal-tree", release];
-  const failed = spawnSync(process.execPath, args, {
+  const sealed = spawnSync(process.execPath, args, {
     encoding: "utf8", env: { ...process.env, PATH: `${bin}:${process.env.PATH}` },
   });
-  assert.notEqual(failed.status, 0, "a failed sync cannot admit a durable release");
-  assert.match(failed.stderr, /cannot sync sealed release filesystem/);
-  const retried = spawnSync(process.execPath, args, { encoding: "utf8" });
+  assert.equal(sealed.status, 0, "unrelated filesystem flushes must not gate sealing: " + sealed.stderr);
+  const trace = join(root, "fsyncs"), preload = join(root, "fsync.mjs");
+  writeFileSync(preload, `
+    import fs from "node:fs/promises";
+    import { appendFileSync } from "node:fs";
+    import { syncBuiltinESMExports } from "node:module";
+    const open = fs.open;
+    fs.open = async (...args) => {
+      const handle = await open(...args), sync = handle.sync.bind(handle);
+      handle.sync = async () => {
+        if (args[0] === process.env.FAIL_FSYNC) throw new Error("fixture fsync failure");
+        await sync();
+        appendFileSync(${JSON.stringify(trace)}, args[0] + "\\n");
+      };
+      return handle;
+    };
+    syncBuiltinESMExports();
+  `);
+  for (const pathname of [file, join(release, "nested")]) {
+    const failed = spawnSync(process.execPath, ["--import", preload, ...args], {
+      encoding: "utf8", env: { ...process.env, FAIL_FSYNC: pathname },
+    });
+    assert.notEqual(failed.status, 0, "file and directory fsync failures must refuse sealing");
+    assert.match(failed.stderr, /fixture fsync failure/);
+  }
+  writeFileSync(trace, "");
+  const retried = spawnSync(process.execPath, ["--import", preload, ...args], { encoding: "utf8" });
   assert.equal(retried.status, 0, retried.stderr);
+  const persisted = readFileSync(trace, "utf8").trim().split("\n");
+  assert.deepEqual(new Set(persisted), new Set([file, executable, release, join(release, "nested")]));
+  assert.ok(persisted.indexOf(file) < persisted.indexOf(release), "file data precedes directory persistence");
   for (const directory of [release, join(release, "nested")]) {
     assert.equal(statSync(directory).mode & 0o777, 0o555);
   }

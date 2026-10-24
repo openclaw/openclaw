@@ -1,4 +1,3 @@
-// Covers argv analysis and Windows shell analysis.
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -15,13 +14,19 @@ import {
 } from "./exec-approvals-test-helpers.js";
 import { analyzeWindowsShellCommand, windowsEscapeArg } from "./windows-shell-command.js";
 
-describe("exec argv analysis", () => {
+const analyzeWindows = (command: string) =>
+  analyzeWindowsShellCommand({ command, platform: "win32" });
+
+function expectWindowsArgv(command: string, argv: string[]) {
+  const result = analyzeWindows(command);
+  expect(result.ok).toBe(true);
+  expect(result.segments[0]?.argv).toEqual(argv);
+}
+
+describe("exec command analysis", () => {
   it("rejects empty argv commands", () => {
-    expect(analyzeArgvCommand({ argv: ["", "   "] })).toEqual({
-      ok: false,
-      reason: "empty argv",
-      segments: [],
-    });
+    const result = analyzeArgvCommand({ argv: ["", "   "] });
+    expect(result).toEqual({ ok: false, reason: "empty argv", segments: [] });
   });
 
   it("keeps shell multiplexer rebuilds as coherent execution argv", () => {
@@ -29,9 +34,7 @@ describe("exec argv analysis", () => {
       return;
     }
     const dir = makeExecApprovalsTempDir();
-    const busybox = path.join(dir, "busybox");
-    fs.writeFileSync(busybox, "");
-    fs.chmodSync(busybox, 0o755);
+    const busybox = makeExecutable(dir, "busybox");
 
     const analysis = analyzeArgvCommand({
       argv: [busybox, "sh", "-lc", "echo hi"],
@@ -53,125 +56,69 @@ describe("exec argv analysis", () => {
     ]);
     expect(planned?.[0]).not.toBe(busybox);
   });
-});
 
-describe("Windows shell analysis", () => {
   it("accepts shell metacharacters inside double-quoted arguments", () => {
-    const cases = [
+    for (const command of [
       'node add_lifelog.js "2026-03-28" "2026-03-28 (土) - LifeLog" --markdown',
       'node tool.js "--filter=a|b" "--label=x>y" "--name=foo & bar"',
       'node tool.js "--pattern=a^b"',
       'node tool.js "--msg=Hello!"',
-    ];
-
-    for (const command of cases) {
-      const res = analyzeWindowsShellCommand({ command, platform: "win32" });
+    ]) {
+      const res = analyzeWindows(command);
       expect(res.ok).toBe(true);
       expect(res.segments[0]?.argv[0]).toBe("node");
     }
   });
 
-  it("rejects PowerShell expansion tokens", () => {
-    const cases: string[] = [
-      'node tool.js "--user=%USERNAME%"',
-      'node app.js "$env:USERPROFILE"',
-      "node app.js ${var}",
-      "node app.js $(whoami)",
-      'node app.js "$?"',
-      'node app.js "$$"',
-    ];
-
-    for (const command of cases) {
-      const res = analyzeWindowsShellCommand({ command, platform: "win32" });
-      expect(res.ok).toBe(false);
+  it.each([
+    [
+      "PowerShell expansions",
+      [
+        'node tool.js "--user=%USERNAME%"',
+        'node app.js "$env:USERPROFILE"',
+        "node app.js ${var}",
+        "node app.js $(whoami)",
+        'node app.js "$?"',
+        'node app.js "$$"',
+      ],
+    ],
+    [
+      "cmd-incompatible single quotes",
+      [
+        "node tool.js '--name=foo & bar'",
+        "node tool.js '--filter=a|b'",
+        "node tool.js '--msg=Hello!'",
+        "node tool.js '--pattern=(x)'",
+        "node tool.js '--label=%USERNAME%'",
+      ],
+    ],
+  ] satisfies Array<[string, string[]]>)("rejects %s", (_name, commands) => {
+    for (const command of commands) {
+      expect(analyzeWindows(command).ok).toBe(false);
     }
   });
 
   it("allows bare $ not followed by identifier", () => {
-    const res = analyzeWindowsShellCommand({
-      command: 'net use "\\\\host\\C$"',
-      platform: "win32",
-    });
-
-    expect(res.ok).toBe(true);
+    expect(analyzeWindows('net use "\\\\host\\C$"').ok).toBe(true);
   });
 
-  it("rejects metacharacters inside single-quoted arguments for cmd compatibility", () => {
-    const unsafeSingleQuoteCommands: string[] = [
-      "node tool.js '--name=foo & bar'",
-      "node tool.js '--filter=a|b'",
-      "node tool.js '--msg=Hello!'",
-      "node tool.js '--pattern=(x)'",
-      "node tool.js '--label=%USERNAME%'",
-    ];
+  const toolPath = "C:\\Program Files\\Tool\\tool.exe";
+  const workingDirectoryCommand =
+    'powershell -WorkingDirectory "C:\\Users\\Jane Doe\\proj" -Command "node a.js"';
+  it.each([
+    ["node tool.js 'O''Brien'", ["node", "tool.js", "O'Brien"]],
+    ['node tool.js ""', ["node", "tool.js", ""]],
+    ["node tool.js ''", ["node", "tool.js", ""]],
+    [`"${toolPath}" --version`, [toolPath, "--version"]],
+    ['powershell -Command "node a.js ""hello world"""', ["node", "a.js", "hello world"]],
+    ["powershell -Command 'node a.js ''hello world'''", ["node", "a.js", "hello world"]],
+    [workingDirectoryCommand, ["node", "a.js"]],
+    ['pwsh -NoLogo -c "node a.js"', ["node", "a.js"]],
+    ["pwsh --command node a.js", ["node", "a.js"]],
+  ] satisfies Array<[string, string[]]>)("parses Windows argv: %s", expectWindowsArgv);
 
-    for (const command of unsafeSingleQuoteCommands) {
-      const res = analyzeWindowsShellCommand({ command, platform: "win32" });
-      expect(res.ok).toBe(false);
-    }
-  });
-
-  it("tokenizes PowerShell single-quoted arguments", () => {
-    const res = analyzeWindowsShellCommand({
-      command: "node tool.js 'O''Brien'",
-      platform: "win32",
-    });
-
-    expect(res.ok).toBe(true);
-    expect(res.segments[0]?.argv).toEqual(["node", "tool.js", "O'Brien"]);
-  });
-
-  it("preserves empty quoted args", () => {
-    const doubleQuoted = analyzeWindowsShellCommand({
-      command: 'node tool.js ""',
-      platform: "win32",
-    });
-    const singleQuoted = analyzeWindowsShellCommand({
-      command: "node tool.js ''",
-      platform: "win32",
-    });
-
-    expect(doubleQuoted.ok).toBe(true);
-    expect(doubleQuoted.segments[0]?.argv).toEqual(["node", "tool.js", ""]);
-    expect(singleQuoted.ok).toBe(true);
-    expect(singleQuoted.segments[0]?.argv).toEqual(["node", "tool.js", ""]);
-  });
-
-  it("parses quoted executables", () => {
-    const res = analyzeWindowsShellCommand({
-      command: '"C:\\Program Files\\Tool\\tool.exe" --version',
-      platform: "win32",
-    });
-
-    expect(res.ok).toBe(true);
-    expect(res.segments[0]?.argv).toEqual(["C:\\Program Files\\Tool\\tool.exe", "--version"]);
-  });
-
-  it("unwraps PowerShell -Command payloads", () => {
-    const powershellCommandCases: Array<readonly [string, string[]]> = [
-      ['powershell -Command "node a.js ""hello world"""', ["node", "a.js", "hello world"]],
-      ["powershell -Command 'node a.js ''hello world'''", ["node", "a.js", "hello world"]],
-      [
-        'powershell -WorkingDirectory "C:\\Users\\Jane Doe\\proj" -Command "node a.js"',
-        ["node", "a.js"],
-      ],
-      ['pwsh -NoLogo -c "node a.js"', ["node", "a.js"]],
-      ["pwsh --command node a.js", ["node", "a.js"]],
-    ];
-
-    for (const [command, argv] of powershellCommandCases) {
-      const res = analyzeWindowsShellCommand({ command, platform: "win32" });
-      expect(res.ok).toBe(true);
-      expect(res.segments[0]?.argv).toEqual(argv);
-    }
-  });
-});
-
-describe("Windows enforced shell command rendering", () => {
   it("builds enforced command for simple Windows command", () => {
-    // Resolve from a fixture PATH: host python3 locations (e.g. Homebrew's
-    // python@3.x Cellar path) contain characters that trigger quoting and make
-    // the rendered command host-dependent.
+    // A fixture PATH keeps quoting independent of host Python installation paths.
     const dir = makeExecApprovalsTempDir();
     const python3 = makeExecutable(dir, "python3");
     const analysis = analyzeWindowsShellCommand({
@@ -187,8 +134,7 @@ describe("Windows enforced shell command rendering", () => {
       platform: "win32",
     });
 
-    expect(result.ok).toBe(true);
-    expect(result.command).toBe(`& ${python3} a.py`);
+    expect(result).toMatchObject({ ok: true, command: `& ${python3} a.py` });
   });
 
   it("rejects Windows commands with unsafe tokens", () => {
@@ -200,35 +146,25 @@ describe("Windows enforced shell command rendering", () => {
 
     expect(result.ok).toBe(false);
   });
-});
 
-describe("windowsEscapeArg", () => {
-  it("quotes empty strings", () => {
-    expect(windowsEscapeArg("")).toEqual({ ok: true, escaped: '""' });
-  });
-
-  it("double-quotes values with spaces and escapes embedded quotes", () => {
-    expect(windowsEscapeArg("hello world")).toEqual({ ok: true, escaped: '"hello world"' });
-    expect(windowsEscapeArg('say "hi"')).toEqual({ ok: true, escaped: '"say ""hi"""' });
+  it.each([
+    ["", '""'],
+    ["hello world", '"hello world"'],
+    ['say "hi"', '"say ""hi"""'],
+  ])("escapes Windows argument %j", (value, escaped) => {
+    expect(windowsEscapeArg(value)).toEqual({ ok: true, escaped });
   });
 
   it("rejects expansion tokens", () => {
-    expect(windowsEscapeArg("%PATH%")).toEqual({ ok: false });
-    expect(windowsEscapeArg("$env:SECRET")).toEqual({ ok: false });
-    expect(windowsEscapeArg("$var")).toEqual({ ok: false });
-    expect(windowsEscapeArg("${var}")).toEqual({ ok: false });
-    expect(windowsEscapeArg("$(whoami)")).toEqual({ ok: false });
-    expect(windowsEscapeArg("$?")).toEqual({ ok: false });
-    expect(windowsEscapeArg("$$")).toEqual({ ok: false });
+    for (const value of ["%PATH%", "$env:SECRET", "$var", "${var}", "$(whoami)", "$?", "$$"]) {
+      expect(windowsEscapeArg(value)).toEqual({ ok: false });
+    }
   });
-});
 
-describe("Windows inline allowlist analysis", () => {
   it("evaluates inline cmd payloads against the inner executable", () => {
     const dir = makeExecApprovalsTempDir();
-    const cmdPath = path.join(dir, "cmd.exe");
     const nodePath = path.join(dir, "node.exe");
-    for (const file of [cmdPath, nodePath]) {
+    for (const file of [path.join(dir, "cmd.exe"), nodePath]) {
       fs.writeFileSync(file, "");
       fs.chmodSync(file, 0o755);
     }

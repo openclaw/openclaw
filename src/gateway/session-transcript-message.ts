@@ -7,8 +7,8 @@ import {
   projectChatDisplayMessage,
   projectChatDisplayMessagesWithState,
 } from "./chat-display-projection.js";
+import { readChatHistoryReplyMessageId } from "./chat-history-reply-messages.js";
 import { resolveCurrentUserProfileDisplay } from "./current-user-profile-display.js";
-import { readChatHistoryReplyMessageId } from "./server-methods/chat-history-reply-messages.js";
 import {
   attachOpenClawTranscriptMeta,
   readTranscriptMessageIdempotencyKey,
@@ -30,6 +30,8 @@ function readTranscriptMessageSenderIsOwner(message: unknown): boolean | undefin
 export function projectSessionMessagePayload(params: {
   agentId?: string;
   historyDelta?: boolean;
+  includePluginSteering?: boolean;
+  maxChars?: number;
   toolResultMaxChars?: number;
   message: unknown;
   messageId?: string;
@@ -62,9 +64,11 @@ export function projectSessionMessagePayload(params: {
   const historyProjection = params.historyDelta
     ? projectChatDisplayMessagesWithState([rawMessage], {
         ...params.projectionState,
+        includePluginSteering: params.includePluginSteering,
         subagentCoordination: params.subagentCoordination,
         resolveCronJobName: params.resolveCronJobName,
         includeCommentaryFallbacks: true,
+        maxChars: params.maxChars,
         toolResultMaxChars: params.toolResultMaxChars,
         activity: false,
       })
@@ -95,6 +99,8 @@ export function projectSessionMessagePayload(params: {
             assistantErrorPending: params.projectionState.assistantErrorPending,
             turnBoundaryPending: params.projectionState.turnBoundaryPending,
             activity: false,
+            includePluginSteering: params.includePluginSteering,
+            maxChars: params.maxChars,
             toolResultMaxChars: params.toolResultMaxChars,
             subagentCoordination: params.subagentCoordination,
             resolveCronJobName: params.resolveCronJobName,
@@ -102,6 +108,7 @@ export function projectSessionMessagePayload(params: {
         : {
             messages: [
               projectChatDisplayMessage(rawMessage, {
+                includePluginSteering: params.includePluginSteering,
                 subagentCoordination: params.subagentCoordination,
                 resolveCronJobName: params.resolveCronJobName,
               }),

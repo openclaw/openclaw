@@ -2,6 +2,7 @@ import { normalizeModelCostConfig } from "@openclaw/llm-core";
 // Verifies default config values and environment-sensitive overrides.
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { listAgentIds } from "../agents/agent-roster.js";
 import type { ProviderResolveModelRoutesContext } from "../plugin-sdk/provider-model-types.js";
 import { resolveProviderModelRoutes } from "../plugins/provider-model-routes.js";
 import { estimateUsageCost } from "../utils/usage-format.js";
@@ -17,7 +18,15 @@ import {
   applyMessageDefaults,
   applyModelDefaults,
 } from "./defaults.js";
+import { resolveConfigEnvVars, type EnvSubstitutionWarning } from "./env-substitution.js";
 import { materializeRuntimeConfig } from "./materialize.js";
+import {
+  collectEnvSecretRefIds,
+  createConfigResolutionFacts,
+  getAuthoredConfigSecretRef,
+  getResolvedConfigEnvSecretRef,
+  setConfigResolutionFacts,
+} from "./resolution-facts.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "./runtime-snapshot.js";
 import type { ModelProviderConfig } from "./types.models.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
@@ -45,6 +54,104 @@ describe("config defaults", () => {
   afterEach(() => {
     clearRuntimeConfigSnapshot();
     vi.unstubAllEnvs();
+  });
+
+  it("materializes the canonical main session key and warns only once", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const source = { session: { mainKey: " custom " } };
+    const options = { env: {}, manifestRegistry: { plugins: [] } };
+    try {
+      expect(materializeRuntimeConfig(source, options).session?.mainKey).toBe("main");
+      expect(source.session.mainKey).toBe(" custom ");
+      expect(
+        materializeRuntimeConfig({ session: { mainKey: "another" } }, options).session?.mainKey,
+      ).toBe("main");
+      expect(warn).toHaveBeenCalledExactlyOnceWith(
+        'session.mainKey is ignored; main session is always "main".',
+      );
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("carries only surviving env provenance through materialization", () => {
+    const warnings: EnvSubstitutionWarning[] = [];
+    const pending = new Map<string, string>();
+    const resolved = new Map<string, string>();
+    const source = resolveConfigEnvVars(
+      {
+        logging: { file: "${LOG_PATH}" },
+        gateway: { auth: { token: "$PENDING_TOKEN", password: "${KEEP_PASSWORD}" } },
+      },
+      { LOG_PATH: "~/logs/openclaw.log", KEEP_PASSWORD: "fixture-password" },
+      {
+        onMissing: (warning) => warnings.push(warning),
+        onPendingEnvSecretRef: (id, path) => pending.set(path, id),
+        onResolvedEnvSecretRef: (id, path) => resolved.set(path, id),
+      },
+      // SAFETY: substitution changes only strings in this known config fixture.
+    ) as OpenClawConfig;
+    setConfigResolutionFacts(
+      source,
+      createConfigResolutionFacts(warnings, pending, "custom", resolved),
+    );
+
+    const runtime = materializeRuntimeConfig(source, {
+      env: {},
+      homedir: () => "/tmp/config-fixture",
+      manifestRegistry: { plugins: [] },
+    });
+
+    expect(runtime.logging?.file).toBe("/tmp/config-fixture/logs/openclaw.log");
+    expect(getResolvedConfigEnvSecretRef(runtime, "logging.file")).toBeNull();
+    expect(getResolvedConfigEnvSecretRef(runtime, "gateway.auth.password")).toEqual({
+      source: "env",
+      provider: "custom",
+      id: "KEEP_PASSWORD",
+    });
+    expect(getAuthoredConfigSecretRef(runtime, "gateway.auth.token")).toEqual({
+      source: "env",
+      provider: "custom",
+      id: "PENDING_TOKEN",
+    });
+    expect(collectEnvSecretRefIds(runtime)).toEqual(new Set(["PENDING_TOKEN", "KEEP_PASSWORD"]));
+  });
+
+  it("preserves the implicit main agent when materializing a pre-roster config", () => {
+    const runtime = materializeRuntimeConfig({}, { env: {}, manifestRegistry: { plugins: [] } });
+
+    expect(listAgentIds(runtime)).toEqual(["main"]);
+  });
+
+  it("rebuilds the SDK roster projection from the final materialized entries", () => {
+    const source: OpenClawConfig = {
+      agents: {
+        entries: {
+          worker: { model: "google/gemini-3-pro-preview", workspace: "~/worker" },
+          helper: { name: "Helper" },
+        },
+      },
+    };
+    attachAgentListProjection(source);
+    const runtime = materializeRuntimeConfig(source, {
+      env: {},
+      homedir: () => "/tmp/config-fixture",
+      manifestRegistry: { plugins: [] },
+    });
+    expect(Object.getOwnPropertyDescriptor(runtime.agents, "list")).toEqual({
+      configurable: true,
+      enumerable: false,
+      writable: false,
+      value: [
+        {
+          id: "worker",
+          model: "google/gemini-3.1-pro-preview",
+          workspace: "/tmp/config-fixture/worker",
+        },
+        { id: "helper", name: "Helper" },
+      ],
+    });
+    expect(structuredClone(runtime)).not.toHaveProperty("agents.list");
   });
 
   it("skips provider defaults when agent defaults are absent", () => {

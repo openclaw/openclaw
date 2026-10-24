@@ -1,54 +1,93 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { createEffect, createMemo, createSignal, onCleanup, Show } from "solid-js";
+import {
+  action,
+  createEffect,
+  createMemo,
+  createOptimistic,
+  createSignal,
+  Errored,
+  onSettled,
+  Show,
+} from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
+import { currentDisplaySpeechConfig } from "../../../lib/config/config-state-model.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
 import { canCallGatewayMethod } from "../../../lib/gateway-methods.ts";
 import { projectGateway } from "../../../lib/reactive/application.ts";
-import { useOptionalApplication } from "../../../lib/reactive/context.ts";
+import { useApplication, useOptionalApplication } from "../../../lib/reactive/context.ts";
 import { projectRuntimeConfig } from "../../../lib/reactive/domain-capabilities.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { GatewaySpeechPlayback, resolveSpeechTextLimit } from "../../../lib/speech-playback.ts";
 
-export function ReadAloud(props: { text: string }) {
+type ReadAloudProps = { text: string; buttonRef?: (element: HTMLButtonElement) => void };
+
+export function ReadAloud(props: ReadAloudProps) {
   const context = useOptionalApplication();
-  if (!context) {
-    return null;
-  }
+  return (
+    <Show when={context}>
+      <ReadAloudControl text={props.text} buttonRef={(element) => props.buttonRef?.(element)} />
+    </Show>
+  );
+}
+
+function ReadAloudControl(props: ReadAloudProps) {
+  const context = useApplication();
   const gateway = projectGateway(context.gateway);
   const config = projectRuntimeConfig(context.runtimeConfig);
   const playback = new GatewaySpeechPlayback();
-  const [playing, setPlaying] = createSignal(false);
-  const [error, setError] = createSignal("");
+  const [playing, setPlaying] = createOptimistic(false);
+  const [attempt, setAttempt] = createSignal<{ result: Promise<void> }>();
+  // Readiness never hides a usable Stop control; the optimistic flag presents playback.
+  const outcome = createMemo(() => attempt()?.result.then(() => null), { loadingValue: undefined });
   let generation = 0;
-  const cancelPlayback = () => {
+  let resolving = false;
+  const stop = () => {
     generation += 1;
+    resolving = false;
     playback.stop();
   };
-  const stop = () => {
-    cancelPlayback();
-    setPlaying(false);
-  };
   const playbackIdentity = createMemo(
-    () => [gateway.read().snapshot.client, gateway.read().snapshot.phase, props.text] as const,
+    () => {
+      const { snapshot, connectionRevision } = gateway.read();
+      return [
+        snapshot.client,
+        snapshot.client?.recoveryScope,
+        snapshot.client?.offlineRecoveryRetired,
+        connectionRevision,
+        props.text,
+        snapshot.phase === "connected" &&
+          snapshot.hello !== null &&
+          !canCallGatewayMethod(snapshot, "tts.speak", "operator.write"),
+      ] as const;
+    },
     { equals: (before, after) => before.every((value, index) => value === after[index]) },
   );
   createEffect(playbackIdentity, () => {
     stop();
-    setError("");
-    // The config capability coalesces this with the other chat consumers.
-    void context.runtimeConfig.ensureLoaded().catch(() => undefined);
+    setAttempt(undefined);
+    const runtime = currentDisplaySpeechConfig(context.runtimeConfig.state);
+    // Missing keys identify older or unavailable bootstrap projections; null is authoritative.
+    if (!runtime || !Object.hasOwn(runtime, "tts")) {
+      void context.runtimeConfig.ensureLoaded().catch(() => undefined);
+    }
   });
-  onCleanup(cancelPlayback);
+  onSettled(() => stop);
   const available = () => {
-    const snapshot = config.read().state.configSnapshot;
-    const runtime = snapshot?.runtimeConfig ?? snapshot?.config;
+    const runtime = currentDisplaySpeechConfig(config.read().state);
     return (
       Boolean(asOptionalRecord(runtime)?.tts) &&
       canCallGatewayMethod(gateway.read().snapshot, "tts.speak", "operator.write")
     );
   };
+  const presentPlayback = action(function* (pending: Promise<void>, isCurrent: () => boolean) {
+    if (!isCurrent()) {
+      return;
+    }
+    setPlaying(true);
+    yield pending;
+  });
   const speak = async () => {
-    if (playing()) {
+    if (resolving) {
       stop();
       return;
     }
@@ -57,36 +96,49 @@ export function ReadAloud(props: { text: string }) {
       return;
     }
     const current = ++generation;
-    const isCurrent = () =>
-      current === generation &&
-      context.gateway.snapshot.client === client &&
-      context.gateway.snapshot.phase === "connected";
-    setPlaying(true);
-    setError("");
-    try {
-      const snapshot = context.runtimeConfig.state.configSnapshot;
-      await playback.speak(
-        client,
-        props.text,
-        "tts.speak",
-        isCurrent,
-        resolveSpeechTextLimit(snapshot?.runtimeConfig ?? snapshot?.config),
-      );
-    } catch (cause) {
-      if (isCurrent()) {
-        setError(formatUiError(cause));
+    const connectionGeneration = client.connectionGeneration;
+    const isCurrent = () => current === generation && context.gateway.snapshot.client === client;
+    resolving = true;
+    // Prepare audio during the native gesture, before the presentation action begins.
+    const pending = (async () => {
+      try {
+        await playback.speak(
+          client,
+          props.text,
+          "tts.speak",
+          () => isCurrent() && available() && client.connectionGeneration === connectionGeneration,
+          resolveSpeechTextLimit(currentDisplaySpeechConfig(context.runtimeConfig.state)),
+        );
+      } catch (cause) {
+        if (isCurrent()) {
+          throw cause;
+        }
+      } finally {
+        if (isCurrent()) {
+          resolving = false;
+        }
       }
-    } finally {
-      if (isCurrent()) {
-        setPlaying(false);
-      }
-    }
+    })();
+    // Observe rejection even if this message retires before its error slot renders.
+    void pending.catch(() => {});
+    setAttempt({ result: pending });
+    await Promise.resolve();
+    await presentPlayback(pending, isCurrent).catch(() => {});
   };
   const label = () => t(playing() ? "chat.messages.stopReading" : "chat.messages.readAloud");
   return (
-    <Show when={available()}>
-      <openclaw-tooltip prop:content={error() || label()}>
+    <Show when={playing() || available()}>
+      <openclaw-tooltip>
+        <span slot="content">
+          <Show when={!playing()} fallback={label()}>
+            <Errored fallback={(error) => formatUiError(error())}>
+              {outcome()}
+              {label()}
+            </Errored>
+          </Show>
+        </span>
         <button
+          ref={(element) => props.buttonRef?.(element)}
           class="chat-read-aloud-btn"
           type="button"
           aria-label={label()}
@@ -95,8 +147,10 @@ export function ReadAloud(props: { text: string }) {
         >
           <Icon name={playing() ? "square" : "volume2"} />
         </button>
-        <Show when={error()}>
-          <span role="status">{error()}</span>
+        <Show when={!playing()}>
+          <Errored fallback={(error) => <span role="status">{formatUiError(error())}</span>}>
+            {outcome()}
+          </Errored>
         </Show>
       </openclaw-tooltip>
     </Show>

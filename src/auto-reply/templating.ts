@@ -285,7 +285,7 @@ export type MsgContext = Partial<CanonicalInboundText> & {
   Prompt?: string;
   MaxChars?: number;
   ChatType?: string;
-  /** Trusted channel-configured policy for this admitted conversation turn. */
+  /** @deprecated Channel-configured snapshot for the original external request. Use the channel policy resolver; retained until a later stable release after an announced deprecation window and explicit maintainer approval. No removal date is set. */
   ConversationToolPolicy?: GroupToolPolicyConfig;
   /** Human label for envelope headers (conversation label, not sender). */
   ConversationLabel?: string;
@@ -472,7 +472,7 @@ export type FinalizedRuntimeMsgContext = Omit<
 > &
   CanonicalInboundText & {
     CommandAuthorized: boolean;
-    CommandTurn?: CommandTurnContext;
+    CommandTurn: CommandTurnContext;
   };
 
 type NonTemplateContextKey = "ConversationAvatar";

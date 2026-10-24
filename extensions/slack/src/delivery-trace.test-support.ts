@@ -1,44 +1,41 @@
 import { WebClient } from "@slack/web-api";
 import {
   runDeliveryTraceScenario,
-  type DeliveryTraceInStep,
   type TraceEvent,
   type TraceNormalizer,
+  type WireRecorder,
+  type DeliveryTraceDispatch,
 } from "openclaw/plugin-sdk/channel-contract-testing";
 import { expect } from "vitest";
 import { markSlackStreamsStopped } from "./streaming.js";
 
+type Recorder = Pick<WireRecorder, "recordWireCall">;
+type TraceSetup = (recorder: Recorder) => Promise<DeliveryTraceDispatch>;
+
 export const SHORT_FINAL_TEXT = "All checks passed. Ship it.";
 export const BLOCKS_FINAL_TEXT = "Release 2026.1.0 is ready to ship.";
 
-// Portable presentation actions render as Block Kit with accessible fallback text.
+const releaseButtons = [
+  { label: "Approve release", action: { type: "callback", value: "approve-release" } },
+  { label: "Release notes", url: "https://docs.openclaw.ai/release" },
+];
 export const BLOCKS_FINAL_PRESENTATION = {
-  blocks: [
-    {
-      type: "buttons",
-      buttons: [
-        { label: "Approve release", action: { type: "callback", value: "approve-release" } },
-        { label: "Release notes", url: "https://docs.openclaw.ai/release" },
-      ],
-    },
-  ],
+  blocks: [{ type: "buttons", buttons: releaseButtons }],
 };
 
 /** Canonicalizes Slack `sec.micro` timestamps to `ts#N` in first-seen order. */
 export function createSlackTsNormalizer(): TraceNormalizer {
   const seen = new Map<string, string>();
-  const canonicalize = (value: string) =>
-    value.replace(/\b\d{10}\.\d{6}\b/g, (ts) => {
-      let mapped = seen.get(ts);
-      if (!mapped) {
-        mapped = `ts#${seen.size + 1}`;
-        seen.set(ts, mapped);
-      }
-      return mapped;
-    });
   const walk = (value: unknown): unknown => {
     if (typeof value === "string") {
-      return canonicalize(value);
+      return value.replace(/\b\d{10}\.\d{6}\b/g, (ts) => {
+        let mapped = seen.get(ts);
+        if (!mapped) {
+          mapped = `ts#${seen.size + 1}`;
+          seen.set(ts, mapped);
+        }
+        return mapped;
+      });
     }
     if (Array.isArray(value)) {
       return value.map(walk);
@@ -50,78 +47,35 @@ export function createSlackTsNormalizer(): TraceNormalizer {
     }
     return value;
   };
-  return (event: TraceEvent) =>
-    event.data === undefined ? event : { ...event, data: walk(event.data) };
+  return (event) => (event.data === undefined ? event : { ...event, data: walk(event.data) });
 }
 
 export function collectSlackWireTexts(events: readonly TraceEvent[]): string[] {
-  const texts: string[] = [];
-  const pushText = (value: unknown) => {
-    if (typeof value === "string" && value.length > 0) {
-      texts.push(value);
-    }
-  };
-  for (const event of events) {
+  return events.flatMap((event) => {
     if (event.dir !== "out" || !event.data || typeof event.data !== "object") {
-      continue;
+      return [];
     }
     const payload = (event.data as { payload?: unknown }).payload;
     if (!payload || typeof payload !== "object") {
-      continue;
+      return [];
     }
     const record = payload as Record<string, unknown>;
-    pushText(record.text);
-    pushText(record.markdown_text);
-    if (Array.isArray(record.chunks)) {
-      for (const chunk of record.chunks) {
-        if (chunk && typeof chunk === "object") {
-          pushText((chunk as { text?: unknown }).text);
-        }
-      }
-    }
-  }
-  return texts;
+    const chunks = Array.isArray(record.chunks) ? record.chunks : [];
+    return [
+      record.text,
+      record.markdown_text,
+      ...chunks.map((chunk: unknown) =>
+        chunk && typeof chunk === "object" ? (chunk as { text?: unknown }).text : undefined,
+      ),
+    ].filter((text): text is string => typeof text === "string" && text.length > 0);
+  });
 }
 
-export function buildSlackDeliveryProofVerdict(params: {
-  scenario: string;
-  events: readonly TraceEvent[];
-  headSha: string;
-  expectedProse: string;
-}): Record<string, unknown> {
-  const wireTexts = collectSlackWireTexts(params.events);
-  return {
-    kind: "mock-gateway",
-    liveSlack: false,
-    harness: "extensions/slack/src/delivery-trace.test.ts",
-    channel: "slack",
-    scenario: params.scenario,
-    headSha: params.headSha,
-    environment: {
-      node: process.version,
-      platform: process.platform,
-      slackApi: "recording WebClient",
-      provider: "scripted agent turn",
-      delivery: "real dispatchPreparedSlackMessage + ChatStreamer/draft preview",
-    },
-    inboundPayloads: params.events
-      .filter((event) => event.dir === "in" && (event.kind === "final" || event.kind === "partial"))
-      .map((event) => event.data),
-    deliveredWireTexts: wireTexts,
-    execFailedDelivered: wireTexts.some((text) => text.includes("Exec failed")),
-    proseDelivered: wireTexts.some((text) => text.includes(params.expectedProse)),
-    outMethods: params.events.filter((event) => event.dir === "out").map((event) => event.kind),
-  };
-}
-
-/** Exercises the real Slack dispatch and SDK stream lifecycle with recorded wire calls. */
 export async function assertSlackSteeringTransportTrace(params: {
   stoppedBySlack: boolean;
   channelId: string;
   inboundTs: string;
-  setup: (recorder: {
-    recordWireCall: (call: { method: string; result?: unknown }) => void;
-  }) => Promise<(step: DeliveryTraceInStep) => Promise<void>>;
+  setup: TraceSetup;
   getClient: () => WebClient;
   assertNoRuntimeError: () => void;
 }): Promise<void> {
@@ -131,9 +85,7 @@ export async function assertSlackSteeringTransportTrace(params: {
   const ingress = createSlackSystemEventTestHarness({ channelType: "channel" });
   registerSlackMessageEvents({ ctx: ingress.ctx, handleSlackMessage: async () => {} });
   const handleHumanMessage = ingress.getHandler("message");
-  if (!handleHumanMessage) {
-    throw new Error("expected registered Slack message ingress");
-  }
+  expect(handleHumanMessage).toBeDefined();
   let firstStreamTs: string | undefined;
   const events = await runDeliveryTraceScenario({
     scenario: {
@@ -157,7 +109,7 @@ export async function assertSlackSteeringTransportTrace(params: {
       return async (step) => {
         if (step.kind === "final") {
           expect(firstStreamTs).toBeDefined();
-          await handleHumanMessage({
+          await handleHumanMessage!({
             event: {
               type: "message",
               channel: params.channelId,
@@ -179,15 +131,15 @@ export async function assertSlackSteeringTransportTrace(params: {
   const out = events.filter((event) => event.dir === "out");
   const methods = out.map((event) => event.kind);
   const starts = out.filter((event) => event.kind === "chat.startStream");
-  expect(starts[0]?.data).toMatchObject({ payload: { thread_ts: params.inboundTs } });
+  expect(starts).toHaveLength(params.stoppedBySlack ? 1 : 2);
+  for (const { data } of starts) {
+    expect(data).toMatchObject({ payload: { thread_ts: params.inboundTs } });
+  }
   expect(methods).not.toContain("chat.postMessage");
   if (params.stoppedBySlack) {
-    expect(starts).toHaveLength(1);
     expect(methods).not.toContain("chat.stopStream");
     expect(collectSlackWireTexts(events).join("\n")).not.toContain("Final below");
   } else {
-    expect(starts).toHaveLength(2);
-    expect(starts[1]?.data).toMatchObject({ payload: { thread_ts: params.inboundTs } });
     expect(methods.indexOf("chat.stopStream")).toBeGreaterThan(methods.indexOf("chat.startStream"));
     expect(methods.indexOf("chat.stopStream")).toBeLessThan(
       methods.lastIndexOf("chat.startStream"),
@@ -195,17 +147,10 @@ export async function assertSlackSteeringTransportTrace(params: {
     expect(collectSlackWireTexts(events).join("\n")).toContain("Final below");
   }
   params.assertNoRuntimeError();
-  if (process.env.OPENCLAW_DELIVERY_PROOF === "1") {
-    process.stdout.write(
-      `${JSON.stringify({ proof: "slack-top-level-steering", headSha: process.env.OPENCLAW_DELIVERY_PROOF_SHA, stoppedBySlack: params.stoppedBySlack, transport: "real dispatch and SDK ChatStreamer; recording WebClient", wireMethods: methods.filter((method) => method.startsWith("chat.")), wireTexts: collectSlackWireTexts(events) })}\n`,
-    );
-  }
 }
 
 /** Records the real SDK's serialized request, replacing only external HTTP. */
-export function createSlackHttpRecorder(
-  beforeResponse?: (method: string, body: URLSearchParams) => Promise<void>,
-) {
+function createSlackHttpRecorder() {
   const requests: Array<{ method: string; body: URLSearchParams; ts: string }> = [];
   let nextMessage = 0;
   const client = new WebClient("xoxb-synthetic-progress", {
@@ -219,16 +164,12 @@ export function createSlackHttpRecorder(
       const body = new URLSearchParams(init.body);
       const ts = body.get("ts") ?? `1767225601.${String(++nextMessage).padStart(6, "0")}`;
       requests.push({ method, body, ts });
-      await beforeResponse?.(method, body);
       switch (method) {
         case "chat.postMessage":
-        case "chat.update":
-          return Response.json({
-            ok: true,
-            channel: body.get("channel"),
-            ts,
-            message: { ts, text: body.get("text") },
-          });
+        case "chat.update": {
+          const message = { ts, text: body.get("text") };
+          return Response.json({ ok: true, channel: body.get("channel"), ts, message });
+        }
         case "users.info":
           return Response.json({ ok: true, user: { team_id: "T0TRACE" } });
         case "chat.delete":
@@ -248,10 +189,7 @@ export function createSlackHttpRecorder(
 
 export async function assertSlackProgressMentionHttpTrace(params: {
   mode: "compact" | "inferred-compact" | "partial" | "card";
-  setup: (
-    recorder: { recordWireCall: (call: { method: string; result?: unknown }) => void },
-    client: WebClient,
-  ) => Promise<(step: DeliveryTraceInStep) => Promise<void>>;
+  setup: (recorder: Recorder, client: WebClient) => ReturnType<TraceSetup>;
 }) {
   const http = createSlackHttpRecorder();
   const native = "<@U0456EFGH> <#C0456EFGH> <!here>";
@@ -273,7 +211,6 @@ export async function assertSlackProgressMentionHttpTrace(params: {
     },
     setup: (recorder) => params.setup(recorder, http.client),
   });
-  emitSlackProgressHttpEvidence(`dispatch-${params.mode}`, http.requests);
   const writes = http.requests.filter(({ method }) =>
     ["chat.postMessage", "chat.update"].includes(method),
   );
@@ -296,52 +233,28 @@ export async function assertSlackProgressMentionHttpTrace(params: {
   expect(second?.body.get("ts")).toBe(first?.ts);
   for (const request of [first, second]) {
     const text = readText(request!.body);
-    expect(text).toContain(params.mode === "partial" ? native : escaped);
-    expect(text).not.toContain("&amp;lt;");
+    const included = [
+      params.mode === "partial" ? native : escaped,
+      "<https://example.invalid/docs|Docs>",
+      "`src/one.ts`",
+      params.mode === "partial"
+        ? "*bold* _context_"
+        : "_" + (request === first ? "FIRST" : "SECOND"),
+    ];
+    const excluded = [
+      "&amp;lt;",
+      "**bold**",
+      ...(params.mode === "partial" ? [] : native.split(" ")),
+    ];
+    expect(included.filter((token) => !text.includes(token))).toEqual([]);
+    expect(excluded.filter((token) => text.includes(token))).toEqual([]);
     if (params.mode !== "partial") {
-      for (const token of native.split(" ")) {
-        expect(text).not.toContain(token);
-      }
       for (const token of escaped.split(" ")) {
         expect(text.split(token)).toHaveLength(2);
       }
-    }
-    expect(text).toContain("<https://example.invalid/docs|Docs>");
-    expect(text).toContain("`src/one.ts`");
-    expect(text).not.toContain("**bold**");
-    if (params.mode === "partial") {
-      expect(text).toContain("*bold* _context_");
-    } else {
-      expect(text).toContain("_" + (request === first ? "FIRST" : "SECOND"));
     }
   }
   const final = writes.find(({ body }) => readText(body).includes("FINAL"));
   expect(final).toBeDefined();
   expect(readText(final!.body)).toContain(`FINAL ${native}`);
-}
-
-function emitSlackProgressHttpEvidence(
-  scenario: string,
-  requests: ReturnType<typeof createSlackHttpRecorder>["requests"],
-) {
-  if (process.env.OPENCLAW_DELIVERY_PROOF !== "1") {
-    return;
-  }
-  process.stdout.write(
-    `${JSON.stringify({
-      proofRecord: true,
-      boundary: "real Slack SDK serialized HTTP request; external fetch fixture",
-      scenario,
-      sha: process.env.OPENCLAW_DELIVERY_PROOF_SHA,
-      writes: requests
-        .filter(({ method }) => method === "chat.postMessage" || method === "chat.update")
-        .map(({ method, body, ts }) => ({
-          method,
-          ts,
-          channel: body.get("channel"),
-          text: body.get("text"),
-          blocks: body.has("blocks") ? JSON.parse(body.get("blocks")!) : undefined,
-        })),
-    })}\n`,
-  );
 }

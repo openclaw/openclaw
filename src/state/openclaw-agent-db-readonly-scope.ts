@@ -1,6 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import type { DatabaseSync } from "node:sqlite";
 import { normalizeAgentId } from "@openclaw/normalization-core/agent-id";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import { SQLITE_IDLE_HANDLE_TTL_MS } from "../infra/sqlite-handle-lifecycle.js";
 import { runSqliteReadOperationSync } from "../infra/sqlite-schema-facts.js";
 import { registerSqliteCacheExitClose } from "../infra/sqlite-wal.js";
@@ -26,6 +26,7 @@ import { registerOpenClawAgentDatabaseSyncResource } from "./openclaw-agent-db-r
 import { assertAgentDatabaseTerminalOpenAllowed } from "./openclaw-agent-db-terminal.js";
 import {
   adoptOpenClawAgentDatabaseValidation,
+  getOpenClawAgentDatabaseValidation,
   type OpenClawAgentDatabaseReadValidation,
 } from "./openclaw-agent-db-validation-cache.js";
 import { observeOpenClawDatabaseMaintenanceResource } from "./openclaw-state-db-async-lifecycle.js";
@@ -57,6 +58,7 @@ const retainedScopes = resolveGlobalSingleton<ReadOnlyScopes>(
 /** One retained connection, revoked by its caller, database lifecycle, or idle expiry. */
 export class OpenClawAgentDatabaseReadOnlyScope {
   private database?: OpenClawAgentReadOnlyDatabaseHandle;
+  private retainedValidation?: OpenClawAgentDatabaseReadValidation;
   private target?: ReadScopeTarget;
   private idleTimer?: ReturnType<typeof setTimeout>;
   private unregisterResource?: () => void;
@@ -70,7 +72,7 @@ export class OpenClawAgentDatabaseReadOnlyScope {
 
   invalidateProjection(
     databaseIdentity: string,
-    invalidate: (database: DatabaseSync) => void,
+    invalidate: (database: EngineConnection) => void,
   ): void {
     if (
       this.database &&
@@ -91,6 +93,7 @@ export class OpenClawAgentDatabaseReadOnlyScope {
     this.idleTimer = undefined;
     this.database?.close();
     this.database = undefined;
+    this.retainedValidation = undefined;
     this.borrowers = 0;
     if (this.target && retainedScopes.paths.get(this.target.path) === this) {
       retainedScopes.paths.delete(this.target.path);
@@ -165,7 +168,12 @@ export class OpenClawAgentDatabaseReadOnlyScope {
       this.touch();
       return { found: true, database } as const;
     };
-    if (this.database && !isOpenClawAgentDatabasePathCurrent(this.database)) {
+    if (
+      this.database &&
+      ((this.retainedValidation &&
+        Atomics.load(new Int32Array(this.retainedValidation.valid), 0) !== 1) ||
+        !isOpenClawAgentDatabasePathCurrent(this.database))
+    ) {
       this.discardConnection();
     }
     if (this.database) {
@@ -205,6 +213,8 @@ export class OpenClawAgentDatabaseReadOnlyScope {
     if (validation && !adoptOpenClawAgentDatabaseValidation(database, validation)) {
       throw new Error("Session reader validation does not match its current physical owner");
     }
+    // Later requests can carry a successor receipt while this connection still owns the old one.
+    this.retainedValidation ??= getOpenClawAgentDatabaseValidation(database);
     // The open owner validates the schema once; runtime reads retain that admission.
     return finish(database);
   }
@@ -296,7 +306,7 @@ function cachedScope(options: ReadTarget): OpenClawAgentDatabaseReadOnlyScope {
 /** Committed worker receipts invalidate projections on retained readers without running SQL. */
 export function invalidateOpenClawAgentReadOnlyProjections(
   databaseIdentity: string,
-  invalidate: (database: DatabaseSync) => void,
+  invalidate: (database: EngineConnection) => void,
 ): void {
   for (const scope of retainedScopes.active) {
     scope.invalidateProjection(databaseIdentity, invalidate);

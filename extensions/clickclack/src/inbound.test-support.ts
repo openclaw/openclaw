@@ -15,66 +15,37 @@ import type {
   ResolvedClickClackAccount,
 } from "./types.js";
 
-export function createInboundRuntime(includeExecution: boolean): PluginRuntime {
-  const runtime = createPluginRuntimeMock({
-    agent: {
-      session: {
-        getSessionEntry: vi.fn(() => ({ sessionId: "session-id", updatedAt: 1 })),
-        getSessionEntryAsync: vi.fn(async () => ({ sessionId: "session-id", updatedAt: 1 })),
-      },
-    },
-    channel: {
-      routing: {
-        resolveAgentRoute: vi.fn(
-          (params: Parameters<PluginRuntime["channel"]["routing"]["resolveAgentRoute"]>[0]) =>
-            resolveAgentRoute(params),
-        ),
-        buildAgentSessionKey: vi.fn(
-          (params: Parameters<PluginRuntime["channel"]["routing"]["buildAgentSessionKey"]>[0]) =>
-            buildAgentSessionKey(params),
-        ),
-      },
-    },
-    llm: {
-      complete: vi.fn().mockResolvedValue({
-        text: "service bot online",
-        provider: "openai",
-        model: "gpt-5.4-mini",
-        agentId: "service-bot",
-        usage: {},
-        ...(includeExecution
-          ? {
-              execution: {
-                mode: "direct-provider",
-                owner: { kind: "provider", id: "openai" },
-              },
-            }
-          : {}),
-        audit: {
-          caller: { kind: "plugin", id: "clickclack" },
-        },
-      }),
-    },
-  } as unknown as PluginRuntime);
-  configureDiscussionStore(runtime);
-  return runtime;
-}
+const location = { baseUrl: "http://127.0.0.1:8080", workspace: "wsp_1" };
 
-function configureDiscussionStore(runtime: PluginRuntime): void {
+export function createInboundRuntime(includeExecution: boolean): PluginRuntime {
+  const runtime = createPluginRuntimeMock();
+  const sessionEntry = () => ({ sessionId: "session-id", updatedAt: 1 });
+  runtime.agent.session.getSessionEntry = vi.fn(sessionEntry);
+  runtime.agent.session.getSessionEntryAsync = vi.fn(async () => sessionEntry());
+  runtime.channel.routing.resolveAgentRoute = vi.fn(resolveAgentRoute);
+  runtime.channel.routing.buildAgentSessionKey = vi.fn(buildAgentSessionKey);
+  runtime.llm.complete = vi.fn().mockResolvedValue({
+    text: "service bot online",
+    provider: "openai",
+    model: "gpt-5.4-mini",
+    agentId: "service-bot",
+    usage: {},
+    ...(includeExecution && {
+      execution: { mode: "direct-provider", owner: { kind: "provider", id: "openai" } },
+    }),
+    audit: { caller: { kind: "plugin", id: "clickclack" } },
+  });
   const stores = new Map<string, PluginStateSyncKeyedStore<unknown>>();
   runtime.state.openSyncKeyedStore = vi.fn((options: { namespace: string }) => {
-    const existing = stores.get(options.namespace);
-    if (existing) {
-      return existing;
-    }
-    const created = createDiscussionMemoryStore<unknown>();
-    stores.set(options.namespace, created);
-    return created;
+    const store = stores.get(options.namespace) ?? createDiscussionMemoryStore<unknown>();
+    stores.set(options.namespace, store);
+    return store;
   }) as unknown as PluginRuntime["state"]["openSyncKeyedStore"];
   runtime.state.openKeyedStoreV2 = <T>(
     options: Parameters<PluginRuntime["state"]["openKeyedStoreV2"]>[0],
     authority?: Parameters<PluginRuntime["state"]["openKeyedStoreV2"]>[1],
   ) => asyncDiscussionTestStore<T>(runtime.state.openSyncKeyedStore, options, authority);
+  return runtime;
 }
 
 export function createInboundMessage(
@@ -120,10 +91,9 @@ export function createInboundDiscussionConfig(): CoreConfig {
   return {
     channels: {
       clickclack: {
+        ...location,
         enabled: true,
-        baseUrl: "http://127.0.0.1:8080",
         token: "test-token-placeholder",
-        workspace: "wsp_1",
         discussions: { enabled: true, workspace: "wsp_1" },
       },
     },
@@ -133,14 +103,14 @@ export function createInboundDiscussionConfig(): CoreConfig {
 export function createInboundAgentAccount(
   overrides: Partial<ResolvedClickClackAccount> = {},
 ): ResolvedClickClackAccount {
-  const base = {
+  const config = { ...location, allowFrom: ["*"], ...overrides.config };
+  return {
+    ...location,
     accountId: "default",
     enabled: true,
     configured: true,
-    baseUrl: "http://127.0.0.1:8080",
     apiEndpoint: "http://127.0.0.1:8080",
     token: "test-token-placeholder",
-    workspace: "wsp_1",
     replyMode: "agent",
     toolsAllow: [],
     defaultTo: "channel:general",
@@ -155,20 +125,8 @@ export function createInboundAgentAccount(
     requireMention: false,
     mentionPatterns: [],
     groups: {},
-    config: {
-      baseUrl: "http://127.0.0.1:8080",
-      workspace: "wsp_1",
-      allowFrom: ["*"],
-    },
-  } satisfies ResolvedClickClackAccount;
-
-  return {
-    ...base,
     ...overrides,
-    config: {
-      ...base.config,
-      ...overrides.config,
-    },
+    config,
   };
 }
 

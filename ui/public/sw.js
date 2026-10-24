@@ -9,6 +9,8 @@ const CACHE_VERSION =
     : URL_CACHE_VERSION) || "dev";
 // Replaced by Vite with generic HTML and its measured, integrity-bound boot graph.
 const OFFLINE_BOOT = null;
+const NAVIGATION_TIMEOUT_MS = 10_000;
+const NATIVE_AUTH_PARAM = "openclaw_http_auth";
 const CACHE_NAME = `${CACHE_PREFIX}${CACHE_VERSION}${OFFLINE_BOOT ? `-${OFFLINE_BOOT.id}` : ""}`;
 const SCOPE_URL = new URL(self.registration.scope);
 const SCOPE_PATH = SCOPE_URL.pathname.endsWith("/") ? SCOPE_URL.pathname : `${SCOPE_URL.pathname}/`;
@@ -68,6 +70,7 @@ function prepareOfflineShell() {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 60_000);
     offlinePreparation = precacheOfflineShell(controller.signal)
+      .then(retireOldCaches)
       .catch(() => {
         // Cache storage is optional; updates and notifications must still work.
       })
@@ -77,6 +80,47 @@ function prepareOfflineShell() {
       });
   }
   return offlinePreparation;
+}
+
+async function completeCacheNames() {
+  const names = (await caches.keys()).filter((name) => name.startsWith(CACHE_PREFIX)).toReversed();
+  const complete = [];
+  for (const name of names) {
+    if (await caches.match(OFFLINE_SHELL_URL, { cacheName: name })) {
+      complete.push(name);
+    }
+  }
+  return complete;
+}
+
+async function retireOldCaches() {
+  const complete = await completeCacheNames();
+  // Keep one complete predecessor for open documents still importing its chunks.
+  // Even an incomplete replacement must retain the last usable shell.
+  const previous = complete.find((name) => name !== CACHE_NAME);
+  await Promise.all(
+    (await caches.keys())
+      .filter((name) => name.startsWith(CACHE_PREFIX) && name !== CACHE_NAME && name !== previous)
+      .map((name) => caches.delete(name)),
+  );
+}
+
+async function matchOfflineShell(fallback = Response.error()) {
+  try {
+    const current = await caches.match(OFFLINE_SHELL_URL, { cacheName: CACHE_NAME });
+    if (current) {
+      return current;
+    }
+    for (const name of await completeCacheNames()) {
+      const response = await caches.match(OFFLINE_SHELL_URL, { cacheName: name });
+      if (response) {
+        return response;
+      }
+    }
+  } catch {
+    // Storage denial must not discard an available Gateway response.
+  }
+  return fallback;
 }
 
 async function isCachedBootAsset(response, integrity) {
@@ -160,14 +204,7 @@ self.addEventListener("install", (event) => {
 self.addEventListener("activate", (event) => {
   event.waitUntil(
     (async () => {
-      const cacheKeys = await caches.keys();
-      const controlKeys = cacheKeys.filter((key) => key.startsWith(CACHE_PREFIX));
-      await Promise.all([
-        self.clients.claim(),
-        Promise.all(
-          controlKeys.filter((key) => key !== CACHE_NAME).map((key) => caches.delete(key)),
-        ),
-      ]);
+      await Promise.all([self.clients.claim(), retireOldCaches()]);
       // Queue the announcement without waiting for suspended pages or navigating
       // around their unsaved-work guards. Resumed pages also query our identity.
       const windowClients = await self.clients.matchAll({
@@ -219,13 +256,24 @@ async function fetchControlUiRequest(event, cacheable) {
   }
 }
 
-async function matchControlUiAsset(request) {
+async function matchControlUiAsset(request, currentVersion) {
   try {
     // Writes use public URL-only keys. Match the same key rather than a module
     // request whose Origin header can differ from credential-free install fetches.
-    const current = await caches.match(request.url, { cacheName: CACHE_NAME });
-    if (current && cacheableResponse(current)) {
-      return current;
+    if (currentVersion) {
+      const current = await caches.match(request.url, { cacheName: CACHE_NAME });
+      if (current && cacheableResponse(current)) {
+        return current;
+      }
+    }
+    for (const name of await completeCacheNames()) {
+      if (name === CACHE_NAME) {
+        continue;
+      }
+      const cached = await caches.match(request.url, { cacheName: name });
+      if (cached && cacheableResponse(cached)) {
+        return cached;
+      }
     }
   } catch {
     // Storage denial must not prevent ordinary network delivery.
@@ -240,7 +288,7 @@ function isVersionedPublicAsset(url, pathname) {
   );
 }
 
-async function fetchChatNavigation(request, url) {
+async function fetchChatNavigation(request, url, signal = request.signal) {
   const entry = new URL(`${SCOPE_PATH}__openclaw__/session-entry`, SCOPE_URL);
   entry.searchParams.set("path", url.pathname + url.search);
   try {
@@ -250,7 +298,7 @@ async function fetchChatNavigation(request, url) {
       credentials: "same-origin",
       redirect: "manual",
       cache: "no-store",
-      signal: request.signal,
+      signal,
     });
     if (response.status === 200 && response.headers.get("X-OpenClaw-Session-Entry") === "1") {
       return response;
@@ -258,12 +306,38 @@ async function fetchChatNavigation(request, url) {
   } catch {
     // A failed handoff must not prevent a public conversation from opening.
   }
-  const response = await fetch(request);
+  const response = await fetch(request, { signal });
   // Some proxies also protect /chat. A worker response suppresses native HTTP
   // auth dialogs, so hand those challenges to the unhandled protected navigation.
   return response.status === 401 && response.headers.has("WWW-Authenticate")
     ? Response.redirect(entry.href)
     : response;
+}
+
+async function fetchNavigation(request, url, sessionEntry) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), NAVIGATION_TIMEOUT_MS);
+  try {
+    const response = await (sessionEntry
+      ? fetchChatNavigation(request, url, controller.signal)
+      : fetch(request, { signal: controller.signal }));
+    if (response.status === 401 && response.headers.has("WWW-Authenticate")) {
+      // Worker responses suppress native HTTP auth dialogs. Hand the challenge
+      // back to an unhandled navigation; the document removes this one-shot hint.
+      url.searchParams.set(NATIVE_AUTH_PARAM, "1");
+      return Response.redirect(url.href);
+    }
+    if (response.status >= 500) {
+      return matchOfflineShell(response);
+    }
+    return response;
+  } catch {
+    // A VPN/proxy failure can reject while the browser still reports online.
+    // Never cache a fetched Gateway document or replace an HTTP auth response.
+    return matchOfflineShell();
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 self.addEventListener("fetch", (event) => {
@@ -279,29 +353,31 @@ self.addEventListener("fetch", (event) => {
   }
 
   if (event.request.mode === "navigate") {
-    if (
-      self.navigator.onLine &&
+    if (url.searchParams.has(NATIVE_AUTH_PARAM)) {
+      return;
+    }
+    const sessionEntry =
       new URL(self.location.href).searchParams.get("session-entry") === "1" &&
       pathname.startsWith("/chat/") &&
       pathname !== "/chat/" &&
       [...url.searchParams.keys()].every(
-        (key) => key === "dashboard" || key === "draft" || key === "openclaw_mount_recovery",
-      )
-    ) {
-      event.respondWith(fetchChatNavigation(event.request, url));
-    } else if (
-      !self.navigator.onLine &&
-      (pathname === "/" ||
-        pathname === "/new" ||
-        pathname === "/new/" ||
-        pathname === "/chat" ||
-        pathname.startsWith("/chat/"))
-    ) {
-      event.respondWith(
-        caches
-          .match(OFFLINE_SHELL_URL, { cacheName: CACHE_NAME })
-          .then((cached) => cached || Response.error()),
+        (key) =>
+          key === "dashboard" ||
+          key === "draft" ||
+          key === "openclaw_mount_recovery" ||
+          key === "__openclawSessionFacePreference",
       );
+    const route = pathname.replace(/\/$/u, "") || "/";
+    // Static routes and dedicated dynamic namespaces come from the router.
+    // Shared plugin HTTP namespaces and standalone documents stay out.
+    if (
+      sessionEntry ||
+      route === "/" ||
+      route === "/index.html" ||
+      OFFLINE_BOOT?.routes.includes(route.toLowerCase()) ||
+      OFFLINE_BOOT?.routePrefixes.some((prefix) => pathname.startsWith(prefix))
+    ) {
+      event.respondWith(fetchNavigation(event.request, url, sessionEntry));
     }
     return;
   }
@@ -316,7 +392,14 @@ self.addEventListener("fetch", (event) => {
   event.respondWith(
     (async () => {
       const cacheable = permitsCache && (hashedAsset || isVersionedPublicAsset(url, pathname));
-      const cached = cacheable ? await matchControlUiAsset(event.request) : undefined;
+      // Prior documents retain versioned fonts/themes too. Only exact cached
+      // URLs are reusable; new network writes still require the current version.
+      const publicAsset =
+        OFFLINE_BOOT?.publicAssets.includes(pathname.slice(1)) && /^\?v=[^&]+$/u.test(url.search);
+      const cached =
+        permitsCache && (hashedAsset || publicAsset)
+          ? await matchControlUiAsset(event.request, cacheable)
+          : undefined;
       return cached || fetchControlUiRequest(event, cacheable);
     })(),
   );
@@ -339,7 +422,12 @@ self.addEventListener("push", (event) => {
   const title = data.title || "OpenClaw";
   const options = {
     body: data.body || "",
-    icon: "./apple-touch-icon.png",
+    icon:
+      typeof data.icon === "string" &&
+      data.icon.length <= 2400 &&
+      /^data:image\/png;base64,[A-Za-z0-9+/]+={0,2}$/.test(data.icon)
+        ? data.icon
+        : "./apple-touch-icon.png",
     badge: "./favicon-32.png",
     tag: data.tag || "openclaw-notification",
     renotify: data.renotify === true,

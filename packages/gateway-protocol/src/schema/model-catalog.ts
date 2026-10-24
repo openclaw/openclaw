@@ -54,6 +54,11 @@ const ModelUnavailableReasonSchema = Type.Union([
   Type.Literal("cooldown"),
 ]);
 
+const ModelServiceTierObservationSchema = closedObject({
+  requestedTier: NonEmptyString,
+  responseTier: Type.Optional(NonEmptyString),
+});
+
 const ModelRuntimeProperties = {
   available: Type.Optional(Type.Boolean()),
   /** Scoped manual-choice permission; separate from runtime readiness and automatic selection. */
@@ -78,13 +83,10 @@ const ModelRuntimeProperties = {
   supportsFastMode: Type.Optional(Type.Boolean()),
   /** Selected route can safely retry rejected service tiers before output. */
   supportsServiceTierRecovery: Type.Optional(Type.Boolean()),
-  /** Recent fulfillment of a requested tier; never a capability restriction. */
-  serviceTierObservation: Type.Optional(
-    closedObject({
-      requestedTier: NonEmptyString,
-      responseTier: Type.Optional(NonEmptyString),
-    }),
-  ),
+  /** Latest receipt retained for v2026.10.5 clients; current clients use the per-tier list. */
+  serviceTierObservation: Type.Optional(ModelServiceTierObservationSchema),
+  /** Recent fulfillment per requested tier; never a capability restriction. */
+  serviceTierObservations: Type.Optional(Type.Array(ModelServiceTierObservationSchema)),
   supportsTools: Type.Optional(Type.Boolean()),
   input: Type.Optional(
     Type.Array(
@@ -108,11 +110,23 @@ export const ModelRuntimeChoiceSchema = closedObject({
   ),
 });
 
+/** Lowercase, hyphen-separated family token; equality is the only supported comparison. */
+const ModelFamilyString = Type.String({
+  minLength: 1,
+  maxLength: 64,
+  pattern: "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+});
+
 export const ModelChoiceSchema = closedObject({
   id: NonEmptyString,
   name: NonEmptyString,
   provider: NonEmptyString,
   alias: Type.Optional(NonEmptyString),
+  /**
+   * Canonical developer lineage declared by provider or catalog metadata, e.g. `anthropic`
+   * for every route that serves a Claude model. Absent when unknown; never inferred from ids.
+   */
+  family: Type.Optional(ModelFamilyString),
   tags: Type.Optional(Type.Array(NonEmptyString)),
   ...ModelRuntimeProperties,
   agentRuntime: Type.Optional(GatewayAgentRuntimeSchema),

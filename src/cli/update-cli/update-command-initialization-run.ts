@@ -1,7 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { resolveConfigPath, resolveStateDir } from "../../config/paths.js";
 import { resolvePathViaExistingAncestorSync } from "../../infra/boundary-path.js";
+import { formatDiskSpaceBytes } from "../../infra/disk-space.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { findUpdateCaptureSpaceError } from "../../infra/update-capture-space.js";
 import { canResolveRegistryVersionForPackageTarget } from "../../infra/update-global.js";
 import { readUpdateRunDriver } from "../../infra/update-run-driver.js";
 import { updateRunStepsFromResultStep } from "../../infra/update-run-step.js";
@@ -18,6 +20,7 @@ import {
   usesCandidateUpdateAdmission,
   type UpdateCommandOptions,
 } from "./shared.js";
+import { reportUnreportedUpdateAdmissionOutcome } from "./update-command-admission-report.js";
 import { withPrivateStagedPackageInstall } from "./update-command-artifact.js";
 import {
   applyUpdateCandidateAdmission,
@@ -25,7 +28,10 @@ import {
   inspectStagedUpdateCandidateAdmission,
 } from "./update-command-candidate-admission.js";
 import { readUpdateChannelConfig } from "./update-command-config.js";
-import type { UpdateCommandExecutorOptions } from "./update-command-executor-options.js";
+import type {
+  UpdateCommandExecutor,
+  UpdateCommandExecutorOptions,
+} from "./update-command-executor-options.js";
 import {
   captureUpdateCommandExecutorAuthority,
   withUpdateCommandExecutor,
@@ -40,6 +46,7 @@ import {
 } from "./update-command-initialization.js";
 import { preparePackageUpdateRuntime } from "./update-command-node-runtime.js";
 import { assertUpdatePackageActivationAdmission } from "./update-command-package-activation.js";
+import { withUpdatePreviewSignals } from "./update-command-preview-signals.js";
 import { UnreportedUpdateAdmissionOutcome } from "./update-command-result.js";
 import { recordUpdateCommandTarget, type prepareUpdateCommand } from "./update-command-run.js";
 import { preflightUpdateCommandSchemas, previewUpdateCommand } from "./update-command-schema.js";
@@ -50,10 +57,7 @@ import {
 } from "./update-command-service-env.js";
 import type { UpdateCommandRecoveryState } from "./update-command-service-maintenance.js";
 import { resolveFreshUpdateMetadata, resolveUpdateCommandTarget } from "./update-command-target.js";
-import {
-  reportUnreportedUpdateAdmissionOutcome,
-  withUpdateCommandTerminalResult,
-} from "./update-command-terminal.js";
+import { withUpdateCommandTerminalResult } from "./update-command-terminal.js";
 import { prepareUpdateCommandFailureTriage } from "./update-command-triage.js";
 
 export async function initializeAndRunUpdate(
@@ -70,13 +74,22 @@ export async function initializeAndRunUpdate(
   const runId = env.OPENCLAW_UPDATE_RUN_ID?.trim() || randomUUID();
   let handleFailure: Awaited<ReturnType<typeof prepareUpdateCommandFailureTriage>> | undefined;
   let disposePresentation: (() => void) | undefined;
+  let admissionAttempted = false;
   try {
     await withUpdateCommandTerminalResult(
       (registerRun) =>
         withUpdateInProgressEnv(invocationCwd, () =>
           withUpdateCommandExecutor(
             runId,
-            async (executor) => {
+            async (originalExecutor) => {
+              const executor: UpdateCommandExecutor = {
+                enter: (...args) => {
+                  // enter can acquire ownership before failing. Once attempted, an
+                  // unregistered refusal cannot borrow shared state after settlement.
+                  admissionAttempted = true;
+                  return originalExecutor.enter(...args);
+                },
+              };
               const selection: UpdateTargetSelection | undefined = await withOwnedManagedUpdateEnv(
                 targetEnv,
                 () =>
@@ -214,6 +227,7 @@ export async function initializeAndRunUpdate(
                     assertCurrent,
                     nodeRunner: selectedTarget?.packageUpdateNodeRunner,
                     timeoutMs: prepared.timeoutMs ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS,
+                    fullIntegrityCheck: opts.fullIntegrityCheck,
                   });
                   assertCurrent();
                   initialization.originalRecoveryCapture = captured.ref;
@@ -230,8 +244,11 @@ export async function initializeAndRunUpdate(
                   }
                   // Capture is best effort. Lead with continuation guidance because the
                   // warning is length-bounded and the nested cause can be long.
+                  const space = findUpdateCaptureSpaceError(error)?.capacity;
                   warn(
-                    `Original state capture is unavailable; the update continues without it. A running Gateway or another active writer changing state during capture is expected to cause this. Database rollback uses the pre-migration snapshots taken after the Gateway stops. A completed update does not need to be restarted because of this warning. Cause: ${formatErrorMessage(error)}`,
+                    space
+                      ? `NO ORIGINAL-STATE SNAPSHOT: insufficient disk space. Needed ${space.requiredBytes} bytes (${formatDiskSpaceBytes(space.requiredBytes)}); available ${space.availableBytes} bytes (${formatDiskSpaceBytes(space.availableBytes)}). The update continues without a complete pre-update recovery copy. Free space before a future update to allow original-state capture.`
+                      : `Original state capture is unavailable; the update continues without it. A running Gateway or another active writer changing state during capture is expected to cause this. Database rollback uses the pre-migration snapshots taken after the Gateway stops. A completed update does not need to be restarted because of this warning. Cause: ${formatErrorMessage(error)}`,
                   );
                 }
                 assertCurrent();
@@ -250,14 +267,16 @@ export async function initializeAndRunUpdate(
               }
               const target = initialization.target;
               if (opts.dryRun) {
-                return await previewUpdateCommand({
-                  target,
-                  prepared,
-                  opts,
-                  runId,
-                  invocationCwd,
-                  updateStepTimeoutMs: prepared.timeoutMs ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS,
-                });
+                return await withUpdatePreviewSignals(opts, () =>
+                  previewUpdateCommand({
+                    target,
+                    prepared,
+                    opts,
+                    runId,
+                    invocationCwd,
+                    updateStepTimeoutMs: prepared.timeoutMs ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS,
+                  }),
+                );
               }
               const artifact =
                 target.updateInstallKind === "package" &&
@@ -500,7 +519,7 @@ export async function initializeAndRunUpdate(
     );
   } catch (error) {
     if (!handleFailure) {
-      return await reportUnreportedUpdateAdmissionOutcome(error);
+      return await reportUnreportedUpdateAdmissionOutcome(error, { detached: admissionAttempted });
     }
     // The admitted run's prepared handler outlives both staged cleanup and the
     // executor, so no failure is reported while either mutation owner remains live.

@@ -3,7 +3,7 @@ import path from "node:path";
 import { createDirectorySync, createFileSync } from "@openclaw/fs-safe/advanced";
 import { afterEach, beforeEach, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import type { TempHomeEnv } from "../test-utils/temp-home.js";
 import { createCliRuntimeCapture } from "./test-runtime-capture.js";
@@ -141,21 +141,25 @@ vi.mock("../plugins/update.js", async (importOriginal) => {
   };
 });
 
+// mock-isolation: Deferred completion supplies convergence facts without running Doctor or plugin installs.
 vi.mock("../commands/doctor/shared/post-core-plugin-convergence.js", () => ({
   runPostCorePluginConvergence: vi.fn(
     async (params: { cfg: OpenClawConfig; baselineInstallRecords?: unknown }) => ({
+      ...postCoreConvergenceResult(),
       config: params.cfg,
-      configChanges: [],
-      installedPluginIdRecovery: new Map(),
-      changes: [],
-      warnings: [],
-      errored: false,
-      smokeFailures: [],
       installRecords: params.baselineInstallRecords ?? {},
     }),
   ),
 }));
 
+const {
+  createUpdateCliBaseSnapshot,
+  createUpdateCliConfigFixtures,
+  postCoreConvergenceResult,
+  stableConfig,
+  stableWhatsAppConfig,
+} = await import("./update-cli/update-cli-config.test-support.js");
+const { writeJsonFixture } = await import("./update-cli/update-cli-package.test-support.js");
 const nodeSqlite = await import("../infra/node-sqlite.js");
 const windowsPrivateDirectory = await import("../infra/windows-private-directory.js");
 const { createTempHomeEnv } = await import("../test-utils/temp-home.js");
@@ -186,185 +190,52 @@ export function installDeferredCompletionFixture() {
   let fixtureCount = 0;
   const createCaseDir = (prefix: string) => path.join(fixtureRoot, `${prefix}-${fixtureCount++}`);
   const FRESH_POST_UPDATE_ENTRYPOINT = "/tmp/openclaw-updated-entry.mjs";
-  const baseConfig = {} as OpenClawConfig;
-  const baseSnapshot: ConfigFileSnapshot = {
-    path: "/tmp/openclaw-config.json",
-    exists: true,
-    raw: "{}",
-    parsed: {},
-    resolved: baseConfig,
-    sourceConfig: baseConfig,
-    valid: true,
-    config: baseConfig,
-    runtimeConfig: baseConfig,
-    issues: [],
-    warnings: [],
-    legacyIssues: [],
-  };
+  const baseConfig: OpenClawConfig = {};
+  const baseSnapshot = createUpdateCliBaseSnapshot(baseConfig);
 
-  const {
-    syncPluginCall,
-    lastNpmPluginUpdateCall,
-    lastReplaceConfigCall,
-    setupConfigMutationWithRetryMock,
-    lastWriteJsonCall,
-    getLogOutput,
-    getErrorOutput,
-  } = createUpdateFixtureAssertions({
-    syncPluginsForUpdateChannel,
-    updateNpmInstalledPlugins,
-    readConfigFileSnapshot,
-    mutateConfigFileWithRetry,
-    replaceConfigFile,
-    defaultRuntime,
-  });
+  const { syncPluginCall, lastReplaceConfigCall, setupConfigMutationWithRetryMock, getLogOutput } =
+    createUpdateFixtureAssertions({
+      syncPluginsForUpdateChannel,
+      updateNpmInstalledPlugins,
+      readConfigFileSnapshot,
+      mutateConfigFileWithRetry,
+      replaceConfigFile,
+      defaultRuntime,
+    });
   const mockFileBackedPathExists = () => {
-    pathExists.mockImplementation(async (candidate: string) => {
-      try {
-        await fs.access(candidate);
-        return true;
-      } catch {
-        return false;
-      }
-    });
-  };
-
-  const pluginSyncResult = (
-    config: OpenClawConfig,
-    changed = false,
-    overrides: {
-      warnings?: string[];
-      errors?: Array<{ pluginId: string; message: string; code?: string }>;
-    } = {},
-  ) => ({
-    changed,
-    config,
-    summary: {
-      switchedToBundled: [],
-      switchedToClawHub: [],
-      switchedToNpm: [],
-      warnings: [],
-      errors: [],
-      ...overrides,
-    },
-  });
-
-  const npmPluginUpdateResult = (config: OpenClawConfig) => ({
-    changed: false,
-    config,
-    outcomes: [],
-  });
-
-  const mockNpmPluginOutcomes = (
-    outcomes: unknown[],
-    changed = false,
-    config: OpenClawConfig = baseConfig,
-  ) => {
-    updateNpmInstalledPlugins.mockResolvedValueOnce({ changed, config, outcomes });
-  };
-
-  const postCoreConvergenceResult = (
-    overrides: Partial<{
-      changes: string[];
-      warnings: Array<{ pluginId?: string; reason: string; message: string; guidance: string[] }>;
-      errored: boolean;
-    }> = {},
-  ) => ({
-    configChanges: [],
-    installedPluginIdRecovery: new Map(),
-    changes: [],
-    warnings: [],
-    errored: false,
-    smokeFailures: [],
-    installRecords: {},
-    ...overrides,
-  });
-
-  const mockNoopPostUpdatePluginConvergence = () => {
-    syncPluginsForUpdateChannel.mockImplementation(async ({ config }) => pluginSyncResult(config));
-    updateNpmInstalledPlugins.mockImplementation(async ({ config }) =>
-      npmPluginUpdateResult(config),
+    pathExists.mockImplementation((candidate: string) =>
+      fs.access(candidate).then(
+        () => true,
+        () => false,
+      ),
     );
   };
 
-  const mockPostDoctorSnapshot = (
-    configPath: string,
-    config: OpenClawConfig,
-    options: { preserveParsed?: boolean } = {},
-  ) => {
-    vi.mocked(readConfigFileSnapshot).mockResolvedValue({
-      ...baseSnapshot,
-      path: configPath,
-      ...(options.preserveParsed ? {} : { parsed: config }),
-      sourceConfig: config,
-      config,
-      runtimeConfig: config,
-      hash: "post-doctor-hash",
+  const { configSnapshot, mockPostDoctorSnapshot, mockNoopPostUpdatePluginConvergence } =
+    createUpdateCliConfigFixtures({
+      baseConfig,
+      baseSnapshot,
+      readConfigFileSnapshot,
+      syncPluginsForUpdateChannel,
+      updateNpmInstalledPlugins,
+      createCaseDir,
     });
-  };
-
-  const configSnapshot = (
-    config: OpenClawConfig,
-    overrides: Partial<ConfigFileSnapshot> = {},
-  ): ConfigFileSnapshot => ({
-    ...baseSnapshot,
-    parsed: config,
-    resolved: config,
-    sourceConfig: config,
-    config,
-    runtimeConfig: config,
-    ...overrides,
-  });
-
-  const stableConfig = (overrides: Omit<OpenClawConfig, "update"> = {}): OpenClawConfig => ({
-    update: { channel: "stable" },
-    ...overrides,
-  });
-
-  const stableWhatsAppConfig = (): OpenClawConfig =>
-    stableConfig({
-      channels: {
-        whatsapp: { enabled: true, dmPolicy: "pairing" },
-      },
-    });
-
-  const runPostCoreUpdate = (env: NodeJS.ProcessEnv = {}) => {
-    return withEnvAsync(
-      {
-        OPENCLAW_UPDATE_POST_CORE: "1",
-        OPENCLAW_UPDATE_POST_CORE_CHANNEL: "stable",
-        OPENCLAW_COMPATIBILITY_HOST_VERSION: process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION,
-        ...env,
-      },
-      async () => {
-        await updateCommand({ yes: true, restart: false });
-      },
-    );
-  };
 
   const runPostCoreCommand = (
     options: Parameters<typeof updateCommand>[0],
     env: NodeJS.ProcessEnv = {},
-  ) => {
-    return withEnvAsync(
+  ) =>
+    withEnvAsync(
       {
         OPENCLAW_UPDATE_POST_CORE: "1",
         OPENCLAW_UPDATE_POST_CORE_CHANNEL: "stable",
         OPENCLAW_COMPATIBILITY_HOST_VERSION: process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION,
         ...env,
       },
-      async () => {
-        await updateCommand(options);
-      },
+      () => updateCommand(options),
     );
-  };
-
-  const writeJsonFixture = (
-    filePath: string,
-    value: unknown,
-    trailingNewline = true,
-  ): Promise<void> =>
-    fs.writeFile(filePath, `${JSON.stringify(value)}${trailingNewline ? "\n" : ""}`, "utf-8");
+  const runPostCoreUpdate = (env: NodeJS.ProcessEnv = {}) =>
+    runPostCoreCommand({ yes: true, restart: false }, env);
 
   beforeEach(async () => {
     tempHome = await createTempHomeEnv("openclaw-deferred-completion-");
@@ -403,10 +274,7 @@ export function installDeferredCompletionFixture() {
     });
     setupConfigMutationWithRetryMock();
     loadInstalledPluginIndexInstallRecords.mockResolvedValue({});
-    syncPluginsForUpdateChannel.mockImplementation(async ({ config }) => pluginSyncResult(config));
-    updateNpmInstalledPlugins.mockImplementation(async ({ config }) =>
-      npmPluginUpdateResult(config),
-    );
+    mockNoopPostUpdatePluginConvergence();
     const entrypoint = path.join(process.cwd(), "dist", "index.js");
     pathExists.mockImplementation(async (candidate: string) => candidate === entrypoint);
     // Child completion may invoke only Doctor and config validation.
@@ -450,20 +318,14 @@ export function installDeferredCompletionFixture() {
   });
   return {
     runPostCoreCommand,
-    lastNpmPluginUpdateCall,
     postCoreConvergenceResult,
     syncPluginCall,
-    lastWriteJsonCall,
-    mockNpmPluginOutcomes,
-    getErrorOutput,
     getLogOutput,
-    mockNoopPostUpdatePluginConvergence,
     createCaseDir,
     writeJsonFixture,
     FRESH_POST_UPDATE_ENTRYPOINT,
     configSnapshot,
     stableConfig,
-    baseConfig,
     mockFileBackedPathExists,
     stableWhatsAppConfig,
     mockPostDoctorSnapshot,

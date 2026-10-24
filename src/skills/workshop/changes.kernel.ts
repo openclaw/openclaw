@@ -1,7 +1,9 @@
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import type { EngineConnection } from "../../infra/sql-connection.js";
+import { isPostgresSqlConnection } from "../../infra/sql-connection.js";
 import { createSqliteSchemaEnsurer } from "../../infra/sqlite-schema-ensure.js";
 import type { OpenClawStateDatabase } from "../../state/openclaw-state-db-contract.js";
+import { ensureStatePostgresFragment } from "../../state/openclaw-state-db-engine.js";
 import { tableExists } from "../../state/openclaw-state-db-schema-helpers.js";
 import type { DB } from "../../state/openclaw-state-db.generated.js";
 import { getOpenClawStateFeatureSchemaSql } from "../../state/openclaw-state-feature-schema.js";
@@ -57,7 +59,11 @@ export function recordWorkshopChangeInDatabase(
   change: WorkshopChange,
 ): void {
   const { db } = database;
-  ensureWorkshopChangesSchema(db);
+  if (isPostgresSqlConnection(db)) {
+    ensureStatePostgresFragment(db, "skill_workshop_changes");
+  } else {
+    ensureWorkshopChangesSchema(db);
+  }
   const kysely = getNodeSqliteKysely<ChangesDatabase>(db);
   executeSqliteQuerySync(
     db,

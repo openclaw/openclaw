@@ -73,14 +73,11 @@ async function withSessionUsageDiagnosticSource<
   read: (scoped: Params, sessionFile: string) => Promise<Result>,
 ): Promise<Result | null> {
   const source = await resolveUsageSessionSource(params);
-  if (
-    !source ||
-    (!parseSqliteSessionFileMarker(source.sessionFile) && !fs.existsSync(source.sessionFile))
-  ) {
+  const marker = source && parseSqliteSessionFileMarker(source.sessionFile);
+  if (!source || (!marker && !fs.existsSync(source.sessionFile))) {
     return null;
   }
   const signal = getAsyncWorkSignal();
-  const marker = parseSqliteSessionFileMarker(source.sessionFile);
   const memory =
     marker &&
     captureSessionActorStorageOwner(marker, {
@@ -291,12 +288,11 @@ export async function loadSessionLogs(
   return withSessionUsageDiagnosticSource(params, async (scoped, sessionFile) => {
     const logs: SessionLogEntry[] = [];
     if (scoped.limit !== undefined && scoped.limit !== null) {
-      if (!Number.isFinite(scoped.limit) || scoped.limit <= 0) {
+      if (!Number.isInteger(scoped.limit) || scoped.limit <= 0) {
         return [];
       }
     }
     const limit = scoped.limit ?? 50;
-    const boundedLimit = Number.isInteger(limit);
     const retentionLimit = limit * 2;
     const agentDir = resolveAgentDir(scoped.config ?? {}, scoped.agentId);
     const resolveCost = createUsageCostResolver({ config: scoped.config, agentDir });
@@ -389,7 +385,6 @@ export async function loadSessionLogs(
           content = truncateUtf16Safe(content, maxLen) + "…";
         }
       } catch {
-        // Ignore malformed records.
         continue;
       }
 
@@ -410,7 +405,7 @@ export async function loadSessionLogs(
       });
       // Timestamps can arrive out of order, so keep a bounded sorted window instead
       // of relying on transcript append order or retaining the whole file.
-      if (boundedLimit && logs.length > retentionLimit) {
+      if (logs.length > retentionLimit) {
         logs.sort((a, b) => a.timestamp - b.timestamp);
         logs.splice(0, logs.length - limit);
       }

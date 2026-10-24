@@ -45,6 +45,31 @@ afterEach(async () => {
 });
 
 describe("audit event writer", () => {
+  it("rejects one uncloneable event without disabling later audit records", async () => {
+    const stateDir = tempDirs.make("openclaw-audit-writer-invalid-event-");
+    const errors: string[] = [];
+    const writer = createAuditEventWriter({
+      scheduler: createTestGatewayScheduler(),
+      stateDir,
+      onError: (error) => errors.push(error),
+    });
+    try {
+      await writer.ready;
+      expect(writer.record({ ...input(), sourceId: "before", runId: "before" })).toBe(true);
+      const invalid = { ...input(), uncloneable: () => {} };
+      expect(writer.record(invalid)).toBe(false);
+      expect(writer.record({ ...input(), sourceId: "after", runId: "after" })).toBe(true);
+    } finally {
+      await writer.stop();
+    }
+    expect(errors).toHaveLength(1);
+    expect(
+      (
+        await listAuditEvents({ database: { env: { OPENCLAW_STATE_DIR: stateDir } }, limit: 10 })
+      ).events.map((event) => event.runId),
+    ).toEqual(["after", "before"]);
+  });
+
   it("preserves external supervision for claimed state writes", async () => {
     const stateDir = tempDirs.make("openclaw-audit-writer-external-");
     const supervisedDatabase = {

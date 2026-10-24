@@ -1,11 +1,12 @@
-import type { DatabaseSync } from "node:sqlite";
 import {
   resolveSqliteTranscriptScope,
   toDatabaseOptions,
 } from "../../config/sessions/session-accessor.sqlite-scope.js";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions/types.js";
-import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
+import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
+import { bindSqliteWorkerDatabase } from "../../infra/sqlite-worker-binding.js";
 import type { SqliteWorkerBackend } from "../../infra/sqlite-worker-contract.js";
+import type { SqliteWorkerDatabaseContext } from "../../infra/sqlite-worker-database-context.js";
 import { getSqliteWorkerStateContext } from "../../infra/sqlite-worker-state-context.js";
 import { runOpenClawAgentWriteTransaction } from "../../state/openclaw-agent-db.js";
 import type { PreparedTranscriptCommit } from "./transcript-commit-policy.js";
@@ -37,19 +38,11 @@ export type WorkerTranscriptOperations = {
 /** The canonical agent actor owns the connection and writer admission. */
 export function bindSqliteWorkerBackend(
   _input: undefined,
-  context: {
-    databasePath: string;
-    database: DatabaseSync;
-    admit(stage: "transaction" | "commit"): void;
-  },
+  context: SqliteWorkerDatabaseContext,
 ): SqliteWorkerBackend<WorkerTranscriptOperations> {
   let prepared: { input: TranscriptCommitInput; plan: PreparedTranscriptCommit } | undefined;
-  let closed = false;
-  return {
+  return bindSqliteWorkerDatabase<WorkerTranscriptOperations>(context.database, {
     execute(command) {
-      if (closed) {
-        throw new Error("Worker transcript domain is closed");
-      }
       if (command.type === "transcript.prepare") {
         if (prepared) {
           throw new Error("Worker transcript batch is already prepared");
@@ -65,7 +58,7 @@ export function bindSqliteWorkerBackend(
         if (command.input.scope.storePath !== context.databasePath) {
           throw new Error("Worker transcript target changed its database owner");
         }
-        const plan = runSqliteDeferredTransactionSync(context.database, () =>
+        const plan = runSqliteReadSnapshotSync(context.database, () =>
           prepareTranscriptCommit(input),
         );
         prepared = { input, plan };
@@ -102,14 +95,8 @@ export function bindSqliteWorkerBackend(
         { operationLabel: "worker.transcript.commit" },
       );
     },
-    assertSettled() {
-      if (context.database.isTransaction) {
-        throw new Error("Worker transcript command left a transaction open");
-      }
-    },
     close() {
-      closed = true;
       prepared = undefined;
     },
-  };
+  });
 }

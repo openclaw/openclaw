@@ -110,11 +110,9 @@ export function createWorkerPlacementDiskSpaceMonitor(params: {
   environments: Pick<WorkerEnvironmentService, "startTunnel">;
   runnerAvailability: Pick<WorkerPlacementRunnerAvailabilityReader, "read" | "version">;
   warn: (message: string) => void;
-  now?: () => number;
 }) {
   const observations = new Map<string, DiskSpaceObservation>();
   const staleBindings = new Map<string, ActivePlacement>();
-  const now = params.now ?? Date.now;
   let observationVersion = 0;
   let dirty = true;
   let nextSweepAtMs = 0;
@@ -127,7 +125,8 @@ export function createWorkerPlacementDiskSpaceMonitor(params: {
       : undefined;
   };
 
-  const probe = async (placement: ActivePlacement): Promise<void> => {
+  const probe = async (placement: ActivePlacement, signal?: AbortSignal): Promise<void> => {
+    signal?.throwIfAborted();
     // A stale worker build cannot recover until its placement binding changes.
     const stale = staleBindings.get(placement.sessionId);
     if (stale && hasExactBinding(stale, placement)) {
@@ -143,25 +142,29 @@ export function createWorkerPlacementDiskSpaceMonitor(params: {
       hasExactBinding(previousObservation, placement) &&
       previousObservation.updatedAtMs === placement.updatedAtMs &&
       previousObservation.runnerVersion === runnerVersion &&
-      now() - previousObservation.snapshot.observedAtMs < IDLE_DISK_SPACE_REFRESH_MS
+      Date.now() - previousObservation.snapshot.observedAtMs < IDLE_DISK_SPACE_REFRESH_MS
     ) {
       return;
     }
     const tunnel = await params.environments.startTunnel({
       environmentId: placement.environmentId,
       ownerEpoch: placement.activeOwnerEpoch,
+      authorize: () => signal?.throwIfAborted(),
     });
+    signal?.throwIfAborted();
     const result = await tunnel.runWorkspaceCommand({
+      signal,
       transportRetry: "idempotent",
       argv: ["node", "-e", REMOTE_DISK_SPACE_PROBE_JS, placement.remoteWorkspaceDir],
       timeoutMs: DISK_SPACE_PROBE_TIMEOUT_MS,
     });
+    signal?.throwIfAborted();
     if (result.termination !== "exit" || result.code !== 0) {
       throw new Error("Worker disk-space check command failed");
     }
     const snapshot = parseDiskSpaceProbe(
       result.stdout,
-      Math.max(0, Math.min(Number.MAX_SAFE_INTEGER, Math.floor(now()))),
+      Math.max(0, Math.min(Number.MAX_SAFE_INTEGER, Math.floor(Date.now()))),
     );
     const candidate = { ...placement, snapshot, runnerVersion } satisfies DiskSpaceObservation;
     // Late samples remain tagged with their original binding; read() hides them after a move.
@@ -184,10 +187,13 @@ export function createWorkerPlacementDiskSpaceMonitor(params: {
     }
   };
 
-  const sweep = async (): Promise<void> => {
+  const sweep = async (signal?: AbortSignal): Promise<void> => {
+    if (signal?.aborted) {
+      return;
+    }
     if (
       !dirty &&
-      now() < nextSweepAtMs &&
+      Date.now() < nextSweepAtMs &&
       lastRunnerVersion === params.runnerAvailability.version()
     ) {
       return;
@@ -195,7 +201,7 @@ export function createWorkerPlacementDiskSpaceMonitor(params: {
     // Receipts during the awaited inventory/probes must survive this pass.
     dirty = false;
     lastRunnerVersion = params.runnerAvailability.version();
-    nextSweepAtMs = now() + DISK_SPACE_RETRY_MS;
+    nextSweepAtMs = Date.now() + DISK_SPACE_RETRY_MS;
     const inventory = await params.placements.prepareMaintenancePlacements();
     let active: ActivePlacement[];
     try {
@@ -204,6 +210,10 @@ export function createWorkerPlacementDiskSpaceMonitor(params: {
       );
     } finally {
       inventory.release();
+    }
+    if (signal?.aborted) {
+      dirty = true;
+      return;
     }
     const activeBySession = new Map(active.map((placement) => [placement.sessionId, placement]));
     for (const [sessionId, observation] of observations) {
@@ -217,11 +227,15 @@ export function createWorkerPlacementDiskSpaceMonitor(params: {
         staleBindings.delete(sessionId);
       }
     }
-    const tasks = active.map((placement) => () => probe(placement));
+    const tasks = active.map((placement) => () => probe(placement, signal));
     await runTasksWithConcurrency({
       tasks,
       limit: DISK_SPACE_PROBE_CONCURRENCY,
       onTaskError: (error, index) => {
+        if (signal?.aborted && error === signal.reason) {
+          dirty = true;
+          return;
+        }
         const placement = active[index];
         if (placement && error instanceof StaleWorkerBuildError) {
           staleBindings.set(placement.sessionId, { ...placement });
@@ -244,10 +258,10 @@ export function createWorkerPlacementDiskSpaceMonitor(params: {
         const observation = observations.get(placement.sessionId);
         return observation && hasExactBinding(observation, placement)
           ? Math.max(
-              now() + DISK_SPACE_RETRY_MS,
+              Date.now() + DISK_SPACE_RETRY_MS,
               observation.snapshot.observedAtMs + IDLE_DISK_SPACE_REFRESH_MS,
             )
-          : now() + DISK_SPACE_RETRY_MS;
+          : Date.now() + DISK_SPACE_RETRY_MS;
       }),
     );
   };
@@ -260,7 +274,7 @@ export function createWorkerPlacementDiskSpaceMonitor(params: {
     },
     nextSweepAtMs: () =>
       dirty || lastRunnerVersion !== params.runnerAvailability.version()
-        ? now() + DISK_SPACE_RETRY_MS
+        ? Date.now() + DISK_SPACE_RETRY_MS
         : nextSweepAtMs,
     version: () => observationVersion,
   };

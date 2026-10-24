@@ -50,8 +50,14 @@ export const zh_TW = {
       modelAlias: "模型別名（選填）",
       modelAliasPlaceholder: "例如 local、ollama",
       modelId: "模型 ID",
+      modelIdManual: "手動輸入模型 ID",
+      modelDiscoveryUnavailable: "無法從此端點探索模型。請檢查基礎 URL 和憑證，或手動輸入模型 ID。",
       modelIdPlaceholder: "例如 llama3、claude-3-7-sonnet",
       modelIdRequired: "模型 ID 必填",
+      noAuthConfirm:
+        "未輸入 API Key。是否將該端點設為免驗證模式（請求不發送 Authorization 標頭）？",
+      noAuthCompatKeyRequired:
+        "免驗證模式僅支援 OpenAI Chat Completions 端點。請輸入 API Key（若伺服器不驗證金鑰，可填入任意佔位符）。",
       retryChoice: "你想修改哪一項？",
       verifying: "正在驗證...",
       verificationFailedError: "驗證失敗：{error}",
@@ -206,6 +212,8 @@ export const zh_TW = {
       returningToSelection: "返回選擇。",
       arrayPromptSuffix: "（逗號分隔，留空則清除）",
       arrayPlaceholder: "value1, value2",
+      invalidInteger: "請輸入 JSON 整數。",
+      invalidNumber: "請輸入有效的 JSON 數字。",
       sensitiveField:
         '"{label}" 是敏感欄位。請透過以下方式設定：\n  openclaw config set plugins.entries.{plugin}.config.{field} <value>\n或使用 Web UI 設定頁。',
       sensitiveTitle: "敏感欄位",

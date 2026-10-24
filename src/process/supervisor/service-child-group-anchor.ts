@@ -202,6 +202,7 @@ export function runServiceChildGroupAnchor(): void {
     closeInheritedLineage();
     await send({
       type: "startup-error",
+      anchorPid: process.pid,
       error: error instanceof Error ? error.message : error,
       ...(error instanceof Error ? { errorDetails: serializeBrokerError(error) } : {}),
     });
@@ -253,7 +254,7 @@ export function runServiceChildGroupAnchor(): void {
         while (
           !subreaper.drain(forceCleanup || Date.now() >= cleanupDeadline ? "SIGKILL" : "SIGTERM")
         ) {
-          // Yield so libuv can consume its one direct root. Adopted children stay
+          // Yield so the runtime can consume its one direct root. Adopted children stay
           // with the native wait owner even after the caller gives up waiting.
           await delay(10, true);
         }
@@ -575,7 +576,7 @@ export function runServiceChildGroupAnchor(): void {
         windowsHide: true,
       });
       if (command.pid) {
-        subreaper?.retainLibuvChild(command.pid, command);
+        subreaper?.retainSpawnedChild(command.pid, command);
       }
       // Failed Bun spawns have no stdio. Preserve the spawn error before checking lineage.
       await once(command, "spawn");

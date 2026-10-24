@@ -1,3 +1,6 @@
+// This suite owns wizard-to-discovery cancellation. Context-enrichment
+// cancellation stays in setup-model-selection.test.ts: the default enrichment
+// path is separate from the wizard's tool inspection.
 import type { WizardPrompter } from "openclaw/plugin-sdk/setup";
 import { requestUrl } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";

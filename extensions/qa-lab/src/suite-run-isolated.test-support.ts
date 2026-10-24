@@ -8,7 +8,7 @@ import { createTempDirHarness } from "./temp-dir.test-helper.js";
 
 export { mocks } from "./suite-run-isolated.test-mocks.js";
 
-export const tempDirs = createTempDirHarness();
+const tempDirs = createTempDirHarness();
 let testOutputDir: string;
 
 export function createCleanupTestLab(): QaLabServerHandle {

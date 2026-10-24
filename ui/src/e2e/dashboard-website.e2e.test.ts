@@ -97,13 +97,18 @@ suite.define(() => {
         });
         await catalogRow.hover();
         await catalogRow.getByRole("button", { name: "Pin", exact: true }).click();
-        const pinned = sidebar.locator(
-          `.sidebar-rail__pin[data-sidebar-entry="session:${sessionKey}"]`,
-        );
-        await pinned.getByRole("link", { name: "Service status", exact: true }).waitFor();
         expect(await catalogRow.getByRole("button", { name: "Unpin", exact: true }).count()).toBe(
           1,
         );
+        const showView = (name: "Pages" | "Sessions") =>
+          sidebar.locator(".sidebar-rail").getByRole("button", { name, exact: true }).click();
+        // Pinned dashboards join the Sessions list's Pinned section, not the rail.
+        expect(await sidebar.locator(".sidebar-rail__pin").count()).toBe(0);
+        await showView("Sessions");
+        const pinned = sidebar
+          .locator(`[data-session-section="pinned"] [data-session-key="${sessionKey}"]`)
+          .locator("a.sidebar-recent-session__link");
+        await pinned.getByText("Service status", { exact: true }).waitFor();
         expect(await gateway.getRequests("sessions.patch")).toHaveLength(0);
         await content.getByRole("textbox", { name: "Status note" }).fill("Keep this note");
         const originalFrame = await frame.elementHandle();
@@ -156,9 +161,11 @@ suite.define(() => {
         });
         await page.mouse.move(0, 0);
         await page.screenshot({ path: `${suite.artifactDir}/website-expanded.png` });
-        await pages.getByRole("link", { name: "Agents", exact: true }).click();
-        await page.waitForURL(`${suite.server.baseUrl}agents`);
-        await pinned.getByRole("link", { name: "Service status", exact: true }).click();
+        await showView("Pages");
+        await pages.getByRole("link", { name: "Sessions", exact: true }).click();
+        await page.waitForURL(`${suite.server.baseUrl}sessions`);
+        await showView("Sessions");
+        await pinned.click();
         await frame.waitFor();
         await expect.poll(() => page.locator(".sidebar-region--expanded").count()).toBe(1);
         expect(await content.getByRole("textbox", { name: "Status note" }).inputValue()).toBe(
@@ -178,10 +185,38 @@ suite.define(() => {
             page.locator(".shell-nav").evaluate((element) => element.getBoundingClientRect().right),
           )
           .toBeLessThanOrEqual(0);
-        await expect.poll(viewportFits).toBe(true);
+        const host = page.locator(".chat-mobile-host");
+        await page.locator('.chat-mobile-host[data-mode="dock"]').waitFor();
+        await page.locator('.sidebar-region__primary[data-region="main"] .chat-thread').waitFor();
+        const dockHeight = (await host.boundingBox())!.height;
+        await selectChatLayoutAction(page, "Focus");
+        await page.locator('.chat-mobile-host[data-mode="expanded"]').waitFor();
+        await expect
+          .poll(async () => (await host.boundingBox())!.height)
+          .toBeGreaterThan(dockHeight);
+        const mobileViewport = await frame.evaluate((element) => {
+          const outer = element.closest(".chat-mobile-host__panels")!.getBoundingClientRect();
+          const inner = element.getBoundingClientRect();
+          return {
+            width: inner.width,
+            visibleHeight: Math.min(inner.bottom, outer.bottom) - Math.max(inner.top, outer.top),
+            contained: inner.left >= outer.left - 1 && inner.right <= outer.right + 1,
+          };
+        });
+        expect(mobileViewport.width).toBeGreaterThan(280);
+        expect(mobileViewport.visibleHeight).toBeGreaterThan(200);
+        expect(mobileViewport.contained).toBe(true);
+        expect(
+          await frame.evaluate((element, previous) => element === previous, originalFrame),
+        ).toBe(true);
         await page.screenshot({ path: `${suite.artifactDir}/website-mobile.png` });
         expect(await gateway.getRequests("board.data.read")).toHaveLength(0);
         await selectChatLayoutAction(page, "Restore split");
+        await page.locator('.chat-mobile-host[data-mode="dock"]').waitFor();
+        await selectChatLayoutAction(page, "Minimize side panel");
+        await frame.waitFor({ state: "hidden" });
+        await page.locator('.sidebar-region__primary[data-region="main"] .chat-thread').waitFor();
+        await selectChatLayoutAction(page, "Side panel");
         await content.getByRole("textbox", { name: "Status note" }).waitFor();
         expect(await content.getByRole("textbox", { name: "Status note" }).inputValue()).toBe(
           "Keep this note",
@@ -192,7 +227,10 @@ suite.define(() => {
         expect((await files.boundingBox())!.width).toBeGreaterThanOrEqual(390 - 24);
         expect(await frame.isVisible()).toBe(false);
         await page.getByRole("button", { name: "Close Files", exact: true }).click();
+        await selectChatLayoutAction(page, "Dashboard");
         await frame.waitFor();
+        await selectChatLayoutAction(page, "Focus");
+        await page.locator('.chat-mobile-host[data-mode="expanded"]').waitFor();
         expect(
           await frame.evaluate((element, previous) => element === previous, originalFrame),
         ).toBe(true);

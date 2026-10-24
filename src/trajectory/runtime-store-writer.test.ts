@@ -16,7 +16,10 @@ import {
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
 import { runOpenClawAgentWriteAdmission } from "../state/openclaw-agent-write-admission.js";
-import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import {
+  type OpenClawTestState,
+  withOpenClawTestState,
+} from "../test-utils/openclaw-test-state.js";
 import { createSqliteTrajectoryRuntimeSink } from "./runtime-store-writer.js";
 import {
   loadSqliteTrajectoryRuntimeEvents,
@@ -31,6 +34,7 @@ const delivery = vi.hoisted(() => ({
   afterResult: undefined as (() => void) | undefined,
   settlement: undefined as Promise<SqliteWorkerOperationSettlement> | undefined,
   hideCommit: false,
+  appendCalls: 0,
 }));
 vi.mock("../state/openclaw-agent-execution.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../state/openclaw-agent-execution.js")>();
@@ -67,6 +71,7 @@ vi.mock("../state/openclaw-agent-execution.js", async (importOriginal) => {
               operation({
                 execute: async (command, commandOptions) => {
                   if (command.type === "trajectory.events.append") {
+                    delivery.appendCalls += 1;
                     const before = delivery.beforeAppend;
                     delivery.beforeAppend = undefined;
                     await before?.();
@@ -143,27 +148,91 @@ afterEach(() => {
   delivery.afterResult = undefined;
   delivery.settlement = undefined;
   delivery.hideCommit = false;
+  delivery.appendCalls = 0;
   vi.restoreAllMocks();
 });
 
-it("persists repeated events and retains the worker owner without a main-thread database", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+type Target = { agentId: string; sessionId: string; sessionKey: string; storePath: string };
+
+function withTrajectoryState(
+  sessionId: string,
+  run: (fixture: { state: OpenClawTestState; target: Target }) => Promise<void>,
+  initial: { activeWriterRunId?: string } = {},
+) {
+  return withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const target = {
       agentId: "main",
-      sessionId: "trajectory-duplicates",
-      sessionKey: "agent:main:trajectory-duplicates",
+      sessionId,
+      sessionKey: `agent:main:${sessionId}`,
       storePath: state.statePath("agents", "main", "agent.sqlite"),
     };
-    await replaceSessionEntry(target, { sessionId: target.sessionId, updatedAt: 1 });
+    await replaceSessionEntry(target, { sessionId, updatedAt: 1, ...initial });
+    return run({ state, target });
+  });
+}
+
+function pauseAppend(error?: Error, hideCommit = false) {
+  const committed = createDeferredCore();
+  const settlement = createDeferredCore<SqliteWorkerOperationSettlement>();
+  delivery.settlement = settlement.promise;
+  delivery.hideCommit = hideCommit;
+  delivery.afterResult = () => {
+    committed.resolve();
+    if (error) {
+      throw error;
+    }
+  };
+  return { committed, settlement };
+}
+
+function observe(result: Promise<void>) {
+  return result.then(
+    () => ({ ok: true as const }),
+    (error: unknown) => ({ ok: false as const, error }),
+  );
+}
+
+async function createRecorder(
+  target: Target,
+  options: Pick<
+    Parameters<typeof createTrajectoryRuntimeRecorder>[0],
+    "maxRuntimeFileBytes" | "assertCommitAllowed"
+  > = {},
+) {
+  const recorder = await createTrajectoryRuntimeRecorder({
+    sessionId: target.sessionId,
+    sessionKey: target.sessionKey,
+    sessionTarget: target,
+    ...options,
+  });
+  assert(recorder);
+  return recorder;
+}
+
+async function createSink(
+  state: OpenClawTestState,
+  target: Target,
+  maxRuntimeFileBytes = 1024 * 1024,
+) {
+  const sink = await createSqliteTrajectoryRuntimeSink({
+    env: state.env,
+    sessionId: target.sessionId,
+    sessionTarget: target,
+    maxRuntimeFileBytes,
+  });
+  assert(sink);
+  return sink;
+}
+
+async function eventTypes(target: Target) {
+  return (await loadSqliteTrajectoryRuntimeEvents(target)).map((event) => event.type);
+}
+
+it("persists repeated events and retains the worker owner without a main-thread database", async () => {
+  await withTrajectoryState("trajectory-duplicates", async ({ target, state }) => {
     const databaseOptions = { agentId: target.agentId, path: target.storePath, env: state.env };
     expect(getOpenClawAgentDatabaseIfOpen(databaseOptions)).toBeUndefined();
-    const sink = await createSqliteTrajectoryRuntimeSink({
-      env: state.env,
-      sessionId: target.sessionId,
-      sessionTarget: target,
-      maxRuntimeFileBytes: 1024 * 1024,
-    });
-    assert(sink);
+    const sink = await createSink(state, target);
     const event = createTrajectoryEvent({ type: "repeated", sessionId: target.sessionId });
     const line = JSON.stringify(event);
     sink.write(event, line);
@@ -186,30 +255,46 @@ it("persists repeated events and retains the worker owner without a main-thread 
   });
 });
 
+it("keeps a large eight-event turn in one append across writer yields", async () => {
+  await withTrajectoryState("trajectory-large-turn", async ({ target, state }) => {
+    const sink = await createSink(state, target);
+    const events = Array.from({ length: 8 }, (_, index) =>
+      createTrajectoryEvent({
+        type: index === 7 ? "session.ended" : "context.compiled",
+        sessionId: target.sessionId,
+        seq: index,
+        payloadSize: 54_000,
+      }),
+    );
+    const lines = events.map((event) => JSON.stringify(event));
+    for (const [index, event] of events.entries()) {
+      sink.write(event, lines[index]!);
+      if (index === 5) {
+        // Let any early background append settle before the turn's terminal events.
+        await runOpenClawAgentWriteAdmission(
+          { agentId: target.agentId, path: target.storePath, env: state.env },
+          () => {},
+        );
+      }
+    }
+    await sink.flush();
+    expect(delivery.appendCalls).toBe(1);
+    expect(
+      (await loadSqliteTrajectoryRuntimeEvents(target)).map((event) => JSON.stringify(event)),
+    ).toEqual(lines);
+    expect(sink.describeFlushState()).toBeUndefined();
+  });
+});
+
 it("reuses committed trajectory facts across metadata writes and clears them after lifecycle deletion", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const target = {
-      agentId: "main",
-      sessionId: "trajectory-window",
-      sessionKey: "agent:main:trajectory-window",
-      storePath: state.statePath("agents", "main", "agent.sqlite"),
-    };
-    await replaceSessionEntry(target, { sessionId: target.sessionId, updatedAt: 1 });
+  await withTrajectoryState("trajectory-window", async ({ target, state }) => {
     const events = ["first", "later", "final"].map((type) =>
       createTrajectoryEvent({ type, sessionId: target.sessionId }),
     );
     const maxRuntimeFileBytes = events
       .slice(0, 2)
       .reduce((bytes, event) => bytes + Buffer.byteLength(JSON.stringify(event), "utf8") + 1, 0);
-    const createSink = () =>
-      createSqliteTrajectoryRuntimeSink({
-        env: state.env,
-        sessionId: target.sessionId,
-        sessionTarget: target,
-        maxRuntimeFileBytes,
-      });
-    const sink = await createSink();
-    assert(sink);
+    const sink = await createSink(state, target, maxRuntimeFileBytes);
     const flush = async (event: (typeof events)[number]) => {
       sink.write(event, JSON.stringify(event));
       await sink.flush();
@@ -227,8 +312,7 @@ it("reuses committed trajectory facts across metadata writes and clears them aft
       deleteTranscriptWithoutArchive: true,
     });
     await replaceSessionEntry(target, { sessionId: target.sessionId, updatedAt: 3 });
-    const replacement = await createSink();
-    assert(replacement);
+    const replacement = await createSink(state, target, maxRuntimeFileBytes);
     replacement.write(events[0]!, JSON.stringify(events[0]));
     await replacement.flush();
     await retention.accepted;
@@ -239,87 +323,72 @@ it("reuses committed trajectory facts across metadata writes and clears them aft
 });
 
 it("rolls back the successful attempt's diagnostic prefix with its terminal event and retries once", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const target = {
-      agentId: "main",
-      sessionId: "trajectory-terminal-batch",
-      sessionKey: "agent:main:trajectory-terminal-batch",
-      storePath: state.statePath("agents", "main", "agent.sqlite"),
-    };
-    const original = {
-      sessionId: target.sessionId,
-      updatedAt: 1,
-      activeWriterRunId: "trajectory-run",
-    };
-    await replaceSessionEntry(target, original);
-    const recorder = await createTrajectoryRuntimeRecorder({
-      sessionId: target.sessionId,
-      sessionKey: target.sessionKey,
-      sessionTarget: target,
-    });
-    assert(recorder);
-    const owner = createEmbeddedAttemptDeferredLifecycleOwner({
-      runId: "trajectory-run",
-      sessionId: target.sessionId,
-      diagnosticOwner: createDiagnosticEmbeddedRunOwner({
+  await withTrajectoryState(
+    "trajectory-terminal-batch",
+    async ({ target }) => {
+      const original = {
+        sessionId: target.sessionId,
+        updatedAt: 1,
+        activeWriterRunId: "trajectory-run",
+      };
+      const recorder = await createRecorder(target);
+      const owner = createEmbeddedAttemptDeferredLifecycleOwner({
         runId: "trajectory-run",
         sessionId: target.sessionId,
-      }),
-      isCurrent: () => true,
-      onRetryWaitCompleted: () => {},
-      trajectoryRecorder: recorder,
-      clearActiveRun: () => {},
-    });
-    recorder.recordEvent("model.completed");
-    recorder.recordEvent("trace.artifacts");
-    owner.recordSessionEnd({ status: "success" });
-    await cleanupEmbeddedAttemptSessionPhase({
-      attempt: { sessionId: target.sessionId, runId: "trajectory-run" },
-      trajectoryRecorder: recorder,
-      trajectoryEndRecorded: true,
-      deferredLifecycleOwner: owner,
-      buildAbortSettlePromise: () => null,
-      state: { terminal: { kind: "ok" }, beforeAgentRunBlockedBy: undefined },
-      transcriptLifecycle: { beginCleanup: async () => {}, dispose: async () => {} },
-    });
-    const databaseOptions = { agentId: target.agentId, path: target.storePath };
-    const database = await runOpenClawAgentWriteAdmission(databaseOptions, () => {
-      const admittedDatabase = openOpenClawAgentDatabase(databaseOptions);
-      admittedDatabase.db.exec(`CREATE TRIGGER reject_trajectory_terminal
+        diagnosticOwner: createDiagnosticEmbeddedRunOwner({
+          runId: "trajectory-run",
+          sessionId: target.sessionId,
+        }),
+        isCurrent: () => true,
+        onRetryWaitCompleted: () => {},
+        trajectoryRecorder: recorder,
+        clearActiveRun: () => {},
+      });
+      recorder.recordEvent("model.completed");
+      recorder.recordEvent("trace.artifacts");
+      owner.recordSessionEnd({ status: "success" });
+      await cleanupEmbeddedAttemptSessionPhase({
+        attempt: { sessionId: target.sessionId, runId: "trajectory-run" },
+        trajectoryRecorder: recorder,
+        trajectoryEndRecorded: true,
+        deferredLifecycleOwner: owner,
+        buildAbortSettlePromise: () => null,
+        state: { terminal: { kind: "ok" }, beforeAgentRunBlockedBy: undefined },
+        transcriptLifecycle: { beginCleanup: async () => {}, dispose: async () => {} },
+      });
+      const databaseOptions = { agentId: target.agentId, path: target.storePath };
+      const database = await runOpenClawAgentWriteAdmission(databaseOptions, () => {
+        const admittedDatabase = openOpenClawAgentDatabase(databaseOptions);
+        admittedDatabase.db.exec(`CREATE TRIGGER reject_trajectory_terminal
         BEFORE INSERT ON trajectory_runtime_events
         WHEN NEW.event_json LIKE '%"type":"session.ended"%'
         BEGIN SELECT RAISE(ABORT, 'synthetic terminal append failure'); END`);
-      return admittedDatabase;
-    });
-    try {
-      await owner.complete();
-      expect(await loadSqliteTrajectoryRuntimeEvents(target)).toEqual([]);
-      expect(loadSessionEntry(target)).toMatchObject(original);
-      expect(recorder.describeFlushState()).toContain("pendingRows=3");
-    } finally {
-      await runOpenClawAgentWriteAdmission(databaseOptions, () => {
-        database.db.exec("DROP TRIGGER reject_trajectory_terminal");
+        return admittedDatabase;
       });
-    }
-    await recorder.flush();
-    expect((await loadSqliteTrajectoryRuntimeEvents(target)).map((event) => event.type)).toEqual([
-      "model.completed",
-      "trace.artifacts",
-      "session.ended",
-    ]);
-    expect(recorder.describeFlushState()).toBeUndefined();
-  });
+      try {
+        await owner.complete();
+        expect(await loadSqliteTrajectoryRuntimeEvents(target)).toEqual([]);
+        expect(loadSessionEntry(target)).toMatchObject(original);
+        expect(recorder.describeFlushState()).toContain("pendingRows=3");
+      } finally {
+        await runOpenClawAgentWriteAdmission(databaseOptions, () => {
+          database.db.exec("DROP TRIGGER reject_trajectory_terminal");
+        });
+      }
+      await recorder.flush();
+      expect(await eventTypes(target)).toEqual([
+        "model.completed",
+        "trace.artifacts",
+        "session.ended",
+      ]);
+      expect(recorder.describeFlushState()).toBeUndefined();
+    },
+    { activeWriterRunId: "trajectory-run" },
+  );
 });
 
 it("settles retention during concurrent appends and worker session patches", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const target = {
-      agentId: "main",
-      sessionId: "trajectory-during-retention",
-      sessionKey: "agent:main:trajectory-during-retention",
-      storePath: state.statePath("agents", "main", "agent.sqlite"),
-    };
-    await replaceSessionEntry(target, { sessionId: target.sessionId, updatedAt: 1 });
+  await withTrajectoryState("trajectory-during-retention", async ({ target }) => {
     await replaceSessionEntry(
       { ...target, sessionKey: "agent:main:old-trajectory" },
       { sessionId: "old-trajectory", updatedAt: 1 },
@@ -332,12 +401,7 @@ it("settles retention during concurrent appends and worker session patches", asy
       .prepare(`INSERT INTO trajectory_runtime_events
       (session_id, seq, run_id, event_json, created_at) VALUES (?, 0, 'old-run', ?, 1)`)
       .run("old-trajectory", JSON.stringify({ type: "old" }));
-    const recorder = await createTrajectoryRuntimeRecorder({
-      sessionId: target.sessionId,
-      sessionKey: target.sessionKey,
-      sessionTarget: target,
-    });
-    assert(recorder);
+    const recorder = await createRecorder(target);
     const started = createDeferredCore();
     const release = createDeferredCore();
     retention.beforeRead = async () => {
@@ -355,10 +419,7 @@ it("settles retention during concurrent appends and worker session patches", asy
       recorder.recordEvent("while-retention-reads");
       await recorder.flush();
       expect(retention.reads).toBe(1);
-      expect((await loadSqliteTrajectoryRuntimeEvents(target)).map((event) => event.type)).toEqual([
-        "first",
-        "while-retention-reads",
-      ]);
+      expect(await eventTypes(target)).toEqual(["first", "while-retention-reads"]);
     } finally {
       release.resolve();
       await retention.accepted;
@@ -372,52 +433,24 @@ it("settles retention during concurrent appends and worker session patches", asy
     await recorder.flush();
     await retention.accepted;
     expect(retention.reads).toBe(completedReads);
-    expect((await loadSqliteTrajectoryRuntimeEvents(target)).map((event) => event.type)).toEqual([
-      "first",
-      "while-retention-reads",
-      "same-window",
-    ]);
+    expect(await eventTypes(target)).toEqual(["first", "while-retention-reads", "same-window"]);
   });
 });
 
 it.each(["committed", "unknown"] as const)(
   "settles the captured trajectory prefix before another flush after a lost result (%s)",
   async (outcome) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      const target = {
-        agentId: "main",
-        sessionId: "trajectory-settlement",
-        sessionKey: "agent:main:trajectory-settlement",
-        storePath: state.statePath("agents", "main", "agent.sqlite"),
-      };
-      await replaceSessionEntry(target, { sessionId: target.sessionId, updatedAt: 1 });
-      const recorder = await createTrajectoryRuntimeRecorder({
-        sessionId: target.sessionId,
-        sessionKey: target.sessionKey,
-        sessionTarget: target,
-      });
-      assert(recorder);
+    await withTrajectoryState("trajectory-settlement", async ({ target }) => {
+      const recorder = await createRecorder(target);
       recorder.recordEvent("seed");
       await recorder.flush();
       await retention.accepted;
       recorder.recordEvent("warm");
       await recorder.flush();
       await retention.accepted;
-      const committed = createDeferredCore();
-      const settlement = createDeferredCore<SqliteWorkerOperationSettlement>();
       const failure = new Error("trajectory result was lost after native completion");
-      delivery.settlement = settlement.promise;
-      delivery.hideCommit = outcome === "unknown";
-      delivery.afterResult = () => {
-        committed.resolve();
-        throw failure;
-      };
+      const { committed, settlement } = pauseAppend(failure, outcome === "unknown");
       recorder.recordEvent("first");
-      const observe = (result: Promise<void>) =>
-        result.then(
-          () => ({ ok: true as const }),
-          (error: unknown) => ({ ok: false as const, error }),
-        );
       const first = observe(recorder.flush());
       let next: ReturnType<typeof observe> | undefined;
       try {
@@ -437,16 +470,12 @@ it.each(["committed", "unknown"] as const)(
         if (outcome === "committed") {
           expect(await next).toEqual({ ok: true });
           expect(recorder.describeFlushState()).toBeUndefined();
-          expect(
-            (await loadSqliteTrajectoryRuntimeEvents(target)).map((event) => event.type),
-          ).toEqual(["seed", "warm", "first", "later"]);
+          expect(await eventTypes(target)).toEqual(["seed", "warm", "first", "later"]);
         } else {
           expect(await next).toMatchObject({ ok: false, error: { code: "outcome-unknown" } });
           await expect(recorder.flush()).rejects.toMatchObject({ code: "outcome-unknown" });
           expect(recorder.describeFlushState()).toContain("pendingRows=2");
-          expect(
-            (await loadSqliteTrajectoryRuntimeEvents(target)).map((event) => event.type),
-          ).toEqual(["seed", "warm", "first"]);
+          expect(await eventTypes(target)).toEqual(["seed", "warm", "first"]);
         }
       } finally {
         settlement.resolve({ kind: "completed" });
@@ -458,26 +487,12 @@ it.each(["committed", "unknown"] as const)(
 );
 
 it("bounds 2,000 queued events while a background append awaits settlement", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const target = {
-      agentId: "main",
-      sessionId: "trajectory-long-run",
-      sessionKey: "agent:main:trajectory-long-run",
-      storePath: state.statePath("agents", "main", "agent.sqlite"),
-    };
-    await replaceSessionEntry(target, { sessionId: target.sessionId, updatedAt: 1 });
+  await withTrajectoryState("trajectory-long-run", async ({ target }) => {
     const maxRuntimeFileBytes = 64 * 1024;
-    const recorder = await createTrajectoryRuntimeRecorder({
-      sessionId: target.sessionId,
-      sessionKey: target.sessionKey,
-      sessionTarget: target,
+    const recorder = await createRecorder(target, {
       maxRuntimeFileBytes,
     });
-    assert(recorder);
-    const committed = createDeferredCore();
-    const settlement = createDeferredCore<SqliteWorkerOperationSettlement>();
-    delivery.settlement = settlement.promise;
-    delivery.afterResult = () => committed.resolve();
+    const { committed, settlement } = pauseAppend();
     const recordCalls = (start: number, end: number) => {
       for (let index = start; index < end; index++) {
         recorder.recordEvent("tool.result", { index, text: "synthetic result ".repeat(64) });
@@ -517,29 +532,10 @@ it("bounds 2,000 queued events while a background append awaits settlement", asy
 it.each(["committed", "unknown"] as const)(
   "joins a background append with a lost result before final flushing (%s)",
   async (outcome) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      const target = {
-        agentId: "main",
-        sessionId: "trajectory-background-settlement",
-        sessionKey: "agent:main:trajectory-background-settlement",
-        storePath: state.statePath("agents", "main", "agent.sqlite"),
-      };
-      await replaceSessionEntry(target, { sessionId: target.sessionId, updatedAt: 1 });
-      const recorder = await createTrajectoryRuntimeRecorder({
-        sessionId: target.sessionId,
-        sessionKey: target.sessionKey,
-        sessionTarget: target,
-      });
-      assert(recorder);
-      const committed = createDeferredCore();
-      const settlement = createDeferredCore<SqliteWorkerOperationSettlement>();
+    await withTrajectoryState("trajectory-background-settlement", async ({ target }) => {
+      const recorder = await createRecorder(target);
       const failure = new Error("background trajectory result lost after native completion");
-      delivery.settlement = settlement.promise;
-      delivery.hideCommit = outcome === "unknown";
-      delivery.afterResult = () => {
-        committed.resolve();
-        throw failure;
-      };
+      const { committed, settlement } = pauseAppend(failure, outcome === "unknown");
       for (let index = 0; index < 32; index++) {
         recorder.recordEvent("before-settlement", { index });
       }
@@ -570,19 +566,10 @@ it.each(["committed", "unknown"] as const)(
 it.each([3_000, 6_000])(
   "expires durable rows when a %i-character queued prefix is evicted before append",
   async (chars) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      const target = {
-        agentId: "main",
-        sessionId: "trajectory-evicted-prefix",
-        sessionKey: "agent:main:trajectory-evicted-prefix",
-        storePath: state.statePath("agents", "main", "agent.sqlite"),
-      };
+    await withTrajectoryState("trajectory-evicted-prefix", async ({ target }) => {
       await replaceSessionEntry(target, { sessionId: target.sessionId, updatedAt: 1 });
       let allowCommit = true;
-      const recorder = await createTrajectoryRuntimeRecorder({
-        sessionId: target.sessionId,
-        sessionKey: target.sessionKey,
-        sessionTarget: target,
+      const recorder = await createRecorder(target, {
         maxRuntimeFileBytes: 4_096,
         assertCommitAllowed: () => {
           if (!allowCommit) {
@@ -590,7 +577,6 @@ it.each([3_000, 6_000])(
           }
         },
       });
-      assert(recorder);
       recorder.recordEvent("durable-prefix", { text: "a".repeat(1_000) });
       await recorder.flush();
       const durableSeq = loadSqliteTrajectoryRuntimeEventRowsSync(target).at(-1)!.seq;
@@ -598,14 +584,10 @@ it.each([3_000, 6_000])(
       recorder.recordEvent("newest", { text: "c".repeat(1_500) });
       allowCommit = false;
       await expect(recorder.flush()).rejects.toThrow("synthetic trajectory refusal");
-      expect((await loadSqliteTrajectoryRuntimeEvents(target)).map((event) => event.type)).toEqual([
-        "durable-prefix",
-      ]);
+      expect(await eventTypes(target)).toEqual(["durable-prefix"]);
       allowCommit = true;
       await recorder.flush();
-      expect((await loadSqliteTrajectoryRuntimeEvents(target)).map((event) => event.type)).toEqual([
-        "newest",
-      ]);
+      expect(await eventTypes(target)).toEqual(["newest"]);
       expect(
         loadSqliteTrajectoryRuntimeEventRowsSync({ ...target, afterSeq: durableSeq }).map(
           ({ event }) => event.type,
@@ -616,29 +598,13 @@ it.each([3_000, 6_000])(
 );
 
 it("keeps later queue evictions after a captured append settles", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const target = {
-      agentId: "main",
-      sessionId: "trajectory-overlapping-eviction",
-      sessionKey: "agent:main:trajectory-overlapping-eviction",
-      storePath: state.statePath("agents", "main", "agent.sqlite"),
-    };
-    await replaceSessionEntry(target, { sessionId: target.sessionId, updatedAt: 1 });
-    const recorder = await createTrajectoryRuntimeRecorder({
-      sessionId: target.sessionId,
-      sessionKey: target.sessionKey,
-      sessionTarget: target,
-      maxRuntimeFileBytes: 4_096,
-    });
-    assert(recorder);
+  await withTrajectoryState("trajectory-overlapping-eviction", async ({ target }) => {
+    const recorder = await createRecorder(target, { maxRuntimeFileBytes: 4_096 });
     recorder.recordEvent("durable-prefix", { text: "a".repeat(1_000) });
     await recorder.flush();
     recorder.recordEvent("evicted-before", { text: "b".repeat(3_000) });
     recorder.recordEvent("first-committed", { text: "c".repeat(1_500) });
-    const committed = createDeferredCore();
-    const settlement = createDeferredCore<SqliteWorkerOperationSettlement>();
-    delivery.settlement = settlement.promise;
-    delivery.afterResult = () => committed.resolve();
+    const { committed, settlement } = pauseAppend();
     const first = recorder.flush();
     try {
       await committed.promise;
@@ -649,30 +615,15 @@ it("keeps later queue evictions after a captured append settles", async () => {
       await first;
     }
     await recorder.flush();
-    expect((await loadSqliteTrajectoryRuntimeEvents(target)).map((event) => event.type)).toEqual([
-      "newest",
-    ]);
+    expect(await eventTypes(target)).toEqual(["newest"]);
   });
 });
 
 it.each(["committed", "refused"] as const)(
   "keeps the newest two rows when C arrives during an A/B append (%s)",
   async (outcome) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      const target = {
-        agentId: "main",
-        sessionId: "trajectory-abc",
-        sessionKey: "agent:main:trajectory-abc",
-        storePath: state.statePath("agents", "main", "agent.sqlite"),
-      };
-      await replaceSessionEntry(target, { sessionId: target.sessionId, updatedAt: 1 });
-      const recorder = await createTrajectoryRuntimeRecorder({
-        sessionId: target.sessionId,
-        sessionKey: target.sessionKey,
-        sessionTarget: target,
-        maxRuntimeFileBytes: 4_096,
-      });
-      assert(recorder);
+    await withTrajectoryState("trajectory-abc", async ({ target }) => {
+      const recorder = await createRecorder(target, { maxRuntimeFileBytes: 4_096 });
       recorder.recordEvent("A", { text: "a".repeat(1_500) });
       recorder.recordEvent("B", { text: "b".repeat(1_500) });
       const admitted = createDeferredCore();
@@ -689,10 +640,7 @@ it.each(["committed", "refused"] as const)(
           throw failure;
         };
       }
-      const first = recorder.flush().then(
-        () => ({ ok: true as const }),
-        (error: unknown) => ({ ok: false as const, error }),
-      );
+      const first = observe(recorder.flush());
       try {
         await admitted.promise;
         recorder.recordEvent("C", { text: "c".repeat(1_500) });
@@ -704,10 +652,7 @@ it.each(["committed", "refused"] as const)(
         outcome === "committed" ? { ok: true } : { ok: false, error: failure },
       );
       await recorder.flush();
-      expect((await loadSqliteTrajectoryRuntimeEvents(target)).map((event) => event.type)).toEqual([
-        "B",
-        "C",
-      ]);
+      expect(await eventTypes(target)).toEqual(["B", "C"]);
     });
   },
 );

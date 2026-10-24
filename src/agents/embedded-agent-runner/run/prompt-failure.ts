@@ -5,22 +5,20 @@ import {
   buildAgentRunTerminalOutcomeFromAttempt,
   projectAgentRunAttemptTerminal,
 } from "../../agent-run-terminal-outcome.js";
-import {
-  classifyFailoverReason,
-  parseImageSizeError,
-  pickFallbackThinkingLevel,
-} from "../../embedded-agent-helpers.js";
+import { parseImageSizeError } from "../../embedded-agent-helpers/image-errors.js";
+import { pickFallbackThinkingLevel } from "../../embedded-agent-helpers/thinking.js";
 import {
   coerceToFailoverError,
   describeFailoverError,
   FailoverError,
   hasRecordedModelFallbackStop,
   isCliTerminalStopCode,
+  isNonProviderRuntimeCoordinationError,
   resolveFailoverStatus,
 } from "../../failover-error.js";
-import { classifyRateLimitWindow } from "../../failover/retry-evidence.js";
+import { classifyFailoverReason } from "../../failover/classify.js";
+import { classifyRateLimitWindow, resolveRetryAfterMs } from "../../failover/retry-evidence.js";
 import type { FailoverReason } from "../../failover/signal.js";
-import { isAgentHarnessPreflightError } from "../../harness/errors.js";
 import { resolveSessionSuspensionReason } from "../../session-suspension.js";
 import { log } from "../logger.js";
 import type { EmbeddedAgentMeta, EmbeddedAgentRunResult, TraceAttempt } from "../types.js";
@@ -30,7 +28,7 @@ import type { PreparedEmbeddedRunInput } from "./execution-context.js";
 import { createFailoverDecisionLogger } from "./failover-observation.js";
 import { mergeRetryFailoverReason, resolveRunFailoverDecision } from "./failover-policy.js";
 import type { EmbeddedRunFailoverRetryController } from "./failover-retry-controller.js";
-import type { prepareEmbeddedRunRuntime } from "./runtime-preparation.js";
+import type { prepareEmbeddedRunRuntime } from "./runtime.js";
 
 type PromptFailureOutcome =
   | {
@@ -95,7 +93,7 @@ export async function handleEmbeddedPromptFailure(input: {
 }): Promise<PromptFailureOutcome> {
   const { runInput, preparedRuntime, normalizedAttempt, runtime, terminal } = input;
   if (
-    isAgentHarnessPreflightError(terminal.promptError) ||
+    isNonProviderRuntimeCoordinationError(terminal.promptError) ||
     hasRecordedModelFallbackStop(terminal.promptError)
   ) {
     throw terminal.promptError;
@@ -218,7 +216,7 @@ export async function handleEmbeddedPromptFailure(input: {
       result: promptFailoverReason === "timeout" ? "timeout" : decision,
       ...(reason ? { reason } : {}),
       stage: "prompt",
-      ...(typeof status === "number" ? { status } : {}),
+      ...(status !== undefined ? { status } : {}),
     });
     logFailoverDecision(decision, {
       ...(decision === "fallback_model" ? { status } : {}),
@@ -257,6 +255,11 @@ export async function handleEmbeddedPromptFailure(input: {
           profileId: failedProfileId,
           reason: promptProfileFailureReason,
           modelId: preparedRuntime.modelId,
+          retryAfterMs: resolveRetryAfterMs(
+            formatErrorMessage(terminal.promptError),
+            Date.now(),
+            terminal.promptError,
+          ),
         })
         .catch((error: unknown) => {
           log.warn(`prompt profile failure mark failed: ${String(error)}`);
@@ -356,7 +359,7 @@ function resolveBlockedPromptResult(
       return undefined;
     }
     const maxMb = imageSizeError.maxMb;
-    const maxMbLabel = typeof maxMb === "number" && Number.isFinite(maxMb) ? `${maxMb}` : null;
+    const maxMbLabel = Number.isFinite(maxMb) ? `${maxMb}` : null;
     const maxBytesHint = maxMbLabel ? ` (max ${maxMbLabel}MB)` : "";
     text =
       `Image too large for the model${maxBytesHint}. ` +

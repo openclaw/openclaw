@@ -1,4 +1,4 @@
-import type { DiffLine } from "./tool-call-diff.ts";
+import { visitTextDiff, type DiffLine } from "./tool-call-diff.ts";
 
 export type SessionSplitDiffRow =
   | { kind: "pair"; left?: DiffLine; right?: DiffLine }
@@ -16,7 +16,6 @@ export function createDiffPairingBudget() {
   return { remaining: PAIR_WORK_BUDGET };
 }
 
-type DiffPairingBudget = ReturnType<typeof createDiffPairingBudget>;
 const MAX_LINE_CHARS = 2048;
 const MAX_INLINE_CELLS = 65536;
 const INLINE_CELL_BUDGET = 262144;
@@ -31,81 +30,6 @@ function bigrams(text: string): Map<string, number> {
   return counts;
 }
 
-function alignChanges(
-  deletions: DiffLine[],
-  additions: DiffLine[],
-  budget: DiffPairingBudget,
-): SessionSplitDiffRow[] {
-  const rows: SessionSplitDiffRow[] = [];
-  const cells = deletions.length * additions.length;
-  const oldChars = deletions.reduce((sum, line) => sum + line.text.length, 0);
-  const newChars = additions.reduce((sum, line) => sum + line.text.length, 0);
-  // Each old character can produce at most one gram visited for each addition.
-  // Include gram construction and matrix work, before allocating either. This
-  // conservative estimate also bounds repetitive/whitespace-heavy input.
-  const work = cells + oldChars * additions.length + oldChars + newChars;
-  if (
-    !cells ||
-    cells > MAX_PAIR_CELLS ||
-    work > budget.remaining ||
-    [...deletions, ...additions].some((line) => line.text.length > MAX_LINE_CHARS)
-  ) {
-    for (let i = 0; i < Math.max(deletions.length, additions.length); i++) {
-      rows.push({ kind: "pair", left: deletions[i], right: additions[i] });
-    }
-    return rows;
-  }
-  budget.remaining -= work;
-  const oldGrams = deletions.map((line) => bigrams(line.text));
-  const newGrams = additions.map((line) => bigrams(line.text));
-  const weights = (grams: Map<string, number>) => [...grams.values()].reduce((a, b) => a + b, 0);
-  const oldSizes = oldGrams.map(weights);
-  const newSizes = newGrams.map(weights);
-  const stride = additions.length + 1;
-  const scores = new Float64Array((deletions.length + 1) * stride);
-  const matches = new Float64Array(scores.length);
-  for (let i = deletions.length - 1; i >= 0; i--) {
-    for (let j = additions.length - 1; j >= 0; j--) {
-      let shared = 0;
-      for (const [gram, count] of oldGrams[i]!) {
-        shared += Math.min(count, newGrams[j]!.get(gram) ?? 0);
-      }
-      const size = oldSizes[i]! + newSizes[j]!;
-      // Weak similarities should not consume a better match later in the run.
-      const similarity = size ? (2 * shared) / size : 1;
-      const weight = similarity >= 0.5 ? similarity : 0;
-      const offset = i * stride + j;
-      matches[offset] = weight;
-      scores[offset] = Math.max(
-        scores[offset + stride]!,
-        scores[offset + 1]!,
-        weight ? weight + scores[offset + stride + 1]! : 0,
-      );
-    }
-  }
-  let i = 0;
-  let j = 0;
-  while (i < deletions.length || j < additions.length) {
-    const offset = i * stride + j;
-    if (
-      i < deletions.length &&
-      j < additions.length &&
-      matches[offset]! > 0 &&
-      scores[offset] === matches[offset]! + scores[offset + stride + 1]!
-    ) {
-      rows.push({ kind: "pair", left: deletions[i++], right: additions[j++] });
-    } else if (
-      i < deletions.length &&
-      (j === additions.length || scores[offset + stride]! >= scores[offset + 1]!)
-    ) {
-      rows.push({ kind: "pair", left: deletions[i++] });
-    } else {
-      rows.push({ kind: "pair", right: additions[j++] });
-    }
-  }
-  return rows;
-}
-
 /** Align adjacent changes by similarity without reordering either source side. */
 export function pairSessionDiffLines(
   lines: readonly DiffLine[],
@@ -113,9 +37,9 @@ export function pairSessionDiffLines(
 ): SessionSplitDiffRow[] {
   const rows: SessionSplitDiffRow[] = [];
   for (let index = 0; index < lines.length;) {
-    const line = lines[index]!;
-    if (line.kind !== "add" && line.kind !== "del") {
-      rows.push({ kind: "span", line });
+    const currentLine = lines[index]!;
+    if (currentLine.kind !== "add" && currentLine.kind !== "del") {
+      rows.push({ kind: "span", line: currentLine });
       index++;
       continue;
     }
@@ -132,7 +56,72 @@ export function pairSessionDiffLines(
       }
       index++;
     }
-    rows.push(...alignChanges(deletions, additions, budget));
+    const cells = deletions.length * additions.length;
+    const oldChars = deletions.reduce((sum, line) => sum + line.text.length, 0);
+    const newChars = additions.reduce((sum, line) => sum + line.text.length, 0);
+    // Each old character can produce at most one gram visited for each addition.
+    // Include gram construction and matrix work, before allocating either. This
+    // conservative estimate also bounds repetitive/whitespace-heavy input.
+    const work = cells + oldChars * additions.length + oldChars + newChars;
+    if (
+      !cells ||
+      cells > MAX_PAIR_CELLS ||
+      work > budget.remaining ||
+      [...deletions, ...additions].some((line) => line.text.length > MAX_LINE_CHARS)
+    ) {
+      for (let i = 0; i < Math.max(deletions.length, additions.length); i++) {
+        rows.push({ kind: "pair", left: deletions[i], right: additions[i] });
+      }
+      continue;
+    }
+    budget.remaining -= work;
+    const oldGrams = deletions.map((line) => bigrams(line.text));
+    const newGrams = additions.map((line) => bigrams(line.text));
+    const weights = (grams: Map<string, number>) => [...grams.values()].reduce((a, b) => a + b, 0);
+    const oldSizes = oldGrams.map(weights);
+    const newSizes = newGrams.map(weights);
+    const stride = additions.length + 1;
+    const scores = new Float64Array((deletions.length + 1) * stride);
+    const matches = new Float64Array(scores.length);
+    for (let i = deletions.length - 1; i >= 0; i--) {
+      for (let j = additions.length - 1; j >= 0; j--) {
+        let shared = 0;
+        for (const [gram, count] of oldGrams[i]!) {
+          shared += Math.min(count, newGrams[j]!.get(gram) ?? 0);
+        }
+        const size = oldSizes[i]! + newSizes[j]!;
+        // Weak similarities should not consume a better match later in the run.
+        const similarity = size ? (2 * shared) / size : 1;
+        const weight = similarity >= 0.5 ? similarity : 0;
+        const offset = i * stride + j;
+        matches[offset] = weight;
+        scores[offset] = Math.max(
+          scores[offset + stride]!,
+          scores[offset + 1]!,
+          weight ? weight + scores[offset + stride + 1]! : 0,
+        );
+      }
+    }
+    let i = 0;
+    let j = 0;
+    while (i < deletions.length || j < additions.length) {
+      const offset = i * stride + j;
+      if (
+        i < deletions.length &&
+        j < additions.length &&
+        matches[offset]! > 0 &&
+        scores[offset] === matches[offset]! + scores[offset + stride + 1]!
+      ) {
+        rows.push({ kind: "pair", left: deletions[i++], right: additions[j++] });
+      } else if (
+        i < deletions.length &&
+        (j === additions.length || scores[offset + stride]! >= scores[offset + 1]!)
+      ) {
+        rows.push({ kind: "pair", left: deletions[i++] });
+      } else {
+        rows.push({ kind: "pair", right: additions[j++] });
+      }
+    }
   }
   return rows;
 }
@@ -180,42 +169,22 @@ export function diffLineChangeRanges(rows: readonly SessionSplitDiffRow[]) {
       continue;
     }
     budget -= cells;
-    const stride = newTokens.length + 1;
-    const lcs = new Uint16Array(cells);
-    for (let i = oldTokens.length - 1; i >= 0; i--) {
-      for (let j = newTokens.length - 1; j >= 0; j--) {
-        const offset = i * stride + j;
-        lcs[offset] =
-          oldTokens[i] === newTokens[j]
-            ? lcs[offset + stride + 1]! + 1
-            : Math.max(lcs[offset + stride]!, lcs[offset + 1]!);
-      }
-    }
     const oldRanges: DiffChangeRange[] = [];
     const newRanges: DiffChangeRange[] = [];
     let oldOffset = oldParts.slice(0, prefix).join("").length;
     let newOffset = oldOffset;
-    for (let i = 0, j = 0; i < oldTokens.length || j < newTokens.length;) {
-      const oldToken = oldTokens[i];
-      const newToken = newTokens[j];
-      if (oldToken !== undefined && oldToken === newToken) {
-        oldOffset += oldToken.length;
-        newOffset += newToken!.length;
-        i++;
-        j++;
-      } else if (
-        oldToken !== undefined &&
-        (newToken === undefined || lcs[(i + 1) * stride + j]! >= lcs[i * stride + j + 1]!)
-      ) {
-        appendRange(oldRanges, oldOffset, oldOffset + oldToken.length);
-        oldOffset += oldToken.length;
-        i++;
-      } else if (newToken !== undefined) {
-        appendRange(newRanges, newOffset, newOffset + newToken.length);
-        newOffset += newToken.length;
-        j++;
+    visitTextDiff(oldTokens, newTokens, (kind, text) => {
+      if (kind === "ctx") {
+        oldOffset += text.length;
+        newOffset += text.length;
+      } else if (kind === "del") {
+        appendRange(oldRanges, oldOffset, oldOffset + text.length);
+        oldOffset += text.length;
+      } else {
+        appendRange(newRanges, newOffset, newOffset + text.length);
+        newOffset += text.length;
       }
-    }
+    });
     if (oldRanges.length) {
       changes.set(left, oldRanges);
     }

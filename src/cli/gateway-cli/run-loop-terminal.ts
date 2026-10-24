@@ -1,3 +1,4 @@
+import { measureGatewayCloseStep } from "../../gateway/restart-trace.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type { GatewayBootLifecycleCompletion } from "../../infra/gateway-boot-lifecycle.js";
 import type { GatewayRestartIntent } from "../../infra/restart-intent.js";
@@ -51,13 +52,19 @@ export function createGatewayRunTerminal(params: {
     forceExitAfterStabilityBundle,
   } = params;
   const getManagedUpdateOwner = () => params.getRequest()?.restartIntent?.successorOwner;
-  const finishLoopAfterSignals = async (code: number) => {
+  const waitForTerminalSignals = async () => {
     for (;;) {
       if (params.isForcedExitStarted() || !params.getSignals().pending) {
         break;
       }
-      await params.getSignals().pending;
+      await measureGatewayCloseStep(
+        "restart.close.terminal-signals",
+        () => params.getSignals().pending,
+      );
     }
+  };
+  const finishLoopAfterSignals = async (code: number) => {
+    await waitForTerminalSignals();
     finishLoop(code);
   };
   const finishLoopAfterCleanup = async (
@@ -70,18 +77,15 @@ export function createGatewayRunTerminal(params: {
       return;
     }
     if (!params.isForcedExitStarted()) {
-      await params.getSignals().drain();
+      await measureGatewayCloseStep("restart.close.terminal-signals", () =>
+        params.getSignals().drain(),
+      );
     }
     let ownerToCommit = initialOwner;
     let commitOutcome = initialOutcome;
     await params.drainProcessResources();
     for (;;) {
-      for (;;) {
-        if (params.isForcedExitStarted() || !params.getSignals().pending) {
-          break;
-        }
-        await params.getSignals().pending;
-      }
+      await waitForTerminalSignals();
       if (hostStopOwner && params.getHost() !== hostStopOwner) {
         return;
       }
@@ -104,12 +108,7 @@ export function createGatewayRunTerminal(params: {
         sameManagedUpdateOwner(owner, ownerToCommit) &&
         eagerLifecycleRuntime.claimManagedServiceUpdateHandoff(owner) &&
         (await eagerLifecycleRuntime.commitManagedServiceUpdateHandoff(owner, commitOutcome));
-      for (;;) {
-        if (params.isForcedExitStarted() || !params.getSignals().pending) {
-          break;
-        }
-        await params.getSignals().pending;
-      }
+      await waitForTerminalSignals();
       if (
         committed &&
         sameManagedUpdateOwner(getManagedUpdateOwner(), owner) &&
@@ -158,7 +157,9 @@ export function createGatewayRunTerminal(params: {
     owner: HostLifecycle,
     shutdownFailure: GatewayShutdownFailure | undefined,
   ) => {
-    await updateSuccessor.waitForStopSettlement();
+    await measureGatewayCloseStep("restart.close.update-stop-settlement", () =>
+      updateSuccessor.waitForStopSettlement(),
+    );
     if (params.getHost() !== owner) {
       return;
     }
@@ -170,7 +171,9 @@ export function createGatewayRunTerminal(params: {
       }
       // This continuation belongs to the run loop, not to the closed kernel or
       // requesting lane. Native stop starts only after the existing joins.
-      const result = await owner.finishStop();
+      const result = await measureGatewayCloseStep("restart.close.hosted-stop", () =>
+        owner.finishStop(),
+      );
       if (result.outcome === "retired" || params.getHost() !== owner) {
         return;
       }

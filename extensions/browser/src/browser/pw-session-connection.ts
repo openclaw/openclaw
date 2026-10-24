@@ -24,7 +24,7 @@ import {
   closeRelayOperationConnection,
 } from "./extension-relay/owner-playwright.js";
 import { getBorrowedRelayCdpAccess } from "./extension-relay/relay-access.js";
-import { connectOverCdpTransport } from "./pw-session-cdp-transport.js";
+import { connectOverCdpTransport, UnresponsiveCdpTargetError } from "./pw-session-cdp-transport.js";
 import {
   blockedPageRefsByCdpUrl,
   blockedTargetsByCdpUrl,
@@ -316,7 +316,6 @@ function observeContext(context: BrowserContext) {
   context.on("page", (page) => ensurePageState(page));
 }
 
-/** Ensure shared Playwright browser-context state. */
 export function ensureContextState(context: BrowserContext): ContextState {
   const existing = contextStates.get(context);
   if (existing) {
@@ -347,7 +346,7 @@ export async function connectBrowser(
     }
     const browser = await connectRelayBrowser(relay, normalized, relayReference);
     observeBrowser(browser);
-    return { browser, cdpUrl: normalized };
+    return { browser };
   }
   const cached = cachedByCdpUrl.get(normalized);
   if (cached) {
@@ -435,7 +434,11 @@ export async function connectBrowser(
             throw new Error("Relay connection was superseded");
           }
         } catch (err) {
-          if (!configuredIsWebSocket || endpointUrl === normalized) {
+          if (
+            err instanceof UnresponsiveCdpTargetError ||
+            !configuredIsWebSocket ||
+            endpointUrl === normalized
+          ) {
             throw err;
           }
           browser = await connectEndpoint(normalized, configuredPin?.lookup);
@@ -470,7 +473,6 @@ export async function connectBrowser(
         }
         const connected: ConnectedBrowser = {
           browser,
-          cdpUrl: normalized,
           onDisconnected,
           engine,
           headless,
@@ -486,7 +488,7 @@ export async function connectBrowser(
         }
         // Don't retry rate-limit errors; retrying worsens the 429.
         const errMsg = formatErrorMessage(err);
-        if (errMsg.includes("rate limit")) {
+        if (err instanceof UnresponsiveCdpTargetError || errMsg.includes("rate limit")) {
           break;
         }
         await sleepWithAbort(250 + attempt * 250);

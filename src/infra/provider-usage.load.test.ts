@@ -25,15 +25,14 @@ describe("provider-usage.load", () => {
   afterEach(() => vi.useRealTimers());
 
   it("does not dispatch auth or fetch for an exhausted budget", async () => {
-    const fetch = vi.fn(async () => new Response("{}"));
+    const fetch = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("{}"));
+    vi.spyOn(Date, "now").mockReturnValue(usageNow);
     resolveProviderUsageAuthWithPluginMock.mockResolvedValue({ token: "fixture-token" });
     const result = await loadProviderUsageSummary({
       providers: ["anthropic"],
       config: {},
       env: { ANTHROPIC_API_KEY: "fixture-token" },
-      now: usageNow,
       timeoutMs: 0,
-      fetch,
     });
     expect(result).toEqual({
       updatedAt: usageNow,
@@ -70,6 +69,7 @@ describe("provider-usage.load", () => {
         started.resolve();
         return response.promise;
       });
+      vi.spyOn(globalThis, "fetch").mockImplementation(fetch);
       resolveProviderUsageSnapshotWithPluginMock.mockImplementation(async ({ context }) => {
         await (signalSource === "init"
           ? context.fetchFn("https://usage.example.test", { signal: caller.signal })
@@ -82,7 +82,6 @@ describe("provider-usage.load", () => {
           config: {},
           env: {},
           timeoutMs: 1,
-          fetch,
         }),
       );
       try {
@@ -189,24 +188,33 @@ describe("provider-usage.load", () => {
     }
   });
 
-  it("keeps balance-only summary snapshots", async () => {
-    resolveProviderUsageSnapshotWithPluginMock.mockResolvedValueOnce({
-      provider: "deepseek",
-      displayName: "DeepSeek",
-      windows: [],
-      summary: "Balance ¥42.50",
-    });
+  it("keeps window and balance-only snapshots with injected auth", async () => {
+    const snapshots: ProviderUsageSnapshot[] = [
+      { provider: "anthropic", displayName: "Claude", windows: [{ label: "5h", usedPercent: 20 }] },
+      { provider: "deepseek", displayName: "DeepSeek", windows: [], summary: "Balance ¥42.50" },
+    ];
+    resolveProviderUsageSnapshotWithPluginMock.mockImplementation(
+      async ({ provider }) => snapshots.find((snapshot) => snapshot.provider === provider) ?? null,
+    );
     const mockFetch = createProviderUsageFetch(async () => {
       throw new Error("legacy fetch should not run");
     });
 
     const summary = await loadUsageWithAuth(
       loadProviderUsageSummary,
-      [{ provider: "deepseek", token: "token-d" }],
+      [
+        { provider: "anthropic", token: "token-a" },
+        { provider: "deepseek", token: "token-d" },
+      ],
       mockFetch,
     );
 
     expect(summary.providers).toEqual([
+      {
+        provider: "anthropic",
+        displayName: "Claude",
+        windows: [{ label: "5h", usedPercent: 20 }],
+      },
       {
         provider: "deepseek",
         displayName: "DeepSeek",
@@ -214,6 +222,7 @@ describe("provider-usage.load", () => {
         summary: "Balance ¥42.50",
       },
     ]);
+    expect(mockFetch).not.toHaveBeenCalled();
   });
 
   it("returns live siblings at the deadline while retaining the unfinished provider", async () => {
@@ -322,18 +331,17 @@ describe("provider-usage.load", () => {
     ]);
   });
 
-  it("throws when fetch is unavailable", async () => {
+  it("does not require ambient fetch when no provider has a usage hook", async () => {
     const previousFetch = globalThis.fetch;
     vi.stubGlobal("fetch", undefined);
     try {
-      await expect(
-        loadProviderUsageSummary({
-          now: usageNow,
-          auth: [{ provider: "xiaomi", token: "token-x" }],
-          env: {},
-          fetch: undefined,
-        }),
-      ).rejects.toThrow("fetch is not available");
+      const summary = await loadProviderUsageSummary({
+        auth: [{ provider: "xiaomi", token: "token-x" }],
+        env: {},
+      });
+      expect(summary.providers).toEqual([
+        { provider: "xiaomi", displayName: "Xiaomi", windows: [], error: "Unsupported provider" },
+      ]);
     } finally {
       vi.stubGlobal("fetch", previousFetch);
     }

@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -12,6 +13,7 @@ const DIST_ARTIFACT_LOCK_PATH = ".artifacts/dist-artifacts.lock";
 const LOCK_POLL_MS = 500;
 type ArtifactOwner = { directory: string; unjoinedError?: Error };
 let inheritedOwner: ArtifactOwner | undefined;
+const activeOwner = new AsyncLocalStorage<ArtifactOwner>();
 
 export function resolveDistArtifactLockPath(rootDir: string) {
   // Subdirectories share checkout ownership; standalone work owns its directory.
@@ -45,14 +47,15 @@ export async function runOwnedDistArtifactEntry(script: string, args: string[]) 
   // A surviving wrapper claim retains ownership for possibly detached compilers.
   fs.writeFileSync(claim, "Awaiting child completion.\n", { flag: "wx" });
   const owner: ArtifactOwner = { directory };
+  // This entry process inherits ownership until exit. Native bundler callbacks
+  // can lose async context and run after the CLI module's import has settled.
   inheritedOwner = owner;
   process.argv = [process.execPath, fileURLToPath(script), ...args];
   try {
-    await import(script);
+    await activeOwner.run(owner, () => import(script));
   } catch (error) {
     throw retainUnjoinedDistArtifactWork(owner, error);
   } finally {
-    inheritedOwner = undefined;
     // The pre-existing claim is the durable fence if recording uncertainty failed.
     if (owner.unjoinedError === undefined || fs.existsSync(path.join(directory, "unjoined"))) {
       fs.unlinkSync(claim);
@@ -172,9 +175,10 @@ export const withDistArtifactOwnership: WithDistArtifactOwnership = async (
   signal,
 ) => {
   const directory = resolveDistArtifactLockPath(fs.realpathSync(rootDir));
-  if (directory === inheritedOwner?.directory) {
-    if (inheritedOwner.unjoinedError !== undefined) {
-      throw inheritedOwner.unjoinedError;
+  const currentOwner = activeOwner.getStore() ?? inheritedOwner;
+  if (directory === currentOwner?.directory) {
+    if (currentOwner.unjoinedError !== undefined) {
+      throw currentOwner.unjoinedError;
     }
     signal?.throwIfAborted();
     try {
@@ -182,14 +186,14 @@ export const withDistArtifactOwnership: WithDistArtifactOwnership = async (
     } catch (error) {
       // A CLI can turn this error into an exit status before the entry launcher sees it.
       // Record uncertain cleanup at the ownership boundary so the parent retains the lock.
-      throw retainUnjoinedDistArtifactWork(inheritedOwner, error);
+      throw retainUnjoinedDistArtifactWork(currentOwner, error);
     }
   }
   const lock = await acquireDistArtifactOwnership(rootDir, true, signal);
   const owner: ArtifactOwner = { directory };
   try {
     signal?.throwIfAborted();
-    return await run();
+    return await activeOwner.run(owner, run);
   } catch (error) {
     throw retainUnjoinedDistArtifactWork(owner, error);
   } finally {

@@ -87,9 +87,18 @@ export function bindNativePluginInstanceModuleLoader(
         if (params.ownsResolution && !params.ownsResolution()) {
           return undefined;
         }
+        // Host imports do not belong to this capture and must not enter its worker.
+        const requestedPath = request.startsWith("file:") ? fileURLToPath(request) : request;
+        if (
+          !isPathInside(artifact.boundaryRoot, parent) &&
+          (!path.isAbsolute(requestedPath) || !isPathInside(artifact.boundaryRoot, requestedPath))
+        ) {
+          return undefined;
+        }
         // Resolved URLs and built relative imports retain the selected host SDK's identity.
         const original = artifact.sourceForCaptured(parent);
-        const sdkTarget = hostSdkTarget(request, original);
+        const sdkTarget =
+          artifact.sharedModule?.(parent, request) ?? hostSdkTarget(request, original);
         if (sdkTarget) {
           return sdkTarget === request ? undefined : sdkTarget;
         }
@@ -191,7 +200,8 @@ export function bindNativePluginInstanceModuleLoader(
           recordPluginSdkDeprecatedImport(params.instance.pluginId, request);
           return target;
         }
-        const sdkTarget = hostSdkTarget(request, original);
+        const sdkTarget =
+          artifact.sharedModule?.(parent, request) ?? hostSdkTarget(request, original);
         if (sdkTarget) {
           return sdkTarget;
         }

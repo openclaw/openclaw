@@ -5,6 +5,8 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { buildAgentSessionKey, parseAgentSessionKey } from "openclaw/plugin-sdk/routing";
 import {
   archiveLegacyStateSource,
+  decodeUtf8Input,
+  Utf8InputError,
   type PluginDoctorStateMigration,
 } from "openclaw/plugin-sdk/runtime-doctor-migrations";
 // Doctor enumeration cold-loads this closure; session-store-runtime pulls the
@@ -170,6 +172,7 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
     async migrateLegacyState(params) {
       const changes: string[] = [];
       const warnings: string[] = [];
+      let utf8Warnings = 0;
       const store = params.context.openPluginStateKeyedStore<ZaloCredentialStateRecord>({
         namespace: ZALOUSER_CREDENTIALS_NAMESPACE,
         maxEntries: ZALOUSER_CREDENTIALS_MAX_ENTRIES,
@@ -178,7 +181,9 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
       for (const source of await collectLegacyZalouserCredentialSources(params.env)) {
         let credentials: StoredZaloCredentials | null = null;
         try {
-          const raw = JSON.parse(await fs.readFile(source.filePath, "utf8")) as unknown;
+          const raw = JSON.parse(
+            decodeUtf8Input(await fs.readFile(source.filePath), "Legacy Zalo Personal credentials"),
+          ) as unknown;
           const createdAt =
             isRecord(raw) && typeof raw.createdAt === "string" && raw.createdAt
               ? raw.createdAt
@@ -187,7 +192,14 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
             isRecord(raw) ? { ...raw, createdAt } : raw,
             source.profile,
           );
-        } catch {
+        } catch (error) {
+          if (error instanceof Utf8InputError) {
+            warnings.push(
+              `${error.message} Left legacy source in place for profile ${source.profile}`,
+            );
+            utf8Warnings++;
+            continue;
+          }
           // Report the same fail-closed result as a structurally invalid file.
         }
         if (!credentials) {
@@ -219,20 +231,15 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
         }
         if (!existing) {
           try {
-            await store.registerIfAbsent(key, credentials);
+            if (!(await store.registerIfAbsent(key, credentials))) {
+              throw new Error("Canonical state appeared during offline import.");
+            }
           } catch (error) {
             warnings.push(
               `Failed importing Zalo Personal credentials for profile ${source.profile}: ${String(error)}; left legacy source in place`,
             );
             continue;
           }
-        }
-        const persisted = normalizeStoredZaloCredentials(await store.lookup(key), source.profile);
-        if (!persisted || JSON.stringify(persisted) !== JSON.stringify(credentials)) {
-          warnings.push(
-            `Failed verifying Zalo Personal credentials for profile ${source.profile}; left legacy source in place`,
-          );
-          continue;
         }
         changes.push(`Migrated Zalo Personal credentials for profile ${source.profile}`);
         await archiveLegacyStateSource({
@@ -242,7 +249,13 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
           warnings,
         });
       }
-      return { changes, warnings };
+      return {
+        changes,
+        warnings,
+        ...(utf8Warnings > 0 && utf8Warnings === warnings.length
+          ? { warningDisposition: "recoverable" as const }
+          : {}),
+      };
     },
   },
   {

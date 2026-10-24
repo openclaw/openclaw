@@ -1,6 +1,4 @@
 import type { ChannelApprovalKind } from "openclaw/plugin-sdk/approval-handler-runtime";
-// Native Apple Messages poll bindings for approval prompts.
-//
 // Native polls replace tapback controls when the imsg bridge supports them.
 // Poll delivery failures restore a bound tapback hint, so every prompt keeps
 // one canonical interactive control path.
@@ -409,7 +407,6 @@ export async function maybeResolveIMessageApprovalPollVote(params: {
   cfg: OpenClawConfig;
   accountId: string;
   message: IMessagePayload;
-  gatewayUrl?: string;
   gatewayRuntime?: IMessageApprovalGatewayRuntime;
 }): Promise<boolean> {
   const event = readPollVoteEvent(params.message);
@@ -516,7 +513,6 @@ export async function maybeResolveIMessageApprovalPollVote(params: {
       channel: "imessage",
       accountId: params.accountId,
       senderId: event.actorHandle,
-      gatewayUrl: params.gatewayUrl,
       ...(params.gatewayRuntime ? { gatewayRuntime: params.gatewayRuntime } : {}),
     });
     await unregisterIMessageApprovalPollTarget({
@@ -553,15 +549,8 @@ export async function maybeResolveIMessageApprovalPollVote(params: {
   }
 }
 
-function clearIMessageApprovalPollTargetsForTest(): void {
-  pollTargets.clearForTest();
-  pollTombstones.clearForTest();
-  loadResolveApprovalOverGateway.clear();
-}
-
 export const iMessageApprovalPollTargets = {
   register: registerIMessageApprovalPollTarget,
   unregister: unregisterIMessageApprovalPollTarget,
   registerTombstone: registerIMessageApprovalPollTombstone,
-  clearForTest: clearIMessageApprovalPollTargetsForTest,
 };

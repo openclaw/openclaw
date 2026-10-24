@@ -7,10 +7,7 @@ import type { BoardWidgetPutResult } from "../../packages/gateway-protocol/src/i
 import { WIDGET_HTML_MAX_UTF8_BYTES } from "../../packages/gateway-protocol/src/schema/canvas.js";
 import { optionalStringEnum } from "../agents/schema/string-enum.js";
 import { type AnyAgentTool, jsonResult, readToolStringParam } from "../agents/tools/common.js";
-import {
-  callInProcessGatewayTool,
-  type InProcessGatewayCaller,
-} from "../agents/tools/in-process-gateway.js";
+import { callInProcessGatewayTool } from "../agents/tools/in-process-gateway.js";
 import { normalizeBoardWidgetDeclared } from "../boards/board-capabilities.js";
 import {
   BOARD_REPORT_GUIDANCE,
@@ -43,7 +40,6 @@ import { buildWidgetDocument } from "./wrap.js";
 
 const SHOW_WIDGET_REQUIRED_CLIENT_CAPS = ["inline-widgets"];
 const REGISTERED_WIDGET_CODE_MAX_CHARS = 262_144;
-const WIDGET_MAX_PER_SCOPE = 32;
 
 function currentPluginRegistry() {
   return getPluginRuntimeGatewayRequestScope()?.pluginRegistry ?? getActivePluginRegistry();
@@ -53,106 +49,12 @@ export function hasRegisteredShowWidgetKinds(): boolean {
   return listBoardWidgetContentKinds(currentPluginRegistry()).length > 0;
 }
 
-function createShowWidgetToolSchema(
-  kinds: readonly string[],
-  presenters: readonly Exclude<WidgetPresenter, { target: "current_channel" }>[],
-  capabilityGuidance: string,
-  pinnedOnly: boolean,
-  reportAvailable: boolean,
-) {
-  const presenterTargets = presenters.map((presenter) => presenter.target);
-  const targets = ["assistant_message", ...presenterTargets] as const;
-  const presenterDescriptions = presenters.map(
-    (presenter) => `${presenter.target}: ${presenter.description}`,
-  );
-  const widgetCode = Type.String({
-    description:
-      "Required for HTML/SVG or registered source. For HTML, send a fragment with optional style/script tags, not a full document or file path. Use fluid widths and wrap or stack narrow layouts; reserve horizontal scrolling for exact geometry.",
-  });
-  return Type.Object({
-    title: Type.String({ description: "Short host title; do not repeat it inside the widget" }),
-    widget_code: reportAvailable ? Type.Optional(widgetCode) : widgetCode,
-    ...(reportAvailable
-      ? {
-          report: Type.Optional(
-            Type.Record(Type.String(), Type.Unknown(), {
-              description: `Native dashboard data; requires pin=true. Omit widget_code, kind, capabilities, and presentation.target. ${BOARD_REPORT_GUIDANCE}`,
-            }),
-          ),
-        }
-      : {}),
-    kind: optionalStringEnum(kinds, {
-      description: `Widget source kind: ${kinds.join(", ")}`,
-    }),
-    name: Type.Optional(
-      Type.String({
-        pattern: "^[a-z0-9][a-z0-9._-]{0,63}$",
-        description:
-          "Stable dashboard widget name; reuse the same name with pin=true and new report data or widget_code to update",
-      }),
-    ),
-    pin: pinnedOnly
-      ? Type.Literal(true, {
-          description: "Required: this surface can only author pinned widgets",
-        })
-      : Type.Optional(
-          Type.Boolean({
-            description:
-              "Pin only for an explicit dashboard request or multiple non-code visualizations",
-          }),
-        ),
-    tab: Type.Optional(
-      Type.String({ pattern: "^[a-z0-9-]{1,40}$", description: "Dashboard tab slug" }),
-    ),
-    size: optionalStringEnum(["sm", "md", "lg", "xl", "full"] as const, {
-      description: "Dashboard size: sm, md, lg, xl, or full",
-    }),
-    presentation: Type.Optional(
-      Type.Object({
-        ...(pinnedOnly
-          ? {}
-          : {
-              target: optionalStringEnum(targets, {
-                description: [
-                  "Where to show the widget. assistant_message: inline in chat",
-                  ...presenterDescriptions,
-                ].join("; "),
-              }),
-            }),
-        frame: optionalStringEnum(["card", "full-bleed", "frameless"] as const, {
-          description: "Pinned dashboard frame: card, full-bleed, or frameless",
-        }),
-      }),
-    ),
-    after: Type.Optional(
-      Type.String({
-        pattern: "^[a-z0-9][a-z0-9._-]{0,63}$",
-        description: "Place after this dashboard widget name",
-      }),
-    ),
-    capabilities: Type.Optional(
-      Type.Object({
-        netOrigins: Type.Optional(
-          Type.Array(Type.String(), {
-            description: "Exact HTTPS origins the pinned widget may fetch after approval",
-          }),
-        ),
-        tools: Type.Optional(
-          Type.Array(Type.String(), {
-            description: `Pinned widget host tools: prompt or cron.trigger:<jobId>; grant each read/action ID below unless a scoped grant is specified. ${capabilityGuidance}`,
-          }),
-        ),
-      }),
-    ),
-  });
-}
-
 type ShowWidgetToolOptions = {
   sessionId?: string;
   agentId?: string;
   agentSessionKey?: string;
-  stateDir?: string;
-  callGateway?: InProcessGatewayCaller;
+  /** Fails once the board's owner no longer authorizes this run, checked again inside the pin write. */
+  assertTargetCurrent?: () => void;
   inlineHostEnabled?: boolean;
   inlineClientAvailable?: boolean;
   /** Admitted callers without a rendering client may author only durable dashboard widgets. */
@@ -273,7 +175,6 @@ function assertPinnedWidgetDocumentSize(html: string): void {
 }
 
 export function createShowWidgetTool(options: ShowWidgetToolOptions = {}): AnyAgentTool {
-  const gatewayCall = options.callGateway ?? callInProcessGatewayTool;
   const pinnedOnly = options.pinnedOnly === true;
   const inlineHostEnabled = options.inlineHostEnabled !== false;
   const inlineAvailable =
@@ -310,17 +211,96 @@ export function createShowWidgetTool(options: ShowWidgetToolOptions = {}): AnyAg
       : inlineAvailable
         ? "Keep one-off visualizations inline; pin for explicit dashboard requests or multiple non-code visualizations."
         : "Inline previews are unavailable this turn; set pin=true to save to the session dashboard.";
+  const capabilityGuidance = describeDashboardCapabilities(currentPluginRegistry());
+  const presenterTargets = explicitPresenters.map((presenter) => presenter.target);
+  const targets = ["assistant_message", ...presenterTargets] as const;
+  const presenterDescriptions = explicitPresenters.map(
+    (presenter) => `${presenter.target}: ${presenter.description}`,
+  );
+  const widgetCodeSchema = Type.String({
+    description:
+      "Required for HTML/SVG or registered source. For HTML, send a fragment with optional style/script tags, not a full document or file path. Use fluid widths and wrap or stack narrow layouts; reserve horizontal scrolling for exact geometry.",
+  });
   return {
     label: "Show Widget",
     name: "show_widget",
     description: `Visual helps? Make widget. Do not wait for ask. ${usageGuidance} Update pinned HTML by name. Use for code architecture, execution traces, performance comparisons, interactive explanations, UI mockups, and dashboards. Text clearer? Skip. Load the visualize skill when available for composition and dashboard authoring. The source kind defaults to html${advertisedRegisteredKinds.length ? ` and registered kinds are ${advertisedRegisteredKinds.join(", ")}` : ""}. Send markup directly in widget_code. Scripts, stylesheets, and fonts may load from ${WIDGET_CDN_ORIGINS.join(", ")}; pin library versions. Use direct HTTPS URLs for audio/video, or data/blob URLs for embedded/generated clips. Default videos to controls playsinline preload="auto" so a first frame can appear before playback; do not autoplay. Images and video posters must be data URLs; media playback does not grant fetch access. Inline widgets cannot fetch APIs. Pinned data access needs declared and granted capabilities.netOrigins or capabilities.tools; inline previews never inherit those grants. Keep filters and controls local; user-clicked openclaw.prompt.send(text) requests an agent follow-up in the Control UI. Data, action, state, and cron host APIs are dashboard-only. openclaw.host.controlUiBaseUrl is the Control UI origin plus base path after dashboard initialization, otherwise null; read it at click time. Dashboard HTML links support HTTP(S) destinations only; open them with target="_blank" and rel="noopener noreferrer". Put local workspace file links in chat Markdown, not widget HTML; file:// links cannot open the Files panel. \`title\` is host metadata. Start directly with content; do not repeat the title or recreate dashboard chrome. Use host theme variables such as --text, --muted, --card, --border, --accent, --font-body, and --font-mono. Inline script syntax errors return line and column; fix and retry. Check library loading and rendered interactions; hosting success alone is not visual proof.${reportGuidance}${presenterPrompt}`,
-    parameters: createShowWidgetToolSchema(
-      kinds,
-      explicitPresenters,
-      describeDashboardCapabilities(currentPluginRegistry()),
-      pinnedOnly,
-      reportAvailable,
-    ),
+    parameters: Type.Object({
+      title: Type.String({ description: "Short host title; do not repeat it inside the widget" }),
+      widget_code: reportAvailable ? Type.Optional(widgetCodeSchema) : widgetCodeSchema,
+      ...(reportAvailable
+        ? {
+            report: Type.Optional(
+              Type.Record(Type.String(), Type.Unknown(), {
+                description: `Native dashboard data; requires pin=true. Omit widget_code, kind, capabilities, and presentation.target. ${BOARD_REPORT_GUIDANCE}`,
+              }),
+            ),
+          }
+        : {}),
+      kind: optionalStringEnum(kinds, {
+        description: `Widget source kind: ${kinds.join(", ")}`,
+      }),
+      name: Type.Optional(
+        Type.String({
+          pattern: "^[a-z0-9][a-z0-9._-]{0,63}$",
+          description:
+            "Stable dashboard widget name; reuse the same name with pin=true and new report data or widget_code to update",
+        }),
+      ),
+      pin: pinnedOnly
+        ? Type.Literal(true, {
+            description: "Required: this surface can only author pinned widgets",
+          })
+        : Type.Optional(
+            Type.Boolean({
+              description:
+                "Pin only for an explicit dashboard request or multiple non-code visualizations",
+            }),
+          ),
+      tab: Type.Optional(
+        Type.String({ pattern: "^[a-z0-9-]{1,40}$", description: "Dashboard tab slug" }),
+      ),
+      size: optionalStringEnum(["sm", "md", "lg", "xl", "full"] as const, {
+        description: "Dashboard size: sm, md, lg, xl, or full",
+      }),
+      presentation: Type.Optional(
+        Type.Object({
+          ...(pinnedOnly
+            ? {}
+            : {
+                target: optionalStringEnum(targets, {
+                  description: [
+                    "Where to show the widget. assistant_message: inline in chat",
+                    ...presenterDescriptions,
+                  ].join("; "),
+                }),
+              }),
+          frame: optionalStringEnum(["card", "full-bleed", "frameless"] as const, {
+            description: "Pinned dashboard frame: card, full-bleed, or frameless",
+          }),
+        }),
+      ),
+      after: Type.Optional(
+        Type.String({
+          pattern: "^[a-z0-9][a-z0-9._-]{0,63}$",
+          description: "Place after this dashboard widget name",
+        }),
+      ),
+      capabilities: Type.Optional(
+        Type.Object({
+          netOrigins: Type.Optional(
+            Type.Array(Type.String(), {
+              description: "Exact HTTPS origins the pinned widget may fetch after approval",
+            }),
+          ),
+          tools: Type.Optional(
+            Type.Array(Type.String(), {
+              description: `Pinned widget host tools: prompt or cron.trigger:<jobId>; grant each read/action ID below unless a scoped grant is specified. ${capabilityGuidance}`,
+            }),
+          ),
+        }),
+      ),
+    }),
     ...(currentChannelPresenter || pinnedOnly
       ? {}
       : { requiredClientCaps: SHOW_WIDGET_REQUIRED_CLIENT_CAPS }),
@@ -470,7 +450,9 @@ export function createShowWidgetTool(options: ShowWidgetToolOptions = {}): AnyAg
             inputName: "widget document after wrapping",
           });
         }
-        const snapshot = await gatewayCall<BoardWidgetPutResult>("board.widget.put", {
+        const assertTargetCurrent = options.assertTargetCurrent;
+        assertTargetCurrent?.();
+        const putParams = {
           sessionKey: pinSessionKey,
           agentId: options.agentId,
           name,
@@ -494,7 +476,12 @@ export function createShowWidgetTool(options: ShowWidgetToolOptions = {}): AnyAg
                 },
               }
             : {}),
-        });
+        };
+        const snapshot = await (assertTargetCurrent
+          ? callInProcessGatewayTool<BoardWidgetPutResult>("board.widget.put", putParams, {
+              sessionMutationCommitGuard: assertTargetCurrent,
+            })
+          : callInProcessGatewayTool<BoardWidgetPutResult>("board.widget.put", putParams));
         pinnedWidgetName = snapshot.resolvedWidgetName;
         const widget = snapshot.widgets.find(
           (candidate) => candidate.name === snapshot.resolvedWidgetName,
@@ -537,20 +524,13 @@ export function createShowWidgetTool(options: ShowWidgetToolOptions = {}): AnyAg
       }
       let document: Awaited<ReturnType<typeof createCanvasDocument>> | undefined;
       const hostDocument = async () =>
-        (document ??= await createCanvasDocument(
-          {
-            title,
-            html: wrappedDocument,
-            surface: "assistant_message",
-            retentionScope: resolveRetentionScope(options),
-            // Direct navigation must not run widget script as the Control UI origin.
-            cspSandbox: "scripts",
-          },
-          {
-            stateDir: options.stateDir,
-            maxDocumentsPerScope: WIDGET_MAX_PER_SCOPE,
-          },
-        ));
+        (document ??= await createCanvasDocument({
+          title,
+          html: wrappedDocument,
+          retentionScope: resolveRetentionScope(options),
+          // Direct navigation must not run widget script as the Control UI origin.
+          cspSandbox: "scripts",
+        }));
 
       let presentationAttempt: WidgetPresentationAttempt | undefined;
       if (wantsCurrentChannel && currentChannelPresenter) {

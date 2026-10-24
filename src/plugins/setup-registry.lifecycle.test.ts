@@ -6,7 +6,6 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createWizardPrompter } from "../../test/helpers/wizard-prompter.js";
 import { createNonExitingRuntime } from "../runtime.js";
-import { createDeferredCore } from "../shared/deferred.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import type { PluginManifestRecord, PluginManifestRegistry } from "./manifest-registry.js";
@@ -22,7 +21,10 @@ import {
   clearPluginMetadataLifecycleCaches,
   retainGatewayPluginMetadata,
 } from "./plugin-metadata-lifecycle.js";
-import { createPluginMetadataSnapshotFixture } from "./plugin-metadata.test-support.js";
+import {
+  createPluginManifestRecordFixture,
+  createPluginMetadataSnapshotFixture,
+} from "./plugin-metadata.test-support.js";
 import { getPluginSetupModuleLoader } from "./plugin-setup-module.js";
 import { prepareAuthChoiceLoadedPluginProvider } from "./provider-auth-choice.js";
 import { detectAvailableSetupProviderIds } from "./provider-setup-availability.js";
@@ -30,6 +32,46 @@ import { resolvePluginSetupRegistry } from "./setup-registry.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 
 const tempDirs: string[] = [];
+
+function pausedOperation(event: string, cleanup: string, env: NodeJS.ProcessEnv) {
+  const started = createDeferred();
+  const release = createDeferred();
+  const before = process.listenerCount(event);
+  let entered = false;
+  let cache: ReturnType<typeof getScopedPluginCache>;
+  return {
+    enter() {
+      cache = getScopedPluginCache();
+      entered = true;
+      started.resolve();
+      return release.promise;
+    },
+    async run<T>(operation: Promise<T>, beforeRelease?: () => void) {
+      const work = operation.then(
+        (value) => ({ ok: true as const, value }),
+        (error: unknown) => ({ ok: false as const, error }),
+      );
+      try {
+        await Promise.race([started.promise, work]);
+        expect(entered).toBe(true);
+        expect(cache?.kind).toBe("operation");
+        expect(cache?.retirement).toBeUndefined();
+        expect(process.listenerCount(event)).toBe(before + 1);
+        await withPluginLifecycleLease({ env, waitMs: 0 }, async (lease) => lease.assertOwned());
+        beforeRelease?.();
+        release.resolve();
+        const result = await work;
+        expect(process.listenerCount(event)).toBe(before);
+        expect(fs.readFileSync(cleanup, "utf8")).toBe("closed");
+        expect(cache?.retirement).toBeDefined();
+        return result;
+      } finally {
+        release.resolve();
+        await work;
+      }
+    },
+  };
+}
 
 function callable(value: unknown) {
   if (typeof value !== "function") {
@@ -48,19 +90,7 @@ function setupRecord(
   source: string,
   fields: Partial<PluginManifestRecord> = {},
 ): PluginManifestRecord {
-  return {
-    id,
-    origin: "config",
-    rootDir,
-    source,
-    manifestPath: path.join(rootDir, "openclaw.plugin.json"),
-    channels: [],
-    providers: [],
-    cliBackends: [],
-    skills: [],
-    hooks: [],
-    ...fields,
-  };
+  return createPluginManifestRecordFixture({ id, origin: "config", rootDir, source, ...fields });
 }
 
 function writeSetupLifecycleFixture(id: string, body: string) {
@@ -145,9 +175,7 @@ describe("plugin setup registry artifact lifecycle", () => {
       ]);
       expect(process.listenerCount(event)).toBe(before + 1);
     } finally {
-      await retirePluginCache(cache).finally(() => {
-        process.removeAllListeners(event);
-      });
+      await retirePluginCache(cache).finally(() => process.removeAllListeners(event));
     }
   });
 
@@ -270,8 +298,8 @@ describe("plugin setup registry artifact lifecycle", () => {
         const rootDir = state.path("setup-plugin");
         fs.mkdirSync(rootDir);
         const event = `setup-auth-${outcome}`;
-        const before = process.listenerCount(event);
         const cleanup = state.path("setup-cleaned.txt");
+        const paused = pausedOperation(event, cleanup, state.env);
         writeInstalledManifest(rootDir, id, true);
         fs.writeFileSync(
           path.join(rootDir, "setup-api.cjs"),
@@ -297,12 +325,8 @@ describe("plugin setup registry artifact lifecycle", () => {
           } };
         `,
         );
-        const started = createDeferredCore();
-        const release = createDeferredCore();
         const controller = new AbortController();
         const cancelled = new Error("auth cancelled");
-        let entered = false;
-        let operationCache: ReturnType<typeof getScopedPluginCache>;
         const work = prepareAuthChoiceLoadedPluginProvider(
           {
             authChoice: id,
@@ -317,10 +341,7 @@ describe("plugin setup registry artifact lifecycle", () => {
             prompter: createWizardPrompter({
               note: async (message) => {
                 if (message === "auth entered") {
-                  operationCache = getScopedPluginCache();
-                  entered = true;
-                  started.resolve();
-                  await release.promise;
+                  await paused.enter();
                 }
               },
               confirm: async () => true,
@@ -335,49 +356,29 @@ describe("plugin setup registry artifact lifecycle", () => {
             }),
           },
           (prepared) => prepared,
-        ).then(
-          (value) => ({ ok: true as const, value }),
-          (error: unknown) => ({ ok: false as const, error }),
         );
-        try {
-          await Promise.race([started.promise, work]);
-          expect(entered).toBe(true);
-          expect(operationCache?.kind).toBe("operation");
-          expect(operationCache?.retirement).toBeUndefined();
-          expect(process.listenerCount(event)).toBe(before + 1);
-          // A second real lease can be acquired while the provider is still waiting for input.
-          await withPluginLifecycleLease({ env: state.env, waitMs: 0 }, async (lease) =>
-            lease.assertOwned(),
-          );
+        const result = await paused.run(work, () => {
           if (outcome === "cancel") {
             controller.abort(cancelled);
           }
-          release.resolve();
-          const result = await work;
-          expect(process.listenerCount(event)).toBe(before);
-          expect(fs.readFileSync(cleanup, "utf8")).toBe("closed");
-          expect(operationCache?.retirement).toBeDefined();
-          if (outcome === "success") {
-            expect(result.ok).toBe(true);
-            if (!result.ok || !result.value) {
-              throw new Error("auth fixture did not prepare persistence");
-            }
-            expect(result.value.authProfiles).toHaveLength(1);
-            await expect(result.value.persistAuthProfiles()).resolves.toBeUndefined();
-          } else {
-            expect(result.ok).toBe(false);
-            if (result.ok) {
-              throw new Error("auth fixture unexpectedly succeeded");
-            }
-            if (outcome === "cancel") {
-              expect(result.error).toBe(cancelled);
-            } else {
-              expect(String(result.error)).toContain("auth callback failed");
-            }
+        });
+        if (outcome === "success") {
+          expect(result.ok).toBe(true);
+          if (!result.ok || !result.value) {
+            throw new Error("auth fixture did not prepare persistence");
           }
-        } finally {
-          release.resolve();
-          await work;
+          expect(result.value.authProfiles).toHaveLength(1);
+          await expect(result.value.persistAuthProfiles()).resolves.toBeUndefined();
+        } else {
+          expect(result.ok).toBe(false);
+          if (result.ok) {
+            throw new Error("auth fixture unexpectedly succeeded");
+          }
+          if (outcome === "cancel") {
+            expect(result.error).toBe(cancelled);
+          } else {
+            expect(String(result.error)).toContain("auth callback failed");
+          }
         }
       });
     },
@@ -418,17 +419,14 @@ describe("plugin setup registry artifact lifecycle", () => {
           "utf8",
         );
       };
-      const manifestRegistry = {
-        plugins: [
-          setupRecord("bundled-setup", rootDir, sourcePath, {
-            origin: "bundled",
-            setupSource: sourcePath,
-            providers: ["bundled-setup"],
-            setup: { requiresRuntime: true, providers: [{ id: "bundled-setup" }] },
-          }),
-        ],
-        diagnostics: [],
-      };
+      const manifestRegistry = registry(
+        setupRecord("bundled-setup", rootDir, sourcePath, {
+          origin: "bundled",
+          setupSource: sourcePath,
+          providers: ["bundled-setup"],
+          setup: { requiresRuntime: true, providers: [{ id: "bundled-setup" }] },
+        }),
+      );
 
       writeBundledArtifact("before");
       expect(resolvePluginSetupRegistry({ manifestRegistry }).providers[0]?.provider.label).toBe(
@@ -506,9 +504,7 @@ describe("plugin setup module lifecycle", () => {
         expect(() => current()).toThrow("reloaded or disabled");
         expect(process.listenerCount(event)).toBe(listeners + evaluations);
       } finally {
-        await owner.close().finally(() => {
-          process.removeAllListeners(event);
-        });
+        await owner.close().finally(() => process.removeAllListeners(event));
       }
     },
   );
@@ -532,9 +528,7 @@ describe("plugin setup module lifecycle", () => {
       expect(loader()(source)).toMatchObject({ value: "recovered" });
       expect(process.listenerCount(event)).toBe(listeners + 1);
     } finally {
-      await retirePluginCache(cache).finally(() => {
-        process.removeAllListeners(event);
-      });
+      await retirePluginCache(cache).finally(() => process.removeAllListeners(event));
     }
   });
 
@@ -621,8 +615,8 @@ it.each(["available", "failure"] as const)(
       fs.mkdirSync(rootDir);
       const event = `provider-probe-${outcome}`;
       const enteredEvent = `${event}-entered`;
-      const before = process.listenerCount(event);
       const cleanup = state.path("probe-cleaned.txt");
+      const paused = pausedOperation(event, cleanup, state.env);
       writeInstalledManifest(rootDir, id, false);
       fs.writeFileSync(
         path.join(rootDir, "runtime.cjs"),
@@ -642,43 +636,20 @@ it.each(["available", "failure"] as const)(
           }] });
         } };`,
       );
-      const started = createDeferredCore();
-      const release = createDeferredCore();
-      let entered = false;
-      let operationCache: ReturnType<typeof getScopedPluginCache>;
       const observeProbe = (finish: () => void) => {
-        operationCache = getScopedPluginCache();
-        entered = true;
-        started.resolve();
-        void release.promise.then(finish);
+        void paused.enter().then(finish);
       };
       process.on(enteredEvent, observeProbe);
-      const work = detectAvailableSetupProviderIds({
-        config: installedConfig(id, rootDir),
-        env: state.env,
-        workspaceDir: state.path("workspace"),
-      }).then(
-        (value) => ({ ok: true as const, value }),
-        (error: unknown) => ({ ok: false as const, error }),
-      );
       try {
-        await Promise.race([started.promise, work]);
-        expect(entered).toBe(true);
-        expect(operationCache?.kind).toBe("operation");
-        expect(operationCache?.retirement).toBeUndefined();
-        expect(process.listenerCount(event)).toBe(before + 1);
-        await withPluginLifecycleLease({ env: state.env, waitMs: 0 }, async (lease) =>
-          lease.assertOwned(),
+        const result = await paused.run(
+          detectAvailableSetupProviderIds({
+            config: installedConfig(id, rootDir),
+            env: state.env,
+            workspaceDir: state.path("workspace"),
+          }),
         );
-        release.resolve();
-        const result = await work;
         expect(result).toEqual({ ok: true, value: new Set(outcome === "available" ? [id] : []) });
-        expect(process.listenerCount(event)).toBe(before);
-        expect(fs.readFileSync(cleanup, "utf8")).toBe("closed");
-        expect(operationCache?.retirement).toBeDefined();
       } finally {
-        release.resolve();
-        await work;
         process.off(enteredEvent, observeProbe);
       }
     });

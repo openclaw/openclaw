@@ -1,13 +1,17 @@
+import { sql } from "kysely";
 import { executeSqliteQueryTakeFirstSync } from "../../infra/kysely-sync.js";
+import { isPostgresSqlConnection } from "../../infra/sql-connection.js";
 import { getSqliteReadScopeRevision } from "../../infra/sqlite-schema-facts.js";
 import { assertTransactionUsable } from "../../infra/sqlite-transaction.js";
 import {
   openOpenClawAgentDatabase,
   type OpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
-import type { CurrentTranscriptProjection } from "./session-accessor.sqlite-projection-read.js";
 import {
-  getSessionKysely,
+  selectActiveTranscriptIdentityRows,
+  type CurrentTranscriptProjection,
+} from "./session-accessor.sqlite-projection-read.js";
+import {
   resolveSqliteTranscriptScope,
   toDatabaseOptions,
   type ResolvedTranscriptReadScope,
@@ -40,16 +44,9 @@ export function readActiveTranscriptEntryIdentityInSnapshot(
   projection: CurrentTranscriptProjection,
   entryId: string,
 ) {
-  const db = getSessionKysely(projection.database.db);
   return executeSqliteQueryTakeFirstSync(
     projection.database.db,
-    db
-      .selectFrom("transcript_event_identities as identity")
-      .innerJoin("session_transcript_active_events as active", (join) =>
-        join
-          .onRef("active.session_id", "=", "identity.session_id")
-          .onRef("active.event_seq", "=", "identity.seq"),
-      )
+    selectActiveTranscriptIdentityRows(projection.database)
       .select(["identity.seq", "identity.parent_id as parentId"])
       .where("identity.session_id", "=", projection.resolved.sessionId)
       .where("identity.event_id", "=", entryId)
@@ -174,17 +171,20 @@ function readActiveTranscriptEntryFacts(
     }
     const identity = actor.transcript.identities.get(params.entryId);
     const active = identity && actor.transcript.active.get(identity.seq);
-    return identity && active
-      ? {
-          seq: identity.seq,
-          parent_id: identity.parent_id,
-          message_idempotency_key: identity.message_idempotency_key,
-          message_position: active.message_position,
-          generation: actor.hot.transcript.version.generation,
-          latestSeq: actor.hot.transcript.version.rawSeq,
-          transcriptUpdatedAt: actor.hot.transcript.version.updatedAt,
-        }
-      : undefined;
+    if (identity && active) {
+      return {
+        seq: identity.seq,
+        parent_id: identity.parent_id,
+        message_idempotency_key: identity.message_idempotency_key,
+        message_position: active.message_position,
+        generation: actor.hot.transcript.version.generation,
+        latestSeq: actor.hot.transcript.version.rawSeq,
+        transcriptUpdatedAt: actor.hot.transcript.version.updatedAt,
+      };
+    }
+    if (actor.transcript.complete) {
+      return undefined;
+    }
   }
   const row = executeSqliteQueryTakeFirstSync(
     params.database.db,
@@ -205,13 +205,7 @@ function selectActiveTranscriptEntryAnchor(
   projection?: CurrentTranscriptProjection,
   includeVersion = false,
 ) {
-  const query = getSessionKysely(params.database.db)
-    .selectFrom("transcript_event_identities as identity")
-    .innerJoin("session_transcript_active_events as active", (join) =>
-      join
-        .onRef("active.session_id", "=", "identity.session_id")
-        .onRef("active.event_seq", "=", "identity.seq"),
-    )
+  const query = selectActiveTranscriptIdentityRows(params.database)
     .select([
       "identity.seq",
       "identity.parent_id",
@@ -243,7 +237,11 @@ function selectActiveTranscriptEntryAnchor(
         ),
       )
       // Branch changes retain old rows; readiness and the anchor share this statement's snapshot.
-      .where("status.needs_reconcile", "is not", 1),
+      .where(
+        "status.needs_reconcile",
+        "is not",
+        isPostgresSqlConnection(params.database.db) ? sql.lit(true) : 1,
+      ),
   );
 }
 

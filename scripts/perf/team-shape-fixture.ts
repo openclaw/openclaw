@@ -20,12 +20,19 @@ export function parseTeamShapeOptions(argv: string[]) {
       "state-dir": { type: "string" },
       sessions: { type: "string" },
       runs: { type: "string" },
+      "settled-runs": { type: "boolean" },
       approvals: { type: "string" },
       cron: { type: "string" },
+      "cron-announce-last": { type: "boolean" },
       projects: { type: "string" },
       seed: { type: "string" },
       now: { type: "string" },
       "transcript-mib": { type: "string" },
+      "long-transcript-entries": { type: "string" },
+      "long-transcript-sessions": { type: "string" },
+      "worktree-files": { type: "string" },
+      "nested-repository": { type: "boolean" },
+      "github-options-connected": { type: "boolean" },
       port: { type: "string" },
       launch: { type: "boolean" },
       help: { type: "boolean" },
@@ -50,20 +57,52 @@ export function parseTeamShapeOptions(argv: string[]) {
   if (retainedRuns > 0 && sessions < 2) {
     throw new Error("--runs requires at least two sessions (parent and child)");
   }
+  const cronJobs = integer("cron", 100);
+  const cronAnnounceLast = values["cron-announce-last"] ?? false;
+  if (cronAnnounceLast && (sessions < 2 || cronJobs === 0)) {
+    throw new Error("--cron-announce-last requires at least two sessions and one cron job");
+  }
   const transcriptBytes = integer("transcript-mib", 64) * 1024 * 1024;
   if (!Number.isSafeInteger(transcriptBytes)) {
     throw new Error("--transcript-mib exceeds the safe byte range");
+  }
+  const longTranscriptEntries = integer("long-transcript-entries", 0);
+  const longTranscriptSessions = Math.min(integer("long-transcript-sessions", 4, 1), sessions);
+  // Includes text, signatures and envelope headroom; keep opt-in stress writes bounded.
+  if (
+    longTranscriptEntries > 0 &&
+    transcriptBytes + longTranscriptEntries * longTranscriptSessions * 18 * 1024 > 1024 ** 3
+  ) {
+    throw new Error("Long transcripts plus --transcript-mib must fit within 1 GiB");
+  }
+  const projects = integer("projects", 12);
+  const worktreeFiles = integer("worktree-files", 0);
+  if (worktreeFiles > 500_000) {
+    throw new Error("--worktree-files must not exceed 500000 files");
+  }
+  if ((worktreeFiles > 0 || values["nested-repository"]) && projects === 0) {
+    throw new Error("--worktree-files and --nested-repository require at least one project");
+  }
+  if (values["github-options-connected"] && projects === 0) {
+    throw new Error("--github-options-connected requires at least one project");
   }
   return {
     stateDir: path.resolve(values["state-dir"] ?? "."),
     sessions,
     retainedRuns,
+    settledRuns: values["settled-runs"] ?? false,
     approvals: integer("approvals", 200),
-    cronJobs: integer("cron", 100),
-    projects: integer("projects", 12),
+    cronJobs,
+    cronAnnounceLast,
+    projects,
     seed: integer("seed", 967),
     now: integer("now", Date.parse("2026-10-13T12:00:00Z"), 1),
     transcriptBytes,
+    longTranscriptEntries,
+    longTranscriptSessions,
+    worktreeFiles,
+    nestedRepository: values["nested-repository"] ?? false,
+    githubOptionsConnected: values["github-options-connected"] ?? false,
     port,
     launch: values.launch ?? false,
     help: values.help ?? false,
@@ -115,7 +154,6 @@ export async function generateTeamShapeFixture(options: ReturnType<typeof parseT
       cron: { enabled: false },
       update: { checkOnStart: false },
       agents: {
-        defaults: { heartbeat: { every: "0m" } },
         entries: { main: { workspace: path.join(stateDir, "workspace") } },
       },
       logging: { file: path.join(stateDir, "gateway.log") },
@@ -172,10 +210,18 @@ async function main() {
   if (options.help) {
     console.log(`Usage: node --import ./scripts/tsx.mjs scripts/perf/team-shape-fixture.ts --state-dir <new-dir> [options]
   --sessions 5000 --runs 6000 --approvals 200 --cron 100 --projects 12
+  --settled-runs           Keep run history terminal and delivered, without a subagent recovery backlog.
+  --cron-announce-last     Seed disabled isolated cron jobs with announce/last delivery.
   --seed 967 --now <epoch-ms> --transcript-mib 64
+  --long-transcript-entries 0 --long-transcript-sessions 4
+  --worktree-files 0 --nested-repository
+  --github-options-connected  Register synthetic GitHub origins for dashboard measurements.
   --launch --port 40967    Start an isolated loopback dev Gateway after generation.
 State is synthetic and must not exist. Existing state is never overwritten.
-Transcript MiB is logical text before compression; actual database sizes are reported.`);
+Transcript MiB is logical text before compression; actual database sizes are reported.
+Long transcript entries append 1 KiB messages with distinct 16 KiB assistant thinking signatures.
+Worktree files are unchanged, empty tracked files in the first project (maximum 500000).
+Linux generation pauses at 1 GiB of dirty pages and stops at 2 GiB.`);
     return;
   }
   const { summary, env } = await generateTeamShapeFixture(options);

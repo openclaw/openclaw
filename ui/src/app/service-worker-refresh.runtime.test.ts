@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { CONTROL_UI_BUILD_INFO } from "../build-info.ts";
 import { scheduleStaleChunkReload } from "./stale-chunk-reload.ts";
 import { refreshControlUiServiceWorker } from "./sw-refresh.runtime.ts";
@@ -18,9 +19,12 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-function createWorker(version = CONTROL_UI_BUILD_INFO.buildId) {
+function createWorker(
+  version = CONTROL_UI_BUILD_INFO.buildId,
+  state: ServiceWorkerState = "activated",
+) {
   return Object.assign(new EventTarget(), {
-    state: "activated" as ServiceWorkerState,
+    state,
     postMessage: vi.fn((_message: unknown, ports: MessagePort[]) => {
       ports[0]?.postMessage({ type: "sw-updated", version });
     }),
@@ -41,6 +45,41 @@ function installRegistration(active = createWorker()) {
 }
 
 describe("Control UI service-worker reconnect refresh", () => {
+  it.each(["lookup", "update", "installing"] as const)(
+    "releases reconnect after a stalled %s and ignores late completion",
+    async (phase) => {
+      vi.useFakeTimers();
+      const replacement = createWorker("replacement", "installing");
+      const registration = installRegistration();
+      const stalled = createDeferred<undefined>();
+      let complete = () => stalled.resolve(undefined);
+      if (phase === "lookup") {
+        vi.stubGlobal("navigator", {
+          serviceWorker: {
+            getRegistration: async () => {
+              await stalled.promise;
+              return registration;
+            },
+          },
+        });
+      } else if (phase === "update") {
+        registration.update.mockImplementation(() => stalled.promise);
+      } else {
+        registration.installing = replacement as unknown as ServiceWorker;
+        complete = () => {
+          replacement.state = "activated";
+          replacement.dispatchEvent(new Event("statechange"));
+        };
+      }
+      const refresh = refreshControlUiServiceWorker();
+      await vi.advanceTimersByTimeAsync(10_000);
+      await expect(refresh).resolves.toBe(false);
+      complete();
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(scheduleStaleChunkReload).not.toHaveBeenCalled();
+      expect(vi.getTimerCount()).toBe(0);
+    },
+  );
   it("recovers a document that missed the active worker's activation", async () => {
     const active = createWorker("already-active-build");
     const registration = installRegistration(active);
@@ -53,8 +92,7 @@ describe("Control UI service-worker reconnect refresh", () => {
   it.each(["discovered", "installing", "waiting"] as const)(
     "holds reconnect work until a %s replacement can identify its build",
     async (phase) => {
-      const replacement = createWorker("next-build");
-      replacement.state = "installing";
+      const replacement = createWorker("next-build", "installing");
       const registration = installRegistration();
       if (phase === "discovered") {
         registration.update.mockImplementation(async () => {

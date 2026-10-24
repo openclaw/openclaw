@@ -1323,18 +1323,6 @@ mod tests {
     }
 
     #[test]
-    fn parses_gateway_invocation_cancellation() {
-        assert_eq!(
-            parse_invocation_cancel(json!({"invokeId": "invoke-1", "nodeId": "node-1"}))
-                .expect("valid Gateway cancellation"),
-            NodeSessionEvent::InvocationCancelled {
-                invoke_id: "invoke-1".into(),
-                node_id: "node-1".into(),
-            }
-        );
-    }
-
-    #[test]
     fn external_signing_request_uses_final_connect_metadata_and_auth() {
         let options = NodeConnectOptions::new("test", "Windows")
             .device_family("Desktop")

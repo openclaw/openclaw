@@ -1,5 +1,3 @@
-// Commands gateway methods expose validated command listing for a resolved
-// agent, provider, scope, and argument-detail request.
 import {
   ErrorCodes,
   errorShape,
@@ -11,7 +9,6 @@ import { withSessionDiscoveryAccess } from "./session-discovery-access.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { defineValidatedGatewayMethod } from "./validation.js";
 
-/** Gateway handler for enumerating available chat/native commands. */
 export const commandsHandlers: GatewayRequestHandlers = {
   "commands.list": defineValidatedGatewayMethod(
     "commands.list",

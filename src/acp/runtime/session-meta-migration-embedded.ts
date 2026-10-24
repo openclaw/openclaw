@@ -61,6 +61,7 @@ export async function repairEmbeddedAcpSessionMetaForDoctor(params: {
   apply: boolean;
   authority?: DoctorSqliteMaintenanceAuthority;
   targets: readonly ExistingAgentDatabaseTarget[];
+  integrityCheck?: "quick" | "full";
 }) {
   const report: { found: number; repaired: number; backups: string[]; warnings: string[] } = {
     found: 0,
@@ -235,6 +236,7 @@ export async function repairEmbeddedAcpSessionMetaForDoctor(params: {
           assertSourceCurrent();
           report.repaired += rewriteDoctorSessionEntries({
             scope,
+            integrityCheck: params.integrityCheck ?? "quick",
             sessionKeys: [sessionKey],
             updateDeliveryProjection: false,
             transform(current) {

@@ -1,15 +1,21 @@
 import type { CreateGhosttyTerminalOptions } from "@openclaw/libterminal/browser";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { t } from "../../i18n/index.ts";
+import { registerTerminalEnglish } from "../../i18n/locales/en-terminal.ts";
 import { showToast } from "../../lib/toast.ts";
 import { observeTerminalFonts } from "./terminal-fonts.ts";
+
+registerTerminalEnglish();
 
 function isEventListener(value: unknown): value is EventListener {
   return typeof value === "function";
 }
 
 /** Creates a terminal whose WASM memory is never reused by another tab. */
-export async function createIsolatedGhosttyTerminal(options: CreateGhosttyTerminalOptions) {
+export async function createIsolatedGhosttyTerminal(
+  options: CreateGhosttyTerminalOptions,
+  shouldFocusOnOpen?: () => boolean,
+) {
   const [{ createGhosttyTerminal, loadGhosttyRuntime }, ghosttyModule] = await Promise.all([
     import("@openclaw/libterminal/browser"),
     import("ghostty-web"),
@@ -17,6 +23,31 @@ export async function createIsolatedGhosttyTerminal(options: CreateGhosttyTermin
   // ghostty-web 0.4.0 reuses freed WASM pages, exposing stale cells and corrupting
   // later terminals (coder/ghostty-web#142). Per-tab runtimes confine disposal.
   const runtime = await loadGhosttyRuntime({ module: ghosttyModule });
+  if (shouldFocusOnOpen) {
+    let focusOnOpen: (() => boolean) | undefined = shouldFocusOnOpen;
+    const Terminal = runtime.Terminal;
+    runtime.Terminal = class extends Terminal {
+      private opening = false;
+
+      override open(parent: HTMLElement) {
+        this.opening = true;
+        try {
+          super.open(parent);
+        } finally {
+          this.opening = false;
+          // Adopted views and later explicit focus must not retain the boot owner's policy.
+          focusOnOpen = undefined;
+        }
+      }
+
+      override focus() {
+        // Ghostty's open() focus also schedules a second, unconditional focus task.
+        if (!this.opening || focusOnOpen?.() !== false) {
+          super.focus();
+        }
+      }
+    };
+  }
   let disposed = false;
   const controller = await createGhosttyTerminal({
     ...options,

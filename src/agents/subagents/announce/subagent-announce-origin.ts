@@ -169,7 +169,7 @@ export async function resolveSubagentCompletionOrigin(params: {
   const accountId = normalizeAccountId(requesterOrigin?.accountId);
   const conversationId =
     stringifyRouteThreadId(requesterOrigin?.threadId) ||
-    resolveConversationIdFromTargets({ targets: [to] }) ||
+    resolveConversationIdFromTargets([to]) ||
     "";
   const requesterConversation: ConversationRef | undefined =
     channel && conversationId ? { channel, accountId, conversationId } : undefined;

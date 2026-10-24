@@ -7,7 +7,7 @@ const hoisted = vi.hoisted(() => ({
 vi.mock("../../plugins/provider-failover.js", () => hoisted);
 
 import { classifyProviderRuntimeFailureKind } from "../embedded-agent-helpers/provider-runtime-failure.js";
-import { isContextOverflowError } from "./classify.js";
+import { isContextOverflowError } from "./context-overflow.js";
 import { isLikelyHttpErrorText, renderSanitizedUserFacingText } from "./user-copy.js";
 
 it("renders task results and HTTP errors without activating provider hooks", () => {

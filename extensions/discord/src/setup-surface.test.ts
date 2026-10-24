@@ -1,4 +1,3 @@
-// Discord tests cover setup surface plugin behavior.
 import { installChannelDmPolicyContractSuite } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it } from "vitest";
@@ -7,16 +6,13 @@ import { createDiscordSetupWizardBase } from "./setup-core.js";
 const discordSetupWizard = createDiscordSetupWizardBase({
   promptAllowFrom: async ({ cfg }) => cfg,
   resolveAllowFromEntries: async ({ entries }) =>
-    entries.map((entry) => ({
-      input: entry,
-      resolved: false,
-      id: null,
-    })),
+    entries.map((input) => ({ input, resolved: false, id: null })),
   resolveGroupAllowlist: async ({ entries }) =>
-    entries.map((entry) => ({
-      input: entry,
-      resolved: false,
-    })),
+    entries.map((input) => ({ input, resolved: false })),
+});
+
+const config = (discord: NonNullable<OpenClawConfig["channels"]>["discord"]): OpenClawConfig => ({
+  channels: { discord },
 });
 
 describe("discordSetupWizard.dmPolicy", () => {
@@ -37,22 +33,14 @@ describe("discordSetupWizard.dmPolicy", () => {
 describe("discordSetupWizard.status", () => {
   it("uses configured defaultAccount for omitted setup configured state", async () => {
     const configured = await discordSetupWizard.status.resolveConfigured({
-      cfg: {
-        channels: {
-          discord: {
-            defaultAccount: "work",
-            token: "discord-root-token",
-            accounts: {
-              alerts: {
-                token: "discord-alerts-token",
-              },
-              work: {
-                token: "",
-              },
-            },
-          },
+      cfg: config({
+        defaultAccount: "work",
+        token: "discord-root-token",
+        accounts: {
+          alerts: { token: "discord-alerts-token" },
+          work: { token: "" },
         },
-      } as OpenClawConfig,
+      }),
     });
 
     expect(configured).toBe(false);
@@ -62,19 +50,7 @@ describe("discordSetupWizard.status", () => {
 describe("discordSetupWizard.groupAccess", () => {
   it("writes resolved Discord channel rows to their selected guild and channel", () => {
     const next = discordSetupWizard.groupAccess?.applyAllowlist?.({
-      cfg: {
-        channels: {
-          discord: {
-            guilds: {
-              existing: {
-                channels: {
-                  keep: { enabled: true },
-                },
-              },
-            },
-          },
-        },
-      } as OpenClawConfig,
+      cfg: config({ guilds: { existing: { channels: { keep: { enabled: true } } } } }),
       accountId: "default",
       resolved: [
         {
@@ -83,19 +59,13 @@ describe("discordSetupWizard.groupAccess", () => {
           guildId: "guild-1",
           channelId: "channel-1",
         },
-        {
-          input: "missing",
-          resolved: false,
-        },
+        { input: "missing", resolved: false },
       ],
     });
 
-    expect(next?.channels?.discord?.guilds?.["guild-1"]?.channels?.["channel-1"]).toEqual({
-      enabled: true,
-    });
-    expect(next?.channels?.discord?.guilds?.["*"]).toBeUndefined();
-    expect(next?.channels?.discord?.guilds?.existing?.channels?.keep).toEqual({
-      enabled: true,
-    });
+    const guilds = next?.channels?.discord?.guilds;
+    expect(guilds?.["guild-1"]?.channels?.["channel-1"]).toEqual({ enabled: true });
+    expect(guilds?.["*"]).toBeUndefined();
+    expect(guilds?.existing?.channels?.keep).toEqual({ enabled: true });
   });
 });

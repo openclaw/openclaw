@@ -34,6 +34,7 @@ import {
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createExpectedProfileBinding } from "./expected-profile.js";
 import { resolveOperatorRolePolicyForProfile } from "./operator-role-policy.js";
+import { authorizationClient } from "./server-methods.authorization.test-support.js";
 import { handleGatewayRequest } from "./server-methods.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./server-methods/types.js";
 import {
@@ -53,23 +54,13 @@ const cfg: OpenClawConfig = {
   },
 };
 
-afterEach(() => {
-  vi.restoreAllMocks();
-});
+afterEach(() => vi.restoreAllMocks());
 
 function clientFor(profileId: string, scopes = ["operator.admin"]): GatewayClient {
-  return {
-    connId: `users-merge-${profileId}`,
+  return authorizationClient(`users-merge-${profileId}`, scopes, {
     authenticatedUserId: `${profileId}@example.test`,
     authenticatedUserProfile: { profileId, displayName: "Person", hasAvatar: false, updatedAt: 1 },
-    connect: {
-      role: "operator",
-      scopes,
-      client: { id: "test", version: "1", platform: "test", mode: "test" },
-      minProtocol: 1,
-      maxProtocol: 1,
-    },
-  } as GatewayClient;
+  });
 }
 
 async function gateway() {
@@ -121,6 +112,19 @@ function storedRedirect(profileId: string) {
   ).rows[0]?.merged_into;
 }
 
+function expectFailure(response: Parameters<RespondFn>, message: string, exact = false) {
+  expect(response[0]).toBe(false);
+  expect(response[2]).toMatchObject({
+    code: "INVALID_REQUEST",
+    message: exact ? message : expect.stringContaining(message),
+  });
+}
+
+function expectMerged(response: Parameters<RespondFn>, payload: object) {
+  expect(response[0], JSON.stringify(response[2])).toBe(true);
+  expect(response[1]).toMatchObject(payload);
+}
+
 it("merges an email-less person through admin RPC without main-thread SQL and retires captured authority", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     using rpc = await gateway();
@@ -144,68 +148,58 @@ it("merges an email-less person through admin RPC without main-thread SQL and re
       credential: { type: "token", provider: "anthropic", token: "synthetic-merge-token" },
       assertCurrent: () => {},
     });
-    setUserProfileAuthLink({
-      profileId: source.id,
-      provider: "openai",
-      authProfileId: "openai:duplicate",
-    });
-    setUserProfileAuthLink({
-      profileId: target.id,
-      provider: "openai",
-      authProfileId: "openai:survivor",
-    });
+    for (const [profileId, authProfileId] of [
+      [source.id, "openai:duplicate"],
+      [target.id, "openai:survivor"],
+    ] as const) {
+      setUserProfileAuthLink({ profileId, provider: "openai", authProfileId });
+    }
     const captured = await prepareUserProfileIdentity(source.id);
+    using _ = { [Symbol.dispose]: () => captured.release() };
     const selected = await createExpectedProfileBinding(source.id, clientFor(source.id));
     expect(captured.readCurrentProfile().profileId).toBe(source.id);
     expect(() => selected?.assertCurrent()).not.toThrow();
     const params = { sourceProfileId: source.id, targetProfileId: target.id };
-    try {
-      const denied = await rpc.dispatch(
-        "users.merge",
-        params,
-        clientFor(rpc.admin.id, ["operator.read", "operator.write"]),
-      );
-      expect(denied).toEqual([false, undefined, expect.objectContaining({ code: "FORBIDDEN" })]);
-      expect(storedRedirect(source.id)).toBeNull();
-      const queries = vi.spyOn(DatabaseSync.prototype, "prepare");
-      try {
-        const response = await rpc.merge(source.id, target.id);
-        expect(response[0], JSON.stringify(response[2])).toBe(true);
-        expect(response[1]).toMatchObject({
-          profile: { id: target.id, displayName: "Survivor", role: "member" },
-          movedAliasKinds: ["provider", "channel"],
-        });
-        expect(validateUsersMergeResult(response[1])).toBe(true);
-        expect(queries).not.toHaveBeenCalled();
-      } finally {
-        queries.mockRestore();
-      }
-      expect(storedRedirect(source.id)).toBe(target.id);
-      expect(readResidentUserProfileIdentity(source.id)?.profileId).toBe(target.id);
-      expect(ensureProfileForTailscaleIdentity(providerIdentity).id).toBe(target.id);
-      expect(resolveUserChannelIdentity(identity)?.profileId).toBe(target.id);
-      expect(getUserPreferences(target.id)).toEqual({ shared: "target", sourceOnly: true });
-      expect(listUserProfileAuthLinks(target.id)).toMatchObject([
-        { provider: "anthropic", authProfileId: account.authProfileId },
-        { provider: "openai", authProfileId: "openai:survivor" },
-      ]);
-      expect(listUserModelAccounts({ profileId: target.id }).accounts).toMatchObject([
-        { authProfileId: account.authProfileId, provider: "anthropic", selected: true },
-      ]);
-      expect(() => captured.readCurrentProfile()).toThrow();
-      expect(() => selected?.assertCurrent()).toThrow();
-      const stale = await rpc.dispatch("users.prefs.get", {}, clientFor(source.id));
-      expect(stale[0]).toBe(false);
-      expect(stale[2]?.details).toMatchObject({ reason: "EXPECTED_PROFILE_MISMATCH" });
-      expect(rpc.context.refreshConnectedUserProfile).toHaveBeenCalledWith(
-        expect.objectContaining({ id: target.id, displayName: "Survivor" }),
-      );
-      expect(rpc.context.disconnectClientsForUserProfile.mock.calls.flat()).toEqual(
-        expect.arrayContaining([source.id, target.id]),
-      );
-    } finally {
-      captured.release();
+    const denied = await rpc.dispatch(
+      "users.merge",
+      params,
+      clientFor(rpc.admin.id, ["operator.read", "operator.write"]),
+    );
+    expect(denied).toEqual([false, undefined, expect.objectContaining({ code: "FORBIDDEN" })]);
+    expect(storedRedirect(source.id)).toBeNull();
+    {
+      using queries = vi.spyOn(DatabaseSync.prototype, "prepare");
+      const response = await rpc.merge(source.id, target.id);
+      expectMerged(response, {
+        profile: { id: target.id, displayName: "Survivor", role: "member" },
+        movedAliasKinds: ["provider", "channel"],
+      });
+      expect(validateUsersMergeResult(response[1])).toBe(true);
+      expect(queries).not.toHaveBeenCalled();
     }
+    expect(storedRedirect(source.id)).toBe(target.id);
+    expect(readResidentUserProfileIdentity(source.id)?.profileId).toBe(target.id);
+    expect(ensureProfileForTailscaleIdentity(providerIdentity).id).toBe(target.id);
+    expect(resolveUserChannelIdentity(identity)?.profileId).toBe(target.id);
+    expect(getUserPreferences(target.id)).toEqual({ shared: "target", sourceOnly: true });
+    expect(listUserProfileAuthLinks(target.id)).toMatchObject([
+      { provider: "anthropic", authProfileId: account.authProfileId },
+      { provider: "openai", authProfileId: "openai:survivor" },
+    ]);
+    expect(listUserModelAccounts({ profileId: target.id }).accounts).toMatchObject([
+      { authProfileId: account.authProfileId, provider: "anthropic", selected: true },
+    ]);
+    expect(() => captured.readCurrentProfile()).toThrow();
+    expect(() => selected?.assertCurrent()).toThrow();
+    const stale = await rpc.dispatch("users.prefs.get", {}, clientFor(source.id));
+    expect(stale[0]).toBe(false);
+    expect(stale[2]?.details).toMatchObject({ reason: "EXPECTED_PROFILE_MISMATCH" });
+    expect(rpc.context.refreshConnectedUserProfile).toHaveBeenCalledWith(
+      expect.objectContaining({ id: target.id, displayName: "Survivor" }),
+    );
+    expect(rpc.context.disconnectClientsForUserProfile.mock.calls.flat()).toEqual(
+      expect.arrayContaining([source.id, target.id]),
+    );
   });
 });
 
@@ -224,9 +218,7 @@ it("flattens source cohorts, invalidates their cached roles, and rejects redirec
     }
     expect(resolveOperatorRolePolicyForProfile(target.id, cfg)?.scopes).toEqual(["operator.read"]);
     rpc.context.disconnectClientsForUserProfile.mockClear();
-    const merged = await rpc.merge(source.id, target.id);
-    expect(merged[0], JSON.stringify(merged[2])).toBe(true);
-    expect(merged[1]).toMatchObject({ movedAliasKinds: ["email"] });
+    expectMerged(await rpc.merge(source.id, target.id), { movedAliasKinds: ["email"] });
     for (const id of [ancestor.id, source.id]) {
       expect(storedRedirect(id)).toBe(target.id);
       expect(resolveOperatorRolePolicyForProfile(id, cfg)?.scopes).toEqual(["operator.read"]);
@@ -234,28 +226,22 @@ it("flattens source cohorts, invalidates their cached roles, and rejects redirec
     expect(rpc.context.disconnectClientsForUserProfile.mock.calls.flat()).toEqual(
       expect.arrayContaining([ancestor.id, source.id, target.id]),
     );
-    const repeat = await rpc.merge(source.id, target.id);
-    expect(repeat[0], JSON.stringify(repeat[2])).toBe(true);
-    expect(repeat[1]).toMatchObject({ profile: { id: target.id }, movedAliasKinds: [] });
-    const elsewhere = await rpc.merge(source.id, other.id);
-    expect(elsewhere[0]).toBe(false);
-    expect(elsewhere[2]).toMatchObject({
-      code: "INVALID_REQUEST",
-      message: expect.stringContaining(target.id),
+    expectMerged(await rpc.merge(source.id, target.id), {
+      profile: { id: target.id },
+      movedAliasKinds: [],
     });
+    expectFailure(await rpc.merge(source.id, other.id), target.id);
     for (const [from, into] of [
       [target.id, ancestor.id],
       [other.id, source.id],
     ] as const) {
-      const rejected = await rpc.merge(from, into);
-      expect(rejected[0]).toBe(false);
-      expect(rejected[2]).toMatchObject({
-        code: "INVALID_REQUEST",
-        message: `target profile ${into} is merged into ${target.id}; choose the current merge head`,
-      });
+      expectFailure(
+        await rpc.merge(from, into),
+        `target profile ${into} is merged into ${target.id}; choose the current merge head`,
+        true,
+      );
     }
-    expect(storedRedirect(target.id)).toBeNull();
-    expect(storedRedirect(other.id)).toBeNull();
+    expect([target, other].map(({ id }) => storedRedirect(id))).toEqual([null, null]);
   });
 });
 
@@ -285,25 +271,15 @@ it("rejects invalid pairs and both direct and redirected shared-owner identities
       [ownerAlias.id, source.id, ownerError],
       [source.id, ownerAlias.id, ownerError],
     ] as const) {
-      const rejected = await rpc.merge(from, into);
-      expect(rejected[0]).toBe(false);
-      expect(rejected[2]).toMatchObject({
-        code: "INVALID_REQUEST",
-        message: expect.stringContaining(message),
-      });
+      expectFailure(await rpc.merge(from, into), message);
     }
     const malformed = await rpc.dispatch("users.merge", {
       sourceProfileId: source.id,
       targetProfileId: rpc.admin.id,
       unexpected: true,
     });
-    expect(malformed[0]).toBe(false);
-    expect(malformed[2]).toMatchObject({
-      code: "INVALID_REQUEST",
-      message: expect.stringContaining("invalid users.merge params"),
-    });
-    expect(storedRedirect(source.id)).toBeNull();
-    expect(storedRedirect(owner.id)).toBeNull();
+    expectFailure(malformed, "invalid users.merge params");
+    expect([source, owner].map(({ id }) => storedRedirect(id))).toEqual([null, null]);
     expect(rpc.context.disconnectClientsForUserProfile).not.toHaveBeenCalled();
   });
 });

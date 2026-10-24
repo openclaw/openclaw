@@ -19,13 +19,18 @@ function openReader(
     probe?: Promise<{ status: number }>;
     unavailable?: boolean;
     blockedStorage?: boolean;
+    messages?: unknown[];
   } = {},
 ) {
   const basePath = options.basePath ?? "/control";
   const dom = new JSDOM(
     renderPublicSessionDocument({
       title: "Conversation unavailable",
-      messages: [],
+      messages: options.messages ?? [],
+      widgetUrls: new Map([
+        ["cv_size", "/control/share/session/media?widget=size"],
+        ["cv_other", "/control/share/session/media?widget=other"],
+      ]),
       truncated: false,
       unavailable: options.unavailable !== false,
       latestUrl: "/control/chat/main/private",
@@ -61,6 +66,7 @@ function openReader(
     : undefined;
   runInNewContext(document.querySelector("script")!.textContent!, {
     document,
+    window: dom.window,
     location: { protocol: location.protocol, host: location.host, hash: location.hash, replace },
     localStorage: storage ?? localStorage,
     sessionStorage: storage ?? sessionStorage,
@@ -73,25 +79,54 @@ function openReader(
   readers.push(dom);
   const loginVisibility = () =>
     dom.window.getComputedStyle(document.getElementById("session-login")!).visibility;
-  return { replace, fetch, document, loginVisibility };
+  return { replace, fetch, document, loginVisibility, window: dom.window };
 }
 
 const device = JSON.stringify({
-  version: 1,
-  deviceId: "synthetic-device",
-  tokens: {
-    operator: {
-      token: "synthetic-device-token",
-      role: "operator",
-      scopes: ["operator.read"],
-      updatedAtMs: 1,
-    },
-  },
+  tokens: { operator: { token: "synthetic-device-token" } },
 });
 const entry =
   "https://gateway.test/control/__openclaw__/session-entry?path=%2Fcontrol%2Fchat%2Fmain%2Fprivate";
 
+function expectUnavailable(f: ReturnType<typeof openReader>) {
+  expect(f.document.querySelector("main")!.hasAttribute("data-entry-pending")).toBe(false);
+  expect(f.document.title).toBe("Conversation unavailable · OpenClaw");
+  expect(f.loginVisibility()).toBe("visible");
+  expect(f.replace).not.toHaveBeenCalled();
+}
+
 describe("public reader operator handoff", () => {
+  it("resizes only the sending widget frame and ignores unrelated or invalid messages", () => {
+    const f = openReader({
+      unavailable: false,
+      messages: [
+        { role: "assistant", content: '[embed ref="cv_size" /] [embed ref="cv_other" /]' },
+      ],
+    });
+    const [frame, other] = Array.from(f.document.querySelectorAll("iframe"));
+    const send = (data: unknown, source = frame!.contentWindow) =>
+      f.window.dispatchEvent(new f.window.MessageEvent("message", { data, source }));
+    send({ type: "openclaw:widget-size", height: 730 });
+    expect(frame!.style.height).toBe("730px");
+    expect(other!.style.height).toBe("420px");
+    send({ type: "openclaw:widget-size", height: 1 });
+    expect(frame!.style.height).toBe("48px");
+    send({ type: "openclaw:widget-size", height: 9000 });
+    expect(frame!.style.height).toBe("8000px");
+    for (const data of [
+      null,
+      { type: "openclaw:widget-prompt", height: 500 },
+      { type: "openclaw:widget-size", height: "500" },
+      { type: "openclaw:widget-size", height: Infinity },
+    ]) {
+      send(data);
+    }
+    send({ type: "openclaw:widget-size", height: 500 }, other!.contentWindow);
+    expect(other!.style.height).toBe("500px");
+    send({ type: "openclaw:widget-size", height: 600 }, null);
+    expect(frame!.style.height).toBe("8000px");
+    expect(other!.style.height).toBe("500px");
+  });
   it.each([204, 401])(
     "keeps the unavailable result pending through a delayed %s handoff",
     async (status) => {
@@ -109,17 +144,22 @@ describe("public reader operator handoff", () => {
     },
   );
 
-  it.each([401])("reveals confirmed unavailability after a delayed %s response", async (status) => {
+  it("reveals confirmed unavailability after a delayed 401 response", async () => {
     const probe = createDeferred<{ status: number }>();
     const f = openReader({ probe: probe.promise });
     const main = f.document.querySelector("main")!;
     expect(main.hasAttribute("data-entry-pending")).toBe(true);
-    probe.resolve({ status });
+    probe.resolve({ status: 401 });
     await probe.promise;
-    expect(main.hasAttribute("data-entry-pending")).toBe(false);
-    expect(f.document.title).toBe("Conversation unavailable · OpenClaw");
-    expect(f.loginVisibility()).toBe("visible");
-    expect(f.replace).not.toHaveBeenCalled();
+    expectUnavailable(f);
+  });
+
+  it("offers login when an auth proxy redirects the signed-out probe", async () => {
+    const probe = createDeferred<{ status: number; type?: string }>();
+    const f = openReader({ probe: probe.promise });
+    probe.resolve({ status: 0, type: "opaqueredirect" });
+    await probe.promise;
+    expectUnavailable(f);
   });
 
   it.each(["network", "server"])("does not present %s failures as denied access", async (kind) => {
@@ -225,12 +265,10 @@ describe("public reader operator handoff", () => {
   ])("keeps $name on the reader", async (options) => {
     const f = openReader(options);
     await Promise.resolve();
-    expect(f.replace).not.toHaveBeenCalled();
-    expect(f.document.querySelector("main")!.hasAttribute("data-entry-pending")).toBe(false);
-    expect(f.document.title).toBe("Conversation unavailable · OpenClaw");
+    expectUnavailable(f);
     expect(f.fetch).toHaveBeenCalledWith(
       `${entry}&probe=1`,
-      expect.objectContaining({ credentials: "same-origin", redirect: "error" }),
+      expect.objectContaining({ credentials: "same-origin", redirect: "manual" }),
     );
   });
 

@@ -1,37 +1,8 @@
-import type { MarkdownIR } from "openclaw/plugin-sdk/text-chunking";
+import type { markdownToIRWithMeta } from "openclaw/plugin-sdk/text-chunking";
 import { TextStyle, type Style } from "./zca-constants.js";
 
-export type MarkdownBlockMetadata = {
-  kind: "blockquote" | "code_block" | "heading" | "thematic_break";
-  start: number;
-  end: number;
-  depth: number;
-  blockquoteDepth?: number;
-  codeOrigin?: "fenced" | "indented";
-  codeClosed?: boolean;
-  headingLevel?: number;
-  headingOrigin?: "atx" | "setext";
-  language?: string;
-  sourceStartLine?: number;
-  sourceEndLine?: number;
-};
-
-/** Bundled transport view of non-enumerable parser metadata; keep it in lockstep with markdown-core. */
-export type MarkdownIRWithBlockMetadata = Omit<MarkdownIR, "listItems"> & {
-  blocks?: MarkdownBlockMetadata[];
-  listItems?: Array<
-    NonNullable<MarkdownIR["listItems"]>[number] & {
-      contentStart?: number;
-      contentEnd?: number;
-      markerOnly?: true;
-      sourceMarker?: { start: number; end: number };
-      sourceContent?: { start: number; end: number };
-      sourceIndent?: number;
-      sourceStartLine?: number;
-      sourceEndLine?: number;
-    }
-  >;
-};
+export type MarkdownIRWithMetadata = ReturnType<typeof markdownToIRWithMeta>["ir"];
+export type MarkdownBlockSpan = NonNullable<MarkdownIRWithMetadata["blocks"]>[number];
 
 export type InlineStyle = (typeof TextStyle)[keyof typeof TextStyle];
 

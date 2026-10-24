@@ -1,5 +1,3 @@
-import type { DatabaseSync } from "node:sqlite";
-import { expressionBuilder } from "kysely";
 import type { DB as OpenClawAgentKyselyDatabase } from "../state/openclaw-agent-db.generated.js";
 import { chunkItems } from "../utils/chunk-items.js";
 import {
@@ -7,16 +5,22 @@ import {
   getNodeSqliteKysely,
   iterateSqliteQuerySync,
 } from "./kysely-sync.js";
-import type { UsageCostPartition } from "./session-cost-usage-partitions.js";
+import { boundedUsageCacheColumn, usageCacheJsonText } from "./session-cost-usage-expressions.js";
 import {
+  USAGE_COST_PARTITION_SCOPE,
+  usageCostPartitionKey,
+  type UsageCostPartition,
+} from "./session-cost-usage-partitions.js";
+import {
+  deleteSessionCostUsagePartitionsInDatabase,
   pruneSessionCostUsagePartitionsInDatabase,
-  writeSessionCostUsagePartitionsInDatabase,
 } from "./session-cost-usage-partitions.worker.js";
 import {
   decodeUsageCostRollupEnvelope,
   USAGE_COST_ROLLUP_SCOPE as ROLLUP_SCOPE,
   type UsageCostFreshnessCheckpoint,
 } from "./session-cost-usage-rollup-codec.js";
+import type { EngineConnection } from "./sql-connection.js";
 import { withSqliteDatabaseWriteScope } from "./sqlite-database-admission.js";
 
 const LEGACY_CACHE_SCOPE = "session-cost-usage";
@@ -25,7 +29,6 @@ const RETIRED_ROLLUP_SCOPES = ["session-cost-usage-rollup-v1", "session-cost-usa
 const ROLLUP_PRUNE_BATCH_SIZE = 32;
 
 type AgentCacheDatabase = Pick<OpenClawAgentKyselyDatabase, "cache_entries">;
-const cacheExpressions = expressionBuilder<AgentCacheDatabase, "cache_entries">();
 
 export type SessionCostUsageRollupRow = {
   key: string;
@@ -40,12 +43,6 @@ type SessionCostUsageJson = string | Uint8Array;
 export type SessionCostUsageRollupSnapshot = Omit<SessionCostUsageRollupRow, "valueJson"> & {
   valueJson: SessionCostUsageJson;
 };
-
-function cacheJsonText(value: SessionCostUsageJson) {
-  return typeof value === "string"
-    ? value
-    : cacheExpressions.cast<string>(cacheExpressions.val(value), "text");
-}
 
 export type SessionCostUsageDeferredMetadata = {
   checkpoint: UsageCostFreshnessCheckpoint;
@@ -65,17 +62,17 @@ type RollupReadOptions = {
 };
 
 export function readSessionCostUsageRollupRowsInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   filePaths: readonly string[] | undefined,
   options: RollupReadOptions & { includeBody: true },
 ): Array<SessionCostUsageRollupRow & { blob: Uint8Array | null }>;
 export function readSessionCostUsageRollupRowsInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   filePaths?: readonly string[],
   options?: RollupReadOptions & { includeBody?: false },
 ): SessionCostUsageRollupRow[];
 export function readSessionCostUsageRollupRowsInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   filePaths?: readonly string[],
   options?: RollupReadOptions,
 ): Array<SessionCostUsageRollupRow & { blob?: Uint8Array | null }> {
@@ -90,32 +87,10 @@ export function readSessionCostUsageRollupRowsInDatabase(
       .selectFrom("cache_entries")
       .select(["key", "updated_at"])
       .select((eb) => [
-        (budget
-          ? eb
-              .case()
-              .when(eb.fn<number>("length", [eb.cast("value_json", "blob")]), "<=", 64 * 1024)
-              .then(eb.ref("value_json"))
-              .else(null)
-              .end()
-          : eb.ref("value_json")
-        ).as("value_json"),
-        (options?.includeBody
-          ? budget
-            ? eb
-                .case()
-                .when(
-                  eb.fn<number>("length", ["blob"]),
-                  "<=",
-                  Math.min(1024 * 1024, budget.remainingBytes),
-                )
-                .then(eb.ref("blob"))
-                .else(null)
-                .end()
-            : eb.ref("blob")
-          : eb.val(null)
-        ).as("blob"),
+        boundedUsageCacheColumn("value_json", budget).as("value_json"),
+        (options?.includeBody ? boundedUsageCacheColumn("blob", budget) : eb.val(null)).as("blob"),
         eb.fn<number>("coalesce", [eb.fn<number>("length", ["blob"]), eb.val(0)]).as("body_bytes"),
-        eb.fn<number>("length", [eb.cast("value_json", "blob")]).as("header_bytes"),
+        eb.fn<number>("octet_length", ["value_json"]).as("header_bytes"),
       ])
       .where("scope", "=", ROLLUP_SCOPE);
     for (const row of iterateSqliteQuerySync(db, keys ? query.where("key", "in", keys) : query)) {
@@ -185,8 +160,8 @@ export function readSessionCostUsageRollupRowsInDatabase(
   return result;
 }
 
-export function writeSessionCostUsageRollupInDatabase(
-  db: DatabaseSync,
+export function writeSessionCostUsageRollupsInDatabase(
+  db: EngineConnection,
   params: {
     rollupId: string;
     valueJson: Uint8Array;
@@ -195,34 +170,55 @@ export function writeSessionCostUsageRollupInDatabase(
     partitions?: UsageCostPartition[];
     removedDates?: string[];
     replacePartitions?: boolean;
-  },
+  }[],
 ): boolean {
   return withSqliteDatabaseWriteScope(db, [ROLLUP_SCOPE], () => {
     const kysely = getNodeSqliteKysely<AgentCacheDatabase>(db);
-    const values = {
-      value_json: cacheJsonText(params.valueJson),
-      blob: params.blob,
-      expires_at: null,
-      updated_at: params.updatedAt,
-    };
-    executeSqliteQuerySync(
-      db,
-      kysely
-        .insertInto("cache_entries")
-        .values({ scope: ROLLUP_SCOPE, key: params.rollupId, ...values })
-        .onConflict((conflict) => conflict.columns(["scope", "key"]).doUpdateSet(values)),
-    );
-    if (params.partitions || params.removedDates || params.replacePartitions) {
-      writeSessionCostUsagePartitionsInDatabase(db, params);
+    if (params.some((row) => row.partitions || row.removedDates || row.replacePartitions)) {
+      deleteSessionCostUsagePartitionsInDatabase(db, params);
+    }
+    const rows = params.flatMap((row) => [
+      {
+        scope: ROLLUP_SCOPE,
+        key: row.rollupId,
+        value_json: usageCacheJsonText(row.valueJson),
+        blob: row.blob,
+        expires_at: null,
+        updated_at: row.updatedAt,
+      },
+      ...(row.partitions ?? []).map((partition) => ({
+        scope: USAGE_COST_PARTITION_SCOPE,
+        key: usageCostPartitionKey(row.rollupId, partition.date),
+        value_json: partition.valueJson,
+        blob: partition.blob,
+        expires_at: null,
+        updated_at: row.updatedAt,
+      })),
+    ]);
+    for (const batch of chunkItems(rows, 100)) {
+      executeSqliteQuerySync(
+        db,
+        kysely
+          .insertInto("cache_entries")
+          .values(batch)
+          .onConflict((conflict) =>
+            conflict.columns(["scope", "key"]).doUpdateSet((eb) => ({
+              value_json: eb.ref("excluded.value_json"),
+              blob: eb.ref("excluded.blob"),
+              expires_at: eb.ref("excluded.expires_at"),
+              updated_at: eb.ref("excluded.updated_at"),
+            })),
+          ),
+      );
     }
     return true;
   });
 }
 
-/** Read one body only while its exact metadata snapshot still owns the row. */
+/** The refresh lease owns the checkpoint while its body is loaded. */
 export function readSessionCostUsageRollupBodyInDatabase(
-  db: DatabaseSync,
-  row: SessionCostUsageRollupSnapshot,
+  db: EngineConnection,
+  key: string,
 ): { blob: Uint8Array | null } | undefined {
   return executeSqliteQuerySync(
     db,
@@ -230,14 +226,12 @@ export function readSessionCostUsageRollupBodyInDatabase(
       .selectFrom("cache_entries")
       .select("blob")
       .where("scope", "=", ROLLUP_SCOPE)
-      .where("key", "=", row.key)
-      .where("updated_at", "=", row.updatedAt)
-      .where("value_json", "=", cacheJsonText(row.valueJson)),
+      .where("key", "=", key),
   ).rows[0];
 }
 
 export function pruneSessionCostUsageRollupsInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   existing: readonly SessionCostUsageRollupSnapshot[],
 ): void {
   return withSqliteDatabaseWriteScope(db, [ROLLUP_SCOPE], () => {
@@ -262,7 +256,7 @@ export function pruneSessionCostUsageRollupsInDatabase(
               batch.map((row) =>
                 eb.and([
                   eb("key", "=", row.key),
-                  eb("value_json", "=", cacheJsonText(row.valueJson)),
+                  eb("value_json", "=", usageCacheJsonText(row.valueJson)),
                   eb("updated_at", "=", row.updatedAt),
                 ]),
               ),
@@ -270,6 +264,13 @@ export function pruneSessionCostUsageRollupsInDatabase(
           ),
       );
     }
+  });
+}
+
+/** Doctor owns retired scopes; ordinary refreshes only prune observed stale rows. */
+export function retireLegacySessionCostUsageCacheInDatabase(db: EngineConnection): void {
+  return withSqliteDatabaseWriteScope(db, [], () => {
+    const kysely = getNodeSqliteKysely<AgentCacheDatabase>(db);
     executeSqliteQuerySync(
       db,
       kysely

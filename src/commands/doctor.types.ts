@@ -3,6 +3,7 @@ export type DoctorOptions = {
   yes?: boolean;
   nonInteractive?: boolean;
   deep?: boolean;
+  fullIntegrityCheck?: boolean;
   repair?: boolean;
   force?: boolean;
   generateGatewayToken?: boolean;

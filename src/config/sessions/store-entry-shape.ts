@@ -22,7 +22,7 @@ function normalizeSessionEntryArchiveReason(
     : undefined;
 }
 
-function normalizeOptionalTimestamp(value: unknown): number | undefined {
+export function normalizeOptionalTimestamp(value: unknown): number | undefined {
   return value === undefined ? undefined : (asNonNegativeFiniteNumber(value) ?? 0);
 }
 
@@ -260,7 +260,7 @@ export function normalizeMemoryFlush(value: unknown): SessionEntry["memoryFlush"
   };
 }
 
-function normalizeCount(value: unknown): number | undefined {
+export function normalizeCount(value: unknown): number | undefined {
   const number = asNonNegativeFiniteNumber(value);
   return number === undefined ? undefined : Math.floor(number);
 }

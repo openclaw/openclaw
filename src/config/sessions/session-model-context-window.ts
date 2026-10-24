@@ -2,6 +2,10 @@ import type { AgentMessage, SessionTreeEntry } from "@openclaw/agent-core";
 import { projectSessionEntryMessage } from "../../../packages/agent-core/src/harness/session/session.js";
 import { classifyToolUseResultPairing } from "../../../packages/agent-core/src/harness/session/tool-result-pairing.js";
 import type { SessionModelContextLimits } from "./session-history-read.types.js";
+import {
+  PREFIX_TOOL_OWNER,
+  type ModelContextPairingFacts,
+} from "./session-model-context-pairing.js";
 
 export type ContextEntry = SessionTreeEntry & { seq: number };
 export type ModelContextRequest = {
@@ -10,11 +14,31 @@ export type ModelContextRequest = {
   toolResultOmission?: string;
 };
 
+export type ModelContextPrefix = {
+  count: number;
+  bytes: number;
+  hasUser: boolean;
+  pairing: ModelContextPairingFacts;
+};
+
+function readToolResultOwners(messages: readonly AgentMessage[]): ModelContextPairingFacts {
+  const owners = new Map<AgentMessage, Extract<AgentMessage, { role: "assistant" }>>();
+  for (const frame of classifyToolUseResultPairing(messages)) {
+    for (const occurrence of frame.occurrences) {
+      if (occurrence.sourceResult) {
+        owners.set(occurrence.sourceResult, frame.assistant);
+      }
+    }
+  }
+  return owners;
+}
+
 /** Select an owned suffix before SQLite payloads can enter JavaScript or cross a worker. */
 export function selectBoundedModelRequests(
   requests: ModelContextRequest[],
   readSizes: (requests: readonly ModelContextRequest[]) => Map<ContextEntry, number>,
   limits: SessionModelContextLimits,
+  prefix?: ModelContextPrefix,
 ): ModelContextRequest[] {
   const boundary = requests.find(
     ({ entry }) => entry.type === "compaction" || entry.type === "reset",
@@ -76,6 +100,7 @@ export function selectBoundedModelRequests(
     for (const size of readSizes(candidates.slice(0, -sizingCandidates.length)).values()) {
       totalBytes += size;
     }
+    totalBytes += prefix?.bytes ?? 0;
     const step = Math.max(1, Math.floor(capacity / 4));
     byteLimit = bytes + totalBytes - Math.ceil((totalBytes - capacity) / step) * step;
   }
@@ -93,7 +118,7 @@ export function selectBoundedModelRequests(
       cut -= 1;
     }
   }
-  if (cut === 0) {
+  if (cut === 0 && !prefix?.count) {
     return requests.map((request) => replacements.get(request.entry)?.request ?? request);
   }
   const turnStarts = byteLimited
@@ -101,36 +126,36 @@ export function selectBoundedModelRequests(
         entry.type === "message" && entry.message.role === "user" ? [index] : [],
       )
     : [];
+  if (byteLimited && prefix?.hasUser) {
+    turnStarts.unshift(-1);
+  }
   // Prefer a whole turn when one fits; otherwise keep the existing atomic-frame fallback.
   const alignToTurn = (index: number) => turnStarts.find((start) => start >= index) ?? index;
   cut = alignToTurn(cut);
-  const messages = candidates.flatMap(({ entry }) => {
-    const message = entry.type === "message" ? entry.message : projectSessionEntryMessage(entry);
-    return message ? [message] : [];
-  });
   const positions = new Map<AgentMessage, number>();
   for (const [index, { entry }] of candidates.entries()) {
     if (entry.type === "message") {
       positions.set(entry.message, index);
     }
   }
-  const original = classifyToolUseResultPairing(messages);
-  const owners = new Map<AgentMessage, AgentMessage>();
-  // Occurrence ownership, including displaced results, forbids cuts through a tool frame.
-  // Frames are ordered by their assistant, so advancing the cut needs only one pass.
-  for (const frame of original.frames) {
-    const start = positions.get(frame.assistant)!;
-    for (const occurrence of frame.occurrences) {
-      if (occurrence.sourceResult) {
-        owners.set(occurrence.sourceResult, frame.assistant);
-        const end = positions.get(occurrence.sourceResult)!;
-        if (start < cut && cut <= end) {
-          cut = alignToTurn(end + 1);
-        }
-        if (start < fallbackCut && fallbackCut <= end) {
-          fallbackCut = end + 1;
-        }
-      }
+  const pairing =
+    prefix?.pairing ??
+    readToolResultOwners(
+      candidates.flatMap(({ entry }) => {
+        const message =
+          entry.type === "message" ? entry.message : projectSessionEntryMessage(entry);
+        return message ? [message] : [];
+      }),
+    );
+  // Map order preserves canonical assistant order, including owners in the discarded prefix.
+  for (const [result, assistant] of pairing) {
+    const start = assistant === PREFIX_TOOL_OWNER ? -1 : positions.get(assistant)!;
+    const end = positions.get(result)!;
+    if (start < cut && cut <= end) {
+      cut = alignToTurn(end + 1);
+    }
+    if (start < fallbackCut && fallbackCut <= end) {
+      fallbackCut = end + 1;
     }
   }
   // A large newest atomic frame may consume the headroom without exceeding the hard cap.
@@ -164,16 +189,9 @@ export function selectBoundedModelRequests(
     entry.type === "message" ? [entry.message] : [],
   );
   // Removing an older repeated ID must not turn an ambiguous result into a different call's result.
-  const selectedOwners = new Map<AgentMessage, AgentMessage>();
-  for (const frame of classifyToolUseResultPairing(selectedMessages).frames) {
-    for (const occurrence of frame.occurrences) {
-      if (occurrence.sourceResult) {
-        selectedOwners.set(occurrence.sourceResult, frame.assistant);
-      }
-    }
-  }
+  const selectedOwners = readToolResultOwners(selectedMessages);
   for (const message of selectedMessages) {
-    if (message.role === "toolResult" && owners.get(message) !== selectedOwners.get(message)) {
+    if (message.role === "toolResult" && pairing.get(message) !== selectedOwners.get(message)) {
       throw new RangeError("Session context limit would change tool-result ownership");
     }
   }

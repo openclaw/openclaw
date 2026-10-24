@@ -13,7 +13,7 @@ export type PluginCapabilityCatalogContext = {
   resolveProviderRequestHeaders: typeof import("../agents/provider-request-config.js").resolveProviderRequestHeaders;
   resolveProviderAuthProfileApiKey: typeof import("./provider-auth-availability.js").resolveProviderAuthProfileApiKey;
   resolveApiKeyForProvider: typeof import("./runtime/runtime-model-auth.runtime.js").resolveProviderRuntimeApiKey;
-  /** @deprecated Use the host context's captureWsEventAsync; final compatibility day: 2026-12-31. */
+  /** @deprecated Use the host context's captureWsEventAsync; final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
   captureWsEvent: typeof import("../proxy-capture/runtime.js").captureWsEvent;
   createDebugProxyWebSocketAgent: typeof import("../proxy-capture/env.js").createDebugProxyWebSocketAgent;
   resolveDebugProxySettings: typeof import("../proxy-capture/env.js").resolveDebugProxySettings;

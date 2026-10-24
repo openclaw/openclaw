@@ -65,7 +65,6 @@ export function resolveConversationToolPolicies(params: {
 export function buildConversationToolPolicyPipelineSteps(params: {
   capabilityProfile: ResolvedConversationCapabilityProfile;
   policies: ReturnType<typeof resolveConversationToolPolicies>;
-  additionalStepsAfterSandbox?: ToolPolicyPipelineStep[];
   includeRuntimeToolPolicy: boolean;
   unavailableCoreToolReason?: string;
 }): ToolPolicyPipelineStep[] {
@@ -99,7 +98,6 @@ export function buildConversationToolPolicyPipelineSteps(params: {
       unavailableCoreToolReason: params.unavailableCoreToolReason,
     }),
     step(params.policies.sandboxPolicy, "sandbox tools.allow"),
-    ...(params.additionalStepsAfterSandbox ?? []),
     step(params.policies.subagentPolicy, "subagent tools.allow"),
     ...(params.includeRuntimeToolPolicy
       ? [step(params.policies.runtimeToolPolicy, "runtime tools.allow", "runtime")]

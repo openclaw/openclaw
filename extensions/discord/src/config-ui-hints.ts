@@ -39,7 +39,7 @@ export const discordChannelConfigUiHints = {
   }),
   "streaming.progress.toolProgress": {
     label: "Discord Progress Tool Lines",
-    help: "Show the detailed rolling tool log (default: false). Work status, delegated-task states, plans, and authored progress remain visible without it. Set streaming.mode to off for quiet final-only delivery.",
+    help: "Show the detailed rolling tool log and delegated-task lifecycle rows (default: false). The editable work message, plans, and authored progress remain visible without it. Set streaming.mode to off for quiet final-only delivery.",
   },
   joinIntro: {
     label: "Discord Guild Join Introduction",

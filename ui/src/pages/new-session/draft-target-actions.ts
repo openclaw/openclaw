@@ -6,30 +6,28 @@ import {
   markDraftPlaceProjectChoice,
   type createDraftPlaceRestoreState,
 } from "./draft-place-restore.ts";
-import type { DraftRepositoryController } from "./draft-repository-state.ts";
+import type { DraftRepositoryStateOwner } from "./draft-repository-state.ts";
 import type { DraftSuggestedCloudProfile } from "./draft-suggested-cloud-profile.ts";
 import type { DraftRestoredFolderValidation } from "./folder-validation.ts";
 import { environmentDeviceDisabledReason } from "./hosted-environments.ts";
 import type { NewSessionModelControl } from "./model-control.ts";
 import { resolveNewSessionWhere } from "./preferences.ts";
 
-type DraftTargetPlace = {
-  requiredPlacement: boolean;
-  hostedEnvironment: unknown;
-  devices: () => DevicePlacementOption[];
-  worktree: boolean;
-  folder: string;
-  deviceFolderAvailable: boolean;
-  suggestedCloudProfile: DraftSuggestedCloudProfile;
-};
-
 type DraftTargetContext = {
-  place: DraftTargetPlace;
+  place: {
+    requiredPlacement: boolean;
+    hostedEnvironment: unknown;
+    devices: () => DevicePlacementOption[];
+    worktree: boolean;
+    folder: string;
+    deviceFolderAvailable: boolean;
+    suggestedCloudProfile: DraftSuggestedCloudProfile;
+  };
   read: () => DraftPlaceSnapshot;
   selection: ReturnType<typeof createDraftPlaceRestoreState>;
   callbacks: DraftPlaceCallbacks;
   folderValidation: DraftRestoredFolderValidation;
-  repositoryState: DraftRepositoryController;
+  repositoryState: DraftRepositoryStateOwner;
   browser: DraftPlaceBrowser;
   modelControl: NewSessionModelControl;
   persistPreference: (patch: Parameters<DraftGatewayState["persistPreference"]>[2]) => void;
@@ -54,7 +52,7 @@ export function selectDraftDeviceFolder(context: DraftTargetContext, select: () 
   context.browser.clearProjectSelection();
   context.repositoryState.reset();
   context.browser.close();
-  context.callbacks.requestUpdate();
+  context.callbacks.changed();
 }
 
 export function selectDraftDevice(
@@ -97,7 +95,7 @@ export function selectDraftDevice(
     !context.selection.cloudProfileId
   ) {
     context.browser.close();
-    context.callbacks.requestUpdate();
+    context.callbacks.changed();
     return;
   }
   context.folderValidation.cancel();
@@ -114,7 +112,7 @@ export function selectDraftDevice(
   });
   context.browser.close();
   context.repositoryState.synchronize();
-  context.callbacks.requestUpdate();
+  context.callbacks.changed();
 }
 
 export function selectDraftCloudProfile(context: DraftTargetContext, profileId: string) {
@@ -139,7 +137,7 @@ export function selectDraftCloudProfile(context: DraftTargetContext, profileId: 
     freshWorkspace: context.selection.freshWorkspace,
   });
   context.repositoryState.synchronize();
-  context.callbacks.requestUpdate();
+  context.callbacks.changed();
 }
 
 export function selectDraftWorktree(context: DraftTargetContext, value: boolean) {

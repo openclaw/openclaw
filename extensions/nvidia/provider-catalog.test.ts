@@ -27,25 +27,18 @@ afterEach(() => {
   catalogResponses.clear();
 });
 
-function mockFeaturedCatalogResponse(payload: unknown, status = 200, inventoryIds?: string[]) {
-  const release = vi.fn();
-  const featured =
-    (payload as { "featured-models"?: Array<{ model: string }> })["featured-models"] ?? [];
-  const ids =
-    inventoryIds ??
-    featured.map((row) => row.model).filter((id) => typeof id === "string" && !/\s/.test(id));
+function mockCatalog(ids: string[], rows: unknown[], inventoryStatus = 200) {
   for (const [url, body] of [
-    [
-      NVIDIA_MODELS_URL,
-      { data: ids.map((id) => ({ id: id.includes("/") ? id : `nvidia/${id}` })) },
-    ],
-    [NVIDIA_FEATURED_MODELS_URL, payload],
+    [NVIDIA_MODELS_URL, { data: ids.map((id) => ({ id, object: "model" })) }],
+    [NVIDIA_FEATURED_MODELS_URL, { "featured-models": rows }],
   ] as const) {
     const responses = catalogResponses.get(url) ?? [];
     responses.push({
-      response: Response.json(body, { status }),
+      response: Response.json(body, {
+        status: url === NVIDIA_MODELS_URL ? inventoryStatus : 200,
+      }),
       finalUrl: url,
-      release: url === NVIDIA_FEATURED_MODELS_URL ? release : vi.fn(),
+      release: vi.fn(),
     });
     catalogResponses.set(url, responses);
   }
@@ -56,56 +49,27 @@ function mockFeaturedCatalogResponse(payload: unknown, status = 200, inventoryId
     }
     return response;
   });
-  return release;
 }
 
-function mockInventoryAndFeatured(params: {
-  ids: string[];
-  featured: unknown[];
-  inventoryStatus?: number;
-  featuredStatus?: number;
-}) {
-  ssrfRuntimeMocks.fetchWithSsrFGuard.mockImplementation(async ({ url }: { url: string }) => ({
-    response:
-      url === NVIDIA_MODELS_URL
-        ? Response.json(
-            { data: params.ids.map((id) => ({ id, object: "model" })) },
-            { status: params.inventoryStatus ?? 200 },
-          )
-        : Response.json(
-            { "featured-models": params.featured },
-            { status: params.featuredStatus ?? 200 },
-          ),
-    finalUrl: url,
-    release: vi.fn(),
-  }));
+function featured(model: string, name: string, context: number, maxOutput: number) {
+  return { model, "model-name": name, context, "max-output": maxOutput };
 }
 
 describe("nvidia provider catalog", () => {
   it("uses the model inventory for availability while retaining featured ordering", async () => {
-    mockInventoryAndFeatured({
-      ids: [
+    mockCatalog(
+      [
         "nvidia/nemotron-3-ultra-550b-a55b",
         "nvidia/nemotron-3.5-super-vl-120b-a12b",
         "nvidia/nemotron-3.5-lightning-30b-a3b",
         "nvidia/unclassified-new-model",
         "nvidia/nemotron-4-340b-reward",
       ],
-      featured: [
-        {
-          model: "z-ai/glm-5.2",
-          "model-name": "Stale featured model",
-          context: 202752,
-          "max-output": 8192,
-        },
-        {
-          model: "nemotron-3.5-super-vl-120b-a12b",
-          "model-name": "Nemotron 3.5 Super VL",
-          context: 1048576,
-          "max-output": 8192,
-        },
+      [
+        featured("z-ai/glm-5.2", "Stale featured model", 202752, 8192),
+        featured("nemotron-3.5-super-vl-120b-a12b", "Nemotron 3.5 Super VL", 1048576, 8192),
       ],
-    });
+    );
 
     const provider = await buildLiveNvidiaProvider();
 
@@ -120,7 +84,7 @@ describe("nvidia provider catalog", () => {
       init: { headers: expect.any(Headers) },
       lookupFn: expect.any(Function),
       policy: { allowedHostnames: ["assets.ngc.nvidia.com"] },
-      signal: expect.any(AbortSignal),
+      signal: undefined,
       timeoutMs: expect.any(Number),
       url: NVIDIA_FEATURED_MODELS_URL,
       requireHttps: true,
@@ -128,13 +92,7 @@ describe("nvidia provider catalog", () => {
   });
 
   it("does not treat featured rows as fresh inventory when model discovery fails", async () => {
-    mockInventoryAndFeatured({
-      ids: [],
-      inventoryStatus: 503,
-      featured: [
-        { model: "z-ai/glm-5.2", "model-name": "GLM 5.2", context: 202752, "max-output": 8192 },
-      ],
-    });
+    mockCatalog([], [featured("z-ai/glm-5.2", "GLM 5.2", 202752, 8192)], 503);
 
     await expect(buildLiveNvidiaProvider()).rejects.toThrow("HTTP 503");
   });
@@ -142,9 +100,11 @@ describe("nvidia provider catalog", () => {
   it("builds the bundled NVIDIA provider defaults", () => {
     const provider = buildNvidiaProvider();
 
-    expect(provider.baseUrl).toBe("https://integrate.api.nvidia.com/v1");
-    expect(provider.api).toBe("openai-completions");
-    expect(provider.apiKey).toBe("NVIDIA_API_KEY");
+    expect(provider).toMatchObject({
+      baseUrl: "https://integrate.api.nvidia.com/v1",
+      api: "openai-completions",
+      apiKey: "NVIDIA_API_KEY",
+    });
     expect(provider.models.filter((model) => model.compat?.requiresStringContent !== true)).toEqual(
       [],
     );
@@ -180,30 +140,11 @@ describe("nvidia provider catalog", () => {
   });
 
   it("does not cache successful featured catalog responses with no usable rows", async () => {
-    mockFeaturedCatalogResponse(
-      {
-        "featured-models": [
-          {
-            model: "bad model id",
-            "model-name": "Bad",
-            context: 1000,
-            "max-output": 1000,
-          },
-        ],
-      },
-      200,
+    mockCatalog(["moonshotai/kimi-k2.6"], [featured("bad model id", "Bad", 1000, 1000)]);
+    mockCatalog(
       ["moonshotai/kimi-k2.6"],
+      [featured("moonshotai/kimi-k2.6", "Updated Kimi K2.6", 262144, 8192)],
     );
-    mockFeaturedCatalogResponse({
-      "featured-models": [
-        {
-          model: "moonshotai/kimi-k2.6",
-          "model-name": "Updated Kimi K2.6",
-          context: 262144,
-          "max-output": 8192,
-        },
-      ],
-    });
 
     await expect(buildLiveNvidiaProvider()).rejects.toThrow("no usable model metadata");
     const second = await buildLiveNvidiaProvider();

@@ -20,11 +20,7 @@ import {
 } from "../../utils/delivery-context.read.js";
 import { isInternalMessageChannel, normalizeMessageChannel } from "../../utils/message-channel.js";
 import { resolveCommandAuthorizationAsync } from "../command-auth.js";
-import {
-  isAuthorizedTextSlashCommandTurn,
-  isNativeCommandTurn,
-  resolveCommandTurnContext,
-} from "../command-turn-context.js";
+import { isAuthorizedTextSlashCommandTurn, isNativeCommandTurn } from "../command-turn-context.js";
 import { markCommandReplyForDelivery, type ReplyPayload } from "../reply-payload.js";
 import type { FinalizedRuntimeMsgContext as MsgContext } from "../templating.js";
 import { normalizeThinkLevel } from "../thinking.js";
@@ -52,7 +48,7 @@ const skillCommandsRuntimeLoader = createLazyImportLoader(
 const statusCommandRuntimeLoader = createLazyImportLoader(() => import("./commands-status.js"));
 
 function shouldRunNativeSlashCommandFastPath(ctx: MsgContext): boolean {
-  const commandTurn = resolveCommandTurnContext(ctx);
+  const commandTurn = ctx.CommandTurn;
   if (!isNativeCommandTurn(commandTurn) && !isAuthorizedTextSlashCommandTurn(commandTurn)) {
     return false;
   }
@@ -61,9 +57,10 @@ function shouldRunNativeSlashCommandFastPath(ctx: MsgContext): boolean {
     !commandName ||
     commandName === "new" ||
     commandName === "reset" ||
-    // Dashboard creates an agent prompt with exact skill selections. The full
-    // reply pipeline must consume that command once, without re-resolving its text.
-    commandName === "dashboard"
+    // Prompt-producing commands must be consumed once by the full reply pipeline;
+    // their resulting text is not another command or directive invocation.
+    commandName === "dashboard" ||
+    commandName === "followup"
   ) {
     return false;
   }
@@ -378,7 +375,6 @@ export async function maybeResolveNativeSlashCommandFastReply(params: {
     }),
     triggerBodyNormalized: continuationTriggerBodyNormalized,
     resetTriggered: false,
-    hasResolvedHeartbeatModelOverride: false,
   });
   if (directiveResult.kind === "reply") {
     // The canonical directive owner already finalizes typing for every terminal reply.

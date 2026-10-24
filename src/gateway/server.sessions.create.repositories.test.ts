@@ -34,6 +34,7 @@ afterEach(async () => {
   dispatchInboundMessageMock.mockReset();
   closeOpenClawStateDatabaseForTest();
   testState.agentConfig = undefined;
+  vi.unstubAllGlobals();
 });
 
 test("sessions.create retains a cloud repository across replay without creating a Gateway checkout", async () => {
@@ -123,25 +124,23 @@ test("sessions.create retains a cloud repository across replay without creating 
     },
     async () => {
       const fetchImpl = vi.fn<typeof fetch>().mockImplementation(async () => Response.json([]));
+      vi.stubGlobal("fetch", fetchImpl);
       const cacheLifetime = new AbortController();
       onTestFinished(() => cacheLifetime.abort());
       const params = { sessionKey: key, agentId: "main" };
       await loadControlUiSessionPullRequests(params, {
         cacheSignal: cacheLifetime.signal,
-        fetchImpl,
       });
       const repositoryPins = getEventListeners(cacheLifetime.signal, "abort").length;
       expect(repositoryPins).toBeGreaterThan(0);
       await loadControlUiSessionPullRequests(params, {
         cacheSignal: cacheLifetime.signal,
-        fetchImpl,
         resolveGitRoot: async () => workspace,
       });
       expect(getEventListeners(cacheLifetime.signal, "abort")).toHaveLength(repositoryPins);
       gitRead.mockClear();
       const preview = await loadControlUiSessionPullRequests(params, {
         cacheSignal: cacheLifetime.signal,
-        fetchImpl,
       });
       expect(getEventListeners(cacheLifetime.signal, "abort")).toHaveLength(repositoryPins);
       expect(preview.branch, JSON.stringify(preview)).toMatchObject({

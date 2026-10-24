@@ -149,7 +149,6 @@ export async function resolveSubagentModelAndThinkingPlan(params: {
     modelRef: choice.ref,
     ...(inheritedModel ? { inheritedModel: choice.ref } : {}),
     modelApplied: true,
-    thinkingOverride: thinkingPlan.thinkingOverride,
     initialSessionPatch: {
       model: choice.ref.model,
       modelProvider: choice.ref.provider,

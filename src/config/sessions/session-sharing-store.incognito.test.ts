@@ -14,6 +14,7 @@ import {
 } from "./restart-recovery-receipt.js";
 import { memorySessionActorOwners } from "./session-actor-memory-owner.js";
 import { withSessionActorStorage } from "./session-actor-storage-binding.js";
+import type { SessionActorStorageCommand } from "./session-actor-storage-contract.js";
 import { prepareSessionDeliveryGeneration } from "./session-delivery-generation.js";
 import { addSessionSuggestionInWorker } from "./session-metadata-write.async.js";
 import { addSessionMember, readSessionMembersInWorker } from "./session-sharing-store.js";
@@ -62,6 +63,15 @@ function scopeFor(name: string) {
   };
 }
 
+async function mutate(scope: ReturnType<typeof scopeFor>, command: SessionActorStorageCommand) {
+  const result = await withSessionActorStorage(
+    scope,
+    { lifetime, authority, create: command.type === "session.entry.create" },
+    ({ actor }) => actor.storage.mutate(command, authority),
+  );
+  expect(result?.kind).toBe("committed");
+}
+
 it("keeps unbound absent collaboration reads empty without allocating an owner", async () => {
   const scope = scopeFor("absent");
   expect(await readSessionMembersInWorker(scope)).toEqual({ entry: undefined, members: [] });
@@ -87,17 +97,9 @@ it("shares current unbound memory facts across sharing, delivery, steering and p
     updatedAt: 1,
     incognito: true,
   } satisfies SessionEntry;
-  const created = await withSessionActorStorage(
-    scope,
-    { lifetime, authority, create: true },
-    ({ actor }) =>
-      actor.storage.mutate({ type: "session.entry.create", input: { entry } }, authority),
-  );
-  expect(created?.kind).toBe("committed");
-  const owner = memorySessionActorOwners.read(location);
-  if (!owner) {
-    throw new Error("Missing memory owner");
-  }
+  await mutate(scope, { type: "session.entry.create", input: { entry } });
+  const owner = memorySessionActorOwners.read(location)!;
+  expect(owner).toBeDefined();
   const facts = await prepareSessionMutationFacts({ cfg, ...scope });
   const delivery = await prepareSessionDeliveryGeneration({
     ...scope,
@@ -135,21 +137,15 @@ it("shares current unbound memory facts across sharing, delivery, steering and p
       assertCurrent() {},
     });
     await steering.prepareCurrent();
-    const changed = await withSessionActorStorage(scope, { lifetime, authority }, ({ actor }) =>
-      actor.storage.mutate(
-        {
-          type: "session.entry.patch",
-          input: {
-            operation: {
-              kind: "fields",
-              patch: { restartRecoveryDeliveryReceiptState: "delivered-terminal" },
-            },
-          },
+    await mutate(scope, {
+      type: "session.entry.patch",
+      input: {
+        operation: {
+          kind: "fields",
+          patch: { restartRecoveryDeliveryReceiptState: "delivered-terminal" },
         },
-        authority,
-      ),
-    );
-    expect(changed?.kind).toBe("committed");
+      },
+    });
     await expect(steering.prepareCurrent()).rejects.toThrow("delivered-terminal");
 
     owner.closeSession(scope.sessionKey);

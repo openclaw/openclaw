@@ -18,10 +18,12 @@ import {
   type WorkerOperatingSystem,
   type WorkerSshEndpoint,
 } from "../../plugins/types.js";
+import type { WorkerInstallationArtifact } from "./bundle.js";
 import { normalizeWorkerDesktopEndpoint } from "./desktop-endpoint.js";
 import { DEVICE_WORKER_PROVIDER_ID } from "./device-provider-identity.js";
 import { workerEnvironmentServiceError as serviceError } from "./environment-errors.js";
 import { normalizeWorkerSshEndpoint } from "./store-validation.js";
+import type { WorkerEnvironmentRecord } from "./store.js";
 
 export function requireWorkerProfile(value: unknown): WorkerProfile {
   const error = validateProviderSettings(value, "Worker profile");
@@ -107,14 +109,7 @@ export function normalizeWorkerMachineOptions(
       defaultSystems.add(option.os);
     }
   }
-  return value.map((option) => ({
-    id: option.id,
-    label: option.label,
-    ...(option.os === undefined ? {} : { os: option.os }),
-    ...(option.cpu === undefined ? {} : { cpu: option.cpu }),
-    ...(option.memoryGb === undefined ? {} : { memoryGb: option.memoryGb }),
-    ...(option.default === undefined ? {} : { default: option.default }),
-  }));
+  return value;
 }
 
 export function normalizeWorkerOperatingSystems(
@@ -140,12 +135,7 @@ export function normalizeWorkerOperatingSystems(
     }
     ids.add(option.id);
     hasDefault ||= option.default === true;
-    systems.push({
-      id: option.id,
-      label: option.label,
-      ...(option.default === undefined ? {} : { default: option.default }),
-      ...(option.disabledReason === undefined ? {} : { disabledReason: option.disabledReason }),
-    });
+    systems.push(option);
   }
   return systems;
 }
@@ -248,4 +238,14 @@ export function requireWorkerLease(value: unknown): WorkerLease {
     throw new Error("Worker provider returned an invalid node device id");
   }
   return { ...common, node: { deviceId: deviceId.trim() } };
+}
+
+export function requireInstall(
+  record: WorkerEnvironmentRecord,
+): WorkerInstallationArtifact["install"] {
+  const install = record.profileSnapshot.install;
+  if (install !== undefined && install !== "bundle" && install !== "npm") {
+    throw serviceError("invalid_profile", "Worker profile has an invalid install method");
+  }
+  return install ?? "bundle";
 }

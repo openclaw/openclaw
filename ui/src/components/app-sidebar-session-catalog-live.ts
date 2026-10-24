@@ -19,11 +19,12 @@ import { generateUUID } from "../lib/uuid.ts";
 import {
   preserveExpandedCatalogHost,
   refetchExpandedSessionCatalogPages,
+  sessionCatalogPageFailed,
 } from "./app-sidebar-session-catalog-state.ts";
 import { sessionCatalogHostKey } from "./app-sidebar-session-types.ts";
 
-const SESSION_CATALOG_SAFETY_REFRESH_MS = 10 * 60_000;
-const SESSION_CATALOG_STABLE_REFRESH_MS = 30_000;
+// External native clients can change their catalogs without a Gateway event.
+const SESSION_CATALOG_REFRESH_MS = 2 * 60_000;
 const SESSION_CATALOG_MAX_RETRIES = 3;
 
 export function sessionCatalogListClient(
@@ -270,10 +271,16 @@ export class SessionCatalogLiveState {
       ) {
         this.discoveryPages.delete(hostKey);
       }
+      // An exhausted successful snapshot owns the entire host window, even if
+      // the prior view was expanded. Pending and failed reads still retain it.
+      const completeHost =
+        !freshHost.pending && !sessionCatalogPageFailed(freshHost) && !freshHost.nextCursor;
       const mergedHost =
-        freshHost.pending ||
-        (params.pageDepths.get(hostKey) ?? 0) > 0 ||
-        this.discoveryPages.has(hostKey)
+        !completeHost &&
+        (freshHost.pending ||
+          sessionCatalogPageFailed(freshHost) ||
+          (params.pageDepths.get(hostKey) ?? 0) > 0 ||
+          this.discoveryPages.has(hostKey))
           ? preserveExpandedCatalogHost(freshHost, currentHost)
           : freshHost;
       const hosts = currentHost
@@ -281,6 +288,9 @@ export class SessionCatalogLiveState {
         : [...currentCatalog.hosts, mergedHost];
       nextCatalog = {
         ...event.catalog,
+        ...(event.catalog.pending && !event.catalog.error && currentCatalog.error
+          ? { error: currentCatalog.error }
+          : {}),
         hosts: hosts.toSorted((left, right) => left.label.localeCompare(right.label)),
       };
       catalogs = params.catalogs.map((catalog) =>
@@ -293,6 +303,7 @@ export class SessionCatalogLiveState {
       currentCatalog !== undefined &&
       currentCatalog.label === nextCatalog.label &&
       JSON.stringify(currentCatalog.capabilities) === JSON.stringify(nextCatalog.capabilities) &&
+      currentCatalog.pending === nextCatalog.pending &&
       JSON.stringify(currentCatalog.error) === JSON.stringify(nextCatalog.error);
     if (sameCatalogMetadata && JSON.stringify(currentHost) === JSON.stringify(nextHost)) {
       return null;
@@ -354,7 +365,6 @@ export async function refreshSessionCatalogsLive(params: {
   catalogs: () => SessionCatalog[];
   pageDepths: ReadonlyMap<string, number>;
   connected: () => boolean;
-  catalogChangedEvents: boolean;
   applyFinal: (catalogs: SessionCatalog[]) => void;
   /** Finish the finite cursor sweep without repeating the root catalog request. */
   continueRefresh: () => Promise<void>;
@@ -418,12 +428,7 @@ export async function refreshSessionCatalogsLive(params: {
     if (requestIsCurrent() && params.connected()) {
       const pending = live.refreshPending;
       live.refreshPending = false;
-      const interval =
-        retryDelayMs ??
-        (params.catalogChangedEvents
-          ? SESSION_CATALOG_SAFETY_REFRESH_MS
-          : SESSION_CATALOG_STABLE_REFRESH_MS);
-      live.schedule(interval, params.connected(), () => {
+      live.schedule(retryDelayMs ?? SESSION_CATALOG_REFRESH_MS, params.connected(), () => {
         void params.refresh();
       });
       if (pending && retryDelayMs === null) {

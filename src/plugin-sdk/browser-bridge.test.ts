@@ -1,6 +1,7 @@
 // Browser bridge tests protect narrow loading, async activation, and lifecycle delegation.
 import { createServer, type Server } from "node:http";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import type { BrowserBridge, startBrowserBridgeServer } from "./browser-bridge.js";
 
 const loaders = vi.hoisted(() => ({ async: vi.fn(), sync: vi.fn() }));
@@ -55,6 +56,17 @@ function createSurface() {
   };
 }
 
+async function invocation(
+  operation: "startBrowserBridgeServer" | "stopBrowserBridgeServer",
+  surface: ReturnType<typeof createSurface>,
+) {
+  const facade = await import("./browser-bridge.js");
+  return () =>
+    operation === "startBrowserBridgeServer"
+      ? facade.startBrowserBridgeServer(params)
+      : facade.stopBrowserBridgeServer(surface.bridge.server);
+}
+
 describe("browser bridge facade", () => {
   beforeEach(() => {
     vi.resetModules();
@@ -71,21 +83,14 @@ describe("browser bridge facade", () => {
   for (const operation of ["startBrowserBridgeServer", "stopBrowserBridgeServer"] as const) {
     it(`awaits activation of the bridge-only artifact before ${operation} and preserves identity`, async () => {
       const surface = createSurface();
-      let resolveActivation!: (value: typeof surface) => void;
-      const activation = new Promise<typeof surface>((resolve) => {
-        resolveActivation = resolve;
-      });
-      loaders.async.mockReturnValue(activation);
-      loaders.sync.mockReturnValue(surface);
-      const facade = await import("./browser-bridge.js");
-      const pending =
-        operation === "startBrowserBridgeServer"
-          ? facade.startBrowserBridgeServer(params)
-          : facade.stopBrowserBridgeServer(surface.bridge.server);
+      const activation = createDeferred<typeof surface>();
+      loaders.async.mockReturnValue(activation.promise);
+      const invoke = await invocation(operation, surface);
+      const pending = invoke();
       try {
         expect(surface[operation]).not.toHaveBeenCalled();
       } finally {
-        resolveActivation(surface);
+        activation.resolve(surface);
         await pending;
       }
       expect(await pending).toBe(
@@ -104,14 +109,7 @@ describe("browser bridge facade", () => {
       const surface = createSurface();
       const blocked = new Error("activation blocked");
       loaders.async.mockResolvedValueOnce(surface).mockRejectedValueOnce(blocked);
-      loaders.sync.mockReturnValueOnce(surface).mockImplementationOnce(() => {
-        throw blocked;
-      });
-      const facade = await import("./browser-bridge.js");
-      const invoke = () =>
-        operation === "startBrowserBridgeServer"
-          ? facade.startBrowserBridgeServer(params)
-          : facade.stopBrowserBridgeServer(surface.bridge.server);
+      const invoke = await invocation(operation, surface);
       await invoke();
       await expect(invoke()).rejects.toBe(blocked);
       expect(surface[operation]).toHaveBeenCalledOnce();
@@ -122,13 +120,8 @@ describe("browser bridge facade", () => {
       const failure = new Error("bridge lifecycle failed");
       surface[operation].mockRejectedValue(failure);
       loaders.async.mockResolvedValue(surface);
-      loaders.sync.mockReturnValue(surface);
-      const facade = await import("./browser-bridge.js");
-      const pending =
-        operation === "startBrowserBridgeServer"
-          ? facade.startBrowserBridgeServer(params)
-          : facade.stopBrowserBridgeServer(surface.bridge.server);
-      await expect(pending).rejects.toBe(failure);
+      const invoke = await invocation(operation, surface);
+      await expect(invoke()).rejects.toBe(failure);
     });
   }
 });

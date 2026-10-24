@@ -1,13 +1,9 @@
-import {
-  ComponentContext,
-  MessageProcessor,
-  NodeResolver,
-  effect,
-  getValue,
-} from "@a2ui/web_core/v0_9";
-import { basicCatalog } from "@a2ui/web_core/v0_9/basic_catalog";
-import { registerUniversalElement } from "@a2ui/web_core/v0_9/universal";
-import { For, Show, createSignal, onCleanup, untrack } from "solid-js";
+import { MessageProcessor } from "@a2ui/web_core/processing";
+import { getValue } from "@a2ui/web_core/reactivity";
+import { NodeResolver } from "@a2ui/web_core/resolution";
+import { For, Show, onCleanup, untrack } from "solid-js";
+import { observeSource } from "./catalog-primitives.jsx";
+import { basicCatalog, CatalogNode, CatalogStyles, observeValue } from "./catalog-v0.9.jsx";
 import { defineHost } from "./host.jsx";
 
 const actionText = (action) => {
@@ -74,38 +70,18 @@ class A2UIModel {
   }
 }
 
-function CatalogRoot(props) {
-  // The resolver replaces the keyed root when its identity or type changes.
-  const node = untrack(() => props.node);
-  const surface = untrack(() => props.surface);
-  const implementation = node.impl;
-  registerUniversalElement(implementation);
-  const element = document.createElement(implementation.tagName);
-  element.context = new ComponentContext(surface, node.componentId, node.dataPath);
-  return element;
-}
-
 function Surface(props) {
   // The parent keys each surface by the processor-owned model identity.
   const surface = untrack(() => props.surface);
   const resolver = new NodeResolver(surface, surface.defaultCatalog);
-  const [root, setRoot] = createSignal();
-  const stop = effect(() => setRoot(getValue(resolver.rootNode)));
+  const root = observeValue(() => getValue(resolver.rootNode));
   onCleanup(() => {
-    stop();
     resolver.dispose();
   });
   return (
     <a2ui-surface>
-      <Show when={root()} keyed fallback={<div>Loading surface...</div>}>
-        {(node) => (
-          <Show
-            when={node.impl}
-            fallback={<div role="alert">Unknown component type: {node.type}</div>}
-          >
-            <CatalogRoot node={node} surface={surface} />
-          </Show>
-        )}
+      <Show when={root()} fallback={<div>Loading surface...</div>}>
+        <CatalogNode node={root()} />
       </Show>
     </a2ui-surface>
   );
@@ -113,17 +89,18 @@ function Surface(props) {
 
 function A2UIApp(props) {
   const model = untrack(() => props.model);
-  const [revision, setRevision] = createSignal(0);
-  model.notify = () => setRevision((value) => value + 1);
-  onCleanup(() => {
-    model.notify = () => {};
-  });
-  const read = () => {
-    revision();
-    return model;
-  };
+  const { read } = observeSource(
+    () => model,
+    (notify) => {
+      model.notify = notify;
+      return () => {
+        model.notify = () => {};
+      };
+    },
+  );
   return (
     <>
+      <CatalogStyles />
       <style>{`
       openclaw-a2ui-host { display: block; min-height: 100%; color: var(--text); background: transparent; }
       openclaw-a2ui-host #surfaces { display: grid; gap: 12px; min-height: 100%; }

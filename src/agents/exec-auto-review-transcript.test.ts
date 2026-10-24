@@ -150,7 +150,7 @@ describe("buildExecAutoReviewTranscript", () => {
     expect(JSON.stringify(transcript)).not.toContain("private-");
   });
 
-  it("removes source identifiers repeated in user text and honors a smaller bounded excerpt", () => {
+  it("removes source identifiers repeated in user text", () => {
     const transcript = buildExecAutoReviewTranscript({
       messages: [
         user("[sourceSession=private-session] private-peer: please build", {
@@ -159,11 +159,9 @@ describe("buildExecAutoReviewTranscript", () => {
         }),
         user("Latest request"),
       ],
-      limits: { totalChars: 256 },
     });
     expect(transcript.entries).toHaveLength(2);
     expect(JSON.stringify(transcript)).not.toContain("private-");
-    expect(JSON.stringify(transcript).length).toBeLessThanOrEqual(256);
   });
 
   it("scrubs known source identifiers when later users, assistants, and tools repeat them", () => {

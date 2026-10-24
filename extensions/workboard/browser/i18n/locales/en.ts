@@ -13,6 +13,9 @@ export default {
     statusQueued: "Queued",
   },
   workboard: {
+    partialCards:
+      "{count} cards loaded. Search and filters apply to loaded cards. Load all cards to reorder them.",
+    loadMoreCards: "Load more cards",
     pageLoadFailed: "Workboard could not load. Check your connection and reload this page.",
     pinBoard: "Pin to sidebar",
     unpinBoard: "Unpin from sidebar",
@@ -83,6 +86,8 @@ export default {
       disconnected: "Connect to the Gateway to load Workboard.",
       cardIdRequired: "This widget needs a cardId prop.",
       cardMissing: "This Workboard card is no longer available.",
+      cardNotLoaded: "This card is not loaded yet. Load more cards to find it.",
+      partialCards: "{count} cards loaded. Counts and results include loaded cards only.",
       unassigned: "Unassigned",
       openBoard: "Open board",
       statusCounts: "Cards by status",
@@ -120,6 +125,8 @@ export default {
       writeUnavailable:
         "Board appearance was saved. Reconnect with write access to save the session columns.",
       loading: "Loading sessions…",
+      partial: "{count} of {total} sessions loaded. The agent filter applies to loaded sessions.",
+      loadMore: "Load more sessions",
       empty: "No sessions in this column",
       columns: "Columns",
       columnLabel: "Column label",
@@ -256,6 +263,7 @@ export default {
     dependencies: "Dependencies",
     dependenciesBlocked: "{count} blocked",
     dependencyStatusMissing: "Missing",
+    dependencyStatusNotLoaded: "Not loaded",
     unknownStatus: "Unknown",
     showArchived: "Show archived",
     dispatch: "Start agents",

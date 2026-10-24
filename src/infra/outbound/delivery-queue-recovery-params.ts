@@ -5,7 +5,7 @@ import {
 } from "../../auto-reply/reply/session-writer-delivery-authority.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { GatewayOperatorAccessDeniedError } from "../../gateway/operator-access-policy.js";
-import { parseCommandOwnerReference } from "../../state/user-channel-identities.js";
+import { parseCommandOwnerReference } from "../../state/user-channel-authorization-reference.js";
 import {
   resolveDeliveryQueueStateEnv,
   type DeliveryQueueStateContext,

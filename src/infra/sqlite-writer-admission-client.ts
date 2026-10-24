@@ -100,4 +100,6 @@ export function requestSqliteWorkerOperationAdmission(
     throw refusal;
   }
   assertRequestCustody(scope.owner);
+  // A fresh live grant authorizes compensation after a previous stage was refused.
+  delete scope.owner.refusal;
 }

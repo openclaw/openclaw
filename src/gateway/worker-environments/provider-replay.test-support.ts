@@ -35,6 +35,7 @@ export function createProviderReplayNodeTunnel() {
     })),
     stop: vi.fn(async () => {}),
     stopAll: vi.fn(async () => {}),
+    beginClose: vi.fn(),
   } satisfies WorkerEnvironmentNodeTunnel;
   return { nodeTunnelManager, syncWorkspace };
 }

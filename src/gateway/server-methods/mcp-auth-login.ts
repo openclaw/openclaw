@@ -4,7 +4,10 @@ import {
   errorShape,
   validateMcpAuthLoginParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { operatorMcpOAuthIdentity } from "../../agents/mcp-oauth-identity.js";
+import {
+  mcpOAuthCliLoginSteps,
+  operatorMcpOAuthIdentity,
+} from "../../agents/mcp-oauth-identity.js";
 import type { McpOAuthLoginLifecycle } from "../../agents/mcp-oauth-provider.js";
 import {
   cancelMcpOAuthAuthorization,
@@ -32,7 +35,7 @@ export const mcpAuthLoginHandlers: GatewayRequestHandlers = {
     const reject = (message: string) =>
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, message));
     if (!client || !client.connect.scopes?.includes("operator.admin")) {
-      reject("Connector sign-in requires an administrator connection.");
+      reject("Sign-in requires an administrator connection.");
       return;
     }
     if (rejectExistingSetupWizardSession({ sessionId: params.sessionId, context, respond })) {
@@ -52,23 +55,32 @@ export const mcpAuthLoginHandlers: GatewayRequestHandlers = {
       getPluginRuntimeGatewayRequestScope()?.pluginRegistry === methodRegistry?.pluginRegistry;
     if (!connection || !isOperatorOwned()) {
       reject(
-        "This connector cannot use operator browser sign-in. Check its existing account settings.",
-      );
-      return;
-    }
-    if (!client.browserOrigin) {
-      reject(
-        "Open Settings on this Gateway to sign in, or use openclaw mcp login in its terminal.",
+        "This MCP server cannot use operator browser sign-in. Check its existing account settings.",
       );
       return;
     }
     const { config } = connection;
+    const identity = operatorMcpOAuthIdentity(
+      params.serverName,
+      config.url,
+      context.getRuntimeConfig(),
+    );
+    // Plugin-declared servers have no CLI sign-in path, so recovery points at the plugin.
+    const terminalLogin = mcpOAuthCliLoginSteps(identity);
+    const settingsOwner = terminalLogin ? "MCP server" : "plugin";
+    if (!client.browserOrigin) {
+      reject(
+        terminalLogin
+          ? `Open Settings on this Gateway to sign in, or sign in from its terminal: ${terminalLogin}.`
+          : "Open Settings on this Gateway to sign in.",
+      );
+      return;
+    }
     const initialServer = structuredClone(connection.server);
-    const identity = operatorMcpOAuthIdentity(params.serverName, config.url);
     const assertCurrent = () => {
       client.connectionSignal?.throwIfAborted();
       if (client.invalidated || !client.connect.scopes?.includes("operator.admin")) {
-        throw new Error("Connector sign-in authority is no longer active.");
+        throw new Error("Sign-in authority is no longer active.");
       }
       if (
         context.getGatewayMethodRegistry?.() !== methodRegistry ||
@@ -76,7 +88,7 @@ export const mcpAuthLoginHandlers: GatewayRequestHandlers = {
         !isOperatorOwned()
       ) {
         throw new Error(
-          "This connector changed. Close this dialog and review its settings before signing in again.",
+          "This MCP server changed. Close this dialog and review its settings before signing in again.",
         );
       }
     };
@@ -121,8 +133,10 @@ export const mcpAuthLoginHandlers: GatewayRequestHandlers = {
             const failure = () =>
               new Error(
                 saved
-                  ? "Authentication saved, but sign-in cleanup did not finish. Close this dialog and check the connector before trying again."
-                  : "Sign-in did not finish. Check the connector settings and try again, or run openclaw mcp login with this connector's name in this Gateway's terminal.",
+                  ? `Authentication saved, but sign-in cleanup did not finish. Close this dialog and check the ${settingsOwner} before trying again.`
+                  : terminalLogin
+                    ? `Sign-in did not finish. Check the MCP server settings and try again, or sign in from this Gateway's terminal: ${terminalLogin}.`
+                    : "Sign-in did not finish. Check the plugin settings, then select Connect to try again.",
               );
             try {
               try {

@@ -14,6 +14,10 @@ function resolve(files: Record<string, EnvironmentRecipeEntry>) {
   return resolveEnvironmentRecipe(async (file) => files[file]);
 }
 
+function devcontainer(content: string) {
+  return resolve({ ".devcontainer.json": entry(content) });
+}
+
 describe("resolveEnvironmentRecipe", () => {
   it("prefers the nested JSONC devcontainer over the root file, script, and detection", async () => {
     const recipe = await resolve({
@@ -41,36 +45,49 @@ describe("resolveEnvironmentRecipe", () => {
     });
   });
 
-  it("accepts the root devcontainer and lets remoteEnv override containerEnv", async () => {
-    expect(
-      await resolve({
-        ".devcontainer.json": entry(
-          '{"containerEnv":{"MODE":"build","SHARED":"container"},"remoteEnv":{"SHARED":"remote"}}',
-        ),
-      }),
-    ).toMatchObject({
+  it.each([
+    [
+      "remote environment overrides container values",
+      '{"containerEnv":{"MODE":"build","SHARED":"container"},"remoteEnv":{"SHARED":"remote"}}',
+      { env: { MODE: "build", SHARED: "remote" } },
+    ],
+    [
+      "ignored properties are reported without interpretation",
+      '{"image":123,"features":false,"hostRequirements":null,"customizations":[],"name":"App"}',
+      {
+        ignoredPropertiesNote:
+          "devcontainer customizations, features, hostRequirements, image ignored on cloud machines",
+      },
+    ],
+    [
+      "empty exec arguments and shell whitespace survive",
+      '{"onCreateCommand":["printf","%s", ""],"postStartCommand":"  echo ready  "}',
+      { onCreate: ["printf", "%s", ""], postStart: "  echo ready  " },
+    ],
+  ] as const)("accepts a root devcontainer: %s", async (_name, content, expected) => {
+    const recipe = await devcontainer(content);
+    expect(recipe).toMatchObject({
       source: "devcontainer",
       inputs: { ".devcontainer.json": "a".repeat(40) },
-      env: { MODE: "build", SHARED: "remote" },
+      ...expected,
     });
+    if ("ignoredPropertiesNote" in expected) {
+      expect(recipe.onCreate).toBeUndefined();
+    }
   });
 
   it("allows remoteEnv null to unset inherited or container values", async () => {
-    const recipe = await resolve({
-      ".devcontainer.json": entry(
-        '{"containerEnv":{"MODE":"build"},"remoteEnv":{"MODE":null,"LANG":null}}',
-      ),
-    });
+    const recipe = await devcontainer(
+      '{"containerEnv":{"MODE":"build"},"remoteEnv":{"MODE":null,"LANG":null}}',
+    );
     expect(recipe.env).toEqual({ MODE: null, LANG: null });
     expect(EnvironmentRecipeSchema.parse(recipe).env).toEqual({ MODE: null, LANG: null });
   });
 
   it("resolves requested secret names without granting access from repository metadata", async () => {
-    const recipe = await resolve({
-      ".devcontainer.json": entry(
-        '{"secrets":{"TOKEN":{"description":"Package access","provider":"untrusted","id":"other"},"ACCOUNT":{}}}',
-      ),
-    });
+    const recipe = await devcontainer(
+      '{"secrets":{"TOKEN":{"description":"Package access","provider":"untrusted","id":"other"},"ACCOUNT":{}}}',
+    );
     expect(recipe.secretNames).toEqual(["ACCOUNT", "TOKEN"]);
     expect(recipe.ignoredPropertiesNote).toBeUndefined();
     expect(EnvironmentRecipeSchema.parse(recipe).secretNames).toEqual(["ACCOUNT", "TOKEN"]);
@@ -89,15 +106,13 @@ describe("resolveEnvironmentRecipe", () => {
     const secrets = Object.fromEntries(
       Array.from({ length: 17 }, (_, index) => [`TOKEN_${index}`, {}]),
     );
-    await expect(
-      resolve({ ".devcontainer.json": entry(JSON.stringify({ secrets })) }),
-    ).rejects.toThrow("At most 16 setup secrets");
+    await expect(devcontainer(JSON.stringify({ secrets }))).rejects.toThrow(
+      "At most 16 setup secrets",
+    );
   });
 
   it("admits resolved lifecycle recipes and rejects malformed transport commands", async () => {
-    const recipe = await resolve({
-      ".devcontainer.json": entry('{"onCreateCommand":["npm","ci"]}'),
-    });
+    const recipe = await devcontainer('{"onCreateCommand":["npm","ci"]}');
     expect(EnvironmentRecipeSchema.parse(recipe)).toEqual(recipe);
     expect(
       EnvironmentRecipeSchema.safeParse({ ...recipe, postStart: ["", "argument"] }).success,
@@ -105,28 +120,6 @@ describe("resolveEnvironmentRecipe", () => {
     expect(EnvironmentRecipeSchema.safeParse({ ...recipe, identity: "not-a-blob" }).success).toBe(
       false,
     );
-  });
-
-  it("records one note for ignored properties without interpreting their values", async () => {
-    const recipe = await resolve({
-      ".devcontainer.json": entry(
-        '{"image":123,"features":false,"hostRequirements":null,"customizations":[],"name":"App"}',
-      ),
-    });
-    expect(recipe.ignoredPropertiesNote).toBe(
-      "devcontainer customizations, features, hostRequirements, image ignored on cloud machines",
-    );
-    expect(recipe.onCreate).toBeUndefined();
-  });
-
-  it("preserves empty exec arguments and whitespace in shell commands", async () => {
-    const recipe = await resolve({
-      ".devcontainer.json": entry(
-        '{"onCreateCommand":["printf","%s", ""],"postStartCommand":"  echo ready  "}',
-      ),
-    });
-    expect(recipe.onCreate).toEqual(["printf", "%s", ""]);
-    expect(recipe.postStart).toBe("  echo ready  ");
   });
 
   it.each([

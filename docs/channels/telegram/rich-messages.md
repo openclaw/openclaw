@@ -187,6 +187,8 @@ Rich Telegram surfaces: formatted messages, inline keyboards, agent message acti
 
     Channel delivery shows the command text in the chat; only enable `channel` or `both` in trusted groups/topics. When the prompt lands in a forum topic, OpenClaw preserves the topic for the approval prompt and follow-up. Exec approvals expire after 30 minutes by default.
 
+    Delegated OpenClaw change approvals return their final result to the requesting chat or topic, even when the approval card was sent to an approver DM. An edited card in the requesting topic serves as the result there without an extra notice.
+
     Inline approval buttons also require `channels.telegram.capabilities.inlineButtons` to allow the target surface (`dm`, `group`, or `all`). Approval IDs prefixed with `plugin:` resolve through plugin approvals; others resolve through exec approvals first.
 
     See [Exec approvals](/tools/exec-approvals).

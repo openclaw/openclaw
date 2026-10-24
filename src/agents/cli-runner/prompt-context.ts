@@ -1,4 +1,5 @@
 import { splitSystemPromptRelocatableBoundary } from "@openclaw/ai/internal/shared";
+import { buildHarnessVisibleReplyGuidance } from "../../auto-reply/source-reply-delivery-mode.js";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import type { CliHistoryWriter } from "../../config/sessions/cli-history-boundary.js";
 import {
@@ -9,7 +10,7 @@ import { labelRuntimeContextText } from "../../llm/types.js";
 import type { CliBackendConfig, CliBackendPromptContext } from "../../plugins/cli-backend.types.js";
 import { annotateInterSessionPromptText } from "../../sessions/input-provenance.js";
 import { prepareTtsPreferences } from "../../tts/tts-preferences.js";
-import { buildCliSessionDriftNote } from "../cli-session.js";
+import { buildCliSessionDriftNote } from "../cli-session-drift.js";
 import { buildTemporalContextText } from "../date-time.js";
 import type { ResolvedPromptBuildHookResult } from "../embedded-agent-runner/run/attempt-prompt-helpers.js";
 import { composeSystemPromptWithHookContext } from "../embedded-agent-runner/run/attempt-thread-helpers.js";
@@ -24,6 +25,31 @@ import { buildMediaTaskRuntimeContext } from "../media-generation-task-status.js
 import { buildProactiveSubagentOrchestrationSection } from "../ultra-orchestration.js";
 import { cliBackendLog } from "./log.js";
 import type { CliReusableSession, RunCliAgentParams } from "./types.js";
+
+export function buildCliVisibleReplyGuidance(
+  params: Pick<
+    RunCliAgentParams,
+    | "sessionKey"
+    | "messageChannel"
+    | "messageProvider"
+    | "currentChannelId"
+    | "sourceReplyDeliveryMode"
+  >,
+  options: Pick<
+    Parameters<typeof buildHarnessVisibleReplyGuidance>[0],
+    "messageToolAvailable" | "requireExplicitMessageTarget"
+  >,
+): string {
+  return buildHarnessVisibleReplyGuidance({
+    ...options,
+    sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
+    currentConversation: {
+      agentSessionKey: params.sessionKey,
+      currentChannelProvider: params.messageChannel ?? params.messageProvider,
+      currentChannelId: params.currentChannelId,
+    },
+  });
+}
 
 /** Current-turn facts stay outside native prompts that are retained across CLI turns. */
 async function buildCliTurnAppendContext(

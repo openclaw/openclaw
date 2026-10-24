@@ -8,10 +8,6 @@ import { createPluginRuntimeStore } from "openclaw/plugin-sdk/runtime-store";
 import type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";
 import type { SessionBrowserDashboard } from "./browser-dashboard.types.js";
 
-type BrowserDashboardOperation = {
-  promise: Promise<unknown>;
-};
-
 export type BrowserDashboardRegistration = {
   kind: "dashboard-registration";
   targetId: string;
@@ -32,7 +28,7 @@ export type BrowserStateRuntime = {
   sessionTabInitialization?: Promise<void>;
   sessionTabOperations: Map<BrowserSessionTabOperationKey, Promise<void>>;
   gateway?: PluginRuntime["gateway"];
-  dashboardOperations: Map<string, BrowserDashboardOperation>;
+  dashboardOperations: Map<string, Promise<void>>;
   dashboardEvents?: OpenClawPluginGatewayEvents;
   sessionDashboards?: Map<string, SessionBrowserDashboard>;
 };
@@ -70,26 +66,6 @@ export function isBrowserStateRuntimeCurrent(
   isCurrent?: () => boolean,
 ): boolean {
   return (!runtime || getOptionalBrowserStateRuntime() === runtime) && isCurrent?.() !== false;
-}
-
-export async function readCurrentBrowserState<T>(
-  runtime: BrowserStateRuntime | undefined,
-  read: () => Promise<T>,
-  isCurrent?: () => boolean,
-): Promise<T | undefined> {
-  if (!isBrowserStateRuntimeCurrent(runtime, isCurrent)) {
-    return undefined;
-  }
-  try {
-    const value = await read();
-    return isBrowserStateRuntimeCurrent(runtime, isCurrent) ? value : undefined;
-  } catch (error) {
-    // Revoked preparation is discarded; accepted closes and writes still settle.
-    if (!isBrowserStateRuntimeCurrent(runtime, isCurrent)) {
-      return undefined;
-    }
-    throw error;
-  }
 }
 
 export function getPendingBrowserDashboardRegistrations(

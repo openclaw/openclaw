@@ -42,6 +42,15 @@ describe("recordGatewaySessionRunFailure", () => {
       diagnostic: "Synthetic run failure",
       content: "Your request couldn't be completed: Synthetic run failure",
     },
+    {
+      name: "workspace permission error",
+      error: Object.assign(
+        new Error("EACCES: permission denied, scandir '/synthetic/workspace-main'"),
+        { code: "EACCES" },
+      ),
+      diagnostic: '{"code":"EACCES"}',
+      content: 'Your request couldn\'t be completed: {"code":"EACCES"}',
+    },
   ])("appends $name copy and retains its diagnostic", async ({ error, diagnostic, content }) => {
     let appended: CustomMessageReportAppend | undefined;
     vi.mocked(appendSessionTranscriptReport).mockImplementation(async (_target, report) => {
@@ -82,9 +91,10 @@ describe("resolveSessionRunError", () => {
     },
   );
 
-  it("preserves ordinary session-row errors", () => {
-    expect(resolveSessionRunError({ error: "Synthetic run failure" }, "failed")).toBe(
-      "Synthetic run failure",
-    );
+  it.each([
+    "Synthetic run failure",
+    "EACCES: permission denied, scandir '/synthetic/workspace-main'",
+  ])("preserves ordinary session-row errors: %s", (error) => {
+    expect(resolveSessionRunError({ error }, "failed")).toBe(error);
   });
 });

@@ -4,7 +4,7 @@ import { iterateProjectedAgentRunSessionKeys } from "../../infra/agent-run-proje
 import { buildProjectedAgentRunIndex } from "../../infra/agent-run-registry.js";
 import { hasErrnoCode } from "../../infra/errno.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { collectActiveSessionWorkAdmissions } from "../../sessions/session-lifecycle-admission.js";
+import { collectSessionControllerTargets } from "../../sessions/session-controller.lifecycle.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { runQueuedStoreWrite, type StoreWriterQueue } from "../../shared/store-writer-queue.js";
 import { retainOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
@@ -55,6 +55,7 @@ import type {
 } from "./session-cold-storage.types.js";
 import { reclaimSqliteFreePages } from "./session-history-archive-pruning.js";
 import type { SessionSourceValidation } from "./session-source-authority.js";
+import { createSessionSourceConversationMatches } from "./session-source-conversation-matches.js";
 import { publishUnchangedSessionTranscriptReceipts } from "./session-transcript-authority.js";
 import { projectionLane } from "./session-transcript-worker-resources.js";
 import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
@@ -94,21 +95,8 @@ async function runColdMutation(
   acceptSourceValidation?: SessionColdReadPreparation["acceptSourceValidation"],
 ): Promise<SessionColdMutationResult> {
   const sourceMatches =
-    plan.kind === "cold-restore"
-      ? plan.guard?.sources?.flatMap((source, index) =>
-          source.conversationAlternatives
-            ? [
-                {
-                  index,
-                  matches: new Int32Array(
-                    new SharedArrayBuffer(
-                      (source.conversationAlternatives.length + 1) * Int32Array.BYTES_PER_ELEMENT,
-                    ),
-                  ),
-                },
-              ]
-            : [],
-        )
+    plan.kind === "cold-restore" && plan.guard?.sources
+      ? createSessionSourceConversationMatches(plan.guard.sources)
       : undefined;
   return await withSqliteMutationWorkerLifetime(
     plan.databaseOptions,
@@ -305,7 +293,9 @@ async function archiveSessionColdBatch(
       const input: SessionColdPreparationWorkerData["input"] = {
         databaseOptions: workerDatabaseOptions(options.databaseOptions),
         admissionIdentities: [
-          ...(collectActiveSessionWorkAdmissions().get(options.ownerStorePath) ?? []),
+          ...(collectSessionControllerTargets(undefined, options.ownerStorePath).get(
+            options.ownerStorePath,
+          ) ?? []),
         ],
         liveSessionKeys: [...iterateProjectedAgentRunSessionKeys(buildProjectedAgentRunIndex())],
         cooledSessionIds: [...cooled],
@@ -363,7 +353,10 @@ async function archiveSessionColdBatch(
               },
               () => {
                 assertCurrent();
-                const admissions = collectActiveSessionWorkAdmissions().get(options.ownerStorePath);
+                const admissions = collectSessionControllerTargets(
+                  undefined,
+                  options.ownerStorePath,
+                ).get(options.ownerStorePath);
                 if (
                   [
                     ...(admissions ?? []),

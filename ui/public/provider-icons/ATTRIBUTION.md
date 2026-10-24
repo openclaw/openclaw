@@ -46,6 +46,16 @@ contributed by the LongCat team at Meituan with permission to use it here:
   `currentColor` so the mark renders on both light and dark themes; the
   geometry otherwise matches the cited source.
 
+## Requesty icon
+
+`ProviderIcon-requesty.svg` is the official Requesty brand mark, contributed by
+the Requesty team with permission to use it here:
+
+- Source: official Requesty logo vector (https://requesty.ai)
+- The wordmark was removed and the mark recolored to `currentColor` so it
+  renders on both light and dark themes; the geometry otherwise matches the
+  supplied source.
+
 ## llama.cpp icon
 
 `ProviderIcon-llamacpp.svg` is a metadata-cleaned copy of

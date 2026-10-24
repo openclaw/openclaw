@@ -1,10 +1,10 @@
-import type { DatabaseSync } from "node:sqlite";
 import { sql } from "kysely";
 import {
   createSqliteQueryCache,
   getNodeSqliteKysely,
   prepareSqliteQueryTakeFirstSync,
 } from "../../infra/kysely-sync.js";
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import {
   getSqliteReadScopeRevision,
   type SqliteReadScopeRevision,
@@ -19,28 +19,45 @@ import type { SessionEntryProjection } from "./session-entry-snapshot-values.js"
 import { sessionEntrySnapshotColumnsForKeys } from "./session-entry-snapshots.js";
 import type { ResolvedSessionEntryRow } from "./session-entry-storage.types.js";
 
-function cacheSessionEntryQuery<Row extends ResolvedSessionEntryRow["row"]>(
-  database: DatabaseSync,
-  query: (key: string) => Row | undefined,
-): (key: string) => Row | undefined {
-  let last: { key: string; revision: SqliteReadScopeRevision; row: Row | undefined } | undefined;
-  return (key) => {
-    const revision = getSqliteReadScopeRevision(database);
-    if (revision && last?.revision === revision && last.key === key) {
-      return last.row && { ...last.row };
-    }
-    const row = query(key);
-    last =
-      revision && getSqliteReadScopeRevision(database) === revision
-        ? { key, revision, row }
-        : undefined;
-    // Mutation snapshots and parsers own their row, never the retained SQL result.
-    return row && { ...row };
+const MAX_EXACT_ROW_STRING_BYTES = 1024 * 1024;
+
+function createSessionEntryQueryCache(database: EngineConnection) {
+  let clearLast: (() => void) | undefined;
+  return <Row extends ResolvedSessionEntryRow["row"]>(
+    query: (key: string) => Row | undefined,
+  ): ((key: string) => Row | undefined) => {
+    let last: { key: string; revision: SqliteReadScopeRevision; row: Row | undefined } | undefined;
+    const clear = () => {
+      last = undefined;
+    };
+    return (key) => {
+      const revision = getSqliteReadScopeRevision(database);
+      if (revision && last?.revision === revision && last.key === key) {
+        return last.row && { ...last.row };
+      }
+      // All compiled shapes share one payload; a new revision also retires unused shapes.
+      clearLast?.();
+      const row = query(key);
+      if (revision && getSqliteReadScopeRevision(database) === revision) {
+        // Native row strings may use two bytes per code unit; do not scan their contents.
+        const bytes = Object.values(row ?? {}).reduce<number>(
+          (total, value) => total + (typeof value === "string" ? value.length * 2 : 0),
+          key.length * 2,
+        );
+        if (bytes <= MAX_EXACT_ROW_STRING_BYTES) {
+          last = { key, revision, row };
+          clearLast = clear;
+        }
+      }
+      // Mutation snapshots and parsers own their row, never the retained SQL result.
+      return row && { ...row };
+    };
   };
 }
 
-// Each query retains only its last exact row at the connection's admitted revision.
-export const getExactSessionEntryQueries = createSqliteQueryCache((database: DatabaseSync) => {
+// Compiled queries survive payload eviction and remain scoped to their native connection.
+export const getExactSessionEntryQueries = createSqliteQueryCache((database: EngineConnection) => {
+  const cacheQuery = createSessionEntryQueryCache(database);
   const rowQueries = new Map<string, (key: string) => ResolvedSessionEntryRow["row"] | undefined>();
   const canonicalQueries = new Map<
     string,
@@ -51,8 +68,7 @@ export const getExactSessionEntryQueries = createSqliteQueryCache((database: Dat
       const shape = `${JSON.stringify(projection)}:${hasSqliteSessionOwnerColumns(database)}`;
       let query = rowQueries.get(shape);
       if (!query) {
-        query = cacheSessionEntryQuery(
-          database,
+        query = cacheQuery(
           prepareSqliteQueryTakeFirstSync<string, ResolvedSessionEntryRow["row"]>(
             database,
             (parameter) =>
@@ -71,8 +87,7 @@ export const getExactSessionEntryQueries = createSqliteQueryCache((database: Dat
       const shape = `${JSON.stringify(projection)}:${includeOwner}:${includeOwner && hasSqliteSessionOwnerColumns(database)}`;
       let query = canonicalQueries.get(shape);
       if (!query) {
-        query = cacheSessionEntryQuery(
-          database,
+        query = cacheQuery(
           prepareSqliteQueryTakeFirstSync<
             string,
             CanonicalSessionValidationRow & ResolvedSessionEntryRow["row"]

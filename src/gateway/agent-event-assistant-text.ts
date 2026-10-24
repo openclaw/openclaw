@@ -20,11 +20,6 @@ export type AssistantTextSnapshot = {
   };
 };
 
-type AssistantTextMerge = AssistantTextSnapshot & {
-  /** Present only when this merge proves an append to its input snapshot. */
-  appendedText?: string;
-};
-
 /** A text-bearing empty result clears output; a missing text payload does not. */
 export function resolveAssistantResultText(result: unknown): string | undefined {
   const payloads = asOptionalObjectRecord(result)?.payloads;
@@ -46,10 +41,16 @@ export function createAssistantTextStream(holdOutput: boolean) {
     get streamedText() {
       return streamed.text;
     },
-    update(data: unknown): { delta?: string; replacement?: "representable" | "unrepresentable" } {
-      const input = resolveAssistantTextInput(data);
+    update(
+      data: unknown,
+      rawDelta?: string,
+    ): { delta?: string; replacement?: "representable" | "unrepresentable" } {
+      let input = resolveAssistantTextInput(data);
       if (!input) {
         return {};
+      }
+      if (rawDelta !== undefined) {
+        input = { ...input, text: undefined, delta: rawDelta };
       }
       // Hold provisional replacements and their terminal echoes until the run result settles.
       if (input.replaceable || pending) {
@@ -129,7 +130,10 @@ export function mergeAssistantText(
   previous: AssistantTextSnapshot,
   input: AssistantTextInput,
   unkeyed: "live" | "append-only",
-): AssistantTextMerge {
+): AssistantTextSnapshot & {
+  /** Present only when this merge proves an append to its input snapshot. */
+  appendedText?: string;
+} {
   let scope = previous.scope;
   if (!input.itemId) {
     scope = undefined;

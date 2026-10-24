@@ -1,4 +1,7 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { installDatabaseEngineSelection } from "./database-engine/context.js";
+import { resetDatabaseEngineSelectionForTest } from "./database-engine/context.test-support.js";
+import type { DatabaseEngineSelection } from "./database-engine/types.js";
 import type { SqliteWorkerStateContext } from "./sqlite-worker-state-context.js";
 
 const firstContext: SqliteWorkerStateContext = {
@@ -17,7 +20,47 @@ async function loadModuleCopies() {
   return { first, second };
 }
 
+afterEach(resetDatabaseEngineSelectionForTest);
+
 describe("SQLite worker state context across module copies", () => {
+  it.each(["sqlite", "postgres"] as const)(
+    "hands the installed %s state selection to workers without losing SQLite family choices",
+    async (state) => {
+      const selection: DatabaseEngineSelection = {
+        effectiveEngines: {
+          state,
+          agent: "sqlite",
+          workboard: "sqlite",
+          logbook: "sqlite",
+          "team-reports": "sqlite",
+          quarantine: "sqlite",
+          "managed-update": "sqlite",
+          "package-activation": "sqlite",
+        },
+        ...(state === "postgres"
+          ? { postgres: { connection: "postgresql://localhost/synthetic", schemaPrefix: "test" } }
+          : {}),
+      };
+      installDatabaseEngineSelection(selection);
+      const { first } = await loadModuleCopies();
+      const captured = first.captureSqliteWorkerStateContext(firstContext);
+      expect(captured.databaseEngineSelection).toEqual(selection);
+      expect(first.captureSqliteWorkerStateContext(captured).databaseEngineSelection).toEqual(
+        selection,
+      );
+      expect(first.sqliteWorkerRequestBytes(new Uint8Array(), captured)).toBeGreaterThan(
+        first.sqliteWorkerRequestBytes(new Uint8Array(), firstContext),
+      );
+    },
+  );
+
+  it("keeps an uninstalled selection absent", async () => {
+    const { first } = await loadModuleCopies();
+    expect(
+      first.captureSqliteWorkerStateContext(firstContext).databaseEngineSelection,
+    ).toBeUndefined();
+  });
+
   it("shares the current actor facts and restores nested scopes", async () => {
     const { first, second } = await loadModuleCopies();
     first.runWithSqliteWorkerStateContext(firstContext, () => {

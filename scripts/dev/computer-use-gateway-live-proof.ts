@@ -288,7 +288,7 @@ try {
     desktop: { host: { enabled: true, managed: true } },
     plugins: { allow: ["cua-computer"], entries: { "cua-computer": { enabled: true } } },
     agents: {
-      defaults: { workspace: path.join(scratch, "workspace"), heartbeat: { every: "0m" } },
+      defaults: { workspace: path.join(scratch, "workspace") },
     },
     cron: { enabled: false },
   };

@@ -1,5 +1,6 @@
 import { isAbortError } from "../../infra/abort-signal.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import type { ResolvedCliBackend } from "../cli-backends.js";
 import { extractCliErrorMessage } from "../cli-output.js";
 import {
   coerceToFailoverError,
@@ -10,11 +11,10 @@ import {
 
 type CliExitFailoverErrorParams = {
   context: Pick<FailoverError, "provider" | "model" | "sessionId" | "lane">;
-  // Spawn supplies stderr/stdout windows; live stdout is already structured, so it supplies stderr.
   candidates: readonly string[];
-  fallbackMessage: string;
   retryEmptyFailure: boolean;
   resumeAtArg?: string;
+  classifyErrorCode?: ResolvedCliBackend["classifyErrorCode"];
 };
 
 export function createCliFailoverError(
@@ -61,7 +61,7 @@ export function createCliExitFailoverError(params: CliExitFailoverErrorParams): 
   const structuredError =
     candidates.map((candidate) => extractCliErrorMessage(candidate)).find(Boolean) ?? null;
   const resumeAtError = resolveCliResumeAtError(
-    structuredError || candidates[0] || params.fallbackMessage,
+    structuredError || candidates[0] || "CLI failed.",
     params.resumeAtArg,
     params.context,
   );
@@ -71,13 +71,13 @@ export function createCliExitFailoverError(params: CliExitFailoverErrorParams): 
   const classified = [structuredError, ...candidates]
     .flatMap((candidate) => (candidate ? [coerceToFailoverError(candidate, params.context)] : []))
     .find((error) => error !== null);
-  const message = structuredError || classified?.message || candidates[0] || params.fallbackMessage;
+  const message = structuredError || classified?.message || candidates[0] || "CLI failed.";
   const reason = classified?.reason ?? "unknown";
   const code =
     reason === "context_overflow"
       ? "cli_context_overflow"
       : candidates.length === 0 && params.retryEmptyFailure
         ? "cli_unknown_empty_failure"
-        : undefined;
+        : params.classifyErrorCode?.(message);
   return createCliFailoverError(message, reason, params.context, { code });
 }

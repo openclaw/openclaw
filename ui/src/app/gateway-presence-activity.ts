@@ -1,3 +1,4 @@
+import { listen } from "../lib/reactive/listener.ts";
 import type { ApplicationGateway } from "./gateway.ts";
 import { hasOperatorReadAccess } from "./operator-access.ts";
 
@@ -52,16 +53,14 @@ export function startGatewayPresenceActivity(
       report();
     }
   };
-  for (const event of INPUT_EVENTS) {
-    documentTarget.addEventListener(event, onInput, { capture: true, passive: true });
-  }
-  const unsubscribe = gateway.subscribe(onReady);
+  const stops = INPUT_EVENTS.map((event) =>
+    listen(documentTarget, event, onInput, { capture: true, passive: true }),
+  );
+  // Consume the document's first connection once; mounting views must not count as visits.
+  stops.push(gateway.subscribe(onReady));
   onReady();
   return () => {
     disposed = true;
-    unsubscribe();
-    for (const event of INPUT_EVENTS) {
-      documentTarget.removeEventListener(event, onInput, true);
-    }
+    stops.forEach((stop) => stop());
   };
 }

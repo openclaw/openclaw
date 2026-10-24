@@ -1,11 +1,11 @@
 import "../../test/dom.setup.ts";
 import { GatewayProtocolRequestError } from "@openclaw/gateway-client/browser";
 import { expectDefined } from "@openclaw/normalization-core";
-import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { createDeferred } from "openclaw/plugin-sdk/concurrency-runtime";
 import { flush } from "solid-js";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import { resetWorkboardConnectionState } from "../../lib/workboard/index.ts";
+import { resetWorkboardConnectionState } from "../../lib/workboard/runtime.ts";
 import {
   createGatewaySession,
   createWorkboardCard,
@@ -201,6 +201,51 @@ describe("WorkboardView", () => {
       await waitForFast(() => expect(state.cards[0]).toMatchObject(patch));
     },
   );
+
+  it("keeps inline save admission synchronous and preserves the draft after failure", async () => {
+    const card = createWorkboardCard({ notes: "Original notes" });
+    const pending = createDeferred<{ card: typeof card }>();
+    let attempts = 0;
+    const client = createWorkboardTestClient(() => {
+      attempts += 1;
+      return attempts === 1
+        ? pending.promise
+        : { card: { ...card, notes: "Edited notes", updatedAt: card.updatedAt + 1 } };
+    });
+    const { state, container, renderView } = createWorkboardView({
+      client,
+      onRequestUpdate: () => renderView(),
+    });
+    state.cards = [card];
+    state.detailCardId = card.id;
+    renderView();
+    const { owner, open } = await inlineEditor(container, "notes");
+    const input = await open();
+    input.value = "Edited notes";
+    input.dispatchEvent(new InputEvent("input", { bubbles: true }));
+    const save = textButton(owner, "Save");
+    save.click();
+    save.click();
+    requireButton(container, "Close").click();
+    input.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    expect(attempts).toBe(1);
+    expect(state.detailCardId).toBe(card.id);
+    expect(input.isConnected).toBe(true);
+    await waitForFast(() => {
+      expect(input.disabled).toBe(true);
+      expect(save.disabled).toBe(true);
+      expect(textButton(owner, "Cancel").disabled).toBe(true);
+    });
+    pending.reject(new Error("Notes unavailable"));
+    await waitForFast(() => {
+      expect(state.error).toContain("Notes unavailable");
+      expect(save.disabled).toBe(false);
+    });
+    expect(input.value).toBe("Edited notes");
+    save.click();
+    await waitForFast(() => expect(state.cards[0]?.notes).toBe("Edited notes"));
+    expect(attempts).toBe(2);
+  });
 
   it("keeps notes selectable and opens the editor only on a plain click", async () => {
     const card = createWorkboardCard({ notes: "Copy me" });

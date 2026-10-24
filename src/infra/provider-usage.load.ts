@@ -7,8 +7,9 @@ import {
 } from "../plugins/provider-runtime.js";
 import { trackAsyncWork } from "../shared/async-work-scope.js";
 import { formatErrorMessage } from "./errors.js";
-import { resolveFetch } from "./fetch.js";
+import { wrapFetchWithAbortSignal } from "./fetch.js";
 import { resolveProxyFetchFromEnv } from "./net/proxy-fetch.js";
+import { fetchWithRuntimeDispatcherOrMockedGlobal } from "./net/runtime-fetch.js";
 import { type ProviderAuth, resolveProviderAuths } from "./provider-usage.auth.js";
 import {
   PROVIDER_USAGE_TIMEOUT_MS,
@@ -22,24 +23,20 @@ import type {
   UsageSummary,
 } from "./provider-usage.types.js";
 
-type UsageSummaryOptions = {
-  now?: number;
-  timeoutMs?: number;
-  providers?: UsageProviderId[];
-  auth?: ProviderAuth[];
-  authStore?: AuthProfileStore;
-  agentDir?: string;
-  workspaceDir?: string;
-  config?: OpenClawConfig;
-  env?: NodeJS.ProcessEnv;
-  fetch?: typeof fetch;
-};
-
 /** Loads usage snapshots from configured provider auth and plugin-backed usage hooks. */
 export async function loadProviderUsageSummary(
-  opts: UsageSummaryOptions = {},
+  opts: {
+    timeoutMs?: number;
+    providers?: UsageProviderId[];
+    auth?: ProviderAuth[];
+    authStore?: AuthProfileStore;
+    agentDir?: string;
+    workspaceDir?: string;
+    config?: OpenClawConfig;
+    env?: NodeJS.ProcessEnv;
+  } = {},
 ): Promise<UsageSummary> {
-  const now = opts.now ?? Date.now();
+  const now = Date.now();
   const timeoutMs = opts.timeoutMs ?? PROVIDER_USAGE_TIMEOUT_MS;
   const config = opts.config ?? getRuntimeConfig();
   const env = opts.env ?? process.env;
@@ -70,12 +67,9 @@ export async function loadProviderUsageSummary(
       providers: descriptors.map(({ provider }) => failureSnapshot(provider, "Timeout")),
     };
   }
-  const fetchFn = opts.fetch
-    ? resolveFetch(opts.fetch)
-    : (resolveProxyFetchFromEnv(env) ?? resolveFetch());
-  if (!fetchFn) {
-    throw new Error("fetch is not available");
-  }
+  const fetchFn =
+    resolveProxyFetchFromEnv(env) ??
+    wrapFetchWithAbortSignal(fetchWithRuntimeDispatcherOrMockedGlobal);
   let authStore: Promise<AuthProfileStore> | undefined;
   const getAuthStore = () =>
     opts.authStore ??

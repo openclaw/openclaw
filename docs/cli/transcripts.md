@@ -277,7 +277,10 @@ larger exports.
 
 Status reports registered subscriptions, not confirmed recording. `armed`,
 `not-active`, and `unknown` remain distinct; a sanitized URL alone cannot prove
-which original invitation started a capture. Provider, configured-source, and
+which original invitation started a capture. During a configuration change,
+source health may briefly reflect the previous entry until the auto-start service
+reindexes it; this display does not grant capture or stop authority.
+Provider, configured-source, and
 active lists are limited to 100 entries with omitted counts. Saved utterance
 counts come from durable rows. The latest transcript is the most recently
 updated session containing utterances; source speech times are not ingestion

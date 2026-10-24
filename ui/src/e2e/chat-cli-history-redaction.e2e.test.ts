@@ -7,8 +7,6 @@ import {
   readClaudeCliSessionMessagesAsync,
 } from "../../../src/gateway/cli-session-history.test-support.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
-import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   chatSessionListResponse,
   createChatFlowE2eSuite,
@@ -26,10 +24,7 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 suite.define(() => {
   it("renders a real imported Claude transcript once with its original text", async () => {
     const homeDir = tempDirs.make("openclaw-cli-history-redaction-");
-    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
-
-    try {
-      const page = await context.newPage();
+    await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
       const cliSessionId = "control-ui-claude-history-redaction";
       const secret = "sk-abcdef1234567890xyz";
       const userText = `CLI user copy ${secret}`;
@@ -40,19 +35,15 @@ suite.define(() => {
       await fs.writeFile(
         filePath,
         [
-          {
-            type: "user",
-            uuid: "control-ui-claude-user-copy",
-            timestamp: "2026-03-26T16:29:54.800Z",
-            message: { role: "user", content: userText },
-          },
-          {
-            type: "assistant",
-            uuid: "control-ui-claude-imported-assistant",
-            timestamp: "2026-03-26T16:29:55.800Z",
-            message: { role: "assistant", content: assistantText },
-          },
+          ["user", "user-copy", "54", userText],
+          ["assistant", "imported-assistant", "55", assistantText],
         ]
+          .map(([role, suffix, second, content]) => ({
+            type: role,
+            uuid: `control-ui-claude-${suffix}`,
+            timestamp: `2026-03-26T16:29:${second}.800Z`,
+            message: { role, content },
+          }))
           .map((entry) => JSON.stringify(entry))
           .join("\n"),
         "utf-8",
@@ -93,22 +84,16 @@ suite.define(() => {
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:session-a"));
       await waitForRequests(gateway, "chat.startup", 1);
       const thread = page.locator(".chat-thread");
-      await thread.getByText("CLI user copy", { exact: false }).waitFor({ timeout: 10_000 });
-      await thread.getByText("CLI imported-only reply", { exact: false }).waitFor({
-        timeout: 10_000,
-      });
-
+      const prefixes = ["CLI user copy", "CLI imported-only reply"];
+      for (const prefix of prefixes) {
+        await thread.getByText(prefix, { exact: false }).waitFor({ timeout: 10_000 });
+      }
       const visibleMessages = await visibleChatBubbleTexts(page);
-      expect(visibleMessages.filter((message) => message.includes("CLI user copy"))).toHaveLength(
-        1,
-      );
-      expect(
-        visibleMessages.filter((message) => message.includes("CLI imported-only reply")),
-      ).toHaveLength(1);
+      for (const prefix of prefixes) {
+        expect(visibleMessages.filter((message) => message.includes(prefix))).toHaveLength(1);
+      }
       expect(await thread.textContent()).toContain(secret);
-    } finally {
-      await suite.closeBrowserContext(context);
-    }
+    });
   });
 
   it("preserves tool source in Activity while bounding the visible preview", async () => {
@@ -116,13 +101,13 @@ suite.define(() => {
       { viewport: { width: 1280, height: 900 }, locale: "en-US", serviceWorkers: "block" },
       async ({ page }) => {
         const sessionKey = "agent:main:main";
+        const command = "app.api.key=synthetic-source-value-1234567890";
         const source = [
           "API_TOKEN = computeToken()",
-          "app.api.key=synthetic-source-value-1234567890",
+          command,
           "spring.datasource.password=synthetic-db-value-1234567890",
           "Read output continues here.\n".repeat(100),
         ].join("\n");
-        const command = "app.api.key=synthetic-source-value-1234567890";
         const gateway = await installMockGateway(page, {
           sessionKey,
           sessions: [{ key: sessionKey, kind: "direct", hasActiveRun: true, status: "running" }],
@@ -150,10 +135,6 @@ suite.define(() => {
             { role: "assistant", content: "The original tool source is available.", timestamp: 4 },
           ],
         });
-        const artifacts =
-          process.env.OPENCLAW_CAPTURE_UI_PROOF === "1"
-            ? createControlUiE2eArtifactDir("tool-source-fidelity")
-            : undefined;
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
         await page.getByText("The original tool source is available.", { exact: true }).waitFor();
         for (const group of await page
@@ -164,17 +145,6 @@ suite.define(() => {
         const toolRow = page.locator(".chat-tool-msg-summary").first();
         await toolRow.waitFor();
         const collapsedText = await toolRow.textContent();
-        if (artifacts) {
-          const frame = await takeControlUiScreenshotFrame(page, toolRow, [toolRow], {
-            animations: "disabled",
-            elements: [toolRow],
-          });
-          await fs.writeFile(path.join(artifacts, "chat-tool-source.png"), frame.png);
-          await fs.writeFile(
-            path.join(artifacts, "chat-tool-source-crop.png"),
-            frame.elements[0]!.png,
-          );
-        }
         await page.goto(`${suite.server.baseUrl}activity?view=live`);
         await page.locator(".activity-empty").waitFor();
         await gateway.waitForRequest("sessions.messages.subscribe", { match: { key: sessionKey } });
@@ -197,21 +167,10 @@ suite.define(() => {
         const note = entry.locator(".activity-entry__note");
         await preview.waitFor();
         await note.waitFor();
-        if (artifacts) {
-          const frame = await takeControlUiScreenshotFrame(page, entry, [preview, note], {
-            animations: "disabled",
-            elements: [entry],
-          });
-          await fs.writeFile(path.join(artifacts, "activity-source.png"), frame.png);
-          await fs.writeFile(
-            path.join(artifacts, "activity-source-crop.png"),
-            frame.elements[0]!.png,
-          );
-        }
         expect(collapsedText).toContain(command);
         const visible = await preview.textContent();
         expect(visible).toContain("API_TOKEN = computeToken()");
-        expect(visible).toContain("app.api.key=synthetic-source-value-1234567890");
+        expect(visible).toContain(command);
         expect(visible).toContain("spring.datasource.password=synthetic-db-value-1234567890");
         expect(visible!.length).toBeLessThan(source.length);
         expect(await note.textContent()).toBe("Preview truncated.");

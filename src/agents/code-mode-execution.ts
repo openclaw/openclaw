@@ -1,4 +1,4 @@
-import { logCodeModeFailure } from "../logging/code-mode-diagnostic.js";
+import { codeModeGcAttribution, logCodeModeFailure } from "../logging/code-mode-diagnostic.js";
 import type { AgentRunApprovalWait } from "./agent-run-approval-wait.js";
 import { raceWithAbortSignal } from "./agent-tools.abort.js";
 import {
@@ -61,7 +61,7 @@ import {
   type CodeModeRunOwner,
 } from "./code-mode-state.js";
 import { recordCodeModeToolOutcome } from "./code-mode-tool-outcome.js";
-import { codeModeWaitRunUnavailableMessage } from "./code-mode-wait-errors.js";
+import { resolveCodeModeWaitRun } from "./code-mode-wait-errors.js";
 import type { AgentToolUpdateCallback } from "./runtime/index.js";
 import type { ToolResultBudget } from "./tool-result-limits.js";
 import { resolveCatalog } from "./tool-search-catalog.js";
@@ -194,17 +194,14 @@ export async function runCodeModeExec(params: {
       result,
     });
   } catch (error) {
-    inlineHost.onFailure?.(error, bridgeDispatch.started ? "bridge" : "host");
     const code = signal.aborted ? ("aborted" as const) : codeModeFailureCode(error);
+    const failurePhase = code === "invalid_input" ? "input" : "host";
+    inlineHost.onFailure?.(error, failurePhase);
     return output.takeResult(
       {
         status: "failed" as const,
         code,
-        failurePhase: bridgeDispatch.started
-          ? ("bridge" as const)
-          : code === "invalid_input"
-            ? ("input" as const)
-            : ("host" as const),
+        failurePhase,
         bridgeDispatchStarted: bridgeDispatch.started,
         replaySafe: params.restartSafe,
         telemetry: telemetry(runtime),
@@ -284,10 +281,15 @@ function createInlineHost(
   onInputConsumed?: () => void,
 ): CodeModeExecutorInlineHost {
   return {
+    gcAttribution: codeModeGcAttribution(params.owner.runId, params.ctx.sessionKey),
     onWorkerAssigned: (workerId) => {
       params.bridgeDispatch.workerId = workerId;
     },
-    onFailure: (error, failurePhase, workerId = params.bridgeDispatch.workerId) =>
+    onFailure: (error, failurePhase, workerId = params.bridgeDispatch.workerId) => {
+      // The bridge already recorded the original cause before guest projection.
+      if (failurePhase === "bridge") {
+        return;
+      }
       logCodeModeFailure(error, {
         sessionId: params.ctx.sessionId,
         sessionKey: params.ctx.sessionKey,
@@ -297,7 +299,8 @@ function createInlineHost(
         workerId,
         failurePhase,
         bridgeDispatchStarted: params.bridgeDispatch.started,
-      }),
+      });
+    },
     onInputConsumed,
     onNetworkContent: () => params.runtime.observeNetworkContent(params.parentToolCallId),
     onBoundary: async (boundary, context) => {
@@ -625,25 +628,7 @@ export async function runWait(params: {
   onRuntime?: (runtime: ToolSearchRuntime) => void;
 }) {
   removeExpiredRuns();
-  if (resumingRunIds.has(params.runId)) {
-    throw new ToolInputError(
-      "code mode run is already being resumed by another wait. Use that wait’s result before deciding the next step; do not issue another concurrent wait or replay earlier actions.",
-    );
-  }
-  const state = activeRuns.get(params.runId);
-  if (!state) {
-    throw new ToolInputError(codeModeWaitRunUnavailableMessage(params.ctx));
-  }
-  if (state.ctx.runId && state.ctx.runId !== params.ctx.runId) {
-    throw new ToolInputError("code mode run belongs to a different agent run.");
-  }
-  if (
-    (state.ctx.sessionId && state.ctx.sessionId !== params.ctx.sessionId) ||
-    (state.ctx.sessionKey && state.ctx.sessionKey !== params.ctx.sessionKey) ||
-    (state.ctx.agentId && state.ctx.agentId !== params.ctx.agentId)
-  ) {
-    throw new ToolInputError("code mode run belongs to a different session.");
-  }
+  const state = resolveCodeModeWaitRun(params.runId, params.ctx);
   params.onRuntime?.(state.runtime);
   resumingRunIds.add(state.runId);
   // One wait call shares a single monotonic deadline across draining the prior
@@ -713,6 +698,8 @@ export async function runWait(params: {
     });
   } catch (error) {
     const aborted = signal.aborted;
+    const code = aborted ? ("aborted" as const) : codeModeFailureCode(error);
+    const failurePhase = code === "invalid_input" ? "input" : "host";
     logCodeModeFailure(error, {
       sessionId: state.ctx.sessionId,
       sessionKey: state.ctx.sessionKey,
@@ -720,7 +707,7 @@ export async function runWait(params: {
       toolCallId: params.toolCallId,
       codeModeRunId: state.runId,
       workerId: state.bridgeDispatch.workerId,
-      failurePhase: "bridge",
+      failurePhase,
       bridgeDispatchStarted: state.bridgeDispatch.started,
     });
     await state.owner.close();
@@ -728,8 +715,8 @@ export async function runWait(params: {
     return state.output.takeResult(
       {
         status: "failed" as const,
-        code: aborted ? ("aborted" as const) : codeModeFailureCode(error),
-        failurePhase: "bridge" as const,
+        code,
+        failurePhase,
         bridgeDispatchStarted: state.bridgeDispatch.started,
         replaySafe: state.replaySafe,
         telemetry: telemetry(state.runtime),

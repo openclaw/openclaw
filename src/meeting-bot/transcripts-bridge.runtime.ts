@@ -18,7 +18,6 @@ import type {
 import { sanitizeTranscriptSourceLocator } from "../transcripts/source-locator.js";
 import { TranscriptsSummaryChangedError } from "../transcripts/store-errors.js";
 import { TranscriptsStore } from "../transcripts/store.js";
-import { normalizeMeetingObservationProvenance } from "./observation-provenance.js";
 import { MeetingTranscriptDeliveryError } from "./session-transcript-store.js";
 import type { MeetingSessionRecord } from "./session-types.js";
 import type {
@@ -209,14 +208,7 @@ export function createMeetingDurableTranscriptBridge<
               meetingSessionId: session.id,
               ...(line.provenance !== undefined
                 ? {
-                    meetingObservationProvenance: normalizeMeetingObservationProvenance(
-                      line.provenance,
-                      {
-                        observer: params.options.providerId,
-                        observedAt: line.at,
-                        speaker: line.speaker,
-                      },
-                    ),
+                    meetingObservationProvenance: { ...line.provenance },
                   }
                 : {}),
             },
@@ -264,10 +256,8 @@ export function createMeetingDurableTranscriptBridge<
           return false;
         }
         active.closing = true;
-        if (active.timer) {
-          clearInterval(active.timer);
-          delete active.timer;
-        }
+        clearInterval(active.timer);
+        delete active.timer;
         const summariesStopped = active.summaryUpdates?.stop();
         try {
           let initializationError: Error | undefined;

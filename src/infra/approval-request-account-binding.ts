@@ -1,4 +1,3 @@
-// Matches approval requests against channel account and session bindings.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { loadSessionEntryReadOnly } from "../config/sessions/session-accessor.js";
@@ -76,12 +75,19 @@ export type ApprovalRequestSessionDelivery = Pick<
   "sessionId" | "updatedAt" | "delivery"
 >;
 
+function approvalRequestSessionDelivery(
+  entry: ApprovalRequestSessionDelivery | null | undefined,
+): ApprovalRequestSessionDelivery | null {
+  return entry
+    ? { sessionId: entry.sessionId, updatedAt: entry.updatedAt, delivery: entry.delivery }
+    : null;
+}
+
 /** Classifies whether native delivery has named channel-account owners. */
 export async function classifyApprovalRequestChannelRouteAsync(params: {
   cfg: OpenClawConfig;
   request: ApprovalRequestLike;
   channel: string;
-  defaultAccountId?: string | null;
 }): Promise<ApprovalRequestChannelRouteClass> {
   const expectedChannel = normalizeMessageChannel(params.channel);
   if (!expectedChannel) {
@@ -117,19 +123,14 @@ function resolveLegacyApprovalRequestSessionDelivery(params: {
       memory.binding?.actor.target.sessionKey === sessionKey
         ? memory.binding.actor.snapshot(memory.authority)?.entry
         : memory.owner?.readSession(sessionKey, memory.authority)?.entry;
-    return entry
-      ? { sessionId: entry.sessionId, updatedAt: entry.updatedAt, delivery: entry.delivery }
-      : null;
+    return approvalRequestSessionDelivery(entry);
   }
   const entry = loadSessionEntryReadOnly({
     storePath,
     sessionKey,
     clone: false,
   });
-  if (!entry) {
-    return null;
-  }
-  return { sessionId: entry.sessionId, updatedAt: entry.updatedAt, delivery: entry.delivery };
+  return approvalRequestSessionDelivery(entry);
 }
 
 function resolvePersistedApprovalRequestSessionBinding(
@@ -300,9 +301,7 @@ export async function resolveApprovalRequestSessionDeliveryAsync(
       memory.binding?.actor.target.sessionKey === sessionKey
         ? memory.binding.actor.snapshot(memory.authority)?.entry
         : memory.owner?.readSession(sessionKey, memory.authority)?.entry;
-    return entry
-      ? { sessionId: entry.sessionId, updatedAt: entry.updatedAt, delivery: entry.delivery }
-      : null;
+    return approvalRequestSessionDelivery(entry);
   }
   const entry = await readSessionEntryReadOnlyInWorker({
     agentId,
@@ -311,9 +310,7 @@ export async function resolveApprovalRequestSessionDeliveryAsync(
     projection: "list",
     hydrateSkillPromptRefs: false,
   });
-  return entry
-    ? { sessionId: entry.sessionId, updatedAt: entry.updatedAt, delivery: entry.delivery }
-    : null;
+  return approvalRequestSessionDelivery(entry);
 }
 
 function warnLegacyApprovalRouting(name: string): void {
@@ -324,7 +321,7 @@ function warnLegacyApprovalRouting(name: string): void {
   });
 }
 
-/** @deprecated Use resolveApprovalRequestAccountIdAsync; final compatibility day: 2026-12-31. */
+/** @deprecated Use resolveApprovalRequestAccountIdAsync; final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
 export function resolveApprovalRequestAccountId(
   params: Parameters<typeof resolveApprovalRequestAccountIdFromDelivery>[0],
 ): ReturnType<typeof resolveApprovalRequestAccountIdFromDelivery> {
@@ -347,7 +344,7 @@ export async function resolveApprovalRequestAccountIdAsync(
   );
 }
 
-/** @deprecated Use resolveApprovalRequestChannelAccountIdAsync; final compatibility day: 2026-12-31. */
+/** @deprecated Use resolveApprovalRequestChannelAccountIdAsync; final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
 export function resolveApprovalRequestChannelAccountId(
   params: Parameters<typeof resolveApprovalRequestChannelAccountIdFromDelivery>[0],
 ): ReturnType<typeof resolveApprovalRequestChannelAccountIdFromDelivery> {
@@ -372,7 +369,7 @@ export async function resolveApprovalRequestChannelAccountIdAsync(
   );
 }
 
-/** @deprecated Use doesApprovalRequestMatchChannelAccountAsync; final compatibility day: 2026-12-31. */
+/** @deprecated Use doesApprovalRequestMatchChannelAccountAsync; final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
 export function doesApprovalRequestMatchChannelAccount(
   params: Parameters<typeof doesApprovalRequestMatchChannelAccountFromDelivery>[0],
 ): ReturnType<typeof doesApprovalRequestMatchChannelAccountFromDelivery> {
@@ -395,7 +392,7 @@ export async function doesApprovalRequestMatchChannelAccountAsync(
   );
 }
 
-/** @deprecated Use doesApprovalRequestSelectChannelAccountAsync; final compatibility day: 2026-12-31. */
+/** @deprecated Use doesApprovalRequestSelectChannelAccountAsync; final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
 export function doesApprovalRequestSelectChannelAccount(
   params: Parameters<typeof doesApprovalRequestSelectChannelAccountFromDelivery>[0],
 ): ReturnType<typeof doesApprovalRequestSelectChannelAccountFromDelivery> {

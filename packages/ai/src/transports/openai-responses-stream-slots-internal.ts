@@ -10,6 +10,7 @@ import type {
   TextBlockReference,
 } from "./openai-responses-stream-terminal-internal.js";
 import type { OpenAIResponsesStreamEvent } from "./openai-responses-stream-types-internal.js";
+import { detachPartialSnapshot } from "./openai-transport-shared.js";
 
 export type ResponsesStreamOutputSlot<TMessage, TToolCall> =
   | {
@@ -30,11 +31,6 @@ export type ResponsesStreamOutputSlot<TMessage, TToolCall> =
     }
   | { type: "toolCall"; toolCall: TToolCall };
 
-type DeferredTextSlot = {
-  pendingText: string | null;
-  collapseCandidate: { block: { text: string } } | null;
-};
-
 type ResponsesOutputIdentityItem = {
   type: string;
   id?: string | null;
@@ -47,6 +43,7 @@ type ResponsesOutputState = {
   outputIndex?: number;
   contentIndex: number;
   completed: boolean;
+  completedProse?: string;
 };
 
 export type ResponsesOutputTracker = ReturnType<typeof createResponsesOutputTracker>;
@@ -111,7 +108,7 @@ export function createResponsesOutputTracker(params: {
           visibleTextEmitted ||=
             (event.type === "text_delta" && event.delta.length > 0) ||
             (event.type === "text_end" && event.content.length > 0);
-          sink.push(event);
+          sink.push(detachPartialSnapshot(event));
         },
       };
     },
@@ -145,6 +142,7 @@ export function createResponsesOutputTracker(params: {
       contentIndex: number,
       outputIndex?: number,
       completed = false,
+      completedProse?: string,
     ): void {
       const output: ResponsesOutputState = get(item, outputIndex) ?? {
         type: item.type,
@@ -152,6 +150,10 @@ export function createResponsesOutputTracker(params: {
         completed,
       };
       Object.assign(output, { contentIndex, completed });
+      if (completedProse !== undefined) {
+        // Collapsed message items share a public block, not their completed prose.
+        output.completedProse = completedProse;
+      }
       if (item.call_id) {
         output.callId = item.call_id;
       }
@@ -169,14 +171,15 @@ export function createResponsesOutputTracker(params: {
   };
 }
 
-export function appendResponsesPendingTextDelta<TSlot extends DeferredTextSlot>(
-  slot: TSlot,
-  delta: string,
-  materialize: (slot: TSlot) => void,
-): void {
+export function appendResponsesPendingTextDelta<
+  TSlot extends {
+    pendingText: string | null;
+    collapseCandidate: { rendered: { prose: string } } | null;
+  },
+>(slot: TSlot, delta: string, materialize: (slot: TSlot) => void): void {
   const offset = slot.pendingText?.length ?? 0;
   slot.pendingText = `${slot.pendingText ?? ""}${delta}`;
-  const priorText = slot.collapseCandidate?.block.text ?? "";
+  const priorText = slot.collapseCandidate?.rendered.prose ?? "";
   // Earlier deltas already matched; only compare the new overlap with the prior item.
   if (
     offset >= priorText.length ||

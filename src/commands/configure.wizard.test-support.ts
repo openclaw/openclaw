@@ -6,6 +6,8 @@ import { committedConfigFiles } from "./committed-config.test-support.js";
 const wizardTestMocks = vi.hoisted(() => {
   const writeConfigFile = vi.fn<(config: OpenClawConfig) => Promise<void>>();
   return {
+    runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+    isTerminalInteractive: vi.fn(),
     clackIntro: vi.fn(),
     clackOutro: vi.fn(),
     clackSelect: vi.fn(),
@@ -63,6 +65,19 @@ const wizardTestMocks = vi.hoisted(() => {
     guardCancel: vi.fn((value: unknown, _runtime: RuntimeEnv, _exitCode?: number) => value),
   };
 });
+
+vi.mock("../runtime.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../runtime.js")>();
+  return {
+    ...actual,
+    defaultRuntime: { ...actual.defaultRuntime, ...wizardTestMocks.runtime },
+  };
+});
+
+vi.mock("../cli/terminal-interactivity.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../cli/terminal-interactivity.js")>()),
+  isTerminalInteractive: wizardTestMocks.isTerminalInteractive,
+}));
 
 vi.mock("@clack/prompts", () => ({
   intro: wizardTestMocks.clackIntro,
@@ -236,6 +251,7 @@ const { runConfigureWizard } = await import("./configure.wizard.js");
 export { runConfigureWizard, wizardTestMocks };
 
 export function setupWizardTestDefaults() {
+  wizardTestMocks.isTerminalInteractive.mockReturnValue(true);
   committedConfigFiles.clear();
   wizardTestMocks.assertConfigPathForWrite.mockImplementation(() => {});
   wizardTestMocks.resolvePluginContributionOwners.mockReturnValue(["firecrawl"]);
@@ -271,14 +287,6 @@ export const EMPTY_CONFIG_SNAPSHOT = {
   config: {},
   issues: [],
 };
-
-export function createWizardTestRuntime() {
-  return {
-    log: vi.fn(),
-    error: vi.fn(),
-    exit: vi.fn(),
-  };
-}
 
 export function setupBaseWizardTestState(config: OpenClawConfig = {}) {
   wizardTestMocks.runMemorySetupFlow.mockImplementation(async (candidate) => candidate);

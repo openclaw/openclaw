@@ -18,92 +18,8 @@ export const MIGRATION_SELECTION_TOGGLE_ALL_OFF = "__openclaw_migrate_toggle_all
 
 type MigrationSelectionKind = "skill" | "plugin";
 
-function migrationItemRefs(item: MigrationItem, kind: "skill" | "plugin"): string[] {
-  const prefix = `${kind}:`;
-  const idSuffix = item.id.startsWith(prefix) ? item.id.slice(prefix.length) : undefined;
-  const sourceBase = item.source ? path.basename(item.source) : undefined;
-  const targetBase = item.target ? path.basename(item.target) : undefined;
-  return [
-    item.id,
-    idSuffix,
-    normalizeOptionalString(item.details?.[`${kind}Name`]),
-    ...(kind === "plugin" ? [normalizeOptionalString(item.details?.configKey)] : []),
-    sourceBase,
-    targetBase,
-  ].filter((value): value is string => typeof value === "string" && value.trim().length > 0);
-}
-
 function formatSelectionRefList(values: readonly string[]): string {
   return values.length === 0 ? "none" : values.map((value) => `"${value}"`).join(", ");
-}
-
-function buildSelectionIndex(
-  items: readonly MigrationItem[],
-  kind: "skill" | "plugin",
-): Map<string, ReadonlySet<string>> {
-  const index = new Map<string, Set<string>>();
-  for (const item of items) {
-    for (const ref of migrationItemRefs(item, kind)) {
-      const normalized = normalizeOptionalLowercaseString(ref);
-      if (!normalized) {
-        continue;
-      }
-      const existing = index.get(normalized) ?? new Set<string>();
-      existing.add(item.id);
-      index.set(normalized, existing);
-    }
-  }
-  return index;
-}
-
-function resolveSelectedMigrationItemIds(params: {
-  items: readonly MigrationItem[];
-  selectedRefs: readonly string[];
-  kind: "skill" | "plugin";
-}): Set<string> {
-  const index = buildSelectionIndex(params.items, params.kind);
-  const selectedIds = new Set<string>();
-  const unknownRefs: string[] = [];
-  const ambiguousRefs: string[] = [];
-  for (const ref of params.selectedRefs) {
-    const normalized = normalizeOptionalLowercaseString(ref);
-    if (!normalized) {
-      continue;
-    }
-    const matches = index.get(normalized);
-    if (!matches) {
-      unknownRefs.push(ref);
-      continue;
-    }
-    if (matches.size > 1) {
-      ambiguousRefs.push(ref);
-      continue;
-    }
-    const [id] = matches;
-    if (id) {
-      selectedIds.add(id);
-    }
-  }
-
-  if (unknownRefs.length > 0 || ambiguousRefs.length > 0) {
-    const available = params.items
-      .map((item) => formatMigrationSelectionLabel(item, params.kind))
-      .toSorted((a, b) => a.localeCompare(b));
-    const titleKind = params.kind === "skill" ? "Skill" : "Plugin";
-    const parts: string[] = [];
-    if (unknownRefs.length > 0) {
-      parts.push(`No migratable ${params.kind} matched ${formatSelectionRefList(unknownRefs)}.`);
-    }
-    if (ambiguousRefs.length > 0) {
-      parts.push(`${titleKind} selection ${formatSelectionRefList(ambiguousRefs)} was ambiguous.`);
-    }
-    parts.push(
-      `Available ${params.kind}s: ${available.length > 0 ? available.join(", ") : "none"}.`,
-    );
-    throw new Error(parts.join(" "));
-  }
-
-  return selectedIds;
 }
 
 export function getSelectableMigrationItems(
@@ -207,7 +123,69 @@ export function applyMigrationSelections(
       continue;
     }
     const items = getSelectableMigrationItems(selectedPlan, kind);
-    const selectedIds = resolveSelectedMigrationItemIds({ items, selectedRefs, kind });
+    const index = new Map<string, Set<string>>();
+    for (const item of items) {
+      const prefix = `${kind}:`;
+      const idSuffix = item.id.startsWith(prefix) ? item.id.slice(prefix.length) : undefined;
+      const sourceBase = item.source ? path.basename(item.source) : undefined;
+      const targetBase = item.target ? path.basename(item.target) : undefined;
+      for (const ref of [
+        item.id,
+        idSuffix,
+        normalizeOptionalString(item.details?.[`${kind}Name`]),
+        ...(kind === "plugin" ? [normalizeOptionalString(item.details?.configKey)] : []),
+        sourceBase,
+        targetBase,
+      ].filter((value): value is string => typeof value === "string" && value.trim().length > 0)) {
+        const normalized = normalizeOptionalLowercaseString(ref);
+        if (!normalized) {
+          continue;
+        }
+        const existing = index.get(normalized) ?? new Set<string>();
+        existing.add(item.id);
+        index.set(normalized, existing);
+      }
+    }
+    const selectedIds = new Set<string>();
+    const unknownRefs: string[] = [];
+    const ambiguousRefs: string[] = [];
+    for (const ref of selectedRefs) {
+      const normalized = normalizeOptionalLowercaseString(ref);
+      if (!normalized) {
+        continue;
+      }
+      const matches = index.get(normalized);
+      if (!matches) {
+        unknownRefs.push(ref);
+        continue;
+      }
+      if (matches.size > 1) {
+        ambiguousRefs.push(ref);
+        continue;
+      }
+      const [id] = matches;
+      if (id) {
+        selectedIds.add(id);
+      }
+    }
+
+    if (unknownRefs.length > 0 || ambiguousRefs.length > 0) {
+      const available = items
+        .map((item) => formatMigrationSelectionLabel(item, kind))
+        .toSorted((a, b) => a.localeCompare(b));
+      const titleKind = kind === "skill" ? "Skill" : "Plugin";
+      const parts: string[] = [];
+      if (unknownRefs.length > 0) {
+        parts.push(`No migratable ${kind} matched ${formatSelectionRefList(unknownRefs)}.`);
+      }
+      if (ambiguousRefs.length > 0) {
+        parts.push(
+          `${titleKind} selection ${formatSelectionRefList(ambiguousRefs)} was ambiguous.`,
+        );
+      }
+      parts.push(`Available ${kind}s: ${available.length > 0 ? available.join(", ") : "none"}.`);
+      throw new Error(parts.join(" "));
+    }
     selectedPlan = applyMigrationSelectedItemIds(selectedPlan, selectedIds, kind);
   }
   return applyMigrationItemSelection(selectedPlan, opts.itemIds);

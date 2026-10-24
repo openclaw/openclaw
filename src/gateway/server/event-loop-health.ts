@@ -16,6 +16,7 @@ import { runWithDiagnosticTraceContext } from "../../infra/diagnostic-trace-cont
 import type { GatewayScheduler } from "../../infra/gateway-scheduler.js";
 import { createMainThreadStallMonitor } from "../../infra/main-thread-stall.js";
 import { getTrackedWorkerCpuSources } from "../../infra/worker-cpu.js";
+import { roundDiagnosticMetric as roundMetric } from "../../logging/diagnostic-metric.js";
 import { createStallFlightRecorder } from "../../logging/diagnostic-stall-flight-recorder.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 
@@ -30,6 +31,8 @@ const SUSTAINED_LOAD_SAMPLE_MIN_INTERVAL_MS = 1_000;
 const IDLE_SAMPLE_INTERVAL_MS = 10_000;
 // A native request can wait on a blocked worker. It must not delay the sampler.
 const WORKER_CPU_SAMPLE_BUDGET_MS = 100;
+const CPU_USAGE_ORIGIN = { user: 0, system: 0 };
+const HOST_CPU_TIME_KEYS = ["user", "nice", "sys", "idle", "irq"] as const;
 const log = createSubsystemLogger("gateway/event-loop");
 
 type EventLoopUtilization = ReturnType<typeof performance.eventLoopUtilization>;
@@ -39,36 +42,6 @@ export type GatewayEventLoopHealth = SchemaContract<Static<typeof GatewayEventLo
 };
 
 type GatewayEventLoopHealthReason = GatewayEventLoopHealth["reasons"][number];
-
-type GatewayEventLoopHealthMonitor = {
-  snapshot: () => GatewayEventLoopHealth | undefined;
-  persistentDegradationSnapshot: () => GatewayEventLoopHealth | undefined;
-  reset: () => void;
-  stop: () => void;
-};
-
-type EventLoopUtilizationReader = typeof performance.eventLoopUtilization;
-
-type GatewayEventLoopHealthMonitorDeps = {
-  scheduler: GatewayScheduler;
-  now?: () => number;
-  cpuUsage?: typeof process.cpuUsage;
-  eventLoopUtilization?: EventLoopUtilizationReader;
-  isIdle?: () => boolean;
-};
-
-type GatewayEventLoopHealthMetrics = Pick<
-  GatewayEventLoopHealth,
-  "intervalMs" | "delayP99Ms" | "delayMaxMs" | "utilization" | "cpuCoreRatio"
->;
-
-function roundMetric(value: number, digits = 3): number {
-  if (!Number.isFinite(value)) {
-    return 0;
-  }
-  const factor = 10 ** digits;
-  return Math.round(value * factor) / factor;
-}
 
 function nanosecondsToMilliseconds(value: number): number {
   return roundMetric(value / 1_000_000, 1);
@@ -80,7 +53,7 @@ function readMainThreadCpuUsage(): NodeJS.CpuUsage | undefined {
       isMainThread && typeof process.threadCpuUsage === "function"
         ? process.threadCpuUsage()
         : undefined;
-    return cpuUsageDelta(usage, { user: 0, system: 0 }) === undefined ? undefined : usage;
+    return isValidCpuUsage(usage) ? usage : undefined;
   } catch {
     return undefined;
   }
@@ -98,17 +71,14 @@ function cpuUsageDelta(
   return Number.isFinite(user + system) && user >= 0 && system >= 0 ? user + system : undefined;
 }
 
+function isValidCpuUsage(usage: NodeJS.CpuUsage | undefined): usage is NodeJS.CpuUsage {
+  return cpuUsageDelta(usage, CPU_USAGE_ORIGIN) !== undefined;
+}
+
 function readHostCpuTimes(): CpuInfo["times"][] | undefined {
   try {
     const times = cpus().map((cpu) => cpu.times);
-    return times.length &&
-      times.every((cpu) =>
-        [cpu.user, cpu.nice, cpu.sys, cpu.idle, cpu.irq].every(
-          (value) => Number.isFinite(value) && value >= 0,
-        ),
-      )
-      ? times
-      : undefined;
+    return times.length ? times : undefined;
   } catch {
     return undefined;
   }
@@ -123,9 +93,10 @@ function hostCpuUtilization(
   }
   let total = 0;
   let idle = 0;
-  for (const [index, cpu] of current.entries()) {
+  for (let index = 0; index < current.length; index++) {
+    const cpu = current[index]!;
     const before = previous[index]!;
-    for (const key of ["user", "nice", "sys", "idle", "irq"] as const) {
+    for (const key of HOST_CPU_TIME_KEYS) {
       const delta = cpu[key] - before[key];
       if (delta < 0) {
         return undefined;
@@ -140,7 +111,10 @@ function hostCpuUtilization(
 }
 
 function classifyGatewayEventLoopHealthReasons(
-  metrics: GatewayEventLoopHealthMetrics,
+  metrics: Pick<
+    GatewayEventLoopHealth,
+    "intervalMs" | "delayP99Ms" | "delayMaxMs" | "utilization" | "cpuCoreRatio"
+  >,
 ): GatewayEventLoopHealthReason[] {
   const reasons: GatewayEventLoopHealthReason[] = [];
 
@@ -172,15 +146,20 @@ function classifyGatewayEventLoopHealthReasons(
   return reasons;
 }
 
-export function createGatewayEventLoopHealthMonitor(
-  deps: GatewayEventLoopHealthMonitorDeps,
-): GatewayEventLoopHealthMonitor {
+export function createGatewayEventLoopHealthMonitor(deps: {
+  scheduler: GatewayScheduler;
+  isIdle?: () => boolean;
+}): {
+  snapshot: () => GatewayEventLoopHealth | undefined;
+  persistentDegradationSnapshot: () => GatewayEventLoopHealth | undefined;
+  reset: () => void;
+  stop: () => void;
+} {
   const { scheduler } = deps;
-  const nowMs = deps.now ?? performance.now.bind(performance);
-  const readCpuUsage = deps.cpuUsage ?? process.cpuUsage.bind(process);
-  const readEventLoopUtilization =
-    deps.eventLoopUtilization ?? performance.eventLoopUtilization.bind(performance);
-  const flightRecorder = createStallFlightRecorder((message) => log.warn(message), nowMs);
+  const nowMs = performance.now.bind(performance);
+  const readCpuUsage = process.cpuUsage.bind(process);
+  const readEventLoopUtilization = performance.eventLoopUtilization.bind(performance);
+  const flightRecorder = createStallFlightRecorder((message) => log.warn(message));
   const stalls = createMainThreadStallMonitor(nowMs);
   let unattributedDelayMs = 0;
   let histogram: ELDHistogram | null = null;
@@ -210,9 +189,9 @@ export function createGatewayEventLoopHealthMonitor(
     if (process.versions.bun || typeof Worker.prototype.cpuUsage !== "function") {
       return;
     }
-    const { workers, revision } = getTrackedWorkerCpuSources();
+    const { workers, revision, currentRevision } = getTrackedWorkerCpuSources();
     const accept = (usage: NodeJS.CpuUsage[]) => {
-      if (revision !== getTrackedWorkerCpuSources().revision) {
+      if (revision !== currentRevision()) {
         return;
       }
       lastWorkerCpuWindow = { at, revision, usage };
@@ -226,8 +205,8 @@ export function createGatewayEventLoopHealthMonitor(
         return;
       }
       let total = 0;
-      for (const [index, current] of usage.entries()) {
-        const delta = cpuUsageDelta(current, previous.usage[index]);
+      for (let index = 0; index < usage.length; index++) {
+        const delta = cpuUsageDelta(usage[index], previous.usage[index]);
         if (delta === undefined) {
           return;
         }
@@ -259,23 +238,13 @@ export function createGatewayEventLoopHealthMonitor(
     cancelWorkerCpuSample = () => {
       active = false;
     };
-    const readings = workers.map(async (worker) => {
-      try {
-        return await worker.cpuUsage();
-      } catch {
-        return undefined;
-      }
-    });
+    const readings = workers.map((worker) => worker.cpuUsage());
     void Promise.all(readings).then((usage) => {
       if (!active || nowMs() - at > WORKER_CPU_SAMPLE_BUDGET_MS) {
         return;
       }
-      const valid = usage.filter(
-        (value): value is NodeJS.CpuUsage =>
-          value !== undefined && cpuUsageDelta(value, { user: 0, system: 0 }) !== undefined,
-      );
-      if (valid.length === workers.length) {
-        accept(valid);
+      if (usage.every(isValidCpuUsage)) {
+        accept(usage);
       }
     });
   };
@@ -294,6 +263,22 @@ export function createGatewayEventLoopHealthMonitor(
 
     const now = nowMs();
     const attributed = stalls.drain();
+    if (
+      attributed.stalls.length > 0 &&
+      areDiagnosticsEnabledForProcess() &&
+      hasInternalDiagnosticEventInterest("gateway.main_thread.stall")
+    ) {
+      runWithDiagnosticTraceContext(undefined, () =>
+        emitInternalDiagnosticEvent({
+          type: "gateway.main_thread.stall",
+          stalls: attributed.stalls.map((stall) => ({
+            task: stall.task,
+            durationMs: stall.elapsedMs,
+          })),
+          dropped: attributed.dropped,
+        }),
+      );
+    }
     // Idle windows retain callback attribution and overdue-deadline detection without
     // the native histogram's 20 ms wakeup. Full resolution returns with active work.
     const delayMaxMs = Math.max(

@@ -51,8 +51,15 @@ export const en = {
       modelAlias: "Model alias (optional)",
       modelAliasPlaceholder: "e.g. local, ollama",
       modelId: "Model ID",
+      modelIdManual: "Enter a model ID manually",
+      modelDiscoveryUnavailable:
+        "Could not discover models from this endpoint. Check the base URL and credentials, or enter a model ID manually.",
       modelIdPlaceholder: "e.g. llama3, claude-3-7-sonnet",
       modelIdRequired: "Model ID is required",
+      noAuthConfirm:
+        "No API key entered. Use no-auth mode for this endpoint (requests send no Authorization header)?",
+      noAuthCompatKeyRequired:
+        "No-auth mode supports OpenAI Chat Completions endpoints only. Enter an API key (a placeholder works if the server ignores keys).",
       retryChoice: "What would you like to change?",
       verifying: "Verifying...",
       verificationFailedError: "Verification failed: {error}",
@@ -200,6 +207,8 @@ export const en = {
       installedPlugin: "Installed {plugin} plugin",
       installingPlugin: "Installing {plugin} plugin…",
       installTitle: "Plugin install",
+      invalidInteger: "Enter a JSON integer.",
+      invalidNumber: "Enter a valid JSON number.",
       noRemoteInstallSource:
         "No remote install source is available for {plugin}. Returning to selection.",
       officialInstall: "Install optional plugins",

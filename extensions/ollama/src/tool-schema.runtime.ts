@@ -1,4 +1,3 @@
-// Normalizes JSON Schema tool parameters into the shape the native Ollama chat API expects.
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 function inferOllamaSchemaType(schema: Record<string, unknown>): string | undefined {

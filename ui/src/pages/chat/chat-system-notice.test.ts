@@ -2,8 +2,10 @@
 import { afterEach, describe, expect, it } from "vitest";
 import type { ChatPendingInputsPage } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { coalesceAgentRunFrames } from "./chat-agent-run-grouping.ts";
+import { projectChatSystemNotice } from "./chat-system-notice.ts";
 import { createProps } from "./chat-thread.test-support.ts";
 import { buildCachedChatItems, resetChatThreadState } from "./chat-thread.ts";
+import { chatItemStartsDisplayTurn, chatItemStartsUserTurn } from "./chat-turn-boundary.ts";
 
 const clients = [{ id: "cli", mode: "cli", displayName: "Release helper" }];
 const baseMessage = {
@@ -165,6 +167,34 @@ describe("system notices through pending-to-history promotion", () => {
     },
   );
 
+  it.each(["cli_harness_context", "claude_cli_task_notification", "plugin:review-helper"])(
+    "keeps %s between tool groups without starting a turn",
+    (sourceTool) => {
+      const call = (id: string) => ({
+        role: "assistant",
+        content: [{ type: "toolCall", id, name: "read", arguments: { path: `${id}.ts` } }],
+        timestamp: 999,
+        __openclaw: { runId: "same-run" },
+      });
+      const items = render(
+        [
+          call("before"),
+          { ...baseMessage, provenance: { kind: "internal_system", sourceTool } },
+          call("after"),
+        ],
+        [],
+      );
+      expect(items).toMatchObject([
+        { kind: "group", role: "tool" },
+        { kind: "notice", collapsedBody: true },
+        { kind: "group", role: "tool" },
+      ]);
+      const notice = items[1]!;
+      expect(chatItemStartsUserTurn(notice)).toBe(false);
+      expect(chatItemStartsDisplayTurn(notice)).toBe(false);
+    },
+  );
+
   it("keeps a user's System prefix and sender attribution through promotion", () => {
     const inputs = pending(baseMessage);
     for (const consumed of [false, true]) {
@@ -177,6 +207,84 @@ describe("system notices through pending-to-history promotion", () => {
         },
       ]);
     }
+  });
+});
+
+describe("plugin steering notices", () => {
+  it.each([
+    [{ pluginId: "release-helper", pluginName: "Release Helper" }, "Release Helper"],
+    [{ pluginId: "review-helper" }, "review-helper"],
+    [{ pluginId: "review-helper", pluginName: " " }, "review-helper"],
+    [undefined, "review-helper"],
+  ] as const)(
+    "uses plugin attribution without starting an operator turn: %j",
+    (pluginSteering, name) => {
+      const before = { role: "user", content: "Review the patch.", timestamp: 999 };
+      const steering = {
+        ...baseMessage,
+        content: "Check the rollback path before continuing.",
+        provenance: {
+          kind: "internal_system",
+          sourceTool: `plugin:${pluginSteering?.pluginId ?? "review-helper"}`,
+        },
+        __openclaw: { ...baseMessage["__openclaw"], pluginSteering },
+      };
+      const after = {
+        role: "assistant",
+        content: "The rollback path is safe.",
+        timestamp: 1001,
+        __openclaw: { runId: "run" },
+      };
+
+      const items = render([before, steering, after], []);
+      expect(items).toMatchObject([
+        { kind: "group", role: "user", messages: [{ message: before }] },
+        {
+          kind: "notice",
+          label: `${name} guidance`,
+          text: steering.content,
+          timestamp: 1000,
+          collapsedBody: true,
+          showTimestamp: true,
+        },
+        { kind: "group", role: "assistant", messages: [{ message: after }] },
+      ]);
+      const notice = items.find((item) => item.kind === "notice");
+      expect(notice).not.toHaveProperty("startsTurn");
+      if (!notice) {
+        throw new Error("Expected a plugin steering notice");
+      }
+      expect(chatItemStartsUserTurn(notice)).toBe(false);
+      expect(chatItemStartsDisplayTurn(notice)).toBe(false);
+      expect(coalesceAgentRunFrames(items)).toMatchObject([
+        { kind: "group", role: "user" },
+        { kind: "notice", label: `${name} guidance` },
+        { kind: "agent-run-frame", runId: "run", boundaryId: "send:run" },
+      ]);
+      expect(render([before, steering, after], [], "rollback")).toMatchObject([
+        { kind: "notice", text: steering.content },
+        { kind: "group", role: "assistant" },
+      ]);
+    },
+  );
+
+  it.each([
+    { role: "user", provenance: { kind: "external_user", sourceTool: "plugin:review-helper" } },
+    {
+      role: "assistant",
+      provenance: { kind: "internal_system", sourceTool: "plugin:review-helper" },
+    },
+  ])("does not treat unrelated plugin-tagged messages as steering: %j", (fields) => {
+    const item = {
+      kind: "message" as const,
+      key: "not-steering",
+      message: {
+        ...baseMessage,
+        ...fields,
+        __openclaw: { pluginSteering: { pluginId: "review-helper", pluginName: "Review Helper" } },
+      },
+    };
+    expect(projectChatSystemNotice(item)).toEqual([item]);
   });
 });
 
@@ -202,6 +310,34 @@ describe("skill review notices", () => {
     timestamp: 1500,
     __openclaw: { runId: "run" },
   };
+
+  it.each([
+    [{ idempotencyKey: "skill-workshop-notice:review" }, true],
+    [{ __openclaw: { idempotencyKey: "skill-workshop-notice:review" } }, true],
+    [{ idempotencyKey: "ordinary-delivery" }, false],
+    [{ idempotencyKey: "skill-workshop-notice:" }, false],
+    [{ idempotencyKey: "skill-workshop-notice:review", provider: "model-provider" }, false],
+    [{ idempotencyKey: "skill-workshop-notice:review", model: "model-output" }, false],
+    [{ idempotencyKey: "skill-workshop-notice:review", role: "user" }, false],
+  ])("uses legacy notice provenance, not Learned text: %j", (fields, projected) => {
+    const item = {
+      kind: "message" as const,
+      key: "legacy-notice",
+      message: {
+        role: "assistant",
+        provider: "openclaw",
+        model: "delivery-mirror",
+        content: "💾 Learned: updated deploy-staging.",
+        timestamp: 2000,
+        ...fields,
+      },
+    };
+    expect(projectChatSystemNotice(item)).toEqual(
+      projected
+        ? [{ kind: "notice", key: item.key, text: item.message.content, timestamp: 2000 }]
+        : [item],
+    );
+  });
 
   it("renders a marked review notice natively and keeps malformed markers as text", () => {
     const skills = [{ name: "deploy-staging", action: "updated", summary: "rollback" }];

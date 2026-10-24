@@ -1,18 +1,16 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { buildQaSuiteEvidenceSummary } from "./evidence-summary.js";
 import type { QaLabServerHandle } from "./lab-server.types.js";
 import { remapModelRefForForcedRuntime } from "./model-selection.js";
 import { sanitizeQaProgressValue as sanitizeQaSuiteProgressValue } from "./progress-format.js";
 import type { QaTransportAdapter } from "./qa-transport.js";
+import { createTestLab } from "./suite-runtime-parity.test-support.js";
 import {
   buildQaGatewayHeapCheckpointRuntimeEnvPatch,
-  buildQaIsolatedScenarioWorkerParams,
   mergeQaRuntimeEnvPatches,
 } from "./suite-support.js";
-import { makeQaSuiteTestScenario, recordQaSuiteTestResults } from "./suite-test-helpers.js";
-import type { QaSuiteResult } from "./suite-types.js";
+import { makeQaSuiteTestScenario } from "./suite-test-helpers.js";
 import {
   buildQaSuiteRuntimeMetrics,
   buildQaSuiteSummaryJson,
@@ -36,25 +34,58 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
 }));
 
 const tempDirs = createTempDirHarness();
+const messageToolConfig = () => ({ messages: { groupChat: { visibleReplies: "message_tool" } } });
+const rssSamples = [
+  { label: "suite-start", at: "2026-04-22T12:00:00.000Z", gatewayProcessRssBytes: 100_000_000 },
+  { label: "finish", at: "2026-04-22T12:00:10.000Z", gatewayProcessRssBytes: 140_000_000 },
+];
+const heapSnapshots = [
+  {
+    label: "suite-start",
+    at: "2026-04-22T12:00:01.000Z",
+    path: "artifacts/gateway-heap-snapshots/suite-start.heapsnapshot",
+    bytes: 12_345,
+  },
+];
+
+const expectedMetrics = {
+  wallMs: 12_000,
+  gatewayProcessCpuMs: 3_000,
+  gatewayCpuCoreRatio: 0.25,
+  gatewayProcessRssStartBytes: 100_000_000,
+  gatewayProcessRssEndBytes: 125_000_000,
+  gatewayProcessRssDeltaBytes: 25_000_000,
+  gatewayProcessRssPeakBytes: 140_000_000,
+  gatewayProcessRssPeakDeltaBytes: 40_000_000,
+  gatewayProcessRssSamples: rssSamples,
+  gatewayHeapSnapshots: heapSnapshots,
+};
+
+function cleanupErrorForTest(params: Parameters<typeof throwQaSuiteCleanupErrors>[0]): Error {
+  try {
+    throwQaSuiteCleanupErrors(params);
+  } catch (error) {
+    if (error instanceof Error) {
+      return error;
+    }
+    throw error;
+  }
+  throw new Error("Expected cleanup to fail");
+}
+
+function readiness(stop: QaLabServerHandle["stop"], ownsLab: boolean, timeoutMs?: number) {
+  return waitForQaLabReadyOrStopOwned({
+    lab: { listenUrl: "http://127.0.0.1:43123", stop },
+    ownsLab,
+    timeoutMs,
+  });
+}
 
 afterEach(async () => {
   fetchWithSsrFGuardMock.mockReset();
   vi.useRealTimers();
   await tempDirs.cleanup();
 });
-
-function makeQaSuiteTestLabHandle(): QaLabServerHandle {
-  return {
-    baseUrl: "http://127.0.0.1:43123",
-    listenUrl: "http://127.0.0.1:43123",
-    state: {} as QaLabServerHandle["state"],
-    setControlUi: vi.fn(),
-    setScenarioRun: vi.fn(),
-    setLatestReport: vi.fn(),
-    runSelfCheck: vi.fn(async () => ({}) as Awaited<ReturnType<QaLabServerHandle["runSelfCheck"]>>),
-    stop: vi.fn(async () => {}),
-  };
-}
 
 describe("qa suite", () => {
   it("runs the production cleanup plan in dependency order after a failure", async () => {
@@ -96,96 +127,50 @@ describe("qa suite", () => {
     ]);
   });
 
-  it("keeps the primary suite error as the cause of aggregated cleanup failures", () => {
-    const runError = new Error("gateway infrastructure failed");
-    const cleanupError = new Error("transport cleanup failed");
-
-    let thrown: unknown;
-    try {
-      throwQaSuiteCleanupErrors({
-        cleanupFailures: [{ phase: "transport before gateway stop", error: cleanupError }],
-        runFailed: true,
-        runError,
-      });
-    } catch (error) {
-      thrown = error;
-    }
-
-    expect(thrown).toMatchObject({
-      cause: runError,
-      errors: [runError, cleanupError],
+  it.each([true, false])("preserves error causes with runFailed=%s", (runFailed) => {
+    const runError = runFailed ? new Error("primary failed") : undefined;
+    const cleanupError = new Error("cleanup failed");
+    const thrown = cleanupErrorForTest({
+      cleanupFailures: [{ phase: "transport stop", error: cleanupError }],
+      runFailed,
+      runError,
     });
-    expect((thrown as Error).message.split("\n")[0]).toBe("QA suite and cleanup failed");
-    expect((thrown as Error).message).toContain(
-      "failed cleanup phases: transport before gateway stop: transport cleanup failed",
+    expect(thrown).toMatchObject({
+      cause: runError ?? cleanupError,
+      errors: runFailed ? [runError, cleanupError] : [cleanupError],
+    });
+    expect(thrown.message.split("\n")[0]).toBe(
+      runFailed
+        ? "QA suite and cleanup failed"
+        : "QA suite cleanup failed before scenarios completed",
     );
+    expect(thrown.message).toContain("failed cleanup phases: transport stop: cleanup failed");
   });
 
-  it("reports cleanup failure before scenarios completed when no result exists", () => {
-    const cleanupError = new Error("stop failed");
-    let thrown: unknown;
-    try {
-      throwQaSuiteCleanupErrors({
-        cleanupFailures: [{ phase: "lab stop", error: cleanupError }],
-        runFailed: false,
-        runError: undefined,
-      });
-    } catch (error) {
-      thrown = error;
-    }
+  it("reports completed counts and labeled failures", () => {
+    const scenarios = (["pass", "fail", "skip"] as const).map((status) => ({
+      name: status,
+      status,
+      steps: [],
+    }));
+    const thrown = cleanupErrorForTest({
+      cleanupFailures: [
+        { phase: "agent\nharnesses", error: new Error("dispose failed") },
+        { phase: "lab stop", error: new Error("stop failed") },
+      ],
+      runFailed: false,
+      runError: undefined,
+      scenarios,
+    });
 
-    expect((thrown as Error).message.split("\n")[0]).toBe(
-      "QA suite cleanup failed before scenarios completed",
-    );
-    expect((thrown as Error).cause).toBe(cleanupError);
-  });
-
-  it("reports completed counts, labeled failures, and only written artifact paths", () => {
-    const result = {
-      outputDir: "/qa-output\nretained",
-      evidencePath: "/qa-output/qa-evidence.json",
-      reportPath: "/qa-output/qa-suite-report.md",
-      summaryPath: "/qa-output/qa-suite-summary.json",
-      report: "",
-      ...recordQaSuiteTestResults(
-        undefined,
-        ["pass", "fail", "skip"].map((id) => makeQaSuiteTestScenario(id)),
-        [
-          { name: "pass", status: "pass", steps: [] },
-          { name: "fail", status: "fail", steps: [] },
-          { name: "skip", status: "skip", steps: [] },
-        ],
-      ),
-      startedScenarioIds: ["pass", "fail", "skip"],
-      watchUrl: "http://127.0.0.1:43123",
-    } satisfies QaSuiteResult;
-
-    let thrown: unknown;
-    try {
-      throwQaSuiteCleanupErrors({
-        cleanupFailures: [
-          { phase: "agent\nharnesses", error: new Error("dispose failed") },
-          { phase: "lab stop", error: new Error("stop failed") },
-        ],
-        runFailed: false,
-        runError: undefined,
-        result,
-        evidenceWritten: false,
-      });
-    } catch (error) {
-      thrown = error;
-    }
-
-    expect((thrown as Error).message).toBe(
+    expect(thrown.message).toBe(
       [
         "QA scenarios completed, but cleanup failed",
         "scenario counts: passed=1 failed=1 skipped=1 total=3",
         "failed cleanup phases: agent harnesses: dispose failed; lab stop: stop failed",
-        "retained artifacts: output=/qa-output retained report=/qa-output/qa-suite-report.md summary=/qa-output/qa-suite-summary.json",
       ].join("\n"),
     );
-    expect("cause" in (thrown as object)).toBe(false);
-    expect((thrown as Error).message).not.toContain("evidence=");
+    expect("cause" in thrown).toBe(false);
   });
 
   it.each(["never-spawned", "unconfirmed"] as const)(
@@ -212,57 +197,43 @@ describe("qa suite", () => {
   it("rejects unsupported transport ids before starting the lab", async () => {
     const startLab = vi.fn();
 
-    await expect(
-      runQaFlowSuite({
-        transportId: "qa-nope" as unknown as "qa-channel",
-        startLab,
-      }),
-    ).rejects.toThrow("unsupported QA transport: qa-nope");
+    const run = runQaFlowSuite({ transportId: "qa-nope" as unknown as "qa-channel", startLab });
+    await expect(run).rejects.toThrow("unsupported QA transport: qa-nope");
 
     expect(startLab).not.toHaveBeenCalled();
   });
 
-  it("keeps metadata-only live channel drivers on the shared QA transport", async () => {
-    const create = vi.fn();
-
-    await expect(
-      createQaSuiteTransportAdapter({
+  it.each([undefined, "telegram"])(
+    "selects the live adapter only for channel %s",
+    async (channelId) => {
+      const adapter = { id: "telegram" } as QaTransportAdapter;
+      const create = vi.fn(async () => adapter);
+      const selected = await createQaSuiteTransportAdapter({
         adapterFactories: [{ id: "telegram", matches: () => true, create }],
         channelDriver: "live",
-        outputDir: "/tmp/qa-output",
-        state: {} as QaLabServerHandle["state"],
-        transportId: "qa-channel",
-      }),
-    ).resolves.toMatchObject({ adapter: { id: "qa-channel" }, driver: "qa-channel" });
-
-    expect(create).not.toHaveBeenCalled();
-  });
-
-  it("uses a contributed live adapter when its channel is selected", async () => {
-    const adapter = { id: "telegram" } as QaTransportAdapter;
-    const create = vi.fn(async () => adapter);
-
-    await expect(
-      createQaSuiteTransportAdapter({
-        adapterFactories: [{ id: "telegram", matches: () => true, create }],
-        channelDriver: "live",
-        channelId: "telegram",
+        channelId,
         outputDir: "/tmp/qa-output",
         transportPolicy: { requireGroupMention: true },
         state: {} as QaLabServerHandle["state"],
         transportId: "qa-channel",
-      }),
-    ).resolves.toMatchObject({ adapter, driver: "live" });
-
-    expect(create).toHaveBeenCalledTimes(1);
-    expect(create).toHaveBeenCalledWith(
-      expect.objectContaining({
-        adapterOptions: expect.objectContaining({
-          transportPolicy: { requireGroupMention: true },
-        }),
-      }),
-    );
-  });
+      });
+      expect(selected).toMatchObject(
+        channelId
+          ? { adapter, driver: "live" }
+          : { adapter: { id: "qa-channel" }, driver: "qa-channel" },
+      );
+      expect(create).toHaveBeenCalledTimes(channelId ? 1 : 0);
+      if (channelId) {
+        expect(create).toHaveBeenCalledWith(
+          expect.objectContaining({
+            adapterOptions: expect.objectContaining({
+              transportPolicy: { requireGroupMention: true },
+            }),
+          }),
+        );
+      }
+    },
+  );
 
   it("cancels a successful lab readiness body before releasing its guard", async () => {
     const events: string[] = [];
@@ -281,15 +252,7 @@ describe("qa suite", () => {
       },
     });
 
-    await expect(
-      waitForQaLabReadyOrStopOwned({
-        lab: {
-          listenUrl: "http://127.0.0.1:43123",
-          stop,
-        },
-        ownsLab: false,
-      }),
-    ).resolves.toBeUndefined();
+    await expect(readiness(stop, false)).resolves.toBeUndefined();
 
     expect(events).toEqual(["cancel", "release"]);
     expect(stop).not.toHaveBeenCalled();
@@ -305,15 +268,7 @@ describe("qa suite", () => {
         }),
     );
 
-    const readiness = waitForQaLabReadyOrStopOwned({
-      lab: {
-        listenUrl: "http://127.0.0.1:43123",
-        stop,
-      },
-      ownsLab: true,
-      timeoutMs: 1_000,
-    });
-    const rejection = expect(readiness).rejects.toThrow(
+    const rejection = expect(readiness(stop, true, 1_000)).rejects.toThrow(
       "timed out after 1000ms waiting for qa-lab ready",
     );
 
@@ -332,72 +287,37 @@ describe("qa suite", () => {
       release: vi.fn(async () => {}),
     });
 
-    await expect(
-      waitForQaLabReadyOrStopOwned({
-        lab: {
-          listenUrl: "http://127.0.0.1:43123",
-          stop,
-        },
-        ownsLab: false,
-        timeoutMs: 1,
-      }),
-    ).rejects.toThrow("timed out after 1ms waiting for qa-lab ready");
+    await expect(readiness(stop, false, 1)).rejects.toThrow(
+      "timed out after 1ms waiting for qa-lab ready",
+    );
     expect(stop).not.toHaveBeenCalled();
   });
 
   it("resolves transport-ready timeout from params and env", () => {
-    expect(resolveQaSuiteTransportReadyTimeoutMs(undefined, {})).toBe(120_000);
-    expect(
-      resolveQaSuiteTransportReadyTimeoutMs(undefined, {
-        OPENCLAW_QA_TRANSPORT_READY_TIMEOUT_MS: "180000",
-      }),
-    ).toBe(180_000);
-    expect(
-      resolveQaSuiteTransportReadyTimeoutMs(undefined, {
-        OPENCLAW_QA_TRANSPORT_READY_TIMEOUT_MS: "bad",
-      }),
-    ).toBe(120_000);
-    for (const value of ["0x10", "1e3", "10.5"]) {
+    for (const [timeout, value, expected] of [
+      [undefined, undefined, 120_000],
+      [undefined, "180000", 180_000],
+      ...["bad", "0x10", "1e3", "10.5"].map((invalid) => [undefined, invalid, 120_000] as const),
+      [90_000, undefined, 90_000],
+    ] as const) {
       expect(
-        resolveQaSuiteTransportReadyTimeoutMs(undefined, {
+        resolveQaSuiteTransportReadyTimeoutMs(timeout, {
           OPENCLAW_QA_TRANSPORT_READY_TIMEOUT_MS: value,
         }),
-      ).toBe(120_000);
+      ).toBe(expected);
     }
-    expect(resolveQaSuiteTransportReadyTimeoutMs(90_000, {})).toBe(90_000);
   });
 
   it("applies OPENCLAW_QA_SUITE_PROGRESS override and falls back on invalid values", () => {
-    expect(
-      shouldLogQaSuiteProgress({
-        CI: "false",
-        OPENCLAW_QA_SUITE_PROGRESS: "true",
-      }),
-    ).toBe(true);
-    expect(
-      shouldLogQaSuiteProgress({
-        CI: "true",
-        OPENCLAW_QA_SUITE_PROGRESS: "false",
-      }),
-    ).toBe(false);
-    expect(
-      shouldLogQaSuiteProgress({
-        CI: "false",
-        OPENCLAW_QA_SUITE_PROGRESS: "on",
-      }),
-    ).toBe(true);
-    expect(
-      shouldLogQaSuiteProgress({
-        CI: "true",
-        OPENCLAW_QA_SUITE_PROGRESS: "off",
-      }),
-    ).toBe(false);
-    expect(
-      shouldLogQaSuiteProgress({
-        CI: "true",
-        OPENCLAW_QA_SUITE_PROGRESS: "definitely",
-      }),
-    ).toBe(true);
+    for (const [CI, override, expected] of [
+      ["false", "true", true],
+      ["true", "false", false],
+      ["false", "on", true],
+      ["true", "off", false],
+      ["true", "definitely", true],
+    ] as const) {
+      expect(shouldLogQaSuiteProgress({ CI, OPENCLAW_QA_SUITE_PROGRESS: override })).toBe(expected);
+    }
   });
 
   it("sanitizes scenario ids for progress logs", () => {
@@ -407,90 +327,42 @@ describe("qa suite", () => {
   });
 
   it("includes effective channel driver in run start progress logs", () => {
-    expect(
-      formatQaSuiteRunStartProgress({
-        selectedScenarioCount: 80,
-        concurrency: 8,
-        transportId: "qa-channel",
-      }),
-    ).toBe("run start: scenarios=80 concurrency=8 transport=qa-channel");
-
-    expect(
-      formatQaSuiteRunStartProgress({
-        selectedScenarioCount: 80,
+    for (const { expected, ...params } of [
+      { concurrency: 8, expected: "run start: scenarios=80 concurrency=8 transport=qa-channel" },
+      {
         concurrency: 1,
-        transportId: "qa-channel",
-        channelDriver: "crabline",
+        channelDriver: "crabline" as const,
         channelId: "telegram",
-      }),
-    ).toBe(
-      "run start: scenarios=80 concurrency=1 transport=qa-channel channelDriver=crabline channel=telegram",
-    );
+        expected:
+          "run start: scenarios=80 concurrency=1 transport=qa-channel channelDriver=crabline channel=telegram",
+      },
+    ]) {
+      expect(
+        formatQaSuiteRunStartProgress({
+          selectedScenarioCount: 80,
+          transportId: "qa-channel",
+          ...params,
+        }),
+      ).toBe(expected);
+    }
   });
 
   it("records gateway RSS peak and trace samples", () => {
-    expect(
-      buildQaSuiteRuntimeMetrics({
-        startedAt: new Date("2026-04-22T12:00:00.000Z"),
-        finishedAt: new Date("2026-04-22T12:00:12.000Z"),
-        gatewayProcessCpuStartMs: 1_000,
-        gatewayProcessCpuEndMs: 4_000,
-        gatewayProcessRssStartBytes: 100_000_000,
-        gatewayProcessRssEndBytes: 125_000_000,
-        gatewayProcessRssSamples: [
-          {
-            label: "suite-start",
-            at: "2026-04-22T12:00:00.000Z",
-            gatewayProcessRssBytes: 100_000_000,
-          },
-          {
-            label: "scenario:canary:finish",
-            at: "2026-04-22T12:00:10.000Z",
-            gatewayProcessRssBytes: 140_000_000,
-          },
-        ],
-        gatewayHeapSnapshots: [
-          {
-            label: "suite-start",
-            at: "2026-04-22T12:00:01.000Z",
-            path: "artifacts/gateway-heap-snapshots/suite-start.heapsnapshot",
-            bytes: 12_345,
-          },
-        ],
-      }),
-    ).toEqual({
-      wallMs: 12_000,
-      gatewayProcessCpuMs: 3_000,
-      gatewayCpuCoreRatio: 0.25,
+    const metrics = buildQaSuiteRuntimeMetrics({
+      startedAt: new Date("2026-04-22T12:00:00.000Z"),
+      finishedAt: new Date("2026-04-22T12:00:12.000Z"),
+      gatewayProcessCpuStartMs: 1_000,
+      gatewayProcessCpuEndMs: 4_000,
       gatewayProcessRssStartBytes: 100_000_000,
       gatewayProcessRssEndBytes: 125_000_000,
-      gatewayProcessRssDeltaBytes: 25_000_000,
-      gatewayProcessRssPeakBytes: 140_000_000,
-      gatewayProcessRssPeakDeltaBytes: 40_000_000,
-      gatewayProcessRssSamples: [
-        {
-          label: "suite-start",
-          at: "2026-04-22T12:00:00.000Z",
-          gatewayProcessRssBytes: 100_000_000,
-        },
-        {
-          label: "scenario:canary:finish",
-          at: "2026-04-22T12:00:10.000Z",
-          gatewayProcessRssBytes: 140_000_000,
-        },
-      ],
-      gatewayHeapSnapshots: [
-        {
-          label: "suite-start",
-          at: "2026-04-22T12:00:01.000Z",
-          path: "artifacts/gateway-heap-snapshots/suite-start.heapsnapshot",
-          bytes: 12_345,
-        },
-      ],
+      gatewayProcessRssSamples: structuredClone(rssSamples),
+      gatewayHeapSnapshots: structuredClone(heapSnapshots),
     });
+    expect(metrics).toEqual(expectedMetrics);
   });
 
   it("arms gateway heap checkpoint env only when requested", () => {
+    const option = "--heapsnapshot-signal=SIGQUIT";
     expect(
       buildQaGatewayHeapCheckpointRuntimeEnvPatch({
         OPENCLAW_QA_GATEWAY_HEAP_CHECKPOINTS: "0",
@@ -502,153 +374,42 @@ describe("qa suite", () => {
         NODE_OPTIONS: "--max-old-space-size=4096",
       }),
     ).toEqual({
-      NODE_OPTIONS: "--max-old-space-size=4096 --heapsnapshot-signal=SIGQUIT",
+      NODE_OPTIONS: `--max-old-space-size=4096 ${option}`,
     });
-    expect(
-      mergeQaRuntimeEnvPatches(
-        { OPENAI_API_KEY: "mock" },
-        { NODE_OPTIONS: "--heapsnapshot-signal=SIGQUIT" },
-      ),
-    ).toEqual({
+    expect(mergeQaRuntimeEnvPatches({ OPENAI_API_KEY: "mock" }, { NODE_OPTIONS: option })).toEqual({
       OPENAI_API_KEY: "mock",
-      NODE_OPTIONS: "--heapsnapshot-signal=SIGQUIT",
+      NODE_OPTIONS: option,
     });
   });
-
-  it("forwards run options into isolated scenario worker params", () => {
-    const startLab = vi.fn();
-    const adapterFactory = {
-      id: "telegram",
-      matches: vi.fn(() => true),
-      create: vi.fn(),
-    };
-    const scenario = makeQaSuiteTestScenario("patched-control-ui", {
-      surface: "control-ui",
-      gatewayConfigPatch: {
-        messages: {
-          groupChat: {
-            visibleReplies: "message_tool",
-          },
-        },
-      },
-    });
-    const sutOpenClawCommand = {
-      executablePath: "/usr/local/bin/openclaw-telegram-sut-launcher",
-      usePackagedPlugins: true,
-    };
-
-    expect(
-      buildQaIsolatedScenarioWorkerParams({
-        repoRoot: "/repo",
-        outputDir: "/repo/.artifacts/qa-e2e/scenarios/patched-control-ui",
-        providerMode: "mock-openai",
-        transportId: "qa-channel",
-        primaryModel: "mock-openai/gpt-5.6-luna",
-        alternateModel: "mock-openai/gpt-5.6-luna-alt",
-        fastMode: true,
-        scenario,
-        startLab,
-        input: {
-          adapterFactories: [adapterFactory],
-          channelId: "telegram",
-          adapterOptions: { repoRoot: "/repo" },
-          sutOpenClawCommand,
-          thinkingDefault: "minimal",
-          claudeCliAuthMode: "subscription",
-          enabledPluginIds: ["acpx"],
-          transportReadyTimeoutMs: 180_000,
-          forcedRuntime: "codex",
-          writeEvidenceFile: false,
-        },
-      }),
-    ).toMatchObject({
-      scenarioIds: ["patched-control-ui"],
-      adapterFactories: [adapterFactory],
-      channelId: "telegram",
-      adapterOptions: { repoRoot: "/repo" },
-      sutOpenClawCommand,
-      concurrency: 1,
-      startLab,
-      controlUiEnabled: true,
-      thinkingDefault: "minimal",
-      claudeCliAuthMode: "subscription",
-      enabledPluginIds: ["acpx"],
-      transportReadyTimeoutMs: 180_000,
-      forcedRuntime: "codex",
-      writeEvidenceFile: false,
-    });
-  });
-
-  it.each([{ surface: "control-ui", explicit: false, expected: false }])(
-    "preserves an explicit Control UI override for isolated $surface scenarios",
-    ({ surface, explicit, expected }) => {
-      const scenario = makeQaSuiteTestScenario("isolated-control-ui-ownership", { surface });
-
-      expect(
-        buildQaIsolatedScenarioWorkerParams({
-          repoRoot: "/repo",
-          outputDir: "/repo/.artifacts/qa-e2e/scenarios/isolated-control-ui-ownership",
-          providerMode: "mock-openai",
-          transportId: "qa-channel",
-          primaryModel: "mock-openai/gpt-5.6-luna",
-          alternateModel: "mock-openai/gpt-5.6-luna-alt",
-          fastMode: true,
-          scenario,
-          startLab: vi.fn(),
-          ...(explicit === undefined ? {} : { input: { controlUiEnabled: explicit } }),
-        }).controlUiEnabled,
-      ).toBe(expected);
-    },
-  );
 
   it("keeps caller-owned serial labs on shared workers without a launcher", () => {
     const scenarios = [
       makeQaSuiteTestScenario("baseline"),
       makeQaSuiteTestScenario("message-tool-mode", {
-        gatewayConfigPatch: {
-          messages: {
-            groupChat: {
-              visibleReplies: "message_tool",
-            },
-          },
-        },
+        gatewayConfigPatch: messageToolConfig(),
       }),
     ];
-    const lab = makeQaSuiteTestLabHandle();
+    const lab = createTestLab();
     const startLab = vi.fn();
 
-    expect(
-      shouldRunQaSuiteWithIsolatedScenarioWorkers({
-        scenarios,
-        concurrency: 1,
-        lab,
-      }),
-    ).toBe(false);
-    expect(
-      shouldRunQaSuiteWithIsolatedScenarioWorkers({
-        scenarios,
-        concurrency: 1,
-        lab,
-        startLab,
-      }),
-    ).toBe(true);
+    const params = { scenarios, concurrency: 1, lab };
+    expect(shouldRunQaSuiteWithIsolatedScenarioWorkers(params)).toBe(false);
+    expect(shouldRunQaSuiteWithIsolatedScenarioWorkers({ ...params, startLab })).toBe(true);
   });
 
-  it("remaps mock-openai model refs onto the app-server OpenAI provider for codex cells only", () => {
-    expect(
-      remapModelRefForForcedRuntime({
-        modelRef: "mock-openai/gpt-5.6-luna",
-        providerMode: "mock-openai",
-        forcedRuntime: "codex",
-      }),
-    ).toBe("openai/gpt-5.6-luna");
-    expect(
-      remapModelRefForForcedRuntime({
-        modelRef: "mock-openai/gpt-5.6-luna",
-        providerMode: "mock-openai",
-        forcedRuntime: "openclaw",
-      }),
-    ).toBe("mock-openai/gpt-5.6-luna");
+  it("remaps mock-openai refs only for the codex runtime", () => {
+    for (const [forcedRuntime, expected] of [
+      ["codex", "openai/gpt-5.6-luna"],
+      ["openclaw", "mock-openai/gpt-5.6-luna"],
+    ] as const) {
+      expect(
+        remapModelRefForForcedRuntime({
+          modelRef: "mock-openai/gpt-5.6-luna",
+          providerMode: "mock-openai",
+          forcedRuntime,
+        }),
+      ).toBe(expected);
+    }
   });
 });
 
@@ -678,26 +439,17 @@ describe("buildQaSuiteSummaryJson", () => {
   });
 
   it("records selected scenarios and realized run metadata", () => {
-    const scenarioIds = ["approval-turn-tool-followthrough", "subagent-handoff", "memory-recall"];
-    const json = buildQaSuiteSummaryJson({
-      ...baseParams,
-      scenarioIds,
+    const run = {
+      scenarioIds: ["approval", "handoff", "recall"],
       status: "running",
       channel: "telegram",
       channelDriver: "crabline",
       channelCapabilityMatrixPath: "crabline-channel-driver-capabilities.json",
       channelDriverSmokePath: "crabline-provider-readiness.json",
       runtimePair: ["openclaw", "codex"],
-    });
-    expect(json.run).toMatchObject({
-      scenarioIds,
-      status: "running",
-      channel: "telegram",
-      channelDriver: "crabline",
-      channelCapabilityMatrixPath: "crabline-channel-driver-capabilities.json",
-      channelDriverSmokePath: "crabline-provider-readiness.json",
-      runtimePair: ["openclaw", "codex"],
-    });
+    } satisfies Partial<Parameters<typeof buildQaSuiteSummaryJson>[0]>;
+    const json = buildQaSuiteSummaryJson({ ...baseParams, ...structuredClone(run) });
+    expect(json.run).toMatchObject(run);
   });
 
   it("leaves split fields null when a model ref is malformed", () => {
@@ -707,13 +459,15 @@ describe("buildQaSuiteSummaryJson", () => {
       alternateModel: "",
       scenarioIds: [],
     });
-    expect(json.run.primaryModel).toBe("not-a-real-ref");
-    expect(json.run.primaryProvider).toBeNull();
-    expect(json.run.primaryModelName).toBeNull();
-    expect(json.run.alternateModel).toBe("");
-    expect(json.run.alternateProvider).toBeNull();
-    expect(json.run.alternateModelName).toBeNull();
-    expect(json.run.scenarioIds).toBeNull();
+    expect(json.run).toMatchObject({
+      primaryModel: "not-a-real-ref",
+      primaryProvider: null,
+      primaryModelName: null,
+      alternateModel: "",
+      alternateProvider: null,
+      alternateModelName: null,
+      scenarioIds: null,
+    });
   });
 
   it("includes skipped scenarios in the canonical summary counts", () => {
@@ -726,132 +480,51 @@ describe("buildQaSuiteSummaryJson", () => {
       ],
     });
 
-    expect(json.counts).toEqual({
-      total: 4,
-      passed: 1,
-      failed: 1,
-      skipped: 2,
-    });
-  });
-
-  it("preserves the evidence summary when provided", () => {
-    const evidence = buildQaSuiteEvidenceSummary({
-      artifactPaths: [{ kind: "summary", path: "qa-suite-summary.json" }],
-      scenarioDefinitions: [
-        {
-          id: "dm-chat-baseline",
-          title: "DM baseline conversation",
-          sourcePath: "qa/scenarios/channels/dm-chat-baseline.yaml",
-          surface: "dm",
-          coverage: {
-            primary: ["channels.dm"],
-          },
-        },
-      ],
-      channelId: "qa-channel",
-      generatedAt: "2026-04-11T00:05:00.000Z",
-      primaryModel: "mock-openai/gpt-5.6-luna",
-      providerMode: "mock-openai",
-      scenarioResults: [{ name: "DM baseline conversation", status: "pass" }],
-    });
-    const json = buildQaSuiteSummaryJson({
-      ...baseParams,
-      evidence,
-    });
-
-    expect(json.evidence).toEqual(evidence);
+    expect(json.counts).toEqual({ total: 4, passed: 1, failed: 1, skipped: 2 });
   });
 
   it("records optional runtime metrics when provided", () => {
-    const metrics = {
-      wallMs: 12_000,
-      gatewayProcessCpuMs: 3_400,
-      gatewayCpuCoreRatio: 0.283,
-      gatewayProcessRssStartBytes: 100_000_000,
-      gatewayProcessRssEndBytes: 125_000_000,
-      gatewayProcessRssDeltaBytes: 25_000_000,
-      gatewayProcessRssPeakBytes: 140_000_000,
-      gatewayProcessRssPeakDeltaBytes: 40_000_000,
-      gatewayProcessRssSamples: [
-        {
-          label: "suite-start",
-          at: "2026-04-22T12:00:00.000Z",
-          gatewayProcessRssBytes: 100_000_000,
-        },
-        {
-          label: "scenario:canary:finish",
-          at: "2026-04-22T12:00:10.000Z",
-          gatewayProcessRssBytes: 140_000_000,
-        },
-      ],
-      gatewayHeapSnapshots: [
-        {
-          label: "suite-start",
-          at: "2026-04-22T12:00:01.000Z",
-          path: "artifacts/gateway-heap-snapshots/suite-start.heapsnapshot",
-          bytes: 12_345,
-        },
-      ],
-    };
+    const metrics = { ...expectedMetrics, gatewayProcessCpuMs: 3_400, gatewayCpuCoreRatio: 0.283 };
     const json = buildQaSuiteSummaryJson({ ...baseParams, metrics: structuredClone(metrics) });
-
     expect(json.metrics).toEqual(metrics);
   });
 });
 
 describe("Gateway heap snapshot checkpoints", () => {
-  async function createWriterFixture(outcome?: "failed" | "replaced-before" | "replaced-during") {
+  async function createWriterFixture(outcome?: "failed") {
     const tempRoot = await tempDirs.makeTempDir("qa-heap-checkpoint-");
     const outputDir = path.join(tempRoot, "output");
     const snapshotPath = path.join(tempRoot, "Heap.snapshot.heapsnapshot");
-    let pid = 123;
     const gateway = {
       tempRoot,
-      get pid() {
-        return pid;
-      },
       async signalProcess(signal: NodeJS.Signals) {
         expect(signal).toBe("SIGQUIT");
         await fs.writeFile(snapshotPath, '{"snapshot":');
-        if (outcome === "replaced-before") {
-          pid += 1;
-        }
       },
       async call() {
         if (outcome === "failed") {
           throw new Error("Gateway exited during snapshot serialization");
-        }
-        if (outcome === "replaced-during") {
-          pid += 1;
         }
         // Node's signal handler closes the snapshot before its JS thread can answer an RPC.
         await fs.appendFile(snapshotPath, '{"complete":true}}');
         return { ok: true };
       },
     };
-    return { gateway, outputDir };
+    return { gateway, outputDir, label: "after turn" };
   }
 
   it("copies the completed snapshot even when an unfinished prefix has stopped growing", async () => {
     const params = await createWriterFixture();
-    const checkpoint = await captureGatewayHeapSnapshotCheckpoint({
-      ...params,
-      label: "after turn",
-    });
+    const checkpoint = await captureGatewayHeapSnapshotCheckpoint(params);
     expect(checkpoint).toBeDefined();
     const artifact = await fs.readFile(path.join(params.outputDir, checkpoint!.path));
     expect(JSON.parse(artifact.toString())).toEqual({ snapshot: { complete: true } });
     expect(checkpoint!.bytes).toBe(artifact.length);
   });
 
-  it.each(["failed", "replaced-before", "replaced-during"] as const)(
-    "does not publish a snapshot after the Gateway is %s",
-    async (outcome) => {
-      const params = await createWriterFixture(outcome);
-      await expect(
-        captureGatewayHeapSnapshotCheckpoint({ ...params, label: "after turn" }),
-      ).rejects.toThrow(outcome === "failed" ? "Gateway exited" : "Gateway changed");
-      await expect(fs.access(params.outputDir)).rejects.toMatchObject({ code: "ENOENT" });
-    },
-  );
+  it("does not publish a snapshot after the Gateway exits", async () => {
+    const params = await createWriterFixture("failed");
+    await expect(captureGatewayHeapSnapshotCheckpoint(params)).rejects.toThrow("Gateway exited");
+    await expect(fs.access(params.outputDir)).rejects.toMatchObject({ code: "ENOENT" });
+  });
 });

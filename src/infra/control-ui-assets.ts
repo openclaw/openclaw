@@ -29,46 +29,12 @@ type ControlUiAssetHealth =
   | { kind: "stale"; indexPath: string; buildId: string | null }
   | { kind: "ready"; indexPath: string; publicAssetBuildId?: string };
 
-export async function resolveControlUiAssetHealth(
-  opts: {
-    root?: string;
-    argv1?: string;
-    moduleUrl?: string;
-    expectedBuildId?: string | null;
-  } = {},
-): Promise<ControlUiAssetHealth> {
-  const indexPath = opts.root
-    ? resolveControlUiDistIndexPathForRoot(opts.root)
-    : await resolveControlUiDistIndexPath({
-        argv1: opts.argv1 ?? process.argv[1],
-        moduleUrl: opts.moduleUrl,
-      });
+export async function resolveControlUiAssetHealth(opts: {
+  root: string;
+  expectedBuildId?: string | null;
+}): Promise<ControlUiAssetHealth> {
+  const indexPath = resolveControlUiDistIndexPathForRoot(opts.root);
   return inspectControlUiAssetHealth(indexPath, opts.expectedBuildId);
-}
-
-function resolveControlUiRepoRoot(opts: {
-  root?: string;
-  argv1?: string;
-  moduleUrl?: string;
-  cwd?: string;
-}): string | null {
-  const cwd = opts.cwd ?? process.cwd();
-  const roots = opts.root
-    ? [path.resolve(opts.root)]
-    : [
-        resolveOpenClawPackageRootSync({
-          argv1: opts.argv1 ?? process.argv[1],
-          moduleUrl: opts.moduleUrl ?? import.meta.url,
-          cwd,
-        }),
-        resolveOpenClawPackageRootSync({ cwd }),
-      ];
-  return (
-    roots.find(
-      (root): root is string =>
-        root !== null && fs.existsSync(path.join(root, "ui", "vite.config.ts")),
-    ) ?? null
-  );
 }
 
 function tryRealpath(value: string): string | null {
@@ -85,10 +51,8 @@ function resolveControlUiEntrypointPaths(argv1: string): string[] {
   return realpath && realpath !== normalized ? [normalized, realpath] : [normalized];
 }
 
-async function resolveControlUiDistIndexPath(
-  opts: ControlUiRootResolveOptions,
-): Promise<string | null> {
-  const argv1 = opts.argv1 ?? process.argv[1];
+async function resolveControlUiDistIndexPath(opts: { moduleUrl?: string }): Promise<string | null> {
+  const argv1 = process.argv[1];
   const moduleUrl = opts.moduleUrl;
   if (!argv1) {
     return null;
@@ -202,23 +166,13 @@ export function isPackageProvenControlUiRootSync(
 }
 
 type EnsureControlUiAssetsResult =
-  | { ok: true; built: boolean; assets: Extract<ControlUiAssetHealth, { kind: "ready" }> }
-  | { ok: false; built: boolean; message: string };
-
-type EnsureControlUiAssetsOptions = ControlUiRootResolveOptions & {
-  root?: string;
-  assetRoot?: string;
-  expectedBuildId?: string | null;
-  force?: boolean;
-  signal?: AbortSignal;
-  timeoutMs?: number;
-  onBuildStart?: () => void;
-};
+  | { ok: true; assets: Extract<ControlUiAssetHealth, { kind: "ready" }> }
+  | { ok: false; message: string };
 
 export const CONTROL_UI_ASSETS_BUILD_TIMEOUT_MS = 10 * 60_000;
 
-function controlUiAssetsFailure(message: string, built = false): EnsureControlUiAssetsResult {
-  return { ok: false, built, message };
+function controlUiAssetsFailure(message: string): EnsureControlUiAssetsResult {
+  return { ok: false, message };
 }
 
 function inspectControlUiAssetHealth(
@@ -326,7 +280,15 @@ function summarizeCommandOutput(text: string): string | undefined {
 
 export async function ensureControlUiAssetsBuilt(
   runtime: RuntimeEnv = defaultRuntime,
-  opts: EnsureControlUiAssetsOptions = {},
+  opts: {
+    moduleUrl?: string;
+    root?: string;
+    assetRoot?: string;
+    expectedBuildId?: string | null;
+    force?: boolean;
+    signal?: AbortSignal;
+    onBuildStart?: () => void;
+  } = {},
 ): Promise<EnsureControlUiAssetsResult> {
   const assetRoot =
     opts.assetRoot ??
@@ -338,10 +300,25 @@ export async function ensureControlUiAssetsBuilt(
     : await resolveControlUiDistIndexPath(opts);
   const health = inspectControlUiAssetHealth(selectedIndex, opts.expectedBuildId);
   if (!opts.force && health.kind === "ready") {
-    return { ok: true, built: false, assets: health };
+    return { ok: true, assets: health };
   }
 
-  const repoRoot = resolveControlUiRepoRoot(opts);
+  const cwd = process.cwd();
+  const roots = opts.root
+    ? [path.resolve(opts.root)]
+    : [
+        resolveOpenClawPackageRootSync({
+          argv1: process.argv[1],
+          moduleUrl: opts.moduleUrl ?? import.meta.url,
+          cwd,
+        }),
+        resolveOpenClawPackageRootSync({ cwd }),
+      ];
+  const repoRoot =
+    roots.find(
+      (root): root is string =>
+        root !== null && fs.existsSync(path.join(root, "ui", "vite.config.ts")),
+    ) ?? null;
   const indexPath = repoRoot ? resolveControlUiDistIndexPathForRoot(repoRoot) : null;
   // Only the selected source tree owns its output. A healthy checkout beside a
   // damaged app's Resources directory cannot repair the assets that app serves.
@@ -386,7 +363,7 @@ export async function ensureControlUiAssetsBuilt(
     const { runCommandWithTimeout } = await import("../process/exec.js");
     build = await runCommandWithTimeout([process.execPath, uiScript, "build"], {
       cwd: repoRoot,
-      timeoutMs: opts.timeoutMs ?? CONTROL_UI_ASSETS_BUILD_TIMEOUT_MS,
+      timeoutMs: CONTROL_UI_ASSETS_BUILD_TIMEOUT_MS,
       ...(opts.signal ? { signal: opts.signal } : {}),
     });
   } catch (error) {
@@ -415,7 +392,7 @@ export async function ensureControlUiAssetsBuilt(
         : builtHealth.kind === "incomplete"
           ? `startup asset ${builtHealth.missingAsset} is missing.`
           : `its identity is ${builtHealth.buildId ?? "unknown"}; expected ${opts.expectedBuildId}. Restart the Gateway after rebuilding its runtime and UI together.`;
-    return controlUiAssetsFailure(`Control UI build completed but ${issue}`, true);
+    return controlUiAssetsFailure(`Control UI build completed but ${issue}`);
   }
-  return { ok: true, built: true, assets: builtHealth };
+  return { ok: true, assets: builtHealth };
 }

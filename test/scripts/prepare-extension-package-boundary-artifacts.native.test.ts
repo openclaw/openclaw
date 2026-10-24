@@ -18,6 +18,20 @@ import {
 const fixture = createFixtureLifetime();
 afterEach(() => fixture.cleanup());
 let preparationSources: string[] | undefined;
+const boundaryRoot = ".artifacts/extension-package-boundary";
+const sdkConfig = "packages/plugin-sdk/tsconfig.json";
+const sdkOutput = "packages/plugin-sdk/dist";
+const chosenConfig = `${boundaryRoot}/compile/chosen.tsconfig.json`;
+
+function command(root: string, bin: string, args: string[], env?: NodeJS.ProcessEnv) {
+  const result = spawnSync(bin, args, { cwd: root, env, encoding: "utf8", timeout: 20_000 });
+  expect(result.error, result.stderr).toBeUndefined();
+  return result;
+}
+function expectExit(result: ReturnType<typeof command>, status: number) {
+  expect(result.status, result.stdout + result.stderr).toBe(status);
+  return result.stdout;
+}
 
 function resolvePreparationSources() {
   // Keep source-key hashing and git indexing scoped to this fixture's executable graph.
@@ -57,28 +71,38 @@ function createPreparationFixture(mode: "package-boundary" | "all", signal: Abor
     signal.throwIfAborted();
     return writeNativeFixtureFile(root, file, text);
   };
+  const json = (file: string, value: unknown) => write(file, JSON.stringify(value));
+  const files = (entries: Record<string, unknown>) => {
+    for (const [file, value] of Object.entries(entries)) {
+      write(file, typeof value === "string" ? value : JSON.stringify(value));
+    }
+  };
+  const read = (file: string) => fs.readFileSync(path.resolve(root, file), "utf8");
+  const has = (file: string) => fs.existsSync(path.resolve(root, file));
+  const snapshot = (file: string) => ({
+    bytes: fs.readFileSync(path.resolve(root, file)),
+    mtimeMs: fs.statSync(path.resolve(root, file)).mtimeMs,
+  });
+  const compile = (args: string[], status = 0) => {
+    return expectExit(command(root, native, args), status);
+  };
+  const selected = (env?: NodeJS.ProcessEnv) => run(root, root, ["chosen"], env);
   write("package.json", '{"name":"openclaw","type":"module"}');
   write("pnpm-workspace.yaml", "packages: []\n");
-  write(
-    "tsconfig.json",
-    JSON.stringify({
-      compilerOptions: {
-        target: "es2023",
-        lib: ["es5"],
-        module: "nodenext",
-        skipLibCheck: true,
-        types: [],
-      },
-    }),
-  );
-  write(
-    "packages/plugin-sdk/tsconfig.json",
-    JSON.stringify({
-      extends: "../../tsconfig.json",
-      include: ["../../src/**/*.ts"],
-      exclude: ["../../src/shared/deferred.ts"],
-    }),
-  );
+  json("tsconfig.json", {
+    compilerOptions: {
+      target: "es2023",
+      lib: ["es5"],
+      module: "nodenext",
+      skipLibCheck: true,
+      types: [],
+    },
+  });
+  json(sdkConfig, {
+    extends: "../../tsconfig.json",
+    include: ["../../src/**/*.ts"],
+    exclude: ["../../src/shared/deferred.ts"],
+  });
   write("src/plugin-sdk/core.ts", 'export { value } from "../nested.js";');
   write("src/nested.ts", "export const value = 1;");
   copyFixtureFiles(root, [
@@ -100,25 +124,24 @@ function createPreparationFixture(mode: "package-boundary" | "all", signal: Abor
   fs.symlinkSync("../packages/plugin-sdk", path.join(root, "node_modules/fixture-sdk"), "dir");
   const plugins = mode === "all" ? BOUNDARY_PLUGIN_UNITS : [];
   for (const [id, entry] of plugins) {
-    write(
-      `extensions/${id}/tsconfig.json`,
-      JSON.stringify({ extends: "../../tsconfig.json", files: [`${entry}.ts`] }),
-    );
-    write(
-      `extensions/${id}/node_modules/boundary-private-dep/package.json`,
-      '{"name":"boundary-private-dep","types":"index.d.ts"}',
-    );
-    write(
-      `extensions/${id}/node_modules/boundary-private-dep/index.d.ts`,
-      "export declare function consume(callback: (value: string) => string): void;",
-    );
-    write(
-      `extensions/${id}/${entry}.ts`,
-      'export { value } from "fixture-sdk"; export { consume } from "boundary-private-dep";',
-    );
+    const pluginRoot = `extensions/${id}`;
+    files({
+      [`${pluginRoot}/tsconfig.json`]: {
+        extends: "../../tsconfig.json",
+        files: [`${entry}.ts`],
+      },
+      [`${pluginRoot}/node_modules/boundary-private-dep/package.json`]: {
+        name: "boundary-private-dep",
+        types: "index.d.ts",
+      },
+      [`${pluginRoot}/node_modules/boundary-private-dep/index.d.ts`]:
+        "export declare function consume(callback: (value: string) => string): void;",
+      [`${pluginRoot}/${entry}.ts`]:
+        'export { value } from "fixture-sdk"; export { consume } from "boundary-private-dep";',
+    });
   }
-  const recordPath = path.join(root, ".artifacts/extension-package-boundary/plugin-sdk.json");
-  const output = "packages/plugin-sdk/dist";
+  const recordPath = path.join(root, boundaryRoot, "plugin-sdk.json");
+  const output = sdkOutput;
   const step = async (label: string, args: string[], bin?: string, env?: NodeJS.ProcessEnv) => {
     signal.throwIfAborted();
     // Expected compiler failures cancel only their own invocation, not later repair phases.
@@ -143,7 +166,24 @@ function createPreparationFixture(mode: "package-boundary" | "all", signal: Abor
       undefined,
       { ...env, PWD: pwd },
     );
-  return { ancestor, root, native, write, plugins, recordPath, output, step, run };
+  return {
+    ancestor,
+    root,
+    native,
+    write,
+    json,
+    files,
+    read,
+    has,
+    snapshot,
+    compile,
+    selected,
+    plugins,
+    recordPath,
+    output,
+    step,
+    run,
+  };
 }
 
 function writeSelectedConsumer(f: ReturnType<typeof createPreparationFixture>) {
@@ -152,70 +192,57 @@ function writeSelectedConsumer(f: ReturnType<typeof createPreparationFixture>) {
     "src/plugins/package-entrypoints.ts",
     "src/shared/non-packaged-plugin-dirs.ts",
   ]);
-  f.write(
-    "packages/plugin-sdk/tsconfig.json",
-    JSON.stringify({
+  f.files({
+    [sdkConfig]: {
       extends: "../../tsconfig.json",
       include: ["../../src/plugin-sdk/**/*.ts", "../../src/**/*.d.ts"],
-    }),
-  );
-  const sourceAliases = {
-    "openclaw/plugin-sdk/*": ["./src/plugin-sdk/*.ts"],
-    "@openclaw/memory-core/api.js": ["./extensions/memory-core/api.ts"],
-    "@openclaw/qa-channel/api.js": ["./extensions/qa-channel/api.ts"],
-  };
-  f.write(
-    "tsconfig.json",
-    JSON.stringify({
+    },
+    "tsconfig.json": {
       compilerOptions: {
         target: "es2023",
         module: "nodenext",
         skipLibCheck: true,
         types: [],
-        paths: sourceAliases,
+        paths: {
+          "openclaw/plugin-sdk/*": ["./src/plugin-sdk/*.ts"],
+          "@openclaw/memory-core/api.js": ["./extensions/memory-core/api.ts"],
+          "@openclaw/qa-channel/api.js": ["./extensions/qa-channel/api.ts"],
+        },
       },
-    }),
-  );
-  f.write(
-    "extensions/tsconfig.package-boundary.base.json",
-    JSON.stringify({
+    },
+    "extensions/tsconfig.package-boundary.base.json": {
       extends: "../tsconfig.json",
       compilerOptions: {
         paths: {
-          "openclaw/plugin-sdk/*": ["../packages/plugin-sdk/dist/src/plugin-sdk/*.d.ts"],
-          "@openclaw/memory-core/api.js": [
-            "../.artifacts/extension-package-boundary/plugins/memory-core/api.d.ts",
-          ],
-          "@openclaw/qa-channel/api.js": [
-            "../.artifacts/extension-package-boundary/plugins/qa-channel/api.d.ts",
-          ],
+          "openclaw/plugin-sdk/*": [`../${sdkOutput}/src/plugin-sdk/*.d.ts`],
+          ...Object.fromEntries(
+            ["memory-core", "qa-channel"].map((id) => [
+              `@openclaw/${id}/api.js`,
+              [`../${boundaryRoot}/plugins/${id}/api.d.ts`],
+            ]),
+          ),
         },
       },
-    }),
-  );
-  f.write(
-    "extensions/chosen/package.json",
-    JSON.stringify({
+    },
+    "extensions/chosen/package.json": {
       name: "@openclaw/chosen",
       type: "module",
       openclaw: { extensions: ["./index.ts"] },
-    }),
-  );
-  f.write("extensions/chosen/openclaw.plugin.json", '{"id":"chosen"}');
-  f.write(
-    "extensions/chosen/tsconfig.json",
-    JSON.stringify({
+    },
+    "extensions/chosen/openclaw.plugin.json": { id: "chosen" },
+    "extensions/chosen/tsconfig.json": {
       extends: "../tsconfig.package-boundary.base.json",
       compilerOptions: { rootDir: "." },
       include: ["index.ts"],
       exclude: ["excluded/**"],
-    }),
-  );
-  f.write("extensions/chosen/index.ts", 'export { value } from "./excluded/helper.js";');
-  f.write(
-    "extensions/chosen/excluded/helper.ts",
-    'export { value } from "openclaw/plugin-sdk/core";',
-  );
+    },
+    "extensions/chosen/index.ts": 'export { value } from "./excluded/helper.js";',
+    "extensions/chosen/excluded/helper.ts": 'export { value } from "openclaw/plugin-sdk/core";',
+  });
+}
+
+function expectConsumerTypeError(f: ReturnType<typeof createPreparationFixture>, message: string) {
+  expect(f.compile(["-p", chosenConfig, "--noEmit"], 2)).toContain(message);
 }
 
 describe("native declaration preparation", () => {
@@ -230,51 +257,39 @@ describe("native declaration preparation", () => {
         f.write("src/nested.ts", "export const value = fixtureAmbient;");
         f.write("src/plugin-sdk/unused.ts", "export const broken = ;");
         f.write("scripts/lib/plugin-sdk-entrypoints.json", '["core", "unused"]');
-        const narrow = () => f.run(f.root, f.root, ["chosen"]);
-        await narrow();
+        await f.selected();
         const receipt = readArtifactRecord(f.recordPath)!;
         expect(receipt.inputs).toContain("src/nested.ts");
         expect(receipt.inputs).toContain("src/ambient.d.ts");
         expect(receipt.inputs).not.toContain("src/plugin-sdk/unused.ts");
-        expect(fs.readFileSync(path.join(f.root, f.output, "src/nested.d.ts"), "utf8")).toContain(
-          'value: "kept"',
-        );
-        const coldStamp = fs.statSync(f.recordPath).mtimeMs;
-        await narrow();
-        expect(fs.statSync(f.recordPath).mtimeMs).toBe(coldStamp);
+        expect(f.read(`${f.output}/src/nested.d.ts`)).toContain('value: "kept"');
+        const cold = f.snapshot(f.recordPath);
+        await f.selected();
+        expect(f.snapshot(f.recordPath)).toEqual(cold);
 
         f.write("src/plugin-sdk/added.ts", "export const added = 2;");
         f.write(
           "extensions/chosen/excluded/helper.ts",
           'export { value } from "openclaw/plugin-sdk/core"; export { added } from "openclaw/plugin-sdk/added";',
         );
-        await narrow();
+        await f.selected();
         expect(readArtifactRecord(f.recordPath)?.inputs).toContain("src/plugin-sdk/added.ts");
-        expect(fs.existsSync(path.join(f.root, f.output, "src/plugin-sdk/added.d.ts"))).toBe(true);
+        expect(f.has(`${f.output}/src/plugin-sdk/added.d.ts`)).toBe(true);
 
         await expect(f.run()).rejects.toThrow("failed with exit code 1");
-        expect(fs.existsSync(f.recordPath)).toBe(false);
+        expect(f.has(f.recordPath)).toBe(false);
         f.write("src/plugin-sdk/unused.ts", "export const unused = 3;");
         await f.run();
-        expect(fs.existsSync(path.join(f.root, f.output, "src/plugin-sdk/unused.d.ts"))).toBe(true);
-        const fullReceipt = fs.readFileSync(f.recordPath);
-        const fullStamp = fs.statSync(f.recordPath).mtimeMs;
-        await narrow();
-        expect(fs.readFileSync(f.recordPath)).toEqual(fullReceipt);
-        expect(fs.statSync(f.recordPath).mtimeMs).toBe(fullStamp);
+        expect(f.has(`${f.output}/src/plugin-sdk/unused.d.ts`)).toBe(true);
+        const full = f.snapshot(f.recordPath);
+        await f.selected();
+        expect(f.snapshot(f.recordPath)).toEqual(full);
 
         f.write(
           "extensions/chosen/index.ts",
           'import { value } from "./excluded/helper.js"; export const wrong: number = value;',
         );
-        const checked = spawnSync(
-          f.native,
-          ["-p", ".artifacts/extension-package-boundary/compile/chosen.tsconfig.json", "--noEmit"],
-          { cwd: f.root, encoding: "utf8", timeout: 20_000 },
-        );
-        expect(checked.error).toBeUndefined();
-        expect(checked.status, checked.stdout + checked.stderr).toBe(2);
-        expect(checked.stdout).toContain("Type 'string' is not assignable to type 'number'");
+        expectConsumerTypeError(f, "Type 'string' is not assignable to type 'number'");
       }),
   );
 
@@ -285,64 +300,38 @@ describe("native declaration preparation", () => {
       fixture.run(async () => {
         const f = createPreparationFixture("package-boundary", signal);
         writeSelectedConsumer(f);
-        f.write("src/plugin-sdk/unused.ts", "export const unused = 7;");
-        f.write("scripts/lib/plugin-sdk-entrypoints.json", '["core", "unused"]');
-        f.write(
-          "src/plugin-sdk/core.ts",
-          'export type { MemoryValue } from "@openclaw/memory-core/api.js";',
-        );
-        f.write(
-          "extensions/chosen/excluded/helper.ts",
-          'export type { MemoryValue } from "openclaw/plugin-sdk/core";',
-        );
-        f.write(
-          "extensions/chosen/index.ts",
-          'export type { MemoryValue } from "./excluded/helper.js";',
-        );
-        for (const id of ["memory-core", "qa-channel"]) {
-          f.write(
-            `extensions/${id}/tsconfig.json`,
-            JSON.stringify({
-              extends: "../tsconfig.package-boundary.base.json",
-              files: ["api.ts"],
-              include: [],
-            }),
-          );
-        }
-        f.write(
-          "extensions/memory-core/api.ts",
-          'import type { ChannelValue } from "@openclaw/qa-channel/api.js"; export type MemoryValue = { channel: ChannelValue };',
-        );
-        f.write("extensions/qa-channel/api.ts", "export type ChannelValue = { text: string };");
-        const narrow = () =>
-          f.run(f.root, f.root, ["chosen"], {
-            OPENCLAW_CI_SHARED_SDK: sharedSdk ? "1" : "0",
-          });
-        await narrow();
-        expect(fs.existsSync(path.join(f.root, f.output, "src/plugin-sdk/unused.d.ts"))).toBe(
-          sharedSdk,
-        );
-        const outputs = ["memory-core", "qa-channel"].map((id) => {
-          const record = path.join(f.root, `.artifacts/extension-package-boundary/${id}.json`);
-          expect(readArtifactRecord(record)).toBeDefined();
-          expect(
-            fs.existsSync(
-              path.join(f.root, `.artifacts/extension-package-boundary/plugins/${id}/api.d.ts`),
-            ),
-          ).toBe(true);
-          return { record, bytes: fs.readFileSync(record), mtimeMs: fs.statSync(record).mtimeMs };
+        f.files({
+          "src/plugin-sdk/unused.ts": "export const unused = 7;",
+          "scripts/lib/plugin-sdk-entrypoints.json": ["core", "unused"],
+          "src/plugin-sdk/core.ts":
+            'export type { MemoryValue } from "@openclaw/memory-core/api.js";',
+          "extensions/chosen/excluded/helper.ts":
+            'export type { MemoryValue } from "openclaw/plugin-sdk/core";',
+          "extensions/chosen/index.ts": 'export type { MemoryValue } from "./excluded/helper.js";',
+          "extensions/memory-core/api.ts":
+            'import type { ChannelValue } from "@openclaw/qa-channel/api.js"; export type MemoryValue = { channel: ChannelValue };',
+          "extensions/qa-channel/api.ts": "export type ChannelValue = { text: string };",
         });
-        const checked = spawnSync(
-          f.native,
-          ["-p", ".artifacts/extension-package-boundary/compile/chosen.tsconfig.json", "--noEmit"],
-          { cwd: f.root, encoding: "utf8", timeout: 20_000 },
-        );
-        expect(checked.error).toBeUndefined();
-        expect(checked.status, checked.stdout + checked.stderr).toBe(0);
+        for (const id of ["memory-core", "qa-channel"]) {
+          f.json(`extensions/${id}/tsconfig.json`, {
+            extends: "../tsconfig.package-boundary.base.json",
+            files: ["api.ts"],
+            include: [],
+          });
+        }
+        const narrow = () => f.selected({ OPENCLAW_CI_SHARED_SDK: sharedSdk ? "1" : "0" });
         await narrow();
-        for (const output of outputs) {
-          expect(fs.readFileSync(output.record)).toEqual(output.bytes);
-          expect(fs.statSync(output.record).mtimeMs).toBe(output.mtimeMs);
+        expect(f.has(`${f.output}/src/plugin-sdk/unused.d.ts`)).toBe(sharedSdk);
+        const outputs = ["memory-core", "qa-channel"].map((id) => {
+          const record = path.join(f.root, `${boundaryRoot}/${id}.json`);
+          expect(readArtifactRecord(record)).toBeDefined();
+          expect(f.has(`${boundaryRoot}/plugins/${id}/api.d.ts`)).toBe(true);
+          return { record, before: f.snapshot(record) };
+        });
+        f.compile(["-p", chosenConfig, "--noEmit"]);
+        await narrow();
+        for (const { record, before } of outputs) {
+          expect(f.snapshot(record)).toEqual(before);
         }
       }),
   );
@@ -360,7 +349,7 @@ describe("native declaration preparation", () => {
         ".artifacts/generic-signature.mts",
         'import { CompilerInputSnapshot } from "../scripts/lib/compiler-input-snapshot.mts";\n' +
           "const snapshot = new CompilerInputSnapshot(process.cwd(), { toolchainFiles: [], generatorInputs: [] });\n" +
-          'console.log(snapshot.signature("packages/plugin-sdk/tsconfig.json", [], []));\n',
+          `console.log(snapshot.signature(${JSON.stringify(sdkConfig)}, [], []));\n`,
       );
       const major = Number(process.versions.node.split(".")[0]);
       const envFor = (version: string) => ({
@@ -368,34 +357,28 @@ describe("native declaration preparation", () => {
         FIXTURE_NODE_VERSION: version,
       });
       const genericSignature = (version: string) => {
-        const result = spawnSync(process.execPath, [genericEntry], {
-          cwd: f.root,
-          env: { ...process.env, ...envFor(version) },
-          encoding: "utf8",
-          timeout: 20_000,
-        });
-        expect(result.error).toBeUndefined();
-        expect(result.status, result.stdout + result.stderr).toBe(0);
-        return result.stdout.trim();
+        return expectExit(
+          command(f.root, process.execPath, [genericEntry], {
+            ...process.env,
+            ...envFor(version),
+          }),
+          0,
+        ).trim();
       };
       const firstVersion = `${major}.19.0`;
       const minorVersion = `${major}.21.0`;
       await f.run(f.root, f.root, undefined, envFor(firstVersion));
-      const receipt = fs.readFileSync(f.recordPath);
-      const stamp = fs.statSync(f.recordPath).mtimeMs;
+      const receipt = f.snapshot(f.recordPath);
       const generic = genericSignature(firstVersion);
       await f.run(f.root, f.root, undefined, envFor(minorVersion));
-      expect(fs.readFileSync(f.recordPath)).toEqual(receipt);
-      expect(fs.statSync(f.recordPath).mtimeMs).toBe(stamp);
+      expect(f.snapshot(f.recordPath)).toEqual(receipt);
       expect(genericSignature(minorVersion)).not.toBe(generic);
 
       await f.run(f.root, f.root, undefined, envFor(`${major + 1}.0.0`));
       expect(readArtifactRecord(f.recordPath)?.signature).not.toBe(
-        JSON.parse(receipt.toString()).signature,
+        JSON.parse(receipt.bytes.toString()).signature,
       );
-      expect(fs.readFileSync(path.join(f.root, f.output, "src/nested.d.ts"), "utf8")).toContain(
-        "value = 1",
-      );
+      expect(f.read(`${f.output}/src/nested.d.ts`)).toContain("value = 1");
     }));
 
   it("prepares the full shared SDK when the boundary checker selects no packages", ({ signal }) =>
@@ -409,13 +392,10 @@ describe("native declaration preparation", () => {
       ]);
       fs.symlinkSync(path.resolve("node_modules/p-map"), path.join(f.root, "node_modules/p-map"));
       fs.mkdirSync(path.join(f.root, "extensions"));
-      f.write(
-        "packages/plugin-sdk/tsconfig.json",
-        JSON.stringify({
-          extends: "../../tsconfig.json",
-          include: ["../../src/plugin-sdk/**/*.ts"],
-        }),
-      );
+      f.json(sdkConfig, {
+        extends: "../../tsconfig.json",
+        include: ["../../src/plugin-sdk/**/*.ts"],
+      });
       await f.step(
         "empty-boundary-selection",
         [path.join(f.root, "scripts/check-extension-package-tsc-boundary.mts"), "--mode=compile"],
@@ -423,9 +403,7 @@ describe("native declaration preparation", () => {
         { OPENCLAW_CI_SHARED_SDK: "1", GITHUB_STEP_SUMMARY: undefined },
       );
       expect(readArtifactRecord(f.recordPath)?.inputs).toContain("src/nested.ts");
-      expect(fs.readFileSync(path.join(f.root, f.output, "src/nested.d.ts"), "utf8")).toContain(
-        "value = 1",
-      );
+      expect(f.read(`${f.output}/src/nested.d.ts`)).toContain("value = 1");
     }));
 
   it(
@@ -456,22 +434,16 @@ describe("native declaration preparation", () => {
         const consumer = setup();
         const cli = (f: typeof producer, operation: string, ...args: string[]) => {
           signal.throwIfAborted();
-          const result = spawnSync(
+          return command(
+            f.root,
             process.execPath,
             ["scripts/ci-sdk-declarations.mts", operation, ...args],
-            {
-              cwd: f.root,
-              env: { ...process.env, GITHUB_OUTPUT: undefined },
-              encoding: "utf8",
-              timeout: 20_000,
-            },
+            { ...process.env, GITHUB_OUTPUT: undefined },
           );
-          expect(result.error, result.stderr).toBeUndefined();
-          return result;
         };
         const success = (f: typeof producer, operation: string, ...args: string[]) => {
           const result = cli(f, operation, ...args);
-          expect(result.status, result.stdout + result.stderr).toBe(0);
+          expectExit(result, 0);
           return result;
         };
         const identity = (
@@ -479,8 +451,8 @@ describe("native declaration preparation", () => {
         ): { "cache-key": string; archive: string; fresh: string } =>
           JSON.parse(success(f, "key").stdout);
 
-        await producer.run(producer.root, producer.root, ["chosen"]);
-        const narrowReceipt = fs.readFileSync(producer.recordPath, "utf8");
+        await producer.selected();
+        const narrowReceipt = producer.read(producer.recordPath);
         const narrowPack = cli(producer, "pack");
         expect(narrowPack.status, narrowPack.stdout + narrowPack.stderr).toBe(1);
         expect(narrowPack.stderr).toContain("Only a current full SDK receipt");
@@ -498,25 +470,14 @@ describe("native declaration preparation", () => {
         fs.writeFileSync(targetArchive, archive);
         success(consumer, "restore", "--required");
         success(consumer, "validate");
-        const restoredReceipt = fs.readFileSync(consumer.recordPath);
-        const restoredStamp = fs.statSync(consumer.recordPath).mtimeMs;
-        await consumer.run(consumer.root, consumer.root, ["chosen"], {
-          OPENCLAW_CI_SHARED_SDK: "1",
-        });
-        expect(fs.readFileSync(consumer.recordPath)).toEqual(restoredReceipt);
-        expect(fs.statSync(consumer.recordPath).mtimeMs).toBe(restoredStamp);
+        const restored = consumer.snapshot(consumer.recordPath);
+        await consumer.selected({ OPENCLAW_CI_SHARED_SDK: "1" });
+        expect(consumer.snapshot(consumer.recordPath)).toEqual(restored);
         consumer.write(
           "extensions/chosen/index.ts",
           'import { value } from "./excluded/helper.js"; export const wrong: string = value;',
         );
-        const checked = spawnSync(
-          consumer.native,
-          ["-p", ".artifacts/extension-package-boundary/compile/chosen.tsconfig.json", "--noEmit"],
-          { cwd: consumer.root, encoding: "utf8", timeout: 20_000 },
-        );
-        expect(checked.error).toBeUndefined();
-        expect(checked.status, checked.stdout + checked.stderr).toBe(2);
-        expect(checked.stdout).toContain("Type 'number' is not assignable to type 'string'");
+        expectConsumerTypeError(consumer, "Type 'number' is not assignable to type 'string'");
         consumer.write(
           "extensions/chosen/index.ts",
           'export { value } from "./excluded/helper.js";',
@@ -526,7 +487,7 @@ describe("native declaration preparation", () => {
           gunzipSync(archive).toString("utf8"),
         );
         const declaration = `${consumer.output}/src/nested.d.ts`;
-        const record = ".artifacts/extension-package-boundary/plugin-sdk.json";
+        const record = `${boundaryRoot}/plugin-sdk.json`;
         const invalidArchives = [
           payload.files.map(([file, bytes]) => [
             file,
@@ -543,7 +504,7 @@ describe("native declaration preparation", () => {
           const rejected = cli(consumer, "restore", "--required");
           expect(rejected.status, rejected.stdout + rejected.stderr).toBe(1);
           expect(rejected.stderr).toMatch(/SDK (?:archive|receipt)/u);
-          expect(fs.existsSync(consumer.recordPath)).toBe(false);
+          expect(consumer.has(consumer.recordPath)).toBe(false);
         }
 
         fs.writeFileSync(targetArchive, archive);
@@ -555,12 +516,10 @@ describe("native declaration preparation", () => {
         expect(stale.status, stale.stdout + stale.stderr).toBe(1);
         expect(stale.stderr).toContain("different source or toolchain inputs");
         expect(success(consumer, "restore").stdout).toContain("native preparation will run");
-        expect(fs.existsSync(consumer.recordPath)).toBe(false);
+        expect(consumer.has(consumer.recordPath)).toBe(false);
         await consumer.run();
         success(consumer, "validate");
-        expect(fs.readFileSync(path.join(consumer.root, declaration), "utf8")).toContain(
-          "value = 2",
-        );
+        expect(consumer.read(declaration)).toContain("value = 2");
       }),
   );
 
@@ -589,14 +548,12 @@ describe("native declaration preparation", () => {
         "consumer.ts",
         'import type { DB } from "fixture-sdk"; declare const row: DB["records"]; const wrong: number = row.title;',
       );
-      const result = spawnSync(
-        f.native,
-        ["--ignoreConfig", "--module", "nodenext", "--noEmit", "--skipLibCheck", "consumer.ts"],
-        { cwd: f.root, encoding: "utf8", timeout: 20_000 },
-      );
-      expect(result.error).toBeUndefined();
-      expect(result.status, result.stdout + result.stderr).toBe(2);
-      expect(result.stdout).toContain("Type 'string' is not assignable to type 'number'");
+      expect(
+        f.compile(
+          ["--ignoreConfig", "--module", "nodenext", "--noEmit", "--skipLibCheck", "consumer.ts"],
+          2,
+        ),
+      ).toContain("Type 'string' is not assignable to type 'number'");
     }));
 
   it.for([
@@ -644,11 +601,9 @@ describe("native declaration preparation", () => {
         const cold = await f
           .run(mode ? f.root : declared, declared)
           .catch((error: unknown) => error);
-        const declaration = path.join(f.root, f.output, "src/nested.d.ts");
-        const metadata = path.join(f.root, f.output, ".inputs.json");
         // Even the failing-before case must reach real native emit, not fail during setup.
-        expect(fs.readFileSync(declaration, "utf8")).toContain("value = 1");
-        const receipt: { inputs: string[] } = JSON.parse(fs.readFileSync(metadata, "utf8"));
+        expect(f.read(`${f.output}/src/nested.d.ts`)).toContain("value = 1");
+        const receipt: { inputs: string[] } = JSON.parse(f.read(`${f.output}/.inputs.json`));
         expect(receipt.inputs).toContain("src/nested.ts");
         expect(cold).toBeUndefined();
         expect(readArtifactRecord(f.recordPath)?.inputs).toContain("src/nested.ts");
@@ -659,8 +614,8 @@ describe("native declaration preparation", () => {
             files: [".inputs.json", "src/nested.d.ts", "src/plugin-sdk/core.d.ts"],
           },
           ...f.plugins.map(([id, pluginEntry]) => ({
-            recordPath: path.join(f.root, `.artifacts/extension-package-boundary/${id}.json`),
-            output: `.artifacts/extension-package-boundary/plugins/${id}`,
+            recordPath: path.join(f.root, `${boundaryRoot}/${id}.json`),
+            output: `${boundaryRoot}/plugins/${id}`,
             files: [".inputs.json", `${pluginEntry}.d.ts`],
           })),
         ];
@@ -669,15 +624,12 @@ describe("native declaration preparation", () => {
           expect(Object.keys(readArtifactRecord(owner.recordPath)!.outputs).toSorted()).toEqual(
             outputs.toSorted(),
           );
-          return [owner.recordPath, ...outputs.map((file) => path.join(f.root, file))].map(
-            (file) => ({ file, bytes: fs.readFileSync(file), mtimeMs: fs.statSync(file).mtimeMs }),
-          );
+          return [owner.recordPath, ...outputs].map((file) => ({ file, before: f.snapshot(file) }));
         });
         for (const spelling of [declared, f.root]) {
           await f.run(mode ? f.root : spelling, spelling);
-          for (const artifact of artifacts) {
-            expect(fs.readFileSync(artifact.file)).toEqual(artifact.bytes);
-            expect(fs.statSync(artifact.file).mtimeMs).toBe(artifact.mtimeMs);
+          for (const { file, before } of artifacts) {
+            expect(f.snapshot(file)).toEqual(before);
           }
         }
       });
@@ -696,22 +648,15 @@ describe("native declaration preparation", () => {
       if (linked) {
         fs.symlinkSync(primaryModules, modules, "junction");
       }
-      const result = spawnSync(
-        process.execPath,
-        [
-          path.join(f.root, "scripts/prepare-extension-package-boundary-artifacts.mts"),
-          "--mode=package-boundary",
-        ],
-        { cwd: f.root, encoding: "utf8", timeout: 20_000 },
-      );
-      expect(result.error).toBeUndefined();
-      expect(result.status, result.stdout + result.stderr).toBe(1);
+      const result = command(f.root, process.execPath, [
+        path.join(f.root, "scripts/prepare-extension-package-boundary-artifacts.mts"),
+        "--mode=package-boundary",
+      ]);
+      expectExit(result, 1);
       expect(result.stderr).toContain("Declaration input escapes checkout");
       expect(fs.existsSync(modules)).toBe(linked);
-      expect(fs.existsSync(f.recordPath)).toBe(false);
-      expect(fs.existsSync(path.join(f.root, ".artifacts/dist-artifacts.lock/owner.json"))).toBe(
-        false,
-      );
+      expect(f.has(f.recordPath)).toBe(false);
+      expect(f.has(".artifacts/dist-artifacts.lock/owner.json")).toBe(false);
     },
   );
 
@@ -720,7 +665,7 @@ describe("native declaration preparation", () => {
     { timeout: 30_000 },
     ({ signal }) =>
       fixture.run(async () => {
-        const { root, native, write, plugins, recordPath, output, step, run } =
+        const { root, native, write, read, has, snapshot, plugins, recordPath, output, step, run } =
           createPreparationFixture("all", signal);
         await run();
         const slackBoundaryEntry = BOUNDARY_PLUGIN_UNITS.find(([id]) => id === "slack")?.[1];
@@ -759,38 +704,33 @@ describe("native declaration preparation", () => {
           write("src/renamed.ts", invalid);
           await expect(run()).rejects.toThrow("failed with exit code 1");
           signal.throwIfAborted();
-          expect(fs.existsSync(recordPath)).toBe(false);
-          expect(fs.existsSync(path.join(root, output, "src/renamed.d.ts"))).toBe(false);
-          expect(fs.existsSync(path.join(root, output, ".inputs.json"))).toBe(false);
-          expect(fs.existsSync(path.join(root, output, "src/nested.d.ts"))).toBe(true);
+          expect(fs.readdirSync(path.join(root, ".artifacts/dist-artifacts.lock"))).toEqual([]);
+          expect(has(recordPath)).toBe(false);
+          expect(has(`${output}/src/renamed.d.ts`)).toBe(false);
+          expect(has(`${output}/.inputs.json`)).toBe(false);
+          expect(has(`${output}/src/nested.d.ts`)).toBe(true);
         }
         write("src/renamed.ts", "export const value = 2;");
         await run();
         const repaired = readArtifactRecord(recordPath)!;
         expect(repaired.outputs[`${output}/src/renamed.d.ts`]).toBeDefined();
         expect(repaired.outputs[`${output}/src/nested.d.ts`]).toBeUndefined();
-        expect(fs.existsSync(path.join(root, output, "src/nested.d.ts"))).toBe(false);
-        expect(fs.existsSync(path.join(root, output, "orphan.d.ts"))).toBe(false);
-        expect(fs.readFileSync(path.join(root, output, "operator-note.txt"), "utf8")).toBe(
-          "unowned",
-        );
+        expect(has(`${output}/src/nested.d.ts`)).toBe(false);
+        expect(has(`${output}/orphan.d.ts`)).toBe(false);
+        expect(read(`${output}/operator-note.txt`)).toBe("unowned");
         for (const [id, entry] of plugins) {
-          const record = readArtifactRecord(
-            path.join(root, `.artifacts/extension-package-boundary/${id}.json`),
-          )!;
+          const record = readArtifactRecord(path.join(root, `${boundaryRoot}/${id}.json`))!;
           expect(record.inputs).toContain(`${output}/src/renamed.d.ts`);
-          expect(
-            record.outputs[`.artifacts/extension-package-boundary/plugins/${id}/${entry}.d.ts`],
-          ).toBeDefined();
+          expect(record.outputs[`${boundaryRoot}/plugins/${id}/${entry}.d.ts`]).toBeDefined();
         }
         fs.rmSync(path.join(root, output, "src/renamed.d.ts"));
         await run();
         expect(readArtifactRecord(recordPath)?.outputs).toEqual(repaired.outputs);
-        const unchanged = fs.statSync(path.join(root, output, "src/renamed.d.ts")).mtimeMs;
-        const unchangedRecord = fs.statSync(recordPath).mtimeMs;
+        const unchanged = snapshot(`${output}/src/renamed.d.ts`);
+        const unchangedRecord = snapshot(recordPath);
         await run();
-        expect(fs.statSync(path.join(root, output, "src/renamed.d.ts")).mtimeMs).toBe(unchanged);
-        expect(fs.statSync(recordPath).mtimeMs).toBe(unchangedRecord);
+        expect(snapshot(`${output}/src/renamed.d.ts`)).toEqual(unchanged);
+        expect(snapshot(recordPath)).toEqual(unchangedRecord);
       }),
   );
 
@@ -805,14 +745,10 @@ describe("native declaration preparation", () => {
         const [pluginId, entry] = BOUNDARY_PLUGIN_UNITS[0];
         const input =
           owner === "SDK" ? "src/plugin-sdk/core.ts" : `extensions/${pluginId}/${entry}.ts`;
-        const config =
-          owner === "SDK"
-            ? "packages/plugin-sdk/tsconfig.json"
-            : `extensions/${pluginId}/tsconfig.json`;
+        const config = owner === "SDK" ? sdkConfig : `extensions/${pluginId}/tsconfig.json`;
         const rootDir = owner === "SDK" ? "." : `extensions/${pluginId}`;
         const emitted = owner === "SDK" ? "src/plugin-sdk/core.d.ts" : `${entry}.d.ts`;
-        const output =
-          owner === "SDK" ? f.output : `.artifacts/extension-package-boundary/plugins/${pluginId}`;
+        const output = owner === "SDK" ? f.output : `${boundaryRoot}/plugins/${pluginId}`;
         f.write(
           input,
           'import type { Marker } from "synthetic-wrapper";\nexport type { Marker };\nexport const inferredOrigin = declarationOrigin;\n',
@@ -822,7 +758,7 @@ describe("native declaration preparation", () => {
             ? [{ id: "plugin-sdk", output: f.output }]
             : f.plugins.map(([id]) => ({
                 id,
-                output: `.artifacts/extension-package-boundary/plugins/${id}`,
+                output: `${boundaryRoot}/plugins/${id}`,
               }));
         for (const unit of units) {
           f.write(`${unit.output}/orphan.d.ts`, "export interface Orphan {}\n");
@@ -854,16 +790,12 @@ describe("native declaration preparation", () => {
         );
 
         await f.run();
-        expect(fs.readFileSync(path.join(f.root, output, emitted), "utf8")).toContain(
-          'inferredOrigin: "local"',
-        );
+        expect(f.read(`${output}/${emitted}`)).toContain('inferredOrigin: "local"');
         for (const unit of units) {
           expect(
-            readArtifactRecord(
-              path.join(f.root, `.artifacts/extension-package-boundary/${unit.id}.json`),
-            ),
+            readArtifactRecord(path.join(f.root, `${boundaryRoot}/${unit.id}.json`)),
           ).toBeDefined();
-          expect(fs.existsSync(path.join(f.root, unit.output, "orphan.d.ts"))).toBe(false);
+          expect(f.has(`${unit.output}/orphan.d.ts`)).toBe(false);
           f.write(`${unit.output}/orphan.d.ts`, "export interface Orphan {}\n");
         }
         fs.rmSync(
@@ -877,18 +809,10 @@ describe("native declaration preparation", () => {
         // Every batch member must seal before any obsolete declaration is pruned.
         await expect(f.run()).rejects.toThrow("failed with exit code 1");
         for (const unit of units) {
-          expect(
-            fs.existsSync(
-              path.join(f.root, `.artifacts/extension-package-boundary/${unit.id}.json`),
-            ),
-          ).toBe(false);
-          expect(fs.readFileSync(path.join(f.root, unit.output, "orphan.d.ts"), "utf8")).toBe(
-            "export interface Orphan {}\n",
-          );
+          expect(f.has(`${boundaryRoot}/${unit.id}.json`)).toBe(false);
+          expect(f.read(`${unit.output}/orphan.d.ts`)).toBe("export interface Orphan {}\n");
         }
-        expect(fs.existsSync(path.join(f.root, ".artifacts/dist-artifacts.lock/owner.json"))).toBe(
-          false,
-        );
+        expect(f.has(".artifacts/dist-artifacts.lock/owner.json")).toBe(false);
       }),
   );
 });

@@ -12,7 +12,7 @@ export async function createCronHookEffectProbe(state: OpenClawTestState) {
     string,
     { entered: ReturnType<typeof createDeferred<void>>; response?: ServerResponse; effects: number }
   >(
-    ["HOOK_ALLOWED", "HOOK_ROTATED"].map((marker) => [
+    ["HOOK_ALLOWED", "HOOK_QUEUED"].map((marker) => [
       marker,
       { entered: createDeferred(), effects: 0 },
     ]),
@@ -66,7 +66,7 @@ const base = ${JSON.stringify(url)};
 // Startup methods and request-scoped plugin instances share one test observation owner.
 const state = globalThis[Symbol.for("openclaw.test.cronHookEffect")] ??= {
   calls: {}, runs: new Map(), providerStarts: 0,
-  settled: Object.fromEntries(["HOOK_ALLOWED", "HOOK_ROTATED"].map(marker => [marker, Promise.withResolvers()])),
+  settled: Object.fromEntries(["HOOK_ALLOWED", "HOOK_QUEUED"].map(marker => [marker, Promise.withResolvers()])),
 };
 const { calls, runs, settled } = state;
 async function request(action, marker) {
@@ -81,7 +81,7 @@ module.exports = {
   id: "${CRON_HOOK_PROBE_ID}",
   register(api) {
     api.on("before_agent_reply", async (event, ctx) => {
-      const marker = ["HOOK_ALLOWED", "HOOK_ROTATED"].find(value => event.cleanedBody.includes(value));
+      const marker = ["HOOK_ALLOWED", "HOOK_QUEUED"].find(value => event.cleanedBody.includes(value));
       if (!marker) return;
       runs.set(ctx.runId, marker);
       const record = calls[marker] ??= { hooks: 0, providers: 0 };

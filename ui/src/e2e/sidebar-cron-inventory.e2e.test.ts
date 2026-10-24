@@ -1,10 +1,10 @@
-import { writeFile } from "node:fs/promises";
-import path from "node:path";
 import { expect, it } from "vitest";
 import type { CronJob } from "../api/types.ts";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
-import { compactCronJobFixture } from "../test-helpers/cron.ts";
+import { compactCronJobFixture, cronListResponseFixture } from "../test-helpers/cron.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { expectCount } from "./sidebar-assertions.test-support.ts";
+import { sidebarCronJob } from "./sidebar-customization.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Compact Inbox automation inventory" });
 
@@ -15,41 +15,33 @@ suite.define(() => {
       kind: "agentTurn" as const,
       message: "Review the synthetic daily report. ".repeat(200),
     };
-    const jobs: CronJob[] = Array.from({ length: 55 }, (_, index) => ({
-      id: `automation-${index}`,
-      name: `Daily report ${index}`,
-      agentId: "main",
-      enabled: true,
-      createdAtMs: now,
-      updatedAtMs: now,
-      schedule: { kind: "every", everyMs: 60_000 },
-      sessionTarget: "isolated",
-      wakeMode: "now",
-      payload,
-      state: { lastRunStatus: "ok", nextRunAtMs: now + 60_000 },
-    }));
-    jobs[50] = { ...jobs[50]!, name: "Failed daily report", state: { lastStatus: "error" } };
-    jobs[51] = {
-      ...jobs[51]!,
-      name: "Paused report",
-      enabled: false,
-      state: { lastRunStatus: "error" },
+    const jobs = Array.from({ length: 55 }, (_, index) =>
+      sidebarCronJob({
+        id: `automation-${index}`,
+        name: `Daily report ${index}`,
+        agentId: "main",
+        createdAtMs: now,
+        updatedAtMs: now,
+        payload,
+        state: { lastRunStatus: "ok", nextRunAtMs: now + 60_000 },
+      }),
+    );
+    const setJob = (index: number, name: string, state: CronJob["state"], enabled = true) => {
+      jobs[index] = { ...jobs[index]!, name, state, enabled };
     };
-    jobs[52] = {
-      ...jobs[52]!,
-      name: "Running report",
-      state: { runningAtMs: 0, nextRunAtMs: now - 600_000 },
-    };
-    jobs[53] = {
-      ...jobs[53]!,
-      name: "Disabled after failures",
-      enabled: false,
-      state: { autoDisabled: { reason: "consecutive-failures", atMs: now, consecutiveErrors: 3 } },
-    };
-    jobs[54] = { ...jobs[54]!, name: "Overdue report", state: { nextRunAtMs: now - 600_000 } };
+    setJob(50, "Failed daily report", { lastStatus: "error" });
+    setJob(51, "Paused report", { lastRunStatus: "error" }, false);
+    setJob(52, "Running report", { runningAtMs: 0, nextRunAtMs: now - 600_000 });
+    setJob(
+      53,
+      "Disabled after failures",
+      { autoDisabled: { reason: "consecutive-failures", atMs: now, consecutiveErrors: 3 } },
+      false,
+    );
+    setJob(54, "Overdue report", { nextRunAtMs: now - 600_000 });
     const compactJobs = jobs.map(compactCronJobFixture);
-    const pageResponse = (compact: boolean, offset: number) => ({
-      jobs: (compact ? compactJobs : jobs).slice(offset, offset + 50),
+    const pageResponse = <T>(entries: T[], offset: number) => ({
+      jobs: entries.slice(offset, offset + 50),
       snapshotRevision: "synthetic-inventory-1",
       total: jobs.length,
       limit: 50,
@@ -66,14 +58,10 @@ suite.define(() => {
           historyMessages: [{ role: "assistant", content: "The synthetic daily report is ready." }],
           deferredMethods: ["chat.startup"],
           methodResponses: {
-            "cron.list": {
-              cases: [
-                { match: { compact: true, offset: 50 }, response: pageResponse(true, 50) },
-                { match: { compact: true }, response: pageResponse(true, 0) },
-                { match: { offset: 50 }, response: pageResponse(false, 50) },
-                { response: pageResponse(false, 0) },
-              ],
-            },
+            "cron.list": cronListResponseFixture([
+              { match: { offset: 50 }, response: pageResponse(jobs, 50) },
+              { response: pageResponse(jobs, 0) },
+            ]),
             "cron.status": { enabled: true, triggersEnabled: true, jobs: jobs.length },
             "models.authStatus": { providers: [], ts: now },
           },
@@ -93,37 +81,22 @@ suite.define(() => {
         await sidebar.locator(".sidebar-issues-button").click();
         await sidebar.getByRole("tab", { name: /Automations/ }).click();
         const rows = sidebar.locator("[data-attention-kind]");
-        await expect.poll(() => rows.count()).toBe(3);
+        await expectCount(rows, 3);
         for (const name of ["Failed daily report", "Disabled after failures", "Overdue report"]) {
           await rows.getByText(name, { exact: true }).waitFor();
         }
         const requests = await gateway.getRequests("cron.list");
+        const bytes = (compact: boolean, offset: number) =>
+          Buffer.byteLength(
+            JSON.stringify(
+              compact ? pageResponse(compactJobs, offset) : pageResponse(jobs, offset),
+            ),
+          );
         const responseBytes = requests.reduce((sum, request) => {
           const params = request.params as { compact?: boolean; offset?: number };
-          return (
-            sum +
-            Buffer.byteLength(
-              JSON.stringify(pageResponse(params.compact === true, params.offset ?? 0)),
-            )
-          );
+          return sum + bytes(params.compact === true, params.offset ?? 0);
         }, 0);
-        const fullBytes = [0, 50].reduce(
-          (sum, offset) => sum + Buffer.byteLength(JSON.stringify(pageResponse(false, offset))),
-          0,
-        );
-        const proof = {
-          responseBytes,
-          fullBytes,
-          requests: requests.map((request) => request.params),
-          renderedRows: 3,
-        };
-        await writeFile(
-          path.join(suite.artifactDir, "inventory.json"),
-          `${JSON.stringify(proof, null, 2)}\n`,
-        );
-        if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
-          await page.screenshot({ path: path.join(suite.artifactDir, "inbox.png") });
-        }
+        const fullBytes = bytes(false, 0) + bytes(false, 50);
         expect(responseBytes).toBeLessThan(fullBytes / 10);
         expect(requests).toHaveLength(2);
       },

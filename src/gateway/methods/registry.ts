@@ -115,19 +115,12 @@ export function createGatewayMethodRegistry(
 export function createGatewayMethodDescriptorsFromHandlers(params: {
   handlers: Record<string, GatewayMethodHandler>;
   owner: GatewayMethodOwner;
-  defaultScope?: OperatorScope;
-  scopes?: Partial<Record<string, OperatorScope>>;
+  defaultScope: OperatorScope;
 }): GatewayMethodDescriptorInput[] {
-  return Object.entries(params.handlers).map(([name, handler]) => {
-    const scope = params.scopes?.[name] ?? params.defaultScope;
-    if (!scope) {
-      throw new Error(`gateway method is missing a scope: ${name}`);
-    }
-    return {
-      name,
-      handler,
-      owner: params.owner,
-      scope,
-    };
-  });
+  return Object.entries(params.handlers).map(([name, handler]) => ({
+    name,
+    handler,
+    owner: params.owner,
+    scope: params.defaultScope,
+  }));
 }

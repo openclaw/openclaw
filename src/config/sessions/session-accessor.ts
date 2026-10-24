@@ -5,6 +5,10 @@
  * Runtime callers import this barrel instead of storage-specific modules.
  */
 export * from "./session-history.js";
+export {
+  listSessionTranscriptInstances,
+  listSessionTranscriptArchivesReadOnly,
+} from "./session-history-read.js";
 export { readSessionPendingInputReceiptsInWorker as listSessionPendingInputReceipts } from "./session-pending-input-receipts.js";
 export {
   bindSessionPendingInputSources,
@@ -65,7 +69,6 @@ export type {
   SessionEntryPatchOptions,
   SessionEntryPatchResult,
   SessionEntryReadScope,
-  SessionEntryReadView,
   SessionEntryReplacement,
   SessionEntryReplacementSnapshot,
   SessionEntryReplacementUpdate,
@@ -141,13 +144,11 @@ export {
   listSessionEntryKeysReadOnly,
   loadExactSessionEntry,
   loadExactSessionEntryCandidates,
-  loadExactSessionEntryCandidatesReadOnlyBatch,
   loadExactSessionEntryFromStoreReadOnly,
   loadExactSessionEntryReadOnly,
   loadSessionEntry,
   loadSessionEntryByIdReadOnly,
   loadSessionEntryReadOnly,
-  openSessionEntryReadView,
   patchSessionEntryCore,
   patchSessionEntryTarget,
   patchSessionEntryWithKey,
@@ -227,14 +228,12 @@ export {
   appendTranscriptMessage,
   appendTranscriptMessageSync,
   findTranscriptEvent,
-  hasSessionTranscriptEventsSync,
   hasSessionTranscriptMessage,
   inspectTranscriptEventsSync,
   loadTranscriptEventRowsAfterSeqSync,
   loadTranscriptEvents,
   loadTranscriptEventsSync,
   loadTranscriptHeaderSync,
-  persistCompactionBoundaryWithSessionEntrySync,
   persistCompactionBoundaryWithSessionEntryAsync,
   preflightSessionTranscriptForManualCompact,
   publishTranscriptUpdate,
@@ -243,7 +242,6 @@ export {
   readTranscriptIdentityByEventId,
   readTranscriptRawDelta,
   readTranscriptMutationAtSync,
-  readTranscriptMutationStateSync,
   readTranscriptExportSnapshotReadOnlySync,
   readTranscriptStatsBatchReadOnlySync,
   readTranscriptStatsSync,

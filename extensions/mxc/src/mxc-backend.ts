@@ -2,8 +2,8 @@ import { randomBytes } from "node:crypto";
 import { mkdtempSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import type { ContainerConfig } from "@microsoft/mxc-sdk";
-import { extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
 import { isPathInside, resolvePathPrefixSync } from "openclaw/plugin-sdk/file-access-runtime";
+import { isNotFoundPathError as isMissingPathError } from "openclaw/plugin-sdk/path-existence-runtime";
 import { runCommandBuffered } from "openclaw/plugin-sdk/process-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/sandbox";
 import type {
@@ -12,6 +12,7 @@ import type {
   SandboxBackendCommandParams,
   SandboxBackendCommandResult,
   SandboxBackendManager,
+  SandboxContext,
 } from "openclaw/plugin-sdk/sandbox";
 import { resolveMxcBinaryPath } from "./binary-resolver.js";
 import type { MxcConfig } from "./config.js";
@@ -27,7 +28,6 @@ import { resolveSandboxTempDir, type BaselineHostEnv } from "./sandbox-baseline.
 import { loadSandboxBaselinePolicy } from "./sandbox-policy-loader.js";
 import { createWindowsCommandBridge } from "./windows-command.js";
 import { buildLauncherEnv } from "./windows-env.js";
-import type { MxcWorkspaceAccess } from "./workspace-skill-mounts.js";
 
 type MxcExecFinalizeToken = {
   payloadDir: string;
@@ -39,10 +39,7 @@ type MxcExecFinalizeToken = {
 const CONTAINER_ID_MAX_LEN = 64;
 function uniqueContainerId(runtimeId: string): string {
   const suffix = randomBytes(4).toString("hex");
-  const base =
-    runtimeId.length + suffix.length + 1 > CONTAINER_ID_MAX_LEN
-      ? runtimeId.slice(0, CONTAINER_ID_MAX_LEN - suffix.length - 1)
-      : runtimeId;
+  const base = runtimeId.slice(0, CONTAINER_ID_MAX_LEN - suffix.length - 1);
   return `${base}-${suffix}`;
 }
 
@@ -98,14 +95,6 @@ function realpathForExistingPath(value: string, label: string): string {
   }
 }
 
-// ENOTDIR means a parent component is a file, so the path can never resolve to a
-// directory. Classifying it alongside ENOENT keeps validateWorkdir's "return null
-// for unusable workdirs" contract intact instead of leaking a raw filesystem error.
-function isMissingPathError(err: unknown): boolean {
-  const code = extractErrorCode(err);
-  return code === "ENOENT" || code === "ENOTDIR";
-}
-
 function createMxcLauncherPayload(
   config: MxcConfig,
   payload: ContainerConfig,
@@ -139,7 +128,7 @@ export function createMxcSandboxBackendHandle(params: {
   workdir: string;
   agentWorkspaceDir?: string;
   skillsWorkspaceDir?: string;
-  workspaceAccess?: MxcWorkspaceAccess;
+  workspaceAccess?: SandboxContext["workspaceAccess"];
 }): SandboxBackendHandle {
   const baseline = loadSandboxBaselinePolicy({ policyPaths: params.config.mxcPolicyPaths });
 
@@ -168,7 +157,7 @@ export function createMxcSandboxBackendHandle(params: {
       );
       const workspace = resolveMxcWorkspaceContext(params);
       const runtimeWorkdir = resolveMxcRuntimeWorkdir(workspace, effectiveWorkdir);
-      const baselineContext = resolveCurrentBaselineContext(workspace.activeWorkspaceDir);
+      const baselineContext = resolveCurrentBaselineContext();
       const sandboxTempDir = createSandboxTempDir(baselineContext.hostEnv);
       try {
         const payload = buildMxcContainerConfig({
@@ -233,7 +222,7 @@ export function createMxcSandboxBackendHandle(params: {
       const effectiveWorkdir = path.resolve(params.workdir);
       const workspace = resolveMxcWorkspaceContext(params);
       const runtimeWorkdir = resolveMxcRuntimeWorkdir(workspace, effectiveWorkdir);
-      const baselineContext = resolveCurrentBaselineContext(workspace.activeWorkspaceDir);
+      const baselineContext = resolveCurrentBaselineContext();
       const sandboxTempDir = createSandboxTempDir(baselineContext.hostEnv);
       let commandBridge: ReturnType<typeof createWindowsCommandBridge> | undefined;
 

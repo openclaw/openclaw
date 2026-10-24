@@ -3,7 +3,7 @@ import { isPostgresSqlConnection } from "../infra/sql-connection.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
 import {
   assertSqliteSchemaContains,
-  getCanonicalSqliteNamedIndexContracts,
+  getCanonicalSqliteNamedIndexNames,
   getCanonicalSqliteTableNames,
 } from "../infra/sqlite-schema-contract.js";
 import { createSqliteSchemaEnsurer } from "../infra/sqlite-schema-ensure.js";
@@ -42,7 +42,7 @@ function ensureTable(
     const schema = getOpenClawStateFeatureSchemaSql(table, options);
     ensure = createSqliteSchemaEnsurer(() => schema, {
       tables: getCanonicalSqliteTableNames(schema),
-      indexes: getCanonicalSqliteNamedIndexContracts(schema).map(({ name }) => name),
+      indexes: getCanonicalSqliteNamedIndexNames(schema),
     });
     tableEnsurers.set(table, ensure);
   }
@@ -195,15 +195,8 @@ export function ensurePersonalGitHubPublicationSchema(db: EngineConnection): voi
 }
 
 /**
- * Add the feature-owned first-use columns that a STRICT rebuild cannot skip.
- *
- * These columns normally stay absent until their owning feature first writes
- * them, and the persistent schema contract accepts that shape. The STRICT
- * table rebuild is the one caller that cannot: it recreates each table from
- * canonical SQL, which already declares these columns, so a database missing
- * them fails the canonical column check and rolls the entire repair back.
- * Ensuring them immediately before that rebuild matches the shape the rebuild
- * produces anyway, and stays scoped to databases old enough to need it.
+ * Complete first-use columns before a STRICT rebuild or in a private port copy.
+ * Both require canonical layouts; ordinary admission leaves these columns lazy.
  */
 export function ensureFirstUseAdditiveStateColumnsForStrictMigration(db: DatabaseSync): void {
   for (const {

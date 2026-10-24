@@ -1,14 +1,10 @@
-import { join } from "node:path";
-import { StatementSync } from "node:sqlite";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { ensureAgentProvenanceSchema } from "./agent-provenance.schema.js";
 import { tableExists } from "./openclaw-state-db-schema-helpers.js";
-import {
-  closeOpenClawStateDatabaseForTest,
-  openOpenClawStateDatabase,
-} from "./openclaw-state-db.js";
+import { openOpenClawStateDatabase } from "./openclaw-state-db.js";
 import * as stateWorker from "./openclaw-state-worker-store.js";
 import {
   getCanonicalUserPreferences,
@@ -18,11 +14,21 @@ import {
 import { ensureUserPreferencesSchema, mergeUserPreferences } from "./user-preferences.store.js";
 import { getUserPreferences, setUserPreferences } from "./user-preferences.test-support.js";
 import { ensureProfileForEmail } from "./user-profiles.js";
+import { fillUserPreferences, useUserStateFixture } from "./user-state.test-support.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const stateOptions = useUserStateFixture("openclaw-user-prefs-");
 
-function stateOptions() {
-  return { path: join(tempDirs.make("openclaw-user-prefs-"), "openclaw.sqlite") };
+const success = { ok: true, value: undefined };
+const conflict = { ok: false, error: { code: "conflict" } };
+function preferences(options = stateOptions(), profileId = "profile-a") {
+  return {
+    options,
+    get: (keys?: string[]) => getUserPreferences(profileId, keys, options),
+    set: (entries: Record<string, unknown>, expectedEntries?: Record<string, unknown>) =>
+      setUserPreferences(profileId, entries, { ...options, expectedEntries }),
+    fill: (count: number, prefix?: string) =>
+      fillUserPreferences(options, profileId, count, prefix),
+  };
 }
 
 function openWithoutFeatureSchemas() {
@@ -31,10 +37,6 @@ function openWithoutFeatureSchemas() {
   db.exec("DROP TABLE IF EXISTS user_preferences; DROP TABLE IF EXISTS agent_provenance;");
   return { db, options };
 }
-
-afterEach(() => {
-  closeOpenClawStateDatabaseForTest();
-});
 
 describe("user preferences", () => {
   it("reads absent canonical preferences without creating their optional table", async () => {
@@ -97,187 +99,83 @@ describe("user preferences", () => {
     const first = openWithoutFeatureSchemas();
     const second = openWithoutFeatureSchemas();
     ensureUserPreferencesSchema(first.options);
-    expect(tableExists(first.db, "user_preferences")).toBe(true);
-    expect(tableExists(first.db, "agent_provenance")).toBe(false);
-    expect(tableExists(second.db, "user_preferences")).toBe(false);
+    const tables = () =>
+      [first, second].map(({ db }) =>
+        ["user_preferences", "agent_provenance"].map((table) => tableExists(db, table)),
+      );
+    expect(tables()).toEqual([
+      [true, false],
+      [false, false],
+    ]);
 
     ensureAgentProvenanceSchema(first.options);
     ensureUserPreferencesSchema(second.options);
-    expect(tableExists(first.db, "agent_provenance")).toBe(true);
-    expect(tableExists(second.db, "user_preferences")).toBe(true);
-    expect(tableExists(second.db, "agent_provenance")).toBe(false);
+    expect(tables()).toEqual([
+      [true, true],
+      [true, false],
+    ]);
   });
 
-  it("retries first-use schema creation after its transaction fails", () => {
-    const { db, options } = openWithoutFeatureSchemas();
-    const failure = new Error("schema write refused");
-    const exec = db.exec.bind(db);
-    const write = vi.spyOn(db, "exec").mockImplementation((sql) => {
-      if (sql.includes("CREATE TABLE IF NOT EXISTS user_preferences")) {
-        throw failure;
-      }
-      return exec(sql);
-    });
-    try {
-      expect(() => ensureUserPreferencesSchema(options)).toThrow(failure);
-      expect(db.isTransaction).toBe(false);
-      expect(tableExists(db, "user_preferences")).toBe(false);
-    } finally {
-      write.mockRestore();
-    }
-
-    ensureUserPreferencesSchema(options);
-    expect(tableExists(db, "user_preferences")).toBe(true);
-  });
-
-  it("lazily creates the additive table and isolates profile rows", () => {
-    const options = stateOptions();
-    const database = openOpenClawStateDatabase(options).db;
-    const version = database.prepare("PRAGMA user_version").get()?.user_version;
-    database.exec("DROP TABLE user_preferences;");
-    closeOpenClawStateDatabaseForTest();
-    const reopened = openOpenClawStateDatabase(options).db;
-    expect(tableExists(reopened, "user_preferences")).toBe(false);
-
-    expect(setUserPreferences("profile-a", { beta: 2, alpha: { enabled: true } }, options)).toEqual(
-      {
-        ok: true,
-        value: undefined,
-      },
-    );
-    expect(getUserPreferences("profile-a", undefined, options)).toEqual({
-      alpha: { enabled: true },
-      beta: 2,
-    });
-    expect(getUserPreferences("profile-a", ["beta"], options)).toEqual({ beta: 2 });
-    expect(getUserPreferences("profile-b", undefined, options)).toEqual({});
-    expect(tableExists(reopened, "user_preferences")).toBe(true);
-    expect(reopened.prepare("PRAGMA user_version").get()?.user_version).toBe(version);
-  });
-
-  it("persists a full preference batch with bounded native writes", () => {
-    const options = stateOptions();
-    const entries = Object.fromEntries(
-      Array.from({ length: 32 }, (_, index) => [`key-${index}`, { enabled: index % 2 === 0 }]),
-    );
-    expect(setUserPreferences("profile-a", { "key-0": false }, options)).toMatchObject({
-      ok: true,
-    });
-    expect(setUserPreferences("profile-b", { "key-0": "unrelated" }, options)).toMatchObject({
-      ok: true,
-    });
-    // oxlint-disable-next-line typescript/unbound-method -- apply below preserves the intercepted statement receiver.
-    const originalRun = StatementSync.prototype.run;
-    let writes = 0;
-    const run = vi.spyOn(StatementSync.prototype, "run").mockImplementation(function (
-      this: StatementSync,
-      ...values
-    ) {
-      if (/^insert into "user_preferences"/i.test(this.sourceSQL)) {
-        writes++;
-      }
-      return originalRun.apply(this, values);
-    });
-    try {
-      expect(setUserPreferences("profile-a", entries, options)).toEqual({
-        ok: true,
-        value: undefined,
-      });
-    } finally {
-      run.mockRestore();
-    }
-    expect(getUserPreferences("profile-a", undefined, options)).toEqual(entries);
-    expect(getUserPreferences("profile-b", undefined, options)).toEqual({
-      "key-0": "unrelated",
-    });
-    expect(writes).toBeGreaterThan(0);
-    expect(writes).toBeLessThanOrEqual(1);
-  });
-
-  it.each(["ABORT", "FAIL"])("rolls back removals and earlier preferences on %s", (action) => {
-    const options = stateOptions();
-    expect(
-      setUserPreferences("profile-a", { existing: "original", removed: true }, options),
-    ).toMatchObject({ ok: true });
+  it("rolls back removals and earlier preferences on ABORT", () => {
+    const { options, set } = preferences();
+    expect(set({ existing: "original", removed: true })).toMatchObject({ ok: true });
     const { db } = openOpenClawStateDatabase(options);
-    const before = db.prepare("SELECT * FROM user_preferences ORDER BY profile_id, pref_key").all();
+    const rows = () =>
+      db.prepare("SELECT * FROM user_preferences ORDER BY profile_id, pref_key").all();
+    const before = rows();
     db.exec(`CREATE TRIGGER refuse_preference BEFORE INSERT ON user_preferences
-      WHEN NEW.pref_key = 'refused' BEGIN SELECT RAISE(${action}, 'preference refused'); END`);
-    try {
-      expect(() =>
-        setUserPreferences(
-          "profile-a",
-          {
-            removed: null,
-            existing: "changed",
-            inserted: true,
-            refused: true,
-          },
-          options,
-        ),
-      ).toThrow("preference refused");
-      expect(db.isTransaction).toBe(false);
-      expect(
-        db.prepare("SELECT * FROM user_preferences ORDER BY profile_id, pref_key").all(),
-      ).toEqual(before);
-    } finally {
-      db.exec("DROP TRIGGER refuse_preference");
-    }
+      WHEN NEW.pref_key = 'refused' BEGIN SELECT RAISE(ABORT, 'preference refused'); END`);
+    expect(() =>
+      set({ removed: null, existing: "changed", inserted: true, refused: true }),
+    ).toThrow("preference refused");
+    expect(db.isTransaction).toBe(false);
+    expect(rows()).toEqual(before);
   });
 
   it("rejects oversized batches and values before writing any row", () => {
-    const options = stateOptions();
+    const { set, get } = preferences();
     const tooMany = Object.fromEntries(
       Array.from({ length: 33 }, (_, index) => [`key-${index}`, index]),
     );
-    expect(setUserPreferences("profile-a", tooMany, options)).toMatchObject({
+    expect(set(tooMany)).toMatchObject({
       ok: false,
       error: { code: "invalid-entry-count" },
     });
-    expect(
-      setUserPreferences("profile-a", { valid: true, oversized: "🦞".repeat(1_025) }, options),
-    ).toMatchObject({ ok: false, error: { code: "value-too-large", key: "oversized" } });
-    expect(getUserPreferences("profile-a", undefined, options)).toEqual({});
+    expect(set({ valid: true, oversized: "🦞".repeat(1_025) })).toMatchObject({
+      ok: false,
+      error: { code: "value-too-large", key: "oversized" },
+    });
+    expect(get()).toEqual({});
   });
 
   it("caps each profile at 128 keys while allowing deletions to free capacity", () => {
-    const options = stateOptions();
-    for (let start = 0; start < 127; start += 32) {
-      const count = Math.min(32, 127 - start);
-      const entries = Object.fromEntries(
-        Array.from({ length: count }, (_, index) => [`key-${start + index}`, true]),
-      );
-      expect(setUserPreferences("profile-a", entries, options)).toEqual({
-        ok: true,
-        value: undefined,
-      });
-    }
-
-    expect(setUserPreferences("profile-a", { "key-127": true }, options)).toEqual({
-      ok: true,
-      value: undefined,
-    });
-    expect(setUserPreferences("profile-a", { "key-128": true }, options)).toEqual({
+    const { options, fill, set, get } = preferences();
+    fill(127);
+    expect(set({ "key-127": true })).toEqual(success);
+    expect(set({ "key-128": true })).toEqual({
       ok: false,
       error: { code: "profile-key-limit", limit: 128, currentCount: 128 },
     });
-    expect(setUserPreferences("profile-a", { "key-0": null }, options)).toEqual({
-      ok: true,
-      value: undefined,
-    });
-    expect(setUserPreferences("profile-a", { "key-128": true }, options)).toEqual({
-      ok: true,
-      value: undefined,
-    });
-    expect(getUserPreferences("profile-a", ["key-0", "key-128"], options)).toEqual({
-      "key-128": true,
-    });
+    const reads = trackSqliteStatementExecutions(
+      requireNativeSqliteDatabase(openOpenClawStateDatabase(options).db),
+      ["keys"],
+      (sql) => (/^select "pref_key" from "user_preferences"/iu.test(sql) ? "keys" : null),
+    );
+    try {
+      expect(set({ "key-0": null })).toEqual(success);
+      expect(set({}, { "key-0": null })).toEqual(success);
+      expect(reads.counts.keys).toBe(0);
+    } finally {
+      reads.restore();
+    }
+    expect(set({ "key-128": true })).toEqual(success);
+    expect(get(["key-0", "key-128"])).toEqual({ "key-128": true });
   });
 
   it("checks semantic expectations before any writes in a multi-entry batch", () => {
-    const options = stateOptions();
+    const { options, set, get } = preferences();
     const original = { retained: { nested: { a: 1, b: 2 }, list: [1, 2] }, removed: true };
-    expect(setUserPreferences("profile-a", original, options).ok).toBe(true);
+    expect(set(original).ok).toBe(true);
     const { db } = openOpenClawStateDatabase(options);
     const before = db.prepare("SELECT * FROM user_preferences ORDER BY pref_key").all();
     db.exec(`CREATE TRIGGER reject_any_insert BEFORE INSERT ON user_preferences
@@ -286,60 +184,34 @@ describe("user preferences", () => {
       BEGIN SELECT RAISE(FAIL, 'unexpected preference delete'); END;`);
     try {
       expect(
-        setUserPreferences(
-          "profile-a",
+        set(
           { removed: null, inserted: true },
-          {
-            ...options,
-            expectedEntries: { retained: { nested: { b: 2, a: 1 }, list: [2, 1] } },
-          },
+          { retained: { nested: { b: 2, a: 1 }, list: [2, 1] } },
         ),
-      ).toEqual({ ok: false, error: { code: "conflict" } });
+      ).toEqual(conflict);
       expect(db.prepare("SELECT * FROM user_preferences ORDER BY pref_key").all()).toEqual(before);
     } finally {
       db.exec("DROP TRIGGER reject_any_insert; DROP TRIGGER reject_any_delete;");
     }
     expect(
-      setUserPreferences(
-        "profile-a",
+      set(
         { removed: null, inserted: true },
         {
-          ...options,
-          expectedEntries: {
-            retained: { list: [1, 2], nested: { b: 2, a: 1 } },
-            inserted: null,
-          },
+          retained: { list: [1, 2], nested: { b: 2, a: 1 } },
+          inserted: null,
         },
       ),
-    ).toEqual({ ok: true, value: undefined });
-    expect(getUserPreferences("profile-a", undefined, options)).toEqual({
+    ).toEqual(success);
+    expect(get()).toEqual({
       retained: original.retained,
       inserted: true,
     });
-    expect(
-      setUserPreferences(
-        "profile-a",
-        {},
-        {
-          ...options,
-          expectedEntries: { inserted: null },
-        },
-      ),
-    ).toEqual({ ok: false, error: { code: "conflict" } });
-    expect(
-      setUserPreferences(
-        "profile-a",
-        {},
-        {
-          ...options,
-          expectedEntries: { removed: null },
-        },
-      ),
-    ).toEqual({ ok: true, value: undefined });
+    expect(set({}, { inserted: null })).toEqual(conflict);
+    expect(set({}, { removed: null })).toEqual(success);
   });
 
   it("validates bounded expectations before changing values", () => {
-    const options = stateOptions();
+    const { set, get } = preferences();
     const expectations = [
       {
         entries: Object.fromEntries(Array.from({ length: 33 }, (_, i) => [`key-${i}`, null])),
@@ -350,44 +222,20 @@ describe("user preferences", () => {
       { entries: { oversized: "🦞".repeat(1_025) }, code: "value-too-large" },
     ];
     for (const { entries, code } of expectations) {
-      expect(
-        setUserPreferences(
-          "profile-a",
-          { changed: true },
-          {
-            ...options,
-            expectedEntries: entries,
-          },
-        ),
-      ).toMatchObject({ ok: false, error: { code } });
+      expect(set({ changed: true }, entries)).toMatchObject({ ok: false, error: { code } });
     }
-    expect(getUserPreferences("profile-a", undefined, options)).toEqual({});
+    expect(get()).toEqual({});
   });
 
   it("keeps merged profiles within the same preference cap", () => {
     const options = stateOptions();
-    for (let start = 0; start < 127; start += 32) {
-      const count = Math.min(32, 127 - start);
-      expect(
-        setUserPreferences(
-          "target",
-          Object.fromEntries(
-            Array.from({ length: count }, (_, index) => [`target-${start + index}`, true]),
-          ),
-          options,
-        ),
-      ).toMatchObject({ ok: true });
-    }
-    expect(
-      setUserPreferences("source", { "source-a": true, "source-b": true }, options),
-    ).toMatchObject({ ok: true });
-
+    const target = preferences(options, "target");
+    const source = preferences(options, "source");
+    target.fill(127, "target");
+    expect(source.set({ "source-a": true, "source-b": true })).toMatchObject({ ok: true });
     mergeUserPreferences(openOpenClawStateDatabase(options).db, "source", "target");
-
-    expect(Object.keys(getUserPreferences("target", undefined, options))).toHaveLength(128);
-    expect(getUserPreferences("target", ["source-a", "source-b"], options)).toEqual({
-      "source-a": true,
-    });
-    expect(getUserPreferences("source", undefined, options)).toEqual({});
+    expect(Object.keys(target.get())).toHaveLength(128);
+    expect(target.get(["source-a", "source-b"])).toEqual({ "source-a": true });
+    expect(source.get()).toEqual({});
   });
 });

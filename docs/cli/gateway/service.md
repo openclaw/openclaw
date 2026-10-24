@@ -49,6 +49,12 @@ process tree; a replacement instance is preserved. Transient SQLite sharing erro
 after confirmed process exit are retried; if inspection remains unavailable, the
 command warns and checks that the Gateway port is free before continuing with restart.
 
+Port confirmation shares the five-second settlement budget across the configured
+addresses, allowing slow Windows LAN connection refusals to confirm shutdown. If
+confirmation times out, the command reports an inconclusive result rather than a
+busy listener. Run `openclaw gateway status --deep` before retrying maintenance;
+a timeout does not prove that the port is free.
+
 If task settlement inspection remains unavailable
 within the stop budget, restart still attempts the captured task after confirming
 the Gateway exited, then reports that restart is unverified. An observed replacement
@@ -216,6 +222,8 @@ prevent OpenClaw from reading the previous environment file.
 ### Install with a wrapper
 
 Use `--wrapper` when the managed service must start through another executable, for example a secrets manager shim or a run-as helper. The wrapper receives the normal Gateway args and is responsible for eventually exec'ing `openclaw` or Node with those args.
+
+Service inspection preserves empty quoted arguments in systemd commands and Windows batch launchers, keeping later arguments in their original positions.
 
 ```bash
 cat > ~/.local/bin/openclaw-doppler <<'EOF'

@@ -1,5 +1,3 @@
-// Shared Gateway session projection types.
-// Keeps server methods and Control UI payloads aligned.
 import type { FastMode } from "@openclaw/normalization-core/string-coerce";
 import type {
   SessionPlacement,
@@ -8,6 +6,7 @@ import type {
 } from "../../packages/gateway-protocol/src/index.js";
 import type { QueueMode } from "../../packages/gateway-protocol/src/schema/logs-chat.js";
 import type { SessionObserverDigest } from "../../packages/gateway-protocol/src/schema/sessions.js";
+import type { SessionsPatchResult as ProtocolSessionsPatchResult } from "../../packages/gateway-protocol/src/sessions-patch-result.js";
 import type { StickyModelSelectionTarget } from "../agents/sticky-model-selection.js";
 import type { SessionPreviewItem } from "../config/sessions/session-history-read.types.js";
 import type { SessionEntry, SessionGoal, SessionOrigin } from "../config/sessions/types.js";
@@ -75,6 +74,8 @@ export type GatewaySessionRow = Omit<SessionRow, "archivedBy" | "updatedAt" | "w
   verboseLevel?: string;
   traceLevel?: string;
   reasoningLevel?: string;
+  /** Configured agent or global reasoning default inherited when reasoningLevel is unset. */
+  reasoningDefault?: "on" | "off" | "stream";
   elevatedLevel?: string;
   sendPolicy?: "allow" | "deny";
   goal?: SessionGoal;
@@ -140,15 +141,5 @@ export type SessionsListResult = SessionsListResultBase<GatewaySessionsDefaults,
 export type SessionListModelCatalog = ReadonlyMap<string, PreparedGatewayModelCatalog | undefined>;
 
 export type SessionsPatchResult = SessionsPatchResultBase<SessionEntry> & {
-  entry: SessionEntry;
-  resolved?: {
-    modelProvider?: string;
-    model?: string;
-    agentRuntime?: GatewayAgentRuntime;
-    runtimeSelectionLocked?: boolean;
-    contextWindow?: string;
-    contextWindows?: GatewayContextWindowOption[];
-    thinkingLevel?: string;
-    thinkingLevels?: GatewayThinkingLevelOption[];
-  };
+  resolved?: NonNullable<ProtocolSessionsPatchResult["resolved"]>;
 };

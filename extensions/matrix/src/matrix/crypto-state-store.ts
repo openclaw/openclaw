@@ -1,6 +1,7 @@
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { sha256Hex as digestText } from "openclaw/plugin-sdk/node-crypto-runtime";
 import { asSafeIntegerInRange } from "openclaw/plugin-sdk/number-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import type {
@@ -271,7 +272,7 @@ function resolveRecoveryKeyStateKeyForPath(recoveryKeyPath: string): string {
   if (basename === MATRIX_RECOVERY_KEY_FILENAME) {
     return STATE_KEY;
   }
-  return `file:${createHash("sha256").update(basename, "utf8").digest("hex").slice(0, 32)}`;
+  return `file:${digestText(basename).slice(0, 32)}`;
 }
 
 function normalizeMatrixStoredRecoveryKey(value: unknown): MatrixStoredRecoveryKey | null {
@@ -353,10 +354,6 @@ function idbChunkKeyPrefix(): string {
 
 function idbChunkKey(generation: string, index: number): string {
   return `${idbChunkKeyPrefix()}${generation}:${index}`;
-}
-
-function digestText(value: string): string {
-  return createHash("sha256").update(value, "utf8").digest("hex");
 }
 
 function isIdbSnapshotMeta(value: unknown): value is MatrixIdbSnapshotMeta {

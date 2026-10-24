@@ -1,8 +1,10 @@
 import type { JSX } from "@solidjs/web";
-import { Icon } from "../../../components/solid/icon.tsx";
+import { Icon, type IconName } from "../../../components/solid/icon.tsx";
 import type { MenuEntry, MenuItem } from "../../../components/solid/menu.tsx";
-import { t } from "../../../lib/reactive/i18n.ts";
-import { LitContent } from "./chat-composer-interop.tsx";
+import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-composer.ts";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
+
+registerEnglishCatalog(registerChatComposerEnglish);
 
 export function menuDivider(id: string): MenuEntry {
   return {
@@ -44,7 +46,7 @@ export function renderCapabilityToggleRow(options: {
   checked: boolean;
   disabled: boolean;
   title?: string | null;
-  icon?: unknown;
+  icon?: IconName;
   note?: string | null;
   sessionNote?: string;
   checkbox?: boolean;
@@ -55,9 +57,14 @@ export function renderCapabilityToggleRow(options: {
     type: "checkbox",
     checked: options.checked,
     disabled: options.disabled,
-    class: `agent-chat__capability-menu-item agent-chat__capability-menu-toggle${options.checkbox ? "" : " agent-chat__capability-menu-toggle--switch"}`,
+    class: [
+      "agent-chat__capability-menu-item agent-chat__capability-menu-toggle",
+      {
+        "agent-chat__capability-menu-toggle--switch": !options.checkbox,
+      },
+    ],
     attributes: { title: options.title ?? "" },
-    icon: options.icon ? <LitContent value={options.icon} /> : undefined,
+    icon: options.icon ? <Icon name={options.icon} /> : undefined,
     content: (
       <span class="agent-chat__capability-menu-label">
         <span>{options.label}</span>
@@ -73,7 +80,12 @@ export function renderCapabilityToggleRow(options: {
     ),
     details: options.checkbox ? undefined : (
       <span
-        class={`agent-chat__capability-menu-switch chat-controls__speed-toggle ${options.checked ? "chat-controls__speed-toggle--active" : ""}`}
+        class={[
+          "agent-chat__capability-menu-switch chat-controls__speed-toggle",
+          {
+            "chat-controls__speed-toggle--active": options.checked,
+          },
+        ]}
         aria-hidden="true"
       >
         <span class="chat-controls__speed-toggle-thumb" />

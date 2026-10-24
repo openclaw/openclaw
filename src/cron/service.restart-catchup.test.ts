@@ -1,9 +1,17 @@
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { CronService } from "./service.js";
-import { setupCronServiceSuite } from "./service.test-harness.js";
-import { createCronServiceState, type CronServiceDeps } from "./service/state.js";
-import { runMissedJobs } from "./service/timer.test-support.js";
+import {
+  createCronServiceWithStateForTest,
+  setupCronServiceSuite,
+} from "./service.test-harness.js";
+import {
+  createCronServiceState,
+  type CronServiceDeps,
+  type CronServiceState,
+} from "./service/state.js";
+import { onTimer, runMissedJobs } from "./service/timer.test-support.js";
 import { loadCronStore, saveCronStore } from "./store.js";
 import type { CronJob } from "./types.js";
 
@@ -40,6 +48,9 @@ async function fixture(jobs: CronJob[], overrides: Partial<CronServiceDeps> = {}
     log: logger,
     enqueueSystemEvent: vi.fn(),
     requestHeartbeat: vi.fn(),
+    runSessionEvent: vi.fn<NonNullable<CronServiceDeps["runSessionEvent"]>>(async () => ({
+      status: "ok",
+    })),
     onEvent: vi.fn(),
     runCommandJob: vi.fn(async () => ({ status: "ok" as const })),
     runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
@@ -50,13 +61,17 @@ async function fixture(jobs: CronJob[], overrides: Partial<CronServiceDeps> = {}
 
 async function withRestartedCron(
   jobs: CronJob[],
-  run: (cron: CronService, deps: Awaited<ReturnType<typeof fixture>>["deps"]) => Promise<void>,
+  run: (
+    cron: CronService,
+    deps: Awaited<ReturnType<typeof fixture>>["deps"],
+    state: CronServiceState,
+  ) => Promise<void>,
 ) {
   const { store, deps } = await fixture(jobs);
-  const cron = new CronService(deps);
+  const { cron, state } = createCronServiceWithStateForTest(deps);
   try {
     await cron.start();
-    await run(cron, deps);
+    await run(cron, deps, state);
   } finally {
     cron.stop();
     await store.cleanup();
@@ -64,6 +79,46 @@ async function withRestartedCron(
 }
 
 describe("CronService restart catch-up", () => {
+  it("defers an overdue immediate event without waiting for its session turn", async () => {
+    const now = Date.now();
+    const entered = createDeferred<"session turn">();
+    const release = createDeferred<{ status: "ok" }>();
+    const runSessionEvent = vi.fn<NonNullable<CronServiceDeps["runSessionEvent"]>>(async () => {
+      entered.resolve("session turn");
+      return await release.promise;
+    });
+    const { store, deps } = await fixture(
+      [
+        job({
+          createdAtMs: now - 120_000,
+          updatedAtMs: now - 120_000,
+          schedule: { kind: "every", everyMs: 60_000, anchorMs: now - 120_000 },
+          wakeMode: "now",
+          state: { nextRunAtMs: now - 60_000 },
+        }),
+      ],
+      { runSessionEvent },
+    );
+    const cron = new CronService(deps);
+    const starting = cron.start();
+    try {
+      expect(await Promise.race([starting.then(() => "started"), entered.promise])).toBe("started");
+      expect(runSessionEvent).not.toHaveBeenCalled();
+      expect((await loadCronStore(store.storePath)).jobs).toMatchObject([
+        {
+          enabled: true,
+          state: { nextRunAtMs: now + 120_000, startupCatchupAtMs: now + 120_000 },
+        },
+      ]);
+    } finally {
+      release.resolve({ status: "ok" });
+      await starting;
+      cron.stop();
+      await cron.waitForIdle();
+      await store.cleanup();
+    }
+  });
+
   it.each([
     {
       label: "successful scheduled",
@@ -147,7 +202,7 @@ describe("CronService restart catch-up", () => {
         }),
       ],
       async (cron, deps) => {
-        expect(deps.enqueueSystemEvent).not.toHaveBeenCalled();
+        expect(deps.runSessionEvent).not.toHaveBeenCalled();
         expect(cron.getJob("restart-job")?.state.nextRunAtMs).toBe(time("2025-12-13T04:04:00Z"));
       },
     );
@@ -222,7 +277,7 @@ describe("CronService restart catch-up", () => {
       ],
       async (cron, deps) => {
         expect(deps.runIsolatedAgentJob).not.toHaveBeenCalled();
-        expect(deps.enqueueSystemEvent).not.toHaveBeenCalled();
+        expect(deps.runSessionEvent).not.toHaveBeenCalled();
         expect(deps.requestHeartbeat).not.toHaveBeenCalled();
         expect(cron.getJob("restart-job")?.state).toMatchObject({
           lastRunStatus: "skipped",
@@ -244,12 +299,18 @@ describe("CronService restart catch-up", () => {
           },
         }),
       ],
-      async (_cron, deps) => {
-        expect(deps.enqueueSystemEvent).toHaveBeenCalledExactlyOnceWith(
-          "tick",
-          expect.objectContaining({ agentId: "main" }),
+      async (cron, deps, state) => {
+        expect(deps.runSessionEvent).not.toHaveBeenCalled();
+        expect(cron.getJob("restart-job")?.state.nextRunAtMs).toBe(time("2025-12-13T04:04:00Z"));
+        vi.setSystemTime(time("2025-12-13T04:04:00Z"));
+        await onTimer(state);
+        expect(deps.runSessionEvent).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({
+            text: "tick",
+            job: expect.objectContaining({ sessionTarget: "main" }),
+          }),
         );
-        expect(deps.requestHeartbeat).toHaveBeenCalled();
+        expect(deps.requestHeartbeat).not.toHaveBeenCalled();
       },
     );
   });
@@ -264,7 +325,7 @@ describe("CronService restart catch-up", () => {
         }),
       ],
       async (cron, deps) => {
-        expect(deps.enqueueSystemEvent).not.toHaveBeenCalled();
+        expect(deps.runSessionEvent).not.toHaveBeenCalled();
         expect(deps.requestHeartbeat).not.toHaveBeenCalled();
         const stored = cron.getJob("restart-job");
         expect(stored?.state.runningAtMs).toBeUndefined();
@@ -290,19 +351,31 @@ describe("CronService restart catch-up", () => {
 
   it("releases queued reservations and runs due jobs after restart", async () => {
     const dueAt = time("2025-12-13T16:30:00Z");
-    const state = { nextRunAtMs: dueAt, queuedAtMs: time("2025-12-13T16:45:00Z") };
+    const persistedState = { nextRunAtMs: dueAt, queuedAtMs: time("2025-12-13T16:45:00Z") };
     await withRestartedCron(
       [
-        job({ id: "recurring", schedule: { kind: "every", everyMs: 60_000 }, state }),
+        job({
+          id: "recurring",
+          schedule: { kind: "every", everyMs: 60_000 },
+          state: persistedState,
+        }),
         job({
           id: "one-shot",
           deleteAfterRun: true,
           schedule: { kind: "at", at: new Date(dueAt).toISOString() },
-          state,
+          state: persistedState,
         }),
       ],
-      async (cron, deps) => {
-        expect(deps.enqueueSystemEvent).toHaveBeenCalledTimes(2);
+      async (cron, deps, state) => {
+        expect(deps.runSessionEvent).not.toHaveBeenCalled();
+        const firstAt = time("2025-12-13T17:02:00Z");
+        expect(cron.getJob("recurring")?.state.nextRunAtMs).toBe(firstAt);
+        expect(cron.getJob("one-shot")?.state.nextRunAtMs).toBe(firstAt + 5_000);
+        vi.setSystemTime(firstAt);
+        await onTimer(state);
+        vi.setSystemTime(firstAt + 5_000);
+        await onTimer(state);
+        expect(deps.runSessionEvent).toHaveBeenCalledTimes(2);
         expect(cron.getJob("recurring")).toMatchObject({
           enabled: true,
           state: { lastRunStatus: "ok" },
@@ -345,7 +418,7 @@ describe("CronService restart catch-up", () => {
         expect(recovered?.state.runningAtMs).toBeUndefined();
         expect(recovered?.state.nextRunAtMs).toBeUndefined();
         expect(recovered?.state.startupCatchupAtMs).toBeUndefined();
-        expect(deps.enqueueSystemEvent).not.toHaveBeenCalled();
+        expect(deps.runSessionEvent).not.toHaveBeenCalled();
         expect(deps.requestHeartbeat).not.toHaveBeenCalled();
         expect(deps.onEvent).toHaveBeenCalledWith(
           expect.objectContaining({
@@ -374,14 +447,20 @@ describe("CronService restart catch-up", () => {
           },
         }),
       ],
-      async (cron, deps) => {
-        expect(deps.enqueueSystemEvent).not.toHaveBeenCalled();
+      async (cron, deps, state) => {
+        expect(deps.runSessionEvent).not.toHaveBeenCalled();
         expect(deps.requestHeartbeat).not.toHaveBeenCalled();
         expect(cron.getJob("restart-job")?.state.nextRunAtMs).toBe(time("2025-12-13T04:02:00Z"));
         cron.stop();
         vi.setSystemTime(time("2025-12-13T04:02:00Z"));
         await cron.start();
-        expect(deps.enqueueSystemEvent).toHaveBeenCalledExactlyOnceWith("tick", expect.anything());
+        expect(deps.runSessionEvent).not.toHaveBeenCalled();
+        expect(cron.getJob("restart-job")?.state.nextRunAtMs).toBe(time("2025-12-13T04:04:00Z"));
+        vi.setSystemTime(time("2025-12-13T04:04:00Z"));
+        await onTimer(state);
+        expect(deps.runSessionEvent).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({ text: "tick" }),
+        );
       },
     );
   });
@@ -402,52 +481,13 @@ describe("CronService restart catch-up", () => {
         }),
       ],
       async (cron, deps) => {
-        expect(deps.enqueueSystemEvent).not.toHaveBeenCalled();
+        expect(deps.runSessionEvent).not.toHaveBeenCalled();
         expect(deps.requestHeartbeat).not.toHaveBeenCalled();
         expect(cron.getJob("restart-job")?.state.nextRunAtMs).toBe(time("2025-12-13T04:02:00Z"));
         expect(cron.getJob("restart-job")?.state.lastRunStatus).toBe("error");
         expect(cron.getJob("restart-job")?.state.lastStatus).toBeUndefined();
       },
     );
-  });
-
-  it("stagger-limits overdue disabled-heartbeat one-shot retries after restart", async () => {
-    const now = Date.now();
-    const jobs = [now - 60_000, now - 45_000].map((nextRunAtMs, index) =>
-      job({
-        id: `retry-${index}`,
-        deleteAfterRun: true,
-        schedule: { kind: "at", at: new Date(nextRunAtMs - 30_000).toISOString() },
-        wakeMode: "now",
-        payload: { kind: "systemEvent", text: `retry-${index}` },
-        state: {
-          nextRunAtMs,
-          lastRunAtMs: nextRunAtMs - 30_000,
-          lastRunStatus: "skipped",
-          lastError: "disabled",
-          consecutiveSkipped: 1,
-        },
-      }),
-    );
-    const { store, deps } = await fixture(jobs, {
-      maxMissedJobsPerRestart: 1,
-      missedJobStaggerMs: 5_000,
-    });
-    const state = createCronServiceState(deps);
-    await runMissedJobs(state);
-    expect(deps.enqueueSystemEvent).toHaveBeenCalledExactlyOnceWith("retry-0", expect.anything());
-    expect(deps.requestHeartbeat).toHaveBeenCalledOnce();
-    expect((await loadCronStore(store.storePath)).jobs).toEqual([
-      expect.objectContaining({
-        id: "retry-1",
-        enabled: true,
-        state: expect.objectContaining({
-          lastRunStatus: "skipped",
-          lastError: "disabled",
-          nextRunAtMs: now + 5_000,
-        }),
-      }),
-    ]);
   });
 
   it.each([

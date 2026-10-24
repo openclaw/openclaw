@@ -16,16 +16,13 @@ export function registerSignalExitOwner(owner: SignalExitOwner): () => void {
     throw new Error("A process signal exit owner is already registered");
   }
   processExitOwner.current = owner;
-  let active = true;
-  return () => {
-    if (!active) {
-      return;
-    }
-    active = false;
+  const lifetime = new DisposableStack();
+  lifetime.defer(() => {
     if (processExitOwner.current === owner) {
       processExitOwner.current = undefined;
     }
-  };
+  });
+  return () => lifetime.dispose();
 }
 
 // Gates let bounded mutations finish before signal cleanup begins; barriers
@@ -202,17 +199,14 @@ export function installCliSignalExitHandlers(): () => void {
     process.prependListener("SIGINT", onCliSigint);
     process.prependListener("SIGTERM", onCliSigterm);
   }
-  let active = true;
-  return () => {
-    if (!active) {
-      return;
-    }
-    active = false;
+  const lifetime = new DisposableStack();
+  lifetime.defer(() => {
     if (--cliSignalOwners === 0) {
       cliDoctorSignalOwner = false;
       detachCliSignalExitHandlers();
     }
-  };
+  });
+  return () => lifetime.dispose();
 }
 
 /** Command error/output finalization cannot race an accepted signal's cleanup. */

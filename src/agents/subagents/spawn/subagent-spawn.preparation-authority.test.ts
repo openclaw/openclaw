@@ -37,6 +37,7 @@ import { sessionDeleteHandlers } from "../../../gateway/server-methods/sessions-
 import type { GatewayRequestContext } from "../../../gateway/server-methods/types.js";
 import type { DispatchGatewayMethodInProcessOptions } from "../../../gateway/server-plugin-in-process-dispatch.types.js";
 import { withPluginRuntimeGatewayRequestScope } from "../../../plugins/runtime/gateway-request-scope.js";
+import { captureSessionTarget } from "../../../sessions/session-controller.lifecycle.js";
 import { AsyncWorkScope } from "../../../shared/async-work-scope.js";
 import { getAdmittedRunDelegatedAuthority } from "../../admitted-run-context.js";
 import { finalizeAgentToolAvailability } from "../../agent-tool-availability.js";
@@ -452,7 +453,12 @@ describe("pending spawn preparation authority", () => {
             const childSessionKey = params.sessionKey as string;
             const child = loadSessionEntry({ storePath, sessionKey: childSessionKey })!;
             childController = registerChatAbortController({
-              chatAbortControllers: context.chatAbortControllers,
+              target: captureSessionTarget({
+                storeScope: storePath,
+                sessionKey: childSessionKey,
+                incarnation: child.sessionId,
+                agentId: "main",
+              }),
               runId: params.idempotencyKey as string,
               sessionKey: childSessionKey,
               sessionId: child.sessionId,
