@@ -1,5 +1,6 @@
 import { expect, type Mock, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
+import type { MediaUnderstandingProvider } from "../../media-understanding/types.js";
 import * as pdfExtract from "../../media/pdf-extract.js";
 import * as webMedia from "../../media/web-media.js";
 import { createEmptyPluginMetadataSnapshot } from "../../plugins/plugin-metadata-empty.test-support.js";
@@ -83,6 +84,8 @@ export function createPdfToolInfraStub(completeMock: Mock) {
       api?: string;
       modelFound?: boolean;
       pluginRegistry?: PluginRegistry;
+      baseUrl?: string;
+      mediaUnderstandingProviders?: MediaUnderstandingProvider[];
     } = {},
   ) {
     const {
@@ -101,7 +104,7 @@ export function createPdfToolInfraStub(completeMock: Mock) {
     const setRuntimeApiKey = vi.fn();
     const authStorage = { setRuntimeApiKey };
     const model = {
-      baseUrl: "https://pdf-fixture.invalid/v1",
+      baseUrl: params.baseUrl ?? "https://pdf-fixture.invalid/v1",
       provider,
       api: params.api ?? (provider === "openai" ? "openai-responses" : "anthropic-messages"),
       maxTokens: 8192,
@@ -115,13 +118,22 @@ export function createPdfToolInfraStub(completeMock: Mock) {
     vi.spyOn(preparedModelRuntime, "acquireAgentRunPreparedModelRuntime").mockImplementation(
       async ({ agentDir: capturedAgentDir, config, workspaceDir }) =>
         ({
-          snapshot: withPreparedRuntimeFacts({
-            agentDir: capturedAgentDir,
-            config,
-            workspaceDir,
-            pluginRegistry,
-            createStores,
-          }),
+          snapshot: {
+            ...withPreparedRuntimeFacts({
+              agentDir: capturedAgentDir,
+              config,
+              workspaceDir,
+              pluginRegistry,
+              createStores,
+            }),
+            ...(params.mediaUnderstandingProviders
+              ? {
+                  mediaCapabilityProviders: {
+                    mediaUnderstandingProviders: params.mediaUnderstandingProviders,
+                  },
+                }
+              : {}),
+          },
           [Symbol.asyncDispose]: release,
         }) as never,
     );

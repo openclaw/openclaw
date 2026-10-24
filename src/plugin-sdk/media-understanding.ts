@@ -12,6 +12,8 @@ export type {
   MediaUnderstandingProviderAuthResult,
   MediaUnderstandingProviderRequestAuth,
   MediaUnderstandingProviderSyntheticAuthResult,
+  PdfAnalysisRequest,
+  PdfAnalysisResult,
   StructuredExtractionImageInput,
   StructuredExtractionInput,
   StructuredExtractionRequest,

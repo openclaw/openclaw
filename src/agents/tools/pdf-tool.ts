@@ -5,6 +5,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { Type } from "typebox";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { captureAmbientGatewayOperatorAuthority } from "../../gateway/operator-invocation-authority.js";
+import { withGuardedFetchRequestAuthority } from "../../infra/net/fetch-request-authority.js";
 import { providerSupportsNativePdfDocument } from "../../media-understanding/defaults.js";
 import { renderDocumentTruncationNotice } from "../../media/document-extraction-metadata.js";
 import {
@@ -13,6 +14,7 @@ import {
 } from "../../media/media-reference.js";
 import { extractPdfContent, type PdfExtractedContent } from "../../media/pdf-extract.js";
 import { loadWebMediaRaw } from "../../media/web-media.js";
+import { assertProviderAuthAuthority } from "../../plugins/provider-auth-authority.js";
 import { runWithAsyncWorkResources } from "../../shared/async-work-resources.js";
 import { trackAsyncWork } from "../../shared/async-work-scope.js";
 import {
@@ -35,6 +37,10 @@ import {
 } from "../prepared-model-runtime.js";
 import { retainPreparedModelRuntimeSnapshotResources } from "../prepared-model-runtime.resources.js";
 import { getModelProviderRequestTransport } from "../provider-request-config.js";
+import {
+  unwrapModelHeaderSentinelsForProviderEgress,
+  unwrapSecretSentinelsForProviderEgress,
+} from "../provider-secret-egress.js";
 import { createSandboxBridgeReadFile } from "../sandbox-media-paths.js";
 import { optionalFiniteNumberSchema } from "../schema/typebox.js";
 import { completeWithPreparedSimpleCompletionModel } from "../simple-completion-execution.js";
@@ -42,6 +48,7 @@ import { prepareSimpleCompletionModel } from "../simple-completion-runtime.js";
 import type { ToolFsPolicy } from "../tool-fs-policy.js";
 import { textResult, ToolInputError, type AnyAgentTool } from "./common.js";
 import { coerceImageModelConfig } from "./image-tool.helpers.js";
+import { acquireMediaGenerationToolProviders } from "./media-generation-tool-providers.js";
 import {
   buildMediaReferenceDetails,
   buildTextToolResult,
@@ -429,6 +436,87 @@ export function createPdfTool(options?: {
           auth.mode === "aws-sdk" && model.api === "bedrock-converse-stream"
             ? (auth.apiKey ?? "")
             : requireApiKey(auth, model.provider);
+
+        if (
+          effectiveCfg?.agents?.defaults?.pdfNativeOpenai === true &&
+          provider === "openai" &&
+          model.input?.includes("image") &&
+          !pagesRaw &&
+          !password
+        ) {
+          const extractions = await getExtractions();
+          // Reuse the extractor's validated completeness facts; unknown/custom
+          // extraction metadata cannot authorize sending unselected pages.
+          const complete = extractions.every(({ metadata }) => {
+            const pages = metadata?.pages;
+            return (
+              pages &&
+              pages.total > 0 &&
+              pages.total <= configuredMaxPages &&
+              pages.processed.length === pages.total &&
+              !pages.truncated &&
+              !metadata.textTruncated &&
+              !metadata.imagesTruncated
+            );
+          });
+          if (complete) {
+            assertModelCurrent();
+            const providers = await acquireMediaGenerationToolProviders(
+              "mediaUnderstandingProviders",
+              { cfg: effectiveCfg ?? {}, prepared: preparedRuntime },
+            );
+            onAcquired({
+              async [Symbol.asyncDispose]() {
+                await providers.release();
+              },
+            });
+            providers.assertOpen();
+            const analyze = providers.providers.find((entry) => entry.id === provider)?.analyzePdf;
+            if (analyze) {
+              assertModelCurrent();
+              const requestModel = unwrapModelHeaderSentinelsForProviderEgress(
+                model,
+                "PDF provider request handoff",
+              );
+              const result = await providers.run(() =>
+                withGuardedFetchRequestAuthority(
+                  () => {
+                    assertModelCurrent();
+                    assertProviderAuthAuthority(model);
+                    providers.assertOpen();
+                  },
+                  () =>
+                    analyze({
+                      pdfs: loadedPdfs.map(({ buffer }) => buffer),
+                      model: modelId,
+                      api: model.api,
+                      apiKey: unwrapSecretSentinelsForProviderEgress(
+                        apiKey,
+                        "PDF provider auth handoff",
+                      ),
+                      prompt: promptRaw,
+                      maxTokens: resolvePdfToolMaxTokens(model.maxTokens),
+                      baseUrl: model.baseUrl,
+                      headers: requestModel.headers,
+                      request: getModelProviderRequestTransport(requestModel),
+                      signal: modelSignal,
+                    }),
+                ),
+              );
+              assertModelCurrent();
+              providers.assertOpen();
+              if (result) {
+                return {
+                  text: result.text,
+                  provider,
+                  model: modelId,
+                  native: true,
+                  extractions: [],
+                };
+              }
+            }
+          }
+        }
 
         if (providerSupportsNativePdfDocument({ providerId: provider })) {
           if (password) {
