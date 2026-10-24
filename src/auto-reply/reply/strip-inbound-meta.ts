@@ -15,9 +15,6 @@ const ACTIVE_MEMORY_CLOSE_TAG = "</active_memory_plugin>";
 export const LEGACY_REQUESTER_PROFILE_HINT =
   'requester_profile is the verified linked requester. For "assign to me", use sessions assign_owner with ownerType="human" and ownerId=requester_profile.id, if available.';
 const INBOUND_METADATA_SENTINELS = [INBOUND_CONTEXT_MARKER, ...MESSAGE_TOOL_DELIVERY_HINTS];
-const INBOUND_METADATA_SCAN_OVERLAP = Math.max(
-  ...INBOUND_METADATA_SENTINELS.map((token) => token.length - 1),
-);
 const METADATA_TOKENS_RE = new RegExp(INBOUND_METADATA_SENTINELS.map(escapeRegExp).join("|"), "g");
 
 type TextLine = { start: number; end: number; next: number; trimmed: string };
@@ -74,6 +71,7 @@ export function hasInboundMetadataSentinel(text: string): boolean {
 
 /** Probe appended bytes only until canonical metadata can affect the visible text. */
 export function createInboundMetadataProbe(): (input: TextProjection) => boolean {
+  const scanOverlap = Math.max(...INBOUND_METADATA_SENTINELS.map((token) => token.length - 1));
   let active = false;
   let tail = "";
   let contextOffset = 0;
@@ -85,7 +83,7 @@ export function createInboundMetadataProbe(): (input: TextProjection) => boolean
     }
     const appended = delta ?? text;
     const scan = tail + appended;
-    tail = scan.slice(-INBOUND_METADATA_SCAN_OVERLAP);
+    tail = scan.slice(-scanOverlap);
     if (INBOUND_METADATA_SENTINELS.some((token) => scan.includes(token))) {
       active = true;
       return true;
