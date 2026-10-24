@@ -710,6 +710,7 @@ test("sessions.reset directly unbinds thread bindings when hooks are unavailable
   expectThreadUnbound();
 });
 
+// Explicit delete proceeds past owner repair. A retained close still keeps the row.
 describe("acp-authority", () => {
   test.each(["already retired", "caller retired"] as const)(
     "ACP reset preserves its row and resume state when %s before metadata commit",
