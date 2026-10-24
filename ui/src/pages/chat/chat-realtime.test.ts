@@ -689,6 +689,7 @@ it.each(["stop", "route", "disconnect"] as const)(
     const loaded = createDeferred<Runtime>();
     const loading = createDeferred();
     const startChatRealtimeSession = vi.fn<Runtime["startChatRealtimeSession"]>();
+    // mock-isolation: Hold module evaluation open to prove cancellation before the voice runtime loads.
     vi.doMock("./talk/chat-actions-runtime.ts", () => {
       loading.resolve();
       return loaded.promise;
