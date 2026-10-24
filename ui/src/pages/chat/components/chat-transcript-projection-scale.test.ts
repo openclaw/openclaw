@@ -443,6 +443,43 @@ describe("voice reconciliation", () => {
     },
   );
 
+  it("interleaves unmatched Talk captions with typed history by time", () => {
+    const messages = [
+      {
+        role: "user",
+        content: "Typed later",
+        timestamp: 3_000,
+        __openclaw: { id: "typed-later" },
+      },
+    ];
+    const props = threadProps("voice-chronology", undefined, messages);
+    props.realtimeTalkConversation = [
+      {
+        id: "rt-older",
+        role: "user",
+        text: "Spoken earlier",
+        isStreaming: false,
+        createdAtMs: 1_000,
+      },
+      {
+        id: "rt-newer",
+        role: "user",
+        text: "Spoken later",
+        isStreaming: false,
+        createdAtMs: 5_000,
+      },
+    ];
+
+    const view = drawThread(props);
+    view.draw();
+
+    expect(
+      [...view.container.querySelectorAll(".agent-chat__voice-turn-text, .chat-text")].map((node) =>
+        node.textContent?.trim(),
+      ),
+    ).toEqual(["Spoken earlier", "Typed later", "Spoken later"]);
+  });
+
   it("uses one raw-history scan, preserving pending captions and refreshing replaced history", () => {
     const messages = [
       savedMessage("Hidden saved words", "voice:saved"),

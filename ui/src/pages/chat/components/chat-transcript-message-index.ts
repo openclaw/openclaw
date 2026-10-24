@@ -33,6 +33,7 @@ import type { TranscriptRow } from "./chat-transcript-layout.ts";
 import { createTranscriptMemo } from "./chat-transcript-memo.ts";
 import { GuardedTranscriptItem } from "./chat-transcript-render-guard.ts";
 import type { NativeTranscriptView } from "./chat-transcript-rows.ts";
+import { transcriptRowTimestamp } from "./chat-transcript-timeline.ts";
 import type { projectTranscriptWorkPreviews } from "./chat-transcript-work-previews.ts";
 
 type ChatRenderItem = SystemEventRenderItem;
@@ -430,23 +431,42 @@ export function projectTranscriptRows(
   workPreviews: ReturnType<typeof projectTranscriptWorkPreviews>,
   contentRows: readonly Extract<TranscriptRow, { kind: "content" }>[],
 ): readonly TranscriptRow<ChatRenderItem>[] {
-  return presentationRows(rows, [workPreviews, ...contentRows.map((row) => row.key)], () => {
-    if (!workPreviews.size && !contentRows.length) {
-      return rows;
-    }
-    const result: TranscriptRow<ChatRenderItem>[] = [];
-    for (const row of rows) {
-      result.push(row);
-      const previews = workPreviews.get(row.key);
-      if (previews && !(row.kind === "item" && row.item.kind === "work-group")) {
-        const content: NativeTranscriptView = { kind: "work-previews", previews };
-        result.push({
-          kind: "content",
-          key: `work-previews:${row.key}`,
-          content: new GuardedTranscriptItem([content], content),
-        });
+  return presentationRows(
+    rows,
+    [workPreviews, ...contentRows.flatMap((row) => [row.key, row.timestamp ?? null])],
+    () => {
+      if (!workPreviews.size && !contentRows.length) {
+        return rows;
       }
-    }
-    return result.concat(contentRows);
-  });
+      const timedContent = contentRows
+        .filter((row) => row.timestamp !== undefined)
+        .toSorted((left, right) => left.timestamp! - right.timestamp!);
+      const untimedContent = contentRows.filter((row) => row.timestamp === undefined);
+      const result: TranscriptRow<ChatRenderItem>[] = [];
+      let timedIndex = 0;
+      for (const row of rows) {
+        const rowTimestamp = transcriptRowTimestamp(row);
+        if (rowTimestamp !== undefined) {
+          while (
+            timedIndex < timedContent.length &&
+            timedContent[timedIndex]!.timestamp! < rowTimestamp
+          ) {
+            result.push(timedContent[timedIndex]!);
+            timedIndex += 1;
+          }
+        }
+        result.push(row);
+        const previews = workPreviews.get(row.key);
+        if (previews && !(row.kind === "item" && row.item.kind === "work-group")) {
+          const content: NativeTranscriptView = { kind: "work-previews", previews };
+          result.push({
+            kind: "content",
+            key: `work-previews:${row.key}`,
+            content: new GuardedTranscriptItem([content], content),
+          });
+        }
+      }
+      return result.concat(timedContent.slice(timedIndex), untimedContent);
+    },
+  );
 }

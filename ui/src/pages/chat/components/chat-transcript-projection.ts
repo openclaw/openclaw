@@ -27,7 +27,6 @@ import { buildChatArchiveNotice } from "./chat-divider.ts";
 import type { NativeMessageGroupOptions } from "./chat-message-group-frame.ts";
 import { assistantMediaPolicyKey } from "./chat-message-media.ts";
 import type { StreamGroupOptions } from "./chat-message-stream-view.tsx";
-import { projectRealtimeTalkConversation } from "./chat-realtime-controls.ts";
 import { createReplyPreviewResolver } from "./chat-reply-preview.ts";
 import { resolveChatSwarmParent } from "./chat-swarm-progress-parent.ts";
 import { getTranscriptState, type ChatThreadProps } from "./chat-thread-interactions.ts";
@@ -45,6 +44,7 @@ import {
   projectTranscriptIndex,
   projectTranscriptRows,
 } from "./chat-transcript-message-index.ts";
+import { projectRealtimeTalkContentRows } from "./chat-transcript-realtime-placement.ts";
 import { projectTranscriptRecovery } from "./chat-transcript-recovery.ts";
 import {
   GuardedTranscriptItem,
@@ -529,10 +529,7 @@ export function projectChatTranscript(
       key,
       content: new GuardedTranscriptItem([content], content),
     });
-  const realtimeConversation = projectRealtimeTalkConversation(props);
-  if (realtimeConversation) {
-    appendContent("realtime-talk", { kind: "realtime", ...realtimeConversation });
-  }
+  contentRows.push(...projectRealtimeTalkContentRows(rows, props));
   if (turnRecap !== null && !recapAttached && !isEmpty && !showLoadingSkeleton) {
     appendContent("turn-recap", { kind: "recap", recap: turnRecap });
   }

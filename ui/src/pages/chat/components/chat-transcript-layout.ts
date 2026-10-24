@@ -11,7 +11,13 @@ export type TranscriptContent = GuardedTranscriptItem | JSX.Element;
 
 export type TranscriptRow<T = unknown> =
   | { kind: "item"; key: string; item: T }
-  | { kind: "content"; key: string; content: TranscriptContent };
+  | {
+      kind: "content";
+      key: string;
+      content: TranscriptContent;
+      /** Places live content among history rows; untimed content stays at the tail. */
+      timestamp?: number;
+    };
 
 export type TranscriptLayoutProps = {
   applicationContext?: ApplicationContext;

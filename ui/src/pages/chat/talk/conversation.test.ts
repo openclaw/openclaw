@@ -31,6 +31,26 @@ describe("realtime Talk conversation", () => {
       isStreaming: false,
     });
   });
+
+  it("stamps an entry when it first appears", () => {
+    update("user", "Hello", false, { nowMs: 1_000 });
+    update("user", " there", false, { nowMs: 2_000 });
+    update("user", " there", true, { nowMs: 3_000 });
+    update("assistant", "Hi", false, { nowMs: 4_000 });
+
+    expect(state.entries).toMatchObject([
+      { role: "user", text: "Hello there", createdAtMs: 1_000 },
+      { role: "assistant", text: "Hi", createdAtMs: 4_000 },
+    ]);
+  });
+
+  it("preserves the first timestamp for provider-keyed entries", () => {
+    update("assistant", "Hel", false, { itemId: "one", nowMs: 1_000 });
+    update("assistant", "Hello", true, { itemId: "one", nowMs: 2_000 });
+
+    expect(state.entries[0]?.createdAtMs).toBe(1_000);
+  });
+
   it("keeps a corrected snapshot before the answer without adding another user entry", () => {
     update("user", "How", false, { textMode: "snapshot" });
     update("assistant", "Earth is", false);

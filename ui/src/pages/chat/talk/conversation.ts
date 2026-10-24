@@ -11,6 +11,7 @@ export type RealtimeTalkConversationEntry = {
   isStreaming: boolean;
   order?: number;
   transcriptId?: string;
+  createdAtMs?: number;
 };
 
 export type RealtimeTalkConversationState = {
@@ -79,6 +80,7 @@ function applyRealtimeTalkTranscript(
   if (update.final ? text.trim() === "" : text === "") {
     return state;
   }
+  const nowMs = update.nowMs ?? Date.now();
   if (update.itemId !== undefined) {
     const id = `item-${update.itemId}`;
     const previous = state.entries.find((entry) => entry.id === id);
@@ -88,6 +90,7 @@ function applyRealtimeTalkTranscript(
       order: update.order,
       text: boundRealtimeConversationText(update.final ? text : (previous?.text ?? "") + text),
       isStreaming: !update.final,
+      createdAtMs: previous?.createdAtMs ?? nowMs,
     };
     // Provider identities survive delayed ASR and overlapping responses. Text and
     // wall-clock proximity cannot identify which utterance a final replaces.
@@ -96,7 +99,6 @@ function applyRealtimeTalkTranscript(
       entries: [...state.entries.filter((candidate) => candidate.id !== id), entry],
     });
   }
-  const nowMs = update.nowMs ?? Date.now();
   if (update.textMode === "verbatim" || update.textMode === "snapshot") {
     return upsertRealtimeConversationEntry(
       state,
@@ -105,6 +107,7 @@ function applyRealtimeTalkTranscript(
       text,
       update.final,
       update.textMode,
+      nowMs,
     );
   }
   if (update.role === "assistant") {
@@ -115,6 +118,8 @@ function applyRealtimeTalkTranscript(
       preparedState.assistantEntryId,
       text,
       update.final,
+      undefined,
+      nowMs,
     );
   }
   const entryId = state.userEntryId;
@@ -137,6 +142,8 @@ function applyRealtimeTalkTranscript(
     shouldStartNewUserEntry ? null : entryId,
     text,
     update.final,
+    undefined,
+    nowMs,
   );
 }
 
@@ -161,6 +168,7 @@ function upsertRealtimeConversationEntry(
   text: string,
   isFinal: boolean,
   textMode?: RealtimeTalkTranscript["textMode"],
+  createdAtMs: number = Date.now(),
 ): RealtimeTalkConversationState {
   const targetIndex =
     entryId === null ? -1 : state.entries.findIndex((entry) => entry.id === entryId);
@@ -174,6 +182,7 @@ function upsertRealtimeConversationEntry(
         role,
         text: boundRealtimeConversationText(textMode ? text : text.trimStart()),
         isStreaming: !isFinal,
+        createdAtMs,
       },
     ].slice(-MAX_CONVERSATION_ENTRIES);
     return rememberRealtimeConversationEntry(
