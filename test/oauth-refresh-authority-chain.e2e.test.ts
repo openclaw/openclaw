@@ -60,11 +60,9 @@ const REQUEST_MARKERS = [
   LOGOUT_FOLLOWUP_MARKER,
 ] as const;
 
-type TokenClass = "A" | "B" | "other";
-type ModelAuthClass = "A" | "A-stale" | "B" | "missing" | "other";
 type ProviderRequest = {
   marker: string;
-  auth: ModelAuthClass;
+  auth: string | undefined;
   model: string | undefined;
 };
 type AgentResult = {
@@ -72,23 +70,10 @@ type AgentResult = {
   status?: string;
   error?: string;
 };
-type TurnHandle = {
-  runId: string;
-  sessionKey: string;
-  terminal: Promise<AgentResult>;
-};
-type ControlledProvider = {
-  baseUrl: string;
-  modelRequests: ProviderRequest[];
-  refreshStarted: Promise<void>;
-  releaseRefresh: () => void;
-  stop: () => Promise<void>;
-  tokenRequests: TokenClass[];
-};
 type Scenario = {
   instance: OpenClawTestInstance;
   pluginRoot: string;
-  provider: ControlledProvider;
+  provider: Awaited<ReturnType<typeof startControlledProvider>>;
 };
 
 const activeScenarios: Scenario[] = [];
@@ -127,32 +112,6 @@ function authStore(credential?: OAuthCredential): AuthProfileStore {
   };
 }
 
-function classifyRefresh(value: unknown): TokenClass {
-  if (value === REFRESH_A) {
-    return "A";
-  }
-  if (value === REFRESH_B) {
-    return "B";
-  }
-  return "other";
-}
-
-function classifyAuthorization(value: string | undefined): ModelAuthClass {
-  if (value === `Bearer ${ACCESS_A_ROTATED}`) {
-    return "A";
-  }
-  if (value === `Bearer ${ACCESS_A_OLD}`) {
-    return "A-stale";
-  }
-  if (value === `Bearer ${ACCESS_B}`) {
-    return "B";
-  }
-  if (!value) {
-    return "missing";
-  }
-  return "other";
-}
-
 async function readJsonBody(request: IncomingMessage): Promise<Record<string, unknown>> {
   const chunks: Buffer[] = [];
   for await (const chunk of request) {
@@ -161,20 +120,15 @@ async function readJsonBody(request: IncomingMessage): Promise<Record<string, un
   return JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<string, unknown>;
 }
 
-function requestMarker(body: Record<string, unknown>): string {
-  const serialized = JSON.stringify(body);
-  return REQUEST_MARKERS.find((marker) => serialized.includes(marker)) ?? "unknown";
-}
-
 function sendJson(response: ServerResponse, body: unknown, status = 200) {
   response.writeHead(status, { "content-type": "application/json" });
   response.end(JSON.stringify(body));
 }
 
-async function startControlledProvider(): Promise<ControlledProvider> {
+async function startControlledProvider() {
   const refreshGate = createDeferredCore();
   const refreshStarted = createDeferredCore();
-  const tokenRequests: TokenClass[] = [];
+  const tokenRequests: unknown[] = [];
   const modelRequests: ProviderRequest[] = [];
   let modelResponseIndex = 0;
 
@@ -182,7 +136,7 @@ async function startControlledProvider(): Promise<ControlledProvider> {
     void (async () => {
       if (request.method === "POST" && request.url === "/oauth/token") {
         const body = await readJsonBody(request);
-        tokenRequests.push(classifyRefresh(body.refresh));
+        tokenRequests.push(body.refresh);
         refreshStarted.resolve();
         await refreshGate.promise;
         if (body.refresh !== REFRESH_A) {
@@ -198,18 +152,16 @@ async function startControlledProvider(): Promise<ControlledProvider> {
       }
       if (request.method === "GET" && request.url === "/v1/models") {
         sendJson(response, {
-          data: [
-            { id: OWNER_MODEL_ID, object: "model" },
-            { id: PEER_MODEL_ID, object: "model" },
-          ],
+          data: [OWNER_MODEL_ID, PEER_MODEL_ID].map((id) => ({ id, object: "model" })),
         });
         return;
       }
       if (request.method === "POST" && request.url === "/v1/responses") {
         const body = await readJsonBody(request);
+        const serialized = JSON.stringify(body);
         modelRequests.push({
-          marker: requestMarker(body),
-          auth: classifyAuthorization(request.headers.authorization),
+          marker: REQUEST_MARKERS.find((marker) => serialized.includes(marker)) ?? "unknown",
+          auth: request.headers.authorization,
           model: typeof body.model === "string" ? body.model : undefined,
         });
         modelResponseIndex += 1;
@@ -258,49 +210,43 @@ async function writeProviderPlugin(pluginDir: string, tokenUrl: string): Promise
   await fs.mkdir(pluginDir, { recursive: true });
   await fs.writeFile(
     path.join(pluginDir, "openclaw.plugin.json"),
-    `${JSON.stringify(
-      {
-        id: PROVIDER_ID,
-        activation: { onStartup: true, onProviders: [PROVIDER_ID] },
-        providers: [PROVIDER_ID],
-        configSchema: { type: "object", additionalProperties: false, properties: {} },
-      },
-      null,
-      2,
-    )}\n`,
+    JSON.stringify({
+      id: PROVIDER_ID,
+      activation: { onStartup: true, onProviders: [PROVIDER_ID] },
+      providers: [PROVIDER_ID],
+      configSchema: { type: "object", additionalProperties: false, properties: {} },
+    }),
   );
   await fs.writeFile(
     path.join(pluginDir, "index.mjs"),
-    [
-      "export default {",
-      `  id: ${JSON.stringify(PROVIDER_ID)},`,
-      "  register(api) {",
-      "    api.registerProvider({",
-      `      id: ${JSON.stringify(PROVIDER_ID)},`,
-      '      label: "OAuth authority proof",',
-      "      auth: [],",
-      "      async refreshOAuth(credential) {",
-      `        const response = await fetch(${JSON.stringify(tokenUrl)}, {`,
-      '          method: "POST",',
-      '          headers: { "content-type": "application/json" },',
-      "          body: JSON.stringify({ refresh: credential.refresh }),",
-      "        });",
-      '        if (!response.ok) throw new Error("authority proof refresh rejected");',
-      "        const refreshed = await response.json();",
-      "        return {",
-      "          ...credential,",
-      '          type: "oauth",',
-      `          provider: ${JSON.stringify(PROVIDER_ID)},`,
-      "          access: refreshed.access,",
-      "          refresh: refreshed.refresh,",
-      "          expires: refreshed.expires,",
-      "        };",
-      "      },",
-      "    });",
-      "  },",
-      "};",
-      "",
-    ].join("\n"),
+    `export default {
+  id: ${JSON.stringify(PROVIDER_ID)},
+  register(api) {
+    api.registerProvider({
+      id: ${JSON.stringify(PROVIDER_ID)},
+      label: "OAuth authority proof",
+      auth: [],
+      async refreshOAuth(credential) {
+        const response = await fetch(${JSON.stringify(tokenUrl)}, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ refresh: credential.refresh }),
+        });
+        if (!response.ok) throw new Error("authority proof refresh rejected");
+        const refreshed = await response.json();
+        return {
+          ...credential,
+          type: "oauth",
+          provider: ${JSON.stringify(PROVIDER_ID)},
+          access: refreshed.access,
+          refresh: refreshed.refresh,
+          expires: refreshed.expires,
+        };
+      },
+    });
+  },
+};
+`,
   );
 }
 
@@ -358,7 +304,7 @@ function createConfig(pluginDir: string, providerBaseUrl: string) {
   };
 }
 
-async function createScenario(name: string): Promise<Scenario> {
+async function startScenario(name: string, shared?: OAuthCredential | "same-account") {
   const provider = await startControlledProvider();
   const pluginRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-oauth-authority-plugin-"));
   const pluginDir = path.join(pluginRoot, "plugin");
@@ -375,34 +321,37 @@ async function createScenario(name: string): Promise<Scenario> {
     });
     const scenario = { instance, pluginRoot, provider };
     activeScenarios.push(scenario);
-    return scenario;
+    const expiredA: OAuthCredential = {
+      type: "oauth",
+      provider: PROVIDER_ID,
+      accountId: ACCOUNT_A,
+      access: ACCESS_A_OLD,
+      refresh: REFRESH_A,
+      expires: Date.now() - 60_000,
+    };
+    runAuthProfileWriteTransaction(
+      undefined,
+      (database) =>
+        writePersistedAuthProfileStoreRaw(
+          authStore(shared === "same-account" ? expiredA : shared),
+          undefined,
+          database,
+        ),
+      { env: instance.env },
+    );
+    for (const agent of ["owner", "peer"]) {
+      await instance.state.writeAuthProfiles(authStore(expiredA), agent);
+    }
+    closeOpenClawAgentDatabasesForTest(instance.stateDir);
+    closeOpenClawStateDatabaseForTest();
+    await instance.startGateway();
+    return { ...scenario, client: await connect(instance) };
   } catch (error) {
     provider.releaseRefresh();
     await provider.stop();
     await fs.rm(pluginRoot, { recursive: true, force: true });
     throw error;
   }
-}
-
-function writeSharedStore(instance: OpenClawTestInstance, store: AuthProfileStore): void {
-  runAuthProfileWriteTransaction(
-    undefined,
-    (database) => writePersistedAuthProfileStoreRaw(store, undefined, database),
-    { env: instance.env },
-  );
-}
-
-async function startScenario(name: string, shared?: OAuthCredential | "same-account") {
-  const scenario = await createScenario(name);
-  const { instance } = scenario;
-  const expiredA = expiredAccountA();
-  writeSharedStore(instance, authStore(shared === "same-account" ? expiredA : shared));
-  await instance.state.writeAuthProfiles(authStore(expiredA), "owner");
-  await instance.state.writeAuthProfiles(authStore(expiredA), "peer");
-  closeOpenClawAgentDatabasesForTest(instance.stateDir);
-  closeOpenClawStateDatabaseForTest();
-  await instance.startGateway();
-  return { ...scenario, client: await connect(instance) };
 }
 
 function readLocalCredential(
@@ -423,15 +372,6 @@ function readSharedCredential(instance: OpenClawTestInstance): OAuthCredential |
 function expectTerminalFence(credential: OAuthCredential | undefined): void {
   expect(credential && isOAuthRefreshFence(credential)).toBe(true);
   expect(credential && isPendingOAuthRefreshFence(credential)).toBe(false);
-}
-
-function expiredAccountA(): OAuthCredential {
-  return oauthCredential({
-    accountId: ACCOUNT_A,
-    access: ACCESS_A_OLD,
-    refresh: REFRESH_A,
-    expires: Date.now() - 60_000,
-  });
 }
 
 function expectAuthError(result: AgentResult, message: string | RegExp): void {
@@ -460,7 +400,7 @@ async function startTurn(
   client: Awaited<ReturnType<typeof connectGatewayClient>>,
   agentId: "owner" | "peer",
   marker: string,
-): Promise<TurnHandle> {
+) {
   const requestedRunId = marker.toLowerCase();
   const sessionKey = `agent:${agentId}:authority-proof:${requestedRunId}`;
   const started = await client.request<AgentResult>("agent", {
@@ -471,7 +411,7 @@ async function startTurn(
   });
   const runId = started.runId ?? requestedRunId;
   if (started.status === "ok") {
-    return { runId, sessionKey, terminal: Promise.resolve(started) };
+    return { runId, terminal: Promise.resolve(started) };
   }
   expect(started).toMatchObject({ status: "accepted", runId });
   const terminal = client.request<AgentResult>(
@@ -480,7 +420,7 @@ async function startTurn(
     { timeoutMs: REQUEST_TIMEOUT_MS + 5_000 },
   );
   void terminal.catch(() => undefined);
-  return { runId, sessionKey, terminal };
+  return { runId, terminal };
 }
 
 async function startPendingPeer(
@@ -517,7 +457,7 @@ async function startPendingPeer(
     { timeoutMs: REQUEST_TIMEOUT_MS },
   );
   expect(result).toEqual({ runId: peer.runId, status: "timeout" });
-  expect(scenario.provider.tokenRequests).toEqual(["A"]);
+  expect(scenario.provider.tokenRequests).toEqual([REFRESH_A]);
   expect(scenario.provider.modelRequests).toHaveLength(0);
   return peer;
 }
@@ -544,8 +484,8 @@ describe("OAuth refresh authority chain", () => {
           left.marker.localeCompare(right.marker),
         ),
       ).toEqual([
-        { marker: SAME_OWNER_MARKER, auth: "A", model: OWNER_MODEL_ID },
-        { marker: SAME_PEER_MARKER, auth: "A", model: PEER_MODEL_ID },
+        { marker: SAME_OWNER_MARKER, auth: `Bearer ${ACCESS_A_ROTATED}`, model: OWNER_MODEL_ID },
+        { marker: SAME_PEER_MARKER, auth: `Bearer ${ACCESS_A_ROTATED}`, model: PEER_MODEL_ID },
       ]);
       expect(readLocalCredential(scenario.instance, "peer")).toBeUndefined();
       expect(readSharedCredential(scenario.instance)).toMatchObject({
@@ -568,11 +508,11 @@ describe("OAuth refresh authority chain", () => {
       expect(scenario.provider.modelRequests.slice(restartRequestOffset)).toEqual([
         {
           marker: SAME_RESTART_MARKER,
-          auth: "A",
+          auth: `Bearer ${ACCESS_A_ROTATED}`,
           model: PEER_MODEL_ID,
         },
       ]);
-      expect(scenario.provider.tokenRequests).toEqual(["A"]);
+      expect(scenario.provider.tokenRequests).toEqual([REFRESH_A]);
     },
   );
 
@@ -600,7 +540,11 @@ describe("OAuth refresh authority chain", () => {
         timeout: REQUEST_TIMEOUT_MS,
       });
       expect(scenario.provider.modelRequests).toEqual([
-        { marker: MISMATCH_OWNER_MARKER, auth: "A", model: OWNER_MODEL_ID },
+        {
+          marker: MISMATCH_OWNER_MARKER,
+          auth: `Bearer ${ACCESS_A_ROTATED}`,
+          model: OWNER_MODEL_ID,
+        },
       ]);
       expect(readLocalCredential(scenario.instance, "owner")).toMatchObject({
         accountId: ACCOUNT_A,
@@ -661,7 +605,7 @@ describe("OAuth refresh authority chain", () => {
         ),
       );
       expect(scenario.provider.modelRequests).toHaveLength(0);
-      expect(scenario.provider.tokenRequests).toEqual(["A"]);
+      expect(scenario.provider.tokenRequests).toEqual([REFRESH_A]);
       expect(readLocalCredential(scenario.instance, "owner")).toBeUndefined();
       expect(readLocalCredential(scenario.instance, "peer")).toBeUndefined();
     },

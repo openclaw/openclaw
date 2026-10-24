@@ -318,6 +318,89 @@ function connectInstance(
   return connectRestartClient(instance, { mode: profiled ? "test" : "backend" }, signal);
 }
 
+async function withGateway(
+  signal: AbortSignal,
+  options: { holdFirstResume?: boolean; automaticReply?: boolean; profiled?: boolean },
+  run: (fixture: Awaited<ReturnType<typeof createFixture>>) => Promise<void>,
+) {
+  const fixture = await createFixture(signal, options);
+  await runQaGatewayFixture(
+    async () => {
+      await fixture.start();
+      await run(fixture);
+    },
+    fixture.close,
+    () => fixture.instance.cleanup(),
+    fixture.provider.close,
+  );
+}
+
+async function createFixture(
+  signal: AbortSignal,
+  options: { holdFirstResume?: boolean; automaticReply?: boolean; profiled?: boolean },
+) {
+  const provider = await startProvider(
+    signal,
+    options.holdFirstResume ?? false,
+    options.automaticReply,
+  );
+  const instance = await createInstance(provider, signal);
+  let client: GatewayClient;
+  const race = <T>(promise: Promise<T>) =>
+    withinTest(Promise.race([promise, provider.failed]), signal);
+  const request = <T = Record<string, unknown>>(...args: Parameters<GatewayClient["request"]>) =>
+    client.request<T>(...args);
+  const rows = async () =>
+    (await request<SessionsListResult>("sessions.list", { agentId: "main" })).sessions;
+  const row = async (key: string) => (await rows()).find((entry) => entry.key === key);
+  const start = async () => {
+    await instance.startGateway();
+    client = await connectInstance(instance, signal, options.profiled);
+  };
+  return {
+    provider,
+    instance,
+    race,
+    request,
+    rows,
+    row,
+    start,
+    wait: (assertion: () => Promise<void>) => race(vi.waitFor(assertion, { timeout: 30_000 })),
+    read: (name: string) => readFile(path.join(instance.state.workspaceDir, name), "utf8"),
+    create: (key: string) =>
+      request("sessions.create", { key, agentId: "main", permissionMode: "full" }),
+    send: (sessionKey: string, message: string, idempotencyKey: string) =>
+      request<{ runId: string }>(
+        "chat.send",
+        { sessionKey, message, idempotencyKey },
+        { expectFinal: false },
+      ),
+    readOnly: (key: string) => applyReadOnly(client, instance, key),
+    close: () => client?.stopAndWait(),
+    restart: async (kind: RestartMode) => {
+      const child = instance.child;
+      if (!child?.pid) {
+        throw new Error("Owned Gateway process unavailable");
+      }
+      await client.stopAndWait();
+      const closed = once(child, "close");
+      if (kind === "managed") {
+        expect(
+          writeGatewayRestartIntentSync({
+            env: instance.env,
+            targetPid: child.pid,
+            intent: { reason: "gateway.restart", force: true, waitMs: 100 },
+          }),
+        ).toBe(true);
+      }
+      expect(child.kill(kind === "SIGKILL" ? "SIGKILL" : "SIGTERM")).toBe(true);
+      await race(closed);
+      await start();
+      expect(instance.child?.pid).not.toBe(child.pid);
+    },
+  };
+}
+
 async function applyReadOnly(
   client: GatewayClient,
   instance: Awaited<ReturnType<typeof createInstance>>,
@@ -338,55 +421,26 @@ it.skipIf(process.platform === "win32")(
   "applies an ordinary operator permission change while inference is pending",
   { timeout: 120_000 },
   async ({ signal }) => {
-    const provider = await startProvider(signal, false);
-    const instance = await createInstance(provider, signal);
-    let client: GatewayClient | undefined;
-    const race = <T>(promise: Promise<T>) =>
-      withinTest(Promise.race([promise, provider.failed]), signal);
-    await runQaGatewayFixture(
-      async () => {
-        await instance.startGateway();
-        client = await connectInstance(instance, signal);
-        await client.request("sessions.create", {
-          key: ORDINARY_KEY,
-          agentId: "main",
-          permissionMode: "full",
-        });
-        await client.request(
-          "chat.send",
-          {
-            sessionKey: ORDINARY_KEY,
-            message: ORDINARY_REQUEST,
-            idempotencyKey: "ordinary-control",
-          },
-          { expectFinal: false },
-        );
+    await withGateway(
+      signal,
+      {},
+      async ({ provider, race, create, send, readOnly, wait, request, row, read }) => {
+        await create(ORDINARY_KEY);
+        await send(ORDINARY_KEY, ORDINARY_REQUEST, "ordinary-control");
         await race(provider.ordinaryReady);
-        await applyReadOnly(client, instance, ORDINARY_KEY);
+        await readOnly(ORDINARY_KEY);
         provider.releaseOrdinary();
-        await race(
-          vi.waitFor(
-            async () => {
-              const history = await client!.request("chat.history", { sessionKey: ORDINARY_KEY });
-              expect(JSON.stringify(history)).toContain(ORDINARY_FINAL);
-              const sessions = await client!.request<SessionsListResult>("sessions.list", {
-                agentId: "main",
-              });
-              expect(sessions.sessions.find((row) => row.key === ORDINARY_KEY)).toMatchObject({
-                hasActiveRun: false,
-                permissionMode: "read-only",
-              });
-            },
-            { timeout: 30_000 },
-          ),
-        );
-        await expect(
-          readFile(path.join(instance.state.workspaceDir, "ordinary-effect")),
-        ).rejects.toMatchObject({ code: "ENOENT" });
+        await wait(async () => {
+          expect(
+            JSON.stringify(await request("chat.history", { sessionKey: ORDINARY_KEY })),
+          ).toContain(ORDINARY_FINAL);
+          expect(await row(ORDINARY_KEY)).toMatchObject({
+            hasActiveRun: false,
+            permissionMode: "read-only",
+          });
+        });
+        await expect(read("ordinary-effect")).rejects.toMatchObject({ code: "ENOENT" });
       },
-      async () => client?.stopAndWait(),
-      () => instance.cleanup(),
-      provider.close,
     );
   },
 );
@@ -395,108 +449,45 @@ it.skipIf(process.platform === "win32").for(["managed", "SIGTERM", "SIGKILL"] as
   "automatically continues delegated owner work in place after %s",
   { timeout: 180_000 },
   async (mode, { signal }) => {
-    const provider = await startProvider(signal, mode === "SIGKILL");
-    const instance = await createInstance(provider, signal);
-    let client: GatewayClient | undefined;
-    const connect = () => connectInstance(instance, signal, mode === "SIGKILL");
-    const race = <T>(promise: Promise<T>) =>
-      withinTest(Promise.race([promise, provider.failed]), signal);
-    const rows = async () =>
-      (await client!.request<SessionsListResult>("sessions.list", { agentId: "main" })).sessions;
-    const row = async (name: ResumeCase) =>
-      (await rows()).find((entry) => entry.key === targetKey(name));
-    const waitFinal = (name: ResumeCase) =>
-      race(
-        vi.waitFor(
-          async () => {
+    await withGateway(
+      signal,
+      { holdFirstResume: mode === "SIGKILL", profiled: mode === "SIGKILL" },
+      async (fixture) => {
+        const { provider, race, rows, request, wait, create, send, read, readOnly, restart } =
+          fixture;
+        const row = (name: ResumeCase) => fixture.row(targetKey(name));
+        const waitFinal = (name: ResumeCase) =>
+          wait(async () => {
             expect(
-              JSON.stringify(
-                await client!.request("chat.history", { sessionKey: targetKey(name) }),
-              ),
+              JSON.stringify(await request("chat.history", { sessionKey: targetKey(name) })),
             ).toContain(final(name));
             expect(await row(name)).toMatchObject({ status: "done", hasActiveRun: false });
-          },
-          { timeout: 30_000 },
-        ),
-      );
-    const restart = async (kind: RestartMode) => {
-      const child = instance.child;
-      if (!child?.pid) {
-        throw new Error("Owned Gateway process unavailable");
-      }
-      await client?.stopAndWait();
-      client = undefined;
-      const closed = once(child, "close");
-      if (kind === "managed") {
-        expect(
-          writeGatewayRestartIntentSync({
-            env: instance.env,
-            targetPid: child.pid,
-            intent: { reason: "gateway.restart", force: true, waitMs: 100 },
-          }),
-        ).toBe(true);
-      }
-      expect(child.kill(kind === "SIGKILL" ? "SIGKILL" : "SIGTERM")).toBe(true);
-      await withinTest(closed, signal);
-      await instance.startGateway();
-      expect(instance.child?.pid).not.toBe(child.pid);
-      client = await connect();
-    };
-    await runQaGatewayFixture(
-      async () => {
-        await instance.startGateway();
-        client = await connect();
+          });
         const identities = new Map<ResumeCase, string>();
         for (const name of CASES) {
-          await client.request("sessions.create", {
-            key: targetKey(name),
-            agentId: "main",
-            permissionMode: "full",
-          });
-          await client.request("sessions.create", {
-            key: sourceKey(name),
-            agentId: "main",
-            permissionMode: "full",
-          });
-          const accepted = await client.request<{ runId: string }>(
-            "chat.send",
-            {
-              sessionKey: sourceKey(name),
-              message: sourceRequest(name),
-              idempotencyKey: `delegate-${name}`,
-            },
-            { expectFinal: false },
-          );
+          await create(targetKey(name));
+          await create(sourceKey(name));
+          const accepted = await send(sourceKey(name), sourceRequest(name), `delegate-${name}`);
           await race(provider.suspended(name));
           expect(
-            await client.request("agent.wait", { runId: accepted.runId, timeoutMs: 30_000 }),
+            await request("agent.wait", { runId: accepted.runId, timeoutMs: 30_000 }),
           ).toMatchObject({ status: "ok" });
           const current = await row(name);
           expect(current).toMatchObject({ hasActiveRun: true, sessionId: expect.any(String) });
           identities.set(name, current!.sessionId!);
-          expect(
-            await readFile(path.join(instance.state.workspaceDir, `effect-${name}`), "utf8"),
-          ).toBe("completed\n");
+          expect(await read(`effect-${name}`)).toBe("completed\n");
         }
-        const cancelled = await client.request<{ aborted: boolean; warning?: string }>(
-          "chat.abort",
-          { sessionKey: targetKey("cancel") },
-        );
+        const cancelled = await request<{ aborted: boolean; warning?: string }>("chat.abort", {
+          sessionKey: targetKey("cancel"),
+        });
         expect(cancelled.aborted).toBe(true);
         expect(cancelled.warning).toBeUndefined();
-        await race(
-          vi.waitFor(
-            // The live projection clears before the cancellation write has settled.
-            async () =>
-              expect(await row("cancel")).toMatchObject({
-                status: "killed",
-                hasActiveRun: false,
-              }),
-            { timeout: 30_000 },
-          ),
-        );
+        // The live projection clears before the cancellation write has settled.
+        await wait(async () => {
+          expect(await row("cancel")).toMatchObject({ status: "killed", hasActiveRun: false });
+        });
         // Change the retained task before recovery prepares its next tool surface.
-        await applyReadOnly(client!, instance, targetKey("restricted"));
+        await readOnly(targetKey("restricted"));
         for (const name of ["revoked", "restricted", "continue"] as const) {
           provider.adopted(name);
         }
@@ -504,7 +495,7 @@ it.skipIf(process.platform === "win32").for(["managed", "SIGTERM", "SIGKILL"] as
         expect(await row("cancel")).toMatchObject({ status: "killed", hasActiveRun: false });
         expect((await row("cancel"))?.restartRecoveryStatus).toBeUndefined();
         await expect(
-          client!.request("sessions.recover", {
+          request("sessions.recover", {
             key: targetKey("cancel"),
             mode: "in-place",
             sessionId: identities.get("cancel"),
@@ -513,7 +504,7 @@ it.skipIf(process.platform === "win32").for(["managed", "SIGTERM", "SIGKILL"] as
         ).rejects.toThrow(/restart-tombstoned|not recoverable|changed/);
         // Revoke after the recovered model request starts, before its tool can act.
         await race(provider.revocationReady);
-        await applyReadOnly(client!, instance, targetKey("revoked"));
+        await readOnly(targetKey("revoked"));
         expect(await row("revoked")).toMatchObject({ permissionMode: "read-only" });
         provider.releaseRevoked();
         await Promise.all([waitFinal("revoked"), waitFinal("restricted")]);
@@ -527,27 +518,18 @@ it.skipIf(process.platform === "win32").for(["managed", "SIGTERM", "SIGKILL"] as
           mode === "SIGKILL" ? 3 : 2,
         );
         for (const name of CASES) {
-          expect(
-            await readFile(path.join(instance.state.workspaceDir, `effect-${name}`), "utf8"),
-          ).toBe("completed\n");
+          expect(await read(`effect-${name}`)).toBe("completed\n");
           expect((await row(name))?.sessionId).toBe(identities.get(name));
           expect((await row(name))?.restartRecoveryStatus).toBeUndefined();
         }
         for (const name of ["revoked", "restricted"]) {
-          await expect(
-            readFile(path.join(instance.state.workspaceDir, `${name}-effect`)),
-          ).rejects.toMatchObject({ code: "ENOENT" });
+          await expect(read(`${name}-effect`)).rejects.toMatchObject({ code: "ENOENT" });
         }
-        expect(
-          await readFile(path.join(instance.state.workspaceDir, "operator-effect"), "utf8"),
-        ).toBe("resumed\n");
+        expect(await read("operator-effect")).toBe("resumed\n");
         expect(
           (await rows()).filter((entry) => entry.key.startsWith("agent:main:operator-resume-")),
         ).toHaveLength(8);
       },
-      async () => client?.stopAndWait(),
-      () => instance.cleanup(),
-      provider.close,
     );
   },
 );
@@ -557,70 +539,47 @@ it.skipIf(process.platform === "win32").for(["restart", "stop"] as const)(
   { timeout: 180_000 },
   async (mode, context) => {
     const { signal } = context;
-    const provider = await startProvider(signal, false, true);
-    const instance = await createInstance(provider, signal);
-    let client: GatewayClient | undefined;
-    const race = <T>(promise: Promise<T>) =>
-      withinTest(Promise.race([promise, provider.failed]), signal);
-    let lastHistory: unknown;
-    const history = async () => {
-      const result = await client!.request<{
-        messages: unknown[];
-        pendingInputs?: {
-          items: Array<{ id: string; runId: string; state: string; message: unknown }>;
+    await withGateway(
+      signal,
+      { automaticReply: true, profiled: true },
+      async ({ provider, instance, race, request, wait, create, send, row, read, restart }) => {
+        let lastHistory: unknown;
+        const history = async () => {
+          const result = await request<{
+            messages: unknown[];
+            pendingInputs?: {
+              items: Array<{ id: string; runId: string; state: string; message: unknown }>;
+            };
+          }>("chat.history", { sessionKey: sourceKey("continue"), limit: 100 });
+          lastHistory = result;
+          return result;
         };
-      }>("chat.history", { sessionKey: sourceKey("continue"), limit: 100 });
-      lastHistory = result;
-      return result;
-    };
-    await runQaGatewayFixture(
-      async () => {
-        await instance.startGateway();
-        client = await connectInstance(instance, signal, true);
         for (const key of [sourceKey("continue"), targetKey("continue")]) {
-          await client.request("sessions.create", { key, agentId: "main", permissionMode: "full" });
+          await create(key);
         }
         // The original request is allowed, but neither endpoint permits a new
         // reverse-direction send. Its requested result must still be admitted.
-        await client.request("sessions.patch", {
+        await request("sessions.patch", {
           key: sourceKey("continue"),
           communication: { receive: "never" },
         });
-        await client.request("sessions.patch", {
+        await request("sessions.patch", {
           key: targetKey("continue"),
           communication: { send: "never" },
         });
-        await client.request(
-          "chat.send",
-          {
-            sessionKey: sourceKey("continue"),
-            message: sourceRequest("continue"),
-            idempotencyKey: "automatic-return-source",
-          },
-          { expectFinal: false },
-        );
+        await send(sourceKey("continue"), sourceRequest("continue"), "automatic-return-source");
         await race(provider.suspended("continue"));
         let pendingId: string | undefined;
         let pendingRunId: string | undefined;
-        await race(
-          vi.waitFor(
-            async () => {
-              const input = (await history()).pendingInputs?.items.find((item) =>
-                JSON.stringify(item.message).includes(final("continue")),
-              );
-              expect(input).toMatchObject({ state: "queued" });
-              pendingId = input!.id;
-              pendingRunId = input!.runId;
-            },
-            { timeout: 30_000 },
-          ),
-        );
-        const rowsBefore = await client.request<SessionsListResult>("sessions.list", {
-          agentId: "main",
+        await wait(async () => {
+          const input = (await history()).pendingInputs?.items.find((item) =>
+            JSON.stringify(item.message).includes(final("continue")),
+          );
+          expect(input).toMatchObject({ state: "queued" });
+          pendingId = input!.id;
+          pendingRunId = input!.runId;
         });
-        const sourceSessionId = rowsBefore.sessions.find(
-          (row) => row.key === sourceKey("continue"),
-        )!.sessionId;
+        const sourceSessionId = (await row(sourceKey("continue")))?.sessionId;
         if (!sourceSessionId) {
           throw new Error("Expected the source session before reading retained input");
         }
@@ -653,32 +612,17 @@ it.skipIf(process.platform === "win32").for(["restart", "stop"] as const)(
         });
         provider.adopted("continue");
         if (mode === "stop") {
-          expect(
-            await client.request("chat.abort", { sessionKey: sourceKey("continue") }),
-          ).toMatchObject({ aborted: true });
-          await race(
-            vi.waitFor(
-              async () => {
-                const rows = await client!.request<SessionsListResult>("sessions.list", {
-                  agentId: "main",
-                });
-                expect(
-                  rows.sessions.find((row) => row.key === sourceKey("continue")),
-                ).toMatchObject({ status: "killed", hasActiveRun: false });
-              },
-              { timeout: 30_000 },
-            ),
-          );
+          expect(await request("chat.abort", { sessionKey: sourceKey("continue") })).toMatchObject({
+            aborted: true,
+          });
+          await wait(async () => {
+            expect(await row(sourceKey("continue"))).toMatchObject({
+              status: "killed",
+              hasActiveRun: false,
+            });
+          });
         }
-        await client.stopAndWait();
-        client = undefined;
-        const child = instance.child!;
-        const closed = once(child, "close");
-        expect(child.kill("SIGKILL")).toBe(true);
-        await race(closed);
-        await instance.startGateway();
-        expect(instance.child?.pid).not.toBe(child.pid);
-        client = await connectInstance(instance, signal, true);
+        await restart("SIGKILL");
         if (mode === "stop") {
           const current = await history();
           const saved = await readPendingInputSource(pendingScope, `${pendingRunId}:user`, false);
@@ -690,49 +634,33 @@ it.skipIf(process.platform === "win32").for(["restart", "stop"] as const)(
             current.pendingInputs?.items.find((item) => item.id === pendingId),
           ).toBeUndefined();
           expect(JSON.stringify(current.messages)).not.toContain("AUTOMATIC_REPLY_CONSUMED");
-          const rows = await client.request<SessionsListResult>("sessions.list", {
-            agentId: "main",
-          });
-          expect(rows.sessions.find((row) => row.key === sourceKey("continue"))).toMatchObject({
+          expect(await row(sourceKey("continue"))).toMatchObject({
             status: "killed",
             hasActiveRun: false,
           });
           return;
         }
-        await race(
-          vi.waitFor(
-            async () => {
-              const current = await history();
-              expect(JSON.stringify(current.messages)).toContain("AUTOMATIC_REPLY_CONSUMED");
-              expect(
-                current.pendingInputs?.items.find((item) => item.id === pendingId),
-              ).toBeUndefined();
-              const returned = current.messages.filter((message) => {
-                const record = asRecord(message);
-                return (
-                  asRecord(record.provenance).sourceSessionKey === targetKey("continue") &&
-                  JSON.stringify(record.content).includes(final("continue"))
-                );
-              });
-              expect(returned).toHaveLength(1);
-              const rows = await client!.request<SessionsListResult>("sessions.list", {
-                agentId: "main",
-              });
-              expect(rows.sessions.find((row) => row.key === sourceKey("continue"))).toMatchObject({
-                status: "done",
-                hasActiveRun: false,
-              });
-            },
-            { timeout: 30_000 },
-          ),
-        );
-        expect(
-          await readFile(path.join(instance.state.workspaceDir, "effect-continue"), "utf8"),
-        ).toBe("completed\n");
+        await wait(async () => {
+          const current = await history();
+          expect(JSON.stringify(current.messages)).toContain("AUTOMATIC_REPLY_CONSUMED");
+          expect(
+            current.pendingInputs?.items.find((item) => item.id === pendingId),
+          ).toBeUndefined();
+          const returned = current.messages.filter((message) => {
+            const record = asRecord(message);
+            return (
+              asRecord(record.provenance).sourceSessionKey === targetKey("continue") &&
+              JSON.stringify(record.content).includes(final("continue"))
+            );
+          });
+          expect(returned).toHaveLength(1);
+          expect(await row(sourceKey("continue"))).toMatchObject({
+            status: "done",
+            hasActiveRun: false,
+          });
+        });
+        expect(await read("effect-continue")).toBe("completed\n");
       },
-      async () => client?.stopAndWait(),
-      () => instance.cleanup(),
-      provider.close,
     );
   },
 );

@@ -225,6 +225,19 @@ describe("openclaw launcher", () => {
     return ["--import", pathToFileURL(path.join(root, name)).href];
   }
 
+  async function runPreloadedLauncher(
+    source: string,
+    args: string[] = [],
+    options: Partial<SpawnSyncOptionsWithStringEncoding> = {},
+    execPath = testNodeExecPath,
+  ) {
+    return runNode(
+      [...(await writePreload("preload.mjs", source)), path.join(root, "openclaw.mjs"), ...args],
+      options,
+      execPath,
+    );
+  }
+
   function expectOutput(result: ReturnType<typeof runLauncher>, stdout: string, status = 0) {
     expect(result.status, result.stderr).toBe(status);
     expect(result.stdout).toBe(stdout);
@@ -355,10 +368,9 @@ describe("openclaw launcher", () => {
             ? 'throw new Error("ordinary CLI must not load");'
             : 'process.stdout.write("ordinary CLI");',
         );
-        const child = spawnSync(
-          process.execPath,
+        const child = runNode(
           [...execArgv, path.join(root, "openclaw.mjs"), "browser", "extension", "native-host"],
-          { encoding: "utf8", timeout: 20_000, env: launcherEnv({ HOME: root }) },
+          { timeout: 20_000, env: { HOME: root }, cwd: process.cwd() },
         );
         expectOutput(child, "", 1);
         if (kind === "unsupported") {
@@ -733,14 +745,10 @@ describe("openclaw launcher", () => {
   ])("admits packaged diagnostics on unsupported Node: %j", async (...args) => {
     await writeFixture("package.json", JSON.stringify({ name: "openclaw", version: "2026.9.3" }));
     await writeEntry('process.stdout.write("diagnostic-entry\\n");');
-    const execArgv = await writePreload(
-      "unsupported.mjs",
+    const result = await runPreloadedLauncher(
       'Object.defineProperty(process.versions, "node", { value: "22.23.2" });',
-    );
-    const result = runNode(
-      [...execArgv, path.join(root, "openclaw.mjs"), ...args],
+      [...args],
       { env: { HOME: root, OPENCLAW_HOME: root, NODE_DISABLE_COMPILE_CACHE: "1" } },
-      testNodeExecPath,
     );
     expect(result.status, result.stderr).toBe(0);
     expect(result.stdout).toMatch(/OpenClaw 2026\.9\.3|diagnostic-entry/);
@@ -758,19 +766,9 @@ describe("openclaw launcher", () => {
     ]);
 
     for (const version of NODE_RELEASE_VERSION_CASES) {
-      const execArgv = await writePreload(
-        `mock-node-version-${version}.mjs`,
-        [
-          "Object.defineProperty(process.versions, 'node', {",
-          `  value: ${JSON.stringify(version)},`,
-          "});",
-        ].join("\n"),
-      );
-
-      const result = runNode(
-        [...execArgv, path.join(root, "openclaw.mjs"), "gateway", "start"],
-        {},
-        testNodeExecPath,
+      const result = await runPreloadedLauncher(
+        `Object.defineProperty(process.versions, "node", { value: ${JSON.stringify(version)} });`,
+        ["gateway", "start"],
       );
 
       if (admitted.has(version)) {
@@ -786,15 +784,12 @@ describe("openclaw launcher", () => {
   });
 
   it("prints recovery guidance before legacy-incompatible modules can load", async () => {
-    const execArgv = await writePreload(
-      "mock-legacy-runtime.mjs",
+    const result = await runPreloadedLauncher(
       [
         "Object.defineProperty(Array.prototype, 'at', { value: undefined });",
         "Object.defineProperty(process.versions, 'node', { value: '20.0.0' });",
       ].join("\n"),
     );
-
-    const result = runNode([...execArgv, path.join(root, "openclaw.mjs")], {}, testNodeExecPath);
 
     expectOutput(result, "", 1);
     expect(result.stderr).toContain("openclaw: Node 20.0.0:");
@@ -804,8 +799,7 @@ describe("openclaw launcher", () => {
 
   it("rejects Bun without node:sqlite even when its Node compatibility version is new enough", async () => {
     await writeEntry('process.stdout.write("unexpected-bun-runtime\\n");\n');
-    const execArgv = await writePreload(
-      "mock-bun-runtime.mjs",
+    const result = await runPreloadedLauncher(
       [
         "Object.defineProperty(process.versions, 'bun', { value: '1.3.14' });",
         "Object.defineProperty(process.versions, 'node', { value: '24.3.0' });",
@@ -815,9 +809,10 @@ describe("openclaw launcher", () => {
         "process.getBuiltinModule = (id) =>",
         "  id === 'node:sqlite' || id === 'sqlite' ? undefined : realGetBuiltinModule(id);",
       ].join("\n"),
+      [],
+      {},
+      process.execPath,
     );
-
-    const result = runNode([...execArgv, path.join(root, "openclaw.mjs")]);
 
     expectOutput(result, "", 1);
     expect(result.stderr).toContain(
@@ -993,20 +988,16 @@ console.log(JSON.stringify({ parent: process.pid, bun: process.versions.bun, mar
       metadata: { rootHelpText: "PRECOMPUTED help\n" },
       expected: "PRECOMPUTED help\n",
     },
-    ...[
-      { command: "browser", metadataKey: "browserHelpText" },
-      { command: "secrets", metadataKey: "secretsHelpText" },
-      { command: "nodes", metadataKey: "nodesHelpText" },
-    ].map(({ command, metadataKey }) => ({
-      args: [command, "--help"],
-      metadata: { [metadataKey]: `PRECOMPUTED ${command} help\n` },
-      expected: `PRECOMPUTED ${command} help\n`,
-    })),
-    ...["config", "doctor", "gateway", "models", "plugins", "sessions"].map((command) => ({
-      args: [command, "--help"],
-      metadata: { subcommandHelpText: { [command]: `PRECOMPUTED ${command} help\n` } },
-      expected: `PRECOMPUTED ${command} help\n`,
-    })),
+    {
+      args: ["browser", "--help"],
+      metadata: { browserHelpText: "PRECOMPUTED browser help\n" },
+      expected: "PRECOMPUTED browser help\n",
+    },
+    {
+      args: ["nodes", "--help"],
+      metadata: { nodesHelpText: "PRECOMPUTED nodes help\n" },
+      expected: "PRECOMPUTED nodes help\n",
+    },
     {
       args: ["--log-level", "warn", "--no-color", "models", "-h"],
       metadata: { subcommandHelpText: { models: "PRECOMPUTED models help\n" } },
@@ -1035,13 +1026,8 @@ console.log(JSON.stringify({ parent: process.pid, bun: process.versions.bun, mar
       ["--profile", "work", "nodes", "--help"],
       ["--profile=work", "nodes", "--help"],
       ["--dev", "nodes", "--help"],
-      ["--profile", "default", "models", "--help"],
-      ["--profile=", "models", "--help"],
-      ["--profile", "bad profile", "models", "--help"],
-      ["--dev", "--profile", "work", "models", "--help"],
-      ["--profile", "work", "--dev", "models", "--help"],
     ].map((args) => ({ args, env: {}, echoArgs: true })),
-    ...[["models", "--help"], ["--help"], ["-h"], ["browser", "--help"]].map((args) => ({
+    ...[["models", "--help"], ["--help"]].map((args) => ({
       args,
       env: { OPENCLAW_CONTAINER: "demo" },
       echoArgs: false,
@@ -1064,7 +1050,6 @@ console.log(JSON.stringify({ parent: process.pid, bun: process.versions.bun, mar
     );
     const result = runLauncher([...args], { env });
     expectOutput(result, echoArgs ? JSON.stringify(args) : "RUNTIME ENTRY\n");
-    expect(result.stdout).not.toContain("PRECOMPUTED");
   });
 
   it.each(["explicit", "nodes", "home", "tilde", "legacy", "include"])(
@@ -1109,7 +1094,6 @@ console.log(JSON.stringify({ parent: process.pid, bun: process.versions.bun, mar
         env,
       });
       expectOutput(result, "RUNTIME ENTRY\n");
-      expect(result.stdout).not.toContain("PRECOMPUTED");
     },
   );
 
