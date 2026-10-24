@@ -5,6 +5,7 @@ import type { ControlUiGitHubPreviewIdentity } from "./preview-contract.js";
 import {
   githubJson as json,
   queuedFetch as fetchResponses,
+  githubRedirect as redirect,
   requestUrl,
 } from "./preview.test-support.js";
 import type { GitHubTarget } from "./targets.js";
@@ -182,7 +183,7 @@ afterEach(() => {
 
 describe("GitHub detail selected read identity", () => {
   it.each(["pull", "commit"] as const)(
-    "uses the prepared credential for the entire %s document and refresh",
+    "authenticates the full %s document and refresh",
     async (kind) => {
       const payload = kind === "commit" ? commit({}, 1) : fullPull();
       const { selected, fetchMock, read } = fixture(kind, payload);
@@ -236,7 +237,7 @@ describe("GitHub detail selected read identity", () => {
   });
 
   it.each([401, 403, 429])(
-    "retries optional credentials anonymously after HTTP %s, including cached delivery",
+    "retries optional HTTP %s credentials anonymously, even from cache",
     async (status) => {
       for (const cached of [false, true]) {
         const input = target();
@@ -281,36 +282,33 @@ describe("GitHub detail selected read identity", () => {
     { name: "internal", repository: { id: 123, private: false, visibility: "internal" } },
     { name: "missing-visibility", repository: { id: 123, private: false } },
     { name: "replacement", repository: { id: 456, private: false, visibility: "public" } },
-  ])(
-    "does not deliver freshly read or cached content from a $name repository",
-    async ({ repository }) => {
-      for (const cached of [false, true]) {
-        const input = target();
-        const selected = identity();
-        const upstream = authenticatedFetch();
-        let changed = false;
-        const fetchMock = vi.fn<typeof fetch>(async (url, options) => {
-          const isRepository = /^\/repos\/[^/]+\/[^/]+$/u.test(requestPath(url));
-          if (changed && isRepository) {
-            return json(repository);
-          }
-          const response = await upstream(url, options);
-          if (!cached && !isRepository) {
-            changed = true;
-          }
-          return response;
-        });
-        if (cached) {
-          await loadGitHubDetail(input, selected, fetchMock);
+  ])("withholds fresh and cached $name repository content", async ({ repository }) => {
+    for (const cached of [false, true]) {
+      const input = target();
+      const selected = identity();
+      const upstream = authenticatedFetch();
+      let changed = false;
+      const fetchMock = vi.fn<typeof fetch>(async (url, options) => {
+        const isRepository = /^\/repos\/[^/]+\/[^/]+$/u.test(requestPath(url));
+        if (changed && isRepository) {
+          return json(repository);
+        }
+        const response = await upstream(url, options);
+        if (!cached && !isRepository) {
           changed = true;
         }
-        await expectStatus(loadGitHubDetail(input, selected, fetchMock), 404);
+        return response;
+      });
+      if (cached) {
+        await loadGitHubDetail(input, selected, fetchMock);
+        changed = true;
       }
-    },
-  );
+      await expectStatus(loadGitHubDetail(input, selected, fetchMock), 404);
+    }
+  });
 
   it.each(["item", "review", "files"] as const)(
-    "rejects a redirected %s before sending credentials to a different repository's content",
+    "blocks cross-repository %s redirects before sending credentials",
     async (stage) => {
       const input = target("pull");
       const suffix =
@@ -320,10 +318,7 @@ describe("GitHub detail selected read identity", () => {
           return json({ id: 456, private: false, visibility: "public" });
         }
         if (pathname.endsWith(suffix)) {
-          return new Response(null, {
-            status: 301,
-            headers: { Location: "/repos/octocat/another" + suffix },
-          });
+          return redirect("/repos/octocat/another" + suffix);
         }
         return undefined;
       });
@@ -335,18 +330,13 @@ describe("GitHub detail selected read identity", () => {
   );
 
   it("allows a public repository rename while retaining its immutable identity", async () => {
-    const input = target();
-    const selected = identity();
-    const fetchMock = authenticatedFetch(item(), (pathname) => {
+    const { input, read, fetchMock } = fixture("issue", item(), (pathname) => {
       if (pathname === "/repos/octocat/" + input.repo + "/issues/1") {
-        return new Response(null, {
-          status: 301,
-          headers: { Location: "/repositories/123/issues/1" },
-        });
+        return redirect("/repositories/123/issues/1");
       }
       return pathname === "/repositories/123" ? json(publicRepo) : undefined;
     });
-    await expect(loadGitHubDetail(input, selected, fetchMock)).resolves.toMatchObject({
+    await expect(read()).resolves.toMatchObject({
       title: "Read me",
     });
     expect(
@@ -371,7 +361,7 @@ describe("GitHub detail selected read identity", () => {
     }
   });
 
-  it("retains a completed authenticated refresh after an older request finishes first", async () => {
+  it("keeps an authenticated refresh when the older request finishes first", async () => {
     const responses = [createDeferred<Response>(), createDeferred<Response>()];
     const started = [createDeferred<void>(), createDeferred<void>()];
     let itemRequests = 0;
@@ -402,7 +392,7 @@ describe("GitHub detail selected read identity", () => {
   });
 
   it.each(["optional content", "concurrent repository read"])(
-    "rejects a disconnected caller during %s without poisoning another reader",
+    "isolates caller revocation during %s",
     async (stage) => {
       const input = target();
       const { selected, revoke } = revocableIdentity();
@@ -462,19 +452,15 @@ describe("GitHub detail public read boundary", () => {
     "http://api.github.com/repos/octocat/repo",
     "https://user:password@api.github.com/repos/octocat/repo",
   ])("rejects redirect %s without following it", async (location) => {
-    const redirect = new Response("discard", { status: 301, headers: { Location: location } });
-    const fetchMock = fetchResponses(json(publicRepo), redirect);
+    const response = new Response("discard", { status: 301, headers: { Location: location } });
+    const fetchMock = fetchResponses(json(publicRepo), response);
     await expectStatus(loadGitHubDetail(target(), undefined, fetchMock), 502);
     expect(fetchMock).toHaveBeenCalledTimes(2);
-    expect(redirect.bodyUsed).toBe(true);
+    expect(response.bodyUsed).toBe(true);
   });
 
   it("caps redirect chains", async () => {
-    const fetchMock = vi
-      .fn<typeof fetch>()
-      .mockImplementation(
-        async () => new Response(null, { status: 301, headers: { Location: "/repositories/123" } }),
-      );
+    const fetchMock = vi.fn<typeof fetch>(async () => redirect("/repositories/123"));
     await expectStatus(loadGitHubDetail(target(), undefined, fetchMock), 502);
     expect(fetchMock).toHaveBeenCalledTimes(4);
   });
@@ -488,7 +474,7 @@ describe("GitHub detail public read boundary", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
-  it("expires cached visibility failures rather than making a missing repository permanently unavailable", async () => {
+  it("expires cached visibility failures", async () => {
     const input = target();
     const now = vi.spyOn(Date, "now").mockReturnValue(1_000);
     const fetchMock = fetchResponses(json({}, 404), json(publicRepo), json(item()));
@@ -639,7 +625,7 @@ describe("GitHub detail public read boundary", () => {
     expect(detail.comments[1]?.context).toBeUndefined();
   });
 
-  it("loads commit comments with source permalinks and optional file locations anonymously", async () => {
+  it("loads anonymous commit comments with permalinks and optional locations", async () => {
     const first = commentItem({
       html_url: "https://github.com/octocat/repo/commit/" + sha + "#commitcomment-1",
       path: "src/file.ts",
@@ -705,7 +691,7 @@ describe("GitHub detail public read boundary", () => {
   );
 
   it.each(["https://example.com/steal", "https://user:secret@github.com/owner/repo"])(
-    "marks incomplete commit comments for unsafe permalink %s without losing the commit",
+    "omits unsafe commit permalink %s without losing the commit",
     async (html_url) => {
       const fetchMock = publicFetch(commit({}, 1), json([commentItem({ html_url })]));
       const detail = await loadGitHubDetail(target("commit"), undefined, fetchMock);
@@ -720,7 +706,7 @@ describe("GitHub detail public read boundary", () => {
     },
   );
 
-  it("marks omitted binary patches and commit file pagination rather than claiming complete content", async () => {
+  it("marks omitted binary patches and paginated commit files incomplete", async () => {
     const fetchMock = fetchResponses(
       json(publicRepo),
       json(
@@ -797,12 +783,11 @@ describe("progressive GitHub documents", () => {
     },
   );
 
-  it("delivers the overview before slow checks, loads discussion independently, and reads files only on demand", async () => {
-    const input = target("pull");
+  it("delivers overview first, discussion independently, and files on demand", async () => {
     const checks = createDeferred<Response>();
     const checksStarted = createDeferred<void>();
     let delayChecks = true;
-    const fetchMock = authenticatedFetch(fullPull(), (path) => {
+    const { read, fetchMock } = fixture("pull", fullPull(), (path) => {
       if (delayChecks && path.endsWith("/check-runs")) {
         delayChecks = false;
         checksStarted.resolve();
@@ -810,8 +795,6 @@ describe("progressive GitHub documents", () => {
       }
       return undefined;
     });
-    const selected = identity("progressive");
-    const read = reader(input, selected, fetchMock);
     const overview = await read("overview");
     expect(overview).toMatchObject({
       title: "Read me",
@@ -832,7 +815,7 @@ describe("progressive GitHub documents", () => {
     const pendingChecks = read("checks");
     await checksStarted.promise;
     try {
-      const discussion = await read("discussion", false, identity("progressive"));
+      const discussion = await read("discussion", false, identity());
       expect(discussion).toMatchObject({
         revision: sha,
         commentsTotal: 2,
@@ -874,9 +857,8 @@ describe("progressive GitHub documents", () => {
   });
 
   it("retires cached sections when a refreshed overview selects another head", async () => {
-    const input = target("pull");
     let currentSha = sha;
-    const fetchMock = authenticatedFetch(item(), (path) => {
+    const { read } = fixture("pull", item(), (path) => {
       if (path.endsWith("/pulls/1")) {
         return json(item({ head: { sha: currentSha } }));
       }
@@ -885,8 +867,6 @@ describe("progressive GitHub documents", () => {
       }
       return undefined;
     });
-    const selected = identity("progressive-refresh");
-    const read = reader(input, selected, fetchMock);
     await read("overview");
     expect((await read("checks")).checks?.commit).toBe(sha);
     currentSha = "d".repeat(40);
@@ -917,7 +897,7 @@ describe("progressive GitHub documents", () => {
     ).rejects.toMatchObject({ statusCode: 409 });
   });
 
-  it("rechecks current visibility and caller authority when sections reuse a settled overview", async () => {
+  it("rechecks visibility and caller authority for settled overviews", async () => {
     const { selected, read } = fixture("pull");
     await read("overview");
     selected.assertSelected = () => {
@@ -955,7 +935,7 @@ describe("progressive GitHub documents", () => {
   });
 
   it.each(["issue", "commit"] as const)(
-    "defers only supported %s sections and binds them to the source revision",
+    "defers supported %s sections at the source revision",
     async (kind) => {
       const { read } = fixture(kind, kind === "commit" ? commit() : item());
       const overview = await read("overview");
