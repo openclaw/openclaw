@@ -508,9 +508,7 @@ suite.define(() => {
         await changeSession(
           snapshot(runningChild, 63_001, {
             observerDigest: {
-              sessionKey: child.key,
               agentId: "main",
-              sessionId: child.sessionId,
               runId: "backend-run",
               revision: 2,
               updatedAt: now + 63_001,

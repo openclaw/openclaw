@@ -555,7 +555,9 @@ describe("chat waiting on subagents", () => {
     (bubbleMode) => {
       const now = 66_500;
       vi.spyOn(Date, "now").mockReturnValue(now);
-      onTestFinished(() => vi.restoreAllMocks());
+      onTestFinished(() => {
+        vi.restoreAllMocks();
+      });
       const container = document.createElement("div");
       const onOpenSubagents = vi.fn();
       const wait = { startedAt: 1_500, runningCount: 1 };

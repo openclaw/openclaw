@@ -33,6 +33,7 @@ suite.define(() => {
           );
           const parentKey = "agent:main:subagent-presentation";
           const groupId = grouped ? "swarm:layout-review" : undefined;
+          const firstChildLabel = "Audit mobile header CSS reuse";
           const children = Array.from(
             { length: count },
             (_, index): GatewaySessionRow & { updatedAt: number } => ({
@@ -40,7 +41,7 @@ suite.define(() => {
               sessionId: "layout-" + index,
               kind: "direct",
               classification: "subagent",
-              label: index === 0 ? "Audit mobile header CSS reuse" : "Review layout " + (index + 1),
+              label: index === 0 ? firstChildLabel : "Review layout " + (index + 1),
               parentSessionKey: parentKey,
               spawnedBy: parentKey,
               swarmGroupId: groupId,
@@ -131,7 +132,7 @@ suite.define(() => {
           await block.waitFor();
           await expect
             .poll(() => block.textContent())
-            .toContain(count === 1 ? children[0]!.label : String(count));
+            .toContain(count === 1 ? firstChildLabel : String(count));
           const artifactDir = createControlUiE2eArtifactDir("subagent-surfaces-" + name);
           const frame = await takeControlUiScreenshotFrame(page, pane, [footer, block], {
             animations: "disabled",
@@ -145,7 +146,7 @@ suite.define(() => {
           const panel = pane.locator("openclaw-chat-subagents-panel");
           await panel.waitFor();
           await expect.poll(() => panel.locator("[data-session-key]").count()).toBe(count);
-          await panel.getByText(children[0]!.label, { exact: true }).waitFor();
+          await panel.getByText(firstChildLabel, { exact: true }).waitFor();
         },
       );
     },
