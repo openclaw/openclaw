@@ -113,6 +113,51 @@ import kotlin.time.Duration.Companion.seconds
 @Config(sdk = [34])
 class TalkModeManagerTest {
   @Test
+  fun chatTalkCapturesSelectedConversationAndReopeningUsesNewSelection() =
+    runBlocking {
+      val first = "agent:main:dashboard:first"
+      val second = "agent:main:dashboard:second"
+      val creates = ConcurrentLinkedQueue<String>()
+      var runtime: NodeRuntime? = null
+      try {
+        withStartedTalk(
+          startTalk = { manager ->
+            val app = RuntimeEnvironment.getApplication()
+            val node = NodeRuntime(app, SecurePrefs(app, app.getSharedPreferences("talk-routing", 0)), mode = NodeRuntimeMode.ScreenshotFixture)
+            runtime = node
+            setPrivateField(node, "talkMode\$delegate", lazyOf(manager))
+            node.switchChatSession(first)
+            node.setTalkModeEnabled(true)
+            // Selection/default refresh while startup is suspended must not redirect it.
+            node.switchChatSession(second)
+            manager.setMainSessionKey("agent:main:node-default")
+          },
+          responseForRequest = { request, _ ->
+            if (request.getValue("method").jsonPrimitive.content == "talk.session.create") {
+              val params = request.getValue("params").jsonObject
+              creates.add(params.getValue("sessionKey").jsonPrimitive.content)
+            }
+            null
+          },
+        ) { proof ->
+          assertEquals(listOf(first), creates.toList())
+          val node = requireNotNull(runtime)
+          node.setTalkModeEnabled(true)
+          proof.manager.setMainSessionKey("agent:other:node-default")
+          proof.scheduler.runCurrent()
+          assertEquals(listOf(first), creates.toList())
+          node.setTalkModeEnabled(false)
+          proof.drainCancelledCapture()
+          node.setTalkModeEnabled(true)
+          awaitTalkWork(proof) { creates.size == 2 && proof.manager.isListening.value }
+          assertEquals(listOf(first, second), creates.toList())
+        }
+      } finally {
+        runtime?.let(::closeNodeRuntimeTestFixture)
+      }
+    }
+
+  @Test
   fun phoneRealtimeRetriesWithoutLanguageWhenOlderGatewayRejectsCreateParams() =
     runTest {
       val requestedLanguages = mutableListOf<String?>()
@@ -2979,6 +3024,7 @@ class TalkModeManagerTest {
 
   private suspend fun withStartedTalk(
     sessionKey: String = "main",
+    startTalk: ((TalkModeManager) -> Unit)? = null,
     workDispatcher: CoroutineDispatcher? = null,
     captureRelayStopNotification: () -> ((() -> Boolean) -> Unit) = { {} },
     responseForRequest: (JsonObject, WebSocket) -> String? = { _, _ -> null },
@@ -3090,7 +3136,7 @@ class TalkModeManagerTest {
         )
         withContext(Dispatchers.Default) { withTimeout(5_000) { connected.await() } }
         manager.setMainSessionKey(sessionKey)
-        manager.setEnabled(true)
+        if (startTalk == null) manager.setEnabled(true) else startTalk(manager)
         val deadline = System.nanoTime() + 5_000_000_000L
         while (!manager.isListening.value) {
           scheduler.runCurrent()
