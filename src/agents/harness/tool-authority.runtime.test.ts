@@ -14,6 +14,7 @@ import type { ReplyToolAuthorityOverlay } from "../../sessions/session-controlle
 import {
   beginReplyMessageInjectionTarget,
   createReplyOperation,
+  getSessionControllerOperation,
 } from "../../sessions/session-controller.js";
 import { captureSessionTarget } from "../../sessions/session-controller.lifecycle.js";
 import { captureCurrentReplyMessageInjectionTarget } from "../../sessions/session-controller.message-injection.js";
@@ -136,15 +137,6 @@ function questionAnswer(caller?: ReplyToolAuthorityOverlay) {
     : claimPendingAgentQuestionAnswer(input);
 }
 
-function questionDispatcher() {
-  return vi.fn<AgentQuestionDispatcher["call"]>(async ({ authority }) => {
-    if (authority.kind === "source-bound") {
-      authority.assertCurrent();
-    }
-    return { status: "answered" };
-  });
-}
-
 function voiceControl(
   getToolAuthorityOverlay?: Parameters<
     typeof controlRealtimeVoiceAgentRun
@@ -160,10 +152,8 @@ function inject(
     NonNullable<Parameters<typeof beginReplyMessageInjectionTarget>[2]>,
     "isInboundUserMessage" | "toolAuthorityOverlay"
   > = {},
-  target = currentTarget(),
-  text = "Apply the correction",
 ) {
-  return beginReplyMessageInjectionTarget(target, text, {
+  return beginReplyMessageInjectionTarget(currentTarget(), "Apply the correction", {
     isInboundUserMessage: true,
     toolAuthorityOverlay: overlay,
     ...options,
@@ -224,6 +214,8 @@ describe("host-prepared embedded tool authority", () => {
           : change === "result-required"
             ? "result-required"
             : "required";
+      expect(currentTarget()).toBeDefined();
+      expect(getSessionControllerOperation(sessionKey)).toBeDefined();
 
       const injection = await inject(
         {
@@ -277,7 +269,12 @@ describe("host-prepared embedded tool authority", () => {
             });
             expect(queue).toHaveBeenCalledOnce();
           } else {
-            const dispatch = questionDispatcher();
+            const dispatch = vi.fn<AgentQuestionDispatcher["call"]>(async ({ authority }) => {
+              if (authority.kind === "source-bound") {
+                authority.assertCurrent();
+              }
+              return { status: "answered" };
+            });
             question = pendingQuestion("shared-session-id-question", {
               version: 2,
               call: dispatch,
@@ -301,20 +298,21 @@ describe("host-prepared embedded tool authority", () => {
     async (capability) => {
       await published(async ({ handle, queue }) => {
         const source = new AbortController();
-        const target = currentTarget();
+        const target = captureCurrentReplyMessageInjectionTarget(sessionKey);
+        if (!target) {
+          throw new Error("Expected the direct admitted owner to be injectable");
+        }
         if (capability === "guarded injection") {
           delete handle.messageInjectionV2;
         } else {
           handle.supportsTranscriptCommitWait = false;
         }
-        const injection = await inject(
-          own,
-          {
-            waitForTranscriptCommit: capability === "transcript commitment",
-            assertCurrent: () => source.signal.throwIfAborted(),
-          },
-          target,
-        );
+        const injection = await beginReplyMessageInjectionTarget(target, "Apply the correction", {
+          isInboundUserMessage: true,
+          waitForTranscriptCommit: capability === "transcript commitment",
+          toolAuthorityOverlay: own,
+          assertCurrent: () => source.signal.throwIfAborted(),
+        });
         await expect(injection.outcome).resolves.toMatchObject({
           status: "rejected",
           reason:
@@ -469,7 +467,12 @@ describe("host-prepared embedded tool authority", () => {
     "checks %s question caller policy without a published handle",
     (kind) =>
       inAuthority(async () => {
-        const dispatch = questionDispatcher();
+        const dispatch = vi.fn<AgentQuestionDispatcher["call"]>(async ({ authority }) => {
+          if (authority.kind === "source-bound") {
+            authority.assertCurrent();
+          }
+          return { status: "answered" };
+        });
         const controller = new AbortController();
         const pending =
           kind === "secret"
