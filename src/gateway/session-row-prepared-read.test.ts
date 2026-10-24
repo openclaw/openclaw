@@ -45,6 +45,9 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
+const pendingInspectionMessage =
+  /still preparing \(phase: inspection; background preparation elapsed: \d+s\)\.[\s\S]*Retry the request after preparation finishes/;
+
 const cfg = { agents: { entries: { main: {} } } };
 const query = { agentId: "main", key: "agent:main:dashboard:incognito-prepared" };
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -286,7 +289,7 @@ it.each([
       await vi.advanceTimersByTimeAsync(0);
       expect(handler).not.toHaveBeenCalled();
       expect(respond).not.toHaveBeenCalled();
-      expect(() => assertAgentDatabaseAdmitted("main")).toThrow("synthetic inspection");
+      expect(() => assertAgentDatabaseAdmitted("main")).toThrow(pendingInspectionMessage);
       complete();
       await request;
       expect(handler).toHaveBeenCalledOnce();
@@ -329,7 +332,7 @@ it("holds a logical agent's read for the physical shared-store owner", async () 
     await vi.advanceTimersByTimeAsync(0);
     expect(settled).toBe(false);
     expect(() => assertAgentDatabaseAdmitted("ops")).not.toThrow();
-    expect(() => assertAgentDatabaseAdmitted("main")).toThrow("synthetic inspection");
+    expect(() => assertAgentDatabaseAdmitted("main")).toThrow(pendingInspectionMessage);
     complete();
     await expect(reading).resolves.toMatchObject({ error: null });
   });
@@ -439,7 +442,7 @@ it.each(["current", "revoked"] as const)(
             },
       );
       expect(admission.signal.aborted).toBe(false);
-      expect(() => assertAgentDatabaseAdmitted("main")).toThrow("synthetic inspection");
+      expect(() => assertAgentDatabaseAdmitted("main")).toThrow(pendingInspectionMessage);
       complete();
       await admission.pendingPreparation;
       expect(readAgentDatabaseAdmissionRefusal("main")).toBeUndefined();
@@ -473,7 +476,7 @@ it.each(["request", "connection", "observation"] as const)(
       }
       await cancelled;
       expect(admission.signal.aborted).toBe(false);
-      expect(() => assertAgentDatabaseAdmitted("main")).toThrow("synthetic inspection");
+      expect(() => assertAgentDatabaseAdmitted("main")).toThrow(pendingInspectionMessage);
     });
   },
 );
