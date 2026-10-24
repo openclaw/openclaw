@@ -6,6 +6,28 @@ const extractText = async (html: string) =>
   (await extractBasicHtmlContent({ html, extractMode: "text" }))?.text;
 
 describe("web-fetch-utils", () => {
+  it("removes complete balanced link destinations without leaking URL suffixes", async () => {
+    const markdown =
+      "Read [Cassini](https://example.com/a_(b(c))) and ![diagram](images/a_(b).png).";
+    expect(markdownToText(markdown)).toBe("Read Cassini and .");
+    await expect(
+      extractText('<p>Read <a href="https://example.com/a_(b(c))">Cassini</a>.</p>'),
+    ).resolves.toBe("Read Cassini.");
+    await expect(
+      extractText('<p>Read <a href="https://example.com/search?q=(foo">Cassini</a>.</p>'),
+    ).resolves.toBe("Read Cassini.");
+    await expect(
+      extractText('<p>Read <a href="https://example.com/search?q=foo)">Cassini</a>.</p>'),
+    ).resolves.toBe("Read Cassini.");
+    await expect(
+      extractText('<p>Read <a href="https://example.com/annual report">report</a>.</p>'),
+    ).resolves.toBe("Read report.");
+    await expect(extractText('<p>Open <a href="/docs">C:\\</a>.</p>')).resolves.toBe("Open C:\\.");
+    expect(markdownToText("[broken](https://example.com/a_(b)")).toBe(
+      "[broken](https://example.com/a_(b)",
+    );
+  });
+
   it.each([
     "<p hidden>Before<bloc\u212aquote>Secret</bloc\u212aquote></p><p>Visible</p>",
     "<p hidden>Before<div.foo>Secret</div.foo></p><p>Visible</p>",

@@ -1,3 +1,4 @@
+import { stripInlineLinks } from "@openclaw/normalization-core/markdown-plain-text";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
   RAW_TEXT_TAGS,
@@ -41,6 +42,7 @@ type RenderContext =
   | { kind: "pre"; parts: string[] };
 
 type RenderState = {
+  linksAsText?: boolean;
   title?: string;
   preBlocks: string[];
 };
@@ -120,7 +122,7 @@ function closeContext(context: RenderContext, parent: RenderContext, state: Rend
       return;
     case "anchor":
       parent.parts.push(
-        context.href && label
+        !state.linksAsText && context.href && label
           ? `[${label}](${escapePreMarkerText(context.href)})`
           : label || escapePreMarkerText(context.href || ""),
       );
@@ -178,10 +180,13 @@ function pushContext(
   stack.push(context);
 }
 
-export function htmlToMarkdown(html: string): { text: string; title?: string } {
+export function htmlToMarkdown(
+  html: string,
+  options?: { linksAsText?: boolean },
+): { text: string; title?: string } {
   const root: RenderContext = { kind: "root", parts: [] };
   const stack: RenderContext[] = [root];
-  const state: RenderState = { preBlocks: [] };
+  const state: RenderState = { preBlocks: [], linksAsText: options?.linksAsText };
   const tableRowCellCounts: number[] = [];
 
   for (let i = 0; i < html.length;) {
@@ -372,8 +377,7 @@ export function markdownToText(markdown: string): string {
     text += lineEnd;
     pos = close?.end ?? markdown.length;
   }
-  text = text.replace(/!\[[^\]]*]\([^)]+\)/g, "");
-  text = text.replace(/\[([^\]]+)]\([^)]+\)/g, "$1");
+  text = stripInlineLinks(text, { images: "omit" });
   text = text.replace(/`([^`]+)`/g, "$1");
   text = text.replace(/^#{1,6}\s+/gm, "");
   text = text.replace(/^[^\S\n]*[-*+]\s+/gm, "");
@@ -402,7 +406,9 @@ export async function extractBasicHtmlContent(params: {
   extractMode: ExtractMode;
 }): Promise<{ text: string; title?: string } | null> {
   const cleanHtml = await sanitizeHtml(params.html);
-  const rendered = htmlToMarkdown(cleanHtml);
+  // HTML labels are literal text, not authored Markdown. Do not serialize destinations
+  // only to parse them back out in text mode. Keep Markdown rendering unchanged.
+  const rendered = htmlToMarkdown(cleanHtml, { linksAsText: params.extractMode === "text" });
   const text =
     stripInvisibleUnicode(
       params.extractMode === "text" ? markdownToText(rendered.text) : rendered.text,
