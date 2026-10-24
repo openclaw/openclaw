@@ -658,7 +658,7 @@ describe("Talk device and voice wake settings", () => {
     },
   );
 
-  it("keeps unsupported Mac Voice Wake disabled unless it is already enabled", async () => {
+  it("routes device voice changes to native owners and excludes the primary language from additions", async () => {
     const snapshot = createNativeDeviceSettingsSnapshot();
     snapshot.voice.supported = false;
     snapshot.voice.locale.additional = ["de-DE"];
@@ -684,21 +684,46 @@ describe("Talk device and voice wake settings", () => {
       false,
       expect.any(Function),
     );
+    const microphone = row("Microphone").querySelector("select")!;
+    microphone.value = "builtin";
+    microphone.dispatchEvent(new Event("change"));
+    expect(nativeDeviceSettings.set).toHaveBeenCalledWith(
+      "voice.microphone",
+      "builtin",
+      expect.any(Function),
+    );
     expect(
       [...row("Additional languages").querySelectorAll("option")].map((option) => option.value),
     ).toEqual([""]);
+    const primary = row("Primary language").querySelector("select")!;
+    primary.value = "de-DE";
+    primary.dispatchEvent(new Event("change"));
+    expect(nativeDeviceSettings.set).toHaveBeenCalledWith(
+      "voice.locale.additional",
+      [],
+      expect.any(Function),
+    );
+    expect(nativeDeviceSettings.set).toHaveBeenCalledWith(
+      "voice.locale.primary",
+      "de-DE",
+      expect.any(Function),
+    );
     row("Test microphone…").querySelector("button")?.click();
     expect(nativeDeviceSettings.openPanel).toHaveBeenCalledWith("microphone-test");
     snapshot.voice.wakeEnabled = true;
     publishSnapshot();
     await waitForSolid(() => expectWakeDisabled(false));
+    row("Voice Wake").click();
+    expect(nativeDeviceSettings.set).toHaveBeenCalledWith(
+      "voice.wakeEnabled",
+      false,
+      expect.any(Function),
+    );
     snapshot.voice.wakeEnabled = false;
     publishSnapshot();
-    flush();
     expectWakeDisabled(true);
     snapshot.voice.supported = true;
     publishSnapshot();
-    flush();
     expectWakeDisabled(false);
   });
 });
