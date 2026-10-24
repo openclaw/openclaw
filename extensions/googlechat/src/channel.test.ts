@@ -173,9 +173,13 @@ describe("googlechatPlugin outbound", () => {
         "require remote HTTP(S) URLs",
       );
     }
-    expect(() => normalize({ payload: { mediaUrl: "https://example.invalid/a\nforged" } })).toThrow(
-      "require remote HTTP(S) URLs",
-    );
+    for (const code of [...Array.from({ length: 0x21 }, (_, index) => index), 0x7f]) {
+      expect(() =>
+        normalize({
+          payload: { mediaUrl: `https://example.invalid/a${String.fromCharCode(code)}forged` },
+        }),
+      ).toThrow("require remote HTTP(S) URLs");
+    }
   });
 });
 

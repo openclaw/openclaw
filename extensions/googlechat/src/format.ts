@@ -48,8 +48,11 @@ export function formatGoogleChatMediaText(
   mediaUrls: readonly string[],
 ): string {
   const remoteUrls = mediaUrls.filter((value) => {
-    // oxlint-disable-next-line no-control-regex -- URL parsing strips controls that must never reach the rendered message.
-    if (/[\u0000-\u0020\u007f]/u.test(value) || !/^https?:\/\//iu.test(value)) {
+    // URL parsing strips controls; reject them before they reach the rendered message.
+    if (
+      [...value].some((character) => character <= " " || character === "\u007f") ||
+      !/^https?:\/\//iu.test(value)
+    ) {
       return false;
     }
     try {
