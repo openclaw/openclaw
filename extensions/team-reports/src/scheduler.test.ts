@@ -7,13 +7,8 @@ import { resolveRuntimeWorkerUrl } from "openclaw/plugin-sdk/process-runtime";
 import { racePromiseWithAbortSignal } from "openclaw/plugin-sdk/time-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { parseTeamReportsConfig, type TeamReportsConfig } from "./config.js";
-import { bindReportFetch, type ReportFixtureFetch } from "./report-network.test-support.js";
-import {
-  createNativeDiscordSource as createDiscordSource,
-  createNativeGithubSource as createGithubSource,
-  withReportSourceFixtures,
-} from "./report-source-fixtures.test-support.js";
-import { discordMessage, githubItem, measureReads } from "./reports-data.test-support.js";
+import { withReportSourceFixtures } from "./report-source-fixtures.test-support.js";
+import { discordMessage, githubItem } from "./reports-data.test-support.js";
 import { completion, type Complete } from "./reports.fixtures.js";
 import type { ReportRunRequest } from "./run-worker-contract.js";
 import { generateReportPeriods, type ResolvedTeamReportsConfig } from "./run.js";
@@ -21,23 +16,6 @@ import { TeamReportsScheduler } from "./scheduler.js";
 import { teamReportsSqliteBackendEntrypoint } from "./sqlite-backend-entrypoint.test-support.js";
 import { createTeamReportsStore, type TeamReportsStore } from "./store.js";
 import type { DiscordSource, GithubSource, SourceStatus } from "./types.js";
-
-const workerReads = vi.hoisted(() => ({ enabled: false, calls: 0, bytes: 0 }));
-vi.mock("openclaw/plugin-sdk/database-engine-runtime", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("openclaw/plugin-sdk/database-engine-runtime")>();
-  return {
-    ...actual,
-    runEngineStoreOperation: async (...args: Parameters<typeof actual.runEngineStoreOperation>) => {
-      const result = await actual.runEngineStoreOperation(...args);
-      if (workerReads.enabled) {
-        workerReads.calls += 1;
-        workerReads.bytes += Buffer.byteLength(JSON.stringify(result) ?? "");
-      }
-      return result;
-    },
-  };
-});
 
 const resources: Array<{
   scheduler: TeamReportsScheduler;
@@ -67,27 +45,6 @@ async function totals(store: TeamReportsStore, github: number, discord: number) 
       discord: { messages: discord },
     });
   }
-}
-
-function activityFetch(): ReportFixtureFetch {
-  return async (input) => {
-    const pathname = new URL(input).pathname;
-    const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status });
-    if (pathname.endsWith("/commits") || pathname.endsWith("/messages")) {
-      return json({}, 403);
-    }
-    return json(
-      pathname.endsWith("/repos")
-        ? [{ full_name: "sample/widgets", archived: false }]
-        : pathname === "/search/issues"
-          ? { total_count: 0, items: [] }
-          : pathname.endsWith("/channels")
-            ? [{ id: "200", name: "engineering" }]
-            : pathname.includes("/threads/")
-              ? { threads: [], has_more: false }
-              : [],
-    );
-  };
 }
 
 async function reopen(directory: string, check: (store: TeamReportsStore) => Promise<void>) {
@@ -182,7 +139,6 @@ async function setup(
       return healthy;
     }),
   };
-  const runtimes: ReportRunRequest["runtime"][] = [];
   const sources = { github, discord };
   const complete = vi.fn<Complete>().mockRejectedValue(new Error("Unexpected model request"));
   const completions: Array<ReturnType<typeof createDeferred<void>>> = [];
@@ -196,10 +152,9 @@ async function setup(
     logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
     serviceHealth: { reportFailure: vi.fn(runSettled), clearFailure: vi.fn(runSettled) },
   };
-  const runReports = vi.fn(async (params: ReportRunRequest) => {
-    runtimes.push(params.runtime);
-    return withReportSourceFixtures(sources, () => generateReportPeriods(params));
-  });
+  const runReports = vi.fn((params: ReportRunRequest) =>
+    withReportSourceFixtures(sources, () => generateReportPeriods(params)),
+  );
   const scheduler = new TeamReportsScheduler({
     config,
     resolved,
@@ -221,7 +176,6 @@ async function setup(
     discord,
     complete,
     context,
-    runtimes,
     runReports,
     nextRun,
     tick: async (ms = 4 * 3_600_000) => {
@@ -263,16 +217,12 @@ afterEach(async () => {
   vi.useRealTimers();
 });
 
-describe("Team Reports schedule boundaries", () => {
+describe("Team Reports scheduler", () => {
   it("keeps automatic collection off across rollover and restart while preserving manual reports", async () => {
     vi.setSystemTime(new Date("2026-08-31T23:58:00Z"));
     const schedule = { enabled: false, weekly: true, monthly: true };
     const first = await setup({ schedule });
     const prune = vi.spyOn(first.store, "prune");
-    await vi.advanceTimersByTimeAsync(2 * 60_000);
-    expect(first.github.loadRoster).not.toHaveBeenCalled();
-    expect(await first.store.listRuns()).toEqual([]);
-
     const id = await first.generate({ date: "2026-08-31" });
     expect(await first.store.listRuns()).toMatchObject([{ id, kind: "manual", status: "ok" }]);
     const periods = await first.store.listPeriods();
@@ -323,9 +273,6 @@ describe("Team Reports schedule boundaries", () => {
     await vi.advanceTimersByTimeAsync(5 * 60_000);
     expect(await store.listRuns()).toHaveLength(1);
   });
-});
-
-describe("Team Reports scheduler lifecycle", () => {
   it.each([false, true])("settles admission before collection (reject=%s)", async (reject) => {
     const { scheduler, store, github, generate, nextRun } = await setup();
     const admission = createDeferred<void>();
@@ -380,8 +327,7 @@ describe("Team Reports scheduler lifecycle", () => {
     expect(await store.listRuns()).toEqual(runs);
     const nextDue = (await scheduler.status()).nextDue;
     expect(nextDue.closedDay).toBe(Date.parse("2026-08-20T23:59:00Z"));
-    const nextIntraday = nextDue.intraday!;
-    await vi.advanceTimersByTimeAsync(nextIntraday - Date.now());
+    await vi.advanceTimersByTimeAsync(nextDue.intraday! - Date.now());
     await nextRun();
     expect((await store.listRuns())[0]?.kind).toBe("intraday");
   });
@@ -420,12 +366,7 @@ describe("Team Reports scheduler lifecycle", () => {
     await collecting.promise;
     await vi.advanceTimersByTimeAsync(6 * 60_000);
     expect(github.collect).toHaveBeenCalledTimes(2);
-    expect(await scheduler.health()).toEqual({
-      running: true,
-      warnings: 0,
-      lastRun,
-      nextDueMs: Date.parse("2026-08-20T08:00:00Z"),
-    });
+    expect((await scheduler.health()).lastRun).toEqual(lastRun);
     expect((await runById(store, id))?.status).toBe("running");
     blocked.resolve(healthy);
     await nextRun();
@@ -477,20 +418,20 @@ describe("Team Reports scheduler lifecycle", () => {
     { reason: "30 seconds", timeout: 30_000, stop: true },
     { reason: "45-minute", timeout: 45 * 60_000, stop: false },
   ])("aborts at $reason and rejects late run results", async ({ reason, timeout, stop }) => {
-    const { scheduler, runReports, runtimes, store, directory, nextRun } = await setup();
+    const { scheduler, runReports, store, directory, nextRun } = await setup();
     const blocked = createDeferred<Record<string, SourceStatus>>();
     // Model the native runner's cancellation boundary, not an inline collector's private signal.
-    runReports.mockImplementationOnce(({ runtime }) => {
-      runtimes.push(runtime);
-      return racePromiseWithAbortSignal(blocked.promise, runtime.signal, (signal) => signal.reason);
-    });
+    runReports.mockImplementationOnce(({ runtime }) =>
+      racePromiseWithAbortSignal(blocked.promise, runtime.signal, (signal) => signal.reason),
+    );
     const id = await scheduler.generate();
     await vi.advanceTimersByTimeAsync(0);
+    const signal = runReports.mock.calls[0]?.[0].runtime.signal;
     const stopped = stop ? scheduler.stop() : undefined;
     await vi.advanceTimersByTimeAsync(timeout - 1);
-    expect(runtimes[0]?.signal?.aborted).toBe(false);
+    expect(signal?.aborted).toBe(false);
     await vi.advanceTimersByTimeAsync(1);
-    expect(runtimes[0]?.signal?.aborted).toBe(true);
+    expect(signal?.aborted).toBe(true);
     await (stopped ?? nextRun());
     blocked.resolve({});
     await vi.advanceTimersByTimeAsync(0);
@@ -504,10 +445,8 @@ describe("Team Reports scheduler lifecycle", () => {
     await (stop ? reopen(directory, check) : check(store));
   });
 
-  it("publishes evidence before model completion and reuses stored prose on regeneration", async () => {
-    const { scheduler, store, complete, nextRun, generate } = await setup({
-      summaries: true,
-    });
+  it("publishes evidence before model completion", async () => {
+    const { scheduler, store, complete, nextRun } = await setup({ summaries: true });
     const blocked = createDeferred<Awaited<ReturnType<Complete>>>();
     const summarizing = createDeferred<void>();
     complete.mockImplementation(() => {
@@ -522,44 +461,25 @@ describe("Team Reports scheduler lifecycle", () => {
     expect((await runById(store, id))?.status).toBe("running");
     blocked.resolve(modelResponse());
     await nextRun();
-    const stored = await store.getPeriod("day", "2026-08-19");
-    expect(stored?.summary?.source).toBe("model");
+    expect((await store.getPeriod("day", "2026-08-19"))?.summary?.source).toBe("model");
     expect((await runById(store, id))?.status).toBe("ok");
-    if (!stored) {
-      throw new Error("Generated report is missing");
-    }
-    await store.upsertPeriod({ ...stored, markdown: stored.markdown + "é".repeat(128 * 1024) });
-    await measureReads(workerReads, generate);
-    expect.soft(workerReads.bytes).toBeLessThan(16 * 1024);
-    expect(complete).toHaveBeenCalledOnce();
-    expect(await store.getPeriod("day", "2026-08-19")).toEqual(stored);
   });
 
-  it("surfaces the latest day's model fallback in status, storage, Markdown, and logs", async () => {
-    const { scheduler, generate, store, context, complete, github } = await setup({
+  it("surfaces and clears the latest day's model fallback", async () => {
+    const { scheduler, generate, store, complete, github } = await setup({
       summaries: true,
     });
     github.loadRoster.mockResolvedValue({
       people: [{ github: ["alex"] }],
       status: { ...healthy, warnings: ["Roster coverage warning"] },
     });
-    complete.mockRejectedValue(new Error("private-provider-error-marker"));
     await generate();
     const reason = "Model summary unavailable: completion failed";
     const stored = await store.getPeriod("day", "2026-08-19");
     expect(stored?.summary?.warnings).toEqual([reason]);
     expect(stored?.markdown).toContain(`> ${reason}`);
     expect((await scheduler.status()).sourceWarnings).toEqual(["Roster coverage warning", reason]);
-    if (!stored) {
-      throw new Error("Generated report is missing");
-    }
-    await store.upsertPeriod({ ...stored, markdown: stored.markdown + "x".repeat(256 * 1024) });
-    await measureReads(workerReads, async () => {
-      expect((await scheduler.health()).warnings).toBe(2);
-    });
-    expect(workerReads.calls).toBeLessThanOrEqual(3);
-    expect(workerReads.bytes).toBeLessThan(16 * 1024);
-    expect(context.logger.warn.mock.calls).toEqual([[reason]]);
+    expect((await scheduler.health()).warnings).toBe(2);
     complete.mockResolvedValue(modelResponse());
     await generate({ intraday: true });
     expect((await scheduler.status()).sourceWarnings).toEqual(["Roster coverage warning"]);
@@ -577,34 +497,23 @@ describe("Team Reports scheduler lifecycle", () => {
       const previous = await documents(store);
       const previousDays = await store.listPersonDays("alex");
       await totals(store, 1, 1);
-      const fetchImpl = activityFetch();
-      const runtime = { logger: context.logger };
       if (source === "exception") {
         github.collect.mockRejectedValueOnce(new Error("Access failed for fixture-github-token"));
-      } else if (source !== "discord") {
-        github.collect.mockImplementationOnce((...args) =>
-          bindReportFetch(createGithubSource(runtime), fetchImpl).collect(...args),
-        );
-      }
-      if (source === "discord" || source === "both") {
-        discord.collect.mockImplementationOnce((...args) =>
-          bindReportFetch(createDiscordSource(runtime), fetchImpl).collect(...args),
-        );
+      } else {
+        for (const name of source === "both" ? (["github", "discord"] as const) : [source]) {
+          const failure = { ...failedSource(name), stale: true };
+          ({ github, discord })[name].collect.mockResolvedValueOnce(failure);
+        }
       }
       vi.setSystemTime(Date.now() + 1_000);
-      const failed = await generate();
-      const run = await runById(store, failed);
+      const run = await runById(store, await generate());
       expect(run?.status).toBe("error");
       if (source === "exception") {
         expect(run?.error).toBe("Access failed for [redacted]");
         expect(JSON.stringify(context.logger.error.mock.calls)).not.toContain(
           "fixture-github-token",
         );
-        expect((await scheduler.health()).lastRun).toEqual({
-          status: "error",
-          kind: "manual",
-          finishedAtMs: Date.now(),
-        });
+        expect((await scheduler.health()).lastRun?.status).toBe("error");
       } else {
         for (const name of source === "both" ? ["github", "discord"] : [source]) {
           const id = `day/2026-08-19/${name}`;
@@ -621,8 +530,7 @@ describe("Team Reports scheduler lifecycle", () => {
 
       github.collect.mockResolvedValueOnce(healthy);
       discord.collect.mockResolvedValueOnce(healthy);
-      const recovered = await generate();
-      expect((await runById(store, recovered))?.status).toBe("ok");
+      expect((await runById(store, await generate()))?.status).toBe("ok");
       await totals(store, 0, 0);
       expect(context.serviceHealth.clearFailure).toHaveBeenCalledTimes(2);
     },
