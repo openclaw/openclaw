@@ -3790,7 +3790,6 @@
       "ui/src/e2e/sidebar-name-marquee.e2e.test.ts": 32,
       "ui/src/e2e/sidebar-outbox.e2e.test.ts": 20,
       "ui/src/e2e/sidebar-per-tab-visibility.capture.e2e.test.ts": 14,
-      "ui/src/e2e/sidebar-plugin-order.e2e.test.ts": 5,
       "ui/src/e2e/sidebar-refresh-availability.e2e.test.ts": 23,
       "ui/src/e2e/sidebar-restart-recovery.e2e.test.ts": 2,
       "ui/src/e2e/sidebar-roster-completeness.capture.e2e.test.ts": 1,

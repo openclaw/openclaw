@@ -13,16 +13,12 @@ suite.define(() => {
       { viewport: { width: 1440, height: 1000 }, colorScheme: "light" },
       async ({ page }) => {
         await installNativeWebChrome(page);
-        const snapshot = createNativeDeviceSettingsSnapshot();
         const setupResult = createChromeExtensionSetupResult({
-          phase: "waiting_for_connection",
           installation: {
             ...createChromeExtensionSetupResult().installation,
             nativeHostRegistered: true,
             installedProfiles: 1,
-            discoveredProfiles: 1,
           },
-          nextAction: "check_connection",
         });
         await page.addInitScript(
           ({ settings, result }) => {
@@ -57,7 +53,7 @@ suite.define(() => {
               webkit: { messageHandlers: { openclawDeviceSettings: { postMessage } } },
             });
           },
-          { settings: snapshot, result: setupResult },
+          { settings: createNativeDeviceSettingsSnapshot(), result: setupResult },
         );
         await installMockGateway(page, { operatorScopes: ["operator.read"] });
         await page.goto(`${suite.server.baseUrl}settings/device`);
