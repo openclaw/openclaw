@@ -27,10 +27,30 @@ const BLOCK_BREAK_TAGS = new Set([
   "tr",
   "ul",
   "ol",
+  "address",
+  "aside",
+  "blockquote",
+  "caption",
+  "center",
+  "details",
+  "dialog",
+  "dir",
+  "fieldset",
+  "figcaption",
+  "figure",
+  "form",
+  "hgroup",
+  "legend",
+  "main",
+  "menu",
+  "nav",
+  "search",
+  "summary",
 ]);
 // Keep malformed nested markup from making end-of-document context unwind quadratic.
 // web_fetch favors bounded, auditable text over preserving deep broken HTML structure.
 const MAX_RENDER_CONTEXT_DEPTH = 32;
+const MAX_BLOCK_BREAK_LOOKBACK = 64;
 
 type RenderContext =
   | { kind: "root"; parts: string[] }
@@ -67,6 +87,24 @@ function appendText(stack: RenderContext[], value: string): void {
   context?.parts.push(context.kind === "pre" ? value : escapePreMarkerText(value));
   if (context?.kind === "anchor" && /\S/.test(value)) {
     context.hasText = true;
+  }
+}
+
+// A block that starts mid-line must not run into the text before it. The look-back over trailing
+// spaces is bounded so long whitespace runs cannot make every block start rescan them.
+function breakLineBeforeBlock(stack: RenderContext[]): void {
+  const parts = stack[stack.length - 1]?.parts ?? [];
+  let budget = MAX_BLOCK_BREAK_LOOKBACK;
+  for (let i = parts.length - 1; i >= 0 && budget > 0; i -= 1, budget -= 1) {
+    const part = parts[i]!;
+    for (let j = part.length - 1; j >= 0 && budget > 0; j -= 1, budget -= 1) {
+      if (part[j] !== " " && part[j] !== "\t") {
+        if (part[j] !== "\n") {
+          appendText(stack, "\n");
+        }
+        return;
+      }
+    }
   }
 }
 
@@ -269,8 +307,12 @@ export function htmlToMarkdown(html: string): { text: string; title?: string } {
         tableRowCellCounts[rowIndex] = cellCount + 1;
       }
     }
-    if (BLOCK_BREAK_TAGS.has(token.name) && closeThroughContext(stack, "anchor", state, true)) {
-      appendText(stack, " ");
+    if (BLOCK_BREAK_TAGS.has(token.name)) {
+      if (closeThroughContext(stack, "anchor", state, true)) {
+        appendText(stack, " ");
+      } else {
+        breakLineBeforeBlock(stack);
+      }
     }
     if (token.name === "pre") {
       appendText(stack, "\n");
