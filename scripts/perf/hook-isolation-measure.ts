@@ -97,9 +97,9 @@ const cells = [200, 1_000].flatMap((size) => {
     const registry = createEmptyPluginRegistry();
     let handlerCalls = 0;
     let verifyHistory = false;
-    for (let index = 0; index < handlers; index++) {
+    for (let handlerIndex = 0; handlerIndex < handlers; handlerIndex++) {
       registry.typedHooks.push({
-        pluginId: `synthetic-${index}`,
+        pluginId: `synthetic-${handlerIndex}`,
         hookName: "before_prompt_build",
         source: "synthetic",
         handler: (event) => {
