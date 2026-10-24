@@ -3245,6 +3245,27 @@ it does not measure a whole chat turn. Pair it with
 `transcript-broadcast-measure.ts --scenario chat.send --allocations` when assessing
 the effect on Gateway turn allocations.
 
+## Published schemas across sessions
+
+Measure factory-owned schema reuse through real tool finalization and settlement:
+
+```sh
+node --expose-gc --import ./scripts/tsx.mjs scripts/perf/finalized-tool-schemas-measure.ts \
+  --factory message --sessions 63 --samples 5 \
+  --output /path/to/report.json --golden-output /path/to/provider-json.json
+```
+
+Use `message` for the default full message schema or `message-configured` for the
+send-only schema with an empty configuration. Each sample warms one session and
+creates up to 63 more, fitting the finalizer's 64-session snapshot bound. The
+probe counts distinct source objects, exact schema contents, retained published
+schemas, and publication/prewarming calls. It measures untraced CPU/time,
+allocation including collected objects, and survivors in separate passes.
+Compare at least five samples per revision on the approved benchmark host and
+compare provider JSON files byte for byte. Forced-GC retained bytes are contextual
+memory evidence, not natural GC cost or promotion measurements. The probe does
+not execute tools, send messages, or measure a whole Gateway turn.
+
 ## Allocated bytes per RPC or turn
 
 For a bounded chat-owner replay, run:
