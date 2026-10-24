@@ -1,13 +1,15 @@
 // Featherless live tests prove text generation and a complete tool-call round trip.
-import {
-  completeSimple,
-  type AssistantMessage,
-  type Model,
-  type Tool,
-} from "openclaw/plugin-sdk/llm";
+import { completeSimple, type Model } from "openclaw/plugin-sdk/llm";
 import { extractNonEmptyAssistantText, isLiveTestEnabled } from "openclaw/plugin-sdk/test-live";
-import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
+import {
+  createLiveValueTool,
+  requireLiveToolCall,
+} from "../test-support/live-value-tool.test-support.js";
+import {
+  makeTextToolResult,
+  makeUserMessage,
+} from "../test-support/message-fixtures.test-support.js";
 import { buildFeatherlessProvider, FEATHERLESS_DEFAULT_MODEL_ID } from "./models.js";
 
 const FEATHERLESS_API_KEY = process.env.FEATHERLESS_API_KEY?.trim() ?? "";
@@ -28,36 +30,14 @@ function resolveLiveModel(): Model<"openai-completions"> {
   } as Model<"openai-completions">;
 }
 
-function liveEchoTool(): Tool {
-  return {
-    name: "live_echo",
-    description: "Return the supplied value.",
-    parameters: Type.Object(
-      {
-        value: Type.String(),
-      },
-      { additionalProperties: false },
-    ),
-  };
-}
-
-function requireToolCall(message: AssistantMessage) {
-  const toolCall = message.content.find((block) => block.type === "toolCall");
-  if (toolCall?.type !== "toolCall") {
-    throw new Error(`Featherless live model did not call a tool: ${message.stopReason}`);
-  }
-  return toolCall;
-}
-
 describeLive("featherless plugin live", () => {
   it("completes a tool-call round trip with the default model", async () => {
     const model = resolveLiveModel();
-    const tool = liveEchoTool();
-    const userPrompt = {
-      role: "user" as const,
-      content: "Call live_echo with value featherless. Do not answer directly.",
-      timestamp: Date.now() - 3,
-    };
+    const tool = createLiveValueTool("live_echo");
+    const userPrompt = makeUserMessage(
+      "Call live_echo with value featherless. Do not answer directly.",
+      Date.now() - 3,
+    );
     const first = await completeSimple(
       model,
       {
@@ -73,7 +53,7 @@ describeLive("featherless plugin live", () => {
     if (first.stopReason === "error") {
       throw new Error(first.errorMessage || "Featherless first turn returned an error");
     }
-    const toolCall = requireToolCall(first);
+    const toolCall = requireLiveToolCall(first, "Featherless live model did not call a tool: ");
     expect(toolCall.name).toBe("live_echo");
     expect(toolCall.arguments).toEqual({ value: "featherless" });
 
@@ -83,19 +63,8 @@ describeLive("featherless plugin live", () => {
         messages: [
           userPrompt,
           first,
-          {
-            role: "toolResult",
-            toolCallId: toolCall.id,
-            toolName: toolCall.name,
-            content: [{ type: "text", text: "ok" }],
-            isError: false,
-            timestamp: Date.now() - 1,
-          },
-          {
-            role: "user",
-            content: "Reply with exactly: ok",
-            timestamp: Date.now(),
-          },
+          makeTextToolResult(toolCall.id, toolCall.name, "ok", false, Date.now() - 1),
+          makeUserMessage("Reply with exactly: ok", Date.now()),
         ],
         tools: [tool],
       },

@@ -47,6 +47,7 @@ import {
 } from "./session-entry-read.worker.js";
 import type { SessionEntrySnapshotField } from "./session-entry-snapshot-values.js";
 import { addSessionMember } from "./session-sharing-store.native.js";
+import { promptReport } from "./system-prompt-report.test-support.js";
 
 type Database = ReturnType<typeof openOpenClawAgentDatabase>;
 type Target = { agentId: string; path: string };
@@ -101,14 +102,7 @@ it("hydrates only requested snapshots while retaining exact-read lifecycle and a
       status: "done" as const,
       skillsSnapshot: { prompt: "saved prompt".repeat(8192), skills: [] },
       sessionDiffBaseline: { version: 1 as const, sessionId, root: "/synthetic", files: [] },
-      systemPromptReport: {
-        source: "run" as const,
-        generatedAt: 1,
-        systemPrompt: { chars: 1, projectContextChars: 0, nonProjectContextChars: 1 },
-        injectedWorkspaceFiles: [],
-        skills: { promptChars: 0, entries: [] },
-        tools: { listChars: 0, schemaChars: 0, entries: [] },
-      },
+      systemPromptReport: promptReport(1, 1, 0),
     };
     replaceSessionEntrySync({ agentId: "main", env, sessionKey }, entry);
     const target = { agentId: database.agentId, path: database.path };

@@ -46,13 +46,41 @@ surface and session root. Channels may use this capability to enable helper
 tools for restricted senders. Core remains responsible for authorization and
 containment. The same ID is advertised in Gateway `hello-ok.features.capabilities`.
 
+## Module loading and host identity
+
+Declare plugin entries in `package.json` under `openclaw.extensions`, import
+documented `openclaw/plugin-sdk/*` subpaths, and declare `openclaw` as a peer
+dependency. The running host owns SDK classes, registries, and lifecycle state;
+do not bundle a second SDK copy. Installation and Doctor repair the peer link.
+Loading retains the existing peer-identity, captured-source, and instance
+disposal checks and never installs dependencies.
+
+[Standalone builds](/install/standalone) validate an explicit map of package SDK
+runtime exports and bundled runtime/setup entries. Those modules execute from the
+image and cannot be replaced through cache deletion or export mutation.
+Replacing bundled code requires restarting its owner. JIT and bytecode standalone
+builds, including a matched JIT companion, lazily load a host-owned Jiti package
+when a plugin needs transformation. The host supplies its native SDK namespace
+directly. This preserves SDK identity
+without evaluating another SDK copy. Native JavaScript loading retains its
+existing behavior.
+
+Use `api.logger` for plugin logs, owned fetch wrappers and the declared provider
+`createStreamFn`/`wrapStreamFn` hooks for transport behavior, and `onDiagnosticEvent` from
+`openclaw/plugin-sdk/diagnostic-runtime` for observability. Local wrappers,
+owned subclasses, and metadata on individual response objects avoid competing
+process-wide `console`, `fetch`, process-method, or prototype patches. Loader
+interception cannot observe every import in a compiled host. Qualify a plugin's
+transitive dependencies and activation/shutdown behavior against the actual host
+runtime; the compiled entry map is not a compatibility certificate.
+
 ## What each page covers
 
 - [Config and utilities](/plugins/sdk-runtime/config-and-utilities) — runtime config reads and writes, plus the shared process, error, and model-picker utilities.
 - [Agent and sessions](/plugins/sdk-runtime/agent) — agent identity, directories, session store, transcripts, and sandbox authority.
 - [Model helpers](/plugins/sdk-runtime/models) — host-owned completions, model-selection policy, and provider auth resolution.
 - [Background work](/plugins/sdk-runtime/background-work) — hook agent turns, subagent runs, and native harness completion delivery.
-- [Gateway and nodes](/plugins/sdk-runtime/gateway-and-nodes) — in-process Gateway requests, bounded session facts through `gateway.readSessionFacts`, paired node invocation, and Gateway service events.
+- [Gateway and nodes](/plugins/sdk-runtime/gateway-and-nodes) — in-process Gateway requests, bounded session facts through `gateway.readSessionFacts`, plugin-written agent messages through `gateway.appendAgentMessage`, paired node invocation, and Gateway service events.
 - [Media helpers](/plugins/sdk-runtime/media) — speech, media understanding, image/video/music generation, web search, and media utilities.
 - [State and system](/plugins/sdk-runtime/state-and-system) — config snapshot, SQLite-backed plugin state, system utilities, events, and logging.
 - [Channel helpers](/plugins/sdk-runtime/channel) — channel-specific runtime helper groups for chunking, routing, pairing, media, and mentions.
@@ -135,7 +163,15 @@ On Anthropic, changing tool choice invalidates the messages cache, but preserves
 the tool and system caches. Other APIs without a supported hosted-tool prohibition
 are rejected when the recorded request contains tools.
 The built-in runtime keeps snapshots for up to 90 minutes, with a shared 64 MiB
-request-data budget and at most 1,000 sessions, until expiry or session cleanup.
+retained-data budget and at most 1,000 sessions, until expiry or session cleanup.
+The budget includes request bytes, detached replay options, later publications
+(including Blob and typed-array backing storage), and conservative container and
+timer overhead. Shared transport runtimes are owned by their lifecycle, outside
+this request-data budget. Data that cannot be safely copied and accounted for
+does not replace an existing snapshot; an unretainable publication retires it.
+Opaque Blob publications retain a copy of their visible bytes, so a slice cannot
+pin a larger backing allocation. Forks wait for those copies before replay;
+shared-memory buffers cannot be retained for isolated replay.
 Keeping a snapshot does not retain the completed parent session or its transcript manager.
 The built-in runtime retains the prepared provider prefix instead of a second copy
 of conversation history. Forks convert only later publications and the side question;
@@ -268,6 +304,12 @@ property contracts, including execution methods supplied by `get` traps.
 plugin mutations cannot alter caller arguments or an approved request. These
 snapshots reject shared memory in the cloned graph; properties omitted by
 structured cloning do not cross this boundary.
+
+`before_prompt_build` and `agent_turn_prepare` receive fresh message arrays and
+envelopes with shared, frozen transcript payload leaves. Treat nested history as
+read-only and return contribution fields instead of mutating message content.
+Non-owned values still receive detached snapshots with shared-memory checks.
+See the [prompt-hook migration](/plugins/sdk-migration#prompt-hook-history-is-read-only).
 
 Host-created request scopes borrow their plugin registry. A direct registry-scope
 callback keeps its registry until its returned operation settles; detached async

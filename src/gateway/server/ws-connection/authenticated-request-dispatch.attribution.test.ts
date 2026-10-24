@@ -9,10 +9,10 @@ import { serializeGatewayFrame } from "../../serialized-json.js";
 import type { GatewayRequestHandler } from "../../server-methods/types.js";
 import { captureSessionRowGeneration } from "../../session-row-identity.js";
 import { shareSidebarSessionRows } from "../../session-row-presentation.js";
+import { dispatchProfile } from "../client-fixtures.test-support.js";
 import {
   createDispatchTestHarness,
   createOperatorWsClient,
-  dispatchProfile,
   requestFrame,
 } from "./authenticated-request-dispatch.test-support.js";
 

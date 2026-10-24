@@ -20,11 +20,8 @@ import { withEnvAsync } from "../../test-utils/env.js";
 import { resetGeneratedMediaTaskActivityForTests } from "../media-generation-activity.test-support.js";
 import { resetRecentMediaGenerationDuplicateGuardsForTests } from "../media-generation-task-status-shared.test-support.js";
 import * as taskRuntime from "../media-generation-task-status.js";
-import { prepareConfiguredRuntimeFacts } from "../prepared-model-runtime.configured-catalog.js";
 import { prepareWorkspaceBuildGroup } from "../prepared-model-runtime.facts.js";
-import { createPreparedModelRuntimeSnapshot } from "../prepared-model-runtime.full-catalog.js";
 import { discardPreparedPluginGeneration } from "../prepared-model-runtime.plugin-lifetime.js";
-import { ModelRegistry } from "../sessions/model-registry.js";
 import { runWithAgentWorkspaceReadiness } from "../workspace-readiness.js";
 import { createImageGenerateTool } from "./image-generate-tool.js";
 import {
@@ -32,7 +29,10 @@ import {
   musicGenerationTaskLifecycle,
   videoGenerationTaskLifecycle,
 } from "./media-generate-background.js";
-import { admitTask } from "./media-resource-fixtures.test-support.js";
+import {
+  admitTask,
+  snapshot as createPreparedSnapshot,
+} from "./media-resource-fixtures.test-support.js";
 import { createMusicGenerateTool } from "./music-generate-tool.js";
 import { createVideoGenerateTool } from "./video-generate-tool.js";
 
@@ -268,34 +268,12 @@ async function prepareSnapshot(
     { includeCredentialProviders: false },
     () => registry,
   );
-  const facts = prepared.agentFacts[0]!;
-  const catalog = prepareConfiguredRuntimeFacts({
-    agentFacts: facts,
-    workspaceFacts: prepared.pluginGeneration,
-    templateModelRegistry: ModelRegistry.inMemory(facts.templateAuthStorage),
-    configuredRuntimeModels: facts.configuredRuntimeModels,
-  });
-  const snapshot = createPreparedModelRuntimeSnapshot(
-    undefined,
-    facts,
-    prepared.pluginGeneration,
-    catalog,
-    {
-      initialAuth: { authStore: facts.authStore, authModes: {}, providerAuthLabels: new Map() },
-      isCurrent: () => true,
-      withRefreshStatus: (value) => value,
-      readFullModelCatalog: () => catalog.modelCatalog,
-      refreshExpiredModelCatalog: () => {},
-      recheckNativeLogin: () => {},
-      readPublishedModels: () => undefined,
-      loadFullModelCatalog: async () => catalog.modelCatalog,
-      loadNativeModelCatalog: async () => catalog.modelCatalog,
-      loadAuth: async () => {
-        throw new Error("The synthetic media provider does not request model credentials");
-      },
-    },
-  );
-  return { snapshot, release: () => discardPreparedPluginGeneration(prepared.pluginGeneration) };
+  return {
+    snapshot: createPreparedSnapshot(prepared, async () => {
+      throw new Error("The synthetic media provider does not request model credentials");
+    }),
+    release: () => discardPreparedPluginGeneration(prepared.pluginGeneration),
+  };
 }
 
 afterEach(() => {

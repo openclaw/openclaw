@@ -133,9 +133,10 @@ describe("production lint suppressions", () => {
   it("keeps the intentional production suppression tail on an explicit allowlist", () => {
     expect(summarizeSuppressions(productionLintSuppressions)).toEqual(
       [
+        // These callbacks run only in the page and preserve page-thrown message coercion.
+        "extensions/browser/src/browser/page-function-runtime.ts|@typescript-eslint/no-base-to-string|1",
+        "extensions/browser/src/browser/page-function-runtime.ts|no-eval|2",
         "extensions/browser/src/browser/pw-tools-core.activity.ts|unicorn/prefer-dom-node-text-content|1",
-        "extensions/browser/src/browser/pw-tools-core.interactions.actions.ts|@typescript-eslint/no-implied-eval|2",
-        "extensions/browser/src/browser/pw-tools-core.interactions.content.ts|@typescript-eslint/no-implied-eval|1",
         "extensions/codex/session-history-worker-runtime.ts|no-warning-comments|1",
         "extensions/codex/src/app-server/run-attempt-turn-request.ts|preserve-caught-error|1",
         "extensions/diffs/src/viewer-client.ts|eslint/no-underscore-dangle|1",
@@ -168,6 +169,8 @@ describe("production lint suppressions", () => {
         "scripts/perf/session-pr-subscriptions-measure.ts|typescript/unbound-method|1",
         // The registry-copy probe forwards Map.set with the original map receiver.
         "scripts/perf/subagent-maintenance-capture-measure.ts|typescript/unbound-method|1",
+        // The retention probe measures fresh strings from the transcript JSON decode boundary.
+        "scripts/perf/system-prompt-pool-retention.ts|unicorn/prefer-structured-clone|1",
         "src/agents/agent-bundle-mcp-runtime.ts|unicorn/prefer-add-event-listener|1",
         "src/agents/agent-tools.abort.ts|typescript/prefer-promise-reject-errors|1",
         "src/agents/auth-profiles/oauth-refresh-fence.ts|preserve-caught-error|1",
@@ -199,6 +202,8 @@ describe("production lint suppressions", () => {
         "src/gateway/control-ui-session-task-prs.ts|unicorn/no-array-sort|1",
         // Pinned Bun HTTP sockets omit Writable._writev; this probe selects native or one-copy batching.
         "src/gateway/server/ws-transport.ts|no-underscore-dangle|1",
+        // Node worker ports do not accept a browser target origin.
+        "src/gateway/system-ca-warmup.worker.ts|unicorn/require-post-message-target-origin|1",
         "src/hooks/module-loader.ts|typescript/no-unnecessary-type-parameters|1",
         "src/infra/device-pairing-row-mapping.ts|typescript/no-unnecessary-type-parameters|1",
         "src/infra/json-file.ts|typescript-eslint/no-unnecessary-type-parameters|1",

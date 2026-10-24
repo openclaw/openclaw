@@ -1,14 +1,8 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { Compile, type Validator } from "typebox/schema";
-import {
-  SessionParticipantIdentitySchema,
-  type SessionParticipantIdentity,
-} from "../../../packages/gateway-protocol/src/schema/session-participant.js";
+import { isSessionParticipantIdentity } from "../../../packages/gateway-protocol/src/compiled/sender-identity.js";
+import type { SessionParticipantIdentity } from "../../../packages/gateway-protocol/src/schema/session-participant.js";
 
 export type { SessionParticipantIdentity };
-
-// Compile only decoded own-property records; raw sender objects have different inherited-key semantics.
-let identityValidator: Validator<typeof SessionParticipantIdentitySchema> | undefined;
 
 export function participantIdentityNamespace(identity: SessionParticipantIdentity): string {
   if (identity.type === "profile" || identity.type === "agent") {
@@ -41,7 +35,7 @@ export function readParticipantIdentity(namespace: string, id: string): SessionP
   const parsed: unknown = JSON.parse(namespace);
   if (isRecord(parsed)) {
     const identity = { ...parsed, id };
-    if ((identityValidator ??= Compile(SessionParticipantIdentitySchema)).Check(identity)) {
+    if (isSessionParticipantIdentity(identity)) {
       return identity;
     }
   }

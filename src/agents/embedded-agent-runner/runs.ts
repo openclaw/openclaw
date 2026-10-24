@@ -31,7 +31,6 @@ import {
   assertSessionControllerOperation,
   getAttachedBackend,
   getSessionControllerEntryForOperation,
-  getSessionControllerOperation,
   markReplyOperationExecutionStarted,
   readSessionControllerOperationState,
   resolveReplyRunForCurrentSessionId,
@@ -470,20 +469,6 @@ export function prepareEmbeddedAgentRunCompletionClaim(
 
 export function isEmbeddedAgentRunHandleActive(sessionId: string): boolean {
   return Boolean(getActiveNativeAttempt(sessionId));
-}
-
-/** @internal Exposed for unit tests only. */
-export function resolveActiveEmbeddedRunHandleSessionId(sessionKey: string): string | undefined {
-  const normalizedSessionKey = sessionKey.trim();
-  if (!normalizedSessionKey) {
-    return undefined;
-  }
-  // Logical aliases outlive turns; native lookup follows the exact registration key.
-  const operation = getSessionControllerOperation(normalizedSessionKey);
-  const registration = operation && getControllerEmbeddedAttachment(operation);
-  return registration?.sessionKey?.trim() === normalizedSessionKey
-    ? registration.sessionId
-    : undefined;
 }
 
 export type ActiveEmbeddedRunOwner = {

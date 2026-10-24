@@ -14,6 +14,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { gatewayConnect, gatewayProfile } from "../server/client-fixtures.test-support.js";
 import { bindSessionRowProjection } from "../session-row-projection-access.js";
 import { createSessionRowProjection } from "../session-row-projection.js";
 import * as sharingPreparation from "../session-sharing-preparation.js";
@@ -58,19 +59,8 @@ const handlers = {
 
 function participant(): GatewayClient {
   return {
-    connect: {
-      minProtocol: 1,
-      maxProtocol: 1,
-      client: { id: "openclaw-control-ui", version: "test", platform: "test", mode: "webchat" },
-      role: "operator",
-      scopes: ["operator.read", "operator.write"],
-    },
-    authenticatedUserProfile: {
-      profileId: "alice",
-      displayName: "Alice",
-      hasAvatar: false,
-      updatedAt: 1,
-    },
+    connect: gatewayConnect(["operator.read", "operator.write"]),
+    authenticatedUserProfile: gatewayProfile("alice", "Alice"),
     preparedSessionProfile: { profileId: "alice", aliases: new Set(["alice"]), role: null },
   };
 }

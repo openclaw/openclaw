@@ -19,6 +19,7 @@ import { readTranscriptStorageRows } from "./session-accessor.sqlite-read.js";
 import { replaceTranscriptEventsSync } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import { markCanonicalSessionValidationPending } from "./session-canonical-key.js";
 import { seedCanonicalSessionValidation } from "./session-canonical-validation.js";
+import { promptReport } from "./system-prompt-report.test-support.js";
 import type { SessionEntry } from "./types.js";
 
 const tempDirs: string[] = [];
@@ -96,14 +97,7 @@ it("prepares and adopts a complete target without decoding sibling entries", asy
   const { scope, put, snapshot } = fixture();
   const target = {
     ...savedEntry("target-saved-prompt"),
-    systemPromptReport: {
-      source: "run" as const,
-      generatedAt: 1,
-      systemPrompt: { chars: 1, projectContextChars: 0, nonProjectContextChars: 1 },
-      injectedWorkspaceFiles: [],
-      skills: { promptChars: 0, entries: [] },
-      tools: { listChars: 0, schemaChars: 0, entries: [] },
-    },
+    systemPromptReport: promptReport(1, 1, 0),
   };
   put(target);
   put(

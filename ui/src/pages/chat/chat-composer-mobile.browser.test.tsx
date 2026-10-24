@@ -11,6 +11,7 @@ import {
   renderComposerInto,
   resetComposerFixture,
 } from "./chat-composer.test-support.ts";
+import { makeCapabilities } from "./components/chat-composer-menu.test-support.ts";
 import { SessionRailComposer } from "./components/chat-session-rail-composer.tsx";
 import "../../styles/base.css";
 import "../../styles/chat/composer.css";
@@ -33,23 +34,7 @@ it("keeps mobile editing, field and caret while the native composer menu owns fo
     mobileKeyboardVisible: false,
     draft: "Keep this draft and selection",
     onComposerEditingChange: editing,
-    capabilityMenu: {
-      basePath: "",
-      skills: [],
-      skillsRead: null,
-      mcpServers: [],
-      toolsEffectiveResult: null,
-      toolsEffectiveLoading: false,
-      toolsEffectiveError: false,
-      toolAccessMutationBlockedReason: null,
-      webSearchBaseEnabled: true,
-      mutationBlockedReason: null,
-      canAdmin: true,
-      adminBlockedReason: null,
-      onLoadSkills: vi.fn(),
-      onPatchToolOverrides: vi.fn(),
-      onNavigate: vi.fn(),
-    },
+    capabilityMenu: makeCapabilities({ basePath: "" }),
   });
   const { props } = view;
   document.body.append(view.container);

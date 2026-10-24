@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { readSessionEntryCount } from "../config/sessions/session-accessor.sqlite-entry-inventory.js";
 import { loadExactSessionEntryReadOnly } from "../config/sessions/session-accessor.sqlite-exact-read.js";
 import * as nodeSqlite from "../infra/node-sqlite.js";
 import { createSessionSqliteMigrationRun } from "../infra/session-sqlite-migration-manifest.js";
@@ -91,6 +92,74 @@ function seedEntry(key: string, fields: Record<string, unknown>) {
     scope: { agentId: "main", env, sessionKey, storePath: database.path },
   };
 }
+
+it("backs up and repairs numeric-only legacy rows before canonical reads", async () => {
+  const legacy = seedEntry("numeric-only", {
+    spawnDepth: "2",
+    inputTokens: "32",
+    runtimeMs: "0",
+    estimatedCostUsd: "0.25",
+    createdAt: "10",
+    pinnedAt: "20",
+    archivedAt: "30",
+    lastReadAt: "40",
+    lastInteractionAt: "50",
+    lastActivityAt: "60",
+    startedAt: "70",
+    endedAt: "80",
+    pluginExtensions: { example: { draft: { text: "retained draft" } } },
+  });
+  expect(await repair(false)).toEqual({ found: 1, repaired: 0, scannedStores: 1 });
+  expect(legacy.readRaw()).toBe(legacy.raw);
+
+  expect(await withMaintenance((authority) => repair(true, authority))).toMatchObject({
+    found: 1,
+    repaired: 1,
+  });
+  closeOpenClawAgentDatabasesForTest();
+  const entry = loadExactSessionEntryReadOnly(legacy.scope)?.entry;
+  expect(entry).toMatchObject({
+    spawnDepth: 2,
+    inputTokens: 32,
+    runtimeMs: 0,
+    estimatedCostUsd: 0.25,
+    pluginExtensions: { example: { draft: { text: "retained draft" } } },
+  });
+  expect((entry?.spawnDepth ?? 0) + 1).toBe(3);
+  const database = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
+  expect(readSessionEntryCount(database, { includeArchived: false })).toBe(0);
+  expect(
+    database.db
+      .prepare(
+        "SELECT created_at, pinned_at, archived_at, last_read_at, last_interaction_at, last_activity_at FROM session_nodes WHERE session_key = ?",
+      )
+      .get(legacy.sessionKey),
+  ).toEqual({
+    created_at: 10,
+    pinned_at: 20,
+    archived_at: 30,
+    last_read_at: 40,
+    last_interaction_at: 50,
+    last_activity_at: 60,
+  });
+  expect(
+    database.db
+      .prepare("SELECT started_at, ended_at FROM session_windows WHERE session_key = ?")
+      .get(legacy.sessionKey),
+  ).toEqual({ started_at: 70, ended_at: 80 });
+
+  const backups = fs
+    .readdirSync(path.dirname(legacy.databasePath))
+    .filter((name) =>
+      name.startsWith(`${path.basename(legacy.databasePath)}.pre-startup-migration-`),
+    );
+  expect(backups).toHaveLength(1);
+  using backup = new DatabaseSync(path.join(path.dirname(legacy.databasePath), backups[0]!), {
+    readOnly: true,
+  });
+  expect(legacy.readStored(backup)).toBe(legacy.raw);
+  expect(await repair()).toEqual({ found: 0, repaired: 0, scannedStores: 1 });
+});
 
 it("backs up original rows and migrates pending delivery state before canonical reads", async () => {
   const legacy = seedEntry("legacy", {
@@ -456,20 +525,23 @@ it.each(["snapshot failure", "retired owner", "retired room introduced after sca
   },
 );
 
-it("refuses a failed raw scan without treating its store as clean", async () => {
-  state = await createOpenClawTestState({
-    prefix: "openclaw-entry-scan-refusal-",
-    scenario: "minimal",
-  });
-  const legacy = seedEntry("scan-failure", { pendingFinalDelivery: true });
-  vi.spyOn(entryRepairs, "scanDoctorSessionEntryRecords").mockImplementationOnce(() => {
-    throw new Error("synthetic database read failure");
-  });
-  await expect(
-    repairLegacySessionEntryStates({ apply: false, cfg: {}, env: state.env }),
-  ).rejects.toBeInstanceOf(DoctorStateMigrationRefusalError);
-  expect(legacy.readRaw()).toBe(legacy.raw);
-});
+it.each([false, true])(
+  "refuses a failed raw scan with schema deferral %s",
+  async (deferSchemaRepair) => {
+    state = await createOpenClawTestState({
+      prefix: "openclaw-entry-scan-refusal-",
+      scenario: "minimal",
+    });
+    const legacy = seedEntry("scan-failure", { pendingFinalDelivery: true });
+    vi.spyOn(entryRepairs, "scanDoctorSessionEntryRecords").mockImplementationOnce(() => {
+      throw new Error("synthetic database read failure");
+    });
+    await expect(
+      repairLegacySessionEntryStates({ apply: false, cfg: {}, env: state.env, deferSchemaRepair }),
+    ).rejects.toBeInstanceOf(DoctorStateMigrationRefusalError);
+    expect(legacy.readRaw()).toBe(legacy.raw);
+  },
+);
 
 it("normalizes only scalar state while leaving malformed identity for its repair owner", async () => {
   const legacy = seedEntry("malformed", { pendingFinalDelivery: true });
@@ -581,8 +653,10 @@ it.each(["preparation", "native open"] as const)(
         sessionKeys: [legacy.sessionKey],
         expectedIdentity,
         rawTransform: (entry) => ({
-          ...entry,
-          pendingFinalDelivery: { kind: "transport-only", createdAt: 42 },
+          entry: {
+            ...entry,
+            pendingFinalDelivery: { kind: "transport-only", createdAt: 42 },
+          },
         }),
       }),
     ).toThrow(
@@ -630,8 +704,10 @@ it("stops cold admission when the repair owner retires before native open return
         }
       },
       rawTransform: (entry) => ({
-        ...entry,
-        pendingFinalDelivery: { kind: "transport-only", createdAt: 42 },
+        entry: {
+          ...entry,
+          pendingFinalDelivery: { kind: "transport-only", createdAt: 42 },
+        },
       }),
     }),
   ).toThrow("repair owner retired during admission");

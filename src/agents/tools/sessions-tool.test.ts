@@ -18,6 +18,7 @@ import * as failoverErrors from "../failover-error.js";
 import { createAgentPatchedSessionModelRunGuard } from "../session-model-auto-revert.js";
 import { withGatewayToolCallerIdentity } from "./gateway-caller-context.js";
 import type { AgentToolGatewayRequestCaller } from "./in-process-gateway.js";
+import { captureSessionDecisionWork as captureDecisionWork } from "./sessions-spawn-tool.decision.test-support.js";
 import { createSessionsTool } from "./sessions-tool.js";
 import {
   adversarialResolved,
@@ -38,33 +39,19 @@ beforeEach(() => {
 
 type AgentToolGatewayRequest = Parameters<AgentToolGatewayRequestCaller>[0];
 
-async function captureSessionDecisionWork<T>(run: () => Promise<T>): Promise<{
-  result: T;
-  work: ExecutionDecisionWork[];
-}> {
-  const work: ExecutionDecisionWork[] = [];
-  const clear = configureExecutionDecisionWorkSink((item) => {
-    work.push(item);
-    return true;
-  });
-  try {
-    const token = createExecutionIdentityAdmissionToken("sessions-tool-action", {
-      contextId: "sessions-tool-context",
-      executionId: "sessions-tool-execution",
-    });
-    const result = await withGatewayToolCallerIdentity(
-      {
-        agentId: "main",
-        sessionKey: "agent:main:main",
-        executionIdentityToken: token,
-        receiptAuthority: () => true,
-      },
-      run,
-    );
-    return { result, work };
-  } finally {
-    clear();
-  }
+function captureSessionDecisionWork<T>(run: () => Promise<T>) {
+  return captureDecisionWork(run, "sessions-tool");
+}
+
+function globalSessionConfig(): OpenClawConfig {
+  return {
+    session: { store: "/tmp/shared-sessions.sqlite", scope: "global" },
+    agents: {
+      ownership: "explicit",
+      defaults: { sessionStore: { agentId: "ops" } },
+      entries: { ops: {}, research: {} },
+    },
+  };
 }
 
 describe("sessions tool", () => {
@@ -97,14 +84,7 @@ describe("sessions tool", () => {
     const callGateway = vi.fn().mockResolvedValue({});
     const tool = createSessionsTool({
       agentSessionKey: "global",
-      config: {
-        session: { store: "/tmp/shared-sessions.sqlite", scope: "global" },
-        agents: {
-          ownership: "explicit",
-          defaults: { sessionStore: { agentId: "ops" } },
-          entries: { ops: {}, research: {} },
-        },
-      },
+      config: globalSessionConfig(),
       callGateway,
     });
 
@@ -127,14 +107,7 @@ describe("sessions tool", () => {
     const tool = createSessionsTool({
       agentSessionKey: "agent:research:main",
       requesterAgentIdOverride: "research",
-      config: {
-        session: { store: "/tmp/shared-sessions.sqlite", scope: "global" },
-        agents: {
-          ownership: "explicit",
-          defaults: { sessionStore: { agentId: "ops" } },
-          entries: { ops: {}, research: {} },
-        },
-      },
+      config: globalSessionConfig(),
       callGateway,
     });
 

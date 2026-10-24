@@ -389,21 +389,10 @@ describe("chat page retained sessions", () => {
     async ({ retainedSessionKey, routeSessionKey }) => {
       const { navigation, page, paneFor } = await mountRetainedPage(retainedSessionKey);
       const pane = expectDefined(paneFor(retainedSessionKey), "retained main chat pane");
-      const receivedDrafts: Array<string | undefined> = [];
-      const focusRequests: boolean[] = [];
-
-      Object.defineProperties(pane, {
-        draft: {
-          configurable: true,
-          get: () => receivedDrafts.at(-1),
-          set: (value: string | undefined) => receivedDrafts.push(value),
-        },
-        focusComposer: {
-          configurable: true,
-          get: () => focusRequests.at(-1) ?? false,
-          set: (value: boolean) => focusRequests.push(value),
-        },
-      });
+      const draft = vi.fn<(value: string | undefined) => void>();
+      const focus = vi.fn<(value: boolean) => void>();
+      Object.defineProperty(pane, "draft", { configurable: true, set: draft });
+      Object.defineProperty(pane, "focusComposer", { configurable: true, set: focus });
 
       page.data = {
         sessionKey: routeSessionKey,
@@ -415,8 +404,10 @@ describe("chat page retained sessions", () => {
       await settleChatPage(page);
 
       expect(paneFor(retainedSessionKey)).toBe(pane);
-      expect(receivedDrafts.filter((draft) => draft !== undefined)).toEqual(["What can you do?"]);
-      expect(focusRequests).toContain(true);
+      expect(
+        draft.mock.calls.map(([value]) => value).filter((value) => value !== undefined),
+      ).toEqual(["What can you do?"]);
+      expect(focus).toHaveBeenCalledWith(true);
       expect(navigation.replace).toHaveBeenCalledOnce();
 
       page.data = { sessionKey: routeSessionKey };

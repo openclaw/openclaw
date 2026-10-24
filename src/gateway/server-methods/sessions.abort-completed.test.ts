@@ -15,6 +15,7 @@ import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.
 import * as workerStore from "../../infra/sqlite-worker-store.js";
 import { rpcSourceTesting } from "../../sessions/session-lifecycle-admission.test-support.js";
 import * as agentWorkers from "../../state/openclaw-agent-worker-store.js";
+import { gatewayRequest } from "../request-frame.test-support.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { handleGatewayRequest } from "../server-methods.js";
 import { sharingPolicyClient } from "../session-sharing.test-utils.js";
@@ -73,12 +74,7 @@ it.each([
   const publications: Array<{ mockRestore(): void }> = [metadata];
   const respond = vi.fn();
   const stopping = handleGatewayRequest({
-    req: {
-      type: "req",
-      id: "native-stop",
-      method: "sessions.abort",
-      params: { key: sessionKey, runId: "run" },
-    },
+    req: gatewayRequest("native-stop", "sessions.abort", { key: sessionKey, runId: "run" }),
     context,
     client: {
       ...sharingPolicyClient({ deviceId: "same-device", scopes: ["operator.write"] }),

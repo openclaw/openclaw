@@ -692,8 +692,8 @@ it("projects metadata-only badges and counts distinct operator-review rows", () 
         queued("held", { createdAt: 9, sendState: "held" }),
         queued("failed", { createdAt: 10, sendState: "failed" }),
         queued("failed", { text: "duplicate", createdAt: 11, sendState: "failed" }),
-        queued("unconfirmed", { createdAt: 12, sendState: "unconfirmed" }),
-        queued("unconfirmed", { text: "duplicate", createdAt: 13, sendState: "unconfirmed" }),
+        queued("pending", { createdAt: 12, sendState: "waiting-reconnect" }),
+        queued("pending", { text: "duplicate", createdAt: 13, sendState: "waiting-reconnect" }),
         queued("other-owner", {
           createdAt: 14,
           sendState: "failed",
@@ -704,7 +704,7 @@ it("projects metadata-only badges and counts distinct operator-review rows", () 
     },
     "thread-b\u0000agent:main": {
       queue: ownedQueue(gatewayUrl, [
-        queued("unconfirmed", { createdAt: 14, sendState: "unconfirmed" }),
+        queued("pending", { createdAt: 14, sendState: "waiting-reconnect" }),
       ]),
       updatedAt: 14,
     },
@@ -713,11 +713,10 @@ it("projects metadata-only badges and counts distinct operator-review rows", () 
   expect(summary.total).toBe(9);
   expect(summary.sessions).toEqual([
     badge("agent:main:a", "main", true),
-    badge("agent:work:b", "work", false, 4),
-    badge("thread-b", undefined, false, 1),
+    badge("agent:work:b", "work", false, 3),
   ]);
-  expect(summary.attentionCountForSession("agent:work:b")).toBe(4);
-  expect(summary.attentionCountForSession("thread-b")).toBe(1);
+  expect(summary.attentionCountForSession("agent:work:b")).toBe(3);
+  expect(summary.attentionCountForSession("thread-b")).toBe(0);
   expect(summary.attentionCountForSession("absent")).toBe(0);
 });
 
@@ -765,7 +764,7 @@ it("derives badges and replay from the same migrated durable queue", () => {
       agentId: "work",
       storageScope: outboxStorageScope(state),
       sendState: "failed",
-      sendError: "Recovered message. Review this destination and retry only if it did not arrive.",
+      sendError: "Recovered message. Review this destination and retry when ready.",
     }),
   ]);
   expect(sessionStorage.getItem(legacyKey)).toBeNull();

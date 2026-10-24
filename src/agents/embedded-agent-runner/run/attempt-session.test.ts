@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
+import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js";
 import { isEmbeddedMode, setEmbeddedMode } from "../../../infra/embedded-mode.js";
 import {
   EmbeddedPluginApprovalBroker,
@@ -232,14 +233,7 @@ function createSystemUpdateInput() {
   fixture.input.initialSystemPrompt = pinnedPrompt;
   fixture.input.onSystemPromptChanged = vi.fn();
   fixture.activeSession.agent.state.messages = [
-    {
-      role: "toolResult",
-      toolCallId: "read-1",
-      toolName: "read",
-      content: [{ type: "text", text: "Read complete." }],
-      isError: false,
-      timestamp: 1,
-    },
+    makeTextToolResult("read-1", "read", "Read complete.", false, 1),
   ];
   const steer = fixture.queuePromptContext;
   const promptStateLease = retainEmbeddedSessionPromptState("permission-system-updates");

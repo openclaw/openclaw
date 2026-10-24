@@ -4,6 +4,21 @@ import { injectAssistantMessageWithHumanMentions } from "./assistant-human-menti
 import { SESSION_ID, SESSION_KEY, withMentionInbox } from "./mention-inbox.test-support.js";
 import { injectGatewayAssistantMessage } from "./server-methods/chat-inject.js";
 
+const transcriptAppend = vi.hoisted(() => ({ entered: false }));
+vi.mock("./server-methods/chat-transcript-inject.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("./server-methods/chat-transcript-inject.js")>();
+  return {
+    ...actual,
+    appendInjectedAssistantMessageToTranscript: (
+      ...args: Parameters<typeof actual.appendInjectedAssistantMessageToTranscript>
+    ) => {
+      transcriptAppend.entered = true;
+      return actual.appendInjectedAssistantMessageToTranscript(...args);
+    },
+  };
+});
+
 type Fixture = Parameters<Parameters<typeof withMentionInbox>[0]>[0];
 const scope = { agentId: "main", sessionKey: SESSION_KEY };
 const TEXT = "Welcome! @Bob invited you.";
@@ -80,6 +95,43 @@ it("records one Inbox mention and involvement for a Gateway-authored assistant m
     expect(await assistantRows()).toHaveLength(1);
     expect(await f.items()).toEqual(items);
     expect(f.push).toHaveBeenCalledOnce();
+  });
+});
+
+it("keeps directive-like text literal so mention offsets still match", async () => {
+  await withMentionInbox(async (f) => {
+    const text = `${TEXT} Please test [[audio_as_voice]] replies.`;
+    expect(await insert(f, { text }).result).toMatchObject({ ok: true });
+    expect(await assistantRows()).toMatchObject([{ content: [{ type: "text", text }] }]);
+    expect(await f.items()).toMatchObject([{ excerpt: text }]);
+  });
+});
+
+it("rechecks caller authority at the transcript commit, after the append started", async () => {
+  await withMentionInbox(async (f) => {
+    transcriptAppend.entered = false;
+    // Authority ends while the append waits for its target: no row and no Inbox entry.
+    const guard = () => {
+      if (transcriptAppend.entered) {
+        throw new Error("Visitor access ended");
+      }
+    };
+    const result = await injectAssistantMessageWithHumanMentions(
+      contextFor(f),
+      {
+        sessionKey: SESSION_KEY,
+        agentId: "main",
+        text: TEXT,
+        mentions: [{ profileId: f.bob.id, start: 9, end: 13 }],
+        onBehalfOfProfileId: f.alice.id,
+        idempotencyKey: "welcome:invitation-1",
+      },
+      guard,
+    );
+    expect(transcriptAppend.entered).toBe(true);
+    expect(result.ok).toBe(false);
+    expect(await assistantRows()).toEqual([]);
+    expect(await f.items()).toEqual([]);
   });
 });
 

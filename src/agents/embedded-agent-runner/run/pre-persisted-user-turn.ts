@@ -5,6 +5,7 @@ import type { SessionTranscriptWriteScope } from "../../../config/sessions/sessi
 import type { SessionTranscriptRuntimeTarget } from "../../../config/sessions/session-accessor.types.js";
 import { runWithSessionActorStorage } from "../../../config/sessions/session-actor-storage-binding.js";
 import { readSessionTranscriptAnchorsAsync } from "../../../config/sessions/session-transcript-anchor-read.js";
+import { SessionTranscriptReadFenceError } from "../../../config/sessions/session-transcript-read-fence-error.js";
 import { resolveSessionTranscriptReadFence } from "../../../config/sessions/session-transcript-read-fence.js";
 import { withSessionTranscriptReadSource } from "../../../config/sessions/session-transcript-read-source.js";
 import type { TranscriptEntryAnchor } from "../../../config/sessions/transcript-entry-anchor.js";
@@ -16,13 +17,19 @@ import {
   SessionTranscriptWriterClaimReboundError,
   withOwnedSessionTranscriptWriterFence,
 } from "../../../config/sessions/transcript-write-context.js";
-import { SessionWorkStartChangedError } from "../../../config/sessions/work-start-error.js";
+import {
+  isSessionWorkStartInvalidatedError,
+  SessionWorkStartChangedError,
+} from "../../../config/sessions/work-start-error.js";
 import { readNestedToolActivity } from "../../../sessions/nested-tool-activity.js";
 import type {
   PersistedUserTurnMessage,
   UserTurnTranscriptRecorder,
 } from "../../../sessions/user-turn-transcript.types.js";
-import { isOpenClawDeliveryMirrorAssistantMessage } from "../../../shared/transcript-only-openclaw-assistant.js";
+import {
+  isOpenClawDeliveryMirrorAssistantMessage,
+  SKILL_WORKSHOP_CHANGE_NOTICE_KIND,
+} from "../../../shared/transcript-only-openclaw-assistant.js";
 import {
   AGENT_RUN_RESTART_ABORT_ERROR,
   AGENT_RUN_RESTART_ABORT_ERROR_CODE,
@@ -59,6 +66,13 @@ function isInterruptedTurnEntry(entry: SessionEntry, runId: string): boolean {
   if (message.role === "custom") {
     return readNestedToolActivity(message)?.details.runId === runId;
   }
+  const delivery = isOpenClawDeliveryMirrorAssistantMessage(message)
+    ? asOptionalRecord(Reflect.get(message, "openclawDeliveryMirror"))
+    : undefined;
+  // Background Workshop notices do not complete the foreground user turn.
+  if (delivery?.kind === SKILL_WORKSHOP_CHANGE_NOTICE_KIND) {
+    return true;
+  }
   if (Reflect.get(message, "__openclaw")?.runId !== runId) {
     return false;
   }
@@ -66,7 +80,6 @@ function isInterruptedTurnEntry(entry: SessionEntry, runId: string): boolean {
     return message.role === "toolResult";
   }
   if (isOpenClawDeliveryMirrorAssistantMessage(message)) {
-    const delivery = asOptionalRecord(Reflect.get(message, "openclawDeliveryMirror"));
     // Only explicit same-run progress can cross this boundary; final or unmarked
     // mirrors still close the turn, even if more tool activity followed them.
     return delivery?.kind === "message-tool-source-reply" && delivery.final === false;
@@ -413,9 +426,23 @@ export async function preparePersistedCurrentUserTurn(params: {
       }
     };
     assertCurrent();
-    // Read once at core entry; prompt preparation does not reserve a database incarnation.
     return async (onAdmitted) => {
-      await readCurrentTurn(replaySignal, (prepared) => accept(prepared, onAdmitted));
+      const consume = () =>
+        readCurrentTurn(replaySignal, (prepared) => accept(prepared, onAdmitted));
+      try {
+        await consume();
+      } catch (error) {
+        if (
+          !pending ||
+          (!isSessionWorkStartInvalidatedError(error) &&
+            !(error instanceof SessionTranscriptReadFenceError))
+        ) {
+          throw error;
+        }
+        // An append may invalidate selection before admission. Refresh once;
+        // the original user anchor, generation, and live authority must still match.
+        await consume();
+      }
     };
   };
 }

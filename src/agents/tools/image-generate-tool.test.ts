@@ -101,12 +101,30 @@ function savedMedia(fileName: string, size: number, contentType = "image/png") {
   return { path: `/tmp/${fileName}`, id: fileName, size, contentType };
 }
 
+function mockReferenceImage(bytes: string, contentType = "image/png") {
+  return vi.spyOn(webMedia, "loadWebMedia").mockResolvedValue({
+    kind: "image",
+    buffer: Buffer.from(bytes),
+    contentType,
+  });
+}
+
 function configWithDefaults(
   defaults: NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]>,
 ): OpenClawConfig {
   const config = { agents: { defaults } };
   setRuntimeConfigSnapshot(config, config);
   return config;
+}
+
+function createConfiguredImageTool(
+  primary: string,
+  options: Omit<NonNullable<Parameters<typeof createImageGenerateTool>[0]>, "config"> = {},
+) {
+  return createImageGenerateTool({
+    config: configWithDefaults({ mediaModels: { image: { primary } } }),
+    ...options,
+  });
 }
 
 const GENERATION_PROVIDER_ENV_VARS = [
@@ -332,28 +350,6 @@ function createToolWithPrimaryImageModel(
   );
 }
 
-function createSingleImageResult(params: {
-  provider: string;
-  model: string;
-  bytes: string;
-  mimeType: string;
-  fileName: string;
-}): Awaited<ReturnType<typeof imageGenerationRuntime.generateImage>> {
-  return {
-    provider: params.provider,
-    model: params.model,
-    attempts: [],
-    ignoredOverrides: [],
-    images: [
-      {
-        buffer: Buffer.from(params.bytes),
-        mimeType: params.mimeType,
-        fileName: params.fileName,
-      },
-    ],
-  };
-}
-
 function stubEditedImageFlow(params?: { width?: number; height?: number }) {
   const maxDimension = Math.max(params?.width ?? 0, params?.height ?? 0);
   const appliedResolution =
@@ -366,11 +362,7 @@ function stubEditedImageFlow(params?: { width?: number; height?: number }) {
     ...(appliedResolution ? { appliedResolution } : {}),
     images: [imageAsset("png-out", "edited.png")],
   });
-  vi.spyOn(webMedia, "loadWebMedia").mockResolvedValue({
-    kind: "image",
-    buffer: Buffer.from("input-image"),
-    contentType: "image/png",
-  });
+  mockReferenceImage("input-image");
   if (params?.width && params?.height) {
     vi.spyOn(imageOps, "getImageMetadata").mockResolvedValue({
       width: params.width,
@@ -532,13 +524,7 @@ describe("createImageGenerateTool", () => {
         throw new Error("runtime provider list should not run during tool registration");
       });
 
-    requireImageGenerateTool(
-      createImageGenerateTool({
-        config: configWithDefaults({
-          mediaModels: { image: { primary: "openai/gpt-image-1" } },
-        }),
-      }),
-    );
+    requireImageGenerateTool(createConfiguredImageTool("openai/gpt-image-1"));
     expect(listProviders).not.toHaveBeenCalled();
   });
 
@@ -794,22 +780,12 @@ describe("createImageGenerateTool", () => {
       ],
     });
     const terminalError = new Error("image persistence failed");
-    const lateSavedMedia = {
-      path: "/tmp/late.png",
-      id: "late.png",
-      size: 4,
-      contentType: "image/png",
-    };
+    const lateSavedMedia = savedMedia("late.png", 4);
     let resolveLateSave!: (saved: typeof lateSavedMedia) => void;
     const lateSave = new Promise<typeof lateSavedMedia>((resolve) => {
       resolveLateSave = resolve;
     });
-    const immediatelySavedMedia = {
-      path: "/tmp/saved.png",
-      id: "saved.png",
-      size: 5,
-      contentType: "image/png",
-    };
+    const immediatelySavedMedia = savedMedia("saved.png", 5);
     const saveMediaBuffer = vi
       .spyOn(mediaStore, "saveMediaBuffer")
       .mockRejectedValueOnce(terminalError)
@@ -912,31 +888,17 @@ describe("createImageGenerateTool", () => {
   it("starts image generation asynchronously and keeps the selected filename on completion", async () => {
     stubImageGenerationProviders();
     vi.stubEnv("OPENAI_API_KEY", "openai-test");
-    const generateImage = vi.spyOn(imageGenerationRuntime, "generateImage").mockResolvedValue(
-      createSingleImageResult({
-        provider: "openai",
-        model: "gpt-image-1",
-        bytes: "png-out",
-        mimeType: "image/png",
-        fileName: "cat.png",
-      }),
-    );
+    const generateImage = mockGeneratedImage();
     const savedId = "poster---a1b2c3d4-e5f6-4789-abcd-ef1234567890.png";
     const savedPath = `/tmp/${savedId}`;
-    const save = vi.spyOn(mediaStore, "saveMediaBuffer").mockResolvedValueOnce({
-      path: savedPath,
-      id: savedId,
-      size: 7,
-      contentType: "image/png",
-    });
+    const save = vi
+      .spyOn(mediaStore, "saveMediaBuffer")
+      .mockResolvedValueOnce(savedMedia(savedId, 7));
     taskRuntimeMocks.createOperation.mockReturnValue({
       taskId: "task-image-123",
     });
     const tool = requireImageGenerateTool(
-      createImageGenerateTool({
-        config: configWithDefaults({
-          mediaModels: { image: { primary: "openai/gpt-image-1" } },
-        }),
+      createConfiguredImageTool("openai/gpt-image-1", {
         agentDir: "/tmp/agent",
         agentSessionKey: "agent:main:discord:direct:123",
         requesterOrigin: {
@@ -1019,19 +981,10 @@ describe("createImageGenerateTool", () => {
         return { primary: "google/gemini-3-pro-image-preview", generate: stubEditedImageFlow() };
       }
       vi.stubEnv("OPENAI_API_KEY", "openai-test");
-      const generate = vi.spyOn(imageGenerationRuntime, "generateImage").mockResolvedValue({
-        provider: "openai",
-        model: "gpt-image-1",
-        attempts: [],
-        ignoredOverrides: [],
-        images: [{ buffer: Buffer.from("image"), mimeType: "image/png", fileName: "image.png" }],
-      });
-      vi.spyOn(mediaStore, "saveMediaBuffer").mockResolvedValue({
-        path: "/tmp/accepted-image.png",
-        id: "accepted-image.png",
-        size: 5,
-        contentType: "image/png",
-      });
+      const generate = mockGeneratedImage({ images: [imageAsset("image", "image.png")] });
+      vi.spyOn(mediaStore, "saveMediaBuffer").mockResolvedValue(
+        savedMedia("accepted-image.png", 5),
+      );
       return { primary: "openai/gpt-image-1", generate };
     },
   });
@@ -1130,10 +1083,7 @@ describe("createImageGenerateTool", () => {
       taskId: "task-cron-image",
     });
     const tool = requireImageGenerateTool(
-      createImageGenerateTool({
-        config: configWithDefaults({
-          mediaModels: { image: { primary: "openai/gpt-image-1" } },
-        }),
+      createConfiguredImageTool("openai/gpt-image-1", {
         agentDir: "/tmp/agent",
         agentSessionKey: "agent:main:cron:daily-media:run:run-123",
         requesterOrigin: {
@@ -1186,10 +1136,7 @@ describe("createImageGenerateTool", () => {
       },
     ]);
     const tool = requireImageGenerateTool(
-      createImageGenerateTool({
-        config: configWithDefaults({
-          mediaModels: { image: { primary: "openai/gpt-image-1" } },
-        }),
+      createConfiguredImageTool("openai/gpt-image-1", {
         agentDir: "/tmp/agent",
         agentSessionKey: "agent:main:discord:direct:123",
         requesterOrigin: {
@@ -1240,10 +1187,7 @@ describe("createImageGenerateTool", () => {
       },
     ]);
     const tool = requireImageGenerateTool(
-      createImageGenerateTool({
-        config: configWithDefaults({
-          mediaModels: { image: { primary: "openai/gpt-image-1" } },
-        }),
+      createConfiguredImageTool("openai/gpt-image-1", {
         agentSessionKey: "agent:main:discord:direct:123",
       }),
     );
@@ -1288,10 +1232,7 @@ describe("createImageGenerateTool", () => {
       },
     ]);
     const tool = requireImageGenerateTool(
-      createImageGenerateTool({
-        config: configWithDefaults({
-          mediaModels: { image: { primary: "openai/gpt-image-1" } },
-        }),
+      createConfiguredImageTool("openai/gpt-image-1", {
         agentDir: "/tmp/agent",
         agentSessionKey: "agent:main:discord:direct:123",
       }),
@@ -1323,10 +1264,7 @@ describe("createImageGenerateTool", () => {
     const generateImage = mockGeneratedImage();
     vi.spyOn(mediaStore, "saveMediaBuffer").mockResolvedValue(savedMedia("proof.png", 7));
     const tool = requireImageGenerateTool(
-      createImageGenerateTool({
-        config: configWithDefaults({
-          mediaModels: { image: { primary: "openai/gpt-image-1" } },
-        }),
+      createConfiguredImageTool("openai/gpt-image-1", {
         agentDir: "/tmp/agent",
         agentSessionKey: "agent:main:discord:direct:123",
       }),
@@ -1381,10 +1319,7 @@ describe("createImageGenerateTool", () => {
     });
     vi.spyOn(mediaStore, "saveMediaBuffer").mockResolvedValue(savedMedia("proof.png", 7));
     const tool = requireImageGenerateTool(
-      createImageGenerateTool({
-        config: configWithDefaults({
-          mediaModels: { image: { primary: "google/gemini-3.1-flash-image-preview" } },
-        }),
+      createConfiguredImageTool("google/gemini-3.1-flash-image-preview", {
         agentDir: "/tmp/agent",
         agentSessionKey: "agent:main:discord:direct:123",
       }),
@@ -1538,11 +1473,7 @@ describe("createImageGenerateTool", () => {
       model,
       images: [imageAsset("krea-style-out", "krea-style.png")],
     });
-    vi.spyOn(webMedia, "loadWebMedia").mockResolvedValue({
-      kind: "image",
-      buffer: Buffer.from("style-ref"),
-      contentType: "image/png",
-    });
+    mockReferenceImage("style-ref");
     vi.spyOn(imageOps, "getImageMetadata").mockResolvedValue({
       width: 2048,
       height: 2048,
@@ -1594,11 +1525,7 @@ describe("createImageGenerateTool", () => {
       provider,
     ]);
     const generateImage = vi.spyOn(imageGenerationRuntime, "generateImage");
-    const loadWebMedia = vi.spyOn(webMedia, "loadWebMedia").mockResolvedValue({
-      kind: "image",
-      buffer: Buffer.from("reference"),
-      contentType: "image/png",
-    });
+    const loadWebMedia = mockReferenceImage("reference");
     vi.spyOn(imageOps, "getImageMetadata").mockResolvedValue({
       width: 1024,
       height: 1024,
@@ -1638,11 +1565,7 @@ describe("createImageGenerateTool", () => {
     vi.spyOn(imageGenerationRuntime, "listRuntimeImageGenerationProviders").mockReturnValue([
       provider,
     ]);
-    vi.spyOn(webMedia, "loadWebMedia").mockResolvedValue({
-      kind: "image",
-      buffer: Buffer.from("reference"),
-      contentType: "image/png",
-    });
+    mockReferenceImage("reference");
     const tool = createToolWithPrimaryImageModel("fal/fal-ai/flux/dev", {
       workspaceDir: process.cwd(),
     });
@@ -1677,11 +1600,7 @@ describe("createImageGenerateTool", () => {
     vi.spyOn(imageGenerationRuntime, "listRuntimeImageGenerationProviders").mockReturnValue([
       provider,
     ]);
-    vi.spyOn(webMedia, "loadWebMedia").mockResolvedValue({
-      kind: "image",
-      buffer: Buffer.from("reference"),
-      contentType: "image/png",
-    });
+    mockReferenceImage("reference");
     vi.spyOn(imageOps, "getImageMetadata").mockResolvedValue({
       width: 1024,
       height: 1024,
@@ -1722,12 +1641,7 @@ describe("createImageGenerateTool", () => {
       primary,
       fallback,
     ]);
-    vi.spyOn(mediaStore, "saveMediaBuffer").mockResolvedValue({
-      path: "/tmp/fallback-edit.png",
-      id: "fallback-edit.png",
-      size: 6,
-      contentType: "image/png",
-    });
+    vi.spyOn(mediaStore, "saveMediaBuffer").mockResolvedValue(savedMedia("fallback-edit.png", 6));
     const tool = createToolWithPrimaryImageModel("fal/edit", {
       fallbacks: ["fallback-image/edit"],
     });
@@ -1774,11 +1688,7 @@ describe("createImageGenerateTool", () => {
       model: "gemini-3-pro-image-preview",
       images: [{ buffer: Buffer.from("edited"), mimeType: "image/png" }],
     });
-    vi.spyOn(webMedia, "loadWebMedia").mockResolvedValue({
-      kind: "image",
-      buffer: Buffer.from("reference"),
-      contentType: "image/png",
-    });
+    mockReferenceImage("reference");
     vi.spyOn(imageOps, "getImageMetadata").mockResolvedValue({
       width: 2048,
       height: 2048,
@@ -1848,21 +1758,11 @@ describe("createImageGenerateTool", () => {
   });
 
   it("forwards transparent OpenAI background requests with a PNG output format", async () => {
-    const generateImage = vi.spyOn(imageGenerationRuntime, "generateImage").mockResolvedValue(
-      createSingleImageResult({
-        provider: "openai",
-        model: "gpt-image-1.5",
-        bytes: "png-out",
-        mimeType: "image/png",
-        fileName: "transparent.png",
-      }),
-    );
-    vi.spyOn(mediaStore, "saveMediaBuffer").mockResolvedValue({
-      path: "/tmp/transparent.png",
-      id: "transparent.png",
-      size: 7,
-      contentType: "image/png",
+    const generateImage = mockGeneratedImage({
+      model: "gpt-image-1.5",
+      images: [imageAsset("png-out", "transparent.png")],
     });
+    vi.spyOn(mediaStore, "saveMediaBuffer").mockResolvedValue(savedMedia("transparent.png", 7));
 
     const tool = createToolWithPrimaryImageModel("openai/gpt-image-1.5");
     const result = await tool.execute("call-openai-transparent", {
@@ -1896,15 +1796,11 @@ describe("createImageGenerateTool", () => {
     vi.spyOn(imageGenerationRuntime, "listRuntimeImageGenerationProviders").mockReturnValue([
       createGoogleImageProvider(),
     ]);
-    vi.spyOn(imageGenerationRuntime, "generateImage").mockResolvedValue(
-      createSingleImageResult({
-        provider: "google",
-        model: "gemini-3.1-flash-image-preview",
-        bytes: "jpg-data",
-        mimeType: "image/jpeg",
-        fileName: "kodo_sawaki_zazen.jpg",
-      }),
-    );
+    mockGeneratedImage({
+      provider: "google",
+      model: "gemini-3.1-flash-image-preview",
+      images: [imageAsset("jpg-data", "kodo_sawaki_zazen.jpg", "image/jpeg")],
+    });
     vi.spyOn(mediaStore, "saveMediaBuffer").mockResolvedValueOnce({
       path: "/home/openclaw/.openclaw/media/tool-image-generation/kodo_sawaki_zazen---3337a0ed-898a-4572-8950-0d288719f4f8.jpg",
       id: "kodo_sawaki_zazen---3337a0ed-898a-4572-8950-0d288719f4f8.jpg",
@@ -1942,11 +1838,7 @@ describe("createImageGenerateTool", () => {
       createGoogleImageProvider(),
     ]);
     const tool = requireImageGenerateTool(
-      createImageGenerateTool({
-        config: configWithDefaults({
-          mediaModels: { image: { primary: "google/gemini-3.1-flash-image-preview" } },
-        }),
-      }),
+      createConfiguredImageTool("google/gemini-3.1-flash-image-preview"),
     );
 
     await expect(tool.execute("call-2", { prompt: "too many cats", count: 5 })).rejects.toThrow(
@@ -1999,10 +1891,7 @@ describe("createImageGenerateTool", () => {
     stubImageGenerationProviders();
     const generateImage = stubEditedImageFlow({ width: 1024, height: 1024 });
     const defaultTool = requireImageGenerateTool(
-      createImageGenerateTool({
-        config: configWithDefaults({
-          mediaModels: { image: { primary: "google/gemini-3-pro-image-preview" } },
-        }),
+      createConfiguredImageTool("google/gemini-3-pro-image-preview", {
         workspaceDir: process.cwd(),
       }),
     );
@@ -2098,11 +1987,7 @@ describe("createImageGenerateTool", () => {
     const generateImage = mockGeneratedImage({
       images: [imageAsset("png-out", "edited.png")],
     });
-    vi.spyOn(webMedia, "loadWebMedia").mockResolvedValue({
-      kind: "image",
-      buffer: Buffer.from("input-image"),
-      contentType: "image/jpeg",
-    });
+    mockReferenceImage("input-image", "image/jpeg");
     vi.spyOn(imageOps, "getImageMetadata").mockResolvedValue({
       width: 3200,
       height: 1800,
@@ -2278,11 +2163,7 @@ describe("createImageGenerateTool", () => {
     stubImageGenerationProviders();
 
     const tool = requireImageGenerateTool(
-      createImageGenerateTool({
-        config: configWithDefaults({
-          mediaModels: { image: { primary: "google/gemini-3-pro-image-preview" } },
-        }),
-      }),
+      createConfiguredImageTool("google/gemini-3-pro-image-preview"),
     );
 
     await expect(
@@ -2296,11 +2177,7 @@ describe("createImageGenerateTool", () => {
     stubImageGenerationProviders();
 
     const tool = requireImageGenerateTool(
-      createImageGenerateTool({
-        config: configWithDefaults({
-          mediaModels: { image: { primary: "google/gemini-3.1-flash-image-preview" } },
-        }),
-      }),
+      createConfiguredImageTool("google/gemini-3.1-flash-image-preview"),
     );
 
     const result = await tool.execute("call-list", { action: "list" });
@@ -2378,13 +2255,7 @@ describe("createImageGenerateTool", () => {
       },
     ]);
 
-    const tool = requireImageGenerateTool(
-      createImageGenerateTool({
-        config: configWithDefaults({
-          mediaModels: { image: { primary: "__proto__/proto-v1" } },
-        }),
-      }),
-    );
+    const tool = requireImageGenerateTool(createConfiguredImageTool("__proto__/proto-v1"));
 
     const result = await tool.execute("call-list-proto", { action: "list" });
     const text = resultText(result);
@@ -2405,11 +2276,7 @@ describe("createImageGenerateTool", () => {
       vi.spyOn(imageGenerationRuntime, "listRuntimeImageGenerationProviders").mockReturnValue([
         provider,
       ]);
-      vi.spyOn(webMedia, "loadWebMedia").mockResolvedValue({
-        kind: "image",
-        buffer: Buffer.from("input-image"),
-        contentType: "image/png",
-      });
+      mockReferenceImage("input-image");
 
       const tool = createToolWithPrimaryImageModel("fal/fal-ai/flux/dev", {
         workspaceDir: process.cwd(),
@@ -2437,11 +2304,7 @@ describe("createImageGenerateTool", () => {
       ignoredOverrides: [{ key: "aspectRatio", value: "16:9" }],
       images: [imageAsset("png-out", "edited.png")],
     });
-    vi.spyOn(webMedia, "loadWebMedia").mockResolvedValue({
-      kind: "image",
-      buffer: Buffer.from("input-image"),
-      contentType: "image/png",
-    });
+    mockReferenceImage("input-image");
     vi.spyOn(mediaStore, "saveMediaBuffer").mockResolvedValue(savedMedia("edited.png", 7));
 
     const tool = createToolWithPrimaryImageModel("fal/fal-ai/flux/dev", {

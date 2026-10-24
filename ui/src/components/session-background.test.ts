@@ -12,6 +12,7 @@ import type {
   ApplicationTheme,
 } from "../app/context.ts";
 import { loadSettings } from "../app/settings.ts";
+import { createApplicationGatewaySnapshot } from "../test-helpers/application-context-fixtures.ts";
 import { createApplicationGateway } from "../test-helpers/application-context.ts";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { createSolidApplicationContextProvider } from "../test-helpers/solid-application-context.tsx";
@@ -33,18 +34,12 @@ vi.mock("../app/server-prefs-profile.ts", async (importOriginal) => ({
 }));
 
 function fixture(resourceBasePath = "/control") {
-  const state: ApplicationGatewaySnapshot = {
+  const state: ApplicationGatewaySnapshot = createApplicationGatewaySnapshot({
     client: {} as GatewayBrowserClient,
     phase: "connected",
-    offlineStable: false,
-    hello: null,
-    canvasPluginSurfaceUrl: null,
-    assistantAgentId: null,
     sessionKey: "main",
-    lastError: null,
-    lastErrorCode: null,
     selfUser: { id: "profile-a" },
-  };
+  });
   const gateway = createApplicationGateway(state);
   gateway.gateway.connection.gatewayUrl = `${location.origin.replace(/^http/u, "ws")}/ws`;
   gateway.gateway.connection.token = "test-credential";

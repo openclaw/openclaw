@@ -130,6 +130,9 @@ export type OpenClawToolsOptions = {
   sessionPortalTarget?: import("./tools/session-portal-target.js").SessionPortalToolTarget;
   sandboxBrowserBridgeUrl?: string;
   allowHostBrowserControl?: boolean;
+  /** Host-prepared local exec parity for this run's managed browser requests. */
+  allowLocalBrowserLoopback?: boolean;
+  assertLocalBrowserLoopbackCurrent?: () => void;
   agentSessionKey?: string;
   agentChannel?: string;
   /** Prepared active-conversation support for structured human questions. */

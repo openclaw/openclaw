@@ -273,12 +273,7 @@ async function runPreparedCliAgentOwned(
     ...(params.config ? { config: params.config } : {}),
     ...contextWindowFields(),
     ...buildAgentHookContextChannelFields(params),
-    ...buildAgentHookContextIdentityFields({
-      trigger: params.trigger,
-      senderId: params.senderId,
-      chatId: params.chatId,
-      channelContext: params.channelContext,
-    }),
+    ...buildAgentHookContextIdentityFields(params),
   } as const;
 
   const buildAgentEndMessages = (lastAssistant?: unknown): unknown[] =>

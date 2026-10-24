@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { CLI_PARENT_BOUND_PRELOAD, CLI_RESPAWN_PARENT_ENV } from "./cli-parent-lifetime.mjs";
+import { hasNodeStartupHooks } from "./node-runtime-env.mjs";
 
 /** Packaging owns hashes; launch planning consumes only the artifact identity. */
 export function readStandaloneRuntimeManifest(executable = process.execPath) {
@@ -182,6 +183,13 @@ export function getEmbeddedStandaloneRuntimeRoot() {
   return typeof rootUrl === "string" ? fileURLToPath(rootUrl) : undefined;
 }
 
+/** Image membership comes from the compiler's module inventory, never disk contents. */
+export function isEmbeddedStandaloneModule(modulePath) {
+  const filename = modulePath.startsWith("file:") ? fileURLToPath(modulePath) : modulePath;
+  // eslint-disable-next-line no-underscore-dangle -- Compiler bootstrap contract.
+  return globalThis.__openclawStandaloneIsEmbeddedModule?.(filename) === true;
+}
+
 function resolveStandaloneSidecarRoot(executable) {
   if (executable === process.execPath) {
     const embeddedRoot = getEmbeddedStandaloneRuntimeRoot();
@@ -195,6 +203,15 @@ function resolveStandaloneSidecarRoot(executable) {
 
 export function isStandaloneRuntimeExecutable(executable = process.execPath) {
   return resolveStandaloneSidecarRoot(executable) !== undefined;
+}
+
+/** Startup hooks can own a separate compiler/reaper; source filenames cannot prove that. */
+export function runtimeHasSourceLoader() {
+  // BUN_BE_BUN executes disk programs, even when the executable has a manifest.
+  if (process.env.BUN_BE_BUN !== "1" && isStandaloneRuntimeExecutable()) {
+    return false;
+  }
+  return hasNodeStartupHooks(process.execArgv, process.env.NODE_OPTIONS);
 }
 
 /** Disk-executed package-manager programs belong to the standalone sidecar. */

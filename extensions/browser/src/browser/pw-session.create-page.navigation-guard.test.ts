@@ -252,6 +252,24 @@ afterEach(async () => {
 });
 
 describe("pw-session createPageViaPlaywright navigation guard", () => {
+  it("does not navigate after preview authority is revoked during page preparation", async () => {
+    let current = true;
+    vi.spyOn(f.page.context(), "newPage").mockImplementationOnce(async () => {
+      current = false;
+      return f.page;
+    });
+    await expect(
+      create({
+        assertNavigationCurrent: () => {
+          if (!current) {
+            throw new Error("preview invocation revoked");
+          }
+        },
+      }),
+    ).rejects.toThrow("preview invocation revoked");
+    expect(f.pageGoto).not.toHaveBeenCalled();
+    expect(f.pageClose).toHaveBeenCalledOnce();
+  });
   it("blocks hostname navigation when strict SSRF policy is configured", async () => {
     getChromeWebSocketEndpointSpy.mockResolvedValue({
       url: "ws://127.0.0.1:18792/devtools/browser/ROOT",

@@ -29,6 +29,21 @@ import {
 import { createReplyDispatcher } from "./reply-dispatcher.js";
 import { buildTestCtx } from "./test-ctx.js";
 
+function createMirroredTextReply(text: string, idempotencyKey: string) {
+  return setReplyPayloadMetadata(
+    { text },
+    {
+      deliverDespiteSourceReplySuppression: true,
+      sourceReplyTranscriptMirror: {
+        sessionKey: "agent:main:main",
+        agentId: "main",
+        text,
+        idempotencyKey,
+      },
+    },
+  );
+}
+
 beforeAll(globalBeforeAll0);
 
 describe("sendPolicy deny — suppress delivery, not processing (#53328)", () => {
@@ -307,17 +322,9 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     };
     const deliver = vi.fn();
     const dispatcher = createReplyDispatcher({ deliver });
-    const sourceReply = setReplyPayloadMetadata(
-      { text: "message tool reply" },
-      {
-        deliverDespiteSourceReplySuppression: true,
-        sourceReplyTranscriptMirror: {
-          sessionKey: "agent:main:main",
-          agentId: "main",
-          text: "message tool reply",
-          idempotencyKey: "run-1:internal-source-reply:0",
-        },
-      },
+    const sourceReply = createMirroredTextReply(
+      "message tool reply",
+      "run-1:internal-source-reply:0",
     );
     const replyResolver = vi.fn(async () => sourceReply satisfies ReplyPayload);
     transcriptMocks.appendAssistantMessageToSessionTranscript.mockClear();
@@ -436,18 +443,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
         order.push("first-delivery");
       },
     });
-    const firstReply = setReplyPayloadMetadata(
-      { text: "first reply" },
-      {
-        deliverDespiteSourceReplySuppression: true,
-        sourceReplyTranscriptMirror: {
-          sessionKey: "agent:main:main",
-          agentId: "main",
-          text: "first reply",
-          idempotencyKey: "run-1:internal-source-reply:queued",
-        },
-      },
-    );
+    const firstReply = createMirroredTextReply("first reply", "run-1:internal-source-reply:queued");
     transcriptMocks.appendAssistantMessageToSessionTranscript.mockImplementationOnce(async () => {
       order.push("mirror");
       return {
@@ -513,17 +509,9 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     };
     const deliver = vi.fn();
     const dispatcher = createReplyDispatcher({ deliver, beforeDeliver: async () => null });
-    const sourceReply = setReplyPayloadMetadata(
-      { text: "message tool reply" },
-      {
-        deliverDespiteSourceReplySuppression: true,
-        sourceReplyTranscriptMirror: {
-          sessionKey: "agent:main:main",
-          agentId: "main",
-          text: "message tool reply",
-          idempotencyKey: "run-1:internal-source-reply:0",
-        },
-      },
+    const sourceReply = createMirroredTextReply(
+      "message tool reply",
+      "run-1:internal-source-reply:0",
     );
     const replyResolver = vi.fn(async () => sourceReply satisfies ReplyPayload);
     transcriptMocks.appendAssistantMessageToSessionTranscript.mockClear();
@@ -554,17 +542,9 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
       sendPolicy: "allow",
     };
     const dispatcher = createDispatcher();
-    const sourceReply = setReplyPayloadMetadata(
-      { text: "message tool reply" },
-      {
-        deliverDespiteSourceReplySuppression: true,
-        sourceReplyTranscriptMirror: {
-          sessionKey: "agent:main:main",
-          agentId: "main",
-          text: "message tool reply",
-          idempotencyKey: "run-tts:internal-source-reply:0",
-        },
-      },
+    const sourceReply = createMirroredTextReply(
+      "message tool reply",
+      "run-tts:internal-source-reply:0",
     );
     const replyResolver = vi.fn(async () => sourceReply satisfies ReplyPayload);
 

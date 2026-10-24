@@ -320,3 +320,14 @@ export function testWorkerLaunchInput(
     ),
   };
 }
+
+export function testIsolatedWorkerLaunchInput(
+  workspaceDir: string,
+  launchId: string,
+  prompt = "success",
+) {
+  const input = testWorkerLaunchInput(workspaceDir, launchId, prompt);
+  input.descriptor.admission.environmentId = `environment-${launchId}`;
+  input.descriptor.admission.sessionId = `session-${launchId}`;
+  return input;
+}

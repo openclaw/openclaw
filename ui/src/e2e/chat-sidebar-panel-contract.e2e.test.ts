@@ -112,7 +112,16 @@ function coldOpenScenario(populated = false): ControlUiMockGatewayScenario {
     ...(populated
       ? {
           sessions: [
-            { key: "agent:main:main", kind: "direct", label: "Main", updatedAt: 1 },
+            {
+              key: "agent:main:main",
+              sessionId: "main-session",
+              kind: "direct",
+              label: "Main",
+              updatedAt: 1,
+              totalTokens: 2000,
+              totalTokensFresh: true,
+              contextTokens: 100000,
+            },
             {
               key: "agent:main:subagent:panel-content",
               kind: "direct",
@@ -319,6 +328,7 @@ async function readSlotColdOpenOutcome(
     } finally {
       held?.release();
     }
+
     if (label === "Processes") {
       const processes = page.locator("openclaw-chat-processes-panel");
       await processes

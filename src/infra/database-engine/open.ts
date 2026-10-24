@@ -179,7 +179,12 @@ export function openEngineStore(ref: {
   };
   try {
     const publishSearch = schema.search
-      ? admitPostgresSearch(db, schema.search, identity.namespace)
+      ? admitPostgresSearch(
+          db,
+          schema.search,
+          identity.namespace,
+          ref.existingVersion ? 1 : schema.postgresVectorSearchVersion,
+        )
       : undefined;
     if (!known || (known.engine === "postgres" && known.version !== schema.version)) {
       admitPostgresCapabilities(db);
@@ -232,6 +237,7 @@ export function openEngineStore(ref: {
                   ...schema,
                   ...source,
                   postgresVectorDecoderVersion: source.postgresVectorDecoderVersion,
+                  postgresVectorSearchVersion: source.postgresVectorSearchVersion,
                   version: Number(meta.version),
                 };
               } else {
@@ -279,7 +285,12 @@ export function openEngineStore(ref: {
     // Publish against the committed schema revision, after bootstrap/migration settles.
     publishSearch?.();
     for (const extension of Object.values(getAdmittedPostgresSchema(db)?.searchExtensions ?? {})) {
-      admitPostgresSearch(db, extension, identity.namespace)?.();
+      admitPostgresSearch(
+        db,
+        extension,
+        identity.namespace,
+        schema.postgresVectorSearchVersion,
+      )?.();
     }
     return db;
   } catch (error) {

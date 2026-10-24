@@ -27,22 +27,17 @@ import {
 import * as stateReads from "../state/openclaw-state-db-readonly.js";
 import type { DB } from "../state/openclaw-state-db.generated.js";
 import {
-  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseAsync as closeDatabase,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
-  runOpenClawStateWriteTransaction,
   runOpenClawStateWriteTransaction as writeTransaction,
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import * as worker from "../state/openclaw-state-worker-store.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import {
-  captureConfigHealthStateStore,
   captureConfigHealthStateStore as captureHealth,
-  readConfigHealthStateFromStore,
   readConfigHealthStateFromStore as readHealth,
-  patchConfigHealthEntryToStore,
   patchConfigHealthEntryToStore as patchHealthEntry,
 } from "./io.health-state.js";
 import * as healthOwner from "./io.health-state.js";
@@ -57,7 +52,7 @@ import { hashConfigRaw, normalizeConfigIoDeps } from "./io.read-helpers.js";
 const directories = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
     vi.restoreAllMocks();
-    await closeOpenClawStateDatabaseAsync();
+    await closeDatabase();
     closeOpenClawStateDatabaseForTest();
     cleanup();
   }),
@@ -96,30 +91,16 @@ describe("warnings", () => {
     async (operation) => {
       if (operation === "update") {
         const warm = createHealthDeps();
-        patchConfigHealthEntryToStore(warm, "/warm.json", {
+        patchHealthEntry(warm, "/warm.json", {
           lastObservedSuspiciousSignature: "warm",
         });
-        expect(await captureConfigHealthStateStore(warm, "/warm.json").read()).not.toBeNull();
-        await closeOpenClawStateDatabaseAsync();
+        expect(await captureHealth(warm, "/warm.json").read()).not.toBeNull();
+        await closeDatabase();
       }
       const deps = createHealthDeps();
       makeNewerSchema(deps);
-      let incoming: unknown;
-      const execute = worker.runOpenClawStateWorkerOperation;
-      const spy = vi.spyOn(worker, "runOpenClawStateWorkerOperation").mockImplementation(
-        new Proxy(execute, {
-          async apply(target, receiver, args) {
-            try {
-              return await Reflect.apply(target, receiver, args);
-            } catch (error) {
-              incoming = error;
-              throw error;
-            }
-          },
-        }),
-      );
       try {
-        const store = captureConfigHealthStateStore(deps, "/config.json");
+        const store = captureHealth(deps, "/config.json");
         const previous = await store.read();
         if (operation === "updateAfterFileCommit") {
           expect(previous).toEqual({ state: {}, basis: null });
@@ -127,15 +108,13 @@ describe("warnings", () => {
         const failure = await store[operation](healthEntry, previous).catch(
           (error: unknown) => error,
         );
-        expect(incoming).toBeInstanceOf(StartupMaintenanceRequiredError);
-        expect(failure).toBe(incoming);
+        expect(failure).toBeInstanceOf(StartupMaintenanceRequiredError);
         expect(findStartupMaintenanceRequiredError(failure)).toMatchObject({
           kind: "newer-schema",
         });
         expect(deps.logger.warn).not.toHaveBeenCalled();
       } finally {
-        spy.mockRestore();
-        await closeOpenClawStateDatabaseAsync();
+        await closeDatabase();
       }
     },
   );
@@ -163,9 +142,9 @@ describe("warnings", () => {
 
   function patchHealth(
     deps: ReturnType<typeof createHealthDeps>,
-    changes: Parameters<typeof patchConfigHealthEntryToStore>[2] = healthEntry,
+    changes: Parameters<typeof patchHealthEntry>[2] = healthEntry,
   ) {
-    patchConfigHealthEntryToStore(deps, "/config.json", changes);
+    patchHealthEntry(deps, "/config.json", changes);
   }
 
   function expectWarning(deps: ReturnType<typeof createHealthDeps>, count: number, text: string) {
@@ -182,35 +161,33 @@ describe("warnings", () => {
         observe: false,
       }).readConfigFileSnapshot();
       const observationDeps = normalizeConfigIoDeps(options);
-      await closeOpenClawStateDatabaseAsync();
+      await closeDatabase();
       const mainSql = observeMainThreadSql();
       try {
-        const store = captureConfigHealthStateStore(deps, configPath);
+        const store = captureHealth(deps, configPath);
         expect((await store.read())?.state).toEqual({});
         expect(fs.existsSync(databasePath)).toBe(false);
         await observeConfigSnapshot(observationDeps, snapshot);
-        const verification = captureConfigHealthStateStore(deps, configPath);
+        const verification = captureHealth(deps, configPath);
         const observed = await verification.read();
         expect(observed.state.entries?.[configPath]?.lastKnownGood?.hash).toBe(hashConfigRaw(raw));
-        await closeOpenClawStateDatabaseAsync();
-        const reopened = captureConfigHealthStateStore(deps, configPath);
+        await closeDatabase();
+        const reopened = captureHealth(deps, configPath);
         expect(await reopened.read()).toEqual(observed);
         mainSql.expectIdle();
       } finally {
         mainSql.restore();
       }
-      expect(readConfigHealthStateFromStore(deps).entries?.[configPath]?.lastKnownGood?.hash).toBe(
-        hashConfigRaw(raw),
-      );
+      expect(readHealth(deps).entries?.[configPath]?.lastKnownGood?.hash).toBe(hashConfigRaw(raw));
     });
 
     it("keeps a valid config snapshot when health observation admission retires", async () => {
       const { deps, configPath, options } = configFixture();
-      patchConfigHealthEntryToStore(deps, configPath, {
+      patchHealthEntry(deps, configPath, {
         lastObservedSuspiciousSignature: "seed",
       });
-      const seeded = readConfigHealthStateFromStore(deps);
-      expect(await captureConfigHealthStateStore(deps, configPath).read()).not.toBeNull();
+      const seeded = readHealth(deps);
+      expect(await captureHealth(deps, configPath).read()).not.toBeNull();
       const entered = createDeferredCore();
       const release = createDeferredCore();
       const normalized = normalizeConfigIoDeps(options);
@@ -225,10 +202,10 @@ describe("warnings", () => {
       const pending = createConfigIO({ ...options, fs: normalized.fs }).readConfigFileSnapshot();
       try {
         await entered.promise;
-        await closeOpenClawStateDatabaseAsync();
+        await closeDatabase();
         release.resolve();
         expect((await pending).valid).toBe(true);
-        expect(readConfigHealthStateFromStore(deps)).toEqual(seeded);
+        expect(readHealth(deps)).toEqual(seeded);
       } finally {
         release.resolve();
         await Promise.allSettled([pending]);
@@ -240,7 +217,7 @@ describe("warnings", () => {
       const deps = createHealthDeps();
       const databasePath = resolveOpenClawStateSqlitePath(deps.env);
       fs.mkdirSync(databasePath, { recursive: true });
-      const store = captureConfigHealthStateStore(deps, "/config.json");
+      const store = captureHealth(deps, "/config.json");
       const previous = await store.read();
       expect(previous.state).toEqual({});
       await expect(store.update(healthEntry, previous)).resolves.toEqual({ status: "unavailable" });
@@ -253,7 +230,7 @@ describe("warnings", () => {
 
     it("deduplicates write failures across fresh sync and async config reads", async () => {
       const { deps, configPath, options } = configFixture();
-      const store = captureConfigHealthStateStore(deps, configPath);
+      const store = captureHealth(deps, configPath);
       const previous = await store.read();
       await store.update({ lastObservedSuspiciousSignature: "seed" }, previous);
       openOpenClawStateDatabase(deps).db.exec(`
@@ -274,7 +251,7 @@ describe("warnings", () => {
     it("propagates audit migration required from health writes and config snapshots", async () => {
       const deps = createHealthDeps();
       const { path: databasePath } = openOpenClawStateDatabase(deps);
-      await closeOpenClawStateDatabaseAsync();
+      await closeDatabase();
       closeOpenClawStateDatabaseForTest();
       fs.renameSync(databasePath, `${databasePath}.seed`);
       fs.copyFileSync(`${databasePath}.seed`, databasePath);
@@ -308,7 +285,7 @@ describe("warnings", () => {
       const { db } = openOpenClawStateDatabase(deps);
       db.exec("PRAGMA query_only = ON");
       patchHealth(deps);
-      readConfigHealthStateFromStore(deps);
+      readHealth(deps);
       patchHealth(deps, {});
       patchHealth(deps);
       expectWarning(deps, 1, "readonly database");
@@ -328,7 +305,7 @@ describe("warnings", () => {
 
       db.exec("PRAGMA query_only = OFF; DROP TRIGGER reject_health_write");
       patchHealth(deps);
-      expect(readConfigHealthStateFromStore(deps)).toEqual(healthState);
+      expect(readHealth(deps)).toEqual(healthState);
       db.exec("PRAGMA query_only = ON");
       patchHealth(deps);
       patchHealth(deps);
@@ -344,7 +321,7 @@ describe("warnings", () => {
       db.exec("PRAGMA query_only = OFF");
       const abort = new Error("outer rollback");
       expect(() =>
-        runOpenClawStateWriteTransaction(() => {
+        writeTransaction(() => {
           patchHealth(deps);
           throw abort;
         }, deps),
@@ -353,7 +330,7 @@ describe("warnings", () => {
       patchHealth(deps);
       expect(deps.logger.warn).toHaveBeenCalledTimes(1);
       db.exec("PRAGMA query_only = OFF");
-      expect(readConfigHealthStateFromStore(deps)).toEqual({ entries: {} });
+      expect(readHealth(deps)).toEqual({ entries: {} });
     });
 
     it("keeps identical failures independent for different state databases", () => {
@@ -448,23 +425,42 @@ describe("observation scope", () => {
     expect(signature()).toBe("before");
   });
 
-  it("keeps a pinned snapshot separate from the published live health fact", async () => {
-    const { deps, configPath, capture, setSignature } = fixture();
-    const owner = capture();
-    await owner.read();
-    await readDatabaseSnapshot(
-      async () => {
-        setSignature("live commit");
-        expect(
-          (await owner.read()).state.entries?.[configPath]?.lastObservedSuspiciousSignature,
-        ).toBe("before");
-      },
-      { env: deps.env },
-    );
-    expect((await owner.read()).state.entries?.[configPath]?.lastObservedSuspiciousSignature).toBe(
-      "live commit",
-    );
-  });
+  it.each(["sync", "foreign"] as const)(
+    "keeps pinned health isolated from a %s commit",
+    async (writerKind) => {
+      const { deps, configPath, capture, setSignature, signature } = fixture();
+      await closeDatabase();
+      using writer = new DatabaseSync(resolveOpenClawStateSqlitePath(deps.env));
+      const owner = capture();
+      if (writerKind === "sync") {
+        await owner.read();
+      }
+      const before = await readDatabaseSnapshot(
+        async () => {
+          if (writerKind === "sync") {
+            setSignature("live commit");
+          } else {
+            writer
+              .prepare(
+                "UPDATE config_health_entries SET last_observed_suspicious_signature = ? WHERE config_path = ?",
+              )
+              .run("live commit", configPath);
+          }
+          const pinned = await owner.read();
+          expect(pinned.state.entries?.[configPath]?.lastObservedSuspiciousSignature).toBe(
+            "before",
+          );
+          return pinned;
+        },
+        { env: deps.env },
+      );
+      await owner.update(signaturePatch("stale recovery"), before);
+      expect(signature()).toBe("live commit");
+      expect(
+        (await owner.read()).state.entries?.[configPath]?.lastObservedSuspiciousSignature,
+      ).toBe("live commit");
+    },
+  );
 
   it("publishes imported health rows to an already-read owner", async () => {
     const { deps, configPath, capture } = fixture();
@@ -484,27 +480,6 @@ describe("observation scope", () => {
     expect((await owner.read()).state.entries?.[configPath]?.lastPromotedGood?.hash).toBe(
       "imported",
     );
-  });
-
-  it("reads admitted recovery health without overwriting a foreign commit", async () => {
-    const { deps, configPath, capture, signature } = fixture();
-    await closeDatabase();
-    using writer = new DatabaseSync(resolveOpenClawStateSqlitePath(deps.env));
-    const observation = capture();
-    const before = await readDatabaseSnapshot(
-      async () => {
-        writer
-          .prepare(
-            "UPDATE config_health_entries SET last_observed_suspicious_signature = ? WHERE config_path = ?",
-          )
-          .run("foreign commit", configPath);
-        return observation.read();
-      },
-      { env: deps.env },
-    );
-    expect(before?.state.entries?.[configPath]?.lastObservedSuspiciousSignature).toBe("before");
-    await observation.update(signaturePatch("stale recovery"), before);
-    expect(signature()).toBe("foreign commit");
   });
 
   it("compares every raw health field and absence before applying an observed patch", async () => {
@@ -733,18 +708,18 @@ describe("observation freshness", () => {
       const timestamp = 1_700_000_000_000;
       vi.spyOn(Date, "now").mockReturnValue(timestamp);
       if (present) {
-        patchConfigHealthEntryToStore(options, configPath, {
+        patchHealthEntry(options, configPath, {
           lastPromotedGood: oldPromotion,
           ...(suspicious
             ? { lastKnownGood: oldPromotion, lastObservedSuspiciousSignature: "seed" }
             : {}),
         });
       }
-      patchConfigHealthEntryToStore(options, siblingPath, {
+      patchHealthEntry(options, siblingPath, {
         lastKnownGood: oldPromotion,
         lastPromotedGood: oldPromotion,
       });
-      const baseline = readConfigHealthStateFromStore(options);
+      const baseline = readHealth(options);
       const { db } = openOpenClawStateDatabase({ env });
       const readUpdatedAt = () => readHealthRow(db, configPath)?.updated_at_ms;
       if (present) {
@@ -815,7 +790,7 @@ describe("observation freshness", () => {
           ) {
             // Hold the ordinary SQLite writer before dispatch. The synchronous observer
             // commits after postMessage, before the worker can admit its write transaction.
-            runOpenClawStateWriteTransaction(
+            writeTransaction(
               () => {
                 Reflect.apply(postMessage, this, args);
                 writeNewerObservation();
@@ -843,10 +818,10 @@ describe("observation freshness", () => {
         await observationWork.drain();
         expect(intervened).toBe(true);
         expect(expected).toBeDefined();
-        expect(readConfigHealthStateFromStore(options)).toEqual(expected);
+        expect(readHealth(options)).toEqual(expected);
         expect(expected?.entries?.[siblingPath]).toEqual(baseline.entries?.[siblingPath]);
-        await closeOpenClawStateDatabaseAsync();
-        expect(readConfigHealthStateFromStore(options)).toEqual(expected);
+        await closeDatabase();
+        expect(readHealth(options)).toEqual(expected);
       } finally {
         release.resolve();
         try {
@@ -863,13 +838,13 @@ describe("observation freshness", () => {
     async (legacyText) => {
       const deps = fixture("openclaw-health-legacy-basis-");
       const { configPath, env } = deps;
-      patchConfigHealthEntryToStore(deps, configPath, {
+      patchHealthEntry(deps, configPath, {
         lastObservedSuspiciousSignature: "seed",
       });
       const { db } = openOpenClawStateDatabase({ env });
       const readRow = () => readHealthRow(db, configPath);
       const writeRaw = (text: string) =>
-        runOpenClawStateWriteTransaction(
+        writeTransaction(
           ({ db: writeDb }) => {
             executeSqliteQuerySync(
               writeDb,
@@ -882,7 +857,7 @@ describe("observation freshness", () => {
           { env },
         );
       writeRaw(legacyText);
-      const store = captureConfigHealthStateStore(deps, configPath);
+      const store = captureHealth(deps, configPath);
       const initialRead = await store.read();
       await store.update({ lastObservedSuspiciousSignature: "applied" }, initialRead);
       expect(readRow()?.last_known_good_json).toBe(legacyText);

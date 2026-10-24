@@ -371,11 +371,16 @@ export abstract class ChatPaneSidePanels extends ChatPaneStateOwner {
     this.companionIntents.subagentsShowRequest = take;
     this.requestBackgroundPanel("subagents", "open");
     if (focus) {
-      void this.focusSubagentsPanel();
+      void this.focusSidePanel("subagents");
     }
   }
 
-  private async focusSubagentsPanel(): Promise<void> {
+  protected readonly openContextPanel = (): void => {
+    this.requestBackgroundPanel("context", "open");
+    void this.focusSidePanel("context");
+  };
+
+  private async focusSidePanel(slot: SidebarSlotId): Promise<void> {
     const state = this.state;
     if (!state) {
       return;
@@ -391,7 +396,7 @@ export abstract class ChatPaneSidePanels extends ChatPaneStateOwner {
       this.isConnected &&
       this.state === state &&
       state.sessionKey === sessionKey &&
-      this.isSlotShown(state.sidebarLayout, "subagents")
+      this.isSlotShown(state.sidebarLayout, slot)
     ) {
       region?.focusActiveSideTab({ preventScroll: true });
     }
@@ -442,7 +447,7 @@ export abstract class ChatPaneSidePanels extends ChatPaneStateOwner {
   }
 
   protected requestBackgroundPanel(
-    slot: "subagents" | "processes",
+    slot: "subagents" | "processes" | "context",
     intent: "open" | "close" | "toggle",
   ): void {
     const state = this.state;

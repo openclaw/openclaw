@@ -1,10 +1,7 @@
-import { writeFile } from "node:fs/promises";
-import path from "node:path";
 import { expect, it } from "vitest";
-import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
-import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { captureFrame } from "./sidebar-assertions.test-support.ts";
 import { sidebarSessionList } from "./sidebar-contract.test-support.ts";
 import { selectAllSidebarSessions } from "./sidebar-navigation.test-support.ts";
 
@@ -96,14 +93,7 @@ suite.define(() => {
           expect(iconInk[0]).toEqual(iconInk[1]);
           if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1" && !hasTouch) {
             const sidebar = page.locator(".sidebar.sidebar--rail");
-            const frame = await takeControlUiScreenshotFrame(page, sidebar, [owner], {
-              elements: [sidebar],
-              animations: "disabled",
-            });
-            await writeFile(
-              path.join(createControlUiE2eArtifactDir("sidebar-spacing"), "sidebar.png"),
-              frame.elements[0]!.png,
-            );
+            await captureFrame(suite.artifactDir, "sidebar.png", sidebar, [owner]);
           }
           const toolbarBox = await page.locator(".sidebar-session-toolbar").boundingBox();
           const firstRowBox = await page

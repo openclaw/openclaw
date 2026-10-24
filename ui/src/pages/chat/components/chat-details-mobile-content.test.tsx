@@ -139,7 +139,10 @@ it("retains Outputs demand across publications and returns navigation origins wi
   setPage({ kind: "outputs" });
   flush();
   expect(retain).toHaveBeenCalledOnce();
-  setPage({ kind: "context" });
+  setPage({
+    kind: "task-progress",
+    content: { showTaskProgress: true, onShowTaskProgressChange: vi.fn() },
+  });
   flush();
   expect(release).toHaveBeenCalledOnce();
   setPage({ kind: "root", content });

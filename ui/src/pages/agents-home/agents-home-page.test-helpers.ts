@@ -15,6 +15,7 @@ import { createAgentCapability } from "../../lib/agents/index.ts";
 import type { PluginListResult } from "../../lib/plugins/index.ts";
 import { createSessionCapability } from "../../lib/sessions/index.ts";
 import { createContext } from "../../test-helpers/app-sidebar.ts";
+import { createApplicationGatewaySnapshot } from "../../test-helpers/application-context-fixtures.ts";
 import { createApplicationGateway } from "../../test-helpers/application-context.ts";
 import {
   createGatewayRequestMock,
@@ -309,20 +310,18 @@ export function createPage(options: PageOptions = {}) {
     throw new Error(`Unexpected RPC: ${method}`);
   });
   const client = createTestGatewayClient(request);
-  const source = createApplicationGateway({
-    client,
-    phase: "connected",
-    offlineStable: false,
-    canvasPluginSurfaceUrl: null,
-    hello: gatewayHelloForMethods(
-      ["openclaw.chat", "claws.catalog.search", "claws.catalog.detail", "claws.add.apply"],
-      ["operator.read", "operator.admin"],
-    ),
-    assistantAgentId: "harbor",
-    sessionKey: "agent:harbor:team-room",
-    lastError: null,
-    lastErrorCode: null,
-  });
+  const source = createApplicationGateway(
+    createApplicationGatewaySnapshot({
+      client,
+      phase: "connected",
+      hello: gatewayHelloForMethods(
+        ["openclaw.chat", "claws.catalog.search", "claws.catalog.detail", "claws.add.apply"],
+        ["operator.read", "operator.admin"],
+      ),
+      assistantAgentId: "harbor",
+      sessionKey: "agent:harbor:team-room",
+    }),
+  );
   source.gateway.setSessionKey = vi.fn((sessionKey: string) => {
     source.publish({ ...source.gateway.snapshot, sessionKey });
   });

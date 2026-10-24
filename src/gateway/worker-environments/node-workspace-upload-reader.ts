@@ -333,7 +333,9 @@ export async function readNodeWorkspaceUpload(params: {
         throw new NodeWorkspaceTransferLimitError("Workspace Git pack exceeds its byte limit");
       }
       const needsPack =
-        gitHistory?.descendsFromBase && gitHistory.headCommit !== gitHistory.baseCommit;
+        gitHistory?.descendsFromBase &&
+        !gitHistory.unavailableReason &&
+        gitHistory.headCommit !== gitHistory.baseCommit;
       if (Boolean(needsPack) !== packBytes > 0n) {
         throw new NodeWorkspaceTransferInvalidError(
           "payload",

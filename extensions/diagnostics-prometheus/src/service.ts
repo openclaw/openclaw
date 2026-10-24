@@ -666,7 +666,7 @@ export function createDiagnosticsPrometheusExporter() {
           }
         },
         // Metrics do not consume logs; avoid enabling their diagnostic copy/formatting path.
-        { exclude: ["log.record"] },
+        { exclude: ["log.record"], includePromptStats: false },
         { includePrivateData: false },
       );
       internalDiagnostics = ctx.internalDiagnostics;

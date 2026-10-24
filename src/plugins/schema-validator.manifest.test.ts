@@ -1,4 +1,5 @@
 import { Format } from "typebox/format";
+import { Settings } from "typebox/system";
 import { expect, it, vi } from "vitest";
 import * as schemaDefaults from "../shared/json-schema-defaults.js";
 import {
@@ -15,6 +16,24 @@ const textDefault = (value: string) => ({ type: "string", default: value });
 function objectSchema(props: Record<string, unknown>, extra: Record<string, unknown> = {}) {
   return { type: "object", properties: props, ...extra };
 }
+
+it("does not reuse evaluated properties between cached nonaccelerated checks", () => {
+  const useAcceleration = Settings.Get().useAcceleration;
+  Settings.Set({ useAcceleration: false });
+  try {
+    const schema = {
+      type: "object",
+      anyOf: [{ properties: { a: { type: "number" } } }, { properties: { b: { type: "number" } } }],
+      unevaluatedProperties: false,
+    };
+    expect(check(schema, { a: 1 })).toMatchObject({ ok: true });
+    expect(check(schema, { a: "bad" })).toMatchObject({ ok: false, schemaError: false });
+    expect(check(schema, { b: 2 })).toMatchObject({ ok: true });
+    expect(check(schema, { b: "bad" })).toMatchObject({ ok: false, schemaError: false });
+  } finally {
+    Settings.Set({ useAcceleration });
+  }
+});
 
 it("strips terminal control characters a manifest embedded in the thrown text", () => {
   const escape = String.fromCharCode(27);

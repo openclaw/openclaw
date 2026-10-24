@@ -1,14 +1,11 @@
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import {
-  initializeGlobalHookRunner,
-  resetGlobalHookRunner,
-} from "openclaw/plugin-sdk/hook-runtime";
-import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { resetGlobalHookRunner } from "openclaw/plugin-sdk/hook-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createFixture,
+  installJournalMessageWriteHook,
   createJournalSession,
   emitReplayGroup,
   transcriptMessages,
@@ -26,9 +23,7 @@ describe("Copilot caller-owned transcript", () => {
       const hook = vi.fn(({ message }) =>
         blocked && message.role === "toolResult" ? { block: true } : undefined,
       );
-      initializeGlobalHookRunner(
-        createMockPluginRegistry([{ hookName: "before_message_write", handler: hook }]),
-      );
+      installJournalMessageWriteHook(hook);
       const fixture = await createFixture();
       fixture.bridge.detach();
       const manager = SessionManager.inMemory(fixture.tempDir);
@@ -94,18 +89,11 @@ describe("Copilot caller-owned transcript", () => {
     const fixture = await createFixture();
     fixture.bridge.detach();
     const manager = SessionManager.inMemory(fixture.tempDir);
-    initializeGlobalHookRunner(
-      createMockPluginRegistry([
-        {
-          hookName: "before_message_write",
-          handler: (input: unknown) => {
-            if ((input as { message: AgentMessage }).message.role === "assistant") {
-              manager.newSession();
-            }
-          },
-        },
-      ]),
-    );
+    installJournalMessageWriteHook((input: unknown) => {
+      if ((input as { message: AgentMessage }).message.role === "assistant") {
+        manager.newSession();
+      }
+    });
     const { journal, session, bridge } = createJournalSession({
       ...fixture.attempt,
       sessionTarget: undefined,
@@ -122,19 +110,12 @@ describe("Copilot caller-owned transcript", () => {
   });
 
   it("keeps the complete prefix when a tool-result serialization fails", async () => {
-    initializeGlobalHookRunner(
-      createMockPluginRegistry([
-        {
-          hookName: "before_message_write",
-          handler: (input: unknown) => {
-            const message = (input as { message: AgentMessage }).message;
-            return message.role === "toolResult"
-              ? { message: { ...message, details: { nonSerializable: 1n } } }
-              : undefined;
-          },
-        },
-      ]),
-    );
+    installJournalMessageWriteHook((input: unknown) => {
+      const message = (input as { message: AgentMessage }).message;
+      return message.role === "toolResult"
+        ? { message: { ...message, details: { nonSerializable: 1n } } }
+        : undefined;
+    });
     const fixture = await createFixture();
     fixture.bridge.detach();
     const manager = SessionManager.inMemory(fixture.tempDir);

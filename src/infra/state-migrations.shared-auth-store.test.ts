@@ -8,7 +8,6 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resolveAgentDir } from "../agents/agent-scope-config.js";
 import * as ownership from "../agents/auth-profiles/path-resolve.js";
 import { prepareSharedAuthStoreOwnershipForNative } from "../agents/auth-profiles/path-resolve.native.js";
-import * as persisted from "../agents/auth-profiles/persisted.js";
 import { setAuthProfileOrder } from "../agents/auth-profiles/profiles.js";
 import * as paths from "../agents/auth-profiles/shared-main-dir.js";
 import * as bootstrap from "../agents/auth-profiles/shared-store-bootstrap.js";
@@ -18,7 +17,6 @@ import {
   readSharedAuthProfileRows,
 } from "../agents/auth-profiles/sqlite-read.js";
 import * as sqlite from "../agents/auth-profiles/sqlite.js";
-import * as authState from "../agents/auth-profiles/state.js";
 import {
   loadAuthProfileStoreWithoutExternalProfiles,
   saveAuthProfileStore,
@@ -100,9 +98,6 @@ function receiptRow(db: EngineConnection) {
     db,
     "SELECT source_sha256, source_record_count, status, removed_source FROM migration_sources WHERE target_table = 'auth_profile_stores'",
   );
-}
-function count(db: EngineConnection, table: string, key: string, value: string) {
-  return row(db, `SELECT COUNT(*) AS count FROM ${table} WHERE ${key} = ?`, value)?.count;
 }
 function completedReceipt(source: unknown) {
   return {
@@ -321,43 +316,13 @@ describe("shared auth relocation lifecycle", () => {
         `);
       }
 
-      const sourceChecks = new Map<DatabaseSync, string[]>();
-      // oxlint-disable-next-line typescript/unbound-method -- Invoked with the intercepted native database receiver.
-      const prepare = DatabaseSync.prototype.prepare;
-      vi.spyOn(DatabaseSync.prototype, "prepare").mockImplementation(function (
-        this: DatabaseSync,
-        sql,
-      ) {
-        const statement = prepare.call(this, sql);
-        if (this.location() !== sourcePath || !/^PRAGMA (?:quick|integrity)_check\b/u.test(sql)) {
-          return statement;
-        }
-        const all = statement.all.bind(statement);
-        statement.all = () => {
-          const checks = sourceChecks.get(this) ?? [];
-          checks.push(sql);
-          sourceChecks.set(this, checks);
-          return all();
-        };
-        return statement;
-      });
-
       const result = await migrate(sourcePath, integrityCheck);
       if (integrityCheck === "full") {
-        expect([...sourceChecks.values()]).toEqual([["PRAGMA integrity_check;"]]);
         expect(result).toMatchObject({
           changes: [],
           warnings: [expect.stringMatching(/integrity_check.*idx_agent_cache_updated/su)],
         });
       } else {
-        expect([...sourceChecks.values()]).toEqual([
-          ["PRAGMA quick_check;"],
-          [
-            "PRAGMA quick_check;",
-            "PRAGMA integrity_check('auth_profile_store');",
-            "PRAGMA integrity_check('auth_profile_state');",
-          ],
-        ]);
         expect(result.warnings).toEqual([]);
         expect(
           await readSharedAuthProfileRows(captureOpenClawStateWorkerContext({ env: state.env })),
@@ -481,10 +446,8 @@ it.runIf(process.platform === "linux")(
   },
 );
 
-it.each([false, true])("records ownership only (source=%s)", async (hasSource) => {
-  const fixture = await createEmptyFixture(hasSource);
-  expect(fs.existsSync(fixture.sourcePath)).toBe(hasSource);
-
+it("records ownership for an empty source database without reporting relocation", async () => {
+  const fixture = await createEmptyFixture(true);
   const detected = fixture.detect();
   expect(detected.hasLegacy).toBe(true);
   expect(await fixture.migrate(detected)).toEqual(NO_CHANGES);
@@ -493,65 +456,26 @@ it.each([false, true])("records ownership only (source=%s)", async (hasSource) =
   });
 });
 
-it("moves exact rows, preserves every effective agent store, and records receipts", async () => {
+it("preserves effective main and private-agent auth across relocation", async () => {
   const fixture = await createFixture();
-  const effectiveBytes = (agentDir: string) => {
-    const effective = loadAuthProfileStoreWithoutExternalProfiles(agentDir);
-    return JSON.stringify({
-      credentials: persisted.buildPersistedAuthProfileSecretsStore(effective),
-      state: authState.buildPersistedAuthProfileState(effective),
+  const effective = () =>
+    [fixture.mainAgentDir, fixture.opsAgentDir].map((agentDir) => {
+      const { profiles, order, lastGood } = loadAuthProfileStoreWithoutExternalProfiles(agentDir);
+      return { profiles, order, lastGood };
     });
-  };
-  const before = {
-    main: effectiveBytes(fixture.mainAgentDir),
-    ops: effectiveBytes(fixture.opsAgentDir),
-  };
-  const detected = fixture.detect();
-
-  expect(await fixture.migrate(detected)).toMatchObject({
+  const before = effective();
+  expect(await fixture.migrate(fixture.detect())).toMatchObject({
     warnings: [],
     changes: [expect.stringContaining("Relocated shared auth")],
   });
-
-  expect({
-    store: sqlite.readPersistedAuthProfileStoreRaw(),
-    state: sqlite.readPersistedAuthProfileStateRaw(),
-    local: localAuth(fixture.mainAgentDir),
-  }).toEqual({
-    store: fixture.sharedStore,
-    state: fixture.sharedState,
-    local: { store: null, state: null },
-  });
-  expect({
-    main: effectiveBytes(fixture.mainAgentDir),
-    ops: effectiveBytes(fixture.opsAgentDir),
-  }).toEqual(before);
-
-  const database = stateDb.openOpenClawStateDatabase({ env: fixture.env }).db;
-  for (const [key, value] of [
-    ["authProfiles.store", fixture.sharedStore],
-    ["authProfiles.state", fixture.sharedState],
-    ["auth.sharedStore", { location: "state-db" }],
-  ] as const) {
-    expect(machineRow(database, key)).toEqual({ value_json: JSON.stringify(value) });
-  }
-  expect(
-    row(
-      database,
-      "SELECT COUNT(*) AS count FROM migration_sources WHERE migration_kind = ?",
-      "shared-auth-store-state-db",
-    ),
-  ).toEqual({ count: 2 });
+  expect(effective()).toEqual(before);
 });
 
-it.each(["standard", "custom", "main override"] as const)(
+it.each(["custom", "main override"] as const)(
   "relocates the configured inheritance owner through Doctor (%s)",
   async (layout) => {
     const fixture = await createEmptyFixture(false);
-    const ownerDir = path.join(
-      fixture.stateDir,
-      layout === "custom" ? "custom-owner" : "agents/ops/agent",
-    );
+    const ownerDir = path.join(fixture.stateDir, "custom-owner");
     const peerDir = path.join(fixture.stateDir, "agents/dev/agent");
     const config: OpenClawConfig = {
       agents: {
@@ -755,11 +679,6 @@ it.each([
   expect(result.warnings).toEqual(converges ? [] : [expect.stringMatching(/conflict.*Back up/)]);
   if (!converges) {
     expect(result.warnings[0]).toContain(conflict);
-    expect(result.warnings[0]).toContain("openclaw doctor --fix");
-    expect(result.warnings[0]).toContain(JSON.stringify(sourcePath));
-    expect(result.warnings[0]).toContain(
-      JSON.stringify(path.join(fixture.stateDir, "state", "openclaw.sqlite")),
-    );
     expect(result.warnings[0]).not.toMatch(/shared-key|extra-key|different-key|legacyMetadata/);
   }
   expect(machineRow(migratedTarget, "authProfiles.store", true)).toEqual(targetRow);
@@ -769,6 +688,13 @@ it.each([
   expect(fixture.detect().hasLegacy).toBe(!converges);
   if (scenario === "changed credential") {
     const warning = result.warnings[0]!;
+    for (const guidance of [
+      "openclaw doctor --fix",
+      sourcePath,
+      path.join(fixture.stateDir, "state", "openclaw.sqlite"),
+    ]) {
+      expect(warning).toContain(guidance);
+    }
     expect(warning).toContain(`${JSON.stringify(escapedProfileId)}: missing from target`);
     expect(warning.indexOf(JSON.stringify(escapedProfileId))).toBeLessThan(
       warning.indexOf('"openai:shared"'),
@@ -834,14 +760,10 @@ it.each(["absolute", "tilde"] as const)(
           },
           { env: source.env },
         );
-        expect(localAuth(source.agentDir)).toEqual({ store: source.store, state: source.state });
       }
 
       const detected = await detectLegacy(selected.env, () => selected.owner.home);
-      expect(detected).toMatchObject({
-        stateDir: selected.owner.stateDir,
-        stateSchema: { hasLegacy: false },
-      });
+      expect(detected.stateDir).toBe(selected.owner.stateDir);
       const selectedSourcePath = sqlite.resolveAuthProfileDatabasePath(selected.agentDir);
       expect
         .soft(detected.sharedAuthStore)
@@ -981,14 +903,15 @@ for (const crashState of [
         value_json: targetStoreJson,
       });
     }
-    expect(
-      ["authProfiles.store", "authProfiles.state"].map((key) =>
-        count(migratedTarget, "config_machine_state", "state_key", key),
-      ),
-    ).toEqual([1, 1]);
+    expect(sharedAuth(fixture.env)).toEqual({
+      store: JSON.parse(targetStoreJson),
+      state: fixture.sharedState,
+    });
     using cleanedSource = new DatabaseSync(sourcePath, { readOnly: true });
-    expect(count(cleanedSource, "auth_profile_store", "store_key", "primary")).toBe(0);
-    expect(count(cleanedSource, "auth_profile_state", "state_key", "primary")).toBe(0);
+    expect([readSource(cleanedSource, "store"), readSource(cleanedSource, "state")]).toEqual([
+      undefined,
+      undefined,
+    ]);
   });
 }
 

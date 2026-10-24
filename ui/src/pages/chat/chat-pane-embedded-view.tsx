@@ -45,6 +45,9 @@ const Terminal = lazy(() => import("../../components/terminal/terminal-panel-reg
 const Browser = lazy(() => import("../../components/browser/browser-panel.ts"), {
   export: "BrowserPanelHost",
 });
+const Context = lazy(() => import("./components/chat-context-panel.tsx"), {
+  export: "ChatContextPanel",
+});
 const Companion = lazy(() => import("./components/chat-session-rail.tsx"), {
   export: "ChatSessionRail",
 });
@@ -321,6 +324,19 @@ function SubagentsPanel(props: Props) {
   );
 }
 
+function ContextPanel(props: Props) {
+  const presented = usePanePresentation(() => props.contextPresented ?? false);
+  return (
+    <Context
+      data-sidebar-panel-host
+      ref={[elementRef(props.registerPanelHost)]}
+      details={props.contextDetails}
+      presented={presented()}
+      onScrollPortRef={props.onScrollPortRef}
+    />
+  );
+}
+
 function ProcessesPanel(props: Props) {
   const presented = usePanePresentation(() => props.processesPresented ?? false);
   return (
@@ -383,6 +399,7 @@ const embeddedPanels: Partial<
   portal: PortalPanel,
   subagents: SubagentsPanel,
   processes: ProcessesPanel,
+  context: ContextPanel,
   "link-reader": LinkReaderPanel,
   workspace: WorkspacePanel,
   detail: DetailPanel,
@@ -397,7 +414,9 @@ export function SidebarPanel(
   const [activated] = createSignal(
     (previous = false) =>
       previous ||
-      (props.definition.slot !== "dashboard" && props.definition.slot !== "workspace") ||
+      (props.definition.slot !== "dashboard" &&
+        props.definition.slot !== "workspace" &&
+        props.definition.slot !== "context") ||
       props.visible !== false,
   );
   return (
@@ -440,6 +459,9 @@ declare module "@solidjs/web" {
       >;
       "openclaw-chat-subagents-panel": EmbeddedAttributes<
         HTMLElementTagNameMap["openclaw-chat-subagents-panel"]
+      >;
+      "openclaw-chat-context-panel": EmbeddedAttributes<
+        HTMLElementTagNameMap["openclaw-chat-context-panel"]
       >;
       "openclaw-chat-processes-panel": EmbeddedAttributes<
         HTMLElementTagNameMap["openclaw-chat-processes-panel"]

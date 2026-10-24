@@ -181,7 +181,7 @@ describe("restart verifier local control identity", () => {
                 );
                 return;
               }
-              if (request.method !== "health" && !scopes.includes("operator.read")) {
+              if (request.method !== "health" || !scopes.includes("operator.read")) {
                 reject("missing scope: operator.read");
                 return;
               }

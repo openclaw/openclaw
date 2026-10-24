@@ -600,9 +600,11 @@ describe("main session recovery store", () => {
     expect(read().mainRestartRecovery?.foregroundClaims?.tokens).toEqual([claim.lease.claimId]);
   });
 
-  it("leaves interrupted non-main rows to their specialized recovery owner", async () => {
+  it("leaves interrupted children without session recovery custody to their registry", async () => {
     const subagentKey = "agent:main:subagent:child";
-    await seedExact({ [subagentKey]: interruptedEntry({ spawnDepth: 1 }) });
+    await seedExact({
+      [subagentKey]: interruptedEntry({ spawnDepth: 1, mainRestartRecovery: undefined }),
+    });
 
     const claim = await claimRecovery({ target: { sessionKey: subagentKey, storePath } });
 

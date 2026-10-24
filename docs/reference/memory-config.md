@@ -266,10 +266,46 @@ authentication.
 
 ---
 
+## Query instructions
+
+Set `memory.search.queryInstruction` when your embedding model requires a text
+prefix for retrieval queries, especially when a local server exposes the model
+under an alias that OpenClaw cannot recognize:
+
+```json5
+{
+  memory: {
+    search: {
+      provider: "openai-compatible",
+      model: "my-nomic-alias",
+      remote: { baseUrl: "http://127.0.0.1:1234/v1" },
+      queryInstruction: "search_query: ",
+    },
+  },
+}
+```
+
+The instruction is prepended literally to query text. Include any required
+spaces or newlines; OpenClaw does not trim it, add a separator, or expand
+placeholders. This changes query embeddings only. Document text, stored
+embeddings, and index identity stay unchanged, so changing the instruction does
+not require reindexing. The `queryInputType` setting is separate: it sends an
+API `input_type` label rather than changing text.
+
+A non-empty instruction replaces automatic query formatting, including native
+Ollama's model-family templates, so the prefix is applied once. When unset or
+empty, existing provider behavior is preserved. Per-agent overrides use
+`agents.entries.<id>.memory.search.queryInstruction`; an empty string suppresses
+an inherited instruction and restores the provider's automatic behavior.
+
 ## Provider-specific config
 
 <AccordionGroup>
   <Accordion title="Gemini">
+    Set `provider: "gemini"` or its alias `provider: "google"`. Both use the
+    same Google credentials and canonical Gemini index identity; switching
+    between these names does not require reindexing.
+
     | Key                    | Type     | Default                | Description                                |
     | ---------------------- | -------- | ---------------------- | ------------------------------------------- |
     | `model`                | `string` | `gemini-embedding-001` | Also supports `gemini-embedding-2`         |

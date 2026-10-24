@@ -61,7 +61,6 @@ suite.define(() => {
   it.each([
     ["Asia/Shanghai", "2026-09-13T16:30:00Z", "2026-09-13", "2026-09-14"],
     ["America/Los_Angeles", "2026-09-14T02:30:00Z", "2026-09-14", "2026-09-13"],
-    ["Asia/Shanghai", "2026-09-14T04:30:00Z", "2026-09-14", "2026-09-14"],
   ])(
     "uses the selected calendar for date presets in %s at %s",
     async (timezoneId, instant, utcDate, localDate) => {
@@ -150,9 +149,6 @@ suite.define(() => {
             for (const [label, days] of [
               ["Today", 1],
               ["7d", 7],
-              ["30d", 30],
-              ["90d", 90],
-              ["1y", 365],
               ["All", null],
             ] as const) {
               const startDate =

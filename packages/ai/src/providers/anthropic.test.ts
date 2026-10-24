@@ -7,6 +7,7 @@ import {
   SYSTEM_PROMPT_RELOCATABLE_BOUNDARY,
   SYSTEM_PROMPT_RELOCATABLE_BOUNDARY_END,
 } from "../utils/system-prompt-cache-boundary.js";
+import { makeProviderModel } from "./provider-model.test-support.js";
 
 const anthropicMockState = vi.hoisted(() => ({
   configs: [] as unknown[],
@@ -119,19 +120,13 @@ function messageDelta(delta: Record<string, unknown>, usage?: Record<string, unk
 }
 
 function makeAnthropicModel(overrides: Partial<Model<"anthropic-messages">> = {}) {
-  return {
-    id: "claude-sonnet-4-6",
+  return makeProviderModel("anthropic-messages", "anthropic", "claude-sonnet-4-6", {
     name: "Claude Sonnet 4.6",
-    provider: "anthropic",
-    api: "anthropic-messages",
     baseUrl: "https://api.anthropic.com",
-    reasoning: true,
-    input: ["text"],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     contextWindow: 200_000,
     maxTokens: 4096,
     ...overrides,
-  } satisfies Model<"anthropic-messages">;
+  });
 }
 
 function makeAnthropicAssistantMessage(

@@ -14,8 +14,7 @@ import { cleanupSessionResources } from "../session-resources.js";
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "../utils/system-prompt-cache-boundary.js";
 import { resolveResponsesContextUsageBoundary } from "./openai-responses-context-usage.js";
 import * as fixtures from "./openai-responses-prompt-observer.test-support.js";
-
-type SdkResponse = { data: AsyncIterable<unknown>; response: Response };
+import type { SdkResponse } from "./openai-responses-sdk.test-support.js";
 
 const sdkState = vi.hoisted(() => ({
   clients: [] as Array<"openai" | "azure">,
@@ -24,27 +23,15 @@ const sdkState = vi.hoisted(() => ({
   requests: [] as Array<Record<string, unknown>>,
 }));
 
-vi.mock("openai", () => {
-  const createClient = (client: "openai" | "azure") =>
-    class MockOpenAI {
-      responses = {
-        create: (request: Record<string, unknown>) => {
-          sdkState.clients.push(client);
-          sdkState.order.push(`${client}.create`);
-          sdkState.requests.push(request);
-          const outcome = sdkState.outcomes.shift() ?? new Error("stop after request");
-          return {
-            withResponse: async () => {
-              if (outcome instanceof Error) {
-                throw outcome;
-              }
-              return outcome;
-            },
-          };
-        },
-      };
-    };
-  return { default: createClient("openai"), AzureOpenAI: createClient("azure") };
+vi.mock("openai", async () => {
+  const { createResponsesSdkMock } = await import("./openai-responses-sdk.test-support.js");
+  return createResponsesSdkMock(sdkState, {
+    unexpectedRequest: "stop after request",
+    onCreate: (client) => {
+      sdkState.clients.push(client);
+      sdkState.order.push(`${client}.create`);
+    },
+  });
 });
 
 import {

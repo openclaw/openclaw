@@ -1,10 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import { createTestAdmittedRunContext } from "../../admitted-run-context.test-support.js";
 import { createUsageAccumulator, mergeUsageIntoAccumulator } from "../usage-accumulator.js";
-import { createEmbeddedRunContextRecoveryState } from "./context-recovery-state.js";
 import {
   assistantMessage,
   attemptResult,
+  createTerminalPreparationInput,
   type OuterContextTokenMeta,
   type TerminalStatsInput,
 } from "./terminal-preparation.test-support.js";
@@ -33,38 +33,28 @@ describe("prepareEmbeddedRunTerminal run stats", () => {
     }
     usageAccumulator.assistantTurns = statsInput.assistantTurns ?? 0;
     usageAccumulator.bridgeCalls = statsInput.bridgeCalls;
-    return prepareEmbeddedRunTerminal({
-      runParams: {
+    return prepareEmbeddedRunTerminal(
+      createTerminalPreparationInput({
         admittedRunContext: createTestAdmittedRunContext("run-1"),
-        sessionId: "session-1",
-        runId: "run-1",
-        workspaceDir: "/tmp/openclaw-test",
-        prompt: "hi",
-        trigger: "user",
-        timeoutMs: 60_000,
-        ...(statsInput.config ? { config: statsInput.config as never } : {}),
-      },
-      attempt: attemptResult({
-        lastAssistant: assistant,
-        currentAttemptAssistant: assistant,
+        runParams: {
+          sessionId: "session-1",
+          runId: "run-1",
+          ...(statsInput.config ? { config: statsInput.config as never } : {}),
+        },
+        attempt: attemptResult({
+          lastAssistant: assistant,
+          currentAttemptAssistant: assistant,
+          currentAttemptCompletedAssistant: assistant,
+          ...statsInput.attempt,
+        }),
         currentAttemptCompletedAssistant: assistant,
-        ...statsInput.attempt,
+        provider,
+        model,
+        activeErrorContext: { provider, model },
+        outerContextTokenMeta: statsInput.outerContextTokenMeta ?? {},
+        usageAccumulator,
       }),
-      currentAttemptCompletedAssistant: assistant,
-      provider,
-      model,
-      activeErrorContext: { provider, model },
-      authProfileStore: { version: 1, profiles: {} },
-      sessionIdUsed: "session-1",
-      outerContextTokenMeta: statsInput.outerContextTokenMeta ?? {},
-      usageAccumulator,
-      contextRecoveryState: createEmbeddedRunContextRecoveryState(),
-      resolvedToolResultFormat: "markdown",
-      terminalState: {
-        outcome: { reason: "completed", status: "ok", stopReason: "stop" },
-        signalOwnedInterruption: false,
-      },
-    });
+    );
   }
 
   const COST_CONFIG = {

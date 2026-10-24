@@ -18,8 +18,6 @@ import { runCliWithExitFinalization } from "./one-shot-exit.js";
 
 const SESSION_ID = "cli-cleanup-fixture-session";
 const PROTOCOL_VERSION = "2025-11-25";
-const CLEANUP_ERROR = "MCP runtime cleanup could not confirm closure";
-const cleanupFailure = new RegExp(`${CLEANUP_ERROR}.*session termination support.*rerun`);
 const CATALOG_ERROR = "fixture catalog unavailable";
 const rpcResults: Record<string, unknown> = {
   initialize: {
@@ -121,77 +119,76 @@ async function probe(args: string[]) {
 const output = (mock: typeof mockLog) => mock.mock.calls.map(([line]) => String(line)).join("\n");
 const errors = () => output(mockError);
 
-it.each<[number, boolean, boolean]>([
-  [204, true, true],
-  [404, true, true],
-  [405, true, true],
-  [400, false, true],
-  [401, false, true],
-  [500, false, true],
-  [400, false, false],
-])("reports DELETE %s cleanup (confirmed=%s, JSON=%s)", async (status, confirmed, json) => {
+it.each<[number, boolean]>([
+  [204, true],
+  [404, true],
+  [405, true],
+  [400, true],
+  [401, true],
+  [500, true],
+  [400, false],
+])("succeeds after DELETE %s (JSON=%s)", async (status, json) => {
   deleteStatus = status;
   await probe(json ? ["--json"] : []);
-  const result = json ? JSON.parse(lastLogLine()) : undefined;
   if (json) {
+    const result = JSON.parse(lastLogLine());
     expect(mockLog).toHaveBeenCalledTimes(1);
     expect(result).toMatchObject({
       servers: { docs: { tools: 1 } },
       tools: ["docs__ping"],
       diagnostics: [],
     });
-    expect(deleteHeaders).toEqual([{ session: SESSION_ID, protocol: PROTOCOL_VERSION }]);
+    expect(result).not.toHaveProperty("cleanupError");
   } else {
     expect(output(mockLog)).toContain("- docs: 1 tools");
   }
-  if (confirmed) {
-    expect(result).not.toHaveProperty("cleanupError");
-    expect(mockError).not.toHaveBeenCalled();
-    expect(process.exitCode).toBeUndefined();
-  } else {
-    expect(json ? result.cleanupError : output(mockLog)).toMatch(cleanupFailure);
-    expect(errors()).toMatch(cleanupFailure);
-    expect(process.exitCode).toBe(1);
-  }
+  expect(deleteHeaders).toEqual([{ session: SESSION_ID, protocol: PROTOCOL_VERSION }]);
+  expect(mockError).not.toHaveBeenCalled();
+  expect(process.exitCode).toBeUndefined();
 });
 
-it("includes uncertain cleanup as an error in the Doctor JSON report", async () => {
-  await expect(run("doctor", "docs", "--probe", "--json")).rejects.toMatchObject({ code: 1 });
-  const issues = expect.arrayContaining([
-    { level: "error", message: expect.stringMatching(cleanupFailure) },
-  ]);
+it("reports Doctor success when DELETE is unconfirmed", async () => {
+  await run("doctor", "docs", "--probe", "--json");
   expect(JSON.parse(lastLogLine())).toMatchObject({
-    ok: false,
-    servers: [{ name: "docs", ok: false, issues }],
+    ok: true,
+    servers: [{ name: "docs", ok: true, issues: [] }],
   });
-});
-
-it.each(["add", "configure"] as const)("keeps config on failed %s cleanup", async (command) => {
-  if (command === "add") {
-    await fs.writeFile(configPath, JSON.stringify({ mcp: { servers: {} } }) + "\n");
-  }
-  const before = await fs.readFile(configPath, "utf8");
-  const args =
-    command === "add"
-      ? ["add", "docs", "--url", endpoint, "--transport", "streamable-http"]
-      : ["configure", "docs", "--include", "ping", "--probe"];
-  await expect(run(...args)).rejects.toMatchObject({ code: 1 });
-  expect(errors()).toMatch(cleanupFailure);
-  expect(errors()).toContain("Configuration was not saved.");
-  expect(await fs.readFile(configPath, "utf8")).toBe(before);
+  expect(mockError).not.toHaveBeenCalled();
+  expect(process.exitCode).toBeUndefined();
   expect(deleteHeaders).toEqual([{ session: SESSION_ID, protocol: PROTOCOL_VERSION }]);
 });
 
-it("preserves the discovery diagnostic when cleanup also fails", async () => {
+it.each(["add", "configure"] as const)(
+  "saves %s config when DELETE is unconfirmed",
+  async (command) => {
+    if (command === "add") {
+      await fs.writeFile(configPath, JSON.stringify({ mcp: { servers: {} } }) + "\n");
+    }
+    const args =
+      command === "add"
+        ? ["add", "docs", "--url", endpoint, "--transport", "streamable-http"]
+        : ["configure", "docs", "--probe"];
+    await run(...args, "--include", "ping");
+    expect(JSON.parse(await fs.readFile(configPath, "utf8")).mcp.servers.docs).toMatchObject({
+      url: endpoint,
+      transport: "streamable-http",
+      toolFilter: { include: ["ping"] },
+    });
+    expect(mockError).not.toHaveBeenCalled();
+    expect(process.exitCode).toBeUndefined();
+    expect(deleteHeaders).toEqual([{ session: SESSION_ID, protocol: PROTOCOL_VERSION }]);
+  },
+);
+
+it("preserves the discovery failure when DELETE is unconfirmed", async () => {
   failCatalog = true;
   await probe(["--json"]);
-  expect(JSON.parse(lastLogLine())).toMatchObject({
+  const result = JSON.parse(lastLogLine());
+  expect(result).toMatchObject({
     diagnostics: [{ serverName: "docs", message: expect.stringContaining(CATALOG_ERROR) }],
-    cleanupError: expect.stringContaining(CLEANUP_ERROR),
   });
+  expect(result).not.toHaveProperty("cleanupError");
   expect(errors()).toContain(CATALOG_ERROR);
-  expect(errors()).toContain(CLEANUP_ERROR);
-  expect(errors().indexOf(CATALOG_ERROR)).toBeLessThan(errors().indexOf(CLEANUP_ERROR));
   expect(process.exitCode).toBe(1);
   expect(deleteHeaders).toEqual([{ session: SESSION_ID, protocol: PROTOCOL_VERSION }]);
 });

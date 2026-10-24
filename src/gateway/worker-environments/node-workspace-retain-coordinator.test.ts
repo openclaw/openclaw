@@ -15,28 +15,20 @@ import type {
 import { createNodeRegistryRuntime, updateNodeRunnerInventory } from "../node-registry-private.js";
 import { NodeRegistry } from "../node-registry.js";
 import { makeClient, registerNodeSession } from "../node-registry.test-helpers.js";
+import { createNodeWorkerBundleTestNode } from "./node-worker-bundle.test-support.js";
 import { createNodeWorkspaceRetainCoordinator } from "./node-workspace-retain-coordinator.js";
 import { WorkerPlacementInventoryChangedError } from "./placement-inventory-changed-error.js";
 import type { WorkerSessionPlacementStore as PlacementStore } from "./placement-store.js";
 
 type BundleStatus = NonNullable<ReturnType<NonNullable<Transport["getBundleStatus"]>>>;
 
-const node = {
-  nodeId: "node-1",
+const node = createNodeWorkerBundleTestNode({
   connId: "connection-1",
-  pairingIdentity: "pairing-1",
-  pairingGeneration: "generation-1",
-  clientId: "node-host",
-  clientMode: "node",
-  protocolFeature: NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
   workerHost: {
-    enabled: true,
-    capacity: { total: 2, available: 2 },
     bundleRetention: 1,
     bundleStatus: 1,
   },
-  commands: [],
-} as const;
+});
 
 function receipt(bundleHash: string, openclawVersion = "2026.8.9") {
   return { bundleHash, openclawVersion, protocolFeatures: [], installKind: "bundle" };

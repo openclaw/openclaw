@@ -11,9 +11,8 @@ import { loadAssistantAttachmentAvailability } from "./chat-message-attachment-a
 import { AssistantAttachments, MessageAttachment } from "./chat-message-attachments-solid.tsx";
 import { MessageImages } from "./chat-message-images-solid.tsx";
 import { managedSource, stubObjectUrls } from "./chat-message-media.test-helpers.ts";
-import type { AttachmentItem, ImageBlock } from "./chat-message-media.ts";
+import type { AttachmentItem, ImageBlock, ImageRenderOptions } from "./chat-message-media.ts";
 import { MessageVideoPreview } from "./chat-message-video-preview-solid.tsx";
-import { SentCommentAttachments } from "./chat-sent-comments.tsx";
 
 vi.mock("../../../lib/media/video-poster.ts", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../../lib/media/video-poster.ts")>()),
@@ -39,6 +38,31 @@ const commentResponse = (text: string) =>
     `Selected text:\n${text}\n\nSource session: agent:main:fixture\nDOM text UTF-16 range: [0, ${text.length})`,
   );
 
+const commentAttachment = (url: string): AttachmentItem => ({
+  type: "attachment",
+  attachment: { kind: "document", label: "selection-comment.txt", mimeType: "text/plain", url },
+});
+const commentOptions: ImageRenderOptions = {
+  sessionKey: "agent:main:first",
+  authToken: "test-token",
+  policyKey: "first-policy",
+  connectionEpoch: 1,
+  messageSendId: "same-send",
+};
+function mountComments(initial: AttachmentItem[]) {
+  const [comments, setComments] = createSignal(initial);
+  const [options, setOptions] = createSignal(commentOptions);
+  const view = mountSolid(() => (
+    <AssistantAttachments
+      inlinePlayback={false}
+      inlineComments
+      attachments={comments()}
+      options={options()}
+    />
+  ));
+  return { ...view, setComments, setOptions };
+}
+
 it.each([
   { retirement: "replacement", inline: false },
   { retirement: "removal", inline: false },
@@ -55,20 +79,16 @@ it.each([
       .mockReturnValueOnce(second.promise);
     vi.stubGlobal("fetch", fetchMock);
     const initialComments = ["first", "second"].map((name) =>
-      attachment("document", name, `https://example.test/${name}.txt`),
+      commentAttachment(`/__openclaw__/fixtures/${name}.txt`),
     );
     const [comments, setComments] = createSignal(initialComments);
     const [presentation, setPresentation] = createSignal({ inline });
     const view = mountSolid(() => (
-      <SentCommentAttachments
-        inline={presentation().inline}
-        comments={comments()}
+      <AssistantAttachments
+        inlinePlayback={false}
+        inlineComments={presentation().inline}
+        attachments={comments()}
         options={{}}
-        resolve={(item) => ({
-          identity: item.attachment.url,
-          src: item.attachment.url,
-          fallback: () => <span>Unavailable</span>,
-        })}
       />
     ));
     if (!inline) {
@@ -104,6 +124,108 @@ it.each([
     expect(document.body.textContent).not.toContain("first source");
   },
 );
+
+it.each([
+  ["session", { sessionKey: "agent:main:second" }],
+  ["auth", { authToken: "replacement-token" }],
+  ["policy", { policyKey: "second-policy" }],
+  ["connection", { connectionEpoch: 2 }],
+  ["send", { messageSendId: "another-send" }],
+] as const)("clears the previous annotation when %s changes", async (_name, changed) => {
+  const pending = createDeferred<Response>();
+  const fetchMock = vi
+    .fn<typeof fetch>()
+    .mockResolvedValueOnce(commentResponse("Original passage"))
+    .mockReturnValue(pending.promise);
+  vi.stubGlobal("fetch", fetchMock);
+  const view = mountComments([commentAttachment("blob:scope")]);
+  await waitForSolid(() => expect(view.container.textContent).toContain("Original passage"));
+  view.setOptions({ ...commentOptions, ...changed });
+  await waitForSolid(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+  expect(view.container.textContent).not.toContain("Original passage");
+  view.unmount();
+  pending.resolve(commentResponse("Replacement passage"));
+});
+
+it.each(["denied", "oversized"])(
+  "clears a retained annotation when its replacement is %s",
+  async (reason) => {
+    vi.stubGlobal("IntersectionObserver", undefined);
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(commentResponse("Original passage"))
+      .mockResolvedValue(
+        Response.json({ available: false, reason: "Unavailable annotation", retryable: false }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+    const item = commentAttachment("blob:annotation");
+    const view = mountComments([item]);
+    await waitForSolid(() => expect(view.container.textContent).toContain("Original passage"));
+    view.setComments([
+      {
+        ...item,
+        attachment: {
+          ...item.attachment,
+          ...(reason === "denied"
+            ? { url: "media://inbound/denied.txt" }
+            : { sizeBytes: 256 * 1024 + 1 }),
+        },
+      },
+    ]);
+    await waitForSolid(() =>
+      expect(view.container.querySelector(".chat-assistant-attachment-card")).not.toBeNull(),
+    );
+    expect(view.container.textContent).not.toContain("Original passage");
+    expect(fetchMock).toHaveBeenCalledTimes(reason === "denied" ? 2 : 1);
+  },
+);
+
+it("preserves staggered canonical comments and clears the old set on removal", async () => {
+  const firstRead = createDeferred<Response>();
+  const secondRead = createDeferred<Response>();
+  const replacement = createDeferred<Response>();
+  const fetchMock = vi
+    .fn<typeof fetch>()
+    .mockResolvedValueOnce(commentResponse("First passage"))
+    .mockResolvedValueOnce(commentResponse("Second passage"))
+    .mockReturnValueOnce(firstRead.promise)
+    .mockReturnValueOnce(secondRead.promise)
+    .mockImplementation(() => replacement.promise);
+  vi.stubGlobal("fetch", fetchMock);
+  const indexes = [0, 1];
+  const view = mountComments(
+    indexes.map((index) => commentAttachment(`blob:local-comment-${index}`)),
+  );
+  const selected = () =>
+    Array.from(view.container.querySelectorAll(".chat-sent-comments-inline__selection")).map(
+      (element) => element.textContent,
+    );
+  try {
+    await waitForSolid(() => expect(selected()).toEqual(["First passage", "Second passage"]));
+    const canonical = indexes.map((index) =>
+      commentAttachment(`/__openclaw__/fixtures/canonical-comment-${index}.txt`),
+    );
+    view.setComments(canonical);
+    await waitForSolid(() => expect(fetchMock).toHaveBeenCalledTimes(4));
+    expect(selected()).toEqual(["First passage", "Second passage"]);
+    firstRead.resolve(commentResponse("First canonical passage"));
+    await waitForSolid(() =>
+      expect(selected()).toEqual(["First canonical passage", "Second passage"]),
+    );
+    secondRead.resolve(commentResponse("Second canonical passage"));
+    await waitForSolid(() =>
+      expect(selected()).toEqual(["First canonical passage", "Second canonical passage"]),
+    );
+    view.setComments(canonical.slice(1));
+    flush();
+    expect(selected()).toEqual([]);
+  } finally {
+    firstRead.resolve(commentResponse("First canonical passage"));
+    secondRead.resolve(commentResponse("Second canonical passage"));
+    replacement.resolve(commentResponse("Replacement passage"));
+    view.unmount();
+  }
+});
 
 it("keeps the focused native image control and decoded node when gallery metadata changes", () => {
   const source = "data:image/png;base64,cG5n";

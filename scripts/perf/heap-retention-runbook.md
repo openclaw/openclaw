@@ -105,6 +105,70 @@ to appear. Never construct that allowlist from unreviewed snapshot strings.
 Do not substitute the ordinary two-file diff: its object labels and retaining paths are sensitive.
 Review the generated schema and output before exporting aggregates.
 
+### Attribute compiled code to scripts
+
+Use the aggregate-only code mode to rank compiled scripts and detect repeated
+compilation identities:
+
+```bash
+node scripts/heap-snapshot-diff.mjs --code-by-script /path/to/capture.heapsnapshot \
+  --script-allowlist /path/to/reviewed-build-files.txt --top 30 \
+  > /path/to/private-evidence/code-summary.json
+```
+
+`--code-by-script` implies `--summary`; the same on-host isolation and pressure
+guards below apply. Its output contains only aggregate counts/bytes and reviewed
+script names. Build the separate newline-separated script allowlist from the
+**deployed build's file listing**, including JavaScript files in `dist` and
+package-relative JavaScript paths in deployed `node_modules`. Review the listing
+before use; exclude user state, home directories, and symlinks outside the product
+build. List each approved absolute path, file URL, or package-relative spelling
+explicitly. Matching is exact after removing the snapshot name's query/hash:
+there are no prefix, basename, URL-decoding, or realpath matches. Never derive
+this allowlist from snapshot strings. Without an allowlist, all names are redacted.
+List the release that produced the snapshot, not the current symlink: after a
+deploy, `current` resolves to a newer release directory and every name redacts.
+
+`topScripts` ranks retained bytes; `duplicateScripts` includes **every** complete
+normalized identity with multiple reachable V8 Script objects, regardless of
+`--top`. HMAC-SHA-256 values keyed per run distinguish redacted names within one
+report without emitting them; they cannot confirm a guessed path or link runs. Empty
+and truncated names have null hashes and remain separate; match `--string-limit`
+to the capturing runtime. Instance counts measure compiled Script objects, not
+functions or proof of repeated module evaluation. Intentional VM/plugin isolation
+and query-busted imports can both create multiple instances; inspect the loader
+before treating duplication as waste.
+
+Attribution follows Node/V8's Script and SharedFunctionInfo links, closure
+code/feedback links, and strong internal/hidden edges between code nodes. Script
+and function-info seeds stay fixed. Conflicting script associations and tagged
+runtime builtins go to `sharedOrRuntime`; code with no known association goes to
+`unattributed`. This is an inferred association, not an exclusive ownership proof.
+`shallowBytes` partitions reachable code nodes once. `retainedBytes` is the union
+of each group's dominated subtrees, including source strings and non-code data;
+nested code in the same group counts once, but **different rows can overlap**.
+The `total` row unions all reachable code subtrees independently. Do not sum
+retained rows or equate them with `v8.getHeapCodeStatistics()` or expected savings.
+
+`duplicateStringRetainers` ranks excess shallow bytes by a representative direct
+retainer constructor/property and its nearest context or named-constructor
+dominator. It keeps the first largest copy of each complete string and charges
+every other physical node once. Multiple incoming references do not multiply
+the bytes; `multipleIncomingCopies` flags that ambiguity. This is an attribution
+clue, not proof that changing that producer can reclaim the entire row. Shared
+values may remain live elsewhere. `attributedBytes` includes groups outside the
+top-N output; `unattributedBytes` accounts for nodes with no reachable strong
+incoming edge. Both sum to the duplicate estimate.
+
+The report includes safe paths for each displayed group's owner and an example
+retainer. Follow reviewed code identifiers back to source before assigning a
+module. Use `--node ID` to inspect a snapshot-local owner's immediate children;
+`inspectedNodes` prints only allowlisted labels, retained bytes and outgoing
+element-reference counts. The latter can count a sample array's populated
+entries, but is neither array length nor Map size. No payload strings are printed.
+JavaScript string equality compares values, so it cannot prove physical sharing;
+validate string-sharing changes with synthetic heap-node/byte counts instead.
+
 On a shared Linux host, run the analyzer in a dedicated systemd scope with an
 explicit memory bound, no swap, and low CPU/I/O priority. Choose approved CPUs
 for that host. For example:

@@ -14,18 +14,12 @@ import { initializeGitFixture } from "../../agents/worktrees/git-fixture.test-su
 import { ManagedWorktreeService } from "../../agents/worktrees/service.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
-import {
-  loadOrCreateDeviceIdentity,
-  publicKeyRawBase64UrlFromPem,
-} from "../../infra/device-identity.js";
-import { approveDevicePairing } from "../../infra/device-pairing-approval.js";
-import { rotateDeviceToken } from "../../infra/device-pairing-tokens.js";
-import { requestDevicePairing } from "../../infra/device-pairing.js";
 import * as fsSafe from "../../infra/fs-safe.js";
 import { acquireGatewayLock } from "../../infra/gateway-lock.js";
 import { captureGatewayStateOwner } from "../../infra/gateway-state-owner.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { pairOperatorDeviceFixture } from "../paired-device.test-support.js";
 import {
   connectGatewayClient,
   disconnectGatewayClient,
@@ -100,24 +94,13 @@ export async function proveWorkspaceRecoveryAuthority(signal: AbortSignal) {
         const expectedOwnerId = captureGatewayStateOwner(resolveOpenClawStateSqlitePath())?.ownerId;
         expect(expectedOwnerId).toBeTruthy();
         const connectDevice = async (label: string, scopes: string[]) => {
-          const identity = loadOrCreateDeviceIdentity({
-            path: state.path(label, "client", "credentials.sqlite"),
-          });
-          const pending = await requestDevicePairing({
-            deviceId: identity.deviceId,
-            publicKey: publicKeyRawBase64UrlFromPem(identity.publicKeyPem),
+          const { identity, issued: token } = await pairOperatorDeviceFixture({
+            identityPath: state.path(label, "client", "credentials.sqlite"),
+            scopes,
+            tokenScopes: scopes,
             clientId: "test",
             clientMode: "backend",
-            role: "operator",
-            scopes,
-          });
-          await approveDevicePairing(pending.request.requestId, {
             callerScopes: ["operator.admin"],
-          });
-          const token = await rotateDeviceToken({
-            deviceId: identity.deviceId,
-            role: "operator",
-            scopes,
           });
           if (!token.ok) {
             throw new Error("Expected a paired device token");

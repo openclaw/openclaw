@@ -41,51 +41,46 @@ export function headerSessionMetadataPatch(
   return action satisfies never;
 }
 
-function headerSessionActionRow(
-  row: GatewaySessionRow,
-  label: string,
-  rows: readonly GatewaySessionRow[],
-) {
-  return {
-    key: row.key,
-    sessionId: row.sessionId,
-    sharingRole: row.sharingRole,
-    label,
-    pinned: row.pinned === true,
-    unread: row.unread === true,
-    archived: row.archived === true,
-    category: row.category,
-    sidebarRoot: row.sidebarRoot,
-    isChild:
-      !isSubagentSessionKey(row.key) && Boolean(resolveSidebarSessionParentKey(row, new Set())),
-    active: true,
-    hasActiveRun: row.hasActiveRun ?? row.status === "running",
-    gatewayHasActiveRun: row.hasActiveRun,
-    hasActiveSubagentRun: row.hasActiveSubagentRun,
-    hasArchiveDescendants: hasSessionArchiveDescendants(row, rows),
-  };
-}
-
 export function createHeaderSessionActionRows(
   scope: SidebarSessionMutationScope,
-  row: GatewaySessionRow,
+  sourceRow: GatewaySessionRow,
   presentation: {
     label(row: GatewaySessionRow): string;
     rows(): readonly GatewaySessionRow[];
   },
 ) {
-  const toActionSession = (candidate: GatewaySessionRow) =>
-    headerSessionActionRow(candidate, presentation.label(candidate), presentation.rows());
-  const session = toActionSession(row);
+  const toActionSession = (row: GatewaySessionRow) => {
+    const label = presentation.label(row);
+    const rows = presentation.rows();
+    return {
+      key: row.key,
+      sessionId: row.sessionId,
+      sharingRole: row.sharingRole,
+      label,
+      pinned: row.pinned === true,
+      unread: row.unread === true,
+      archived: row.archived === true,
+      category: row.category,
+      sidebarRoot: row.sidebarRoot,
+      isChild:
+        !isSubagentSessionKey(row.key) && Boolean(resolveSidebarSessionParentKey(row, new Set())),
+      active: true,
+      hasActiveRun: row.hasActiveRun ?? row.status === "running",
+      gatewayHasActiveRun: row.hasActiveRun,
+      hasActiveSubagentRun: row.hasActiveSubagentRun,
+      hasArchiveDescendants: hasSessionArchiveDescendants(row, rows),
+    };
+  };
+  const session = toActionSession(sourceRow);
   // Refresh metadata only on the selected instance. Replacements retain the
   // captured ID so the Gateway rejects them; no-ID rows still need roster presence.
   const resolveCurrentSession = (notify = false) => {
     const currentRow = scope.sessions.state.result?.sessions.find(
       (candidate) =>
-        areUiSessionKeysEquivalent(candidate.key, row.key) &&
+        areUiSessionKeysEquivalent(candidate.key, sourceRow.key) &&
         (!session.sessionId || candidate.sessionId === session.sessionId),
     );
-    const resolvedRow = currentRow ?? (session.sessionId ? row : null);
+    const resolvedRow = currentRow ?? (session.sessionId ? sourceRow : null);
     if (!resolvedRow && notify) {
       showToast({ message: t("common.refresh") });
     }

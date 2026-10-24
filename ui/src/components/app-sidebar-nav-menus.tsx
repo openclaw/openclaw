@@ -44,8 +44,6 @@ export function renderSidebarNavLink(params: {
   icon: JSX.Element;
   label: string;
   onNavigate: () => void;
-  onPreload?: (event: Event, immediate?: boolean) => void;
-  onCancelPreload?: (event: Event) => void;
 }): JSX.Element {
   return (
     <a
@@ -54,11 +52,6 @@ export function renderSidebarNavLink(params: {
       href={params.href}
       class={["nav-item", { "nav-item--active": params.active }]}
       aria-current={params.active ? "page" : undefined}
-      onFocus={(event) => params.onPreload?.(event)}
-      onBlur={(event) => params.onCancelPreload?.(event)}
-      onPointerEnter={(event) => params.onPreload?.(event)}
-      onPointerLeave={(event) => params.onCancelPreload?.(event)}
-      onTouchStart={(event) => params.onPreload?.(event, true)}
       onClick={(event: MouseEvent) => handleNavigationClick(event, () => params.onNavigate())}
     >
       <span class="nav-item__icon" aria-hidden="true">

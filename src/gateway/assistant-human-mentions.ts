@@ -46,6 +46,7 @@ function invalid(message: string): Result<never, ErrorShape> {
 export async function injectAssistantMessageWithHumanMentions(
   context: GatewayAssistantInjectionContext & { mentionInbox?: MentionInbox },
   params: AssistantHumanMentionMessage,
+  sessionMutationCommitGuard?: () => void,
 ): Promise<Result<{ messageId: string; replayed?: true }, ErrorShape>> {
   const { mentionInbox } = context;
   if (!mentionInbox) {
@@ -75,21 +76,27 @@ export async function injectAssistantMessageWithHumanMentions(
   }
   const sourceId = `assistant-mention:${key}`;
   let committed: { anchor: TranscriptEntryAnchor; timestamp: number } | undefined;
-  const injected = await injectGatewayAssistantMessage(context, {
-    sessionKey: params.sessionKey,
-    agentId: params.agentId,
-    message: params.text,
-    idempotencyKey: sourceId,
-    humanMentions: mentions,
-    // Replays reach this callback too, so a retry finishes an interrupted delivery;
-    // the Inbox source key and involvement source keep it from alerting twice.
-    onMessageCommitted: ({ anchor, message }) => {
-      const timestamp = asOptionalRecord(message)?.timestamp;
-      if (anchor && typeof timestamp === "number") {
-        committed = { anchor, timestamp };
-      }
+  const injected = await injectGatewayAssistantMessage(
+    context,
+    {
+      sessionKey: params.sessionKey,
+      agentId: params.agentId,
+      message: params.text,
+      idempotencyKey: sourceId,
+      humanMentions: mentions,
+      // Mention offsets bind the exact bytes; Gateway-authored text carries no model directives.
+      literal: true,
+      // Replays reach this callback too, so a retry finishes an interrupted delivery;
+      // the Inbox source key and involvement source keep it from alerting twice.
+      onMessageCommitted: ({ anchor, message }) => {
+        const timestamp = asOptionalRecord(message)?.timestamp;
+        if (anchor && typeof timestamp === "number") {
+          committed = { anchor, timestamp };
+        }
+      },
     },
-  });
+    sessionMutationCommitGuard,
+  );
   // Deliver after the transcript write admission is released; delivery writes session metadata.
   if (injected.ok && committed) {
     const { anchor, timestamp } = committed;

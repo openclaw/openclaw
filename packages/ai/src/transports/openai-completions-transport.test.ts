@@ -1,4 +1,3 @@
-import { createServer } from "node:http";
 import { describe, expect, it, vi } from "vitest";
 import { configureAiTransportHost, getAiTransportHost } from "../host.js";
 import type { OpenAICompletionsOptions } from "../provider-options.js";
@@ -224,76 +223,47 @@ describe("openai completions transport", () => {
 
   it("allows generic OpenAI-compatible chat streams without the ModelStudio turn guard", async () => {
     let capturedRoles: string[] | undefined;
-    const server = createServer((req, res) => {
-      let body = "";
-      req.setEncoding("utf8");
-      req.on("data", (chunk) => {
-        body += chunk;
-      });
-      req.on("end", () => {
+    await withServer(
+      (_req, res, body) => {
         const parsed = JSON.parse(body) as { messages?: Array<{ role?: string }> };
         capturedRoles = parsed.messages?.map((message) => message.role ?? "");
-        res.writeHead(200, {
-          "content-type": "text/event-stream; charset=utf-8",
-          "cache-control": "no-cache",
-          connection: "keep-alive",
-        });
-        res.write(
-          `data: ${JSON.stringify(makeCompletionsChunk({ role: "assistant", content: "OK" }))}\n\n`,
-        );
-        res.write(`data: ${JSON.stringify(makeCompletionsChunk({}, "stop"))}\n\n`);
+        startSse(res, true);
+        writeSse(res, makeCompletionsChunk({ role: "assistant", content: "OK" }));
+        writeSse(res, makeCompletionsChunk({}, "stop"));
         res.write("data: [DONE]\n\n");
         res.end();
-      });
-    });
-
-    await new Promise<void>((resolve) => {
-      server.listen(0, "127.0.0.1", resolve);
-    });
-    try {
-      const address = server.address();
-      if (!address || typeof address === "string") {
-        throw new Error("Missing loopback server address");
-      }
-      const model = makeCompletionsModel({
-        id: "generic-openai-compatible",
-        name: "Generic OpenAI Compatible",
-        provider: "custom-openai-compatible",
-        baseUrl: `http://127.0.0.1:${address.port}/v1`,
-        reasoning: false,
-        contextWindow: 4096,
-        maxTokens: 256,
-      });
-      const stream = createOpenAICompletionsTransportStreamFn()(
-        model,
-        {
-          systemPrompt: "runtime-only system prompt",
-          messages: [],
-          tools: [],
-        } as never,
-        { apiKey: "test-key" } as never,
-      );
-
-      let doneReason: string | undefined;
-      for await (const event of stream as AsyncIterable<{ type: string; reason?: string }>) {
-        if (event.type === "done") {
-          doneReason = event.reason;
-        }
-      }
-
-      expect(capturedRoles).toEqual(["system"]);
-      expect(doneReason).toBe("stop");
-    } finally {
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => {
-          if (error) {
-            reject(error);
-          } else {
-            resolve();
-          }
+      },
+      async (baseUrl) => {
+        const model = makeCompletionsModel({
+          id: "generic-openai-compatible",
+          name: "Generic OpenAI Compatible",
+          provider: "custom-openai-compatible",
+          baseUrl,
+          reasoning: false,
+          contextWindow: 4096,
+          maxTokens: 256,
         });
-      });
-    }
+        const stream = createOpenAICompletionsTransportStreamFn()(
+          model,
+          {
+            systemPrompt: "runtime-only system prompt",
+            messages: [],
+            tools: [],
+          } as never,
+          { apiKey: "test-key" } as never,
+        );
+
+        let doneReason: string | undefined;
+        for await (const event of stream as AsyncIterable<{ type: string; reason?: string }>) {
+          if (event.type === "done") {
+            doneReason = event.reason;
+          }
+        }
+
+        expect(capturedRoles).toEqual(["system"]);
+        expect(doneReason).toBe("stop");
+      },
+    );
   });
 
   it("fails OpenAI completions streams when headers arrive but no first event follows", async () => {

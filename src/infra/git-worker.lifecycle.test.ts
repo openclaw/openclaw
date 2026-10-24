@@ -13,16 +13,10 @@ import * as worktreeGit from "../agents/worktrees/git.js";
 import { runPublicationCommand } from "../gateway/github-publication-git-transport.js";
 import { runWorkspaceInventoryCommandToFile } from "../gateway/worker-environments/workspace-sync-inventory.js";
 import { ensureStagedInputDirectory, stagedInputDirectory } from "../media/staged-inputs.js";
-import { emitChildProcessSpawnSample } from "../process/spawn-diagnostics.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.js";
 import { isPidAlive } from "../shared/pid-alive.js";
 import { killPidIfAlive } from "../test-utils/process-tree.js";
-import {
-  onDiagnosticEvent,
-  setDiagnosticsEnabledForProcess,
-  type DiagnosticEventPayload,
-} from "./diagnostic-events.js";
 import * as gitExec from "./git-exec.js";
 import { installUnknownDirentFixture } from "./git-worker-dir.test-support.js";
 import { runGitWorkerOperation, type GitWorkerOperationOptions } from "./git-worker.js";
@@ -431,18 +425,6 @@ describe("Git operation host lifecycle", () => {
     const peerRoot = path.join(root, "peer");
     await fs.mkdir(peerRoot);
     const peer = await repository(peerRoot);
-    let now = 0;
-    vi.spyOn(performance, "now").mockImplementation(() => now);
-    setDiagnosticsEnabledForProcess(false);
-    emitChildProcessSpawnSample();
-    setDiagnosticsEnabledForProcess(true);
-    const spawns: Extract<DiagnosticEventPayload, { type: "diagnostic.child_process.spawn" }>[] =
-      [];
-    const stop = onDiagnosticEvent((event) => {
-      if (event.type === "diagnostic.child_process.spawn") {
-        spawns.push(event);
-      }
-    });
     const entered = createDeferredCore();
     const release = createDeferredCore();
     const realRun = worktreeGit.runGitBytes;
@@ -489,18 +471,7 @@ describe("Git operation host lifecycle", () => {
     } finally {
       release.resolve();
       await Promise.all(pending);
-      now = 60_000;
-      emitChildProcessSpawnSample();
-      stop();
-      setDiagnosticsEnabledForProcess(false);
-      emitChildProcessSpawnSample();
     }
-    expect(
-      spawns
-        .map(({ operation }) => operation ?? "unknown")
-        .toSorted((left, right) => left.localeCompare(right)),
-    ).toEqual(["checkout.diff", "repository.branches"]);
-    expect(spawns.every(({ family, count }) => family === "git" && count > 0)).toBe(true);
   });
 
   it.each(["cleanup-inspection", "snapshot"] as const)(

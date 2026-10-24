@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { stableStringify } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import "../../agents/test-helpers/fast-bash-tools.js";
 import "../../agents/test-helpers/fast-coding-tools.js";
@@ -106,6 +107,45 @@ afterEach(() => {
 });
 
 describe("resolveWorkerToolAuthority", () => {
+  it.each<{ name: string; overrides: TurnOverrides }>([
+    { name: "default", overrides: {} },
+    {
+      name: "configured review",
+      overrides: {
+        config: { tools: { exec: { host: "gateway", mode: "auto", strictInlineEval: true } } },
+      },
+    },
+    {
+      name: "scheduled approval",
+      overrides: {
+        scheduledToolPolicy: {
+          version: 1,
+          mode: "account",
+          ownerSessionKey: "agent:main:cron:owner",
+          ownerAccountId: "default",
+          execTarget: { host: "gateway", ask: "always" },
+        },
+      },
+    },
+  ])("preserves launch fingerprint bytes across JSON for $name policy", async ({ overrides }) => {
+    const { exec } = await resolvedAuthority(overrides);
+    // The node supervisor fingerprints the projection before and after JSON transport.
+    // oxlint-disable-next-line unicorn/prefer-structured-clone -- Exercise JSON transport, which omits undefined fields.
+    expect(stableStringify(JSON.parse(JSON.stringify(exec)))).toBe(stableStringify(exec));
+  });
+
+  it.each(["auto", "ask"] as const)(
+    "preserves %s exec mode without withholding worker shell tools",
+    async (mode) => {
+      const config = { tools: { exec: { host: "gateway" as const, mode } } };
+      const result = await resolvedAuthority({ config, toolsAllow: ["exec", "process"] });
+      expect(result.exec).toMatchObject({ mode });
+      expect(result.execUnavailable).toBe(false);
+      expect(await authority({ config, toolsAllow: ["exec", "process"] })).toEqual(
+        expect.arrayContaining(["exec", "process"]),
+      );
+    },
+  );
   it("refuses an existing delegated session before exporting worker tool authority", async () => {
     const sessionKey = "agent:main:dashboard:delegated";
     const config = {
@@ -234,12 +274,16 @@ describe("resolveWorkerToolAuthority", () => {
   });
 
   it.each([
-    ["deny", { permissionMode: "read-only" }, { security: "deny", ask: "off" }],
-    ["approval", { permissionMode: "guarded" }, { security: "allowlist", ask: "on-miss" }],
+    ["deny", { permissionMode: "read-only" }, { mode: "deny", security: "deny", ask: "off" }],
+    [
+      "approval",
+      { permissionMode: "guarded" },
+      { mode: "ask", security: "allowlist", ask: "on-miss" },
+    ],
     [
       "node binding",
       { ...sessionNode, execCwd: " /remote/session/workspace " },
-      { host: "node", node: "session-node", security: "full", ask: "off" },
+      { host: "node", mode: "full", node: "session-node", security: "full", ask: "off" },
     ],
   ] as const)(
     "preserves effective exec authority for session %s",

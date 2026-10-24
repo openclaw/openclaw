@@ -27,9 +27,9 @@ import {
   globalInstallArgs,
   isPackageTargetAlreadyCurrent,
   resolveExpectedInstalledVersionFromSpec,
-  resolveGlobalInstallTarget,
   resolveGlobalInstallSpec,
 } from "./update-global.js";
+import { commandResult, resolveTarget } from "./update-global.test-support.js";
 import { resolvePnpmGlobalDirFromGlobalRoot } from "./update-native-package-owner.js";
 import {
   resolveNpmGlobalPrefixLayoutFromGlobalRoot,
@@ -37,10 +37,6 @@ import {
 } from "./update-npm-prefix.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
-
-function commandResult(stdout: string, code = 0) {
-  return { stdout, stderr: "", code };
-}
 
 async function npmFixture(prefix: string, name = "openclaw") {
   const globalRoot = path.join(prefix, "lib/node_modules");
@@ -61,22 +57,6 @@ function npmTarget(globalRoot: string, packageRoot: string, version: string | nu
 
 async function expectPackageError(packageRoot: string, error: string) {
   expect(await collectInstalledGlobalPackageErrors({ packageRoot })).toContain(error);
-}
-
-function resolveTarget(
-  runCommand: CommandRunner,
-  pkgRoot?: string,
-  options: Partial<
-    Omit<Parameters<typeof resolveGlobalInstallTarget>[0], "runCommand" | "pkgRoot" | "timeoutMs">
-  > = {},
-) {
-  return resolveGlobalInstallTarget({
-    manager: "npm",
-    runCommand,
-    timeoutMs: 1000,
-    pkgRoot,
-    ...options,
-  });
 }
 
 const execFileSyncMock = vi.hoisted(() => vi.fn(() => "/tmp/openclaw-test-global-npmrc\n"));

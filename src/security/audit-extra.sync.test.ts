@@ -2,18 +2,43 @@
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { setConfigResolutionFacts } from "../config/resolution-facts.js";
+import {
+  createConfigResolutionFacts,
+  setConfigResolutionFacts,
+} from "../config/resolution-facts.js";
 import {
   collectAttackSurfaceSummaryFindings,
   collectSmallModelRiskFindings,
 } from "./audit-extra.summary.js";
-import { collectSecretsInConfigFindings } from "./audit-extra.sync.js";
+import { collectSecretsInConfigFindings } from "./audit-secrets.js";
 
 vi.mock("../plugins/web-search-credential-presence.js", () => ({
   hasConfiguredWebSearchCredential: () => false,
 }));
 
 describe("collectSecretsInConfigFindings", () => {
+  it("distinguishes resolved env secrets from byte-identical stored literals", () => {
+    const config = {
+      gateway: { auth: { password: "synthetic-gateway-password" } },
+      hooks: { enabled: true, token: "synthetic-hooks-token" },
+    } satisfies OpenClawConfig;
+    const resolved = new Map([
+      ["gateway.auth.password", "GATEWAY_PASSWORD"],
+      ["hooks.token", "HOOKS_TOKEN"],
+    ]);
+    setConfigResolutionFacts(
+      config,
+      createConfigResolutionFacts([], new Map(), undefined, resolved),
+    );
+    expect(collectSecretsInConfigFindings(config)).toEqual([]);
+
+    setConfigResolutionFacts(config, createConfigResolutionFacts([]));
+    expect(collectSecretsInConfigFindings(config).map((finding) => finding.checkId)).toEqual([
+      "config.secrets.gateway_password_in_config",
+      "config.secrets.hooks_token_in_config",
+    ]);
+  });
+
   it("distinguishes an unresolved password from byte-identical literal text", () => {
     const config = {
       gateway: { auth: { password: "${GATEWAY_PASSWORD}" } },

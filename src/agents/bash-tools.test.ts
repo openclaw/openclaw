@@ -1,7 +1,6 @@
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
-import type { dispatchInboundMessageWithRoutedChannelDispatcher } from "../auto-reply/dispatch.js";
 import type { SessionEventReceipt } from "../auto-reply/reply/session-event-contract.js";
 import * as sessionEvents from "../auto-reply/reply/session-event-handoff.js";
 import { drainFormattedSystemEvents } from "../auto-reply/reply/session-system-events.js";
@@ -29,31 +28,11 @@ import { createExecTool, createProcessTool } from "./bash-tools.js";
 import { getBashShellConfig } from "./shell-utils.js";
 
 // mock-isolation: Hold normal follow-up admission so factory tests can inspect exact queued routing.
-vi.mock("../auto-reply/dispatch.js", () => ({
-  dispatchInboundMessageWithRoutedChannelDispatcher: vi.fn<
-    typeof dispatchInboundMessageWithRoutedChannelDispatcher
-  >(async ({ replyOptions }) => {
-    const lifecycle = expectDefined(replyOptions?.turnAdoptionLifecycle, "notification lifecycle");
-    const signal = expectDefined(lifecycle.abortSignal, "notification cancellation");
-    lifecycle.onDeferred?.();
-    const onAbort = async () => {
-      try {
-        await lifecycle.onAbandoned?.();
-      } finally {
-        await lifecycle.onSettled?.();
-      }
-    };
-    signal.addEventListener("abort", () => void onAbort(), { once: true });
-    if (signal.aborted) {
-      await onAbort();
-    }
-    return {
-      deferredToActiveRun: "followup",
-      queuedFinal: false,
-      counts: { tool: 0, block: 0, final: 0 },
-    };
-  }),
-}));
+vi.mock("../auto-reply/dispatch.js", async () => {
+  const { createDeferredExecDispatchMock } =
+    await import("./bash-tools.exec-runtime.test-support.js");
+  return createDeferredExecDispatchMock();
+});
 
 vi.mock("../infra/channel-summary.js", () => ({
   buildChannelSummary: vi.fn(async () => []),

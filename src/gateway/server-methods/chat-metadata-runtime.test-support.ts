@@ -17,7 +17,9 @@ import { isPreparedModelCatalogFull } from "../../agents/prepared-model-runtime.
 import type { PreparedModelRuntimeSnapshot } from "../../agents/prepared-model-runtime.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
+import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import * as pluginRuntime from "../../plugins/runtime.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import * as skills from "../../skills/runtime/refresh-state.js";
 import { connectUserModelAccount } from "../../state/user-model-accounts.js";
 import { setDisplayName } from "../../state/user-profile-writes.worker.js";
@@ -27,6 +29,7 @@ import { createGatewayChatMetadataRuntime } from "./chat-metadata-runtime.js";
 import * as projectionRuntime from "./chat-metadata-session-projection.js";
 import type { ChatMetadataProjectionFacts } from "./chat-metadata-session-projection.js";
 import * as commands from "./commands-list-result.js";
+import * as modelLists from "./models-list-result.js";
 
 export const chatMetadataCommandFields = {
   description: "",
@@ -277,6 +280,66 @@ export function createChatMetadataHarness(
     },
     setSkillsVersion(next: number) {
       skillsVersion = next;
+    },
+  };
+}
+
+export function createOtherAgentChatMetadataFixture(signal: AbortSignal) {
+  const config = {
+    agents: {
+      entries: { main: {}, other: {} },
+      defaults: { model: "test/main-model", modelPolicy: { allow: ["test/*"] } },
+    },
+  };
+  const pluginRegistry = createEmptyPluginRegistry();
+  const owner = (id: string) => ({
+    ...createChatMetadataOwner(config, id, {}, "test", "openai-completions"),
+    pluginRegistry,
+  });
+  const mainOwner = owner("main-model");
+  let otherOwner = owner("other-model");
+  const harness = createChatMetadataHarness(config);
+  harness.setOwner(mainOwner);
+  harness.getPreparedOwner.mockImplementation((params) =>
+    params?.agentId === "other" ? otherOwner : mainOwner,
+  );
+  const entered = createDeferredCore();
+  const release = createDeferredCore();
+  const abort = () => release.resolve();
+  signal.addEventListener("abort", abort, { once: true });
+  let blockOther = false;
+  const prepare = modelLists.prepareModelsListResult;
+  const preparation = vi
+    .spyOn(modelLists, "prepareModelsListResult")
+    .mockImplementation(async (params) => {
+      if (blockOther && params.agentId === "other") {
+        entered.resolve();
+        await release.promise;
+      }
+      return prepare(params);
+    });
+  const pending: Promise<unknown>[] = [];
+  return {
+    config,
+    harness,
+    entered,
+    release,
+    pending,
+    request: {
+      agentId: "other",
+      params: { agentId: "other", view: "all" as const },
+      includeManualSelection: true,
+    },
+    holdOtherModel(id: string) {
+      otherOwner = owner(id);
+      blockOther = true;
+    },
+    async stop() {
+      release.resolve();
+      await Promise.allSettled(pending);
+      preparation.mockRestore();
+      signal.removeEventListener("abort", abort);
+      await harness.runtime.stop();
     },
   };
 }

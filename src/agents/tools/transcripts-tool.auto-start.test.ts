@@ -8,9 +8,9 @@ import type {
   TranscriptStartRequest,
 } from "../../transcripts/provider-types.js";
 import { TranscriptsStore } from "../../transcripts/store.js";
+import { createEnteredGate as captureGate } from "../entered-gate.test-support.js";
 import {
   captureFixture,
-  captureGate,
   type CaptureStop,
 } from "./transcripts-tool.capture-fixture.test-support.js";
 import { useTranscriptTestState } from "./transcripts-tool.test-support.js";

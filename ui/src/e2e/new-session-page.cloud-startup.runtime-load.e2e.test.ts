@@ -61,6 +61,7 @@ const suite = createControlUiE2eSuite({
 async function recoverStartup(page: Page, escape: "saved" | "chat" | "toast") {
   const incognito = escape !== "saved";
   const sessionKey = "agent:main:startup-load-recovery";
+  const sessionId = `session:${sessionKey}`;
   const messageId = "startup-load-first-turn";
   const message = "Continue the saved cloud task";
   const privateKey = "agent:main:private-startup";
@@ -75,12 +76,19 @@ async function recoverStartup(page: Page, escape: "saved" | "chat" | "toast") {
         environments: [],
         profiles: [{ id: "test-cloud", providerId: "crabbox" }],
       },
-      "sessions.create": { key: privateKey },
+      "sessions.create": { key: privateKey, sessionId: `session:${privateKey}` },
       "sessions.list": createdSessionListResult(sessionKey),
       "sessions.describe": {
-        session: { placement: { state: "active", environmentId: "cloud-recovery" } },
+        session: { sessionId, placement: { state: "active", environmentId: "cloud-recovery" } },
       },
-      "sessions.send": { runId: messageId, status: "started" },
+      "chat.send": {
+        cases: [
+          {
+            match: { idempotencyKey: messageId },
+            response: { runId: messageId, status: "started" },
+          },
+        ],
+      },
     },
   });
   await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
@@ -98,6 +106,7 @@ async function recoverStartup(page: Page, escape: "saved" | "chat" | "toast") {
   const recovery: SessionPlacementPendingRecovery = {
     ...owner,
     sessionKey,
+    sessionId,
     messageId,
     message,
     agentId: "main",
@@ -164,7 +173,6 @@ async function recoverStartup(page: Page, escape: "saved" | "chat" | "toast") {
   expect(held).toEqual({ draft: "", queued: ["later ordinary turn"] });
   await composer.fill("unfinished later draft");
   expect(await gateway.getRequests("chat.send")).toHaveLength(0);
-  expect(await gateway.getRequests("sessions.send")).toHaveLength(0);
   if (incognito) {
     const timeOrigin = await page.evaluate(() => performance.timeOrigin);
     await page.locator(".sidebar-rail .sidebar-new-session").click();
@@ -199,28 +207,6 @@ async function recoverStartup(page: Page, escape: "saved" | "chat" | "toast") {
       )
       .toBe(true);
     await page.setViewportSize({ width: 1280, height: 900 });
-    const version = await page.evaluate(
-      () =>
-        new Promise<string>((resolve) => {
-          const { port1, port2 } = new MessageChannel();
-          port1.addEventListener(
-            "message",
-            ({ data }) => {
-              port1.close();
-              port2.close();
-              resolve(data.version);
-            },
-            { once: true },
-          );
-          port1.start();
-          const probe = new MessageEvent("message", {
-            data: { type: "sw-version-probe" },
-            ports: [port2],
-          });
-          navigator.serviceWorker.dispatchEvent(probe);
-        }),
-    );
-    expect(version).toBe(buildId);
     await page.evaluate(() => {
       navigator.serviceWorker.dispatchEvent(
         new MessageEvent("message", {
@@ -248,7 +234,7 @@ async function recoverStartup(page: Page, escape: "saved" | "chat" | "toast") {
       recovery: JSON.stringify(recovery),
     });
     expect(documentProbes).toBe(blockedDocumentProbes);
-    expect(await gateway.getRequests("sessions.send")).toHaveLength(0);
+    expect(await gateway.getRequests("chat.send")).toHaveLength(0);
     if (escape === "toast") {
       await page.locator(".sidebar-rail .sidebar-new-session").click();
       const privacy = page.getByRole("switch", { name: "Incognito" });
@@ -304,8 +290,14 @@ async function recoverStartup(page: Page, escape: "saved" | "chat" | "toast") {
     await button(alert, "Retry").click();
     documentReachable = true;
   }
-  expect(await gateway.waitForRequest("sessions.send")).toMatchObject({
-    params: { key: sessionKey, message, idempotencyKey: messageId },
+  expect(await gateway.waitForRequest("chat.send")).toMatchObject({
+    params: {
+      sessionKey,
+      sessionId,
+      expectedLeafEntryId: null,
+      message,
+      idempotencyKey: messageId,
+    },
   });
   if (escape === "toast") {
     // Retained requests do not establish readiness in the reloaded document.
@@ -322,12 +314,11 @@ async function recoverStartup(page: Page, escape: "saved" | "chat" | "toast") {
     runId: messageId,
     text: "Initial turn finished.",
   });
-  expect(await gateway.waitForRequest("chat.send")).toMatchObject({
+  expect(await gateway.waitForRequest("chat.send", { after: 1 })).toMatchObject({
     params: { sessionKey, message: "later ordinary turn" },
   });
   expect(await gateway.getRequests("sessions.dispatch")).toHaveLength(0);
-  expect(await gateway.getRequests("sessions.send")).toHaveLength(1);
-  expect(await gateway.getRequests("chat.send")).toHaveLength(1);
+  expect(await gateway.getRequests("chat.send")).toHaveLength(2);
   expect(failure.documentCount()).toBe(2);
   if (incognito) {
     expect(

@@ -46,16 +46,18 @@ function createStatRuntime(
   };
 }
 
-function createLocalRemoteRuntime(params: {
-  remoteWorkspaceDir: string;
-  remoteAgentWorkspaceDir: string;
-}) {
+function createLocalRemoteRuntime(
+  params: string | { remoteWorkspaceDir: string; remoteAgentWorkspaceDir: string },
+) {
   // Execute remote shell snippets locally so the bridge scripts are exercised
   // without a real SSH host.
   const calls: Array<Parameters<RemoteShellSandboxHandle["runRemoteShellScript"]>[0]> = [];
+  const roots =
+    typeof params === "string"
+      ? { remoteWorkspaceDir: params, remoteAgentWorkspaceDir: params }
+      : params;
   const runtime: RemoteShellSandboxHandle = {
-    remoteWorkspaceDir: params.remoteWorkspaceDir,
-    remoteAgentWorkspaceDir: params.remoteAgentWorkspaceDir,
+    ...roots,
     runRemoteShellScript: createLocalRemoteShellScriptRunner({
       onCommand: (command) => calls.push(command),
     }),
@@ -63,15 +65,16 @@ function createLocalRemoteRuntime(params: {
   return { calls, runtime };
 }
 
-function createWorkspaceBridge(workspaceDir: string) {
-  const { runtime } = createLocalRemoteRuntime({
-    remoteWorkspaceDir: workspaceDir,
-    remoteAgentWorkspaceDir: workspaceDir,
-  });
+function createWorkspaceBridge(
+  workspaceDir: string,
+  runtime = createLocalRemoteRuntime(workspaceDir).runtime,
+  overrides?: Parameters<typeof createSandbox>[0],
+) {
   return createRemoteShellSandboxFsBridge({
     sandbox: createSandbox({
       workspaceDir,
       agentWorkspaceDir: workspaceDir,
+      ...overrides,
     }),
     runtime,
   });
@@ -86,17 +89,9 @@ describe("remote pinned read sources", () => {
       await fs.mkdir(protectedDir);
       await fs.writeFile(path.join(protectedDir, "USER.md"), "protected file");
       await fs.symlink(protectedDir, path.join(workspaceDir, "alias"), "dir");
-      const { runtime } = createLocalRemoteRuntime({
-        remoteWorkspaceDir: workspaceDir,
-        remoteAgentWorkspaceDir: workspaceDir,
-      });
-      const bridge = createRemoteShellSandboxFsBridge({
-        sandbox: createSandbox({
-          workspaceDir,
-          agentWorkspaceDir: workspaceDir,
-          readOnlyResourceMounts: [{ hostPath: protectedDir, containerPath: protectedDir }],
-        }),
-        runtime,
+      const { runtime } = createLocalRemoteRuntime(workspaceDir);
+      const bridge = createWorkspaceBridge(workspaceDir, runtime, {
+        readOnlyResourceMounts: [{ hostPath: protectedDir, containerPath: protectedDir }],
       });
       await expect(bridge.readFileWithSource!({ filePath: "alias/USER.md" })).resolves.toEqual({
         data: Buffer.from("protected file"),
@@ -119,25 +114,22 @@ describe("remote pinned read sources", () => {
       await fs.symlink(original, alias, "dir");
       const runRemoteShellScript = createLocalRemoteShellScriptRunner();
       let swapped = false;
-      const bridge = createRemoteShellSandboxFsBridge({
-        sandbox: createSandbox({ workspaceDir, agentWorkspaceDir: workspaceDir }),
-        runtime: {
-          remoteWorkspaceDir: workspaceDir,
-          remoteAgentWorkspaceDir: workspaceDir,
-          async runRemoteShellScript(command) {
-            // Canonicalization has finished; the unmodified guest reader runs next.
-            if (command.args?.[0] === "read" && !swapped) {
-              swapped = true;
-              if (swap === "alias") {
-                await fs.unlink(alias);
-                await fs.symlink(replacement, alias, "dir");
-              } else {
-                await fs.rename(original, path.join(workspaceDir, "moved-original"));
-                await fs.symlink(replacement, original, "dir");
-              }
+      const bridge = createWorkspaceBridge(workspaceDir, {
+        remoteWorkspaceDir: workspaceDir,
+        remoteAgentWorkspaceDir: workspaceDir,
+        async runRemoteShellScript(command) {
+          // Canonicalization has finished; the unmodified guest reader runs next.
+          if (command.args?.[0] === "read" && !swapped) {
+            swapped = true;
+            if (swap === "alias") {
+              await fs.unlink(alias);
+              await fs.symlink(replacement, alias, "dir");
+            } else {
+              await fs.rename(original, path.join(workspaceDir, "moved-original"));
+              await fs.symlink(replacement, original, "dir");
             }
-            return runRemoteShellScript(command);
-          },
+          }
+          return runRemoteShellScript(command);
         },
       });
       if (!bridge.readFileWithSource) {
@@ -267,17 +259,9 @@ describe("remote sandbox fs bridge", () => {
         const remoteWorkspaceDir = path.join(await fs.realpath(stateDir), "remote 'workspace'");
         await fs.mkdir(workspaceDir);
         await fs.mkdir(remoteWorkspaceDir);
-        const { runtime } = createLocalRemoteRuntime({
-          remoteWorkspaceDir,
-          remoteAgentWorkspaceDir: remoteWorkspaceDir,
-        });
-        const bridge = createRemoteShellSandboxFsBridge({
-          sandbox: createSandbox({
-            workspaceDir,
-            agentWorkspaceDir: workspaceDir,
-            workspaceAccess,
-          }),
-          runtime,
+        const { runtime } = createLocalRemoteRuntime(remoteWorkspaceDir);
+        const bridge = createWorkspaceBridge(workspaceDir, runtime, {
+          workspaceAccess,
         });
         const filePath = "quoted ' \" $() `literal`.bin";
         const payload = Buffer.from([0, 255, 128, 10, 13, 39, 34, 36, 96]);
@@ -337,17 +321,8 @@ describe("remote sandbox fs bridge", () => {
       const workspaceDir = path.join(stateDir, "workspace");
       await fs.mkdir(workspaceDir, { recursive: true });
 
-      const { calls, runtime } = createLocalRemoteRuntime({
-        remoteWorkspaceDir: workspaceDir,
-        remoteAgentWorkspaceDir: workspaceDir,
-      });
-      const bridge = createRemoteShellSandboxFsBridge({
-        sandbox: createSandbox({
-          workspaceDir,
-          agentWorkspaceDir: workspaceDir,
-        }),
-        runtime,
-      });
+      const { calls, runtime } = createLocalRemoteRuntime(workspaceDir);
+      const bridge = createWorkspaceBridge(workspaceDir, runtime);
 
       await expect(bridge.readFile({ filePath: "." })).rejects.toThrow(
         /Invalid sandbox entry target/,
@@ -367,13 +342,7 @@ describe("remote sandbox fs bridge", () => {
         stat: (script) =>
           `${script.includes('LC_ALL=C stat -c "%F|%s|%y"') ? "regular file" : "reguläre Datei"}|9007199254740992|8640000000001`,
       });
-      const bridge = createRemoteShellSandboxFsBridge({
-        sandbox: createSandbox({
-          workspaceDir,
-          agentWorkspaceDir: workspaceDir,
-        }),
-        runtime,
-      });
+      const bridge = createWorkspaceBridge(workspaceDir, runtime);
 
       await expect(bridge.stat({ filePath: "note.txt" })).resolves.toEqual({
         type: "file",
@@ -392,13 +361,7 @@ describe("remote sandbox fs bridge", () => {
           `${script.includes('LC_ALL=C stat -c "%F|%h"') ? "regular file" : "reguläre Datei"}|2`,
         stat: () => "regular file|12|2026-05-29 12:00:00.000000000 +0000",
       });
-      const bridge = createRemoteShellSandboxFsBridge({
-        sandbox: createSandbox({
-          workspaceDir,
-          agentWorkspaceDir: workspaceDir,
-        }),
-        runtime,
-      });
+      const bridge = createWorkspaceBridge(workspaceDir, runtime);
 
       await expect(bridge.stat({ filePath: "note.txt" })).rejects.toThrow(/Hardlinked path/);
     });
@@ -412,13 +375,7 @@ describe("remote sandbox fs bridge", () => {
         hardlinks: () => "regular file|0x2",
         stat: () => "regular file|12|2026-05-29 12:00:00.000000000 +0000",
       });
-      const bridge = createRemoteShellSandboxFsBridge({
-        sandbox: createSandbox({
-          workspaceDir,
-          agentWorkspaceDir: workspaceDir,
-        }),
-        runtime,
-      });
+      const bridge = createWorkspaceBridge(workspaceDir, runtime);
 
       await expect(bridge.stat({ filePath: "note.txt" })).resolves.toMatchObject({
         type: "file",
@@ -564,14 +521,8 @@ describe.runIf(process.platform === "linux")("remote sandbox fs bridge (GNU shel
       const workspaceDir = await fs.realpath(workspacePath);
       await fs.writeFile(path.join(workspaceDir, "..note.txt"), "hello", "utf8");
 
-      const { calls, runtime } = createLocalRemoteRuntime({
-        remoteWorkspaceDir: workspaceDir,
-        remoteAgentWorkspaceDir: workspaceDir,
-      });
-      const bridge = createRemoteShellSandboxFsBridge({
-        sandbox: createSandbox({ workspaceDir, agentWorkspaceDir: workspaceDir }),
-        runtime,
-      });
+      const { calls, runtime } = createLocalRemoteRuntime(workspaceDir);
+      const bridge = createWorkspaceBridge(workspaceDir, runtime);
 
       expect(bridge.resolvePath({ filePath: "..note.txt" })).toMatchObject({
         relativePath: "..note.txt",
@@ -603,14 +554,8 @@ describe.runIf(process.platform === "linux")("remote sandbox fs bridge (GNU shel
       await fs.mkdir(workspacePath, { recursive: true });
       const workspaceDir = await fs.realpath(workspacePath);
       await fs.writeFile(path.join(workspaceDir, "source.txt"), "streamed", "utf8");
-      const { calls, runtime } = createLocalRemoteRuntime({
-        remoteWorkspaceDir: workspaceDir,
-        remoteAgentWorkspaceDir: workspaceDir,
-      });
-      const bridge = createRemoteShellSandboxFsBridge({
-        sandbox: createSandbox({ workspaceDir, agentWorkspaceDir: workspaceDir }),
-        runtime,
-      });
+      const { calls, runtime } = createLocalRemoteRuntime(workspaceDir);
+      const bridge = createWorkspaceBridge(workspaceDir, runtime);
 
       const copyFile = bridge.copyFile?.bind(bridge);
       expect(copyFile).toBeTypeOf("function");

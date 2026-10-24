@@ -8,6 +8,7 @@ import {
   buildSystemdUnitPropertyOutput,
   type SystemdManagerSnapshotFixture,
 } from "./service.test-helpers.js";
+import { nativeExit } from "./systemd-exec.test-support.js";
 import {
   readSystemdServiceExecStart,
   resolveSystemdEnvironmentFilePath,
@@ -51,12 +52,7 @@ describe.skipIf(process.platform === "win32")("systemd scalar paths", () => {
     home = await fs.realpath(tempDirs.make("openclaw-systemd-scalars-"));
     await fs.mkdir(path.dirname(unitPath()), { recursive: true });
     execBusctlUser.mockReset();
-    execBusctlUser.mockResolvedValue({
-      code: 1,
-      termination: "exit",
-      stdout: "",
-      stderr: "Synthetic manager unavailable",
-    });
+    execBusctlUser.mockResolvedValue(nativeExit("", "Synthetic manager unavailable", 1));
   });
 
   async function writeUnit(content = "[Service]\nExecStart=/usr/bin/openclaw gateway run\n") {

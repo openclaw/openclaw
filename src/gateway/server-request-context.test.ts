@@ -1,6 +1,7 @@
 /**
  * Gateway request context construction tests.
  */
+
 import { writeFileSync } from "node:fs";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import {
@@ -43,6 +44,7 @@ import {
   makeGatewayClient,
 } from "./server-request-context.test-support.js";
 import { startGatewayEventSubscriptions } from "./server-runtime-subscriptions.js";
+import { gatewayProfile, dispatchProfile } from "./server/client-fixtures.test-support.js";
 import { GatewayClientRegistry } from "./server/client-registry.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 
@@ -171,13 +173,7 @@ describe("createGatewayRequestContext", () => {
           }),
           usesSharedGatewayAuth: false,
           presenceKey: `event-${index}`,
-          authenticatedUserProfile: {
-            profileId: profile.id,
-            displayName: null,
-            avatarRevision: "1",
-            hasAvatar: false,
-            updatedAt: profile.updatedAt,
-          },
+          authenticatedUserProfile: dispatchProfile(profile.id, { updatedAt: profile.updatedAt }),
           socket: {
             readyState: 1,
             bufferedAmount: 0,
@@ -558,24 +554,14 @@ describe("createGatewayRequestContext", () => {
           clientId: GATEWAY_CLIENT_IDS.CONTROL_UI,
           scopes: ["operator.admin"],
         }),
-        authenticatedUserProfile: {
-          profileId: "profile-ada",
-          displayName: "Ada",
-          hasAvatar: false,
-          updatedAt: 1,
-        },
+        authenticatedUserProfile: gatewayProfile("profile-ada", "Ada"),
       };
       const unrelated = {
         ...makeGatewayClient({
           connId: "profile-unrelated",
           clientId: GATEWAY_CLIENT_IDS.CONTROL_UI,
         }),
-        authenticatedUserProfile: {
-          profileId: "profile-grace",
-          displayName: "Grace",
-          hasAvatar: false,
-          updatedAt: 1,
-        },
+        authenticatedUserProfile: gatewayProfile("profile-grace", "Grace"),
       };
       const unidentified = makeGatewayClient({
         connId: "shared-secret",

@@ -21,6 +21,7 @@ import {
 } from "../../auto-reply/reply/personal-tool-turn.test-support.js";
 import type { GatewayBroadcastToConnIdsFn } from "../server-broadcast-types.js";
 import { createContext } from "../server-plugin-in-process-dispatch.test-support.js";
+import { gatewayProfile } from "../server/client-fixtures.test-support.js";
 import type { GatewayClient } from "./types.js";
 import { uiCommandHandlers } from "./ui-command.js";
 
@@ -36,12 +37,7 @@ function client(
     connId,
     ...(profileId
       ? {
-          authenticatedUserProfile: {
-            profileId,
-            displayName: null,
-            hasAvatar: false,
-            updatedAt: 1,
-          },
+          authenticatedUserProfile: gatewayProfile(profileId),
         }
       : {}),
     connect: {

@@ -6,7 +6,7 @@ import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { createRuntimeProcessEntrypoints } from "../src/infra/runtime-process-manifest.ts";
+import { createStandaloneRuntimeProcessEntrypoints } from "../src/infra/runtime-process-manifest.ts";
 import {
   WORKSPACE_PACKAGE_ALIAS_ENTRIES,
   WORKSPACE_PACKAGE_EXPORT_DIRS,
@@ -30,9 +30,11 @@ import { createStandaloneMetadataAdapter } from "./lib/bun-standalone-metadata.m
 import { createStandaloneNativeAdapter } from "./lib/bun-standalone-native.mjs";
 import { planStandalonePackageManager } from "./lib/bun-standalone-package-manager.mjs";
 import {
+  createStandalonePluginContract,
   planStandalonePlugins,
   pruneStandalonePluginDirectories,
   selectStandalonePluginModules,
+  stageStandalonePluginLoader,
 } from "./lib/bun-standalone-plugins.mjs";
 import { createStandaloneRequireAdapter } from "./lib/bun-standalone-require.mjs";
 import {
@@ -49,6 +51,7 @@ import {
   publishStandaloneArtifacts,
   STANDALONE_BUILD_MARKER,
 } from "./lib/bun-standalone-support.mjs";
+import { prepareStandaloneWasm } from "./lib/bun-standalone-wasm.mjs";
 import {
   discoverStandaloneWorkers,
   prepareStandaloneWorkers,
@@ -209,8 +212,10 @@ moduleEntries = await selectStandalonePluginModules(runtimeRoot, moduleEntries, 
 const workerEntries = discoverStandaloneWorkers({
   runtimeRoot,
   moduleEntries,
-  runtimeEntrypoints: createRuntimeProcessEntrypoints(import.meta.url),
-  parse,
+  runtimeEntrypoints: createStandaloneRuntimeProcessEntrypoints(
+    import.meta.url,
+    plugins.embeddedDirs,
+  ),
 });
 const native = createStandaloneNativeAdapter({ runtimeRoot, parse });
 native.discover(moduleEntries);
@@ -316,6 +321,11 @@ for (const [name, entries] of outputNames) {
 const embeddedPaths = Object.fromEntries(
   [...moduleInputs].map(([entry, { output }]) => [entry, `/$bunfs/root/${output}`]),
 );
+const pluginContract = createStandalonePluginContract({ runtimeRoot, plugins, embeddedPaths });
+const pluginLoader =
+  mode === "aot" && !supportDestination
+    ? undefined
+    : await stageStandalonePluginLoader({ runtimeRoot, outputRoot, build: Bun.build });
 for (const [name, entry] of Object.entries(moduleAliases)) {
   embeddedPaths[name] = embeddedPaths[path.relative(runtimeRoot, entry).split(path.sep).join("/")];
 }
@@ -338,10 +348,11 @@ const artifacts = createStandaloneArtifactAdapter({
   buildIdentity: buildId,
 });
 const metadata = createStandaloneMetadataAdapter({ runtimeRoot, embeddedPaths, parse });
-const requireAdapter = createStandaloneRequireAdapter({ runtimeRoot, embeddedPaths });
+const requireAdapter = createStandaloneRequireAdapter({ runtimeRoot, embeddedPaths, pluginLoader });
 fs.writeFileSync(
   runtimeBootstrap,
-  `import path from "node:path";
+  `import Module, { createRequire } from "node:module";
+import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { isMainThread } from "node:worker_threads";
 const root = path.join(path.dirname(process.execPath), "runtime");
@@ -403,7 +414,7 @@ if (process.env.OPENCLAW_STANDALONE_TRACE_PRELOAD) {
 const bootstrap = path.join(outputRoot, "standalone-entry.mjs");
 fs.writeFileSync(
   bootstrap,
-  createStandaloneEntrySource({ runtimeBootstrap, runtimeRoot, workerEntries, moduleEntries }),
+  createStandaloneEntrySource({ runtimeBootstrap, runtimeRoot, workerEntries }),
 );
 const audit = process.env.OPENCLAW_STANDALONE_AUDIT_MODULE
   ? await import(pathToFileURL(process.env.OPENCLAW_STANDALONE_AUDIT_MODULE).href)
@@ -419,7 +430,11 @@ const codegen = await createStandaloneCodegenAdapter({
 const codegenTransforms = [];
 const artifactTransforms = [];
 const transformedFiles = [];
-const external = ["chromium-bidi/*", "@audio/decode-ape"];
+const external = [
+  "chromium-bidi/*",
+  "@audio/decode-ape",
+  ...(pluginLoader ? [pluginLoader.specifier] : []),
+];
 const result = await Bun.build({
   entrypoints: [
     bootstrap,
@@ -454,7 +469,6 @@ const result = await Bun.build({
             return undefined;
           }
           let contents = await fs.promises.readFile(filename, "utf8");
-          contents = workers.rewriteInlineWorkers(filename, contents);
           const artifact = artifacts.transform({ filename, contents });
           contents = artifact.contents;
           const metadataResult = metadata.transform({ filename, contents });
@@ -545,10 +559,6 @@ fs.writeFileSync(
   JSON.stringify(workerEntries, null, 2),
 );
 fs.writeFileSync(
-  path.join(outputRoot, "inline-worker-entries.json"),
-  JSON.stringify(workers.inlineWorkers, null, 2),
-);
-fs.writeFileSync(
   path.join(outputRoot, "embedded-modules.json"),
   JSON.stringify(embeddedPaths, null, 2),
 );
@@ -577,10 +587,23 @@ const nativeModules = describeStandaloneNativeModules({
 const packageManager = planStandalonePackageManager(runtimeRoot);
 const resourcePlan = planStandaloneRuntime(
   runtimeRoot,
-  [...nativeResources.files, ...sqlite.files, ...packageManager.files],
+  [
+    ...nativeResources.files,
+    ...sqlite.files,
+    ...packageManager.files,
+    ...(pluginLoader?.files ?? []),
+  ],
   declaredPluginAssets,
   metadata.directories,
 );
+const wasm =
+  mode === "aot"
+    ? prepareStandaloneWasm({
+        resources: resourcePlan.files,
+        outputRoot: path.join(outputRoot, "modules"),
+        parse,
+      })
+    : undefined;
 fs.writeFileSync(
   path.join(outputRoot, "native-resources.json"),
   JSON.stringify(nativeResources.files, null, 2),
@@ -592,10 +615,12 @@ for (const filename of compiledEntries) {
     nativeTables += 1;
     fs.writeFileSync(
       filename,
-      contents.replaceAll(
-        nativeResources.bootstrapReplacement.search,
-        nativeResources.bootstrapReplacement.replacement,
-      ),
+      // Every embedded worker imports this bootstrap before its library loaders.
+      (wasm?.registrationPath ? `import ${JSON.stringify(wasm.registrationPath)};\n` : "") +
+        contents.replaceAll(
+          nativeResources.bootstrapReplacement.search,
+          nativeResources.bootstrapReplacement.replacement,
+        ),
     );
   }
 }
@@ -720,8 +745,10 @@ await publishStandaloneArtifacts({
     bun: bunIdentity,
     openclaw: openclawIdentity,
     plugins,
+    pluginContract,
     nativeModules,
     embedded: {
+      ...(wasm ? { webAssembly: wasm.assets } : {}),
       workers: workerEntries.length,
       plugins: new Set(
         Object.keys(embeddedPaths)
@@ -729,7 +756,7 @@ await publishStandaloneArtifacts({
           .map((entry) => entry.split("/")[2]),
       ).size,
       modules: Object.keys(embeddedPaths).length,
-      inlineWorkers: workers.inlineWorkers.length,
+      inlineWorkers: 0,
     },
     pruning,
     sqlite: sqlite.manifest,

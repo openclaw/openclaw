@@ -15,6 +15,7 @@ import {
   validateWorkerConnectRequestFrame,
   validateWorkerTranscriptCommitParams,
 } from "../../../../packages/gateway-protocol/src/index.js";
+import { WORKER_EXEC_APPROVAL_METHOD } from "../../../../packages/gateway-protocol/src/schema/worker-exec-approval.js";
 import {
   WORKER_GATEWAY_TOOL_METHODS,
   WORKER_GATEWAY_TOOLS_PROTOCOL_FEATURE,
@@ -410,7 +411,9 @@ export function attachWorkerWsMessageHandler(params: WorkerWsMessageHandlerParam
       );
     };
     const isLongToolOperation =
-      parsed.method === "worker.computer" || parsed.method === WORKER_GATEWAY_TOOL_METHODS.invoke;
+      parsed.method === "worker.computer" ||
+      parsed.method === WORKER_GATEWAY_TOOL_METHODS.invoke ||
+      parsed.method === WORKER_EXEC_APPROVAL_METHOD;
     if (isLongToolOperation) {
       if (toolOperations.has(parsed.id)) {
         failConnection(1008);

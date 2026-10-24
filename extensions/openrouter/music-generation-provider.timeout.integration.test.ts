@@ -2,9 +2,9 @@
 import "openclaw/plugin-sdk/compiled-subprocess-testing";
 import { channel } from "node:diagnostics_channel";
 import { createServer, type ServerResponse } from "node:http";
-import type { AddressInfo } from "node:net";
 import { setImmediate } from "node:timers/promises";
 import { describe, expect, it, vi } from "vitest";
+import { listenOnLoopback } from "../test-support/hanging-loopback-server.js";
 import { buildOpenRouterMusicGenerationProvider } from "./music-generation-provider.js";
 
 const resolveContext = vi.hoisted(() => vi.fn());
@@ -21,10 +21,8 @@ describe("OpenRouter music HTTP deadline", () => {
       response.write('data: {"choices":[{"delta":{"audio":{"transcript":"start"}}}]}\n');
       responseReady.resolve(response);
     });
-    await new Promise<void>((resolve) => {
-      server.listen(0, "127.0.0.1", resolve);
-    });
-    const origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    const port = await listenOnLoopback(server);
+    const origin = `http://127.0.0.1:${port}`;
     resolveContext.mockResolvedValue({
       baseUrl: `${origin}/api/v1`,
       allowPrivateNetwork: true,

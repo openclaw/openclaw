@@ -11,6 +11,7 @@ import {
   completeEmbeddedAttemptResult,
   type EmbeddedRunAttemptWithReceiptEvidence,
 } from "./attempt-result.js";
+import { createSettledStreamResult } from "./attempt-stream.test-helpers.js";
 import { createEmbeddedRunContextRecoveryState } from "./context-recovery-state.js";
 import { createEmbeddedRunLaneController } from "./lane-controller.js";
 import type { prepareTerminalWithSettledTurnFinalization } from "./settled-turn-finalization.js";
@@ -141,20 +142,12 @@ export function projectSettledProviderFailureAttempt(
     throw new Error("Missing failed assistant");
   }
   const transcript = { sessionIdUsed: base.sessionIdUsed, messagesSnapshot: base.messagesSnapshot };
-  const settled: Parameters<typeof completeEmbeddedAttemptResult>[1] = {
-    promptError: null,
-    promptErrorSource: null,
-    timedOutDuringCompaction: false,
-    compactionOccurredThisAttempt: false,
+  const settled: Parameters<typeof completeEmbeddedAttemptResult>[1] = createSettledStreamResult({
     ...transcript,
     lastAssistant: assistant,
     currentAttemptAssistant: assistant,
     currentAttemptCompletedAssistant: assistant,
-    successfulNestedToolNames: [],
-    attemptUsage: undefined,
-    lastCallUsage: undefined,
-    promptCache: undefined,
-  };
+  });
   const prompt: Parameters<typeof completeEmbeddedAttemptResult>[2] = {
     preflightRecovery: undefined,
     contextBudgetStatus: undefined,

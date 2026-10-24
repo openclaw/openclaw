@@ -19,6 +19,7 @@ import type {
 } from "./chat-session-companion.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import type { ChatProps } from "./chat-view-frame.ts";
+import type { ChatContextPanelProps } from "./components/chat-context-panel.tsx";
 import type { ChatModelControlsProps } from "./components/chat-model-controls.tsx";
 import type { SessionWorkspaceState } from "./components/chat-session-workspace-types.ts";
 import type {
@@ -58,6 +59,8 @@ export type SidebarPanelDefinitionParams = {
   subagentsInputRegion: "page" | "dock";
   subagentsPresented: PresentationValue;
   processesPresented?: PresentationValue;
+  contextPresented?: PresentationValue;
+  contextDetails?: ChatContextPanelProps["details"];
   subagentsAvailable: boolean;
   subagentsShowRequest?: () => string | null | undefined;
   onSubagentSessionSelect: (

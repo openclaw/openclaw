@@ -25,6 +25,10 @@ packages/gateway-protocol/package.json
 packages/gateway-protocol/src/canvas-limits.ts
 packages/gateway-protocol/src/capability-consent-error-details.ts
 packages/gateway-protocol/src/client-info.ts
+packages/gateway-protocol/src/compiled/protocol.generated/predicates.js
+packages/gateway-protocol/src/compiled/protocol.generated/schema-presence.js
+packages/gateway-protocol/src/compiled/protocol.generated/schema-worker-exec-approval.js
+packages/gateway-protocol/src/compiled/protocol.generated/schema-worker-gateway-tool.js
 packages/gateway-protocol/src/compiled/sender-identity.js
 packages/gateway-protocol/src/failover-reasons.ts
 packages/gateway-protocol/src/plugin-ui-capabilities.ts
@@ -33,13 +37,17 @@ packages/gateway-protocol/src/protocol-value-normalization.ts
 packages/gateway-protocol/src/schema/closed-object.ts
 packages/gateway-protocol/src/schema/failover-reason.ts
 packages/gateway-protocol/src/schema/plugin-declared-surface-groups.ts
+packages/gateway-protocol/src/schema/presence-activity.ts
 packages/gateway-protocol/src/schema/presence.ts
 packages/gateway-protocol/src/schema/primitives.ts
 packages/gateway-protocol/src/schema/session-placement-state.ts
 packages/gateway-protocol/src/schema/since.ts
 packages/gateway-protocol/src/schema/user-profile-constants.ts
+packages/gateway-protocol/src/schema/validation-invariants.ts
 packages/gateway-protocol/src/schema/worker-admission.ts
 packages/gateway-protocol/src/schema/worker-computer.ts
+packages/gateway-protocol/src/schema/worker-exec-approval-schemas.ts
+packages/gateway-protocol/src/schema/worker-exec-approval.ts
 packages/gateway-protocol/src/schema/worker-gateway-tool.ts
 packages/gateway-protocol/src/schema/worker-inference.ts
 packages/gateway-protocol/src/schema/worker-protocol-constants.ts
@@ -66,6 +74,7 @@ packages/llm-core/src/usage-cost.ts
 packages/llm-core/src/utils/assistant-message-events.ts
 packages/llm-core/src/utils/diagnostics.ts
 packages/llm-core/src/utils/event-stream.ts
+packages/llm-core/src/utils/request-headers.ts
 packages/llm-core/src/validation.ts
 packages/media-core/src/constants.ts
 packages/media-core/src/file-name.ts
@@ -252,7 +261,6 @@ scripts/watch-pr-ci.mjs
 scripts/watch-pr-ci.mts
 scripts/windows-cmd-helpers.mjs
 src/acp/event-ledger-bytes.ts
-src/agents/agent-activity-delegation.ts
 src/agents/agent-bundle-mcp-names.ts
 src/agents/agent-create-error.ts
 src/agents/agent-delete-session-store-safety.kernel.ts
@@ -694,6 +702,7 @@ src/config/sessions/session-entry-codec.ts
 src/config/sessions/session-entry-write-policy.ts
 src/config/sessions/session-entry-cohort.worker.ts
 src/config/sessions/session-entry-json.ts
+src/config/sessions/session-entry-numeric-snapshot.ts
 src/config/sessions/session-entry-snapshot-values.ts
 src/config/sessions/session-entry-snapshots.ts
 src/config/sessions/session-entry-state-format.ts
@@ -942,6 +951,8 @@ src/infra/diagnostics-timeline.ts
 src/infra/diff-read-timing.ts
 src/infra/directory-durability.ts
 src/infra/directory-watch-host.ts
+src/infra/directory-watch-host.worker.ts
+src/infra/directory-watch-parent.worker.ts
 src/infra/disk-space.ts
 src/infra/dispatch-wrapper-resolution.ts
 src/infra/device-identity-store.ts
@@ -1054,7 +1065,6 @@ src/infra/net/undici-family-policy.ts
 src/infra/net/undici-global-dispatcher.ts
 src/infra/net/undici-runtime.ts
 src/infra/node-compile-cache-env.ts
-src/infra/node-options.ts
 src/infra/node-runner-inventory.ts
 src/infra/node-runtime-executable.ts
 src/infra/node-sqlite.ts
@@ -1078,6 +1088,7 @@ src/infra/package-update-activation-settlement.ts
 src/infra/package-update-activation-status.ts
 src/infra/package-update-filesystem.ts
 src/infra/package-update-integrity-hasher.ts
+src/infra/package-update-integrity-hasher.worker.ts
 src/infra/package-update-integrity.ts
 src/infra/package-update-publication-tree.ts
 src/infra/package-update-refusal.ts
@@ -1097,10 +1108,12 @@ src/infra/restart-stale-pids.ts
 src/infra/retry-attempt-errors.ts
 src/infra/retry.ts
 src/infra/root-walk.ts
+src/infra/runtime-capabilities.ts
 src/infra/runtime-dependency-ownership.ts
 src/infra/runtime-process-entrypoints.ts
 src/infra/runtime-process-manifest.ts
 src/infra/runtime-process-url.ts
+src/infra/runtime-profile.ts
 src/infra/runtime-worker-generation.ts
 src/infra/runtime-worker-url.ts
 src/infra/safe-cwd.ts
@@ -1558,7 +1571,6 @@ src/plugins/provider-thinking.ts
 src/plugins/registry-runtime-binding.ts
 src/plugins/plugin-instance-error.ts
 src/plugins/plugin-instance-invocation.ts
-src/plugins/plugin-bundled-reload.ts
 src/plugins/plugin-instance-module-loader.ts
 src/plugins/plugin-state-operation-module-loader.ts
 src/plugins/plugin-state-operation-source.ts
@@ -1931,6 +1943,7 @@ src/state/openclaw-agent-transcript-payload-migration.ts
 src/state/openclaw-agent-write-layout-migration.ts
 src/state/openclaw-agent-index-retirement-migration.ts
 src/state/openclaw-agent-vector-decoder-migration.ts
+src/state/openclaw-agent-vector-search-migration.ts
 src/state/openclaw-agent-write-admission.ts
 src/state/openclaw-agent-write-admission-state.ts
 src/state/openclaw-database-preflight-agent-scheduler.ts
@@ -2053,6 +2066,7 @@ src/state/openclaw-state-read-pool.ts
 src/state/openclaw-state-read-request.ts
 src/state/openclaw-state-read-scope.ts
 src/state/openclaw-state-read-snapshot-source.ts
+src/state/openclaw-state-read-stream.ts
 src/state/openclaw-state-read-worker.ts
 src/state/openclaw-state-read.worker.ts
 src/state/openclaw-state-schema-compatibility.ts
@@ -2558,6 +2572,7 @@ src/shared/text/escape-markdown.ts
 src/shared/text/final-tags.ts
 src/shared/text/glm-arg-key-payload.ts
 src/shared/text/model-special-tokens.ts
+src/shared/text/native-tool-marker.ts
 src/shared/text/reasoning-tags.ts
 src/shared/text/tag-name-probe.ts
 src/shared/text/text-projection.ts

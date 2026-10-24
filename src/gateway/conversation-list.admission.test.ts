@@ -179,7 +179,7 @@ describe("conversation directory write admission", () => {
       };
       const config = {
         ...fixture.config,
-        session: { store: path.relative(process.cwd(), fixture.storePath) },
+        session: { store: path.basename(fixture.storePath) },
       };
       const result = fixture.list({ config });
       try {

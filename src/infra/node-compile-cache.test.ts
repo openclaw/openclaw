@@ -65,6 +65,7 @@ it("prewarms the release graph, respecting the disabled cache policy", async () 
     "cli-invocation.mjs",
     "cli-parent-lifetime.mjs",
     "gateway-shutdown-budget.mjs",
+    "node-runtime-env.mjs",
   ]) {
     await fs.copyFile(new URL(`../../${name}`, import.meta.url), path.join(root, name));
   }

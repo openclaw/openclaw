@@ -5,6 +5,7 @@ import {
   msteamsSetupAdapter,
   msteamsSetupContract,
 } from "./setup-core.js";
+import { createMSTeamsSetupPrompter } from "./setup.test-support.js";
 
 const hasConfiguredMSTeamsCredentials = vi.hoisted(() => vi.fn());
 const resolveMSTeamsCredentials = vi.hoisted(() => vi.fn());
@@ -503,15 +504,12 @@ describe("msteams setup surface", () => {
       certificatePath: "/secure/env.pem",
     });
     hasConfiguredMSTeamsCredentials.mockReturnValue(false);
-    const confirm = vi.fn(async () => true);
+    const prompter = createMSTeamsSetupPrompter();
+    const { confirm } = prompter;
 
     const result = await msteamsSetupWizard.finalize?.({
       cfg: { channels: { msteams: {} } },
-      prompter: {
-        confirm,
-        note: vi.fn(async () => {}),
-        text: vi.fn(),
-      },
+      prompter,
     } as never);
 
     expect(confirm).toHaveBeenCalledWith({
@@ -535,15 +533,12 @@ describe("msteams setup surface", () => {
       tenantId: "env-tenant",
     });
     hasConfiguredMSTeamsCredentials.mockReturnValue(false);
-    const confirm = vi.fn(async () => true);
+    const prompter = createMSTeamsSetupPrompter();
+    const { confirm } = prompter;
 
     const result = await msteamsSetupWizard.finalize?.({
       cfg: { channels: { msteams: { existing: true } } },
-      prompter: {
-        confirm,
-        note: vi.fn(async () => {}),
-        text: vi.fn(),
-      },
+      prompter,
     } as never);
 
     expect(confirm).toHaveBeenCalledWith({
@@ -576,24 +571,12 @@ describe("msteams setup surface", () => {
       certificatePath: "/secure/env.pem",
     });
     hasConfiguredMSTeamsCredentials.mockReturnValue(true);
-    const confirm = vi.fn(async () => false);
-    const text = vi.fn(async ({ message }: { message: string }) => {
-      if (message === "Enter MS Teams App ID") {
-        return "new-app";
-      }
-      if (message === "Enter MS Teams App Password") {
-        return "new-password";
-      }
-      if (message === "Enter MS Teams Tenant ID") {
-        return "new-tenant";
-      }
-      throw new Error(`Unexpected prompt: ${message}`);
-    });
+    const prompter = createMSTeamsSetupPrompter(["new-app", "new-password", "new-tenant"]);
 
     const result = await msteamsSetupWizard.finalize?.({
       cfg: { channels: { msteams: {} } },
       accountId: "default",
-      prompter: { confirm, note: vi.fn(async () => {}), text },
+      prompter,
     } as never);
 
     expect(result?.cfg?.channels?.msteams?.accounts?.default).toMatchObject({
@@ -612,7 +595,7 @@ describe("msteams setup surface", () => {
       tenantId: "tenant-id",
     });
     hasConfiguredMSTeamsCredentials.mockReturnValue(true);
-    const confirm = vi.fn(async () => true);
+    const prompter = createMSTeamsSetupPrompter();
 
     const result = await msteamsSetupWizard.finalize?.({
       cfg: {
@@ -632,11 +615,7 @@ describe("msteams setup surface", () => {
         },
       },
       accountId: "default",
-      prompter: {
-        confirm,
-        note: vi.fn(async () => {}),
-        text: vi.fn(),
-      },
+      prompter,
     } as never);
 
     if (!result?.cfg) {
@@ -687,12 +666,12 @@ describe("msteams setup surface", () => {
       }
       resolveMSTeamsCredentials.mockReturnValue(credentials);
       hasConfiguredMSTeamsCredentials.mockReturnValue(true);
-      const confirm = vi.fn(async () => true);
-      const text = vi.fn();
+      const prompter = createMSTeamsSetupPrompter();
+      const { confirm, text } = prompter;
 
       const result = await msteamsSetupWizard.finalize?.({
         cfg: { channels: { msteams } },
-        prompter: { confirm, note: vi.fn(async () => {}), text },
+        prompter,
       } as never);
 
       expect(confirm).toHaveBeenCalledWith({
@@ -725,28 +704,12 @@ describe("msteams setup surface", () => {
   it("finalize prompts for manual credentials when env/config creds are unavailable", async () => {
     resolveMSTeamsCredentials.mockReturnValue(null);
     hasConfiguredMSTeamsCredentials.mockReturnValue(false);
-    const note = vi.fn(async () => {});
-    const confirm = vi.fn(async () => false);
-    const text = vi.fn(async ({ message }: { message: string }) => {
-      if (message === "Enter MS Teams App ID") {
-        return "app-id";
-      }
-      if (message === "Enter MS Teams App Password") {
-        return "app-password";
-      }
-      if (message === "Enter MS Teams Tenant ID") {
-        return "tenant-id";
-      }
-      throw new Error(`Unexpected prompt: ${message}`);
-    });
+    const prompter = createMSTeamsSetupPrompter(["app-id", "app-password", "tenant-id"]);
+    const { note } = prompter;
 
     const result = await msteamsSetupWizard.finalize?.({
       cfg: { channels: { msteams: {} } },
-      prompter: {
-        confirm,
-        note,
-        text,
-      },
+      prompter,
     } as never);
 
     expect(note).toHaveBeenCalled();
@@ -774,20 +737,7 @@ describe("msteams setup surface", () => {
   it("finalize configures named accounts with credentials without requiring a listener", async () => {
     resolveMSTeamsCredentials.mockReturnValue(null);
     hasConfiguredMSTeamsCredentials.mockReturnValue(false);
-    const note = vi.fn(async () => {});
-    const confirm = vi.fn(async () => false);
-    const text = vi.fn(async ({ message }: { message: string }) => {
-      if (message === "Enter MS Teams App ID") {
-        return "support-app";
-      }
-      if (message === "Enter MS Teams App Password") {
-        return "support-password";
-      }
-      if (message === "Enter MS Teams Tenant ID") {
-        return "tenant-id";
-      }
-      throw new Error(`Unexpected prompt: ${message}`);
-    });
+    const prompter = createMSTeamsSetupPrompter(["support-app", "support-password", "tenant-id"]);
 
     const result = await msteamsSetupWizard.finalize?.({
       cfg: {
@@ -801,11 +751,7 @@ describe("msteams setup surface", () => {
         },
       },
       accountId: "support",
-      prompter: {
-        confirm,
-        note,
-        text,
-      },
+      prompter,
     } as never);
 
     expect(result).toEqual({
@@ -841,8 +787,8 @@ describe("msteams setup surface", () => {
       certificatePath: "/secure/support.pem",
     });
     hasConfiguredMSTeamsCredentials.mockReturnValue(true);
-    const confirm = vi.fn(async () => true);
-    const text = vi.fn();
+    const prompter = createMSTeamsSetupPrompter();
+    const { confirm, text } = prompter;
 
     const result = await msteamsSetupWizard.finalize?.({
       cfg: {
@@ -861,11 +807,7 @@ describe("msteams setup surface", () => {
         },
       },
       accountId: "support",
-      prompter: {
-        confirm,
-        note: vi.fn(async () => {}),
-        text,
-      },
+      prompter,
     } as never);
 
     expect(result).toEqual({
@@ -903,19 +845,7 @@ describe("msteams setup surface", () => {
       certificatePath: "/secure/support.pem",
     });
     hasConfiguredMSTeamsCredentials.mockReturnValue(false);
-    const confirm = vi.fn(async () => false);
-    const text = vi.fn(async ({ message }: { message: string }) => {
-      if (message === "Enter MS Teams App ID") {
-        return "new-app";
-      }
-      if (message === "Enter MS Teams App Password") {
-        return "new-password";
-      }
-      if (message === "Enter MS Teams Tenant ID") {
-        return "tenant-id";
-      }
-      throw new Error(`Unexpected prompt: ${message}`);
-    });
+    const prompter = createMSTeamsSetupPrompter(["new-app", "new-password", "tenant-id"]);
 
     const result = await msteamsSetupWizard.finalize?.({
       cfg: {
@@ -934,7 +864,7 @@ describe("msteams setup surface", () => {
         },
       },
       accountId: "support",
-      prompter: { confirm, note: vi.fn(async () => {}), text },
+      prompter,
     } as never);
 
     if (!result?.cfg) {

@@ -557,10 +557,7 @@ describe("releaseAccountThrottler", () => {
     try {
       const account = getOrCreateAccountThrottler("settle-release");
       const entered: string[] = [];
-      let releaseFirst!: () => void;
-      const firstGate = new Promise<void>((resolve) => {
-        releaseFirst = resolve;
-      });
+      const { promise: firstGate, resolve: releaseFirst } = deferred<void>();
       const prev = vi.fn(async (_method: string, payload: unknown) => {
         const request = payload as { text?: string };
         entered.push(request.text ?? "");
@@ -605,10 +602,7 @@ describe("releaseAccountThrottler", () => {
     try {
       const account = getOrCreateAccountThrottler("group-retire");
       const entered: string[] = [];
-      let releaseFirst!: () => void;
-      const firstGate = new Promise<void>((resolve) => {
-        releaseFirst = resolve;
-      });
+      const { promise: firstGate, resolve: releaseFirst } = deferred<void>();
       const prev = vi.fn(async (_method: string, payload: unknown) => {
         const request = payload as { text?: string };
         entered.push(request.text ?? "");

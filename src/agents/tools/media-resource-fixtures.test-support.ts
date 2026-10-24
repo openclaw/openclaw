@@ -42,7 +42,12 @@ export function reset() {
   clearPluginMetadataLifecycleCaches();
 }
 
-export function snapshot(prepared: Awaited<ReturnType<typeof prepareWorkspaceBuildGroup>>) {
+export function snapshot(
+  prepared: Awaited<ReturnType<typeof prepareWorkspaceBuildGroup>>,
+  loadAuth = async (): Promise<never> => {
+    throw new Error("No model auth in this fixture");
+  },
+) {
   const facts = prepared.agentFacts[0]!;
   const catalog = prepareConfiguredRuntimeFacts({
     agentFacts: facts,
@@ -60,9 +65,7 @@ export function snapshot(prepared: Awaited<ReturnType<typeof prepareWorkspaceBui
     readPublishedModels: () => undefined,
     loadFullModelCatalog: async () => catalog.modelCatalog,
     loadNativeModelCatalog: async () => catalog.modelCatalog,
-    loadAuth: async () => {
-      throw new Error("No model auth in this fixture");
-    },
+    loadAuth,
   });
 }
 
