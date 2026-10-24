@@ -654,6 +654,12 @@ importers:
         specifier: workspace:*
         version: link:../..
 
+  extensions/abliteration:
+    devDependencies:
+      '@openclaw/plugin-sdk':
+        specifier: workspace:*
+        version: link:../../packages/plugin-sdk
+
   extensions/acpx:
     dependencies:
       '@agentclientprotocol/claude-agent-acp':

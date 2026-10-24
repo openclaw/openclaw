@@ -124,8 +124,10 @@ handshake does not report an error.
 </Warning>
 
 Capability-gated agent tools are a separate use of the same declaration. If an
-agent tool requires a client capability, the Gateway omits that tool unless the
-originating client advertised every required capability.
+agent tool requires a client capability, the Gateway lists it using the operator
+capabilities recorded for that session. Internal wakes and restart recovery retain
+that declaration. Current client capabilities still gate calls, and tools that
+act on a browser require their bound, connected recipient at execution.
 
 ## Validate attachments before sending
 

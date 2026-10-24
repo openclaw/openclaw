@@ -23,7 +23,13 @@ export function finalizeOpenClawTools(params: {
 }): AnyAgentTool[] {
   const { options, config, hookAgentId, gatewayCallerAccountId } = params;
   const allTools = applyGatewayToolPolicy(
-    finalizeAgentToolAvailability(filterToolsByClientCaps(params.tools, options?.clientCaps)),
+    finalizeAgentToolAvailability(
+      filterToolsByClientCaps(
+        params.tools,
+        options?.listingClientCaps ?? options?.clientCaps,
+        options?.clientCaps,
+      ),
+    ),
     config,
   );
   options?.recordToolPrepStage?.("openclaw-tools:client-capabilities");

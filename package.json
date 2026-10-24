@@ -297,6 +297,7 @@
     "!dist/extensions/acpx/**",
     "!dist/extensions/amazon-bedrock/**",
     "!dist/extensions/amazon-bedrock-mantle/**",
+    "!dist/extensions/abliteration/**",
     "!dist/extensions/anthropic-vertex/**",
     "!dist/extensions/node_modules/**",
     "!dist/extensions/*/node_modules/**",

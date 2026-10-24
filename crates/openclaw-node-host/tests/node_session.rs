@@ -1101,13 +1101,62 @@ fn lifecycle_fixture() -> Value {
     .expect("valid node invocation lifecycle fixture")
 }
 
-#[tokio::test]
-async fn native_signed_connect_preserves_product_fields_and_rejects_invalid_node_manifests() {
-    let signed = json!({"minProtocol":5,"maxProtocol":5,"role":"node","scopes":[],
+fn native_signed_connect_params() -> Value {
+    json!({"minProtocol":5,"maxProtocol":5,"role":"node","scopes":[],
         "client":{"id":"openclaw-macos","mode":"node","platform":"macOS","version":"test"},
         "commands":["system.notify","computer.act"],"computerUse":{"test":"native-authority"},
         "device":{"id":"native-device","signature":"unchanged-signature","nonce":"native-nonce"},
-        "auth":{"token":"fixture-token"}});
+        "auth":{"token":"fixture-token"}})
+}
+
+async fn connect_native_signed(
+    params: Value,
+    server_protocol: u32,
+    rejected: bool,
+) -> Result<NodeSession, Box<openclaw_node_host::ClientError>> {
+    let expected = params.clone();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        let (tcp, _) = listener.accept().await.unwrap();
+        let mut socket = accept_async(tcp).await.unwrap();
+        send_json(
+            &mut socket,
+            json!({"type":"event","event":"connect.challenge",
+            "payload":{"nonce":"native-nonce","ts":1}}),
+        )
+        .await;
+        if rejected {
+            let next = socket.next().await;
+            assert!(
+                !matches!(next, Some(Ok(Message::Text(_)))),
+                "invalid manifest was sent to Gateway"
+            );
+        } else {
+            let connect = receive_json(&mut socket).await;
+            assert_eq!(connect["params"], expected);
+            send_json(
+                &mut socket,
+                json!({"type":"res","id":connect["id"],"ok":true,
+                "payload":{"type":"hello-ok","protocol":server_protocol}}),
+            )
+            .await;
+        }
+    });
+    let connected = NodeClient::connect_signed(
+        openclaw_gateway_client::GatewayClientConfig::new(format!("ws://{address}")).unwrap(),
+        move |challenge| async move {
+            assert_eq!(challenge.nonce, "native-nonce");
+            Ok::<_, io::Error>(params)
+        },
+    )
+    .await;
+    server.await.unwrap();
+    connected.map_err(Box::new)
+}
+
+#[tokio::test]
+async fn native_signed_connect_preserves_product_fields() {
     for invalid in [
         None,
         Some("previous"),
@@ -1115,18 +1164,8 @@ async fn native_signed_connect_preserves_product_fields_and_rejects_invalid_node
         Some("range"),
         Some("omitted"),
         Some("empty"),
-        Some("role"),
-        Some("mode"),
-        Some("retired-protocol"),
-        Some("future-protocol"),
-        Some("duplicate"),
-        Some("command"),
     ] {
-        let mut params = signed.clone();
-        let rejected = !matches!(
-            invalid,
-            None | Some("previous" | "previous-server" | "range" | "omitted" | "empty")
-        );
+        let mut params = native_signed_connect_params();
         match invalid {
             Some("previous" | "previous-server") => {
                 params["minProtocol"] = json!(4);
@@ -1137,12 +1176,6 @@ async fn native_signed_connect_preserves_product_fields_and_rejects_invalid_node
                 params.as_object_mut().unwrap().remove("commands");
             }
             Some("empty") => params["commands"] = json!([]),
-            Some("role") => params["role"] = json!("operator"),
-            Some("mode") => params["client"]["mode"] = json!("operator"),
-            Some("retired-protocol") => params["minProtocol"] = json!(3),
-            Some("future-protocol") => params["maxProtocol"] = json!(6),
-            Some("duplicate") => params["commands"] = json!(["system.notify", "system.notify"]),
-            Some("command") => params["commands"] = json!(["system.notify "]),
             _ => {}
         }
         let server_protocol = if invalid == Some("previous-server") {
@@ -1150,68 +1183,53 @@ async fn native_signed_connect_preserves_product_fields_and_rejects_invalid_node
         } else {
             5
         };
-        let expected = params.clone();
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let address = listener.local_addr().unwrap();
-        let server = tokio::spawn(async move {
-            let (tcp, _) = listener.accept().await.unwrap();
-            let mut socket = accept_async(tcp).await.unwrap();
-            send_json(
-                &mut socket,
-                json!({"type":"event","event":"connect.challenge",
-                "payload":{"nonce":"native-nonce","ts":1}}),
-            )
-            .await;
-            if rejected {
-                let next = socket.next().await;
-                assert!(
-                    !matches!(next, Some(Ok(Message::Text(_)))),
-                    "invalid manifest was sent to Gateway"
-                );
+        let session = connect_native_signed(params, server_protocol, false)
+            .await
+            .unwrap();
+        assert_eq!(
+            session.protocol(),
+            if matches!(invalid, Some("previous" | "previous-server")) {
+                NodeProtocolVersion::V4
             } else {
-                let connect = receive_json(&mut socket).await;
-                assert_eq!(connect["params"], expected);
-                send_json(
-                    &mut socket,
-                    json!({"type":"res","id":connect["id"],"ok":true,
-                    "payload":{"type":"hello-ok","protocol":server_protocol}}),
-                )
-                .await;
+                NodeProtocolVersion::V5
             }
-        });
-        let connected = NodeClient::connect_signed(
-            openclaw_gateway_client::GatewayClientConfig::new(format!("ws://{address}")).unwrap(),
-            move |challenge| async move {
-                assert_eq!(challenge.nonce, "native-nonce");
-                Ok::<_, io::Error>(params)
-            },
-        )
-        .await;
-        if rejected {
-            assert!(connected.is_err());
+        );
+        let expected_commands = if matches!(
+            invalid,
+            None | Some("previous" | "previous-server" | "range")
+        ) {
+            vec!["computer.act", "system.notify"]
         } else {
-            let session = connected.unwrap();
-            assert_eq!(
-                session.protocol(),
-                if matches!(invalid, Some("previous" | "previous-server")) {
-                    NodeProtocolVersion::V4
-                } else {
-                    NodeProtocolVersion::V5
-                }
-            );
-            let expected_commands = if matches!(
-                invalid,
-                None | Some("previous" | "previous-server" | "range")
-            ) {
-                vec!["computer.act", "system.notify"]
-            } else {
-                vec![]
-            };
-            assert_eq!(
-                session.command_names().collect::<Vec<_>>(),
-                expected_commands
-            );
+            vec![]
+        };
+        assert_eq!(
+            session.command_names().collect::<Vec<_>>(),
+            expected_commands
+        );
+    }
+}
+
+#[tokio::test]
+async fn native_signed_connect_rejects_invalid_node_manifests() {
+    for invalid in [
+        "role",
+        "mode",
+        "retired-protocol",
+        "future-protocol",
+        "duplicate",
+        "command",
+    ] {
+        let mut params = native_signed_connect_params();
+        match invalid {
+            "role" => params["role"] = json!("operator"),
+            "mode" => params["client"]["mode"] = json!("operator"),
+            "retired-protocol" => params["minProtocol"] = json!(3),
+            "future-protocol" => params["maxProtocol"] = json!(6),
+            "duplicate" => params["commands"] = json!(["system.notify", "system.notify"]),
+            "command" => params["commands"] = json!(["system.notify "]),
+            _ => unreachable!(),
         }
-        server.await.unwrap();
+        let connected = connect_native_signed(params, 5, true).await;
+        assert!(connected.is_err());
     }
 }
