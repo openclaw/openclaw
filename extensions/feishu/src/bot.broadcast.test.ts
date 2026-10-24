@@ -270,6 +270,43 @@ describe("broadcast dispatch", () => {
     expect(broadcastClaim.release).not.toHaveBeenCalled();
   });
 
+  it("cancels the shared claim without spending retry budget when a deferred lane is cancelled", async () => {
+    const { broadcastClaim, susanClaim, mainClaim } = mockBroadcastClaims("broadcast-cancelled");
+    let deferredLifecycle:
+      | Pick<FeishuIngressLifecycle, "onDeferred" | "onCancelled" | "onAbandoned">
+      | undefined;
+    mockDispatchReply.mockImplementation(async ({ ctx, replyOptions }) => {
+      if (String(ctx.SessionKey).startsWith("agent:susan:")) {
+        deferredLifecycle = replyOptions?.turnAdoptionLifecycle;
+        deferredLifecycle?.onDeferred();
+        return { queuedFinal: false, counts: { final: 1 }, deferAdoption: true };
+      }
+      return { queuedFinal: false, counts: { final: 1 } };
+    });
+    const cancelled = vi.fn(async () => {});
+    const transport = { ...createIngressLifecycle(), onCancelled: cancelled };
+
+    await dispatchBroadcast("msg-broadcast-cancelled", {
+      turnAdoptionLifecycle: transport,
+    });
+    expect(transport.onDeferred).toHaveBeenCalledTimes(1);
+
+    // The reply lane settles a cleared queued turn through onCancelled and
+    // falls back to abandonment only when the lifecycle cannot cancel.
+    await (deferredLifecycle?.onCancelled
+      ? deferredLifecycle.onCancelled()
+      : deferredLifecycle?.onAbandoned());
+
+    expect(cancelled).toHaveBeenCalledOnce();
+    expect(transport.onAbandoned).not.toHaveBeenCalled();
+    expect(transport.onAdopted).not.toHaveBeenCalled();
+    expect(susanClaim.commit).not.toHaveBeenCalled();
+    expect(susanClaim.release).toHaveBeenCalledTimes(1);
+    expect(mainClaim.commit).toHaveBeenCalledTimes(1);
+    expect(broadcastClaim.commit).not.toHaveBeenCalled();
+    expect(broadcastClaim.release).toHaveBeenCalledTimes(1);
+  });
+
   it("waits for every independently deferred broadcast lane before adoption", async () => {
     const { broadcastClaim, susanClaim, mainClaim } = mockBroadcastClaims("deferred");
     let deferredLifecycle: NonNullable<

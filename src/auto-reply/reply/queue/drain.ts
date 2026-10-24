@@ -39,6 +39,7 @@ import {
 import {
   admitFollowupRunLifecycle,
   completeFollowupRunLifecycle,
+  isFollowupRunAdopted,
   retireFollowupRunCancellation,
   updateFollowupRetryHeartbeats,
 } from "./lifecycle.js";
@@ -206,6 +207,7 @@ async function executeClaim(
   }
   let adoptionRefused = false;
   let waitForFreshKick = false;
+  let executionThrew = false;
   try {
     if (admissionSessionRebind && run.run.sessionId === admissionSessionRebind.from) {
       run = { ...run, admissionSessionId: admissionSessionRebind.to };
@@ -214,6 +216,7 @@ async function executeClaim(
       (source.controllerInput && followupSourceRunners.get(source.controllerInput)) ?? execute;
     await runFollowup(run);
   } catch (error) {
+    executionThrew = true;
     updateFollowupRetryHeartbeats(error, sources);
     adoptionRefused = sources.some((item) => {
       const custody = item.controllerInput?.custody;
@@ -259,7 +262,7 @@ async function executeClaim(
       consumeQueueSummaryDelivery(
         queue,
         { sources: consumed, droppedCount: consumed.length },
-        false,
+        "retained",
       );
     }
     for (const item of retrySources) {
@@ -280,7 +283,15 @@ async function executeClaim(
         continue;
       }
       try {
-        completeFollowupRunLifecycle(item, preparationRefused ? undefined : "consumed");
+        // A run that returned normally without adopting this source never started
+        // its model/tool work: it releases the source (an aborted owner cancels, an
+        // unadmitted one abandons) instead of consuming its durable claim. Throws
+        // keep upstream's no-replay rule unless the producer refused explicitly.
+        const unadopted = !executionThrew && !isFollowupRunAdopted(item);
+        completeFollowupRunLifecycle(
+          item,
+          preparationRefused || unadopted ? undefined : "consumed",
+        );
       } catch (error) {
         defaultRuntime.error?.("mailbox custody settlement failed: " + String(error));
       }
@@ -347,7 +358,7 @@ export function rememberFollowupDrainCallback(
         consumeQueueSummaryDelivery(
           mailbox,
           { sources: claim.sources, droppedCount: claim.sources.length },
-          false,
+          "retained",
         );
       }
       releaseSessionControllerClaim(claim);
@@ -381,7 +392,7 @@ export async function dropAbortedFollowups(
       !queue.inFlight.has(source),
   );
   detachSessionControllerSources(sources);
-  consumeQueueSummaryDelivery(queue, { sources, droppedCount: 0 }, false);
+  consumeQueueSummaryDelivery(queue, { sources, droppedCount: 0 }, "retained");
   for (const source of sources) {
     const execute =
       (source.controllerInput && followupSourceRunners.get(source.controllerInput)) ?? runFollowup;
@@ -389,7 +400,8 @@ export async function dropAbortedFollowups(
     if (source.controllerInput) {
       trackSessionControllerSourceWork(source.controllerInput, presentation);
     }
-    completeFollowupRunLifecycle(source);
+    // The owner aborted before admission: settle as cancelled, not abandoned.
+    completeFollowupRunLifecycle(source, "cancelled");
     try {
       await presentation;
     } catch (error) {

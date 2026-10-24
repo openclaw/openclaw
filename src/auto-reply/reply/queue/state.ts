@@ -20,7 +20,7 @@ import {
   type SessionTarget,
 } from "../../../sessions/session-controller.target.js";
 import { normalizeThinkLevel } from "../../thinking.js";
-import { completeFollowupRunLifecycle } from "./lifecycle.js";
+import { cancelFollowupRunLifecycle } from "./lifecycle.js";
 import type { FollowupRun, QueueDropPolicy, QueueSettings } from "./types.js";
 
 export const DEFAULT_QUEUE_DEBOUNCE_MS = 500;
@@ -155,7 +155,8 @@ export function getFollowupQueue(
 /** @internal Exposed for unit tests only. */
 export function clearFollowupQueue(key: string, captured?: SessionControllerMailbox): number {
   const queue = captured ?? getExistingSessionControllerMailbox(key.trim());
-  return queue ? clearSessionControllerMailbox(queue, completeFollowupRunLifecycle) : 0;
+  // A cleared queue relinquishes its turns on purpose: cancellation, not abandonment.
+  return queue ? clearSessionControllerMailbox(queue, cancelFollowupRunLifecycle) : 0;
 }
 
 export function clearRemovedQueuedAuthProfiles(params: {

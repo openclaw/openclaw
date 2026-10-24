@@ -20,7 +20,11 @@ import {
   resolveFollowupDeliveryStorageKey,
 } from "./delivery-context.js";
 import { dropAbortedFollowups, rememberFollowupDrainCallback } from "./drain.js";
-import { completeFollowupRunLifecycle, markFollowupRunEnqueued } from "./lifecycle.js";
+import {
+  completeFollowupRunLifecycle,
+  markFollowupRunEnqueued,
+  releaseBeforeTurnAdoptionRetry,
+} from "./lifecycle.js";
 import {
   followupSourceRunners,
   getExistingFollowupQueue,
@@ -188,13 +192,11 @@ export function enqueueFollowupRun(
       });
       const lifecycle = run.turnAdoptionLifecycle;
       if (lifecycle) {
-        const onAbandoned = lifecycle.onAbandoned;
-        lifecycle.onAbandoned = () => {
+        releaseBeforeTurnAdoptionRetry(lifecycle, () => {
           if (mailbox.recentSources.get(recentMessageIdKey)?.input === recentInput) {
             mailbox.recentSources.delete(recentMessageIdKey);
           }
-          return onAbandoned?.();
-        };
+        });
       }
     }
     if (runFollowup) {

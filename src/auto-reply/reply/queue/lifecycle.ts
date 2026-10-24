@@ -1,12 +1,13 @@
 import { defaultRuntime } from "../../../runtime.js";
 import { completeSessionControllerSourceLifecycle } from "../../../sessions/session-controller.mailbox-source.js";
 import { submitSessionControllerInput } from "../../../sessions/session-controller.mailbox.js";
+import type { TurnAdoptionLifecycle } from "../../get-reply-options.types.js";
 import type { ReplyOperationRunState } from "../reply-operation-run-state.js";
 import {
   startFollowupRunPreAdoptionHeartbeatWithCustody,
   updateFollowupRetryHeartbeatsWithCustody,
 } from "./pre-adoption-heartbeat.js";
-import type { FollowupRun } from "./types.js";
+import { isFollowupRunAborted, type FollowupRun } from "./types.js";
 
 type FollowupLifecycleSource = Pick<
   FollowupRun,
@@ -170,16 +171,53 @@ export async function admitFollowupRunLifecycle(
   }
 }
 
+/**
+ * Dedupe owners must free their entry before durable ingress retries the turn.
+ * Cancellation and abandonment are both pre-retry releases, so hook whichever
+ * terminal callbacks this lifecycle actually exposes.
+ */
+export function releaseBeforeTurnAdoptionRetry(
+  lifecycle: TurnAdoptionLifecycle,
+  release: () => void,
+): void {
+  const onAbandoned = lifecycle.onAbandoned;
+  lifecycle.onAbandoned = () => {
+    release();
+    return onAbandoned?.();
+  };
+  const onCancelled = lifecycle.onCancelled;
+  if (onCancelled) {
+    lifecycle.onCancelled = () => {
+      release();
+      return onCancelled();
+    };
+  }
+}
+
 /** Adapter registers source identity before the canonical custody owner settles it. */
 export function completeFollowupRunLifecycle(
   run: FollowupRun | FollowupLifecycleSource,
-  disposition?: "consumed",
+  disposition?: "consumed" | "cancelled",
 ): void {
   const state = custody(run);
   if (!state.completed && disposition === "consumed") {
     abandonedDeliveryCorrelations.delete(state);
   }
-  completeSessionControllerSourceLifecycle(run, state, disposition);
+  // An aborted owner ended the turn by intent, so an unconsumed completion of
+  // its run is cancellation, not abandonment that would spend retry budget.
+  const settlement =
+    disposition ?? ("run" in run && isFollowupRunAborted(run) ? "cancelled" : undefined);
+  completeSessionControllerSourceLifecycle(run, state, settlement);
+}
+
+/** True once this source's adoption committed (the last boundary before model/tool work). */
+export function isFollowupRunAdopted(run: FollowupRun | FollowupLifecycleSource): boolean {
+  return custody(run).adopted === true;
+}
+
+/** Settles a source whose owner relinquished it on purpose (queue clear, stop). */
+export function cancelFollowupRunLifecycle(run: FollowupRun | FollowupLifecycleSource): void {
+  completeFollowupRunLifecycle(run, "cancelled");
 }
 
 /** A policy refusal consumes transport custody without granting execution custody. */

@@ -257,6 +257,129 @@ describe("LINE webhook spool", () => {
       }
     });
   });
+
+  it("keeps an aged row at the retry ceiling recoverable when shutdown rejects a late deferral", async () => {
+    await withQueue(async (queue) => {
+      const event = createEvent({ webhookEventId: "event-stop-aged" });
+      const eventId = "message:message-event-stop-aged";
+      // Received long before any age floor, with one try left.
+      await queue.enqueue(eventId, payloadFor(event), { laneKey: "user:user-1", receivedAt: 1 });
+      for (
+        let attempt = 1;
+        attempt < channelOutbound.DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS;
+        attempt += 1
+      ) {
+        const claim = await queue.claim(eventId);
+        if (!claim) {
+          throw new Error(`failed to seed LINE retry attempt ${attempt}`);
+        }
+        await queue.release(claim, { lastError: "prior failure", releasedAt: 1 });
+      }
+      const deliveryGate = createDeferred<void>();
+      const deliveryStarted = createDeferred<void>();
+      let lateLifecycle: LineWebhookTurnAdoptionLifecycle | undefined;
+      const deliver = vi.fn(
+        async (
+          _events: readonly webhook.Event[],
+          _destination: string,
+          control: { turnAdoptionLifecycle: LineWebhookTurnAdoptionLifecycle },
+        ) => {
+          lateLifecycle = control.turnAdoptionLifecycle;
+          deliveryStarted.resolve();
+          await deliveryGate.promise;
+        },
+      );
+      const spool = createSpool(queue, deliver);
+      let grace: ReturnType<typeof observeActiveDeliveryStopGrace> | undefined;
+      try {
+        spool.start();
+        await deliveryStarted.promise;
+
+        grace = observeActiveDeliveryStopGrace(spool);
+        await grace.armed;
+        await vi.advanceTimersByTimeAsync(5_000);
+        await grace.stopping;
+        grace.restore();
+        grace = undefined;
+        vi.useRealTimers();
+        if (!lateLifecycle) {
+          throw new Error("LINE delivery did not expose its adoption lifecycle");
+        }
+
+        // Shutdown rejects the late deferral by intent: ownership ends through
+        // cancellation, so the row keeps its prior retry facts.
+        const released = observeChannelIngressQueueWrite(queue, "release", eventId);
+        lateLifecycle.onDeferred();
+        await expect(released).resolves.toBe(true);
+        expect(await queue.listClaims()).toEqual([]);
+        expect(await queue.listFailed?.()).toEqual([]);
+        expect(await queue.listPending()).toEqual([
+          expect.objectContaining({
+            id: eventId,
+            attempts: channelOutbound.DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS - 1,
+            lastError: "prior failure",
+          }),
+        ]);
+      } finally {
+        grace?.restore();
+        vi.useRealTimers();
+        deliveryGate.resolve();
+        await spool.stop();
+      }
+    });
+  });
+
+  it("keeps an aged row at the retry ceiling recoverable when shutdown ends an unhanded delivery", async () => {
+    await withQueue(async (queue) => {
+      const event = createEvent({ webhookEventId: "event-stop-unhanded" });
+      const eventId = "message:message-event-stop-unhanded";
+      // Received long before any age floor, with one try left.
+      await queue.enqueue(eventId, payloadFor(event), { laneKey: "user:user-1", receivedAt: 1 });
+      for (
+        let attempt = 1;
+        attempt < channelOutbound.DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS;
+        attempt += 1
+      ) {
+        const claim = await queue.claim(eventId);
+        if (!claim) {
+          throw new Error(`failed to seed LINE retry attempt ${attempt}`);
+        }
+        await queue.release(claim, { lastError: "prior failure", releasedAt: 1 });
+      }
+      const deliveryGate = createDeferred<void>();
+      const deliveryStarted = createDeferred<void>();
+      // The delivery returns without adopting or deferring its turn.
+      const deliver = vi.fn(async () => {
+        deliveryStarted.resolve();
+        await deliveryGate.promise;
+      });
+      const spool = createSpool(queue, deliver);
+      try {
+        spool.start();
+        await deliveryStarted.promise;
+
+        // stop() begins while the delivery is awaited; the delivery then
+        // returns, so shutdown hands the claim back by cancellation.
+        const stopping = spool.stop();
+        deliveryGate.resolve();
+        await stopping;
+
+        expect(await queue.listClaims()).toEqual([]);
+        expect(await queue.listFailed?.()).toEqual([]);
+        expect(await queue.listPending()).toEqual([
+          expect.objectContaining({
+            id: eventId,
+            attempts: channelOutbound.DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS - 1,
+            lastError: "prior failure",
+          }),
+        ]);
+      } finally {
+        deliveryGate.resolve();
+        await spool.stop();
+      }
+    });
+  });
+
   it("waits for claims deferred after an active-delivery stop timeout", async () => {
     await withQueue(async (queue) => {
       const deliveryGate = createDeferred<void>();

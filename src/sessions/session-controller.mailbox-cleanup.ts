@@ -225,12 +225,14 @@ export function bindSessionControllerMailboxRestartDrain(): void {
 }
 
 // Use the existing source custody without submitting missing followup work.
+// Shutdown relinquishes waiting turns on purpose: cancellation, not abandonment.
 function completeRestartClearedSource(source: FollowupRun): void {
   const input = source.controllerInput;
   if (input) {
     completeSessionControllerSourceLifecycle(
       source,
       source.controllerClaim?.custody ?? input.custody,
+      "cancelled",
     );
   }
 }

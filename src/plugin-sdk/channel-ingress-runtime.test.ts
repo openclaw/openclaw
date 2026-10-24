@@ -99,7 +99,10 @@ describe("plugin-sdk/channel-ingress-runtime", () => {
     const legacy = { ...createLifecycle(), onFailed: vi.fn(async () => {}) };
     const combined = fanInChannelIngressLifecycles([modern, legacy]);
 
-    expect(combined.lifecycle).not.toHaveProperty("onCancelled");
+    // A reply-lane consumer must always find onCancelled on the aggregate so a
+    // capable source is never downgraded to abandonment by a legacy sibling.
+    expect(combined.lifecycle?.onCancelled).toBeTypeOf("function");
+    await combined.lifecycle?.onCancelled?.();
     await combined.cancel();
 
     expect(modern.onAdopted).not.toHaveBeenCalled();

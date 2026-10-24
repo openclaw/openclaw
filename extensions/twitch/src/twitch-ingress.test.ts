@@ -1,6 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import {
   createChannelIngressMonitor,
+  DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS,
   type ChannelIngressQueue,
 } from "openclaw/plugin-sdk/channel-outbound";
 import { withTimeout } from "openclaw/plugin-sdk/time-runtime";
@@ -250,6 +251,61 @@ describe("Twitch durable ingress", () => {
       });
     },
   );
+
+  it("keeps an aged row at the retry ceiling recoverable when its reply-lane turn is cancelled", async () => {
+    await withTwitchIngressTestQueue(async (queue, createIngress) => {
+      const message = createTwitchIngressTestMessage("aged-cancelled");
+      // Received long before the dead-letter age floor, with one try left.
+      await queue.enqueue(
+        "aged-cancelled",
+        { version: 1, rawEvent: JSON.stringify(message) },
+        { laneKey: "channel:testchannel", receivedAt: 1 },
+      );
+      for (let attempt = 1; attempt < DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS; attempt += 1) {
+        const claim = await queue.claim("aged-cancelled");
+        if (!claim) {
+          throw new Error("Expected to claim the aged Twitch row");
+        }
+        await queue.release(claim, { lastError: "prior failure", releasedAt: 1 });
+      }
+      const finishRedelivery = Promise.withResolvers<void>();
+      const redelivered = Promise.withResolvers<void>();
+      const deliver = vi
+        .fn()
+        .mockImplementationOnce(async (_message, lifecycle) => {
+          lifecycle.onDeferred();
+          // The reply lane settles a cleared queued turn through onCancelled and
+          // falls back to abandonment only when the lifecycle cannot cancel.
+          await (lifecycle.onCancelled ? lifecycle.onCancelled() : lifecycle.onAbandoned());
+        })
+        .mockImplementationOnce(async (_message, lifecycle) => {
+          redelivered.resolve();
+          await finishRedelivery.promise;
+          await lifecycle.onAdopted();
+        });
+      const ingress = createIngress({ queue, deliver });
+      try {
+        ingress.start();
+        // Cancellation spends no budget, so the drain redelivers the row with
+        // its prior retry facts instead of dead-lettering it.
+        await redelivered.promise;
+        expect(deliver).toHaveBeenCalledTimes(2);
+        expect(await queue.listFailed?.()).toEqual([]);
+        expect(await queue.listClaims()).toEqual([
+          expect.objectContaining({
+            id: "aged-cancelled",
+            attempts: DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS - 1,
+            lastError: "prior failure",
+          }),
+        ]);
+        finishRedelivery.resolve();
+        await expectSettledIngressVerdict(queue, "aged-cancelled", "completed");
+      } finally {
+        finishRedelivery.resolve();
+        await ingress.stop();
+      }
+    });
+  });
 });
 
 describe("Twitch ingress fixture isolation", () => {

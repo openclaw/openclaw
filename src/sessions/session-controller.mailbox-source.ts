@@ -404,7 +404,8 @@ export function abortSessionControllerInput(
           !input.custody.adopted &&
           !input.custody.completed
         ) {
-          void notifySessionControllerSourceAbandonment(input.source, input.custody);
+          // A committed abort ends ownership by intent: cancellation, not abandonment.
+          void notifySessionControllerSourceAbandonment(input.source, input.custody, true);
         }
       }
     }
@@ -529,6 +530,7 @@ export function holdSessionControllerSourceWithdrawal(
 function notifySessionControllerSourceAbandonment(
   run: Pick<FollowupRun, "turnAdoptionLifecycle">,
   state: SessionControllerSourceCustody,
+  cancelled: boolean,
 ): void | Promise<void> {
   const prior = state.abandonment;
   if (prior) {
@@ -540,7 +542,15 @@ function notifySessionControllerSourceAbandonment(
   const notification: NonNullable<SessionControllerSourceCustody["abandonment"]> = {};
   state.abandonment = notification;
   try {
-    const completion = run.turnAdoptionLifecycle?.onAbandoned?.();
+    const lifecycle = run.turnAdoptionLifecycle;
+    // Cancellation ended ownership before the reply lane, so it settles through
+    // the cancel callback and leaves the retry budget untouched. An explicit
+    // "cancelled" disposition and an already-aborted signal are the same end of
+    // ownership, so either takes the cancel path.
+    const completion =
+      (cancelled || lifecycle?.abortSignal?.aborted) && lifecycle?.onCancelled
+        ? lifecycle.onCancelled()
+        : lifecycle?.onAbandoned?.();
     if (completion) {
       notification.completion = Promise.resolve(completion);
       void notification.completion.catch(() => {});
@@ -556,7 +566,7 @@ function notifySessionControllerSourceAbandonment(
 export function completeSessionControllerSourceLifecycle(
   run: Pick<FollowupRun, "turnAdoptionLifecycle" | "controllerInput" | "controllerClaim">,
   state: SessionControllerSourceCustody,
-  disposition?: "consumed",
+  disposition?: "consumed" | "cancelled",
 ): void {
   if (state.completed) {
     return;
@@ -581,7 +591,7 @@ export function completeSessionControllerSourceLifecycle(
     try {
       abandonment =
         disposition !== "consumed" && !state.adopted
-          ? notifySessionControllerSourceAbandonment(run, state)
+          ? notifySessionControllerSourceAbandonment(run, state, disposition === "cancelled")
           : undefined;
     } catch (error) {
       return afterFailure(error);

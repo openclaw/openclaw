@@ -57,6 +57,74 @@ export function observeChannelIngressQueueWrite<TCompletedMetadata>(
   return committed.promise;
 }
 
+/**
+ * Observe several events' committed writes through one wrapper per queue
+ * method, so concurrent observers never stack and restore over each other.
+ * Resolves with each event's commit result once every named write lands.
+ */
+export function observeChannelIngressQueueWrites<TCompletedMetadata>(
+  queue: Pick<
+    ChannelIngressQueue<unknown, unknown, TCompletedMetadata>,
+    "complete" | "release" | "fail"
+  >,
+  expected: Readonly<Record<string, "complete" | "release" | "fail">>,
+): Promise<Record<string, boolean>> {
+  const committed = createDeferredCore<Record<string, boolean>>();
+  const waiting = new Map(Object.entries(expected));
+  const results = new Map<string, Promise<boolean>>();
+  const restores: Array<() => void> = [];
+  const finish = () => {
+    for (const restore of restores) {
+      restore();
+    }
+    Promise.all([...results].map(async ([id, result]) => [id, await result] as const)).then(
+      (entries) => committed.resolve(Object.fromEntries(entries)),
+      (error: unknown) => committed.reject(error),
+    );
+  };
+  const observe = (
+    method: "complete" | "release" | "fail",
+    id: string | ChannelIngressQueueClaimRef,
+    result: Promise<boolean>,
+  ) => {
+    const eventId = typeof id === "string" ? id : id.id;
+    if (waiting.get(eventId) === method) {
+      waiting.delete(eventId);
+      results.set(eventId, result);
+      if (waiting.size === 0) {
+        finish();
+      }
+    }
+    return result;
+  };
+  const methods = new Set(waiting.values());
+  if (methods.has("complete")) {
+    const write = queue.complete;
+    queue.complete = (...args) => observe("complete", args[0], write.apply(queue, args));
+    restores.push(() => {
+      queue.complete = write;
+    });
+  }
+  if (methods.has("release")) {
+    const write = queue.release;
+    queue.release = (...args) => observe("release", args[0], write.apply(queue, args));
+    restores.push(() => {
+      queue.release = write;
+    });
+  }
+  if (methods.has("fail")) {
+    const write = queue.fail;
+    queue.fail = (...args) => observe("fail", args[0], write.apply(queue, args));
+    restores.push(() => {
+      queue.fail = write;
+    });
+  }
+  if (waiting.size === 0) {
+    finish();
+  }
+  return committed.promise;
+}
+
 export function createTestIngressQueue(
   stateDir: string,
   options: Omit<QueueOptions, "channelId" | "accountId" | "stateDir"> = {},

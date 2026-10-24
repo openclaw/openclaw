@@ -5,7 +5,7 @@ import {
   clearSessionControllerMailbox,
   type SessionControllerInput,
 } from "../../../sessions/session-controller.mailbox.js";
-import { completeFollowupRunLifecycle } from "./lifecycle.js";
+import { cancelFollowupRunLifecycle } from "./lifecycle.js";
 import { getExistingFollowupQueue } from "./state.js";
 
 export function clearSessionQueues(
@@ -28,9 +28,10 @@ export function clearSessionQueues(
     const queue = getExistingFollowupQueue(cleaned, target);
     if (queue && !clearedQueues.has(queue)) {
       clearedQueues.add(queue);
+      // Stop relinquishes queued turns on purpose: cancellation, not abandonment.
       clearSessionControllerMailbox(
         queue,
-        completeFollowupRunLifecycle,
+        cancelFollowupRunLifecycle,
         capturedInputs,
         assertCurrent,
       );
