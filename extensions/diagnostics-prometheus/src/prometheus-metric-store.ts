@@ -20,6 +20,7 @@ type ScalarSample = {
   name: string;
   prefix: Buffer;
   value: number;
+  rendered?: Uint8Array;
 };
 
 type HistogramSample = {
@@ -33,6 +34,7 @@ type HistogramSample = {
   sumPrefix: Buffer;
   countPrefix: Buffer;
   sum: number;
+  rendered?: Uint8Array;
 };
 
 type LabelNode<T> = {
@@ -41,10 +43,18 @@ type LabelNode<T> = {
 };
 
 type LabelShape<T> = { keys: string[]; root: LabelNode<T> };
-type MetricSeries<T> = { samples: T[]; shapes: Map<string, LabelShape<T>[]> };
+type MetricSeries<T> = { samples: T[]; shapes: Map<string, LabelShape<T>[]>; sorted: boolean };
 
 function createSeries<T>(): MetricSeries<T> {
-  return { samples: [], shapes: new Map() };
+  return { samples: [], shapes: new Map(), sorted: true };
+}
+
+function sortedSamples<T extends { key: string }>(series: MetricSeries<T>): T[] {
+  if (!series.sorted) {
+    series.samples.sort((left, right) => left.key.localeCompare(right.key));
+    series.sorted = true;
+  }
+  return series.samples;
 }
 
 export type PrometheusMetricStore = ReturnType<typeof createPrometheusMetricStore>;
@@ -88,8 +98,8 @@ export function createPrometheusMetricStore(
     prefixOffset += prefixBuffer.write(text, prefixOffset);
     return prefixBuffer.subarray(start, prefixOffset);
   };
-  // Reuse scratch capacity, releasing every fragment reference after each scrape.
-  const parts: (Buffer | string)[] = [];
+  // Scratch for one changed series; cached blocks never share response backing storage.
+  let scratch = Buffer.alloc(0);
 
   const series = <T>(map: MetricSeries<T>, name: PrometheusMetricName, labels: LabelSet) => {
     let labelCount = 0;
@@ -183,12 +193,16 @@ export function createPrometheusMetricStore(
       return;
     }
     if (node.sample) {
-      node.sample.value =
+      const next =
         mode === "add"
           ? node.sample.value + value
           : mode === "max"
             ? Math.max(node.sample.value, value)
             : value;
+      if (next !== node.sample.value) {
+        node.sample.value = next;
+        node.sample.rendered = undefined;
+      }
     } else {
       node.sample = {
         help,
@@ -198,6 +212,7 @@ export function createPrometheusMetricStore(
         value,
       };
       map.samples.push(node.sample);
+      map.sorted = false;
     }
   };
 
@@ -256,6 +271,7 @@ export function createPrometheusMetricStore(
       };
       node.sample = sample;
       histograms.samples.push(sample);
+      histograms.sorted = false;
     }
     return sample;
   };
@@ -280,6 +296,7 @@ export function createPrometheusMetricStore(
     }
     sample.count += 1;
     sample.sum += value;
+    sample.rendered = undefined;
     for (let index = 0; index < sample.buckets.length; index += 1) {
       const bucket = sample.buckets[index];
       if (bucket !== undefined && value <= bucket) {
@@ -289,31 +306,50 @@ export function createPrometheusMetricStore(
   };
 
   const render = () => {
-    let index = 0;
-    let bytes = 0;
+    let scratchOffset = 0;
+    let totalBytes = 0;
+    const chunks: Uint8Array[] = [];
+    const append = (chunk: Uint8Array) => {
+      chunks.push(chunk);
+      totalBytes += chunk.length;
+    };
     const write = (prefix: Buffer, value: number) => {
       const number = formatPrometheusNumber(value);
-      parts[index++] = prefix;
-      parts[index++] = number;
-      parts[index++] = "\n";
-      bytes += prefix.length + number.length + 1;
+      const required = scratchOffset + prefix.length + number.length + 1;
+      if (required > scratch.length) {
+        const grown = Buffer.allocUnsafeSlow(Math.max(required, scratch.length * 2));
+        grown.set(scratch.subarray(0, scratchOffset));
+        scratch = grown;
+      }
+      scratch.set(prefix, scratchOffset);
+      scratchOffset += prefix.length;
+      scratchOffset += scratch.write(number, scratchOffset, "ascii");
+      scratch[scratchOffset++] = 10;
+    };
+    const finish = () => {
+      const output = new Uint8Array(scratch.subarray(0, scratchOffset));
+      scratchOffset = 0;
+      return output;
     };
     const emitted = new Set<string>();
     const header = (name: string, type: string, help: string) => {
       if (!emitted.has(name)) {
         emitted.add(name);
         const text = Buffer.from(`# HELP ${name} ${escapeHelp(help)}\n# TYPE ${name} ${type}\n`);
-        parts[index++] = text;
-        bytes += Buffer.byteLength(text);
+        append(text);
       }
     };
-    for (const [type, samples] of [
-      ["counter", counters.samples],
-      ["gauge", gauges.samples],
+    for (const [type, map] of [
+      ["counter", counters],
+      ["gauge", gauges],
     ] as const) {
-      for (const sample of samples.toSorted((left, right) => left.key.localeCompare(right.key))) {
+      for (const sample of sortedSamples(map)) {
         header(sample.name, type, sample.help);
-        write(sample.prefix, sample.value);
+        if (!sample.rendered) {
+          write(sample.prefix, sample.value);
+          sample.rendered = finish();
+        }
+        append(sample.rendered);
       }
       if (type === "counter" && droppedSeries > 0) {
         header(
@@ -322,6 +358,7 @@ export function createPrometheusMetricStore(
           "New-series observations dropped because an exporter series budget was reached.",
         );
         write(Buffer.from(`${DROPPED_SERIES_COUNTER_NAME} `), droppedSeries);
+        append(finish());
         header(
           DROPPED_FAMILY_COUNTER_NAME,
           type,
@@ -330,37 +367,31 @@ export function createPrometheusMetricStore(
         for (const [family, count] of familyDrops) {
           write(Buffer.from(`${DROPPED_FAMILY_COUNTER_NAME}${formatLabels({ family })} `), count);
         }
+        append(finish());
       }
     }
-    for (const sample of histograms.samples.toSorted((left, right) =>
-      left.key.localeCompare(right.key),
-    )) {
+    for (const sample of sortedSamples(histograms)) {
       if (sample.count === 0) {
         continue;
       }
       header(sample.name, "histogram", sample.help);
-      sample.bucketPrefixes.forEach((prefix, bucketIndex) => {
-        write(prefix, sample.counts[bucketIndex] ?? sample.count);
-      });
-      write(sample.sumPrefix, sample.sum);
-      write(sample.countPrefix, sample.count);
-    }
-    parts.length = index;
-    // A private backing store lets the HTTP owner release bytes after the write completes.
-    const output = Buffer.from(new ArrayBuffer(bytes));
-    let offset = 0;
-    for (const part of parts) {
-      if (typeof part === "string") {
-        // Number formatting and newlines are ASCII; labels/help were encoded above.
-        for (let i = 0; i < part.length; i++) {
-          output[offset++] = part.charCodeAt(i);
-        }
-      } else {
-        output.set(part, offset);
-        offset += part.length;
+      if (!sample.rendered) {
+        sample.bucketPrefixes.forEach((prefix, bucketIndex) => {
+          write(prefix, sample.counts[bucketIndex] ?? sample.count);
+        });
+        write(sample.sumPrefix, sample.sum);
+        write(sample.countPrefix, sample.count);
+        sample.rendered = finish();
       }
+      append(sample.rendered);
     }
-    parts.fill("");
+    // A private backing store lets the HTTP owner release bytes after the write completes.
+    const output = Buffer.from(new ArrayBuffer(totalBytes));
+    let offset = 0;
+    for (const chunk of chunks) {
+      output.set(chunk, offset);
+      offset += chunk.length;
+    }
     return output;
   };
 
@@ -373,7 +404,7 @@ export function createPrometheusMetricStore(
     sharedSeries = 0;
     familyCounts.clear();
     familyDrops.clear();
-    parts.length = 0;
+    scratch = Buffer.alloc(0);
     prefixBuffer = Buffer.alloc(0);
     prefixOffset = 0;
   };
