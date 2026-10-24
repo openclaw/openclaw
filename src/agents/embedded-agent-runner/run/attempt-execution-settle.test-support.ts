@@ -135,6 +135,7 @@ export function createFixture(mocks: {
     },
     timeout: {
       getRunAbortDeadlineAtMs: vi.fn(() => 123),
+      onRunAbortDeadlineChanged: () => () => {},
       clearTimers,
     },
   };

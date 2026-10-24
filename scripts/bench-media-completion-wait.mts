@@ -50,7 +50,7 @@ for (let sample = 1; sample <= samples; sample++) {
         deadlineReads++;
         return undefined;
       },
-      pollIntervalMs: 500,
+      onDeadlineChanged: () => () => {},
     });
     assert.deepEqual(result.timedOutRunIds, []);
   } finally {

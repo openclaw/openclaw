@@ -101,6 +101,7 @@ function streamInput(messages: unknown[] = [], currentAttemptAssistant?: unknown
     }),
     markTimedOutDuringCompaction: () => {},
     getRunAbortDeadlineAtMs: () => runAbortDeadlineAtMs,
+    onRunAbortDeadlineChanged: () => () => {},
     runAbortSignal: new AbortController().signal,
     isProbeSession: true,
     abortable: async (promise) => await promise,
