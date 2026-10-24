@@ -4874,7 +4874,6 @@ const PR_EXEMPT_RUNTIME_TEST_FILES = [
   "ui/src/e2e/chat-image-lightbox.e2e.test.ts",
   "ui/src/e2e/chat-image-virtual-remount.e2e.test.ts",
   "ui/src/e2e/chat-json-tree.e2e.test.ts",
-  "ui/src/e2e/chat-live-final-order.e2e.test.ts",
   "ui/src/e2e/chat-markdown-alignment.e2e.test.ts",
   "ui/src/e2e/chat-markdown-table-interactions.e2e.test.ts",
   "ui/src/e2e/chat-mention-search.e2e.test.ts",

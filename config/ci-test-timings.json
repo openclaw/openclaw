@@ -3330,7 +3330,6 @@
       "ui/src/e2e/chat-interrupted-reply.e2e.test.ts": 2,
       "ui/src/e2e/chat-json-tree.e2e.test.ts": 10,
       "ui/src/e2e/chat-large-paste-99213.e2e.test.ts": 4,
-      "ui/src/e2e/chat-live-final-order.e2e.test.ts": 7,
       "ui/src/e2e/chat-loading-deadlines.e2e.test.ts": 8,
       "ui/src/e2e/chat-loading-performance.real-gateway.e2e.test.ts": 35,
       "ui/src/e2e/chat-managed-media-order.real-gateway.e2e.test.ts": 21,
