@@ -3,6 +3,7 @@ import {
   attachModelProviderRequestRouteFacts,
   getModelProviderRequestRouteFacts,
 } from "../agents/provider-request-config.js";
+import { loadAgentRuntimePluginRegistryHandle } from "../agents/runtime-plugins.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   cleanupPluginLoaderFixturesForTest,
@@ -13,6 +14,7 @@ import { loadPluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
 import { resolveProviderRuntimePluginHandle } from "./provider-hook-runtime.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import { setActivePluginRegistry } from "./runtime.js";
+import { withPluginRuntimeGenerationScope } from "./runtime/generation-scope.js";
 
 afterEach(clearPluginLoaderCache);
 afterAll(cleanupPluginLoaderFixturesForTest);
@@ -59,14 +61,26 @@ it.each([
   );
   const providerOwner = getModelProviderRequestRouteFacts(model)?.providerOwner;
   expect(providerOwner).toBe("modelstudio-native");
-  const handle = resolveProviderRuntimePluginHandle({
-    provider,
-    providerOwner,
-    modelId: model.id,
+  const pluginRegistry = loadAgentRuntimePluginRegistryHandle({
     config,
     env,
-    pluginMetadataSnapshot: snapshot,
+    metadataSnapshot: snapshot,
+    workspaceDir: makePluginLoaderTempDir(),
+    basePluginIds: [],
+    selections: [{ provider, modelId: model.id }],
   });
+  const handle = withPluginRuntimeGenerationScope(
+    { metadataSnapshot: snapshot, pluginRegistry },
+    () =>
+      resolveProviderRuntimePluginHandle({
+        provider,
+        providerOwner,
+        modelId: model.id,
+        config,
+        env,
+        pluginMetadataSnapshot: snapshot,
+      }),
+  );
   expect(handle.plugin?.id).toBe(expected);
   if (!expected) {
     return;
