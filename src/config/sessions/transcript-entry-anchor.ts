@@ -14,27 +14,40 @@ export type TranscriptEntryAnchor = Readonly<{
   idempotencyKey?: string;
 }>;
 
+/** Reports the first failed identity predicate without disclosing transcript values. */
+export function transcriptEntryAnchorMismatch(
+  left: TranscriptEntryAnchor,
+  right: TranscriptEntryAnchor | undefined,
+): keyof TranscriptEntryAnchor | "unavailable" | undefined {
+  if (!right) {
+    return "unavailable";
+  }
+  const changedField = (
+    [
+      "agentId",
+      "sessionId",
+      "sessionKey",
+      "generation",
+      "entryId",
+      "rawSeq",
+      "effectiveParentId",
+      "activeMessagePosition",
+    ] as const
+  ).find((field) => left[field] !== right[field]);
+  return (
+    changedField ??
+    (left.storePath === right.storePath ||
+    isSameOpenClawAgentDatabasePath(left.storePath, right.storePath)
+      ? undefined
+      : "storePath")
+  );
+}
+
 export function sameTranscriptEntryAnchor(
   left: TranscriptEntryAnchor,
   right: TranscriptEntryAnchor | undefined,
 ): boolean {
-  return (
-    right !== undefined &&
-    (
-      [
-        "agentId",
-        "sessionId",
-        "sessionKey",
-        "generation",
-        "entryId",
-        "rawSeq",
-        "effectiveParentId",
-        "activeMessagePosition",
-      ] as const
-    ).every((field) => left[field] === right[field]) &&
-    (left.storePath === right.storePath ||
-      isSameOpenClawAgentDatabasePath(left.storePath, right.storePath))
-  );
+  return transcriptEntryAnchorMismatch(left, right) === undefined;
 }
 
 /** Current user row bound to one recorder-owned logical turn. */
