@@ -205,7 +205,7 @@ const windowsEnv = {
 };
 const envEntries = (env: Record<string, string>) =>
   Object.entries(env).map(([key, value]) => `${key}=${value}`);
-const includes = <T>(actual: readonly T[], expected: readonly T[]) =>
+const includes = (actual: readonly string[], expected: readonly string[]) =>
   expect(actual).toEqual(expect.arrayContaining([...expected]));
 
 test("hashes workspace-qualified scopes without truncating their identity", async () => {
