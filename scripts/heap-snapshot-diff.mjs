@@ -229,12 +229,16 @@ function readGraph(file, safeLabels = null, stringLimit = 1024) {
     const sessionStrings = safeLabels ? new Uint8Array(maxName + 1) : null;
     const tableStrings = safeLabels ? new Uint8Array(maxName + 1) : null;
     const truncatedStrings = safeLabels ? new Uint8Array(maxName + 1) : null;
+    const safeNames = new Map();
     reader.array(
       (value, index) => {
         if (sessionStrings) {
           sessionStrings[index] = Number(/^agent:[^:]+:.+/u.test(value));
           tableStrings[index] = Number(value === "table");
           truncatedStrings[index] = Number(value.length >= stringLimit);
+          if (safeLabels.has(value)) {
+            safeNames.set(index, value);
+          }
         }
         if (usedNames.has(index)) {
           strings.set(index, !safeLabels || safeLabels.has(value) ? value : "(redacted)");
@@ -247,6 +251,7 @@ function readGraph(file, safeLabels = null, stringLimit = 1024) {
     const stringBytes = safeLabels ? new Float64Array(maxName + 1) : null;
     const stringLargest = safeLabels ? new Float64Array(maxName + 1) : null;
     const sessionNodes = safeLabels ? new Uint8Array(count) : null;
+    const excessStringNodes = safeLabels ? new Uint8Array(count) : null;
     if (safeLabels) {
       for (let node = 0; node < count; node++) {
         if (typeNames[types[node]] === "string") {
@@ -255,6 +260,23 @@ function readGraph(file, safeLabels = null, stringLimit = 1024) {
           stringBytes[name] += sizes[node];
           stringLargest[name] = Math.max(stringLargest[name], sizes[node]);
           sessionNodes[node] = sessionStrings[name];
+        }
+      }
+      // Keep the first largest copy; charge each other physical node exactly once.
+      const kept = new Uint8Array(maxName + 1);
+      for (let node = 0; node < count; node++) {
+        const name = names[node];
+        if (
+          typeNames[types[node]] !== "string" ||
+          stringNodes[name] < 2 ||
+          truncatedStrings[name]
+        ) {
+          continue;
+        }
+        if (!kept[name] && sizes[node] === stringLargest[name]) {
+          kept[name] = 1;
+        } else {
+          excessStringNodes[node] = 1;
         }
       }
     }
@@ -304,7 +326,16 @@ function readGraph(file, safeLabels = null, stringLimit = 1024) {
       labels,
       meta,
       ...(safeLabels
-        ? { edgeNames, edgeKinds, sessionStrings, tableStrings, sessionNodes, duplicateStrings }
+        ? {
+            edgeNames,
+            edgeKinds,
+            sessionStrings,
+            tableStrings,
+            sessionNodes,
+            duplicateStrings,
+            excessStringNodes,
+            safeNames,
+          }
         : {}),
     };
   } finally {
@@ -732,6 +763,111 @@ function summarizeIndependent(file, options) {
   };
 }
 
+function duplicateRetainers(snapshot, top) {
+  const {
+    count,
+    starts,
+    targets,
+    names,
+    labels,
+    ids,
+    sizes,
+    retained,
+    immediateDominators,
+    excessStringNodes,
+    edgeKinds,
+    edgeNames,
+    safeNames,
+    meta,
+  } = snapshot;
+  const kinds = meta.edge_types[meta.edge_fields.indexOf("type")];
+  const sources = new Uint32Array(count).fill(count);
+  const chosenEdges = new Uint32Array(count);
+  const references = new Uint32Array(count);
+  const rank = (edge) => (["property", "context"].includes(kinds[edgeKinds[edge]]) ? 2 : 1);
+  for (let from = 0; from < count; from++) {
+    if (immediateDominators[from] === count) {
+      continue;
+    }
+    for (let edge = starts[from]; edge < starts[from + 1]; edge++) {
+      const to = targets[edge];
+      if (to >= count || !excessStringNodes[to]) {
+        continue;
+      }
+      references[to]++;
+      if (sources[to] === count || rank(edge) > rank(chosenEdges[to])) {
+        sources[to] = from;
+        chosenEdges[to] = edge;
+      }
+    }
+  }
+  const groups = new Map();
+  let unattributedBytes = 0;
+  let attributedBytes = 0;
+  for (let node = 0; node < count; node++) {
+    if (!excessStringNodes[node]) {
+      continue;
+    }
+    const from = sources[node];
+    if (from === count) {
+      unattributedBytes += sizes[node];
+      continue;
+    }
+    let owner = from;
+    // A context or named constructor is an ownership clue; generic containers are not.
+    while (owner && owner < count) {
+      const label = labels[names[owner]];
+      if (
+        label === "object: system / Context" ||
+        (label.startsWith("object: ") &&
+          ![
+            "object: Object",
+            "object: Array",
+            "object: Map",
+            "object: Set",
+            "object: (redacted)",
+          ].includes(label))
+      ) {
+        break;
+      }
+      owner = immediateDominators[owner];
+    }
+    const edge = chosenEdges[node];
+    const kind = kinds[edgeKinds[edge]];
+    const property = ["hidden", "element"].includes(kind)
+      ? "(index)"
+      : (safeNames.get(edgeNames[edge]) ?? "(redacted)");
+    const retainer = labels[names[from]];
+    const ownerId = owner < count ? ids[owner] : null;
+    const key = JSON.stringify([ownerId, retainer, kind, property]);
+    let row = groups.get(key);
+    if (!row) {
+      row = {
+        ownerId,
+        ownerLabel: owner < count ? labels[names[owner]] : "(unresolved)",
+        retainer,
+        edge: { type: kind, name: property },
+        copies: 0,
+        excessBytes: 0,
+        multipleIncomingCopies: 0,
+        exampleRetainerId: ids[from],
+        exampleRetainerBytes: retained[from],
+      };
+      groups.set(key, row);
+    }
+    row.copies++;
+    row.excessBytes += sizes[node];
+    row.multipleIncomingCopies += Number(references[node] > 1);
+    attributedBytes += sizes[node];
+  }
+  return {
+    attributedBytes,
+    unattributedBytes,
+    groupCount: groups.size,
+    groups: [...groups.values()].toSorted((a, b) => b.excessBytes - a.excessBytes).slice(0, top),
+  };
+}
+
 function summarizeRetention(file, options) {
   const safeLabels = new Set(publicLabels);
   if (options.labels) {
@@ -817,11 +953,59 @@ function summarizeRetention(file, options) {
     .filter((row) => row.count)
     .toSorted((a, b) => b.retained - a.retained)
     .slice(0, options.top);
+  const stringRetainers = duplicateRetainers(snapshot, options.top);
+  const requested = new Set(options.nodes);
+  const inspectedNodes = [];
+  for (let node = 0; node < count && requested.size; node++) {
+    if (!requested.delete(ids[node])) {
+      continue;
+    }
+    const children = [];
+    for (let edge = starts[node]; edge < starts[node + 1]; edge++) {
+      const target = targets[edge];
+      if (target >= count) {
+        continue;
+      }
+      const kind = edgeTypeNames[edgeKinds[edge]];
+      let elements = 0;
+      for (let child = starts[target]; child < starts[target + 1]; child++) {
+        elements += Number(targets[child] < count && edgeTypeNames[edgeKinds[child]] === "element");
+      }
+      children.push({
+        edge: {
+          type: kind,
+          name: ["element", "hidden"].includes(kind)
+            ? "(index)"
+            : (snapshot.safeNames.get(edgeNames[edge]) ?? "(redacted)"),
+        },
+        id: ids[target],
+        label: labels[names[target]],
+        retained: retained[target],
+        elementReferences: elements,
+      });
+    }
+    inspectedNodes.push({
+      id: ids[node],
+      label: labels[names[node]],
+      retained: retained[node],
+      children,
+    });
+  }
   const retainers = retainingPaths(
     file,
     snapshot,
     {
-      ids: [...new Set([...topNodes, ...collections, ...sessions].map((row) => row.id))],
+      ids: [
+        ...new Set(
+          [...topNodes, ...collections, ...sessions]
+            .map((row) => row.id)
+            .concat(
+              stringRetainers.groups
+                .flatMap((row) => [row.ownerId, row.exampleRetainerId])
+                .filter((id) => id !== null),
+            ),
+        ),
+      ],
       classes: classes.map((row) => row.label),
     },
     { ...options, safeLabels },
@@ -835,11 +1019,14 @@ function summarizeRetention(file, options) {
     collections,
     sessionStructures: sessions,
     duplicateStrings: snapshot.duplicateStrings,
+    duplicateStringRetainers: stringRetainers,
+    inspectedNodes,
     retainers,
     notes: [
       "Only fixed built-in labels and the explicit reviewed-source label allowlist are emitted; other names are redacted. No string values or session keys are emitted.",
       "Retained sizes exclude weak and shortcut edges; ephemerons follow V8 internal edges. Class totals overlap across classes; nested same-class subtrees count once.",
       "Duplicate estimates cover flat string nodes sharing a V8 string-table entry, including unreachable nodes; names at or above stringLimit are excluded because V8 truncates them. Match --string-limit to the capturing runtime flag (Node default 1024). Sliced/concatenated strings and external backing are excluded. Savings retain the largest copy and are not a measured reclamation result.",
+      "Duplicate retainer attribution keeps the first largest copy per string group and charges each other node once to one reachable strong incoming edge, preferring property/context edges. Multiple incoming edges are counted, not charged again. Attribution is representative, not exclusive ownership or a promise of producer-local savings; ownerId is the nearest context/named-constructor dominator, or the root. Unattributed bytes have no reachable strong incoming edge. Displayed groups are top-N; attributedBytes includes all groups. Requested --node children contain only allowlisted labels and element-reference counts, not array length or Map.size.",
       "Session scaling counts references to agent:<agent>:<session> keys, not unique sessions or Map.size; shared keys and backing tables can appear in multiple rows. Other key formats are not detected.",
       "Root paths are shortest strong routes, not ownership proof. Dominator paths show exclusive graph retention, not direct edges. Owner/module attribution requires source inspection of approved class, closure, and property labels.",
       "Snapshot sizes are shallow V8 sizes, not process RSS; external/native memory may be absent. One snapshot does not establish a leak or a before/after improvement.",

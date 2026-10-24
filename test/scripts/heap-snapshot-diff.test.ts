@@ -405,3 +405,70 @@ it("rejects summary flags that could accidentally select the unsanitized compari
     expect(result.stderr).toContain("Usage:");
   }
 });
+
+it("attributes excess string nodes once, preserves unreachable accounting, and exposes only reviewed owner labels", () => {
+  const secret = "private repeated payload";
+  const contents = snapshot([
+    makeNode(1, "Object", 0, [
+      [0, 1],
+      [0, 2],
+      [0, 3],
+      [1, 7],
+      [2, 7],
+    ]),
+    { ...makeNode(3, secret, 40), type: "string" },
+    makeNode(5, "Array", 24, [[4, 5]]),
+    makeNode(7, "system / Context", 24, [[0, 4, "store"]]),
+    makeNode(9, "Object", 24, [
+      [0, 5, "role"],
+      [0, 6, "private-edge"],
+    ]),
+    { ...makeNode(11, secret, 32), type: "string" },
+    { ...makeNode(13, secret, 40), type: "string" },
+    { ...makeNode(15, secret, 32), type: "string" },
+    makeNode(17, "Object", 24, [[0, 7, "role"]]),
+  ]);
+  const result = runSummary(contents, ["store", "role"], ["--node", "7"]);
+  expect(result.duplicateStrings.potentialSavingsBytes).toBe(104);
+  expect(result.duplicateStringRetainers).toMatchObject({
+    attributedBytes: 72,
+    unattributedBytes: 32,
+    groupCount: 2,
+    groups: expect.arrayContaining([
+      expect.objectContaining({
+        ownerId: 7,
+        retainer: "object: Object",
+        edge: { type: "property", name: "role" },
+        copies: 1,
+        excessBytes: 32,
+        multipleIncomingCopies: 1,
+      }),
+      expect.objectContaining({
+        ownerId: 7,
+        edge: { type: "property", name: "(redacted)" },
+        copies: 1,
+        excessBytes: 40,
+        multipleIncomingCopies: 0,
+      }),
+    ]),
+  });
+  expect(result.inspectedNodes).toEqual([
+    {
+      id: 7,
+      label: "object: system / Context",
+      retained: 88,
+      children: [
+        {
+          edge: { type: "property", name: "store" },
+          id: 9,
+          label: "object: Object",
+          retained: 64,
+          elementReferences: 0,
+        },
+      ],
+    },
+  ]);
+  expect(result.retainers.some((row: { id: number }) => row.id === 9)).toBe(true);
+  expect(JSON.stringify(result)).not.toContain(secret);
+  expect(JSON.stringify(result)).not.toContain("private-edge");
+});

@@ -76,6 +76,92 @@ experimental AOT compiler. Selecting `--compile-aot` with a Bun that lacks that
 capability stops with a diagnostic; it does not silently fall back to JIT or
 bytecode. An AOT artifact needs its own runtime and signing qualification.
 
+### WebAssembly in AOT builds
+
+AOT builds import the retained host WebAssembly assets at compile time, including
+Photon, PDFium, Opus, the tree-sitter engine and Bash grammar, QuickJS and its
+encoding extension, Matrix crypto, and the fs-safe archive parser. Byte-identical
+assets share one compiler input. The existing lazy library loaders still read and
+instantiate their own bytes; the registry adds no runtime loader or global patch.
+Standard JIT and bytecode builds keep their existing packaging.
+
+The inventory comes from the same resource plan as the sidecar, so omitted plugins
+contribute no assets. `embedded.webAssembly` records each source, its byte size,
+and SHA-256. Content-addressed imports also include these bytes in the shared
+module graph fingerprint. The inline Opus payload is decoded during the build without evaluating
+package code; an unsupported decoder shape stops the build. Compiled WASM adds
+machine code to the AOT executable. Plugins installed after shipment are outside
+this compile-time inventory.
+
+For focused measurements with an AOT-capable compiler, run:
+
+```bash
+node scripts/bench-standalone-wasm.mjs "$AOT_BUN" ./wasm-probe
+```
+
+Choose a fresh output directory. The script compiles only small dependency
+workloads, checks matching results in JIT and AOT, and reports interleaved CPU and
+wall-time samples, including QuickJS module transfer to a real worker.
+
+## Matched JIT support build
+
+Use `--support-output` with AOT to produce a JIT companion from the **same staged
+module graph, compiler, source commit, plugin selection, and resource snapshot**:
+
+```bash
+./aot-compiler/bin/bun scripts/build-bun-standalone.mjs ./standalone-aot --compile-aot --support-output ./standalone-support --plugins "$EMBEDDED_PLUGIN_IDS"
+```
+
+Both output directories must be fresh, separate, and outside each other. The
+builder compiles both executables before publishing either output. The support
+artifact has `mode: "jit"` and `build.flavor: "support"`; the AOT artifact has
+`mode: "aot"` and `build.flavor: "standard"`. Compare `build.id`,
+`openclaw.commit`, `build.pluginSetSha256`, and `build.moduleGraphSha256` before
+reproducing an issue. Matching a version string alone is insufficient.
+
+For breakpoints, the companion also retains the selected input runtime, its
+source maps, and a copy of the matching ordinary Bun executable under `debug/`.
+These are recorded separately in `debug.runtime` and `debug.executable`; compiled
+virtual files are not available in Bun CLI mode. Use an isolated copy of the
+reproduction state and launch the entry recorded in `build.debugEntry`:
+
+```bash
+./standalone-support/debug/bin/bun --inspect-brk ./standalone-support/debug/entry.mjs
+```
+
+The debug entry starts the selected source runtime with its build facts and
+defaults to its bundled SQLite library, while preserving `OPENCLAW_SQLITE_LIBRARY`
+overrides. Its bootstrap preload survives normal startup respawns. If a respawn
+starts a new inspector listener, attach to the child's reported URL. Keep
+`debug/` together with the companion; it is intentionally excluded from support
+exports. The AOT artifact does not gain debugger permissions. The compiled JIT
+companion and the source debugger use the same commit and selected plugins, but
+source execution does not include the standalone compiler's adaptations. A JIT
+reproduction can isolate a runtime-specific problem; it does not establish that
+AOT behaves identically.
+
+### Build each target on its matching host
+
+The standalone builder uses the **compiler process's** OS and architecture and
+rejects `--target`. Bun AOT cannot cross-compile. Run a matching compiler and
+install the matching native dependencies separately for each row:
+
+| Compiler host      | Native closure to qualify                                                   |
+| ------------------ | --------------------------------------------------------------------------- |
+| macOS arm64        | arm64 addons, SQLite library, hardened signing                              |
+| macOS x64          | x64 addons and SQLite library; optional backends may lack x64 distributions |
+| Linux x64, glibc   | x64 glibc addons and the oldest supported runtime libraries                 |
+| Linux arm64, glibc | arm64 glibc addons and the oldest supported runtime libraries               |
+| Linux x64, musl    | x64 musl addons; verify each optional backend is distributed for musl       |
+| Linux arm64, musl  | arm64 musl addons; verify each optional backend is distributed for musl     |
+
+These are separate build/qualification combinations, not a claim that every
+backend supports every row. Windows, FreeBSD, and other architectures remain
+unsupported by this builder. A compiler running as x64 under translation produces
+x64 facts; it does not qualify arm64 native resources. Combining ordinary Bun
+runtimes with `lipo` does not establish that combined AOT application images work.
+Desktop packaging owns architecture selection and app signing.
+
 ## Select embedded plugins
 
 By default, the builder embeds every plugin in the completed runtime build.
@@ -117,23 +203,38 @@ runtime in `runtime/npm/` is retained regardless of the plugin selection.
 `manifest.json` describes the output for packaging and verification. Its version
 1 contract is:
 
-| Field           | Contents                                                                                                          |
-| --------------- | ----------------------------------------------------------------------------------------------------------------- |
-| `schemaVersion` | Manifest schema version, `1`.                                                                                     |
-| `mode`          | `jit`, `bytecode`, or `aot`.                                                                                      |
-| `target`        | `platform` and `arch` for the compiled executable.                                                                |
-| `bun`           | Compiler `version`, `revision`, `commit`, and `executableSha256`.                                                 |
-| `openclaw`      | OpenClaw `version` and source `commit`.                                                                           |
-| `executable`    | Relative `path`, `sizeBytes`, and `sha256`.                                                                       |
-| `runtime`       | Relative `path`, `sizeBytes`, `sha256`, `fileCount`, `symlinkCount`, resource `categories`, and `sidecarPlugins`. |
-| `embedded`      | Counts for `workers`, `plugins`, `modules`, and `inlineWorkers`.                                                  |
-| `plugins`       | Sorted plugin ID arrays: `embedded` and `omitted`. The additive fields retain schema version `1`.                 |
-| `pruning`       | Resource `policy`, `removedFiles`, `removedBytes`, and `removedSymlinks`.                                         |
-| `macos`         | macOS only: `hardenedRuntime` and the selected mode's `entitlements` map.                                         |
+| Field           | Contents                                                                                                                                         |
+| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `schemaVersion` | Manifest schema version, `1`.                                                                                                                    |
+| `build`         | Shared build `id`, `flavor` (`standard` or `support`), `pluginSetSha256`, `moduleGraphSha256`, and the support artifact's relative `debugEntry`. |
+| `debug`         | Support only: debugger entry and bootstrap digests, ordinary Bun executable digest, and selected source-runtime inventory.                       |
+| `nativeModules` | Target-selected native package names, versions, relative artifact paths, backend scope, and explicit `unverified` qualification.                 |
+| `mode`          | `jit`, `bytecode`, or `aot`.                                                                                                                     |
+| `target`        | `platform` and `arch` for the compiled executable.                                                                                               |
+| `bun`           | Compiler `version`, `revision`, `commit`, and `executableSha256`.                                                                                |
+| `openclaw`      | OpenClaw `version` and source `commit`.                                                                                                          |
+| `executable`    | Relative `path`, `sizeBytes`, and `sha256`.                                                                                                      |
+| `runtime`       | Relative `path`, `sizeBytes`, `sha256`, `fileCount`, `symlinkCount`, resource `categories`, and `sidecarPlugins`.                                |
+| `embedded`      | Counts for `workers`, `plugins`, `modules`, and `inlineWorkers`.                                                                                 |
+| `plugins`       | Sorted plugin ID arrays: `embedded` and `omitted`. The additive fields retain schema version `1`.                                                |
+| `pruning`       | Resource `policy`, `removedFiles`, `removedBytes`, and `removedSymlinks`.                                                                        |
+| `macos`         | macOS only: `hardenedRuntime` and the selected mode's `entitlements` map.                                                                        |
+
+`nativeModules` records the selected native-resource inventory, including SQLite;
+packaging does not load or execute optional addons to certify them. A listed
+package is not proof that every backend works, and an omitted package is not a
+claim of incompatibility. Qualify real operations on the exact signed artifact:
+SQLite extensions, fs-safe rooted I/O, proc-safe identity/child operations, PTY
+open/close, LanceDB vector/filter queries, ONNX with its selected execution
+provider, and callback-heavy FFI integrations. Record target OS/architecture/libc,
+package versions, signature identity, selected backend, and executable-memory
+policy with that qualification. Repeat after changing any of those inputs.
 
 Keep compiler provenance when signing or packaging the executable. Signing
 changes its bytes: refresh `executable.sizeBytes` and `executable.sha256` after
 signing. If packaging changes the sidecar, refresh its recorded inventory too.
+If signing or packaging the support debugger, also refresh `debug.executable`
+and `debug.runtime` after changing those bytes.
 
 `runtime.categories` records `{ "files": number, "bytes": number }` for each
 resource category. Its totals equal `runtime.fileCount` and `runtime.sizeBytes`.

@@ -195,9 +195,6 @@ export function ChatDetails(props: ChatDetailsViewProps) {
     }
     const pane = elements?.pane;
     const frame = elements?.frame;
-    const footerBounds = conversationVisible
-      ? elements?.footer?.getBoundingClientRect()
-      : undefined;
     const bounds = (
       mobile ? (pane ?? frame) : conversationVisible ? frame : (pane ?? host)
     )?.getBoundingClientRect();
@@ -229,12 +226,15 @@ export function ChatDetails(props: ChatDetailsViewProps) {
       frame?.style.setProperty("--chat-details-frame-width", `${dockingWidth}px`);
     }
     setWideEnough(dockingWidth >= DETAILS_DOCK_MIN_WIDTH);
+    if (!open) {
+      return;
+    }
+    const footerBounds = conversationVisible
+      ? elements?.footer?.getBoundingClientRect()
+      : undefined;
     if (isDesktop) {
       // Measure the conversation owner, never the moving Details surface. Its
       // reservation changes the composer width, but not this frame's width.
-      if (!open) {
-        return;
-      }
       const composer = conversationVisible
         ? elements?.getComposerInput?.()?.getBoundingClientRect()
         : undefined;
@@ -504,7 +504,8 @@ export function ChatDetails(props: ChatDetailsViewProps) {
     if (pane && desktop()) {
       layout.observe(pane, { attributes: true, attributeFilter: ["class", "style"] });
     }
-    reposition();
+    // Initial ResizeObserver delivery discovers docking width after layout.
+    mountSurface(readLayout());
     const stop = [
       listen(window, "resize", reposition),
       listen(document, "pointerdown", outside),

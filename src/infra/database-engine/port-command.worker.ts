@@ -148,7 +148,7 @@ async function preflight(
   assertCurrent: () => void,
 ) {
   return withDatabasePortConnection(task.config, async (db) => {
-    const facts = await readPostgresPortCapabilities(db, {
+    await readPostgresPortCapabilities(db, {
       minimumPostgresVersion: Math.max(
         ...databasePortProviders.map((provider) => provider.minimumPostgresVersion),
       ),
@@ -169,7 +169,6 @@ async function preflight(
         await db.query("ROLLBACK");
       }
     }
-    return { ...facts, privilegesChecked: task.probe };
   });
 }
 async function stage(
