@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { downloadReadStream, trackDownloadStagingOpens } from "./pw-download-test-doubles.js";
 import { awaitStarted } from "./pw-tools-core.guard-test-support.js";
 import {
   getPwToolsCoreSessionMocks,
@@ -13,6 +14,13 @@ import {
   setPwToolsCoreCurrentPage,
   setPwToolsCoreCurrentRefLocator,
 } from "./pw-tools-core.test-harness.js";
+
+let stagedDownloadPaths: string[] | undefined;
+
+function stagedDownloads(): string[] {
+  stagedDownloadPaths ??= trackDownloadStagingOpens();
+  return stagedDownloadPaths;
+}
 
 const tmpDirMocks = vi.hoisted(() => ({
   resolvePreferredOpenClawTmpDir: vi.fn(() => "/tmp/openclaw"),
@@ -45,23 +53,23 @@ function waitForDownload(
   return mod.waitForDownloadViaPlaywright({ ...target, timeoutMs: 1000, ...options });
 }
 function writer(content: string) {
-  return vi.fn(async (outPath: string) => {
-    await fs.writeFile(outPath, content, "utf8");
-  });
+  stagedDownloads();
+  return downloadReadStream(content);
 }
 function downloadEvent(
-  saveAs: ReturnType<typeof vi.fn>,
+  createReadStream: ReturnType<typeof vi.fn>,
   filename = "file.bin",
   url = `https://example.com/${filename}`,
   cancel = vi.fn(async () => {}),
 ) {
-  return { url: () => url, suggestedFilename: () => filename, saveAs, cancel };
+  return { url: () => url, suggestedFilename: () => filename, createReadStream, cancel };
 }
 
 describe("pw-tools-core", () => {
   installPwToolsCoreTestHooks();
 
   beforeEach(() => {
+    stagedDownloadPaths = undefined;
     for (const fn of Object.values({ ...tmpDirMocks, ...chromeMocks, ...clientFetchMocks })) {
       fn.mockClear();
     }
@@ -79,10 +87,10 @@ describe("pw-tools-core", () => {
     };
   }
 
-  function requireSaveAsPath(saveAs: ReturnType<typeof vi.fn>): string {
-    const savedPath = saveAs.mock.calls[0]?.[0];
-    if (typeof savedPath !== "string") {
-      throw new Error("expected download saveAs path");
+  function requireSaveAsPath(): string {
+    const savedPath = stagedDownloads().shift();
+    if (!savedPath) {
+      throw new Error("expected download staging file");
     }
     return savedPath;
   }
@@ -106,7 +114,7 @@ describe("pw-tools-core", () => {
     targetPath: string;
     content: string;
   }) {
-    const savedPath = requireSaveAsPath(params.saveAs);
+    const savedPath = requireSaveAsPath();
     expect(savedPath).not.toBe(params.targetPath);
     await expectPathMissing(path.dirname(savedPath));
     expect(path.basename(savedPath)).toMatch(/\.part$/);
@@ -127,16 +135,17 @@ describe("pw-tools-core", () => {
 
       const harness = createDownloadEventHarness();
       let parentSwappedBeforeFinalize = false;
-      const saveAs = vi.fn(async (outPath: string) => {
-        await fs.writeFile(outPath, "race-content", "utf8");
-        const beforeSwap = await fs.lstat(targetParent);
-        expect(beforeSwap.isDirectory()).toBe(true);
-        expect(beforeSwap.isSymbolicLink()).toBe(false);
-        await fs.rm(targetParent, { recursive: true, force: true });
-        await fs.symlink(outsideDir, targetParent);
-        const afterSwap = await fs.lstat(targetParent);
-        expect(afterSwap.isSymbolicLink()).toBe(true);
-        parentSwappedBeforeFinalize = true;
+      const saveAs = downloadReadStream("race-content", {
+        afterYield: async () => {
+          const beforeSwap = await fs.lstat(targetParent);
+          expect(beforeSwap.isDirectory()).toBe(true);
+          expect(beforeSwap.isSymbolicLink()).toBe(false);
+          await fs.rm(targetParent, { recursive: true, force: true });
+          await fs.symlink(outsideDir, targetParent);
+          const afterSwap = await fs.lstat(targetParent);
+          expect(afterSwap.isSymbolicLink()).toBe(true);
+          parentSwappedBeforeFinalize = true;
+        },
       });
 
       const p = waitForDownload({ path: targetPath, rootDir });
@@ -342,7 +351,7 @@ describe("pw-tools-core", () => {
     await Promise.resolve();
     harness.trigger(downloadEvent(saveAs, "../../../../etc/passwd", "https://example.com/evil"));
     const res = await pending;
-    const outPath = requireSaveAsPath(saveAs);
+    const outPath = requireSaveAsPath();
     expect(typeof outPath).toBe("string");
     const expectedRootedDownloadsDir = await fs.realpath(
       path.resolve(path.join(path.sep, "tmp", "openclaw-preferred", "downloads")),

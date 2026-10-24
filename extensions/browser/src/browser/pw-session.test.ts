@@ -5,6 +5,7 @@ import type { Frame, Page } from "playwright-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_DOWNLOAD_DIR } from "./paths.js";
 import { createDownloadCaptureForPage } from "./pw-download-capture.js";
+import { downloadReadStream, trackDownloadStagingOpens } from "./pw-download-test-doubles.js";
 import { getObservedBrowserStateForPage } from "./pw-session-state.js";
 import {
   armObservedDialogResponseOnPage,
@@ -25,11 +26,19 @@ type MutableDownload = {
   url: () => string;
   cancel: () => Promise<void>;
   suggestedFilename: () => string;
-  saveAs: ReturnType<typeof vi.fn>;
+  createReadStream: ReturnType<typeof vi.fn>;
   path?: () => Promise<string>;
 };
 
+let stagedDownloadPaths: string[] | undefined;
+
+function stagedDownloads(): string[] {
+  stagedDownloadPaths ??= trackDownloadStagingOpens();
+  return stagedDownloadPaths;
+}
+
 afterEach(() => {
+  stagedDownloadPaths = undefined;
   vi.restoreAllMocks();
   vi.useRealTimers();
 });
@@ -79,12 +88,17 @@ function fakePage() {
 }
 
 function saveContents(contents: string, gate?: Promise<void>) {
-  return vi.fn(async (outPath: string) => {
-    if (gate) {
-      await gate;
-    }
-    await fs.writeFile(outPath, contents, "utf8");
-  });
+  stagedDownloads();
+  return downloadReadStream(
+    contents,
+    gate
+      ? {
+          beforeYield: async () => {
+            await gate;
+          },
+        }
+      : undefined,
+  );
 }
 
 function observedPage() {
@@ -102,20 +116,22 @@ function observedPage() {
 
 function download(
   filename: string,
-  saveAs = vi.fn(async (_outPath: string) => {}),
+  saveAs: ReturnType<typeof vi.fn> = vi.fn(async () => {
+    throw new Error("download stream should not start");
+  }),
   url = `https://example.com/${filename}`,
 ): MutableDownload {
   return {
     url: () => url,
     cancel: vi.fn(async () => {}),
     suggestedFilename: () => filename,
-    saveAs,
+    createReadStream: saveAs,
   };
 }
 
-function firstSavePath(saveAs: MutableDownload["saveAs"]): string {
-  const savedPath = saveAs.mock.calls[0]?.[0];
-  if (typeof savedPath !== "string") {
+function firstSavePath(): string {
+  const savedPath = stagedDownloads().shift();
+  if (!savedPath) {
     throw new Error("Expected saved download path");
   }
   return savedPath;
@@ -219,13 +235,10 @@ describe("pw-session ensurePageState", () => {
     const managedPathB = await downloadB.path?.();
 
     expect(managedPathA).not.toBe(managedPathB);
-    for (const [managedPath, saveAs] of [
-      [managedPathA, saveAsA],
-      [managedPathB, saveAsB],
-    ] as const) {
+    for (const managedPath of [managedPathA, managedPathB]) {
       expect(path.dirname(managedPath ?? "")).toBe(DEFAULT_DOWNLOAD_DIR);
       expect(path.basename(managedPath ?? "")).toMatch(/-report\.pdf$/);
-      const savedPath = firstSavePath(saveAs);
+      const savedPath = firstSavePath();
       expect(savedPath).not.toBe(managedPath);
       expect(savedPath.length).toBeGreaterThan(0);
       const relativeStagedPath = path.relative(await fs.realpath(DEFAULT_DOWNLOAD_DIR), savedPath);
@@ -322,7 +335,7 @@ describe("pw-session ensurePageState", () => {
     await expect(capture.drain()).resolves.toBeUndefined();
     capture.dispose();
     expect(explicit).not.toHaveProperty("path");
-    expect(explicit.saveAs).not.toHaveBeenCalled();
+    expect(explicit.createReadStream).not.toHaveBeenCalled();
   });
 
   it("drains late siblings before surfacing the first download policy failure", async () => {
@@ -391,7 +404,7 @@ describe("pw-session ensurePageState", () => {
     expect(result.suggestedFilename).toBe("export.csv");
     expect(path.dirname(result.path)).toBe(DEFAULT_DOWNLOAD_DIR);
     expect(path.basename(result.path)).toMatch(/-export\.csv$/);
-    expect(firstSavePath(saveAs)).not.toBe(result.path);
+    expect(firstSavePath()).not.toBe(result.path);
     await expect(fs.readFile(result.path, "utf8")).resolves.toBe("attachment");
   });
 
