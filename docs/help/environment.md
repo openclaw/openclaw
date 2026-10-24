@@ -47,9 +47,10 @@ The variables below are the supported environment contract for operators. Undocu
 
 A named `OPENCLAW_PROFILE` uses `~/.openclaw-<profile>` for state and config defaults, even before that profile has a config file. Explicit `OPENCLAW_STATE_DIR` and `OPENCLAW_CONFIG_PATH` values take precedence. An explicit CLI `--profile` selects the requested profile as described in [Global flags](/cli#global-flags).
 
-After startup environment selection, the Gateway pins its resolved state directory,
-including the default home-based path. Foreground child restarts inherit that
-directory. To select a different home, profile, or state directory, stop the
+After startup environment selection, the Gateway pins the default home-based state
+directory when the config directory matches it. Named profiles and separate config
+directories keep their existing selection behavior. Foreground child restarts
+inherit a pinned directory. To select a different home, profile, or state directory, stop the
 Gateway and launch it with the new environment.
 
 #### `OPENCLAW_HOME`
