@@ -10,6 +10,7 @@ const selectedSessionKey = "agent:main:main";
 const backgroundSessionKey = "agent:main:verification";
 const runId = "verification-run";
 const baseTime = Date.parse("2026-09-18T05:00:00.000Z");
+const conversation = "Your current conversation stays uninterrupted.";
 
 suite.define(() => {
   it("keeps background observer assessments in the sidebar without interrupting chat or replacing Undo", async () => {
@@ -24,11 +25,13 @@ suite.define(() => {
         });
         const archived = sessionRow("agent:main:completed", "Completed work", baseTime - 2);
         const gateway = await installMockGateway(page, {
+          historyMessages: [{ role: "assistant", content: [{ type: "text", text: conversation }] }],
           sessions: [sessionRow(selectedSessionKey, "Main", baseTime), background, archived],
           sessionArchiveFiltering: true,
           sessionKey: selectedSessionKey,
         });
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, selectedSessionKey));
+        await page.getByText(conversation).waitFor();
         const currentUrl = page.url();
         const session = ui.sessionRows(page);
         const row = session(backgroundSessionKey);
@@ -75,6 +78,9 @@ suite.define(() => {
         await undo.waitFor({ state: "visible" });
         await undo.focus();
         await emit("stuck", "Still needs repair");
+        expect(await toast.count()).toBe(1);
+        expect(await toast.textContent()).toContain("Session archived");
+        expect(await page.getByText(conversation).count()).toBe(1);
         await undo.click();
         await ui.sessionPatch(gateway, archived.key, { archived: false });
         expect(page.url()).toBe(currentUrl);
