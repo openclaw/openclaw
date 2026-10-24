@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { stableStringify } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { CodeModeOutputState } from "./code-mode-json.js";
 import type { CodeModeWorkerResult } from "./code-mode-runtime.js";
 import {
@@ -642,12 +642,11 @@ describe("Code Mode swarm host bridge", () => {
         controller.signal,
       );
       try {
-        await Promise.race([
+        await awaitGateBeforeSettlement(
           entered.promise,
-          executing.then(() => {
-            throw new Error("execution ended before the collector frontier started");
-          }),
-        ]);
+          executing,
+          "execution ended before the collector frontier started",
+        );
         if (closure === "abort") {
           controller.abort();
         } else {

@@ -205,6 +205,8 @@ const scenario = values.scenario;
 if (
   ![
     "sessions.list",
+    "status",
+    "health",
     "sessions.describe",
     "sessions.patch",
     "sessions.cleanup",
@@ -224,7 +226,7 @@ if (
   ].includes(scenario)
 ) {
   throw new Error(
-    "--scenario must be sessions.list, sessions.describe, sessions.patch, sessions.cleanup, connect, reconnect, subscribe, chat.send, chat.startup, transcript-broadcast, attempt-retention, session-idle-retention, memory-soak, plugins.reload, plugin.scope, cron.list, or board.get",
+    "--scenario must be sessions.list, status, health, sessions.describe, sessions.patch, sessions.cleanup, connect, reconnect, subscribe, chat.send, chat.startup, transcript-broadcast, attempt-retention, session-idle-retention, memory-soak, plugins.reload, plugin.scope, cron.list, or board.get",
   );
 }
 const startupTemperature = values["startup-temperature"];
@@ -4717,6 +4719,22 @@ try {
                     : startupTargets[measuredRound * operations + offset + index]!
                   : startupTargets[(offset + index) % startupTargets.length]!;
               await readStartup(workerClient, target);
+            } else if (scenario === "status" || scenario === "health") {
+              const result = await rpc(
+                workerClient,
+                scenario,
+                scenario === "health" ? { probe: true } : { includeChannelSummary: false },
+              );
+              const sessions = isRecord(result) ? result.sessions : undefined;
+              if (
+                !isRecord(sessions) ||
+                typeof sessions.count !== "number" ||
+                sessions.count < fixtureSessionCount ||
+                !Array.isArray(sessions.recent) ||
+                sessions.recent.length === 0
+              ) {
+                throw new Error(`${scenario} did not summarize the seeded sessions`);
+              }
             } else if (scenario === "sessions.describe") {
               const result = await rpc(workerClient, "sessions.describe", {
                 key: parentKey,

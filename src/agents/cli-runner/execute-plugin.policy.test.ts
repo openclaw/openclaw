@@ -1,6 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import {
   activateMcpLoopbackClientGrantCapture,
   deactivateMcpLoopbackClientGrantCapture,
@@ -673,12 +673,11 @@ describe("plugin-owned CLI same-turn input", () => {
       yield SUCCESS_RESULT;
     });
     try {
-      await Promise.race([
+      await awaitGateBeforeSettlement(
         ready.promise,
-        run.then(() => {
-          throw new Error("CLI run ended before injection became ready");
-        }),
-      ]);
+        run,
+        "CLI run ended before injection became ready",
+      );
       const target = captureCurrentReplyMessageInjectionTarget(operation.key);
       if (!target) {
         throw new Error("running CLI backend did not expose a registry injection target");

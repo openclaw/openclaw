@@ -1,4 +1,5 @@
 import net from "node:net";
+import { listenOnLoopback } from "../../test-support/hanging-loopback-server.js";
 
 type IrcTestServer = {
   port: number;
@@ -16,19 +17,9 @@ export async function startIrcTestServer(
     socket.on("close", () => sockets.delete(socket));
     onConnection(socket);
   });
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      server.off("error", reject);
-      resolve();
-    });
-  });
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("expected loopback IRC server to bind a TCP port");
-  }
+  const port = await listenOnLoopback(server);
   return {
-    port: address.port,
+    port,
     openSocketCount: () => sockets.size,
     close: async () => {
       // Server.close waits for accepted peers; destroy them before awaiting listener shutdown.

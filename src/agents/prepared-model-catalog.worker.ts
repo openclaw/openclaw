@@ -10,7 +10,10 @@ import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { installDatabaseEngineSelection } from "../infra/database-engine/context.js";
 import { serveWorkerTasks } from "../infra/worker-task-server.js";
 import type { Model } from "../llm/types.js";
-import { withRemoteModelCatalogSnapshot } from "../model-catalog/remote-overlay.js";
+import {
+  captureRemoteModelCatalogStartupSnapshot,
+  withRemoteModelCatalogSnapshot,
+} from "../model-catalog/remote-overlay.js";
 import { withHandedOffCodexClientVersion } from "../plugin-sdk/codex-client-version-handoff.internal.js";
 import { normalizePluginsConfig } from "../plugins/config-state.js";
 import { isManifestPluginAvailableForControlPlane } from "../plugins/manifest-contract-eligibility.js";
@@ -518,7 +521,27 @@ if (parentPort) {
   serveWorkerTasks(
     async (input, channel) => {
       // SAFETY: The typed catalog host is the sole producer of this private task envelope.
-      const { value, request } = input as PreparedModelCatalogWorkerTask;
+      const task = input as PreparedModelCatalogWorkerTask;
+      const { request } = task;
+      let { value } = task;
+      if (value.remoteCatalog) {
+        // Transport clones share the publisher's content revision. Reuse an existing owner
+        // before registry callbacks capture the request scope; keep no extra revision cache.
+        const retained = [
+          captureRemoteModelCatalogStartupSnapshot(),
+          ...Array.from(
+            contexts.values(),
+            ({ prepared }) => prepared.pluginGeneration.remoteCatalog,
+          ),
+        ].find(
+          (catalog) =>
+            catalog?.sourceUrl === value.remoteCatalog?.sourceUrl &&
+            catalog?.revision === value.remoteCatalog?.revision,
+        );
+        if (retained) {
+          value = { ...value, remoteCatalog: retained };
+        }
+      }
       activeRequest = value;
       let reportAfter = 0;
       let reportedPlugin: string | undefined;

@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { visibleCompletion } from "./subagent-announce-fixtures.test-support.js";
+import {
+  privateRequesterRouteCases,
+  visibleCompletion,
+} from "./subagent-announce-fixtures.test-support.js";
 import {
   registryRuntimeMock,
   setSessionStore,
@@ -118,16 +121,7 @@ describe("maybeWakeRequesterAfterAllChildrenSettled private batches", () => {
     }
   });
 
-  it.each([
-    { name: "channel-less", origin: undefined, canDeliver: false },
-    {
-      name: "internal session target",
-      origin: { channel: "internal", to: "agent:main:main" },
-      canDeliver: false,
-    },
-    { name: "channel", origin: { channel: "discord", to: "channel:123" }, canDeliver: true },
-    { name: "WebChat", origin: { channel: "webchat" }, canDeliver: true },
-  ])(
+  it.each(privateRequesterRouteCases())(
     "guides private $name settles according to the requester route",
     async ({ origin, canDeliver }) => {
       settledPrivateChildren({});

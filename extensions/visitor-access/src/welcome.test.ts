@@ -27,6 +27,13 @@ const gatewayConfig: OpenClawConfig = {
 
 type Client = GatewayRequestHandlerOptions["client"];
 
+function pendingWelcomeGrant() {
+  return visitorGrant(EMAIL, {
+    invitedBy: JOSH,
+    onboarding: { state: "pending", updatedAt: NOW },
+  });
+}
+
 function guestClient(grantId: string, profile: { profileId: string; displayName?: string } = SAM) {
   return {
     authenticatedUserProfile: profile,
@@ -198,10 +205,7 @@ describe("visitor-access.welcome.ensure", () => {
   });
 
   it("answers concurrent calls with pending while one call holds the reservation", async () => {
-    const grant = visitorGrant(EMAIL, {
-      invitedBy: JOSH,
-      onboarding: { state: "pending", updatedAt: NOW },
-    });
+    const grant = pendingWelcomeGrant();
     const h = welcomeHarness([grant]);
     await h.fixture.service.initialize();
 
@@ -221,10 +225,7 @@ describe("visitor-access.welcome.ensure", () => {
   });
 
   it("resumes a failed or interrupted setup against the reserved session key", async () => {
-    const grant = visitorGrant(EMAIL, {
-      invitedBy: JOSH,
-      onboarding: { state: "pending", updatedAt: NOW },
-    });
+    const grant = pendingWelcomeGrant();
     const h = welcomeHarness([grant]);
     await h.fixture.service.initialize();
     h.gateway.appendAgentMessage.mockRejectedValueOnce(new Error("transcript write failed: disk"));
@@ -312,10 +313,7 @@ describe("visitor-access.welcome.ensure", () => {
   });
 
   it("keeps one welcome session when access is renewed during setup or after a failure", async () => {
-    const grant = visitorGrant(EMAIL, {
-      invitedBy: JOSH,
-      onboarding: { state: "pending", updatedAt: NOW },
-    });
+    const grant = pendingWelcomeGrant();
     const h = welcomeHarness([grant]);
     await h.fixture.service.initialize();
     const gate = visitorGate();
@@ -357,10 +355,7 @@ describe("visitor-access.welcome.ensure", () => {
   it.each(["append", "ready commit"] as const)(
     "ends setup cleanly when access is revoked before the %s",
     async (step) => {
-      const grant = visitorGrant(EMAIL, {
-        invitedBy: JOSH,
-        onboarding: { state: "pending", updatedAt: NOW },
-      });
+      const grant = pendingWelcomeGrant();
       const h = welcomeHarness([grant]);
       await h.fixture.service.initialize();
       const gate = visitorGate();
@@ -396,10 +391,7 @@ describe("visitor-access.welcome.ensure", () => {
   );
 
   it("does not recreate a deleted welcome session or send the guest to it", async () => {
-    const grant = visitorGrant(EMAIL, {
-      invitedBy: JOSH,
-      onboarding: { state: "pending", updatedAt: NOW },
-    });
+    const grant = pendingWelcomeGrant();
     const h = welcomeHarness([grant]);
     await h.fixture.service.initialize();
     const first = await h.welcome.ensure(guestClient(grant.grantId!));
@@ -427,10 +419,7 @@ describe("visitor-access.welcome.ensure", () => {
   });
 
   it("starts a new welcome session for a new invitation after the old one expired", async () => {
-    const grant = visitorGrant(EMAIL, {
-      invitedBy: JOSH,
-      onboarding: { state: "pending", updatedAt: NOW },
-    });
+    const grant = pendingWelcomeGrant();
     const h = welcomeHarness([grant]);
     await h.fixture.service.initialize();
     const first = await h.welcome.ensure(guestClient(grant.grantId!));

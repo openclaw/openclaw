@@ -6,6 +6,7 @@ import {
   buildComfyConfig,
   buildLegacyComfyConfig,
   fetchGuardJson,
+  fetchGuardResponse,
   mockComfyCloudJobResponses,
   mockComfyProviderApiKey,
   parseComfyJsonBody,
@@ -79,13 +80,7 @@ function mockLocalImageResponses(
   fetchWithSsrFGuardMock
     .mockResolvedValueOnce(fetchGuardJson({ prompt_id: promptId }))
     .mockResolvedValueOnce(fetchGuardJson(generatedHistory(promptId, filename)))
-    .mockResolvedValueOnce({
-      response: new Response(download.body, {
-        status: 200,
-        headers: { "content-type": download.contentType },
-      }),
-      release: vi.fn(async () => {}),
-    });
+    .mockResolvedValueOnce(fetchGuardResponse(download.body, download.contentType));
 }
 
 function testWorkflowConfig(config: Record<string, unknown> = {}) {

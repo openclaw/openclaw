@@ -44,6 +44,7 @@ function observeModelCallIterator<T>(
   let started = false;
   let returning: Promise<IteratorResult<T>> | undefined;
   const observed = observe();
+  const advance = observed.next.bind(observed);
   return {
     [Symbol.asyncIterator]() {
       return this;
@@ -53,7 +54,7 @@ function observeModelCallIterator<T>(
         return returning.then(() => ({ done: true as const, value: undefined }));
       }
       started = true;
-      return lifecycle.runInTransportContext(() => observed.next());
+      return lifecycle.runInTransportContext(advance);
     },
     return(value) {
       returning ??= lifecycle.runInTransportContext(() =>
@@ -181,13 +182,14 @@ export function wrapStreamFnWithDiagnosticModelCallEvents(
       ctx,
       options,
       requestTimeoutMs,
-      createObserver: (capturePromptStats) =>
+      createObserver: (capturePromptStats, captureByteStats) =>
         createModelObserver({
           diagnosticOwner: ctx.diagnosticOwner,
           streamContext,
           contentCapture: ctx.contentCapture,
           suppressPluginHooks: ctx.suppressPluginHooks,
           capturePromptStats,
+          captureByteStats,
           measurePromptStats,
         }),
     });

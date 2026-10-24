@@ -1,6 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
-import { withinTest } from "../../../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, withinTest } from "../../../../test/helpers/promise.js";
 import { getRuntimeConfig } from "../../../config/config.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../../config/io.js";
 import * as sessionAccessor from "../../../config/sessions/session-accessor.js";
@@ -55,6 +55,7 @@ import { loadAgentRuntimePluginRegistryHandle } from "../../runtime-plugins.js";
 import { createRequesterTranscriptWriter } from "../../test-helpers/requester-transcript-writer.test-support.js";
 import { withGatewayToolCallerIdentity } from "../../tools/gateway-caller-context.js";
 import { createStructuredOutputTool } from "../../tools/structured-output-tool.js";
+import type { SubagentAnnounceDeliveryResult } from "../announce/subagent-announce-dispatch.js";
 import { readSubagentRunAnnounceResultUsing } from "../announce/subagent-announce-result.js";
 import {
   captureRequesterContinuationCaller,
@@ -144,6 +145,42 @@ beforeEach(() => {
 afterEach(() => {
   clearRuntimeConfigSnapshot();
 });
+
+function seedResidentLifecycleRun(entry: SubagentRunRecord) {
+  const previous = subagentRuns.get(entry.runId);
+  subagentRuns.set(entry.runId, entry);
+  return () => {
+    if (previous) {
+      subagentRuns.set(entry.runId, previous);
+    } else {
+      subagentRuns.delete(entry.runId);
+    }
+  };
+}
+
+function createPendingYieldedHandoffRun() {
+  return createRunEntry({
+    endedAt: 4_000,
+    expectsCompletionMessage: true,
+    requesterSettleWake: {
+      status: "pending",
+      attemptCount: 0,
+      requesterYieldBatch: true,
+      rearmGeneration: 1,
+    },
+  });
+}
+
+function suppressedDeliveryFixture(): SubagentAnnounceDeliveryResult {
+  return {
+    delivered: false,
+    path: "direct",
+    reason: "delivery_suppressed",
+    error: "cancelled_by_message_sending_hook",
+    terminal: true,
+    disposition: "intentional_non_delivery",
+  };
+}
 
 describe("subagent recovery session-effect ownership", () => {
   it("does not treat an ordinary run generation as a recovery suppression receipt", () => {
@@ -670,15 +707,7 @@ describe("subagent registry lifecycle hardening", () => {
         runTimeoutSeconds?: number;
       }) => "delivered" as AnnounceFlowOutcome,
     );
-    const previous = subagentRuns.get(entry.runId);
-    subagentRuns.set(entry.runId, entry);
-    onTestFinished(() => {
-      if (previous) {
-        subagentRuns.set(entry.runId, previous);
-      } else {
-        subagentRuns.delete(entry.runId);
-      }
-    });
+    onTestFinished(seedResidentLifecycleRun(entry));
     const controller = createLifecycleController({
       entry,
       runs: subagentRuns,
@@ -2669,12 +2698,11 @@ describe("subagent registry lifecycle hardening", () => {
 
     const completion = completeRun(controller, entry, { triggerCleanup: true });
     try {
-      await Promise.race([
+      await awaitGateBeforeSettlement(
         timingEntered.promise,
-        completion.then(() => {
-          throw new Error("Completion settled before entering timing persistence");
-        }),
-      ]);
+        completion,
+        "Completion settled before entering timing persistence",
+      );
       expect(helperMocks.persistSubagentSessionTiming).toHaveBeenCalledOnce();
       const newer = createRunEntry({
         runId: "run-same-millisecond-newer",
@@ -4424,16 +4452,7 @@ describe("requester settle wake trigger", () => {
   ] as const)(
     "credits a yielded handoff only from settled delivery evidence: %s",
     async (ownership) => {
-      const entry = createRunEntry({
-        endedAt: 4_000,
-        expectsCompletionMessage: true,
-        requesterSettleWake: {
-          status: "pending",
-          attemptCount: 0,
-          requesterYieldBatch: true,
-          rearmGeneration: 1,
-        },
-      });
+      const entry = createPendingYieldedHandoffRun();
       let gatewayOpen = true;
       const gatewayContext = {};
       if (ownership !== "unbound") {
@@ -4462,15 +4481,7 @@ describe("requester settle wake trigger", () => {
           return "intentional_non_delivery" as const;
         },
       );
-      const previous = subagentRuns.get(entry.runId);
-      subagentRuns.set(entry.runId, entry);
-      onTestFinished(() => {
-        if (previous) {
-          subagentRuns.set(entry.runId, previous);
-        } else {
-          subagentRuns.delete(entry.runId);
-        }
-      });
+      onTestFinished(seedResidentLifecycleRun(entry));
       const controller = createLifecycleController({
         entry,
         runs: subagentRuns,
@@ -4543,14 +4554,7 @@ describe("requester settle wake trigger", () => {
       const maybeWakeRequesterAfterAllChildrenSettled = vi.fn(async () => false);
       const runSubagentAnnounceFlow: LifecycleControllerParams["runSubagentAnnounceFlow"] = vi.fn(
         async (announceParams) => {
-          await announceParams.onDeliveryResult?.({
-            delivered: false,
-            path: "direct",
-            reason: "delivery_suppressed",
-            error: "cancelled_by_message_sending_hook",
-            terminal: true,
-            disposition: "intentional_non_delivery",
-          });
+          await announceParams.onDeliveryResult?.(suppressedDeliveryFixture());
           return "intentional_non_delivery" as const;
         },
       );
@@ -4623,14 +4627,7 @@ describe("requester settle wake trigger", () => {
       beforeWrite,
       maybeWakeRequesterAfterAllChildrenSettled: settleWake,
       runSubagentAnnounceFlow: async (params) => {
-        await params.onDeliveryResult?.({
-          delivered: false,
-          path: "direct",
-          reason: "delivery_suppressed",
-          error: "cancelled_by_message_sending_hook",
-          terminal: true,
-          disposition: "intentional_non_delivery",
-        });
+        await params.onDeliveryResult?.(suppressedDeliveryFixture());
         return "intentional_non_delivery";
       },
     });
@@ -4656,16 +4653,7 @@ describe("requester settle wake trigger", () => {
   });
 
   it("marks yielded intentional non-delivery blocked after requester-settle exhaustion", async () => {
-    const entry = createRunEntry({
-      endedAt: 4_000,
-      expectsCompletionMessage: true,
-      requesterSettleWake: {
-        status: "pending",
-        attemptCount: 0,
-        requesterYieldBatch: true,
-        rearmGeneration: 1,
-      },
-    });
+    const entry = createPendingYieldedHandoffRun();
     let settleParams: RequesterSettleWakeParams | undefined;
     const maybeWakeRequesterAfterAllChildrenSettled = vi.fn(async (params) => {
       settleParams = params;

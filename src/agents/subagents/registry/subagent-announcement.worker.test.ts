@@ -3,6 +3,7 @@
 import { useSubagentControlFixture } from "./subagent-control.test-support.js";
 import path from "node:path";
 import { expect, it, onTestFinished, vi } from "vitest";
+import { awaitGateBeforeSettlement } from "../../../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../../../test/helpers/sqlite-statement-execution-counter.js";
 import { getRuntimeConfig } from "../../../config/config.js";
 import { captureGatewayOperatorRunAuthority } from "../../../gateway/operator-run-authority.js";
@@ -473,12 +474,11 @@ it.each([false, true])(
     let rejectedRegistration: Promise<unknown> | undefined;
     let registration: Promise<void> | undefined;
     try {
-      await Promise.race([
+      await awaitGateBeforeSettlement(
         ready.promise,
-        outcome.then(() => {
-          throw new Error("Registered retirement omitted its acknowledgement boundary");
-        }),
-      ]);
+        outcome,
+        "Registered retirement omitted its acknowledgement boundary",
+      );
       expect(currentRun(run.runId)).toBe(entry);
       expect(entry.delivery?.status).toBe("suspended");
       expect(loadSubagentRegistryFromSqlite().has(run.runId)).toBe(false);
@@ -492,12 +492,11 @@ it.each([false, true])(
       const publicationRevision = getSubagentRegistryPublicationRevision();
       release.resolve();
       if (replace) {
-        await Promise.race([
+        await awaitGateBeforeSettlement(
           cleanupEntered.promise,
-          outcome.then(() => {
-            throw new Error("Suspended retirement settled before attachment cleanup entered");
-          }),
-        ]);
+          outcome,
+          "Suspended retirement settled before attachment cleanup entered",
+        );
         const rejection = await rejectedRegistration;
         expect(rejection).toBeInstanceOf(SubagentRegistryMutationRejectedError);
         expect(rejection).toHaveProperty(

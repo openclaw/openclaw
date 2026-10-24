@@ -322,16 +322,19 @@ export async function acquirePreparedModelRuntimeLeaseFromOwners(
         `prepared model runtime publication was superseded for ${input.agentDir}`,
       );
     }
+    // Execution purpose isolates plugins, not the configured agent's published inventory.
     const catalogOwner =
       configuredOwner &&
       ownerKey({
         ...configuredOwner.input,
         loadRuntimePlugins: false,
+        runtimePluginPurpose: undefined,
         runtimePluginSelections: undefined,
       }) ===
         ownerKey({
           ...inventoryInput,
           loadRuntimePlugins: false,
+          runtimePluginPurpose: undefined,
           runtimePluginSelections: undefined,
         })
         ? configuredOwner

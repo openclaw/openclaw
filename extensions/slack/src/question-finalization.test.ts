@@ -86,6 +86,17 @@ function questionPayload(
     ...extra,
   };
 }
+function fallbackQuestionPayload() {
+  return questionPayload(
+    [
+      { type: "table", caption: "Choices", headers: ["Label"], rows: [["A useful answer"]] },
+      questionButtons(),
+      { type: "text", text: "Trailing context intentionally arrives after the question card." },
+    ],
+    { text: "Pick one" },
+  );
+}
+
 async function render(payload: ReplyPayload, text = payload.text ?? "") {
   const rendered = await slackOutbound.renderPresentation?.({
     payload,
@@ -129,14 +140,7 @@ describe("Slack question finalization", () => {
   });
 
   it("finalizes the accepted native question card before a later delivery observer fails", async () => {
-    const payload = questionPayload(
-      [
-        { type: "table", caption: "Choices", headers: ["Label"], rows: [["A useful answer"]] },
-        questionButtons(),
-        { type: "text", text: "Trailing context intentionally arrives after the question card." },
-      ],
-      { text: "Pick one" },
-    );
+    const payload = fallbackQuestionPayload();
     const client = createSlackSendTestClient();
     const update = vi.fn(async () => ({ ok: true }));
     client.chat.update = update;
@@ -386,22 +390,7 @@ describe("Slack question finalization", () => {
   });
 
   it("keeps the actual fallback question card through durable result reconciliation", async () => {
-    const payload = questionPayload(
-      [
-        {
-          type: "table" as const,
-          caption: "Choices",
-          headers: ["Label"],
-          rows: [["A useful answer"]],
-        },
-        questionButtons(),
-        {
-          type: "text" as const,
-          text: "Trailing context intentionally arrives after the question card.",
-        },
-      ],
-      { text: "Pick one" },
-    );
+    const payload = fallbackQuestionPayload();
     const plugins = [{ pluginId: "slack", plugin: slackPlugin, source: "test" as const }];
     setActivePluginRegistry(createTestRegistry(plugins));
 

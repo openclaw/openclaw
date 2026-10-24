@@ -21,6 +21,7 @@ import {
   nativeReplyFixture,
 } from "./subagent-spawn.plugin-native-rewrite.test-support.js";
 import {
+  createSpawnTranscriptTarget,
   createSpawnOperatorSource,
   recordSpawnBoundaryFinal,
   type NativePluginSpawnTestOptions,
@@ -155,14 +156,7 @@ function registerNativePluginSandboxCases(options: NativePluginSpawnTestOptions)
       expect(initialEntry.sandbox).toBe(required ? "required" : undefined);
       const recorder = createUserTurnTranscriptRecorder({
         input: { text: "sandbox requester input" },
-        target: {
-          agentId: "main",
-          sessionKey: parentSessionKey,
-          sessionId: initialEntry.sessionId,
-          sessionEntry: initialEntry,
-          storePath: bound.storePath,
-          config: bound.cfg,
-        },
+        target: createSpawnTranscriptTarget(bound, initialEntry),
       });
       const inReply = (run: () => Promise<void>) =>
         nativeReplyFixture(
