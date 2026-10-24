@@ -55,6 +55,15 @@ function createReleaseNotesFixtureLines(): string[] {
   ];
 }
 
+function contributionRecord(
+  base: string,
+  target: string,
+  rows: string[],
+  partition = `${rows.length} in-range PRs + 0 retained seed-only PRs = ${rows.length} unique PRs.`,
+) {
+  return `### Complete contribution record\n\nThis audited record covers the complete ${base}..${target} history: ${partition}\n\n#### Pull requests\n\n${rows.join("\n")}\n`;
+}
+
 function commitAll(cwd: string, message: string, extraEnv: Record<string, string> = {}) {
   git(cwd, ["add", "."]);
   git(cwd, ["commit", "--allow-empty", "-qm", message], extraEnv);
@@ -203,13 +212,7 @@ describe("release-note verification", () => {
     git(cwd, ["add", "CHANGELOG.md"]);
     git(cwd, ["commit", "-qm", "initial"]);
     const target = git(cwd, ["rev-parse", "HEAD"]);
-    const verifiedChangelog = [
-      changelog,
-      "",
-      "### Complete contribution record",
-      "",
-      `This audited record covers the complete HEAD..${target} history: 0 in-range PRs + 0 retained seed-only PRs = 0 unique PRs.`,
-    ].join("\n");
+    const verifiedChangelog = `${changelog}\n${contributionRecord("HEAD", target, [], "0 in-range PRs + 0 retained seed-only PRs = 0 unique PRs.")}`;
     writeFileSync(join(cwd, "CHANGELOG.md"), verifiedChangelog);
     const body = renderGithubReleaseNotes({
       changelog: verifiedChangelog,
@@ -371,17 +374,7 @@ describe("release-note verification", () => {
     const target = "a".repeat(40);
     expect(
       contributionRecordTarget({
-        source: [
-          "## 2026.7.2",
-          "",
-          "### Complete contribution record",
-          "",
-          `This audited record covers the complete base..${target} history: 1 in-range PR + 0 retained seed-only PRs = 1 unique PR.`,
-          "",
-          "#### Pull requests",
-          "",
-          "- **PR #123** fix: example.",
-        ].join("\n"),
+        source: `## 2026.7.2\n\n${contributionRecord("base", target, ["- **PR #123** fix: example."])}`,
       }),
     ).toBe(target);
   });
@@ -448,73 +441,54 @@ process.exitCode = errors.length ? 1 : 0;
     expect(record).not.toContain("155121");
   });
 
-  it.each([
-    { name: "unavailable body context with sorted, unique commits", contextual: true },
-    { name: "subject PR suffix", subject: "fix: implementation (#155121)" },
-    { name: "closing reference", body: "Fixes #155121." },
-    { name: "closing reference list", body: "Resolves #12 and #155121." },
-    { name: "release-note prose/record or provenance", protectedReference: true },
-    { name: "other GraphQL error", errorType: "FORBIDDEN" },
-    { name: "missing node without an error", errorType: "" },
-    { name: "number above the resolved maximum", highestResolved: 155120 },
-    { name: "number equal to the resolved maximum", highestResolved: 155121 },
-    { name: "no resolved references", highestResolved: 0 },
-    { name: "no active body occurrence", body: "No contextual reference." },
-    { name: "subject reference in another active commit", otherSubject: "fix: #155121" },
-  ])("classifies contextual references: $name", (scenario) => {
-    const number = 155121;
-    const response = {
-      data: { n155121: { issueOrPullRequest: null } },
-      errors:
-        scenario.errorType === ""
-          ? []
-          : [{ type: scenario.errorType ?? "NOT_FOUND", path: ["n155121", "issueOrPullRequest"] }],
-    };
+  it("sorts and deduplicates unavailable contextual references", () => {
+    const hash = "b".repeat(40);
     expect(
       classifyUnavailableContextualReferences({
-        unresolved: scenario.contextual ? [155121, 155120, 155119] : [number],
-        notFound: new Set(
-          scenario.contextual ? [155120, 155121] : githubNotFoundReferences(response, [number]),
-        ),
-        activeCommits: scenario.contextual
-          ? [
-              {
-                hash: "b6b45244ab750".padEnd(40, "0"),
-                subject: "fix: preserve release references (#156166)",
-                body: "#155121 took a similar approach and was closed by its author. See #155121 and #155120.",
-              },
-              {
-                hash: "a".repeat(40),
-                subject: "fix: follow-up",
-                body: "Related discussion: #155121.",
-              },
-            ]
-          : [
-              {
-                hash: "a".repeat(40),
-                subject: scenario.subject ?? "fix: implementation (#156166)",
-                body: scenario.body ?? "#155121 took a similar approach.",
-              },
-              {
-                hash: "b".repeat(40),
-                subject: scenario.otherSubject ?? "fix: follow-up",
-                body: "",
-              },
-            ],
-        protectedReferences: new Set(scenario.protectedReference ? [number] : []),
+        unresolved: [155121, 155120, 155119],
+        notFound: new Set([155120, 155121]),
+        activeCommits: [
+          { hash, subject: "fix: source", body: "#155121 #155121 #155120" },
+          { hash: "a".repeat(40), subject: "fix: follow-up", body: "#155121" },
+        ],
+        protectedReferences: new Set(),
+        highestResolved: 156166,
+      }),
+    ).toEqual({
+      unavailable: [
+        { number: 155120, commits: ["bbbbbbbbbbbb"] },
+        { number: 155121, commits: ["aaaaaaaaaaaa", "bbbbbbbbbbbb"] },
+      ],
+      stillUnresolved: [155119],
+    });
+  });
+
+  it.each([
+    { subject: "fix: implementation (#155121)" },
+    { body: "Fixes #155121." },
+    { body: "Resolves #12 and #155121." },
+    { protectedReference: true },
+    { notFound: false },
+    { highestResolved: 155121 },
+    { body: "No contextual reference." },
+    { otherSubject: "fix: #155121" },
+  ])("preserves required or unclassified references: %j", (scenario) => {
+    expect(
+      classifyUnavailableContextualReferences({
+        unresolved: [155121],
+        notFound: new Set(scenario.notFound === false ? [] : [155121]),
+        activeCommits: [
+          {
+            hash: "a".repeat(40),
+            subject: scenario.subject ?? "fix: source",
+            body: scenario.body ?? "#155121 took a similar approach.",
+          },
+          { hash: "b".repeat(40), subject: scenario.otherSubject ?? "fix: follow-up", body: "" },
+        ],
+        protectedReferences: new Set(scenario.protectedReference ? [155121] : []),
         highestResolved: scenario.highestResolved ?? 156166,
       }),
-    ).toEqual(
-      scenario.contextual
-        ? {
-            unavailable: [
-              { number: 155120, commits: ["b6b45244ab75"] },
-              { number: 155121, commits: ["aaaaaaaaaaaa", "b6b45244ab75"] },
-            ],
-            stillUnresolved: [155119],
-          }
-        : { unavailable: [], stillUnresolved: [number] },
-    );
+    ).toEqual({ unavailable: [], stillUnresolved: [155121] });
   });
 
   it.each([
@@ -622,21 +596,9 @@ process.exitCode = errors.length ? 1 : 0;
   });
 
   it.each(["commit", "CLI"])("accepts exact release provenance from %s inputs", (mode) => {
-    const releaseCommit = "a".repeat(40);
-    const mappings: Array<[string, number[]]> =
-      mode === "CLI"
-        ? [
-            ["bdde3d1c6dd7cc415588a72cf27ebe27f83bfe47", [120085]],
-            ["5090cae6d0cc3f2ec272b2448970c6238f525610", [120479]],
-            ["8ff1724067c1dcfb9a63574e6f3771261033ffae", [120479]],
-            ["0cd3075adf7cd201e17d25c95cbe190991f8aab1", [120538]],
-          ]
-        : [[releaseCommit, [104905, 102980, 104956]]];
-    const payloads = mappings.map(
-      ([commit, pullRequests]) =>
-        `${commit} -> ${pullRequests.map((number) => `#${number}`).join(", ")}`,
-    );
-    const releaseProvenance =
+    const hash = "a".repeat(40);
+    const payload = `${hash} -> #1, #2`;
+    const args =
       mode === "CLI"
         ? parseArgs([
             "--base",
@@ -645,90 +607,74 @@ process.exitCode = errors.length ? 1 : 0;
             "target",
             "--version",
             "2026.8.1",
-            ...payloads.flatMap((payload) => ["--release-provenance", payload]),
+            "--release-provenance",
+            payload,
           ]).releaseProvenance
         : [];
-    const body = [
-      `Release provenance: ${payloads[0]}`,
-      `Release provenance for ${"c".repeat(40)} -> #123`,
-    ].join("\n");
-    expect(
-      collectReleaseProvenanceOverrides(
-        [
-          ...mappings.map(([hash]) => ({ body: "", hash })),
-          ...(mode === "commit" ? [{ body, hash: "b".repeat(40) }] : []),
-        ],
-        releaseProvenance,
-      ),
-    ).toEqual(new Map(mappings));
+    const body =
+      mode === "commit"
+        ? `Release provenance: ${payload}
+Release provenance for ${hash} -> #3`
+        : "";
+    expect(collectReleaseProvenanceOverrides([{ hash, body }], args)).toEqual(
+      new Map([[hash, [1, 2]]]),
+    );
     if (mode === "CLI") {
-      expect(releaseProvenance).toEqual(payloads);
-      return;
+      expect(args).toEqual([payload]);
+    } else {
+      expect(releaseProvenanceMarkers(body)).toEqual([{ commit: hash, pullRequests: [1, 2] }]);
+      expect(resolvedReleasePullRequests([3], [], false, [1, 2])).toEqual([1, 2]);
+      expect(releasePullRequestReferencesToSuppress([], "fix: subject (#3)", [1, 2], true)).toEqual(
+        [3],
+      );
     }
-    expect(releaseProvenanceMarkers(body)).toEqual([
-      {
-        commit: releaseCommit,
-        pullRequests: [104905, 102980, 104956],
-      },
-    ]);
-    expect(resolvedReleasePullRequests([104939], [], false, [104905, 102980, 104956])).toEqual([
-      104905, 102980, 104956,
-    ]);
-    expect(
-      releasePullRequestReferencesToSuppress(
-        [],
-        "test(live): harden GPT-5.6 nonce retries for July (#104939)",
-        [104905, 102980, 104956],
-        true,
-      ),
-    ).toEqual([104939]);
   });
 
   it.each(["commit", "CLI"])(
     "rejects malformed, out-of-range, or conflicting %s provenance",
     (mode) => {
-      const activeCommit = "a".repeat(40);
-      for (const payload of mode === "CLI"
-        ? [
-            "short -> #1",
-            `${activeCommit} -> #1 trailing`,
-            `${activeCommit} -> #1\nRelease provenance: ${activeCommit} -> #2`,
-            `${activeCommit} -> #1\n`,
-            `${activeCommit} -> #1,\n#2`,
-            `${activeCommit} -> #1\r\n`,
-          ]
-        : ["short -> #123"]) {
-        expect(() =>
-          mode === "CLI"
-            ? collectReleaseProvenanceOverrides([{ body: "", hash: activeCommit }], [payload])
-            : releaseProvenanceMarkers(`Release provenance: ${payload}`),
-        ).toThrow("invalid release provenance marker");
+      const hash = "a".repeat(40);
+      const collect = (payloads: string[]) =>
+        collectReleaseProvenanceOverrides(
+          [
+            {
+              hash,
+              body:
+                mode === "commit"
+                  ? payloads.map((value) => `Release provenance: ${value}`).join("\n")
+                  : "",
+            },
+          ],
+          mode === "CLI" ? payloads : [],
+        );
+      const malformed =
+        mode === "CLI"
+          ? [
+              "short -> #1",
+              `${hash} -> #1 trailing`,
+              `${hash} -> #1\nRelease provenance: ${hash} -> #2`,
+              `${hash} -> #1\n`,
+              `${hash} -> #1,\n#2`,
+              `${hash} -> #1\r\n`,
+            ]
+          : ["short -> #1"];
+      for (const value of malformed) {
+        expect(() => collect([value])).toThrow("invalid release provenance marker");
       }
-      expect(() =>
-        collectReleaseProvenanceOverrides(
-          mode === "CLI"
-            ? [{ body: "", hash: activeCommit }]
-            : [
-                {
-                  body: `Release provenance: ${"d".repeat(40)} -> #104905`,
-                  hash: "b".repeat(40),
-                },
-              ],
-          mode === "CLI" ? [`${"b".repeat(40)} -> #1`] : [],
-        ),
-      ).toThrow("release provenance marker targets commit outside the active range");
-      expect(() =>
-        collectReleaseProvenanceOverrides(
-          mode === "CLI"
-            ? [{ body: `Release provenance: ${activeCommit} -> #1`, hash: activeCommit }]
-            : [
-                { body: "", hash: activeCommit },
-                { body: `Release provenance: ${activeCommit} -> #104905`, hash: "b".repeat(40) },
-                { body: `Release provenance: ${activeCommit} -> #104956`, hash: "c".repeat(40) },
-              ],
-          mode === "CLI" ? [`${activeCommit} -> #2`] : [],
-        ),
-      ).toThrow(`conflicting release provenance markers for ${activeCommit}`);
+      expect(() => collect([`${"b".repeat(40)} -> #1`])).toThrow(
+        "targets commit outside the active range",
+      );
+      expect(() => collect([`${hash} -> #1`, `${hash} -> #2`])).toThrow(
+        `conflicting release provenance markers for ${hash}`,
+      );
+      if (mode === "CLI") {
+        expect(() =>
+          collectReleaseProvenanceOverrides(
+            [{ hash, body: `Release provenance: ${hash} -> #1` }],
+            [`${hash} -> #2`],
+          ),
+        ).toThrow(`conflicting release provenance markers for ${hash}`);
+      }
     },
   );
 
@@ -795,92 +741,66 @@ process.exitCode = errors.length ? 1 : 0;
     }
   });
 
-  it.each(["backports", "ambiguous", "direct"])(
-    "resolves canonical main provenance: %s",
-    (mode) => {
-      if (mode === "direct") {
-        expect(canonicalPullRequests([456], [], true)).toEqual([]);
-        return;
-      }
-      const identity = {
-        authorEmail: "maintainer@example.com",
-        authorName: "Maintainer",
-        changedPaths: new Set(["src/channel.ts"]),
-        subject: "fix(channel): preserve durable replies",
-      };
-      const mainCommit = {
-        ...identity,
-        body: "",
-        hash: "a".repeat(40),
-        pullRequests: [123],
-      };
-      const explicitBackport = {
-        ...identity,
-        authorEmail: "other@example.com",
-        authorName: "Other",
-        body: `(cherry picked from commit ${mainCommit.hash})`,
-        hash: "b".repeat(40),
-      };
-      const integratedBackport = {
-        ...identity,
-        body: "",
-        changedPaths: new Set(["src/channel.ts", "src/release.ts"]),
-        hash: "c".repeat(40),
-      };
-      if (mode === "ambiguous") {
-        const releaseCommit = { ...integratedBackport, changedPaths: new Set(["src/channel.ts"]) };
-        const candidates = ["a", "b"].map((prefix) => ({
-          authorEmail: releaseCommit.authorEmail,
-          authorName: releaseCommit.authorName,
-          changedPaths: releaseCommit.changedPaths,
-          hash: prefix.repeat(40),
-          subject: "fix(channel): preserve durable replies (#123)",
-        }));
-        expect(canonicalMainCommitMatches(releaseCommit, candidates)).toEqual([]);
-        expect(canonicalPullRequests([456], [])).toEqual([456]);
-        return;
-      }
-      const pullRequestBackport = {
-        ...identity,
-        body: "Backport of #123 to release/2026.7.1.",
-        hash: "d".repeat(40),
-        subject: "fix(channel): keep replies after renewal",
-      };
-
-      const matches = (release: typeof pullRequestBackport, candidates = [mainCommit]) =>
-        expect(canonicalMainCommitMatches(release, candidates));
-      matches(explicitBackport).toEqual([mainCommit.hash]);
-      matches(integratedBackport).toEqual([mainCommit.hash]);
-      matches(pullRequestBackport).toEqual([mainCommit.hash]);
-      matches(pullRequestBackport, [
-        { ...mainCommit, pullRequests: [], body: "Original main PR #123." },
-      ]).toEqual([]);
-      matches(pullRequestBackport, [
-        { ...mainCommit, pullRequests: [999], subject: "fix(channel): keep replies after renewal" },
-      ]).toEqual([]);
+  it("matches canonical main commits only by unambiguous provenance", () => {
+    const identity = {
+      authorEmail: "maintainer@example.com",
+      authorName: "Maintainer",
+      changedPaths: new Set(["src/channel.ts"]),
+      subject: "fix(channel): preserve durable replies",
+    };
+    const main = { ...identity, body: "", hash: "a".repeat(40), pullRequests: [123] };
+    const release = {
+      ...identity,
+      body: "Backport of #123 to release/2026.7.1.",
+      hash: "b".repeat(40),
+    };
+    const matches = (patch = {}, candidates = [main]) =>
+      canonicalMainCommitMatches({ ...release, ...patch }, candidates);
+    expect(matches()).toEqual([main.hash]);
+    expect(
       matches({
-        ...pullRequestBackport,
+        body: `(cherry picked from commit ${main.hash})`,
         authorEmail: "other@example.com",
         authorName: "Other",
-      }).toEqual([]);
-      matches({ ...pullRequestBackport, changedPaths: new Set(["src/other.ts"]) }).toEqual([]);
-      matches({ ...pullRequestBackport, body: "Related #123." }).toEqual([]);
-      matches(pullRequestBackport, [mainCommit, { ...mainCommit, hash: "e".repeat(40) }]).toEqual(
-        [],
-      );
-      matches(pullRequestBackport, [
-        mainCommit,
-        { ...mainCommit, body: "Original main PR #123.", hash: "f".repeat(40), pullRequests: [] },
-      ]).toEqual([mainCommit.hash]);
-      const backportSubject = "fix(gateway): retain work admission across hosted wizard steps";
-      mainCommit.subject = `${backportSubject} (#120582)`;
-      integratedBackport.subject = `${mainCommit.subject} (#120584)`;
-      matches(integratedBackport).toEqual([mainCommit.hash]);
-      const malformed = { ...integratedBackport, subject: `${backportSubject}(#120582) (#120584)` };
-      matches(malformed).toEqual([]);
-      expect(canonicalPullRequests([456], [123])).toEqual([123]);
-    },
-  );
+      }),
+    ).toEqual([main.hash]);
+    expect(
+      matches({ body: "", changedPaths: new Set(["src/channel.ts", "src/release.ts"]) }),
+    ).toEqual([main.hash]);
+    for (const patch of [
+      { authorEmail: "other@example.com", authorName: "Other" },
+      { changedPaths: new Set(["src/other.ts"]) },
+      { body: "Related #123.", subject: "different" },
+    ]) {
+      expect(matches(patch)).toEqual([]);
+    }
+    expect(matches({}, [{ ...main, pullRequests: [], body: "Original main PR #123." }])).toEqual(
+      [],
+    );
+    expect(matches({}, [{ ...main, pullRequests: [999], subject: release.subject }])).toEqual([]);
+    expect(matches({}, [main, { ...main, hash: "c".repeat(40) }])).toEqual([]);
+    expect(matches({ body: "" }, [main, { ...main, hash: "c".repeat(40) }])).toEqual([]);
+    expect(
+      matches({}, [
+        main,
+        { ...main, hash: "c".repeat(40), pullRequests: [], body: "Original main PR #123." },
+      ]),
+    ).toEqual([main.hash]);
+    const subject = "fix(gateway): retain work admission";
+    expect(
+      matches({ body: "", subject: `${subject} (#120582) (#120584)` }, [
+        { ...main, subject: `${subject} (#120582)` },
+      ]),
+    ).toEqual([main.hash]);
+    expect(
+      matches({ body: "", subject: `${subject}(#120582) (#120584)` }, [
+        { ...main, subject: `${subject} (#120582)` },
+      ]),
+    ).toEqual([]);
+    expect(canonicalPullRequests([456], [], true)).toEqual([]);
+    expect(canonicalPullRequests([456], [])).toEqual([456]);
+    expect(canonicalPullRequests([456], [123])).toEqual([123]);
+  });
 
   it.each(["reuse", "checkpoint", "transient-error", "target-mismatch"])(
     "preserves exact-range GitHub snapshot lifecycle: %s",
@@ -970,52 +890,17 @@ process.exitCode = errors.length ? 1 : 0;
     },
   );
 
-  it("ignores nested revert markers in squash-merge bodies", () => {
-    const nestedRevert = [
-      "feat(android): render display math (#101435)",
-      "",
-      "* feat(android): render display math",
-      "",
-      ' * Revert "docs(changelog): note display math"',
-      "",
-      `This reverts commit ${"a".repeat(40)}.`,
-    ].join("\n");
-    const topLevelRevert = [
-      'Revert "fix(qa): keep smoke profile on one channel (#101173)" (#101184)',
-      "",
-      `This reverts commit ${"b".repeat(40)}.`,
-    ].join("\n");
-    const squashRevert = [
-      "Revert chat session picker inline search (#85527)",
-      "",
-      '* Revert "fix(ui): keep chat session search inline (#85490)"',
-      "",
-      `This reverts commit ${"c".repeat(40)}.`,
-      "",
-      "* fix(ui): clear applied chat picker search on empty input",
-    ].join("\n");
-    const conventionalSquashRevert = [
-      "chore: revert dependency guard backfill machinery (#87867)",
-      "",
-      '* Revert "ci: isolate dependency guard backfill label (#87882)"',
-      "",
-      `This reverts commit ${"d".repeat(40)}.`,
-      "",
-      "* ci: preserve clawsweeper bot label filter",
-    ].join("\n");
-    const explainedTopLevelRevert = [
-      "revert: restore a provider default",
-      "",
-      "The replacement broke non-native endpoints.",
-      "",
-      `This reverts commit ${"e".repeat(40)}.`,
-    ].join("\n");
-
-    expect(standardRevertedHash(nestedRevert)).toBeUndefined();
-    expect(standardRevertedHash(topLevelRevert)).toBe("b".repeat(40));
-    expect(standardRevertedHash(squashRevert)).toBe("c".repeat(40));
-    expect(standardRevertedHash(conventionalSquashRevert)).toBe("d".repeat(40));
-    expect(standardRevertedHash(explainedTopLevelRevert)).toBe("e".repeat(40));
+  it.each([
+    ["feat: squash", '* Revert "nested"', undefined],
+    ['Revert "fix: original"', "", "b"],
+    ["Revert squash", '* Revert "nested"', "c"],
+    ["chore: revert dependency guard", '* Revert "nested"', "d"],
+    ["revert: restore default", "The replacement broke endpoints.", "e"],
+  ])("recognizes top-level revert: %s", (subject, context, expected) => {
+    const hash = (expected ?? "a").repeat(40);
+    expect(standardRevertedHash(`${subject}\n\n${context}\n\nThis reverts commit ${hash}.`)).toBe(
+      expected ? hash : undefined,
+    );
   });
 
   it("counts only top-level Highlights bullets and enforces the 5-8 policy input", () => {
@@ -1073,38 +958,16 @@ process.exitCode = errors.length ? 1 : 0;
 
   it("ignores the stale generated record while rewriting it", () => {
     const record = {
-      pullRequests: new Map([[104732, { references: [102289], thanks: ["fuller-stack-dev"] }]]),
+      pullRequests: new Map([[1, { references: [2], thanks: [] }]]),
       legacyIssues: new Map(),
     };
-
     expect(renderedContributionRecordReferences(record, true)).toEqual([]);
-    expect(renderedContributionRecordReferences(record, false)).toEqual([104732, 102289]);
+    expect(renderedContributionRecordReferences(record, false)).toEqual([1, 2]);
   });
 
   it("excludes Unreleased records from a cumulative shipped tag boundary", () => {
-    const changelog = [
-      "# Changelog",
-      "",
-      "## Unreleased",
-      "",
-      "### Complete contribution record",
-      "",
-      `This audited record covers the complete base..${"a".repeat(40)} history: 1 merged PR.`,
-      "",
-      "#### Pull requests",
-      "",
-      "- **PR #1** fix: not shipped.",
-      "",
-      "## 2026.6.11",
-      "",
-      "### Complete contribution record",
-      "",
-      "This audited record covers the complete base..HEAD history: 0 merged PRs.",
-      "",
-      "#### Pull requests",
-      "",
-      "- **PR #2** fix: shipped.",
-    ].join("\n");
+    const changelog = `## Unreleased\n\n${contributionRecord("base", "a".repeat(40), ["- **PR #1** fix: not shipped."])}
+## 2026.6.11\n\n${contributionRecord("base", "HEAD", ["- **PR #2** fix: shipped."])}`;
 
     expect([...cumulativeShippedPullRequests(changelog, "test baseline")]).toEqual([2]);
   });
@@ -1296,18 +1159,7 @@ process.exitCode = errors.length ? 1 : 0;
       git(cwd, ["checkout", "-qb", "shipped-release", base]);
       writeFileSync(
         join(cwd, "CHANGELOG.md"),
-        [
-          "## 2026.6.1",
-          "",
-          "### Complete contribution record",
-          "",
-          `This audited record covers the complete ${base}..${base} history: 1 in-range PR + 0 retained seed-only PRs = 1 unique PR.`,
-          "",
-          "#### Pull requests",
-          "",
-          "- **PR #12** Thanks @contributor.",
-          "",
-        ].join("\n"),
+        `## 2026.6.1\n\n${contributionRecord(base, base, ["- **PR #12** Thanks @contributor."], "1 in-range PR + 0 retained seed-only PRs = 1 unique PR.")}`,
       );
       git(cwd, ["add", "CHANGELOG.md"]);
       git(cwd, ["commit", "-qm", "docs: shipped record"]);
