@@ -7,8 +7,7 @@ import {
 } from "@openclaw/gateway-client/browser";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { validatePreviousConnectParams } from "../../../packages/gateway-protocol/src/connect-compatibility.test-support.js";
-import { lazyCompile } from "../../../packages/gateway-protocol/src/protocol-validator.js";
-import { ConnectParamsSchema } from "../../../packages/gateway-protocol/src/schema/frames.js";
+import { validateConnectParams } from "../../../packages/gateway-protocol/src/validators/workers.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import {
   loadDeviceAuthToken as loadScopedDeviceAuthToken,
@@ -37,7 +36,6 @@ import {
 import type { GatewayBrowserClientOptions, GatewayHelloOk } from "./gateway.ts";
 
 const realLoadOrCreateDeviceIdentity = nodes.loadOrCreateDeviceIdentity;
-const validateConnectParams = lazyCompile(ConnectParamsSchema);
 const recoveryMigrationRuntimeMock = vi.hoisted(() => ({
   loaded: vi.fn(),
   migrate: vi.fn(),

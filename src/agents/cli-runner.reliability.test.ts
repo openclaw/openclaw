@@ -52,7 +52,7 @@ import { createTestAdmittedRunContext } from "./admitted-run-context.test-suppor
 import { testing as cliBackendsTesting } from "./cli-backends.test-support.js";
 import { createLifecycleHooks, setHookRunnerForTest } from "./cli-runner.hooks.test-support.js";
 import { runPreparedCliAgent as runPreparedCliAgentCore } from "./cli-runner.js";
-import { registerCliReplyCompletionTests } from "./cli-runner.reply-completion.cases.js";
+import { registerCliReplyCompletionTests } from "./cli-runner.reply-completion.test-support.js";
 import { failClosedPluginResumeCases } from "./cli-runner.resume.test-fixtures.js";
 import {
   createManagedRun,

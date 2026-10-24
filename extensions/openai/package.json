@@ -4,7 +4,11 @@
   "private": true,
   "description": "OpenClaw OpenAI provider plugins",
   "type": "module",
+  "bundleDependencies": [
+    "@shinyoshiaki/binary-data"
+  ],
   "dependencies": {
+    "@shinyoshiaki/binary-data": "0.6.1",
     "jose": "6.2.12",
     "libopus-wasm": "0.4.1",
     "werift": "0.25.0",

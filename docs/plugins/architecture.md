@@ -623,7 +623,11 @@ or a later dynamic import.
 Dynamic TypeScript imports preserve asynchronous CommonJS execution, including
 top-level await and `module.exports`, while source loaded from native JavaScript
 follows Node's module format. The first evaluation fixes that mode for the
-instance; resolving a module alone does not evaluate it. Source
+instance; resolving a module alone does not evaluate it. Compiler outputs are
+allocated on first resolution, not for every captured TypeScript file. A
+resolve-only call returns a stable existing path without compiling the module.
+Jiti-backed modules use Jiti's transformed runtime bindings for loader helpers,
+without a separate TypeScript analysis pass. Source
 `import.meta.resolve` retains Jiti's optional parent URL and resolution options,
 including custom conditions and `try`. The one-argument resolver uses the
 source's directory and package scope.
@@ -631,7 +635,10 @@ Captures reuse resolution state for local TypeScript imports such as `./helper.j
 when only `helper.ts` exists, avoiding repeated resolver setup and exception-based
 file probing. Existing JavaScript and Jiti's alternative filename precedence remain
 unchanged. Resolver state is released with its capture; new captures select
-current source inputs independently.
+current source inputs independently. Captured package manifests and sorted
+dependency declarations are reused for that capture's lifetime; new imports
+still resolve and validate dependency links. Native directory freshness checks
+continue to inspect current source metadata.
 Entries loaded from captured source retain evaluation failures for their instance
 instead of retrying through another loader. Core-shipped JavaScript and libraries
 loaded outside a captured plugin instance keep their existing native/Jiti loading

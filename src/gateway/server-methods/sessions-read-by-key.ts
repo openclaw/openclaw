@@ -5,11 +5,8 @@ import {
   errorShape,
   validateSessionsDescribeParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { lazyCompile } from "../../../packages/gateway-protocol/src/protocol-validator.js";
-import {
-  NativeSubagentsSnapshotSchema,
-  type NativeSubagentsSnapshot,
-} from "../../../packages/gateway-protocol/src/schema/native-subagents.js";
+import type { NativeSubagentsSnapshot } from "../../../packages/gateway-protocol/src/schema/native-subagents.js";
+import { validateNativeSubagentsSnapshot } from "../../../packages/gateway-protocol/src/session-result-validators.js";
 import { captureAgentHarnessLifecycleHooks } from "../../agents/harness/registry-lifecycle.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import { projectOperatorModelRead } from "../operator-model-presentation.js";
@@ -27,8 +24,6 @@ import { createVisibleActiveSessionRunProjector } from "./session-active-runs.js
 import { requireSessionKey } from "./sessions-shared.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
-
-const validateNativeSubagentsSnapshot = lazyCompile(NativeSubagentsSnapshotSchema);
 
 export const sessionByKeyReadHandlers: GatewayRequestHandlers = {
   "sessions.describe": async ({

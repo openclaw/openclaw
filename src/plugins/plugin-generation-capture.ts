@@ -585,16 +585,15 @@ function createPluginGenerationArtifact(
       if (!entry && !capturedPaths.has(manifestPath)) {
         return;
       }
-      const manifest = capturePluginDependencies({
+      capturePluginDependencies({
         root,
-        manifestFile: entry ? undefined : path.join(destination, "package.json"),
+        plan: entry
+          ? undefined
+          : metadataCapture.dependencyPlan(path.join(destination, "package.json")),
         references,
         resolve: resolveDependency,
         capture: linkDependency,
       });
-      if (!entry) {
-        metadataCapture.setManifest(path.join(destination, "package.json"), manifest);
-      }
     };
     if (metadataOnly) {
       const manifest = capturePluginPackageMetadata(

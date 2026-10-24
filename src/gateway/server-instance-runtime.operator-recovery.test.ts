@@ -1,3 +1,4 @@
+import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
@@ -13,6 +14,7 @@ import {
   loadTranscriptEvents,
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   getAgentEventLifecycleGeneration,
   resetAgentEventsForTest,
@@ -121,7 +123,7 @@ async function withRecovery(
       profileId: string;
     },
   ) => Promise<void>,
-  internal = false,
+  internal: boolean | "tui" = false,
 ) {
   await withOpenClawTestState({ scenario: "minimal" }, async ({ stateDir }) => {
     if (internal) {
@@ -134,6 +136,7 @@ async function withRecovery(
       context,
       profileId: profile.id,
       config: {},
+      clientInfo: internal === "tui" ? { id: "openclaw-tui", mode: "ui" } : undefined,
       ...(internal
         ? { sessionKey: "agent:main:dashboard:repeat-recovery", sourceIngress: "internal" as const }
         : {}),
@@ -342,6 +345,189 @@ describe("typed restart recovery operator admission", () => {
       }
     }, true);
   });
+
+  it.each([
+    "allowed",
+    "policy denied",
+    "missing",
+    "replaced",
+    "missing source",
+    "missing channel source",
+    "missing control-ui source",
+    "legacy cohort",
+    "missing lineage",
+    "operator only",
+    "direct human",
+    "direct TUI",
+    "internal self-origin",
+  ] as const)(
+    "recovers a later child turn under its exact cross-agent parent (%s)",
+    async (parentState) => {
+      const ingress = parentState === "direct TUI" ? "tui" : parentState !== "direct human";
+      await withRecovery(async (fixture) => {
+        const { context, stateDir } = fixture;
+        const directHuman = parentState === "direct human" || parentState === "direct TUI";
+        const selfOrigin = directHuman || parentState === "internal self-origin";
+        if (parentState === "direct TUI") {
+          expect(fixture.entry.restartRecoverySourceIngress).toBe("internal");
+        }
+        const target = {
+          ...fixture.target,
+          sourceRunId:
+            parentState === "legacy cohort"
+              ? "announce:requester-settle:main:historical-child:completed:yield-1"
+              : fixture.target.sourceRunId,
+        };
+        const missingSource =
+          parentState === "missing source" ||
+          parentState === "missing channel source" ||
+          parentState === "missing control-ui source" ||
+          parentState === "legacy cohort" ||
+          parentState === "missing lineage";
+        const config = (allowAgents: string[]): OpenClawConfig => ({
+          agents: { entries: { main: {}, requester: { subagents: { allowAgents } } } },
+        });
+        const cfg = config(parentState === "policy denied" ? [] : ["main"]);
+        fixture.setConfig(cfg);
+        setRuntimeConfigSnapshot(cfg);
+        const parent = {
+          agentId: "requester",
+          sessionKey: "agent:requester:slack:channel:original-parent",
+          sessionId: "original-parent",
+          storePath: path.join(stateDir, "agents", "requester", "sessions", "sessions.json"),
+        };
+        if (parentState !== "missing" && !selfOrigin && parentState !== "operator only") {
+          await replaceSessionEntry(parent, {
+            sessionId: parentState === "replaced" ? "replacement-parent" : parent.sessionId,
+            lifecycleRevision: "parent-revision",
+            updatedAt: 1,
+          });
+        }
+        const requesterOrigin = selfOrigin
+          ? { sessionKey: target.sessionKey, operatorProfileId: fixture.profileId }
+          : {
+              sessionKey: parent.sessionKey,
+              messageProvider: "slack",
+              senderId: "original-requester",
+            };
+        const entry = {
+          ...fixture.entry,
+          spawnDepth: 1,
+          spawnedBy: parentState === "missing lineage" ? undefined : parent.sessionKey,
+          spawnedBySessionId: parent.sessionId,
+          parentSessionKey: parent.sessionKey,
+          parentSessionId: parent.sessionId,
+          parentSessionLifecycleRevision: "parent-revision",
+          restartRecoveryDeliverySourceRunId: target.sourceRunId,
+          restartRecoverySourceIngress:
+            parentState === "missing source" || parentState === "missing lineage"
+              ? undefined
+              : parentState === "missing channel source"
+                ? ("channel" as const)
+                : parentState === "missing control-ui source"
+                  ? ("control-ui" as const)
+                  : fixture.entry.restartRecoverySourceIngress,
+          restartRecoveryOperatorSource:
+            selfOrigin || parentState === "operator only"
+              ? fixture.entry.restartRecoveryOperatorSource
+              : undefined,
+        };
+        await replaceSessionEntry(target, {
+          ...entry,
+          restartRecoveryRequesterSource:
+            missingSource || parentState === "operator only"
+              ? undefined
+              : createRestartRecoveryRequesterSource({
+                  ...target,
+                  entry,
+                  requesterOrigin,
+                }),
+        });
+        if (parentState === "internal self-origin") {
+          await appendTranscriptMessage(target, {
+            message: {
+              role: "user",
+              content: "An earlier human request does not own the interrupted turn.",
+              idempotencyKey: "earlier-human-turn:user",
+              provenance: { kind: "external_user" },
+            },
+          });
+        }
+        await appendTranscriptMessage(target, {
+          message: {
+            role: "user",
+            content: "Continue the requested child work.",
+            idempotencyKey: `${target.sourceRunId}:user`,
+            provenance:
+              parentState === "direct TUI"
+                ? undefined
+                : { kind: directHuman ? "external_user" : "inter_session" },
+            ...(selfOrigin
+              ? { __openclaw: { transport: { clients: [{ id: "openclaw-tui", mode: "ui" }] } } }
+              : {}),
+          },
+        });
+        await appendTranscriptMessage(target, {
+          message: { role: "assistant", content: [], stopReason: "aborted" },
+        });
+        expect(await markRecovery(target, context, stateDir, target.sourceRunId)).toEqual({
+          marked: 1,
+          skipped: 0,
+        });
+        rotateAgentEventLifecycleGeneration();
+        using runtime = createRuntime(() => context);
+        const finish = holdRecoveryTurn(target);
+        try {
+          const authorized = parentState === "allowed" || directHuman;
+          const outcome = await recoverStore({
+            cfg,
+            storePath: target.storePath,
+            stateDir,
+            handledSessionKeys: new Set(),
+            expectedTarget: target,
+            gatewayRuntime: runtime.recovery,
+          });
+          expect(outcome).toEqual({
+            started: authorized ? 1 : 0,
+            settled: authorized ? 0 : 1,
+            failed: 0,
+            skipped: 0,
+          });
+          expect(startTurn).toHaveBeenCalledTimes(authorized ? 1 : 0);
+          if (parentState === "allowed") {
+            const recovered = expectDefined(startTurn.mock.calls[0]?.[0], "recovered turn");
+            const assertParent = expectDefined(
+              recovered.principal?.internal?.agentToolCaller?.assertCurrent,
+              "live parent authority",
+            );
+            expect(assertParent).not.toThrow();
+            expect(recovered.executionSource).not.toThrow();
+            const revoked = config([]);
+            fixture.setConfig(revoked);
+            setRuntimeConfigSnapshot(revoked);
+            expect(assertParent).toThrow();
+            expect(recovered.executionSource).toThrow();
+          } else if (!authorized) {
+            expect(loadSessionEntry(target)?.status).toBe("interrupted");
+            expect(loadSessionEntry(target)?.mainRestartRecovery).toBeUndefined();
+            expect(JSON.stringify(await loadTranscriptEvents(target))).toContain(
+              "Send a new authenticated message to continue.",
+            );
+            if (
+              parentState === "policy denied" ||
+              (missingSource && parentState !== "missing lineage")
+            ) {
+              expect(JSON.stringify(await loadTranscriptEvents(parent))).toContain(
+                `Child session ${target.sessionKey} could not resume`,
+              );
+            }
+          }
+        } finally {
+          await finish();
+        }
+      }, ingress);
+    },
+  );
 
   it.each(["matching", "missing", "different", "stale requester"] as const)(
     "settles or resumes an interrupted requester (source: %s)",

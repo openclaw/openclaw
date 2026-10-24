@@ -432,11 +432,6 @@ export function bindPluginInstanceModuleLoader(params: PluginInstanceModuleLoade
   const tsconfigPaths = entryPaths.resolver.options.tsconfigPaths;
   const demandedModules = new Map<string, { url: string } | { error: unknown }>();
   let resolvingPaths = false;
-  const includeSources = (additions: readonly string[]) => {
-    for (const build of sourceBuilds.values()) {
-      build.include(additions);
-    }
-  };
   const prepareSource = (
     filename: string,
     mode?: PluginSourceLoadMode,
@@ -490,7 +485,7 @@ export function bindPluginInstanceModuleLoader(params: PluginInstanceModuleLoade
             string | JitiResolveOptions,
           ];
           const query = typeof options === "string" ? { parentURL: options } : options;
-          includeSources(artifact.prepareDependency(parentSource, request));
+          artifact.prepareDependency(parentSource, request);
           let paths = pathResolvers.get(parentSource);
           if (!paths) {
             paths = createPaths(resolverSource, entryPaths.resolver.options);
@@ -577,7 +572,7 @@ export function bindPluginInstanceModuleLoader(params: PluginInstanceModuleLoade
                   return { shortCircuit: true, url: demanded.url };
                 }
                 // A captured ancestor can contain another version; prepare this importer's lookup first.
-                includeSources(artifact.prepareDependency(parentSource, specifier));
+                artifact.prepareDependency(parentSource, specifier);
                 let resolutionFailure: unknown;
                 try {
                   const native = nextResolve(specifier, nativeContext);
@@ -612,7 +607,6 @@ export function bindPluginInstanceModuleLoader(params: PluginInstanceModuleLoade
                   if (!captured) {
                     throw resolutionFailure;
                   }
-                  includeSources(captured.additions);
                   if ("retryNative" in captured) {
                     const native = nextResolve(specifier, nativeContext);
                     demandedModules.set(key, { url: native.url });
@@ -668,8 +662,7 @@ export function bindPluginInstanceModuleLoader(params: PluginInstanceModuleLoade
           resolved = { ...resolved, importAttributes: { ...attributes, type: "json" } };
         }
         artifact.assertModuleAvailable(filename);
-        const additions = artifact.prepareModule(filename);
-        includeSources(additions);
+        artifact.prepareModule(filename);
         if (
           (isPluginSourceModulePath(filename) || filename.endsWith(".jsx")) &&
           artifact.moduleRoot(filename)

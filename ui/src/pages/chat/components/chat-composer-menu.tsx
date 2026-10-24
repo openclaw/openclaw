@@ -3,8 +3,6 @@ import { For, onSettled } from "solid-js";
 import { useScrollState } from "../../../components/solid/scroll-state.ts";
 import { registerChatComposerInvocationMenu } from "./chat-picker-overlay.ts";
 
-export { handleComposerMenuKeydown } from "../../../components/composer-menu.ts";
-
 /** Keep option semantics and geometry while their visual renderer loads. */
 export function ComposerMenuLoadingRows(props: {
   rows: readonly {

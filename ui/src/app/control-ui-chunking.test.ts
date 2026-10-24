@@ -104,6 +104,10 @@ describe("Control UI build chunking", () => {
     const sharedUi = modulePath("../components/select-picker-view.tsx");
     const pluginActions = modulePath("../plugins/control-ui-actions.ts");
     const pluginLoader = modulePath("../plugins/control-ui-loader.ts");
+    const mutations = modulePath("../lib/sessions/session-mutation-operations.runtime.ts");
+    const receipts = modulePath("../lib/sessions/session-patch-row-facts.ts");
+    const creation = modulePath("../lib/sessions/create.ts");
+    const unread = modulePath("../../../src/shared/session-unread.ts");
     const sharedStyle = modulePath("../styles/select-picker.css");
     const transcriptStyle = modulePath("../styles/chat/grouped.css");
     const sidebarStyle = modulePath("../styles/sidebar-reorder.css");
@@ -113,11 +117,11 @@ describe("Control UI build chunking", () => {
     const sources = new Map([
       [
         entry,
-        `export const chat = () => import(${JSON.stringify(chat)}); export const newSession = () => import(${JSON.stringify(newSession)}); export const devices = () => import(${JSON.stringify(devices)}); export const plugins = () => import(${JSON.stringify(pluginLoader)});`,
+        `export const chat = () => import(${JSON.stringify(chat)}); export const newSession = () => import(${JSON.stringify(newSession)}); export const devices = () => import(${JSON.stringify(devices)}); export const plugins = () => import(${JSON.stringify(pluginLoader)}); export const mutate = () => import(${JSON.stringify(mutations)});`,
       ],
       [
         chat,
-        `import ${JSON.stringify(sharedStyle)}; import ${JSON.stringify(transcriptStyle)}; import { label } from ${JSON.stringify(sharedUi)}; import { action } from ${JSON.stringify(pluginActions)}; export class Chat { label = action(label); } export const openPanel = () => import(${JSON.stringify(optional)});`,
+        `import ${JSON.stringify(sharedStyle)}; import ${JSON.stringify(transcriptStyle)}; import { label } from ${JSON.stringify(sharedUi)}; import { action } from ${JSON.stringify(pluginActions)}; import { patch } from ${JSON.stringify(mutations)}; export class Chat { label = patch(action(label)); } export const openPanel = () => import(${JSON.stringify(optional)});`,
       ],
       [
         newSession,
@@ -128,6 +132,13 @@ describe("Control UI build chunking", () => {
       [sharedUi, `import inline from ${JSON.stringify(inlineStyle)}; export const label = inline;`],
       [pluginActions, "export const action = (label) => label;"],
       [pluginLoader, `export { action } from ${JSON.stringify(pluginActions)};`],
+      [
+        mutations,
+        `export { patch } from ${JSON.stringify(receipts)}; export { create } from ${JSON.stringify(creation)};`,
+      ],
+      [creation, "export const create = () => 'created';"],
+      [receipts, `export { patch } from ${JSON.stringify(unread)};`],
+      [unread, "export const patch = (value) => value;"],
       [sharedStyle, ".shared-fixture { color: red; }"],
       [transcriptStyle, ".transcript-fixture { color: green; }"],
       [sidebarStyle, ".sidebar-fixture { color: blue; }"],
@@ -164,8 +175,16 @@ describe("Control UI build chunking", () => {
                   ? {
                       // Fixture sharing is independent of changing production captures.
                       test: (id: string) =>
-                        [devices, sharedUi, sharedStyle, sidebarStyle].includes(id) ||
-                        group.test(id),
+                        [
+                          devices,
+                          sharedUi,
+                          sharedStyle,
+                          sidebarStyle,
+                          mutations,
+                          receipts,
+                          creation,
+                          unread,
+                        ].includes(id) || group.test(id),
                     }
                   : {}),
                 ...(group.name === "control-ui-boot-shared-styles"
@@ -214,6 +233,10 @@ describe("Control UI build chunking", () => {
     expect(staticImports(pluginChunk.fileName)).not.toContain(chatChunk.fileName);
     const entryChunk = chunks.find((chunk) => chunk.isEntry)!;
     expect(staticImports(entryChunk.fileName)).not.toContain(actionChunk.fileName);
+    const mutationChunk = chunks.find((chunk) => mutations in chunk.modules)!;
+    expect(staticImports(entryChunk.fileName)).not.toContain(mutationChunk.fileName);
+    expect(staticImports(mutationChunk.fileName)).not.toContain(chatChunk.fileName);
+    expect(staticImports(mutationChunk.fileName)).not.toContain(sharedChunk.fileName);
     const devicesChunk = chunks.find((chunk) => devices in chunk.modules)!;
     expect(staticImports(chatChunk.fileName)).not.toContain(devicesChunk.fileName);
     expect(staticImports(newSessionChunk.fileName)).not.toContain(devicesChunk.fileName);

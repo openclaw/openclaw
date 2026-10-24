@@ -533,6 +533,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/agents/bootstrap-files.test.ts",
   "src/agents/workspace-attestation.worker.test.ts",
   "src/agents/workspace-bootstrap-publish.test.ts",
+  "src/agents/workspace.missing-templates.test.ts",
   "src/agents/workspace-sqlite-safety.test.ts",
   "src/agents/workspace-state-read.worker.test.ts",
   "src/agents/workspace-state-store.test.ts",

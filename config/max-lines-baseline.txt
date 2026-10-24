@@ -185,7 +185,6 @@ src/agents/embedded-agent-runner/compact.hooks.test.ts
 src/agents/embedded-agent-runner/run.overflow-compaction.harness.ts
 src/agents/embedded-agent-runner/run/attempt-spawn-workspace.test-support.ts
 src/agents/embedded-agent-runner/runs.ts
-src/agents/embedded-agent-runner/thinking.test.ts
 src/agents/embedded-agent-runner/tool-result-truncation.test.ts
 src/agents/embedded-agent-runner/tool-result-truncation.ts
 src/agents/embedded-agent-subscribe.handlers.tools.test.ts
@@ -201,7 +200,6 @@ src/agents/sessions/extensions/runner.ts
 src/agents/sessions/extensions/types.ts
 src/agents/sessions/model-registry.ts
 src/agents/subagents/announce/subagent-announce-delivery.test.ts
-src/agents/subagents/announce/subagent-announce.format.e2e.test.ts
 src/agents/subagents/registry/subagent-control.test.ts
 src/agents/subagents/registry/subagent-registry-lifecycle.test.ts
 src/agents/subagents/registry/subagent-registry.test.ts

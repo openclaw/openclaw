@@ -4,6 +4,9 @@
   "private": true,
   "description": "OpenClaw QA lab plugin with private debugger UI and scenario runner",
   "type": "module",
+  "bundleDependencies": [
+    "@openclaw/crabline"
+  ],
   "dependencies": {
     "@copilotkit/aimock": "1.45.1",
     "@modelcontextprotocol/client": "2.3.1",

@@ -117,6 +117,7 @@ export function createPluginGenerationFileCapture({
     target: string,
     copyFile: RootFileCopyBatchSync["copyFile"],
     openFile: RootFileOpenBatchSync["openFile"],
+    realParent?: string,
   ) => {
     // Metadata can precede its package body; promotion never replaces those captured bytes.
     if (capturedPaths.get(path.resolve(source)) === target) {
@@ -125,7 +126,10 @@ export function createPluginGenerationFileCapture({
     const prepared = nativeAdmission.resolvePreparedSource(source);
     const input = prepared?.path ?? source;
     const inputBoundary = prepared?.boundary ?? boundary;
-    const real = fs.realpathSync(input);
+    // Directory recursion already resolved the parent; only links need another path walk.
+    const entry = !prepared && realParent ? fs.lstatSync(input, { bigint: true }) : undefined;
+    const ordinary = entry && !entry.isSymbolicLink();
+    const real = ordinary ? path.join(realParent!, path.basename(input)) : fs.realpathSync(input);
     const retainedNative = nativeAdmission.isRetainedReference(source, real);
     if (!isPathInside(inputBoundary, real) && !retainedNative) {
       throw new Error(
@@ -135,7 +139,7 @@ export function createPluginGenerationFileCapture({
     if (!prepared && outputRoot && isPathInside(outputRoot, real)) {
       return;
     }
-    const stat = fs.statSync(real, { bigint: true });
+    const stat = ordinary ? entry : fs.statSync(real, { bigint: true });
     const captured = capturedPaths.get(real);
     capturedPaths.set(path.resolve(source), target);
     originalSources.set(target, path.resolve(source));
@@ -162,7 +166,7 @@ export function createPluginGenerationFileCapture({
             sourceLinks.defer(path.join(input, name), inputBoundary, path.join(source, name))
           )
         ) {
-          copy(path.join(source, name), path.join(target, name), copyFile, openFile);
+          copy(path.join(source, name), path.join(target, name), copyFile, openFile, real);
         }
       }
       ancestors.delete(real);
@@ -170,7 +174,9 @@ export function createPluginGenerationFileCapture({
       if (stat.nlink > 1n) {
         hardlinkedSources.add(target);
       }
-      fs.mkdirSync(path.dirname(target), { recursive: true, mode: 0o700 });
+      if (!realParent) {
+        fs.mkdirSync(path.dirname(target), { recursive: true, mode: 0o700 });
+      }
       // Register before copying or admission can fail: known aliases must remain
       // rejected by the acquisition owner even when the first attempt is incomplete.
       additions.add(target);

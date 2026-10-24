@@ -135,7 +135,15 @@ On Anthropic, changing tool choice invalidates the messages cache, but preserves
 the tool and system caches. Other APIs without a supported hosted-tool prohibition
 are rejected when the recorded request contains tools.
 The built-in runtime keeps snapshots for up to 90 minutes, with a shared 64 MiB
-request-data budget and at most 1,000 sessions, until expiry or session cleanup.
+retained-data budget and at most 1,000 sessions, until expiry or session cleanup.
+The budget includes request bytes, detached replay options, later publications
+(including Blob and typed-array backing storage), and conservative container and
+timer overhead. Shared transport runtimes are owned by their lifecycle, outside
+this request-data budget. Data that cannot be safely copied and accounted for
+does not replace an existing snapshot; an unretainable publication retires it.
+Opaque Blob publications retain a copy of their visible bytes, so a slice cannot
+pin a larger backing allocation. Forks wait for those copies before replay;
+shared-memory buffers cannot be retained for isolated replay.
 Keeping a snapshot does not retain the completed parent session or its transcript manager.
 The built-in runtime retains the prepared provider prefix instead of a second copy
 of conversation history. Forks convert only later publications and the side question;

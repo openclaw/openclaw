@@ -8,32 +8,16 @@ import {
   responsesServiceTierObserver,
   type ResponsesServiceTierObservation,
 } from "./openai-responses-contracts.js";
-
-type SdkResponse = { data: AsyncIterable<unknown>; response: Response };
+import type { SdkResponse } from "./openai-responses-sdk.test-support.js";
 
 const sseState = vi.hoisted(() => ({
   outcomes: [] as Array<Error | SdkResponse>,
   requests: [] as Array<Record<string, unknown>>,
 }));
 
-vi.mock("openai", () => {
-  class MockOpenAI {
-    responses = {
-      create: (request: Record<string, unknown>) => {
-        sseState.requests.push(request);
-        const outcome = sseState.outcomes.shift() ?? new Error("Unexpected SSE request");
-        return {
-          withResponse: async () => {
-            if (outcome instanceof Error) {
-              throw outcome;
-            }
-            return outcome;
-          },
-        };
-      },
-    };
-  }
-  return { default: MockOpenAI, AzureOpenAI: MockOpenAI };
+vi.mock("openai", async () => {
+  const { createResponsesSdkMock } = await import("./openai-responses-sdk.test-support.js");
+  return createResponsesSdkMock(sseState);
 });
 
 vi.mock("openai/resources/responses/ws.js", () => ({
