@@ -1,8 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createTypingCallbacks } from "../../channels/typing.js";
-import type { AdmittedFollowupTurn } from "./followup-turn-admission.js";
 import type { FollowupExecutionResult } from "./followup-turn-execution.js";
 import type { FollowupRun } from "./queue.js";
+import type { AdmittedFollowupTurn } from "./reply-agent-turn-preparation.js";
 import { createTypingController } from "./typing.js";
 
 const state = vi.hoisted(() => ({
@@ -32,9 +32,17 @@ vi.mock("./agent-runner-result-accounting.js", async (importOriginal) => ({
   accountFollowupTurn: (...args: unknown[]) => state.account(...args),
 }));
 
-vi.mock("./followup-turn-admission.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./followup-turn-admission.js")>()),
-  admitFollowupTurn: (...args: unknown[]) => state.admit(...args),
+vi.mock("./reply-agent-turn-preparation.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./reply-agent-turn-preparation.js")>()),
+  prepareReplyAgentTurn: (...args: unknown[]) => state.admit(...args),
+}));
+
+vi.mock("./reply-turn-admission-lifecycle.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./reply-turn-admission-lifecycle.js")>()),
+  runWithReplyOperationLifecycleAdmission: async (
+    _operation: unknown,
+    run: () => Promise<unknown>,
+  ) => await run(),
 }));
 
 vi.mock("./followup-turn-execution.js", async (importOriginal) => ({
