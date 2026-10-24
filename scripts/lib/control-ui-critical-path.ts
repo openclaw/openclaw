@@ -39,7 +39,16 @@ export async function readCriticalPathCpu(cdp: CDPSession) {
   return Object.fromEntries(
     metrics
       .filter(({ name }) =>
-        ["TaskDuration", "ScriptDuration", "LayoutDuration", "RecalcStyleDuration"].includes(name),
+        [
+          "TaskDuration",
+          "ScriptDuration",
+          "LayoutDuration",
+          "RecalcStyleDuration",
+          "V8CompileDuration",
+          "DevToolsCommandDuration",
+          "TaskOtherDuration",
+          "ThreadTime",
+        ].includes(name),
       )
       .map(({ name, value }) => [name, value * 1000]),
   );
@@ -190,9 +199,17 @@ export async function readCriticalPath(page: Page) {
   };
 }
 
-export async function navigateCriticalPath(page: Page, cdp: CDPSession, route: CriticalPathRoute) {
+export async function navigateCriticalPath(
+  page: Page,
+  cdp: CDPSession,
+  route: CriticalPathRoute,
+  beforeMeasurement?: () => Promise<void>,
+) {
   let cpuBefore: Record<string, number>;
   if (route === "settings") {
+    if (beforeMeasurement) {
+      await beforeMeasurement();
+    }
     cpuBefore = await readCriticalPathCpu(cdp);
     await page.evaluate(() => Reflect.get(window, "__criticalPath").start("settings"));
     await page.keyboard.press("Control+Shift+,");
@@ -203,6 +220,9 @@ export async function navigateCriticalPath(page: Page, cdp: CDPSession, route: C
     }
     const link = page.locator('.settings-sidebar a[href="/settings/agents"]').first();
     await link.waitFor({ state: "visible" });
+    if (beforeMeasurement) {
+      await beforeMeasurement();
+    }
     cpuBefore = await readCriticalPathCpu(cdp);
     await link.evaluate((element: HTMLAnchorElement) => {
       Reflect.get(window, "__criticalPath").start("agents");
@@ -220,6 +240,9 @@ export async function navigateCriticalPath(page: Page, cdp: CDPSession, route: C
       link = page.locator(`openclaw-app-sidebar a[href="${pathname}"]`).first();
     }
     await link.waitFor({ state: "visible" });
+    if (beforeMeasurement) {
+      await beforeMeasurement();
+    }
     cpuBefore = await readCriticalPathCpu(cdp);
     await link.evaluate((element: HTMLAnchorElement, name) => {
       Reflect.get(window, "__criticalPath").start(name);

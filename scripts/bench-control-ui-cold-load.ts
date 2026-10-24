@@ -2176,7 +2176,38 @@ try {
         }
         await page.goto(url, { waitUntil: "domcontentloaded" });
         await settle();
-        criticalPath.push(await navigateCriticalPath(page, cdp, route));
+        const routeTrace: unknown[] = [];
+        criticalPath.push(
+          await navigateCriticalPath(
+            page,
+            cdp,
+            route,
+            cpuProfile
+              ? async () => {
+                  collectedTrace = routeTrace;
+                  await cdp.send("Profiler.start");
+                  await cdp.send("Tracing.start", {
+                    categories:
+                      "toplevel,loading,blink.user_timing,devtools.timeline,disabled-by-default-devtools.timeline,disabled-by-default-devtools.timeline.stack,v8",
+                    transferMode: "ReportEvents",
+                  });
+                }
+              : undefined,
+          ),
+        );
+        if (cpuProfile) {
+          const routeProfile = (await cdp.send("Profiler.stop")).profile;
+          const complete = new Promise<void>((resolve) => {
+            cdp.once("Tracing.tracingComplete", () => resolve());
+          });
+          await cdp.send("Tracing.end");
+          await complete;
+          await recordCpu(route, routeProfile);
+          await writeFile(
+            path.join(artifactDir, `run-${run + 1}.${route}.trace.json`),
+            JSON.stringify({ traceEvents: routeTrace }),
+          );
+        }
         await saveCriticalPath();
         await page.screenshot({ path: path.join(artifactDir, `run-${run + 1}.${route}.png`) });
       }

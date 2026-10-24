@@ -151,6 +151,11 @@ serialized Gateway events may add their own fixture delay.
 `run-1.critical-path.json` records document-clock start/readiness/capture times,
 RPCs (including requests already in flight at interaction start), duplicate
 groups, resource timings, and task/script/layout/style CPU milliseconds.
+It also records compilation, DevTools command, other-task, and total thread CPU
+counters when Chromium exposes them. Add `--cpu-profile` to save each selected
+destination's `run-1.<route>.cpuprofile` and `run-1.<route>.trace.json` for attribution.
+Profile base and candidate in separate invocations; bundle comparison accepts
+only unprofiled runs.
 Readiness is the first animation frame with visible transcript and enabled
 composer (Chat), enabled composer (New Session), populated usable inventory
 (Sessions/Cron/Agents), or visible Appearance controls and Settings search.
