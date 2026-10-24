@@ -166,6 +166,12 @@ export type BaseOriginResolverParams<TTarget> = {
   normalizeTarget?: NativeApprovalTargetNormalizer<TTarget>;
   /** Normalizes only matcher inputs when delivery target shape must stay native. */
   normalizeTargetForMatch?: NativeApprovalTargetNormalizer<TTarget>;
+  /** Reconciles an incomplete live turn-source target with a matching persisted session target. */
+  reconcileTurnSourceTarget?: (
+    turnSourceTarget: TTarget,
+    sessionTarget: TTarget,
+    request: ApprovalRequest,
+  ) => TTarget | null;
   /** Optional fallback target when neither turn-source nor session target resolves. */
   resolveFallbackTarget?: (request: ApprovalRequest) => TTarget | null;
 };

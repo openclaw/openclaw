@@ -42,6 +42,11 @@ type ApprovalRequestOriginTargetResolver<TTarget> = {
   resolveTurnSourceTarget: (request: ApprovalRequestLike) => TTarget | null;
   resolveSessionTarget: (sessionTarget: ExecApprovalSessionTarget) => TTarget | null;
   targetsMatch: (a: TTarget, b: TTarget) => boolean;
+  reconcileTurnSourceTarget?: (
+    turnSourceTarget: TTarget,
+    sessionTarget: TTarget,
+    request: ApprovalRequestLike,
+  ) => TTarget | null;
   resolveFallbackTarget?: (request: ApprovalRequestLike) => TTarget | null;
 };
 
@@ -152,7 +157,9 @@ function resolveApprovalRequestOriginTargetFromDelivery<TTarget>(
 
   if (turnSourceTarget && sessionTarget && !params.targetsMatch(turnSourceTarget, sessionTarget)) {
     // Avoid routing to an origin when live turn metadata disagrees with persisted session state.
-    return null;
+    return (
+      params.reconcileTurnSourceTarget?.(turnSourceTarget, sessionTarget, params.request) ?? null
+    );
   }
 
   return (

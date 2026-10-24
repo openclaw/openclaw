@@ -96,6 +96,12 @@ function originTargetOptions<TTarget>(
         normalizedLeft && normalizedRight && params.targetsMatch(normalizedLeft, normalizedRight),
       );
     },
+    reconcileTurnSourceTarget: params.reconcileTurnSourceTarget
+      ? (turnSourceTarget: TTarget, sessionTarget: TTarget, request: ApprovalRequest) =>
+          normalizeTarget(
+            params.reconcileTurnSourceTarget?.(turnSourceTarget, sessionTarget, request) ?? null,
+          )
+      : undefined,
     resolveFallbackTarget: params.resolveFallbackTarget
       ? (request: ApprovalRequest) =>
           normalizeTarget(params.resolveFallbackTarget?.(request) ?? null)

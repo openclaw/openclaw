@@ -60,6 +60,10 @@ const resolveTelegramOriginTarget = createChannelNativeOriginTargetResolverAsync
     to: normalizeTelegramChatId(sessionTarget.to) ?? sessionTarget.to,
     threadId: parseTelegramThreadId(sessionTarget.threadId),
   }),
+  reconcileTurnSourceTarget: (turnSourceTarget, sessionTarget) =>
+    turnSourceTarget.to === sessionTarget.to && turnSourceTarget.threadId == null
+      ? sessionTarget
+      : null,
 });
 
 const resolveTelegramApproverDmTargets = createChannelApproverDmTargetResolverAsync({

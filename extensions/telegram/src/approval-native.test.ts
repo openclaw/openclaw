@@ -103,4 +103,45 @@ describe("telegram native approval adapter", () => {
 
     expect(target).toEqual({ to: "-1003841603622", threadId: 928 });
   });
+
+  it("reconciles a missing turn-source topic from the persisted session target", async () => {
+    const storePath = path.join(sessionDirs.make(), "sessions.json");
+    const sessionKey = "agent:main:telegram:group:-1003841603622:topic:928";
+    await upsertSessionEntry({
+      storePath,
+      sessionKey,
+      entry: {
+        sessionId: "sess",
+        updatedAt: Date.now(),
+        delivery: normalizeSessionDeliveryState({
+          context: {
+            channel: "telegram",
+            to: "-1003841603622",
+            accountId: "default",
+            threadId: "928",
+          },
+        }),
+      },
+    });
+
+    const target = await telegramApprovalCapability.native?.resolveOriginTarget?.({
+      cfg: { ...cfg, session: { store: storePath } },
+      accountId: "default",
+      approvalKind: "plugin",
+      request: {
+        ...requestTimes,
+        id: "plugin:req-3",
+        request: {
+          title: "Plugin approval",
+          description: "Allow access",
+          sessionKey,
+          turnSourceChannel: "telegram",
+          turnSourceTo: "telegram:group:-1003841603622",
+          turnSourceAccountId: "default",
+        },
+      },
+    });
+
+    expect(target).toEqual({ to: "-1003841603622", threadId: 928 });
+  });
 });
