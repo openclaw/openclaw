@@ -23,11 +23,14 @@ const env = (name: string) => named(gateway.get("env"), name);
 
 it("includes every shipped manifest in kustomization", () => {
   const resources = read("kustomization").get("resources");
-  expect(isSeq(resources) ? resources.toJSON().toSorted() : resources).toEqual(
-    readdirSync(directory)
-      .filter((name) => name.endsWith(".yaml") && name !== "kustomization.yaml")
-      .toSorted(),
+  if (!isSeq(resources)) {
+    throw new Error("Expected a manifest resource sequence");
+  }
+  const names = readdirSync(directory).filter(
+    (name) => name.endsWith(".yaml") && name !== "kustomization.yaml",
   );
+  expect(resources.toJSON()).toEqual(expect.arrayContaining(names));
+  expect(resources.items).toHaveLength(names.length);
 });
 
 it("connects the service to the deployed gateway", () => {
@@ -60,7 +63,7 @@ it("keeps credentials secret-backed and state writable under the read-only gatew
   expect(home.get("mountPath")).toBe(env("OPENCLAW_CONFIG_DIR").get("value"));
   expect(home.get("readOnly")).not.toBe(true);
   expect(env("HOME").get("value")).toBe("/home/node");
-  expect(env("XDG_CACHE_HOME").get("value")).toBe(`${home.get("mountPath")}/.cache`);
+  expect(env("XDG_CACHE_HOME").get("value")).toBe("/home/node/.openclaw/.cache");
   const claim = read("pvc").getIn(["metadata", "name"]);
   expect(claim).toEqual(expect.any(String));
   expect(

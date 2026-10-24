@@ -86,7 +86,7 @@ async function runRepairEnvelope(params: UpdateRepairParams): Promise<UpdateRepa
           result = message.result;
         }
       } catch (error) {
-        failure = toErrorObject(error);
+        failure = toErrorObject(error, "Repair worker failed.");
         child.kill("SIGKILL");
       }
     });
