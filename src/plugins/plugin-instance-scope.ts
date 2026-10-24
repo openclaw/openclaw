@@ -142,6 +142,68 @@ export function wrapCurrentPluginInstance<T>(value: T, host?: (value: T) => T): 
   return owner ? owner.wrap(value) : host ? host(value) : value;
 }
 
+/** Host callback records retain their plugin owner without taking ownership of caller data. */
+export function bindCurrentPluginInstanceCallbacks<T extends object | undefined>(callbacks: T): T {
+  const owner = pluginInstanceInvocation.getStore()?.instance;
+  if (!owner || !callbacks) {
+    return callbacks;
+  }
+  const descriptors: PropertyDescriptorMap = Object.getOwnPropertyDescriptors(callbacks);
+  const seen = new Set(Reflect.ownKeys(descriptors));
+  // Class adapters publish methods on their prototypes, not on the instance.
+  for (
+    let prototype = Object.getPrototypeOf(callbacks);
+    prototype && prototype !== Object.prototype;
+    prototype = Object.getPrototypeOf(prototype)
+  ) {
+    for (const key of Reflect.ownKeys(prototype)) {
+      if (key === "constructor" || seen.has(key)) {
+        continue;
+      }
+      seen.add(key);
+      const descriptor = Object.getOwnPropertyDescriptor(prototype, key)!;
+      if (typeof descriptor.value === "function" || descriptor.get || descriptor.set) {
+        Object.defineProperty(descriptors, key, {
+          value: descriptor,
+          configurable: true,
+          enumerable: true,
+          writable: true,
+        });
+      }
+    }
+  }
+  const bound = Object.create(Object.getPrototypeOf(callbacks));
+  const bindCallback = <V>(value: V): V =>
+    typeof value === "function"
+      ? new Proxy(value, {
+          apply: (target, receiver, args) =>
+            owner.run(() => Reflect.apply(target, receiver === bound ? callbacks : receiver, args)),
+        })
+      : value;
+  for (const key of Reflect.ownKeys(descriptors)) {
+    const descriptor = descriptors[key]!;
+    if (descriptor.get) {
+      // oxlint-disable-next-line typescript/unbound-method -- The proxy supplies the original accessor receiver via Reflect.apply.
+      descriptor.get = new Proxy(descriptor.get, {
+        apply: (target, receiver, args) =>
+          owner.run(() =>
+            bindCallback(Reflect.apply(target, receiver === bound ? callbacks : receiver, args)),
+          ),
+      });
+    }
+    if (descriptor.set) {
+      // oxlint-disable-next-line typescript/unbound-method -- bindCallback restores the original receiver via Reflect.apply.
+      descriptor.set = bindCallback(descriptor.set);
+    }
+    if ("value" in descriptor) {
+      descriptor.value = bindCallback(descriptor.value);
+    }
+  }
+  // Payloads and results keep their exact identities; only the callback view's
+  // receiver maps back to the original adapter, including its private fields.
+  return Object.defineProperties(bound, descriptors);
+}
+
 /** Teardown admission comes from the host owner, never a plugin method name. */
 export function runPluginCleanup<T>(value: object, run: () => T): T {
   const instance = pluginInstanceState.values.get(value);
