@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/channel-plugin-common";
@@ -243,7 +244,7 @@ export function registerDiscordActivities(api: OpenClawPluginApi): void {
     () => api.runtime.config.current() as typeof api.config,
   );
   setDiscordActivitiesRuntime(runtime);
-  const vendorAssetPath = api.resolvePath("assets/embedded-app-sdk.mjs");
+  const vendorAssetPath = resolveActivitySdkPath(api);
   const limiter = new TokenRateLimiter();
   // The OAuth code body is unauthenticated and tiny. Reuse the pre-auth webhook budget so a
   // stalled upload cannot retain a Gateway handler indefinitely.
@@ -635,4 +636,13 @@ export function registerDiscordActivities(api: OpenClawPluginApi): void {
       return { ok: true, value: { kind: "message", receipt: result.receipt } };
     },
   });
+}
+
+// Source checkouts and bundled dist builds keep the SDK in assets/; the standalone
+// npm package copies it to dist/assets/ beside the compiled entry.
+function resolveActivitySdkPath(api: OpenClawPluginApi): string {
+  const candidates = ["assets/embedded-app-sdk.mjs", "dist/assets/embedded-app-sdk.mjs"].map(
+    (input) => api.resolvePath(input),
+  );
+  return candidates.find((candidate) => existsSync(candidate)) ?? candidates[0]!;
 }
