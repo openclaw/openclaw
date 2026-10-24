@@ -52,7 +52,7 @@ beforeEach(installTranscriptDomMocks);
 afterEach(resetTranscriptTestDom);
 
 it.each([null, 4_800])(
-  "keeps one bounded scrolling buffer from the first presented frame at offset %s",
+  "keeps a bounded initial range before measured placement at offset %s",
   (offset) => {
     const flushFrames = stubAnimationFrames();
     const paneId = `render-window-${offset}`;
@@ -85,12 +85,12 @@ it.each([null, 4_800])(
     expect(renderWindow([])).toBe(0);
     flushFrames();
 
-    expect(renderWindow()).toBe(offset === null ? 3 : 9);
+    expect(renderWindow()).toBe(offset === null ? 1 : 9);
     const mounted = transcriptRows(container).map((row) => Number(row.dataset.index));
     expect(mounted).toEqual(expect.arrayContaining(offset === null ? [99] : [40, 44]));
-    expect(renderWindow()).toBe(offset === null ? 3 : 9);
+    expect(renderWindow()).toBe(offset === null ? 1 : 9);
     flushFrames();
-    expect(renderWindow()).toBe(offset === null ? 3 : 9);
+    expect(renderWindow()).toBe(offset === null ? 1 : 9);
 
     transcript.dispose();
   },
