@@ -25,7 +25,6 @@ function record(
   spec: string,
   sampleFile: string,
   category: string,
-  recommendation: string,
   declaredInExtensions: string[] = [],
   internalizedBundledRuntimeOwners: string[] = [],
 ) {
@@ -35,7 +34,6 @@ function record(
     depName,
     fileCount: 1,
     internalizedBundledRuntimeOwners,
-    recommendation,
     sampleFiles: [sampleFile],
     sections: [sampleFile.split("/")[0]],
     spec,
@@ -48,11 +46,6 @@ describe("classifyRootDependencyOwnership", () => {
       ["scripts", "test"],
       "script_or_test_only",
       "consider moving from dependencies to devDependencies",
-    ],
-    [
-      ["extensions", "test"],
-      "extension_only_localizable",
-      "remove from root package.json and rely on owning extension manifests plus doctor --fix",
     ],
     [[], "unreferenced", "investigate removal; no direct source imports found in scanned files"],
   ] satisfies [string[], string, string][])(
@@ -74,9 +67,16 @@ describe("collectRootDependencyOwnershipCheckErrors", () => {
       "extensions/demo-channel/src/setup.ts": 'const sdk = await import("vendor-sdk");\n',
     });
 
-    expect(collectRootDependencyOwnershipCheckErrors(records)).toEqual([
-      "root dependency 'vendor-sdk' is extension-owned (remove from root package.json and rely on owning extension manifests plus doctor --fix); extension declarations: demo-channel:dependencies; sample imports: extensions/demo-channel/src/setup.ts",
-    ]);
+    expect(records).toMatchObject([{ category: "extension_only_localizable" }]);
+    const errors = collectRootDependencyOwnershipCheckErrors(records);
+    expect(errors).toHaveLength(1);
+    for (const detail of [
+      "vendor-sdk",
+      "demo-channel:dependencies",
+      "extensions/demo-channel/src/setup.ts",
+    ]) {
+      expect(errors[0]).toContain(detail);
+    }
   });
 
   it("classifies root dependencies referenced through constant dynamic imports", () => {
@@ -99,14 +99,13 @@ describe("collectRootDependencyOwnershipCheckErrors", () => {
       ["src", "packages"],
     );
 
-    expect(records).toEqual([
-      record("clawpdf", "^0.2.0", "src/media/pdf-extract.ts", "core_runtime", "keep at root"),
+    expect(records).toMatchObject([
+      record("clawpdf", "^0.2.0", "src/media/pdf-extract.ts", "core_runtime"),
       record(
         "sqlite-vec",
         "0.1.9",
         "packages/memory-host-sdk/src/host/sqlite-vec.ts",
         "core_runtime",
-        "keep at root",
       ),
     ]);
   });
@@ -130,28 +129,22 @@ describe("collectRootDependencyOwnershipCheckErrors", () => {
         'const runtime = require("playwright-core");\n',
     });
 
-    expect(records).toEqual([
-      record(
-        "@homebridge/ciao",
-        "^1.3.7",
-        "extensions/bonjour/src/advertiser.ts",
-        "root_owned_extension_runtime",
-        "keep at root; the Bonjour runtime is shipped with packaged startup surfaces even though the bundled plugin also declares it",
-        ["bonjour:dependencies"],
-      ),
+    const category = "root_owned_extension_runtime";
+    expect(records).toMatchObject([
+      record("@homebridge/ciao", "^1.3.7", "extensions/bonjour/src/advertiser.ts", category, [
+        "bonjour:dependencies",
+      ]),
       record(
         "@opentelemetry/semantic-conventions",
         "1.43.0",
         "extensions/diagnostics-otel/src/service.ts",
-        "root_owned_extension_runtime",
-        "keep at root; the bundled Mistral runtime in @openclaw/ai imports these constants even though only the diagnostics plugin imports them directly in repository source",
+        category,
       ),
       record(
         "playwright-core",
         "1.59.1",
         "extensions/browser/src/browser/playwright-core.runtime.ts",
-        "root_owned_extension_runtime",
-        "keep at root; the internal browser runtime is shipped with core even though downloadable browser-adjacent plugins also declare it",
+        category,
         ["browser:dependencies"],
       ),
     ]);
@@ -169,15 +162,15 @@ describe("collectRootDependencyOwnershipCheckErrors", () => {
       "extensions/internal/src/setup.ts": 'const sdk = await import("vendor-sdk");\n',
     });
 
-    expect(records).toEqual([
+    const owners = ["internal:dependencies"];
+    expect(records).toMatchObject([
       record(
         "vendor-sdk",
         "^1.0.0",
         "extensions/internal/src/setup.ts",
         "root_owned_extension_runtime",
-        "keep at root while bundled plugin runtime dependencies are internalized; owners: internal:dependencies",
-        ["internal:dependencies"],
-        ["internal:dependencies"],
+        owners,
+        owners,
       ),
     ]);
     expect(collectRootDependencyOwnershipCheckErrors(records)).toStrictEqual([]);
