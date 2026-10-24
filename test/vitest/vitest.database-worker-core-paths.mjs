@@ -1,6 +1,5 @@
 // These consumers need the host-owned SQLite broker, which runs in forked processes.
 export const databaseWorkerCoreTestFiles = [
-  "src/config/sessions/session-accessor.sqlite-lifecycle-artifacts.postgres.test.ts",
   "src/auto-reply/reply/get-reply.fallback-transcript.test.ts",
   "src/config/sessions/session-actor-initialization.test.ts",
   "test/scripts/upgrade-survivor-acp-metadata.test.ts",
@@ -128,6 +127,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/config/sessions/session-canonical-key.test.ts",
   "src/config/sessions/session-canonical-reader-continuation.test.ts",
   "src/config/sessions/session-accessor.sqlite-schema-probes.test.ts",
+  "src/config/sessions/session-accessor.sqlite-lifecycle-artifacts.postgres.test.ts",
   "src/config/sessions/session-accessor.sqlite-transcript-store.test.ts",
   "src/config/sessions/session-accessor.sqlite-entry-revalidation.test.ts",
   "src/config/sessions/startup-migration.registry-recovery.test.ts",
