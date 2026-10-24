@@ -21,8 +21,10 @@ function newInstance(
   }
   return instance;
 }
-function capture(instance: PluginInstance, captures: string) {
-  return withPluginSourceCaptureDirectory(captures, () => instance.captureModuleLoaderRecovery());
+async function capture(instance: PluginInstance, captures: string) {
+  return await withPluginSourceCaptureDirectory(captures, () =>
+    instance.captureModuleLoaderRecovery(),
+  );
 }
 function expectIdentity(filename: string, identity: fs.Stats) {
   expect(fs.statSync(filename)).toMatchObject({ dev: identity.dev, ino: identity.ino });
@@ -145,7 +147,7 @@ it.each(
     const nativeShadow = fs.realpathSync(oldModule.nativePath);
     fs.writeFileSync(path.join(root, "native.so"), "replacement native bytes");
     expect(oldModule.native()).toBe("original native bytes");
-    const recovery = capture(instance, captures);
+    const recovery = await capture(instance, captures);
     fs.writeFileSync(entry, "throw new Error('replacement code must not run during recovery');");
     await instance.dispose();
     fs.rmSync(root, { recursive: true });
@@ -166,7 +168,7 @@ it.each(
     expect(() => oldModule.next()).toThrow();
 
     // Recovery remains recoverable itself after another failed update.
-    const again = capture(restored, captures);
+    const again = await capture(restored, captures);
     await restored.dispose();
     const final = newInstance();
     withPluginSourceCaptureDirectory(captures, () => again.bind(final));
@@ -204,7 +206,7 @@ it.each(
 it("releases unused recovery custody without disturbing the active loader", async () => {
   const { entry, captures, instance } = fixture();
   const before = fs.readdirSync(captures);
-  const recovery = capture(instance, captures);
+  const recovery = await capture(instance, captures);
   expect(fs.readdirSync(captures).length).toBeGreaterThan(before.length);
   await recovery.dispose();
   await recovery.dispose();
@@ -218,10 +220,10 @@ it("captures quiesced code without admitting calls and refuses capture after dis
   expect((instance.loadModule(entry) as FixtureModule).dependency()).toBe("original dependency");
   instance.quiesce();
   fs.writeFileSync(entry, "throw new Error('changed disk bytes must not become recovery');");
-  const recovery = capture(instance, captures);
+  const recovery = await capture(instance, captures);
   expect(() => instance.loadModule(entry)).toThrow(/reloaded or disabled/);
   const disposing = instance.dispose();
-  expect(() => instance.captureModuleLoaderRecovery()).toThrow(/reloaded or disabled/);
+  await expect(instance.captureModuleLoaderRecovery()).rejects.toThrow(/reloaded or disabled/);
   await disposing;
   fs.rmSync(root, { recursive: true });
   const restored = newInstance(instance.pluginId);
@@ -288,7 +290,7 @@ it.each(["cjs", "mjs"])(
     const oldCallback = (previous.loadModule(entry) as BundledModule).register();
     expect(oldCallback()).toBe(1);
     expect(getSharedPluginCodeReloadWarning(previous)).toBeUndefined();
-    const recovery = previous.captureModuleLoaderRecovery();
+    const recovery = await previous.captureModuleLoaderRecovery();
     await previous.dispose();
     fs.rmSync(root, { recursive: true });
 
@@ -301,7 +303,7 @@ it.each(["cjs", "mjs"])(
     expect(oldCallback).toThrow(/reloaded or disabled/);
     expect(restoredCallback()).toBe(2);
 
-    const secondRecovery = restored.captureModuleLoaderRecovery();
+    const secondRecovery = await restored.captureModuleLoaderRecovery();
     await restored.dispose();
     const final = newInstance(previous.pluginId);
     secondRecovery.bind(final);

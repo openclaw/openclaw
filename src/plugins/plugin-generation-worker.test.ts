@@ -205,7 +205,7 @@ it("keeps a native-only recovery fork after its worker and admission cache retir
     preparePluginNativeAdmissions(fixture.index, cache);
     const prepared = await prepare(fixture);
     const captured = fs.realpathSync(prepared.artifact.resolve(fixture.filename));
-    const recovery = prepared.artifact.captureRecoverySource();
+    const recovery = await prepared.artifact.captureRecoverySource();
     const native = recovery.native!.fork();
     try {
       await recovery.disposeAsync();
@@ -310,7 +310,7 @@ it("joins retained capture workers before terminal native-source shutdown", asyn
     withStorage(root, async () => {
       const prepared = await preparePluginGenerationArtifact({ rootDir: source, source: entry });
       const capturesBeforeRecovery = fs.readdirSync(path.dirname(prepared.artifact.boundaryRoot));
-      const recovery = prepared.artifact.captureRecoverySource();
+      const recovery = await prepared.artifact.captureRecoverySource();
       const capturesWithRecovery = fs.readdirSync(path.dirname(prepared.artifact.boundaryRoot));
       const nativeSource = captureRetainedNativeWorkerSource({ runtimeGeneration: undefined });
       expect(nativeSource.hasActiveWorkers).toBe(true);
@@ -439,7 +439,7 @@ it.each(["capture", "custody", "fork"] as const)(
           expect(replies.every((reply) => reply.deref() === undefined)).toBe(true);
           expectSource(artifact, entry, "42");
           const releaseRecovery = async () => {
-            const recovery = artifact.captureRecoverySource();
+            const recovery = await artifact.captureRecoverySource();
             const references = [
               new WeakRef(recovery.fork),
               new WeakRef(recovery.sourceCapture.capture),
@@ -454,18 +454,19 @@ it.each(["capture", "custody", "fork"] as const)(
           expectSource(artifact, entry, "42");
         }
         // Recovery copies the captured package synchronously in the worker. Advance
-        // its host deadline clock without making this lifecycle proof sleep for 30s.
-        const parentRecovery = operation === "fork" ? artifact.captureRecoverySource() : undefined;
+        // its host deadline clock without making this lifecycle proof sleep for two minutes.
+        const parentRecovery =
+          operation === "fork" ? await artifact.captureRecoverySource() : undefined;
         const now = performance.now();
-        const clock = vi.spyOn(performance, "now").mockReturnValue(now + 30_001);
+        const clock = vi.spyOn(performance, "now").mockReturnValue(now + 120_001);
         clock.mockReturnValueOnce(now);
-        let recovery: ReturnType<typeof artifact.captureRecoverySource>;
+        let recovery: Awaited<ReturnType<typeof artifact.captureRecoverySource>>;
         try {
           recovery = parentRecovery
             ? parentRecovery.fork()
             : operation === "custody"
               ? artifact.retainSourceCustody().source
-              : artifact.captureRecoverySource();
+              : await artifact.captureRecoverySource();
         } finally {
           clock.mockRestore();
           await parentRecovery?.disposeAsync();
@@ -536,7 +537,7 @@ it("isolates an active artifact from a sibling capture waiting on host publicati
         const second = await preparing;
         expect(path.dirname(second.artifact.boundaryRoot)).not.toBe(firstDirectory);
         const secondDirectory = path.dirname(second.artifact.boundaryRoot);
-        const recovery = first.artifact.captureRecoverySource();
+        const recovery = await first.artifact.captureRecoverySource();
         await first.artifact.disposeAsync();
         await second.artifact.disposeAsync();
         expectSource(recovery, fixture.entry);

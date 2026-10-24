@@ -152,7 +152,7 @@ it("validates overlapping hardlinked companion placements once per member, inclu
     await using resources = captureResources();
     const cache = resources.cache();
     const capture = () => resources.capture(cache, root);
-    let recovery: ReturnType<Artifact["captureRecoverySource"]> | undefined;
+    let recovery: Awaited<ReturnType<Artifact["captureRecoverySource"]>> | undefined;
     try {
       const first = capture();
       expect.soft(walks(first.rootDir)).toBe(1);
@@ -176,7 +176,7 @@ it("validates overlapping hardlinked companion placements once per member, inclu
       successor.linkHost(hosts[1]!);
       expect.soft(walks(successor.rootDir)).toBe(1);
       paths.mockClear();
-      recovery = first.captureRecoverySource();
+      recovery = await first.captureRecoverySource();
       expect.soft(walks(recovery.rootDir)).toBe(1);
       expect(readText(path.join(recovery.rootDir, "helper.dat"))).toBe("original companion");
 
