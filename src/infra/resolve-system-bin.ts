@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { pruneMapToMaxSize } from "./map-size.js";
+import { LruCache } from "./lru-cache.js";
 import { canAccessSync } from "./path-existence.js";
 import { getWindowsInstallRoots, getWindowsProgramFilesRoots } from "./windows-install-roots.js";
 
@@ -20,13 +20,8 @@ const WINDOWS_PROGRAM_FILES_TOOL_DIR_PREFIXES = ["ImageMagick-", "GraphicsMagick
 const WINDOWS_PROGRAM_FILES_TOOL_DIRS = ["ImageMagick", "GraphicsMagick"] as const;
 
 const RESOLVED_BIN_CACHE_LIMIT = 512;
-const resolvedCacheStrict = new Map<string, string>();
-const resolvedCacheStandard = new Map<string, string>();
-
-function cacheResolvedSystemBin(cache: Map<string, string>, name: string, candidate: string): void {
-  cache.set(name, candidate);
-  pruneMapToMaxSize(cache, RESOLVED_BIN_CACHE_LIMIT);
-}
+const resolvedCacheStrict = new LruCache<string>(RESOLVED_BIN_CACHE_LIMIT);
+const resolvedCacheStandard = new LruCache<string>(RESOLVED_BIN_CACHE_LIMIT);
 
 function collectWindowsProgramFilesToolDirs(programFilesRoot: string): string[] {
   const dirs = WINDOWS_PROGRAM_FILES_TOOL_DIRS.map((dir) => path.win32.join(programFilesRoot, dir));
@@ -130,10 +125,6 @@ export function resolveSystemBin(
   if (!hasExtra) {
     const cached = cache.get(name);
     if (cached !== undefined) {
-      // Trusted-directory probes hit the filesystem repeatedly; keep active binaries ahead of
-      // colder entries when the shared insertion-order pruning helper enforces the bound.
-      cache.delete(name);
-      cache.set(name, cached);
       return cached;
     }
   }
@@ -150,7 +141,7 @@ export function resolveSystemBin(
     for (const candidate of candidates) {
       if (canAccessSync(candidate, isWin ? fs.constants.R_OK : fs.constants.X_OK)) {
         if (!hasExtra) {
-          cacheResolvedSystemBin(cache, name, candidate);
+          cache.set(name, candidate);
         }
         return candidate;
       }

@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import path from "node:path";
 import { compileFunction } from "node:vm";
 import { root as fsRoot, sanitizeUntrustedFileName, type Root } from "../infra/fs-safe.js";
+import { getOrCreatePromise } from "../shared/lazy-promise.js";
 import type { MediaFact } from "./media-facts.js";
 
 /** Existing per-file allowance for staging task inputs. */
@@ -82,17 +83,12 @@ export function createStagedInputPathMatcher(
     if (!directory) {
       return false;
     }
-    let owned = directories.get(directory);
-    if (!owned) {
-      owned = root
-        .readText(`${directory}/.gitignore`, { maxBytes: STAGED_INPUT_GITIGNORE.length })
-        .then(
-          (text) => text === STAGED_INPUT_GITIGNORE,
-          () => false,
-        );
-      directories.set(directory, owned);
-    }
-    return await owned;
+    return await getOrCreatePromise(directories, directory, () =>
+      root.readText(`${directory}/.gitignore`, { maxBytes: STAGED_INPUT_GITIGNORE.length }).then(
+        (text) => text === STAGED_INPUT_GITIGNORE,
+        () => false,
+      ),
+    );
   };
 }
 

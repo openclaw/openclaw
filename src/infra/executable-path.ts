@@ -4,7 +4,7 @@ import path from "node:path";
 import { safeStatSync } from "@openclaw/fs-safe/path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { expandHomePrefix } from "./home-dir.js";
-import { pruneMapToMaxSize } from "./map-size.js";
+import { LruCache } from "./lru-cache.js";
 import { resolveEnvironmentValue } from "./process-env.js";
 
 export function resolveExecutablePathCandidate(
@@ -91,14 +91,15 @@ type ExecutablePathCacheEntry = {
   resolved: string | null;
 };
 
-const executablePathCache = new Map<string, ExecutablePathCacheEntry>();
+const executablePathCache = new LruCache<ExecutablePathCacheEntry>(
+  EXECUTABLE_PATH_CACHE_MAX_ENTRIES,
+);
 
 function cacheExecutablePath(key: string, resolved: string | undefined): void {
   executablePathCache.set(key, {
     expiresAt: Date.now() + EXECUTABLE_PATH_CACHE_TTL_MS,
     resolved: resolved ?? null,
   });
-  pruneMapToMaxSize(executablePathCache, EXECUTABLE_PATH_CACHE_MAX_ENTRIES);
 }
 
 /** Clears process-local PATH probe results after the runtime environment changes. */
@@ -127,14 +128,13 @@ export function resolveExecutableFromPathEnv(
     // A deleted cwd already makes relative probes fail; keep the cache key stable for that state.
   }
   const cacheKey = `${process.platform}\0${executable}\0${JSON.stringify(pathEnv)}\0${pathExt}\0${options?.includeExtensionless !== false}\0${cacheCwd}\0${cwd !== undefined}`;
-  const cached = useCache ? executablePathCache.get(cacheKey) : undefined;
+  const cached = useCache ? executablePathCache.peek(cacheKey) : undefined;
   const now = Date.now();
   if (cached && cached.expiresAt > now) {
     // Hits and misses remain valid while the same PATH/PATHEXT/cwd key is used; config reload clears
     // the map. Installs/removals under an unchanged key intentionally need reload or a 60s idle gap,
     // because steady pollers must never fall back into synchronous PATH stat loops.
     cached.expiresAt = now + EXECUTABLE_PATH_CACHE_TTL_MS;
-    executablePathCache.delete(cacheKey);
     executablePathCache.set(cacheKey, cached);
     return cached.resolved ?? undefined;
   }

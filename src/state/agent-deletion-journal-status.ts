@@ -8,6 +8,7 @@ import {
 } from "../infra/sqlite-database-admission.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { getOrCreatePromise } from "../shared/lazy-promise.js";
 import type {
   AgentDeletionJournalDisposition,
   AgentDeletionJournalStatus,
@@ -132,20 +133,14 @@ export async function loadAgentDeletionJournalStatus(
     return cached;
   }
   const pendingKey = JSON.stringify([statePath, key.name]);
-  let pending = pendingLoads.get(pendingKey);
-  if (!pending) {
-    pending = (async () => {
+  return getOrCreatePromise(
+    pendingLoads,
+    pendingKey,
+    async () => {
       const loaded = await load();
       // A deletion committed during the read owns the newer fact.
       return getOrLoadAgentDeletionJournalStatus(statePath, agentId, () => loaded) ?? loaded;
-    })();
-    pendingLoads.set(pendingKey, pending);
-  }
-  try {
-    return await pending;
-  } finally {
-    if (pendingLoads.get(pendingKey) === pending) {
-      pendingLoads.delete(pendingKey);
-    }
-  }
+    },
+    { evictOnSettled: true },
+  );
 }
