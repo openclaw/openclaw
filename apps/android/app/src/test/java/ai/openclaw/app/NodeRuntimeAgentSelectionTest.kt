@@ -730,6 +730,64 @@ class NodeRuntimeAgentSelectionTest {
     }
 
   @Test
+  fun coldStartCompletesReadinessForAnEmptyAllowedRoster() =
+    runBlocking {
+      val runtime = createConnectedRuntime()
+      val rosterAnswered = CompletableDeferred<Unit>()
+      val requests = Collections.synchronizedList(mutableListOf<Pair<String, String?>>())
+      try {
+        runtime.gatewayDataRequestOverrideForTests = { _, method, _ ->
+          when (method) {
+            "agents.list" -> {
+              rosterAnswered.complete(Unit)
+              """{"defaultId":"agent-a","mainKey":"agent:agent-a:main","agents":[]}"""
+            }
+
+            "models.list" -> {
+              """{"models":[]}"""
+            }
+
+            "models.authStatus" -> {
+              """{"providers":[]}"""
+            }
+
+            else -> {
+              "{}"
+            }
+          }
+        }
+        installChatGateway(
+          runtime,
+          requestGateway = { method, params ->
+            requests += method to params
+            when (method) {
+              "sessions.describe" -> """{"session":null}"""
+              "chat.history" -> """{"sessionId":"device-session","messages":[]}"""
+              else -> "{}"
+            }
+          },
+        )
+
+        reconnectOperator(runtime, methods = setOf("agents.list"))
+        withTimeout(2_000) { rosterAnswered.await() }
+        withTimeout(2_000) {
+          runtime.gatewayConnectionDisplay.first { it.isConnected }
+        }
+
+        assertTrue(ReflectionHelpers.getField<Boolean>(runtime, "operatorConnected"))
+        assertTrue(runtime.gatewayAgents.value.isEmpty())
+        assertEquals(null, runtime.gatewayDefaultAgentId.value)
+        assertFalse(
+          requests.any { (method, params) ->
+            method.startsWith("sessions.") && params.orEmpty().contains("agent-a")
+          },
+        )
+      } finally {
+        closeNodeRuntimeTestFixture(runtime)
+      }
+    }
+
+  @Test
   fun disconnectCancelsPendingAgentDiscoveryWithoutPublishingConnected() =
     runBlocking {
       val runtime = createConnectedRuntime()

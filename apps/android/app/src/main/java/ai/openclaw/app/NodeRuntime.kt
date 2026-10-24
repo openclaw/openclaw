@@ -1419,9 +1419,9 @@ class NodeRuntime internal constructor(
               val gatewayScope = captureGatewayDataScope() ?: return@launch
               var retryDelayMs = 250L
               while (operatorConnectionEpoch == connectionEpoch && isGatewayDataScopeCurrent(gatewayScope)) {
-                val bound = refreshAgentsFromGateway(gatewayScope, requireConnected = false, bindMainSession = false)
+                val refresh = refreshAgentsFromGateway(gatewayScope, requireConnected = false, bindMainSession = false)
                 if (operatorConnectionEpoch != connectionEpoch || !isGatewayDataScopeCurrent(gatewayScope)) return@launch
-                if (bound) {
+                if (refresh.succeeded) {
                   synchronized(gatewayDataScopeLock) {
                     if (operatorConnectionEpoch != connectionEpoch || !isGatewayDataScopeCurrent(gatewayScope)) return@launch
                     chat.onGatewayConnected(mainSessionBinding(mainSessionKey.value))
@@ -6451,19 +6451,27 @@ class NodeRuntime internal constructor(
 
   private fun workspaceAgentId(): String = resolveActiveAgentId().ifEmpty { "main" }
 
+  private data class AgentRosterRefresh(
+    val succeeded: Boolean,
+    val bound: Boolean,
+  )
+
   private suspend fun refreshAgentsFromGateway(
     gatewayScope: GatewayDataScope? = captureGatewayDataScope(),
     requireConnected: Boolean = true,
     bindMainSession: Boolean = true,
-  ): Boolean {
-    if (gatewayScope == null || (requireConnected && !operatorConnected)) return false
+  ): AgentRosterRefresh {
+    if (gatewayScope == null || (requireConnected && !operatorConnected)) {
+      return AgentRosterRefresh(succeeded = false, bound = false)
+    }
     val selectionSequence = chatSelectionSeq.get()
     try {
-      val root = requestGatewayObject(gatewayScope, "agents.list", "{}") ?: return false
+      val root =
+        requestGatewayObject(gatewayScope, "agents.list", "{}")
+          ?: return AgentRosterRefresh(succeeded = false, bound = false)
       val defaultAgentId = root["defaultId"].asStringOrNull()?.trim().orEmpty()
       val mainKey = normalizeMainKey(root["mainKey"].asStringOrNull())
       val agents = parseGatewayAgentSummaries(root)
-      if (agents.isEmpty()) return false
 
       var bound = false
       val published =
@@ -6471,6 +6479,14 @@ class NodeRuntime internal constructor(
           gatewayScope,
         ) {
           if (chatSelectionSeq.get() != selectionSequence) return@publishGatewayData
+          if (agents.isEmpty()) {
+            // An empty roster is an authenticated success, not a transport failure. Do not
+            // retain a default agent the caller is forbidden to use.
+            updateGatewayDefaultAgentId(null)
+            _gatewayAgents.value = emptyList()
+            selectedChatAgentId = null
+            return@publishGatewayData
+          }
           updateGatewayDefaultAgentId(defaultAgentId)
           _gatewayAgents.value = agents
           val selectedAgentId = selectedChatAgentId?.takeIf { id -> agents.any { it.id == id } }
@@ -6488,11 +6504,11 @@ class NodeRuntime internal constructor(
             bound = true
           }
         }
-      return published && bound
+      return AgentRosterRefresh(succeeded = published, bound = bound)
     } catch (err: CancellationException) {
       throw err
     } catch (_: Throwable) {
-      return false
+      return AgentRosterRefresh(succeeded = false, bound = false)
     }
   }
 
