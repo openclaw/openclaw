@@ -777,14 +777,38 @@ it.skipIf(process.platform === "win32")(
           } else {
             expect(input).toContain(childTask);
             childCalls += 1;
-            expect(childCalls).toBeLessThanOrEqual(2);
+            expect(childCalls).toBeLessThanOrEqual(4);
             if (childCalls === 1) {
+              writeRestartToolCall(
+                response,
+                "dashboard_checkpoint",
+                "subagents",
+                { action: "list" },
+                childCalls,
+              );
+            } else if (childCalls === 2) {
               initialChild.resolve();
-            } else {
+            } else if (childCalls === 3) {
               resumedChild.resolve(response);
+            } else {
+              // A resumed agent must be able to inspect retained work before finishing.
+              const output = asRecord(
+                (Array.isArray(body.input) ? body.input : []).find(
+                  (item) =>
+                    isRecord(item) &&
+                    item.type === "function_call_output" &&
+                    item.call_id === "call_dashboard_recovered_history_3",
+                ),
+              );
+              expect(output.output).toBeTypeOf("string");
+              const history = asRecord(JSON.parse(String(output.output)));
+              expect(history).toMatchObject({ messages: expect.any(Array) });
+              expect(history.error).toBeUndefined();
+              expect(JSON.stringify(history.messages)).toContain("call_dashboard_checkpoint_1");
+              text(childFinal);
             }
-            // Hold the original transport through the drain, then the resumed
-            // transport until the test proves the parent has not been notified.
+            // After recording a checkpoint, hold the next transport through the drain,
+            // then hold the resumed transport until the parent is proven still waiting.
           }
         }),
     });
@@ -896,7 +920,7 @@ it.skipIf(process.platform === "win32")(
         await restart();
         const resumedResponse = await wait(resumedChild.promise);
         expect(parentCalls, instance.logs()).toBe(2);
-        expect(childCalls).toBe(2);
+        expect(childCalls).toBe(3);
         const running = await client!.request<SessionsListResult>("sessions.list", {
           agentId: "main",
         });
@@ -904,11 +928,13 @@ it.skipIf(process.platform === "win32")(
           status: "running",
           hasActiveRun: true,
         });
-        writeOpenAiResponsesText(resumedResponse, {
-          text: childFinal,
-          messageId: "msg_dashboard_child_final",
-          responseId: "resp_dashboard_child_final",
-        });
+        writeRestartToolCall(
+          resumedResponse,
+          "dashboard_recovered_history",
+          "sessions_history",
+          { sessionKey: child.key, limit: 20 },
+          childCalls,
+        );
         const assertCompleted = async () => {
           const sessions = await client!.request<SessionsListResult>("sessions.list", {
             agentId: "main",
@@ -928,9 +954,9 @@ it.skipIf(process.platform === "win32")(
           expect(
             history.messages.map(extractAssistantPhaseText).filter((text) => text === parentFinal),
           ).toHaveLength(1);
-          expect({ parentCalls, childCalls }).toEqual({ parentCalls: 3, childCalls: 2 });
+          expect({ parentCalls, childCalls }).toEqual({ parentCalls: 3, childCalls: 4 });
         };
-        await vi.waitFor(assertCompleted, { timeout: 60_000 });
+        await wait(vi.waitFor(assertCompleted, { timeout: 60_000 }));
         const recoveryPasses = () =>
           (instance.logs().match(/startup trace: sidecars.subagent-recovery /g) ?? []).length;
         const completedPasses = recoveryPasses();
@@ -938,9 +964,14 @@ it.skipIf(process.platform === "win32")(
         await vi.waitFor(() => expect(recoveryPasses()).toBeGreaterThan(completedPasses), {
           timeout: 60_000,
         });
-        await vi.waitFor(assertCompleted, { timeout: 60_000 });
+        await wait(vi.waitFor(assertCompleted, { timeout: 60_000 }));
       },
-      () => client?.stopAndWait(),
+      async () => {
+        if (signal.aborted) {
+          console.error(instance.logs().replaceAll(instance.gatewayToken, "[fixture token]"));
+        }
+        await client?.stopAndWait();
+      },
       () => instance.cleanup(),
       async () => {
         reservation.listener.closeAllConnections();

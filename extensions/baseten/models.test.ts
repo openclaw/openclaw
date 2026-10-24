@@ -10,7 +10,7 @@ const liveRow = (id: string, fields: object = {}) => ({ id, object: "model", ...
 it("keeps manifest thinking controls and declared capabilities in runtime catalogs", () => {
   const declaredModels = buildManifestModelProviderConfig({
     providerId: "baseten",
-    catalog: manifest.modelCatalog.providers.baseten,
+    catalog: { ...manifest.modelCatalog.providers.baseten, models: catalog.BASETEN_MODEL_CATALOG },
   }).models;
   const runtime = new Map(catalog.buildStaticBasetenModels().map((model) => [model.id, model]));
   const defaultModel = declaredModels.find((model) => model.id === FLASH);
@@ -106,4 +106,33 @@ it.each<[string, string[]]>([
   });
   expect(row?.compat?.supportedReasoningEfforts).toBeUndefined();
   expect(row?.compat?.reasoningEffortMap).toBeUndefined();
+});
+
+it("keeps System One models out of every conversational discovery path", () => {
+  const ids = [
+    "decision-models/baseten-elephant-9b-latest",
+    "decision-models/baseten-mammoth-27b-latest",
+  ];
+  expect(catalog.buildStaticBasetenModels().some((model) => ids.includes(model.id))).toBe(false);
+  expect(catalog.projectBasetenLiveModels(ids.map((id) => liveRow(id)))).toEqual([]);
+  for (const id of ids) {
+    expect(catalog.resolveBasetenDynamicModel(id)).toBeUndefined();
+  }
+  for (const id of ids) {
+    const row = manifest.modelCatalog.providers.baseten.models.find((model) => model.id === id);
+    expect(row).toMatchObject({
+      inference: {
+        chat: false,
+        decision: {
+          protocol: "baseten-systemone",
+          input: ["text"],
+          questions: {
+            boolean: { probabilities: "boolean" },
+            choice: { probabilities: "categorical" },
+            score: { probabilities: "categorical" },
+          },
+        },
+      },
+    });
+  }
 });

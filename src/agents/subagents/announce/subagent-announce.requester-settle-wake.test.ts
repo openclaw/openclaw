@@ -233,7 +233,7 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
     const call = deliveredCallArg();
     expect(call.directIdempotencyKey).toBe(requesterSettleKey("run-a,run-b,run-c"));
     const message = expectMessage(
-      findings.map((result) => `${"&lt;result&gt;".repeat(700)}${result}`),
+      findings.map((result) => `${resultPrefix}${result}`),
       [
         "stale previous result",
         "earlier commentary",
@@ -444,10 +444,7 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
     expect(await wake()).toBe(true);
     expect(deliverSpy).toHaveBeenCalledOnce();
     const call = deliveredCallArg();
-    expectMessage(
-      [`${"&lt;source-reply&gt;".repeat(400)}required source reply tail`],
-      ["NO_REPLY", "stale source reply", "unrelated source reply"],
-    );
+    expectMessage([text], ["NO_REPLY", "stale source reply", "unrelated source reply"]);
     expect(call.requireVisibleReply).toBe(true);
     expect(completeBatchSpy).toHaveBeenCalledExactlyOnceWith(["run-b"], 1, {
       delivered: true,

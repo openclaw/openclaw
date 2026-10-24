@@ -381,7 +381,20 @@ describe("qa multipass runtime", () => {
   });
 
   it("redacts persisted credentials while forwarding them to the executable script", async () => {
-    vi.stubEnv("OPENAI_API_KEY", TEST_ENV_VALUE);
+    const credentials = [
+      "OPENAI_API_KEY",
+      "OPENROUTER_API_KEY",
+      "CUSTOM_API_KEYS",
+      "CUSTOM_API_KEY_2",
+      "OPENCLAW_QA_LIVE_ANTHROPIC_SETUP_TOKEN",
+      "OPENCLAW_LIVE_SETUP_TOKEN_VALUE",
+      "OPENCLAW_QA_LIVE_ANTHROPIC_SETUP_TOKEN_PROFILE",
+    ];
+    for (const key of credentials) {
+      vi.stubEnv(key, TEST_ENV_VALUE);
+    }
+    vi.stubEnv("UNRELATED_SECRET", "do-not-forward");
+    vi.stubEnv("NODE_OPTIONS", "--unrelated-runtime-option");
     const { executableScript, persistedScript } = await guestScripts(
       {
         outputDirName: "multipass-live-test",
@@ -395,9 +408,13 @@ describe("qa multipass runtime", () => {
       true,
     );
 
-    expect(persistedScript).toContain("OPENAI_API_KEY='<redacted>'");
+    for (const key of credentials) {
+      expect(persistedScript).toContain(`${key}='<redacted>'`);
+      expect(executableScript).toContain(`${key}='${TEST_ENV_VALUE}'`);
+    }
     expect(persistedScript).not.toContain(TEST_ENV_VALUE);
-    expect(executableScript).toContain(`OPENAI_API_KEY='${TEST_ENV_VALUE}'`);
+    expect(executableScript).not.toContain("UNRELATED_SECRET");
+    expect(executableScript).not.toContain("NODE_OPTIONS");
     expect(executableScript).not.toContain("<redacted>");
     expect(persistedScript).toContain("'--model' 'openai/gpt-5.6-luna'");
     expect(persistedScript).toContain("'--alt-model' 'openai/gpt-5.6-luna'");

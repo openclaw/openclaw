@@ -80,9 +80,10 @@ do not yield expecting one.
   succeeds but startup fails, `runError` reports the failure and the session remains
   available. Inspect that session before retrying creation.
 
-Creation is exposed only with live admitted `operator.sessions.write` authority.
-The existing `sessions` management tool does not create sessions, and senderless
-runs do not gain the separate creation capability. The default sandbox surface for an
+The `sessions_create` definition stays in the session's tool catalog across turns;
+execution requires live admitted `operator.sessions.write` authority. The existing
+`sessions` management tool does not create sessions, and senderless runs do not
+gain creation authority. The default sandbox surface for an
 admitted non-owner with session-write authority includes creation and renaming.
 Tool policy and execution-time authority checks still apply.
 

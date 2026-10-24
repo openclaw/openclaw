@@ -41,6 +41,12 @@ necessarily delete the provider's older cache entry before its normal expiry.
 
 ## Stable tools between turns
 
+Client-capability tool listing uses the session's recorded operator declaration.
+Internal wake and restart-recovery turns retain the same tool definitions and
+Code Mode catalog, including `screen`, without borrowing execution authority.
+The next operator declaration updates that session fact; current-turn execution
+gates and the live requesting-browser check still enforce calls.
+
 The `message` description and schema use the session's channel, bound account,
 and configured bindings, not the current turn's source. CLI, restart recovery, and subagent
 announcement turns in the same conversation keep identical definitions,

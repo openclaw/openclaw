@@ -9,12 +9,16 @@ import {
   createDeferred,
   withinTest,
 } from "../../../../test/helpers/promise.js";
-import { loadSessionEntry } from "../../../config/sessions/session-accessor.js";
+import {
+  listSessionEntryKeysReadOnly,
+  loadSessionEntry,
+} from "../../../config/sessions/session-accessor.js";
 import { withPluginRuntimeGatewayRequestScope } from "../../../plugins/runtime/gateway-request-scope.js";
 import { registerProjectRegistry } from "../../../projects/project-registry.js";
 import { AsyncWorkScope } from "../../../shared/async-work-scope.js";
 import { normalizeAcceptedSessionSpawnResult } from "../../accepted-session-spawn.js";
 import type { EmbeddedAgentRunResult } from "../../embedded-agent.js";
+import { readToolEffectReceipt } from "../../tool-effect-receipt.js";
 import { managedWorktrees, ManagedWorktreeService } from "../../worktrees/service.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
 import { cleanupProvisionalSession } from "./subagent-spawn-cleanup.js";
@@ -138,6 +142,29 @@ export function registerManagedWorktreeSpawnCases(
         await withinTest(setup, signal);
         const bound = expectDefined(ownedBound, "prepared Gateway parent");
         signal.throwIfAborted();
+        if (cleanup === "keep") {
+          const keys = () => listSessionEntryKeysReadOnly({ storePath: bound.storePath });
+          const before = keys();
+          spawn = createBoundSpawnInvocation(bound, {
+            visible: false,
+            projectId,
+            worktree: true,
+            worktreeName: "codex/qa-telemetry-prompt-cache-20261016",
+          })();
+          const rejected = await withinTest(
+            spawn.catch((error: unknown) => error),
+            signal,
+          );
+          expect(rejected, JSON.stringify(rejected)).toBeInstanceOf(Error);
+          expect(rejected).toHaveProperty(
+            "message",
+            "worktree name must match [a-z0-9][a-z0-9-]{0,63}",
+          );
+          expect(readToolEffectReceipt(rejected)).toEqual({ state: "not_started" });
+          expect(keys()).toEqual(before);
+          expect(subagentRuns.size).toBe(0);
+          expect(runEmbeddedAgent).not.toHaveBeenCalled();
+        }
         spawn = createBoundSpawnInvocation(bound, {
           visible: false,
           context: "isolated",

@@ -7,6 +7,8 @@ export type VisitorInviter = { profileId: string; label?: string };
 export type VisitorInvitationContext = {
   invitedVia?: string;
   invitedBy?: VisitorInviter;
+  /** Trusted Gateway sign-in address for the invitation text; absent when not configured. */
+  signInUrl?: string;
   assertCurrent: () => void;
 };
 

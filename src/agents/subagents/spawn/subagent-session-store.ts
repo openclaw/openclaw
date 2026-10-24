@@ -45,7 +45,7 @@ type PersistedSessionCapabilityEntry = Pick<
 >;
 export type SessionCapabilityEntry = {
   [Key in keyof PersistedSessionCapabilityEntry]?: unknown;
-};
+} & { clientCapabilities?: string[] };
 
 /** A complete store view; reads are memoized only for the current synchronous resolution. */
 export type SessionCapabilityLookup = {

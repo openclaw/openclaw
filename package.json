@@ -297,6 +297,7 @@
     "!dist/extensions/acpx/**",
     "!dist/extensions/amazon-bedrock/**",
     "!dist/extensions/amazon-bedrock-mantle/**",
+    "!dist/extensions/abliteration/**",
     "!dist/extensions/anthropic-vertex/**",
     "!dist/extensions/node_modules/**",
     "!dist/extensions/*/node_modules/**",
@@ -1756,6 +1757,7 @@
     "bench:agent-database-holds": "node --import ./scripts/tsx.mjs scripts/bench-agent-database-holds.ts",
     "bench:plugins:invocation": "node --import ./scripts/tsx.mjs scripts/bench-plugin-invocation.ts",
     "bench:plugins:stream": "node --expose-gc --import ./scripts/tsx.mjs scripts/bench-plugin-stream.ts",
+    "bench:ui:copies": "node --import ./scripts/tsx.mjs scripts/bench-control-ui-copies.ts",
     "bench:usage-refresh-memory": "node --import ./scripts/tsx.mjs scripts/bench-usage-refresh-memory.ts",
     "build": "node --import ./scripts/tsx.mjs scripts/build-all.mts",
     "build:ci-artifacts": "node --import ./scripts/tsx.mjs scripts/build-all.mts ciArtifacts",
@@ -1765,7 +1767,6 @@
     "build:plugin-sdk:dts": "node --import ./scripts/tsx.mjs scripts/write-plugin-sdk-entry-dts.ts",
     "build:plugin-sdk:strict-smoke": "node --import ./scripts/tsx.mjs scripts/build-all.mts pluginSdkStrictSmoke",
     "build:strict-smoke": "node --import ./scripts/tsx.mjs scripts/build-all.mts strictSmoke",
-    "canvas:a2ui:bundle": "node --import ./scripts/tsx.mjs scripts/bundle-a2ui.mts",
     "channels:catalog:check": "node scripts/write-official-channel-catalog.mjs --check",
     "channels:catalog:gen": "node scripts/write-official-channel-catalog.mjs --write",
     "changed:lanes": "node scripts/changed-lanes.mjs",
@@ -2413,7 +2414,6 @@
     "zod-to-json-schema": "3.25.2"
   },
   "devDependencies": {
-    "@a2ui/web_core": "0.13.0",
     "@babel/types": "8.0.6",
     "@copilotkit/aimock": "1.45.1",
     "@mdx-js/mdx": "3.1.1",

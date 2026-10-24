@@ -156,25 +156,19 @@ async function collectFixtureSources(filenames: string[], roots: string[]) {
 }
 
 describe("check-database-first-legacy-stores", () => {
-  it("skips generated extension asset, renderer, and dist bundles", async () => {
+  it("skips generated extension assets and dist bundles", async () => {
     expect(
       await collectFixtureSources(
         [
           "extensions/diffs/assets/viewer-runtime.js",
           "extensions/diffs/dist/assets/viewer-runtime.js",
           "extensions/diffs/src/runtime.js",
-          "extensions/canvas/src/host/a2ui/a2ui.bundle.js",
-          "extensions/canvas/src/host/a2ui/bootstrap.js",
           "packages/plugin-sdk/dist/index.js",
           "packages/plugin-sdk/src/index.js",
         ],
         ["extensions", "packages"],
       ),
-    ).toEqual([
-      "extensions/canvas/src/host/a2ui/bootstrap.js",
-      "extensions/diffs/src/runtime.js",
-      "packages/plugin-sdk/src/index.js",
-    ]);
+    ).toEqual(["extensions/diffs/src/runtime.js", "packages/plugin-sdk/src/index.js"]);
   });
 
   it("keeps legacy restart sentinel filesystem access in its sole migration owner", () => {

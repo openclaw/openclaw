@@ -1,5 +1,19 @@
 # Team-shaped synthetic state
 
+## Private-array copies
+
+`node --expose-gc scripts/perf/private-array-copies-measure.mjs <baseline-root> <candidate-root>`
+measures six alternating samples per side with collected-object heap sampling.
+The roots need only the five source files listed in the script; no build or install
+is needed. It measures the task-audience result build/sort site, the complete
+subagent topology patch owner, and one scope canonicalization (both reader sites
+must match). Synthetic inputs cover 1/100/5,000 task rows, 100/5,000 historical runs
+per child with absent/shared/distinct memory rows, and reordered or changed scopes.
+These are owner/site allocation bytes per call, not whole-Gateway or GC claims.
+Output includes source hashes, call counts, allocation sample counts, every sample,
+and absolute/relative mean deltas. Run on an approved benchmark host under its
+shared guard; equivalent results and reduced allocation are the acceptance rule.
+
 ## Limited-scope Control UI RPCs
 
 `control-ui-forbidden-rpc-measure.ts` opens the real Control UI against a synthetic,
@@ -367,6 +381,41 @@ Run concurrent pairs under one quiet lock and the production guard, with separat
 fixtures and ports, then swap interleaved CPU placements. Start deadlines must
 allow both preparation phases to finish. Apply the campaign's sample-count and
 paired-delta rules; the 70 first-read samples alone cannot qualify p95 or p99.
+
+Add `--startup-admission --waves 20` to the cold-row command to attribute the
+operator request-start backlog. This uses a fixed 20 batches per client instead
+of `--seconds`. Each batch sends a scoped `models.list` before an event-only
+`sessions.subscribe`, immediately followed on the same socket by the
+sidebar, roster, Board, `sessions.resolve`, `sessions.messages.subscribe`, and
+keyed `chat.startup` requests. Batches await all replies and retain the
+`--poll-ms` pacing. There are no artificial handler delays or held preparations.
+Each client uses a distinct shared, unarchived fixture session for catalog,
+resolution, message subscription, and startup reads; Board uses the common seeded
+session. Results record each client's session key and exact request parameters.
+The first batch remains separate from later warm traffic in the latency report.
+The explicit catalog RPC reproduces the server's catalog-bootstrap admission
+order; this does not exercise capability negotiation or `models.snapshot` delivery.
+
+The `admission` result contains sample counts, total duration, p50/p90/p95/p99,
+and maxima for each method's queue wait, admission, handler, and first response.
+Queue wait is the operator RPC start scheduler, while admission also includes
+work before handler entry. Existing `gateway.chat.startup.*` timeline spans are
+sampled in memory through the private source loader; they do not enable timeline
+file writes. Additional `startup-boundary.*` samples cover pending-input reads
+and optional subagent snapshot preparation across all callers in the measured
+window; they are attribution context, not exclusive startup-handler phases.
+The difference between handler duration and its observed spans may
+include uninstrumented waits; overlapping spans must not be summed as exclusive
+time. All responses are checked, including roster pages, event enrollment, session
+resolution, message subscription, and startup history page. Diagnostics overflow
+or absent startup-handler evidence fails the run. This compact settled fixture
+measures reconnect contention, not interrupted agent-turn recovery or large
+transcript hydration. Keep identical instrumentation for A/A and A/B runs, use
+the campaign's untraced cost gates, and collect promotion separately with
+`--trace-gc` and its own controls.
+Use `--request-start-owner /path/to/request-start.ts` to compare scheduler
+revisions in the same installation. The source loader verifies the selected
+file's SHA-256 at load time and records it in the result.
 
 Use `scripts/bench-gateway-startup.ts` and `scripts/bench-gateway-restart.ts`
 against an exact-head build and isolated synthetic state. Record the Node version,
@@ -1544,6 +1593,35 @@ timestamp. The driver reports latency, CPU, RSS, event-loop delay and GC samples
 Initial projection creation happens before measurement: this measures reuse,
 not cold container provisioning or chat time to first model request. Use the
 Gateway chat workload separately for those end-to-end timings.
+
+## Measure history reader construction
+
+`session-history-reader-setup-measure.mjs` isolates the history reader factory
+and, optionally, its exact owner-construction expression from a pinned runtime
+source. It exercises two synthetic runners before measuring setup. It does not
+measure database admission, workers, history queries, or Gateway latency.
+
+```sh
+node --expose-gc --import ./scripts/tsx.mjs scripts/perf/session-history-reader-setup-measure.mjs \
+  --owner src/config/sessions/session-transcript-worker-readers.ts \
+  --runtime-owner src/config/sessions/session-transcript-worker-runtime.ts \
+  --operations 200000
+```
+
+Use `--allocations` in a separate pass for sampled allocation, including collected
+objects. Unprofiled setup timing, CPU, shared method counts, and retained bytes
+are reported separately. For an isolated source capsule, copy the reader and its
+`session-transcript-worker.types.ts` sibling and use `--capsule` without the source
+loader. The capsule replaces three unrelated imports with throwing sentinels;
+calling any of them fails the run. The report includes source hashes. Do not use
+capsule results as end-to-end history or GC evidence.
+
+Paired runners can share an initially absent `--start-file` with distinct
+`--side baseline` and `--side candidate`. Each writes a `.ready` marker after
+warmup; the coordinator then publishes a future epoch in milliseconds to the
+start file. Use matched instrumentation, exclusive host admission, and swapped
+CPU placement for comparisons. Keep allocation-profile timing separate from
+unprofiled timing.
 
 ## Measure history pages and checkout diffs
 
@@ -3446,13 +3524,14 @@ equally configured comparisons.
 
 For session-projection comparisons from one installed checkout, add
 `--entry src/entry.ts --session-projection-source <directory>` to both arms.
-The directory must contain all eight coherent owner files:
+The directory must contain all nine coherent owner files:
 `session-event-projection.ts`, `session-row-presentation.ts`,
 `session-sharing-read.ts`, `session-utils-list.ts`, `session-row-placement-projection.ts`,
 `session-ancestor-references.ts`,
-`server-connection-state.ts`, and `server-methods/sessions-read.ts`. Put their original
+`server-connection-state.ts`, `server-methods/sessions-read.ts`, and
+`server-methods/sessions-read-by-key.ts`. Put their original
 revision's files in a baseline directory and use `--session-projection-source
-src/gateway` for the candidate. The preload reads all eight before Gateway startup
+src/gateway` for the candidate. The preload reads all nine before Gateway startup
 and fails on a missing file; it substitutes raw TypeScript while retaining canonical
 module URLs, relative imports, and source line numbers. The report records the
 resolved `sessionProjectionSource`. It also loads the canonical broadcaster as
@@ -4068,3 +4147,79 @@ run a third pair when an inconclusive metric would gate. Every latency and loop
 tail includes its sample count. This simulation establishes persistence-path
 blocking behavior; it does not claim production throughput or macOS browser
 cookie-import latency.
+
+## Managed attachment cleanup
+
+`managed-attachment-cleanup-measure.mjs` exercises the actual managed-media
+cleanup owner with 5,000 unrelated 8 KiB transcript messages and two referenced
+managed originals. Prepare each side sequentially in a fresh synthetic directory;
+preparation uses the real media creator and transcript writer and is outside the
+capture. Each measured process warms cleanup once, then performs 30 cleanups
+paced over 30 seconds and verifies both originals remain registered.
+
+```sh
+node --import ./scripts/tsx.mjs scripts/perf/managed-attachment-cleanup-measure.mjs \
+  --state-dir /path/to/new-cleanup-state --output /path/to/prepare.json --prepare
+node --expose-gc --trace-gc-nvp --import ./scripts/tsx.mjs \
+  scripts/perf/managed-attachment-cleanup-measure.mjs \
+  --state-dir /path/to/new-cleanup-state --output /path/to/cleanup.json \
+  --allocations --start-at <shared-future-epoch-ms> --trace-log /path/to/cleanup.log \
+  > /path/to/cleanup.log 2>&1
+```
+
+`--messages`, `--message-bytes`, `--operations`, and `--seconds` select the workload.
+Use identical values, separate state/log/output paths, and the shared quiet-slot
+rules above. A missed `--start-at` rejects the run. Two concurrent pairs swap the
+interleaved CPU sets. The driver never starts or accesses a production Gateway.
+
+For one installed source tree, `--owner-dir /path/to/candidate-owners` replaces
+only these source files, preserved beneath that directory at their repository
+relative paths: `src/gateway/managed-image-attachments.ts`,
+`src/gateway/session-transcript-read.types.ts`,
+`src/gateway/session-transcript-archive-reader.ts`,
+`src/config/sessions/session-accessor.sqlite-history-source.ts`, and
+`src/config/sessions/session-actor-memory-history-projection.ts`.
+`--source-root` selects the installed source tree and defaults to the working
+directory. The generated preload also reaches workers through `NODE_OPTIONS`;
+`overriddenOwners` records the module paths and thread IDs actually replaced.
+An ordinary run uses the tree's unchanged sources. Do not change those sources
+or dependencies during a pair. For paired comparisons, also pass the unchanged
+source root as the baseline's `--owner-dir`, so both sides use the same esbuild
+preload and helper infrastructure.
+
+The report contains main-isolate sampled allocation and raw V8 frame names,
+process/thread CPU, before/after heap and RSS, worker-message counts and known
+payload bytes, per-collection GC percentiles and maximum pauses, total GC per
+cleanup, promotion from bounded main-isolate GC traces, and event-loop delay.
+GC and loop capture end before stopping allocation sampling, excluding its forced
+collection. Every tail carries a sample count; apply the shared v5.3 qualification
+and paired-delta rules. Worker byte counts are partial and retain their
+`unmeasuredMessages` counts; the observer never reserializes replies. Allocation
+sampling excludes worker heaps and external Buffer backing stores. RSS includes
+workers. This isolates the cleanup boundary; it is not a full Gateway throughput
+or retained-memory soak result.
+
+## Private diagnostic dispatch
+
+`diagnostic-private-data-measure.ts` exercises the real asynchronous diagnostic
+emitter and drain with synthetic private model content. It registers 1, 2, or 4
+private consumers (the first marked as OTel), a metadata-only consumer, and a
+filtered skill consumer. The default payload contains 64 messages and 128 KiB of
+text. One-event clone counting is separate from the warm, untraced CPU pass and
+inspector allocation pass, which includes collected objects.
+
+```sh
+node --import ./scripts/tsx.mjs scripts/perf/diagnostic-private-data-measure.ts \
+  --listeners 2 --events 12000 --payload-kib 128 \
+  --start-at <cpu-epoch-ms> --allocation-start-at <allocation-epoch-ms>
+```
+
+Use identical prepared sources and fixtures, at least six paired samples per
+listener count, synchronized starts, and swapped interleaved CPU sets under the
+shared quiet-slot lock and guard. Compare clones, sampled bytes, and CPU per event;
+this workload does not establish whole-Gateway, GC, or promotion results. A normal
+OTel + Prometheus setup has one private model-content consumer: Prometheus opts
+out. The 2/4-consumer cells measure fanout scaling. Accept reduced duplicate clones
+and multi-consumer allocation only with intact isolation and no material
+single-consumer CPU/allocation regression. Report sample counts and absolute as
+well as relative deltas; short-sample percentiles are context only.

@@ -427,35 +427,99 @@ describe("codex websocket idle watchdog through the embedded runner chain", () =
     );
   });
 
-  it.each(["silent", "progress"] as const)(
-    "polices a parked consumer while its provider is %s",
-    async (mode) => {
-      const id = mode === "silent" ? "resp_d" : "resp_f";
-      deliverOnSend(id);
-      const { streamFn, onIdleTimeout, runAbort } = startWatchdog(mode);
-      const { entered, release, consumed } = parkConsumer(streamFn, runAbort.signal);
+  it("D: consumer parked in emit() after start is still policed by the idle watchdog", async () => {
+    deliverOnSend("resp_d");
+    const { streamFn, onIdleTimeout, runAbort } = startWatchdog("D");
+    const { entered, release, consumed } = parkConsumer(streamFn, runAbort.signal);
+    await vi.advanceTimersByTimeAsync(10);
+    await entered;
+    await vi.advanceTimersByTimeAsync(119_000);
+    expect(onIdleTimeout).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(2_000);
+    // The consumer is still parked; the dead socket is aborted anyway.
+    expect(onIdleTimeout).toHaveBeenCalledTimes(1);
+    expect(String(onIdleTimeout.mock.calls[0]?.[0]?.message)).toMatch(/idle timeout/);
+    expect(ControlledWebSocket.instances[0]?.closeCalls.length).toBeGreaterThan(0);
+
+    release();
+    await vi.advanceTimersByTimeAsync(10);
+    const { result, thrown } = await consumed;
+    expect(String((thrown as Error | undefined)?.message ?? result?.errorMessage)).toMatch(
+      /idle timeout|aborted/,
+    );
+  });
+
+  it.each([
+    { activity: "bookkeeping", parked: true },
+    { activity: "hidden reasoning", parked: true },
+    { activity: "empty reasoning", parked: false },
+    { activity: "repeated snapshot", parked: false },
+    { activity: "hidden reasoning", parked: false },
+  ] as const)(
+    "F: distinguishes activity from progress ($activity, parked=$parked)",
+    async ({ activity, parked }) => {
+      ControlledWebSocket.onSend = (socket) => {
+        queueMicrotask(() => {
+          socket.deliver({ type: "response.created", response: { id: "resp_f" } });
+          if (activity !== "bookkeeping") {
+            socket.deliver({
+              type: "response.output_item.added",
+              output_index: 0,
+              item: { id: "reasoning_f", type: "reasoning", summary: [] },
+            });
+          }
+        });
+      };
+      const { streamFn, onIdleTimeout, runAbort } = startWatchdog(`F-${activity}-${parked}`);
+      const emitEntered = createDeferredCore();
+      const releaseEmit = createDeferredCore();
+      const consumed = consumeLikeAgentCore(streamFn, runAbort.signal, async (type) => {
+        if (type === "start") {
+          emitEntered.resolve();
+          if (parked) {
+            await releaseEmit.promise;
+          }
+        }
+      });
       await vi.advanceTimersByTimeAsync(10);
-      await entered;
+      await emitEntered.promise;
       const socket = ControlledWebSocket.instances[0];
-      if (mode === "silent") {
-        await expectIdleDeadline(onIdleTimeout);
-        expect(String(onIdleTimeout.mock.calls[0]?.[0]?.message)).toMatch(/idle timeout/);
-        expect(socket?.closeCalls.length).toBeGreaterThan(0);
+      // Both kinds arrive inside the connection's 120s window. Only genuine
+      // reasoning is allowed to extend the independent 15-minute progress deadline.
+      const progress = setInterval(() => {
+        socket?.deliver(
+          activity === "bookkeeping"
+            ? { type: "response.in_progress", response: { id: "resp_f" } }
+            : activity === "repeated snapshot"
+              ? {
+                  type: "response.output_item.done",
+                  output_index: 0,
+                  item: { id: "reasoning_f", type: "reasoning", summary: [] },
+                }
+              : {
+                  type: "response.reasoning_text.delta",
+                  item_id: "reasoning_f",
+                  output_index: 0,
+                  delta: activity === "empty reasoning" ? "" : "Synthetic hidden progress",
+                },
+        );
+      }, 60_000);
+      await vi.advanceTimersByTimeAsync(1_020_000);
+      clearInterval(progress);
+      if (activity !== "hidden reasoning") {
+        expect(onIdleTimeout).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({ message: "LLM idle timeout (900s): no model progress" }),
+        );
       } else {
-        const progress = setInterval(() => {
-          socket?.deliver({ type: "response.in_progress", response: { id } });
-        }, 60_000);
-        await vi.advanceTimersByTimeAsync(300_000);
-        clearInterval(progress);
         expect(onIdleTimeout).not.toHaveBeenCalled();
-        socket?.deliver(completedFrame(id));
+        socket?.deliver(completedFrame("resp_f"));
       }
-      release();
+      releaseEmit.resolve();
       await vi.advanceTimersByTimeAsync(10);
       const { result, thrown } = await consumed;
-      if (mode === "silent") {
+      if (activity !== "hidden reasoning") {
         expect(String((thrown as Error | undefined)?.message ?? result?.errorMessage)).toMatch(
-          /idle timeout|aborted/,
+          /no model progress|aborted/,
         );
       } else {
         expect(thrown).toBeUndefined();

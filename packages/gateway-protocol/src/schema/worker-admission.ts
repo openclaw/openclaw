@@ -29,6 +29,7 @@ import {
   workerRequestSchema,
   workerResponseSchema,
 } from "./worker-protocol-primitives.js";
+import { WORKER_TURN_ADMISSION_PROTOCOL_FEATURE } from "./worker-turn-admission.js";
 
 export * from "./worker-session-tools.js";
 export {
@@ -68,6 +69,7 @@ export const NODE_WORKER_IDLE_RETENTION_PROTOCOL_FEATURE = "node-worker-idle-ret
 export const NODE_WORKER_PROCESS_CHANGES_PROTOCOL_FEATURE = "node-worker-process-changes-v1";
 export const WORKER_LOCAL_INFERENCE_PROTOCOL_FEATURE = "worker-local-inference-v1";
 export const WORKER_PROTOCOL_FEATURES = [
+  WORKER_TURN_ADMISSION_PROTOCOL_FEATURE,
   WORKER_LOCAL_INFERENCE_PROTOCOL_FEATURE,
   "skill-resources-v1",
   "worker-heartbeat-v1",

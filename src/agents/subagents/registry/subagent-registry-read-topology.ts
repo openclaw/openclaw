@@ -164,7 +164,7 @@ export function buildSubagentRunReadTopology<T extends SubagentRunReadRecord>(pa
       ] as const) {
         updateIndex(index, child, entry);
       }
-      const candidates = [...new Set([...rows, ...(memory ? [memory] : [])])];
+      const candidates = memory && !rows.includes(memory) ? [...rows, memory] : rows.slice();
       updateIndex(runsByChildSessionKey, child, candidates.length ? candidates : undefined);
       const byRequester = new Map<string, T>();
       for (const row of rows) {

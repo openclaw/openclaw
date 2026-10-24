@@ -40,6 +40,8 @@ const { values } = parseArgs({
     clients: { type: "string" },
     "reconnect-waves": { type: "boolean", default: false },
     "cold-row-reads": { type: "boolean", default: false },
+    "startup-admission": { type: "boolean", default: false },
+    "request-start-owner": { type: "string" },
     "row-refresh-owner": { type: "string" },
     "trace-gc": { type: "boolean", default: false },
     "reconnect-count": { type: "string" },
@@ -67,6 +69,21 @@ if (port > 65535 || mockPort > 65535 || port === mockPort) {
 }
 const reconnectWaves = values["reconnect-waves"];
 const coldRowReads = values["cold-row-reads"];
+const startupAdmission = values["startup-admission"];
+if (startupAdmission && !coldRowReads) {
+  throw new Error("--startup-admission requires --cold-row-reads");
+}
+if (values["request-start-owner"] && !startupAdmission) {
+  throw new Error("--request-start-owner requires --startup-admission");
+}
+const requestStartOwner = startupAdmission
+  ? path.resolve(
+      values["request-start-owner"] ?? "src/gateway/server/ws-connection/request-start.ts",
+    )
+  : undefined;
+const requestStartOwnerSha256 = requestStartOwner
+  ? createHash("sha256").update(readFileSync(requestStartOwner)).digest("hex")
+  : undefined;
 if ((values["row-refresh-owner"] || values["trace-gc"]) && !coldRowReads) {
   throw new Error("--row-refresh-owner and --trace-gc require --cold-row-reads");
 }
@@ -138,6 +155,9 @@ if (
   (fixture.sessionCount !== 5000 || (fixture.retainedRuns !== 0 && fixture.settledRuns !== true))
 ) {
   throw new Error("--cold-row-reads requires 5000 sessions and --settled-runs (or --runs 0)");
+}
+if (startupAdmission && 1 + 10 * (clientCount - 1) > 5000) {
+  throw new Error("--startup-admission requires at most 500 clients for distinct shared sessions");
 }
 const worktreeProject = Array.isArray(fixture.projectWorktrees)
   ? fixture.projectWorktrees[0]
@@ -255,9 +275,40 @@ if (isMainThread) {
   const rowOwnerSha256 = ${JSON.stringify(rowRefreshOwnerSha256)};
   const rowCounts = { active: false, selectPage: 0, taskSamples: 0, taskMaxMs: 0, taskName: null, taskPhase: null };
   Object.defineProperty(globalThis, Symbol.for('openclaw.bench.cold-row-counts'), { value: rowCounts });
+  const admissionSamples = new Map();
+  let admissionSampleCount = 0;
+  let admissionOverflow = false;
+  const recordAdmissionSample = (key, ms) => {
+    if (!rowCounts.active || !Number.isFinite(ms)) return;
+    if (admissionSampleCount >= 200000) { admissionOverflow = true; return; }
+    const samples = admissionSamples.get(key) ?? [];
+    if (!admissionSamples.has(key)) admissionSamples.set(key, samples);
+    samples.push(ms);
+    admissionSampleCount++;
+  };
+  if (${startupAdmission}) {
+    const { channel } = await import('node:diagnostics_channel');
+    const methods = new Set(['models.list', 'sessions.subscribe', 'sessions.list', 'board.get', 'sessions.resolve', 'sessions.messages.subscribe', 'chat.startup']);
+    channel('openclaw.gateway.rpc').subscribe((event) => {
+      if (!rowCounts.active || !methods.has(event.method)) return;
+      if (event.phase === 'dispatch') recordAdmissionSample(event.method + ':queue_wait', event.queueWaitMs);
+      if (event.phase === 'handler') {
+        recordAdmissionSample(event.method + ':admission', event.admissionMs);
+        recordAdmissionSample(event.method + ':handler', event.durationMs);
+      }
+      if (event.phase === 'response' && event.firstResponse) recordAdmissionSample(event.method + ':first_response', event.durationMs);
+    });
+    rowCounts.startSpan = (name) => {
+      if (!rowCounts.active || (!name.startsWith('gateway.chat.startup.') && !name.startsWith('startup-boundary.'))) return undefined;
+      const startedAt = performance.now();
+      return { [Symbol.dispose]() { recordAdmissionSample(name, performance.now() - startedAt); } };
+    };
+  }
   let rowOwnerLoaded = false;
   let rowSelectionHookLoaded = false;
   let rowTaskHookLoaded = false;
+  let startupSpanHookLoaded = false;
+  let requestStartOwnerLoaded = false;
   const markColdGc = (phase) => {
     if (${values["trace-gc"]}) writeSync(1, ${JSON.stringify(GATEWAY_GC_TRACE_MARKER)} + JSON.stringify({ phase, pid: process.pid, profilePath: 'cold-rows' }) + '\\n');
   };
@@ -269,6 +320,14 @@ if (isMainThread) {
   }
   registerHooks({ load(url, context, next) {
     const loaded = next(url, context);
+    if (${startupAdmission} && url.endsWith('/src/gateway/server/ws-connection/request-start.ts')) {
+      const source = readFileSync(${JSON.stringify(requestStartOwner)}, 'utf8');
+      if (createHash('sha256').update(source).digest('hex') !== ${JSON.stringify(requestStartOwnerSha256)}) {
+        throw new Error('Request start owner changed after measurement preparation');
+      }
+      requestStartOwnerLoaded = true;
+      return { ...loaded, source: stripTypeScriptTypes(source) };
+    }
     if (url.endsWith('/src/gateway/session-row-projection-refresh.ts')) {
       const source = readFileSync(rowOwnerPath, 'utf8');
       if (createHash('sha256').update(source).digest('hex') !== rowOwnerSha256) {
@@ -293,6 +352,27 @@ if (isMainThread) {
       source = source.replace(task, '$&const probe = globalThis[Symbol.for("openclaw.bench.cold-row-counts")]; if (probe.active) { const originalRun = run; run = () => { const at = performance.now(); try { return originalRun(); } finally { const ms = performance.now() - at; probe.taskSamples++; if (ms > probe.taskMaxMs) { probe.taskMaxMs = ms; probe.taskName = name.slice(0, 160); probe.taskPhase = phase?.slice(0, 160) ?? null; } } }; }');
       rowTaskHookLoaded = true;
       return { ...loaded, source };
+    }
+    if (${startupAdmission} && url.endsWith('/src/infra/diagnostics-timeline.ts')) {
+      let source = stripTypeScriptTypes(readFileSync(new URL(url), 'utf8'));
+      const span = /function measureDiagnosticsTimelineSpan(?:Sync)?\\s*\\([^)]*\\)\\s*\\{/g;
+      if ([...source.matchAll(span)].length !== 2) throw new Error('Missing chat startup timeline span hooks');
+      source = source.replace(span, '$&using benchmarkSpan = globalThis[Symbol.for("openclaw.bench.cold-row-counts")].startSpan(name);');
+      startupSpanHookLoaded = true;
+      return { ...loaded, source };
+    }
+    if (${startupAdmission}) {
+      const boundary = url.endsWith('/src/gateway/server-methods/chat-pending-inputs.ts')
+        ? ['readChatPendingInputs', 'pending_inputs']
+        : url.endsWith('/src/agents/subagents/registry/subagent-registry-state.ts')
+          ? ['prepareOptionalSubagentSessionListReadCache', 'subagent_snapshot'] : undefined;
+      if (boundary) {
+        let source = stripTypeScriptTypes(readFileSync(new URL(url), 'utf8'));
+        const start = new RegExp('async function ' + boundary[0] + '\\\\s*\\\\([^)]*\\\\)\\\\s*\\\\{');
+        if (!start.test(source)) throw new Error('Missing startup boundary hook: ' + boundary[0]);
+        source = source.replace(start, '$&using benchmarkSpan = globalThis[Symbol.for("openclaw.bench.cold-row-counts")].startSpan("startup-boundary.' + boundary[1] + '");');
+        return { ...loaded, source };
+      }
     }
     return loaded;
   } });`
@@ -543,12 +623,21 @@ if (isMainThread) {
       if (!rowOwnerLoaded || !rowSelectionHookLoaded || !rowTaskHookLoaded || rowCounts.selectPage === 0 || rowCounts.taskSamples === 0) {
         throw new Error('Cold row measurement did not load the selected owner, selection, and task hooks');
       }
+      if (${startupAdmission} && (!requestStartOwnerLoaded || !startupSpanHookLoaded || admissionOverflow || !admissionSamples.has('chat.startup:handler'))) {
+        throw new Error('Startup admission diagnostics are incomplete');
+      }
+      const admission = ${startupAdmission} ? Object.fromEntries([...admissionSamples].map(([key, samples]) => {
+        samples.sort((a, b) => a - b);
+        const percentile = (fraction) => samples[Math.max(0, Math.ceil(samples.length * fraction) - 1)] ?? null;
+        return [key, { samples: samples.length, totalMs: samples.reduce((sum, ms) => sum + ms, 0), p50Ms: percentile(0.5), p90Ms: percentile(0.9), p95Ms: percentile(0.95), p99Ms: percentile(0.99), maxMs: samples.at(-1) ?? null }];
+      })) : undefined;
       process.send?.({ channel: 'cold-rows-loop', pid: process.pid,
         samples: coldLag.count, p95Ms: coldLag.percentile(95)/1e6,
         p99Ms: coldLag.percentile(99)/1e6, maxMs: coldLag.max/1e6,
         mainThreadCpuMs: (threadCpu.user + threadCpu.system)/1000,
         processCpuMs: (processCpu.user + processCpu.system)/1000,
         selectPageCalls: rowCounts.selectPage, rowOwnerSha256,
+        admission,
         synchronousTasks: { samples: rowCounts.taskSamples, maxMs: rowCounts.taskMaxMs, task: rowCounts.taskName, phase: rowCounts.taskPhase, boundary: 'inclusive synchronous runWithMainThreadTask callbacks; nested scopes may overlap' },
         gc: { scope: 'main-isolate', all: gcSummary(), minor: gcSummary(constants.NODE_PERFORMANCE_GC_MINOR), major: gcSummary(constants.NODE_PERFORMANCE_GC_MAJOR) } });
     }
@@ -620,6 +709,7 @@ const coldRowsLoop = Promise.withResolvers<{
   rowOwnerSha256: string;
   gc: Record<string, unknown>;
   synchronousTasks: Record<string, unknown>;
+  admission?: Record<string, unknown>;
 }>();
 let githubFixtureRequests = 0;
 let vapidPublicKey: string | undefined;
@@ -829,6 +919,7 @@ function launch(name: string) {
           rowOwnerSha256: sample.rowOwnerSha256,
           gc: sample.gc,
           synchronousTasks: sample.synchronousTasks,
+          ...(isRecord(sample.admission) ? { admission: sample.admission } : {}),
         });
         return;
       }
@@ -1450,6 +1541,7 @@ function summarize(rows: typeof timings) {
     completed: successful.length,
     errors: rows.length - successful.length,
     p50Ms: percentile(0.5),
+    p90Ms: percentile(0.9),
     p95Ms: percentile(0.95),
     p99Ms: percentile(0.99),
     maxMs: successful.at(-1) ?? null,
@@ -1789,7 +1881,21 @@ async function measureColdRowReads(
       throw new Error("Cold row probe did not start");
     }),
   ]);
-  const readShapes = [
+  const makeReadShapes = (clientSessionKey: string) => [
+    ...(startupAdmission
+      ? [
+          {
+            name: "models.list",
+            method: "models.list",
+            params: { agentId: "main", sessionKey: clientSessionKey, view: "configured" },
+          },
+          {
+            name: "sessions.subscribe",
+            method: "sessions.subscribe",
+            params: { includeMessageBodies: false },
+          },
+        ]
+      : []),
     { name: "sessions.list:sidebar", method: "sessions.list", params: shapes[0]!.params },
     {
       name: "sessions.list:agent-roster",
@@ -1805,16 +1911,46 @@ async function measureColdRowReads(
       },
     },
     { name: "board.get", method: "board.get", params: { sessionKey } },
+    ...(startupAdmission
+      ? [
+          {
+            name: "sessions.resolve",
+            method: "sessions.resolve",
+            params: { key: clientSessionKey },
+          },
+          {
+            name: "sessions.messages.subscribe",
+            method: "sessions.messages.subscribe",
+            params: { key: clientSessionKey },
+          },
+          {
+            name: "chat.startup",
+            method: "chat.startup",
+            params: { sessionKey: clientSessionKey, limit: 40, maxBytes: 262144 },
+          },
+        ]
+      : []),
   ];
+  // The fixture's indices ending in 1 are shared and unarchived.
+  const clientSessionKeys = Array.from({ length: clientCount }, (_, index) =>
+    startupAdmission ? `agent:main:team-shape-session-${1 + 10 * index}` : sessionKey,
+  );
+  const clientReadShapes = clientSessionKeys.map(makeReadShapes);
+  const readShapes = clientReadShapes[0]!;
   const deadline = loadStartedAt + durationMs;
   console.log(`PHASE cold-row-ready ${readyMs.toFixed(1)}ms`);
   const observations = await Promise.allSettled(
     Array.from({ length: clientCount }, async (_, index) => {
       const client = await connect(index);
+      const clientSessionKey = clientSessionKeys[index]!;
       connectedClients.add(index);
-      for (let wave = 0; performance.now() < deadline; wave++) {
+      for (
+        let wave = 0;
+        startupAdmission ? wave < waveCount : performance.now() < deadline;
+        wave++
+      ) {
         await Promise.all(
-          readShapes.map(async ({ name, method, params }) => {
+          clientReadShapes[index]!.map(async ({ name, method, params }) => {
             const startedMs = performance.now() - restartAt;
             let error: string | undefined;
             try {
@@ -1826,6 +1962,41 @@ async function measureColdRowReads(
                   response.widgets.length !== 3
                 ) {
                   throw new Error("Board did not return all three seeded widgets");
+                }
+              } else if (method === "models.list") {
+                if (!isRecord(response) || !Array.isArray(response.models)) {
+                  throw new Error("Model catalog did not return its models array");
+                }
+              } else if (method === "sessions.resolve") {
+                if (
+                  !isRecord(response) ||
+                  response.ok !== true ||
+                  response.key !== clientSessionKey
+                ) {
+                  throw new Error("Session resolution did not return the seeded session");
+                }
+              } else if (method === "sessions.messages.subscribe") {
+                if (
+                  !isRecord(response) ||
+                  response.subscribed !== true ||
+                  response.key !== clientSessionKey
+                ) {
+                  throw new Error("Message subscription did not admit the seeded session");
+                }
+              } else if (method === "chat.startup") {
+                if (
+                  !isRecord(response) ||
+                  response.sessionKey !== clientSessionKey ||
+                  !Array.isArray(response.messages) ||
+                  !isRecord(response.sessionInfo)
+                ) {
+                  throw new Error(
+                    "Chat startup did not return the seeded session and history page",
+                  );
+                }
+              } else if (method === "sessions.subscribe") {
+                if (!isRecord(response) || response.subscribed !== true) {
+                  throw new Error("Session subscription did not enroll its observer");
                 }
               } else if (
                 !isRecord(response) ||
@@ -1852,11 +2023,17 @@ async function measureColdRowReads(
             });
           }),
         );
-        await delay(Math.max(0, Math.min(pollMs, deadline - performance.now())));
+        await delay(
+          startupAdmission ? pollMs : Math.max(0, Math.min(pollMs, deadline - performance.now())),
+        );
       }
     }),
   );
   assertAlive();
+  // Successful socket replies precede the dispatch-finally diagnostic publication.
+  if (startupAdmission) {
+    await delay(0);
+  }
   restarted.send({ channel: "cold-rows-finish" });
   const {
     mainThreadCpuMs,
@@ -1865,6 +2042,7 @@ async function measureColdRowReads(
     rowOwnerSha256,
     gc,
     synchronousTasks,
+    admission,
     ...loop
   } = await Promise.race([
     coldRowsLoop.promise,
@@ -1890,8 +2068,17 @@ async function measureColdRowReads(
   const result = {
     output,
     fixture,
-    scenario: "cold-row-reads",
+    scenario: startupAdmission ? "startup-admission" : "cold-row-reads",
     clientCount,
+    ...(startupAdmission
+      ? {
+          waves: waveCount,
+          pollMs,
+          clientSessionKeys,
+          admission,
+          requestStartOwner: { path: requestStartOwner, sha256: requestStartOwnerSha256 },
+        }
+      : {}),
     readyMs,
     startedAtEpochMs,
     afterReadyDurationMs,
@@ -1906,12 +2093,19 @@ async function measureColdRowReads(
     promotedBytesPerRead:
       promotion && completedReads ? promotion.promotedBytes / completedReads : null,
     connectedClients: connectedClients.size,
+    ...(startupAdmission ? { completedRequests: completedReads } : {}),
     errors,
     reads: Object.fromEntries(
-      readShapes.map(({ name, params }) => [
+      readShapes.map(({ name, params }, shapeIndex) => [
         name,
         {
-          params,
+          ...(startupAdmission
+            ? {
+                paramsByClient: clientReadShapes.map(
+                  (clientShapes) => clientShapes[shapeIndex]!.params,
+                ),
+              }
+            : { params }),
           ...summarize(timings.filter((row) => row.method === name)),
           firstBatch: summarize(timings.filter((row) => row.method === name && row.wave === 0)),
         },

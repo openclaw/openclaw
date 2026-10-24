@@ -10,12 +10,12 @@ const variants = [
   {
     name: "clawhub",
     version: "0.23.3",
-    hash: "8dc2d1dadd9c2423b87752c7fde83bf40018a30a46edb80166c43e458690f2b0",
+    hash: "d5777c921323d324624e6cd78bf5ef3d343454c91629a222b29fcee793d2cace",
   },
   {
     name: "vercel",
-    version: "63.1.2",
-    hash: "dccdda41622764f52c604c2cb2ffaed3085fbd6c4764444e90d4669f5f423ac8",
+    version: "64.4.0",
+    hash: "2b811581752c9e8b4aefebb6a984049a746c6dea254421549f7da1c3406ad7e2",
   },
 ] as const;
 
