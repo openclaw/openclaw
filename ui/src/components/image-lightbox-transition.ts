@@ -16,6 +16,7 @@ export function createImageLightboxTransition() {
     if (!current || reducedMotion) {
       return { request };
     }
+    // SAFETY: cloneNode preserves the HTMLImageElement receiver's element type.
     const image = current.cloneNode() as HTMLImageElement;
     const style = getComputedStyle(current);
     image.className = "image-transition";
