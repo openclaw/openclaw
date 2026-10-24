@@ -194,7 +194,7 @@ function heapBytes(profile: HeapProfiler.SamplingHeapProfile) {
     if (names.some((name) => ["stringify", "isDeeplyFrozenPlainData", "get"].includes(name))) {
       keyPath += node.selfSize;
     }
-    if (names.includes("checkSchemaWithCurrentFormats")) {
+    if (names.includes("checkSchema")) {
       validation += node.selfSize;
     }
     if (names.includes("compileSchema")) {
@@ -317,7 +317,7 @@ function cpuBreakdown(profile: Profiler.Profile) {
       ? "selection"
       : names.includes("compileSchema")
         ? "compilation"
-        : names.includes("checkSchemaWithCurrentFormats")
+        : names.includes("checkSchema")
           ? "validation"
           : names.some((name) => ["stringify", "isDeeplyFrozenPlainData", "get"].includes(name))
             ? "keyPath"
@@ -329,7 +329,7 @@ function cpuBreakdown(profile: Profiler.Profile) {
   return {
     samples: profile.samples?.length ?? 0,
     microseconds: categories,
-    note: "Sampled CPU attribution is contextual; validatorOther includes inlined cache-key work and format scoping. Untraced CPU is the decision metric.",
+    note: "Sampled CPU attribution is contextual; validatorOther includes inlined cache-key work. Untraced CPU is the decision metric.",
   };
 }
 inspector.disconnect();
