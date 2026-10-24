@@ -273,6 +273,9 @@ async function runChannelProviderLogin(
     const nextProfileId = loginResult.profiles.find(
       (profile) => normalizeSurface(profile.provider) === normalizeSurface(choice.providerId),
     )?.profileId;
+    // Harness-owned sign-ins intentionally save no credential profile (the
+    // credential lives in the runtime's own store), so there is no account
+    // switch to fail; only a profiled result without a matching profile is.
     const switchResult = nextProfileId
       ? await switchLoginSessionProfile({
           commandParams,
@@ -281,7 +284,17 @@ async function runChannelProviderLogin(
           signal: flowSignal,
           assertCurrent,
         })
-      : "failed";
+      : loginResult.profiles.length === 0
+        ? "not-applicable"
+        : "failed";
+    // A profileless result that also staged no runtime policy saved nothing
+    // chat can use; reporting success would strand the user exactly like the
+    // original bug. Surface it as a setup handoff instead.
+    if (loginResult.profiles.length === 0 && !loginResult.stagedRuntimePolicy) {
+      return {
+        text: `${choice.providerLabel} sign-in finished without saving a login. Open Control UI → Models → Configure Models, then choose “${choice.label}”.`,
+      };
+    }
     const terminalMessage = formatProviderLoginCompletion(
       choice,
       loginResult.authRefresh,

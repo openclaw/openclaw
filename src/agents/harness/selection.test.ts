@@ -2202,6 +2202,43 @@ describe("runAgentHarnessAttempt", () => {
 });
 
 describe("selectAgentHarness", () => {
+  it("keeps the configured endpoint when a prepared native route has a blank baseUrl", () => {
+    const config: OpenClawConfig = {
+      models: {
+        providers: {
+          meta: {
+            api: "openai-responses",
+            baseUrl: "https://api.meta.ai/v1",
+            models: [
+              {
+                id: "muse-spark-1.3",
+                name: "Muse Spark 1.3",
+                reasoning: true,
+                input: ["text"],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                maxTokens: 8192,
+              },
+            ],
+          },
+        },
+      },
+    };
+    expect(
+      buildAgentHarnessSupportContext({
+        provider: "meta",
+        modelId: "muse-spark-1.3",
+        requestedRuntime: "muse",
+        config,
+        preparedModelProvider: true,
+        modelProvider: { api: "openai-responses", baseUrl: "" },
+      }).modelProvider,
+    ).toMatchObject({
+      baseUrl: "https://api.meta.ai/v1",
+      endpointOverrides: "present",
+      requestTransportOverrides: "none",
+    });
+  });
+
   it("auto-selects the highest-priority plugin harness without duplicate support probes", () => {
     const lowPrioritySupports = vi.fn(() => ({
       supported: true as const,

@@ -1,4 +1,5 @@
 /** Lightweight runtime availability shared by execution and next-turn projections. */
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { isDefaultAgentRuntimeId, normalizeOptionalAgentRuntimeId } from "../agent-runtime-id.js";
 import { resolveAgentHarnessPolicy, type AgentHarnessPolicy } from "./policy.js";
 import { getRegisteredAgentHarness } from "./registry.js";
@@ -37,7 +38,9 @@ export function resolveAgentHarnessAvailabilityDecision(
   const configured = resolveAgentHarnessPolicy({
     ...params,
     modelApi: params.modelProvider?.api ?? params.modelApi,
-    modelBaseUrl: params.modelProvider?.baseUrl ?? params.modelBaseUrl,
+    // Prepared native routes carry a blank baseUrl; it must not mask the
+    // configured endpoint (same rule as buildAgentHarnessSupportContext).
+    modelBaseUrl: normalizeOptionalString(params.modelProvider?.baseUrl) ?? params.modelBaseUrl,
     requestTransportOverrides:
       params.modelProvider?.requestTransportOverrides ?? params.requestTransportOverrides,
   });

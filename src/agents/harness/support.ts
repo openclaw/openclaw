@@ -169,7 +169,10 @@ export function buildAgentHarnessSupportContext(
       : "none";
   const modelProviderFacts = {
     api: params.modelProvider?.api ?? configuredModelProvider?.api,
-    baseUrl: params.modelProvider?.baseUrl ?? configuredModelProvider?.baseUrl,
+    // Prepared native routes carry a blank baseUrl (the runtime owns its
+    // endpoint); a blank value must not mask the configured endpoint that
+    // endpointOverrides was derived from.
+    baseUrl: readStringParam(params.modelProvider?.baseUrl) ?? configuredModelProvider?.baseUrl,
     azureApiVersion:
       params.modelProvider?.azureApiVersion ?? configuredModelProvider?.azureApiVersion,
     request: params.modelProvider?.request ?? configuredModelProvider?.request,

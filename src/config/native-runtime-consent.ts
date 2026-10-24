@@ -1,7 +1,10 @@
 import { normalizeAgentId } from "@openclaw/normalization-core/agent-id";
 import type { OpenClawConfig } from "./types.openclaw.js";
 
-function resolveConsentAgentKey(config: OpenClawConfig | undefined, agentId: string): string {
+export function resolveConsentAgentKey(
+  config: OpenClawConfig | undefined,
+  agentId: string,
+): string {
   const entries = config?.agents?.entries;
   if (!entries || Object.hasOwn(entries, agentId)) {
     return agentId;

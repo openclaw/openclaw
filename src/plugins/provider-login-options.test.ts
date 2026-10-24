@@ -162,10 +162,51 @@ describe("provider login choices", () => {
       status: "resolved",
       choice: { mode: "chat" },
     });
-    declarations.read.mockReturnValue([choice({ credentialOnly: undefined })]);
+    declarations.read.mockReturnValue([
+      choice({ credentialOnly: undefined, channelLogin: undefined }),
+    ]);
     expect(resolveProviderChannelLoginChoice("demo/demo-device")).toMatchObject({
       status: "resolved",
       choice: { mode: "setup" },
+    });
+  });
+
+  it("starts a channelLogin-declared harness sign-in in chat without hiding the API-key handoff", () => {
+    declarations.read.mockReturnValue([
+      choice({
+        pluginId: "meta",
+        providerId: "meta",
+        groupId: "meta",
+        groupLabel: "Meta",
+        methodId: "api-key",
+        choiceId: "meta-api-key",
+        choiceLabel: "Meta API key",
+        appGuidedAuth: undefined,
+        appGuidedSecret: true,
+        credentialOnly: undefined,
+        channelLogin: undefined,
+      }),
+      choice({
+        pluginId: "meta",
+        providerId: "meta",
+        groupId: "meta",
+        groupLabel: "Meta",
+        methodId: "muse-code",
+        choiceId: "muse-code",
+        choiceLabel: "Muse Code",
+        // Harness-owned sign-ins return no credential profile, so they are
+        // not credential-only; the explicit channelLogin declaration alone
+        // opts this device-code flow into chat.
+        credentialOnly: undefined,
+      }),
+    ]);
+    expect(resolveProviderChannelLoginChoice("meta")).toMatchObject({
+      status: "resolved",
+      choice: { methodId: "muse-code", mode: "chat" },
+    });
+    expect(resolveProviderChannelLoginChoice("meta/meta-api-key")).toMatchObject({
+      status: "resolved",
+      choice: { methodId: "api-key", mode: "setup" },
     });
   });
 

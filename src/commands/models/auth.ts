@@ -5,6 +5,10 @@ import {
   normalizeOptionalString,
   normalizeStringifiedOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import {
+  isDefaultAgentRuntimeId,
+  normalizeOptionalAgentRuntimeId,
+} from "../../agents/agent-runtime-id.js";
 import { resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import { removeProviderAuthProfilesWithLock } from "../../agents/auth-profiles.js";
 import { upsertAuthProfileWithLockOrThrow } from "../../agents/auth-profiles/profiles.js";
@@ -16,6 +20,7 @@ import { formatCliCommand } from "../../cli/command-format.js";
 import { parseDurationMs } from "../../cli/parse-duration.js";
 import { logConfigUpdated } from "../../config/logging.js";
 import { normalizeAgentModelRefForConfig } from "../../config/model-input.js";
+import { resolveConsentAgentKey } from "../../config/native-runtime-consent.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   applyProviderAuthConfigPatchWithNormalization,
@@ -311,22 +316,125 @@ async function runProviderAuthMethod(
     browserAuthorization: params.browserAuthorization,
   });
   params.signal?.throwIfAborted();
+  // A login may declare the runtime that must serve its default model (for
+  // example a harness-owned subscription sign-in). Guided setup stages that
+  // as per-agent model runtime policy; every other login path (chat, gateway
+  // wizard, CLI) must stage the same policy or the signed-in model keeps
+  // resolving to the default API runtime. A login may only pin its own
+  // provider's models, and the entry key must match the authored agent key
+  // (mixed-case keys would otherwise create a rejected duplicate).
+  const stagedAgentRuntimeId = normalizeOptionalAgentRuntimeId(result.agentRuntimeId);
+  const stagedDefaultModelCandidate = result.defaultModel
+    ? normalizeAgentModelRefForConfig(result.defaultModel)
+    : undefined;
+  const stagedDefaultModel =
+    stagedDefaultModelCandidate &&
+    normalizeProviderId(stagedDefaultModelCandidate.split("/")[0] ?? "") ===
+      normalizeProviderId(params.provider.id)
+      ? stagedDefaultModelCandidate
+      : undefined;
+  // "openclaw" is the built-in runtime (isDefaultAgentRuntimeId covers the
+  // auto/default sentinels, not this id); staging it would only pin noise.
+  const stagedAgentKey = resolveConsentAgentKey(params.config, params.agentId);
+  const stagedRuntimePatch =
+    stagedAgentRuntimeId &&
+    stagedAgentRuntimeId !== "openclaw" &&
+    !isDefaultAgentRuntimeId(stagedAgentRuntimeId) &&
+    stagedDefaultModel
+      ? {
+          agents: {
+            entries: {
+              [stagedAgentKey]: {
+                models: {
+                  [stagedDefaultModel]: { agentRuntime: { id: stagedAgentRuntimeId } },
+                },
+              },
+            },
+          },
+        }
+      : undefined;
+  // Harness-owned logins reached the credential-only persistence path without
+  // declaring credential-only semantics, so (like guided setup) keep only the
+  // login's own plugin and runtime enablement entries from their patch.
+  const stagedPluginsPatch =
+    stagedRuntimePatch && result.configPatch?.plugins?.entries
+      ? {
+          plugins: {
+            entries: Object.fromEntries(
+              Object.entries(result.configPatch.plugins.entries).filter(
+                ([pluginId]) =>
+                  pluginId === stagedAgentRuntimeId ||
+                  pluginId === params.provider.id ||
+                  pluginId === params.ownerPluginId,
+              ),
+            ),
+          },
+        }
+      : undefined;
+  // When staging (harness-owned login), narrow the provider-catalog slice to
+  // this provider only, mirroring guided setup's staged scope.
+  const stagedProviderPatch =
+    stagedRuntimePatch && result.configPatch?.models?.providers
+      ? {
+          models: {
+            providers: Object.fromEntries(
+              Object.entries(result.configPatch.models.providers).filter(
+                ([providerId]) =>
+                  normalizeProviderId(providerId) === normalizeProviderId(params.provider.id),
+              ),
+            ),
+          },
+        }
+      : undefined;
   const connectionResult: ProviderAuthResult = params.credentialOnly
     ? {
         profiles: result.profiles,
         notes: result.notes,
-        ...(result.configPatch
+        // Only a staged (harness-owned) result keeps its declared model so
+        // runtime-plugin repair sees the same facts as a guided login.
+        ...(stagedRuntimePatch && result.defaultModel ? { defaultModel: result.defaultModel } : {}),
+        ...(result.configPatch || stagedRuntimePatch
           ? {
               configPatch: {
-                ...(result.configPatch.models?.providers
-                  ? { models: { providers: result.configPatch.models.providers } }
-                  : {}),
-                ...(result.configPatch.plugins ? { plugins: result.configPatch.plugins } : {}),
+                ...stagedRuntimePatch,
+                ...(stagedProviderPatch ??
+                  (result.configPatch?.models?.providers
+                    ? { models: { providers: result.configPatch.models.providers } }
+                    : {})),
+                ...(stagedRuntimePatch
+                  ? (stagedPluginsPatch ?? {})
+                  : result.configPatch?.plugins
+                    ? { plugins: result.configPatch.plugins }
+                    : {}),
               },
             }
           : {}),
       }
-    : result;
+    : stagedRuntimePatch
+      ? {
+          ...result,
+          configPatch: {
+            ...result.configPatch,
+            agents: {
+              ...result.configPatch?.agents,
+              entries: Object.fromEntries(
+                Object.entries({
+                  ...result.configPatch?.agents?.entries,
+                  ...stagedRuntimePatch.agents.entries,
+                }).map(([agentKey, agentEntry]) => {
+                  const stagedModels = stagedRuntimePatch.agents.entries[stagedAgentKey]?.models;
+                  return [
+                    agentKey,
+                    agentKey === stagedAgentKey && stagedModels
+                      ? { ...agentEntry, models: { ...agentEntry?.models, ...stagedModels } }
+                      : agentEntry,
+                  ];
+                }),
+              ),
+            },
+          },
+        }
+      : result;
   const resolvedIdentity = resolveReloginProfileIdentity({
     profiles: connectionResult.profiles,
     requestedProfileId: params.profileId,
@@ -462,7 +570,10 @@ async function runProviderAuthMethod(
     }
     throw error;
   }
-  if (persistedProfiles.length > 0) {
+  // Harness-owned logins save no credential profile; their staged runtime
+  // policy is the success signal that model-access consent should still run,
+  // or restricted model lists keep hiding the just-connected provider.
+  if (persistedProfiles.length > 0 || stagedRuntimePatch) {
     await completeLoginModelAccess(params, modelAccess);
   }
   return { result: connectionResult, profiles: persistedProfiles, authRefresh };
@@ -734,6 +845,8 @@ export type ModelsAuthLoginFlowResult = {
   methodId: string;
   authRefresh: ModelAuthRefreshOutcome;
   defaultModel?: string;
+  /** A harness-owned login staged its declared runtime policy (no profile saved). */
+  stagedRuntimePolicy?: true;
   imported?: boolean;
   profiles: Array<{
     profileId: string;
@@ -959,10 +1072,19 @@ async function runModelsAuthLoginFlow(
       `Tip: Codex-capable models can use native Codex web search. Configure the \`web_search\` tool with \`${formatCliCommand("openclaw configure --section web")}\`. Docs: https://docs.openclaw.ai/tools/web`,
     );
   }
+  const stagedRuntimePolicy =
+    result.agentRuntimeId &&
+    normalizeOptionalAgentRuntimeId(result.agentRuntimeId) !== undefined &&
+    normalizeOptionalAgentRuntimeId(result.agentRuntimeId) !== "openclaw" &&
+    result.defaultModel &&
+    normalizeProviderId(
+      normalizeAgentModelRefForConfig(result.defaultModel).split("/")[0] ?? "",
+    ) === normalizeProviderId(selectedProvider.id);
   return {
     providerId: selectedProvider.id,
     methodId: chosenMethod.id,
     authRefresh,
+    ...(stagedRuntimePolicy ? { stagedRuntimePolicy: true as const } : {}),
     ...(result.defaultModel ? { defaultModel: result.defaultModel } : {}),
     profiles: profiles.map((profile) => ({
       profileId: profile.profileId,

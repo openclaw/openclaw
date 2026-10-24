@@ -571,6 +571,84 @@ it("retains the imported profile and model-access choice after direct refresh fa
   });
 });
 
+it("stages the declared agent runtime for credential-only harness sign-ins", async () => {
+  runProviderAuth.mockResolvedValueOnce({
+    profiles: [],
+    defaultModel: "openai/gpt-5.5",
+    agentRuntimeId: "codex",
+    configPatch: {
+      plugins: { entries: { codex: { enabled: true }, other: { enabled: true } } },
+    },
+  });
+  await loginFlow({ credentialOnly: true });
+  expect(currentConfig.agents?.entries?.main?.models?.["openai/gpt-5.5"]?.agentRuntime).toEqual({
+    id: "codex",
+  });
+  expect(currentConfig.plugins?.entries?.codex?.enabled).toBe(true);
+  // Harness-owned logins only keep their own plugin/runtime enablement entries.
+  expect(currentConfig.plugins?.entries?.other).toBeUndefined();
+});
+
+it("stages the declared agent runtime on the non-credential-only (CLI) path too", async () => {
+  runProviderAuth.mockResolvedValueOnce({
+    profiles: [],
+    defaultModel: "openai/gpt-5.5",
+    agentRuntimeId: "codex",
+  });
+  await loginFlow({});
+  expect(currentConfig.agents?.entries?.main?.models?.["openai/gpt-5.5"]?.agentRuntime).toEqual({
+    id: "codex",
+  });
+});
+
+it("does not let a login stage a runtime policy for another provider's model", async () => {
+  runProviderAuth.mockResolvedValueOnce({
+    profiles: [],
+    defaultModel: "meta/muse-spark-1.3",
+    agentRuntimeId: "muse",
+  });
+  await loginFlow({ credentialOnly: true });
+  expect(currentConfig.agents?.entries?.main?.models?.["meta/muse-spark-1.3"]).toBeUndefined();
+});
+
+it("stages the runtime policy under the authored agent key", async () => {
+  currentConfig = { agents: { entries: { Main: {} } } };
+  runProviderAuth.mockResolvedValueOnce({
+    profiles: [],
+    defaultModel: "openai/gpt-5.5",
+    agentRuntimeId: "codex",
+  });
+  await loginFlow({ credentialOnly: true });
+  expect(currentConfig.agents?.entries?.Main?.models?.["openai/gpt-5.5"]?.agentRuntime).toEqual({
+    id: "codex",
+  });
+  expect(currentConfig.agents?.entries?.main).toBeUndefined();
+});
+
+it("does not stage a runtime policy for credential-only logins on the default runtime", async () => {
+  runProviderAuth.mockResolvedValueOnce({
+    profiles: [],
+    defaultModel: "openai/gpt-5.5",
+    agentRuntimeId: "openclaw",
+  });
+  await loginFlow({ credentialOnly: true });
+  expect(currentConfig.agents?.entries?.main?.models?.["openai/gpt-5.5"]).toBeUndefined();
+});
+
+it("runs model-access consent after a profileless harness sign-in stages its runtime", async () => {
+  const onModelAccessRequested = vi.fn();
+  runProviderAuth.mockResolvedValueOnce({
+    profiles: [],
+    defaultModel: "openai/gpt-5.5",
+    agentRuntimeId: "codex",
+  });
+  currentConfig = {
+    agents: { defaults: { modelPolicy: { allow: ["other/current"] } } },
+  };
+  await loginFlow({ credentialOnly: true, onModelAccessRequested });
+  expect(onModelAccessRequested).toHaveBeenCalled();
+});
+
 it("identifies a config failure after credentials are saved and preserves its cause", async () => {
   const cause = new Error("config write failed");
   runProviderAuth.mockResolvedValueOnce({

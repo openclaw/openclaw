@@ -122,7 +122,12 @@ function normalizeInput(value: string | undefined): string {
 }
 
 function projectChannelChoice(choice: ProviderAuthChoiceMetadata): ProviderChannelLoginChoice {
-  const kind = choice.credentialOnly === true ? loginKind(choice) : undefined;
+  // A plugin may opt a guided-auth login into chat with channelLogin even when
+  // the login is not credential-only (for example a harness-owned sign-in that
+  // returns no credential profile). Without that explicit opt-in, only
+  // credential-only logins are startable outside guided setup.
+  const kind =
+    choice.credentialOnly === true || choice.channelLogin ? loginKind(choice) : undefined;
   return {
     choiceId: choice.choiceId,
     pluginId: choice.pluginId,
