@@ -639,7 +639,7 @@ class NodeRuntimeAgentSelectionTest {
           },
         )
 
-        reconnectOperator(runtime)
+        reconnectOperator(runtime, methods = setOf("agents.list"))
         withTimeout(2_000) { rosterStarted.await() }
         assertFalse(
           "Chat must wait for the accessible roster before adopting a session",
@@ -659,6 +659,117 @@ class NodeRuntimeAgentSelectionTest {
             method.startsWith("sessions.") && params.orEmpty().contains("agent-a")
           },
         )
+      } finally {
+        releaseRoster.complete(Unit)
+        closeNodeRuntimeTestFixture(runtime)
+      }
+    }
+
+  @Test
+  fun coldStartRetriesFailedAgentDiscoveryBeforePublishingConnected() =
+    runBlocking {
+      val runtime = createConnectedRuntime()
+      val attempts = AtomicInteger()
+      val rosterSucceeded = CompletableDeferred<Unit>()
+      val requests = Collections.synchronizedList(mutableListOf<Pair<String, String?>>())
+      try {
+        runtime.gatewayDataRequestOverrideForTests = { _, method, _ ->
+          when (method) {
+            "agents.list" -> {
+              if (attempts.incrementAndGet() == 1) error("Synthetic discovery failure")
+              rosterSucceeded.complete(Unit)
+              """{"defaultId":"agent-a","mainKey":"agent:agent-a:main","agents":[{"id":"agent-b"}]}"""
+            }
+
+            "models.list" -> {
+              """{"models":[]}"""
+            }
+
+            "models.authStatus" -> {
+              """{"providers":[]}"""
+            }
+
+            else -> {
+              "{}"
+            }
+          }
+        }
+        installChatGateway(
+          runtime,
+          requestGateway = { method, params ->
+            requests += method to params
+            when (method) {
+              "sessions.describe" -> """{"session":null}"""
+              "chat.history" -> """{"sessionId":"allowed-session","messages":[]}"""
+              else -> "{}"
+            }
+          },
+        )
+
+        reconnectOperator(runtime, methods = setOf("agents.list"))
+        withTimeout(2_000) {
+          runtime.gatewayConnectionDisplay.first { it.statusText.contains("retrying") }
+        }
+        assertFalse(ReflectionHelpers.getField(runtime, "operatorConnected"))
+
+        withTimeout(2_000) { rosterSucceeded.await() }
+        withTimeout(2_000) {
+          runtime.mainSessionKey.first { resolveAgentIdFromMainSessionKey(it) == "agent-b" }
+        }
+        assertEquals(2, attempts.get())
+        assertEquals("agent-b", resolveAgentIdFromMainSessionKey(runtime.chat.sessionKey.value))
+        assertTrue(ReflectionHelpers.getField<Boolean>(runtime, "operatorConnected"))
+        assertFalse(
+          requests.any { (method, params) ->
+            method.startsWith("sessions.") && params.orEmpty().contains("agent-a")
+          },
+        )
+      } finally {
+        closeNodeRuntimeTestFixture(runtime)
+      }
+    }
+
+  @Test
+  fun disconnectCancelsPendingAgentDiscoveryWithoutPublishingConnected() =
+    runBlocking {
+      val runtime = createConnectedRuntime()
+      val rosterStarted = CompletableDeferred<Unit>()
+      val releaseRoster = CompletableDeferred<Unit>()
+      try {
+        runtime.gatewayDataRequestOverrideForTests = { _, method, _ ->
+          when (method) {
+            "agents.list" -> {
+              rosterStarted.complete(Unit)
+              releaseRoster.await()
+              """{"defaultId":"agent-b","mainKey":"agent:agent-b:main","agents":[{"id":"agent-b"}]}"""
+            }
+
+            else -> {
+              "{}"
+            }
+          }
+        }
+        installChatGateway(
+          runtime,
+          requestGateway = { method, _ ->
+            when (method) {
+              "sessions.describe" -> """{"session":null}"""
+              "chat.history" -> """{"sessionId":"allowed-session","messages":[]}"""
+              else -> "{}"
+            }
+          },
+        )
+
+        reconnectOperator(runtime, methods = setOf("agents.list"))
+        withTimeout(2_000) { rosterStarted.await() }
+        val session = ReflectionHelpers.getField<GatewaySession>(runtime, "operatorSession")
+        ReflectionHelpers.getField<(String) -> Unit>(session, "onDisconnected")("Gateway closed")
+        releaseRoster.complete(Unit)
+
+        assertFalse(runtime.gatewayConnectionDisplay.value.isConnected)
+        assertFalse(ReflectionHelpers.getField(runtime, "operatorConnected"))
+        val bootstrapJob = ReflectionHelpers.getField<Job?>(runtime, "operatorAgentBootstrapJob")
+        assertTrue(bootstrapJob == null || bootstrapJob.isCancelled)
       } finally {
         releaseRoster.complete(Unit)
         closeNodeRuntimeTestFixture(runtime)
@@ -1690,6 +1801,7 @@ class NodeRuntimeAgentSelectionTest {
     runtime: NodeRuntime,
     disconnectCallbacks: Int = 1,
     capabilities: Set<String>? = null,
+    methods: Set<String>? = null,
   ) {
     val session = ReflectionHelpers.getField<GatewaySession>(runtime, "operatorSession")
     val onDisconnected = ReflectionHelpers.getField<(String) -> Unit>(session, "onDisconnected")
@@ -1701,6 +1813,7 @@ class NodeRuntimeAgentSelectionTest {
         serverVersion = null,
         mainSessionKey = "agent:main:main",
         updateAvailable = null,
+        methods = methods,
         authScopes = listOf("operator.read"),
         capabilities = capabilities,
       ),
