@@ -104,6 +104,15 @@ type Result = {
   artifactPrefix: string;
 };
 const results: Result[] = [];
+const pairHostObservations: Array<{
+  step: string;
+  viewport: string;
+  pair: number;
+  startedAt: string;
+  startLoad: number[];
+  endedAt: string;
+  endLoad: number[];
+}> = [];
 const servers: Array<{
   directory: string;
   build: { buildId: string; version: string };
@@ -171,6 +180,8 @@ try {
   for (const viewport of viewports) {
     for (const scenario of scenarios) {
       for (let pair = 0; pair < pairs; pair++) {
+        const startedAt = new Date().toISOString();
+        const startLoad = os.loadavg();
         for (const [bundle, slot] of servers.entries()) {
           const context = await browser.newContext({
             viewport: { width: viewport.width, height: viewport.height },
@@ -361,6 +372,19 @@ try {
           await writeFile(path.join(artifactDir, "results.json"), JSON.stringify(results, null, 2));
           console.log(JSON.stringify(result));
         }
+        pairHostObservations.push({
+          step: scenario.id,
+          viewport: viewport.name,
+          pair,
+          startedAt,
+          startLoad,
+          endedAt: new Date().toISOString(),
+          endLoad: os.loadavg(),
+        });
+        await writeFile(
+          path.join(artifactDir, "pair-host-load.json"),
+          JSON.stringify(pairHostObservations, null, 2),
+        );
       }
     }
   }
