@@ -30,9 +30,15 @@ registerEnglishCatalog(registerChatToolLabelsEnglish);
 
 const ToolCardRow = lazy(() => import("./chat-tool-card-row.solid.tsx"), { export: "ToolCardRow" });
 
-export function BrowserTabPreviews(props: { previews: readonly BrowserTabPreview[] | undefined }) {
+export function BrowserTabPreviews(props: {
+  previews: readonly BrowserTabPreview[] | undefined;
+  mediaReadAllowed?: boolean;
+}) {
   return (
-    <For each={props.previews} keyed={(item) => browserTabKey(item.preview)}>
+    <For
+      each={props.mediaReadAllowed === false ? undefined : props.previews}
+      keyed={(item) => browserTabKey(item.preview)}
+    >
       {(item) => (
         <BrowserTabCardHost
           preview={item().preview}
@@ -285,6 +291,7 @@ export function ChatToolCard(props: ToolCardProps) {
       surface="tool-result"
       props={toolResultSurfaceProps(props.card, props.options)}
       presented={props.options.presented ?? true}
+      enabled={props.options.mediaReadAllowed !== false}
       renderDefault={() => (
         <openclaw-chat-tool-card style={{ display: "contents" }}>
           <ToolCardView

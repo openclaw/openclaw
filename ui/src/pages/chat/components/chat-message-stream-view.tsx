@@ -224,6 +224,7 @@ export function StreamGroup(props: { parts: StreamGroupPart[]; options: StreamGr
       <Show when={hasAvatar()}>
         <ChatAvatar
           role="assistant"
+          mediaReadAllowed={props.options.mediaReadAllowed}
           assistant={props.options.assistant}
           elementRef={(element) => (replyElements.avatar = element)}
         />
@@ -260,6 +261,7 @@ type WorkGroupSummaryItem = {
   groups: readonly MessageGroup[];
 };
 type WorkGroupSummaryOptions = {
+  mediaReadAllowed?: boolean;
   expanded: boolean;
   onToggle: () => void;
   presentation?: "standalone" | "continuation";
@@ -382,7 +384,10 @@ function WorkGroupSummaryBody(props: {
       </button>
       <div class="chat-work-group__separator" aria-hidden="true" />
       <Show when={!props.options.expanded && !props.options.bubbleMode}>
-        <BrowserTabPreviews previews={props.options.browserTabPreviews} />
+        <BrowserTabPreviews
+          previews={props.options.browserTabPreviews}
+          mediaReadAllowed={props.options.mediaReadAllowed}
+        />
       </Show>
     </div>
   );

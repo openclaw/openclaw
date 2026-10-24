@@ -72,6 +72,7 @@ export type ImageRenderOptions = {
   authToken?: string | null;
   /** Synchronous cancellation custody, independent of any rendering callback. */
   mediaOwner?: object;
+  mediaReadAllowed?: boolean;
   /** A local resource observer; never a pane or page redraw callback. */
   onMediaChange?: () => void;
   onRequestOpenImage?: () => number;

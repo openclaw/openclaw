@@ -311,6 +311,7 @@ function RunFrame(props: FrameProps) {
                     item={timedWork()?.key === work().key ? timedWork()! : work()}
                     options={{
                       expanded: options().isWorkExpanded(work().key),
+                      mediaReadAllowed: options().streamOptions.mediaReadAllowed,
                       bubbleMode: options().streamOptions.bubbleMode,
                       onToggle: () =>
                         options().onToggleWork(work().key, options().isWorkExpanded(work().key)),

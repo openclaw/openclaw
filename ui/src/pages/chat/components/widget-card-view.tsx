@@ -91,6 +91,7 @@ type WidgetCardOptions = {
   rawText?: string | null;
   toggleRawDetails?: () => boolean;
   canvasPluginSurfaceUrl?: string | null;
+  mediaReadAllowed?: boolean;
   embedSandboxMode?: EmbedSandboxMode;
   allowExternalEmbedUrls?: boolean;
   sessionKey?: string;
@@ -666,59 +667,73 @@ export function ToolPreview(props: ToolPreviewProps) {
       : undefined;
   return (
     <Show
-      when={browser()}
+      when={props.options?.mediaReadAllowed !== false}
       fallback={
-        <Show when={canvas()}>
-          {(preview) => {
-            const video = createMemo(() =>
-              !preview().mcpApp ? parseYouTubeVideoUrl(preview().url) : undefined,
-            );
-            return (
-              <Show
-                when={video()}
-                fallback={
-                  <CanvasPreview
-                    preview={preview()}
-                    surface={props.surface}
-                    options={props.options}
-                  />
-                }
-              >
-                {(item) => {
-                  const Fallback = () => (
-                    <openclaw-youtube-video>
-                      <a href={item().watchUrl} target="_blank" rel="noopener noreferrer">
-                        {preview().title?.trim() || t("chat.youtube.video")}
-                        <Icon name="externalLink" />
-                      </a>
-                    </openclaw-youtube-video>
-                  );
-                  return (
-                    <Show when={`${props.options?.sessionKey ?? ""}\0${item().watchUrl}`} keyed>
-                      {(_key) => (
-                        <Errored fallback={<Fallback />}>
-                          <Loading fallback={<Fallback />}>
-                            <YouTubeVideoCard
-                              video={item()}
-                              videoTitle={preview().title ?? ""}
-                              enabled={
-                                props.options?.embedSandboxMode !== "strict" &&
-                                preview().sandbox !== "strict"
-                              }
-                            />
-                          </Loading>
-                        </Errored>
-                      )}
-                    </Show>
-                  );
-                }}
-              </Show>
-            );
+        <div
+          class="chat-tool-card__preview"
+          style={{
+            "min-height": `${props.preview?.kind === "canvas" ? (props.preview.preferredHeight ?? 160) : 160}px`,
           }}
-        </Show>
+        >
+          {props.preview?.kind === "canvas" ? props.preview.title : undefined}
+        </div>
       }
     >
-      {(preview) => <BrowserTabCardHost preview={preview()} latest={false} />}
+      <Show
+        when={browser()}
+        fallback={
+          <Show when={canvas()}>
+            {(preview) => {
+              const video = createMemo(() =>
+                !preview().mcpApp ? parseYouTubeVideoUrl(preview().url) : undefined,
+              );
+              return (
+                <Show
+                  when={video()}
+                  fallback={
+                    <CanvasPreview
+                      preview={preview()}
+                      surface={props.surface}
+                      options={props.options}
+                    />
+                  }
+                >
+                  {(item) => {
+                    const Fallback = () => (
+                      <openclaw-youtube-video>
+                        <a href={item().watchUrl} target="_blank" rel="noopener noreferrer">
+                          {preview().title?.trim() || t("chat.youtube.video")}
+                          <Icon name="externalLink" />
+                        </a>
+                      </openclaw-youtube-video>
+                    );
+                    return (
+                      <Show when={`${props.options?.sessionKey ?? ""}\0${item().watchUrl}`} keyed>
+                        {(_key) => (
+                          <Errored fallback={<Fallback />}>
+                            <Loading fallback={<Fallback />}>
+                              <YouTubeVideoCard
+                                video={item()}
+                                videoTitle={preview().title ?? ""}
+                                enabled={
+                                  props.options?.embedSandboxMode !== "strict" &&
+                                  preview().sandbox !== "strict"
+                                }
+                              />
+                            </Loading>
+                          </Errored>
+                        )}
+                      </Show>
+                    );
+                  }}
+                </Show>
+              );
+            }}
+          </Show>
+        }
+      >
+        {(preview) => <BrowserTabCardHost preview={preview()} latest={false} />}
+      </Show>
     </Show>
   );
 }

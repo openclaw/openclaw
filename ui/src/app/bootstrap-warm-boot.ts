@@ -1,5 +1,7 @@
 import { gatewayCredentialScope } from "@openclaw/gateway-client/browser";
-import { parseAgentSessionKey } from "../lib/sessions/session-key.ts";
+import type { RouteLocation } from "@openclaw/uirouter";
+import { sessionRefFromPath } from "../app-session-route-paths.ts";
+import { buildAgentMainSessionKey, parseAgentSessionKey } from "../lib/sessions/session-key.ts";
 import { clearStoredChatSnapshots } from "../pages/chat/session-snapshot-invalidation.runtime.ts";
 import { resolveChatSnapshotKey } from "../pages/chat/session-snapshot-key.ts";
 import { prewarmChatSnapshot } from "../pages/chat/session-snapshot-prewarm.ts";
@@ -18,7 +20,26 @@ import {
 import type { ApplicationContext } from "./context.ts";
 import type { ApplicationGateway } from "./gateway.ts";
 
-export function prewarmBootChat(record: BootRecord, sessionKey: string): void {
+export function prewarmBootChat(
+  record: BootRecord,
+  lastSessionKey: string,
+  location: RouteLocation,
+  basePath: string,
+): void {
+  const target = sessionRefFromPath(location.pathname, basePath, record.agents.mainKey);
+  const path = location.pathname.slice(basePath.length).replace(/\/$/u, "");
+  if (!target && path !== "" && path !== "/chat") {
+    return;
+  }
+  const sessionKey =
+    target?.kind === "main"
+      ? buildAgentMainSessionKey({ agentId: target.agentId, mainKey: record.agents.mainKey })
+      : target?.kind === "literal"
+        ? target.sessionKey
+        : lastSessionKey;
+  if (target?.kind === "short" && parseAgentSessionKey(sessionKey)?.agentId !== target.agentId) {
+    return;
+  }
   if (parseAgentSessionKey(sessionKey)) {
     prewarmChatSnapshot(
       resolveChatSnapshotKey(
