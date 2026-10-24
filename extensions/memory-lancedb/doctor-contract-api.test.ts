@@ -113,7 +113,9 @@ describe("MemoryDB agent isolation", () => {
   beforeEach(() => {
     db = new MemoryDB(getDbPath(), 2);
   });
-  afterEach(() => db.close());
+  afterEach(async () => {
+    await db.close();
+  });
 
   test("cancels a timed-out native search and keeps the table usable", async () => {
     const stored = await db.store("alpha", entry("alpha"));
@@ -140,7 +142,7 @@ describe("MemoryDB agent isolation", () => {
     ).resolves.toMatchObject([{ id: alpha.id, text: "alpha" }]);
     await expect(db.delete("beta", alpha.id)).resolves.toBe(false);
     await expect(db.list("alpha")).resolves.toMatchObject([{ id: alpha.id }]);
-    db.close();
+    await db.close();
     db = new MemoryDB(getDbPath(), 2);
     await expect(db.list("alpha")).resolves.toMatchObject([{ id: alpha.id, text: "alpha" }]);
     await expect(db.list("beta")).resolves.toMatchObject([{ text: "beta" }]);
@@ -148,7 +150,7 @@ describe("MemoryDB agent isolation", () => {
 
   test("rejects search when a persisted table is reopened with a different vector dimension", async () => {
     await db.store("main", entry("fixed-size vector"));
-    db.close();
+    await db.close();
     db = new MemoryDB(getDbPath(), 3);
     await expect(db.search("main", [1, 0, 0], 5, 0)).rejects.toThrow(
       "No vector column found to match with the query vector dimension: 3",

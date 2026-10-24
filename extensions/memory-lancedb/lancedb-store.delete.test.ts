@@ -39,7 +39,9 @@ beforeEach(() => {
   vi.clearAllMocks();
   db = new MemoryDB("/unused", 3);
 });
-afterEach(() => db.close());
+afterEach(async () => {
+  await db.close();
+});
 
 test("uses LanceDB's deleted-row count as the authoritative receipt", async () => {
   lanceMocks.deleteRows

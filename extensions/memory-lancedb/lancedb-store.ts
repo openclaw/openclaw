@@ -84,6 +84,10 @@ export class MemoryDB {
   private db: LanceDB.Connection | null = null;
   private table: LanceDB.Table | null = null;
   private initPromise: Promise<void> | null = null;
+  private generation = 0;
+  private closed = false;
+  private activeOperations = 0;
+  private closingPromise: Promise<void> | null = null;
 
   constructor(
     private readonly dbPath: string,
@@ -91,24 +95,49 @@ export class MemoryDB {
     private readonly storageOptions?: Record<string, string>,
   ) {}
 
+  private assertOpen(): void {
+    if (this.closed) {
+      throw new Error("MemoryDB is closed");
+    }
+  }
+
+  // Tracks an admitted operation so close() can drain it before releasing
+  // native handles. Admissions are rejected once close() has published its
+  // closed intent.
+  private async runOperation<T>(operation: () => Promise<T>): Promise<T> {
+    this.assertOpen();
+    this.activeOperations += 1;
+    try {
+      return await operation();
+    } finally {
+      this.activeOperations -= 1;
+    }
+  }
+
   private async ensureInitialized(): Promise<void> {
+    this.assertOpen();
     if (this.table) {
       // Retained handles need an explicit refresh to observe external commits.
       await this.table.checkoutLatest();
+      this.assertOpen();
       return;
     }
     if (this.initPromise) {
-      return await this.initPromise;
+      await this.initPromise;
+      this.assertOpen();
+      return;
     }
 
-    this.initPromise = this.doInitialize().catch((error: unknown) => {
+    const generation = this.generation;
+    this.initPromise = this.doInitialize(generation).catch((error: unknown) => {
       this.initPromise = null;
       throw error;
     });
-    return await this.initPromise;
+    await this.initPromise;
+    this.assertOpen();
   }
 
-  private async doInitialize(): Promise<void> {
+  private async doInitialize(generation: number): Promise<void> {
     const lancedb = await loadLanceDbModule();
     const connectionOptions: LanceDB.ConnectionOptions = this.storageOptions
       ? { storageOptions: this.storageOptions }
@@ -127,6 +156,12 @@ export class MemoryDB {
         throw legacyMemorySchemaError();
       }
 
+      // The instance may have been closed while initialization was in flight.
+      // Never publish handles for a stale generation; the catch below releases
+      // the local handles instead.
+      if (generation !== this.generation) {
+        throw new Error("MemoryDB is closed during initialization");
+      }
       this.db = db;
       this.table = table;
     } catch (error) {
@@ -137,17 +172,19 @@ export class MemoryDB {
   }
 
   async store(agentId: string, entry: Omit<MemoryEntry, "id" | "createdAt">): Promise<MemoryEntry> {
-    await this.ensureInitialized();
+    return this.runOperation(async () => {
+      await this.ensureInitialized();
 
-    const fullEntry: MemoryEntry = {
-      ...entry,
-      id: randomUUID(),
-      createdAt: Date.now(),
-    };
-    const storedEntry: StoredMemoryRow = { ...fullEntry, agentId };
+      const fullEntry: MemoryEntry = {
+        ...entry,
+        id: randomUUID(),
+        createdAt: Date.now(),
+      };
+      const storedEntry: StoredMemoryRow = { ...fullEntry, agentId };
 
-    await this.table!.add([storedEntry]);
-    return fullEntry;
+      await this.table!.add([storedEntry]);
+      return fullEntry;
+    });
   }
 
   async search(
@@ -157,32 +194,34 @@ export class MemoryDB {
     minScore = 0.5,
     executionOptions?: Pick<LanceDB.QueryExecutionOptions, "timeoutMs">,
   ): Promise<MemorySearchResult[]> {
-    await this.ensureInitialized();
+    return this.runOperation(async () => {
+      await this.ensureInitialized();
 
-    // LanceDB applies metadata predicates before vector ranking. Foreign rows
-    // must never enter this agent's candidate set or top-K.
-    const results = await this.table!.vectorSearch(vector)
-      .where(memoryAgentPredicate(agentId))
-      .limit(limit)
-      .toArray(executionOptions);
+      // LanceDB applies metadata predicates before vector ranking. Foreign rows
+      // must never enter this agent's candidate set or top-K.
+      const results = await this.table!.vectorSearch(vector)
+        .where(memoryAgentPredicate(agentId))
+        .limit(limit)
+        .toArray(executionOptions);
 
-    const mapped = results.map((row) => {
-      const distance = row["_distance"] ?? 0;
-      const score = 1 / (1 + distance);
-      return {
-        entry: {
-          id: row.id as string,
-          text: row.text as string,
-          vector: row.vector as number[],
-          importance: row.importance as number,
-          category: row.category as MemoryEntry["category"],
-          createdAt: row.createdAt as number,
-        },
-        score,
-      };
+      const mapped = results.map((row) => {
+        const distance = row["_distance"] ?? 0;
+        const score = 1 / (1 + distance);
+        return {
+          entry: {
+            id: row.id as string,
+            text: row.text as string,
+            vector: row.vector as number[],
+            importance: row.importance as number,
+            category: row.category as MemoryEntry["category"],
+            createdAt: row.createdAt as number,
+          },
+          score,
+        };
+      });
+
+      return mapped.filter((result) => result.score >= minScore);
     });
-
-    return mapped.filter((result) => result.score >= minScore);
   }
 
   async list(
@@ -209,34 +248,95 @@ export class MemoryDB {
   }
 
   async query(agentId: string, options: MemoryQueryOptions): Promise<Record<string, unknown>[]> {
-    await this.ensureInitialized();
+    return this.runOperation(async () => {
+      await this.ensureInitialized();
 
-    let query = this.table!.query()
-      // LanceDB 0.30 replaces rather than combines repeated where() calls.
-      // Scope and operator filter stay one predicate so scope cannot be lost.
-      .where(scopedPredicate(agentId, options.filter))
-      .select(options.columns);
-    if (options.limit !== undefined) {
-      query = query.limit(options.limit);
-    }
-    return (await query.toArray()) as Record<string, unknown>[];
+      let query = this.table!.query()
+        // LanceDB 0.30 replaces rather than combines repeated where() calls.
+        // Scope and operator filter stay one predicate so scope cannot be lost.
+        .where(scopedPredicate(agentId, options.filter))
+        .select(options.columns);
+      if (options.limit !== undefined) {
+        query = query.limit(options.limit);
+      }
+      return (await query.toArray()) as Record<string, unknown>[];
+    });
   }
 
   async delete(agentId: string, id: string): Promise<boolean> {
-    await this.ensureInitialized();
-    if (!UUID_PATTERN.test(id)) {
-      throw new Error(`Invalid memory ID format: ${id}`);
-    }
-    const predicate = scopedPredicate(agentId, { column: "id", operator: "=", value: id });
-    const result = await this.table!.delete(predicate);
-    return result.numDeletedRows > 0;
+    return this.runOperation(async () => {
+      await this.ensureInitialized();
+      if (!UUID_PATTERN.test(id)) {
+        throw new Error(`Invalid memory ID format: ${id}`);
+      }
+      const predicate = scopedPredicate(agentId, { column: "id", operator: "=", value: id });
+      const result = await this.table!.delete(predicate);
+      return result.numDeletedRows > 0;
+    });
   }
 
-  close(): void {
-    this.table?.close();
-    this.db?.close();
-    this.table = null;
-    this.db = null;
-    this.initPromise = null;
+  // Reopens a closed instance for a new service lifecycle. Generation advances
+  // so a new initializer cannot publish into the retired lifecycle.
+  reopen(): void {
+    this.generation += 1;
+    this.closed = false;
+  }
+
+  async close(): Promise<void> {
+    // Publish the closed intent synchronously: new admissions are rejected and
+    // any in-flight or future initialization cannot publish handles.
+    this.generation += 1;
+    this.closed = true;
+    if (this.closingPromise) {
+      return this.closingPromise;
+    }
+    const closing = (async () => {
+      try {
+        if (this.initPromise) {
+          try {
+            await this.initPromise;
+          } catch {
+            // A failed or rejected initialization is still a settled lifecycle.
+          }
+        }
+        // Drain operations already admitted before close published its intent;
+        // releasing native handles under an in-flight add/search would corrupt
+        // the operation or leak resources.
+        while (this.activeOperations > 0) {
+          await new Promise<void>((resolve) => {
+            setImmediate(resolve);
+          });
+        }
+      } finally {
+        const table = this.table;
+        const db = this.db;
+        // Clear the instance first so a throwing native close cannot leave the
+        // instance stuck on a rejected closingPromise or leaked handles.
+        this.table = null;
+        this.db = null;
+        this.initPromise = null;
+        try {
+          table?.close();
+        } catch {
+          // Native close errors are surfaced by the next operation, not fatal here.
+        }
+        try {
+          db?.close();
+        } catch {
+          // Native close errors are surfaced by the next operation, not fatal here.
+        }
+      }
+    })();
+    // Assign after creating the IIFE and clear only our own promise after it
+    // settles; clearing inside the IIFE races the assignment and leaves a
+    // resolved promise cached, making every later close skip handle cleanup.
+    this.closingPromise = closing;
+    try {
+      await closing;
+    } finally {
+      if (this.closingPromise === closing) {
+        this.closingPromise = null;
+      }
+    }
   }
 }
