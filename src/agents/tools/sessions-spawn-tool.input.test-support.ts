@@ -271,6 +271,7 @@ export function registerSessionsSpawnInputTests({
     expect(description).toContain(
       'With runtime="acp": ACP harness id from: main. agentId is required.',
     );
+    expect(description).not.toContain('`runtime="acp"` ids: codex, claude');
   });
 
   it("adds no agentId guidance for a lone agent without ACP", () => {

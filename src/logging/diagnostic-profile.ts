@@ -333,7 +333,9 @@ export async function captureDiagnosticProfile<Profile, Result>(options: {
         ? error.reason
         : options.signal?.aborted
           ? "cancelled"
-          : "capture-failed";
+          : error instanceof Error && error.message.startsWith("Inspector error -32601:")
+            ? "unsupported"
+            : "capture-failed";
   } finally {
     if (capture) {
       if (startAttempted && !stopAttempted) {
