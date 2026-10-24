@@ -1,10 +1,12 @@
 import fs from "node:fs";
+import { createRequire } from "node:module";
 import path from "node:path";
 import {
   listOfficialExternalPluginCatalogEntries,
   resolveOfficialExternalPluginId,
   resolveOfficialExternalPluginInstall,
 } from "../../src/plugins/official-external-plugin-catalog.ts";
+import { listBuiltRuntimeEntryCandidates } from "../../src/plugins/package-entrypoints.ts";
 import { NON_PACKAGED_BUNDLED_PLUGIN_DIRS } from "../../src/shared/non-packaged-plugin-dirs.ts";
 import { collectRootPackageExcludedExtensionDirs } from "./root-package-bundled-plugin-excludes.mjs";
 
@@ -135,4 +137,166 @@ export async function selectStandalonePluginModules(runtimeRoot, moduleEntries, 
     new Set(selection.omittedDirs),
   );
   return files;
+}
+
+/**
+ * @typedef {{source: string, entry: string}} CompiledPluginEntry
+ * @typedef {{runtime: CompiledPluginEntry[], setup?: CompiledPluginEntry}} CompiledPluginEntries
+ * @typedef {{schemaVersion: 1, sdk: Record<string, CompiledPluginEntry>,
+ *   plugins: Record<string, CompiledPluginEntries>}} StandalonePluginContract
+ * @typedef {{id?: string, exports?: Record<string, string | {default?: string}>,
+ *   openclaw?: {extensions?: string[], setupEntry?: string}}} PluginContractManifest
+ */
+
+/** @param {string} root @param {string} name @returns {PluginContractManifest} */
+function readPluginContractManifest(root, name) {
+  return JSON.parse(fs.readFileSync(path.join(root, name), "utf8"));
+}
+
+/**
+ * @param {string} root
+ * @param {string} filename
+ * @param {Record<string, string>} entries
+ * @param {string} label
+ * @returns {CompiledPluginEntry}
+ */
+function compiledPluginEntry(root, filename, entries, label) {
+  const relative = path.relative(root, path.resolve(root, filename)).split(path.sep).join("/");
+  if (!relative || relative === ".." || relative.startsWith("../") || path.isAbsolute(relative)) {
+    throw new Error(`${label} is outside the standalone runtime: ${filename}`);
+  }
+  if (!Object.hasOwn(entries, relative)) {
+    throw new Error(
+      `${label} is missing its compiled entry: ${relative}. Run pnpm build and rebuild the standalone artifact.`,
+    );
+  }
+  return { source: relative, entry: entries[relative] };
+}
+
+/**
+ * Package exports and plugin manifests own the names; the compiled image owns their code.
+ * @param {{runtimeRoot: string, plugins: {embedded: readonly string[], embeddedDirs: readonly string[]},
+ *   embeddedPaths: Record<string, string>}} options
+ * @returns {StandalonePluginContract}
+ */
+export function createStandalonePluginContract({ runtimeRoot, plugins, embeddedPaths }) {
+  const rootManifest = readPluginContractManifest(runtimeRoot, "package.json");
+  /** @type {Record<string, CompiledPluginEntry>} */
+  const sdk = {};
+  for (const [name, target] of Object.entries(rootManifest.exports ?? {})) {
+    if (!name.startsWith("./plugin-sdk/")) {
+      continue;
+    }
+    const runtime = typeof target === "string" ? target : target?.default;
+    if (typeof runtime !== "string") {
+      throw new Error(`Plugin SDK export ${name} has no runtime entry`);
+    }
+    sdk[`openclaw/${name.slice(2)}`] = compiledPluginEntry(
+      runtimeRoot,
+      runtime,
+      embeddedPaths,
+      `Plugin SDK export ${name}`,
+    );
+  }
+  if (Object.keys(sdk).length === 0) {
+    throw new Error("Standalone runtime has no compiled Plugin SDK exports");
+  }
+  /** @type {Record<string, CompiledPluginEntries>} */
+  const compiledPlugins = {};
+  const selected = new Set(plugins.embedded);
+  for (const directory of plugins.embeddedDirs) {
+    const root = `dist/extensions/${directory}`;
+    const plugin = readPluginContractManifest(runtimeRoot, `${root}/openclaw.plugin.json`);
+    if (typeof plugin.id !== "string" || !selected.delete(plugin.id)) {
+      throw new Error(`Unexpected or duplicate bundled plugin ID: ${plugin.id}`);
+    }
+    const pkg = readPluginContractManifest(runtimeRoot, `${root}/package.json`);
+    const metadata = pkg.openclaw;
+    const declared = metadata?.extensions;
+    if (!metadata || !Array.isArray(declared) || declared.length === 0) {
+      throw new Error(`Bundled plugin ${plugin.id} has no declared runtime entries`);
+    }
+    /** @param {string} filename @returns {CompiledPluginEntry} */
+    const entry = (filename) => {
+      if (typeof filename !== "string" || !filename.trim()) {
+        throw new Error(`Bundled plugin ${plugin.id} has an invalid runtime entry`);
+      }
+      const normalized = path.posix.normalize(filename.replace(/\\/g, "/"));
+      if (
+        path.posix.isAbsolute(normalized) ||
+        normalized === ".." ||
+        normalized.startsWith("../")
+      ) {
+        throw new Error(`Bundled plugin ${plugin.id} entry is outside its package: ${filename}`);
+      }
+      const built = listBuiltRuntimeEntryCandidates(filename);
+      const candidates = [...built, filename].map((candidate) => path.posix.join(root, candidate));
+      const source = candidates.find((candidate) => Object.hasOwn(embeddedPaths, candidate));
+      return compiledPluginEntry(
+        runtimeRoot,
+        source ?? path.posix.join(root, built[0] ?? filename),
+        embeddedPaths,
+        `Bundled plugin ${plugin.id}`,
+      );
+    };
+    compiledPlugins[plugin.id] = {
+      runtime: declared.map(entry),
+      ...(metadata.setupEntry === undefined ? {} : { setup: entry(metadata.setupEntry) }),
+    };
+  }
+  if (selected.size > 0) {
+    throw new Error(`Missing bundled plugin directories: ${[...selected].join(", ")}`);
+  }
+  return { schemaVersion: 1, sdk, plugins: compiledPlugins };
+}
+
+const STANDALONE_PLUGIN_LOADER_SPECIFIER = "@openclaw/plugin-loader";
+const STANDALONE_PLUGIN_LOADER_DIRECTORY = "node_modules/@openclaw/plugin-loader";
+
+/**
+ * Keep the dynamic loader, including Jiti's lazy transform, in one host-owned disk package.
+ * @param {{runtimeRoot: string, outputRoot: string, build: (options: {
+ *   entrypoints: string[], outdir: string, naming: string, target: "bun", format: "cjs"
+ * }) => Promise<{success: boolean, logs: Iterable<unknown>}>}} options
+ */
+export async function stageStandalonePluginLoader({ runtimeRoot, outputRoot, build }) {
+  const require = createRequire(path.join(runtimeRoot, "package.json"));
+  const jiti = require.resolve("jiti");
+  const packageRoot = path.dirname(require.resolve("jiti/package.json"));
+  const entrypoint = path.join(outputRoot, "plugin-loader-entry.cjs");
+  fs.writeFileSync(
+    entrypoint,
+    `exports.createJiti = require(${JSON.stringify(jiti)}).createJiti;\n`,
+  );
+  const directory = path.join(runtimeRoot, STANDALONE_PLUGIN_LOADER_DIRECTORY);
+  fs.mkdirSync(directory, { recursive: true });
+  try {
+    const result = await build({
+      entrypoints: [entrypoint],
+      outdir: directory,
+      naming: "index.cjs",
+      target: "bun",
+      format: "cjs",
+    });
+    if (!result.success) {
+      throw new AggregateError(result.logs, "Could not bundle the standalone plugin loader");
+    }
+  } finally {
+    fs.rmSync(entrypoint, { force: true });
+  }
+  fs.writeFileSync(
+    path.join(directory, "package.json"),
+    JSON.stringify({ name: STANDALONE_PLUGIN_LOADER_SPECIFIER, private: true, main: "index.cjs" }) +
+      "\n",
+  );
+  fs.copyFileSync(path.join(packageRoot, "LICENSE"), path.join(directory, "LICENSE"));
+  return {
+    specifier: STANDALONE_PLUGIN_LOADER_SPECIFIER,
+    modulePath: `${STANDALONE_PLUGIN_LOADER_DIRECTORY}/index.cjs`,
+    files: ["index.cjs", "package.json", "LICENSE"].map((name) => ({
+      source: `${STANDALONE_PLUGIN_LOADER_DIRECTORY}/${name}`,
+      destination: `${STANDALONE_PLUGIN_LOADER_DIRECTORY}/${name}`,
+      category: "pluginLoader",
+    })),
+  };
 }

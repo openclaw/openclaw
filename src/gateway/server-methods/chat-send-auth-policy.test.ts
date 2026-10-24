@@ -18,6 +18,7 @@ import { rpcSourceTesting } from "../../sessions/session-lifecycle-admission.tes
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { captureGatewayAuthPolicy } from "../auth-policy.js";
 import { publishOperatorRoleConfigChange } from "../operator-role-policy.js";
+import { dispatchProfile } from "../server/client-fixtures.test-support.js";
 import {
   createDispatchTestHarness,
   createOperatorWsClient,
@@ -55,13 +56,7 @@ it.each([true, false])(
         verifiedIdentity: verified ? identity : undefined,
       }),
       ...(verified ? { authenticatedUserId: identity } : {}),
-      authenticatedUserProfile: {
-        profileId: profile.id,
-        displayName: null,
-        hasAvatar: false,
-        avatarRevision: "1",
-        updatedAt: profile.updatedAt,
-      },
+      authenticatedUserProfile: dispatchProfile(profile.id, { updatedAt: profile.updatedAt }),
     };
     const harness = createDispatchTestHarness({
       buildRequestContext: () => fixture.context,

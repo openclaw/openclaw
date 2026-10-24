@@ -25,6 +25,7 @@ import { HubTabs } from "../../components/solid/hub-tabs.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { LoadingState } from "../../components/solid/loading-state.tsx";
 import { Popover, type PopoverHandle } from "../../components/solid/popover.tsx";
+import { SettingsSelect } from "../../components/solid/settings-select.tsx";
 import { SettingsStatus, SettingsToggle } from "../../components/solid/settings-ui.tsx";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
 import { registerActivityEnglish } from "../../i18n/locales/en-activity.ts";
@@ -236,23 +237,15 @@ export function ActivityPageView(pageProps: { page: ActivityPageState }) {
           <div class="activity-live-filter-popover__panel">
             <label class="field">
               <span>{t("activity.toolFilter")}</span>
-              <select
-                class="settings-select"
+              <SettingsSelect
                 aria-label={t("activity.toolFilter")}
                 value={filters.toolFilter}
                 onChange={(event) => update({ toolFilter: event.currentTarget.value })}
-              >
-                <option value="" selected={filters.toolFilter === ""}>
-                  {t("activity.allTools")}
-                </option>
-                <For each={props.toolNames}>
-                  {(name) => (
-                    <option value={name} selected={name === filters.toolFilter}>
-                      {name}
-                    </option>
-                  )}
-                </For>
-              </select>
+                options={[
+                  { value: "", label: t("activity.allTools") },
+                  ...props.toolNames.map((name) => ({ value: name, label: name })),
+                ]}
+              />
             </label>
           </div>
         </Popover>

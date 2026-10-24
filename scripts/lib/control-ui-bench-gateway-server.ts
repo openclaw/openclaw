@@ -5,6 +5,15 @@ import type { ControlUiRootState } from "../../src/gateway/server-control-ui-roo
 
 /** Production HTTP delivery for immutable benchmark bundles in an isolated process. */
 export async function startControlUiBenchGatewayServer(outDir: string, port = 0) {
+  let readFixture:
+    | ((pathname: string) =>
+        | {
+            body: string | Buffer;
+            contentType: string;
+            delayMs?: number;
+          }
+        | undefined)
+    | undefined;
   const [
     { handleControlUiHttpRequest },
     { inspectControlUiRootAssets },
@@ -42,6 +51,24 @@ export async function startControlUiBenchGatewayServer(outDir: string, port = 0)
   let currentRoot = await prepareRoot(outDir);
   let closing: Promise<void> | undefined;
   const server = createServer((request, response) => {
+    const fixture = readFixture?.(new URL(request.url ?? "/", "http://localhost").pathname);
+    if (fixture) {
+      const send = () => {
+        response.writeHead(200, {
+          "Content-Type": fixture.contentType,
+          "Cache-Control": "no-store",
+          "Access-Control-Allow-Origin": "*",
+          "Cross-Origin-Resource-Policy": "cross-origin",
+        });
+        response.end(request.method === "HEAD" ? undefined : fixture.body);
+      };
+      if (fixture.delayMs) {
+        setTimeout(send, fixture.delayMs);
+      } else {
+        send();
+      }
+      return;
+    }
     // Each admitted request retains its bundle even if the next document switches builds.
     // Match the synthetic Gateway fixture; a document/bootstrap mismatch triggers a reload.
     void handleControlUiHttpRequest(request, response, {
@@ -78,6 +105,9 @@ export async function startControlUiBenchGatewayServer(outDir: string, port = 0)
 
   return {
     baseUrl: `http://127.0.0.1:${address.port}`,
+    setFixtureReader(reader: typeof readFixture) {
+      readFixture = reader;
+    },
     async selectBuild(directory: string) {
       const root = await prepareRoot(directory);
       if (closing) {

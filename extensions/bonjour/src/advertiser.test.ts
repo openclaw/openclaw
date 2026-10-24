@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import os from "node:os";
+import type { CiaoLogger } from "@homebridge/ciao/native.js";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const {
@@ -11,11 +12,11 @@ const {
   logger,
 } = vi.hoisted(() => ({
   createService: vi.fn(),
-  getResponder: vi.fn(),
+  getResponder: vi.fn<(options?: { logger?: CiaoLogger }) => unknown>(),
   shutdown: vi.fn(),
   registerUncaughtExceptionHandler: vi.fn(),
   registerUnhandledRejectionHandler: vi.fn(),
-  logger: { info: vi.fn(), warn: vi.fn() },
+  logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }));
 
 const stringOrFallback = (value: unknown, fallback: string) =>
@@ -66,9 +67,9 @@ function mockCiaoService(params?: {
   return { destroy };
 }
 
-vi.mock("@homebridge/ciao", () => ({ getResponder }));
-vi.mock("openclaw/plugin-sdk/runtime", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("openclaw/plugin-sdk/runtime")>()),
+vi.mock("@homebridge/ciao/native.js", () => ({ getResponder }));
+// mock-isolation: Test callback registration without installing process handlers or SDK runtime state.
+vi.mock("openclaw/plugin-sdk/runtime", () => ({
   registerUncaughtExceptionHandler,
   registerUnhandledRejectionHandler,
 }));
@@ -76,7 +77,7 @@ vi.mock("openclaw/plugin-sdk/runtime", async (importOriginal) => ({
 const { startGatewayBonjourAdvertiser } = await import("./advertiser.js");
 
 afterAll(() => {
-  vi.doUnmock("@homebridge/ciao");
+  vi.doUnmock("@homebridge/ciao/native.js");
   vi.doUnmock("openclaw/plugin-sdk/runtime");
   vi.resetModules();
 });
@@ -110,13 +111,22 @@ async function expectDisabled() {
   await expect(started.stop()).resolves.toBeUndefined();
 }
 
-async function expectConsoleFilter(method: "log" | "warn", noise: string) {
-  const original = vi.spyOn(console, method).mockImplementation(() => {});
+function responderLogger(): CiaoLogger {
+  const ciaoLogger = getResponder.mock.calls[0]?.[0]?.logger;
+  if (!ciaoLogger) {
+    throw new Error("expected a responder-owned logger");
+  }
+  return ciaoLogger;
+}
+
+async function expectCiaoFilter(method: "log" | "warn", noise: string) {
   await startAdvertiser();
-  console[method](noise);
-  console[method]("ordinary console line");
-  expect(original).toHaveBeenCalledTimes(1);
-  expect(original).toHaveBeenCalledWith("ordinary console line");
+  const destination = method === "log" ? logger.info : logger.warn;
+  destination.mockClear();
+  const ciaoLogger = responderLogger();
+  ciaoLogger[method](noise);
+  ciaoLogger[method]("ordinary %s", "ciao line");
+  expect(destination).toHaveBeenCalledExactlyOnceWith("bonjour: ordinary ciao line");
 }
 
 describe("gateway bonjour advertiser", () => {
@@ -307,27 +317,37 @@ describe("gateway bonjour advertiser", () => {
     expectWarnContaining("advertise threw");
   });
 
-  it("suppresses ciao self-probe retry console noise while advertising", async () => {
-    await expectConsoleFilter(
+  it("suppresses ciao self-probe retry noise in its own logger", async () => {
+    await expectCiaoFilter(
       "log",
       "[test._openclaw-gw._tcp.local.] failed probing with reason: Error: Can't probe for a service which is announced already. Received announcing for service test._openclaw-gw._tcp.local.. Trying again in 2 seconds!",
     );
   });
 
-  it("suppresses transient ciao ENODEV MDNS socket warnings while advertising", async () => {
-    await expectConsoleFilter(
+  it("suppresses transient ciao ENODEV MDNS socket warnings in its own logger", async () => {
+    await expectCiaoFilter(
       "warn",
       "Encountered MDNS socket error on socket 'br-abcdef123456': Error: send ENODEV 224.0.0.251:5353\n    at ...",
     );
   });
 
-  it("does not clobber console.log if another wrapper replaced it before shutdown", async () => {
-    vi.spyOn(console, "log").mockImplementation(() => {});
-    const replacementConsoleLog = vi.fn();
+  it("routes ciao errors without replacing or filtering the process console", async () => {
+    const originalLog = vi.spyOn(console, "log").mockImplementation(() => {});
+    const originalWarn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const originalError = vi.spyOn(console, "error").mockImplementation(() => {});
     const started = await startAdvertiser();
-    console.log = replacementConsoleLog as typeof console.log;
+    expect(console.log).toBe(originalLog);
+    expect(console.warn).toBe(originalWarn);
+    expect(console.error).toBe(originalError);
+    const noise = "Encountered MDNS socket error on socket 'example': send ENODEV";
+    console.warn(noise);
+    expect(originalWarn).toHaveBeenCalledExactlyOnceWith(noise);
+    responderLogger().error("socket %s", "failed");
+    expect(logger.error).toHaveBeenCalledExactlyOnceWith("bonjour: socket failed");
     await started.stop();
-    expect(console.log).toBe(replacementConsoleLog);
+    expect(console.log).toBe(originalLog);
+    expect(console.warn).toBe(originalWarn);
+    expect(console.error).toBe(originalError);
   });
 
   it("never overlaps ciao lifecycle states or conflict handling with another advertise call", async () => {

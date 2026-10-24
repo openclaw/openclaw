@@ -79,17 +79,26 @@ retain restart behavior under a broader no-op prefix.
 or `embedded-aot` for an AOT standalone. The artifact owns this process-stable
 fact; it is not a user setting or an authorization grant.
 
-Before intentionally evaluating host JavaScript, call
-`assertRuntimeSupportsDynamicExecution("Your feature name")` from the same
-entrypoint. In an embedded AOT host it throws an error naming the required
-runtime and the next step. Propagate that error instead of switching to another
-host evaluator. Fixed programs should be ordinary source functions; runtime
-schemas and syntax checks need codegen-free validators and parsers.
+AOT hosts allow fetched CJS/TypeScript plugins, Node Code Mode, and QA expressions.
+The code supplied after compilation runs interpreted while plugins share the
+host's compiled SDK. Use `noteRuntimeDynamicExecution("plugins")` (or
+`"code-mode"` / `"qa"`) to emit the owner's one-time performance notice. Runtime
+and setup loading already report fetched plugin execution; do not log another
+warning per plugin or call.
 
-Installing a plugin after compilation does not embed it, even if it ships
-JavaScript rather than TypeScript. Run fetched code in a dynamic-execution host
-or rebuild the complete artifact with the plugin. Metadata discovery does not
-execute its runtime. See [Runtime execution profiles](/concepts/runtime-profiles).
+At an execution boundary, propagate
+`annotateRuntimeExecutionError(error, "Your feature name")`. It preserves ordinary
+errors and adds actionable guidance to actual code-generation restrictions or
+unavailable AOT modules. An AOT profile alone is never a reason to reject code.
+A strict code-generation ban still prevents disk/VM loading; use a build without
+that flag. A missing late module must be installed through the disk loader or
+included in a rebuilt artifact.
+
+Keep fixed programs as normal source functions, runtime schemas in codegen-free
+validators, and syntax checks in parsers. Declare worker/child entries and runtime
+dependencies; CJS/TS loading does not qualify every transitive host API or worker.
+Metadata discovery still does not execute plugin code. See
+[Runtime execution profiles](/concepts/runtime-profiles).
 
 ### Process and network utilities
 

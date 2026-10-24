@@ -126,6 +126,7 @@ it.each([onInternalDiagnosticEvent, onTrustedInternalDiagnosticEvent])(
   "filters trusted event types before cloning without narrowing untrusted interest (%#)",
   async (subscribe) => {
     const seen: Array<{ type: string; trusted: boolean; seq: number }> = [];
+    const trace = { traceId: "a".repeat(32), spanId: "b".repeat(16) };
     const clone = vi.spyOn(globalThis, "structuredClone");
     const stop = subscribe(
       (event, metadata) => {
@@ -136,10 +137,13 @@ it.each([onInternalDiagnosticEvent, onTrustedInternalDiagnosticEvent])(
     expect(hasInternalDiagnosticEventInterest("message.queued")).toBe(true);
     expect(hasInternalDiagnosticEventInterest("log.record")).toBe(false);
 
-    emitTrustedDiagnosticEvent({ type: "message.queued", source: "core" });
+    emitTrustedDiagnosticEvent({ type: "message.queued", source: "core", trace });
     expect(clone).not.toHaveBeenCalled();
     emitDiagnosticEvent(
-      Object.assign({ type: "message.queued" as const, source: "plugin" }, { trusted: true }),
+      Object.assign(
+        { type: "message.queued" as const, source: "plugin", trace },
+        { trusted: true },
+      ),
     );
     emitTrustedDiagnosticEvent({
       type: "model.call.started",
@@ -147,9 +151,10 @@ it.each([onInternalDiagnosticEvent, onTrustedInternalDiagnosticEvent])(
       callId: "call",
       provider: "test",
       model: "test",
+      trace,
     });
-    emitTrustedDiagnosticEvent({ type: "log.record", level: "INFO", message: "ignored" });
-    emitDiagnosticEvent({ type: "log.record", level: "INFO", message: "ignored" });
+    emitTrustedDiagnosticEvent({ type: "log.record", level: "INFO", message: "ignored", trace });
+    emitDiagnosticEvent({ type: "log.record", level: "INFO", message: "ignored", trace });
     emitDiagnosticEvent({ type: "model.usage", usage: { total: 1 } });
     await waitForDiagnosticEventsDrained();
 

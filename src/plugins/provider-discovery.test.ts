@@ -1,6 +1,7 @@
 /** Tests provider discovery normalization, grouping, and manifest contribution handling. */
 import { describe, expect, it } from "vitest";
-import type { ModelDefinitionConfig, ModelProviderConfig } from "../config/types.js";
+import type { ModelProviderConfig } from "../config/types.js";
+import { buildCatalogModel as makeModel } from "../plugin-sdk/provider-catalog.test-support.js";
 import {
   groupPluginDiscoveryProvidersByOrder,
   normalizePluginDiscoveryResult,
@@ -35,23 +36,6 @@ function makeModelProviderConfig(overrides?: Partial<ModelProviderConfig>): Mode
     baseUrl: "http://127.0.0.1:8000/v1",
     models: [],
     ...overrides,
-  };
-}
-
-function makeModel(id: string): ModelDefinitionConfig {
-  return {
-    id,
-    name: id,
-    reasoning: false,
-    input: ["text"],
-    cost: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-    },
-    contextWindow: 128_000,
-    maxTokens: 8_192,
   };
 }
 

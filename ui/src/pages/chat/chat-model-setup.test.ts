@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { createActiveSessionPlacement } from "../../test-helpers/session-placement.ts";
 import { resolveChatModelSetup, requiresChatModelSetup } from "./chat-model-setup.ts";
 
 type ModelSetup = Parameters<typeof resolveChatModelSetup>[0];
@@ -18,19 +19,12 @@ it.each([
   expect(requiresChatModelSetup({ ...loaded, ...overrides })).toBe(required);
 });
 
-const active = {
-  state: "active" as const,
-  generation: 1,
-  createdAtMs: 1,
-  updatedAtMs: 1,
-  stateChangedAtMs: 1,
+const active = createActiveSessionPlacement({
   environmentId: "worker:test",
-  activeOwnerEpoch: 1,
-  workerBundleHash: "a".repeat(64),
   workspaceBaseManifestRef: "workspace-base",
   remoteWorkspaceDir: "/worker/workspace",
   inference: "worker" as const,
-};
+});
 
 it.each(["missing-auth", "auth-failed"] as const)(
   "ignores only Gateway provider credentials for a current worker placement (%s)",

@@ -702,6 +702,7 @@ src/config/sessions/session-entry-codec.ts
 src/config/sessions/session-entry-write-policy.ts
 src/config/sessions/session-entry-cohort.worker.ts
 src/config/sessions/session-entry-json.ts
+src/config/sessions/session-entry-numeric-snapshot.ts
 src/config/sessions/session-entry-snapshot-values.ts
 src/config/sessions/session-entry-snapshots.ts
 src/config/sessions/session-entry-state-format.ts
@@ -2571,6 +2572,7 @@ src/shared/text/escape-markdown.ts
 src/shared/text/final-tags.ts
 src/shared/text/glm-arg-key-payload.ts
 src/shared/text/model-special-tokens.ts
+src/shared/text/native-tool-marker.ts
 src/shared/text/reasoning-tags.ts
 src/shared/text/tag-name-probe.ts
 src/shared/text/text-projection.ts

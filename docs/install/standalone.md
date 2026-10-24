@@ -78,10 +78,12 @@ bytecode. An AOT artifact needs its own runtime and signing qualification.
 
 AOT artifacts select the `embedded-aot` [runtime execution profile](/concepts/runtime-profiles).
 Host Code Mode using the Node executor, QA expressions, and plugins fetched after
-the build require dynamic execution and report an actionable error before
-evaluating code. Run those features with a Node/Bun installation or a JIT/bytecode
-standalone. An embedded guest runtime has its own qualification requirements;
-OpenClaw does not silently switch executors.
+the build run interpreted. Each feature emits one performance notice per process;
+use a JIT build for full speed. Fetched CJS/TypeScript plugins load from disk
+through the normal loader against the compiled SDK. Missing runtime modules and
+builds with `--disallow-code-generation-from-strings=strict` still report actionable
+guidance. Guest runtimes keep their own qualification requirements; OpenClaw
+does not silently switch executors.
 
 ### WebAssembly in AOT builds
 
@@ -223,7 +225,7 @@ runtime in `runtime/npm/` is retained regardless of the plugin selection.
 | `executable`    | Relative `path`, `sizeBytes`, and `sha256`.                                                                                                      |
 | `runtime`       | Relative `path`, `sizeBytes`, `sha256`, `fileCount`, `symlinkCount`, resource `categories`, and `sidecarPlugins`.                                |
 | `embedded`      | Counts for `workers`, `plugins`, `modules`, and `inlineWorkers`.                                                                                 |
-| `plugins`       | Sorted plugin ID arrays: `embedded` and `omitted`. The additive fields retain schema version `1`.                                                |
+| `plugins`       | Sorted plugin ID arrays: `embedded` and `omitted`, plus the compiled entry `contract`. These additive fields retain schema version `1`.          |
 | `pruning`       | Resource `policy`, `removedFiles`, `removedBytes`, and `removedSymlinks`.                                                                        |
 | `macos`         | macOS only: `hardenedRuntime` and the selected mode's `entitlements` map.                                                                        |
 
@@ -247,6 +249,13 @@ and `debug.runtime` after changing those bytes.
 resource category. Its totals equal `runtime.fileCount` and `runtime.sizeBytes`.
 `runtime.sidecarPlugins` is empty because bundled plugin code is embedded in the
 executable. Browser scripts served as plugin assets are counted as resources.
+
+`plugins.contract` maps package SDK runtime exports and selected plugin
+runtime/setup entries to their source-relative names and compiled image entries.
+The builder validates this map before compilation; a missing declared entry fails
+the build. The map describes image membership and does not load plugin code or
+grant plugin admission. Its inventory includes private bundled facades; plugins
+must still use documented SDK subpaths.
 
 `runtime.sqlite` records the selected SQLite version, compile options, and extension
 loading support. For macOS it also records the bundled library's relative `path`,
@@ -327,6 +336,7 @@ boundaries. The sidecar contains the resources read from disk:
 - Session-card fonts, HTML export templates, and bundled hook metadata.
 - Native addons, shared libraries, dependency resources, and their package and
   license metadata.
+- The host-owned plugin transform package for JIT and bytecode builds.
 - Runtime identity and startup metadata, install-owner metadata, and license notices.
 
 The builder removes embedded application and bundled plugin JavaScript, source
@@ -337,9 +347,21 @@ executable metadata supplies bundled plugin source checks and Doctor contract
 hashes. Installed plugins keep their normal filesystem admission and loading
 rules and live in the configured state directory.
 
-In JIT and bytecode builds, installed TypeScript plugins use the embedded Jiti
-loader and Babel transformer. AOT builds admit only compiler-embedded plugin
-modules; an install does not add code to the executable.
+JIT and bytecode builds, including the matched JIT companion, retain Jiti and its
+lazy Babel transformer in one host-owned package under
+`runtime/node_modules/@openclaw/plugin-loader/`. The package loads only when a
+plugin needs source transformation; native JavaScript loading, including supported
+native ESM entry behavior, keeps its existing path. The `pluginLoader` resource
+category includes the bundle, package metadata, and license.
+
+AOT builds admit only compiler-embedded plugin modules; an install does not add
+code to the executable. An AOT build without `--support-output` omits the loader
+package. A paired AOT/JIT build keeps the same resource snapshot in both sidecars,
+including the inactive loader package in the AOT sidecar. Only the JIT artifact
+publishes its lazy loader
+factory; the AOT artifact does not enable it. The compiled entry contract and
+presence of package files do not establish source-plugin support.
+
 On-demand plugin installs use the declared npm runtime in `runtime/npm/` through
 the standalone executable's Bun mode. This preserves npm registry authentication,
 configuration, lockfile integrity checks, and the installer's disabled lifecycle

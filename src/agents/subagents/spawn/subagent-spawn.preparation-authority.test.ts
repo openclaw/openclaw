@@ -44,6 +44,7 @@ import { finalizeAgentToolAvailability } from "../../agent-tool-availability.js"
 import { copyAgentToolMetadata } from "../../agent-tool-metadata.js";
 import { finalizeAgentTools } from "../../agent-tools.finalize.js";
 import type { AnyAgentTool } from "../../agent-tools.types.js";
+import { createEnteredGate } from "../../entered-gate.test-support.js";
 import { createAgentHarnessHostCapabilities } from "../../harness/host-capability.js";
 import { createAgentsWaitTool } from "../../tools/agents-wait-tool.js";
 import {
@@ -162,8 +163,7 @@ describe("pending spawn preparation authority", () => {
           },
         ],
       );
-      const writerEntered = createDeferred();
-      const releaseWriter = createDeferred();
+      const writerGate = createEnteredGate();
       const forkQueued = createDeferred<{ childSessionKey: string; initialSessionId: string }>();
       const forkSettled = createDeferred<
         Awaited<ReturnType<typeof forkSessionEntryFromParent>> | Error
@@ -178,13 +178,10 @@ describe("pending spawn preparation authority", () => {
           // Hold a genuine preceding database writer, then enqueue the real fork owner.
           blocker = runExclusiveSqliteSessionWrite(
             resolveSqliteStoreScope(storePath),
-            async () => {
-              writerEntered.resolve();
-              await releaseWriter.promise;
-            },
+            writerGate.wait,
             "session.transcript.batch",
           );
-          await writerEntered.promise;
+          await writerGate.entered;
           const initial = loadSessionEntry({ storePath, sessionKey: params.sessionKey })!;
           const pending = forkSessionEntryFromParent(params);
           forkQueued.resolve({
@@ -284,7 +281,7 @@ describe("pending spawn preparation authority", () => {
           expect(parent.controller.signal.aborted).toBe(false);
           expect(getAdmittedRunDelegatedAuthority(admitted)).toBeUndefined();
         }
-        releaseWriter.resolve();
+        writerGate.release();
         const result = await forkSettled.promise;
         const entry = loadSessionEntry({ storePath, sessionKey: childSessionKey })!;
         const transcript = await loadTranscriptEvents({
@@ -339,7 +336,7 @@ describe("pending spawn preparation authority", () => {
           ).toBe("synthetic attachment");
         }
       } finally {
-        releaseWriter.resolve();
+        writerGate.release();
         inspected.resolve();
         await blocker;
         await pending;

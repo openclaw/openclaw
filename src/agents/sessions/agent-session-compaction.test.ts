@@ -35,6 +35,7 @@ import { cleanupSessionStateForTest } from "../../test-utils/session-state-clean
 import { MAX_OVERFLOW_COMPACTION_ATTEMPTS } from "../agent-compaction-constants.js";
 import { compactWithSafetyTimeout } from "../embedded-agent-runner/compaction-safety-timeout.js";
 import { subscribeEmbeddedAgentSession } from "../embedded-agent-subscribe.js";
+import { createEnteredGate } from "../entered-gate.test-support.js";
 import { estimateContextTokens } from "../runtime/index.js";
 import { guardSessionManager } from "../session-tool-result-guard-wrapper.js";
 import { createZeroUsageFixture } from "../test-helpers/usage-fixtures.js";
@@ -735,16 +736,12 @@ describe("compaction writer admission", () => {
     });
     const before = await loadTranscriptEvents(target);
     const messagesBefore = [...session.messages];
-    const release = createDeferred();
-    const entered = createDeferred();
+    const gate = createEnteredGate();
     const reservation = runOpenClawAgentWriteAdmission(
       toDatabaseOptions(resolveSqliteReadScope(target)),
-      async () => {
-        entered.resolve();
-        await release.promise;
-      },
+      gate.wait,
     );
-    await entered.promise;
+    await gate.entered;
     const work = session.compact();
     const outcome = work.then(
       (value) => ({ status: "fulfilled" as const, value }),
@@ -755,7 +752,7 @@ describe("compaction writer admission", () => {
       // The summary continuations reach the held writer before cancellation.
       await nextTurn();
       session.abortCompaction();
-      release.resolve();
+      gate.release();
       const result = await outcome;
       expect(result).toMatchObject({
         status: "rejected",
@@ -765,7 +762,7 @@ describe("compaction writer admission", () => {
       expect(session.messages).toEqual(messagesBefore);
       expect(published).toEqual([]);
     } finally {
-      release.resolve();
+      gate.release();
       await Promise.allSettled([reservation, work]);
     }
   });

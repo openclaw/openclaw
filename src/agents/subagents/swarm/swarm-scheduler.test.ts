@@ -1,5 +1,6 @@
 import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import { createEnteredGate } from "../../entered-gate.test-support.js";
 let PluginRuntimeCloseRetainedError: typeof import("../../../plugins/runtime-close-error.js").PluginRuntimeCloseRetainedError;
 let activateSwarmRun: typeof import("./swarm-scheduler.js").activateSwarmRun;
 let bindSwarmRunReservation: typeof import("./swarm-scheduler.js").bindSwarmRunReservation;
@@ -235,25 +236,21 @@ describe("swarm scheduler", () => {
 
   it("joins a released reservation's pending launch before shutdown cleanup", async () => {
     const lifecycleOwner = {};
-    const entered = createDeferred();
-    const finishLaunch = createDeferred();
+    const launchGate = createEnteredGate();
     const onRemoved = vi.fn(async () => undefined);
     makeQueue("released-launch").enqueue("pending-launch", {
       lifecycleOwner,
-      start: async () => {
-        entered.resolve();
-        await finishLaunch.promise;
-      },
+      start: launchGate.wait,
       onRemoved,
     });
-    await entered.promise;
+    await launchGate.entered;
     expect(releaseSwarmRun("pending-launch")).toBe(true);
     const closing = closeSwarmScheduler(lifecycleOwner);
     try {
       await flushMicrotasks();
       expect(onRemoved).not.toHaveBeenCalled();
     } finally {
-      finishLaunch.resolve();
+      launchGate.release();
     }
     await closing;
     expect(onRemoved).toHaveBeenCalledExactlyOnceWith("shutdown");

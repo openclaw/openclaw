@@ -6,6 +6,7 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import * as approvals from "../operator-approval-store.js";
+import { gatewayRequest } from "../request-frame.test-support.js";
 import { handleGatewayRequest } from "../server-methods.js";
 import { getSessionRowProjection } from "../session-row-projection-access.js";
 import * as lifetime from "../session-utils-read-lifetime.js";
@@ -107,15 +108,10 @@ it("measures subscription dispatch with a 160k-token transcript", async () => {
             const respond = vi.fn();
             const start = performance.now();
             await handleGatewayRequest({
-              req: {
-                type: "req",
-                id: `${index}`,
-                method: "sessions.messages.subscribe",
-                params: {
-                  key: scope.sessionKey,
-                  ...(includeApprovals ? { includeApprovals: true } : {}),
-                },
-              },
+              req: gatewayRequest(`${index}`, "sessions.messages.subscribe", {
+                key: scope.sessionKey,
+                ...(includeApprovals ? { includeApprovals: true } : {}),
+              }),
               client,
               context,
               respond,

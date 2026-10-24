@@ -178,6 +178,24 @@ describe("memory search config", () => {
       { inputType: "passage", queryInputType: "query", documentInputType: "document" },
     ],
     [
+      "literal query instruction inheritance",
+      { queryInstruction: "search_query: " },
+      undefined,
+      { queryInstruction: "search_query: " },
+    ],
+    [
+      "literal query instruction override",
+      { queryInstruction: "search_query: " },
+      { queryInstruction: "Instruct: Retrieve notes\nQuery: " },
+      { queryInstruction: "Instruct: Retrieve notes\nQuery: " },
+    ],
+    [
+      "empty query instruction suppresses inheritance",
+      { queryInstruction: "search_query: " },
+      { queryInstruction: "" },
+      { queryInstruction: undefined },
+    ],
+    [
       "session source exclusion",
       { provider: "openai", sources: ["memory", "sessions"] },
       { rememberAcrossConversations: false },

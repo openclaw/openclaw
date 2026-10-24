@@ -18,6 +18,7 @@ import type {
   PluginCapabilityCatalogHostContext,
 } from "./capability-catalog-context.types.js";
 import { isPluginRegistryLoadInFlight, resolvePluginRegistryLoadCacheKey } from "./loader-cache.js";
+import { pluginFixtureConfig } from "./loader-fixture-builders.test-support.js";
 import { createLazyPluginRuntime } from "./loader-module-runtime.js";
 import { loadOpenClawPluginsWithInternalOverrides } from "./loader-runtime-load.js";
 import { loadOpenClawPlugins, type PluginLoadOptions } from "./loader.js";
@@ -116,13 +117,7 @@ async function withFactoryPlugin(
     async () =>
       await run(
         {
-          config: {
-            plugins: {
-              allow: [plugin.id],
-              load: { paths: [plugin.file] },
-              slots: { memory: "none" },
-            },
-          },
+          config: pluginFixtureConfig(plugin),
           pluginSdkResolution: "src",
           activate: false,
         },
