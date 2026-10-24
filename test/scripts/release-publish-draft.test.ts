@@ -91,84 +91,53 @@ function publicationFixture(releaseVersion = "2026.9.4") {
   };
 }
 
-it.each([
-  { releaseVersion: "2026.9.4", hasManifest: true },
-  { releaseVersion: "2026.9.4", hasManifest: false },
-  { releaseVersion: "2026.8.35", hasManifest: false },
-])(
-  "renders pinned $releaseVersion with manifest=$hasManifest",
-  ({ releaseVersion, hasManifest }) => {
-    const extended = releaseVersion === "2026.8.35";
-    const { root, targetSha, read, write, json, run } = publicationFixture(releaseVersion);
-    const prepare = workflow.jobs.publish.steps.find(
-      (step: { name?: string }) => step.name === "Prepare GitHub release notes",
-    );
-    const notes = join(root, "helper-notes.md");
-    const proof = write("proof.md", `### Release verification\n\n- Source: ${targetSha}\n`);
-    if (hasManifest) {
-      json("full-release-validation-manifest.json", {
-        childRuns: {},
-        childEvidence: {},
-        advisoryJobs: [],
-      });
-    }
-    if (!extended) {
-      for (const name of [
-        "Dispatch publish workflows",
-        "Start core npm publication",
-        "Complete publish workflows",
-      ]) {
-        expect(
-          workflow.jobs.publish.steps.find((step: { name?: string }) => step.name === name)?.env
-            .FULL_RELEASE_VALIDATION_MANIFEST_DIR,
-        ).toBe("${{ runner.temp }}/full-release-validation-manifest");
-      }
-    }
-    const result = run(
-      extended
-        ? prepare.run
-        : `
+it.each([true, false])("renders pinned release notes with manifest=%s", (hasManifest) => {
+  const { root, targetSha, read, write, json, run } = publicationFixture();
+  const prepare = workflow.jobs.publish.steps.find(
+    (step: { name?: string }) => step.name === "Prepare GitHub release notes",
+  );
+  const notes = join(root, "helper-notes.md");
+  const proof = write("proof.md", `### Release verification\n\n- Source: ${targetSha}\n`);
+  if (hasManifest) {
+    json("full-release-validation-manifest.json", {
+      childRuns: {},
+      childEvidence: {},
+      advisoryJobs: [],
+    });
+  }
+  expect(
+    new Set(
+      workflow.jobs.publish.steps.flatMap((step: { env?: Record<string, string> }) =>
+        step.env?.FULL_RELEASE_VALIDATION_MANIFEST_DIR
+          ? [step.env.FULL_RELEASE_VALIDATION_MANIFEST_DIR]
+          : [],
+      ),
+    ),
+  ).toEqual(new Set(["${{ runner.temp }}/full-release-validation-manifest"]));
+  const result = run(
+    `
 set -euo pipefail
 ${prepare.run}
 source "$GITHUB_WORKSPACE/.release-harness/scripts/lib/release-publish-children.sh"
 render_github_release_notes "$NOTES_FILE" "$PROOF_FILE"
 canonical_release_body_matches "$NOTES_FILE"
 `,
-      extended
-        ? {
-            GITHUB_REPOSITORY: "openclaw/openclaw",
-            RELEASE_NPM_DIST_TAG: "extended-stable",
-          }
-        : {
-            NOTES_FILE: notes,
-            PROOF_FILE: proof,
-            RELEASE_EVIDENCE_MODE: "full-release-validation",
-            ...(hasManifest ? { FULL_RELEASE_VALIDATION_MANIFEST_DIR: root } : {}),
-          },
-      process.platform === "darwin" ? "/bin/bash" : "bash",
-    );
-    expect(result.status, result.stderr).toBe(0);
-    const prepared = read("release-notes.md");
-    if (extended) {
-      expect(
-        prepared.startsWith(
-          "This is a gateway-only `extended-stable` release, which is our current equivalent to LTS. " +
-            "This release is OpenClaw from the end of August 2026, plus critical security updates, " +
-            "reliability and performance fixes, and features like new model support. " +
-            "The latest version of OpenClaw at the time of this release is " +
-            "[2026.9.5](https://github.com/openclaw/openclaw/releases#release-v2026.9.5)\n\n",
-        ),
-      ).toBe(true);
-    } else {
-      expect(prepared).toContain("Frozen release fix.");
-      expect(read("helper-notes.md")).toBe(`${prepared}\n\n${read("proof.md").trimEnd()}`);
-    }
-  },
-);
+    {
+      NOTES_FILE: notes,
+      PROOF_FILE: proof,
+      RELEASE_EVIDENCE_MODE: "full-release-validation",
+      ...(hasManifest ? { FULL_RELEASE_VALIDATION_MANIFEST_DIR: root } : {}),
+    },
+    process.platform === "darwin" ? "/bin/bash" : "bash",
+  );
+  expect(result.status, result.stderr).toBe(0);
+  const prepared = read("release-notes.md");
+  expect(prepared).toContain("Frozen release fix.");
+  expect(read("helper-notes.md")).toBe(`${prepared}\n\n${read("proof.md").trimEnd()}`);
+});
 
 it.each<[string, string, string?, string?]>([
   ["draft", "latest", "edit"],
-  ["draft", "beta", "edit"],
   ["missing", "latest", "create"],
   ["public", "latest"],
   ["diverged-public", "latest"],

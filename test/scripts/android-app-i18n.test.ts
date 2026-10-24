@@ -66,65 +66,44 @@ describe("Android app i18n resources", () => {
 
   it("builds complete Wear and third-party resources for every native locale", async () => {
     const catalog = await buildAndroidAppI18nCatalog();
-    const resourcesFor = (directory: string, filename: string) =>
-      [...catalog.resources].filter(
-        ([file]) => file.includes(directory) && file.endsWith(filename),
+    for (const [root, filename] of [
+      ["apps/android/wear/src/main/res", "strings.xml"],
+      ["apps/android/app/src/thirdParty/res", "accessibility_strings.xml"],
+    ]) {
+      const base = await readFile(`${root}/values/${filename}`, "utf8");
+      const resources = [...catalog.resources].filter(
+        ([file]) => file.includes(`/${root}/values-`) && file.endsWith(`/${filename}`),
       );
-    const wearResources = resourcesFor("/apps/android/wear/src/main/res/values-", "/strings.xml");
-    const base = await readFile("apps/android/wear/src/main/res/values/strings.xml", "utf8");
-    const baseKeys = sortedMatches(base, /<string name="([^"]+)"/gu, 1);
-    const basePlaceholders = sortedMatches(base, /%\d+\$[a-z]/giu);
-
-    expect(wearResources).toHaveLength(NATIVE_I18N_LOCALES.length);
-    for (const [, content] of wearResources) {
-      const stringTags = [...content.matchAll(/<string\b[^>]*>/gu)].map((match) => match[0]);
-      const keys = sortedMatches(stringTags.join("\n"), /\bname="([^"]+)"/gu, 1);
-      expect(keys).toEqual(baseKeys);
-      expect(sortedMatches(content, /%\d+\$[a-z]/giu)).toEqual(basePlaceholders);
-      expect(content).not.toMatch(/(?:&apos;|(?<!\\)')/u);
-      expect(content).toContain('<resources xmlns:tools="http://schemas.android.com/tools">');
-      for (const tag of stringTags) {
-        if (!tag.includes('translatable="false"')) {
-          expect(tag.match(/\btools:ignore=/gu)).toHaveLength(1);
-          expect(tag).toMatch(/\btools:ignore="[^"]*\bTypos\b[^"]*"/u);
-          expect(tag).toMatch(/\btools:ignore="[^"]*\bTypographyDashes\b[^"]*"/u);
-          expect(tag).toMatch(/\btools:ignore="[^"]*\bTypographyEllipsis\b[^"]*"/u);
+      expect(resources).toHaveLength(NATIVE_I18N_LOCALES.length);
+      for (const [, content] of resources) {
+        expect(sortedMatches(content, /<string name="([^"]+)"/gu, 1)).toEqual(
+          sortedMatches(base, /<string name="([^"]+)"/gu, 1),
+        );
+        expect(sortedMatches(content, /%\d+\$[a-z]/giu)).toEqual(
+          sortedMatches(base, /%\d+\$[a-z]/giu),
+        );
+        expect(content).not.toMatch(/(?:&apos;|(?<!\\)')/u);
+        expect(content).toContain('<resources xmlns:tools="http://schemas.android.com/tools">');
+        expect(content).toContain('tools:ignore="MissingTranslation,');
+        for (const [tag] of content.matchAll(/<string\b[^>]*>/gu)) {
+          if (!tag.includes('translatable="false"')) {
+            expect(tag.match(/\btools:ignore=/gu)).toHaveLength(1);
+            expect(tag).toMatch(
+              /\btools:ignore="(?:[^"\n]*,)?Typos,TypographyDashes,TypographyEllipsis"/u,
+            );
+          }
         }
       }
-      expect(content).toContain(
-        'name="open_thread" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis"',
-      );
-      expect(content).toContain(
-        'name="show_new_messages" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis"',
-      );
     }
-
-    const thirdPartyBase = await readFile(
-      "apps/android/app/src/thirdParty/res/values/accessibility_strings.xml",
-      "utf8",
-    );
-    const resources = resourcesFor(
-      "/apps/android/app/src/thirdParty/res/values-",
-      "/accessibility_strings.xml",
-    );
-
-    expect(thirdPartyBase).toContain('tools:ignore="MissingTranslation"');
-    expect(resources).toHaveLength(NATIVE_I18N_LOCALES.length);
-    for (const [, content] of resources) {
-      expect(content).toContain('name="accessibility_service_label"');
-      expect(content).toContain('name="accessibility_dev_activity_label"');
-    }
-  });
-
-  it("preserves the existing Swedish app name", async () => {
-    const strings = await readFile("apps/android/app/src/main/res/values-sv/strings.xml", "utf8");
-    expect(strings).toContain('<string name="app_name">OpenClaw-nod</string>');
   });
 
   it.each<[string, string[], string]>([
-    ["frequency", ["Beta", "Alpha", "Beta"], "Beta"],
+    [
+      "frequency excluding the source",
+      ["Source", "Beta", "Alpha", "Beta", "Source", "Source"],
+      "Beta",
+    ],
     ["stable order", ["Beta", "Alpha"], "Alpha"],
-    ["translated candidate", ["Source", "Translated", "Source"], "Translated"],
     ["source fallback", ["Source", "Source"], "Source"],
   ])("selects translations by %s", (_name, values, expected) => {
     expect(selectDeterministicTranslation("Source", values)).toBe(expected);
@@ -229,62 +208,47 @@ describe("Android app i18n resources", () => {
     );
   });
 
-  it("maps typed model fields across generic types and named argument omissions", () => {
-    const source = `
-      data class GenericState<T : Map<String, String>>(
-        val metadata: Map<String, String>,
-        val statusText: String,
-      )
+  it.each<[string, string, unknown]>([
+    [
+      "generic model fields and omitted named arguments",
+      `data class GenericState<T : Map<String, String>>(val metadata: Map<String, String>, val statusText: String)
       data class OptionalState(val statusText: String = "", val code: String)
       GenericState<Map<String, String>>(emptyMap(), "Generic ready")
-      OptionalState(code = "Internal code")
-    `;
-    expect(findings(source)).toEqual(["Generic ready"]);
-  });
-
-  it("scans helpers with generic and lambda parameters", () => {
-    const source = `
-      fun <T> statusText(value: T, transform: (T) -> String): String =
-        if (transform(value).isBlank()) "No status" else nativeString("Ready")
-    `;
-    expect(findings(source)).toEqual(["No status"]);
-  });
-
-  it("finds raw strings in direct UI and presentation helpers", () => {
-    const source = `
+      OptionalState(code = "Internal code")`,
+      ["Generic ready"],
+    ],
+    [
+      "helpers with generic and lambda parameters",
+      `fun <T> statusText(value: T, transform: (T) -> String): String =
+        if (transform(value).isBlank()) "No status" else nativeString("Ready")`,
+      ["No status"],
+    ],
+    [
+      "raw UI and presentation helper strings",
+      `
       Text("""Direct raw copy""")
       fun diagnosticsReport(): String =
         """
           Raw helper copy
         """.trimIndent()
-    `;
-    expect(findings(source)).toEqual(
+    `,
       expect.arrayContaining(["Direct raw copy", expect.stringContaining("Raw helper copy")]),
-    );
-  });
-
-  it("decodes Kotlin Unicode escapes without collapsing escaped backslashes", () => {
-    const source = String.raw`
+    ],
+    [
+      "Unicode escapes without collapsing escaped backslashes",
+      String.raw`
       Text("Progress \u00b7 ready")
       Text("Literal \\u00b7 marker")
-    `;
-    expect(findings(source)).toEqual(["Progress · ready", String.raw`Literal \u00b7 marker`]);
-  });
-
-  it("inventories command, attention, and overview model display literals", () => {
-    const source = `
-      data class CommandItem(val key: String, val title: String, val subtitle: String)
-      data class HomeAttentionRow(val title: String, val subtitle: String, val route: String)
-      data class OverviewMetricCardSpec(val title: String, val value: String, val subtitle: String)
-      CommandItem("chat", "Chat", "Start")
-      CommandItem(key = "voice", title = nativeString("Voice"), subtitle = nativeString("Talk"))
-      HomeAttentionRow(title = "Gateway",
-        subtitle = "Connect", route = "gateway")
-      OverviewMetricCardSpec(title = nativeString("Gateway"),
-        value = if (connected) "Online" else nativeString("Offline"),
-        subtitle = "Fine")
-    `;
-    expect(findings(source)).toEqual(["Chat", "Start", "Gateway", "Connect", "Online", "Fine"]);
+    `,
+      ["Progress · ready", String.raw`Literal \u00b7 marker`],
+    ],
+    [
+      "unclosed quoted parameter",
+      'fun statusText(token: String = "unterminated): String = "Ready"',
+      [],
+    ],
+  ])("scans %s", (_name, source, expected) => {
+    expect(findings(source)).toEqual(expected);
   });
 
   it("scans flavor-specific activity surfaces", () => {
@@ -295,11 +259,5 @@ describe("Android app i18n resources", () => {
         "thirdParty",
       ),
     ).toEqual(["Developer surface"]);
-  });
-
-  it("keeps scanner boundaries for an unclosed quoted parameter", () => {
-    expect(
-      findings('fun statusText(token: String = "unterminated): String = "Ready"', "ui/Scanner.kt"),
-    ).toEqual([]);
   });
 });

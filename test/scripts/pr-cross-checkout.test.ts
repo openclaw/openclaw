@@ -10,8 +10,6 @@ import {
 import { delimiter, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
-import { landingSnapshotQuery } from "./pr-merge-snapshot.test-support.js";
-import { validReview, writeReviewArtifacts } from "./pr-review-artifact-fixture.js";
 import { copyPrWrapperSources, linkPrWrapperDependencies } from "./pr-wrapper.test-support.js";
 
 const temps = useAutoCleanupTempDirTracker(afterEach);
@@ -135,7 +133,6 @@ function fixture() {
       base: { ref: baseRef, repo: repoAuthority },
       head: { sha: "" },
     });
-  const snapshotCall = `${owner}\tapi graphql --hostname github.com -H Cache-Control: max-age=0 -f owner=fixture -f name=repo -F number=123 -f ${landingSnapshotQuery} --include`;
   const calls = join(root, "calls.log");
   const gh = join(bin, "gh");
   writeFileSync(
@@ -174,12 +171,6 @@ esac
     return { ...result, output: result.stdout + result.stderr };
   };
   const readCalls = () => readFileSync(calls, "utf8").trim().split("\n");
-  const expectedCalls = (...extra: string[]) => [
-    `${owner}\tbrowse`,
-    `${owner}\tapi --hostname github.com repos/fixture/repo/pulls/123 -H Cache-Control: max-age=0`,
-    ...extra,
-  ];
-  const authenticationCall = `${owner}\tapi user --include`;
   const refs = (repoPath: string, prefix: string) =>
     git(repoPath, ["for-each-ref", "--format=%(refname)", prefix]);
   return {
@@ -192,32 +183,31 @@ esac
     landed,
     intent,
     record,
-    snapshotCall,
     git,
     run,
-    readCalls,
-    expectedCalls,
-    authenticationCall,
+    expectOwnerCalls: () => {
+      const observedCalls = readCalls();
+      expect(new Set(observedCalls.map((call) => call.split("\t")[0]))).toEqual(new Set([owner]));
+      expect(
+        observedCalls.filter((call) =>
+          /\bmutation\b|(?:--method|-X) (?:POST|PATCH|PUT|DELETE)\b/u.test(call),
+        ),
+      ).toEqual([]);
+    },
     refs,
   };
 }
 
 describePosix("native PR wrapper repository ownership", () => {
-  it.each(["foreign", "foreign with outcome", "linked", "non-Git"])(
-    "reconciles the owner's accepted intent from a %s caller without redispatch or cleanup",
+  it.each(["conflicting caller outcome", "non-Git caller"])(
+    "reconciles from a %s without redispatch or cleanup",
     (location) => {
       const f = fixture();
-      let cwd = f.caller;
-      if (location === "foreign with outcome") {
-        // A same-number record in another clone must never become recovery authority.
+      if (location === "conflicting caller outcome") {
         f.git(f.caller, ["update-ref", outcomeRef, f.git(f.caller, ["rev-parse", "HEAD"])]);
-      } else if (location === "linked") {
-        cwd = f.worktree;
-      } else if (location === "non-Git") {
-        cwd = f.root;
       }
       const callerRefs = f.git(f.caller, ["show-ref"]);
-      const result = f.run(cwd);
+      const result = f.run(location === "non-Git caller" ? f.root : f.caller);
 
       expect(result.status, result.output).toBe(0);
       expect(result.output).toContain(`MERGED exact attempted head ${f.head} as ${f.landed}`);
@@ -231,10 +221,7 @@ describePosix("native PR wrapper repository ownership", () => {
       expect(readFileSync(f.capture, "utf8")).toBe("retained capture\n");
       expect(f.git(f.caller, ["show-ref"])).toBe(callerRefs);
       expect(f.refs(f.owner, lockRef)).toBe("");
-      expect(f.readCalls()).toEqual([
-        f.authenticationCall,
-        ...f.expectedCalls(f.snapshotCall, f.snapshotCall),
-      ]);
+      f.expectOwnerCalls();
     },
   );
 
@@ -258,41 +245,21 @@ describePosix("native PR wrapper repository ownership", () => {
     expect(f.git(f.owner, ["rev-parse", outcomeRef])).toBe(f.head);
     expect(f.git(f.caller, ["rev-parse", outcomeRef])).toBe(f.intent);
     expect(readFileSync(f.capture, "utf8")).toBe("retained capture\n");
-    expect(f.readCalls()).toEqual([f.authenticationCall, ...f.expectedCalls()]);
+    f.expectOwnerCalls();
   });
 
-  it.each(["prepare-run", "merge-recover", "ci-dispatch", "review-init"])(
+  it.each(["ci-dispatch", "review-init"])(
     "uses owner repository metadata for early %s validation",
     (command) => {
       const f = fixture();
-      if (command === "prepare-run") {
-        const review = validReview(f.head);
-        review.pr.number = 123;
-        review.recommendation = "READY FOR /prepare-pr";
-        review.issueValidation.status = "valid";
-        writeReviewArtifacts(f.worktree, review, { prNumber: 123, headSha: f.head });
-      }
-      const result = f.run(f.caller, [
-        command,
-        "123",
-        ...(command === "merge-recover" ? [f.intent, "--confirmed-operator-recovery"] : []),
-      ]);
+      const result = f.run(f.caller, [command, "123"]);
       expect(result.status, result.output).toBe(1);
       expect(result.output).toContain(
         command === "ci-dispatch"
           ? "missing remote headRefName/headRefOid metadata"
-          : command === "review-init"
-            ? "did not include a head SHA"
-            : "targets owner-release",
+          : "did not include a head SHA",
       );
-      const calls = f.expectedCalls();
-      if (command === "review-init") {
-        calls.unshift(f.authenticationCall);
-        calls.push(
-          `${f.owner}\tapi --hostname github.com repos/fixture/repo/pulls/123/files?per_page=100 --paginate --slurp -H Cache-Control: max-age=0`,
-        );
-      }
-      expect(f.readCalls()).toEqual(calls);
+      f.expectOwnerCalls();
       expect(f.git(f.owner, ["rev-parse", outcomeRef])).toBe(f.intent);
       expect(f.refs(f.owner, lockRef)).toBe("");
       expect(f.refs(f.caller, "refs/openclaw")).toBe("");

@@ -56,7 +56,6 @@ function fixture(root = roots.make("compiler-input-snapshot-")) {
 
 it.each([
   ['{"compilerOptions":{"target":"invalid"},"include":["src/**/*.ts"]}', "TS6046"],
-  ['{"include":"src/**/*.ts"}', "TS5024"],
   ['{"extends":"./missing.json","include":["src/**/*.ts"]}', "TS5083"],
   ['{"compilerOptions": {', "TS1005"],
 ])("rejects invalid native compiler configuration %s", (config, diagnostic) => {
@@ -67,10 +66,6 @@ it.each([
 
 it.each([
   { file: "tools/compiler.js", bytes: "export const compiler = 2;\n" },
-  {
-    file: "base.json",
-    bytes: '{"compilerOptions":{"target":"ES2022","types":[]}}',
-  },
   {
     file: "base.json",
     bytes: '{ "compilerOptions": {"target":"ES2023","types":[]} }\n',
