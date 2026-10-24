@@ -218,14 +218,9 @@ it.each([
       opts: {
         message: "Child completed",
         operatorAuthority,
-        ...(requesterProfileId
-          ? {
-              requesterOrigin: {
-                sessionKey: "agent:main:main",
-                operatorProfileId: requesterProfileId,
-              },
-            }
-          : {}),
+        requesterOrigin: requesterProfileId
+          ? { sessionKey: "agent:main:main", operatorProfileId: requesterProfileId }
+          : undefined,
         inputProvenance: {
           kind: "inter_session",
           sourceTool,
@@ -297,17 +292,15 @@ it.each(["channel", "delegate", "generated-media", "recovery"] as const)(
       opts: {
         message: "continue accepted work",
         requesterOrigin,
-        ...(kind === "channel"
-          ? {}
-          : {
-              inputProvenance: {
-                kind: "inter_session" as const,
+        inputProvenance:
+          kind === "channel"
+            ? undefined
+            : {
+                kind: "inter_session",
                 sourceTool: kind === "generated-media" ? "subagent_settle" : "sessions_send",
               },
-            }),
-        ...(kind === "generated-media"
-          ? { internalDeliveryMediaUrls: ["/synthetic/result.png"] }
-          : {}),
+        internalDeliveryMediaUrls:
+          kind === "generated-media" ? ["/synthetic/result.png"] : undefined,
       },
     });
     requesterOrigin.senderId = "replacement";
@@ -351,15 +344,9 @@ it.each([
       await prepare({
         opts: {
           message: "hello",
-          ...(coordination
-            ? {
-                inputProvenance: {
-                  kind: "inter_session" as const,
-                  sourceTool: "sessions_send",
-                  sourceRole: "subagent" as const,
-                },
-              }
-            : {}),
+          inputProvenance: coordination
+            ? { kind: "inter_session", sourceTool: "sessions_send", sourceRole: "subagent" }
+            : undefined,
         },
         sessionKey,
         sessionId,

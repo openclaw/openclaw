@@ -198,13 +198,10 @@ describe("deliverAgentCommandResult payload normalization", () => {
 
   it("rechecks delivery ownership after asynchronous payload preparation", async () => {
     let deliveryCurrent = true;
-    normalizerMock.mockImplementationOnce(
-      () =>
-        async (payload: ReplyPayload): Promise<ReplyPayload> => {
-          deliveryCurrent = false;
-          return payload;
-        },
-    );
+    normalizerMock.mockReturnValueOnce(async (payload) => {
+      deliveryCurrent = false;
+      return payload;
+    });
 
     await expect(
       deliverForTest({
@@ -307,10 +304,11 @@ describe("deliverAgentCommandResult payload normalization", () => {
   });
 
   it("normalizes reply-media paths before outbound delivery", async () => {
+    const normalizedPath = "/tmp/agent-workspace/out/photo.png";
     const normalizerFn = vi.fn(async (payload: ReplyPayload): Promise<ReplyPayload> => ({
       ...payload,
-      mediaUrl: "/tmp/agent-workspace/out/photo.png",
-      mediaUrls: ["/tmp/agent-workspace/out/photo.png"],
+      mediaUrl: normalizedPath,
+      mediaUrls: [normalizedPath],
     }));
     normalizerMock.mockReturnValue(normalizerFn);
 
@@ -345,9 +343,7 @@ describe("deliverAgentCommandResult payload normalization", () => {
         runId: "run-1",
       },
     });
-    expect(deliverArgs.payloads[0]?.mediaUrls).toStrictEqual([
-      "/tmp/agent-workspace/out/photo.png",
-    ]);
+    expect(deliverArgs.payloads[0]?.mediaUrls).toStrictEqual([normalizedPath]);
   });
 
   it("emits canonical text and media JSON and isolates the writer's payload array", async () => {
@@ -537,16 +533,12 @@ describe("deliverAgentCommandResult payload normalization", () => {
   });
 
   it("dedupes delivered file media before normalization can add a failure warning", async () => {
-    normalizerMock.mockImplementationOnce(
-      () =>
-        async (payload: ReplyPayload): Promise<ReplyPayload> => ({
-          ...payload,
-          text: `${payload.text ?? ""}\n⚠️ Media failed.`,
-          mediaUrl: undefined,
-          mediaUrls: undefined,
-        }),
-    );
-
+    normalizerMock.mockReturnValueOnce(async (payload) => ({
+      ...payload,
+      text: `${payload.text ?? ""}\n⚠️ Media failed.`,
+      mediaUrl: undefined,
+      mediaUrls: undefined,
+    }));
     const delivered = await deliverForTest({
       opts: { threadId: "171.222" },
       payloads: [{ text: "The image is ready.", mediaUrls: ["file:///tmp/generated-image.png"] }],

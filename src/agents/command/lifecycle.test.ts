@@ -131,6 +131,11 @@ describe("createAgentCommandLifecycle", () => {
       });
       expect(data.error).toBe(error);
       expect(data).not.toHaveProperty("errorObservation");
+      if (outcome === "recovered") {
+        expect(lifecycleLog.info).toHaveBeenCalledOnce();
+        expect(lifecycleLog.warn).not.toHaveBeenCalled();
+        expect(lifecycleLog.error).not.toHaveBeenCalled();
+      }
     },
   );
 
@@ -179,19 +184,6 @@ describe("createAgentCommandLifecycle", () => {
     expect(event.data.error).toMatch(/installation may have changed.*gateway restart/i);
     expect(JSON.stringify(event)).not.toContain(missingChunk);
     expect(JSON.stringify(event)).not.toContain(importingChunk);
-  });
-
-  it("logs successful stops at the expected severity", () => {
-    const lifecycle = createLifecycle("logged-terminal-owner");
-
-    lifecycle.emitEnd({
-      metadata: {},
-      outcome: buildAgentRunTerminalOutcome({ status: "ok", stopReason: "stop" }),
-    });
-
-    expect(lifecycleLog.info).toHaveBeenCalledOnce();
-    expect(lifecycleLog.warn).not.toHaveBeenCalled();
-    expect(lifecycleLog.error).not.toHaveBeenCalled();
   });
 
   it.each(["finishing", "end", "error"] as const)(

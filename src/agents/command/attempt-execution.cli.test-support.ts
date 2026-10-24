@@ -301,37 +301,27 @@ export function registerCommandCliAdmissionTests({
     expect(runCliAgentMock).toHaveBeenCalledOnce();
   });
 
-  it.each(["assistant_output_started"] as const)(
-    "keeps CLI admission separate from observed %s",
-    async (phase) => {
-      const sessionKey = "agent:main:direct:cli-execution-started";
-      const sessionEntry = makeSessionEntry("session-cli-execution-started");
-      const { runCli } = await createCliSession(sessionKey, sessionEntry);
-      const onExecutionStarted = vi.fn();
-      const onRuntimeTurnStarted = vi.fn();
-      const callbacks = createAgentAttemptLifecycleCallbacks(
-        {
-          lifecycleFinishing: false,
-          lifecycleEnded: false,
-        },
-        onRuntimeTurnStarted,
-      );
-      runCliAgentMock.mockResolvedValueOnce(makeCliResult("started"));
-
-      await runCli({
-        onExecutionStarted,
-        onAgentEvent: callbacks.onAgentEvent,
-      });
-
-      expect(firstRunCliAgentArg().onExecutionStarted).toBe(onExecutionStarted);
-      const observePhase = firstRunCliAgentArg().onExecutionPhase;
-      if (typeof observePhase !== "function") {
-        throw new Error("CLI execution phase observer is missing");
-      }
-      observePhase({ phase: "process_spawned" });
-      expect(onRuntimeTurnStarted).not.toHaveBeenCalled();
-      observePhase({ phase });
-      expect(onRuntimeTurnStarted).toHaveBeenCalledOnce();
-    },
-  );
+  it("keeps CLI admission separate from observed assistant output", async () => {
+    const { runCli } = await createCliSession(
+      "agent:main:direct:cli-execution-started",
+      makeSessionEntry("session-cli-execution-started"),
+    );
+    const onExecutionStarted = vi.fn();
+    const onRuntimeTurnStarted = vi.fn();
+    const callbacks = createAgentAttemptLifecycleCallbacks(
+      { lifecycleFinishing: false, lifecycleEnded: false },
+      onRuntimeTurnStarted,
+    );
+    runCliAgentMock.mockResolvedValueOnce(makeCliResult("started"));
+    await runCli({ onExecutionStarted, onAgentEvent: callbacks.onAgentEvent });
+    expect(firstRunCliAgentArg().onExecutionStarted).toBe(onExecutionStarted);
+    const observePhase = firstRunCliAgentArg().onExecutionPhase;
+    if (typeof observePhase !== "function") {
+      throw new Error("CLI execution phase observer is missing");
+    }
+    observePhase({ phase: "process_spawned" });
+    expect(onRuntimeTurnStarted).not.toHaveBeenCalled();
+    observePhase({ phase: "assistant_output_started" });
+    expect(onRuntimeTurnStarted).toHaveBeenCalledOnce();
+  });
 }
