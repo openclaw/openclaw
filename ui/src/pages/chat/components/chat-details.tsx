@@ -57,7 +57,6 @@ export type ChatDetailsViewProps = {
   nativePresentation?: "desktop" | "mobile";
   mobileHost?: ChatMobileHost;
   mobileBindings?: MobileDetailsBindings;
-  automaticContentReady?: boolean;
   conversationVisible?: boolean;
   conversationMain?: boolean;
   externalTrigger?: boolean;
@@ -133,16 +132,8 @@ export function ChatDetails(props: ChatDetailsViewProps) {
   const outputsDemand = createMemo(() =>
     desktop() && opened() && props.chat?.outputs ? props.chat.retainOutputs : undefined,
   );
-  // Automatic content follows transcript paint; explicit opens bypass that wait.
-  // After first mount, retain disclosure state while closed or reconnecting.
-  const [sessionOpened] = createSignal<boolean>(
-    (previous) =>
-      previous === true ||
-      (opened() &&
-        (props.mobileHost !== undefined ||
-          intent() === "open" ||
-          props.automaticContentReady !== false)),
-  );
+  // Load on first presentation, then retain disclosure state while closed.
+  const [sessionOpened] = createSignal<boolean>((previous) => previous === true || opened());
   const docked = () => opened() && canDock();
   const surface = document.createElement("div");
   surface.style.display = "contents";
@@ -545,12 +536,15 @@ export function ChatDetails(props: ChatDetailsViewProps) {
     };
   });
   function SessionContent(content: { children: Element }) {
-    const loading = () => (
-      <PanelLoadingSkeleton variant="file-list" label={t("common.loading")} compact />
-    );
     return (
-      <Show when={sessionOpened()} fallback={opened() && loading()}>
-        <ChatLazyBoundary fallback={loading()}>{content.children}</ChatLazyBoundary>
+      <Show when={sessionOpened()}>
+        <ChatLazyBoundary
+          fallback={
+            <PanelLoadingSkeleton variant="file-list" label={t("common.loading")} compact />
+          }
+        >
+          {content.children}
+        </ChatLazyBoundary>
       </Show>
     );
   }

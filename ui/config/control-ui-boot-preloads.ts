@@ -107,10 +107,15 @@ export function controlUiBootPreloadsPlugin(): Plugin {
                 : {
                     rel: "modulepreload",
                     crossorigin: "",
-                    // Let signing pass Chat content without delaying shared prerequisites.
+                    // Keep signing and the composer ahead of other Chat content.
                     ...(route === "chat" &&
                     bundle[file]?.type === "chunk" &&
-                    bundle[file].name.startsWith("control-ui-boot-chat")
+                    bundle[file].name.startsWith("control-ui-boot-chat") &&
+                    Object.keys(bundle[file].modules).every(
+                      (id) =>
+                        controlUiBootManifestKey(id) !==
+                        "ui/src/pages/chat/components/chat-composer.tsx",
+                    )
                       ? { fetchpriority: "low" }
                       : {}),
                     href: `./${file}`,
