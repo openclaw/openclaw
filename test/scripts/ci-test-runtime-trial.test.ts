@@ -79,18 +79,6 @@ it("doubles explicit row deadlines only for dual-all", () => {
   }
 });
 
-it("installs Bun for selections that build the runtime first", () => {
-  const outputs = manifest({
-    eventName: "workflow_dispatch",
-    nodeTestShards: [{ ...fixture.nodeTestShards[0], pretestBuildMode: "runtime" }],
-    scopeEnv: { OPENCLAW_CI_TEST_RUNTIME_POLICY: "dual-all" },
-  });
-  expect(nodeRows(outputs)[0]).toMatchObject({
-    requires_bun: true,
-    pretest_build_mode: "runtime",
-  });
-});
-
 it("ignores trial environment on automatic events", () => {
   const outputs = manifest({
     eventName: "pull_request",

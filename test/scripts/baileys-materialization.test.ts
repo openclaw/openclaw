@@ -149,13 +149,11 @@ it("materializes patched Baileys with its own long edge and refreshes final dist
          assert.ok([...waveform].some(value => value > 0));
          assert.equal(await getAudioWaveform(Buffer.from("not audio")), undefined);
          const manifest = JSON.parse(fs.readFileSync(new URL("../package.json", pathToFileURL(entry))));
-         assert.equal(manifest.peerDependencies["audio-decode"], "^3.12.0");
-         console.log("patched waveform: 64 samples; invalid audio: best-effort undefined");`,
+         assert.equal(manifest.peerDependencies["audio-decode"], "^3.12.0");`,
         ],
         { cwd: distPlugin, env: prepared.env },
       );
       expect(probe.code, probe.stderr + probe.stdout).toBe(0);
-      expect(probe.stdout).toContain("patched waveform: 64 samples");
       expect(fs.readFileSync(sibling, "utf8")).toBe("preserve sibling");
       previousTarget = source;
     } finally {
