@@ -26,6 +26,9 @@ export async function prepareDoctorClientCredentials(params: {
         entry.kind === "state" && entry.foundVersion < CLIENT_CREDENTIAL_CUTOVER_SCHEMA_VERSION,
     )
   ) {
+    if (params.maintenanceActive) {
+      await preparePostgresClientCredentials(process.env, params.runtime);
+    }
     return true;
   }
   let present: boolean;
