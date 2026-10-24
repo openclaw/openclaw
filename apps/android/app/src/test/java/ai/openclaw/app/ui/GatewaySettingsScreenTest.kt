@@ -18,9 +18,11 @@ import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.hasClickAction
+import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.isDialog
@@ -210,6 +212,136 @@ class GatewaySettingsScreenTest {
   }
 
   @Test
+  fun secureManualGatewayMergesMaskedProxyHeadersWhenConnecting() {
+    showGateway()
+    val stableId = "manual|gateway.example|443"
+    val saved = mapOf("CF-Access-Client-Id" to "saved-id", "CF-Access-Client-Secret" to "expired-secret")
+    prefs.saveGatewayCustomHeaders(stableId, saved)
+    openManualSettings()
+    composeRule.onNodeWithText("Unencrypted").performScrollTo().performClick()
+    composeRule.onNodeWithContentDescription("Header name").assertDoesNotExist()
+    composeRule.onNode(hasSetTextAction() and hasText("127.0.0.1")).performScrollTo().performTextReplacement("gateway.example")
+    composeRule.onNode(hasSetTextAction() and hasText("18789")).performScrollTo().performTextReplacement("443")
+
+    val name = composeRule.onNodeWithContentDescription("Header name")
+    val value = composeRule.onNodeWithContentDescription("Header value")
+    val add = composeRule.onNodeWithText("Add header")
+    composeRule.waitUntil(timeoutMillis = 10_000) { composeRule.onAllNodesWithText("Saved headers for https://gateway.example").fetchSemanticsNodes().isNotEmpty() }
+    composeRule.onNodeWithText("CF-Access-Client-Secret").performScrollTo().assertIsDisplayed()
+    assertNoText("saved-id", "expired-secret")
+    // The saved Client ID header points the next name at the secret.
+    composeRule.onNode(hasSetTextAction() and hasText("e.g. CF-Access-Client-Secret")).assertExists()
+    name.performScrollTo().performTextReplacement("Host")
+    value.performScrollTo().performTextReplacement("smuggled.example")
+    composeRule.onNodeWithText("This header is set by the connection itself.").performScrollTo().assertIsDisplayed()
+    add.performScrollTo().assertIsNotEnabled()
+
+    name.performScrollTo().performTextReplacement("cf-access-client-secret")
+    value.performScrollTo().performTextReplacement("rotated-secret")
+    value.assert(SemanticsMatcher.keyIsDefined(SemanticsProperties.Password))
+    add.performScrollTo().performClick()
+    composeRule.onNodeWithText("cf-access-client-secret").assertIsDisplayed()
+    // A complete header that was typed but never added still belongs to this connect.
+    name.performScrollTo().performTextReplacement("X-Proxy-Tenant")
+    value.performScrollTo().performTextReplacement("synthetic-tenant")
+    capture("manual-gateway-custom-headers")
+    composeRule.runOnIdle { assertEquals("Editing is not persistence", saved, prefs.loadGatewayCustomHeaders(stableId)) }
+
+    composeRule.onNodeWithText("Save & Connect").performScrollTo().performClick()
+    val expected = mapOf("CF-Access-Client-Id" to "saved-id", "cf-access-client-secret" to "rotated-secret", "X-Proxy-Tenant" to "synthetic-tenant")
+    composeRule.waitUntil(timeoutMillis = 10_000) { prefs.loadGatewayCustomHeaders(stableId) == expected }
+  }
+
+  @Test
+  fun secureManualGatewayKeepsTypedHeadersWhenThePortIsCorrected() {
+    showGateway()
+    openManualSettings()
+    val expected = mapOf("CF-Access-Client-Id" to "synthetic-client-id", "CF-Access-Client-Secret" to "synthetic-client-secret")
+    composeRule.onNode(hasSetTextAction() and hasText("127.0.0.1")).performScrollTo().performTextReplacement("gateway.example")
+    val name = composeRule.onNodeWithContentDescription("Header name")
+    val value = composeRule.onNodeWithContentDescription("Header value")
+    name.performScrollTo().performTextReplacement("CF-Access-Client-Id")
+    value.performScrollTo().performTextReplacement("synthetic-client-id")
+    composeRule.onNodeWithText("Add header").performScrollTo().performClick()
+    name.performScrollTo().performTextReplacement("CF-Access-Client-Secret")
+    value.performScrollTo().performTextReplacement("synthetic-client-secret")
+    // The default port is wrong for a Cloudflare hostname; this attempt saves the address and headers under it.
+    composeRule.onNodeWithText("Save & Connect").performScrollTo().performClick()
+    composeRule.waitUntil(timeoutMillis = 10_000) { prefs.loadGatewayCustomHeaders("manual|gateway.example|18789") == expected }
+
+    composeRule.onNode(hasSetTextAction() and hasText("18789")).performScrollTo().performTextReplacement("443")
+    composeRule.onNodeWithText("Save & Connect").performScrollTo().performClick()
+    composeRule.waitUntil(timeoutMillis = 10_000) { prefs.loadGatewayCustomHeaders("manual|gateway.example|443") == expected }
+
+    // An address saved from elsewhere, such as a setup code, must not inherit these rows.
+    composeRule.runOnIdle { prefs.setManualHost("other.example") }
+    composeRule.onNode(hasSetTextAction() and hasText("other.example")).performScrollTo()
+    composeRule.onAllNodes(hasContentDescription("Remove header CF-Access-Client-Secret")).assertCountEquals(0)
+  }
+
+  @Test
+  fun savedProxyHeadersListNamesOnlyAndRemoveOneAfterConfirmation() {
+    showGateway()
+    val stableId = "manual|gateway.example|443"
+    val misplacedClientId = "0123456789abcdef0123456789abcdef.access"
+    prefs.saveGatewayCustomHeaders(
+      stableId,
+      mapOf("CF-Access-Client-Id" to "synthetic-client-id", misplacedClientId to "synthetic-secret", "X-Proxy-Tenant" to "synthetic-tenant"),
+    )
+    openManualSettings()
+    composeRule.onNode(hasSetTextAction() and hasText("127.0.0.1")).performScrollTo().performTextReplacement("gateway.example")
+    composeRule.onNode(hasSetTextAction() and hasText("18789")).performScrollTo().performTextReplacement("443")
+    composeRule.waitUntil(timeoutMillis = 10_000) { composeRule.onAllNodesWithText("Client ID saved as a header name").fetchSemanticsNodes().isNotEmpty() }
+    composeRule.onNodeWithText("X-Proxy-Tenant").performScrollTo().assertIsDisplayed()
+    // A credential saved as a name is described, never printed or announced.
+    assertNoText("synthetic-client-id", "synthetic-secret", "synthetic-tenant", "0123456789abcdef")
+    capture("manual-gateway-saved-headers")
+
+    composeRule.onNodeWithContentDescription("Remove saved header X-Proxy-Tenant").performScrollTo().performClick()
+    composeRule.onNodeWithText("Remove saved header?").assertIsDisplayed()
+    composeRule.onNodeWithText("Cancel").performClick()
+    composeRule.onNodeWithText("Remove saved header?").assertDoesNotExist()
+
+    composeRule.onNodeWithContentDescription("Remove saved header Client ID saved as a header name").performScrollTo().performClick()
+    assertNoText("0123456789abcdef")
+    composeRule.onNodeWithText("Remove").performClick()
+    val expected = mapOf("CF-Access-Client-Id" to "synthetic-client-id", "X-Proxy-Tenant" to "synthetic-tenant")
+    composeRule.waitUntil(timeoutMillis = 10_000) { prefs.loadGatewayCustomHeaders(stableId) == expected }
+    composeRule.waitUntil(timeoutMillis = 10_000) { composeRule.onAllNodesWithText("Client ID saved as a header name").fetchSemanticsNodes().isEmpty() }
+    composeRule.runOnIdle { assertEquals("Removing a header is not a connect", "127.0.0.1", prefs.manualHost.value) }
+  }
+
+  @Test
+  fun credentialTypedAsHeaderNameBlocksAddAndConnect() {
+    showGateway()
+    openManualSettings()
+    composeRule.onNode(hasSetTextAction() and hasText("127.0.0.1")).performScrollTo().performTextReplacement("gateway.example")
+    composeRule.onNode(hasSetTextAction() and hasText("18789")).performScrollTo().performTextReplacement("443")
+    composeRule.onNode(hasSetTextAction() and hasText("e.g. CF-Access-Client-Id")).assertExists()
+    val name = composeRule.onNodeWithContentDescription("Header name")
+    composeRule.onNodeWithContentDescription("Header value").performScrollTo().performTextReplacement("synthetic-secret")
+    val warnings =
+      listOf(
+        "0123456789abcdef0123456789abcdef.access" to "This looks like a Cloudflare Access Client ID. Put it in Header value and enter CF-Access-Client-Id as Header name.",
+        "0123456789abcdef".repeat(4) to "This looks like a secret. Put it in Header value, not Header name.",
+        "cfast_${"a1".repeat(24)}" to "This looks like a secret. Put it in Header value, not Header name.",
+      )
+    for ((typed, warning) in warnings) {
+      name.performScrollTo().performTextReplacement(typed)
+      composeRule.onNodeWithText(warning).performScrollTo().assertIsDisplayed()
+      composeRule.onNodeWithText("Add header").performScrollTo().assertIsNotEnabled()
+    }
+    capture("manual-gateway-client-id-warning")
+
+    composeRule.onNodeWithText("Save & Connect").performScrollTo().performClick()
+    composeRule.onNodeWithText("Fix the custom header above before connecting.").performScrollTo().assertIsDisplayed()
+    composeRule.runOnIdle {
+      assertEquals("A blocked connect keeps the form", "127.0.0.1", prefs.manualHost.value)
+      assertTrue(prefs.loadGatewayCustomHeaders("manual|gateway.example|443").isEmpty())
+    }
+  }
+
+  @Test
   fun setupReplacementStillRequiresConfirmationAndCancelPreservesSavedGateway() {
     showGateway()
     val entries = prefs.gatewayRegistry.entries.value
@@ -238,6 +370,13 @@ class GatewaySettingsScreenTest {
       disclosure.assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "Expanded"))
       disclosure.performScrollTo().performClick()
       disclosure.assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "Collapsed"))
+    }
+  }
+
+  private fun assertNoText(vararg fragments: String) {
+    for (fragment in fragments) {
+      composeRule.onAllNodes(hasText(fragment, substring = true), useUnmergedTree = true).assertCountEquals(0)
+      composeRule.onAllNodes(hasContentDescription(fragment, substring = true), useUnmergedTree = true).assertCountEquals(0)
     }
   }
 

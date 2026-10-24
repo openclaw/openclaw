@@ -50,6 +50,7 @@ import androidx.compose.ui.test.DeviceConfigurationOverride
 import androidx.compose.ui.test.FontScale
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assert
+import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
@@ -57,12 +58,14 @@ import androidx.compose.ui.test.assertIsNotSelected
 import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.getUnclippedBoundsInRoot
+import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.hasScrollAction
 import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.isDisplayed
 import androidx.compose.ui.test.isFocused
 import androidx.compose.ui.test.junit4.v2.createComposeRule
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
@@ -154,6 +157,113 @@ class InitialOnboardingLayoutTest {
       composeRule.onNodeWithText("Scan QR or setup code").performClick()
       composeRule.onNodeWithText("Enter setup code").performClick()
       assertInputPresentation("Paste setup code", "synthetic-setup-code", secret = true)
+    }
+  }
+
+  @Test
+  fun secureManualSetupStoresMaskedProxyHeadersWhenConnecting() {
+    val prefs = onboardingPrefs()
+    withOnboarding(prefs = prefs) { _, _ ->
+      composeRule.onNodeWithText("Continue").performClick()
+      composeRule.onNodeWithText("Set up manually").performClick()
+      composeRule.onNodeWithContentDescription("Header name").assertDoesNotExist()
+      composeRule.onNode(hasSetTextAction() and hasText("Host")).performScrollTo().performTextReplacement("gateway.example")
+      composeRule.onNode(hasSetTextAction() and hasText("18789")).performScrollTo().performTextReplacement("443")
+
+      val list = composeRule.onNode(hasScrollAction())
+      list.performScrollToNode(hasContentDescription("Header name"))
+      composeRule.onNodeWithContentDescription("Header name").performTextReplacement("CF-Access-Client-Id")
+      list.performScrollToNode(hasContentDescription("Header value"))
+      assertInputPresentation("Header value", "synthetic-client-id", secret = true)
+      list.performScrollToNode(hasText("Add header"))
+      composeRule.onNodeWithText("Add header").performClick()
+      composeRule.onNodeWithText("CF-Access-Client-Id").assertExists()
+
+      composeRule.onNodeWithText("Test connection").performClick()
+      composeRule.waitUntil(timeoutMillis = 10_000) {
+        prefs.loadGatewayCustomHeaders("manual|gateway.example|443") == mapOf("CF-Access-Client-Id" to "synthetic-client-id")
+      }
+    }
+  }
+
+  @Test
+  fun manualSetupKeepsTypedHeadersWhenTheAddressIsCorrected() {
+    val prefs = onboardingPrefs()
+    val expected = mapOf("CF-Access-Client-Id" to "synthetic-client-id", "CF-Access-Client-Secret" to "synthetic-client-secret")
+    withOnboarding(prefs = prefs) { _, _ ->
+      composeRule.onNodeWithText("Continue").performClick()
+      composeRule.onNodeWithText("Set up manually").performClick()
+      // The default port is wrong for a Cloudflare hostname; the first attempt saves under it.
+      composeRule.onNode(hasSetTextAction() and hasText("Host")).performScrollTo().performTextReplacement("gateway.example")
+      val list = composeRule.onNode(hasScrollAction())
+      list.performScrollToNode(hasContentDescription("Header name"))
+      composeRule.onNodeWithContentDescription("Header name").performTextReplacement("CF-Access-Client-Id")
+      composeRule.onNodeWithContentDescription("Header value").performTextReplacement("synthetic-client-id")
+      list.performScrollToNode(hasText("Add header"))
+      composeRule.onNodeWithText("Add header").performClick()
+      composeRule.onNodeWithContentDescription("Header name").performTextReplacement("CF-Access-Client-Secret")
+      composeRule.onNodeWithContentDescription("Header value").performTextReplacement("synthetic-client-secret")
+      composeRule.onNodeWithText("Test connection").performClick()
+      composeRule.waitUntil(timeoutMillis = 10_000) { prefs.loadGatewayCustomHeaders("manual|gateway.example|18789") == expected }
+
+      composeRule.onNodeWithContentDescription("Back").performClick()
+      // Saved under 18789, the rows leave that address's pending list and reappear for the corrected one.
+      list.performScrollToNode(hasContentDescription("Header name"))
+      composeRule.waitUntil(timeoutMillis = 10_000) {
+        composeRule.onAllNodes(hasContentDescription("Remove header CF-Access-Client-Secret")).fetchSemanticsNodes().isEmpty()
+      }
+      composeRule.onNode(hasSetTextAction() and hasText("18789")).performScrollTo().performTextReplacement("443")
+      list.performScrollToNode(hasContentDescription("Remove header CF-Access-Client-Secret"))
+      composeRule.onNodeWithText("Test connection").performClick()
+      composeRule.waitUntil(timeoutMillis = 10_000) { prefs.loadGatewayCustomHeaders("manual|gateway.example|443") == expected }
+    }
+  }
+
+  @Test
+  fun manualSetupRetryRemovesMisplacedClientIdAndSavesTwoHeaders() {
+    val prefs = onboardingPrefs()
+    val stableId = "manual|gateway.example|443"
+    // The first attempt of a real tester: Client ID typed as the name, secret as the value.
+    prefs.saveGatewayCustomHeaders(stableId, mapOf("0123456789abcdef0123456789abcdef.access" to "synthetic-secret"))
+    withOnboarding(prefs = prefs) { _, _ ->
+      composeRule.onNodeWithText("Continue").performClick()
+      composeRule.onNodeWithText("Set up manually").performClick()
+      composeRule.onNode(hasSetTextAction() and hasText("Host")).performScrollTo().performTextReplacement("gateway.example")
+      composeRule.onNode(hasSetTextAction() and hasText("18789")).performScrollTo().performTextReplacement("443")
+      val list = composeRule.onNode(hasScrollAction())
+      list.performScrollToNode(hasContentDescription("Header name"))
+      composeRule.waitUntil(timeoutMillis = 10_000) { composeRule.onAllNodesWithText("Client ID saved as a header name").fetchSemanticsNodes().isNotEmpty() }
+      for (fragment in listOf("0123456789abcdef", "synthetic-secret")) {
+        composeRule.onAllNodes(hasText(fragment, substring = true), useUnmergedTree = true).assertCountEquals(0)
+        composeRule.onAllNodes(hasContentDescription(fragment, substring = true), useUnmergedTree = true).assertCountEquals(0)
+      }
+
+      // Repeating the mistake keeps the form open with a warning instead of saving it again.
+      composeRule.onNodeWithContentDescription("Header name").performTextReplacement("fedcba9876543210fedcba9876543210.access")
+      composeRule.onNodeWithContentDescription("Header value").performTextReplacement("synthetic-client-secret")
+      list.performScrollToNode(hasText("Add header"))
+      composeRule.onNodeWithText("This looks like a Cloudflare Access Client ID. Put it in Header value and enter CF-Access-Client-Id as Header name.").assertIsDisplayed()
+      composeRule.onNodeWithText("Add header").assertIsNotEnabled()
+      composeRule.onNodeWithText("Test connection").performClick()
+      list.performScrollToNode(hasText("Fix the custom header above before connecting.", substring = true))
+      composeRule.onNodeWithContentDescription("Header name").assertExists()
+
+      list.performScrollToNode(hasContentDescription("Remove saved header Client ID saved as a header name"))
+      composeRule.onNodeWithContentDescription("Remove saved header Client ID saved as a header name").performClick()
+      composeRule.onNodeWithText("Remove").performClick()
+      composeRule.waitUntil(timeoutMillis = 10_000) { prefs.loadGatewayCustomHeaders(stableId).isEmpty() }
+
+      list.performScrollToNode(hasContentDescription("Header name"))
+      composeRule.onNodeWithContentDescription("Header name").performTextReplacement("CF-Access-Client-Id")
+      composeRule.onNodeWithContentDescription("Header value").performTextReplacement("synthetic-client-id")
+      list.performScrollToNode(hasText("Add header"))
+      composeRule.onNodeWithText("Add header").performClick()
+      composeRule.onNode(hasSetTextAction() and hasText("e.g. CF-Access-Client-Secret")).assertExists()
+      composeRule.onNodeWithContentDescription("Header name").performTextReplacement("CF-Access-Client-Secret")
+      composeRule.onNodeWithContentDescription("Header value").performTextReplacement("synthetic-client-secret")
+      composeRule.onNodeWithText("Test connection").performClick()
+      val expected = mapOf("CF-Access-Client-Id" to "synthetic-client-id", "CF-Access-Client-Secret" to "synthetic-client-secret")
+      composeRule.waitUntil(timeoutMillis = 10_000) { prefs.loadGatewayCustomHeaders(stableId) == expected }
     }
   }
 
@@ -595,10 +705,10 @@ class InitialOnboardingLayoutTest {
     fontScale: Float = 1f,
     viewportWidth: Dp = 360.dp,
     permissionsStep: Boolean = false,
+    prefs: SecurePrefs = onboardingPrefs(),
     verify: (MainViewModel, ComponentActivity) -> Unit,
   ) {
     val app = ApplicationProvider.getApplicationContext<NodeApp>()
-    val prefs = SecurePrefs(app, app.getSharedPreferences("onboarding-input-${UUID.randomUUID()}", Context.MODE_PRIVATE))
     val runtime = NodeRuntime(app, prefs, NodeRuntimeMode.ScreenshotFixture)
     val models = ViewModelStore()
     val registry = mutableStateOf(SaveableStateRegistry(null) { true })
@@ -1058,6 +1168,11 @@ class InitialOnboardingLayoutTest {
     assertTrue("$label should stay inside the viewport's top edge", child.top >= parent.top)
     assertTrue("$label should stay inside the viewport's right edge", child.right <= parent.right)
     assertTrue("$label should stay inside the viewport's bottom edge", child.bottom <= parent.bottom)
+  }
+
+  private fun onboardingPrefs(): SecurePrefs {
+    val app = ApplicationProvider.getApplicationContext<NodeApp>()
+    return SecurePrefs(app, app.getSharedPreferences("onboarding-input-${UUID.randomUUID()}", Context.MODE_PRIVATE))
   }
 
   private fun assertInputPresentation(

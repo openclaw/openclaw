@@ -599,6 +599,10 @@ class MainViewModel internal constructor(
   internal val gatewayConnectionHandoff: StateFlow<GatewayConnectionHandoff> =
     runtimeState(initial = GatewayConnectionHandoff()) { it.gatewayConnectionHandoff }
   val pairedGateways: StateFlow<List<GatewayRegistryEntry>> = prefs.gatewayRegistry.entries
+  private val customHeadersRevisionMutable = MutableStateFlow(0L)
+
+  /** Bumped whenever saved custom headers may have changed, so editors reload their names. */
+  internal val customHeadersRevision: StateFlow<Long> = customHeadersRevisionMutable.asStateFlow()
   private val pendingTalkSetupMessageMutable = MutableStateFlow<NativeText?>(null)
   val pendingTalkSetupMessage: StateFlow<NativeText?> = pendingTalkSetupMessageMutable
   val activeGatewayStableId: StateFlow<String?> = prefs.gatewayRegistry.activeStableId
@@ -794,6 +798,7 @@ class MainViewModel internal constructor(
   internal fun saveGatewayConfigAndConnect(
     plan: GatewayConnectPlan,
     addition: GatewayAdditionRequest? = null,
+    onCustomHeadersSaved: ((stableId: String) -> Unit)? = null,
   ) {
     if (addition != null && (gatewayAdditionRequestState.value !== addition || !canBeginQuickGatewayConnection(ensureRuntime()))) return
     // Only an explicitly confirmed, still-current addition enters connection admission.
@@ -855,6 +860,16 @@ class MainViewModel internal constructor(
             password = config.password,
           )
         }
+        // Saved before the first upgrade so a proxy-gated gateway is reachable on this attempt; cleartext
+        // routes never send proxy headers. Case-insensitive merging lets one rotated header replace only itself.
+        if (config.tls && plan.customHeaders.isNotEmpty()) {
+          val replaced = plan.customHeaders.keys.mapTo(HashSet()) { it.lowercase() }
+          val kept = prefs.loadGatewayCustomHeaders(endpoint.stableId).filterKeys { it.lowercase() !in replaced }
+          prefs.saveGatewayCustomHeaders(endpoint.stableId, kept + plan.customHeaders)
+          customHeadersRevisionMutable.update { it + 1 }
+          // Forms list saved rows under this address; a connect retired before this point leaves them typed.
+          onCustomHeadersSaved?.let { saved -> viewModelScope.launch(Dispatchers.Main) { saved(endpoint.stableId) } }
+        }
         prefs.gatewayRegistry.upsert(
           GatewayRegistryEntry(
             stableId = endpoint.stableId,
@@ -891,7 +906,7 @@ class MainViewModel internal constructor(
         runtime.prepareForGatewaySetup()
       }
       // Pairing another gateway no longer forgets existing gateways; per-gateway
-      // credentials and proxy headers are removed only by forgetGateway.
+      // credentials and proxy headers stay until forgetGateway or an explicit header removal.
       prefs.setOnboardingCompleted(false)
       _startOnboardingAtGatewaySetup.value = true
     }
@@ -1316,7 +1331,32 @@ class MainViewModel internal constructor(
 
   fun forgetGateway(stableId: String) {
     launchGatewayConfigOperation { isCurrent ->
-      ensureRuntime().forgetGateway(stableId, isCurrent)
+      try {
+        ensureRuntime().forgetGateway(stableId, isCurrent)
+      } finally {
+        // Forget can clear headers and still report failure later.
+        customHeadersRevisionMutable.update { it + 1 }
+      }
+    }
+  }
+
+  /** Names only: saved header values are credentials and never leave SecurePrefs for the UI. */
+  internal suspend fun gatewayCustomHeaderNames(stableId: String): List<String> = withContext(Dispatchers.IO) { prefs.loadGatewayCustomHeaders(stableId).keys.sortedWith(String.CASE_INSENSITIVE_ORDER) }
+
+  /**
+   * Removes one saved header now. The config mutex orders it with the connect merge and Forget without
+   * superseding an in-flight connect; the open socket keeps its headers until the next connection.
+   */
+  internal fun removeGatewayCustomHeader(
+    stableId: String,
+    name: String,
+  ) {
+    viewModelScope.launch(Dispatchers.IO) {
+      gatewayConfigOperationMutex.withLock {
+        val saved = prefs.loadGatewayCustomHeaders(stableId)
+        prefs.saveGatewayCustomHeaders(stableId, saved.filterKeys { !it.equals(name, ignoreCase = true) })
+        customHeadersRevisionMutable.update { it + 1 }
+      }
     }
   }
 

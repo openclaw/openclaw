@@ -1085,6 +1085,19 @@ class GatewaySession(
     private var connectRequestId: String? = null
     val tlsConfig: GatewayTlsConfig? = buildGatewayTlsConfig(target.tls)
     private val client: OkHttpClient = buildClient()
+
+    // Proxy headers are credentials, and OkHttp keeps them across hosts when it follows a
+    // redirect. Every request that carries them stops at the gateway's own answer.
+    private val noRedirectClient: OkHttpClient by lazy {
+      client
+        .newBuilder()
+        .followRedirects(false)
+        .followSslRedirects(false)
+        .build()
+    }
+
+    private fun clientFor(headers: Map<String, String>): OkHttpClient = if (headers.isEmpty()) client else noRedirectClient
+
     private val sourceFaviconLoader by lazy { GatewaySourceFaviconLoader(client) }
     private var controlUiReadCredentials: List<String> = emptyList()
     private val listener = Listener()
@@ -1150,6 +1163,8 @@ class GatewaySession(
           if (ingressAuthorization != null) {
             ingressHeaders = request.headers.names().associateWith { request.header(it).orEmpty() }
           }
+          // A proxy that rejects stored headers may redirect to its login or identity provider.
+          val upgradeClient = if (original.headers.size == 0) client else noRedirectClient
           // OkHttp can invoke onOpen before newWebSocket returns. Keep publication under the
           // send lock, and reject a retirement that won while this coroutine waited for it.
           var socketToCancel: WebSocket? = null
@@ -1163,7 +1178,7 @@ class GatewaySession(
               }
               val createdSocket =
                 try {
-                  webSocketFactory?.invoke(client, request, listener) ?: client.newWebSocket(request, listener)
+                  webSocketFactory?.invoke(upgradeClient, request, listener) ?: upgradeClient.newWebSocket(request, listener)
                 } catch (error: Throwable) {
                   synchronized(lifecycleLock) {
                     socketCreationPending = false
@@ -1228,7 +1243,7 @@ class GatewaySession(
       return GatewayLoadedMedia.Streaming(
         url = request.url,
         headers = request.headers + ("Accept" to "video/*"),
-        client = client,
+        client = clientFor(request.headers),
         mimeType = mimeType,
         retryPreparingPlayback = playbackRendition,
       )
@@ -1251,13 +1266,10 @@ class GatewaySession(
     fun bufferedMedia(
       bytes: ByteArray,
       mimeType: String,
-    ): GatewayLoadedMedia.Buffered =
-      GatewayLoadedMedia.Buffered(
-        bytes = bytes,
-        mimeType = mimeType,
-        headers = mediaTransportHeaders(),
-        client = client,
-      )
+    ): GatewayLoadedMedia.Buffered {
+      val headers = mediaTransportHeaders()
+      return GatewayLoadedMedia.Buffered(bytes = bytes, mimeType = mimeType, headers = headers, client = clientFor(headers))
+    }
 
     suspend fun loadTicketedMedia(
       ticketedPath: String,
@@ -1271,16 +1283,7 @@ class GatewaySession(
           request.header(name, value)
         }
         // Exported documents must not follow a redirect outside the ticketed Gateway route.
-        val downloadClient =
-          if (kind == GatewayMediaKind.File) {
-            client
-              .newBuilder()
-              .followRedirects(false)
-              .followSslRedirects(false)
-              .build()
-          } else {
-            client
-          }
+        val downloadClient = if (kind == GatewayMediaKind.File) noRedirectClient else clientFor(resolved.headers)
         val retry = GatewayPlaybackRetryState()
         repeat(Int.MAX_VALUE) {
           if (!retry.canAttempt()) return@withContext null

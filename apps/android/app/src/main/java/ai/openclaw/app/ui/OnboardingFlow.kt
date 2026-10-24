@@ -233,6 +233,7 @@ internal enum class OnboardingErrorCode(
     GatewayEndpointInputSource.QR_SCAN,
   ),
   ManualTokenLooksLikeSetupCode(message = nativeText("That looks like a setup code. Go back and choose Setup Gateway, then Use setup code.")),
+  CustomHeaderNeedsFix(message = nativeText("Fix the custom header above before connecting.")),
   ManualInsecureRemote(
     GatewayEndpointValidationError.INSECURE_REMOTE_URL,
     GatewayEndpointInputSource.MANUAL,
@@ -383,6 +384,17 @@ fun OnboardingFlow(
     var manualTls by rememberSaveable { mutableStateOf(false) }
     var token by rememberSaveable { mutableStateOf("") }
     var password by rememberSaveable { mutableStateOf("") }
+    // Proxy header values are credentials; keep them out of saved instance state.
+    val customHeaders = remember { GatewayCustomHeadersInput() }
+    val customHeadersTarget =
+      remember(manualHost, manualPort, manualTls) {
+        resolveGatewayHeaderTarget(
+          hostInput = manualHost,
+          portInput = manualPort,
+          effectiveTls = gatewayManualTransportPresentation(hostInput = manualHost, requestedTls = manualTls).effectiveTls,
+        )
+      }
+    val savedCustomHeaders = rememberSavedCustomHeaders(viewModel, customHeadersTarget)
     var setupErrorCode by rememberSaveable(stateSaver = OnboardingErrorCodeSaver) { mutableStateOf(OnboardingErrorCode.None) }
     var setupScanErrorCode by rememberSaveable(stateSaver = OnboardingErrorCodeSaver) { mutableStateOf(OnboardingErrorCode.None) }
     var attemptedGatewayName by rememberSaveable { mutableStateOf<String?>(null) }
@@ -568,7 +580,7 @@ fun OnboardingFlow(
       setupScanErrorCode = OnboardingErrorCode.None
       attemptedGatewayName = attemptedName
       lastGatewayInputSource = inputSource
-      viewModel.saveGatewayConfigAndConnect(plan)
+      viewModel.saveGatewayConfigAndConnect(plan, onCustomHeadersSaved = { stableId -> customHeaders.markSaved(stableId, plan.customHeaders) })
       step = OnboardingStep.Recovery
     }
 
@@ -681,6 +693,11 @@ fun OnboardingFlow(
           hostInput = manualHost,
           requestedTls = manualTls,
         )
+      // A credential typed as a header name keeps the form, where its warning is visible.
+      if (transport.effectiveTls && customHeaders.blocksConnect) {
+        setupErrorCode = OnboardingErrorCode.CustomHeaderNeedsFix
+        return
+      }
       val plan =
         resolveGatewayConnectPlan(
           useSetupCode = false,
@@ -694,7 +711,7 @@ fun OnboardingFlow(
           bootstrapTokenInput = "",
           tokenInput = token,
           passwordInput = password,
-        )
+        )?.copy(customHeaders = customHeaders.forConnect(customHeadersTarget?.stableId))
       if (plan == null) {
         val endpointError =
           composeGatewayManualUrl(manualHost, manualPort, transport.effectiveTls)
@@ -795,6 +812,7 @@ fun OnboardingFlow(
               manualHost = nearbyGateway.host
               manualPort = nearbyGatewayManualPort(nearbyGateway)
               manualTls = nearbyGatewayManualTls(nearbyGateway)
+              customHeaders.clear()
               attemptedGatewayName = nearbyGateway.name
             }
             step = OnboardingStep.Manual
@@ -860,6 +878,9 @@ fun OnboardingFlow(
           manualTls = manualTls,
           token = token,
           password = password,
+          customHeaders = customHeaders,
+          savedCustomHeaders = savedCustomHeaders,
+          customHeadersTargetId = customHeadersTarget?.stableId,
           error = setupErrorCode.nativeTextOrNull()?.resolveNativeTextResource(),
           mascotMood = onboardingMascotMood(step = step, setupErrorCode = setupErrorCode),
           onBack = ::goBack,
@@ -1647,6 +1668,9 @@ private fun ManualGatewaySetupScreen(
   manualTls: Boolean,
   token: String,
   password: String,
+  customHeaders: GatewayCustomHeadersInput,
+  savedCustomHeaders: GatewaySavedCustomHeaders?,
+  customHeadersTargetId: String?,
   error: String?,
   mascotMood: MascotMood,
   onBack: () -> Unit,
@@ -1734,6 +1758,11 @@ private fun ManualGatewaySetupScreen(
                 color = ClawTheme.colors.textMuted,
               )
             }
+          }
+        }
+        if (transport.effectiveTls) {
+          item {
+            GatewayCustomHeadersEditor(customHeaders, targetStableId = customHeadersTargetId, saved = savedCustomHeaders)
           }
         }
         error?.let { message ->

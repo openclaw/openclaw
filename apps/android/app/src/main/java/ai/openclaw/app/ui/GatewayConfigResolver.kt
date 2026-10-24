@@ -1,5 +1,6 @@
 package ai.openclaw.app.ui
 
+import ai.openclaw.app.gateway.GatewayEndpoint
 import ai.openclaw.app.gateway.isLocalCleartextGatewayHost
 import ai.openclaw.app.gateway.normalizeGatewayContextPath
 import ai.openclaw.app.i18n.NativeText
@@ -59,10 +60,14 @@ internal enum class GatewaySavedAuthAction {
   REPLACE_SETUP,
 }
 
-/** Endpoint plus the credential ownership decision applied by MainViewModel. */
+/**
+ * Endpoint plus the credential ownership decision applied by MainViewModel. [customHeaders] merge
+ * into a TLS endpoint's saved proxy headers by name; empty keeps them unchanged.
+ */
 internal data class GatewayConnectPlan(
   val config: GatewayConnectConfig,
   val savedAuthAction: GatewaySavedAuthAction,
+  val customHeaders: Map<String, String> = emptyMap(),
 )
 
 /** Validation reason used by setup, QR, and manual endpoint copy. */
@@ -453,6 +458,25 @@ internal fun composeGatewayManualUrl(
   if (port !in 1..65535) return null
   val scheme = if (tls) "https" else "http"
   return "$scheme://${ai.openclaw.app.gateway.formatGatewayAuthority(bareHost, port)}"
+}
+
+/** Owner of the custom headers an editor shows: the endpoint a connect with these fields would save them under. */
+internal data class GatewayHeaderTarget(
+  val stableId: String,
+  val displayUrl: String,
+)
+
+/** Mirrors the connect derivation; pass the effective TLS choice, as connect does. Null when headers cannot apply. */
+internal fun resolveGatewayHeaderTarget(
+  hostInput: String,
+  portInput: String,
+  effectiveTls: Boolean,
+): GatewayHeaderTarget? {
+  val endpoint = composeGatewayManualUrl(hostInput, portInput, effectiveTls)?.let(::parseGatewayEndpoint)?.takeIf { it.tls } ?: return null
+  return GatewayHeaderTarget(
+    stableId = GatewayEndpoint.manual(endpoint.host, endpoint.port, endpoint.tls, endpoint.contextPath).stableId,
+    displayUrl = endpoint.displayUrl,
+  )
 }
 
 /** Keeps manual transport controls aligned with the runtime's remote-host TLS policy. */

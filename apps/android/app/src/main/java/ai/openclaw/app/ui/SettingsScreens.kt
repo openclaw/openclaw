@@ -1526,6 +1526,13 @@ private fun GatewaySettingsScreen(
   var tokenInput by remember { mutableStateOf("") }
   var bootstrapTokenInput by remember { mutableStateOf("") }
   var passwordInput by remember { mutableStateOf("") }
+  // A connect from this form saves its address before the attempt finishes, so typed headers outlive
+  // it and a corrected port keeps them. An address saved from elsewhere, such as a setup code, clears them.
+  val customHeadersInput = remember { GatewayCustomHeadersInput() }
+  var submittedManualAddress by remember { mutableStateOf<Triple<String, Int, Boolean>?>(null) }
+  LaunchedEffect(manualHost, manualPort, manualTls) {
+    if (Triple(manualHost, manualPort, manualTls) != submittedManualAddress) customHeadersInput.clear()
+  }
   var setupValidationText by remember { mutableStateOf<String?>(null) }
   var manualValidationText by remember { mutableStateOf<String?>(null) }
   var showDiagnostics by rememberSaveable { mutableStateOf(false) }
@@ -1543,11 +1550,14 @@ private fun GatewaySettingsScreen(
         requestedTls = tlsInput,
       )
     }
+  val customHeadersTarget =
+    remember(hostInput, portInput, transport.effectiveTls) { resolveGatewayHeaderTarget(hostInput, portInput, transport.effectiveTls) }
+  val savedCustomHeaders = rememberSavedCustomHeaders(viewModel, customHeadersTarget)
 
   fun saveAndConnect(plan: GatewayConnectPlan) {
     setupValidationText = null
     manualValidationText = null
-    viewModel.saveGatewayConfigAndConnect(plan)
+    viewModel.saveGatewayConfigAndConnect(plan, onCustomHeadersSaved = { stableId -> customHeadersInput.markSaved(stableId, plan.customHeaders) })
   }
 
   pendingSetupResetPlan?.let { plan ->
@@ -1659,6 +1669,11 @@ private fun GatewaySettingsScreen(
   LaunchedEffect(Unit) { viewModel.startGatewayDiscovery() }
 
   fun connectGateway(useSetupCode: Boolean) {
+    // A credential typed as a header name keeps the form open with its warning.
+    if (!useSetupCode && transport.effectiveTls && customHeadersInput.blocksConnect) {
+      manualValidationText = nativeString("Fix the custom header above before connecting.")
+      return
+    }
     val plan =
       resolveGatewayConnectPlan(
         useSetupCode = useSetupCode,
@@ -1672,12 +1687,13 @@ private fun GatewaySettingsScreen(
         tokenInput = if (useSetupCode) "" else tokenInput,
         bootstrapTokenInput = if (useSetupCode) "" else bootstrapTokenInput,
         passwordInput = if (useSetupCode) "" else passwordInput,
-      )
+      )?.let { if (useSetupCode) it else it.copy(customHeaders = customHeadersInput.forConnect(customHeadersTarget?.stableId)) }
     if (plan == null) {
       val message = nativeString("Enter a valid setup code or gateway address.")
       if (useSetupCode) setupValidationText = message else manualValidationText = message
       return
     }
+    if (!useSetupCode) submittedManualAddress = Triple(plan.config.host, plan.config.port, plan.config.tls)
     if (plan.savedAuthAction == GatewaySavedAuthAction.REPLACE_SETUP) {
       pendingSetupResetPlan = plan
     } else {
@@ -1955,6 +1971,9 @@ private fun GatewaySettingsScreen(
           label = nativeString("Password"),
           secret = true,
         )
+        if (transport.effectiveTls) {
+          GatewayCustomHeadersEditor(customHeadersInput, targetStableId = customHeadersTarget?.stableId, saved = savedCustomHeaders)
+        }
         manualValidationText?.let {
           Text(text = it, style = ClawTheme.type.caption, color = ClawTheme.colors.warning)
         }
