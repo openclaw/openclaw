@@ -210,6 +210,9 @@ export function createEditTool(
             { changed: true, ...plan.receipt },
           );
         } catch (error: unknown) {
+          await runWithAgentToolSourceExecutionScope(assertCurrent, async () => {
+            assertCurrent();
+          });
           const normalizedError = error instanceof Error ? error : new Error(String(error));
           const recoveryContent = expectedContent;
           if (
