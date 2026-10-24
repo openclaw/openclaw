@@ -42,10 +42,10 @@ import {
   captureContextEngineRegistryStateForTests,
   resetContextEngineRuntimeQuarantineForTests,
 } from "./registry.test-support.js";
-import type { ContextEngine } from "./types.js";
+import type { ContextEngine, ContextEngineHostCapability } from "./types.js";
 
 const { compactRuntime } = vi.hoisted(() => ({ compactRuntime: vi.fn() }));
-// Observe delegation without starting a provider-backed runner.
+// mock-isolation: observe delegation without starting a provider-backed runner.
 vi.mock("../agents/embedded-agent-runner/compact.runtime.js", () => ({
   compactEmbeddedAgentSessionOnDemand: compactRuntime,
 }));
@@ -88,7 +88,7 @@ beforeEach(async () => {
   await register(id, () => current, "plugin:fixture", refresh);
 });
 afterEach(async () => {
-  await Promise.allSettled([...owned].map((value) => value.dispose?.()));
+  await Promise.allSettled([...owned].map(async (value) => await value.dispose?.()));
   owned.clear();
   vi.restoreAllMocks();
   clearMemoryPluginState();
@@ -384,7 +384,7 @@ it("rejects an incompatible host after the logical turn starts", async () => {
     "agent-run": { requiredCapabilities: ["thread-bootstrap-projection"] },
   };
   const value = await lease();
-  const select = (capabilities: string[]) =>
+  const select = (capabilities: ContextEngineHostCapability[]) =>
     value.selectForHost({
       host: { ...host, id: capabilities.length ? "first" : "fallback", capabilities },
       operation: "agent-run",
@@ -454,7 +454,11 @@ const invalid = "contract-validation";
 it.each<[Parameters<typeof register>[1], string, RegExp]>([
   [() => createPassthroughEngineMethods() as ContextEngine, invalid, /missing info/],
   [
-    () => ({ info: raw.info, ingest: raw.ingest }) as unknown as ContextEngine,
+    () =>
+      ({
+        info: raw.info,
+        ingest: (params: Parameters<ContextEngine["ingest"]>[0]) => raw.ingest(params),
+      }) as unknown as ContextEngine,
     invalid,
     /missing assemble\(\), missing compact\(\)/,
   ],
@@ -487,7 +491,7 @@ it("coalesces fallback initialization across concurrent lifecycle failures", asy
 it("routes fence failures through quarantine and revokes the old owner's hooks", async () => {
   const reason = "admitted user row is unavailable";
   raw.info.ownsCompaction = true;
-  const ingest = vi.fn(raw.ingest);
+  const ingest = vi.spyOn(raw, "ingest");
   const assemble = vi
     .fn<() => Promise<never>>()
     .mockRejectedValue(new SessionTranscriptReadFenceError(reason));

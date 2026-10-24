@@ -53,7 +53,10 @@ beforeEach(() => {
   };
 });
 
-function statusReport(workspaceDir = "/tmp/workspace", skills: unknown[] = []) {
+function statusReport(
+  workspaceDir = "/tmp/workspace",
+  skills: SkillStatusReport["skills"] = [],
+): SkillStatusReport {
   return { workspaceDir, managedSkillsDir: "/tmp/skills", skills };
 }
 
@@ -168,7 +171,7 @@ describe("loadSkills", () => {
       .mockResolvedValueOnce(
         statusReport("/tmp/research", [
           ...owners.map((owner) => linkedSkill(owner ? "weather" : "agentreceipt", owner)),
-          { name: "Local", skillKey: "local", source: "workspace" },
+          createSkill({ name: "Local", skillKey: "local", source: "workspace" }),
         ]),
       )
       .mockResolvedValueOnce({ items });
@@ -306,6 +309,22 @@ it("requests the discovery feed when the query is empty", async () => {
     { query: undefined, limit: 20 },
     { signal: undefined },
   );
+});
+
+it("ignores stale detail responses after slug changes", async () => {
+  const queue = createDeferredRequestQueue(request);
+  const firstPending = loadClawHubDetail(state, "github");
+  const secondPending = loadClawHubDetail(state, "gitlab");
+  queue.resolveNext({
+    skill: { slug: "github", displayName: "GitHub", createdAt: 1, updatedAt: 2 },
+  });
+  await firstPending;
+  expect(state.clawhubDetail).toBeNull();
+  queue.resolveNext({
+    skill: { slug: "gitlab", displayName: "GitLab", createdAt: 3, updatedAt: 4 },
+  });
+  await secondPending;
+  expect(state.clawhubDetail?.skill?.slug).toBe("gitlab");
 });
 
 it("ignores a same-client detail response from an older connection epoch", async () => {

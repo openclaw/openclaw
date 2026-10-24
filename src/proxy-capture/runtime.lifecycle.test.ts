@@ -581,7 +581,9 @@ it.each(["host-only", "legacy-first", "async-first"])(
       }
       const rows = persisted!.rows
         .toReversed()
-        .filter((row) => !legacy || ["ws-before-admission", "http-prefix"].includes(row.flowId));
+        .filter(
+          (row) => !legacy || row.flowId === "ws-before-admission" || row.flowId === "http-prefix",
+        );
       expect(rows).toMatchObject([
         { kind: "ws-frame", dataText: "websocket original" },
         { kind: "request", dataText: "request original" },
