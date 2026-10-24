@@ -71,7 +71,20 @@ suite.define(() => {
           .getAttribute("aria-pressed"),
       ).toBe("true");
       await closeChatDetails(page);
+      const connectCount = await gateway.deferNext("connect");
       await gateway.setOnline(true);
+      await gateway.waitForRequest("connect", { after: connectCount });
+      const spinner = header.locator(".mobile-header__spinner");
+      await spinner.waitFor();
+      await page.emulateMedia({ reducedMotion: "reduce" });
+      await expect
+        .poll(() => spinner.evaluate((element) => getComputedStyle(element).animationName))
+        .toBe("none");
+      await page.emulateMedia({ reducedMotion: "no-preference" });
+      await expect
+        .poll(() => spinner.evaluate((element) => getComputedStyle(element).animationName))
+        .toBe("btn-spinner-spin");
+      await gateway.resolveDeferred("connect");
       await expect.poll(() => header.locator(".mobile-header__notices").isVisible()).toBe(false);
       const reconnectedDetails = await openChatDetails(page);
       expect(

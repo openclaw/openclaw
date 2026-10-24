@@ -26,11 +26,9 @@
       position: absolute;
       display: grid;
       place-items: center;
-      box-sizing: border-box;
       width: 18px;
       height: 18px;
       overflow: hidden;
-      border: 0;
       border-radius: 50%;
       background: var(--bg-elevated);
       box-shadow: 0 0 0 1px var(--chat-mobile-people-grid-surface, var(--bg));
@@ -104,7 +102,6 @@
   }
 
   .chat-author-avatar__initials {
-    font-size: 8px;
     font-weight: 500;
   }
 }

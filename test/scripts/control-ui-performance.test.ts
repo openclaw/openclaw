@@ -316,33 +316,58 @@ describe("Control UI performance budgets", () => {
     expect(formatReport(metrics, budgets)).toContain("startup JS gzip: 40 B exceeds 30 B");
   });
 
-  it("allows CSS consolidation but rejects total growth beyond build variance", () => {
+  it("bounds the approved mobile header CSS restoration", () => {
+    const { distDir, writeAsset } = createStartupFixture();
+    for (let index = 0; index < 6; index++) {
+      writeAsset(
+        "css-" + index + ".css",
+        index === 0 ? 265_570 : 265_567,
+        index === 0 ? 50_422 : 50_418,
+      );
+    }
+    const base = collectMetrics(distDir);
+    writeAsset("mobile-header.css", 2_066, 845);
+    const accepted = collectMetrics(distDir);
+    expect(evaluateBudgets(accepted, undefined, null, 512, base)).toEqual([]);
+    writeAsset("mobile-header.css", 2_067, 846);
+    expect(evaluateBudgets(collectMetrics(distDir), undefined, null, 512, base)).toEqual([
+      expect.objectContaining({ metric: "total CSS gzip" }),
+      expect.objectContaining({ metric: "total CSS raw" }),
+    ]);
+  });
+
+  it("allows CSS consolidation but rejects total growth beyond fixed ceilings", () => {
     const { distDir, writeAsset } = createStartupFixture();
     writeAsset("shared.css", 4_000, 2_000);
     writeAsset("route.css", 4_000, 2_000);
     const base = collectMetrics(distDir);
+    const budgets = {
+      ...CONTROL_UI_PERFORMANCE_BUDGETS,
+      totalCssGzipBytes: base.total.css.gzipBytes + 64,
+      totalCssRawBytes: base.total.css.rawBytes + 64,
+    };
     fs.unlinkSync(path.join(distDir, "assets/route.css"));
     writeAsset("shared.css", 8_000, 3_900);
     const consolidated = collectMetrics(distDir);
-    expect(evaluateBudgets(consolidated, undefined, null, 512, base)).toEqual([]);
-    expect(formatReport(consolidated, undefined, null, 512, base)).toContain(
-      "total CSS gzip vs base: 4015 B -> 3915 B (-100 B; growth up to 64 B allowed)",
+    expect(evaluateBudgets(consolidated, budgets, null, 512, base)).toEqual([]);
+    expect(formatReport(consolidated, budgets, null, 512, base)).toContain(
+      "total CSS gzip vs base: 4015 B -> 3915 B (-100 B; fixed ceiling 4079 B)",
     );
     writeAsset("shared.css", 8_000, 4_064);
-    expect(evaluateBudgets(collectMetrics(distDir), undefined, null, 512, base)).toEqual([]);
+    expect(evaluateBudgets(collectMetrics(distDir), budgets, null, 512, base)).toEqual([]);
     writeAsset("shared.css", 8_000, 4_065);
-    expect(evaluateBudgets(collectMetrics(distDir), undefined, null, 512, base)).toEqual([
-      { metric: "total CSS gzip growth", actual: 65, limit: 64, unit: "bytes" },
+    expect(evaluateBudgets(collectMetrics(distDir), budgets, null, 512, base)).toEqual([
+      { metric: "total CSS gzip", actual: 4080, limit: 4079, unit: "bytes" },
     ]);
     writeAsset("shared.css", 8_064, 3_900);
     const rawAtLimit = collectMetrics(distDir);
-    expect(evaluateBudgets(rawAtLimit, undefined, null, 512, base)).toEqual([]);
-    expect(formatReport(rawAtLimit, undefined, null, 512, base)).toContain(
-      "total CSS raw vs base: 8050 B -> 8114 B (+64 B; growth up to 64 B allowed)",
+    expect(evaluateBudgets(rawAtLimit, budgets, null, 512, base)).toEqual([]);
+    expect(formatReport(rawAtLimit, budgets, null, 512, base)).toContain(
+      "total CSS raw vs base: 8050 B -> 8114 B (+64 B; fixed ceiling 8114 B)",
     );
     writeAsset("shared.css", 8_065, 3_900);
-    expect(evaluateBudgets(collectMetrics(distDir), undefined, null, 512, base)).toEqual([
-      { metric: "total CSS raw growth", actual: 65, limit: 64, unit: "bytes" },
+    expect(evaluateBudgets(collectMetrics(distDir), budgets, null, 512, base)).toEqual([
+      { metric: "total CSS raw", actual: 8115, limit: 8114, unit: "bytes" },
     ]);
   });
 
@@ -389,8 +414,7 @@ describe("Control UI performance budgets", () => {
   it.each<[string, number, number, number, number, string | null]>([
     ["startup growth below 1.5 KiB with offset", 47_615, 46_080, 48_465, 50_000, null],
     ["startup growth at 1.5 KiB with offset", 47_616, 46_080, 48_464, 50_000, "startup CSS"],
-    ["total growth at build variance", 46_080, 46_080, 52_000, 51_936, null],
-    ["total growth above build variance", 46_080, 46_080, 52_000, 51_935, "total CSS"],
+    ["total growth within fixed ceiling", 46_080, 46_080, 52_000, 51_935, null],
     ["startup at the hard cap", 51_200, 51_200, 50_000, 50_000, null],
     ["startup newly above the hard cap", 51_201, 51_200, 50_000, 50_000, "startup CSS"],
     ["startup unchanged above the hard cap", 51_201, 51_201, 50_000, 50_000, null],

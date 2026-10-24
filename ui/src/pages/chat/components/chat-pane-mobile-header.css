@@ -4,21 +4,12 @@ openclaw-pending-session-create .sidebar-region__header .chat-pane__header--mobi
   min-height: 54px;
 }
 
-/* Reuse the absent project line without adding a third header row. */
-
-@media (prefers-reduced-motion: reduce) {
-  .agent-chat__header--mobile .mobile-header__spinner {
-    animation: none;
-  }
-}
-
 .agent-chat__header--mobile {
   position: relative;
   display: flex;
   flex: 0 0 auto;
   align-items: center;
   gap: 8px;
-  box-sizing: border-box;
   min-width: 0;
   padding: 10px 12px 4px;
   color: var(--text);
@@ -58,7 +49,6 @@ openclaw-pending-session-create .sidebar-region__header .chat-pane__header--mobi
   }
 
   & .mobile-header__navigation {
-    box-sizing: border-box;
     border: 1px solid var(--border-strong);
     background: var(--bg-hover);
   }
@@ -108,7 +98,6 @@ openclaw-pending-session-create .sidebar-region__header .chat-pane__header--mobi
     display: block;
     min-width: 0;
     overflow: hidden;
-    text-overflow: clip;
     white-space: nowrap;
   }
 
@@ -159,7 +148,6 @@ openclaw-pending-session-create .sidebar-region__header .chat-pane__header--mobi
 
   & .mobile-header__capsule {
     display: flex;
-    box-sizing: border-box;
     flex: 0 0 auto;
     align-items: center;
     height: 40px;
@@ -182,7 +170,6 @@ openclaw-pending-session-create .sidebar-region__header .chat-pane__header--mobi
     display: inline-flex;
     align-items: center;
     gap: 8px;
-    box-sizing: border-box;
     max-width: 100%;
     min-height: 28px;
     padding: 3px 10px;
@@ -228,5 +215,9 @@ openclaw-pending-session-create .sidebar-region__header .chat-pane__header--mobi
 
   & .mobile-header__spinner {
     animation: btn-spinner-spin 1s linear infinite;
+
+    @media (prefers-reduced-motion: reduce) {
+      animation: none;
+    }
   }
 }

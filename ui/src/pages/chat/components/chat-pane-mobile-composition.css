@@ -22,12 +22,6 @@
     text-overflow: clip;
     white-space: nowrap;
   }
-  & .chat-pane__workspace-chip > span[data-scrollable="true"] {
-    mask-image: linear-gradient(to right, black calc(100% - 12px), transparent);
-  }
-  & .chat-pane__workspace-chip > span[data-scrollable="true"]:dir(rtl) {
-    mask-image: linear-gradient(to left, black calc(100% - 12px), transparent);
-  }
   & .mobile-header__actions .chat-header-session-menu__trigger {
     width: 40px;
     height: 40px;
