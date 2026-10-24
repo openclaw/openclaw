@@ -15,6 +15,11 @@ import {
 export function coalesceSessionSqliteArchiveReferences(
   replacements: ReadonlyMap<string, SessionSqliteMigrationMove>,
   runs: readonly ActiveSessionSqliteMigrationRun[],
+  /**
+   * Verified-absent originals whose retained receipts redirect without disposal;
+   * their files vanished, so their rollback claims can only resolve to the survivor.
+   */
+  missingOriginals?: ReadonlySet<string>,
 ): Array<{ target: SessionSqliteMigrationTargetInput; issues: DoctorSessionSqliteIssue[] }> {
   const results = new Map<
     string,
@@ -57,7 +62,11 @@ export function coalesceSessionSqliteArchiveReferences(
         const moves = new Map<string, SessionSqliteMigrationMove>();
         for (const move of target[list]) {
           const survivor = replacements.get(move.archivePath);
-          if (survivor && move.artifact?.disposal.state === "disposed") {
+          if (
+            survivor &&
+            move.artifact &&
+            (move.artifact.disposal.state === "disposed" || missingOriginals?.has(move.archivePath))
+          ) {
             move.archivePath = survivor.archivePath;
             move.artifact = {
               ...move.artifact,

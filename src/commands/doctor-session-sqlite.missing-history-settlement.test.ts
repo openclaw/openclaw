@@ -58,7 +58,7 @@ it("settles plugin repair after a deleted session archive is removed", async () 
   });
 });
 
-it("settles plugin repair with a warning when an older retained original is gone", async () => {
+it("settles plugin repair by redirecting a vanished older retained original", async () => {
   await withOpenClawTestState({ label: "missing-import-original" }, async (state) => {
     const { cfg, storePath } = await seedDeferredPluginSessionSource(state, "default");
     const run = () =>
@@ -106,10 +106,9 @@ it("settles plugin repair with a warning when an older retained original is gone
         await settleRetainedDoctorSessionSources(report, ["fixture-plugin"], authority, () =>
           authority.assertCurrent(),
         );
-        expect(report.targets.flatMap((owner) => owner.issues)).toContainEqual({
-          code: "historical_transcript_deferred",
-          message: expect.stringContaining("artifact is unexpectedly missing"),
-        });
+        expect(report.targets.flatMap((owner) => owner.issues)).toContainEqual(
+          expect.objectContaining({ code: "historical_duplicate_settled" }),
+        );
         expect(
           readSessionSqliteMigrationManifest(report.migrationRun!.manifestPath)?.failedAt,
         ).toBeUndefined();
@@ -118,15 +117,16 @@ it("settles plugin repair with a warning when an older retained original is gone
     expect(fs.existsSync(storePath)).toBe(false);
     expect(fs.existsSync(originals[0]!)).toBe(false);
     expect(fs.readFileSync(originals[1]!, "utf8")).toBe(bytes);
-    expect(
-      readSessionSqliteMigrationManifest(prior.manifestPath)?.targets[0]?.completedMoves,
-    ).toEqual(
+    const priorMoves =
+      readSessionSqliteMigrationManifest(prior.manifestPath)?.targets[0]?.completedMoves ?? [];
+    expect(priorMoves).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          archivePath: originals[0],
+          archivePath: originals[1],
           artifact: expect.objectContaining({ disposal: { state: "retained" } }),
         }),
       ]),
     );
+    expect(priorMoves.some((move) => move.archivePath === originals[0])).toBe(false);
   });
 });
