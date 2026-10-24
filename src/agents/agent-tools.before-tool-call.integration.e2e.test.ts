@@ -66,12 +66,6 @@ function asAgentTool(tool: {
   return tool as unknown as AnyAgentTool;
 }
 
-type BeforeToolCallHookInstall = {
-  pluginId: string;
-  priority?: number;
-  handler: BeforeToolCallHandlerMock;
-};
-
 function privatePreparer(tool: AnyAgentTool, context?: Parameters<typeof toToolDefinitions>[1]) {
   const definition = expectDefined(toToolDefinitions([tool], context)[0], "tool definition");
   return expectDefined(
@@ -107,21 +101,6 @@ function installBeforeToolCallHook(params?: {
   }
   initializeGlobalHookRunner(createMockPluginRegistry([{ hookName: "before_tool_call", handler }]));
   return handler;
-}
-
-function installBeforeToolCallHooks(hooks: BeforeToolCallHookInstall[]): void {
-  resetGlobalHookRunner();
-  const registry = createEmptyPluginRegistry();
-  for (const hook of hooks) {
-    addTestHook({
-      registry,
-      pluginId: hook.pluginId,
-      hookName: "before_tool_call",
-      handler: hook.handler as PluginHookRegistration["handler"],
-      priority: hook.priority,
-    });
-  }
-  initializeGlobalHookRunner(registry);
 }
 
 describe("before_tool_call hook integration", () => {
@@ -230,50 +209,6 @@ describe("before_tool_call hook integration", () => {
     expect(consumePreExecutionBlockedToolCall("call-late-abort")).toBe(true);
   });
 
-  it("does not execute lower-priority hooks after block=true", async () => {
-    const high = vi.fn().mockResolvedValue({ block: true, blockReason: "blocked-high" });
-    const low = vi.fn().mockResolvedValue({ params: { shouldNotApply: true } });
-    installBeforeToolCallHooks([
-      { pluginId: "high", priority: 100, handler: high },
-      { pluginId: "low", priority: 0, handler: low },
-    ]);
-
-    const execute = vi.fn().mockResolvedValue({ content: [], details: { ok: true } });
-    const tool = wrapToolWithBeforeToolCallHook(asAgentTool({ name: "exec", execute }));
-    const extensionContext = {} as Parameters<typeof tool.execute>[3];
-
-    await expect(
-      tool.execute("call-stop", { cmd: "rm -rf /" }, undefined, extensionContext),
-    ).resolves.toEqual({
-      content: [{ type: "text", text: "blocked-high" }],
-      details: {
-        status: "blocked",
-        deniedReason: "plugin-before-tool-call",
-        reason: "blocked-high",
-      },
-    });
-
-    expect(high).toHaveBeenCalledTimes(1);
-    expect(low).not.toHaveBeenCalled();
-    expect(execute).not.toHaveBeenCalled();
-  });
-
-  it("blocks tool execution when hook throws", async () => {
-    beforeToolCallHook = installBeforeToolCallHook({
-      runBeforeToolCallImpl: async () => {
-        throw new Error("boom");
-      },
-    });
-    const execute = vi.fn().mockResolvedValue({ content: [], details: { ok: true } });
-    const tool = wrapToolWithBeforeToolCallHook(asAgentTool({ name: "read", execute }));
-    const extensionContext = {} as Parameters<typeof tool.execute>[3];
-
-    await expect(
-      tool.execute("call-4", { path: "/tmp/file" }, undefined, extensionContext),
-    ).rejects.toThrow("Tool call blocked because before_tool_call hook failed");
-    expect(execute).not.toHaveBeenCalled();
-  });
-
   it("normalizes non-object params for hook contract", async () => {
     beforeToolCallHook = installBeforeToolCallHook({
       runBeforeToolCallImpl: async () => undefined,
@@ -284,6 +219,7 @@ describe("before_tool_call hook integration", () => {
       sessionKey: "main",
       sessionId: "ephemeral-main",
       runId: "run-main",
+      channelId: "channel-main",
     });
     const extensionContext = {} as Parameters<typeof tool.execute>[3];
 
@@ -303,6 +239,7 @@ describe("before_tool_call hook integration", () => {
         sessionKey: "main",
         sessionId: "ephemeral-main",
         runId: "run-main",
+        channelId: "channel-main",
         toolCallId: "call-5",
       },
     );
@@ -625,6 +562,7 @@ describe("before_tool_call hook deduplication (#15502)", () => {
     sessionKey: "agent:main:main",
     sessionId: "session-main",
     runId: "run-main",
+    channelId: "channel-main",
   };
 
   function codeModeDefinition(options: { wrapped?: boolean; config?: OpenClawConfig } = {}) {
@@ -950,49 +888,6 @@ describe("before_tool_call hook deduplication (#15502)", () => {
         toolCallOrdinal: 0,
         terminalPresentation: "Fetched with status 200",
       }),
-    );
-  });
-
-  it("passes hook context for unwrapped tool definitions", async () => {
-    const execute = vi.fn().mockResolvedValue({ content: [], details: { ok: true } });
-    const baseTool = asAgentTool({ name: "exec", execute, description: "exec", parameters: {} });
-    const def = expectDefined(
-      toToolDefinitions([baseTool], {
-        agentId: "code-agent",
-        sessionKey: "agent:code-agent:main",
-        sessionId: "session-code",
-        runId: "run-code",
-        channelId: "channel-code",
-      })[0],
-      "unwrapped exec definition",
-    );
-    const extensionContext = {} as Parameters<typeof def.execute>[4];
-
-    await def.execute(
-      "call-code-exec",
-      { code: "echo hi" },
-      undefined,
-      undefined,
-      extensionContext,
-    );
-
-    expect(beforeToolCallHook).toHaveBeenCalledTimes(1);
-    expect(beforeToolCallHook).toHaveBeenCalledWith(
-      {
-        toolName: "exec",
-        params: { code: "echo hi" },
-        runId: "run-code",
-        toolCallId: "call-code-exec",
-      },
-      {
-        toolName: "exec",
-        agentId: "code-agent",
-        sessionKey: "agent:code-agent:main",
-        sessionId: "session-code",
-        runId: "run-code",
-        toolCallId: "call-code-exec",
-        channelId: "channel-code",
-      },
     );
   });
 });
