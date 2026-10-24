@@ -805,25 +805,19 @@ Release provenance for ${hash} -> #3`
   it.each(["reuse", "checkpoint", "transient-error", "target-mismatch"])(
     "preserves exact-range GitHub snapshot lifecycle: %s",
     (mode) => {
-      const cwd = tempDirs.make("openclaw-release-notes-snapshot-");
-      const filePath = join(cwd, "snapshot.json");
+      const filePath = join(tempDirs.make("release-snapshot-"), "snapshot.json");
       let fetches = 0;
+      const fetchedArgs: string[][] = [];
       const fetchApi = (args: string[]) => {
         fetches += 1;
-        if (mode === "transient-error") {
-          return fetches === 1
-            ? { errors: [{ message: "rate limited" }] }
-            : { data: { repository: { id: "repository-id" } } };
-        }
-        if (mode === "target-mismatch") {
-          return { data: true };
-        }
-        return { data: { request: args, ...(mode === "reuse" ? { fetches } : {}) } };
+        fetchedArgs.push(args);
+        return mode === "transient-error" && fetches === 1
+          ? { errors: [{ message: "rate limited" }] }
+          : { data: fetches };
       };
+      const options = { base: "a".repeat(40), target: "b".repeat(40), filePath };
       const state = createGithubSnapshotState({
-        base: "a".repeat(40),
-        filePath,
-        target: "b".repeat(40),
+        ...options,
         ...(mode === "checkpoint" ? { checkpointEvery: 2 } : {}),
       });
       const args = ["graphql", "-f", "query=one"];
@@ -832,61 +826,33 @@ Release provenance for ${hash} -> #3`
         expect(first).toEqual({ errors: [{ message: "rate limited" }] });
         expect(state.dirty).toBe(false);
         expect(state.responses).toEqual({});
-        expect(githubApiWithSnapshot(args, fetchApi, state)).toEqual({
-          data: { repository: { id: "repository-id" } },
-        });
-        expect(state.misses).toBe(2);
-        expect(fetches).toBe(2);
-        return;
-      }
-      if (mode === "checkpoint") {
-        expect(state.dirty).toBe(true);
-        expect(state.writesSincePersist).toBe(1);
-        githubApiWithSnapshot(["graphql", "-f", "query=two"], fetchApi, state);
-        expect(state.dirty).toBe(false);
-        expect(state.writesSincePersist).toBe(0);
+        expect(githubApiWithSnapshot(args, fetchApi, state)).toEqual({ data: 2 });
+        expect([state.misses, fetches]).toEqual([2, 2]);
+      } else if (mode === "checkpoint") {
+        expect(state).toMatchObject({ dirty: true, writesSincePersist: 1 });
+        const secondArgs = ["graphql", "-f", "query=two"];
+        githubApiWithSnapshot(secondArgs, fetchApi, state);
+        expect(state).toMatchObject({ dirty: false, writesSincePersist: 0 });
         expect(JSON.parse(readFileSync(filePath, "utf8")).responses).toHaveProperty(
-          JSON.stringify(["graphql", "-f", "query=two"]),
+          JSON.stringify(secondArgs),
         );
-        return;
-      }
-      if (mode === "target-mismatch") {
+      } else if (mode === "target-mismatch") {
         persistGithubSnapshot(state);
-        expect(() =>
-          createGithubSnapshotState({ base: "a".repeat(40), filePath, target: "c".repeat(40) }),
-        ).toThrow("use --refresh-github-snapshot");
-        return;
+        expect(() => createGithubSnapshotState({ ...options, target: "c".repeat(40) })).toThrow(
+          "use --refresh-github-snapshot",
+        );
+      } else {
+        expect(first).toEqual({ data: 1 });
+        expect(
+          githubApiWithSnapshot(["repos/openclaw/openclaw/releases/tags/v1"], fetchApi, state),
+        ).toEqual({ data: 2 });
+        persistGithubSnapshot(state);
+        const second = createGithubSnapshotState(options);
+        expect(githubApiWithSnapshot(args, fetchApi, second)).toEqual({ data: 1 });
+        expect(fetchedArgs).toEqual([args, ["repos/openclaw/openclaw/releases/tags/v1"]]);
+        expect(second).toMatchObject({ hits: 1, misses: 0 });
+        expect(fetches).toBe(2);
       }
-      expect(first).toEqual({
-        data: {
-          request: ["graphql", "-f", "query=one"],
-          fetches: 1,
-        },
-      });
-      expect(
-        githubApiWithSnapshot(["repos/openclaw/openclaw/releases/tags/v1"], fetchApi, state),
-      ).toEqual({
-        data: {
-          request: ["repos/openclaw/openclaw/releases/tags/v1"],
-          fetches: 2,
-        },
-      });
-      persistGithubSnapshot(state);
-
-      const second = createGithubSnapshotState({
-        base: "a".repeat(40),
-        filePath,
-        target: "b".repeat(40),
-      });
-      expect(githubApiWithSnapshot(["graphql", "-f", "query=one"], fetchApi, second)).toEqual({
-        data: {
-          request: ["graphql", "-f", "query=one"],
-          fetches: 1,
-        },
-      });
-      expect(second.hits).toBe(1);
-      expect(second.misses).toBe(0);
-      expect(fetches).toBe(2);
     },
   );
 
