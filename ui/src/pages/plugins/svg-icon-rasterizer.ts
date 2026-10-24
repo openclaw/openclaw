@@ -25,6 +25,9 @@ const SVG_COLOR_VALUE_RE = /^(?:none|currentColor|#[0-9a-f]{3,8})$/iu;
 const SVG_NUMBER_VALUE_RE = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?$/iu;
 const SVG_NUMBER_LIST_RE = /^[0-9eE+.,\s-]+$/u;
 const SVG_PATH_VALUE_RE = /^[0-9a-zA-Z+.,\s-]+$/u;
+// The previous nested quantifier stalled the UI thread on an unclosed
+// transform, and the image decode timeout does not cover this check.
+const SVG_TRANSFORM_NAMES = new Set(["matrix", "rotate", "scale", "skewX", "skewY", "translate"]);
 const SVG_ATTRIBUTE_PATTERNS = new Map<string, RegExp>([
   ["d", SVG_PATH_VALUE_RE],
   ["points", SVG_NUMBER_LIST_RE],
@@ -35,7 +38,6 @@ const SVG_ATTRIBUTE_PATTERNS = new Map<string, RegExp>([
   ["fill-rule", /^(?:evenodd|nonzero)$/u],
   ["stroke-linecap", /^(?:butt|round|square)$/u],
   ["stroke-linejoin", /^(?:bevel|miter|round)$/u],
-  ["transform", /^(?:\s*(?:matrix|rotate|scale|skewX|skewY|translate)\(\s*[0-9eE+.,\s-]+\)\s*)+$/u],
   ["cx", SVG_NUMBER_VALUE_RE],
   ["cy", SVG_NUMBER_VALUE_RE],
   ["height", SVG_NUMBER_VALUE_RE],
@@ -67,6 +69,48 @@ function parseSvgNumber(value: string): number | null {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
+function isSvgTransformArgumentChar(char: string): boolean {
+  return /[0-9eE+.,\s-]/u.test(char);
+}
+
+function isSafeSvgTransform(value: string): boolean {
+  if (value.length === 0) {
+    return false;
+  }
+  let index = 0;
+  let functions = 0;
+  while (index < value.length) {
+    while (index < value.length && /\s/u.test(value[index] ?? "")) {
+      index += 1;
+    }
+    if (index >= value.length) {
+      break;
+    }
+    const nameStart = index;
+    while (index < value.length && /[A-Za-z]/u.test(value[index] ?? "")) {
+      index += 1;
+    }
+    const name = value.slice(nameStart, index);
+    if (!SVG_TRANSFORM_NAMES.has(name) || value[index] !== "(") {
+      return false;
+    }
+    index += 1;
+    const argumentStart = index;
+    while (index < value.length && value[index] !== ")") {
+      if (!isSvgTransformArgumentChar(value[index] ?? "")) {
+        return false;
+      }
+      index += 1;
+    }
+    if (value[index] !== ")" || index === argumentStart) {
+      return false;
+    }
+    index += 1;
+    functions += 1;
+  }
+  return functions > 0;
+}
+
 function isSafeSvgAttribute(attribute: Attr): boolean {
   if (attribute.namespaceURI && attribute.name !== "xmlns") {
     return false;
@@ -74,6 +118,9 @@ function isSafeSvgAttribute(attribute: Attr): boolean {
   const value = attribute.value.trim();
   if (attribute.name === "xmlns") {
     return value === SVG_NAMESPACE;
+  }
+  if (attribute.name === "transform") {
+    return isSafeSvgTransform(value);
   }
   return SVG_ATTRIBUTE_PATTERNS.get(attribute.name)?.test(value) ?? false;
 }
