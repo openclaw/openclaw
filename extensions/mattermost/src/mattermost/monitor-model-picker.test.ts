@@ -102,13 +102,14 @@ it.each(scenarios)(
     );
     const order: string[] = [];
     const hasModels = catalogStatus !== "empty";
+    const mixedSelection = action === "select" && !hasModels;
     const refreshWarning =
       catalogStatus === "ready" ? undefined : "Some models could not be refreshed.";
     mocks.parseContext.mockReturnValue({
       action,
       ownerUserId: "user-1",
-      provider: "openai",
-      model: "gpt-5.4",
+      provider: mixedSelection ? "OpenAI" : "openai",
+      model: mixedSelection ? " GPT-5.4 " : "gpt-5.4",
       page: 0,
     });
     mocks.buildPreparedModelsProviderData.mockImplementationOnce(async () => {
@@ -229,7 +230,9 @@ it.each(scenarios)(
       sessionKey: "agent:main:mm",
       commandText:
         action === "select"
-          ? "/model openai/gpt-5.4"
+          ? mixedSelection
+            ? "/model OpenAI/ GPT-5.4 "
+            : "/model openai/gpt-5.4"
           : action === "list"
             ? "/models openai"
             : "/models",

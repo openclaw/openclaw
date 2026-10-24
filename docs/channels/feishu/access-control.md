@@ -157,6 +157,8 @@ In `allowlist` mode, you can also admit a group by adding an explicit `groups.<c
 
 `channels.feishu.groupSenderAllowFrom` sets the same sender allowlist for all groups; a per-group `allowFrom` takes precedence.
 
+With command access groups enabled, group text commands also require authorization. A denied command receives a short explanation. Ask an admin to add your user ID to the selected Feishu account's `allowFrom` list or the group's `allowFrom` list to grant command access.
+
 ### Bot-authored messages
 
 Feishu ignores messages authored by other bots by default. To allow bot-to-bot group conversations, grant the app the `im:message.group_at_msg.include_bot:readonly` and `im:message:readonly` scopes, then set `allowBots`:

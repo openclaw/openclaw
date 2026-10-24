@@ -16,6 +16,7 @@ import * as authStore from "./auth-profiles/store-runtime.js";
 import { createCodeModeCatalogProjection } from "./code-mode-catalog.js";
 import { createOpenClawToolsAsync } from "./openclaw-tools.js";
 import { buildConfiguredAgentSystemPrompt } from "./system-prompt-config.js";
+import { createOpenClawOnlyToolConstructionPlan } from "./test-helpers/tool-construction-plan.js";
 import {
   createToolSearchCatalogRef,
   registerHeadlessToolSearchCatalog,
@@ -171,13 +172,7 @@ it("excludes unconfigured search from initial tools, discovery, and Code Mode", 
     workspaceDir: "/tmp/openclaw-web-search-test",
     disableMessageTool: true,
     wrapBeforeToolCallHook: false,
-    toolConstructionPlan: {
-      includeBaseCodingTools: false,
-      includeShellTools: false,
-      includeChannelTools: false,
-      includeOpenClawTools: true,
-      includePluginTools: false,
-    },
+    toolConstructionPlan: createOpenClawOnlyToolConstructionPlan(),
   });
   const catalogRef = createToolSearchCatalogRef();
   registerHeadlessToolSearchCatalog({ catalogRef, tools });
