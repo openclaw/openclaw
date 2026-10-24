@@ -46,6 +46,7 @@
   "config-mutation",
   "cron-store-runtime",
   "json-schema-runtime",
+  "json-schema-validator",
   "json-unsafe-integers",
   "reply-runtime",
   "reply-dispatch-runtime",
