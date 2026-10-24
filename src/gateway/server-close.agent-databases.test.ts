@@ -77,8 +77,8 @@ import {
   createGatewayMetadataCloseFixture,
   createIncognitoCloseSession,
 } from "./server-close.metadata.test-support.js";
-import { createGatewayCloseRace } from "./server-close.race.test-support.js";
 import type { GatewayServer } from "./server-public.js";
+import * as lifecyclePersistence from "./session-lifecycle-persistence-owner.js";
 
 async function closeFixture(name: string) {
   const fixture = await createGatewayMetadataCloseFixture(name);
@@ -106,12 +106,16 @@ function fakeClock() {
 it("settles accepted incognito outbox work after the close prelude and before actor retirement", async ({
   signal,
 }) => {
-  const race = await createGatewayCloseRace("gateway-incognito-outbox-close", signal);
-  const { fixture, kernel } = race;
-  const joining = new AbortController();
+  const fixture = await closeFixture("gateway-incognito-outbox-close");
+  const release = createDeferredCore();
+  const accepted = createDeferredCore();
+  const joining = createDeferredCore();
   let actor: SessionActor | undefined;
+  let writing: Promise<void> | undefined;
+  let closing: Promise<void> | undefined;
   let persisted: unknown;
   try {
+    const { server, kernel } = await fixture.startServer();
     const session = await createIncognitoCloseSession(
       fixture,
       "agent:main:dashboard:incognito-outbox-close",
@@ -164,20 +168,26 @@ it("settles accepted incognito outbox work after the close prelude and before ac
       id: "accepted-incognito-outbox",
       delayMs: 0,
       async run() {
-        await race.block();
-        await outbox.enqueueIntent({ ...filter, admission });
+        accepted.resolve();
+        await release.promise;
+        writing = outbox.enqueueIntent({ ...filter, admission });
+        await writing;
         persisted = await outbox.readNextPending(filter);
       },
     });
     await vi.advanceTimersByTimeAsync(0);
-    await race.waitForEntry();
+    await withinTest(accepted.promise, signal);
     vi.useRealTimers();
     const stop = kernel.scheduler.stop.bind(kernel.scheduler);
     vi.spyOn(kernel.scheduler, "stop").mockImplementation(() => {
-      joining.abort();
+      joining.resolve();
       return stop();
     });
-    await race.close(joining.signal, undefined, { reason: "incognito outbox close regression" });
+    closing = server.close({ reason: "incognito outbox close regression" });
+    await withinTest(
+      awaitGateBeforeSettlement(joining.promise, closing, "Gateway skipped scheduler settlement"),
+      signal,
+    );
     expect(kernel.scheduler.signal.aborted).toBe(true);
     expect(() => actor?.assertReadable()).not.toThrow();
     expect(persisted).toBeUndefined();
@@ -186,19 +196,20 @@ it("settles accepted incognito outbox work after the close prelude and before ac
       .schedule({ id: "refused-incognito-outbox", delayMs: 0, run: late })
       .stop();
     expect(late).not.toHaveBeenCalled();
-    await race.finish();
+    release.resolve();
+    await withinTest(Promise.all([writing, closing]), signal);
     expect(persisted).toMatchObject({
       advancement_key: admission.logicalTurnId,
       session_id: target.sessionId,
     });
     expect(() => actor?.assertReadable()).toThrow("closed");
   } finally {
+    release.resolve();
+    await Promise.allSettled([writing, closing]);
     vi.useRealTimers();
-    race.onCleanup(async () => {
-      vi.restoreAllMocks();
-      await actor?.release();
-    });
-    await race.dispose();
+    vi.restoreAllMocks();
+    await actor?.release();
+    await fixture.cleanup();
   }
 });
 
@@ -208,14 +219,28 @@ it("joins scheduled plugin work before closing stores while retaining a deleted 
   const fixture = await closeFixture("gateway-retained-deleted-agent-close");
   const stopEntered = createDeferredCore();
   const rootJoinEntered = createDeferredCore();
+  const lifecycleDrainEntered = createDeferredCore();
   const releaseRootWork = createDeferredCore();
   let closing: Promise<void> | undefined;
   let heldWriter: ReturnType<typeof patchSessionEntryCore> | undefined;
   let heldColdWriter: Promise<void> | undefined;
+  let acceptedColdAdmission: Promise<void> | undefined;
   let coldDatabase: ReturnType<typeof openOpenClawAgentDatabase> | undefined;
-  let acceptedWrites: Promise<unknown[]> | undefined;
+  let acceptedFinal: ReturnType<typeof settlePendingFinalDelivery> | undefined;
+  let acceptedLifecycle: ReturnType<typeof applySessionEntryLifecycleMutation> | undefined;
+  let acceptedTerminal: Promise<void> | undefined;
   let acceptedGoal: ReturnType<typeof mutateSessionGoal> | undefined;
   try {
+    let persistenceOwner:
+      | ReturnType<typeof lifecyclePersistence.createSessionLifecyclePersistenceOwner>
+      | undefined;
+    const createPersistenceOwner = lifecyclePersistence.createSessionLifecyclePersistenceOwner;
+    vi.spyOn(lifecyclePersistence, "createSessionLifecyclePersistenceOwner").mockImplementation(
+      () => {
+        persistenceOwner = createPersistenceOwner();
+        return persistenceOwner;
+      },
+    );
     const pluginId = fixture.pluginId;
     const registry = createEmptyPluginRegistry();
     const record = createPluginRecord({ id: pluginId });
@@ -227,10 +252,22 @@ it("joins scheduled plugin work before closing stores while retaining a deleted 
     registry.plugins.push(record);
     setActivePluginRegistry(registry);
     const { server, kernel } = await fixture.startServer();
+    const terminalOwner = persistenceOwner;
+    assert(terminalOwner);
+    const drainTerminal = terminalOwner.drain.bind(terminalOwner);
+    vi.spyOn(terminalOwner, "drain").mockImplementation(() => {
+      const draining = drainTerminal();
+      lifecycleDrainEntered.resolve();
+      return draining;
+    });
+    expect(kernel.pluginRuntime.registry.plugins).toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: pluginId })]),
+    );
     const activeStore = fixture.target().storePath;
     const coldOptions = { agentId: "cold-close", env: fixture.state.env };
-    const coldTarget = fixture.target("agent:cold-close:main", coldOptions.agentId);
+    const coldStore = path.join(fixture.state.sessionsDir(coldOptions.agentId), "sessions.json");
     const coldPath = resolveOpenClawAgentSqlitePath(coldOptions);
+    const coldSessionKey = "agent:cold-close:main";
     const pluginExtensions = { [pluginId]: { active: true } };
     await fixture.write("agent:main:main", {
       sessionId: "main-session",
@@ -270,6 +307,21 @@ it("joins scheduled plugin work before closing stores while retaining a deleted 
         files: [],
       },
       skillsSnapshot: { prompt: "before close", skills: [] },
+    });
+    const terminalKey = "agent:main:terminal-close";
+    const terminalEvent = {
+      runId: "terminal-close-run",
+      sessionId: "terminal-close-session",
+      seq: 1,
+      stream: "lifecycle",
+      ts: 2_000,
+      data: { phase: "end", startedAt: 1_000, endedAt: 2_000 },
+    };
+    await fixture.write(terminalKey, {
+      sessionId: terminalEvent.sessionId,
+      lifecycleRunId: terminalEvent.runId,
+      startedAt: 1_000,
+      updatedAt: 1_000,
     });
     const retainedDatabase = path.join(fixture.state.agentDir("retired"), "openclaw-agent.sqlite");
     const operationId = randomUUID();
@@ -349,48 +401,56 @@ it("joins scheduled plugin work before closing stores while retaining a deleted 
       id: "kernel-held-work",
       delayMs: 0,
       async run() {
-        acceptedWrites = Promise.all([
-          withOpenClawAgentDatabaseRuntime(coldOptions, async (database) => {
-            coldDatabase = database;
-            await replaceSessionEntry(coldTarget, {
-              sessionId: "cold-close-session",
-              updatedAt: 1,
-              label: "accepted before close",
-            });
-          }),
-          settlePendingFinalDelivery(
-            {
-              kind: "pending-final",
-              ...goalTarget,
-              sessionId: "main-session",
-              deliveryId: "close-delivery",
-              intentId: "close-intent",
-            },
-            "delivered",
-          ),
-          applySessionEntryLifecycleMutation({
-            agentId: "main",
-            storePath: activeStore,
-            activeSessionKey: lifecycleKey,
-            upserts: [
-              {
-                sessionKey: lifecycleKey,
-                entry: {
-                  sessionId: "lifecycle-close-session",
-                  updatedAt: 2,
-                  skillsSnapshot: { prompt: "accepted before close", skills: [] },
-                },
-              },
-            ],
-          }),
-          (acceptedGoal = mutateSessionGoal({
+        acceptedColdAdmission = withOpenClawAgentDatabaseRuntime(coldOptions, async (database) => {
+          coldDatabase = database;
+          await replaceSessionEntry(
+            { agentId: coldOptions.agentId, storePath: coldStore, sessionKey: coldSessionKey },
+            { sessionId: "cold-close-session", updatedAt: 1, label: "accepted before close" },
+          );
+        });
+        acceptedFinal = settlePendingFinalDelivery(
+          {
+            kind: "pending-final",
             ...goalTarget,
-            expectedSessionId: "main-session",
-            operation: goalOperation,
-          })),
-        ]);
+            sessionId: "main-session",
+            deliveryId: "close-delivery",
+            intentId: "close-intent",
+          },
+          "delivered",
+        );
+        acceptedLifecycle = applySessionEntryLifecycleMutation({
+          agentId: "main",
+          storePath: activeStore,
+          activeSessionKey: lifecycleKey,
+          upserts: [
+            {
+              sessionKey: lifecycleKey,
+              entry: {
+                sessionId: "lifecycle-close-session",
+                updatedAt: 2,
+                skillsSnapshot: { prompt: "accepted before close", skills: [] },
+              },
+            },
+          ],
+        });
+        acceptedTerminal = terminalOwner.observe({
+          sessionKey: terminalKey,
+          agentId: "main",
+          event: terminalEvent,
+        });
+        acceptedGoal = mutateSessionGoal({
+          ...goalTarget,
+          expectedSessionId: "main-session",
+          operation: goalOperation,
+        });
         rootWorkEntered.resolve();
-        await acceptedWrites;
+        await Promise.all([
+          acceptedColdAdmission,
+          acceptedFinal,
+          acceptedLifecycle,
+          acceptedTerminal,
+          acceptedGoal,
+        ]);
       },
     });
     await vi.advanceTimersByTimeAsync(0);
@@ -404,14 +464,21 @@ it("joins scheduled plugin work before closing stores while retaining a deleted 
     closing = server.close({ reason: "gateway stopping" });
     await withinTest(
       awaitGateBeforeSettlement(
-        rootJoinEntered.promise,
+        lifecycleDrainEntered.promise,
         closing,
-        "Gateway closed before joining its accepted scheduled writes",
+        "Gateway closed before joining its accepted terminal lifecycle write",
       ),
       signal,
     );
     expect(stopService).toHaveBeenCalledOnce();
     expect(kernel.scheduler.signal.aborted).toBe(true);
+    await expect(
+      terminalOwner.observe({
+        sessionKey: terminalKey,
+        agentId: "main",
+        event: { ...terminalEvent, seq: 2 },
+      }),
+    ).rejects.toMatchObject({ name: "AbortError", code: "ERR_STALE_GATEWAY_LIFECYCLE" });
     const lateWork = vi.fn();
     await kernel.scheduler.schedule({ id: "after-close", delayMs: 0, run: lateWork }).stop();
     expect(lateWork).not.toHaveBeenCalled();
@@ -420,20 +487,30 @@ it("joins scheduled plugin work before closing stores while retaining a deleted 
     await expect(fs.stat(coldPath)).rejects.toMatchObject({ code: "ENOENT" });
     releaseRootWork.resolve();
     await Promise.all([heldWriter, heldColdWriter]);
-    assert(acceptedWrites);
-    await acceptedWrites;
+    await expect(acceptedColdAdmission).resolves.toBeUndefined();
+    await expect(acceptedFinal).resolves.toEqual({ state: "delivered" });
+    await expect(acceptedLifecycle).resolves.toMatchObject({ removedEntries: 0 });
+    await expect(acceptedTerminal).resolves.toBeUndefined();
     const goalResult = await acceptedGoal;
     assert(goalResult);
+    expect(goalResult).toMatchObject({
+      replayed: false,
+      result: { action: "edit", goal: { objective: "accepted before close" } },
+    });
+    await withinTest(rootJoinEntered.promise, signal);
     await expect(closing).resolves.toBeUndefined();
     expect([disposed, shared.isOpen, agent.isOpen]).toEqual([true, false, false]);
     expect(fixture.inspectLeases).not.toThrow();
     expect(memorySessionActorOwners.read(incognito)).toBeUndefined();
     expect(() => incognito.assertCurrent()).toThrow("closed");
     expect(coldDatabase?.db.isOpen).toBe(false);
-    expect(loadSessionEntry(coldTarget)).toMatchObject({
-      sessionId: "cold-close-session",
-      label: "accepted before close",
-    });
+    expect(
+      loadSessionEntry({
+        agentId: coldOptions.agentId,
+        storePath: coldStore,
+        sessionKey: coldSessionKey,
+      }),
+    ).toMatchObject({ sessionId: "cold-close-session", label: "accepted before close" });
     const goalReceipt = withOpenClawAgentDatabaseReadOnly(
       (database) =>
         readSessionGoalOperationInDatabase(database, {
@@ -444,6 +521,11 @@ it("joins scheduled plugin work before closing stores while retaining a deleted 
       fixture.options,
     );
     expect(goalReceipt).toEqual({ found: true, value: goalResult.result });
+    expect(fixture.read(terminalKey)).toMatchObject({
+      status: "done",
+      startedAt: 1_000,
+      endedAt: 2_000,
+    });
     expect((await fs.stat(retainedDatabase)).isFile()).toBe(true);
     const lifecycleEntry = fixture.read(lifecycleKey);
     expect(lifecycleEntry?.skillsSnapshot).toEqual({
@@ -463,7 +545,16 @@ it("joins scheduled plugin work before closing stores while retaining a deleted 
   } finally {
     stopEntered.resolve();
     releaseRootWork.resolve();
-    await Promise.allSettled([heldWriter, heldColdWriter, acceptedWrites, closing]);
+    await Promise.allSettled([
+      heldWriter,
+      heldColdWriter,
+      acceptedColdAdmission,
+      acceptedFinal,
+      acceptedLifecycle,
+      acceptedTerminal,
+      acceptedGoal,
+      closing,
+    ]);
     vi.useRealTimers();
     vi.restoreAllMocks();
     await fixture.cleanup();
@@ -487,9 +578,18 @@ it.skipIf(process.platform !== "linux")(
       assert(shared);
       expect(shared.isOpen).toBe(true);
       expect(closeBroker).not.toHaveBeenCalled();
-      completedAtMs = Date.now();
-      await completeGatewayBootLifecycle(bootId, completion, fixture.state.env, completedAtMs);
-      expect(closeBroker).not.toHaveBeenCalled();
+      const prepare = vi.spyOn(shared, "prepare");
+      const exec = vi.spyOn(shared, "exec");
+      try {
+        completedAtMs = Date.now();
+        await completeGatewayBootLifecycle(bootId, completion, fixture.state.env, completedAtMs);
+        expect(closeBroker).not.toHaveBeenCalled();
+        expect(prepare).not.toHaveBeenCalled();
+        expect(exec).not.toHaveBeenCalled();
+      } finally {
+        prepare.mockRestore();
+        exec.mockRestore();
+      }
     });
     const previousStops = new Set(process.listeners("SIGTERM"));
     let closing: Promise<void> | undefined;

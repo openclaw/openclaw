@@ -204,7 +204,7 @@ describe("session event target custody", () => {
     const guest = {
       agents: ["main"],
       sessions: { others: "none" as const },
-      scopes: ["operator.read"],
+      scopes: ["operator.read" as const],
       sandbox: "required" as const,
     };
     const cfg: OpenClawConfig = {

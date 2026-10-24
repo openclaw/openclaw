@@ -4,8 +4,8 @@ import type {
   ModelAuthStatusResult,
   ModelCatalogEntry,
   ProviderLoginOption,
-} from "../../api/types.ts";
-import { waitForSolid } from "../../test-helpers/solid-settle.ts";
+} from "../api/types.ts";
+import { waitForSolid } from "./solid-settle.ts";
 
 type Capability = NonNullable<ModelAuthStatusResult["providerCapabilities"]>[number];
 

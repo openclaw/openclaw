@@ -4,8 +4,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import path from "node:path";
 import { text } from "node:stream/consumers";
-import { toNodeHandler } from "@modelcontextprotocol/node";
-import { createMcpHandler, McpServer } from "@modelcontextprotocol/server";
+import { Client as McpClient, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { WebSocket } from "ws";
@@ -14,6 +13,7 @@ import type {
   WizardStartResult,
 } from "../../packages/gateway-protocol/src/index.js";
 import { getOrCreateSessionMcpRuntime } from "../agents/agent-bundle-mcp-manager.test-support.js";
+import { partitionMcpServersByConnectionScope } from "../agents/mcp-connection-resolver.js";
 import { operatorMcpOAuthIdentity } from "../agents/mcp-oauth-identity.js";
 import { readMcpOAuthStore } from "../agents/mcp-oauth-store.js";
 import {
@@ -32,6 +32,7 @@ import { getCurrentPluginMetadataSnapshotState } from "../plugins/current-plugin
 import { setCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata.test-support.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
 import { createDeferredCore, type Deferred } from "../shared/deferred.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import * as setupMigration from "../wizard/setup.migration-snapshot.js";
@@ -76,14 +77,6 @@ describe("registered mcp.authLogin", () => {
   let discoveryEntered = createDeferredCore();
   let releaseDiscovery: Deferred | undefined;
   const requests: string[] = [];
-  const mcp = createMcpHandler(() => {
-    const server = new McpServer({ name: "fixture", version: "1.0.0" });
-    server.registerTool("echo", {}, async () => ({
-      content: [{ type: "text", text: "Authenticated connector reply" }],
-    }));
-    return server;
-  });
-  const serveMcp = toNodeHandler(mcp);
   const endpoint = createServer((request, response) => {
     void (async () => {
       const json = (value: unknown, code = 200) =>
@@ -143,7 +136,35 @@ describe("registered mcp.authLogin", () => {
             .end();
           return;
         }
-        await serveMcp(request, response);
+        const body = await text(request);
+        if (!body) {
+          response.writeHead(405).end();
+          return;
+        }
+        const message = JSON.parse(body);
+        if (message.id === undefined) {
+          response.writeHead(202).end();
+          return;
+        }
+        const result =
+          message.method === "initialize"
+            ? {
+                protocolVersion: message.params.protocolVersion,
+                capabilities: { tools: {} },
+                serverInfo: { name: "fixture", version: "1.0.0" },
+              }
+            : message.method === "tools/list"
+              ? {
+                  tools: [
+                    {
+                      name: "echo",
+                      description: "Returns a fixture reply",
+                      inputSchema: { type: "object", properties: {} },
+                    },
+                  ],
+                }
+              : { content: [{ type: "text", text: "Authenticated connector reply" }] };
+        json({ jsonrpc: "2.0", id: message.id, result });
       } else {
         response.writeHead(404).end();
       }
@@ -187,7 +208,6 @@ describe("registered mcp.authLogin", () => {
     other?.close();
     readOnly?.close();
     await gateway?.close();
-    await mcp.close();
     endpoint.closeAllConnections();
     await new Promise<void>((resolve) => {
       endpoint.close(() => resolve());
@@ -524,6 +544,26 @@ describe("registered mcp.authLogin", () => {
       expect(after.tokensAuthorizationServerUrl).toEqual(before.tokensAuthorizationServerUrl);
       expectPendingCleared(after);
       expect(requests.slice(exchangeRequests)).toEqual(["/token"]);
+      const retainedClient = new McpClient(
+        { name: "retained-credential", version: "1.0.0" },
+        { versionNegotiation: { mode: "legacy" } },
+      );
+      try {
+        const Authorization = `Bearer ${expectDefined(after.tokens, "retained tokens").access_token}`;
+        await retainedClient.connect(
+          new StreamableHTTPClientTransport(new URL(resourceUrl), {
+            requestInit: { headers: { Authorization } },
+          }),
+        );
+        expect((await retainedClient.listTools()).tools).toEqual(
+          expect.arrayContaining([expect.objectContaining({ name: "echo" })]),
+        );
+        expect(await retainedClient.callTool({ name: "echo", arguments: {} })).toMatchObject({
+          content: [{ type: "text", text: "Authenticated connector reply" }],
+        });
+      } finally {
+        await retainedClient.close();
+      }
     } finally {
       tokenError = false;
     }
@@ -634,6 +674,13 @@ describe("registered mcp.authLogin", () => {
           client.connect.scopes = ["operator.read"];
         } else if (change === "plugin registry") {
           invocation.context.getGatewayMethodRegistry = () => replacement;
+          expect(
+            withPluginRuntimeRegistryScope(
+              registry,
+              () =>
+                partitionMcpServersByConnectionScope({ docs: config }).resolverRequesterServerNames,
+            ),
+          ).toEqual(["docs"]);
         } else if (change === "connector URL") {
           await configure({ ...config, url: resourceUrl + "/replacement" });
           await rpcReq(owner, "wizard.status", { sessionId: started.sessionId });

@@ -634,7 +634,8 @@ describe("server-runtime-services", () => {
     await vi.advanceTimersByTimeAsync(1_250);
 
     const suspension = tryBeginGatewaySuspendAdmission(() => {});
-    assert(suspension?.commit(), "Expected gateway suspension admission to be acquired");
+    assert(suspension, "Expected gateway suspension admission to be acquired");
+    assert(suspension.commit(), "Expected gateway suspension admission to commit");
     await vi.advanceTimersByTimeAsync(13_750);
 
     expect(hoisted.drainPendingDeliveries).not.toHaveBeenCalled();

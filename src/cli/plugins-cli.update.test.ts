@@ -2,8 +2,7 @@ import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createTestConfigSnapshot } from "../commands/test-runtime-config-helpers.js";
 import type { OpenClawConfig } from "../config/config.js";
-import type { PluginInstallRecord } from "../config/types.plugins.js";
-import { buildPluginCapabilityConsentReview } from "../plugins/capability-summary.js";
+import type { PluginCapabilityConsentReview } from "../plugins/capability-summary.js";
 import {
   attachPluginInstallOwnerMigrations,
   resolvePluginInstallTransactionRequest,
@@ -44,10 +43,6 @@ function updated(pluginId: string, message = "Updated " + pluginId + ".") {
   return { pluginId, status: "updated" as const, message };
 }
 
-function npmRecord(spec: string, installPath?: string) {
-  return { source: "npm" as const, spec, ...(installPath ? { installPath } : {}) };
-}
-
 function withRecords(
   config: OpenClawConfig,
   installs: Parameters<typeof setInstalledPluginIndexInstallRecords>[0],
@@ -55,35 +50,48 @@ function withRecords(
   return { ...config, plugins: { ...config.plugins, installs } };
 }
 
-function track(config: OpenClawConfig): OpenClawConfig {
+function createTrackedPluginConfig(pluginId: string, spec: string): OpenClawConfig {
+  return withRecords({}, { [pluginId]: { source: "npm", spec, installPath: `/tmp/${pluginId}` } });
+}
+
+function primeTrackedPluginUpdate(pluginId: string, spec: string): OpenClawConfig {
+  const config = createTrackedPluginConfig(pluginId, spec);
   configMock.mockReturnValue(config);
   setInstalledPluginIndexInstallRecords(config.plugins?.installs ?? {});
   primePluginUpdate(config);
   return config;
 }
 
-function tracked(pluginId: string, spec: string): OpenClawConfig {
-  return withRecords({}, { [pluginId]: npmRecord(spec, `/tmp/${pluginId}`) });
-}
-
 function update(...args: string[]) {
   return runPluginsCommand(["plugins", "update", ...args]);
 }
 
-function createCapabilityConsentReview() {
+function createCapabilityConsentReview(): PluginCapabilityConsentReview {
   return {
-    ...buildPluginCapabilityConsentReview({
-      pluginId: "alpha",
-      manifest: {
-        name: "Alpha plugin",
-        version: "2.0.0",
-        contracts: { tools: ["read", "write"], gatewayMethodDispatch: ["alpha.run"] },
+    pluginId: "alpha",
+    name: "Alpha plugin",
+    version: "2.0.0",
+    source: { kind: "npm", spec: "@acme/alpha", integrity: "sha512-alpha" },
+    declared: {
+      channels: [],
+      providers: [],
+      tools: ["read", "write"],
+      contracts: ["gatewayMethodDispatch: alpha.run"],
+      hooks: [],
+      mcpServers: [],
+      cliCommands: [],
+      cliBackends: [],
+      skills: [],
+      dangerousConfigFlags: [],
+    },
+    grants: {
+      hooks: {
+        allowPromptInjection: { effective: true },
+        allowConversationAccess: { effective: false },
       },
-      record: { source: "npm", spec: "@acme/alpha", integrity: "sha512-alpha" },
-      config: {},
-      widened: { tools: ["write"] },
-    }),
-    trust: { disposition: "review-recommended" as const, reasons: ["Community maintained"] },
+    },
+    widened: { tools: ["write"] },
+    trust: { disposition: "review-recommended", reasons: ["Community maintained"] },
     reviewToken: "reviewed-alpha-surface",
   };
 }
@@ -144,13 +152,29 @@ function primePluginUpdate(
   transactions: PluginInstallTransaction[] = [],
   installOwnerMigrations?: Readonly<Record<string, string>>,
 ): void {
-  updatePlugins.mockImplementation(async (params) => {
-    resolvePluginInstallTransactionRequest(params)?.transactionSink?.push(...transactions);
+  updatePlugins.mockImplementation(async (params: unknown) => {
+    resolvePluginInstallTransactionRequest(params as object)?.transactionSink?.push(
+      ...transactions,
+    );
     const result = { config, changed, outcomes };
     return installOwnerMigrations
       ? attachPluginInstallOwnerMigrations(result, installOwnerMigrations)
       : result;
   });
+}
+
+function primeBraveRecords() {
+  const record = (version: string, installPath: string) => ({
+    source: "npm" as const,
+    spec: `@openclaw/brave-plugin@${version}`,
+    installPath,
+    resolvedName: "@openclaw/brave-plugin",
+    resolvedVersion: version,
+  });
+  const previousRecords = { brave: record("2026.6.11-beta.2", "/tmp/brave-beta") };
+  const nextRecords = { brave: record("2026.6.11", "/tmp/brave-stable") };
+  setInstalledPluginIndexInstallRecords(previousRecords);
+  return { previousRecords, nextRecords };
 }
 
 function expectNoCalls(...mocks: unknown[]) {
@@ -176,7 +200,7 @@ it("refuses plugin updates in Nix mode before package-manager work", async () =>
 it("previews plugin updates in Nix mode without acquiring a lease or writing state", async () => {
   process.env.OPENCLAW_NIX_MODE = "1";
   setTty(true);
-  const config = track(tracked("alpha", "@acme/alpha@1.0.0"));
+  const config = primeTrackedPluginUpdate("alpha", "@acme/alpha@1.0.0");
   primePluginUpdate(config, [updated("alpha", "Would update alpha: 1.0.0 -> 1.1.0.")]);
   const lifecycleLease = await import("../plugins/plugin-lifecycle-lease.js");
   const acquireLease = vi.spyOn(lifecycleLease, "withPluginLifecycleLease");
@@ -212,7 +236,8 @@ it.each([
     await withEnvAsync(
       { OPENCLAW_PROFILE: "work", OPENCLAW_CONTAINER_HINT: container },
       async () => {
-        primeUpdateConfigSnapshot({ config: {} });
+        const config = {} as OpenClawConfig;
+        primeUpdateConfigSnapshot({ config });
 
         await expect(update(id)).rejects.toThrow("__exit__:1");
 
@@ -233,8 +258,12 @@ it.each([
   },
 ])("rejects invalid target sets before any updates: $ids", async ({ ids, error }) => {
   primeUpdateConfigSnapshot({ config: {} });
-  setInstalledPluginIndexInstallRecords({ alpha: npmRecord("@acme/alpha", "/tmp/alpha") });
-  setHookInstallRecords({ hooks: npmRecord("@acme/hooks", "/tmp/hooks") });
+  setInstalledPluginIndexInstallRecords({
+    alpha: { source: "npm", spec: "@acme/alpha", installPath: "/tmp/alpha" },
+  });
+  setHookInstallRecords({
+    hooks: { source: "npm", spec: "@acme/hooks", installPath: "/tmp/hooks" },
+  });
 
   await expect(update(...ids)).rejects.toThrow("__exit__:1");
 
@@ -249,11 +278,13 @@ it("updates distinct plugin and hook targets once from the mutation-start snapsh
     loadedConfig: { plugins: { entries: { alpha: { enabled: false } } } },
   });
   const records = {
-    alpha: npmRecord("@acme/alpha", "/tmp/alpha"),
-    beta: npmRecord("@acme/beta", "/tmp/beta"),
-  };
+    alpha: { source: "npm", spec: "@acme/alpha", installPath: "/tmp/alpha" },
+    beta: { source: "npm", spec: "@acme/beta", installPath: "/tmp/beta" },
+  } as const;
   setInstalledPluginIndexInstallRecords(records);
-  setHookInstallRecords({ hooks: npmRecord("@acme/hooks", "/tmp/hooks") });
+  setHookInstallRecords({
+    hooks: { source: "npm", spec: "@acme/hooks", installPath: "/tmp/hooks" },
+  });
   const nextRecords = { ...records, alpha: { ...records.alpha, spec: "@acme/alpha@beta" } };
   const nextConfig = { plugins: { ...config.plugins, installs: nextRecords } };
   primePluginUpdate(
@@ -272,57 +303,75 @@ it("updates distinct plugin and hook targets once from the mutation-start snapsh
   expect(expectSingleCallParams(updatePlugins)).toMatchObject({
     pluginIds: ["beta", "alpha"],
     specOverrides: { alpha: "@acme/alpha@beta" },
+    dryRun: false,
   });
   expect(expectSingleCallParams(updateHooks)).toMatchObject({
     hookIds: ["hooks"],
     specOverrides: { hooks: "@acme/hooks@beta" },
+    dryRun: false,
   });
   expect(updatePlugins.mock.calls[0]?.[0].config).toEqual({
     plugins: { ...config.plugins, installs: records },
   });
   expect(pluginLifecycleGatewayMock).not.toHaveBeenCalled();
   expectInstallRecordsWrittenWithLease(nextRecords, config);
-  expect(logs).toContain(offlineNotice);
+  expect(logs).toContain("Updates saved; they will load on the next Gateway start.");
 });
 
 it("rejects ambiguous package paths for update all", async () => {
   const sharedPath = "/tmp/openclaw-ambiguous-update-pack";
-  primeUpdateConfigSnapshot({ config: {} });
-  setInstalledPluginIndexInstallRecords({
-    "pack/one": npmRecord("@acme/pack", sharedPath),
-    "pack/two": npmRecord("@acme/pack", sharedPath),
-  });
+  const installRecords = {
+    "pack/one": { source: "npm" as const, spec: "@acme/pack", installPath: sharedPath },
+    "pack/two": { source: "npm" as const, spec: "@acme/pack", installPath: sharedPath },
+  };
+  const config = {} as OpenClawConfig;
+  primeUpdateConfigSnapshot({ config });
+  setInstalledPluginIndexInstallRecords(installRecords);
+
   await expect(update("--all")).rejects.toThrow("__exit__:1");
+
   expectNoCalls(updatePlugins, configWriteMock);
 });
 
 it("updates a tracked hook pack selected by npm package name", async () => {
-  const cfg = {};
+  const cfg = {} as OpenClawConfig;
+  const nextConfig = cfg;
+
   primeUpdateConfigSnapshot({ config: cfg });
   setHookInstallRecords({
     "demo-hooks": {
-      ...npmRecord("@acme/demo-hooks@1.0.0", "/tmp/hooks/demo-hooks"),
+      source: "npm",
+      spec: "@acme/demo-hooks@1.0.0",
+      installPath: "/tmp/hooks/demo-hooks",
       resolvedName: "@acme/demo-hooks",
     },
   });
   const transaction = { commit: vi.fn(async () => {}), rollback: vi.fn(async () => {}) };
   updateHooks.mockImplementation(async (params) => {
     resolvePluginInstallTransactionRequest(params)?.transactionSink?.push(transaction);
-    return { config: cfg, changed: true, outcomes: [] };
+    return {
+      config: nextConfig,
+      changed: true,
+      outcomes: [
+        {
+          hookId: "demo-hooks",
+          status: "updated",
+          message: 'Updated hook pack "demo-hooks": 1.0.0 -> 1.1.0.',
+        },
+      ],
+    };
   });
 
   await update("@acme/demo-hooks", "--dangerously-force-unsafe-install");
 
   const hookUpdateParams = expectSingleCallParams(updateHooks);
   expect(hookUpdateParams.config).toEqual({ ...cfg, plugins: { installs: {} } });
-  expect(hookUpdateParams).toMatchObject({
-    hookIds: ["demo-hooks"],
-    specOverrides: { "demo-hooks": "@acme/demo-hooks" },
-  });
+  expect(hookUpdateParams.hookIds).toEqual(["demo-hooks"]);
+  expect(hookUpdateParams.specOverrides).toEqual({ "demo-hooks": "@acme/demo-hooks" });
   expect(updatePlugins).not.toHaveBeenCalled();
-  expect(configWriteMock).toHaveBeenCalledWith(cfg);
+  expect(configWriteMock).toHaveBeenCalledWith(nextConfig);
   expect(replaceConfigFileMock).toHaveBeenCalledWith(
-    expect.objectContaining({ nextConfig: cfg, baseHash: "update-config" }),
+    expect.objectContaining({ nextConfig, baseHash: "update-config" }),
   );
   expect(refreshRegistry).not.toHaveBeenCalled();
   expect(transaction.commit).toHaveBeenCalledOnce();
@@ -331,7 +380,7 @@ it("updates a tracked hook pack selected by npm package name", async () => {
 });
 
 it("rejects invalid config snapshots before updater side effects", async () => {
-  const cfg = tracked("alpha", "@openclaw/alpha@1.0.0");
+  const cfg = createTrackedPluginConfig("alpha", "@openclaw/alpha@1.0.0");
   primeUpdateConfigSnapshot({ config: cfg, valid: false });
   setInstalledPluginIndexInstallRecords(cfg.plugins?.installs ?? {});
 
@@ -342,14 +391,14 @@ it("rejects invalid config snapshots before updater side effects", async () => {
 });
 
 it("allows index-only legacy id migration when an included plugins section has no references", async () => {
-  const cfg = { plugins: {} };
+  const cfg = { plugins: {} } as OpenClawConfig;
+  const pluginRecords = createTrackedPluginConfig("voice-call", "@openclaw/voice-call@1.0.0")
+    .plugins?.installs;
   const nextConfig = withRecords(cfg, {
-    "@openclaw/voice-call": npmRecord("@openclaw/voice-call@1.1.0"),
-  });
+    "@openclaw/voice-call": { source: "npm", spec: "@openclaw/voice-call@1.1.0" },
+  }) as OpenClawConfig;
   primeBlockedPluginConfig(cfg);
-  setInstalledPluginIndexInstallRecords({
-    "voice-call": npmRecord("@openclaw/voice-call@1.0.0", "/tmp/voice-call"),
-  });
+  setInstalledPluginIndexInstallRecords(pluginRecords ?? {});
   primePluginUpdate(nextConfig, [updated("@openclaw/voice-call")], true, undefined, {
     "voice-call": "@openclaw/voice-call",
   });
@@ -363,24 +412,63 @@ it("allows index-only legacy id migration when an included plugins section has n
   expect(configWriteMock).not.toHaveBeenCalled();
 });
 
+it("commits a moved managed npm load path with its replacement record", async () => {
+  const previousInstallPath = "/tmp/openclaw/npm/projects/brave-v1/node_modules/brave";
+  const nextInstallPath = "/tmp/openclaw/npm/projects/brave-v2/node_modules/brave";
+  const customPath = "/tmp/custom-plugin";
+  const cfg = {
+    plugins: { load: { paths: [previousInstallPath, customPath] } },
+  } as OpenClawConfig;
+  const previousRecords = {
+    brave: {
+      source: "npm" as const,
+      spec: "@openclaw/brave-plugin@1.0.0",
+      installPath: previousInstallPath,
+    },
+  };
+  const nextRecords = {
+    brave: {
+      ...previousRecords.brave,
+      spec: "@openclaw/brave-plugin@2.0.0",
+      installPath: nextInstallPath,
+    },
+  };
+  const nextConfig = {
+    plugins: { load: { paths: [nextInstallPath, customPath] }, installs: nextRecords },
+  } as OpenClawConfig;
+  primeUpdateConfigSnapshot({ config: cfg });
+  setInstalledPluginIndexInstallRecords(previousRecords);
+  primePluginUpdate(nextConfig, [updated("brave")], true);
+
+  await update("brave");
+
+  const expectedConfig = { plugins: { load: { paths: [nextInstallPath, customPath] } } };
+  expectInstallRecordsWrittenWithLease(nextRecords, expectedConfig);
+  expect(replaceConfigFileMock).toHaveBeenCalledWith({
+    nextConfig: expectedConfig,
+    baseHash: "update-config",
+    writeOptions: expect.objectContaining({
+      afterWrite: expect.objectContaining({ mode: "none" }),
+    }),
+  });
+  expect(refreshRegistry).toHaveBeenCalledWith({
+    config: expectedConfig,
+    installRecords: nextRecords,
+    reason: "source-changed",
+    ...writtenIndexCustody(),
+  });
+});
+
 it.each(["config changed", "include changed", "invalid config"])(
   "rolls back records-only updates after %s and retains the cause",
   async (failure) => {
-    const include = failure === "include changed";
-    const invalid = failure === "invalid config";
-    const message = invalid
-      ? "invalid config for plugin brave"
-      : `${include ? "included config" : "config"} changed since last load`;
-    const cfg: OpenClawConfig = {
-      plugins: include
-        ? {}
-        : {
-            entries: { brave: { enabled: true, config: { oldOption: true } } },
-          },
-    };
+    const cfg: OpenClawConfig =
+      failure === "include changed"
+        ? { plugins: {} }
+        : { plugins: { entries: { brave: { enabled: true, config: { oldOption: true } } } } };
     const initial = primeUpdateConfigSnapshot({
       config: cfg,
-      ...(include
+      ...(failure === "include changed"
         ? {
             parsed: { plugins: { $include: "/tmp/plugins.json5" } },
             includeFileHashesForWrite: { "/tmp/plugins.json5": "before" },
@@ -388,21 +476,30 @@ it.each(["config changed", "include changed", "invalid config"])(
           }
         : {}),
     });
+    const changed = structuredClone(initial.snapshot);
+    const writeOptions = { ...initial.writeOptions };
+    let message: string;
+    if (failure === "config changed") {
+      changed.hash = "changed-config";
+      message = "config changed since last load";
+    } else if (failure === "include changed") {
+      writeOptions.includeFileHashesForWrite = { "/tmp/plugins.json5": "after" };
+      message = "included config changed since last load";
+    } else {
+      changed.valid = false;
+      message = "invalid config for plugin brave";
+    }
     readWriteSnapshot.mockResolvedValueOnce(initial).mockResolvedValueOnce({
       snapshot: {
-        ...initial.snapshot,
-        hash: !include && !invalid ? "changed-config" : initial.snapshot.hash,
-        valid: !invalid,
-        issues: invalid ? [{ path: "plugins.entries.brave.config.oldOption", message }] : [],
+        ...changed,
+        issues:
+          failure === "invalid config"
+            ? [{ path: "plugins.entries.brave.config.oldOption", message }]
+            : [],
       },
-      writeOptions: {
-        ...initial.writeOptions,
-        ...(include ? { includeFileHashesForWrite: { "/tmp/plugins.json5": "after" } } : {}),
-      },
+      writeOptions,
     });
-    const previousRecords = { brave: npmRecord("@openclaw/brave-plugin@1.0.0", "/tmp/brave-v1") };
-    const nextRecords = { brave: npmRecord("@openclaw/brave-plugin@2.0.0", "/tmp/brave-v2") };
-    setInstalledPluginIndexInstallRecords(previousRecords);
+    const { previousRecords, nextRecords } = primeBraveRecords();
     const rollback = vi.fn(async () => {});
     const commit = vi.fn(async () => {});
     primePluginUpdate(withRecords(cfg, nextRecords), [updated("brave")], true, [
@@ -455,7 +552,7 @@ it.each([
 ] satisfies {
   name: string;
   id: string;
-  record: PluginInstallRecord;
+  record: import("../config/types.plugins.js").PluginInstallRecord;
   loadPath?: string;
 }[])(
   "blocks $name beside include-owned plugin config before updating",
@@ -469,7 +566,7 @@ it.each([
     setInstalledPluginIndexInstallRecords({
       [id]: {
         ...record,
-        installPath: "/tmp/demo",
+        installPath: loadPath?.includes("node_modules") ? loadPath : "/tmp/demo",
       },
     });
     await expect(update(id)).rejects.toThrow("__exit__:1");
@@ -545,7 +642,7 @@ it.each([true, false])(
   "binds update consent to the reviewed surface (explicit=%s)",
   async (explicit) => {
     setTty(!explicit);
-    track(tracked("alpha", "@acme/alpha"));
+    primeTrackedPluginUpdate("alpha", "@acme/alpha");
     await update("alpha", ...(explicit ? ["--accept-capabilities"] : []));
     const params = expectSingleCallParams(updatePlugins);
     const consent = params.onCapabilityConsent;
@@ -560,16 +657,18 @@ it.each([true, false])(
       expect(params).not.toHaveProperty("acknowledgeCapabilities");
       expect(promptYesNoMock).not.toHaveBeenCalled();
     } else {
-      for (const fragment of [
-        "Alpha plugin (alpha) @ 2.0.0",
-        "Integrity: sha512-alpha",
-        "Contracts: gatewayMethodDispatch: alpha.run",
-        "New tools: write",
-        "Conversation access: denied",
-        "Trust: review-recommended",
-      ]) {
-        expect(logs).toContainEqual(expect.stringContaining(fragment));
-      }
+      expect(logs).toEqual(
+        expect.arrayContaining(
+          [
+            "Alpha plugin (alpha) @ 2.0.0",
+            "Integrity: sha512-alpha",
+            "Contracts: gatewayMethodDispatch: alpha.run",
+            "New tools: write",
+            "Conversation access: denied",
+            "Trust: review-recommended",
+          ].map((fragment) => expect.stringContaining(fragment)),
+        ),
+      );
       expect(promptYesNoMock).toHaveBeenCalledWith('Accept these capabilities and update "alpha"?');
     }
   },
@@ -577,27 +676,44 @@ it.each([true, false])(
 
 it("shares invocation-wide install-policy acknowledgement across bulk plugin and hook updates", async () => {
   setTty(false);
-  const config = track(tracked("openclaw-codex-app-server", "openclaw-codex-app-server"));
+  const config = primeTrackedPluginUpdate("openclaw-codex-app-server", "openclaw-codex-app-server");
   setHookInstallRecords({
-    "demo-hooks": npmRecord("@acme/demo-hooks@1.0.0", "/tmp/hooks/demo-hooks"),
+    "demo-hooks": {
+      source: "npm",
+      spec: "@acme/demo-hooks@1.0.0",
+      installPath: "/tmp/hooks/demo-hooks",
+    },
   });
   updateHooks.mockResolvedValue({ config, changed: false, outcomes: [] });
 
   await update("--all", "--acknowledge-install-policy-warning");
 
-  const acknowledge = expectSingleCallParams(updatePlugins).onInstallPolicyWarning;
-  expect(acknowledge).toEqual(expect.any(Function));
-  expect(expectSingleCallParams(updateHooks).onInstallPolicyWarning).toBe(acknowledge);
+  const pluginAcknowledgement = expectSingleCallParams(updatePlugins).onInstallPolicyWarning;
+  const hookAcknowledgement = expectSingleCallParams(updateHooks).onInstallPolicyWarning;
+  if (typeof pluginAcknowledgement !== "function") {
+    throw new Error("expected plugin install-policy acknowledgement callback");
+  }
+  expect(hookAcknowledgement).toBe(pluginAcknowledgement);
+  for (const targetName of ["openclaw-codex-app-server", "demo-hooks"]) {
+    await expect(
+      pluginAcknowledgement({
+        targetName,
+        targetType: "plugin",
+        requestMode: "update",
+        reason: "Test install-policy warning",
+      }),
+    ).resolves.toEqual({ status: "approved" });
+  }
 });
 
 it("keeps durable state when transaction cleanup fails after the write", async () => {
-  const cfg = { plugins: { entries: { alpha: { enabled: true } } } };
-  const previousRecords = { alpha: npmRecord("@openclaw/alpha@1.0.0") };
-  const nextRecords = { alpha: npmRecord("@openclaw/alpha@1.1.0") };
-  const runtimeConfig: OpenClawConfig = {
+  const cfg = { plugins: { entries: { alpha: { enabled: true } } } } as OpenClawConfig;
+  const previousRecords = { alpha: { source: "npm" as const, spec: "@openclaw/alpha@1.0.0" } };
+  const nextRecords = { alpha: { source: "npm" as const, spec: "@openclaw/alpha@1.1.0" } };
+  const runtimeConfig = {
     ...cfg,
     messages: { ackReactionScope: "group-mentions" },
-  };
+  } as OpenClawConfig;
   const nextRuntimeConfig = withRecords(runtimeConfig, nextRecords);
   primeUpdateConfigSnapshot({
     config: cfg,
@@ -619,6 +735,8 @@ it("keeps durable state when transaction cleanup fails after the write", async (
 
   const updateParams = expectSingleCallParams(updatePlugins);
   expect(updateParams.config).toEqual(withRecords(runtimeConfig, previousRecords));
+  expect(updateParams.pluginIds).toEqual(["alpha"]);
+  expect(updateParams.dryRun).toBe(false);
   expectInstallRecordsWrittenWithLease(nextRecords, cfg);
   expectNoCalls(updateHooks, configWriteMock, replaceConfigFileMock);
   expect(failedCommit).toHaveBeenCalledOnce();
@@ -636,19 +754,59 @@ it("keeps durable state when transaction cleanup fails after the write", async (
   expect(logs).toContain(offlineNotice);
 });
 
-it("fails a blocked ClawHub update without persisting replacement state", async () => {
-  const config = track(
-    withRecords(
-      {},
+it("persists successful bulk updates before reporting errors", async () => {
+  const records = {
+    alpha: { source: "npm" as const, spec: "@openclaw/alpha@1.0.0" },
+    beta: { source: "npm" as const, spec: "@openclaw/beta@1.0.0" },
+  };
+  const cfg = { plugins: { installs: records } };
+  const nextConfig = {
+    plugins: {
+      installs: { ...records, alpha: { ...records.alpha, spec: "@openclaw/alpha@1.1.0" } },
+    },
+  };
+  configMock.mockReturnValue(cfg);
+  setInstalledPluginIndexInstallRecords(cfg.plugins?.installs ?? {});
+  primePluginUpdate(
+    nextConfig,
+    [
+      updated("alpha", "Updated alpha -> 1.1.0"),
       {
-        demo: {
-          source: "clawhub",
-          spec: "clawhub:@openclaw/plugin-demo",
-          clawhubPackage: "@openclaw/plugin-demo",
-        },
+        pluginId: "beta",
+        status: "error",
+        message: "Failed to update beta: registry timeout",
       },
-    ),
+    ],
+    true,
   );
+
+  await expect(update("--all")).rejects.toThrow("__exit__:1");
+
+  expectInstallRecordsWrittenWithLease(nextConfig.plugins?.installs, {});
+  expect(refreshRegistry).toHaveBeenCalledWith({
+    config: {},
+    installRecords: nextConfig.plugins?.installs,
+    reason: "source-changed",
+    ...writtenIndexCustody(),
+  });
+  expect(runtimeErrors).toContain("Failed to update beta: registry timeout");
+  expect(logs).toContain("Updated alpha -> 1.1.0");
+  expect(logs).not.toContain("Failed to update beta: registry timeout");
+});
+
+it("fails a blocked ClawHub update without persisting replacement state", async () => {
+  const config = withRecords(
+    {},
+    {
+      demo: {
+        source: "clawhub",
+        spec: "clawhub:@openclaw/plugin-demo",
+        clawhubPackage: "@openclaw/plugin-demo",
+      },
+    },
+  );
+  configMock.mockReturnValue(config);
+  setInstalledPluginIndexInstallRecords(config.plugins?.installs ?? {});
   const message = "ClawHub blocked this release; existing plugin unchanged.";
   primePluginUpdate(config, [
     { pluginId: "demo", status: "skipped", code: "clawhub_download_blocked", message },

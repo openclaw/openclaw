@@ -2,6 +2,12 @@ import { assert, beforeEach, expect, it, vi } from "vitest";
 import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import { AgentHarnessPreflightError } from "../../agents/harness/errors.js";
 import { resolvePreparedSandboxRuntimeStatus } from "../../agents/sandbox/runtime-status.js";
+import { bindIngressLifecycleToReplyOptions } from "../../channels/message/ingress-drain-lifecycle.js";
+import { createChannelIngressDrain } from "../../channels/message/ingress-drain.js";
+import {
+  createTestIngressQueue,
+  withTempState,
+} from "../../channels/message/ingress-drain.test-helpers.js";
 import {
   createRuntimeConfigReader,
   setRuntimeConfigSnapshot,
@@ -97,9 +103,6 @@ vi.mock("./agent-runner-failure-reply.js", async (importOriginal) => ({
 }));
 
 const { prepareReplyAgentTurn } = await import("./reply-agent-turn-preparation.js");
-type PrepareParams = Parameters<typeof prepareReplyAgentTurn>[0];
-type Defaults = Partial<PrepareParams["defaults"]>;
-type Options = Omit<Partial<PrepareParams>, "queued" | "defaults">;
 
 let operation: ReturnType<typeof createOperation>;
 beforeEach(() => {
@@ -160,7 +163,11 @@ function createOperation(sessionId = "queued-session") {
   };
 }
 
-function prepare(queued = createRun(), defaults: Defaults = {}, options: Options = {}) {
+function prepare(
+  queued = createRun(),
+  defaults: Partial<Parameters<typeof prepareReplyAgentTurn>[0]["defaults"]> = {},
+  options: Omit<Partial<Parameters<typeof prepareReplyAgentTurn>[0]>, "queued" | "defaults"> = {},
+) {
   return prepareReplyAgentTurn({
     queued,
     defaults: {
@@ -205,13 +212,53 @@ function sessionFixture(
   return {
     initialEntry,
     sessionStore,
-    start: (defaults: Defaults = {}, queued = createRun(), options: Options = {}) =>
+    start: (
+      defaults: Parameters<typeof prepare>[1] = {},
+      queued = createRun(),
+      options: Parameters<typeof prepare>[2] = {},
+    ) =>
       admitted(prepare(queued, { sessionEntry: initialEntry, sessionStore, ...defaults }, options)),
   };
 }
 
+function compactionFixture(stored = false) {
+  const session = sessionFixture(makeEntry(stored ? { lifecycleRevision: "initial" } : {}));
+  const rotatedEntry = makeEntry({
+    sessionId: "compacted-session",
+    lifecycleRevision: "compacted",
+    updatedAt: 2,
+  });
+  const onCompactionNotice = vi.fn(async () => {});
+  state.shouldNotifyCompaction = true;
+  return {
+    ...session,
+    rotatedEntry,
+    onCompactionNotice,
+    start: (defaults: Parameters<typeof prepare>[1] = {}) =>
+      session.start(
+        { sessionStore: stored ? session.sessionStore : undefined, ...defaults },
+        createRun(),
+        { onCompactionNotice },
+      ),
+  };
+}
+
+function emitNotices(entry: SessionEntry, phases = ["end"], failure?: Error) {
+  state.preflight.mockImplementation(async ({ onCompactionNotice }) => {
+    for (const phase of phases) {
+      await onCompactionNotice?.(phase);
+    }
+    if (failure) {
+      throw failure;
+    }
+    return entry;
+  });
+}
+
 function createActiveGoalEntry(): SessionEntry {
-  return makeEntry({
+  return {
+    sessionId: "queued-session",
+    updatedAt: 1,
     goal: {
       schemaVersion: 1,
       id: "goal",
@@ -223,27 +270,15 @@ function createActiveGoalEntry(): SessionEntry {
       tokensUsed: 0,
       continuationTurns: 0,
     },
-  });
+  };
 }
 
-it.each([
-  {
-    name: "undefined rejection",
-    error: undefined,
-    expected: { preflightError: { message: "Reply preparation failed", cause: undefined } },
-  },
-  {
-    name: "public recovery guidance",
-    error: new AgentHarnessPreflightError("private diagnostic", {
-      userMessage: "Use /new, then resend your message.",
-    }),
-    expected: { preflightFailurePayload: { text: "Use /new, then resend your message." } },
-  },
-])("retains $name from preflight", async ({ error, expected }) => {
-  state.preflight.mockRejectedValueOnce(error);
-  const turn = await admitted(prepare());
-  expect(turn.preflightError).toBeInstanceOf(Error);
-  expect(turn).toMatchObject(expected);
+it("retains an undefined preflight rejection as an executable failure", async () => {
+  state.preflight.mockRejectedValueOnce(undefined);
+
+  const { preflightError } = await admitted(prepare());
+  expect(preflightError).toBeInstanceOf(Error);
+  expect(preflightError).toMatchObject({ message: "Reply preparation failed", cause: undefined });
 });
 
 it("reports a queued event's admission refusal to its source before consuming it", async () => {
@@ -263,6 +298,7 @@ it("reports a queued event's admission refusal to its source before consuming it
 
 it.each([
   { match: "sender-id", enqueuedOwner: false },
+  { match: "sender-id", enqueuedOwner: true },
   { match: "sender-e164", enqueuedOwner: false },
   { match: "sender-e164", enqueuedOwner: true },
 ] as const)(
@@ -272,14 +308,16 @@ it.each([
     const channel = match === "sender-e164" ? "whatsapp" : "telegram";
     const senderId = match === "sender-e164" ? "123456789@lid" : "alice";
     const senderE164 = match === "sender-e164" ? "+15555550123" : undefined;
-    const ownerConfig = (owner: boolean) => ({
-      commands: {
-        ownerAllowFrom: [`${channel}:${owner ? (senderE164 ?? senderId) : "other"}`],
-      },
-    });
-    const originalConfig = ownerConfig(enqueuedOwner);
+    const configuredOwner = `${channel}:${senderE164 ?? senderId}`;
+    const otherOwner = `${channel}:other`;
+    const originalConfig = {
+      commands: { ownerAllowFrom: [enqueuedOwner ? configuredOwner : otherOwner] },
+    };
     const admittedOwner = !enqueuedOwner;
-    const admittedConfig = ownerConfig(admittedOwner);
+    const admittedConfig = {
+      commands: { ownerAllowFrom: [admittedOwner ? configuredOwner : otherOwner] },
+    };
+    const laterConfig = { ...admittedConfig, tools: { deny: ["message"] } };
     const durableOwnerRead = vi
       .spyOn(configuredOwners, "prepareConfiguredCommandOwnerAuthority")
       .mockResolvedValue(undefined);
@@ -298,15 +336,17 @@ it.each([
     queued.run.traceAuthorized = enqueuedOwner;
     bindCommandOwnerAuthority(queued.run, { isCurrent: () => enqueuedOwner });
     state.admitReply.mockImplementation(async ({ captureRunSelection }) => {
+      // The actual admission owner invokes this fence again after waiting for a direct command.
       setRuntimeConfigSnapshot(admittedConfig, admittedConfig);
       captureRunSelection();
-      setRuntimeConfigSnapshot({ ...admittedConfig, tools: { deny: ["message"] } });
+      setRuntimeConfigSnapshot(laterConfig, laterConfig);
       return { status: "owned", operation };
     });
     try {
       const turn = await admitted(prepare(queued));
       const execution = turn.queued;
       expect(execution.run).toMatchObject({
+        config: admittedConfig,
         requesterOrigin: { senderId, senderE164 },
         senderIsOwner: admittedOwner,
         traceAuthorized: admittedOwner,
@@ -317,6 +357,7 @@ it.each([
       );
       const assertOwner = captureCommandOwnerAssertion(execution.run);
       if (admittedOwner) {
+        expect(assertOwner).toBeDefined();
         expect(assertOwner).not.toThrow();
         setRuntimeConfigSnapshot({ commands: { ownerAllowFrom: [] } });
       }
@@ -338,17 +379,18 @@ it.each([false, true])(
   async (revoked) => {
     const queued = createRun();
     const controller = new AbortController();
+    const assertCurrent = vi.fn(() => controller.signal.throwIfAborted());
     queued.operatorAuthority = createAdmittedRunOperatorAuthority({
-      profileId: "alice-profile",
+      profileId: revoked ? "alice" : "alice-profile",
       scopes: ["operator.admin"],
-      assertCurrent: () => controller.signal.throwIfAborted(),
+      assertCurrent,
       signal: controller.signal,
     });
     queued.run.requesterOrigin = {
-      sessionKey: "agent:original:telegram:direct:alice",
+      sessionKey: revoked ? "main" : "agent:original:telegram:direct:alice",
       messageProvider: "telegram",
       senderId: "alice",
-      operatorProfileId: "alice-profile",
+      ...(!revoked && { operatorProfileId: "alice-profile" }),
     };
     queued.run.senderIsOwner = true;
     if (revoked) {
@@ -357,6 +399,7 @@ it.each([false, true])(
         return config;
       });
       await expect(prepare(queued)).rejects.toThrow("operator source retired");
+      expect(state.admitReply).toHaveBeenCalledOnce();
       expect(operation.complete).toHaveBeenCalledOnce();
       expect(state.preflight).not.toHaveBeenCalled();
     } else {
@@ -368,48 +411,70 @@ it.each([false, true])(
       const turn = await admitted(prepare(queued));
       expect(turn.queued.run).toMatchObject({ senderIsOwner: true, traceAuthorized: true });
       expect(resolveAdmittedToolAuthority(turn).capabilityProfile.sender.isOwner).toBe(true);
+      expect(assertCurrent).toHaveBeenCalled();
       expect(durableOwnerRead).not.toHaveBeenCalled();
     }
   },
 );
-it.each(["paused", "new input", "paused during preflight"] as const)(
-  "drops an automatic Goal nudge when admission observes %s",
-  async (change) => {
-    const original = createActiveGoalEntry();
-    const onQueuedFollowupAdmitted = vi.fn(async () => {});
-    const onQueuedFollowupSettled = vi.fn(async () => {});
-    let current = change === "paused during preflight" ? original : structuredClone(original);
-    if (change === "new input") {
-      state.queueDepth.mockReturnValue(1);
-    } else if (change === "paused during preflight") {
-      state.preflight.mockImplementation(async () => {
-        current = {
-          ...original,
-          updatedAt: 2,
-          goal: { ...original.goal!, status: "paused", updatedAt: 2 },
-        };
-        return original;
-      });
-    } else {
-      current.goal!.status = change;
-    }
-    admit(operation, change === "paused during preflight" ? original : current);
-    state.loadEntry.mockImplementation(() => current);
-    const result = await prepare(
-      createRun({ goalContinuation: { sessionId: "queued-session", goalId: "goal" } }),
-      {
-        sessionEntry: original,
-        storePath: "/fixture/sessions.json",
-        opts: { onQueuedFollowupAdmitted, onQueuedFollowupSettled },
-      },
-    );
-    expect(result).toMatchObject({ kind: "skipped", reason: "goal-inactive", operation });
-    expect(onQueuedFollowupAdmitted).toHaveBeenCalledOnce();
-    expect(onQueuedFollowupSettled).toHaveBeenCalledOnce();
-    expect(operation.complete).not.toHaveBeenCalled();
-    expect(state.preflight).toHaveBeenCalledTimes(change === "paused during preflight" ? 1 : 0);
-  },
-);
+it.each([
+  "paused",
+  "blocked",
+  "complete",
+  "budget_limited",
+  "usage_limited",
+  "replaced",
+  "cleared",
+  "new input",
+  "paused during preflight",
+] as const)("drops an automatic Goal nudge when admission observes %s", async (change) => {
+  const original = createActiveGoalEntry();
+  const onQueuedFollowupAdmitted = vi.fn(async () => {});
+  const onQueuedFollowupSettled = vi.fn(async () => {});
+  let current = change === "paused during preflight" ? original : structuredClone(original);
+  if (change === "replaced") {
+    current.goal!.id = "replacement";
+  } else if (change === "cleared") {
+    current.goal = undefined;
+  } else if (change === "new input") {
+    state.queueDepth.mockReturnValue(1);
+  } else if (change === "paused during preflight") {
+    state.preflight.mockImplementation(async () => {
+      current = {
+        ...original,
+        updatedAt: 2,
+        goal: { ...original.goal!, status: "paused", updatedAt: 2 },
+      };
+      return original;
+    });
+  } else {
+    current.goal!.status = change;
+  }
+  admit(operation, change === "paused during preflight" ? original : current);
+  state.loadEntry.mockImplementation(() => current);
+  const result = await prepare(
+    createRun({ goalContinuation: { sessionId: "queued-session", goalId: "goal" } }),
+    {
+      sessionEntry: original,
+      storePath: "/fixture/sessions.json",
+      opts: { onQueuedFollowupAdmitted, onQueuedFollowupSettled },
+    },
+  );
+  expect(result).toMatchObject({ kind: "skipped", reason: "goal-inactive", operation });
+  expect(onQueuedFollowupAdmitted).toHaveBeenCalledOnce();
+  expect(onQueuedFollowupSettled).toHaveBeenCalledOnce();
+  expect(operation.complete).not.toHaveBeenCalled();
+  expect(state.preflight).toHaveBeenCalledTimes(change === "paused during preflight" ? 1 : 0);
+});
+
+it("preserves the admitted legacy transcript target", async () => {
+  const queued = createRun();
+  queued.run.sessionKey = undefined;
+  queued.run.sessionFile = "legacy-target";
+  admit(createOperation("admitted-session"));
+
+  const turn = await admitted(prepare(queued, { sessionKey: undefined }));
+  expect(turn.queued.run.sessionFile).toBe("legacy-target");
+});
 
 it("retires a selected source refused by reply admission without adopting it", async () => {
   state.admitReply.mockResolvedValue({ status: "skipped", reason: "active-run" });
@@ -439,53 +504,142 @@ it("stops when reply admission aborts the queued source", async () => {
   expect(state.preflight).not.toHaveBeenCalled();
 });
 
-it.each(["admitted", "revision", "missing", "legacy"] as const)(
-  "projects the %s session generation without stale enqueue state",
-  async (kind) => {
-    const initial = makeEntry({ lifecycleRevision: "old", modelSelectionLocked: true });
-    operation = createOperation(kind === "revision" ? initial.sessionId : "admitted-session");
-    const entry =
-      kind === "missing"
-        ? null
-        : makeEntry({
-            sessionId: operation.sessionId,
-            lifecycleRevision: "new",
-            modelSelectionLocked: true,
+it("keeps ingress retryable when queued preparation fails before input acceptance", async () => {
+  vi.useFakeTimers();
+  try {
+    await withTempState(async (stateDir) => {
+      const queue = createTestIngressQueue(stateDir);
+      const failure = new Error("ENOSPC: queued turn preparation failed");
+      await queue.enqueue("queued-input", { text: "Please answer this message" });
+      const drain = createChannelIngressDrain({
+        queue,
+        dispatchClaimedEvent: async (_event, lifecycle) => {
+          await prepare(createRun(bindIngressLifecycleToReplyOptions(lifecycle)), {
+            opts: {
+              onQueuedFollowupAdmitted: async () => {
+                throw failure;
+              },
+            },
           });
-    const { start } = sessionFixture(initial, entry);
-    const queued = createRun({ currentInboundContext: { text: "stale" } });
-    queued.run.cliSessionBindingFacts = { provider: "claude-cli" } as never;
-    queued.run.autoFallbackPrimaryProbe = { provider: "anthropic", model: "claude" } as never;
-    state.loadEntry.mockReturnValue(entry ?? undefined);
-    state.sendPolicy = "deny";
-    state.refreshGoal.mockImplementation((_context, current) =>
-      current ? { text: "fresh" } : undefined,
-    );
-    if (kind === "legacy") {
-      queued.run.sessionKey = undefined;
-      queued.run.sessionFile = "legacy-target";
-    }
-    const turn = await start({ sessionKey: kind === "legacy" ? undefined : "main" }, queued);
-    expect(turn.queued.run).toMatchObject({
-      sessionId: operation.sessionId,
-      sessionFile: kind === "legacy" ? "legacy-target" : "main",
-      modelSelectionLocked: kind !== "missing",
-      cliSessionBindingFacts: undefined,
-      autoFallbackPrimaryProbe: undefined,
+        },
+      });
+      try {
+        await drain.drainOnce();
+        await drain.waitForIdle();
+        expect(await queue.listPending()).toMatchObject([
+          { id: "queued-input", attempts: 1, lastError: failure.message },
+        ]);
+        expect((await queue.enqueue("queued-input", { text: "duplicate" })).kind).toBe("pending");
+      } finally {
+        drain.dispose();
+      }
     });
-    expect(turn.queued.currentInboundContext).toEqual(entry ? { text: "fresh" } : undefined);
-    expect(turn.sendPolicy).toBe("deny");
-    if (kind === "missing") {
-      const preflight = state.preflight.mock.calls[0]?.[0];
-      expect([preflight.sessionEntry, preflight.sessionStore?.main]).toEqual([
-        undefined,
-        undefined,
-      ]);
-    } else if (kind !== "legacy") {
-      expect(turn.session.current()).toBe(entry);
-    }
-  },
-);
+  } finally {
+    vi.clearAllTimers();
+    vi.useRealTimers();
+  }
+});
+
+it("uses admission-time session generation, model lock, policy, and goal context", async () => {
+  operation = createOperation("admitted-session");
+  const entry = makeEntry({
+    sessionId: operation.sessionId,
+    modelSelectionLocked: true,
+    updatedAt: 2,
+  });
+  const { start } = sessionFixture(makeEntry(), entry);
+  const onQueuedFollowupAdmitted = vi.fn(async () => {});
+  const queued = createRun({
+    currentInboundContext: { text: "stale goal" },
+    originatingChatType: "group",
+  });
+  state.loadEntry.mockReturnValue(entry);
+  state.sendPolicy = "deny";
+  state.refreshGoal.mockReturnValue({ text: "fresh goal" });
+  const turn = await start(
+    { storePath: "/tmp/sessions.json", opts: { onQueuedFollowupAdmitted } },
+    queued,
+  );
+  expect(turn.queued.run).toMatchObject({
+    sessionId: "admitted-session",
+    sessionFile: "main",
+    modelSelectionLocked: true,
+  });
+  expect(turn.queued.currentInboundContext).toEqual({ text: "fresh goal" });
+  expect(turn.sendPolicy).toBe("deny");
+  expect(turn.session.current()).toBe(entry);
+  expect(onQueuedFollowupAdmitted).toHaveBeenCalledOnce();
+  expect(state.resolveSendPolicy).toHaveBeenCalledWith(
+    expect.objectContaining({ chatType: "group" }),
+  );
+});
+
+it("clears queued generation facts when only the lifecycle revision advances", async () => {
+  const initial = makeEntry({ lifecycleRevision: "queued-revision" });
+  const entry = makeEntry({ lifecycleRevision: "admitted-revision", updatedAt: 2 });
+  const { start } = sessionFixture(initial, entry);
+  state.loadEntry.mockReturnValue(entry);
+  const queued = createRun();
+  queued.run.cliSessionBindingFacts = { provider: "claude-cli" } as never;
+  queued.run.autoFallbackPrimaryProbe = { provider: "anthropic", model: "claude" } as never;
+  const turn = await start({}, queued);
+  expect(turn.queued.run).toMatchObject({
+    cliSessionBindingFacts: undefined,
+    autoFallbackPrimaryProbe: undefined,
+  });
+});
+
+it("does not pass stale enqueue-time state into a rotated session generation", async () => {
+  operation = createOperation("rotated-session");
+  const { start } = sessionFixture(makeEntry({ modelSelectionLocked: true }), null);
+  state.loadEntry.mockReturnValue(undefined);
+  const turn = await start();
+  expect(turn.queued.run.modelSelectionLocked).toBe(false);
+  expect(state.preflight).toHaveBeenCalledWith(
+    expect.objectContaining({ sessionEntry: undefined }),
+  );
+  const preflightParams: { sessionStore?: Record<string, SessionEntry> } =
+    state.preflight.mock.calls[0]?.[0];
+  expect(preflightParams.sessionStore?.main).toBeUndefined();
+  expect(state.refreshGoal).toHaveBeenCalledWith(undefined, undefined);
+});
+
+it("settles presentation and releases the reply operation when dispatcher setup fails", async () => {
+  const failure = new Error("dispatcher reset failed");
+  const onQueuedFollowupSettled = vi.fn(async () => {});
+
+  await expect(
+    prepare(createRun(), {
+      opts: {
+        onQueuedFollowupAdmitted: vi.fn().mockRejectedValue(failure),
+        onQueuedFollowupSettled,
+      },
+    }),
+  ).rejects.toBe(failure);
+  expect(onQueuedFollowupSettled).toHaveBeenCalledOnce();
+  expect(operation.complete).toHaveBeenCalledOnce();
+});
+
+it("keeps the model selected at admission when preferences change during source adoption", async () => {
+  const queued = createRun();
+  state.admitReply.mockImplementation(async ({ captureRunSelection }) => {
+    queued.run.model = "selected-at-admission";
+    captureRunSelection();
+    return { status: "owned", operation: createOperation() };
+  });
+
+  const turn = await admitted(
+    prepare(queued, {
+      opts: {
+        onQueuedFollowupAdmitted: async () => {
+          queued.run.model = "next-turn-model";
+        },
+      },
+    }),
+  );
+  expect(turn.queued.run.model).toBe("selected-at-admission");
+  expect(queued.run.model).toBe("next-turn-model");
+});
 
 it("takes only the scheduled fallback policy selected at admission", async () => {
   const policy = (sessionModelOverrideSource?: "user") => ({
@@ -510,7 +664,6 @@ it("takes only the scheduled fallback policy selected at admission", async () =>
   for (const source of [queued, ordinary]) {
     state.admitReply.mockImplementationOnce(async ({ captureRunSelection }) => {
       source.run.scheduledAutomation = atAdmission;
-      source.run.model = "selected-at-admission";
       captureRunSelection();
       return { status: "owned", operation: createOperation() };
     });
@@ -522,14 +675,11 @@ it("takes only the scheduled fallback policy selected at admission", async () =>
         opts: {
           onQueuedFollowupAdmitted: async () => {
             queued.run.scheduledAutomation = scheduled("later", "user");
-            queued.run.model = "next-turn-model";
           },
         },
       }),
     )
   ).queued;
-  expect(run.model).toBe("selected-at-admission");
-  expect(queued.run.model).toBe("next-turn-model");
   expect(run.scheduledAutomation?.modelFallbackPolicy).toBe(atAdmission.modelFallbackPolicy);
   // The occurrence's job and authority keep the bindings the turn was enqueued with.
   expect(run.scheduledAutomation?.job).toBe(enqueued.job);
@@ -537,82 +687,92 @@ it("takes only the scheduled fallback policy selected at admission", async () =>
   expect((await admitted(prepare(ordinary))).queued.run.scheduledAutomation).toBeUndefined();
 });
 
-it.each([
-  "rotate",
-  "rotate denied",
-  "rotate failed",
-  "policy recheck",
-  "notice failed",
-  "preflight failed",
-])("settles compaction with %s", async (scenario) => {
-  const rotates = scenario.startsWith("rotate");
-  const denies =
-    scenario === "rotate denied" || scenario === "rotate failed" || scenario === "policy recheck";
-  const { initialEntry, sessionStore, start } = sessionFixture();
-  const finalEntry = makeEntry({
-    sessionId: rotates ? "compacted-session" : initialEntry.sessionId,
-    updatedAt: 2,
-  });
-  const notice = vi.fn<NonNullable<Options["onCompactionNotice"]>>(async () => {});
-  const failure = new Error("preflight failed");
-  state.shouldNotifyCompaction = true;
-  state.loadEntry.mockReturnValue(finalEntry);
+it("refreshes send policy and goal context after preflight rotates the generation", async () => {
+  const { initialEntry, start } = sessionFixture();
+  const rotatedEntry = makeEntry({ sessionId: "compacted-session", updatedAt: 2 });
+  state.loadEntry.mockReturnValue(initialEntry);
   state.refreshGoal.mockImplementation((_context, entry) => ({ text: entry?.sessionId }));
-  state.resolveSendPolicy.mockImplementation(({ entry }) =>
-    entry === finalEntry && denies ? "deny" : "allow",
-  );
-  state.preflight.mockImplementation(async ({ onCompactionNotice, sessionStore: ownedStore }) => {
-    if (rotates) {
-      ownedStore.main = finalEntry;
-      sessionStore.main = finalEntry;
-    }
-    if (scenario === "rotate failed") {
-      throw failure;
-    }
-    if (scenario === "preflight failed") {
-      await onCompactionNotice?.("start");
-      await onCompactionNotice?.("incomplete");
-      throw failure;
-    }
-    await onCompactionNotice?.("end");
-    return finalEntry;
+  state.preflight.mockImplementation(async () => {
+    state.sendPolicy = "deny";
+    return rotatedEntry;
   });
-  if (scenario === "notice failed") {
-    notice.mockRejectedValue(failure);
-  }
-  const result = start(
-    {
-      sessionStore: rotates ? sessionStore : undefined,
-      storePath: scenario === "policy recheck" ? "/tmp/sessions.json" : undefined,
-    },
-    createRun(),
-    { onCompactionNotice: notice },
+
+  const turn = await start({}, createRun({ currentInboundContext: { text: "stale" } }));
+  expect(turn).toMatchObject({
+    sendPolicy: "deny",
+    queued: { currentInboundContext: { text: "compacted-session" } },
+  });
+});
+
+it("rechecks send policy before an in-preflight compaction notice", async () => {
+  const { initialEntry, onCompactionNotice, start } = compactionFixture();
+  const deniedEntry: SessionEntry = { ...initialEntry, updatedAt: 2 };
+  state.loadEntry.mockReturnValue(deniedEntry);
+  state.resolveSendPolicy.mockImplementation(({ entry }) =>
+    entry === deniedEntry ? "deny" : "allow",
   );
-  if (scenario === "notice failed") {
-    await expect(result).rejects.toBe(failure);
-    expect(operation.complete).toHaveBeenCalledOnce();
-    return;
-  }
-  const turn = await result;
-  if (rotates) {
-    expect(turn).toMatchObject({
-      sendPolicy: denies ? "deny" : "allow",
-      queued: {
-        run: { sessionId: "compacted-session" },
-        currentInboundContext: { text: "compacted-session" },
+  emitNotices(deniedEntry);
+
+  await start({ storePath: "/tmp/sessions.json" });
+
+  expect(onCompactionNotice).not.toHaveBeenCalled();
+  expect(state.resolveSendPolicy).toHaveBeenLastCalledWith(
+    expect.objectContaining({ entry: deniedEntry }),
+  );
+});
+
+it.each([false, true])(
+  "adopts a preflight rotation before completion, failure=%s",
+  async (fails) => {
+    const { rotatedEntry, sessionStore, onCompactionNotice, start } = compactionFixture(true);
+    state.preflight.mockImplementation(
+      async ({ onCompactionNotice: emitCompactionNotice, sessionStore: ownedStore }) => {
+        if (fails) {
+          ownedStore.main = rotatedEntry;
+          throw new Error("preflight failed after rotation");
+        }
+        sessionStore.main = rotatedEntry;
+        await emitCompactionNotice?.("end");
+        return rotatedEntry;
       },
-    });
-  }
-  if (scenario.endsWith("failed")) {
-    expect(turn.preflightFailurePayload).toMatchObject({ text: "preflight failed" });
-  }
-  if (denies) {
-    expect(notice).not.toHaveBeenCalled();
-  } else if (scenario === "preflight failed") {
-    expect(notice.mock.calls.map(([phase]) => phase)).toEqual(["start", "incomplete"]);
-  } else {
-    expect(notice.mock.calls[0]?.[2].queued.run.sessionId).toBe(finalEntry.sessionId);
-  }
+    );
+    const turn = await start();
+    if (fails) {
+      expect(turn).toMatchObject({
+        queued: { run: { sessionId: "compacted-session" } },
+        preflightFailurePayload: {},
+      });
+      expect(operation.updateSessionId).toHaveBeenCalledWith("compacted-session");
+    } else {
+      const noticeTurn = {
+        sendPolicy: "allow",
+        queued: { run: { sessionId: "compacted-session" } },
+      };
+      expect(onCompactionNotice.mock.calls[0]).toMatchObject(["end", undefined, noticeTurn]);
+    }
+  },
+);
+
+it("releases the admitted operation when deferred terminal notice delivery fails", async () => {
+  const { initialEntry, onCompactionNotice, start } = compactionFixture();
+  const failure = new Error("notice delivery failed");
+  emitNotices(initialEntry);
+  onCompactionNotice.mockRejectedValue(failure);
+
+  await expect(start()).rejects.toBe(failure);
+  expect(operation.complete).toHaveBeenCalledOnce();
+});
+
+it("delivers an incomplete terminal notice after ordinary preflight failure", async () => {
+  const { initialEntry, onCompactionNotice, start } = compactionFixture();
+  emitNotices(initialEntry, ["start", "incomplete"], new Error("preflight failed"));
+
+  const turn = await start();
+  expect(turn).toMatchObject({ preflightFailurePayload: {} });
+  expect(onCompactionNotice.mock.calls).toEqual([
+    ["start", undefined, expect.anything()],
+    ["incomplete", undefined, expect.anything()],
+  ]);
 });
 
 it("keeps preflight failure cancellation live while refreshing send policy", async () => {
@@ -640,4 +800,13 @@ it("keeps preflight failure cancellation live while refreshing send policy", asy
   } finally {
     replyOperation.complete();
   }
+});
+
+it("retains the preflight owner's public recovery guidance for a queued turn", async () => {
+  const userMessage = "The saved history exceeds its limit. Use /new, then resend your message.";
+  state.preflight.mockRejectedValue(
+    new AgentHarnessPreflightError("private diagnostic", { userMessage }),
+  );
+  const turn = await admitted(prepare());
+  expect(turn).toMatchObject({ preflightFailurePayload: { text: userMessage } });
 });

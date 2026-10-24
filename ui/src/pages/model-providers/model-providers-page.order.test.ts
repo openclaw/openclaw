@@ -14,6 +14,17 @@ import {
   nextFrame,
 } from "../../test-helpers/modal-dialog.ts";
 import "../../lib/toast-host.tsx";
+import {
+  waitForText,
+  loginOption,
+  capability,
+  expectAbsent,
+  expectPresent,
+  profile as authProfile,
+  click,
+  expectDisabled,
+  expectContent,
+} from "../../test-helpers/model-providers.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import {
   appendPage,
@@ -29,17 +40,6 @@ import {
   startSelectedLogin,
   submitCredential,
 } from "./model-providers-page.test-support.tsx";
-import {
-  waitForText,
-  loginOption,
-  capability,
-  expectAbsent,
-  expectPresent,
-  profile as authProfile,
-  click,
-  expectDisabled,
-  expectContent,
-} from "./model-providers.test-fixtures.ts";
 
 afterEach(() => {
   document.body.replaceChildren();

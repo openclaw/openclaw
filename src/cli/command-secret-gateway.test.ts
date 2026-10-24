@@ -297,6 +297,14 @@ it("applies and clears a numeric object key instead of the display path", async 
   expect(getAuthoredConfigSecretRef(result.resolvedConfig, targetPath)).toBeNull();
   expect(result.hadUnresolvedTargets).toBe(false);
   expect(result.targetStatesByPath).toEqual({ [targetPath]: "resolved_gateway" });
+
+  const next = await resolveCommandSecretRefsViaGateway({
+    ...request,
+    config: result.resolvedConfig,
+  });
+  expect(readPath(next.resolvedConfig, pathSegments)).toBe(resolvedLiteral);
+  expect(next.hadUnresolvedTargets).toBe(false);
+  expect(callGateway).toHaveBeenCalledOnce();
 });
 
 it("uses the explicit agent owner during channels resolve secret preflight", async () => {
@@ -376,10 +384,15 @@ it("retries old gateways without allowed paths and still filters scoped results"
   });
 
   expect(callGateway).toHaveBeenCalledTimes(2);
-  expect(callGateway.mock.calls[0]?.[0].params.allowedPaths).toEqual([
-    "channels.discord.accounts.ops.token",
-  ]);
-  expect(callGateway.mock.calls[1]?.[0].params).not.toHaveProperty("allowedPaths");
+  expect(callGateway.mock.calls[0]?.[0].params).toEqual({
+    commandName: "message",
+    targetIds: ["channels.discord.accounts.*.token"],
+    allowedPaths: ["channels.discord.accounts.ops.token"],
+  });
+  expect(callGateway.mock.calls[1]?.[0].params).toEqual({
+    commandName: "message",
+    targetIds: ["channels.discord.accounts.*.token"],
+  });
   expect(result.resolvedConfig.channels?.discord?.accounts?.ops?.token).toBe("ops-token");
   expect(result.resolvedConfig.channels?.discord?.accounts?.chat?.token).toEqual(
     secretRef("DISCORD_CHAT_TOKEN"),

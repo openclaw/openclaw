@@ -7,6 +7,13 @@ import {
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { WebSocketError } from "openai/resources/responses/internal-base.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  createPluginMetadataSnapshot,
+  makeRegistry,
+} from "../../../../src/config/plugin-auto-enable.test-helpers.js";
+import { isRetryableAssistantError } from "../../../../src/llm/utils/retry.js";
+import { createEmptyPluginRegistry } from "../../../../src/plugins/registry-empty.js";
+import { withPluginRuntimeGenerationScope } from "../../../../src/plugins/runtime/generation-scope.js";
 import { configureAiTransportHost, getAiTransportHost } from "../host.js";
 import { makeProviderModel } from "../providers/provider-model.test-support.js";
 import { cleanupSessionResources } from "../session-resources.js";
@@ -18,15 +25,11 @@ import {
   type ResponsesServiceTierObservation,
 } from "./openai-responses-contracts.js";
 import type { SdkResponse } from "./openai-responses-sdk.test-support.js";
-import { message as responseMessage, tool } from "./openai-responses-stream-parity.test-helpers.js";
 import {
-  argumentDelta,
-  collectEventTypes,
-  completedResponse,
+  message as responseMessage,
   outputItem,
-  userMessage as user,
-  wireUser,
-} from "./openai-stream-cases.test-support.js";
+  tool,
+} from "./openai-responses-stream-parity.test-helpers.js";
 import {
   withProviderAcceptanceObserver,
   type ProviderAcceptance,
@@ -45,6 +48,7 @@ const transport = vi.hoisted(() => ({
   sdkOutcomes: [] as Array<Error | SdkResponse>,
   sdkRequests: [] as Array<Record<string, unknown>>,
   closeCount: 0,
+  wsClients: [] as Array<{ apiKey?: string; baseURL?: string }>,
   wsOptions: [] as Array<{ headers?: Record<string, string> }>,
   wsRequests: [] as Array<Record<string, unknown>>,
 }));
@@ -63,9 +67,10 @@ vi.mock("openai/resources/responses/ws.js", () => ({
     private responseMessages: StreamMessage[] = [];
 
     constructor(
-      _client: { apiKey?: string; baseURL?: string },
+      client: { apiKey?: string; baseURL?: string },
       options: { headers?: Record<string, string> },
     ) {
+      transport.wsClients.push(client);
       transport.wsOptions.push(options);
     }
 
@@ -83,21 +88,24 @@ vi.mock("openai/resources/responses/ws.js", () => ({
       return this;
     }
 
-    async *stream() {
+    stream() {
       const handshake = transport.handshakeMessages.shift() ?? { type: "open" as const };
-      yield handshake;
-      if (handshake.type !== "open") {
-        return;
-      }
-      for (const streamMessage of this.responseMessages) {
-        if (streamMessage.type === "delay") {
-          await new Promise<void>((resolve) => {
-            setTimeout(resolve, streamMessage.ms);
-          });
-          continue;
+      const readResponses = () => this.responseMessages;
+      return (async function* () {
+        yield handshake;
+        if (handshake.type !== "open") {
+          return;
         }
-        yield streamMessage;
-      }
+        for (const streamMessage of readResponses()) {
+          if (streamMessage.type === "delay") {
+            await new Promise<void>((resolve) => {
+              setTimeout(resolve, streamMessage.ms);
+            });
+            continue;
+          }
+          yield streamMessage;
+        }
+      })();
     }
   },
 }));
@@ -110,20 +118,51 @@ import { createOpenAIResponsesWebSocketStream as createSocketStream } from "./op
 
 const initialHost = getAiTransportHost();
 const model = makeProviderModel("openai-responses", "openai", "gpt-5.6-luna", {
+  name: "GPT-5.6 Luna",
   baseUrl: "https://api.openai.com/v1",
+  reasoning: true,
   contextWindow: 200_000,
+  maxTokens: 8192,
 });
 
 function history(...messages: Context["messages"]): Context {
   return { messages, tools: [] };
 }
 
+function user(text: string, timestamp: number) {
+  return { role: "user" as const, content: text, timestamp };
+}
+
 function completedEvent(responseId: string, content?: string | Array<Record<string, unknown>>) {
   const output =
     typeof content === "string"
-      ? [responseMessage(`msg_${responseId}`, content, "final_answer")]
+      ? [
+          {
+            ...responseMessage(`msg_${responseId}`, content, "final_answer"),
+            content: [
+              {
+                text: content,
+                type: "output_text",
+                annotations: [{ type: "url_citation", url: "https://example.test/source" }],
+                logprobs: [{ token: content, logprob: -0.1 }],
+              },
+            ],
+          },
+        ]
       : (content ?? []);
-  return completedResponse(responseId, output);
+  return {
+    type: "response.completed",
+    response: {
+      id: responseId,
+      status: "completed",
+      output,
+      usage: {
+        input_tokens: 5,
+        output_tokens: output.length > 0 ? 3 : 0,
+        total_tokens: output.length > 0 ? 8 : 5,
+      },
+    },
+  };
 }
 
 function message(event: Record<string, unknown>): StreamMessage {
@@ -136,10 +175,6 @@ function reply(responseId: string, content?: string | Array<Record<string, unkno
 
 function rejectionBatch(code: string, text: string, param?: string): StreamMessage[] {
   return [{ type: "error", error: wrappedSdkServerError({ code, message: text, param }) }];
-}
-
-function failedResponse(id: string, error: Record<string, unknown>) {
-  return { type: "response.failed", response: { id, status: "failed", error, output: [] } };
 }
 
 function expectCounts(websocket: number, sse: number, clients?: number) {
@@ -177,7 +212,11 @@ function toolCallResponse(responseId: string): StreamMessage[] {
   const position = { output_index: 0, item_id: functionCall.id };
   return [
     message(outputItem("added", { ...functionCall, arguments: "", status: "in_progress" }, 0)),
-    message(argumentDelta(functionCall.id, functionCall.arguments)),
+    message({
+      type: "response.function_call_arguments.delta",
+      ...position,
+      delta: functionCall.arguments,
+    }),
     message({
       type: "response.function_call_arguments.done",
       ...position,
@@ -223,7 +262,6 @@ async function run(
     reasoningEffort: "low" as const,
     ...requestOptions,
   };
-  responsesServiceTierObserver.copy(overrides, options);
   if (acceptanceObserver) {
     withProviderAcceptanceObserver(options, acceptanceObserver);
   }
@@ -243,20 +281,35 @@ describe("native OpenAI Responses WebSocket client integration", () => {
         value.length = 0;
       }
     }
+    let turn = 0;
     configureAiTransportHost({
       ...initialHost,
       plugin: {
         ...initialHost.plugin,
-        resolveTransportTurnState: ({ context }) => ({
-          websocket: {
+        resolveTransportTurnState: ({ context }) => {
+          turn += 1;
+          return {
             headers: {
-              "x-client-request-id": context.sessionId ?? "",
               "x-openclaw-session-id": context.sessionId ?? "",
-              "x-provider-route": "route-a",
+              "x-openclaw-turn-id": `turn-${turn}`,
+              "x-openclaw-turn-attempt": "1",
             },
-            degradeCooldownMs: 1_000,
-          },
-        }),
+            metadata: {
+              openclaw_session_id: context.sessionId ?? "",
+              openclaw_turn_id: `turn-${turn}`,
+              openclaw_turn_attempt: "1",
+              openclaw_transport: context.transport,
+            },
+            websocket: {
+              headers: {
+                "x-client-request-id": context.sessionId ?? "",
+                "x-openclaw-session-id": context.sessionId ?? "",
+                "x-provider-route": "route-a",
+              },
+              degradeCooldownMs: 1_000,
+            },
+          };
+        },
       },
     });
   });
@@ -264,6 +317,47 @@ describe("native OpenAI Responses WebSocket client integration", () => {
   afterEach(() => {
     cleanupSessionResources();
     configureAiTransportHost(initialHost);
+  });
+
+  it("observes the dispatched WebSocket service tier and raw terminal downgrade", async () => {
+    const completed = completedEvent("resp_tier", "ok");
+    transport.responseBatches.push([
+      message({
+        ...completed,
+        response: {
+          ...completed.response,
+          model: "fixture-served",
+          service_tier: "default",
+          usage: {
+            ...completed.response.usage,
+            input_tokens_details: { cached_tokens: 3, cache_write_tokens: 0 },
+          },
+        },
+      }),
+    ]);
+    const observations: ResponsesServiceTierObservation[] = [];
+    const options = {
+      apiKey: "test-key",
+      transport: "websocket" as const,
+      onPayload: (payload: unknown) => ({
+        ...(payload as Record<string, unknown>),
+        service_tier: "ultrafast",
+      }),
+    };
+    responsesServiceTierObserver.set(options, (observation) => observations.push(observation));
+    const stream = await createStreamFn()(model, history(user("hello", 1)), options);
+    expect((await stream.result()).stopReason).toBe("stop");
+    expect(transport.wsRequests[0]?.service_tier).toBe("ultrafast");
+    expect(observations).toEqual([
+      {
+        requestedTier: "ultrafast",
+        responseTier: "default",
+        responseId: "resp_tier",
+        responseModel: "fixture-served",
+        inputTokens: 5,
+        cachedTokens: 3,
+      },
+    ]);
   });
 
   it.each(["after-output", "registered-hook", "active-hook"] as const)(
@@ -276,19 +370,23 @@ describe("native OpenAI Responses WebSocket client integration", () => {
         param: "service_tier",
         message: "Invalid service_tier argument",
       };
-      const prelude =
-        shape === "active-hook"
-          ? { type: "response.created", response: { id: "resp_active" } }
-          : shape === "after-output"
-            ? outputItem("added", {
-                type: "web_search_call",
-                id: "ws_started",
-                status: "in_progress",
-              })
-            : undefined;
       transport.responseBatches.push([
-        ...(prelude ? [message(prelude)] : []),
-        message(failedResponse("resp_tier_error", rejection)),
+        ...(shape === "active-hook"
+          ? [message({ type: "response.created", response: { id: "resp_active" } })]
+          : []),
+        ...(shape === "after-output"
+          ? [
+              message({
+                type: "response.output_item.added",
+                output_index: 0,
+                item: { type: "web_search_call", id: "ws_started", status: "in_progress" },
+              }),
+            ]
+          : []),
+        message({
+          type: "response.failed",
+          response: { id: "resp_tier_error", status: "failed", error: rejection, output: [] },
+        }),
       ]);
       transport.sdkOutcomes.push(sdkCompletion("resp_tier_recovered"));
       const observations: ResponsesServiceTierObservation[] = [];
@@ -312,11 +410,13 @@ describe("native OpenAI Responses WebSocket client integration", () => {
       );
       const result = await stream.result();
       expect(onActiveResponse).toHaveBeenCalledTimes(shape === "active-hook" ? 1 : 0);
-      const recovered = shape === "registered-hook";
-      expect(result.stopReason).toBe(recovered ? "stop" : "error");
-      expect(transport.sdkRequests).toHaveLength(recovered ? 1 : 0);
-      expect(observations.some((entry) => entry.rejected)).toBe(recovered);
-      if (recovered) {
+      if (shape === "after-output" || shape === "active-hook") {
+        expect(result.stopReason).toBe("error");
+        expect(transport.sdkRequests).toHaveLength(0);
+        expect(observations).not.toContainEqual({ requestedTier: "ultrafast", rejected: true });
+      } else {
+        expect(result.stopReason).toBe("stop");
+        expect(transport.sdkRequests).toHaveLength(1);
         expect(transport.sdkRequests[0]?.service_tier).toBe("priority");
         expect(observations).toContainEqual({ requestedTier: "ultrafast", rejected: true });
       }
@@ -332,13 +432,7 @@ describe("native OpenAI Responses WebSocket client integration", () => {
       const result = await run(history(user("hello", 1)), {
         acceptanceObserver,
         cacheRetention,
-        model: {
-          ...model,
-          compat: { sendSessionIdHeader: true },
-          ...(cacheRetention === "short"
-            ? { headers: { "X-OpenCode-Session": "configured-session" } }
-            : {}),
-        },
+        model: { ...model, compat: { sendSessionIdHeader: true } },
       });
 
       expect(result.stopReason).toBe("stop");
@@ -346,14 +440,25 @@ describe("native OpenAI Responses WebSocket client integration", () => {
       expect(transport.wsOptions[0]?.headers?.session_id).toBe(
         cacheRetention === "short" ? "session-1" : undefined,
       );
-      expect(transport.wsOptions[0]?.headers).toMatchObject({
-        "x-client-request-id": "session-1",
-        "x-openclaw-session-id": "session-1",
-        "x-provider-route": "route-a",
-        ...(cacheRetention === "short" ? { "X-OpenCode-Session": "configured-session" } : {}),
-      });
+      expect(transport.wsOptions[0]?.headers?.["x-client-request-id"]).toBe("session-1");
     },
   );
+
+  it("preserves nonconflicting turn headers with an explicit OpenCode session", async () => {
+    transport.responseBatches.push(reply("resp_accepted", "ok"));
+
+    const result = await run(history(user("hello", 1)), {
+      model: { ...model, headers: { "X-OpenCode-Session": "configured-session" } },
+    });
+
+    expect(result.stopReason).toBe("stop");
+    expect(transport.wsOptions[0]?.headers).toMatchObject({
+      "X-OpenCode-Session": "configured-session",
+      "x-client-request-id": "session-1",
+      "x-openclaw-session-id": "session-1",
+      "x-provider-route": "route-a",
+    });
+  });
 
   it("closes the WebSocket when acceptance observation fails", async () => {
     transport.responseBatches.push(reply("resp_rejected", "ignored"));
@@ -416,7 +521,11 @@ describe("native OpenAI Responses WebSocket client integration", () => {
       transport: "auto",
       onResponse,
     });
-    const consume = collectEventTypes(responseStream, order);
+    const consume = (async () => {
+      for await (const event of responseStream) {
+        order.push(event.type);
+      }
+    })();
 
     await vi.waitFor(() => expect(onResponse).toHaveBeenCalledOnce());
     expect(order).toEqual(["hook:start"]);
@@ -439,23 +548,26 @@ describe("native OpenAI Responses WebSocket client integration", () => {
   });
 
   it.each([
-    [
-      "websocket_connection_limit_reached",
-      undefined,
-      "safe rejection: websocket_connection_limit_reached",
-    ],
-    [
-      "unsupported_parameter",
-      "previous_response_id",
-      "Previous response cannot be used for this organization due to Zero Data Retention.",
-    ],
-    [
-      "invalid_encrypted_content",
-      "input[0].encrypted_content",
-      "compaction checkpoint could not be decrypted",
-    ],
-  ] as const)("recovers %s over full-history SSE", async (code, param, rejection) => {
-    const compact = code === "invalid_encrypted_content";
+    {
+      code: "websocket_connection_limit_reached",
+      param: undefined,
+      compact: false,
+      rejection: "safe rejection: websocket_connection_limit_reached",
+    },
+    {
+      code: "unsupported_parameter",
+      param: "previous_response_id",
+      compact: false,
+      rejection:
+        "Previous response cannot be used for this organization due to Zero Data Retention.",
+    },
+    {
+      code: "invalid_encrypted_content",
+      param: "input[0].encrypted_content",
+      compact: true,
+      rejection: "compaction checkpoint could not be decrypted",
+    },
+  ])("recovers $code over full-history SSE", async ({ code, param, compact, rejection }) => {
     const options = compact ? { transport: "websocket" as const } : {};
     const onCompactionRejected = vi.fn();
     transport.responseBatches.push(
@@ -479,6 +591,7 @@ describe("native OpenAI Responses WebSocket client integration", () => {
     const first = await run(history(firstUser), options);
     if (compact) {
       expect(first.providerReplay).toMatchObject({ type: "openai-responses-compaction" });
+      transport.wsRequests.length = 0;
     }
     const secondUser = user(compact ? "continue after compaction" : "second question", 2);
     const context = history(firstUser, first, secondUser);
@@ -496,7 +609,7 @@ describe("native OpenAI Responses WebSocket client integration", () => {
         data: "rejected",
       });
       expect(onCompactionRejected).toHaveBeenCalledOnce();
-      const checkpointInput = JSON.stringify(transport.wsRequests[1]?.input);
+      const checkpointInput = JSON.stringify(transport.wsRequests[0]?.input);
       const fullInput = JSON.stringify(transport.sdkRequests[0]?.input);
       expect(checkpointInput).toContain('"type":"compaction"');
       expect(checkpointInput).not.toContain("full history before compaction");
@@ -505,7 +618,13 @@ describe("native OpenAI Responses WebSocket client integration", () => {
     } else {
       expect(transport.wsRequests[1]).toMatchObject({
         previous_response_id: "resp_1",
-        input: [wireUser("second question")],
+        input: [
+          {
+            type: "message",
+            role: "user",
+            content: [{ type: "input_text", text: "second question" }],
+          },
+        ],
       });
       expect(transport.closeCount).toBe(1);
       expect(transport.sdkRequests[0]).not.toHaveProperty("previous_response_id");
@@ -522,9 +641,12 @@ describe("native OpenAI Responses WebSocket client integration", () => {
       { ...options, ...(compact ? { observations } : {}) },
     );
     expect(third.stopReason).toBe("stop");
-    expectCounts(3, 1, compact ? 3 : 2);
     if (compact) {
-      expect(JSON.stringify(transport.wsRequests[2]?.input)).not.toContain('"type":"compaction"');
+      expect(transport.wsRequests).toHaveLength(2);
+      expect(transport.sdkRequests).toHaveLength(1);
+      expect(JSON.stringify(transport.wsRequests[1]?.input)).not.toContain('"type":"compaction"');
+    } else {
+      expectCounts(3, 1, 2);
     }
     expect(promptPaths(observations)).toEqual([
       { egress: "responses-websocket", payloadVariant: "initial" },
@@ -549,10 +671,14 @@ describe("native OpenAI Responses WebSocket client integration", () => {
       mode: "websocket",
     });
 
-    const error = await Array.fromAsync(response.stream).then(
-      () => undefined,
-      (caught: unknown) => caught,
-    );
+    let error: unknown;
+    try {
+      for await (const event of response.stream) {
+        void event;
+      }
+    } catch (caught) {
+      error = caught;
+    }
 
     expect(error).toBeInstanceOf(OpenAIResponsesWebSocketSafeRetryError);
     expect(error).toMatchObject({
@@ -586,6 +712,9 @@ describe("native OpenAI Responses WebSocket client integration", () => {
 
       expect(result).toMatchObject({ stopReason: "error", errorCode: expectedCode });
       expectCounts(1, 0);
+      if (code === "connection-close") {
+        expect(isRetryableAssistantError(result)).toBe(false);
+      }
     },
   );
 
@@ -610,7 +739,7 @@ describe("native OpenAI Responses WebSocket client integration", () => {
     expect(transport.sdkRequests).toHaveLength(1);
   });
 
-  it("preserves failed WebSocket terminals, their served tier, and fresh requests", async () => {
+  it("preserves failed terminal semantics across WebSocket and SSE without degradation", async () => {
     const failedEvent = {
       type: "response.failed",
       response: {
@@ -634,28 +763,12 @@ describe("native OpenAI Responses WebSocket client integration", () => {
       cost: { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 6.25 },
     } satisfies Model<"openai-responses">;
     transport.responseBatches.push([message(failedEvent)], reply("resp_next"));
-    const observations: ResponsesServiceTierObservation[] = [];
-    const options = {
-      model: pricedModel,
-      onPayload: (payload: unknown) => ({
-        ...(payload as Record<string, unknown>),
-        service_tier: "ultrafast",
-      }),
-    };
-    responsesServiceTierObserver.set(options, (observation) => observations.push(observation));
-    const websocket = await run(history(user("websocket", 1)), options);
-    expect(transport.wsRequests[0]?.service_tier).toBe("ultrafast");
-    expect(observations).toEqual([
-      {
-        requestedTier: "ultrafast",
-        responseTier: "priority",
-        responseId: "resp_failed",
-        responseModel: "gpt-5.6-luna-2026-08-01",
-        inputTokens: 21,
-        cachedTokens: 6,
-      },
-    ]);
-    expect(websocket).toMatchObject({
+    transport.sdkOutcomes.push(sdkEvent(failedEvent));
+
+    const websocket = await run(history(user("websocket", 1)), { model: pricedModel });
+    const sse = await run(history(user("sse", 2)), { model: pricedModel, transport: "sse" });
+
+    const terminalFacts = {
       provider: "openai",
       stopReason: "error",
       errorMessage: "server_error: 503 temporary provider response",
@@ -670,11 +783,45 @@ describe("native OpenAI Responses WebSocket client integration", () => {
         reasoningTokens: 3,
         totalTokens: 25,
       },
-    });
+    };
+    expect(websocket).toMatchObject(terminalFacts);
+    expect(sse).toMatchObject(terminalFacts);
     expect(websocket.usage.cost.total).toBeCloseTo(0.000401, 10);
+    expect(sse.usage.cost.total).toBeCloseTo(0.000401, 10);
+    const classifyFailoverReason = vi.fn(() => undefined);
+    const pluginRegistry = createEmptyPluginRegistry();
+    pluginRegistry.providers.push({
+      pluginId: "openai",
+      source: "test",
+      provider: { id: "openai", label: "OpenAI fixture", auth: [], classifyFailoverReason },
+    });
+    withPluginRuntimeGenerationScope(
+      {
+        metadataSnapshot: createPluginMetadataSnapshot({
+          manifestRegistry: makeRegistry([{ id: "openai", channels: [], providers: ["openai"] }]),
+        }),
+        pluginRegistry,
+      },
+      () => {
+        expect(isRetryableAssistantError(websocket)).toBe(true);
+        expect(isRetryableAssistantError(sse)).toBe(true);
+      },
+    );
+    const expectedProviderSignal = {
+      provider: "openai",
+      code: "server_error",
+      errorMessage: terminalFacts.errorMessage,
+      errorType: undefined,
+      status: undefined,
+    };
+    expect(classifyFailoverReason.mock.calls).toEqual([
+      [expectedProviderSignal],
+      [expectedProviderSignal],
+    ]);
+
     const next = await run(history(user("next", 3)), { model: pricedModel });
     expect(next.stopReason).toBe("stop");
-    expectCounts(2, 0, 2);
+    expectCounts(2, 1, 2);
     expect(transport.wsRequests[1]).not.toHaveProperty("previous_response_id");
   });
 
@@ -691,7 +838,8 @@ describe("native OpenAI Responses WebSocket client integration", () => {
       transport.sdkOutcomes.push(sdkCompletion("resp_sse"));
       const result = await run(history(user("hello", 1)), { model: requestModel });
       expect(result.stopReason).toBe("stop");
-      expectCounts(0, 1, 0);
+      expect(transport.wsClients).toEqual([]);
+      expect(transport.sdkRequests).toHaveLength(1);
     },
   );
 });
