@@ -66,11 +66,10 @@ function disposalError(fixture: InspectionFixture, cause = false) {
 
 describe("owned plugin inspections", () => {
   it.each([false, true])("preserves frozen disposal errors (retained: %s)", async (retained) => {
-    const failure = Object.freeze(
-      retained
-        ? new PluginRuntimeCloseRetainedError(new Error("Unfinished disposal"))
-        : new Error("Completed disposal failed"),
-    );
+    const failure = retained
+      ? new PluginRuntimeCloseRetainedError(new Error("Unfinished disposal"))
+      : new Error("Completed disposal failed");
+    Object.freeze(failure);
     const resources = new PluginRegistryInspectionResources(async () => {
       throw failure;
     });
