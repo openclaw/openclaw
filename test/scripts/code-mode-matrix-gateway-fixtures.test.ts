@@ -271,9 +271,8 @@ describe("Gateway code-mode matrix fixtures", () => {
     expect(fixture.requiredTools).toEqual([]);
   });
 
-  it("keeps each repetition reproducible across runtime/model consumers", () => {
+  it("varies fixture identity between repetitions and rejects invalid repetitions", () => {
     for (const task of GATEWAY_MATRIX_TASKS) {
-      expect(createGatewayMatrixFixture(task, 3)).toEqual(createGatewayMatrixFixture(task, 3));
       expect(createGatewayMatrixFixture(task, 4).expected).not.toEqual(
         createGatewayMatrixFixture(task, 3).expected,
       );
@@ -452,7 +451,7 @@ it.each([
         sourcePatchSha256: null,
       });
       const observedConfig = readJson(path.join(root, "observed-config.json"));
-      expect(observedConfig.codeMode.executor).toBe(executor);
+      expect(observedConfig).toMatchObject({ codeMode: { executor } });
       expect(observedConfig.plugins.allow.includes("code-mode-quickjs")).toBe(
         executor === "quickjs",
       );

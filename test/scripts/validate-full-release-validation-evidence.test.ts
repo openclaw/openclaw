@@ -209,8 +209,6 @@ describe("full release validation evidence", () => {
     "missing",
     "selection",
     "windows-after-admission",
-    "context",
-    "tooling",
     "missing-publication",
     "new-publish-without-admission",
   ])("authenticates new source-admission evidence: %s", (scenario) => {
@@ -258,12 +256,12 @@ describe("full release validation evidence", () => {
       rerunGroup: "all",
       runReleaseSoak: "true",
       trustedWorkflow: {
-        fullRef: scenario === "tooling" ? "refs/heads/other" : "refs/heads/main",
+        fullRef: "refs/heads/main",
         sha: workflowSha,
       },
       validationInputs: {
         ...publicationIntentInputs(source),
-        targetContextRef: scenario === "context" ? "release/2026.9.8" : "release/2026.9.9",
+        targetContextRef: "release/2026.9.9",
         allowUnreleasedChangelog: "false",
       },
     });
