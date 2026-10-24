@@ -1,6 +1,9 @@
+import type { AdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
 import { listAgentIds } from "../agents/agent-scope.js";
 import type { RequesterOrigin } from "../agents/requester-origin.js";
 import { resolveRequesterSpawnTargetPolicy } from "../agents/subagents/spawn/subagent-target-policy.js";
+import { readMessageClientSources } from "../chat/message-client-source.js";
+import { readSessionSubmittedInput } from "../config/sessions/session-accessor.pending-inputs.js";
 import type { SessionSourceAssertion } from "../config/sessions/session-source-authority.js";
 import type { InternalSessionEntry } from "../config/sessions/types.js";
 import { GatewayOperatorRecoveryAuthorizationError } from "../infra/restart-recovery-errors.js";
@@ -13,6 +16,11 @@ export async function prepareRestartRecoveryParentSource(params: {
   entry: InternalSessionEntry;
   target: { agentId: string; sessionKey: string };
   requesterOrigin: RequesterOrigin | undefined;
+  operatorSource?: {
+    authority: AdmittedRunOperatorAuthority;
+    storePath: string;
+    sourceRunId: string;
+  };
   context: GatewayRequestContext;
   assertCurrent: () => void;
 }): Promise<
@@ -32,6 +40,32 @@ export async function prepareRestartRecoveryParentSource(params: {
         params.entry.restartRecoverySourceIngress === "control-ui"))
   ) {
     return undefined;
+  }
+  const operatorSource = params.operatorSource;
+  if (
+    operatorSource &&
+    params.requesterOrigin?.sessionKey === params.target.sessionKey &&
+    params.requesterOrigin.operatorProfileId === operatorSource.authority.profileId
+  ) {
+    // TUI inputs use internal ingress; synthetic continuations can also have self-origin.
+    operatorSource.authority.assertCurrent();
+    const input = await readSessionSubmittedInput(
+      {
+        ...params.target,
+        sessionId: params.entry.sessionId,
+        storePath: operatorSource.storePath,
+      },
+      `${operatorSource.sourceRunId}:user`,
+    );
+    params.assertCurrent();
+    operatorSource.authority.assertCurrent();
+    // Direct inputs can omit provenance while retaining their host-captured client source.
+    if (
+      input?.provenance?.kind === "external_user" ||
+      (input?.provenance === undefined && readMessageClientSources(input).length > 0)
+    ) {
+      return undefined;
+    }
   }
   const parentAgentId = parentSessionKey
     ? parseAgentSessionKey(parentSessionKey)?.agentId

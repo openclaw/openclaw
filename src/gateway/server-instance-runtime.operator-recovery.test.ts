@@ -123,7 +123,7 @@ async function withRecovery(
       profileId: string;
     },
   ) => Promise<void>,
-  internal = false,
+  internal: boolean | "tui" = false,
 ) {
   await withOpenClawTestState({ scenario: "minimal" }, async ({ stateDir }) => {
     if (internal) {
@@ -136,6 +136,7 @@ async function withRecovery(
       context,
       profileId: profile.id,
       config: {},
+      clientInfo: internal === "tui" ? { id: "openclaw-tui", mode: "ui" } : undefined,
       ...(internal
         ? { sessionKey: "agent:main:dashboard:repeat-recovery", sourceIngress: "internal" as const }
         : {}),
@@ -357,11 +358,19 @@ describe("typed restart recovery operator admission", () => {
     "missing lineage",
     "operator only",
     "direct human",
+    "direct TUI",
+    "internal self-origin",
   ] as const)(
     "recovers a later child turn under its exact cross-agent parent (%s)",
     async (parentState) => {
+      const ingress = parentState === "direct TUI" ? "tui" : parentState !== "direct human";
       await withRecovery(async (fixture) => {
         const { context, stateDir } = fixture;
+        const directHuman = parentState === "direct human" || parentState === "direct TUI";
+        const selfOrigin = directHuman || parentState === "internal self-origin";
+        if (parentState === "direct TUI") {
+          expect(fixture.entry.restartRecoverySourceIngress).toBe("internal");
+        }
         const target = {
           ...fixture.target,
           sourceRunId:
@@ -387,25 +396,20 @@ describe("typed restart recovery operator admission", () => {
           sessionId: "original-parent",
           storePath: path.join(stateDir, "agents", "requester", "sessions", "sessions.json"),
         };
-        if (
-          parentState !== "missing" &&
-          parentState !== "direct human" &&
-          parentState !== "operator only"
-        ) {
+        if (parentState !== "missing" && !selfOrigin && parentState !== "operator only") {
           await replaceSessionEntry(parent, {
             sessionId: parentState === "replaced" ? "replacement-parent" : parent.sessionId,
             lifecycleRevision: "parent-revision",
             updatedAt: 1,
           });
         }
-        const requesterOrigin =
-          parentState === "direct human"
-            ? { sessionKey: target.sessionKey, operatorProfileId: fixture.profileId }
-            : {
-                sessionKey: parent.sessionKey,
-                messageProvider: "slack",
-                senderId: "original-requester",
-              };
+        const requesterOrigin = selfOrigin
+          ? { sessionKey: target.sessionKey, operatorProfileId: fixture.profileId }
+          : {
+              sessionKey: parent.sessionKey,
+              messageProvider: "slack",
+              senderId: "original-requester",
+            };
         const entry = {
           ...fixture.entry,
           spawnDepth: 1,
@@ -424,7 +428,7 @@ describe("typed restart recovery operator admission", () => {
                   ? ("control-ui" as const)
                   : fixture.entry.restartRecoverySourceIngress,
           restartRecoveryOperatorSource:
-            parentState === "direct human" || parentState === "operator only"
+            selfOrigin || parentState === "operator only"
               ? fixture.entry.restartRecoveryOperatorSource
               : undefined,
         };
@@ -439,8 +443,29 @@ describe("typed restart recovery operator admission", () => {
                   requesterOrigin,
                 }),
         });
+        if (parentState === "internal self-origin") {
+          await appendTranscriptMessage(target, {
+            message: {
+              role: "user",
+              content: "An earlier human request does not own the interrupted turn.",
+              idempotencyKey: "earlier-human-turn:user",
+              provenance: { kind: "external_user" },
+            },
+          });
+        }
         await appendTranscriptMessage(target, {
-          message: { role: "user", content: "Continue the requested child work." },
+          message: {
+            role: "user",
+            content: "Continue the requested child work.",
+            idempotencyKey: `${target.sourceRunId}:user`,
+            provenance:
+              parentState === "direct TUI"
+                ? undefined
+                : { kind: directHuman ? "external_user" : "inter_session" },
+            ...(selfOrigin
+              ? { __openclaw: { transport: { clients: [{ id: "openclaw-tui", mode: "ui" }] } } }
+              : {}),
+          },
         });
         await appendTranscriptMessage(target, {
           message: { role: "assistant", content: [], stopReason: "aborted" },
@@ -453,7 +478,7 @@ describe("typed restart recovery operator admission", () => {
         using runtime = createRuntime(() => context);
         const finish = holdRecoveryTurn(target);
         try {
-          const authorized = parentState === "allowed" || parentState === "direct human";
+          const authorized = parentState === "allowed" || directHuman;
           const outcome = await recoverStore({
             cfg,
             storePath: target.storePath,
@@ -500,7 +525,7 @@ describe("typed restart recovery operator admission", () => {
         } finally {
           await finish();
         }
-      }, parentState !== "direct human");
+      }, ingress);
     },
   );
 

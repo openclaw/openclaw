@@ -565,6 +565,7 @@ export async function restoreGatewayRunRecovery(params: {
       target,
       entry,
       requesterOrigin,
+      operatorSource: operator ? { ...target, authority: operator.authority } : undefined,
     });
     if (operator) {
       recoverySources.set(operator.authority, {

@@ -306,7 +306,7 @@ Delegated recovery rechecks the recorded parent identity and current cross-agent
 spawn policy. If that authority cannot be restored, the child records why it
 stopped, and its unchanged parent receives a local transcript notice. A deleted,
 archived, or replaced parent cannot receive that notice. A fresh authenticated
-message to the child carries its own authority.
+message to the child from the TUI, Control UI, or a channel carries its own authority.
 Startup discovery excludes archived sessions, recovery tombstones, and rows without
 recovery obligations before preparing targets. Completed sessions with pending
 recovery obligations still settle. Other skipped candidates are logged with a
