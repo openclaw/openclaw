@@ -407,6 +407,8 @@ describe("GatewayProtocolClient requests", () => {
         "responsePayload.runId",
         index === 0 ? "first-run" : "second-run",
       );
+      expect(JSON.stringify(error)).not.toContain('"responsePayload":');
+      expect(JSON.stringify(error)).not.toContain("not-for-logs");
     }
     expect(created.map((error, index) => error === errors[1 - index])).toEqual([true, true]);
     expect(onAccepted).not.toHaveBeenCalled();

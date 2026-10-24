@@ -145,8 +145,8 @@ function wizard(textValues = [endpoint, "lmstudio-test-key"], confirmValues: boo
       async note(message: string, title?: string) {
         await this.recordNote(message, title);
       },
-      async text() {
-        return (await this.readText()) as string;
+      async text(params: Parameters<typeof harness.prompter.text>[0]) {
+        return (await this.readText(params)) as string;
       },
     },
   };
@@ -176,10 +176,15 @@ describe("lmstudio setup", () => {
     removeProfiles.mockReset();
 
     listModels([wireModel(modelId)]);
-    configureProvider.mockImplementation(async ({ ctx }: { ctx: SetupContext }) => ({
-      ...buildConfig(),
-      agents: { defaults: { model: { primary: `lmstudio/${ctx.opts.customModelId}` } } },
-    }));
+    configureProvider.mockImplementation(async ({ ctx }: { ctx: SetupContext }) => {
+      const selectedId =
+        (typeof ctx.opts.customModelId === "string" ? ctx.opts.customModelId.trim() : "") ||
+        modelId;
+      return {
+        ...buildConfig(),
+        agents: { defaults: { model: { primary: `lmstudio/${selectedId}` } } },
+      };
+    });
   });
 
   const loaded = (key: string, context = 32768) =>

@@ -72,7 +72,7 @@ function decisionRequest(
   result: ApprovalResolveResult | Promise<ApprovalResolveResult>,
   pending = pendingApproval(),
 ) {
-  return vi.fn((method: string) =>
+  return vi.fn<GatewayRequestHandler>((method) =>
     Promise.resolve(method === "approval.get" ? get(pending) : result),
   );
 }
@@ -190,6 +190,11 @@ it.each(["success", "failure"] as const)(
     decision(page).click();
     decision(page, "deny").click();
     expect(request.mock.calls.filter(([method]) => method === "approval.resolve")).toHaveLength(1);
+    expect(request).toHaveBeenCalledWith("approval.resolve", {
+      id: "exec:approval-1",
+      kind: "exec",
+      decision: "allow-once",
+    });
     await waitForSolid(() => {
       expect(decision(page).disabled).toBe(true);
       expect(decision(page).textContent).toContain("Recording");

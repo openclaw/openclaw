@@ -206,7 +206,7 @@ const windowsEnv = {
 const envEntries = (env: Record<string, string>) =>
   Object.entries(env).map(([key, value]) => `${key}=${value}`);
 const includes = <T>(actual: readonly T[], expected: readonly T[]) =>
-  expect(actual).toEqual(expect.arrayContaining(expected));
+  expect(actual).toEqual(expect.arrayContaining([...expected]));
 
 test("hashes workspace-qualified scopes without truncating their identity", async () => {
   const handle = await createBackend({ scopeKey: `agent:main:workspace:${"a".repeat(32)}` });
@@ -399,10 +399,7 @@ describeOnWindows("createMxcSandboxBackendHandle (Windows-only MXC backend tests
   test("filesystem bridge preserves exclusive creates and bounds reads", async () => {
     const bridge = makeBridge();
     const create = (data: string, filePath = "notes/file") =>
-      expectDefined(bridge.createFileExclusive, "exclusive create").call(bridge, {
-        filePath,
-        data,
-      });
+      expectDefined(bridge.createFileExclusive?.({ filePath, data }), "exclusive create");
     expect(await create("first")).toBe("created");
     expect(await create("replacement")).toBe("exists");
     expect(readText(path.join(cwd, "notes/file"))).toBe("first");
@@ -418,6 +415,9 @@ describeOnWindows("createMxcSandboxBackendHandle (Windows-only MXC backend tests
     expect(readText(path.join(cwd, "renamed"))).toBe("first");
     await bridge.remove({ filePath: "renamed" });
     expect(existsSync(path.join(cwd, "renamed"))).toBe(false);
+    await expect(
+      bridge.writeFile({ filePath: path.join(cwd, "..", "escape.txt"), data: "escape" }),
+    ).rejects.toThrow(/Path escapes sandbox root/u);
   });
 
   test("protects skill mounts from mkdir, remove and rename", async () => {

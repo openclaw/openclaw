@@ -189,13 +189,13 @@ describe("cron service timer regressions", () => {
     expect(jobIn(persisted.jobs, job.id)).toMatchObject({
       enabled: false,
       state: {
-        nextRunAtMs: undefined,
         lastStatus: "ok",
         lastDelivered: false,
         lastDeliveryStatus: "not-delivered",
         lastDeliveryError: expect.stringContaining("skipping stale delivery"),
       },
     });
+    expect(jobIn(persisted.jobs, job.id).state.nextRunAtMs).toBeUndefined();
     stop(state);
     const restarted = createCronServiceState(state.deps);
     await tick(restarted);
@@ -497,10 +497,8 @@ describe("cron service timer regressions", () => {
           }),
         );
       } else if (scheduled) {
-        expect(jobState(state, last.id)).toMatchObject({
-          lastStatus: "ok",
-          runningAtMs: undefined,
-        });
+        expect(jobState(state, last.id).lastStatus).toBe("ok");
+        expect(jobState(state, last.id).runningAtMs).toBeUndefined();
       }
     },
   );
@@ -523,13 +521,15 @@ describe("cron service timer regressions", () => {
     runner.release();
     await missed;
     const persisted = (await loadCronStore(storePath)).jobs;
-    expect([job, unstarted, replacement].map(({ id }) => jobIn(persisted, id).state)).toMatchObject(
-      [
-        { runningAtMs: undefined, lastStatus: "ok" },
-        { runningAtMs: undefined, lastStatus: undefined },
-        { queuedAtMs: AT + 123, lastStatus: undefined },
-      ],
+    const [completedState, unstartedState, replacementState] = [job, unstarted, replacement].map(
+      ({ id }) => jobIn(persisted, id).state,
     );
+    expect(completedState?.runningAtMs).toBeUndefined();
+    expect(completedState?.lastStatus).toBe("ok");
+    expect(unstartedState?.runningAtMs).toBeUndefined();
+    expect(unstartedState?.lastStatus).toBeUndefined();
+    expect(replacementState?.queuedAtMs).toBe(AT + 123);
+    expect(replacementState?.lastStatus).toBeUndefined();
     expect(readCronRunRecordsForTests(job.id)).toMatchObject([{ status: "succeeded" }]);
   });
 
