@@ -732,10 +732,32 @@ export function createHookRunner(
       let handlerResult: TResult | void = undefined;
       try {
         const invokeHandler = async (): Promise<TResult | void> => {
-          const promise = Promise.resolve(
-            (hook.handler as (event: unknown, ctx: unknown) => Promise<TResult | void>)(event, ctx),
-          );
-          return await awaitHook(hook, promise);
+          let active = true;
+          const handlerContext =
+            hookName === "before_agent_reply"
+              ? {
+                  ...ctx,
+                  hookInvocation: Object.freeze({
+                    assertActive() {
+                      if (!active) {
+                        throw new Error("reply hook invocation is no longer active");
+                      }
+                      admission?.assertCurrent?.();
+                    },
+                  }),
+                }
+              : ctx;
+          try {
+            const promise = Promise.resolve(
+              (hook.handler as (event: unknown, ctx: unknown) => Promise<TResult | void>)(
+                event,
+                handlerContext,
+              ),
+            );
+            return await awaitHook(hook, promise);
+          } finally {
+            active = false;
+          }
         };
         handlerResult = runHandler ? await runHandler(invokeHandler) : await invokeHandler();
       } catch (err) {

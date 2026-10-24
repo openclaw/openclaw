@@ -119,6 +119,29 @@ describe("memory consolidation", () => {
     expect(fallback.complete).toHaveBeenCalledWith(expect.objectContaining({ timeoutMs: 60_000 }));
   });
 
+  it("propagates cancellation after model work instead of falling back or starting another group", async () => {
+    const controller = new AbortController();
+    const cancelled = new Error("dreaming caller cancelled during inference");
+    const subagent = createSubagent("{}", "error", async () => {
+      controller.abort(cancelled);
+    });
+    const first = { ...candidate("agent"), projectKey: "first" };
+    const second = { ...candidate("agent"), key: "second", projectKey: "second" };
+    const localLogger = { info: vi.fn(), warn: vi.fn() };
+    await expect(
+      consolidateMemory({
+        ...consolidationDefaults,
+        existingMemory: "# Memory\n",
+        candidates: [first, second],
+        subagent,
+        logger: localLogger,
+        assertCurrent: () => controller.signal.throwIfAborted(),
+      }),
+    ).rejects.toBe(cancelled);
+    expect(subagent.complete).toHaveBeenCalledOnce();
+    expect(localLogger.warn).not.toHaveBeenCalled();
+  });
+
   it("hard-excludes untrusted and system candidates before prompt construction", async () => {
     const candidates = [
       candidate("owner"),

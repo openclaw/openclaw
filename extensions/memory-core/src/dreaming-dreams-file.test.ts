@@ -364,6 +364,50 @@ describe("dream narrative publication", () => {
     },
   );
 
+  it.each([false, true])(
+    "stops foreground narrative publication and fallback after cancellation (failure=%s)",
+    async (failure) => {
+      const { subagent, logger, run } = await narrativeHarness();
+      const controller = new AbortController();
+      const cancelled = new Error("heartbeat caller ended");
+      subagent.complete.mockImplementationOnce(async () => {
+        controller.abort(cancelled);
+        if (failure) {
+          throw new Error("unknown model: missing");
+        }
+        return { text: "A narrative that must not be published." };
+      });
+      await expect(
+        run({ model: "missing", assertCurrent: () => controller.signal.throwIfAborted() }),
+      ).rejects.toBe(cancelled);
+      expect(subagent.complete).toHaveBeenCalledOnce();
+      expect(logger.warn).not.toHaveBeenCalled();
+      await expect(fs.access(path.join(workspaceDir, "DREAMS.md"))).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+    },
+  );
+
+  it("rechecks foreground ownership after diary preparation before replacing the file", async () => {
+    const { run, readDiary } = await narrativeHarness("A cancelled replacement.");
+    const controller = new AbortController();
+    const cancelled = new Error("caller ended during diary preparation");
+    await fs.writeFile(path.join(workspaceDir, "DREAMS.md"), "Original diary.\n");
+    const access = fs.access.bind(fs);
+    const read = vi.spyOn(fs, "access").mockImplementationOnce(async (...args) => {
+      await access(...args);
+      controller.abort(cancelled);
+    });
+    try {
+      await expect(run({ assertCurrent: () => controller.signal.throwIfAborted() })).rejects.toBe(
+        cancelled,
+      );
+      expect(await readDiary()).toBe("Original diary.\n");
+    } finally {
+      read.mockRestore();
+    }
+  });
+
   it("writes only a generic trace after empty completion", async () => {
     const { run, readDiary } = await narrativeHarness("   \n  ");
     const outcome = await run({

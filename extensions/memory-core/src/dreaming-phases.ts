@@ -74,6 +74,7 @@ type Logger = Pick<OpenClawPluginApi["logger"], "info" | "warn" | "error">;
 type LightDreamingConfig = ReturnType<typeof resolveMemoryLightDreamingConfig>;
 type RemDreamingConfig = ReturnType<typeof resolveMemoryRemDreamingConfig>;
 type DreamingSweepParams = {
+  assertCurrent?: () => void;
   agentId?: string;
   workspaceDir: string;
   pluginConfig?: Record<string, unknown>;
@@ -483,6 +484,7 @@ function resolveWorkspaceMemoryRelativePath(workspaceDir: string, filePath: stri
 }
 
 async function collectSessionIngestionBatches(params: {
+  assertCurrent?: () => void;
   workspaceDir: string;
   cfg?: OpenClawConfig;
   lookbackDays: number;
@@ -511,11 +513,13 @@ async function collectSessionIngestionBatches(params: {
   const nextSeenMessages: Record<string, string[]> = { ...params.state.seenMessages };
   const sources: SessionIngestionSource[] = [];
   for (const agentId of agentIds) {
+    params.assertCurrent?.();
     const knownStateKeys = new Set<string>();
     const corpus = await listSessionTranscriptCorpusEntriesForAgent(agentId, {
       config: params.cfg,
       includeRetainedSqlite: true,
     });
+    params.assertCurrent?.();
     const forgottenSessionIds = await findForgottenMemorySessionIds({
       agentId,
       sessionIds: corpus.map((entry) => entry.sessionId),
@@ -528,6 +532,7 @@ async function collectSessionIngestionBatches(params: {
         selectedSources.push(source);
       }
     }
+    params.assertCurrent?.();
     const excludedReasons = await sessionExclusionReasons(
       selectedSources,
       params.admissionPolicy,
@@ -568,6 +573,7 @@ async function collectSessionIngestionBatches(params: {
   let remaining = SESSION_INGESTION_MAX_MESSAGES_PER_SWEEP;
   const perFileCap = resolveSessionIngestionFileCap(sortedSources.length);
   for (const source of sortedSources) {
+    params.assertCurrent?.();
     if (remaining <= 0) {
       break;
     }
@@ -604,6 +610,9 @@ async function collectSessionIngestionBatches(params: {
       remaining -= scan.candidates.length;
     }
   }
+  // Corpus publication, recall recording and its checkpoint settle as one admitted
+  // unit. Cancellation stops the next phase, not settlement of published input.
+  params.assertCurrent?.();
   const trimmedSeenMessages = trimTrackedSessionScopes(nextSeenMessages);
   const batches: DailyIngestionBatch[] = [];
   for (const day of [...batchByDay.keys()].toSorted()) {
@@ -644,6 +653,7 @@ function dailyIngestionLookbackDays(phaseLookbackDays: number): number {
 }
 
 async function collectDailyIngestionBatches(params: {
+  assertCurrent?: () => void;
   workspaceDir: string;
   lookbackDays: number;
   limit: number;
@@ -652,6 +662,7 @@ async function collectDailyIngestionBatches(params: {
   state: DailyIngestionState;
 }): Promise<DailyIngestionCollectionResult> {
   const provenanceByPath = await readDailyFileProvenance(params.workspaceDir);
+  params.assertCurrent?.();
   const memoryDir = path.join(params.workspaceDir, "memory");
   const cutoffMs = calculateLookbackCutoffMs(params.nowMs, params.lookbackDays);
   const entries = await listWorkspaceDirectory(params.workspaceDir, memoryDir).catch(
@@ -681,6 +692,7 @@ async function collectDailyIngestionBatches(params: {
   const perFileCap = Math.max(6, Math.ceil(totalCap / Math.max(1, files.length)));
   let total = 0;
   for (const file of files) {
+    params.assertCurrent?.();
     const relativePath = `memory/${file.fileName}`;
     const filePath = path.join(memoryDir, file.fileName);
     const stat = await inspectWorkspaceFile(params.workspaceDir, filePath).catch((err: unknown) => {
@@ -710,6 +722,7 @@ async function collectDailyIngestionBatches(params: {
     }
     changed = true;
 
+    params.assertCurrent?.();
     const raw = await readWorkspaceText(params.workspaceDir, filePath).catch((err: unknown) => {
       if (extractErrorCode(err) === "ENOENT") {
         return "";
@@ -1003,6 +1016,7 @@ async function ingestDreamingPhaseSignals(
 ): Promise<void> {
   const { workspaceDir, nowMs } = params;
   const ingestionParams = {
+    assertCurrent: params.assertCurrent,
     workspaceDir,
     nowMs,
     timezone: params.config.timezone,
@@ -1026,6 +1040,7 @@ async function ingestDreamingPhaseSignals(
     }
   };
   await withMemoryWorkspaceLock(workspaceDir, async () => {
+    params.assertCurrent?.();
     const state = await readDailyIngestionState(workspaceDir);
     const ingestionDreamingDay = formatMemoryDreamingDay(nowMs, ingestionParams.timezone);
     const collected = await collectDailyIngestionBatches({
@@ -1035,12 +1050,14 @@ async function ingestDreamingPhaseSignals(
       ingestionDreamingDay,
       state,
     });
+    params.assertCurrent?.();
     await recordBatches(collected.batches, "daily");
     if (collected.changed) {
       await writeDailyIngestionState(workspaceDir, collected.nextState);
     }
   });
   await withMemoryWorkspaceLock(workspaceDir, async () => {
+    params.assertCurrent?.();
     const state = await readSessionIngestionState(workspaceDir);
     const collected = await collectSessionIngestionBatches({
       ...ingestionParams,
@@ -1062,14 +1079,17 @@ async function readDreamingPhaseEntries(
   phase: "light" | "rem",
 ): Promise<ShortTermRecallEntry[]> {
   const { workspaceDir, nowMs } = params;
+  params.assertCurrent?.();
   let entries = filterRecallEntriesWithinLookback({
     entries: await readShortTermRecallEntries({ workspaceDir, nowMs }),
     nowMs,
     lookbackDays: params.config.lookbackDays,
   });
+  params.assertCurrent?.();
   if (phase === "light") {
     entries = await filterFreshLightDreamingEntries({ workspaceDir, nowMs, entries });
   }
+  params.assertCurrent?.();
   return (
     await filterLiveShortTermRecallEntries({
       workspaceDir,
@@ -1093,6 +1113,7 @@ async function prepareLightDreaming(
     }),
     params.config.dedupeSimilarity,
   );
+  params.assertCurrent?.();
   const recentDiaryEntries = await readRecentDreamDiaryEntries({
     workspaceDir: params.workspaceDir,
     limit: LIGHT_DIARY_HISTORY_LIMIT,
@@ -1126,6 +1147,7 @@ async function prepareRemDreaming(
   const allEntries = await readDreamingPhaseEntries(params, "rem");
   // Prefer entries staged by light sleep so REM synthesises from the
   // sequential light→REM pipeline instead of rescanning the full store.
+  params.assertCurrent?.();
   const lightKeys = await readLightStagedKeys({
     workspaceDir: params.workspaceDir,
     nowMs,
@@ -1180,6 +1202,7 @@ export async function runDreamingSweepPhases(
     config: TConfig,
     prepare: (params: DreamingPhaseRunParams<TConfig>) => Promise<DreamingPhasePreparation>,
   ): Promise<void> {
+    params.assertCurrent?.();
     if (!config.enabled || config.limit <= 0) {
       return;
     }
@@ -1189,7 +1212,10 @@ export async function runDreamingSweepPhases(
       // Keep source selection and report publication inside the forget boundary;
       // model work runs outside it and revalidates its inputs before publication.
       const data = await withMemoryWorkspaceLock(params.workspaceDir, async () => {
+        params.assertCurrent?.();
         const prepared = await prepare(phaseParams);
+        // Once report publication starts, finish recording its phase signals.
+        params.assertCurrent?.();
         const publication = { workspaceDir: params.workspaceDir, phase, nowMs: sweepNowMs };
         await writeDailyDreamingPhaseBlock({
           ...publication,
@@ -1211,6 +1237,7 @@ export async function runDreamingSweepPhases(
         narratives.push({ data, timezone: config.timezone, model: config.execution?.model });
       }
     } catch (err) {
+      params.assertCurrent?.();
       await appendFailedDreamingEvent({
         workspaceDir: params.workspaceDir,
         phase,

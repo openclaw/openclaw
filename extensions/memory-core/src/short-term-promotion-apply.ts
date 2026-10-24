@@ -192,6 +192,7 @@ export async function applyShortTermPromotions(
     ? [...new Set([options.agentId, ...(options.workspaceAgentIds ?? [])])]
     : [];
 
+  options.assertCurrent?.();
   const dailyProvenanceEntries = await listMemoryArtifactProvenance({ workspaceDir });
   const dailyProvenanceByPath = new Map(
     dailyProvenanceEntries.map((entry) => [
@@ -199,9 +200,10 @@ export async function applyShortTermPromotions(
       entry.provenance,
     ]),
   );
-  const store = await withMemoryWorkspaceLock(workspaceDir, async () =>
-    readStore(workspaceDir, nowIso),
-  );
+  const store = await withMemoryWorkspaceLock(workspaceDir, async () => {
+    options.assertCurrent?.();
+    return await readStore(workspaceDir, nowIso);
+  });
   const currentCandidates = options.candidates.map((candidate) => {
     const entry = store.entries[candidate.key];
     const authoritative = entry
@@ -287,7 +289,9 @@ export async function applyShortTermPromotions(
   const rehydratedSelected: PromotionCandidate[] = [];
   const plannedSourceFingerprints = new Map<string, string>();
   for (const candidate of selected) {
+    options.assertCurrent?.();
     const sourceFingerprintBefore = await promotionSourceFingerprint(workspaceDir, candidate);
+    options.assertCurrent?.();
     const rehydrated = await rehydratePromotionCandidate(workspaceDir, candidate);
     const sourceFingerprintAfter = await promotionSourceFingerprint(workspaceDir, candidate);
     // Integrity is guarded by source-fingerprint stability during rehydration,
@@ -347,10 +351,12 @@ export async function applyShortTermPromotions(
     0,
     Math.min(1, options.maxPriorEntryLossFraction ?? 0.25),
   );
+  options.assertCurrent?.();
   const consolidationPlan =
     options.agentId && options.consolidation?.subagent && toAppend.length > 0
       ? await consolidateMemory({
           agentId: options.agentId,
+          assertCurrent: options.assertCurrent,
           subagent: options.consolidation.subagent,
           existingMemory,
           candidates: toAppend,
@@ -372,9 +378,11 @@ export async function applyShortTermPromotions(
   let committedMemoryContent: string | undefined;
   let appendedCandidates = 0;
   let rewriteSkippedReason: string | undefined;
+  options.assertCurrent?.();
   const promotionLockTarget = await resolveMemoryPromotionLockTarget(workspaceDir);
   await withFileLock(promotionLockTarget, MEMORY_WRITE_LOCK_OPTIONS, async () => {
     await withMemoryWorkspaceLock(workspaceDir, async () => {
+      options.assertCurrent?.();
       const latestStore = await readStore(workspaceDir, nowIso);
       let retainedPreimageKeys: Set<string> | undefined;
       const authoritativeSelected: PromotionCandidate[] = [];
@@ -438,6 +446,9 @@ export async function applyShortTermPromotions(
           });
         }
       }
+      // Admit the publication unit after preparation. Let its file, lineage and
+      // recall-store settlement finish even if the caller ends during the write.
+      options.assertCurrent?.();
       if (consolidationResult) {
         try {
           retainedPreimageKeys = await storeMemoryPreimage({

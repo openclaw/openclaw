@@ -39,6 +39,7 @@ function createHook(enabled = true) {
         agentId: "main",
         trigger: "heartbeat",
         workspaceDir: ".",
+        hookInvocation: { assertActive() {} },
         ...context,
       },
     );

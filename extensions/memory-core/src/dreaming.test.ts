@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
   MANAGED_MEMORY_DREAMING_CRON_NAME,
   MANAGED_MEMORY_DREAMING_CRON_TAG,
@@ -14,7 +15,11 @@ import {
 } from "openclaw/plugin-sdk/plugin-test-api";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { enqueueSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
-import { resetSystemEventsForTest } from "openclaw/plugin-sdk/test-fixtures";
+import {
+  awaitGateBeforeSettlement,
+  resetSystemEventsForTest,
+  withinTest,
+} from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createCronHarness,
@@ -210,15 +215,18 @@ function getBeforeAgentReplyHandler(onMock: ReturnType<typeof vi.fn>) {
     onMock.mock.calls.find(([eventName]) => eventName === "before_agent_reply"),
     "before_agent_reply hook was not registered",
   );
-  return call[1] as (
+  const handler = call[1] as (
     event: { cleanedBody: string },
     ctx: {
       agentId?: string;
       trigger?: string;
       workspaceDir?: string;
       sessionKey?: string;
+      hookInvocation?: { assertActive(): void };
     },
   ) => Promise<unknown>;
+  return (event: Parameters<typeof handler>[0], ctx: Parameters<typeof handler>[1]) =>
+    handler(event, { hookInvocation: { assertActive() {} }, ...ctx });
 }
 
 function getDreamingService(api: DreamingPluginApiTestDouble) {
@@ -715,6 +723,69 @@ describe("dreaming service reconciliation", () => {
 
   // Regression: the sweep dropped the agent id entirely, so narrative subagent sessions used
   // unscoped keys that no per-agent SQLite store could resolve and every phase failed.
+  it("stops after an awaited sweep without repairing or entering the next workspace", async ({
+    signal,
+  }) => {
+    const first = await createTempWorkspace("dreaming-cancel-first-");
+    const second = await createTempWorkspace("dreaming-cancel-second-");
+    const entered = createDeferred<void>();
+    const release = createDeferred<void>();
+    const cancelled = new Error("original caller cancelled");
+    let active = true;
+    const producer = await import("./short-term-promotion.js");
+    const repair = vi.spyOn(producer, "repairShortTermPromotionArtifacts");
+    runDreamingSweepPhasesMock.mockClear();
+    runDreamingSweepPhasesMock.mockImplementationOnce(async () => {
+      entered.resolve();
+      await release.promise;
+      return { narratives: [], failed: false };
+    });
+    const { api, reply } = createDreamingTestContext({
+      config: createDreamingConfig(
+        { enabled: true },
+        {
+          agents: {
+            defaults: { workspace: first },
+            entries: {
+              main: { workspace: first },
+              other: { workspace: second },
+            },
+          },
+        },
+      ),
+    });
+    registerShortTermPromotionDreamingForTest(api);
+    const running = reply({
+      trigger: "cron",
+      agentId: "main",
+      workspaceDir: first,
+      hookInvocation: {
+        assertActive() {
+          if (!active) {
+            throw cancelled;
+          }
+        },
+      },
+    });
+    const outcome = expect(running).rejects.toBe(cancelled);
+    try {
+      await withinTest(
+        awaitGateBeforeSettlement(entered.promise, running, "Dreaming sweep did not start"),
+        signal,
+      );
+      active = false;
+    } finally {
+      release.resolve();
+      try {
+        await outcome;
+        expect(repair).not.toHaveBeenCalled();
+      } finally {
+        repair.mockRestore();
+      }
+    }
+    expect(runDreamingSweepPhasesMock).toHaveBeenCalledOnce();
+  });
+
   it("sweeps each workspace as its owning agent rather than the roster default", async () => {
     const workspaceDir = await createTempWorkspace("openclaw-dreaming-owner-");
     runDreamingSweepPhasesMock.mockClear();

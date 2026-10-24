@@ -48,6 +48,7 @@ function formatRepairSummary(repair: {
 
 async function runShortTermDreamingPromotion(params: {
   runInBackground?: DreamNarrativeRequest["runInBackground"];
+  assertCurrent: () => void;
   /** Agent whose heartbeat/cron turn triggered the sweep. */
   agentId?: string;
   workspaceDir?: string;
@@ -123,6 +124,7 @@ async function runShortTermDreamingPromotion(params: {
     import("./short-term-promotion.js"),
   ]);
   for (const { agentId, agentIds, workspaceDir } of workspaces) {
+    params.assertCurrent();
     const sweepNowMs = Date.now();
     let phaseResult: Awaited<ReturnType<typeof runDreamingSweepPhases>>;
     try {
@@ -133,8 +135,11 @@ async function runShortTermDreamingPromotion(params: {
         cfg: params.cfg,
         logger: params.logger,
         nowMs: sweepNowMs,
+        assertCurrent: params.assertCurrent,
       });
+      params.assertCurrent();
     } catch (err) {
+      params.assertCurrent();
       failedWorkspaces += 1;
       params.logger.error(
         `memory-core: dreaming sweep failed for workspace ${workspaceDir}: ${formatErrorMessage(err)}`,
@@ -155,6 +160,7 @@ async function runShortTermDreamingPromotion(params: {
           );
           reportLines.push(`- Repaired recall artifacts: ${formatRepairSummary(repair)}.`);
         }
+        params.assertCurrent();
         const candidates = await rankShortTermPromotionCandidates({
           workspaceDir,
           limit: params.config.limit,
@@ -165,6 +171,7 @@ async function runShortTermDreamingPromotion(params: {
           maxAgeDays: params.config.maxAgeDays,
           nowMs: sweepNowMs,
         });
+        params.assertCurrent();
         totalCandidates += candidates.length;
         reportLines.push(`- Ranked ${candidates.length} candidate(s) for durable promotion.`);
         if (params.config.verboseLogging) {
@@ -184,6 +191,7 @@ async function runShortTermDreamingPromotion(params: {
         const applied = await applyShortTermPromotions({
           agentId,
           workspaceAgentIds: agentIds,
+          assertCurrent: params.assertCurrent,
           workspaceDir,
           candidates,
           limit: params.config.limit,
@@ -208,6 +216,7 @@ async function runShortTermDreamingPromotion(params: {
           timezone: params.config.timezone,
           nowMs: sweepNowMs,
         });
+        params.assertCurrent();
         totalApplied += applied.applied;
         reportLines.push(`- Promoted ${applied.applied} candidate(s) into MEMORY.md.`);
         if (applied.rejectedCandidates.length > 0) {
@@ -266,6 +275,7 @@ async function runShortTermDreamingPromotion(params: {
           storage: params.config.storage ?? { mode: "separate", separateReports: false },
         });
       } catch (err) {
+        params.assertCurrent();
         failedWorkspaces += 1;
         const error = formatErrorMessage(err);
         params.logger.error(
@@ -283,6 +293,7 @@ async function runShortTermDreamingPromotion(params: {
     }
     // The sweep owns diary publication, not the individual phases. Preserve prepared
     // Light/REM material even when promotion/reporting failed, and publish only once.
+    params.assertCurrent();
     const firstNarrative = narratives[0];
     const lastNarrative = narratives.at(-1);
     if (!firstNarrative || !lastNarrative) {
@@ -308,6 +319,7 @@ async function runShortTermDreamingPromotion(params: {
         timezone: lastNarrative.timezone,
         logger: params.logger,
         reason: "subagent runtime is unavailable",
+        assertCurrent: params.assertCurrent,
       });
     } else {
       const narrativeOutcome = await runDreamNarrative({
@@ -321,6 +333,7 @@ async function runShortTermDreamingPromotion(params: {
         model: lastNarrative.model,
         logger: params.logger,
         runInBackground: params.runInBackground,
+        assertCurrent: params.assertCurrent,
       });
       if (narrativeOutcome.status === "degraded") {
         degradedNarratives += 1;
@@ -574,6 +587,12 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
   api.on(
     "before_agent_reply",
     async (event, ctx) => {
+      const assertCurrent = () => {
+        if (!ctx.hookInvocation) {
+          throw new Error("memory-core: dreaming requires an active reply hook invocation");
+        }
+        ctx.hookInvocation.assertActive();
+      };
       try {
         if (ctx.trigger !== "heartbeat" && ctx.trigger !== "cron") {
           return undefined;
@@ -581,6 +600,7 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
         if (!includesSystemEventToken(event.cleanedBody, DREAMING_SYSTEM_EVENT_TEXT)) {
           return undefined;
         }
+        assertCurrent();
         const currentConfig = resolveCurrentConfig();
         const config = resolveMemoryDeepDreamingConfig({
           pluginConfig: resolveMemoryDreamingPluginConfig(currentConfig),
@@ -593,6 +613,7 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
         }
         return await runShortTermDreamingPromotion({
           runInBackground: ctx.trigger === "cron" ? trackDreamingTask : undefined,
+          assertCurrent,
           agentId: ctx.agentId,
           workspaceDir: ctx.workspaceDir,
           cfg: currentConfig,
@@ -609,6 +630,7 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
             : {}),
         });
       } catch (err) {
+        assertCurrent();
         api.logger.error(`memory-core: dreaming trigger failed: ${formatErrorMessage(err)}`);
         return undefined;
       }

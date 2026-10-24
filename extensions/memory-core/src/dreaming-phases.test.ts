@@ -15,8 +15,10 @@ import {
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
+import { awaitGateBeforeSettlement, withinTest } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { writeSessionIngestionState } from "./dreaming-ingestion-state.js";
+import { writeDailyDreamingPhaseBlock } from "./dreaming-markdown.js";
 import {
   previewRemDreaming,
   runDreamingSweepPhases,
@@ -38,6 +40,7 @@ import {
 } from "./test-helpers.js";
 
 vi.mock("openclaw/plugin-sdk/memory-core-host-runtime-core", { spy: true });
+vi.mock("./dreaming-markdown.js", { spy: true });
 
 const { createTempWorkspace } = createMemoryCoreTestHarness();
 const BASE_TIME = new Date("2026-04-05T10:00:00.000Z");
@@ -1344,3 +1347,93 @@ describe("previewRemHarness", () => {
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
+
+it("does not publish ingestion or reports after cancellation during source preparation", async ({
+  signal,
+}) => {
+  const entered = createDeferred<void>();
+  const release = createDeferred<void>();
+  const controller = new AbortController();
+  const cancelled = new Error("dreaming caller expired");
+  await fs.writeFile(path.join(workspaceDir, "memory", `${DAY}.md`), "- A durable archive fact.\n");
+  provenanceMock.mockImplementationOnce(async () => {
+    entered.resolve();
+    await release.promise;
+    return [];
+  });
+  const config = INLINE_CONFIG;
+  const running = runDreamingSweepPhases({
+    workspaceDir,
+    cfg: config,
+    pluginConfig: resolveMemoryDreamingPluginConfig(config),
+    nowMs: BASE_TIME.getTime(),
+    logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+    assertCurrent: () => controller.signal.throwIfAborted(),
+  });
+  const outcome = expect(running).rejects.toBe(cancelled);
+  try {
+    await withinTest(
+      awaitGateBeforeSettlement(
+        entered.promise,
+        running,
+        "Dreaming source preparation did not start",
+      ),
+      signal,
+    );
+    controller.abort(cancelled);
+  } finally {
+    release.resolve();
+    await outcome;
+  }
+  expect((await dreamingTestState.readDailyIngestionState(workspaceDir)).files).toEqual({});
+  const store = await shortTermTesting.readRecallStore(workspaceDir, BASE_TIME.toISOString());
+  expect(Object.values(store.entries)).toEqual([]);
+  expect(await fs.readFile(path.join(workspaceDir, "memory", `${DAY}.md`), "utf8")).toBe(
+    "- A durable archive fact.\n",
+  );
+  await expect(fs.access(path.join(workspaceDir, "DREAMS.md"))).rejects.toMatchObject({
+    code: "ENOENT",
+  });
+});
+
+it("settles an admitted phase report and its signals before stopping the next phase", async () => {
+  const actual =
+    await vi.importActual<typeof import("./dreaming-markdown.js")>("./dreaming-markdown.js");
+  const controller = new AbortController();
+  const cancelled = new Error("caller ended after report publication");
+  const notePath = path.join(workspaceDir, "memory", `${DAY}.md`);
+  await fs.writeFile(notePath, "- A durable archive fact.\n");
+  const report = vi.mocked(writeDailyDreamingPhaseBlock).mockImplementationOnce(async (params) => {
+    const published = await actual.writeDailyDreamingPhaseBlock(params);
+    controller.abort(cancelled);
+    return published;
+  });
+  const config = inlineConfig({
+    light: { enabled: true, limit: 20, lookbackDays: 2 },
+    rem: { enabled: true, limit: 20, lookbackDays: 2 },
+  });
+  try {
+    await expect(
+      runDreamingSweepPhases({
+        workspaceDir,
+        cfg: config,
+        pluginConfig: resolveMemoryDreamingPluginConfig(config),
+        nowMs: BASE_TIME.getTime(),
+        logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+        assertCurrent: () => controller.signal.throwIfAborted(),
+      }),
+    ).rejects.toBe(cancelled);
+    const signals = await shortTermTesting.readPhaseSignalStore(
+      workspaceDir,
+      BASE_TIME.toISOString(),
+    );
+    expect(Object.values(signals.entries)).toEqual([
+      expect.objectContaining({ lightHits: 1, remHits: 0 }),
+    ]);
+    const note = await fs.readFile(notePath, "utf8");
+    expect(note).toContain("Light Sleep");
+    expect(note).not.toContain("REM Sleep");
+  } finally {
+    report.mockRestore();
+  }
+});

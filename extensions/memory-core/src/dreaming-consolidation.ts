@@ -385,6 +385,7 @@ export function applyMemoryConsolidationPlan(params: {
 }
 
 export async function consolidateMemory(params: {
+  assertCurrent?: () => void;
   agentId: string;
   subagent: DreamingCompletion;
   existingMemory: string;
@@ -412,6 +413,7 @@ export async function consolidateMemory(params: {
   let rejected = false;
 
   for (const group of groups) {
+    params.assertCurrent?.();
     try {
       const result = await params.subagent.complete({
         agentId: params.agentId,
@@ -424,6 +426,7 @@ export async function consolidateMemory(params: {
         ...(params.model ? { model: params.model } : {}),
         timeoutMs: params.timeoutMs ?? CONSOLIDATION_TIMEOUT_MS,
       });
+      params.assertCurrent?.();
       const plan = parseConsolidationPlan(result.text, group.candidates, maxPromotedSnippetTokens);
       if (!plan) {
         params.logger.warn(
@@ -447,6 +450,7 @@ export async function consolidateMemory(params: {
       }
       operations.push(...plan.operations);
     } catch (error) {
+      params.assertCurrent?.();
       params.logger.warn(
         `memory-core: consolidation failed (${error instanceof Error ? error.message : String(error)}); using append-only fallback.`,
       );

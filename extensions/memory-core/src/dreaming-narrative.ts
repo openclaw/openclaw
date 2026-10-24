@@ -78,6 +78,7 @@ const REQUEST_SCOPED_FALLBACK_NARRATIVE =
   "A memory trace surfaced, but details were unavailable in this run.";
 
 export async function appendFallbackNarrativeEntry(params: {
+  assertCurrent?: () => void;
   workspaceDir: string;
   data: NarrativePhaseData;
   nowMs: number;
@@ -86,7 +87,9 @@ export async function appendFallbackNarrativeEntry(params: {
   reason: string;
 }): Promise<void> {
   try {
+    params.assertCurrent?.();
     await appendNarrativeEntry({
+      assertCurrent: params.assertCurrent,
       workspaceDir: params.workspaceDir,
       // Raw snippets and promotions are pre-processing memory staging fragments.
       // Keep fallback diary text generic so DREAMS.md never leaks staging content.
@@ -98,6 +101,7 @@ export async function appendFallbackNarrativeEntry(params: {
       `memory-core: narrative generation used fallback for ${params.data.phase} phase because ${params.reason}.`,
     );
   } catch (fallbackErr) {
+    params.assertCurrent?.();
     params.logger.warn(
       `memory-core: narrative fallback failed for ${params.data.phase} phase (${formatFallbackWriteFailure(fallbackErr)})`,
     );
@@ -178,6 +182,7 @@ function buildNarrativePrompt(data: NarrativePhaseData): string {
 }
 
 export type DreamNarrativeRequest = {
+  assertCurrent?: () => void;
   /** Agent whose configured model and credentials own the completion. */
   agentId: string;
   timeoutMs: number;
@@ -207,6 +212,7 @@ async function generateAndAppendDreamNarrative(
     const attemptModels = params.model ? [params.model, undefined] : [undefined];
     let narrative = "";
     for (const model of attemptModels) {
+      params.assertCurrent?.();
       try {
         const result = await params.subagent.complete({
           agentId: params.agentId,
@@ -215,9 +221,11 @@ async function generateAndAppendDreamNarrative(
           ...(model ? { model } : {}),
           timeoutMs: params.timeoutMs,
         });
+        params.assertCurrent?.();
         narrative = result.text.trim();
         break;
       } catch (error) {
+        params.assertCurrent?.();
         if (!model || !isConfiguredModelUnavailableNarrativeError(error)) {
           throw error;
         }
@@ -237,7 +245,9 @@ async function generateAndAppendDreamNarrative(
       });
       return { status: "degraded" };
     }
+    params.assertCurrent?.();
     const dreamsPath = await appendNarrativeEntry({
+      assertCurrent: params.assertCurrent,
       workspaceDir: params.workspaceDir,
       narrative,
       nowMs,
@@ -255,6 +265,7 @@ async function generateAndAppendDreamNarrative(
       `memory-core: dream diary entry written for ${params.data.phase} phase [workspace=${params.workspaceDir}].`,
     );
   } catch (error) {
+    params.assertCurrent?.();
     const requestScoped = isRequestScopedSubagentRuntimeError(error);
     if (!requestScoped) {
       params.logger.warn(
@@ -280,7 +291,11 @@ async function generateAndAppendDreamNarrative(
 export async function runDreamNarrative(
   params: Omit<DreamNarrativeRequest, "agentId"> & { agentId?: string },
 ): Promise<DreamNarrativeOutcome> {
-  const { agentId, runInBackground, ...rest } = params;
+  const { agentId, runInBackground, assertCurrent, ...input } = params;
+  assertCurrent?.();
+  // Scheduling transfers the narrative to the service owner. Only foreground
+  // narratives retain the originating hook's lifetime.
+  const rest = runInBackground ? input : { ...input, assertCurrent };
   // Nothing to narrate is a no-op on every path; checking ownership first would let an
   // ownerless empty sweep append a diary entry for material that never existed.
   if (rest.data.snippets.length === 0 && !rest.data.promotions?.length) {

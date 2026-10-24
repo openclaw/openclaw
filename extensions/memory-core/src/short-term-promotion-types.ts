@@ -119,6 +119,7 @@ export type RankShortTermPromotionOptions = PromotionThresholdOptions & {
 };
 
 export type ApplyShortTermPromotionsOptions = PromotionThresholdOptions & {
+  assertCurrent?: () => void;
   agentId?: string;
   workspaceAgentIds?: readonly string[];
   workspaceDir: string;

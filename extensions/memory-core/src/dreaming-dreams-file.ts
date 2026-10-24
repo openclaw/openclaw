@@ -4,7 +4,10 @@ import { extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
 import { replaceManagedMarkdownBlock } from "openclaw/plugin-sdk/memory-host-markdown";
 import { readRegularFile, replaceFileAtomic } from "openclaw/plugin-sdk/security-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
-import { captureMemoryMutationAuthority } from "./memory-mutation-authority.js";
+import {
+  captureMemoryMutationAuthority,
+  withMemoryMutationAuthority,
+} from "./memory-mutation-authority.js";
 import { getMemoryWorkspaceMaintenance } from "./memory-workspace-files.js";
 import { withMemoryWorkspaceLock } from "./memory-workspace-lock.js";
 import { readStore } from "./short-term-promotion-store.js";
@@ -105,6 +108,7 @@ export async function writeDreamsFileAtomic(
 }
 
 export async function updateDreamsFile<T>(params: {
+  assertCurrent?: () => void;
   workspaceDir: string;
   updater: (
     existing: string,
@@ -124,11 +128,19 @@ export async function updateDreamsFile<T>(params: {
     const existing = await readDreamsFile(dreamsPath, params.workspaceDir);
     const { content, result, shouldWrite = true } = await params.updater(existing, dreamsPath);
     if (shouldWrite) {
-      await writeDreamsFileAtomic(
-        dreamsPath,
-        content.endsWith("\n") ? content : `${content}\n`,
-        params.workspaceDir,
-      );
+      const write = () =>
+        writeDreamsFileAtomic(
+          dreamsPath,
+          content.endsWith("\n") ? content : `${content}\n`,
+          params.workspaceDir,
+        );
+      // Bind only the single publication, so its file owner rechecks after awaited
+      // preparation without fencing unrelated sweep settlement or background jobs.
+      if (params.assertCurrent) {
+        await withMemoryMutationAuthority(params.assertCurrent, write);
+      } else {
+        await write();
+      }
     }
     return result;
   });
@@ -428,6 +440,7 @@ export async function dedupeDreamDiaryEntries(params: {
 }
 
 export async function appendNarrativeEntry(params: {
+  assertCurrent?: () => void;
   workspaceDir: string;
   narrative: string;
   nowMs: number;
@@ -439,6 +452,7 @@ export async function appendNarrativeEntry(params: {
   const entry = `\n---\n\n*${dateStr}*\n\n${params.narrative}\n`;
   return await updateDreamsFile<string | undefined>({
     workspaceDir: params.workspaceDir,
+    assertCurrent: params.assertCurrent,
     updater: async (existing, dreamsPath) => {
       const sourceKeys = params.sourceEntryKeys ?? [];
       const currentSources =

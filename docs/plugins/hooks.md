@@ -158,6 +158,14 @@ registration closure. Typed hooks do not receive a universal
 By default in hybrid reload mode, editing `plugins.entries.<id>.config` replaces the
 plugin instance and reruns registration with the new settings.
 
+`before_agent_reply` handlers receive `ctx.hookInvocation.assertActive()`. Call it after awaited
+preparation and before starting another workspace, model request, or write. It
+rejects when the caller is cancelled, its authority is revoked, or that handler
+has returned or timed out. It does not interrupt I/O already dispatched: finish
+an admitted publication and its bookkeeping before stopping the next unit of
+work. Intentionally detached work must transfer to the plugin's service-owned
+background lifecycle instead of retaining the originating hook invocation.
+
 ### Choose a hook
 
 | Task                                               | Hook                                                                        |
@@ -236,7 +244,7 @@ hooks, which cannot protect the raw durable ingress payload.
 | Conversation hook is blocked               | Set `plugins.entries.<id>.hooks.allowConversationAccess: true`; for prompt hooks, also check that `allowPromptInjection` is not `false`. These keys belong under `hooks`, not the plugin's `config`.                                                           |
 | Hook works for one runtime or trigger only | Check the runtime boundary and `eligibleTriggers`. Missing context fields are not proof of a different sender, agent, or authorization state.                                                                                                                  |
 | Persistence rewrite has no effect          | Return `{ message }` synchronously. An `async` handler's result is ignored.                                                                                                                                                                                    |
-| A timed-out hook still performs work       | Timeout ends the host's await, not plugin work. Pass available abort signals through I/O and bound plugin-owned work yourself.                                                                                                                                 |
+| A timed-out hook still performs work       | Timeout ends the host's await, not plugin work. `before_agent_reply` handlers should check `ctx.hookInvocation.assertActive()` before starting more work; pass available abort signals through I/O.                                                            |
 | One plugin's rewrite disappears            | Check the hook's merge rule and priority. `message_sending` uses the last returned content; `reply_payload_sending` passes each updated payload onward.                                                                                                        |
 
 ## Upcoming deprecations

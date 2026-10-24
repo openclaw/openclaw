@@ -58,6 +58,6 @@ export type PluginHookAgentContext = PluginHookContextWindow & {
   channelContext?: PluginHookChannelContext;
   /** Present only for post-policy prompt enrichment hooks that requested tool authority. */
   toolAuthority?: PluginHookToolAuthority;
-  /** Checks this prompt hook handler's result-acceptance lifetime. */
+  /** Checks this prompt or reply hook handler's result-acceptance lifetime. */
   readonly hookInvocation?: Readonly<{ assertActive(): void }>;
 };

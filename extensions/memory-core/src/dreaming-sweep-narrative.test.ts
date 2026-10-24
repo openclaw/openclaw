@@ -45,7 +45,13 @@ const LASTING = "Memories that crystallized into something lasting";
 type CompletionInput = Parameters<DreamingCompletion["complete"]>[0];
 type BeforeReply = (
   event: { cleanedBody: string },
-  context: { trigger: string; agentId: string; workspaceDir: string; sessionKey: string },
+  context: {
+    trigger: string;
+    agentId: string;
+    workspaceDir: string;
+    sessionKey: string;
+    hookInvocation: { assertActive(): void };
+  },
 ) => Promise<unknown>;
 
 const execution = (model: string) => ({ execution: { model }, limit: 10 });
@@ -205,6 +211,7 @@ async function createSweep(
     throw new Error("dreaming trigger hook was not registered");
   }
   const beforeReply = registration[1] as BeforeReply;
+  const controller = new AbortController();
   const run = async (trigger: "heartbeat" | "cron" = "heartbeat") => {
     const sessionKey = "agent:main:main";
     enqueueSystemEvent(MEMORY_DREAMING_SYSTEM_EVENT_TEXT, {
@@ -214,7 +221,13 @@ async function createSweep(
     });
     return await beforeReply(
       { cleanedBody: MEMORY_DREAMING_SYSTEM_EVENT_TEXT },
-      { trigger, agentId: "main", workspaceDir, sessionKey },
+      {
+        trigger,
+        agentId: "main",
+        workspaceDir,
+        sessionKey,
+        hookInvocation: { assertActive: () => controller.signal.throwIfAborted() },
+      },
     );
   };
   const readDreams = () =>
@@ -240,6 +253,7 @@ async function createSweep(
   return {
     workspaceDir,
     config,
+    controller,
     narratives,
     consolidations,
     resolveTimeout,
@@ -377,6 +391,7 @@ describe("dreaming sweep diary publication", () => {
     let stopping: Promise<void> | undefined;
     try {
       expectHandled(await sweep.run("cron"));
+      sweep.controller.abort(new Error("originating cron turn ended"));
       expect(logText(sweep.logger.info)).toContain("narrativesPending=1");
       expectNarrative(sweep);
       stopping = Promise.resolve(sweep.service.stop?.(sweep.serviceContext)).then(() => {
