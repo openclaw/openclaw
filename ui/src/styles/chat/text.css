@@ -349,8 +349,9 @@
   }
 
   /* Many-column comparisons keep useful column widths instead of wrapping a
-   notes column into a word per line. Short numeric columns still fit naturally. */
-  table:has(tr > :nth-child(5)) {
+   notes column into a word per line. Markdown body rows have the header's column
+   count, so inspecting the header avoids searching every row. */
+  table:has(> :where(thead) > tr > :nth-child(5)) {
     width: max-content;
     min-width: 100%;
   }
