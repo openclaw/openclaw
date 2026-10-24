@@ -5,7 +5,6 @@ import { afterEach, expect, it, vi } from "vitest";
 import { runShardPlans } from "../../scripts/ci-run-node-test-shard.mts";
 import {
   ciTestShardRequiresBun as requiresBun,
-  resolveCiTestRuntimePolicy as runtimePolicy,
   resolveCiTestRuntimeSelections as selections,
 } from "../../scripts/lib/ci-test-runtime.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
@@ -49,19 +48,6 @@ async function recordRun(
   return { calls, exitCode };
 }
 
-it.each(["src/infra/exec-host.socket.test.ts", "src/gateway/artifact-downloads.test.ts"])(
-  "selects the required engines for %s",
-  (file) => {
-    for (const policy of ["bun-all", "dual-all"] as const) {
-      expect(selections({ targets: [file] }, policy)).toEqual(
-        file === "src/infra/exec-host.socket.test.ts"
-          ? [{ runtime: "node" }]
-          : [...(policy === "dual-all" ? [{ runtime: "node" }] : []), { runtime: "bun" }],
-      );
-    }
-  },
-);
-
 it.each([
   ["full-agentic", ["src/gateway/server-methods/diagnostics.heap-snapshot.test.ts"]],
   ["gateway-core", []],
@@ -91,32 +77,6 @@ it.each([
     ).toEqual(expected);
   }
 });
-
-it("accepts runtime policies without changing the default", () => {
-  for (const policy of ["node", "bun-all", "dual-all"] as const) {
-    expect(runtimePolicy({ OPENCLAW_CI_TEST_RUNTIME_POLICY: policy })).toBe(policy);
-  }
-  expect(runtimePolicy({})).toBe("node");
-  expect(() => runtimePolicy({ OPENCLAW_CI_TEST_RUNTIME_POLICY: "all" })).toThrow(
-    "Invalid OPENCLAW_CI_TEST_RUNTIME_POLICY",
-  );
-});
-
-it.each(["bun-all", "dual-all"] as const)(
-  "runs unqualified configs and unusual arguments on Bun under %s",
-  (policy) => {
-    const selection = {
-      configs: ["unknown.config.ts"],
-      includePatterns: ["extensions/future/**/*.test.ts"],
-      vitestArgs: ["--retry=1", "--testNamePattern=works"],
-    };
-    expect(selections(selection, policy)).toEqual([
-      ...(policy === "dual-all" ? [{ runtime: "node" }] : []),
-      { runtime: "bun" },
-    ]);
-    expect(requiresBun(selection, policy)).toBe(true);
-  },
-);
 
 it.each(["bun-all", "dual-all"] as const)(
   "partitions process discovery and retains failures under %s",

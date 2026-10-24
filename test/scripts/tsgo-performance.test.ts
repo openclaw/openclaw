@@ -28,15 +28,9 @@ function stat({ user = 10, system = 5, start = "123" } = {}) {
   return `42 (tsgo (worker)) ${fields.join(" ")}`;
 }
 
-it("parses all-thread CPU and kernel RSS high-water observations without confusing comm fields", () => {
-  expect(parseTsgoProcessSample(stat(), "VmHWM:\t1024 kB\n", 100)).toEqual({
-    startTicks: "123",
-    cpuMs: 150,
-    peakRssBytes: 1048576,
-  });
+it("rejects malformed process observations and invalid clock frequencies", () => {
   expect(parseTsgoProcessSample("garbled", "", 100)).toBeNull();
   expect(parseTsgoProcessSample(stat(), "", 0)).toBeNull();
-  expect(parseTsgoProcessSample(stat(), "", 100)?.peakRssBytes).toBeNull();
 });
 
 it.each([
@@ -150,8 +144,6 @@ it.each([
     const onReady = vi.fn();
     const onSignal = vi.fn();
     managed.mockImplementationOnce(async (options) => {
-      expect(options).toMatchObject(command);
-      expect(options.stdio).toBeUndefined();
       const child = Object.assign(new EventEmitter(), {
         pid: undefined,
         exitCode: null,

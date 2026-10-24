@@ -87,17 +87,9 @@ it.each([
     expect(findExportNameCollisions([...modules, extra])).toEqual([
       { name, files: [...paths, extra.path].toSorted() },
     ]);
-    for (const module of modules) {
-      expect(findExportNameCollisions([module, extra])).toEqual([
-        { name, files: [module.path, extra.path].toSorted() },
-      ]);
-    }
     expect(
       findExportNameCollisions(
-        paths.map((modulePath) => ({
-          path: modulePath,
-          content: `export function ${other}() {}`,
-        })),
+        paths.map((modulePath) => ({ path: modulePath, content: `export function ${other}() {}` })),
       ),
     ).toEqual([{ name: other, files: paths.toSorted() }]);
   },

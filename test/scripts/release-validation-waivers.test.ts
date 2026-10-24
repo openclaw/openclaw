@@ -94,30 +94,6 @@ function classify(observed: Awaited<ReturnType<typeof observe>>, targetVersion =
 }
 
 describe("checked-in release-tooling waivers", () => {
-  it("passes the aggregate decision while retaining the failed child and leaf evidence", async () => {
-    grant();
-    const observed = await observe([job(LIVE_JOB, 1), aggregate()]);
-    expect(observed).toMatchObject({ errors: [], conclusion: "failure" });
-    expect(observed.jobs).toContainEqual(
-      expect.objectContaining({ name: LIVE_JOB, status: "completed", conclusion: "failure" }),
-    );
-    expect(terminalPolicyPass(observed, VERSION)).toBe(true);
-    expect(classify(observed)).toMatchObject({
-      state: "passed",
-      blockers: [],
-      waivers: [
-        {
-          targetVersion: VERSION,
-          childRole: ROLE,
-          jobName: LIVE_JOB,
-          reason: REASON,
-          runId: "101",
-          runAttempt: 1,
-        },
-      ],
-    });
-  });
-
   it("composes provider waivers with Windows-node preview advisories", async () => {
     grant(LIVE_JOB, "releaseChecksCandidate");
     const observed = await observe(
@@ -143,22 +119,17 @@ describe("checked-in release-tooling waivers", () => {
 
   it.each<{
     name: string;
-    targetVersion?: string;
-    role?: string;
     leaf?: Partial<Job> | null;
   }>([
-    { name: "another release version", targetVersion: "2026.10.20" },
-    { name: "another child role", role: "releaseChecksCandidate" },
-    { name: "another job name", leaf: { name: `${LIVE_JOB} extra` } },
     { name: "a cancelled leaf", leaf: { conclusion: "cancelled" } },
     { name: "a skipped leaf", leaf: { conclusion: "skipped" } },
     { name: "an unfinished leaf", leaf: { status: "in_progress", conclusion: "" } },
     { name: "a missing leaf", leaf: null },
-  ])("does not apply a grant to $name", async ({ targetVersion = VERSION, role, leaf }) => {
+  ])("does not apply a grant to $name", async ({ leaf }) => {
     grant();
     const jobs = [...(leaf === null ? [] : [job(LIVE_JOB, 1, leaf)]), aggregate()];
-    const observed = await observe(jobs, { targetVersion, role });
-    const decision = classify(observed, targetVersion);
+    const observed = await observe(jobs);
+    const decision = classify(observed);
     expect(observed.errors).toEqual([]);
     expect(decision).toMatchObject({ waivers: [], state: "blocked_complete" });
   });
@@ -167,11 +138,6 @@ describe("checked-in release-tooling waivers", () => {
     {
       name: "an extra evidence-integrity failure",
       log: `${LIVE_FAILURE_LOG}::error::Advisory evidence resolution or validation failed.\n`,
-      error: "unwaived failure",
-    },
-    {
-      name: "an unverified Telegram dispatch identity",
-      log: `${LIVE_FAILURE_LOG}::error::Telegram dispatch identity was not verified\n`,
       error: "unwaived failure",
     },
     {

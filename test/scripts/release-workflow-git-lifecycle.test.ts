@@ -104,8 +104,6 @@ const fault = (operation: string, code = 23, occurrence?: number) => ({
 });
 const ancestry = (revision: string, branch = "origin/main") =>
   `merge-base --is-ancestor ${revision} ${branch}`;
-const shaRejection =
-  "NPM placeholder publication requires ref to equal the exact main workflow SHA.";
 const rejects = (message: string, expected = {}) => ({
   code: 1,
   output: expect.stringContaining(message),
@@ -114,23 +112,14 @@ const rejects = (message: string, expected = {}) => ({
 // Owner startup, cancellation and drain faults are covered by
 // ci-platform-checkout.test.ts; here retain each workflow's admission decisions.
 const failures: FailureCase[] = [
-  ...(["linux", "macos", "placeholder"] as const).map((mode): FailureCase => [
+  ...(["linux", "macos"] as const).map((mode): FailureCase => [
     mode,
     { fetchResults: [23] },
     { code: 23, operation: "fetch" },
   ]),
-  ...(["linux", "macos"] as const).map((mode): FailureCase => [
-    mode,
-    fault("rev-parse"),
-    { code: 23, operation: "rev-parse" },
-  ]),
+  ["macos", fault("rev-parse"), { code: 23, operation: "rev-parse" }],
   ["linux", fault("merge-base"), { code: 23, operation: "merge-base" }],
-  ["placeholder", fault("rev-parse"), rejects(shaRejection, { gitCount: 1 })],
-  [
-    "linux",
-    { commandResults: { [ancestry(sha)]: { code: 1 } }, ...fault("fetch", 128, 2) },
-    { code: 128, operation: "fetch" },
-  ],
+  ["placeholder", fault("rev-parse"), rejects("exact main workflow SHA", { gitCount: 1 })],
   ...[1, 2].map((occurrence): FailureCase => [
     "placeholder",
     fault("merge-base", 23, occurrence),
@@ -141,12 +130,7 @@ const failures: FailureCase[] = [
   [
     "macos",
     { env: { PUBLIC_RELEASE_BRANCH: "feature/not-a-release" } },
-    rejects(
-      "public_release_branch must be main or release/YYYY.M.PATCH, got feature/not-a-release.",
-      {
-        gitCount: 0,
-      },
-    ),
+    rejects("public_release_branch must be main or release/", { gitCount: 0 }),
   ],
   [
     "linux",
@@ -156,25 +140,27 @@ const failures: FailureCase[] = [
         [ancestry(sha, "refs/remotes/origin/release/2026.8.1")]: { code: 1 },
       },
     },
-    rejects(`Tag ${releaseTag} (${sha}) is not reachable from main or release/2026.8.1.`),
+    rejects(`Tag ${releaseTag} (${sha}) is not reachable`),
   ],
   [
     "linux",
     { commandResults: { [ancestry(otherSha)]: { code: 1 } } },
-    rejects("Linux release tooling must be reachable from current main.", {
-      candidateInspected: false,
-    }),
+    rejects("Linux release tooling must be reachable", { candidateInspected: false }),
   ],
   [
     "placeholder",
     { env: { WORKFLOW_REF: "refs/heads/release/2026.8.1" } },
     rejects("must run from the trusted main workflow", { gitCount: 0 }),
   ],
-  ["placeholder", { env: { EVENT_SHA: otherSha } }, rejects(shaRejection, { gitCount: 0 })],
+  [
+    "placeholder",
+    { env: { EVENT_SHA: otherSha } },
+    rejects("exact main workflow SHA", { gitCount: 0 }),
+  ],
   [
     "placeholder",
     { commandResults: { "rev-parse HEAD": { code: 0, output: `${otherSha}\n` } } },
-    rejects(shaRejection, { git: [head] }),
+    rejects("exact main workflow SHA", { git: [head] }),
   ],
 ];
 

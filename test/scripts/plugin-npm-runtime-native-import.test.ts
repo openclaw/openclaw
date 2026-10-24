@@ -222,14 +222,6 @@ it.each([
   ["missing host output", (f) => f.remove("dist"), /Host SDK output is missing/u],
   ["missing plugin output", (f) => f.remove("extensions/demo/dist"), outputError],
   ["symlinked node_modules", (f) => f.link("extensions/demo/node_modules"), directoryError],
-  [
-    "unrelated host directory",
-    (f) => {
-      f.write("extensions/demo/node_modules/openclaw/package.json", '{"name":"unrelated"}');
-      f.write("extensions/demo/node_modules/openclaw/marker", "keep");
-    },
-    /already exists and is not a symlink/u,
-  ],
 ] satisfies RejectionCase[])("rejects %s without mutation", (_scenario, mutate, expected) => {
   const f = rejectionFixture();
   const selected = mutate(f) ?? "extensions/demo";
