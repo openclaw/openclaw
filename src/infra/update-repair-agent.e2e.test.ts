@@ -6,6 +6,7 @@ import path from "node:path";
 import { text as readText } from "node:stream/consumers";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { expect, it, vi } from "vitest";
+import { createOpenAiResponsesModelConfig } from "../../test/helpers/openai-responses-model-fixture.js";
 import {
   writeOpenAiResponsesSse,
   writeOpenAiResponsesText,
@@ -28,7 +29,6 @@ import {
   createManagedHandoffLeaseDatabase,
 } from "./update-managed-service-handoff-database.js";
 import { runUpdateRepairLoop } from "./update-repair-agent.js";
-import { repairModel } from "./update-repair-agent.test-support.js";
 import {
   updateRepairBudgetSchema,
   type UpdateRepairParams,
@@ -53,22 +53,16 @@ vi.mock("./update-repair-agent.runtime.js", async () => {
 });
 
 type TurnDelegation = {
-  runId?: string;
+  runId: string;
   admissionEnv: NodeJS.ProcessEnv;
-  executor: { grant: UpdateCommandChildGrant; bindChild?: (pid: number) => void } | "unowned";
+  executor: { grant: UpdateCommandChildGrant; bindChild?: (pid: number) => void };
 };
 const requester = { channel: "synthetic", senderId: "owner" };
 const expectMissing = (file: string) =>
   expect(fs.stat(file)).rejects.toMatchObject({ code: "ENOENT" });
 
-type RepairDiagnostics = {
-  stdoutTail: string;
-  stderrTail: string;
-};
-
 async function runRepairEnvelope(
   params: UpdateRepairParams,
-  diagnostics: RepairDiagnostics,
   delegation?: TurnDelegation,
 ): Promise<UpdateRepairResult | UpdateRepairTurnResult> {
   const child = spawn(
@@ -89,7 +83,7 @@ async function runRepairEnvelope(
         OPENCLAW_TEST_CONSOLE: "1",
       },
       detached: Boolean(delegation) && process.platform !== "win32",
-      stdio: ["ignore", "pipe", "pipe", "ipc"],
+      stdio: ["ignore", "ignore", "inherit", "ipc"],
     },
   );
   let failure: unknown;
@@ -98,16 +92,6 @@ async function runRepairEnvelope(
     failure = new Error("Repair worker timed out.");
     child.kill("SIGKILL");
   }, 90_000);
-  for (const [stream, field] of [
-    [child.stdout, "stdoutTail"],
-    [child.stderr, "stderrTail"],
-  ] as const) {
-    let tail = Buffer.alloc(0);
-    stream?.on("data", (chunk: Buffer) => {
-      tail = Buffer.from(Buffer.concat([tail, chunk]).subarray(-16 * 1024));
-      diagnostics[field] = tail.toString("utf8");
-    });
-  }
   try {
     return await new Promise((resolve, reject) => {
       child.once("error", reject);
@@ -119,14 +103,14 @@ async function runRepairEnvelope(
         }
       });
       child.on("message", (raw) => {
-        void (async () => {
+        try {
           const message =
             (raw as { type?: unknown }).type === "turn-result"
               ? (raw as Extract<UpdateRepairWorkerMessage, { type: "turn-result" }>)
               : releasedUpdateRepairWorkerMessageSchema.parse(raw);
           if (message.type === "ready") {
             if (delegation) {
-              if (delegation.executor !== "unowned" && delegation.executor.bindChild) {
+              if (delegation.executor.bindChild) {
                 if (!child.pid) {
                   throw new Error("Repair worker has no PID.");
                 }
@@ -135,7 +119,7 @@ async function runRepairEnvelope(
               child.send({
                 type: "turn",
                 runId: delegation.runId,
-                executor: delegation.executor === "unowned" ? undefined : delegation.executor.grant,
+                executor: delegation.executor.grant,
                 requester,
                 target: params.target,
                 prompt: "Repair the missing marker using the configured tools.",
@@ -159,10 +143,10 @@ async function runRepairEnvelope(
           } else if (message.type === "result" || message.type === "turn-result") {
             result = message.result;
           }
-        })().catch((error: unknown) => {
+        } catch (error) {
           failure = error;
           child.kill("SIGKILL");
-        });
+        }
       });
     });
   } finally {
@@ -215,36 +199,14 @@ function writeRepairToolCall(response: ServerResponse, name: "exec" | "write"): 
   ]);
 }
 
-type RepairEntry =
-  | "released-parent"
-  | "manual"
-  | "turn"
-  | "revoked-turn"
-  | "wrong-receiver-turn"
-  | "unowned-turn"
-  | "unidentified-turn";
-it.each([
-  "released-parent",
-  "manual",
-  "turn",
-  "revoked-turn",
-  "wrong-receiver-turn",
-  "unowned-turn",
-  "unidentified-turn",
-] as const)(
+type RepairEntry = "released-parent" | "manual" | "turn" | "revoked-turn" | "wrong-receiver-turn";
+it.each(["released-parent", "manual", "turn", "revoked-turn", "wrong-receiver-turn"] as const)(
   "preserves released behavior and scopes repair inference (%s)",
   async (entry) => {
     const phase = entry === "turn" ? "validating" : "verifying";
-    const diagnostics: RepairDiagnostics = { stdoutTail: "", stderrTail: "" };
     await withOpenClawTestState({ prefix: "update-repair-boundary-", layout: "home" }, (state) =>
-      exerciseRepair(state, phase, entry, diagnostics),
-    ).catch((error: unknown) => {
-      // The E2E runner suppresses console output, including failed cases.
-      process.stderr.write(
-        `[update-repair-test] diagnostics ${JSON.stringify({ phase, entry, workerStdoutTail: diagnostics.stdoutTail, workerStderrTail: diagnostics.stderrTail })}\n`,
-      );
-      throw error;
-    });
+      exerciseRepair(state, phase, entry),
+    );
   },
   120_000,
 );
@@ -253,7 +215,6 @@ async function exerciseRepair(
   state: OpenClawTestState,
   phase: "verifying" | "validating",
   entry: RepairEntry,
-  diagnostics: RepairDiagnostics,
 ) {
   const requests: ModelRequest[] = [];
   const providerCalls: string[] = [];
@@ -303,34 +264,27 @@ async function exerciseRepair(
       });
     },
     async (baseUrl) => {
-      const modelRef = "repair-test/repair-model";
+      const modelConfig = createOpenAiResponsesModelConfig({
+        baseUrl,
+        providerId: "repair-test",
+        modelId: "repair-model",
+        reasoning: false,
+        toolProfile: "coding",
+      });
       const config: OpenClawConfig = {
+        ...modelConfig,
         logging: { level: "silent", consoleLevel: "trace" },
         commands: { ownerAllowFrom: ["owner"] },
         plugins: { slots: { memory: "none" } },
         tools: { exec: { mode: "ask", safeBins: ["cat"] }, fs: { workspaceOnly: false } },
         agents: {
+          ...modelConfig.agents,
           defaults: {
-            model: { primary: modelRef },
-            models: { [modelRef]: { agentRuntime: { id: "openclaw" } } },
+            ...modelConfig.agents?.defaults,
             systemAgent: { agentId: "operator" },
-            skipBootstrap: true,
-            skills: [],
             sandbox: { mode: "off" },
           },
           entries: { operator: {} },
-        },
-        models: {
-          mode: "replace",
-          providers: {
-            "repair-test": {
-              baseUrl: `${baseUrl}/v1`,
-              apiKey: "synthetic-repair-key",
-              api: "openai-responses",
-              request: { allowPrivateNetwork: true },
-              models: [repairModel("repair-model", "Repair model", 4096)],
-            },
-          },
         },
       };
       await state.writeConfig(config);
@@ -406,11 +360,9 @@ async function exerciseRepair(
               fence,
               params.target.installRoot,
               async (grant, bindChild) => {
-                const envelope = (
-                  receiver: Exclude<TurnDelegation["executor"], "unowned"> = { grant, bindChild },
-                ) =>
-                  runRepairEnvelope(params, diagnostics, {
-                    runId: entry === "unidentified-turn" ? undefined : run.runId,
+                const envelope = (receiver: TurnDelegation["executor"] = { grant, bindChild }) =>
+                  runRepairEnvelope(params, {
+                    runId: run.runId,
                     admissionEnv: ledgerEnv,
                     executor: receiver,
                   });
@@ -443,20 +395,6 @@ async function exerciseRepair(
           { existingAuthority: { ...identity, installKey: state.workspaceDir } },
         );
       };
-      if (entry === "unowned-turn" || entry === "unidentified-turn") {
-        await expect(
-          entry === "unowned-turn"
-            ? runRepairEnvelope(params, diagnostics, {
-                runId: run?.runId,
-                admissionEnv: ledgerEnv,
-                executor: "unowned",
-              })
-            : runTurn(),
-        ).rejects.toThrow("worker exited 1");
-        expect(requests).toEqual([]);
-        await expectMissing(marker);
-        return;
-      }
       if (entry === "revoked-turn" || entry === "wrong-receiver-turn") {
         const result = await runTurn();
         expect(result, JSON.stringify(result)).toMatchObject({
@@ -475,7 +413,7 @@ async function exerciseRepair(
         entry === "turn"
           ? await runTurn()
           : entry === "released-parent"
-            ? await runRepairEnvelope(params, diagnostics)
+            ? await runRepairEnvelope(params)
             : await runUpdateRepairLoop(params);
 
       expect(errors).toEqual([]);

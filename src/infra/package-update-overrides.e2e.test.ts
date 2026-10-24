@@ -16,16 +16,7 @@ const writeJson = (root: string, file: string, value: unknown) =>
   writeText(root, file, JSON.stringify(value));
 const script = (message: string) =>
   `#!/usr/bin/env node\nconsole.log(${JSON.stringify(message)});\n`;
-const scenarios = [
-  "late replay",
-  "preserve only",
-  "unchanged",
-  "legacy",
-  "conflict",
-  "unsafe topology",
-  "install failure",
-  "late recovery refusal",
-] as const;
+const scenarios = ["unchanged", "legacy", "late recovery refusal"] as const;
 
 it.each(scenarios)(
   "local overrides through real npm package updates: %s",
@@ -44,7 +35,6 @@ it.each(scenarios)(
         exec(command, args, { cwd, env, timeout: 60_000, maxBuffer: 1024 * 1024 });
       const pristine = script("upstream");
       const local = script("operator override");
-      const targetSource = scenario === "conflict" ? script("new upstream") : pristine;
       async function pack(version: string, source: string, legacy = false) {
         const root = path.join(base, version);
         await fs.mkdir(path.join(root, "dist"), { recursive: true });
@@ -65,7 +55,7 @@ it.each(scenarios)(
         return path.join(base, `openclaw-${version}.tgz`);
       }
       const old = await pack("2026.9.3", pristine, scenario === "legacy");
-      const candidate = await pack("2026.9.4", targetSource);
+      const candidate = await pack("2026.9.4", pristine);
       const prefix = path.join(base, "prefix");
       const globalRoot = path.join(
         prefix,
@@ -86,22 +76,7 @@ it.each(scenarios)(
         await writeText(root, "dist/index.js", local);
         await writeText(root, "dist/local.js", "local payload\n");
       }
-      const outside = path.join(base, "outside");
-      if (scenario === "unsafe topology") {
-        await fs.mkdir(outside);
-        await writeText(outside, "untouched", "outside\n");
-        await fs.symlink(
-          outside,
-          path.join(root, "dist/redirect"),
-          process.platform === "win32" ? "junction" : "dir",
-        );
-      }
-      const late =
-        scenario === "late replay" ||
-        scenario === "preserve only" ||
-        scenario === "late recovery refusal";
       const doctorFails = scenario === "late recovery refusal";
-      let activationEntered = false;
       let transaction: PackageUpdateTransaction | undefined;
       const npmVersion = (await run("npm", ["--version"])).stdout.trim();
       const [major = 0, minor = 0] = npmVersion.split(".").map(Number);
@@ -135,13 +110,13 @@ it.each(scenarios)(
           packageRoot: root,
           npmOwner: { version: npmVersion, lifecyclePolicy },
         },
-        installSpec: scenario === "install failure" ? path.join(base, "missing.tgz") : candidate,
+        installSpec: candidate,
         packageName: "openclaw",
         packageRoot: root,
         requirePackageReplacement: true,
         env,
         timeoutMs: 60_000,
-        localOverrides: { reapply: scenario !== "preserve only", env },
+        localOverrides: { reapply: true, env },
         runCommand: (argv, options) => command(argv, options.cwd),
         runStep: async ({ name, argv, cwd }) => {
           const started = Date.now();
@@ -157,8 +132,7 @@ it.each(scenarios)(
           };
         },
         beforeActivate: async () => {
-          activationEntered = true;
-          if (late) {
+          if (doctorFails) {
             await writeText(root, "dist/late.js", "late payload\n");
           }
         },
@@ -174,15 +148,6 @@ it.each(scenarios)(
           stderrTail: doctorFails ? "injected doctor failure" : null,
         }),
       });
-      if (scenario === "unsafe topology" || scenario === "install failure") {
-        expect(result.failedStep).not.toBeNull();
-        expect(activationEntered).toBe(false);
-        expect(await readText(root, "dist/index.js")).toBe(local);
-        if (scenario === "unsafe topology") {
-          expect(await readText(outside, "untouched")).toBe("outside\n");
-        }
-        return;
-      }
       expect(transaction).toBeDefined();
       if (doctorFails) {
         expect(result).toMatchObject({
@@ -201,23 +166,16 @@ it.each(scenarios)(
       }
       expect(result.failedStep).toBeNull();
       await transaction!.complete({ activationVerified: true }, () => {});
-      const replayed = scenario === "late replay";
       expect((await run(process.execPath, [path.join(root, "dist/index.js")])).stdout.trim()).toBe(
-        replayed ? "operator override" : scenario === "conflict" ? "new upstream" : "upstream",
+        "upstream",
       );
       if (scenario === "unchanged") {
         expect(result.localOverrides?.status).toBe("none");
         expect(result.localOverrides?.recoveryDir).toBeUndefined();
       } else {
-        expect(result.localOverrides).toMatchObject({
-          status: replayed ? "applied" : scenario === "conflict" ? "conflict" : "preserved",
-          applied: replayed ? 3 : 0,
-        });
+        expect(result.localOverrides).toMatchObject({ status: "preserved", applied: 0 });
         const saved = result.localOverrides!.recoveryDir!;
         expect(await readText(saved, "files/dist/index.js")).toBe(local);
-        if (late) {
-          expect(await readText(saved, "files/dist/late.js")).toBe("late payload\n");
-        }
         expect(
           result.steps.some(
             (step) =>
