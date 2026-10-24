@@ -39,8 +39,8 @@ const CRON_SELF_ACTIONS = ["status", "list", "get", "remove", "runs"] as const;
 
 const CRON_SCHEDULE_KINDS = ["at", "every", "cron", "stream", "event"] as const;
 // When cron.triggers.enabled is explicitly false, the scheduler rejects
-// stream schedules, script payloads, and condition triggers, so the
-// model-facing schema must not advertise them.
+// stream schedule creation, script payloads, and condition triggers. The
+// shared job schema still includes existing-job admin edit fields.
 const CRON_SCHEDULE_KINDS_TRIGGERS_DISABLED = ["at", "every", "cron"] as const;
 const CRON_WAKE_MODES = ["now", "next-heartbeat"] as const;
 const CRON_PAYLOAD_KINDS = ["systemEvent", "agentTurn", "script"] as const;
@@ -50,7 +50,6 @@ const CRON_RUN_MODES = ["due", "force"] as const;
 
 type CronToolSchemaOptions = {
   readOnly?: boolean;
-  agentSessionKey?: string;
   management?: "only" | "also";
   allowCommandJobs?: boolean;
   selfRemoveOnly?: boolean;
@@ -58,9 +57,9 @@ type CronToolSchemaOptions = {
   nextCheckEnabled?: boolean;
   /**
    * Whether cron.triggers.enabled is on for this deployment. When false, the
-   * trigger-gated surfaces (job trigger, script payloads, stream
-   * schedules) are omitted from the advertised schema so models cannot be
-   * tempted into calls the scheduler always rejects. Defaults to true so
+   * trigger-gated surfaces (job trigger and script payloads) are omitted
+   * from the advertised schema. Existing-job admin edit fields remain in
+   * the shared declaration and are gated at execution. Defaults to true so
    * config-less callers keep the full surface.
    */
   triggersEnabled?: boolean;
@@ -364,20 +363,20 @@ const cronToolSchemas = createCachedToolSchema({
   key: (options?: CronToolSchemaOptions) =>
     JSON.stringify([
       options?.triggersEnabled !== false,
-      options?.management ?? null,
+      options?.management === "only",
       options?.allowCommandJobs !== false,
       options?.selfRemoveOnly === true,
       options?.readOnly === true,
       options?.activeRun === true,
       options?.nextCheckEnabled === true,
-      Boolean(options?.agentSessionKey?.trim()),
     ]),
   build: buildCronToolSchema,
 });
 
 function buildCronToolSchema(options?: CronToolSchemaOptions): TSchema {
   const triggersEnabled = options?.triggersEnabled !== false;
-  const management = Boolean(options?.management);
+  // Ordinary and admin-also turns share one declaration; execution still checks live authority.
+  const management = true;
   const managementOnly = options?.management === "only";
   const availableActions = managementOnly
     ? CRON_MANAGEMENT_METHODS.map((method) => method.slice(5))
@@ -441,10 +440,8 @@ function buildCronToolSchema(options?: CronToolSchemaOptions): TSchema {
           management: management && options?.allowCommandJobs !== false,
         }),
         delivery: createCronDeliverySchema(),
-        // Session-scoped updates reject retargeting; do not advertise it to the model.
-        ...(management || !options?.agentSessionKey?.trim()
-          ? { agentId: nullableStringSchema("Agent id, or null to clear it") }
-          : {}),
+        // Session-scoped retargeting is rejected at execution, not by the shared schema.
+        agentId: nullableStringSchema("Agent id, or null to clear it"),
         description: Type.Optional(Type.String({ description: "Human description" })),
         enabled: Type.Optional(Type.Boolean()),
         deleteAfterRun: Type.Optional(

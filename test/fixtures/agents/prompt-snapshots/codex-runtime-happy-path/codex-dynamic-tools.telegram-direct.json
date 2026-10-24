@@ -472,6 +472,17 @@
                     }
                   ]
                 },
+                "agentId": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "description": "Agent id, or null to clear it"
+                },
                 "declarationKey": {
                   "description": "Key to avoid duplicate declarations (add only).",
                   "maxLength": 200,
@@ -773,6 +784,13 @@
                       "description": "Allow untrusted external content in prompt",
                       "type": "boolean"
                     },
+                    "argv": {
+                      "description": "Existing command job argv",
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    },
                     "fallbacks": {
                       "anyOf": [
                         {
@@ -793,7 +811,7 @@
                     },
                     "kind": {
                       "description": "Payload kind",
-                      "enum": ["systemEvent", "agentTurn", "script"],
+                      "enum": ["systemEvent", "agentTurn", "script", "command"],
                       "type": "string"
                     },
                     "lightContext": {
@@ -890,6 +908,9 @@
                           },
                           "minItems": 1,
                           "type": "array"
+                        },
+                        {
+                          "type": "string"
                         }
                       ],
                       "description": "Supervised source argv (kind=stream; disabled when cron.triggers.enabled=false)"
@@ -910,7 +931,7 @@
                     },
                     "kind": {
                       "description": "Schedule kind",
-                      "enum": ["at", "every", "cron", "stream", "event"],
+                      "enum": ["at", "every", "cron", "stream", "event", "on-exit"],
                       "type": "string"
                     },
                     "match": {

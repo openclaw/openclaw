@@ -42,27 +42,24 @@ describe("cron model schema regressions", () => {
     ).toBe(true);
   });
 
-  it("reuses policy-equivalent schemas across sessions and refreshes changed policy", () => {
-    const first = createCronToolSchema({ agentSessionKey: "agent:one:main" });
-    expect(createCronToolSchema({ agentSessionKey: "agent:two:main" })).toBe(first);
-    expect(propertyAt(first, "job.agentId")).toBeUndefined();
-    const unscoped = createCronToolSchema();
-    expect(unscoped).not.toBe(first);
-    expect(propertyAt(unscoped, "job.agentId")).toBeDefined();
+  it("reuses policy-equivalent schemas and refreshes changed policy", () => {
+    const first = createCronToolSchema();
+    expect(createCronToolSchema({ management: "also" })).toBe(first);
+    expect(propertyAt(first, "job.agentId")).toBeDefined();
     for (const options of [
       { triggersEnabled: false },
+      { allowCommandJobs: false },
       { management: "only" as const },
-      { management: "also" as const },
       { selfRemoveOnly: true },
       { readOnly: true },
     ]) {
       const changed = createCronToolSchema(options);
-      expect(changed).not.toBe(unscoped);
-      expect(changed).not.toEqual(unscoped);
+      expect(changed).not.toBe(first);
+      expect(changed).not.toEqual(first);
       expect(createCronToolSchema({ ...options })).toBe(changed);
     }
     const recovery = createCronToolSchema({ readOnly: true });
-    expect(Value.Check(unscoped, { action: "remove", jobId: "saved-job" })).toBe(true);
+    expect(Value.Check(first, { action: "remove", jobId: "saved-job" })).toBe(true);
     for (const [action, accepted] of [
       ["list", true],
       ["get", true],
@@ -71,6 +68,17 @@ describe("cron model schema regressions", () => {
     ] as const) {
       expect(Value.Check(recovery, { action, jobId: "saved-job" })).toBe(accepted);
     }
+  });
+
+  it("keeps ordinary and admin-also declarations identical without hiding admin edits", () => {
+    const ordinary = createCronToolSchema();
+    const adminAlso = createCronToolSchema({ management: "also" });
+    const adminOnly = createCronToolSchema({ management: "only" });
+
+    expect(JSON.stringify(adminAlso)).toBe(JSON.stringify(ordinary));
+    expect(propertyAt(ordinary, "job.schedule.kind")?.enum).toContain("on-exit");
+    expect(propertyAt(ordinary, "job.payload.kind")?.enum).toContain("command");
+    expect(propertyAt(adminOnly, "job.schedule.kind")?.enum).toContain("on-exit");
   });
 
   it("does not advertise forbidden automation management inside a scheduled run", () => {
@@ -152,10 +160,10 @@ describe("cron model schema regressions", () => {
   });
 
   it.each([undefined, " agent:main:main "])(
-    "advertises job retargeting only without session scope (%j)",
+    "keeps the shared job schema across session scopes (%j)",
     (agentSessionKey) => {
       const parameters = createCronTool({ agentSessionKey, agentId: "main" }).parameters;
-      expect(Boolean(propertyAt(parameters, "job.agentId"))).toBe(!agentSessionKey);
+      expect(propertyAt(parameters, "job.agentId")).toBeDefined();
       expect(propertyAt(parameters, "agentId")).toMatchObject({ type: "string" });
     },
   );
@@ -231,28 +239,25 @@ describe("cron model schema regressions", () => {
     expect(timezone).toContain("Gateway host local timezone");
   });
 
-  it("omits unavailable trigger capabilities and explains the disabled surface", () => {
+  it("omits event triggers but retains shared admin edit fields when triggers are disabled", () => {
     const disabled = createCronTool({ config: { cron: { triggers: { enabled: false } } } });
     expect(propertyAt(disabled.parameters, "job.trigger")).toBeUndefined();
     expect(propertyAt(disabled.parameters, "job.schedule.kind")?.enum).toEqual([
       "at",
       "every",
       "cron",
+      "on-exit",
     ]);
     expect(propertyAt(disabled.parameters, "job.payload.kind")?.enum).toEqual([
       "systemEvent",
       "agentTurn",
-    ]);
-    for (const key of [
       "command",
-      "cwd",
-      "mode",
-      "match",
-      "batchMs",
-      "maxBatchBytes",
-      "source",
-      "options",
-    ]) {
+    ]);
+    for (const key of ["cwd", "mode", "match", "batchMs", "maxBatchBytes"]) {
+      expect(propertyAt(disabled.parameters, `job.schedule.${key}`)).toBeDefined();
+    }
+    expect(propertyAt(disabled.parameters, "job.schedule.command")).toBeDefined();
+    for (const key of ["source", "options"]) {
       expect(propertyAt(disabled.parameters, `job.schedule.${key}`)).toBeUndefined();
     }
     for (const key of ["script", "toolBudget"]) {
