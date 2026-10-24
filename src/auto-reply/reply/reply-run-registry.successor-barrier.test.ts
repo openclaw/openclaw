@@ -7,6 +7,7 @@ import {
   ReplyRunSuccessorAdmissionBlockedError,
 } from "../../sessions/session-controller.js";
 import { captureSessionTarget } from "../../sessions/session-controller.lifecycle.js";
+import { waitForReplyBarrierSettlement } from "../../sessions/session-controller.settlement.js";
 import { testing } from "../../sessions/session-controller.test-support.js";
 import { waitForReplyRunSuccessorAdmission } from "../../sessions/session-controller.wait.js";
 import { createTestReplyOperation } from "./reply-run-registry.test-helpers.js";
@@ -171,6 +172,34 @@ describe("reply run successor barriers", () => {
       await waitForReplyRunSuccessorAdmission(operation.key, null);
     }
   });
+
+  it.each([-30_000, 30_000])(
+    "settles an extendable barrier on its monotonic budget despite a %s ms wall-clock step",
+    async (wallClockStepMs) => {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      const wallClock = vi.spyOn(Date, "now").mockReturnValue(0);
+      let elapsedMs = 0;
+      vi.spyOn(performance, "now").mockImplementation(() => elapsedMs);
+      try {
+        const settled = vi.fn();
+        const pending = createDeferred();
+        const settlement = waitForReplyBarrierSettlement(pending.promise, {
+          maxTimeoutMs: 500,
+          shouldExtend: () => true,
+        }).then(settled);
+        wallClock.mockReturnValue(wallClockStepMs);
+        await vi.advanceTimersToNextTimerAsync();
+        expect(settled).not.toHaveBeenCalled();
+        elapsedMs = 1_000;
+        await vi.advanceTimersToNextTimerAsync();
+        expect(settled).toHaveBeenCalledOnce();
+        pending.resolve();
+        await settlement;
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
 
   it("waits for the captured physical owner when logical keys are ambiguous", async () => {
     const sessionKey = "global";
