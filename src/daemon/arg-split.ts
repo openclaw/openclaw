@@ -14,6 +14,8 @@ export function splitArgsPreservingQuotes(
 ): string[] {
   const args: string[] = [];
   let current = "";
+  // Tracks whether the current token exists, including empty quoted args (`""`).
+  let argStarted = false;
   let quoteChar: ArgSplitQuoteChar | null = null;
   const escapeMode = options?.escapeMode ?? "none";
   const quoteChars = new Set<ArgSplitQuoteChar>(options?.quoteChars ?? ['"']);
@@ -49,19 +51,23 @@ export function splitArgsPreservingQuotes(
       const canOpenQuote = quoteStart === "anywhere" || current.length === 0;
       if (!quoteChar && canOpenQuote) {
         quoteChar = char as ArgSplitQuoteChar;
+        // An opening quote starts a token even when nothing follows before close.
+        argStarted = true;
         continue;
       }
     }
     if (!quoteChar && /\s/.test(char)) {
-      if (current) {
+      if (argStarted) {
         args.push(current);
         current = "";
+        argStarted = false;
       }
       continue;
     }
     current += char;
+    argStarted = true;
   }
-  if (current) {
+  if (argStarted) {
     args.push(current);
   }
   return args;

@@ -14,9 +14,16 @@ describe("cmd argv helpers", () => {
     "%TEMP%",
     "!token!",
     'he said "hi"',
+    "",
   ])("round-trips single arg: %p", (arg) => {
     const encoded = quoteCmdScriptArg(arg);
     expect(parseCmdScriptCommandLine(encoded)).toEqual([arg]);
+  });
+
+  it("keeps empty quoted arguments in their original positions", () => {
+    const args = ["C:\\openclaw\\node.exe", "gateway", "--label", "", "--port", "18789"];
+    const encoded = args.map((arg) => quoteCmdScriptArg(arg)).join(" ");
+    expect(parseCmdScriptCommandLine(encoded)).toEqual(args);
   });
 
   it("round-trips mixed command lines", () => {

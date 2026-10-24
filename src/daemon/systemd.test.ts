@@ -1483,6 +1483,29 @@ describe("splitArgsPreservingQuotes", () => {
     ]);
   });
 
+  it("preserves empty quoted arguments", () => {
+    expect(splitArgsPreservingQuotes('/usr/bin/node gateway --label "" --port 18789')).toEqual([
+      "/usr/bin/node",
+      "gateway",
+      "--label",
+      "",
+      "--port",
+      "18789",
+    ]);
+    expect(splitArgsPreservingQuotes('openclaw --a "" --b ""')).toEqual([
+      "openclaw",
+      "--a",
+      "",
+      "--b",
+      "",
+    ]);
+  });
+
+  it("still collapses unquoted whitespace runs without inventing empty args", () => {
+    expect(splitArgsPreservingQuotes("openclaw   gateway")).toEqual(["openclaw", "gateway"]);
+    expect(splitArgsPreservingQuotes("openclaw \t gateway ")).toEqual(["openclaw", "gateway"]);
+  });
+
   it("supports systemd-style backslash escaping", () => {
     expect(
       splitArgsPreservingQuotes('openclaw --name "My \\"Bot\\"" --foo bar', {
