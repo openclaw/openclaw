@@ -33,13 +33,18 @@ it.each(
     }[operation];
     const base = { ...original, archived: false, category: undefined };
     const writer = { key: "agent:writer:first", sessionId: "writer", kind: "direct" as const };
+    const requested = createDeferred();
     const reply = createDeferred<unknown>();
     const blocked = createDeferred<SessionsListResult>();
     let holdMain = false;
     let committed = false;
+    const requestMutation = () => {
+      requested.resolve();
+      return reply.promise;
+    };
     const { sessions, request } = selectionHarness({
-      "sessions.patch": () => reply.promise,
-      "sessions.delete": () => reply.promise,
+      "sessions.patch": requestMutation,
+      "sessions.delete": requestMutation,
       "sessions.subscribe": () => ({ subscribed: true }),
       "sessions.list": (raw) => {
         const params = (raw ?? {}) as Record<string, unknown>;
@@ -76,6 +81,8 @@ it.each(
       if (foreground !== "queued") {
         await selecting;
       }
+      // Cold runtime loading must finish before the reply and controlled clock advance.
+      await requested.promise;
       committed = true;
       reply.resolve(
         operation === "delete"
