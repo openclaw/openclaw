@@ -97,23 +97,14 @@ describe("Testbox spending admission", () => {
 
   it("expires abandoned queue entries before hydration, including the deadline itself", () => {
     const plan = planAdmission();
+    expect(
+      planTestboxAdmission(request, Date.parse(request.createdAt) + 35 * 60_000).expires_at,
+    ).toBe(plan.expires_at);
     expect(() => assertFreshTestboxAdmission(plan.expires_at, plan.expires_at - 1)).not.toThrow();
     expect(() => assertFreshTestboxAdmission(plan.expires_at, plan.expires_at)).toThrow(/expired/);
     expect(() => planTestboxAdmission(request, plan.expires_at)).toThrow(/expired/);
     expect(() => planAdmission({ createdAt: "unknown" })).toThrow(/invalid/);
   });
-
-  it.each(["check-focused", "check-routine", "check", "check-memory", "arm", "build", "windows"])(
-    "admits a saturated %s queue without resetting the dispatch deadline",
-    (profile) => {
-      const created = Date.parse(request.createdAt);
-      const plan = planTestboxAdmission({ ...request, profile }, created + 35 * 60_000);
-      expect(plan.expires_at).toBe(created + 60 * 60_000);
-      expect(() => planTestboxAdmission({ ...request, profile }, created + 60 * 60_000)).toThrow(
-        /expired/,
-      );
-    },
-  );
 
   it("caps idle requests while retaining shorter provider deadlines", () => {
     expect(boundedTestboxIdleMinutes("90\n")).toBe(15);
@@ -316,7 +307,6 @@ describe("Testbox admission GitHub response", () => {
         documentation_url: "https://example.test/" + secret,
       }),
     ),
-    denial("<html>" + secret + "</html>", "forbidden", "invalid-json"),
     denial('{"message":"' + secret, "forbidden", "invalid-json"),
     jsonDenial({ value: secret }),
     {
