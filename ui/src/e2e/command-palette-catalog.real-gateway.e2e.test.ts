@@ -1,7 +1,5 @@
 import { once } from "node:events";
-import fs from "node:fs/promises";
 import http from "node:http";
-import path from "node:path";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import type { GatewayClient } from "../../../src/gateway/client.ts";
@@ -17,13 +15,10 @@ import {
   waitForControlUiGatewayReady,
   waitForControlUiInitialRoster,
 } from "../test-helpers/control-ui-e2e-readiness.ts";
-import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { pickerValue } from "../test-helpers/select-picker-e2e.ts";
-import { createCatalogAcquisitionDiagnostics } from "./catalog-acquisition.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const requireRecord = createRequireRecord("record", "expected-object-value");
-const captureEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 const models = (id: string) => [
   { id: "anchor", name: "Anchor" },
   { id, name: id },
@@ -33,7 +28,6 @@ let readback: GatewayClient;
 let providerMode: "ready" | "failed" | "empty" = "ready";
 let providerModel = "refresh-fixture:latest";
 const providerTraffic: Array<{ path: string; status: number }> = [];
-const acquisitionDiagnostics = createCatalogAcquisitionDiagnostics();
 const suite = createControlUiE2eSuite({
   name: "Control UI catalog publication with a real Gateway",
   startServerBeforeBrowser: true,
@@ -41,9 +35,6 @@ const suite = createControlUiE2eSuite({
     const provider = http.createServer((req, res) => {
       const status = providerMode === "failed" ? 503 : 200;
       providerTraffic.push({ path: req.url ?? "", status });
-      if (req.url === "/api/tags") {
-        acquisitionDiagnostics.acquired(status);
-      }
       const body =
         status === 503
           ? { error: "private upstream error body" }
@@ -146,29 +137,13 @@ const suite = createControlUiE2eSuite({
 
 suite.define(() => {
   it("opens Settings pickers from publication and acquires only on Refresh or Retry", async () => {
-    const frames: unknown[] = [];
     const requests: Array<{ id: string; params: Record<string, unknown> }> = [];
     const replies = new Map<string, Record<string, unknown>>();
-    const stages: unknown[] = [];
-    const assets: Array<Promise<{ path: string; sha256: string }>> = [];
     const acquisitions = () => providerTraffic.filter((entry) => entry.path === "/api/tags").length;
     const publish = async (agentId = "main") => {
-      acquisitionDiagnostics.trigger("publication");
-      acquisitionDiagnostics.request("readback", "readback", "models.list", true);
-      try {
-        const result = requireRecord(
-          await readback.request("models.list", {
-            agentId,
-            view: "configured",
-            refresh: true,
-          }),
-        );
-        acquisitionDiagnostics.reply("readback", true, result);
-        return result;
-      } catch (error) {
-        acquisitionDiagnostics.reply("readback", false);
-        throw error;
-      }
+      return requireRecord(
+        await readback.request("models.list", { agentId, view: "configured", refresh: true }),
+      );
     };
     const handoff = await instance.cli(["dashboard", "--json"]);
     expect(handoff.code, handoff.stderr).toBe(0);
@@ -189,18 +164,6 @@ suite.define(() => {
       await suite.withPage(
         { serviceWorkers: "block", locale: "en-US", viewport: { width: 1280, height: 900 } },
         async ({ page }) => {
-          acquisitionDiagnostics.observe(page);
-          page.on("response", (response) => {
-            const asset = new URL(response.url());
-            if (asset.origin === url.origin && /\/assets\/.*\.(?:js|css)$/u.test(asset.pathname)) {
-              assets.push(
-                response.body().then((body) => ({
-                  path: asset.pathname,
-                  sha256: createHash("sha256").update(body).digest("hex"),
-                })),
-              );
-            }
-          });
           page.on("websocket", (socket) => {
             socket.on("framesent", ({ payload }) => {
               const frame = requireRecord(JSON.parse(payload.toString()));
@@ -210,7 +173,6 @@ suite.define(() => {
                 typeof frame.id === "string"
               ) {
                 requests.push({ id: frame.id, params: requireRecord(frame.params) });
-                frames.push({ direction: "sent", frame });
               }
             });
             socket.on("framereceived", ({ payload }) => {
@@ -221,12 +183,10 @@ suite.define(() => {
                 requests.some(({ id }) => id === frame.id)
               ) {
                 replies.set(frame.id, frame);
-                frames.push({ direction: "received", frame });
               }
             });
           });
           const initialAcquisitions = acquisitions();
-          acquisitionDiagnostics.trigger("prefetch");
           await page.goto(url.href);
           await waitForControlUiGatewayReady(page);
           const settings = page.locator("openclaw-model-providers-page");
@@ -237,18 +197,9 @@ suite.define(() => {
           const pickers = settings.locator(".model-providers__defaults openclaw-select-picker");
           const primary = pickers.first();
           const trigger = primary.locator(".picker-select__trigger");
-          const capture = async (name: string) => {
-            if (captureEnabled) {
-              await fs.writeFile(
-                path.join(suite.artifactDir, name),
-                await takeControlUiViewportScreenshot(page, settings, [primary]),
-              );
-            }
-          };
           await trigger.waitFor({ state: "visible" });
           await expect.poll(() => pickerValue(primary)).toBe("fixture/anchor");
           expect(acquisitions()).toBe(initialAcquisitions);
-          stages.push({ stage: "initial", acquisitions: acquisitions() });
 
           const catalogRefresh = async (action: () => Promise<void>) => {
             // Publication can add passive reads; this action owns the explicit acquisition.
@@ -286,7 +237,6 @@ suite.define(() => {
           };
           const open = async () => {
             await waitForCatalogIdle();
-            acquisitionDiagnostics.trigger("picker-open");
             const requestsBeforeOpen = requests.length;
             const acquisitionsBeforeOpen = acquisitions();
             if ((await trigger.getAttribute("aria-expanded")) === "true") {
@@ -303,8 +253,6 @@ suite.define(() => {
             .waitFor({ state: "visible" });
           expect(acquisitions()).toBe(initialAcquisitions);
           expect(await pickerValue(primary)).toBe("fixture/anchor");
-          stages.push({ stage: "first-open", acquisitions: acquisitions() });
-          await capture("settings-first-open.png");
 
           providerModel = "published-fixture:latest";
           const publicationStart = requests.length;
@@ -341,11 +289,8 @@ suite.define(() => {
           await open();
           expect(acquisitions()).toBe(initialAcquisitions + 1);
           expect(await pickerValue(primary)).toBe("fixture/anchor");
-          stages.push({ stage: "published-reopen", acquisitions: acquisitions() });
-          await capture("settings-published-reopen.png");
 
           await trigger.click();
-          acquisitionDiagnostics.trigger("refresh");
           await catalogRefresh(() =>
             settings.getByRole("button", { name: "Refresh", exact: true }).click(),
           );
@@ -353,16 +298,13 @@ suite.define(() => {
           await open();
           expect(acquisitions()).toBe(initialAcquisitions + 2);
           expect(await pickerValue(primary)).toBe("fixture/anchor");
-          stages.push({ stage: "core-replacement-open", acquisitions: acquisitions() });
 
           // A new page starts its own request lifetime and keeps the published rows on failure.
-          acquisitionDiagnostics.trigger("reconnect");
           await page.reload();
           await waitForControlUiGatewayReady(page);
           await trigger.waitFor({ state: "visible" });
           await expect.poll(() => pickerValue(primary)).toBe("fixture/anchor");
           providerMode = "failed";
-          acquisitionDiagnostics.trigger("refresh");
           const failed = await catalogRefresh(() =>
             settings.getByRole("button", { name: "Refresh", exact: true }).click(),
           );
@@ -386,13 +328,9 @@ suite.define(() => {
             status: "unavailable",
           });
           expect(await pickerValue(primary)).toBe("fixture/anchor");
-          stages.push({ stage: "failed-refresh", acquisitions: acquisitions() });
-          await providerStatus.scrollIntoViewIfNeeded();
-          await capture("settings-refresh-failed.png");
 
           providerMode = "ready";
           providerModel = "recovered-fixture:latest";
-          acquisitionDiagnostics.trigger("retry");
           await catalogRefresh(() => retry.click());
           await retry.waitFor({ state: "hidden" });
           await expect.poll(() => providerStatus.textContent()).not.toContain("Models unavailable");
@@ -402,37 +340,15 @@ suite.define(() => {
             .waitFor({ state: "visible" });
           expect(acquisitions()).toBe(initialAcquisitions + 4);
           expect(await pickerValue(primary)).toBe("fixture/anchor");
-          stages.push({ stage: "retry", acquisitions: acquisitions() });
-          await capture("settings-retry.png");
         },
       );
-    } catch (error) {
-      console.error(
-        "catalog-acquisition-failure",
-        JSON.stringify(acquisitionDiagnostics.snapshot()),
-      );
-      throw error;
     } finally {
       providerMode = "ready";
       providerModel = "refresh-fixture:latest";
-      await fs.writeFile(
-        path.join(suite.artifactDir, "settings-acquisition.json"),
-        JSON.stringify(
-          {
-            frames,
-            stages,
-            providerTraffic,
-            assets: await Promise.all(assets),
-          },
-          null,
-          2,
-        ),
-      );
     }
   }, 120_000);
 
   it("shows acquisition failures in Automations while keeping model search quiet and usable", async () => {
-    const outcomes: unknown[] = [];
     const refresh = async () => {
       const payload = requireRecord(
         await readback.request("models.list", {
@@ -441,7 +357,6 @@ suite.define(() => {
           refresh: true,
         }),
       );
-      outcomes.push(payload);
       return payload;
     };
     const handoff = await instance.cli(["dashboard", "--json"]);
@@ -487,9 +402,6 @@ suite.define(() => {
         expect(await page.locator(".cmd-palette").getByText(warning, { exact: true }).count()).toBe(
           0,
         );
-        if (captureEnabled) {
-          await page.screenshot({ path: path.join(suite.artifactDir, "acquisition-failed.png") });
-        }
 
         providerMode = "empty";
         expect((await refresh()).providerOutcomes).toContainEqual({
@@ -502,27 +414,9 @@ suite.define(() => {
           .locator(".cmd-palette")
           .getByText(warning, { exact: true })
           .waitFor({ state: "hidden" });
-        if (captureEnabled) {
-          await page.screenshot({ path: path.join(suite.artifactDir, "acquisition-empty.png") });
-        }
-        console.log(
-          "catalog-refresh-consumer-proof",
-          JSON.stringify({
-            providerTraffic,
-            outcomes,
-            automationsWarning: true,
-            paletteWarning: false,
-            retainedModelCount: 1,
-            successfulEmptyClearedModelAndWarnings: true,
-          }),
-        );
       });
     } finally {
       providerMode = "ready";
-      await fs.writeFile(
-        path.join(suite.artifactDir, "acquisition-outcomes.json"),
-        JSON.stringify({ providerTraffic, outcomes }, null, 2),
-      );
     }
   }, 120_000);
 
@@ -533,21 +427,10 @@ suite.define(() => {
     if (typeof browserUrl !== "string") {
       throw new Error("Dashboard did not return a browser handoff");
     }
-    const frames: Array<{
-      direction: "sent" | "received";
-      frame: Record<string, unknown>;
-      transportFailure?: boolean;
-    }> = [];
-    const commands: Array<Record<string, unknown>> = [];
     const catalogRequests = new Set<string>();
     const catalogParams: unknown[] = [];
     let rejectCatalogReplies = false;
     let rejectedCatalogReplies = 0;
-    const redact = (text: string) =>
-      text
-        .replaceAll(instance.gatewayToken, "[synthetic token]")
-        .replaceAll(instance.hookToken, "[synthetic token]")
-        .replaceAll(instance.homeDir, "[fixture-home]");
     const publish = async (page: Page, id: string) => {
       const applicationHandle = await getControlUiContextHandle(page);
       try {
@@ -569,9 +452,7 @@ suite.define(() => {
           "--replace",
         ];
         try {
-          const startedAt = Date.now();
           const result = await instance.cli(args);
-          commands.push({ args, elapsedMs: Date.now() - startedAt, ...result });
           expect(result.code, result.stderr).toBe(0);
           // Runtime rows can arrive before this accepted-config event retires them.
           await expect
@@ -594,7 +475,6 @@ suite.define(() => {
             socket.onMessage((message) => {
               const frame = requireRecord(JSON.parse(message.toString()));
               if (frame.type === "req" && frame.method !== "connect") {
-                frames.push({ direction: "sent", frame });
                 if (frame.method === "models.list" && typeof frame.id === "string") {
                   catalogRequests.add(frame.id);
                   catalogParams.push(frame.params);
@@ -605,17 +485,6 @@ suite.define(() => {
             server.onMessage((message) => {
               const frame = requireRecord(JSON.parse(message.toString()));
               const catalogReply = typeof frame.id === "string" && catalogRequests.has(frame.id);
-              if (
-                catalogReply ||
-                frame.event === "config.changed" ||
-                frame.event === "chat.metadata.changed"
-              ) {
-                frames.push({
-                  direction: "received",
-                  frame,
-                  transportFailure: catalogReply && rejectCatalogReplies,
-                });
-              }
               if (catalogReply && rejectCatalogReplies) {
                 rejectedCatalogReplies += 1;
                 socket.send(
@@ -647,22 +516,16 @@ suite.define(() => {
             exact: true,
           });
           await retiring.waitFor({ state: "visible" });
-          if (captureEnabled) {
-            await page.screenshot({ path: path.join(suite.artifactDir, "initial.png") });
-          }
+
           await publish(page, "palette-published");
           await expect.poll(() => published.count()).toBe(1);
           expect(await retiring.count()).toBe(0);
-          if (captureEnabled) {
-            await page.screenshot({ path: path.join(suite.artifactDir, "published.png") });
-          }
 
           rejectCatalogReplies = true;
           // Refresh the same catalog owner; a config write retires its display facts.
           providerModel = "read-failure-fixture:latest";
           const refreshParams = { agentId: "main", view: "configured", refresh: true };
           const refreshed = requireRecord(await readback.request("models.list", refreshParams));
-          commands.push({ method: "models.list", params: refreshParams, result: refreshed });
           expect(refreshed.providerOutcomes).toContainEqual({
             provider: "ollama",
             status: "ready",
@@ -676,9 +539,7 @@ suite.define(() => {
             .filter({ hasText: "Model search unavailable" });
           await status.waitFor({ state: "visible" });
           expect(await published.count()).toBe(1);
-          if (captureEnabled) {
-            await page.screenshot({ path: path.join(suite.artifactDir, "read-failure.png") });
-          }
+
           rejectCatalogReplies = false;
           await publish(page, "palette-held");
           await input.fill("palette-held");
@@ -690,9 +551,7 @@ suite.define(() => {
           // History changes before the new view commits; capture must not supply that wait.
           const settings = page.locator("openclaw-model-providers-page");
           await settings.waitFor({ state: "visible" });
-          if (captureEnabled) {
-            await page.screenshot({ path: path.join(suite.artifactDir, "recovered.png") });
-          }
+
           await page.goBack();
           await settings.waitFor({ state: "hidden" });
           rejectCatalogReplies = true;
@@ -710,55 +569,16 @@ suite.define(() => {
             agentId: "reviewer",
           });
           expect(await recovered.count()).toBe(0);
-          if (captureEnabled) {
-            await page.screenshot({
-              path: path.join(suite.artifactDir, "selected-agent-failure.png"),
-            });
-          }
+
           rejectCatalogReplies = false;
           await input.fill("palette-held");
           await recovered.waitFor({ state: "visible" });
           await status.waitFor({ state: "hidden" });
         },
       );
-    } catch (error) {
-      const gatewayLog = redact(instance.logs());
-      const catalogFrames = frames.filter(
-        ({ direction, frame }) => direction === "received" || frame.method === "models.list",
-      );
-      console.log(
-        "catalog-publication-failure",
-        redact(
-          JSON.stringify({
-            rejectCatalogReplies,
-            commands: commands.map(({ args, code, signal, elapsedMs }) => ({
-              args,
-              code,
-              signal,
-              elapsedMs,
-            })),
-            gatewayLogLength: gatewayLog.length,
-            gatewayLogTail: gatewayLog.slice(-48_000),
-            frameCount: catalogFrames.length,
-            frames: catalogFrames.slice(-100).map(({ direction, frame, transportFailure }) => ({
-              direction,
-              id: typeof frame.id === "string" ? frame.id.slice(0, 128) : undefined,
-              method: typeof frame.method === "string" ? frame.method.slice(0, 128) : undefined,
-              event: typeof frame.event === "string" ? frame.event.slice(0, 128) : undefined,
-              ok: typeof frame.ok === "boolean" ? frame.ok : undefined,
-              transportFailure,
-            })),
-          }),
-        ),
-      );
-      throw error;
     } finally {
-      await fs.writeFile(
-        path.join(suite.artifactDir, "publication.json"),
-        redact(JSON.stringify({ frames, commands }, null, 2)),
-      );
-      await fs.writeFile(path.join(suite.artifactDir, "gateway.log"), redact(instance.logs()));
+      providerMode = "ready";
+      providerModel = "refresh-fixture:latest";
     }
   }, 120_000);
 });
-import { createHash } from "node:crypto";

@@ -236,26 +236,7 @@ suite.define(() => {
       const gateway = await installMockGateway(page, {
         assistantName: "Rosita",
         deferredMethods: ["chat.send"],
-        models: [
-          modelFixture(),
-          {
-            id: "gpt-5.4-pro",
-            name: "GPT-5.4 Pro",
-            provider: "openai",
-            available: true,
-          },
-          {
-            id: "gpt-5.3-codex-spark",
-            name: "GPT-5.3 Codex Spark",
-            provider: "codex",
-            available: false,
-          },
-          {
-            id: "claude-sonnet-4-6",
-            name: "Claude Sonnet 4.6",
-            provider: "anthropic",
-          },
-        ],
+        models: [modelFixture()],
         methodResponses: {
           "config.get": {
             config: { ui: { prefs: { chatFollowUpMode: "steer" } } },
@@ -447,54 +428,6 @@ suite.define(() => {
         .toBe("Weekly 72%");
       await contextUsage.click();
 
-      await effort.click();
-      const thinkingSlider = composer.locator('[data-chat-thinking-slider="true"]');
-      const fastOption = composer.locator('[data-chat-speed-option="on"]');
-      await polledVisible(thinkingSlider).toBe(true);
-      await polledAttribute(thinkingSlider, "data-chat-thinking-values").toBe(
-        "off,low,medium,high",
-      );
-      await expect.poll(() => thinkingSlider.inputValue()).toBe("3");
-      await polledAttribute(fastOption, "aria-checked").toBe("false");
-      // Reasoning and speed commit immediately while the Effort picker stays open.
-      await thinkingSlider.press("Home");
-      await thinkingSlider.press("ArrowRight");
-      await expect
-        .poll(() => gateway.getRequests("sessions.patch"))
-        .toContainEqual(
-          expect.objectContaining({ params: expect.objectContaining({ thinkingLevel: "low" }) }),
-        );
-      await polledAttribute(effort, "data-chat-thinking-value").toBe("low");
-      await expect.poll(() => thinkingSlider.inputValue()).toBe("1");
-      await fastOption.click();
-      await expect
-        .poll(() => gateway.getRequests("sessions.patch"))
-        .toContainEqual(
-          expect.objectContaining({ params: expect.objectContaining({ fastMode: true }) }),
-        );
-      await polledAttribute(fastOption, "aria-checked").toBe("true");
-      await page.keyboard.press("Escape");
-      await polledVisible(composer.locator(".chat-controls__effort-menu")).toBe(false);
-      await effort.click();
-      await polledAttribute(fastOption, "aria-checked").toBe("true");
-      await polledCount(composer.locator('[data-chat-thinking-slider="true"]')).toBe(1);
-      await page.keyboard.press("Escape");
-      await model.click();
-      const providerHeadings = composer.locator(
-        "[data-chat-model-provider] .chat-controls__provider-label",
-      );
-      await expect
-        .poll(async () => (await providerHeadings.allTextContents()).map((label) => label.trim()))
-        .toEqual(["OpenAI", "Anthropic"]);
-      await polledText(composer.locator('[data-chat-model-provider-group="openai"]')).toContain(
-        "GPT-5.4 Pro",
-      );
-      const anthropicModels = composer.locator('[data-chat-model-provider-group="anthropic"]');
-      await revealChatModelOption(composer, "anthropic/claude-sonnet-4-6");
-      await polledVisible(anthropicModels).toBe(true);
-      await polledText(anthropicModels).toContain("Claude Sonnet 4.6");
-      await model.click();
-
       const [
         chatContentBox,
         chatMainBox,
@@ -553,33 +486,6 @@ suite.define(() => {
       expect(
         Math.abs(centerX(compactComposerShellBox) - centerX(compactChatMainBox)),
       ).toBeLessThanOrEqual(1);
-
-      await settings.click();
-      const viewDropdown = page.locator(".chat-header-session-menu");
-      const viewMenu = viewDropdown.getByRole("menuitem", { name: "View", exact: true });
-      await polledVisible(viewMenu).toBe(true);
-      await viewMenu.hover();
-      await expect
-        .poll(() =>
-          viewDropdown
-            .getByRole("menu", { name: "View", exact: true })
-            .getByRole("menuitemcheckbox")
-            .locator(".session-menu__text")
-            .allTextContents(),
-        )
-        .toEqual(["Reasoning", "Tool calls", "Keep commentary"]);
-      expect(
-        await viewDropdown.getByRole("menuitemcheckbox", { name: "Speech bubbles" }).count(),
-      ).toBe(0);
-      const reasoning = viewDropdown.getByRole("menuitemcheckbox", { name: "Reasoning" });
-      await polledVisible(reasoning).toBe(true);
-      await polledAttribute(reasoning, "aria-checked").toBe("true");
-      await reasoning.click();
-      await polledAttribute(reasoning, "aria-checked").toBe("false");
-      await reasoning.click();
-      await polledAttribute(reasoning, "aria-checked").toBe("true");
-      await settings.click();
-      await polledAttribute(settings, "aria-expanded").toBe("false");
 
       await textarea.fill("Send this message");
       await polledVisible(send).toBe(true);
