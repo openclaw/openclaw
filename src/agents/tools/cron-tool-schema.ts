@@ -58,6 +58,8 @@ type CronToolSchemaOptions = {
   management?: "only" | "also";
   allowCommandJobs?: boolean;
   selfRemoveOnly?: boolean;
+  /** A self-scoped scheduled run whose execution context lets it wake its parent. */
+  parentWake?: boolean;
   activeRun?: boolean;
   nextCheckEnabled?: boolean;
   /**
@@ -371,6 +373,7 @@ const cronToolSchemas = createCachedToolSchema({
       options?.management ?? null,
       options?.allowCommandJobs !== false,
       options?.selfRemoveOnly === true,
+      options?.parentWake === true,
       options?.readOnly === true,
       options?.activeRun === true,
       options?.nextCheckEnabled === true,
@@ -383,6 +386,12 @@ function buildCronToolSchema(options?: CronToolSchemaOptions): TSchema {
   const triggersEnabled = options?.triggersEnabled !== false;
   const management = Boolean(options?.management);
   const managementOnly = options?.management === "only";
+  // Wake is the one action a parent-linked owner child adds to its self scope.
+  const selfParentWake =
+    options?.selfRemoveOnly === true &&
+    options.parentWake === true &&
+    !managementOnly &&
+    !options.readOnly;
   const availableActions = managementOnly
     ? CRON_MANAGEMENT_METHODS.map((method) => method.slice(5))
     : CRON_ACTIONS;
@@ -484,6 +493,7 @@ function buildCronToolSchema(options?: CronToolSchemaOptions): TSchema {
                     ...(options.nextCheckEnabled ? ["next_check"] : []),
                   ]
                 : []),
+              ...(selfParentWake ? ["wake"] : []),
             ]
           : actions,
       ),
@@ -568,6 +578,7 @@ function buildCronToolSchema(options?: CronToolSchemaOptions): TSchema {
             "in",
             "runId",
             ...(options.activeRun ? ["content", "expectedRevision", "outcome", "summary"] : []),
+            ...(selfParentWake ? ["text", "mode"] : []),
           ]),
     ]);
   }

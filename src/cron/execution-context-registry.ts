@@ -23,12 +23,14 @@ export function bindScheduledExecutionContext(
 }
 
 /**
- * The session a scheduled run's board and widget tools act on, plus the
- * occurrence's assertion. Tools call `assertCurrent` before and inside each
- * effect so a reset or removed parent, or a settled run, refuses the write.
+ * The sessions a scheduled run's tools act on, plus the occurrence's assertion.
+ * Tools call `assertCurrent` before and inside each effect so a reset or
+ * removed parent, or a settled run, refuses the write.
  */
 export type ScheduledToolTargets = Readonly<{
   boardSessionKey: string;
+  /** Set only when the context lets the automations tool wake the run's parent. */
+  parentWake?: Readonly<{ sessionKey: string; assertCurrent: () => void }>;
   assertCurrent: () => void;
 }>;
 
@@ -41,12 +43,22 @@ export function readScheduledToolTargets(
 ): ScheduledToolTargets | undefined {
   const run = owner?.operationalRunInstance;
   const context = run ? contextsByRun.get(run) : undefined;
-  return context
-    ? {
-        boardSessionKey: context.resources.boardSessionKey,
-        assertCurrent: context.assertCurrent,
-      }
-    : undefined;
+  if (!context) {
+    return undefined;
+  }
+  const automations = context.toolPolicy.automations;
+  return {
+    boardSessionKey: context.resources.boardSessionKey,
+    ...(automations.scope === "self-and-parent-wake"
+      ? {
+          parentWake: {
+            sessionKey: automations.parentSessionKey,
+            assertCurrent: context.assertCurrent,
+          },
+        }
+      : {}),
+    assertCurrent: context.assertCurrent,
+  };
 }
 
 /**

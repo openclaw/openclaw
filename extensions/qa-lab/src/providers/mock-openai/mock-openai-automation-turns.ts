@@ -2,6 +2,7 @@ import type { ResponsesInputItem, StreamEvent } from "./mock-openai-contracts.js
 import { planCronBlockedOutcomeTurn } from "./mock-openai-cron-blocked-outcome.js";
 import { planCronFailureRepairTurn } from "./mock-openai-cron-failure-repair.js";
 import { planCronParentBoardTurn } from "./mock-openai-cron-parent-board.js";
+import { planCronParentWakeTurn } from "./mock-openai-cron-parent-wake.js";
 import { planCronSendContinueTurn } from "./mock-openai-cron-send-continue.js";
 import { planHookAutomationsScopeTurn } from "./mock-openai-hook-automations-scope.js";
 
@@ -15,6 +16,7 @@ export function planAutomationScenarioTurn(params: {
   return (
     planCronFailureRepairTurn(params.prompt, params.input) ??
     planCronParentBoardTurn(params.prompt, params.input) ??
+    planCronParentWakeTurn(params) ??
     planCronSendContinueTurn(params) ??
     planCronBlockedOutcomeTurn(params.prompt) ??
     planHookAutomationsScopeTurn(params)

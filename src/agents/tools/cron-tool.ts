@@ -19,7 +19,6 @@ import {
 } from "../../gateway/cron-creator-authority-grant.js";
 import { DEFAULT_EXEC_APPROVAL_TIMEOUT_MS } from "../../infra/exec-approvals-core.js";
 import { normalizeAccountId } from "../../routing/account-id.js";
-import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import { isRecord } from "../../utils.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
 import {
@@ -66,6 +65,7 @@ import {
   CRON_TOOL_LIST_MAX_LIMIT,
 } from "./cron-tool-schema.js";
 import { listCronSelfJob } from "./cron-tool-self-list.js";
+import { executeCronWake } from "./cron-tool-wake.js";
 import {
   assertCronCreatorAuthorityResolutionAvailable,
   assertNoCronShellExecution,
@@ -117,6 +117,10 @@ function assertCronSelfRemoveScope(
   if (!selfRemoveOnlyJobId || action === "status" || action === "list") {
     return;
   }
+  // The wake action checks its own target: only the parent the context names.
+  if (action === "wake" && opts?.parentWake) {
+    return;
+  }
   const invocationAction = ["next_check", "scratch_get", "scratch_set", "record_result"].includes(
     action,
   );
@@ -159,6 +163,7 @@ export function createCronTool(opts?: CronToolOptions): AnyAgentTool {
       callerScoped: !isCronModelManagementAllowed(config),
       readOnly,
       selfRemoveOnly,
+      parentWake: Boolean(opts?.parentWake),
       activeRun,
       nextCheckEnabled,
       managementOnly: managementAuthority?.managementOnly,
@@ -171,6 +176,7 @@ export function createCronTool(opts?: CronToolOptions): AnyAgentTool {
       agentSessionKey: opts?.agentSessionKey,
       triggersEnabled,
       selfRemoveOnly,
+      parentWake: Boolean(opts?.parentWake),
       activeRun,
       nextCheckEnabled,
       management: managementAuthority && (managementAuthority.managementOnly ? "only" : "also"),
@@ -667,39 +673,15 @@ export function createCronTool(opts?: CronToolOptions): AnyAgentTool {
             case "record_result":
             case "next_check":
               return await automation.execute(action, params, callGateway, gatewayOpts);
-            case "wake": {
-              const text = readToolStringParam(params, "text", { required: true });
-              const mode =
-                params.mode === "now" || params.mode === "next-heartbeat"
-                  ? params.mode
-                  : "next-heartbeat";
-              // An omitted target wakes the originating conversation, not the
-              // heartbeat lane. Gateway owns target validation and authorization.
-              const explicitSessionKey = readToolStringParam(params, "sessionKey");
-              const explicitAgentId = readToolStringParam(params, "agentId");
-              const sessionKey = explicitSessionKey ?? callerSessionKey;
-              // Pair an explicit session with its own agent; caller defaults must
-              // not rewrite that target before the Gateway can validate it.
-              const agentIdFromExplicitSessionKey = explicitSessionKey
-                ? parseAgentSessionKey(explicitSessionKey)?.agentId
-                : undefined;
-              const agentId =
-                explicitAgentId ??
-                (explicitSessionKey ? agentIdFromExplicitSessionKey : callerAgentId);
-              return jsonResult(
-                await callGateway(
-                  "wake",
-                  gatewayOpts,
-                  {
-                    mode,
-                    text,
-                    ...(sessionKey ? { sessionKey } : {}),
-                    ...(agentId ? { agentId } : {}),
-                  },
-                  { expectFinal: false },
-                ),
-              );
-            }
+            case "wake":
+              return await executeCronWake({
+                opts,
+                input: params,
+                callGateway,
+                gatewayOpts,
+                callerSessionKey,
+                callerAgentId,
+              });
             default:
               throw new Error(`Unknown action: ${action}`);
           }
