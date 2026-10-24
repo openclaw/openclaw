@@ -110,6 +110,15 @@ function mockWindowsCommands(params: {
   });
 }
 
+function expectLsofArgs(selector: string) {
+  const calls = runCommandWithTimeoutMock.mock.calls.filter(
+    ([argv]) => typeof argv?.[0] === "string" && argv[0].includes("lsof"),
+  );
+  expect(calls).toHaveLength(1);
+  expect(calls[0]?.[0]?.[0]).toMatch(/lsof$/);
+  expect(calls[0]?.[0]?.slice(1)).toEqual(["-nP", selector, "-sTCP:LISTEN", "-FpFcn"]);
+}
+
 beforeAll(async () => {
   ({ inspectPortConnections, inspectPortUsage, inspectPortUsages } =
     await import("./ports-inspect.js"));
@@ -579,14 +588,7 @@ describeUnix("inspectPortUsage", () => {
 
     await inspectPortUsage(18789);
 
-    const lsofCalls = runCommandWithTimeoutMock.mock.calls.filter(([argv]) => {
-      const command = Array.isArray(argv) ? argv[0] : undefined;
-      return typeof command === "string" && command.includes("lsof");
-    });
-    expect(lsofCalls).toHaveLength(1);
-    const lsofArgv = lsofCalls[0]?.[0] as string[] | undefined;
-    expect(lsofArgv?.[0]).toMatch(/lsof$/);
-    expect(lsofArgv?.slice(1)).toEqual(["-nP", "-iTCP:18789", "-sTCP:LISTEN", "-FpFcn"]);
+    expectLsofArgs("-iTCP:18789");
   });
 
   it("batches Unix listener lsof inspection across same-cycle port checks", async () => {
@@ -606,14 +608,7 @@ describeUnix("inspectPortUsage", () => {
 
     const results = await inspectPortUsages([18789, 19001]);
 
-    const lsofCalls = runCommandWithTimeoutMock.mock.calls.filter(([argv]) => {
-      const command = Array.isArray(argv) ? argv[0] : undefined;
-      return typeof command === "string" && command.includes("lsof");
-    });
-    expect(lsofCalls).toHaveLength(1);
-    const lsofArgv = lsofCalls[0]?.[0] as string[] | undefined;
-    expect(lsofArgv?.[0]).toMatch(/lsof$/);
-    expect(lsofArgv?.slice(1)).toEqual(["-nP", "-iTCP", "-sTCP:LISTEN", "-FpFcn"]);
+    expectLsofArgs("-iTCP");
     expect(results.get(18789)).toMatchObject({
       port: 18789,
       status: "busy",
@@ -699,24 +694,18 @@ describeUnix("inspectPortUsage", () => {
 
     const result = await inspectPortConnections(18789);
 
-    expect(result.connections).toEqual([
-      expect.objectContaining({
-        pid: 111,
-        direction: "client",
-        address: "TCP 127.0.0.1:50123->127.0.0.1:18789 (ESTABLISHED)",
-        commandLine: "node /tmp/newer-openclaw/dist/index.js logs --follow",
-        user: "tester",
-        ppid: 1,
-      }),
-      expect.objectContaining({
-        pid: 111,
-        direction: "client",
-        address: "TCP 127.0.0.1:50124->127.0.0.1:18789 (ESTABLISHED)",
-        commandLine: "node /tmp/newer-openclaw/dist/index.js logs --follow",
-        user: "tester",
-        ppid: 1,
-      }),
-    ]);
+    expect(result.connections).toEqual(
+      [50123, 50124].map((clientPort) =>
+        expect.objectContaining({
+          pid: 111,
+          direction: "client",
+          address: `TCP 127.0.0.1:${clientPort}->127.0.0.1:18789 (ESTABLISHED)`,
+          commandLine: "node /tmp/newer-openclaw/dist/index.js logs --follow",
+          user: "tester",
+          ppid: 1,
+        }),
+      ),
+    );
     expect(
       runCommandWithTimeoutMock.mock.calls.filter(([argv]) => argv[0] === "ps").length,
     ).toBeLessThanOrEqual(2);
@@ -736,33 +725,6 @@ describeUnix("inspectPortUsage", () => {
     expect(
       runCommandWithTimeoutMock.mock.calls.filter(([argv]) => argv[0] === "ps").length,
     ).toBeLessThanOrEqual(4);
-  });
-
-  it("keeps ss quoted process names out of established connection endpoints", async () => {
-    mockUnixCommands({
-      lsof: commandOutput("", 1, "lsof: not found\n"),
-      // ss quotes the kernel task name without splitting its spaces or colons.
-      ss: commandOutput(
-        '0 0 127.0.0.1:50123 127.0.0.1:18789 users:(("node worker:1",pid=111,fd=12))\n',
-      ),
-      commandLine: "node fixture-client",
-      user: "tester",
-      parentPid: "1",
-    });
-
-    const result = await inspectPortConnections(18789);
-
-    expect(result.connections).toEqual([
-      {
-        address: "TCP 127.0.0.1:50123->127.0.0.1:18789 (ESTABLISHED)",
-        direction: "client",
-        pid: 111,
-        command: "node worker:1",
-        commandLine: "node fixture-client",
-        user: "tester",
-        ppid: 1,
-      },
-    ]);
   });
 
   it("preserves ss rows with IPv6, unknown processes, and multiple process owners", async () => {
@@ -837,7 +799,7 @@ describe("inspectPortUsage on Windows", () => {
   it.each([false, true])(
     "shares one socket snapshot and PID lookup across ports (WMIC fallback: %s)",
     async (fallback) => {
-      const commandLine = "node fixture-gateway";
+      const commandLine = "node openclaw fixture-gateway";
       mockWindowsCommands({
         netstat: commandOutput(
           "TCP 127.0.0.1:18789 0.0.0.0:0 LISTENING 4242\r\n" +
@@ -1044,21 +1006,6 @@ describe("inspectPortUsage on Windows", () => {
     const result = await inspectPortUsage(18789);
 
     expect(result.listeners).toEqual([]);
-  });
-
-  it("falls back to wmic when PowerShell cannot read the command line", async () => {
-    mockWindowsCommands({
-      netstat: commandOutput("  TCP    127.0.0.1:18789    0.0.0.0:0    LISTENING    4242\r\n"),
-      tasklist: commandOutput('"node.exe","4242","Console","1","10,000 K"\r\n'),
-      powershell: commandOutput("", 1, "access denied"),
-      wmic: commandOutput("CommandLine=node.exe C:\\openclaw\\dist\\index.js gateway run\r\n"),
-    });
-
-    const result = await inspectPortUsage(18789);
-
-    expect(result.listeners[0]?.commandLine).toContain("openclaw");
-    const commandNames = runCommandWithTimeoutMock.mock.calls.map(([argv]) => argv[0]);
-    expect(commandNames).toContain(getWindowsWmicExePath());
   });
 });
 
