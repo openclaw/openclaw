@@ -49,6 +49,36 @@ describe("composer overflow presentation", () => {
   };
   let composerView: ReturnType<typeof mountSolidProps<ComposerFixtureProps>> | undefined;
   let attachmentsView: ReturnType<typeof mountSolidProps<ChatAttachmentControlsProps>> | undefined;
+  const query = <T extends Element = HTMLElement>(selector: string, root: ParentNode = container) =>
+    root.querySelector<T>(selector)!;
+  const rect = (selector: string, root: ParentNode = container) =>
+    query(selector, root).getBoundingClientRect();
+  const click = (selector: string) => page.elementLocator(query(selector)).click();
+  async function resize(width: number, className = "", height = 900) {
+    await page.viewport(width, height);
+    container.className = className;
+    container.style.width = `${Math.min(width - 32, 760)}px`;
+  }
+  function expectInside(inner: DOMRect, outer: DOMRect, vertical = false) {
+    expect(inner.left).toBeGreaterThanOrEqual(outer.left);
+    expect(inner.right).toBeLessThanOrEqual(outer.right);
+    if (vertical) {
+      expect(inner.top).toBeGreaterThanOrEqual(outer.top);
+      expect(inner.bottom).toBeLessThanOrEqual(outer.bottom);
+    }
+  }
+  const makeGoal = (overrides: Partial<SessionGoal> = {}): SessionGoal => ({
+    schemaVersion: 1,
+    id: "overflow-goal",
+    objective: "Short objective",
+    status: "complete",
+    createdAt: 1000,
+    updatedAt: 2000,
+    tokenStart: 0,
+    tokensUsed: 0,
+    continuationTurns: 0,
+    ...overrides,
+  });
 
   function ComposerFixture(props: ComposerFixtureProps) {
     const Provider = composerContextWrapper(container)!;
@@ -71,13 +101,6 @@ describe("composer overflow presentation", () => {
     );
   }
 
-  const connection = {
-    setConnected(active: boolean) {
-      setPresented(active);
-      flush();
-    },
-  };
-
   function drawComposer(input: ChatComposerProps, thread = false) {
     const props = { input: { ...input }, thread };
     if (composerView) {
@@ -85,7 +108,6 @@ describe("composer overflow presentation", () => {
     } else {
       composerView = mountSolidProps(ComposerFixture, props, container);
     }
-    return connection;
   }
 
   beforeEach(async () => {
@@ -141,37 +163,24 @@ describe("composer overflow presentation", () => {
         }),
       });
       drawComposer(props);
-      await page
-        .elementLocator(
-          container.querySelector<HTMLElement>(
-            ".agent-chat__attach-menu .agent-chat__input-btn--attach",
-          )!,
-        )
-        .click();
+      await click(".agent-chat__attach-menu .agent-chat__input-btn--attach");
       await expect.poll(() => container.querySelector('[data-value="open-skills"]')).not.toBeNull();
-      await page
-        .elementLocator(container.querySelector<HTMLElement>('[data-value="open-skills"]')!)
-        .click();
+      await click('[data-value="open-skills"]');
       await afterLayout();
-      const dropdown = container.querySelector<HTMLElement>(".agent-chat__capability-menu")!;
-      const menu = dropdown.querySelector<HTMLElement>(".oc-menu")!;
+      const dropdown = query(".agent-chat__capability-menu");
+      const menu = query(".oc-menu", dropdown);
       expect(menu.scrollHeight).toBeGreaterThan(menu.clientHeight);
       const rows = [...dropdown.querySelectorAll<HTMLElement>('[data-value^="skill:"]')];
       expect(rows).toHaveLength(16);
 
       for (const row of rows) {
-        const box = row.getBoundingClientRect();
-        const label = row
-          .querySelector<HTMLElement>(".agent-chat__capability-menu-label")!
-          .getBoundingClientRect();
-        expect(label.top).toBeGreaterThanOrEqual(box.top);
-        expect(label.bottom).toBeLessThanOrEqual(box.bottom);
-        expect(label.left).toBeGreaterThanOrEqual(box.left);
-        expect(label.right).toBeLessThanOrEqual(box.right);
+        expectInside(
+          rect(".agent-chat__capability-menu-label", row),
+          row.getBoundingClientRect(),
+          true,
+        );
       }
-      const name = rows[1]!.querySelector<HTMLElement>(
-        ".agent-chat__capability-menu-label > span",
-      )!;
+      const name = query(".agent-chat__capability-menu-label > span", rows[1]);
       expect(name.getBoundingClientRect().height).toBeLessThan(
         2 * Number.parseFloat(getComputedStyle(name).lineHeight),
       );
@@ -187,19 +196,16 @@ describe("composer overflow presentation", () => {
     } else {
       attachmentsView = mountSolidProps(AttachmentFixture, props, container);
     }
-    return connection;
   }
 
   function rail() {
-    return container.querySelector<HTMLElement>(".chat-attachments-preview")!;
+    return query(".chat-attachments-preview");
   }
 
   it.each([390, 1440])(
     "keeps long reply context and its dismiss control inside the composer at %ipx",
     async (width) => {
-      await page.viewport(width, 900);
-      container.className = "";
-      container.style.width = `${Math.min(width - 32, 760)}px`;
+      await resize(width);
       drawComposer(
         createComposerProps({
           goalDraftMode: { action: "start" },
@@ -212,20 +218,17 @@ describe("composer overflow presentation", () => {
       );
       await afterLayout();
 
-      const composer = container.querySelector<HTMLElement>(".agent-chat__input")!;
-      const reply = container.querySelector<HTMLElement>(".chat-reply-preview")!;
-      const goal = container.querySelector<HTMLElement>(".agent-chat__goal-mode")!;
-      const text = reply.querySelector<HTMLElement>(".chat-reply-preview__text")!;
-      const dismiss = reply.querySelector<HTMLButtonElement>("button")!;
+      const composer = query(".agent-chat__input");
+      const reply = query(".chat-reply-preview");
+      const goal = query(".agent-chat__goal-mode");
+      const text = query(".chat-reply-preview__text", reply);
       const composerBox = composer.getBoundingClientRect();
       const replyBox = reply.getBoundingClientRect();
-      const dismissBox = dismiss.getBoundingClientRect();
+      const dismissBox = rect("button", reply);
 
       expect(dismissBox.width).toBeGreaterThan(0);
-      expect(dismissBox.left).toBeGreaterThanOrEqual(replyBox.left);
-      expect(dismissBox.right).toBeLessThanOrEqual(replyBox.right);
-      expect(replyBox.left).toBeGreaterThanOrEqual(composerBox.left);
-      expect(replyBox.right).toBeLessThanOrEqual(composerBox.right);
+      expectInside(dismissBox, replyBox);
+      expectInside(replyBox, composerBox);
       expect(composer.scrollWidth).toBeLessThanOrEqual(composer.clientWidth + 1);
       expect(text.getBoundingClientRect().width).toBeGreaterThan(0);
       expect(text.scrollWidth).toBeGreaterThan(text.clientWidth);
@@ -247,10 +250,8 @@ describe("composer overflow presentation", () => {
   );
 
   it("places stacked context before attachments and multiline input in RTL", async () => {
-    await page.viewport(390, 900);
-    container.className = "";
+    await resize(390);
     container.dir = "rtl";
-    container.style.width = "358px";
     drawComposer(
       createComposerProps({
         draft: "@Jordan Rivera\nReview the attached file.\nKeep this third line.",
@@ -263,18 +264,15 @@ describe("composer overflow presentation", () => {
     await afterLayout();
     const strips = container.querySelectorAll<HTMLElement>(".composer-context-strip");
     expect(strips).toHaveLength(3);
-    await waitForSolid(() =>
-      expect(container.querySelector(".chat-attachment-thumb")).not.toBeNull(),
-    );
-    const attachmentBox = rail().querySelector(".chat-attachment-thumb")!.getBoundingClientRect();
-    const textareaBox = container.querySelector("textarea")!.getBoundingClientRect();
-    const composerBox = container.querySelector(".agent-chat__input")!.getBoundingClientRect();
+    await waitForSolid(() => expect(query(".chat-attachment-thumb")).not.toBeNull());
+    const attachmentBox = rect(".chat-attachment-thumb", rail());
+    const textareaBox = rect("textarea");
+    const composerBox = rect(".agent-chat__input");
     for (const strip of strips) {
       const box = strip.getBoundingClientRect();
       expect(box.height).toBeCloseTo(45, 0);
       expect(box.bottom).toBeLessThanOrEqual(attachmentBox.top);
-      expect(box.left).toBeGreaterThanOrEqual(composerBox.left);
-      expect(box.right).toBeLessThanOrEqual(composerBox.right);
+      expectInside(box, composerBox);
       expect(getComputedStyle(strip).borderBottomWidth).toBe("1px");
     }
     expect(attachmentBox.height).toBeGreaterThan(0);
@@ -285,10 +283,8 @@ describe("composer overflow presentation", () => {
     [390, "rtl"],
     [1440, "ltr"],
   ] as const)("dismisses only the intended stacked context at %ipx in %s", async (width, dir) => {
-    await page.viewport(width, 900);
-    container.className = "";
+    await resize(width);
     container.dir = dir;
-    container.style.width = `${Math.min(width - 32, 760)}px`;
     const onClearReply = vi.fn();
     const onGoalDraftModeChange = vi.fn();
     const onDraftChange = vi.fn();
@@ -316,13 +312,11 @@ describe("composer overflow presentation", () => {
     ] as const;
     const targetSize = width === 390 ? 44 : 24;
     for (const [selector, callback, args] of contexts) {
-      const button = container.querySelector<HTMLButtonElement>(`${selector} button`)!;
+      const button = query<HTMLButtonElement>(`${selector} button`);
       const box = button.getBoundingClientRect();
       expect(box.width).toBeGreaterThanOrEqual(24);
       expect(box.height).toBeGreaterThanOrEqual(24);
-      const icon = button.querySelector("svg")!.getBoundingClientRect();
-      expect(icon.width).toBe(14);
-      expect(icon.height).toBe(14);
+      expect(rect("svg", button)).toMatchObject({ width: 14, height: 14 });
       const center = { x: box.left + box.width / 2, y: box.top + box.height / 2 };
       const inset = targetSize / 2 - 0.5;
       const points =
@@ -370,21 +364,20 @@ describe("composer overflow presentation", () => {
       ],
     });
     drawComposer(props);
-    let strip = container.querySelector<HTMLElement>('[role="status"]')!;
+    let strip = query('[role="status"]');
     const visibleNames = () =>
       [...strip.querySelectorAll<HTMLElement>(".composer-context-strip__person")]
         .filter((person) => !person.hidden)
         .map((person) => person.title);
     await expect.poll(visibleNames).toEqual(["@Jordan Rivera", "@Morgan Williams"]);
     for (const avatar of strip.querySelectorAll<HTMLElement>('[role="img"]')) {
-      expect(avatar.getBoundingClientRect().width).toBe(16);
-      expect(avatar.getBoundingClientRect().height).toBe(16);
+      expect(avatar.getBoundingClientRect()).toMatchObject({ width: 16, height: 16 });
     }
     await document.fonts.ready;
     await afterLayout();
     const mutations = vi.fn();
     const observer = new MutationObserver(mutations);
-    observer.observe(strip.querySelector(".composer-context-strip__people")!, {
+    observer.observe(query(".composer-context-strip__people", strip), {
       subtree: true,
       attributes: true,
       // Avatar fallback classes can refresh independently of recipient sizing.
@@ -401,18 +394,16 @@ describe("composer overflow presentation", () => {
     }
     container.style.width = "300px";
     await expect.poll(visibleNames).toEqual(["@Jordan Rivera"]);
-    let more = strip.querySelector<HTMLElement>(".composer-context-strip__more")!;
-    expect(more.hidden).toBe(false);
-    expect(more.textContent).toBe("+1");
-    expect(more.title).toBe("@Morgan Williams");
+    let more = query(".composer-context-strip__more", strip);
+    expect(more).toMatchObject({ hidden: false, textContent: "+1", title: "@Morgan Williams" });
     expect(strip.getBoundingClientRect().height).toBeCloseTo(41, 0);
     container.remove();
     container.style.width = "760px";
     await afterLayout();
     expect(visibleNames()).toEqual(["@Jordan Rivera"]);
     document.body.append(container);
-    strip = container.querySelector<HTMLElement>('[role="status"]')!;
-    more = strip.querySelector<HTMLElement>(".composer-context-strip__more")!;
+    strip = query('[role="status"]');
+    more = query(".composer-context-strip__more", strip);
     await expect.poll(visibleNames).toEqual(["@Jordan Rivera", "@Morgan Williams"]);
     expect(more.hidden).toBe(true);
     const longName = "Morgan Alexandra Penelope Williams ".repeat(3).trim();
@@ -423,8 +414,7 @@ describe("composer overflow presentation", () => {
       mentions: [props.mentions![0]!, { profileId: "morgan", start: 15, end: draft.length }],
     });
     await expect.poll(visibleNames).toEqual(["@Jordan Rivera"]);
-    expect(more.hidden).toBe(false);
-    expect(more.title).toBe("@" + longName);
+    expect(more).toMatchObject({ hidden: false, title: "@" + longName });
   });
 
   async function expectEdges(
@@ -434,11 +424,7 @@ describe("composer overflow presentation", () => {
     atEnd = !scrollable,
   ) {
     await expect
-      .poll(() => ({
-        scrollable: element.dataset.scrollable,
-        atStart: element.dataset.atStart,
-        atEnd: element.dataset.atEnd,
-      }))
+      .poll(() => element.dataset)
       .toMatchObject({
         scrollable: String(scrollable),
         atStart: String(atStart),
@@ -465,27 +451,21 @@ describe("composer overflow presentation", () => {
       });
       const draw = () => drawComposer(props, true);
       draw();
-      const textarea = container.querySelector<HTMLTextAreaElement>(
-        ".agent-chat__composer-combobox > textarea",
-      )!;
-      const placeholder = container.querySelector<HTMLElement>(
-        ".agent-chat__composer-placeholder",
-      )!;
+      const textarea = query<HTMLTextAreaElement>(".agent-chat__composer-combobox > textarea");
+      const placeholder = query(".agent-chat__composer-placeholder");
       const control = page.elementLocator(textarea);
       await afterLayout();
+      expect(getComputedStyle(textarea).fieldSizing).toBe("content");
       const expectStableSize = async (draft: string) => {
         const mutations = vi.fn();
         const observer = new MutationObserver(mutations);
         observer.observe(textarea, { attributes: true, attributeFilter: ["style"] });
         const resized = vi.fn();
-        const stop = subscribeTranscriptScroll(
-          container.querySelector<HTMLElement>(".chat-thread")!,
-          (observation) => {
-            if (observation.type === "resize") {
-              resized(observation);
-            }
-          },
-        );
+        const stop = subscribeTranscriptScroll(query(".chat-thread"), (observation) => {
+          if (observation.type === "resize") {
+            resized(observation);
+          }
+        });
         const height = textarea.clientHeight;
         try {
           await control.fill(draft);
@@ -513,8 +493,10 @@ describe("composer overflow presentation", () => {
         expect(document.activeElement === textarea).toBe(focused);
         expect(placeholder.checkVisibility()).toBe(true);
         expect(placeholder.scrollWidth).toBeGreaterThan(placeholder.clientWidth);
-        expect(getComputedStyle(placeholder).textOverflow).toBe("ellipsis");
-        expect(getComputedStyle(placeholder).overflowX).toBe("hidden");
+        expect(getComputedStyle(placeholder)).toMatchObject({
+          textOverflow: "ellipsis",
+          overflowX: "hidden",
+        });
         expect(getComputedStyle(textarea, "::placeholder").color).toBe("rgba(0, 0, 0, 0)");
         expect(placeholder.getBoundingClientRect().right).toBeLessThanOrEqual(
           textarea.getBoundingClientRect().right + 1,
@@ -534,6 +516,12 @@ describe("composer overflow presentation", () => {
       expect(getComputedStyle(textarea).whiteSpace).toBe("pre-wrap");
       expect(textarea.clientHeight).toBeGreaterThan(emptyHeight);
       expect(textarea.scrollHeight).toBeGreaterThan(textarea.clientHeight);
+      expect(textarea.getBoundingClientRect().height).toBeCloseTo(
+        Number.parseFloat(getComputedStyle(textarea).maxHeight),
+        0,
+      );
+      expect(textarea.scrollWidth).toBeLessThanOrEqual(textarea.clientWidth + 1);
+      expect(container.getBoundingClientRect().width).toBe(width);
       await expectStableSize(`${draft}\nAnother line in the capped draft.`);
 
       await control.fill("");
@@ -547,19 +535,21 @@ describe("composer overflow presentation", () => {
   it.each([false, true])(
     "updates attachment edges after resizing (reconnect=%s)",
     async (reconnect) => {
-      const part = drawAttachments(3);
+      drawAttachments(3);
       const element = rail();
       await afterLayout();
       await expectEdges(element, false);
 
       if (reconnect) {
-        part.setConnected(false);
+        setPresented(false);
+        flush();
       }
       container.style.width = "400px";
       if (reconnect) {
         await afterLayout();
         await expectEdges(element, false);
-        part.setConnected(true);
+        setPresented(true);
+        flush();
       }
       expect(rail()).toBe(element);
       expect(element.scrollWidth).toBeGreaterThan(element.clientWidth);
@@ -580,23 +570,17 @@ describe("composer overflow presentation", () => {
   ] as const)(
     "aligns the expanded %s px %s header and keeps controls above the objective",
     async (width, status) => {
-      await page.viewport(width, 800);
+      await resize(width, "agent-chat__composer-shell", 800);
       styles.textContent += queueStyles;
-      container.className = "agent-chat__composer-shell";
-      container.style.width = `${width - 32}px`;
       const [expanded, setExpanded] = createSignal(false);
-      const goal: SessionGoal = {
-        schemaVersion: 1,
+      const goal = makeGoal({
         id: "mobile-actions",
         objective: "Verify the deployment and summarize its health checks.\n".repeat(12),
         status,
         lastStatusNote: "Review the deployment results before continuing.",
-        createdAt: 1000,
         updatedAt: 61000,
-        tokenStart: 0,
         tokensUsed: 1500,
-        continuationTurns: 0,
-      };
+      });
       const onGoalAction = vi.fn();
       const onGoalEdit = vi.fn();
       mountSolid(
@@ -615,7 +599,7 @@ describe("composer overflow presentation", () => {
         { container },
       );
       flush();
-      const commands = container.querySelector<HTMLElement>(".agent-chat__goal-command-actions")!;
+      const commands = query(".agent-chat__goal-command-actions");
       const visibleCommands = () =>
         [...commands.querySelectorAll<HTMLButtonElement>("button")]
           .filter((button) => button.checkVisibility())
@@ -625,7 +609,7 @@ describe("composer overflow presentation", () => {
       expect(visibleCommands()).toEqual(collapsedCommands);
       await page.getByRole("button", { name: "Show goal details", exact: true }).click();
       await afterLayout();
-      const objective = container.querySelector<HTMLElement>(".agent-chat__goal-detail-objective")!;
+      const objective = query(".agent-chat__goal-detail-objective");
       const commandBox = commands.getBoundingClientRect();
       expect(commandBox.height).toBeGreaterThan(0);
       expect(commandBox.bottom).toBeLessThanOrEqual(objective.getBoundingClientRect().top);
@@ -634,14 +618,14 @@ describe("composer overflow presentation", () => {
         ".agent-chat__goal-label",
         ".agent-chat__goal-expand svg",
       ].map((selector) => {
-        const box = container.querySelector(selector)!.getBoundingClientRect();
+        const box = rect(selector);
         return box.top + box.height / 2;
       });
       expect(Math.max(...centers) - Math.min(...centers)).toBeLessThanOrEqual(1);
-      const cardBox = container.querySelector(".agent-chat__goal")!.getBoundingClientRect();
+      const cardBox = rect(".agent-chat__goal");
       // Exercise keyboard order before pointer activation establishes a native
       // navigation starting point on one of the slotted buttons.
-      const clear = commands.querySelector<HTMLButtonElement>(".agent-chat__goal-clear")!;
+      const clear = query<HTMLButtonElement>(".agent-chat__goal-clear", commands);
       clear.focus();
       expect(document.activeElement).toBe(clear);
       // Option-Tab includes buttons under Safari's default macOS keyboard settings.
@@ -650,21 +634,14 @@ describe("composer overflow presentation", () => {
           ? "{Alt>}{Shift>}{Tab}{/Shift}{/Alt}"
           : "{Shift>}{Tab}{/Shift}",
       );
-      expect(document.activeElement).toBe(
-        commands.querySelector(
-          status === "active" ? ".agent-chat__goal-pause" : ".agent-chat__goal-resume",
-        ),
-      );
+      const action = status === "active" ? "pause" : "resume";
+      expect(document.activeElement).toBe(query(`.agent-chat__goal-${action}`, commands));
       await userEvent.keyboard("{Enter}");
-      expect(onGoalAction).toHaveBeenCalledExactlyOnceWith(
-        goal.id,
-        status === "active" ? "pause" : "resume",
-      );
+      expect(onGoalAction).toHaveBeenCalledExactlyOnceWith(goal.id, action);
       onGoalAction.mockClear();
       for (const button of commands.querySelectorAll<HTMLButtonElement>("button")) {
         const box = button.getBoundingClientRect();
-        expect(box.left).toBeGreaterThanOrEqual(cardBox.left);
-        expect(box.right).toBeLessThanOrEqual(cardBox.right);
+        expectInside(box, cardBox);
         expect(box.height).toBeGreaterThanOrEqual(24);
         expect(box.height).toBeLessThanOrEqual(30);
         expect(
@@ -676,7 +653,7 @@ describe("composer overflow presentation", () => {
       }
       expect(onGoalEdit).toHaveBeenCalledWith(goal);
       expect(onGoalAction.mock.calls).toEqual([
-        [goal.id, status === "active" ? "pause" : "resume"],
+        [goal.id, action],
         [goal.id, "clear"],
       ]);
       objective.scrollTop = objective.scrollHeight;
@@ -687,32 +664,6 @@ describe("composer overflow presentation", () => {
     },
   );
 
-  it("lets native textarea sizing grow and cap multiline drafts", async () => {
-    await page.viewport(1440, 900);
-    drawComposer(createComposerProps());
-    const textarea = container.querySelector<HTMLTextAreaElement>("textarea")!;
-    expect(getComputedStyle(textarea).fieldSizing).toBe("content");
-
-    textarea.value = "one line";
-    textarea.dispatchEvent(new InputEvent("input", { bubbles: true }));
-    await afterLayout();
-    const singleLineHeight = textarea.getBoundingClientRect().height;
-
-    textarea.value = "line 1\nline 2\nline 3";
-    textarea.dispatchEvent(new InputEvent("input", { bubbles: true }));
-    await afterLayout();
-    expect(textarea.getBoundingClientRect().height).toBeGreaterThan(singleLineHeight);
-
-    textarea.value = Array.from({ length: 20 }, (_, index) => `line ${index + 1}`).join("\n");
-    textarea.dispatchEvent(new InputEvent("input", { bubbles: true }));
-    await afterLayout();
-    const capped = textarea.getBoundingClientRect();
-    expect(capped.height).toBeCloseTo(Number.parseFloat(getComputedStyle(textarea).maxHeight), 0);
-    expect(textarea.scrollHeight).toBeGreaterThan(textarea.clientHeight);
-    expect(textarea.scrollWidth).toBeLessThanOrEqual(textarea.clientWidth + 1);
-    expect(container.getBoundingClientRect().width).toBe(760);
-  });
-
   it.each(["attachments", "menu", "goal"] as const)(
     "updates retained %s edges when content grows, scrolls, and shrinks",
     async (kind) => {
@@ -720,63 +671,46 @@ describe("composer overflow presentation", () => {
         await page.viewport(480, 800);
         container.style.width = "400px";
       }
-      const goal: SessionGoal = {
-        schemaVersion: 1,
-        id: "overflow-goal",
-        objective: "Short objective",
-        status: "complete",
-        createdAt: 1000,
-        updatedAt: 2000,
-        tokenStart: 0,
-        tokensUsed: 0,
-        continuationTurns: 0,
-      };
+      const goal = makeGoal();
       const selector = {
         attachments: ".chat-attachments-preview",
         menu: ".slash-menu__scroll",
         goal: ".agent-chat__goal-detail-objective",
       }[kind];
+      const [expanded, setExpanded] = createSignal(false);
       const [currentGoal, setGoal] = createSignal(goal, { equals: false });
-      let goalView: ReturnType<typeof mountSolid> | undefined;
-      let menuView: ReturnType<typeof mountSolid> | undefined;
-      const [menuExpanded, setMenuExpanded] = createSignal(false);
-      const draw = (expanded: boolean) => {
-        goal.objective = expanded ? "Fixture objective\n".repeat(30) : "Short objective";
-        if (kind === "goal") {
-          goalView ??= mountSolid(
-            () => (
+      if (kind !== "attachments") {
+        mountSolid(
+          () =>
+            kind === "goal" ? (
               <ChatGoal goal={currentGoal()} expanded canAct={false} onExpandedChange={() => {}} />
-            ),
-            { container },
-          );
-          setGoal(() => goal);
-          flush();
-          return;
-        }
-        if (kind === "menu") {
-          menuView ??= mountSolid(
-            () => (
-              <ComposerMenu id="overflow-menu" label="Fixture results" revision={menuExpanded()}>
-                {Array.from({ length: menuExpanded() ? 20 : 1 }, (_, index) => (
+            ) : (
+              <ComposerMenu id="overflow-menu" label="Fixture results" revision={expanded()}>
+                {Array.from({ length: expanded() ? 20 : 1 }, (_, index) => (
                   <div style={{ height: "40px" }}>Result {index}</div>
                 ))}
               </ComposerMenu>
             ),
-            { container },
-          );
-          setMenuExpanded(expanded);
+          { container },
+        );
+      }
+      const draw = (value: boolean) => {
+        goal.objective = value ? "Fixture objective\n".repeat(30) : "Short objective";
+        if (kind === "attachments") {
+          drawAttachments(value ? 7 : 1);
+        } else {
+          setGoal(() => goal);
+          setExpanded(value);
           flush();
-          return;
         }
-        drawAttachments(expanded ? 7 : 1);
       };
       draw(false);
-      const element = container.querySelector<HTMLElement>(selector)!;
+      const element = query(selector);
       await afterLayout();
       await expectEdges(element, false);
 
       draw(true);
-      expect(container.querySelector(selector)).toBe(element);
+      expect(query(selector)).toBe(element);
       const [size, viewport, position] =
         kind === "attachments"
           ? (["scrollWidth", "clientWidth", "scrollLeft"] as const)
@@ -787,7 +721,7 @@ describe("composer overflow presentation", () => {
       await expectEdges(element, true, false, true);
 
       draw(false);
-      expect(container.querySelector(selector)).toBe(element);
+      expect(query(selector)).toBe(element);
       await expectEdges(element, false);
     },
   );
