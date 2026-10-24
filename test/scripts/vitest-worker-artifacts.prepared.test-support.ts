@@ -4,7 +4,6 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { expect } from "vitest";
 import { verifyVitestWorkerArtifacts } from "../../scripts/lib/vitest-worker-artifacts.mts";
-import { formatErrorMessage } from "../../src/infra/errors.js";
 import { createFixtureLifetime } from "../helpers/fixture-lifetime.js";
 import { runNodeScript } from "../helpers/run-node-script.js";
 import { DEFAULT_VITEST_TEST_TIMEOUT_MS } from "../vitest/vitest.timeouts.js";
@@ -81,14 +80,11 @@ registerFixtureSourceTransform({
           },
         ),
       );
-      const preparationError = result.error === undefined ? "" : formatErrorMessage(result.error);
       expect(
         result.status,
-        [preparationError, result.stderr, result.stdout].filter(Boolean).join("\n"),
+        `${String(result.error ?? "")}\n${result.stderr}\n${result.stdout}`,
       ).toBe(0);
       await verifyVitestWorkerArtifacts(template);
-      const manifest = JSON.parse(fs.readFileSync(path.join(template, "manifest.json"), "utf8"));
-      console.log(`file compiler prepared in ${Math.round(manifest.durationMs)}ms`);
     },
     readCompiles,
     async cleanup() {
