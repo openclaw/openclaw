@@ -330,24 +330,6 @@ describe("worker bundle producer", () => {
     });
   });
 
-  it("prunes only unretained bundles for an exclusive cache owner", async () => {
-    await withBundleFixture(async ({ packageRoot, cacheDir }) => {
-      await writeFixture(packageRoot, "export const value = 1;\n");
-      const retained = await producer(packageRoot, cacheDir).prepare();
-      await fs.writeFile(artifactPath(packageRoot), "export const value = 2;\n");
-      const owner = producer(packageRoot, cacheDir);
-      const current = await owner.prepare();
-      const removedPath = path.join(cacheDir, `${"c".repeat(64)}.tgz`);
-      await fs.writeFile(removedPath, "historical");
-
-      await owner.prune(() => [retained.bundleHash]);
-
-      await expectPresent(retained.tarballPath);
-      await expectPresent(current.tarballPath);
-      await expectMissing(removedPath);
-    });
-  });
-
   it.each([false, true])(
     "retains a persisted provisioning bundle until its environment terminates (empty=%s)",
     async (empty) => {
@@ -430,30 +412,6 @@ describe("worker bundle producer", () => {
     },
   );
 
-  it("reclaims recognized crash artifacts but preserves unknown cache entries", async () => {
-    await withBundleFixture(async ({ packageRoot, cacheDir }) => {
-      await writeFixture(packageRoot);
-      const owner = producer(packageRoot, cacheDir);
-      const current = await owner.prepare();
-      const staging = path.join(cacheDir, ".staging-stale");
-      const temporary = path.join(
-        cacheDir,
-        `${"b".repeat(64)}.tgz.123.123e4567-e89b-12d3-a456-426614174000.tmp`,
-      );
-      const unknown = path.join(cacheDir, "keep-me.txt");
-      await fs.mkdir(staging);
-      await fs.writeFile(temporary, "partial");
-      await fs.writeFile(unknown, "operator-owned");
-
-      await owner.prune(() => []);
-
-      await expectMissing(staging);
-      await expectMissing(temporary);
-      await expect(fs.readFile(unknown, "utf8")).resolves.toBe("operator-owned");
-      await expectPresent(current.tarballPath);
-    });
-  });
-
   it.each(["all", "staging", "temporary"] as const)(
     "preserves cleanup candidates when retention cannot be read (%s)",
     async (kind) => {
@@ -461,6 +419,8 @@ describe("worker bundle producer", () => {
         await writeFixture(packageRoot);
         const owner = producer(packageRoot, cacheDir);
         const current = await owner.prepare();
+        const unknown = path.join(cacheDir, "keep-me.txt");
+        await fs.writeFile(unknown, "operator-owned");
         const historical = path.join(cacheDir, `${"b".repeat(64)}.tgz`);
         const staging = path.join(cacheDir, ".staging-stale");
         const temporary = path.join(
@@ -501,6 +461,7 @@ describe("worker bundle producer", () => {
         for (const removed of candidates) {
           await expectMissing(removed);
         }
+        await expect(fs.readFile(unknown, "utf8")).resolves.toBe("operator-owned");
         await expectPresent(current.tarballPath);
       });
     },
