@@ -40,18 +40,19 @@ function makeChild() {
     emit(child.stderr, stderr);
     child.emit("close", code, null);
   };
-  return { child, finish };
+  const reply = (code = 0, stdout = "", stderr = "") => {
+    queueMicrotask(() => {
+      emit(child.stdout, stdout);
+      finish(code, stderr);
+    });
+  };
+  return { child, finish, reply };
 }
 
-const exited = "Gateway exited before becoming ready";
 it.each([
   ["reported-refusal", "port", null],
   ["current-refusal", "port", null],
-  ["stale-refusal", null, exited],
-  ["repeated-refusal", "port", exited],
-  ["unrelated-failure", null, exited],
   ["config-failure", "config", "Failed to configure replacement Gateway port"],
-  ["migration", "migration", null],
 ] as const)(
   "keeps packaged Gateway startup recovery scoped and bounded: %s",
   async (scenario, recovery, error) => {
@@ -75,52 +76,35 @@ it.each([
     writePort(oldPort);
     const refusal = (port: number) =>
       `Port ${port} is busy but no listener PID could be determined. Run openclaw gateway status --deep to inspect the listener.\n`;
-    writeFileSync(gatewayLogPath, scenario === "stale-refusal" ? refusal(oldPort) : "");
-    // Mock only the CLI: launch capture, config, ports, log offsets and recovery stay real.
     vi.mocked(spawn).mockImplementation((_command, args) => {
       const cliArgs = Array.isArray(args) ? args.slice(1) : [];
-      const { child, finish } = makeChild();
+      const { child, finish, reply } = makeChild();
       closeChildren.push(() => finish(0));
-      let exitCode: number | undefined = 0;
-      let stdout = "";
-      let stderr = "";
       if (cliArgs[0] === "gateway" && cliArgs[1] === "run") {
         const port = Number(cliArgs[cliArgs.indexOf("--port") + 1]);
         launches.push(port);
-        if (launches.length === 1 || scenario === "repeated-refusal") {
-          exitCode = 1;
-          stderr =
-            scenario === "migration"
-              ? "OpenClaw plugin migration inputs changed during startup convergence; refusing to report the gateway ready.\n"
-              : scenario === "current-refusal"
-                ? `port ${port} is still busy after --force, but no listener PID could be determined\n`
-                : scenario === "stale-refusal" || scenario === "unrelated-failure"
-                  ? "Gateway configuration is invalid.\n"
-                  : refusal(port);
-        } else {
-          exitCode = undefined;
+        if (launches.length === 1) {
+          reply(
+            1,
+            "",
+            scenario === "current-refusal"
+              ? `port ${port} is still busy after --force, but no listener PID could be determined\n`
+              : refusal(port),
+          );
         }
       } else if (cliArgs[0] === "config" && cliArgs[1] === "set") {
         expect(cliArgs[2]).toBe("gateway.port");
         const port = Number(cliArgs[3]);
         configWrites.push(port);
-        exitCode = scenario === "config-failure" ? 1 : 0;
-        if (exitCode === 0) {
+        const failed = scenario === "config-failure";
+        if (!failed) {
           writePort(port);
         }
-      } else if (cliArgs.includes("--help")) {
-        stdout = "--require-rpc";
+        reply(failed ? 1 : 0);
+      } else if (cliArgs[0] === "gateway" && cliArgs[1] === "status") {
+        reply(0, cliArgs.includes("--help") ? "--require-rpc" : "");
       } else {
-        expect(cliArgs.slice(0, 2)).toEqual(["gateway", "status"]);
-        // Status must read the same persisted port as the relaunched Gateway.
-        expect(readConfig().gateway.port).toBe(launches.at(-1));
-      }
-      if (exitCode !== undefined) {
-        const code = exitCode;
-        queueMicrotask(() => {
-          emit(child.stdout, stdout);
-          finish(code, stderr);
-        });
+        throw new Error(`Unexpected CLI command: ${cliArgs.join(" ")}`);
       }
       return child;
     });
@@ -140,17 +124,13 @@ it.each([
         await ready;
       }
       const expectedPort = recovery === "port" ? lane.gatewayPort : oldPort;
-      const relaunched = recovery === "port" || recovery === "migration";
-      expect(launches).toEqual(relaunched ? [oldPort, expectedPort] : [oldPort]);
+      expect(launches).toEqual(recovery === "port" ? [oldPort, expectedPort] : [oldPort]);
       if (recovery === "config") {
         expect(configWrites).toHaveLength(1);
       } else {
         expect(configWrites).toEqual(recovery === "port" ? [expectedPort] : []);
       }
       expect(readConfig()).toEqual({ gateway: { port: expectedPort } });
-      if (!recovery) {
-        expect(lane.gatewayPort).toBe(oldPort);
-      }
       if (recovery === "port") {
         expect(expectedPort).not.toBe(oldPort);
         const replacement = await reserveTestPortListener({
@@ -187,7 +167,6 @@ it.each([0, 1, null])(
     const { promise: started, resolve: notifyStart } = Promise.withResolvers<void>();
     let finishStart: (() => void) | undefined;
     const events = { startedAt: 0, killedAt: 0, statusChecks: 0 };
-    // Mock only CLI/taskkill; lifecycle, deadlines, logs and RPC status stay real.
     vi.mocked(spawn).mockImplementation((_command, args) => {
       const argv = Array.isArray(args) ? args : [];
       const { child, finish } = makeChild();

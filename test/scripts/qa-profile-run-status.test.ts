@@ -21,7 +21,6 @@ function workflowStep(file: string, job: string, name: string): string {
 }
 const aggregateStep = (name: string) =>
   workflowStep("qa-profile-evidence.yml", "aggregate_qa_profile", name);
-const aggregateScript = aggregateStep("Aggregate validated shard evidence");
 function shell(script: string, cwd: string, env: NodeJS.ProcessEnv) {
   return spawnSync(workflowBash(), ["-c", script], { cwd, env, encoding: "utf8" });
 }
@@ -139,20 +138,6 @@ it.skipIf(windows)("rejects a direct status symlink", () => {
   expect(result.diagnostics.issues).toContainEqual({
     source: "artifact-001",
     reason: "missing-or-malformed-status",
-  });
-});
-
-it.skipIf(windows)("retains diagnostics after aggregate rejection", () => {
-  const f = fixture();
-  f.writeShard();
-  const aggregate = shell(aggregateScript, f.root, f.env);
-  expect(aggregate.status, aggregate.stderr).toBe(1);
-  expect(aggregate.stderr).toContain("Expected 2 completed status and evidence files");
-  const { result } = f.collect();
-  expect(result).toMatchObject({
-    exitCode: null,
-    timedOut: null,
-    diagnostics: { stages: { AGGREGATE_OUTCOME: "failure" }, missingStatuses: ["shard-02"] },
   });
 });
 

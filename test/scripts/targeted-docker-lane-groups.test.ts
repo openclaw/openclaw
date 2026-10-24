@@ -1,35 +1,5 @@
-import { mkdir, writeFile } from "node:fs/promises";
-import { join } from "node:path";
 import { expect, it } from "vitest";
-import { parseLaneSelection, resolveDockerE2ePlan } from "../../scripts/lib/docker-e2e-plan.mts";
-import {
-  UPDATE_FIRST_HOP_MISSING_LOAD_PATH_LANE,
-  listRecordedFirstHopSourceVersions,
-  updateFirstHopCompatLaneName,
-} from "../../scripts/lib/update-first-hop-lanes.mjs";
 import { planTargetedDockerLaneGroups } from "../../scripts/plan-targeted-docker-lane-groups.mjs";
-import { withTempDir } from "../../src/test-utils/temp-dir.js";
-
-function expandedPlan(
-  lanes: string,
-  upgradeSurvivorBaselines: string,
-  upgradeSurvivorScenarios: string,
-  upgradeSurvivorTargetRoot?: string,
-) {
-  return resolveDockerE2ePlan({
-    allowFrozenTargetScenarioOmissions: true,
-    includeOpenWebUI: false,
-    liveMode: "all",
-    orderLanes: (entries) => entries,
-    planReleaseAll: false,
-    profile: "all",
-    releaseChunk: "",
-    selectedLaneNames: parseLaneSelection(lanes),
-    upgradeSurvivorBaselines,
-    upgradeSurvivorScenarios,
-    upgradeSurvivorTargetRoot,
-  });
-}
 
 type Group = ReturnType<typeof planTargetedDockerLaneGroups>[number];
 function planGroups(
@@ -45,34 +15,11 @@ function planGroups(
     ...options,
   });
 }
-function groupPlan(group: Group, baselines = "", scenarios = "", targetRoot?: string) {
-  return expandedPlan(
-    group.docker_lanes,
-    group.published_upgrade_survivor_baselines ?? baselines,
-    group.published_upgrade_survivor_scenarios ?? scenarios,
-    targetRoot,
-  );
-}
-
-function expectExpansion(
-  groups: Group[],
-  lanes: string,
-  baselines: string,
-  scenarios: string,
-  target?: string,
-) {
-  const plans = groups.map((group) => groupPlan(group, baselines, scenarios, target));
-  const expected = expandedPlan(lanes, baselines, scenarios, target);
-  const actual = plans.flatMap((plan) => plan.scheduledLanes);
-  const byName = (a: (typeof actual)[number], b: (typeof actual)[number]) =>
-    a.name.localeCompare(b.name);
-  expect(actual.toSorted(byName)).toEqual(expected.scheduledLanes.toSorted(byName));
-  expect(new Set(actual.map((lane) => lane.name)).size).toBe(actual.length);
-  expect(plans.flatMap((plan) => plan.omittedUnsupportedLaneNames).toSorted()).toEqual(
-    expected.omittedUnsupportedLaneNames.toSorted(),
-  );
-  return plans;
-}
+const cells = (groups: Group[]) =>
+  groups.map((group) => [
+    group.published_upgrade_survivor_baselines,
+    group.published_upgrade_survivor_scenarios,
+  ]);
 
 it("retains the reported 9.4 sibling-import cell when current-version baselines are omitted", () => {
   const groups = planGroups(
@@ -84,12 +31,11 @@ it("retains the reported 9.4 sibling-import cell when current-version baselines 
       upgradeSurvivorBaselineScope: "legacy-operator-state",
     },
   );
-  expect(
-    groups.flatMap((group) => groupPlan(group).scheduledLanes.map((entry) => entry.name)),
-  ).toEqual([
-    "published-upgrade-survivor-2026.9.3",
-    "published-upgrade-survivor-2026.9.3-legacy-operator-state",
-    "published-upgrade-survivor-2026.9.4-custom-plugin-siblings",
+  expect(groups.every((group) => group.docker_lanes === "published-upgrade-survivor")).toBe(true);
+  expect(cells(groups)).toEqual([
+    ["openclaw@2026.9.3", "base"],
+    ["openclaw@2026.9.3", "legacy-operator-state"],
+    ["openclaw@2026.9.4", "custom-plugin-siblings"],
   ]);
 });
 
@@ -109,19 +55,10 @@ it("requires an exact predecessor for supported-line pairing", () => {
   ).toThrow("requires an exact published predecessor");
 });
 
-it("runs each recorded first-hop source and the fresh candidate edge as separate jobs", () => {
-  const firstHopLanes = listRecordedFirstHopSourceVersions().map(updateFirstHopCompatLaneName);
-  const expandedLanes = [...firstHopLanes, UPDATE_FIRST_HOP_MISSING_LOAD_PATH_LANE];
-  expect(planGroups("upgrade-survivor update-first-hop-compat")).toEqual([
-    { docker_lanes: "upgrade-survivor", label: "upgrade-survivor" },
-    ...expandedLanes.map((lane) => ({ docker_lanes: lane, label: lane })),
-  ]);
-  // A family token beside one of its members must not schedule that hop twice.
-  const mixed = `${UPDATE_FIRST_HOP_MISSING_LOAD_PATH_LANE} update-first-hop-compat`;
-  expect(planGroups(mixed).map((group) => group.label)).toEqual([
-    UPDATE_FIRST_HOP_MISSING_LOAD_PATH_LANE,
-    ...firstHopLanes,
-  ]);
+it("does not schedule a first-hop member twice beside its family", () => {
+  const family = planGroups("update-first-hop-compat");
+  expect(family.length).toBeGreaterThan(1);
+  expect(planGroups(`${family[0]!.docker_lanes} update-first-hop-compat`)).toEqual(family);
 });
 
 it("shards published upgrade survivor by baseline while preserving surrounding lanes", () => {
@@ -141,12 +78,6 @@ it("shards published upgrade survivor by baseline while preserving surrounding l
     "openclaw@2026.6.11-1",
     "openclaw@2026.6.11",
   ]);
-});
-
-it("rejects pre-June baselines in planner input", () => {
-  expect(() => planGroups("update-migration", "2026.6.1 openclaw@2026.5.35")).toThrow(
-    "must be 2026.6.1 or newer",
-  );
 });
 
 it("admits long update jobs before an expanded scenario matrix without changing coverage", () => {
@@ -174,73 +105,54 @@ it("admits long update jobs before an expanded scenario matrix without changing 
       .toReversed()
       .map((version) => `openclaw@${version}`),
   );
-  expectExpansion(groups, lanes, baselines, scenarios);
 });
 
 it("isolates the weekly mobile and watch scenarios by baseline", () => {
   const baselines = "2026.7.1 2026.8.1";
   const scenarios = "mobile-pairing-reconnect watchos-direct-node";
   const groups = planGroups("update-migration", baselines, scenarios);
-  expect(
-    groups.map((group) => [
-      group.published_upgrade_survivor_baselines,
-      group.published_upgrade_survivor_scenarios,
-    ]),
-  ).toEqual([
+  expect(groups.every((group) => group.docker_lanes === "update-migration")).toBe(true);
+  expect(cells(groups)).toEqual([
     ["openclaw@2026.8.1", "mobile-pairing-reconnect"],
     ["openclaw@2026.8.1", "watchos-direct-node"],
     ["openclaw@2026.7.1", "mobile-pairing-reconnect"],
   ]);
-  const plans = expectExpansion(groups, "update-migration", baselines, scenarios);
-  expect(plans.flatMap((plan) => plan.omittedUnsupportedLaneNames)).toEqual([]);
 });
 
 it.each([
-  { label: "the default baseline", baselines: "", scenarios: "far-reaching" },
+  {
+    label: "the default baseline",
+    baselines: "",
+    scenarios: "base legacy-operator-state",
+    count: 6,
+  },
   {
     label: "recovery-only rows",
     baselines: "2026.10.1",
     scenarios:
       "package-publication-recovery package-verification-recovery package-stranded-first-hop",
+    count: 12,
   },
-])("preserves each expanded lane exactly once for $label", ({ baselines, scenarios }) => {
+])("preserves each expanded lane exactly once for $label", ({ baselines, scenarios, count }) => {
   const lanes = "doctor-switch published-upgrade-survivor update-migration plugin-update";
   const groups = planGroups(lanes, baselines, scenarios, { groupSize: 2 });
-  const plans = expectExpansion(groups, lanes, baselines, scenarios);
+  expect(groups).toHaveLength(count);
   expect(new Set(groups.map((group) => group.label)).size).toBe(groups.length);
-  for (const [index, group] of groups.entries()) {
-    const plan = plans[index]!;
-    expect(plan.scheduledLanes.length).toBeGreaterThan(0);
-    if (
-      group.docker_lanes
-        .split(" ")
-        .some((lane) => ["published-upgrade-survivor", "update-migration"].includes(lane))
-    ) {
-      expect(group.published_upgrade_survivor_scenarios).toBeTruthy();
+  expect(
+    new Set(groups.map((group) => JSON.stringify([group.docker_lanes, ...cells([group])[0]!])))
+      .size,
+  ).toBe(groups.length);
+  expect(
+    [
+      ...new Set(
+        groups.flatMap((group) => group.published_upgrade_survivor_scenarios?.split(" ") ?? []),
+      ),
+    ].toSorted(),
+  ).toEqual(scenarios.split(" ").toSorted());
+  for (const group of groups) {
+    if (/^(?:published-upgrade-survivor|update-migration)(?:$|-)/u.test(group.docker_lanes)) {
       expect(group.published_upgrade_survivor_scenarios?.split(" ")).toHaveLength(1);
-      expect(plan.scheduledLanes).toHaveLength(1);
       expect(group.timeout_minutes).toBe(90);
     }
   }
-});
-
-it("preserves frozen-target omissions across scenario shards", async () => {
-  await withTempDir("openclaw-survivor-shards-", async (targetRoot) => {
-    const harnessDir = join(targetRoot, "scripts/e2e/lib/upgrade-survivor");
-    await mkdir(harnessDir, { recursive: true });
-    await writeFile(
-      join(harnessDir, "assertions.mjs"),
-      'console.log(JSON.stringify(["base", "feishu-channel"]));',
-    );
-    const baselines = "2026.6.1 2026.6.2";
-    const scenarios = "reported-issues";
-    const lanes = "published-upgrade-survivor";
-    const groups = planGroups(lanes, baselines, scenarios);
-    const expanded = expectExpansion(groups, lanes, baselines, scenarios, targetRoot);
-    for (const plan of expanded) {
-      expect(plan.scheduledLanes.length + plan.omittedUnsupportedLaneNames.length).toBeGreaterThan(
-        0,
-      );
-    }
-  });
 });

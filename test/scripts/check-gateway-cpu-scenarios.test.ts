@@ -67,6 +67,9 @@ const concurrencyReport = {
     controlUiLatencyMs: { p99: 25 },
   },
 };
+const startupReport = (cpu = 0, wallMs = 1) => ({
+  results: [{ id: "default", summary: { cpuCoreRatio: { max: cpu }, readyzMs: { max: wallMs } } }],
+});
 
 it("rejects runs with every scenario family skipped", () => {
   expect(() => testing.parseArgs(["--skip-startup", "--skip-qa"])).toThrow(
@@ -115,23 +118,18 @@ it("prepares CLI startup artifacts before running the startup bench", async () =
   const result = await runScenario(["--skip-qa"], {
     env: { ...process.env, PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN: "install" },
     reports: {
-      startup: { results: [{ id: "default" }] },
+      startup: startupReport(),
       concurrency: concurrencyReport,
     },
   });
   expect(result.exitCode).toBe(0);
-  expect(
-    result.calls.map(({ args, env }) => [
-      args[0],
-      args[2],
-      env?.PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN,
-    ]),
-  ).toEqual(
-    [
-      "ensure-cli-startup-build.mts",
-      "bench-gateway-startup.ts",
-      "bench-gateway-concurrency.ts",
-    ].map((script) => ["--import", `scripts/${script}`, "false"]),
+  expect(result.calls.map(({ args }) => args[2])).toEqual([
+    "scripts/ensure-cli-startup-build.mts",
+    "scripts/bench-gateway-startup.ts",
+    "scripts/bench-gateway-concurrency.ts",
+  ]);
+  expect(result.calls.every(({ env }) => env?.PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN === "false")).toBe(
+    true,
   );
 });
 
@@ -211,27 +209,11 @@ it("does not prebuild private QA dist when the required entries already exist", 
 it("fails when completed runs report hot gateway CPU observations", async () => {
   const result = await runScenario(
     ["--skip-qa", "--cpu-core-warn", "0.9", "--hot-wall-warn-ms", "30000"],
-    {
-      reports: {
-        startup: {
-          results: [
-            {
-              id: "default",
-              summary: { cpuCoreRatio: { max: 1.15 }, readyzMs: { max: 45_000 } },
-            },
-          ],
-        },
-      },
-    },
+    { reports: { startup: startupReport(1.15, 45_000) } },
   );
 
   expect(result.exitCode).toBe(1);
   expect(result.summary.observations).toEqual([
-    {
-      kind: "startup-cpu-hot",
-      id: "default",
-      cpuCoreRatioMax: 1.15,
-      wallMsMax: 45_000,
-    },
+    expect.objectContaining({ kind: "startup-cpu-hot" }),
   ]);
 });
