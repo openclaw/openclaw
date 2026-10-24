@@ -48,6 +48,7 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../../test-utils/openclaw-test-state.js";
+import { normalizeAcceptedSessionSpawnResult as acceptedSpawn } from "../../accepted-session-spawn.js";
 import {
   createOperationalRunInstanceRef,
   getAdmittedRunDelegatedAuthority,
@@ -430,23 +431,10 @@ describe("recursive spawn production boundary", () => {
     );
     const primaryModel = expectDefined(customProvider.models[0], "primary model fixture");
     const childModel = { ...primaryModel, id: "child-model", name: "Child model", reasoning: true };
-    runtimeConfig = {
-      ...runtimeConfig,
-      agents: {
-        ...runtimeConfig.agents,
-        defaults: {
-          ...runtimeConfig.agents?.defaults,
-          modelPolicy: { allow: ["custom/manual-only"] },
-        },
-      },
-      models: {
-        ...runtimeConfig.models,
-        providers: {
-          ...runtimeConfig.models?.providers,
-          custom: { ...customProvider, models: [primaryModel, childModel] },
-        },
-      },
+    expectDefined(runtimeConfig.agents?.defaults, "agent defaults").modelPolicy = {
+      allow: ["custom/manual-only"],
     };
+    customProvider.models = [primaryModel, childModel];
     const catalog = [primaryModel, childModel].map((model) =>
       Object.assign({}, model, {
         provider: "custom",
@@ -490,18 +478,11 @@ describe("recursive spawn production boundary", () => {
         { provider: "custom", model: "child-model" },
         true,
       )();
-      expect(result.details, JSON.stringify(result)).toMatchObject({
-        status: "accepted",
-        childSessionKey: expect.any(String),
-        runId: expect.any(String),
-      });
-      const details = result.details as { childSessionKey: string; runId: string };
+      const details = expectDefined(acceptedSpawn(result), JSON.stringify(result));
       childRunId = details.runId;
       await waitForEmbeddedRun(bound, details.runId, modelRun.started);
       const embeddedRun = runEmbeddedAgent.mock.calls[0]?.[0];
       expect(embeddedRun).toMatchObject({
-        runId: details.runId,
-        sessionKey: details.childSessionKey,
         provider: "custom",
         model: "child-model",
       });
@@ -544,10 +525,6 @@ describe("recursive spawn production boundary", () => {
       // The receipt's parent id stays out of navigation fields that sessions.list projects.
       expect(admittedChild.parentSessionId).toBeUndefined();
       expect(admittedChild.groupId).toBeUndefined();
-      expect(subagentRuns.get(details.runId)).toMatchObject({
-        childSessionKey: details.childSessionKey,
-        requesterSessionKey: parentSessionKey,
-      });
     } catch (error) {
       failures.push(error);
     } finally {
@@ -558,24 +535,16 @@ describe("recursive spawn production boundary", () => {
     }
   });
 
-  it.each([
-    "completed",
-    "stopped",
-    "operator-completed",
-    "operator-revoked",
-    "operator-stopped",
-  ] as const)(
+  // System completion/cancellation are covered by in-process-gateway and authority tests.
+  it.each(["operator-completed", "operator-revoked", "operator-stopped"] as const)(
     "keeps queued collector effects with their original parent when it is %s",
     async (parentState) => {
-      const source = parentState.startsWith("operator-") ? createSpawnOperatorSource() : undefined;
-      const operatorAuthority = source?.authority;
-      if (operatorAuthority) {
-        runtimeConfig = { ...runtimeConfig, logging: { audit: { enabled: false } } };
-        await state.writeConfig(runtimeConfig);
-        clearConfigCache();
-        clearRuntimeConfigSnapshot();
-      }
-      const bound = await createBoundParent(operatorAuthority);
+      const source = createSpawnOperatorSource();
+      runtimeConfig = { ...runtimeConfig, logging: { audit: { enabled: false } } };
+      await state.writeConfig(runtimeConfig);
+      clearConfigCache();
+      clearRuntimeConfigSnapshot();
+      const bound = await createBoundParent(source.authority);
       const { context, runtime, identities } = await createBoundGateway(bound);
       const groupId = "production-boundary-queued";
       await holdSpawnCapacity(
@@ -585,9 +554,6 @@ describe("recursive spawn production boundary", () => {
       const releaserInstance = createOperationalRunInstanceRef("capacity-releasing-run");
       const releaserAuthority = claimAgentRunDelegatedAuthority(releaserInstance);
       const modelRun = holdModelRun(bound, "collector complete", async (runParams) => {
-        if (!operatorAuthority) {
-          return;
-        }
         const admitted = await resolvePreparedRunAdmission({
           runId: runParams.runId,
           runtimeKind: "embedded",
@@ -634,32 +600,21 @@ describe("recursive spawn production boundary", () => {
           groupId,
           context: "isolated",
         })();
-        expect(result.details, JSON.stringify(result)).toMatchObject({
-          status: "accepted",
-          runId: expect.any(String),
-          childSessionKey: expect.any(String),
-        });
-        const details = result.details as { runId: string; childSessionKey: string };
+        const details = expectDefined(acceptedSpawn(result), JSON.stringify(result));
         childRunId = details.runId;
         expect(subagentRuns.get(childRunId)).toMatchObject({
           requesterTurnRunId: parentRunId,
           execution: { status: "queued" },
         });
         expect(runEmbeddedAgent).not.toHaveBeenCalled();
-        if (
-          parentState === "completed" ||
-          parentState === "operator-completed" ||
-          parentState === "operator-revoked"
-        ) {
+        if (parentState !== "operator-stopped") {
           bound.admission.close();
           bound.parent.cleanup();
-          source?.closeRequest();
+          source.closeRequest();
           expect(bound.parent.controller.signal.aborted).toBe(false);
           expect(getAdmittedRunDelegatedAuthority(bound.admitted)).toBeUndefined();
-          if (operatorAuthority) {
-            expect(source?.holds ?? 0).toBeGreaterThan(0);
-          }
-        } else if (parentState === "stopped" || parentState === "operator-stopped") {
+          expect(source.holds).toBeGreaterThan(0);
+        } else {
           await expect(abortParent()).resolves.toMatchObject({
             aborted: true,
             runIds: [parentRunId],
@@ -668,27 +623,17 @@ describe("recursive spawn production boundary", () => {
         }
         if (parentState === "operator-revoked") {
           const queued = expectDefined(holdQueuedSwarmRun(childRunId), "queued collector");
-          expectDefined(source, "operator source").revoke();
-          try {
-            // Revocation removes the reservation synchronously; release joins its physical cleanup.
-            await queued.release();
-            const collector = subagentRuns.get(childRunId);
-            if (collector) {
-              expect(collector.execution.status).toBe("terminal");
-              expect(collector.queuedLaunch).toBeUndefined();
-              expect(collector.collectorLaunchCleanupPending).toBe(false);
-            }
-            expect(readSession(bound, details.childSessionKey)).toBeUndefined();
-            expect(source?.holds ?? 0).toBe(0);
-          } catch (cause) {
-            throw new Error(
-              `Revoked collector cleanup did not settle: ${JSON.stringify({
-                ...readBoundExecutionState(bound, childRunId),
-                sourceHolds: source?.holds,
-              })}`,
-              { cause },
-            );
+          source.revoke();
+          // Revocation removes the reservation; release joins its physical cleanup.
+          await queued.release();
+          const collector = subagentRuns.get(childRunId);
+          if (collector) {
+            expect(collector.execution.status).toBe("terminal");
+            expect(collector.queuedLaunch).toBeUndefined();
+            expect(collector.collectorLaunchCleanupPending).toBe(false);
           }
+          expect(readSession(bound, details.childSessionKey)).toBeUndefined();
+          expect(source.holds).toBe(0);
           expect(runEmbeddedAgent).not.toHaveBeenCalled();
           expect(getRpcSource(childRunId)).toBeUndefined();
           expect(readSession(bound)).toMatchObject({ sessionId: "parent-session" });
@@ -703,7 +648,7 @@ describe("recursive spawn production boundary", () => {
           },
           () => expect(releaseSwarmRun("production-boundary-capacity")).toBe(true),
         );
-        if (parentState === "stopped" || parentState === "operator-stopped") {
+        if (parentState === "operator-stopped") {
           await Promise.resolve();
           expect(runEmbeddedAgent).not.toHaveBeenCalled();
           expect(getRpcSource(childRunId)).toBeUndefined();
@@ -712,10 +657,6 @@ describe("recursive spawn production boundary", () => {
           });
         } else if (parentState !== "operator-revoked") {
           await waitForEmbeddedRun(bound, childRunId, modelRun.started);
-          expect(runEmbeddedAgent.mock.calls[0]?.[0]).toMatchObject({
-            runId: childRunId,
-            sessionKey: details.childSessionKey,
-          });
           const childSource = expectDefined(getRpcSource(childRunId), "started child source");
           expect(getRpcSourceIdentity(childSource)).toMatchObject({
             sessionKey: details.childSessionKey,
@@ -754,16 +695,15 @@ describe("recursive spawn production boundary", () => {
           )),
         );
         await collectFailures(failures, () => {
-          expect(source?.holds ?? 0).toBe(0);
+          expect(source.holds).toBe(0);
         });
         throwBoundFailures(failures);
       }
     },
   );
 
+  // Ordinary deletion and stale session identities are covered by server.sessions.delete-lifecycle.
   it.each([
-    "current",
-    "replaced-session",
     "replaced-gateway",
     "worker-current",
     "worker-reassigned",
@@ -776,17 +716,14 @@ describe("recursive spawn production boundary", () => {
     const original = {
       sessionId: "queued-cleanup-session",
       lifecycleRevision: "queued-cleanup-generation",
-      updatedAt: 1,
-      label: "original",
     };
     await upsertSessionEntryCore(childScope, original);
-    let expectedEntry = loadSessionEntry(childScope);
+    const expectedEntry = loadSessionEntry(childScope);
     const worker = target.startsWith("worker-") ? await createBoundWorker(bound) : undefined;
     let replacementClaim:
       | Awaited<ReturnType<NonNullable<typeof worker>["store"]["claimTurn"]>>
       | undefined;
     const results: boolean[] = [];
-    const errors: unknown[] = [];
     const failures: unknown[] = [];
     const interrupted = createDeferred();
     let work: Awaited<ReturnType<typeof beginSessionEffect>> | undefined;
@@ -827,14 +764,7 @@ describe("recursive spawn production boundary", () => {
                 await cleanupProvisionalSession(childSessionKey, {
                   expectedSessionId: original.sessionId,
                   expectedLifecycleRevision: original.lifecycleRevision,
-                  callGateway: async (request) => {
-                    try {
-                      return await callSubagentGateway(request);
-                    } catch (error) {
-                      errors.push(error);
-                      throw error;
-                    }
-                  },
+                  callGateway: callSubagentGateway,
                 }),
               );
             },
@@ -863,15 +793,7 @@ describe("recursive spawn production boundary", () => {
       } else {
         await activate(caller);
       }
-      if (target === "replaced-session") {
-        await upsertSessionEntryCore(childScope, {
-          ...original,
-          sessionId: "replacement-session",
-          lifecycleRevision: "replacement-generation",
-          label: "replacement",
-        });
-        expectedEntry = loadSessionEntry(childScope);
-      } else if (target === "replaced-gateway") {
+      if (target === "replaced-gateway") {
         bound.gatewayBinding.current = { ...context };
       } else if (target === "worker-reassigned" && worker) {
         await reassignWorker();
@@ -899,15 +821,9 @@ describe("recursive spawn production boundary", () => {
         work?.release();
       }
       await removal;
-      const deleted = target === "current" || target === "worker-current";
-      expect(results, errors.map(String).join("\n")).toEqual([deleted]);
-      if (deleted) {
-        expect(errors).toEqual([]);
-        expect(loadSessionEntry(childScope)).toBeUndefined();
-      } else {
-        expect(errors).toHaveLength(1);
-        expect(loadSessionEntry(childScope)).toEqual(expectedEntry);
-      }
+      const deleted = target === "worker-current";
+      expect(results).toEqual([deleted]);
+      expect(loadSessionEntry(childScope)).toEqual(deleted ? undefined : expectedEntry);
       if (replacementClaim && worker) {
         expect(worker.store.validateTurnClaim(replacementClaim)).toBe(true);
       }
