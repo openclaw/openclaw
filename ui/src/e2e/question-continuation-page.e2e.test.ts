@@ -1,6 +1,8 @@
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -130,13 +132,16 @@ suite.define(() => {
           await page.goto(url.toString());
           const document = page.locator("openclaw-question-page");
           await document.getByRole("heading", { name: "Answered", exact: true }).waitFor();
-          if (proofDir) {
-            await page.screenshot({
-              path: path.join(proofDir, "late-receipt-before.png"),
-              animations: "disabled",
-              fullPage: true,
-            });
-          }
+          const capture = async (stage: "before" | "after") => {
+            if (proofDir) {
+              const state = document.locator(".approval-page__state");
+              const frame = await takeControlUiScreenshotFrame(page, state, [state], {
+                animations: "disabled",
+              });
+              await writeFile(path.join(proofDir, `late-receipt-${stage}.png`), frame.png);
+            }
+          };
+          await capture("before");
           await gateway.resolveDeferred(
             "question.list",
             { questions: [question], continuations: [continuation] },
@@ -162,11 +167,7 @@ suite.define(() => {
             );
             expect(await document.locator("openclaw-chat-question-panel").count()).toBe(0);
             if (proofDir && !reload) {
-              await page.screenshot({
-                path: path.join(proofDir, "late-receipt-after.png"),
-                animations: "disabled",
-                fullPage: true,
-              });
+              await capture("after");
             }
             expect(new URL(page.url()).pathname).toBe(`/operator/ask/${id}`);
           }
