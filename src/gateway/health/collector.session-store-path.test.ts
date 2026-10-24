@@ -28,7 +28,6 @@ import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.
 import * as sessionReadRuntime from "../../config/sessions/session-entry-read-runtime.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../../config/sessions/session-sqlite-target.js";
 import { spyOnSessionStoreSummaries } from "../../config/sessions/session-store-summary.test-support.js";
-import { historyLane } from "../../config/sessions/session-transcript-worker-resources.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createDefaultProactiveJob } from "../../cron/default-proactive-job.js";
 import { saveProactiveJobsForTest } from "../../cron/proactive-job.test-support.js";
@@ -93,19 +92,11 @@ async function readStatusSessionStores(...args: Parameters<typeof prepareStatusS
   return (await prepareStatusSessionStores(...args)).publish();
 }
 
-function holdWorkerSummary(pause: (count: number) => Promise<void>) {
-  const run = historyLane.pool.run.bind(historyLane.pool);
-  vi.spyOn(historyLane.pool, "run").mockImplementation(async (...args) => {
-    const result = await run(...args);
-    if (
-      result.ok &&
-      typeof result.value !== "boolean" &&
-      !Array.isArray(result.value) &&
-      result.value.kind === "session-store-summary"
-    ) {
-      await pause(result.value.summary.count);
-    }
-    return result;
+function holdStoreSummary(pause: (count: number) => Promise<void>) {
+  spyOnSessionStoreSummaries().calls.mockImplementation(async (read) => {
+    const summary = await read();
+    await pause(summary.count);
+    return summary;
   });
 }
 
@@ -120,14 +111,14 @@ async function renderHealth(
   return stripAnsi(runtime.log.mock.calls.flat().join("\n"));
 }
 
-function deleteAgent(state: OpenClawTestState, operationId: string) {
+function deleteAgent(state: OpenClawTestState, agentId = "deleting", deleteFiles = true) {
   beginAgentDeletionJournal({
-    agentId: "deleting",
-    operationId,
-    agentDir: state.agentDir("deleting"),
-    sessionsDir: state.sessionsDir("deleting"),
-    workspaceDir: state.workspaceDir,
-    deleteFiles: true,
+    agentId,
+    operationId: `delete-${agentId}`,
+    agentDir: state.agentDir(agentId),
+    sessionsDir: state.sessionsDir(agentId),
+    workspaceDir: deleteFiles ? state.workspaceDir : state.statePath(`workspace-${agentId}`),
+    deleteFiles,
   });
 }
 
@@ -145,6 +136,9 @@ function createReadGate() {
         await this.pause();
       }
       return result;
+    },
+    value<T>(value: T, hold = true) {
+      return this.after(Promise.resolve(value), hold);
     },
     async run<T>(
       pending: Promise<unknown> | undefined,
@@ -178,6 +172,7 @@ async function seedAgents(cfg: OpenClawConfig, updatedAt = 1) {
       { sessionId: `${agentId}-session`, updatedAt },
     );
   }
+  return cfg;
 }
 
 function writeSession(
@@ -227,6 +222,22 @@ function expectStatusSessions(
   );
 }
 
+function expectHealthSessions(
+  health: Awaited<ReturnType<typeof collectGatewayHealthSnapshot>>,
+  ids: string[],
+) {
+  expect(health.agents.map(({ agentId }) => agentId)).toEqual(ids);
+  expect(health.sessions.count).toBe(ids.length);
+}
+
+function expectSurvivorOutput(output: string, ...extra: string[]) {
+  for (const text of ["Heartbeat interval: 1m (survivor)", "Session store (survivor):", ...extra]) {
+    expect(output).toContain(text);
+  }
+}
+
+const collectHealth = () => collectGatewayHealthSnapshot({ audience: "admin", probe: false });
+
 async function prepareDeletionStatusOverview(
   cfg: OpenClawConfig,
 ): Promise<StatusScanOverviewResult> {
@@ -273,13 +284,11 @@ it("scopes template stores and recovers from transient reads", async () => {
   await closeOpenClawAgentDatabasesAsync(stateDir);
   closeOpenClawAgentDatabasesForTest(stateDir);
 
-  vi.spyOn(configRuntime, "getRuntimeConfig").mockReturnValue({
-    agents: { ownership: "explicit", entries: { helper: {}, third: {} } },
-    session: { store: storeTemplate },
-  });
+  vi.spyOn(configRuntime, "getRuntimeConfig").mockReturnValue(
+    sessionConfig(["helper", "third"], storeTemplate),
+  );
   const { calls: reads } = spyOnSessionStoreSummaries();
-  const collect = () => collectGatewayHealthSnapshot({ audience: "admin", probe: false });
-  const summary = await collect();
+  const summary = await collectHealth();
   expect(summary.agents).toMatchObject([
     { agentId: "helper", sessions: { count: 1, path: databasePath("helper") } },
     { agentId: "third", sessions: { count: 0, path: databasePath("third") } },
@@ -288,18 +297,15 @@ it("scopes template stores and recovers from transient reads", async () => {
     true,
   );
   expect(summary.sessions).toEqual(summary.agents[0]?.sessions);
-  expect(reads).toHaveBeenCalledTimes(2);
-
-  reads
-    .mockClear()
-    .mockRejectedValueOnce(Object.assign(new Error("database is locked"), { code: "SQLITE_BUSY" }));
-  expect((await collect()).agents.map((agent) => agent.sessions.count)).toEqual([0, 0]);
-  expect(reads).toHaveBeenCalledTimes(2);
-  expect((await collect()).agents.map((agent) => agent.sessions.count)).toEqual([1, 0]);
+  reads.mockRejectedValueOnce(
+    Object.assign(new Error("database is locked"), { code: "SQLITE_BUSY" }),
+  );
+  expect((await collectHealth()).agents.map((agent) => agent.sessions.count)).toEqual([0, 0]);
+  expect((await collectHealth()).agents.map((agent) => agent.sessions.count)).toEqual([1, 0]);
 
   const fatal = new Error("invalid session state");
   reads.mockRejectedValueOnce(fatal);
-  await expect(collect()).rejects.toBe(fatal);
+  await expect(collectHealth()).rejects.toBe(fatal);
 });
 
 it.each(["admission-refused", "owner-closed"] as const)(
@@ -315,7 +321,7 @@ it.each(["admission-refused", "owner-closed"] as const)(
       { sessionId: "delayed-session", updatedAt: 1 },
     );
     const gate = createReadGate();
-    holdWorkerSummary(async (count) => {
+    holdStoreSummary(async (count) => {
       expect(count).toBe(1);
       await gate.pause();
     });
@@ -387,20 +393,19 @@ it.for([
       .mockImplementation((...args) =>
         gate.after(read(...args), late && args[0].agentId === "survivor"),
       );
-    holdWorkerSummary(async () => {
+    holdStoreSummary(async () => {
       if (timing === "during-read") {
         await gate.pause();
       }
     });
-    const collect = () => collectGatewayHealthSnapshot({ audience: "admin", probe: false });
     const pendingStatus =
       timing === "during-read" || (late && timing !== "late-health")
         ? readStatusSessionStores(cfg, ordered, 10)
         : undefined;
-    const pendingHealth = timing === "late-health" ? collect() : undefined;
+    const pendingHealth = timing === "late-health" ? collectHealth() : undefined;
     const pending = pendingStatus ?? pendingHealth;
     await gate.run(pending, async (resume) => {
-      deleteAgent(state, "health-deletion");
+      deleteAgent(state);
       await withAgentDatabaseCloseFence(
         { agentId: "deleting", rootPath: path.dirname(state.agentDir("deleting")) },
         async () => {
@@ -411,27 +416,22 @@ it.for([
           }
           if (pendingHealth) {
             const health = await pendingHealth;
-            expect(health.agents.map((agent) => agent.agentId)).toEqual(expectedIds);
-            expect(health.sessions.count).toBe(expectedIds.length);
+            expectHealthSessions(health, expectedIds);
             expect(health.sessions.recent.map(({ key }) => key)).toEqual(
               expectedIds.map((id) => `agent:${id}:main`),
             );
-            const output = await renderHealth(cfg, health);
-            expect(output).toContain("Heartbeat interval: 1m (survivor)");
-            expect(output).toContain("Session store (survivor):");
+            expectSurvivorOutput(await renderHealth(cfg, health));
             const fallbackOutput = await renderHealth(cfg, {
               ...health,
               agents: [],
               defaultAgentId: "deleting",
             });
-            expect(fallbackOutput).toContain("Heartbeat interval: 1m (survivor)");
-            expect(fallbackOutput).toContain("Agents: survivor (default)");
-            expect(fallbackOutput).toContain("Session store (survivor):");
+            expectSurvivorOutput(fallbackOutput, "Agents: survivor (default)");
             expect(fallbackOutput).not.toContain("Session store (deleting):");
-            expect(health.defaultAgentId).toBe("survivor");
-            expect(health.agents.find((agent) => agent.agentId === "survivor")?.isDefault).toBe(
-              true,
-            );
+            expect(health).toMatchObject({
+              defaultAgentId: "survivor",
+              agents: [{ agentId: "survivor", isDefault: true }],
+            });
             expect(resolveHealthAgentOrder(cfg).defaultAgentId).toBe("deleting");
             expect(preparedLocal?.defaultId).toBe("deleting");
             expect(preparedLocal?.publish()).toMatchObject({
@@ -439,9 +439,7 @@ it.for([
               agents: [{ id: "survivor" }],
             });
           }
-          const health = await collect();
-          expect(health.agents.map((agent) => agent.agentId)).toEqual(expectedIds);
-          expect(health.sessions.count).toBe(expectedIds.length);
+          expectHealthSessions(await collectHealth(), expectedIds);
           expectStatusSessions(
             await readStatusSessionStores(cfg, ordered, 10),
             expectedIds,
@@ -479,7 +477,7 @@ it.for(["desktop", "certificate"] as const)(
       includeChannelSummary: false,
       includeCliProjection: true,
     });
-    const summary = await gate.finish(pending, () => deleteAgent(state, "status-publication"));
+    const summary = await gate.finish(pending, () => deleteAgent(state));
     expect(summary).toMatchObject({
       sessions: { count: 1, byAgent: [{ agentId: "survivor" }] },
       heartbeat: { defaultAgentId: "survivor", agents: [{ agentId: "survivor" }] },
@@ -500,8 +498,7 @@ it.for(["desktop", "certificate"] as const)(
 it.for(["text", "json"] as const)(
   "publishes local %s status after final backup preparation",
   async (format, { state }) => {
-    const cfg = sessionConfig(undefined, undefined, "deleting");
-    await seedAgents(cfg);
+    const cfg = await seedAgents(sessionConfig(undefined, undefined, "deleting"));
     const { executeStatusScanFromOverview } = await import("../../commands/status.scan-execute.ts");
     const scan = await executeStatusScanFromOverview({
       overview: await prepareDeletionStatusOverview(cfg),
@@ -555,9 +552,7 @@ it.for(["text", "json"] as const)(
             runtime: createTestRuntime(),
             opts: { gatewayProbeDeadlineMs: 0 },
           });
-    const result = await gate.finish<void | string[]>(pending, () =>
-      deleteAgent(state, `status-${format}-publication`),
-    );
+    const result = await gate.finish<void | string[]>(pending, () => deleteAgent(state));
     if (Array.isArray(result)) {
       const output = stripAnsi(result.join("\n"));
       expect(output).toContain("agent:survivor:main");
@@ -575,8 +570,7 @@ it.for(["text", "json"] as const)(
 it.for(["engines", "logs", "usage"] as const)(
   "publishes status --all after deletion during %s preparation",
   async (phase, { state }) => {
-    const cfg = sessionConfig();
-    await seedAgents(cfg);
+    const cfg = await seedAgents(sessionConfig());
     const overview = await prepareDeletionStatusOverview(cfg);
     const scan = await import("../../commands/status.scan-overview.ts");
     const runtime = await import("../../commands/status-runtime-shared.ts");
@@ -587,11 +581,6 @@ it.for(["engines", "logs", "usage"] as const)(
     const rows = await import("../../commands/status-overview-rows.ts");
     const { statusAllCommand } = await import("../../commands/status-all.js");
     const gate = createReadGate();
-    const pause = async (current: typeof phase) => {
-      if (current === phase) {
-        await gate.pause();
-      }
-    };
     // Keep external diagnostics fixed while the real local summary/report owners run.
     vi.spyOn(scan, "collectStatusScanOverview").mockResolvedValue(overview);
     vi.spyOn(runtime, "resolveStatusServiceSummaries").mockResolvedValue([
@@ -610,25 +599,20 @@ it.for(["engines", "logs", "usage"] as const)(
       hints: [],
     });
     vi.spyOn(diagnostics, "readLastGatewayErrorLine").mockResolvedValue(null);
-    vi.spyOn(gatewayCall, "isImplicitLocalGatewayTarget").mockImplementation(async () => {
-      await pause("engines");
-      return false;
-    });
-    vi.spyOn(logs, "readFileTailLines").mockImplementation(async () => {
-      await pause("logs");
-      return [];
-    });
-    vi.spyOn(runtime, "resolveStatusUsageSummary").mockImplementation(async () => {
-      await pause("usage");
-      return { updatedAt: 1, providers: [] };
-    });
+    vi.spyOn(gatewayCall, "isImplicitLocalGatewayTarget").mockImplementation(() =>
+      gate.value(false, phase === "engines"),
+    );
+    vi.spyOn(logs, "readFileTailLines").mockImplementation(() => gate.value([], phase === "logs"));
+    vi.spyOn(runtime, "resolveStatusUsageSummary").mockImplementation(() =>
+      gate.value({ updatedAt: 1, providers: [] }, phase === "usage"),
+    );
     const renderedRows = vi.spyOn(rows, "buildStatusAllOverviewRows");
     const output = createTestRuntime();
     const pending = statusAllCommand(output, {
       gatewayProbeDeadlineMs: 0,
       usage: phase === "usage",
     });
-    await gate.finish(pending, () => deleteAgent(state, `status-all-${phase}-publication`));
+    await gate.finish(pending, () => deleteAgent(state));
     expect(expectDefined(renderedRows.mock.calls[0], "rendered overview")[0]).toMatchObject({
       summary: { sessions: { count: 1, byAgent: [{ agentId: "survivor" }] } },
       agentStatus: { totalSessions: 1, agents: [{ id: "survivor" }] },
@@ -646,7 +630,7 @@ it.for([true, false])(
     const cfg = sessionConfig(configured ? ["survivor", "deleting"] : ["survivor"], storePath);
     setRuntimeConfigSnapshot(cfg);
     seedWindows(storePath, { survivor: 20, deleting: 30, retired: 10 });
-    deleteAgent(state, "shared-publication");
+    deleteAgent(state);
     const result = await readStatusSessionStores(cfg, resolveHealthAgentOrder(cfg).ordered, 10);
     expect(result.byAgent.map(({ agent }) => agent.id)).toEqual(["survivor"]);
     expect(result.count).toBe(24);
@@ -676,7 +660,7 @@ it.for(["snapshot", "read-error"] as const)(
       return summary;
     });
     const read = () => readStatusSessionStores(cfg, resolveHealthAgentOrder(cfg).ordered, 10);
-    const pending = gate.finish(read(), () => deleteAgent(state, "shared-sole-reader"));
+    const pending = gate.finish(read(), () => deleteAgent(state));
     if (outcome === "read-error") {
       await expect(pending).rejects.toBe(failure);
     } else {
@@ -770,14 +754,7 @@ describe("resident session projection", () => {
         await settleProjection(projection);
         const retiringPath = resolveOpenClawAgentSqlitePath({ agentId: "retiring" });
         const startClosing = () => {
-          beginAgentDeletionJournal({
-            agentId: "retiring",
-            operationId: "delete-retiring",
-            agentDir: path.dirname(retiringPath),
-            workspaceDir: state.statePath("workspace-retiring"),
-            sessionsDir: state.statePath("agents", "retiring", "sessions"),
-            deleteFiles: false,
-          });
+          deleteAgent(state, "retiring", false);
           unregister = registerOpenClawAgentDatabaseAsyncResource({
             agentId: "retiring",
             path: retiringPath,
