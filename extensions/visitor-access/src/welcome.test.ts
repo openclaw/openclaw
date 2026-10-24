@@ -409,6 +409,12 @@ describe("visitor-access.welcome.ensure", () => {
     await expect(h.welcome.ensure(guestClient(grant.grantId!))).resolves.toEqual({
       status: "not_applicable",
     });
+    // The guest role holds only session scopes; the read it implies must be requested.
+    expect(h.gateway.request).toHaveBeenLastCalledWith(
+      "sessions.describe",
+      { key: first.status === "ready" ? first.sessionKey : "", agentId: "main" },
+      { scopes: ["operator.sessions.read"] },
+    );
     await h.fixture.invite({ email: EMAIL, days: 30 });
     await expect(h.restart().ensure(guestClient(grant.grantId!))).resolves.toEqual({
       status: "not_applicable",

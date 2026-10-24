@@ -78,10 +78,12 @@ export class VisitorWelcome {
    */
   private async readyWelcome(sessionKey: string): Promise<WelcomeEnsureResult> {
     const agentId = agentFromKey(sessionKey);
-    const { session } = await this.gateway.request<{ session: unknown }>("sessions.describe", {
-      key: sessionKey,
-      agentId,
-    });
+    // The guest role holds only session scopes; ask for the session read it implies.
+    const { session } = await this.gateway.request<{ session: unknown }>(
+      "sessions.describe",
+      { key: sessionKey, agentId },
+      { scopes: ["operator.sessions.read"] },
+    );
     return session
       ? { status: "ready", sessionKey, agentId, created: false }
       : { status: "not_applicable" };

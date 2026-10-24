@@ -316,10 +316,10 @@ committed, and the call answers `not_applicable`. A new invitation after that
 gets a new grant, so the guest's next sign-in creates a new welcome session; the
 earlier one remains the guest's.
 
-A welcome session deleted by the guest or an administrator stays deleted. The
-record keeps its key, so setup never recreates it, and later calls answer
-`not_applicable`, so the Control UI does not open it. Until setup completes, a
-retry resumes against the reserved key, so a partial session removed after a
+A deleted welcome session, for example one an administrator removed, stays
+deleted. The record keeps its key, so setup never recreates it, and later calls
+answer `not_applicable`, so the Control UI does not open it. Until setup
+completes, a retry resumes against the reserved key, so a partial session removed after a
 failed setup is created again with its welcome message.
 
 Welcome sessions belong to an invitation. A person invited by both email and
