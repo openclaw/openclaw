@@ -513,6 +513,72 @@ export function stripPlainTextToolCallBlocks(
   return projectPlainTextToolCallBlocks(text, options).text;
 }
 
+const MAX_PLAIN_TEXT_TOOL_CALL_PROBE_HEADER_CHARS = "tool:".length + 120 + 2;
+
+/**
+ * Detects a line-start bracket call with a JSON payload without rescanning the
+ * complete streamed reply on every delta. Other activation tokens stay with the
+ * caller; this probe only replaces the bare `{` token, which otherwise enters
+ * whole-reply checkpoint mode for ordinary JSON-like prose.
+ */
+export function createPlainTextToolCallBraceProbe(): (delta: string) => boolean {
+  let lineStart = true;
+  let header = "";
+  let awaitingPayload = false;
+
+  return (delta) => {
+    for (let index = 0; index < delta.length; index += 1) {
+      const char = delta.charAt(index);
+      if (char === "\r" || char === "\n") {
+        header = "";
+        lineStart = true;
+        continue;
+      }
+
+      if (awaitingPayload) {
+        if (/\s/u.test(char)) {
+          continue;
+        }
+        if (char === "{") {
+          return true;
+        }
+        awaitingPayload = false;
+        if (!lineStart) {
+          continue;
+        }
+      }
+
+      if (lineStart) {
+        if (/[^\S\r\n]/u.test(char)) {
+          continue;
+        }
+        lineStart = false;
+      }
+
+      if (header) {
+        if (char === "]") {
+          const name = header.slice(1);
+          awaitingPayload = /^(?:tool:)?[A-Za-z0-9_-]{1,120}$/u.test(name);
+          header = "";
+        } else if (
+          /[A-Za-z0-9_:-]/u.test(char) &&
+          header.length < MAX_PLAIN_TEXT_TOOL_CALL_PROBE_HEADER_CHARS
+        ) {
+          header += char;
+        } else {
+          header = "";
+        }
+        continue;
+      }
+
+      if (char === "[") {
+        header = "[";
+      }
+    }
+    return false;
+  };
+}
+
 /** Call-grammar settlement; callers also retain any mutable Markdown ownership. */
 export function projectPlainTextToolCallBlocks(
   text: string,
