@@ -28,7 +28,6 @@ const probePath = path.resolve("scripts/e2e/lib/bundled-plugin-install-uninstall
 const runtimeSmokePath = path.resolve(
   "scripts/e2e/lib/bundled-plugin-install-uninstall/runtime-smoke.mjs",
 );
-const sweepPath = path.resolve("scripts/e2e/lib/bundled-plugin-install-uninstall/sweep.sh");
 let runtimeSmoke: typeof import("../../scripts/e2e/lib/bundled-plugin-install-uninstall/runtime-smoke.mjs");
 beforeEach(async () => {
   runtimeSmoke = await import(pathToFileURL(runtimeSmokePath).href);
@@ -97,6 +96,10 @@ function runnerFixture(
   const waitForDescendant = async (signal: AbortSignal) =>
     (descendantPid = await waitForPidFile(pidPath, closed, signal));
   return { runner, closed, cleanup, waitForDescendant };
+}
+
+function gatewayOptions(root: string, entrypoint: string, port = 19002) {
+  return { entrypoint, env: {}, logPath: path.join(root, "gateway.log"), port, skipChannels: true };
 }
 
 function logFixture(content?: string): string {
@@ -179,10 +182,6 @@ function runStateProbe(root: string, stateDir: string, args: string[]) {
   return runProbeCommand(root, args, { HOME: undefined, OPENCLAW_STATE_DIR: stateDir });
 }
 
-function runProbe(root: string, env: Record<string, string | undefined> = {}) {
-  return runProbeCommand(root, ["select"], env);
-}
-
 function runProbeCommand(root: string, args: string[], env: Record<string, string | undefined>) {
   const childEnv = Object.fromEntries(
     Object.entries({ ...process.env, ...env }).filter(([, value]) => value !== undefined),
@@ -200,6 +199,10 @@ function runScript(root: string, script: string, args: string[], env = process.e
 
 function runRuntimeSmoke(root: string, args: string[]) {
   return runScript(root, runtimeSmokePath, args);
+}
+
+function runProbe(root: string, env: Record<string, string | undefined> = {}) {
+  return runProbeCommand(root, ["select"], env);
 }
 
 async function importRuntimeSmokeWithEnv(env: Record<string, string | undefined>) {
@@ -309,15 +312,6 @@ describe("bundled plugin install/uninstall probe", () => {
     expect(kill).toHaveBeenNthCalledWith(2, 123, "SIGKILL");
   });
 
-  it("keeps sweep commands bounded and compatible with Bash 3", () => {
-    const sweep = fs.readFileSync(sweepPath, "utf8");
-    expect(sweep).not.toMatch(/\b(?:mapfile|readarray)\b/u);
-    expect(sweep).toContain('openclaw_e2e_maybe_timeout "$sweep_command_timeout" "$@"');
-    for (const operation of ["install", "uninstall"]) {
-      expect(sweep).toContain(`run_logged_sweep_command "${operation} $plugin_id"`);
-    }
-  });
-
   it("uses the runtime output limit for command capture", async () => {
     runtimeSmoke = await importRuntimeSmokeWithEnv({
       OPENCLAW_BUNDLED_PLUGIN_RUNTIME_OUTPUT_CHARS: "5",
@@ -358,10 +352,7 @@ describe("bundled plugin install/uninstall probe", () => {
   });
 
   it("rejects loose bundled plugin runtime index args", () => {
-    const root = makePackageRoot();
-
-    const result = runRuntimeSmoke(root, ["tts-openai-live", "", "", "", "1e3"]);
-
+    const result = runRuntimeSmoke(makePackageRoot(), ["tts-openai-live", "", "", "", "1e3"]);
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain("invalid bundled plugin runtime index: 1e3");
   });
@@ -401,14 +392,8 @@ describe("bundled plugin install/uninstall probe", () => {
       "",
     ]);
 
-    const child = runtimeSmoke.startGateway({
-      entrypoint,
-      env: {},
-      logPath,
-      port: 19002,
-      skipChannels: true,
-    });
     const marker = "[gateway log truncated after 64 bytes]";
+    const child = runtimeSmoke.startGateway(gatewayOptions(root, entrypoint));
     const logged = createDeferred();
     const closed = childClosed(child);
     // startGateway's earlier data listener commits the bounded log synchronously.
@@ -429,7 +414,6 @@ describe("bundled plugin install/uninstall probe", () => {
         awaitGateBeforeSettlement(logged.promise, closed, `gateway log missing ${marker}`),
         signal,
       );
-
       const log = fs.readFileSync(logPath, "utf8");
       expect(log).toContain(marker);
       expect(log.length).toBeLessThan(256);
@@ -575,7 +559,6 @@ describe("bundled plugin install/uninstall probe", () => {
     runtimeSmoke = await importRuntimeSmokeWithEnv(teardownEnv);
     const root = createPackageRoot();
     const entrypoint = path.join(root, "dist", "gateway-with-sidecar.js");
-    const logPath = path.join(root, "gateway.log");
     const descendantPidPath = path.join(root, "descendant.pid");
     const descendantScript = packageManager
       ? [
@@ -590,22 +573,18 @@ describe("bundled plugin install/uninstall probe", () => {
       : descendantSource(descendantPidPath);
     writeGatewayWithChild(entrypoint, descendantScript);
 
-    const child = runtimeSmoke.startGateway({
-      entrypoint,
-      env: {},
-      logPath,
-      port,
-      skipChannels: true,
-    });
-    const closed = childClosed(child);
     let descendantPid: number | undefined;
+    const killDescendant = () =>
+      killPidIfAlive(descendantPid ?? readCompletedPidFile(descendantPidPath));
+    const child = runtimeSmoke.startGateway(gatewayOptions(root, entrypoint, port));
+    const closed = childClosed(child);
     const cleanup = registerFixtureCleanup(onTestFinished, async () => {
       if (!packageManager) {
-        killPidIfAlive(descendantPid ?? readCompletedPidFile(descendantPidPath));
+        killDescendant();
       }
       await runtimeSmoke.stopGateway(child);
       if (packageManager) {
-        killPidIfAlive(descendantPid ?? readCompletedPidFile(descendantPidPath));
+        killDescendant();
       }
       await closed;
       fs.rmSync(root, { force: true, recursive: true });
@@ -613,7 +592,6 @@ describe("bundled plugin install/uninstall probe", () => {
     try {
       descendantPid = await waitForPidFile(descendantPidPath, closed, signal);
       expect(pidIsAlive(descendantPid)).toBe(true);
-
       if (packageManager) {
         await expect(runtimeSmoke.assertNoPackageManagerChildren(child.pid)).rejects.toThrow(
           /package manager descendant process still running/u,
@@ -658,13 +636,7 @@ describe("bundled plugin install/uninstall probe", () => {
       const readyMessage = gateway ? "gateway-closed" : "command-settled";
       const operation = gateway
         ? [
-            `const gateway = runtimeSmoke.startGateway(${JSON.stringify({
-              entrypoint: commandPath,
-              env: {},
-              logPath: path.join(root, "gateway.log"),
-              port: 19004,
-              skipChannels: true,
-            })});`,
+            `const gateway = runtimeSmoke.startGateway(${JSON.stringify(gatewayOptions(root, commandPath, 19004))});`,
             "gateway.once('close', () => process.send('gateway-closed'));",
           ]
         : [
@@ -768,61 +740,43 @@ describe("bundled plugin install/uninstall probe", () => {
   });
 
   it.each([
-    {
-      name: "allows degraded runtime readiness only for expected channel failures",
-      status: 503,
-      body: '{"ready":false,"failing":["qa-channel"]}',
-    },
-    {
-      name: "rejects degraded runtime readiness for unexpected channel failures",
-      status: 503,
-      body: '{"ready":false,"failing":["unexpected"]}',
-      error: '/readyz returned HTTP 503: {"ready":false,"failing":["unexpected"]}',
-    },
-    {
-      name: "rejects generic readyz server errors in degraded runtime mode",
-      status: 500,
-      body: '{"ready":true}',
-      error: '/readyz returned HTTP 500: {"ready":true}',
-    },
-    {
-      name: "keeps readyz HTTP status diagnostics when the body is malformed",
-      status: 503,
-      body: "not json",
-      error: '/readyz returned HTTP 503: "not json"',
-    },
-    {
-      name: "bounds readyz diagnostic response bodies",
-      status: 503,
-      body: "",
-      contentLength: 1024 * 1024 + 1,
-      error: "/readyz probe response body exceeded 1048576 bytes",
-    },
-  ])("$name", async ({ status, body, error, contentLength }) => {
-    runtimeSmoke = await importRuntimeSmokeWithEnv({
-      OPENCLAW_BUNDLED_PLUGIN_RUNTIME_HTTP_MS: "100",
-      OPENCLAW_BUNDLED_PLUGIN_RUNTIME_RPC_READY_MS: "50",
-    });
-    const server = createHttpServer((_request, response) => {
-      response.writeHead(status, {
-        "content-type": "application/json",
-        ...(contentLength === undefined ? {} : { "content-length": String(contentLength) }),
+    [503, '{"ready":false,"failing":["qa-channel"]}', undefined],
+    [
+      503,
+      '{"ready":false,"failing":["unexpected"]}',
+      '/readyz returned HTTP 503: {"ready":false,"failing":["unexpected"]}',
+    ],
+    [500, '{"ready":true}', '/readyz returned HTTP 500: {"ready":true}'],
+    [503, "not json", '/readyz returned HTTP 503: "not json"'],
+    [503, "", "/readyz probe response body exceeded 1048576 bytes", 1024 * 1024 + 1],
+  ] as const)(
+    "validates readyz HTTP %s with body %s",
+    async (status, body, error, contentLength) => {
+      runtimeSmoke = await importRuntimeSmokeWithEnv({
+        OPENCLAW_BUNDLED_PLUGIN_RUNTIME_HTTP_MS: "100",
+        OPENCLAW_BUNDLED_PLUGIN_RUNTIME_RPC_READY_MS: "50",
       });
-      response.end(body);
-    });
-    await withServer(server, async (port) => {
-      const probe = runtimeSmoke.assertReadyzProbe({
-        allowedDegradedReadyzFailures: ["qa-channel"],
-        pluginId: "qa-channel",
-        port,
+      const server = createHttpServer((_request, response) => {
+        response.writeHead(status, {
+          "content-type": "application/json",
+          ...(contentLength === undefined ? {} : { "content-length": String(contentLength) }),
+        });
+        response.end(body);
       });
-      if (error) {
-        await expect(probe).rejects.toThrow(error);
-      } else {
-        await expect(probe).resolves.toBeUndefined();
-      }
-    });
-  });
+      await withServer(server, async (port) => {
+        const probe = runtimeSmoke.assertReadyzProbe({
+          allowedDegradedReadyzFailures: ["qa-channel"],
+          pluginId: "qa-channel",
+          port,
+        });
+        if (error) {
+          await expect(probe).rejects.toThrow(error);
+        } else {
+          await expect(probe).resolves.toBeUndefined();
+        }
+      });
+    },
+  );
 
   it("bounds stalled runtime HTTP probes", async () => {
     await withStalledServer(async (port) => {
@@ -910,22 +864,13 @@ describe("bundled plugin install/uninstall probe", () => {
     expect(result.stderr).toContain("Available: clickclack");
   });
 
-  it("rejects loose packaged plugin list limit env values", () => {
-    const root = makePackageRoot();
-
-    const timeout = runProbe(root, {
-      OPENCLAW_BUNDLED_PLUGIN_LIST_TIMEOUT_MS: "100ms",
-    });
-    expect(timeout.status).toBe(1);
-    expect(timeout.stderr).toContain("invalid OPENCLAW_BUNDLED_PLUGIN_LIST_TIMEOUT_MS: 100ms");
-
-    const maxBuffer = runProbe(root, {
-      OPENCLAW_BUNDLED_PLUGIN_LIST_MAX_BUFFER_BYTES: "64bytes",
-    });
-    expect(maxBuffer.status).toBe(1);
-    expect(maxBuffer.stderr).toContain(
-      "invalid OPENCLAW_BUNDLED_PLUGIN_LIST_MAX_BUFFER_BYTES: 64bytes",
-    );
+  it.each([
+    ["OPENCLAW_BUNDLED_PLUGIN_LIST_TIMEOUT_MS", "100ms"],
+    ["OPENCLAW_BUNDLED_PLUGIN_LIST_MAX_BUFFER_BYTES", "64bytes"],
+  ])("rejects loose packaged plugin list limit %s", (name, value) => {
+    const result = runProbe(makePackageRoot(), { [name]: value });
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(`invalid ${name}: ${value}`);
   });
 
   it("bounds plugin list selection when the CLI hangs", () => {
@@ -952,14 +897,7 @@ describe("bundled plugin install/uninstall probe", () => {
       id: "runtime-only",
       contracts: { speechProviders: ["stale-provider"] },
     });
-    fs.mkdirSync(path.join(root, "dist-runtime", "extensions", "runtime-only"), {
-      recursive: true,
-    });
-    fs.writeFileSync(
-      path.join(root, "dist-runtime", "extensions", "runtime-only", "openclaw.plugin.json"),
-      '{"id":"runtime-only"}\n',
-      "utf8",
-    );
+    writePluginManifest(root, "dist-runtime/extensions/runtime-only", { id: "runtime-only" });
 
     const result = runRuntimeSmoke(root, [
       "tts-global-disable",

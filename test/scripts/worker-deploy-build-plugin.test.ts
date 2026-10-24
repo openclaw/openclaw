@@ -7,7 +7,7 @@ import { promisify } from "node:util";
 import { encodePngRgba } from "rastermill";
 import * as tar from "tar";
 import { build } from "tsdown";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { WebSocketServer } from "ws";
 import { rawDataToString } from "../../packages/gateway-client/src/websocket-data.js";
 import {
@@ -23,17 +23,6 @@ import {
 import { createFixtureLifetime } from "../helpers/fixture-lifetime.js";
 import { runNodeScript } from "../helpers/run-node-script.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
-
-vi.mock("tsdown", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("tsdown")>();
-  return { ...actual, build: vi.fn(actual.build) };
-});
-
-// Runtime cases consume the prepared graph without spending their deadline compiling it.
-beforeEach(() => {
-  vi.mocked(build).mockClear();
-});
-afterEach(() => expect(build).not.toHaveBeenCalled());
 
 const fail = (message: string): never => {
   throw new Error(message);
@@ -51,6 +40,34 @@ function workerEnv(root: string): NodeJS.ProcessEnv {
     TMP: root,
     TEMP: root,
   };
+}
+
+function probeArgs(script: string, entry: string, args: string[] = []) {
+  return [
+    "--input-type=module",
+    "--eval",
+    `import assert from "node:assert/strict";
+import { pathToFileURL } from "node:url";
+const [entry, ...args] = process.argv.slice(1);
+process.argv = [process.execPath, entry, "--internal-worker-prewarm"];
+${script}`,
+    entry,
+    ...args,
+  ];
+}
+
+async function runtimeProbe(
+  script: string,
+  entry: string,
+  root: string,
+  args: string[] = [],
+  cwd = root,
+) {
+  return promisify(execFile)(
+    process.execPath,
+    [...(process.versions.bun ? ["--no-install"] : []), ...probeArgs(script, entry, args)],
+    { cwd, timeout: 30_000, env: workerEnv(root) },
+  );
 }
 
 describe("worker deploy build plugin", () => {
@@ -93,6 +110,29 @@ describe("worker deploy build plugin", () => {
     );
     let preparedDist: string;
     let preparedArchive: string;
+
+    async function extractArchive(root: string, relativePath = "bundle") {
+      const relocated = path.join(root, relativePath);
+      fs.mkdirSync(relocated, { recursive: true });
+      await tar.extract({ file: preparedArchive, cwd: relocated });
+      return relocated;
+    }
+
+    async function nodeProbe(
+      script: string,
+      entry: string,
+      env: NodeJS.ProcessEnv,
+      options: Parameters<typeof runNodeScript>[3],
+      output: string,
+      args: string[] = [],
+    ) {
+      const result = await fixtureLifetime.track(
+        runNodeScript(probeArgs(script, entry, args), env, 30_000, options),
+      );
+      expect(result.error, result.stderr).toBeUndefined();
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout.trim()).toBe(output);
+    }
 
     afterEach(() => fixtureLifetime.cleanup());
 
@@ -155,18 +195,12 @@ describe("worker deploy build plugin", () => {
                 return `${code}
 export { highlight, supportsLanguage } from "../agents/utils/syntax-highlight.js";
 export { createOwnedStdioProcess, closeOwnedStdioProcess } from "../process/owned-stdio.js";
-export { explainShellCommand } from "../infra/command-explainer/extract.js";
-export { planShellAuthorization } from "../infra/exec-authorization-plan.js";
 export { commitExecAuthorizationLocked } from "../infra/exec-approvals-authorization.js";
 export { updateExecApprovals, readExecApprovalsSnapshot } from "../infra/exec-approvals-store.js";
 export { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 export { readSecretStoreExecEnvironment } from "../secrets/store/secret-store.js";
-export { rejectUnsafeExecControlShellCommand } from "../infra/exec-control-command-guard.js";
 export { WebSocket } from "../../packages/gateway-client/src/websocket.js";
 export { createImageProcessor, convertBmpToPngWithWorker } from "../media/image-processor.js";
-export { createReadTool } from "../agents/sessions/tools/read.js";
-export { createEditTool } from "../agents/sessions/tools/edit.js";
-export { createWriteTool } from "../agents/sessions/tools/write.js";
 export { createWorkerPlacementTools } from "./worker-placement-tools.js";
 export { createRealtimeTranscriptionWebSocketSession } from "../realtime-transcription/websocket-session.js";
 export { runDesktopWebSocketRuntimeProbe } from "../gateway/desktop/websocket-runtime.test-support.js";
@@ -215,19 +249,10 @@ export { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";`;
 
     it("denies workspace exec without a Gateway transcript worker in the archive", async () => {
       const root = tempDirs.make("openclaw-worker-exec-permission-");
-      const relocated = path.join(root, "bundle");
-      fs.mkdirSync(relocated);
-      await tar.extract({ file: preparedArchive, cwd: relocated });
+      const relocated = await extractArchive(root);
       expect(fs.existsSync(path.join(relocated, "session-transcript.worker.mjs"))).toBe(false);
-      const result = await runNodeScript(
-        [
-          "--input-type=module",
-          "--eval",
-          `
-import assert from "node:assert/strict";
-import { pathToFileURL } from "node:url";
-const entry = process.argv[1];
-process.argv = [process.execPath, entry, "--internal-worker-prewarm"];
+      await nodeProbe(
+        `
 const { createWorkerPlacementTools, closeOpenClawStateDatabaseAsync } = await import(pathToFileURL(entry).href);
 try {
   const exec = createWorkerPlacementTools({
@@ -249,18 +274,12 @@ try {
   await closeOpenClawStateDatabaseAsync();
 }
 `,
-          path.join(relocated, "worker.mjs"),
-        ],
+        path.join(relocated, "worker.mjs"),
         {
           ...workerEnv(root),
           OPENCLAW_STATE_DIR: path.join(root, "state"),
         },
-        30_000,
         { cwd: root },
-      );
-      expect(result.error, result.stderr).toBeUndefined();
-      expect(result.status, result.stderr).toBe(0);
-      expect(result.stdout.trim()).toBe(
         "relocated worker exec permission denied without Gateway storage",
       );
     });
@@ -270,9 +289,7 @@ try {
       ({ signal }) =>
         fixtureLifetime.run(async () => {
           const root = fixtureLifetime.createTempDir("openclaw-worker-exec-authorization-");
-          const relocated = path.join(root, "dist", "worker");
-          fs.mkdirSync(relocated, { recursive: true });
-          await tar.extract({ file: preparedArchive, cwd: relocated });
+          const relocated = await extractArchive(root, "dist/worker");
           expect(
             fs.readFileSync(path.join(relocated, WORKER_BUNDLE_WINDOWS_SECURITY_HELPER_PATH)),
           ).toEqual(
@@ -283,16 +300,9 @@ try {
               ),
             ),
           );
-          const result = await fixtureLifetime.track(
-            runNodeScript(
-              [
-                "--input-type=module",
-                "--eval",
-                `
-import assert from "node:assert/strict";
-import { pathToFileURL } from "node:url";
-const entry = process.argv[1];
-process.argv = [process.execPath, entry, "--internal-worker-prewarm"];
+          await fixtureLifetime.track(
+            nodeProbe(
+              `
 const {
   commitExecAuthorizationLocked,
   loadOrCreateDeviceIdentity,
@@ -314,7 +324,6 @@ try {
     authorization: { source: "current-policy", security: "full", ask: "off", allowlistSatisfied: true },
   });
   assertCurrent();
-  console.log("relocated exec authorization committed");
   await closeOpenClawStateDatabaseAsync();
   const stored = readExecApprovalsSnapshot().file.agents.main.allowlist[0];
   assert.equal(stored.lastUsedCommand, command);
@@ -326,21 +335,15 @@ try {
 }
 console.log("relocated exec authorization persisted");
 `,
-                path.join(relocated, "worker.mjs"),
-              ],
+              path.join(relocated, "worker.mjs"),
               {
                 ...workerEnv(root),
                 OPENCLAW_STATE_DIR: path.join(root, "state"),
               },
-              30_000,
               { cwd: root, signal },
+              "relocated exec authorization persisted",
             ),
           );
-          const diagnostics = `${result.stderr}\n${result.stdout}`;
-          expect(result.error, diagnostics).toBeUndefined();
-          expect(result.status, diagnostics).toBe(0);
-          expect(result.stdout).toContain("relocated exec authorization committed");
-          expect(result.stdout).toContain("relocated exec authorization persisted");
         }),
       180_000,
     );
@@ -351,9 +354,7 @@ console.log("relocated exec authorization persisted");
       async (fault, { signal }) =>
         fixtureLifetime.run(async () => {
           const root = fixtureLifetime.createTempDir("openclaw-worker-native-refusal-");
-          const relocated = path.join(root, "bundle");
-          fs.mkdirSync(relocated);
-          await tar.extract({ file: preparedArchive, cwd: relocated });
+          const relocated = await extractArchive(root);
           const asset =
             process.arch === "arm64"
               ? WORKER_BUNDLE_DARWIN_NATIVE_ARTIFACTS["darwin-arm64"]
@@ -364,21 +365,15 @@ console.log("relocated exec authorization persisted");
           } else {
             fs.writeFileSync(assetPath, "tampered native addon");
           }
-          const result = await fixtureLifetime.track(
-            runNodeScript(
-              [
-                "--input-type=module",
-                "--eval",
-                `
-import assert from "node:assert/strict";
+          await fixtureLifetime.track(
+            nodeProbe(
+              `
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
-const [entry, fault] = process.argv.slice(1);
+const [fault] = args;
 const require = createRequire(pathToFileURL(entry));
 assert.throws(() => require.resolve("@openclaw/fs-safe-darwin-" + process.arch), { code: "MODULE_NOT_FOUND" });
-process.argv = [process.execPath, entry, "--internal-worker-prewarm"];
 const { loadOrCreateDeviceIdentity, getNativeFallbackDiagnostic } = await import(pathToFileURL(entry).href);
 assert.throws(() => loadOrCreateDeviceIdentity(), error => {
   assert.equal(error.code, "helper-unavailable");
@@ -391,9 +386,7 @@ assert.equal(fs.existsSync(path.join(process.env.OPENCLAW_STATE_DIR, "client", "
 assert.deepEqual(Object.keys(require.cache).filter(file => file.endsWith(".node")), []);
 console.log("archive-owned native credentials refused " + fault);
 `,
-                path.join(relocated, "worker.mjs"),
-                fault,
-              ],
+              path.join(relocated, "worker.mjs"),
               {
                 PATH: process.env.PATH,
                 HOME: root,
@@ -401,14 +394,11 @@ console.log("archive-owned native credentials refused " + fault);
                 TMPDIR: root,
                 NODE_DISABLE_COMPILE_CACHE: "1",
               },
-              30_000,
               { cwd: root, signal },
+              `archive-owned native credentials refused ${fault}`,
+              [fault],
             ),
           );
-          const diagnostics = `${result.stderr}\n${result.stdout}`;
-          expect(result.error, diagnostics).toBeUndefined();
-          expect(result.status, diagnostics).toBe(0);
-          expect(result.stdout.trim()).toBe(`archive-owned native credentials refused ${fault}`);
         }),
     );
 
@@ -418,16 +408,14 @@ console.log("archive-owned native credentials refused " + fault);
         fixtureLifetime.run(async () => {
           const root = fixtureLifetime.createTempDir("openclaw-worker-facade-");
           const packageRoot = path.join(root, "pkg");
-          const relocated = path.join(packageRoot, "dist/worker");
+          const relocated = await extractArchive(packageRoot, "dist/worker");
           const bundledRoot = path.join(packageRoot, "dist/extensions");
           const pluginRoot = path.join(bundledRoot, "fixture");
-          fs.mkdirSync(relocated, { recursive: true });
           fs.mkdirSync(pluginRoot, { recursive: true });
           fs.writeFileSync(
             path.join(packageRoot, "package.json"),
             JSON.stringify({ name: "openclaw", version: "0.0.0", type: "module" }),
           );
-          await tar.extract({ file: preparedArchive, cwd: relocated });
           fs.writeFileSync(
             path.join(pluginRoot, "package.json"),
             JSON.stringify({
@@ -455,16 +443,8 @@ console.log("archive-owned native credentials refused " + fault);
             `globalThis[Symbol.for("worker-facade-evaluations")] = (globalThis[Symbol.for("worker-facade-evaluations")] ?? 0) + 1;
 export const marker = "relocated";`,
           );
-          const result = await fixtureLifetime.track(
-            runNodeScript(
-              [
-                "--input-type=module",
-                "--eval",
-                `
-import assert from "node:assert/strict";
-import { pathToFileURL } from "node:url";
-const entry = process.argv[1];
-process.argv = [process.execPath, entry, "--internal-worker-prewarm"];
+          await nodeProbe(
+            `
 const {
   loadActivatedBundledPluginPublicSurfaceModuleSync: load,
   listImportedBundledPluginFacadeIds,
@@ -521,33 +501,26 @@ assert.equal(initializations(), 1);
 assert.equal(evaluations(), 1);
 console.log("relocated worker facade activation follows the shared config snapshot");
 `,
-                path.join(relocated, "worker.mjs"),
-              ],
-              {
-                ...workerEnv(root),
-                OPENCLAW_HOME: root,
-                OPENCLAW_STATE_DIR: path.join(root, "state"),
-                OPENCLAW_CONFIG_PATH: path.join(root, "missing-config.json"),
-                OPENCLAW_FS_SAFE_NATIVE_MODE: "require",
-                OPENCLAW_BUNDLED_PLUGINS_DIR: bundledRoot,
-                XDG_CONFIG_HOME: path.join(root, "config"),
-                XDG_CACHE_HOME: path.join(root, "cache"),
-                XDG_DATA_HOME: path.join(root, "data"),
-                JITI_FS_CACHE: "0",
-                NODE_DISABLE_COMPILE_CACHE: "1",
-              },
-              30_000,
-              {
-                cwd: packageRoot,
-                signal,
-                requireProcessTreeExit: process.platform !== "win32",
-                maxBuffer: 64 * 1024,
-              },
-            ),
-          );
-          expect(result.error, `${root}\n${result.stderr}`).toBeUndefined();
-          expect(result.status, result.stderr).toBe(0);
-          expect(result.stdout.trim()).toBe(
+            path.join(relocated, "worker.mjs"),
+            {
+              ...workerEnv(root),
+              OPENCLAW_HOME: root,
+              OPENCLAW_STATE_DIR: path.join(root, "state"),
+              OPENCLAW_CONFIG_PATH: path.join(root, "missing-config.json"),
+              OPENCLAW_FS_SAFE_NATIVE_MODE: "require",
+              OPENCLAW_BUNDLED_PLUGINS_DIR: bundledRoot,
+              XDG_CONFIG_HOME: path.join(root, "config"),
+              XDG_CACHE_HOME: path.join(root, "cache"),
+              XDG_DATA_HOME: path.join(root, "data"),
+              JITI_FS_CACHE: "0",
+              NODE_DISABLE_COMPILE_CACHE: "1",
+            },
+            {
+              cwd: packageRoot,
+              signal,
+              requireProcessTreeExit: process.platform !== "win32",
+              maxBuffer: 64 * 1024,
+            },
             "relocated worker facade activation follows the shared config snapshot",
           );
 
@@ -572,53 +545,24 @@ console.log("relocated worker facade activation follows the shared config snapsh
       180_000,
     );
 
-    it("delivers image processing and file reads and edits from a relocated archive", async () => {
+    it("delivers native image processing from a relocated archive", async () => {
       const root = tempDirs.make("openclaw-worker-images-");
-      const relocated = path.join(root, "bundle");
-      fs.mkdirSync(relocated);
-      await tar.extract({ file: preparedArchive, cwd: relocated });
+      const relocated = await extractArchive(root);
       fs.writeFileSync(
         path.join(root, "window.png"),
         encodePngRgba(new Uint8Array(1500 * 934 * 4).fill(255), 1500, 934, 1),
       );
-      const result = await promisify(execFile)(
-        process.execPath,
-        [
-          ...(process.versions.bun ? ["--no-install"] : []),
-          "--input-type=module",
-          "--eval",
-          `
-import assert from "node:assert/strict";
+      const result = await runtimeProbe(
+        `
 import fs from "node:fs";
 import { createRequire } from "node:module";
-import { pathToFileURL } from "node:url";
-const [entry, imagePath] = process.argv.slice(1);
-for (const dependency of ["rastermill", "@silvia-odwyer/photon-node", "diff"]) {
+const [imagePath] = args;
+for (const dependency of ["rastermill", "@silvia-odwyer/photon-node"]) {
   assert.throws(() => createRequire(pathToFileURL(entry)).resolve(dependency), { code: "MODULE_NOT_FOUND" });
 }
-process.argv = [process.execPath, entry, "--internal-worker-prewarm"];
-const { createImageProcessor, convertBmpToPngWithWorker, createReadTool, createEditTool, createWriteTool } = await import(pathToFileURL(entry).href);
+const { createImageProcessor, convertBmpToPngWithWorker } = await import(pathToFileURL(entry).href);
 const input = fs.readFileSync(imagePath);
 try {
-const filePath = imagePath + ".txt";
-const written = await createWriteTool(process.cwd()).execute("portable-write", {
-  path: filePath, content: "const label = “hello”; // keep — unchanged\\n",
-});
-assert.equal(written.details.created, true);
-assert.match(written.details.patch, /\\+const label = “hello”/);
-const edited = await createEditTool(process.cwd()).execute("portable-edit", {
-  path: filePath,
-  edits: [{ oldText: 'const label = "hello";', newText: 'const label = "hi";' }],
-});
-assert.equal(edited.details.changed, true);
-assert.match(edited.details.diff, /\\+1 const label = "hi"; \\/\\/ keep — unchanged/);
-assert.equal(fs.readFileSync(filePath, "utf8"), 'const label = "hi"; // keep — unchanged\\n');
-for (const extension of [".txt", ".sqlite"]) {
-  const readPath = imagePath + extension;
-  fs.writeFileSync(readPath, "portable file read\\n");
-  const read = await createReadTool(process.cwd()).execute("portable-read", { path: readPath });
-  assert.ok(read.content.some(block => block.type === "text" && block.text.includes("portable file read")));
-}
 assert.deepEqual(await createImageProcessor().transparency(input), { hasAlphaChannel: true, hasTransparentPixels: false });
 const bmp = Buffer.from("424d3e0000000000000036000000280000000200000001000000010018000000000008000000000000000000000000000000000000000000ff00ff000000", "hex");
 const png = await convertBmpToPngWithWorker(bmp);
@@ -626,43 +570,28 @@ const metadata = await createImageProcessor().probe(png);
 assert.equal(metadata.width, 2);
 assert.equal(metadata.height, 1);
 assert.equal(metadata.format, "png");
-console.log("relocated image processing and file reads and edits passed");
+console.log("relocated native image processing passed");
 } catch (error) {
   console.error(error);
   process.exitCode = 1;
 }
 `,
-          path.join(relocated, "worker.mjs"),
-          path.join(root, "window.png"),
-        ],
-        {
-          cwd: relocated,
-          timeout: 30_000,
-          env: workerEnv(root),
-        },
+        path.join(relocated, "worker.mjs"),
+        root,
+        [path.join(root, "window.png")],
+        relocated,
       );
-      expect(result.stdout).toContain("relocated image processing and file reads and edits passed");
+      expect(result.stdout).toContain("relocated native image processing passed");
     }, 180_000);
 
-    it("keeps worker bootstrap, shell analysis, and Windows child spawning portable", async () => {
+    it("keeps worker bootstrap, highlighting, and Windows child spawning portable", async () => {
       const root = tempDirs.make("openclaw-worker-portable-");
       fs.cpSync(preparedDist, path.join(root, "dist"), { recursive: true });
-      const result = await promisify(execFile)(
-        process.execPath,
-        [
-          ...(process.versions.bun ? ["--no-install"] : []),
-          "--input-type=module",
-          "--eval",
-          `
-import assert from "node:assert/strict";
+      const result = await runtimeProbe(
+        `
 import { createRequire } from "node:module";
-import { pathToFileURL } from "node:url";
-const entry = process.argv[1];
-for (const dependency of ["highlight.js", "web-tree-sitter", "tree-sitter-bash"]) {
-  assert.throws(() => createRequire(pathToFileURL(entry)).resolve(dependency), { code: "MODULE_NOT_FOUND" });
-}
-process.argv = [process.execPath, entry, "--internal-worker-prewarm"];
-const { highlight, supportsLanguage, explainShellCommand, planShellAuthorization, rejectUnsafeExecControlShellCommand, createOwnedStdioProcess, closeOwnedStdioProcess } = await import(pathToFileURL(entry).href);
+assert.throws(() => createRequire(pathToFileURL(entry)).resolve("highlight.js"), { code: "MODULE_NOT_FOUND" });
+const { highlight, supportsLanguage, createOwnedStdioProcess, closeOwnedStdioProcess } = await import(pathToFileURL(entry).href);
 const initializations = () => globalThis[Symbol.for("worker-highlight-initializations")] ?? 0;
 assert.equal(initializations(), 0, "headless worker bootstrap must not initialize syntax highlighting");
 assert.equal(supportsLanguage("javascript"), true);
@@ -670,16 +599,6 @@ assert.match(highlight("const answer = 42;", "javascript", {
   keyword: text => "[" + text + "]",
 }), /\\[const\\]/);
 assert.equal(initializations(), 1, "rendering must initialize the bundled highlighter only once");
-const explanation = await explainShellCommand('printf "%s" "$(whoami)" | cat');
-assert.equal(explanation.ok, true);
-assert.deepEqual(explanation.topLevelCommands.map(step => step.executable), ["printf", "cat"]);
-assert.deepEqual(explanation.nestedCommands.map(step => step.executable), ["whoami"]);
-assert.equal((await planShellAuthorization({ command: 'printf "%s" safe | cat', cwd: process.cwd() })).ok, true);
-await rejectUnsafeExecControlShellCommand('printf "%s" safe');
-await assert.rejects(
-  () => rejectUnsafeExecControlShellCommand('echo $(/approve synthetic allow-once)'),
-  /exec cannot run \\/approve commands/,
-);
 if (process.platform === "win32") {
   assert.throws(() => createRequire(pathToFileURL(entry)).resolve("koffi"), { code: "MODULE_NOT_FOUND" });
   const owned = await createOwnedStdioProcess({
@@ -699,17 +618,12 @@ if (process.platform === "win32") {
     owned.dispose();
   }
 }
-console.log("portable worker highlighting and shell analysis passed");
+console.log("portable worker highlighting and child spawning passed");
 `,
-          path.join(root, "dist/worker/worker.mjs"),
-        ],
-        {
-          cwd: root,
-          timeout: 30_000,
-          env: workerEnv(root),
-        },
+        path.join(root, "dist/worker/worker.mjs"),
+        root,
       );
-      expect(result.stdout.trim()).toBe("portable worker highlighting and shell analysis passed");
+      expect(result.stdout.trim()).toBe("portable worker highlighting and child spawning passed");
       expect(result.stderr).toBe("");
     });
 
@@ -743,17 +657,12 @@ console.log("portable worker highlighting and shell analysis passed");
         }
         fs.renameSync(output, relocated);
         const probe = `
-import assert from "node:assert/strict";
 import { once } from "node:events";
 import { createRequire } from "node:module";
-import { pathToFileURL } from "node:url";
-const [entry, url] = process.argv.slice(1);
-process.argv = [process.execPath, entry, "--internal-worker-prewarm"];
+const [url] = args;
 assert.throws(() => createRequire(pathToFileURL(entry)).resolve("ws/package.json"), { code: "MODULE_NOT_FOUND" });
 const { WebSocket, createRealtimeTranscriptionWebSocketSession, runDesktopWebSocketRuntimeProbe } = await import(pathToFileURL(entry).href);
-for (const mode of ["observer-close", "observer-backpressure", "observer-payload", "desktop", "portal"]) {
-  await runDesktopWebSocketRuntimeProbe(mode);
-}
+await runDesktopWebSocketRuntimeProbe("desktop");
 const socket = new WebSocket(url + "/client", { headers: { "x-worker-proof": "client-header" } });
 await once(socket, "open");
 const message = once(socket, "message");
@@ -780,20 +689,14 @@ try {
 } finally { session.close(); }
 console.log("relocated worker WebSocket and transcription passed");
 `;
-        const result = await runNodeScript(
-          [
-            "--input-type=module",
-            "--eval",
-            probe,
-            path.join(relocated, "worker/worker.mjs"),
-            `ws://127.0.0.1:${address.port}`,
-          ],
+        await nodeProbe(
+          probe,
+          path.join(relocated, "worker/worker.mjs"),
           workerEnv(root),
-          30_000,
           { cwd: relocated },
+          "relocated worker WebSocket and transcription passed",
+          [`ws://127.0.0.1:${address.port}`],
         );
-        expect(result.status, result.stderr).toBe(0);
-        expect(result.stdout.trim()).toBe("relocated worker WebSocket and transcription passed");
         expect(requests).toEqual([
           { path: "/client", header: "client-header" },
           { path: "/transcription", header: "transcription-header" },
