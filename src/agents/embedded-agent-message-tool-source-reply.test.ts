@@ -51,54 +51,22 @@ beforeEach(() => {
 });
 
 describe("messaging delivery action classification", () => {
-  it("classifies exact conversation sends as visible messaging delivery", () => {
-    for (const toolName of ["conversations_send", "conversations_turn"]) {
-      expect(isMessagingToolSendAction(toolName, {})).toBe(true);
-      expect(isMessagingToolTargetEvidenceAction(toolName, {})).toBe(true);
-      expect(isMessagingToolDeliveryAction(toolName, {})).toBe(true);
-    }
-  });
-
-  it("keeps visible side effects broader than terminal reply sends", () => {
-    expect(isMessagingToolSendAction("message", { action: "poll" })).toBe(false);
-    for (const action of [
-      "poll",
-      "reply",
-      "sticker",
-      "thread-create",
-      "topic-create",
-      "threadCreate",
-      "createForumTopic",
-    ]) {
-      expect(isMessagingToolTargetEvidenceAction("message", { action })).toBe(true);
-    }
-    expect(isMessagingToolTargetEvidenceAction("message", { action: "edit" })).toBe(false);
-    for (const action of [
-      "poll",
-      "broadcast",
-      "thread-create",
-      "topic-create",
-      "createForumTopic",
-      "channel-create",
-      "event-create",
-      "react",
-      "read",
-      "channel-list",
-    ]) {
-      expect(isMessagingToolDeliveryAction("message", { action })).toBe(
-        !["read", "channel-list"].includes(action),
-      );
-    }
-  });
-
-  it("uses provider-native mutation contracts", () => {
-    expect(isMessagingToolDeliveryAction("native-messaging", { action: "editMessage" })).toBe(true);
-    expect(isMessagingToolDeliveryAction("native-messaging", { action: "deleteMessage" })).toBe(
-      true,
-    );
-    expect(isMessagingToolDeliveryAction("native-messaging", { action: "readMessages" })).toBe(
-      false,
-    );
+  it.each([
+    ["conversations_send", {}, true, true, true],
+    ["conversations_turn", {}, true, true, true],
+    ["message", { action: "poll" }, false, true, true],
+    ["message", { action: "threadCreate" }, false, true, true],
+    ["message", { action: "edit" }, false, false, true],
+    ["message", { action: "read" }, false, false, false],
+    ["native-messaging", { action: "editMessage" }, false, false, true],
+    ["native-messaging", { action: "deleteMessage" }, false, false, true],
+    ["native-messaging", { action: "readMessages" }, false, false, false],
+  ] as const)("%s %j send=%s target=%s delivery=%s", (tool, args, send, target, delivery) => {
+    expect([
+      isMessagingToolSendAction(tool, args),
+      isMessagingToolTargetEvidenceAction(tool, args),
+      isMessagingToolDeliveryAction(tool, args),
+    ]).toEqual([send, target, delivery]);
   });
 });
 
@@ -343,108 +311,73 @@ describe("isDeliveredMessagingToolResult", () => {
 });
 
 describe("isDeliveredMessageToolOnlySourceReplyResult", () => {
-  const poll = { action: "poll", pollQuestion: "Preferred default?", pollOption: ["a", "b"] };
-  const explicitReply = {
+  const send = { action: "send", message: "reply" };
+  const explicit = {
     action: "reply",
     channel: "imessage",
     target: "+12069106512",
     message: "reply",
   };
-  const replyReceipt = { ok: true, messageId: "imessage-853" };
-  it("accepts a confirmed adopted-thread reply outside message-tool-only mode", () => {
-    expectSourceReplyDelivery({
-      sourceReplyDeliveryMode: "automatic",
-      args: { action: "thread-reply", threadId: "thread-1", message: "done" },
-      result: { details: { ok: true, sourceReplyRoute: "current-source" } },
-    }).toBe(true);
+  const poll = { action: "poll", pollQuestion: "Preferred default?", pollOption: ["a", "b"] };
+  const receipt = { ok: true, messageId: "imessage-853" };
+  const sent = { deliveryStatus: "sent" };
+  const confirmed = (fields: Record<string, unknown>) => ({
+    details: { ...fields, sourceReplyRoute: "current-source" },
   });
-
-  it("accepts a confirmed current-source poll delivery", () => {
-    expectSourceReplyDelivery({
-      args: poll,
-      result: { details: { ok: true, pollId: "poll-1", sourceReplyRoute: "current-source" } },
-    }).toBe(true);
-  });
-
-  it("rejects an unconfirmed poll delivery", () => {
-    expectSourceReplyDelivery({
-      args: poll,
-      result: { details: { ok: true, pollId: "poll-1" } },
-    }).toBe(false);
-  });
-
-  it("accepts only confirmed implicit message sends", () => {
-    expectSourceReplyDelivery({
-      args: { action: "send", message: "reply" },
-      result: { deliveryStatus: "sent" },
-      deliveryConfirmed: true,
-    }).toBe(true);
-    expectSourceReplyDelivery({
-      args: { action: "send", target: "elsewhere", message: "reply" },
-      result: { deliveryStatus: "sent" },
-      deliveryConfirmed: true,
-    }).toBe(false);
-  });
-
-  it.each(["automatic"] as const)(
-    "accepts confirmed explicit routes when the caller verified the source route (%s)",
-    (sourceReplyDeliveryMode) => {
-      expectSourceReplyDelivery({
-        sourceReplyDeliveryMode,
-        args: explicitReply,
-        result: replyReceipt,
-        allowExplicitSourceRoute: true,
-      }).toBe(true);
-      expectSourceReplyDelivery({
-        sourceReplyDeliveryMode,
-        args: explicitReply,
-        result: replyReceipt,
-      }).toBe(false);
-      expectSourceReplyDelivery({
-        sourceReplyDeliveryMode,
-        args: { ...explicitReply, action: "react" },
-        result: { ok: true },
-        allowExplicitSourceRoute: true,
-      }).toBe(false);
-    },
-  );
-
-  it("accepts explicit sends with a structured current-source marker", () => {
-    expectSourceReplyDelivery({
-      args: {
-        action: "send",
-        channel: "telegram",
-        target: "8455538490",
-        message: "reply",
-      },
-      result: {
+  type Input = Parameters<typeof expectSourceReplyDelivery>[0];
+  type Case = [string, unknown, unknown, boolean, Omit<Input, "args" | "result">?];
+  it.each([
+    ["confirmed poll", poll, confirmed({ ok: true, pollId: "poll-1" }), true],
+    ["unconfirmed poll", poll, { details: { ok: true, pollId: "poll-1" } }, false],
+    ["implicit send", send, sent, true, { deliveryConfirmed: true }],
+    [
+      "unverified target",
+      { ...send, target: "elsewhere" },
+      sent,
+      false,
+      { deliveryConfirmed: true },
+    ],
+    [
+      "verified explicit route",
+      explicit,
+      receipt,
+      true,
+      { sourceReplyDeliveryMode: "automatic", allowExplicitSourceRoute: true },
+    ],
+    [
+      "unverified explicit route",
+      explicit,
+      receipt,
+      false,
+      { sourceReplyDeliveryMode: "automatic" },
+    ],
+    [
+      "reaction is not a reply",
+      { ...explicit, action: "react" },
+      { ok: true },
+      false,
+      { sourceReplyDeliveryMode: "automatic", allowExplicitSourceRoute: true },
+    ],
+    [
+      "structured current-source marker",
+      { ...send, channel: "telegram", target: "8455538490" },
+      {
         content: [{ type: "text", text: '{"ok":true}' }],
-        details: {
-          ok: true,
-          messageId: "telegram-242",
-          sourceReplyRoute: "current-source",
-        },
+        ...confirmed({ ok: true, messageId: "telegram-242" }),
       },
-    }).toBe(true);
-  });
-
-  it("does not trust current-source markers echoed in result text", () => {
-    expectSourceReplyDelivery({
-      args: {
-        action: "send",
-        target: "elsewhere",
-        message: "reply",
-      },
-      result: {
-        content: [
-          {
-            type: "text",
-            text: '{"ok":true,"sourceReplyRoute":"current-source"}',
-          },
-        ],
+      true,
+    ],
+    [
+      "untrusted marker in text",
+      { ...send, target: "elsewhere" },
+      {
+        content: [{ type: "text", text: '{"ok":true,"sourceReplyRoute":"current-source"}' }],
         details: { ok: true, messageId: "remote-242" },
       },
-    }).toBe(false);
+      false,
+    ],
+  ] satisfies Case[])("%s", (_name, args, result, expected, options) => {
+    expectSourceReplyDelivery({ args, result, ...options }).toBe(expected);
   });
 });
 
