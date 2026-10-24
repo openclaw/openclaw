@@ -5450,7 +5450,6 @@ try {
         !connectionScenario &&
         listIntervalMs === 0 &&
         values.diagnostics &&
-        values["trace-gc"] &&
         !values.allocations &&
         !values["workload-cpu-profile"]
           ? {
@@ -5464,15 +5463,19 @@ try {
                     "Natural GC capture must contain the declared completed RPC count",
                   );
                 }
-                const gcTrace = readGatewayGcTrace(
-                  path.join(output, "gateway.stdout.log"),
-                  `round-${sample.round}`,
-                  "diagnostics",
-                );
+                const gcTrace = values["trace-gc"]
+                  ? readGatewayGcTrace(
+                      path.join(output, "gateway.stdout.log"),
+                      `round-${sample.round}`,
+                      "diagnostics",
+                    )
+                  : undefined;
                 return {
                   operationCount,
-                  gcTrace,
-                  promotedBytesPerOperation: gcTrace.promotedBytes / operationCount,
+                  timingGateEligible: !values["trace-gc"],
+                  ...(gcTrace
+                    ? { gcTrace, promotedBytesPerOperation: gcTrace.promotedBytes / operationCount }
+                    : {}),
                   millisecondsPerOperation: Object.fromEntries(
                     Object.entries(sample.diagnostics.gateway.gc).map(([kind, metric]) => [
                       kind,

@@ -1021,15 +1021,26 @@ both sides, absolute and relative paired deltas, and the two-pair gate result fo
 pairs 1–2 and 3–4. Four pairs can expose a false rejection; they cannot precisely
 estimate the false-positive rate. A guard-interrupted pair is discarded whole.
 
-Use `transcript-broadcast-measure.ts --diagnostics --trace-gc` **without**
-allocation or CPU profiling for natural GC. Each RPC round without background
-polling records `naturalGc`:
-completed operation count, main-isolate trace promotion per operation, and GC
-milliseconds per operation split by kind. `diagnostics.gateway.gc` supplies
+Use `transcript-broadcast-measure.ts --diagnostics` **without** GC tracing,
+allocation or CPU profiling for natural-GC timing gates. Each RPC round without
+background polling records `naturalGc`: completed operation count, timing-gate
+eligibility, and GC milliseconds per operation split by kind. `diagnostics.gateway.gc` supplies
 collection counts, pause tails, and maxima; `eventLoopDelay` includes its sample
 count. The diagnostic capture also records Node/V8 versions, process age, and
 heap-space sizes before and after. Compare young-generation capacity: equal
 source does not imply equal nursery size after startup or an idle wait.
+
+Measure promotion separately with `--diagnostics --trace-gc` and matched A/A
+controls. This adds main-isolate `gcTrace` and `promotedBytesPerOperation` but marks
+timing as ineligible for gates. Node's GC event clock spans its prologue/epilogue
+callbacks; V8 prints the trace after stopping its collection-pause clock and
+before the epilogue callback. Trace serialization/output can therefore inflate
+GC-event and loop timings. Retain those raw observations for attribution; do not
+subtract trace overhead or replace total GC cost with the narrower trace-pause
+sum. Tracing also forces an initial identification GC before capture, so compare
+baseline and candidate within the same mode. See the
+[Node callback timer](https://github.com/nodejs/node/blob/v26.12.1/src/node_perf.cc#L166)
+and [V8 trace boundary](https://github.com/nodejs/node/blob/v26.12.1/deps/v8/src/heap/heap.cc#L1716).
 
 The allocation profiler is a separate experiment. Its stop operation forces GC;
 the outer `diagnostics.gateway` window includes that operation. Use allocation
@@ -1047,7 +1058,7 @@ node --import ./scripts/tsx.mjs scripts/perf/transcript-broadcast-measure.ts \
   --state-dir /path/to/fresh-team-shape --entry src/entry.ts \
   --scenario plugin.scope --clients 1 --runs 1 --operations 1000 \
   --warmup-operations 40 --rpc-interval-ms 132 --rounds 1 \
-  --port 41580 --mock-port 41582 --diagnostics --trace-gc \
+  --port 41580 --mock-port 41582 --diagnostics \
   --start-file /path/to/pair-start --revision <source-sha>
 ```
 
