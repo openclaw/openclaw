@@ -94,6 +94,14 @@ function expectMcpReply(response: McpResponse, isError = false) {
   expect(response.error).toBeUndefined();
   expect(response.result?.isError).toBe(isError);
 }
+type McpObservation = {
+  listed: McpResponse;
+  reply: McpResponse;
+  followupReply?: McpResponse;
+};
+async function readObservation(root: string, filename: string): Promise<McpObservation> {
+  return JSON.parse(await readFile(path.join(root, filename), "utf8"));
+}
 type Scenario = [
   runtime: "claude-cli" | "openclaw",
   action: "read" | "channel-info" | "channel-edit",
@@ -327,6 +335,17 @@ describe("scheduled message actions", () => {
           OPENCLAW_SKIP_PROVIDERS: undefined,
           OPENCLAW_GATEWAY_URL: undefined,
           OPENCLAW_GATEWAY_TOKEN: undefined,
+          OPENCLAW_SCHEDULED_READ_ARGUMENTS: JSON.stringify(actionParams),
+          OPENCLAW_SCHEDULED_CREATE_JOB: undefined,
+          OPENCLAW_SCHEDULED_MESSAGE_FOLLOWUP_ARGUMENTS: nativeCreator
+            ? JSON.stringify({ ...actionParams, topic: deniedTopic })
+            : undefined,
+          HTTP_PROXY: undefined,
+          HTTPS_PROXY: undefined,
+          ALL_PROXY: undefined,
+          http_proxy: undefined,
+          https_proxy: undefined,
+          all_proxy: undefined,
         })) {
           vi.stubEnv(key, value);
         }
@@ -336,32 +355,11 @@ describe("scheduled message actions", () => {
         let unstartedGatewayPortClaim: typeof gatewayPortClaim | undefined = gatewayPortClaim;
         cleanup.push(() => unstartedGatewayPortClaim?.release());
         const gatewayToken = "synthetic-scheduled-read-gateway-token";
-        vi.stubEnv("OPENCLAW_SCHEDULED_READ_ARGUMENTS", JSON.stringify(actionParams));
-        vi.stubEnv("OPENCLAW_SCHEDULED_CREATE_JOB", undefined);
-        vi.stubEnv(
-          "OPENCLAW_SCHEDULED_MESSAGE_FOLLOWUP_ARGUMENTS",
-          nativeCreator
-            ? JSON.stringify({
-                action: "channel-edit",
-                channel: "discord",
-                target: `channel:${channelId}`,
-                topic: deniedTopic,
-              })
-            : undefined,
+        cleanup.push(
+          clearRuntimeConfigSnapshot,
+          closeOpenClawStateDatabaseForTest,
+          closeOpenClawStateDatabaseAsync,
         );
-        for (const key of [
-          "HTTP_PROXY",
-          "HTTPS_PROXY",
-          "ALL_PROXY",
-          "http_proxy",
-          "https_proxy",
-          "all_proxy",
-        ]) {
-          vi.stubEnv(key, undefined);
-        }
-        cleanup.push(() => clearRuntimeConfigSnapshot());
-        cleanup.push(() => closeOpenClawStateDatabaseForTest());
-        cleanup.push(() => closeOpenClawStateDatabaseAsync());
 
         const provider = createServer((req, res) => {
           const work = (async () => {
@@ -681,9 +679,7 @@ describe("scheduled message actions", () => {
           for (const payload of Array.isArray(producerReply) ? producerReply : [producerReply]) {
             expect(payload?.isError).not.toBe(true);
           }
-          const creation = JSON.parse(
-            await readFile(path.join(root, "created-job.json"), "utf8"),
-          ) as { listed: McpResponse; reply: McpResponse };
+          const creation = await readObservation(root, "created-job.json");
           expect(creation.listed.result?.tools).toContainEqual(
             expect.objectContaining({ name: AUTOMATIONS_TOOL_NAME }),
           );
@@ -813,16 +809,12 @@ describe("scheduled message actions", () => {
         }
         let text: string | undefined;
         if (runtime === "claude-cli") {
-          const observation: {
-            listed: McpResponse;
-            reply: McpResponse;
-            followupReply?: McpResponse;
-          } = mcpHandlerSpy
+          const observation: McpObservation = mcpHandlerSpy
             ? {
                 listed: await readObservedMcpResponse("tools/list"),
                 reply: await readObservedMcpResponse("tools/call"),
               }
-            : JSON.parse(await readFile(path.join(root, "mcp-result.json"), "utf8"));
+            : await readObservation(root, "mcp-result.json");
           if (disableBeforeResponse) {
             expect(await waitForActiveCronTaskRuns(10_000)).toEqual({ drained: true, active: 0 });
             expect(getSuspensionVisibleCronTaskRunCount({ agentId: "main" })).toBe(0);
