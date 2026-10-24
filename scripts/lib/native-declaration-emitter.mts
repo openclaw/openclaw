@@ -62,10 +62,15 @@ async function resolveNativeCompiler(compilerRoot: string | undefined): Promise<
     const exports = isRecord(manifest) && isRecord(manifest.exports) ? manifest.exports : {};
     // Resolve like Node's ESM loader so a linked package keeps one module instance;
     // filesystem sentinels are identity-checked by the client that loaded them.
-    const load = (entry: unknown) =>
-      typeof entry === "string"
-        ? import(pathToFileURL(fs.realpathSync(path.join(path.dirname(packageJson), entry))).href)
-        : undefined;
+    const load = (entry: unknown) => {
+      if (typeof entry !== "string") {
+        return undefined;
+      }
+      const compilerModuleUrl = pathToFileURL(
+        fs.realpathSync(path.join(path.dirname(packageJson), entry)),
+      ).href;
+      return import(compilerModuleUrl);
+    };
     // TypeScript 7 previews before 2026-10 published the API under unstable/.
     const entry = exports["./async"] ?? exports["./unstable/async"];
     if (typeof entry === "string") {
