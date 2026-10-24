@@ -38,8 +38,13 @@ it("reuses host and continuation schemas across interleaved sessions", () => {
             host: { enum: sessionSandbox ? ["auto", "sandbox"] : ["auto", "gateway", "node"] },
           },
         });
-        expect(Object.hasOwn(tool.parameters.properties, "background")).toBe(hasProcess);
-        expect(Object.hasOwn(tool.parameters.properties, "yieldMs")).toBe(hasProcess);
+        if (hasProcess) {
+          expect(tool.parameters).toHaveProperty("properties.background");
+          expect(tool.parameters).toHaveProperty("properties.yieldMs");
+        } else {
+          expect(tool.parameters).not.toHaveProperty("properties.background");
+          expect(tool.parameters).not.toHaveProperty("properties.yieldMs");
+        }
         return tool.parameters;
       }),
     ),
