@@ -16,10 +16,6 @@ export type AsyncStartedToolMeta = {
   asyncTaskId?: string;
 };
 
-export type CompletionRequiredAsyncTaskWaitResult = {
-  timedOutRunIds: string[];
-};
-
 const COMPLETION_REQUIRED_TASK_KINDS = new Set([
   "image_generation",
   "music_generation",
@@ -105,7 +101,7 @@ export async function waitForCompletionRequiredAsyncTasks(params: {
   getDeadlineAtMs: () => number | undefined;
   onDeadlineChanged: (listener: () => void) => () => void;
   abortSignal?: AbortSignal;
-}): Promise<CompletionRequiredAsyncTaskWaitResult> {
+}) {
   const waitedRunIds = new Set<string>();
   const timedOutRunIds = new Set<string>();
   let changed = createDeferredCore();
