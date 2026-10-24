@@ -321,7 +321,7 @@ async function populate(count: number, verify: boolean) {
           },
         )
       ).result();
-      assert.equal(result.stopReason, "stop", result.errorMessage);
+      assert.equal(result.stopReason, "stop", result.errorMessage ?? "Synthetic request failed");
       messages.push(result);
     }
     if (verify) {
