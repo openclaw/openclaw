@@ -206,6 +206,14 @@ describe("agents set-identity command", () => {
     expect(runtime.log.mock.calls.flat().join("\n")).not.toContain("Relocate with");
   });
 
+  it.each([
+    [{ identityFile: " " }, "--identity-file must not be blank"],
+    [{ workspace: "\t" }, "--workspace must not be blank"],
+  ] as const)("rejects an explicitly blank path %j", async (options, message) => {
+    setAgents({ entries: { main: {} } });
+    await expectIdentityCommandFailure({ agent: "main", ...options, json: true }, message);
+  });
+
   it("rejects an invalid agent id without changing config", async () => {
     const agent = "агент✨";
     await expectIdentityCommandFailure(
