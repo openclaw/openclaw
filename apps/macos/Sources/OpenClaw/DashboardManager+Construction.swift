@@ -25,6 +25,7 @@ extension DashboardManager {
         var autoStartSignIn = false
         var legacyNativeCredentials: DashboardNativeGatewayAuth.LegacyCredentials?
         var nativeAuthProvider: DashboardNativeGatewayAuth.Provider?
+        var connectionConsumer: MacGatewayConnectionFleet.Consumer?
     }
 
     struct SupersededDashboardPresentation: Error {}
@@ -94,6 +95,7 @@ extension DashboardManager {
         connectionProvider: @escaping @Sendable (DashboardGatewayTarget) async -> GatewayConnection = {
             await DashboardManager.gatewayConnection(for: $0)
         },
+        connectionFleet: MacGatewayConnectionFleet = .shared,
         browserIdentityURLProvider: (@Sendable (DashboardGatewayTarget, GatewayConnection.Config) async throws
             -> URL?)? = { _, _ in nil },
         legacyCredentialsProvider: (@Sendable (DashboardGatewayTarget, GatewayConnection.EndpointSnapshot) async throws
@@ -119,6 +121,7 @@ extension DashboardManager {
                 defaults: UserDefaults(suiteName: "DashboardSelectionTests.\(UUID().uuidString)")!),
             authTokenProvider: authTokenProvider,
             connectionProvider: connectionProvider,
+            connectionFleet: connectionFleet,
             browserIdentityURLProvider: browserIdentityURLProvider,
             legacyCredentialsProvider: legacyCredentialsProvider,
             routeProbe: routeProbe,
@@ -147,6 +150,7 @@ extension DashboardManager {
         present: Bool,
         restoringRoute: URL? = nil)
     {
+        controller.connectionConsumer = configuration.connectionConsumer
         controller.documentHost.nativeGatewayAuthProvider = configuration.nativeAuthProvider
         controller.documentHost.legacyNativeCredentials = configuration.legacyNativeCredentials
         if let page = configuration.signedOut {
@@ -215,6 +219,7 @@ extension DashboardManager {
         token: String?) async throws
         -> (configuration: WindowConfiguration, endpoint: GatewayConnection.EndpointSnapshot)
     {
+        let consumer = self.connectionFleet.retainConsumer(for: target)
         var endpoint = endpoint
         let config = endpoint.config
         let browserSession = endpoint.browserSession
@@ -282,7 +287,8 @@ extension DashboardManager {
             browserSession: browserSession,
             legacyNativeCredentials: legacyCredentials,
             nativeAuthProvider: auth.usesNativeDevice ? self
-                .nativeAuthProvider(target: target, endpoint: endpoint) : nil), endpoint)
+                .nativeAuthProvider(target: target, endpoint: endpoint) : nil,
+            connectionConsumer: consumer), endpoint)
     }
 
     func nativeAuthProvider(
