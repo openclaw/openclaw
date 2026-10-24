@@ -99,7 +99,8 @@ export function createSqliteDatabaseAdmissionReader(owner: {
       state.rolledBack.delete(anchor);
     }
     let fact = record.facts.get(key.name);
-    if (!fact || !valid(record, fact)) {
+    // A retry may have physical facts while later schema publications are still in transit.
+    if (!fact || !valid(record, fact) || (options.refresh && key.writer !== "host")) {
       if (key.writer === "host") {
         if (
           database.isTransaction ||

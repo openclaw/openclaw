@@ -21,8 +21,8 @@ import { resolveDatabaseFamilyEngines } from "./registry.js";
 const configured: unknown = getEnvironmentData("openclaw.test.state.conformance.connection");
 const connection = typeof configured === "string" ? configured : undefined;
 const scenarios = [
-  { name: "read after delayed publication", release: true },
-  { name: "startup ledger after delayed publication", release: true, startupLedger: true },
+  { name: "read after staggered schema publication", release: true },
+  { name: "startup ledger after staggered schema publication", release: true, startupLedger: true },
   { name: "unpublished schema reaches its bounded deadline" },
   { name: "shorter caller deadline", admissionTimeoutMs: 150 },
   { name: "caller cancellation", cancellable: true },
@@ -67,7 +67,7 @@ it.skipIf(!connection).each(scenarios)("settles $name", async (scenario) => {
         );
         return database;
       });
-      const publisherGate = new Int32Array(new SharedArrayBuffer(2 * Int32Array.BYTES_PER_ELEMENT));
+      const publisherGate = new Int32Array(new SharedArrayBuffer(3 * Int32Array.BYTES_PER_ELEMENT));
       const readerGate = new Int32Array(new SharedArrayBuffer(2 * Int32Array.BYTES_PER_ELEMENT));
       const release = (gate: Int32Array, index: number) => {
         Atomics.store(gate, index, 1);
@@ -87,6 +87,7 @@ it.skipIf(!connection).each(scenarios)("settles $name", async (scenario) => {
           environment: { ...state.env, OPENCLAW_STATE_DIR: state.stateDir },
           selection: getDatabaseEngineSelection(),
           gate: publisherGate.buffer,
+          splitPublication: options.release,
         },
       );
       publisher.worker.postMessage({ admissionPort: publisherRelay.port }, [publisherRelay.port]);
@@ -147,14 +148,39 @@ it.skipIf(!connection).each(scenarios)("settles $name", async (scenario) => {
         if (options.release || options.cancellable) {
           // Real worker clocks prove bounded waiting while the publication transport stays held.
           await delay(50);
+          const physical = options.release
+            ? once(publisher.worker, "message").then(([message]) => message)
+            : undefined;
+          const retried = options.release
+            ? once(reader.worker, "message").then(([message]) => message)
+            : undefined;
           release(options.release ? publisherGate : readerGate, 1);
+          if (physical && retried) {
+            // Physical facts can arrive before the version facts required inside the read.
+            expect(
+              await awaitGateBeforeSettlement(
+                physical,
+                published,
+                "Publisher exited before physical facts",
+              ),
+            ).toMatchObject({ phase: "physical-published" });
+            expect(
+              await awaitGateBeforeSettlement(
+                retried,
+                read,
+                "Reader exited before partial-publication retry",
+              ),
+            ).toMatchObject({ phase: "reader-retried" });
+            await delay(50);
+            release(publisherGate, 2);
+          }
         }
         const result = await read;
         expect(result.elapsedMs).toBeLessThan(
           options.admissionTimeoutMs === undefined ? 1800 : 600,
         );
         if (options.release) {
-          expect(result).toMatchObject({
+          expect(result, JSON.stringify(result)).toMatchObject({
             ok: true,
             callbackCalls: 1,
             value: options.startupLedger
@@ -181,6 +207,7 @@ it.skipIf(!connection).each(scenarios)("settles $name", async (scenario) => {
       } finally {
         release(publisherGate, 0);
         release(publisherGate, 1);
+        release(publisherGate, 2);
         release(readerGate, 0);
         await Promise.allSettled([published, read]);
         publisherRelay.finish();

@@ -75,7 +75,8 @@ shared-state reads before their callback, and standalone feature-schema ensures
 share a brief backoff retry for at most one second, bounded by the caller's
 deadline and cancellation. Transaction retries require a completed rollback;
 feature-schema ensures only replay their own schema work. Each retry asks the
-owner for current facts; ordinary reads do not poll. A longer publication gap
+owner for current facts, even if physical facts arrived before version facts;
+ordinary reads do not poll. A longer publication gap
 still fails visibly. Readers never replay caller work or refresh an imported
 snapshot, and fragment checks inside a caller's transaction do not retry.
 Schema validation and live ownership checks remain in force.

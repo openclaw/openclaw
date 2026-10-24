@@ -60,6 +60,7 @@ let callbackCalls = 0;
 let transactions = 0;
 let paused = false;
 let refreshed = false;
+let retried = false;
 let admissionRefreshes = 0;
 let readStartedAt: number | undefined;
 const gate = new Int32Array(input.gate);
@@ -86,6 +87,10 @@ const listener = (message: unknown) => {
     return;
   }
   if (paused) {
+    if (input.observeRefresh && !retried) {
+      retried = true;
+      port.postMessage({ phase: "reader-retried" });
+    }
     return;
   }
   paused = true;

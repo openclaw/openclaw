@@ -27,6 +27,7 @@ const input = workerData as {
   gate: SharedArrayBuffer;
   twoPublications?: boolean;
   pauseCommit?: boolean;
+  splitPublication?: boolean;
 };
 if (!parentPort) {
   throw new Error("Publication fixture requires a worker");
@@ -46,6 +47,7 @@ const wait = (index: number) => {
 let committed = false;
 let publication = 0;
 let held = -1;
+let physicalPublished = false;
 const statements = channel("openclaw.database.statement");
 const listener = (message: unknown) => {
   const event = message as { engine?: string; sql?: string; outcome?: string };
@@ -68,7 +70,18 @@ try {
         port.postMessage({ phase: "publication-pending", publication });
         wait(publication === 0 ? 1 : 3);
       }
-      return exchangeSqliteDatabaseAdmissions(admissionPort, admissions, location, create);
+      const result = exchangeSqliteDatabaseAdmissions(admissionPort, admissions, location, create);
+      if (
+        input.splitPublication &&
+        committed &&
+        !physicalPublished &&
+        admissions.some((record) => record.facts.has("database.engine.schema"))
+      ) {
+        physicalPublished = true;
+        port.postMessage({ phase: "physical-published" });
+        wait(2);
+      }
+      return result;
     },
     () =>
       withEngineStoreAdmission(() =>
