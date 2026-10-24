@@ -40,10 +40,11 @@ function itemTimestamp(item: TimelineItem): number | undefined {
     case "system-event-group":
       return finiteTimestamp(item.events[0]?.timestamp);
   }
+  return undefined;
 }
 
 export function transcriptRowTimestamp(
   row: TranscriptRow<SystemEventRenderItem>,
 ): number | undefined {
-  return row.kind === "item" ? itemTimestamp(row.item) : finiteTimestamp(row.timestamp);
+  return row.kind === "item" ? itemTimestamp(row.item) : undefined;
 }
