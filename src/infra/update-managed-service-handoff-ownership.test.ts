@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
-import { EventEmitter, once } from "node:events";
+import { once } from "node:events";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { PassThrough, type Readable } from "node:stream";
+import type { Readable } from "node:stream";
 import { setTimeout as delay } from "node:timers/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
@@ -25,8 +25,8 @@ import {
   createManagedHandoffTempDirTracker,
   readManagedHandoffArtifacts,
 } from "./update-managed-service-handoff-artifacts.test-support.js";
+import { createReadyManagedServiceChild } from "./update-managed-service-handoff-command.test-support.js";
 import { createManagedServiceBoundaryParent } from "./update-managed-service-handoff-process.test-support.js";
-import { signalMockManagedUpdateHandoffReady } from "./update-managed-service-handoff.test-support.js";
 
 const testNodeExecPath = resolveTestNodeExecPath();
 
@@ -34,17 +34,6 @@ const { resolvePreferredOpenClawTmpDirMock, spawnMock } = vi.hoisted(() => ({
   resolvePreferredOpenClawTmpDirMock: vi.fn(),
   spawnMock: vi.fn(),
 }));
-
-function createSpawnMock() {
-  return Object.assign(new EventEmitter(), {
-    pid: process.pid,
-    exitCode: null,
-    signalCode: null,
-    stdin: new PassThrough(),
-    stdout: new PassThrough(),
-    unref: vi.fn(),
-  });
-}
 
 async function waitForHandoffLine(output: Readable | null, expected: string): Promise<void> {
   await new Promise<void>((resolve, reject) => {
@@ -147,17 +136,9 @@ beforeEach(async () => {
   const coordinatorDir = await fs.realpath(tempDirs.make("openclaw-handoff-coordinator-"));
   resolvePreferredOpenClawTmpDirMock.mockReturnValue(coordinatorDir);
   spawnMock.mockReset();
-  spawnMock.mockImplementation((_command: string, args: string[]) => {
-    const child = createSpawnMock();
-    process.nextTick(() => {
-      signalMockManagedUpdateHandoffReady({
-        child,
-        paramsPath: readManagedHandoffArtifacts(args).paramsPath,
-        cleanups: mockedHandoffLeaseCleanups,
-      });
-    });
-    return child;
-  });
+  spawnMock.mockImplementation((_command: string, args: string[]) =>
+    createReadyManagedServiceChild(args, mockedHandoffLeaseCleanups),
+  );
 });
 
 afterEach(async () => {
@@ -284,7 +265,9 @@ async function runOwnershipHelper(params: {
       continuationMessage: "continue after restart",
     },
   });
-  const mockedLauncher = spawnMock.mock.results.at(-1)?.value as ReturnType<typeof createSpawnMock>;
+  const mockedLauncher = spawnMock.mock.results.at(-1)?.value as ReturnType<
+    typeof createReadyManagedServiceChild
+  >;
   mockedLauncher.emit("exit", 0, null);
 
   const [, args, spawnOptions] = spawnMock.mock.calls.at(-1) as unknown as [

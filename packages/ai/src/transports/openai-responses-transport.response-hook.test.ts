@@ -8,24 +8,19 @@ import {
   streamOpenAICodexResponses,
 } from "../providers/openai-chatgpt-responses.js";
 import { streamOpenAIResponses } from "../providers/openai-responses.js";
+import { makeProviderModel } from "../providers/provider-model.test-support.js";
 import type { AssistantMessageEventStreamLike, Context, Model, StreamFn } from "../types.js";
 import {
   createAzureOpenAIResponsesTransportStreamFn,
   createOpenAIResponsesTransportStreamFn,
 } from "./openai-responses-client.js";
 
-const openAIModel = {
-  id: "gpt-5.6-luna",
+const openAIModel = makeProviderModel("openai-responses", "openai", "gpt-5.6-luna", {
   name: "Responses hook lifecycle",
-  api: "openai-responses",
-  provider: "openai",
   baseUrl: "https://api.openai.com/v1",
   reasoning: false,
-  input: ["text"],
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-  contextWindow: 128_000,
   maxTokens: 4_096,
-} satisfies Model<"openai-responses">;
+});
 
 const azureModel = {
   ...openAIModel,

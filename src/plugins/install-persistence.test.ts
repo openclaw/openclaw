@@ -30,6 +30,7 @@ import { hasRetainedManagedNpmInstallMarker } from "./managed-npm-retention.js";
 import { recordPluginManifestInstallOwner } from "./manifest-install-owner.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
+import { createPluginManifestRecordFixture } from "./plugin-metadata.test-support.js";
 import type { PluginUninstallDirectoryRemoval } from "./uninstall.js";
 
 async function persistPluginInstall(
@@ -109,19 +110,14 @@ function createManifestRecord(
 ): PluginManifestRecord {
   const rootDir = path.join(os.tmpdir(), "openclaw-plugin-fixtures", id);
   return recordPluginManifestInstallOwner(
-    {
+    createPluginManifestRecordFixture({
       id,
-      channels: [],
-      providers: [],
-      cliBackends: [],
-      skills: [],
-      hooks: [],
       origin: "config",
       rootDir,
       source: path.join(rootDir, "index.ts"),
       manifestPath: path.join(rootDir, "openclaw.plugin.json"),
       ...overrides,
-    },
+    }),
     owner,
   );
 }
