@@ -14,7 +14,10 @@ import { runPostgresTransactionSync } from "./postgres-sync/transaction.js";
 import type { RuntimeWorkerGeneration } from "./runtime-worker-generation.js";
 import type { PostgresSqlConnection } from "./sql-connection.js";
 import { SQLITE_DATABASE_ADMISSIONS_KEY } from "./sqlite-database-admission-key.js";
-import { readSqliteDatabaseAdmissionFact as readFact } from "./sqlite-database-admission-record.js";
+import {
+  readSqliteDatabaseAdmissionFact as readFact,
+  SqliteDatabaseAdmissionRegistry,
+} from "./sqlite-database-admission-record.js";
 import {
   beginSqliteDatabaseAdmissionOperation as beginOperation,
   discardSqliteDatabaseTransactionAdmissions as discardFacts,
@@ -123,6 +126,37 @@ function workerOptions(location: string, port: MessagePort, extra: Record<string
 function recordsFor(location: string) {
   return captureAdmissions().filter((record) => record.location === location);
 }
+
+it("worker release leaves unrelated receipt scopes unvisited", () => {
+  using affected = databaseFixture("sqlite-release-affected-");
+  using unrelated = databaseFixture("sqlite-release-unrelated-");
+  scopedToken(affected.database, "affected-session");
+  scopedToken(unrelated.database, "unrelated-session");
+  const registry = new SqliteDatabaseAdmissionRegistry();
+  registry.install([...recordsFor(affected.location), ...recordsFor(unrelated.location)]);
+  const record = registry.forLocation(affected.location)!;
+  const sibling = registry.forLocation(unrelated.location)!;
+  const owner = 123456;
+  const references = new SharedArrayBuffer(2 * Int32Array.BYTES_PER_ELEMENT);
+  Atomics.store(new Int32Array(references), 0, 1);
+  record.references.set(owner, references);
+  registry.publish(record);
+  const stale = structuredClone(registry.capture());
+  const visits = vi.spyOn(sibling.writeScopes, "forEach");
+  try {
+    registry.releaseWorker(owner + 1);
+    registry.releaseWorker(owner);
+    expect(visits).not.toHaveBeenCalled();
+    expect(Atomics.load(new Int32Array(references), 0)).toBe(-1);
+    expect(record.references.has(owner)).toBe(false);
+    registry.install(stale);
+    expect(record.references.has(owner)).toBe(false);
+    expect(registry.forLocation(affected.location)).toBe(record);
+    expect(registry.forLocation(unrelated.location)).toBe(sibling);
+  } finally {
+    visits.mockRestore();
+  }
+});
 
 it("keeps cold pinned receipts current across physical-fact reads until release", () => {
   using fixture = databaseFixture("sqlite-admission-cold-pins-");

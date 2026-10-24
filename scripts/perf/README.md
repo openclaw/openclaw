@@ -23,6 +23,30 @@ reported as operations, not bytes, and may be zero on macOS. On Linux the script
 also reports `/proc/self/io` logical reads; child-process CPU and I/O are outside
 the parent counters. Keep these measurement limits alongside the results.
 
+## SQLite admission worker release
+
+`node --expose-gc scripts/perf/sqlite-admission-release-measure.mjs SOURCE_ROOT OWNER_FILE LABEL
+MODE OPERATIONS [WARMUP] [TOUCHED]` measures the complete admission registry owner against 40 synthetic
+databases with 3,000 session scopes each. Save baseline and candidate owner source
+files before running; the source root supplies the unchanged singleton, publication
+key, and path-normalization dependencies. Native identity operations deliberately
+refuse: this is publication proof, not SQLite admission or Gateway throughput.
+
+Use `counts 1` to count scope visits and publications, then `timing 1000` for CPU,
+wall time, and untraced GC. Run `allocation 1000` separately for sampled allocation
+including collected objects. Compare at least two concurrent pairs on the approved
+sandbox, swapping interleaved CPU sets, with synchronized starts and the shared guard.
+Acceptance: zero scope visits/publications for an unaffected worker; only affected
+records visited otherwise; preserved reference revocation and last-reader retirement;
+CPU/allocation improves without a material GC regression under the campaign rules.
+The all-records case is the control for changed-state publication overhead.
+To separate JIT history from that control, use `timing 200 500 40`: 500 warmup
+releases followed by 200 measured releases affecting all 40 records, without
+earlier no-op/single-record phases. Report
+absolute deltas and sample counts; this workload does not measure event-loop tails,
+promotion, native SQL, or whole-Gateway performance. The measured loop reattaches
+synthetic reference cells directly, excluding worker admission and transport costs.
+
 ## Retained heap
 
 Use the [heap retention runbook](heap-retention-runbook.md) to capture a main-isolate
