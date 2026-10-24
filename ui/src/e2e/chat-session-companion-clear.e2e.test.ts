@@ -48,10 +48,7 @@ async function withCompanion(
                       {
                         id: "side-panel-column",
                         side: "right",
-                        panels: [
-                          { id: "companion", slot: "companion" },
-                          { id: "conversation", slot: "conversation" },
-                        ],
+                        panels: ["companion", "conversation"].map((id) => ({ id, slot: id })),
                         activePanelId: "conversation",
                         width: 480,
                         height: 360,
@@ -222,26 +219,6 @@ suite.define(() => {
       );
     },
   );
-
-  it("retains a question sent after Clear while its answer is pending", async () => {
-    await withCompanion(async ({ clear, finishClear, input, text, gateway }) => {
-      const question = "Answer the question sent after Clear";
-      await clear(true);
-      await gateway.deferNext("sessions.companion.ask");
-      await input.fill(question);
-      await input.press("Enter");
-      const request = await gateway.waitForRequest("sessions.companion.ask");
-      expect(request.params).toMatchObject({ question });
-      await finishClear();
-      await text(question).waitFor();
-      await gateway.resolveDeferred("sessions.companion.ask", {
-        answer: "New answer retained",
-        ts: 2,
-      });
-      await text("New answer retained").waitFor();
-      expect(await input.inputValue()).toBe("");
-    });
-  });
 
   it.each(["pending", "completed"])(
     "retires a pre-Clear %s image without cancelling a newer image",

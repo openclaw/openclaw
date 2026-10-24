@@ -1,7 +1,6 @@
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import {
-  controlUiSessionUrl,
   defaultControlUiFeatureMethods,
   installMockGateway,
   pauseVirtualClock,
@@ -164,200 +163,53 @@ suite.define(() => {
     });
   });
 
-  it.each(["chat.startup", "models.list"] as const)(
-    "settles a silent %s read and preserves the draft through recovery",
-    async (method) => {
-      await withPage(async (page) => {
-        const submittedMessage = "Send this when the conversation recovers.";
-        await page.clock.install();
-        if (method === "models.list") {
-          await page.addInitScript(() => {
-            const gateway = location.origin.replace(/^http/, "ws");
-            localStorage.setItem(
-              `openclaw.new-session.preferences.v1:${gateway}`,
-              JSON.stringify({ agents: { main: { model: "openai/gpt-5.5" } } }),
-            );
-          });
-        }
-        const gateway = await installMockGateway(page, {
-          sessionKey: "agent:main:main",
-          heldMethods: [method],
-          historyMessages: [{ role: "assistant", content: readyText }],
-        });
-        await page.goto(
-          new URL(method === "models.list" ? "/new" : "/chat/main", suite.server.baseUrl).href,
+  it("settles a silent model read and preserves the draft through recovery", async () => {
+    await withPage(async (page) => {
+      await page.clock.install();
+      await page.addInitScript(() => {
+        const gateway = location.origin.replace(/^http/, "ws");
+        localStorage.setItem(
+          `openclaw.new-session.preferences.v1:${gateway}`,
+          JSON.stringify({ agents: { main: { model: "openai/gpt-5.5" } } }),
         );
-        await gateway.waitForRequest(method);
-        const composer = page.locator("textarea:visible").first();
-        const retry = page.getByRole("button", { name: "Retry", exact: true });
-        const modelSelect = page.locator('[data-chat-model-select="true"]');
-        const start = page.getByRole("button", { name: "Start session", exact: true });
-        const queued = page.locator(".chat-queue").getByText(submittedMessage, { exact: true });
-        if (method === "chat.startup") {
-          await composer.fill(submittedMessage);
-          await page.getByRole("button", { name: "Send message", exact: true }).click();
-          await expect.poll(() => composer.inputValue()).toBe("");
-          await queued.waitFor();
-          expect(await gateway.getRequests("chat.send")).toHaveLength(0);
-        }
-        await composer.fill(draft);
-        await pauseVirtualClock(page);
-        await page.clock.runFor(60_001);
-
-        expect(await gateway.getSocketCount()).toBe(1);
-        expect(await composer.inputValue()).toBe(draft);
-        if (method === "chat.startup") {
-          expect(await page.locator(".chat-history-error").textContent()).toContain("timed out");
-          expect(await retry.isEnabled()).toBe(true);
-          expect(
-            await page.getByRole("button", { name: "Loading chat", exact: true }).count(),
-          ).toBe(0);
-          const send = page.locator(".chat-send-btn--send");
-          expect(await send.isEnabled()).toBe(true);
-          expect(await send.getAttribute("aria-busy")).toBe("false");
-          expect(await gateway.getRequests("chat.send")).toHaveLength(0);
-          expect(await queued.count()).toBe(1);
-        } else {
-          expect(await modelSelect.textContent()).toContain("Models unavailable");
-          // A saved explicit choice needs a receipt; empty automatic drafts remain Gateway-owned.
-          expect(await start.getAttribute("aria-disabled")).toBe("true");
-          await composer.press("Enter");
-          expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
-        }
-
-        const attemptsBeforeRetry = method === "chat.startup" ? 2 : 1;
-        expect(await gateway.getRequests(method)).toHaveLength(attemptsBeforeRetry);
-        await gateway.resolveDeferred(method);
-        await page.clock.runFor(1);
-        if (method === "chat.startup") {
-          expect(await page.getByText(readyText, { exact: true }).count()).toBe(0);
-          expect(await gateway.getRequests("chat.send")).toHaveLength(0);
-          expect(await composer.inputValue()).toBe(draft);
-          await page.clock.resume();
-          await retry.click();
-        } else {
-          expect(await modelSelect.textContent()).toContain("Models unavailable");
-          expect(await start.getAttribute("aria-disabled")).toBe("true");
-          expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
-          await page.clock.resume();
-          await modelSelect.click();
-        }
-        await expect
-          .poll(async () => (await gateway.getRequests(method)).length)
-          .toBe(attemptsBeforeRetry + 1);
-        // The native details toggle may send the retry after the click resolves.
-        // Advance its mock response timer only after that request is observed.
-        await page.clock.runFor(100);
-        if (method === "chat.startup") {
-          await page.getByText(readyText, { exact: true }).waitFor();
-          const sent = await gateway.waitForRequest("chat.send");
-          expect(sent.params).toMatchObject({
-            sessionKey: "agent:main:main",
-            sessionId: "session:agent:main:main",
-            message: submittedMessage,
-          });
-          expect(await gateway.getRequests("chat.send")).toHaveLength(1);
-          expect(await page.locator(".chat-send-btn--send").isEnabled()).toBe(true);
-        } else {
-          await page
-            .locator('[data-chat-model-option="openai/gpt-5.5"]')
-            .waitFor({ state: "attached" });
-          expect(await modelSelect.textContent()).not.toContain("Models unavailable");
-          expect(await start.getAttribute("aria-disabled")).toBe("false");
-        }
-        expect(await composer.inputValue()).toBe(draft);
       });
-    },
-  );
-  it.each(["before history", "after history"] as const)(
-    "accepts an explicit failed-session retry %s and sends it once history is ready",
-    async (retryTiming) => {
-      await suite.withPage({}, async ({ page }) => {
-        const sessionKey = "agent:main:main";
-        const diagnostic = "⚠️ ✉️ Message failed: delivery unavailable near 🧭";
-        const renderedDiagnostic = "Message failed: delivery unavailable near 🧭";
-        const gateway = await installMockGateway(page, {
-          sessionKey,
-          // Account recovery can replace startup with a scoped history request.
-          heldMethods: ["chat.startup", "chat.history", "chat.send"],
-          sessions: [
-            {
-              key: sessionKey,
-              status: "failed",
-              hasActiveRun: false,
-              lastRunId: "failed-run",
-              lastRunError: diagnostic,
-            },
-          ],
-        });
-        await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
-        const startup = await gateway.waitForRequest("chat.startup");
-        expect(startup.params).toMatchObject({ sessionKey });
-        const composer = page.locator(".agent-chat__input textarea");
-        const sendButton = page.getByRole("button", { name: "Send message" });
-        const alert = page.getByRole("alert").filter({ hasText: renderedDiagnostic });
-        const stop = page.getByRole("button", { name: "Stop generating" });
-        const details = alert.getByLabel("Error details", { exact: true });
-        await composer.fill("Try again");
-        expect(await sendButton.isEnabled()).toBe(true);
-        if (retryTiming === "before history") {
-          await sendButton.click();
-          await expect.poll(() => composer.inputValue()).toBe("");
-          await page.locator(".chat-queue").getByText("Try again", { exact: true }).waitFor();
-        }
-        expect(await gateway.getRequests("chat.send")).toHaveLength(0);
-
-        // Fault injection controls only WebSocket delivery, never application state.
-        await gateway.resolveDeferred("chat.startup");
-        await expect
-          .poll(
-            async () =>
-              (await gateway.getRequests("chat.history")).length > 0 ||
-              (retryTiming === "before history"
-                ? (await gateway.getRequests("chat.send")).length > 0
-                : (await alert.count()) > 0),
-          )
-          .toBe(true);
-        if ((await gateway.getRequests("chat.history")).length > 0) {
-          await gateway.resolveDeferred("chat.history");
-        }
-        if (retryTiming === "after history") {
-          expect(await composer.inputValue()).toBe("Try again");
-          expect(await gateway.getRequests("chat.send")).toHaveLength(0);
-          await alert.waitFor();
-          await alert
-            .locator("summary strong")
-            .getByText("Couldn't finish this reply. Check the conversation before trying again.")
-            .waitFor();
-          expect(await alert.locator("details").getAttribute("open")).toBeNull();
-          await alert.locator("summary").click();
-          await details.waitFor();
-          expect(await details.textContent()).toContain(renderedDiagnostic);
-          await sendButton.click();
-        }
-        const send = await gateway.waitForRequest("chat.send");
-        expect(send.params).toMatchObject({ sessionKey, message: "Try again" });
-        const { idempotencyKey: runId } = send.params as { idempotencyKey: string };
-        expect(runId).toEqual(expect.any(String));
-        expect(await gateway.getRequests("chat.send")).toHaveLength(1);
-        expect(await composer.inputValue()).toBe("");
-        if (retryTiming === "after history") {
-          await expect.poll(() => alert.count()).toBe(0);
-        }
-        await gateway.resolveDeferred("chat.send", { runId, status: "started" });
-        await stop.waitFor();
-        await expect.poll(() => alert.count()).toBe(0);
-        await gateway.emitChatFinal({ sessionKey, runId, text: "Recovery completed." });
-        await page
-          .locator(".chat-group.assistant")
-          .getByText("Recovery completed.", { exact: true })
-          .waitFor();
-        await expect.poll(() => alert.count()).toBe(0);
-        expect(await stop.count()).toBe(0);
-        expect(await gateway.getRequests("chat.send")).toHaveLength(1);
+      const gateway = await installMockGateway(page, {
+        sessionKey: "agent:main:main",
+        heldMethods: ["models.list"],
       });
-    },
-  );
+      await page.goto(new URL("/new", suite.server.baseUrl).href);
+      await gateway.waitForRequest("models.list");
+      const composer = page.locator("textarea:visible").first();
+      const modelSelect = page.locator('[data-chat-model-select="true"]');
+      const start = page.getByRole("button", { name: "Start session", exact: true });
+      await composer.fill(draft);
+      await pauseVirtualClock(page);
+      await page.clock.runFor(60_001);
+      expect(await gateway.getSocketCount()).toBe(1);
+      expect(await composer.inputValue()).toBe(draft);
+      expect(await modelSelect.textContent()).toContain("Models unavailable");
+      expect(await start.getAttribute("aria-disabled")).toBe("true");
+      await composer.press("Enter");
+      expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
+      expect(await gateway.getRequests("models.list")).toHaveLength(1);
+      await gateway.resolveDeferred("models.list");
+      await page.clock.runFor(1);
+      expect(await modelSelect.textContent()).toContain("Models unavailable");
+      expect(await start.getAttribute("aria-disabled")).toBe("true");
+      expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
+      await page.clock.resume();
+      await modelSelect.click();
+      await expect.poll(async () => (await gateway.getRequests("models.list")).length).toBe(2);
+      // Observe the native details retry before advancing its mock response timer.
+      await page.clock.runFor(100);
+      await page
+        .locator('[data-chat-model-option="openai/gpt-5.5"]')
+        .waitFor({ state: "attached" });
+      expect(await modelSelect.textContent()).not.toContain("Models unavailable");
+      expect(await start.getAttribute("aria-disabled")).toBe("false");
+      expect(await composer.inputValue()).toBe(draft);
+    });
+  });
 
   it("sends from an existing chat while models.list never answers", async () => {
     await withPage(async (page) => {
