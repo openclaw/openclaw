@@ -24,7 +24,6 @@ const nodesByRevision = new WeakMap<object, Map<EntryRow["generation"], Publicat
 // Display rows retire with sharing publications, independently of long-lived lineage.
 const rowsByRevision = new WeakMap<object, Map<PublicationNode, Row>>();
 
-/** Traverse the row owner's indexed lineage; neither checkout nor transcript is evidence. */
 export function selectTaskPublicationSessions(
   projection: SessionRowProjection,
   root: PublicationRow,
@@ -82,7 +81,8 @@ export function selectTaskPublicationSessions(
     node.children ??= projection.selectEntries({ parentSessionKey: row }).map(prepare);
     pending.push(...node.children);
   }
-  return sessions.toSorted(
+  // oxlint-disable-next-line unicorn/no-array-sort -- Indexed lineage traversal built this private result.
+  return sessions.sort(
     (a, b) => a.sessionKey.localeCompare(b.sessionKey) || a.agentId.localeCompare(b.agentId),
   );
 }

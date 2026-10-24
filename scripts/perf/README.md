@@ -1,5 +1,19 @@
 # Team-shaped synthetic state
 
+## Private-array copies
+
+`node --expose-gc scripts/perf/private-array-copies-measure.mjs <baseline-root> <candidate-root>`
+measures six alternating samples per side with collected-object heap sampling.
+The roots need only the five source files listed in the script; no build or install
+is needed. It measures the task-audience result build/sort site, the complete
+subagent topology patch owner, and one scope canonicalization (both reader sites
+must match). Synthetic inputs cover 1/100/5,000 task rows, 100/5,000 historical runs
+per child with absent/shared/distinct memory rows, and reordered or changed scopes.
+These are owner/site allocation bytes per call, not whole-Gateway or GC claims.
+Output includes source hashes, call counts, allocation sample counts, every sample,
+and absolute/relative mean deltas. Run on an approved benchmark host under its
+shared guard; equivalent results and reduced allocation are the acceptance rule.
+
 ## Limited-scope Control UI RPCs
 
 `control-ui-forbidden-rpc-measure.ts` opens the real Control UI against a synthetic,
