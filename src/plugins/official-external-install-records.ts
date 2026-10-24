@@ -67,22 +67,60 @@ function resolveRecordedClawHubPackageNames(record: PluginInstallRecord): string
   ]);
 }
 
+function resolveUnanimousRecordedClawHubPackageName(
+  record: PluginInstallRecord,
+): string | undefined {
+  const packageNames = resolveRecordedClawHubPackageNames(record);
+  return packageNames && new Set(packageNames).size === 1 ? packageNames[0] : undefined;
+}
+
+function claimsOfficialPluginIdentity(pluginId: string, packageName: string): boolean {
+  return Boolean(
+    getOfficialExternalPluginCatalogEntry(pluginId) ||
+    getOfficialExternalPluginCatalogEntryForPackage(packageName),
+  );
+}
+
+function isClawHubChannelInstallRecord(
+  record: PluginInstallRecord,
+  channel: "official" | "community",
+): boolean {
+  return (
+    record.source === "clawhub" &&
+    record.clawhubChannel === channel &&
+    (record.clawhubUrl ?? "").trim().replace(/\/+$/, "") === "https://clawhub.ai"
+  );
+}
+
 function isOfficialClawHubInstallRecord(record: PluginInstallRecord): boolean {
-  if (record.source !== "clawhub" || record.clawhubChannel !== "official") {
-    return false;
-  }
-  return (record.clawhubUrl ?? "").trim().replace(/\/+$/, "") === "https://clawhub.ai";
+  return isClawHubChannelInstallRecord(record, "official");
 }
 
 /** Resolves one package identity from a current trusted official ClawHub install record. */
 export function resolveTrustedOfficialClawHubPackageName(
   record: PluginInstallRecord,
 ): string | undefined {
-  if (!isOfficialClawHubInstallRecord(record)) {
-    return undefined;
-  }
-  const packageNames = resolveRecordedClawHubPackageNames(record);
-  return packageNames && new Set(packageNames).size === 1 ? packageNames[0] : undefined;
+  return isOfficialClawHubInstallRecord(record)
+    ? resolveUnanimousRecordedClawHubPackageName(record)
+    : undefined;
+}
+
+/**
+ * A consistently recorded community listing never claims official trust, so it is
+ * expected to stay untrusted. An official catalog plugin or package recorded as
+ * community, or any identity conflict, is not accepted here and remains an invalid claim.
+ */
+export function isCommunityClawHubInstallRecord(
+  pluginId: string,
+  packageName: string | undefined,
+  record: PluginInstallRecord,
+): boolean {
+  return Boolean(
+    packageName &&
+    !claimsOfficialPluginIdentity(pluginId, packageName) &&
+    isClawHubChannelInstallRecord(record, "community") &&
+    resolveUnanimousRecordedClawHubPackageName(record) === packageName,
+  );
 }
 
 /** Valid registry provenance does not grant official plugin authority. */
@@ -93,8 +131,7 @@ export function isThirdPartyNpmInstallRecord(
 ): boolean {
   return Boolean(
     packageName &&
-    !getOfficialExternalPluginCatalogEntry(pluginId) &&
-    !getOfficialExternalPluginCatalogEntryForPackage(packageName) &&
+    !claimsOfficialPluginIdentity(pluginId, packageName) &&
     hasTrustedOfficialNpmProvenance(record) &&
     resolveUnanimousRecordedNpmPackageName(record) === packageName &&
     (record.clawhubPackage === undefined ||

@@ -7,6 +7,7 @@ export type PluginTrust = {
   reason:
     | "bundled"
     | "trusted-official"
+    | "community-install"
     | "record-missing"
     | "owner-ambiguous"
     | "origin-path"
@@ -56,7 +57,9 @@ export class PluginTrustRefusalError extends Error {
             ? "Install the official npm package or ClawHub listing and remove the local override from plugins.load.paths; --link and --force do not grant hook agent-turn authority."
             : trust.reason === "third-party-npm"
               ? "This third-party npm plugin is not official and cannot dispatch hook agent turns. Reinstalling the same package will not change that; use an official package if you need that authority."
-              : "Reinstall from the official npm package or ClawHub listing; local paths, archives, ambiguous ownership, and inconsistent install records do not grant hook agent-turn authority.";
+              : trust.reason === "community-install"
+                ? "This community ClawHub install is valid but not official, so it cannot dispatch hook agent turns. Reinstalling the same listing will not change that; use an official package if you need that authority."
+                : "Reinstall from the official npm package or ClawHub listing; local paths, archives, ambiguous ownership, and inconsistent install records do not grant hook agent-turn authority.";
     super(
       `dispatchHookAgentTurn is only available for trusted plugins in this release. Plugin ${JSON.stringify(params.pluginId)} loaded from ${JSON.stringify(params.source)} with origin ${JSON.stringify(params.origin ?? "unknown")}; ${formatPluginTrustDiagnostic(trust)}. ${remedy}`,
     );

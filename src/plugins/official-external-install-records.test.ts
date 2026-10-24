@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import {
+  isCommunityClawHubInstallRecord,
   isOfficialCatalogLookupPluginIdReplacement as isReplacement,
   isThirdPartyNpmInstallRecord,
   isTrustedOfficialCatalogLookupDuplicate as isDuplicate,
@@ -91,6 +92,58 @@ describe("official plugin install trust", () => {
         record: clawhubInstall("@openclaw/acpx", { resolvedName: "@openclaw/acpx", ...overrides }),
       }),
     ).toBe(trusted);
+  });
+});
+
+describe("community ClawHub install records", () => {
+  const packageName = "@acme/community-demo";
+  const record: PluginInstallRecord = {
+    source: "clawhub",
+    spec: `clawhub:${packageName}@1.0.0`,
+    clawhubPackage: packageName,
+    clawhubUrl: "https://clawhub.ai/",
+    clawhubChannel: "community",
+  };
+
+  const isCommunity = (
+    candidate: string | undefined,
+    install: PluginInstallRecord,
+    pluginId = "community-demo",
+  ) => isCommunityClawHubInstallRecord(pluginId, candidate, install);
+
+  it("accepts a consistent community listing", () => {
+    expect(isCommunity(packageName, record)).toBe(true);
+  });
+
+  it.each([
+    { name: "official channel", overrides: { clawhubChannel: "official" } },
+    { name: "missing channel", overrides: { clawhubChannel: undefined } },
+    { name: "custom host", overrides: { clawhubUrl: "https://example.invalid" } },
+    { name: "conflicting identity", overrides: { resolvedName: "@vendor/other" } },
+    { name: "npm source", overrides: { source: "npm" } },
+  ] satisfies Array<{ name: string; overrides: Partial<PluginInstallRecord> }>)(
+    "rejects $name",
+    ({ overrides }) => {
+      expect(isCommunity(packageName, { ...record, ...overrides })).toBe(false);
+    },
+  );
+
+  it.each([undefined, "@acme/other"])("rejects candidate package %s", (candidate) => {
+    expect(isCommunity(candidate, record)).toBe(false);
+  });
+
+  it("rejects an official catalog package recorded as community", () => {
+    expect(
+      isCommunity("@openclaw/acpx", {
+        ...record,
+        spec: undefined,
+        clawhubPackage: "@openclaw/acpx",
+      }),
+    ).toBe(false);
+  });
+
+  it("rejects an official plugin id claimed by a community package", () => {
+    expect(isCommunity(packageName, record, "acpx")).toBe(false);
   });
 });
 
