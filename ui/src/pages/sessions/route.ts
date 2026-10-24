@@ -27,8 +27,9 @@ export const page = defineSolidPage<"sessions", ApplicationContext, SessionsRout
       const options = routeOptions(location);
       return `${options.expandedSessionKey ?? ""}\u0000${options.statusFilter}\u0000${context.agentSelection.state.scopeId ?? "all"}`;
     },
-    loader: async (context: ApplicationContext, { location }): Promise<SessionsRouteData> => {
-      await context.runtimeConfig.ensureLoaded().catch(() => undefined);
+    loader: (context: ApplicationContext, { location }): SessionsRouteData => {
+      // Config decorates the page; it is not a prerequisite for the session roster.
+      void context.runtimeConfig.ensureLoaded().catch(() => undefined);
       // The mounted page owns list issuance, including scope/status navigation
       // during a search. Prefetching here bypasses its single in-flight request.
       return routeOptions(location);

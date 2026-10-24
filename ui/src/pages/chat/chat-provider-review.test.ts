@@ -11,6 +11,7 @@ import {
 } from "../../lib/sessions/session-capability.test-support.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { reloadChatDocumentStorage } from "./chat-delivery-attachments.test-support.ts";
+import { getChatHistoryLoadState } from "./chat-history-state.ts";
 import { loadChatHistory } from "./chat-history.ts";
 import {
   makeChatHost,
@@ -59,6 +60,7 @@ async function createReviewHost(
     sessions,
     sessionKey: initialRow.key,
     currentSessionId: initialRow.sessionId,
+    chatHistoryPagination: { hasMore: false },
     sessionsResult: sessionsResult([initialRow], initialRow.snapshotAt ?? 0),
     chatMessage,
   });
@@ -267,7 +269,7 @@ it("keeps a paused queue input held when its earlier settings wait finishes afte
 });
 
 it.each(["lost-ack", "accepted-unconsumed"] as const)(
-  "retains %s input across pause clearing and reload until server consumption",
+  "transfers %s input to server custody across pause clearing and reload",
   async (outcome) => {
     let row: GatewaySessionRow = {
       ...paused,
@@ -328,62 +330,60 @@ it.each(["lost-ack", "accepted-unconsumed"] as const)(
     const { host, publish } = await createReviewHost(request, row, "Keep this delivery identity");
     await handleSendChat(host);
     expect(attempts).toBe(1);
-    const attempted = host.chatQueue[0];
-    expect(attempted).toMatchObject({
-      sendAttempts: 1,
-      sendState: outcome === "lost-ack" ? "waiting-reconnect" : "sending",
-      sendRunId: attemptedRunId,
-    });
+    if (outcome === "lost-ack") {
+      expect(host.chatQueue[0]).toMatchObject({
+        sendAttempts: 1,
+        sendState: "waiting-reconnect",
+        sendRunId: attemptedRunId,
+      });
+    } else {
+      expect(host.chatQueue).toEqual([]);
+      expect(listStoredChatOutboxes(host)).toEqual([]);
+    }
     row = paused;
     publish(row);
     expect(chatProviderReviewRow(host)?.providerReview).toEqual(paused.providerReview);
     await flushChatQueueForEvent(host);
-    expect(host.chatQueue[0]).toMatchObject({
-      id: attempted?.id,
-      text: attempted?.text,
-      createdAt: attempted?.createdAt,
-      sessionKey: attempted?.sessionKey,
-      sendState: "held",
-      sendAttempts: 1,
-      sendRunId: attemptedRunId,
-    });
+    if (outcome === "lost-ack") {
+      expect(host.chatQueue[0]).toMatchObject({
+        text: "Keep this delivery identity",
+        sendState: "held",
+        sendAttempts: 1,
+        sendRunId: attemptedRunId,
+      });
+    }
 
     row = { ...paused, providerReview: undefined, updatedAt: 11, snapshotAt: 11 };
     publish(row, true);
     await loadChatHistory(host, { deferBranches: true });
     await flushChatQueueForEvent(host);
     expect(attempts).toBe(1);
+    expect(host.chatQueue).toEqual([]);
+    expect(listStoredChatOutboxes(host)).toEqual([]);
+    const historyLoad = getChatHistoryLoadState(host);
+    expect(
+      historyLoad,
+      historyLoad.phase === "failed" ? historyLoad.message : undefined,
+    ).toMatchObject({ phase: "committed" });
+    expect(host.chatPendingInputs?.page.items).toMatchObject([
+      { runId: attemptedRunId, state: "interrupted" },
+    ]);
     reloadChatDocumentStorage([]);
     const reloaded = makeChatHost({
       client: createTestGatewayClient(request),
       sessionKey: row.key,
       currentSessionId: row.sessionId,
+      chatHistoryPagination: { hasMore: false },
       sessionsResult: sessionsResult([row], 11),
     });
-    expect(new ChatComposerPersistence(() => reloaded).restore()).toBe(true);
-    expect(reloaded.chatQueue[0]).toMatchObject({
-      sendState: "held",
-      sendAttempts: 1,
-      sendRunId: attemptedRunId,
-    });
+    new ChatComposerPersistence(() => reloaded).restore();
+    expect(reloaded.chatQueue).toEqual([]);
     await loadChatHistory(reloaded, { deferBranches: true });
     await flushChatQueueForEvent(reloaded);
     expect(attempts).toBe(1);
-    expect(reloaded.chatQueue[0]).toMatchObject({
-      sendState: "held",
-      sendAttempts: 1,
-      sendRunId: attemptedRunId,
-      sessionId: row.sessionId,
-    });
-    await retryQueuedChatMessage(reloaded, attempted!.id);
-    expect(attempts).toBe(1);
-    expect(reloaded.chatQueue[0]).toMatchObject({
-      id: attempted?.id,
-      text: attempted?.text,
-      sendState: "waiting-idle",
-      sendAttempts: 1,
-      sendRunId: attemptedRunId,
-    });
+    expect(reloaded.chatPendingInputs?.page.items).toMatchObject([
+      { runId: attemptedRunId, state: "interrupted" },
+    ]);
     consumed = true;
     await loadChatHistory(reloaded, { deferBranches: true });
     await flushChatQueueForEvent(reloaded);
@@ -439,7 +439,7 @@ it.each(["consumed", "pending", "disconnected"] as const)(
     await sending;
     await flushChatQueueForEvent(host);
     expect(requestCalls(request, "chat.send")).toHaveLength(1);
-    if (outcome === "consumed") {
+    if (outcome !== "disconnected") {
       expect(listStoredChatOutboxes(host)).toEqual([]);
     } else {
       expect(listStoredChatOutboxes(host)[0]?.queue).toEqual([

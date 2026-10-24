@@ -3,6 +3,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { Socket } from "node:net";
 import path from "node:path";
+import { buffer as readRequest } from "node:stream/consumers";
 import { redactSensitiveText } from "openclaw/plugin-sdk/logging-core";
 import { createFixtureLifetime } from "openclaw/plugin-sdk/test-env";
 import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
@@ -15,6 +16,7 @@ import {
 } from "../../../../extensions/qa-lab/api.js";
 import { isProjectedForwardedMessage } from "../../../../src/gateway/chat-display-projection.helpers.js";
 import type { SessionsListResult } from "../../../../src/gateway/session-utils.types.js";
+import { listenLoopback } from "../../../helpers/gateway-integration-fixtures.js";
 import { writeOpenAiResponsesSse } from "../../../helpers/openai-responses-sse.js";
 import { runQaGatewayFixture, stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 import { createQaPreparedRepoCliCommand } from "../../../helpers/qa-prepared-repo-cli.js";
@@ -34,14 +36,6 @@ const FILE_NAME = "qa-empty-response-side-effect.txt";
 const FILE_CONTENT = "side effect completed once\n";
 const RECOVERY_INSTRUCTION =
   "Do not repeat completed tool calls or restart from scratch. Tools are unavailable in this step:";
-
-async function readRequest(req: IncomingMessage): Promise<Buffer> {
-  const chunks: Buffer[] = [];
-  for await (const chunk of req) {
-    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-  }
-  return Buffer.concat(chunks);
-}
 
 const repoRoot = path.resolve(import.meta.dirname, "../../../..");
 const fixture = createFixtureLifetime();
@@ -250,16 +244,8 @@ beforeAll(async () => {
           }
         });
       });
-      await new Promise<void>((resolve, reject) => {
-        server.once("error", reject);
-        server.listen(0, "127.0.0.1", resolve);
-      });
+      const apiRoot = await listenLoopback(server);
       setupAbort.signal.throwIfAborted();
-      const address = server.address();
-      if (!address || typeof address === "string") {
-        throw new Error("artifact fixture did not bind a loopback port");
-      }
-      const apiRoot = `http://127.0.0.1:${address.port}`;
       workspace = fixture.createTempDir("openclaw-recovered-artifact-");
       // Force terminal recovery after one attempt without replaying the completed write.
       await mkdir(path.join(workspace, ".openclaw"), { recursive: true });

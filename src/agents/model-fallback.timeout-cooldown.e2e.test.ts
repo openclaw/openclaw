@@ -1,6 +1,4 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
-import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import type {
   EmbeddedRunAttemptParams,
@@ -9,6 +7,7 @@ import type {
 import { resetFallbackSkipCacheForTest } from "./fallback-skip-cache.test-support.js";
 import { createFallbackE2eMocks } from "./model-fallback.e2e.test-support.js";
 import {
+  createEmbeddedFallbackEntryRunner,
   makeModelFallbackConfig,
   readFallbackUsageStats,
   withModelFallbackWorkspace,
@@ -27,16 +26,18 @@ vi.mock("./models-config.js", () => ({
   ensureOpenClawModelsJson: vi.fn(async () => ({ wrote: false })),
 }));
 
-let runEmbeddedAgent: typeof import("./embedded-agent-runner/run.js").runEmbeddedAgent;
-let runEmbeddedAgentEntry: typeof import("./embedded-agent-runner/run-entry.js").runEmbeddedAgentEntry;
-let createModelRoutingTestAdmission: typeof import("./test-helpers/model-routing-decision-e2e-fixtures.js").createModelRoutingTestAdmission;
+let runEmbeddedEntryFallback: ReturnType<typeof createEmbeddedFallbackEntryRunner>;
 
 beforeAll(async () => {
   fallbackMocks.install();
-  ({ runEmbeddedAgent } = await import("./embedded-agent-runner/run.js"));
-  ({ runEmbeddedAgentEntry } = await import("./embedded-agent-runner/run-entry.js"));
-  ({ createModelRoutingTestAdmission } =
-    await import("./test-helpers/model-routing-decision-e2e-fixtures.js"));
+  runEmbeddedEntryFallback = createEmbeddedFallbackEntryRunner({
+    runEmbeddedAgent: (await import("./embedded-agent-runner/run.js")).runEmbeddedAgent,
+    runEmbeddedAgentEntry: (await import("./embedded-agent-runner/run-entry.js"))
+      .runEmbeddedAgentEntry,
+    createModelRoutingTestAdmission: (
+      await import("./test-helpers/model-routing-decision-e2e-fixtures.js")
+    ).createModelRoutingTestAdmission,
+  });
 });
 
 beforeEach(() => {
@@ -44,65 +45,6 @@ beforeEach(() => {
   runEmbeddedAttemptMock.mockReset();
   fallbackMocks.clear();
 });
-
-type Workspace = { agentDir: string; workspaceDir: string };
-
-async function runEmbeddedEntryFallback(workspace: Workspace, name: string, cfg: OpenClawConfig) {
-  const runId = `run:${name}`;
-  const sessionKey = `agent:test:${name}`;
-  const sessionId = `session:${runId}`;
-  const identity = { runId, sessionId, sessionKey };
-  setRuntimeConfigSnapshot(cfg, cfg);
-  const preparedRunAdmission = createModelRoutingTestAdmission({
-    cfg: { ...cfg, logging: { audit: { executionIdentity: true } } },
-    runId,
-    boundary: "model-fallback-e2e",
-  });
-  try {
-    return await runEmbeddedAgentEntry({
-      selection: {
-        cfg,
-        provider: "openai",
-        model: "mock-1",
-        agentDir: workspace.agentDir,
-        manifestPlugins: [],
-      },
-      identity: { ...identity, agentId: "test" },
-      harness: {
-        workspaceDir: workspace.workspaceDir,
-        sessionKey,
-        preparation: { kind: "direct" },
-        resolveRuntimeOverride: () => undefined,
-        resolveContextEngineHost: (provider, model) => ({
-          id: `embedded-e2e:${provider}/${model}`,
-          label: "embedded runner e2e",
-          capabilities: [],
-        }),
-      },
-      behavior: { kind: "maintenance" },
-      sessionOverride: { kind: "preserve" },
-      runCandidate: (provider, model, attemptOptions) =>
-        runEmbeddedAgent({
-          ...workspace,
-          ...identity,
-          config: cfg,
-          prompt: "hello",
-          authProfileIdSource: "auto",
-          timeoutMs: 5_000,
-          enqueue: async (task) => await task(),
-          preparedRunAdmission,
-          provider,
-          model,
-          modelRoutingProvenance: attemptOptions.modelRoutingProvenance,
-          isFinalFallbackAttempt: attemptOptions.isFinalFallbackAttempt,
-          contextEngineLogicalTurnLease: attemptOptions.contextEngineLogicalTurnLease,
-          onContextEngineTurnCandidate: attemptOptions.onContextEngineTurnCandidate,
-        }),
-    });
-  } finally {
-    preparedRunAdmission.close();
-  }
-}
 
 function expectAttemptOrder(expected: Array<[string, string]>) {
   expect(
@@ -150,7 +92,7 @@ describe("timeout cooldown availability", () => {
         const run = async (name: string) => {
           const work = new AsyncWorkScope();
           try {
-            return await work.run(() => runEmbeddedEntryFallback(workspace, name, cfg));
+            return await work.run(() => runEmbeddedEntryFallback(workspace, name, { config: cfg }));
           } finally {
             await work.drain();
           }

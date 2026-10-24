@@ -14,6 +14,16 @@ stale connection. These signals do not retry a connection that requires a page
 reload, corrected credentials, or a new pairing request. Follow the displayed
 recovery instructions; automatic document refresh remains available after an update.
 
+If an update or rollback leaves a tab using an incompatible connection protocol,
+the Control UI stops reconnecting and reloads the document served by the same
+Gateway. The tab records the attempt in session storage: it reloads once for a
+given server build and never more than once in 60 seconds, even if the build changes.
+If the refreshed page still cannot connect, it keeps the compatibility error and
+**Refresh** action visible. Open the Gateway's dashboard again or update and
+restart the Gateway so its served UI matches its protocol. Automatic reloads wait
+for unsaved-work protection and require working session storage; a separately
+hosted UI must be refreshed or updated at its own host.
+
 Agent names and avatars keep their last loaded values when an identity refresh
 fails. Reads for the same agent share one request across the sidebar and chat,
 including failures: subsequent reads back off from 500 ms to 5 seconds and honor
@@ -87,8 +97,10 @@ next authentication result applies when contact resumes.
 
 Transcripts, roster data, text drafts, and queued input are separated by Gateway
 and account. Switching accounts cannot send or overwrite the previous account's
-input. Retiring offline access does not discard unsent drafts or queued chat input;
-that work remains under its original storage owner. Live state replaces cached
+input. Changing identity or recovery scope, or retiring offline access, clears
+active local pending copies with the existing discard notice. Persisted drafts
+and queued input remain under their original storage owner; they are not
+reassigned or sent under the replacement identity. Live state replaces cached
 roster data on connect, and chat resumes from its saved transcript cursor. The
 cached transcript opens at its latest messages without an initial scroll animation.
 It retains participant and completed-work timing information and the last task
@@ -374,9 +386,9 @@ summary appears only after a message is queued, alongside the actual queued mess
 
 Ordinary text and attachment sends require successful admission to the current tab's
 Gateway/session-scoped browser outbox. Eligible messages resume automatically after connection
-and account recovery, but an active run, an open queued-message edit, or uncertain previous
-delivery can keep them waiting. **Inbox → System** shows local submissions that failed or
-need delivery review, with **Review** opening their conversation and its existing recovery
+and account recovery, but an active run or an open queued-message edit can keep
+new sends waiting. **Inbox → System** shows local submissions that failed or
+need recovery, with **Review** opening their conversation and its existing recovery
 controls. Ordinary queued messages stay in the chat queue; they do not raise Inbox attention.
 The account and connection indicators describe identity and connectivity, not message delivery.
 The composer count covers only its conversation and does not promise automatic sending.
@@ -472,14 +484,15 @@ submission ID when retrying, so reconnect cannot duplicate a recovered input.
 It does not resend interrupted inputs automatically: the server owns recovery order.
 If a saved input remains interrupted, copy it and send again to continue.
 
-When the Gateway confirms that it holds the same pending input, the Control UI clears the
-uncertain-delivery warning without sending the message again. The browser keeps its retry
-payload until consumption or cancellation is confirmed. If delivery is still unknown,
-the review warning remains. Confirmed server custody does not block later browser-queued
+When the Gateway acknowledges a send, including a duplicate submission, the
+Control UI marks it sent. The browser keeps any payload needed to display
+server-held input until consumption or cancellation is confirmed.
+Confirmed server custody does not block later browser-queued
 chat sends, including when the accepted input is too old for automatic recovery.
-Local commands such as `/compact` and `/reset` in the same browser outbox still wait
-behind that input. An independent authorized reset from another client can cancel
-pending work, as with other session resets.
+Local commands such as `/compact` and `/reset` in the same browser outbox wait
+for live accepted work. An interrupted input without a live owner remains
+available for explicit recovery and does not block later commands. An independent
+authorized reset from another client can cancel pending work, as with other session resets.
 If the Gateway is holding that input for a later turn, it appears in the queue
 above the composer. Removing that row withdraws the exact queued message without
 stopping the active turn. Once cancellation is confirmed, the removed prompt and
@@ -497,7 +510,10 @@ the **System · restart recovery** notice shows that outcome and asks you to sen
 message to continue. It does not mean the agent resumed. Messages forwarded from
 other sessions keep their own delivery status next to each message.
 
-Once the Gateway confirms that a message is in the transcript, reconnecting retires its temporary browser copy even when the original message is outside the latest history page. Delivery checks also clear confirmed later messages when an earlier unconfirmed message still blocks the queue, so those delivered copies no longer raise sidebar or Inbox attention. This does not retry the uncertain message or send later queued messages out of order. Loading older history shows the saved message in its original position without adding a second copy.
+Acknowledging a duplicate submission retires its pending browser copy even when
+the original message is outside the latest history page. Reconnect does not need
+to scan old history to establish delivery. Loading older history shows the saved
+message in its original position without adding a second copy.
 
 Retiring a delivered attachment does not discard the run's completion. If the browser misses
 that completion, a queue recovery read that confirms the same session and run have finished
@@ -524,37 +540,51 @@ keep their existing tab-only inline outbox and its smaller browser storage limit
 store queued attachment Blobs in IndexedDB.
 
 Duplicating a tab copies the same submission IDs. Once opened, the duplicate claims its own
-payload copies and marks those submissions **Delivery unconfirmed**. Check the conversation
-before retrying. A duplicate first opened after the source discarded or delivered a message may
+payload copies and resumes pending sends with their original IDs after account
+recovery. The Gateway recognizes recorded submissions instead of starting them again.
+A duplicate first opened after the source discarded or delivered a message may
 instead report missing attachments. Independent tabs do not share newly authored outbox messages.
 
 After connecting, chat waits for account-scoped recovery before accepting or sending ordinary
 messages. During this brief check, submitted text and attachments stay in the composer. Offline
 queues resume once recovery is ready, unless the session still owns an unresolved initial turn;
-resolve that turn with its **Retry** or **Check delivery** action first. While disconnected, a
+that first message also retries automatically with its original submission ID.
+An explicit rejection keeps **Retry** available. While disconnected, a
 notice above the composer says the initial message is unresolved; the composer still accepts
 queued messages.
 If the initial message is waiting for recovery, its chat shows a loading placeholder
 until the message can be restored, rather than the empty new-chat welcome screen.
 Recovery notices appear below the composer and clear when the blocking condition resolves.
 
-If a sent message times out before its acknowledgement, the browser keeps it as
-**Delivery unconfirmed**, not **Not sent**. It checks delivery receipts automatically
-while the connection is available, without sending the message again. Timed-out
-receipt reads retry with backoff; they do not release later queued messages ahead
-of the uncertain input or overwrite a newer draft.
+Until the Gateway acknowledges a chat send, it stays pending, including when
+the frame was written but its acknowledgment times out or the socket closes.
+If the connection stays healthy, an acknowledgment timeout or retryable rejection
+automatically retries the same submission, honoring the Gateway's retry delay.
+This also applies to the first message and memory-only sends.
+While disconnected, it shows **Waiting for reconnect**. On the first accepted
+connection with the same identity and recovery scope, the browser resends
+attempted pending messages in queue order, preserving each original `runId` and
+`idempotencyKey` and their original conversation identity. Replacing or deleting
+the conversation cannot redirect the retained input. A stored attempt without
+its original conversation identity stays in **Needs review** until an explicit
+Retry binds it to the conversation you are viewing.
+An acknowledgment or duplicate response marks the message sent;
+it does not mean the agent has finished its reply.
 
-If the connection drops before a send is acknowledged, reconnect checks delivery proof.
-Ordinary chat sends require an exact input receipt or a user transcript row whose
-idempotency key is the submission's `runId` or `runId:user`. A matching active or
-last run ID alone confirms only commands, not ordinary chat sends.
-Without proof, an attempted message stays in the conversation
-with an amber **Delivery unconfirmed** footer, **Retry**, and **Discard**. Check the conversation and retry only
-if the message did not arrive. Discard removes the pending copy from this browser's outbox; it does not
-undo or cancel work the Gateway already accepted. Later queued messages stay paused until the earlier
-unconfirmed message is resolved or discarded, and the queue explains that blockage. Discarding the
-earlier message lets the next queued message proceed when the session is ready. Unconfirmed local
-commands keep their retry/discard queue controls.
+The Gateway checks the recorded submission before dispatch. A matching user
+transcript row or durable input receipt prevents another turn or transcript
+append, including after the in-memory deduplication cache expires or the Gateway
+restarts. This also covers attachments, commands sent through `chat.send`, and
+per-message overrides. Reusing a recorded key with different content is rejected.
+The guarantee applies while that submission record remains in the same session;
+it does not restore deleted sessions or resume interrupted agent work.
+The Gateway's separate interrupted-input recovery still resumes eligible accepted
+work after rechecking its current authority.
+
+**Discard** stays available while a message is pending. It removes only this
+browser's outbox copy, not work the Gateway already accepted. It does not undo or
+cancel a delivered message. Local commands that use other RPC methods retain
+their own recovery behavior; reconnect does not blindly replay arbitrary actions.
 
 An ordinary message rejected by the Gateway stays in the conversation with a **Not sent**
 footer. Use **Retry** to try again or **Discard** to remove its pending browser copy.
@@ -599,7 +629,7 @@ cleanup follows verified delivery or discard and accounts for retained recovery 
 When the original conversation's loaded history proves a saved queued submission was delivered,
 its recovery copy is removed automatically. Proof requires the exact submission ID on a durable
 user message in the same conversation and, when recorded, the same physical session. Matching
-text or a local display copy is not proof. Any draft or other unconfirmed input in the row stays
+text or a local display copy is not proof. Any draft or other unresolved input in the row stays
 available; recovery never sends a message automatically.
 If the destination changes, a newer draft appears, or storage fails, recovery keeps the source
 available rather than overwriting newer input. Do not clear browser site data

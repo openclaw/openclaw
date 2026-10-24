@@ -2544,6 +2544,15 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+      - name: Upload synthetic protocol mismatch recovery proof
+        if: always() && matrix.task == 'control-ui' && hashFiles('.artifacts/control-ui-e2e/protocol-mismatch-recovery-*/*.png') != ''
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: protocol-mismatch-recovery-${{ strategy.job-index }}-${{ github.run_attempt }}
+          path: .artifacts/control-ui-e2e/protocol-mismatch-recovery-*/*.png
+          if-no-files-found: error
+          retention-days: 7
+
       - name: Upload synthetic widget prompt failure evidence
         if: failure() && hashFiles('.artifacts/control-ui-e2e/control-ui-authenticated-widget-sandbox-*/widget-prompt-failure.json') != ''
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

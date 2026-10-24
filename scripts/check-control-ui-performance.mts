@@ -46,9 +46,8 @@ const controlUiPerformanceBudgets = {
   // Initial shell plus shared route styles and the route's own stylesheet.
   chatBootCssRequests: 3,
   newBootCssRequests: 3,
-  // Defer optional root English: matched bf93c438 1,269,817 to 1,268,099 B Chat.
-  // New Session 763,598 to 761,956 B; preserve each surface's relative headroom.
-  chatBootJsGzipBytes: 1_357_842,
+  // Measured after deferring suggestion rows and person-card content.
+  chatBootJsGzipBytes: 1_275_713,
   newBootJsGzipBytes: 797_395,
   startupCssRequests: 1,
   // Solid 2 action/optimistic runtime adoption; offset tracked by HF-STARTUP-BUDGET.

@@ -215,6 +215,7 @@ Removing a `models.providers.<id>` entry while the Gateway is running clears sav
 
 Changes to aliases or model restrictions reuse compatible inventory. Changes to
 the provider, plugin, credentials, environment, or workspace can invalidate it.
+The Gateway excludes temporary skill overrides from its shared catalog worker environment.
 
 Automations and command-palette model search show a warning when a provider refresh
 fails, while keeping the models returned by the Gateway. Open Models to retry the

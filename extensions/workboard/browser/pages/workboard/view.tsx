@@ -127,7 +127,10 @@ function WorkboardColumns(props: {
   );
 }
 
-export function WorkboardView(props: WorkboardProps & { onRefresh: () => void }) {
+export function WorkboardView(
+  props: WorkboardProps & { onRefresh: () => void; onFocusTarget?: (element: HTMLElement) => void },
+) {
+  let filterTrigger: HTMLButtonElement | undefined;
   const state = workboardViewState(() => props);
   const view = createMemo(() => {
     const current = state();
@@ -414,20 +417,20 @@ export function WorkboardView(props: WorkboardProps & { onRefresh: () => void })
               <div class="workboard-toolbar__navigation">
                 <StatusTabs
                   state={state()}
-                  requestUpdate={props.onRequestUpdate}
+                  onChange={props.onRequestUpdate}
                   revision={props.revision}
                 />
                 <MobileStatusPicker
                   state={state()}
                   cards={view().statusCards}
-                  requestUpdate={props.onRequestUpdate}
+                  onChange={props.onRequestUpdate}
                   revision={props.revision}
                 />
               </div>
             </div>
           )}
           <div class="workboard-toolbar__tools">
-            <WorkboardSearch workboard={props} />
+            <WorkboardSearch workboard={props} onFocusTarget={props.onFocusTarget} />
             {view().hasAgentControl ? (
               <div class="workboard-agent-filter">
                 <AgentControl workboard={props} options={view().agentFilterOptions} />
@@ -436,6 +439,9 @@ export function WorkboardView(props: WorkboardProps & { onRefresh: () => void })
             <button
               popovertarget={workboardFilterPopoverId}
               class={["btn workboard-filter-trigger", { active: view().activeFilterCount > 0 }]}
+              ref={(element) => {
+                filterTrigger = element;
+              }}
               type="button"
               aria-label={
                 view().activeFilterCount > 0
@@ -488,7 +494,7 @@ export function WorkboardView(props: WorkboardProps & { onRefresh: () => void })
                   <DisplayChoices
                     state={state()}
                     revision={props.revision}
-                    requestUpdate={props.onRequestUpdate}
+                    onChange={props.onRequestUpdate}
                   />
                 </div>
                 <MultiFilter
@@ -546,7 +552,11 @@ export function WorkboardView(props: WorkboardProps & { onRefresh: () => void })
             </div>
           </div>
           {!view().selectedCards.length ? (
-            <ActiveFilters filters={view().activeFilters} requestUpdate={props.onRequestUpdate} />
+            <ActiveFilters
+              filters={view().activeFilters}
+              onChange={props.onRequestUpdate}
+              filterTrigger={() => filterTrigger}
+            />
           ) : null}
         </div>
         {state().nextCursor ? (

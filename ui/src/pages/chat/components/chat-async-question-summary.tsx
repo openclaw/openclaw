@@ -95,13 +95,11 @@ export function AsyncQuestionSummary(props: {
           ? t(
               queued.sendState === "failed"
                 ? "chat.asyncQuestions.failed"
-                : queued.sendState === "unconfirmed"
-                  ? "chat.queue.deliveryUnconfirmed"
-                  : isChatSendReconnecting(queued.sendState, presentation.connected)
-                    ? "chat.queue.states.waitingForReconnect"
-                    : queued.sendState === "sending"
-                      ? "chat.asyncQuestions.sending"
-                      : "chat.asyncQuestions.queued",
+                : isChatSendReconnecting(queued.sendState, presentation.connected)
+                  ? "chat.queue.states.waitingForReconnect"
+                  : queued.sendState === "sending"
+                    ? "chat.asyncQuestions.sending"
+                    : "chat.asyncQuestions.queued",
             )
           : draft?.status === "submitted"
             ? t("chat.asyncQuestions.awaitingConfirmation")
@@ -141,13 +139,7 @@ export function AsyncQuestionSummary(props: {
         {(label) => (
           <div class="chat-question-summary__delivery">
             <span>{label()}</span>
-            <Show
-              when={
-                (state().queued?.sendState === "failed" ||
-                  state().queued?.sendState === "unconfirmed") &&
-                props.presentation.retry
-              }
-            >
+            <Show when={state().queued?.sendState === "failed" && props.presentation.retry}>
               <button
                 type="button"
                 class="btn btn--sm"

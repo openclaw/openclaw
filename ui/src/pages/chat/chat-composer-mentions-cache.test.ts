@@ -10,7 +10,7 @@ import {
   people,
   resetMentionComposerFixture,
 } from "./chat-composer-mentions.test-support.ts";
-import { createHumanMentionMenu } from "./components/chat-composer-mention-menu.tsx";
+import { createHumanMentionMenu } from "./components/chat-composer-mention-menu-state.ts";
 
 afterEach(resetMentionComposerFixture);
 

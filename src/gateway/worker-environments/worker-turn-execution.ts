@@ -1,7 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { SKILL_RESOURCE_PROTOCOL_FEATURE } from "../../../packages/gateway-protocol/src/schema/skill-resources.js";
 import { WORKER_LOCAL_INFERENCE_PROTOCOL_FEATURE } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
-import { WORKER_GATEWAY_TOOLS_PROTOCOL_FEATURE } from "../../../packages/gateway-protocol/src/schema/worker-gateway-tool.js";
 import { WORKER_TURN_ADMISSION_PROTOCOL_FEATURE } from "../../../packages/gateway-protocol/src/schema/worker-turn-admission.js";
 import { resolveAgentDir } from "../../agents/agent-scope.js";
 import {
@@ -33,6 +32,7 @@ import {
   getWorkerTurnToolSurface,
 } from "./placement-turn-claim-events.js";
 import { prepareWorkerDesktopLaunchPlan } from "./worker-desktop-launch-plan.js";
+import { prepareWorkerExecApproval } from "./worker-exec-approval.js";
 import type { WorkerGatewayToolRuntime } from "./worker-gateway-tool-contract.js";
 import { createWorkerGatewayToolRuntime } from "./worker-gateway-tool-runtime.js";
 import { bindWorkerGitHubTurn } from "./worker-github-binding.js";
@@ -318,9 +318,6 @@ export async function executeWorkerTurn(
         return false;
       }
     };
-    if (!bootstrapReceipt.protocolFeatures.includes(WORKER_GATEWAY_TOOLS_PROTOCOL_FEATURE)) {
-      throw new StaleWorkerBuildError();
-    }
     const skillWorkshop = turn.skillLibraryAuthoring
       ? createLibrarySkillWorkshopTool({ ...turn.skillLibraryAuthoring, defaultTarget: "personal" })
       : undefined;
@@ -431,6 +428,7 @@ export async function executeWorkerTurn(
       signal,
     });
     const assertInputAdmitted = bindWorkerTurnCapabilities(params.placements, params.turnClaim, {
+      execApproval: prepareWorkerExecApproval({ exec, turn, manager, signal, placement }),
       toolSurface: toolRuntime,
       prepareReplyMedia,
       inference,
@@ -685,13 +683,13 @@ export async function executeWorkerTurn(
       await releaseClaimIfOwned(params.placements, params.turnClaim);
       return blockedResult;
     }
-    assertInputAdmitted();
     return await finalizeWorkerTurnResult({
       ...params,
       turn,
       transcriptTarget,
       tunnel,
       processResult,
+      assertInputAdmitted,
       modelRef,
       baseLeafId,
       promptContext,

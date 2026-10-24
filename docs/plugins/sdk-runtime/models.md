@@ -119,7 +119,11 @@ path; importing it alone does not load model or secret runtime code.
 The `openclaw/plugin-sdk/simple-completion-runtime` helpers support preparing a
 model once and completing with it repeatedly. Successful preparation retains the
 provider resources used by its `model`, `auth`, and `selection` fields. The host
-owns those resources, so callers can reuse the result without a disposer:
+owns those resources, so callers can reuse the result without a disposer.
+
+Preparation loads the selected provider and inference plugins without evaluating
+the agent's configured memory or context-engine plugins. Image preparation and
+one-shot decision inference use the same isolated plugin-loading scope.
 
 ```typescript
 const result = await prepareSimpleCompletionModelForAgent({ cfg, agentId });

@@ -241,15 +241,17 @@ progress (`onboarding`) that starts as `pending`. The inviter comes only from th
 host's trusted requester context, never from tool input; when no human profile
 resolves, it stays unset.
 
-Renewal keeps the recorded inviter, note, and onboarding progress unless new
-values are supplied, and never resets progress to `pending`. Grants recorded
-before this metadata existed keep working without it.
+Renewal of an active grant keeps the recorded inviter, note, and onboarding
+progress unless new values are supplied, and never resets progress to
+`pending`. A new invitation after the previous grant expired or was revoked
+gets a new grant ID and starts onboarding at `pending` again; the recorded
+inviter and note carry over unless replaced. Grants recorded before this
+metadata existed keep working without it.
 
 Welcome-session setup inside this plugin uses two service methods:
 
-- `findActiveInvitation({ emails, githubAccountIds })` returns a snapshot of the
-  current grant for a signed-in identity, checking emails before GitHub accounts,
-  or `undefined` when none is active.
+- `findActiveInvitation(grantId)` returns a snapshot of the current grant with
+  that ID, or `undefined` when it expired, was revoked, or was replaced.
 - `compareAndSetOnboarding({ grantId, expected, next })` replaces the onboarding
   progress of that still-active grant only when the recorded progress matches
   `expected` by `state` and `updatedAt` (`null` matches a grant without
@@ -262,6 +264,51 @@ Welcome-session setup inside this plugin uses two service methods:
   setup against that same key instead of allocating another session. This API
   serializes the active Gateway service, not independent processes. Session
   creation and restart recovery remain the welcome-setup owner's responsibility.
+
+## Welcome session
+
+The guest Control UI calls the Gateway method `visitor-access.welcome.ensure`
+with `{}` on load. It requires `operator.sessions.write` and a signed-in
+profile, so the restricted guest role can call it. Nothing the caller sends
+selects the invitation: the plugin uses the visitor grant the Gateway admitted
+for that connection (its `gatewayAccessGrant` reference). Staff, the Gateway
+owner, and anyone else without an admitted visitor grant get
+`{ status: "not_applicable" }`.
+
+| Response                                            | Meaning                                                                           |
+| --------------------------------------------------- | --------------------------------------------------------------------------------- |
+| `{ status: "not_applicable" }`                      | The caller has no active visitor invitation.                                      |
+| `{ status: "pending", retryAfterMs }`               | Another call is setting up this invitation's welcome session; call again.         |
+| `{ status: "ready", sessionKey, agentId, created }` | The welcome session exists; `created` is true only for the call that finished it. |
+| `{ status: "failed", retryable: true, message }`    | Setup failed; calling again resumes it. The message is short and has no secrets.  |
+
+The first call reserves a session key in the grant's onboarding record, then
+creates the session as the guest, so the guest owns it and the guest role's
+agent, sandbox, and session limits apply. The session uses the configured
+default agent when the guest role permits it, otherwise the role's first
+permitted agent, and is titled "Welcome, <display name>" ("Welcome" without a
+display name). The plugin then adds one agent-written message without running
+the model and records the onboarding as `ready`. Any number of calls, tabs,
+retries, reloads, or Gateway restarts yield at most one welcome session per
+grant: a retry after a failure or crash reuses the reserved key, an existing
+session is adopted, and the message is written with a stable idempotency key,
+so it is never repeated.
+
+The welcome message greets the guest, names the inviter, includes the stored
+note, and gives the access expiry in UTC. It lists what the guest can do from
+the current guest role: which agents they can start sessions with, whether work
+runs in a required sandbox, and whether they can read other people's sessions.
+The inviter appears as a mention, so the session shows up in the inviter's
+**Involving me** list and Inbox with the guest named as the sender. Grants
+recorded without an inviter get a welcome without a mention. Chat input
+normalization applies to the message text, as it does to a typed message.
+
+Renewing an active grant keeps the `ready` record and the session. Expiry or
+revocation leaves the session and its transcript in place; the guest simply
+loses access. A new invitation after that gets a new grant, so the guest's next
+sign-in creates a new welcome session; the earlier one remains. If the guest
+deletes their welcome session, later calls still report the recorded session
+key.
 
 ## Expiry and drift
 

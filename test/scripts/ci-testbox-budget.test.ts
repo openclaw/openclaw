@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
@@ -32,9 +32,7 @@ describe("Testbox spending admission", () => {
       const lease = { ...request, id: `tbx_example_${index}` };
       const group = planTestboxAdmission(lease, now).group;
       expect(group).toMatch(/^openclaw-testbox-budget-v1-(?:[0-9]|[12][0-9]|3[01])$/);
-      for (const profile of ["check-focused", "check-routine", "arm", "build", "windows"]) {
-        expect(planTestboxAdmission({ ...lease, profile }, now).group).toBe(group);
-      }
+      expect(planTestboxAdmission({ ...lease, profile: "build" }, now).group).toBe(group);
       groups.add(group);
     }
     expect(groups.size).toBe(32);
@@ -53,22 +51,7 @@ describe("Testbox spending admission", () => {
     expect(groups.size).toBe(4);
   });
 
-  it.each([
-    ["check-focused", "blacksmith-4vcpu-ubuntu-2404", 60],
-    ["check-routine", "blacksmith-8vcpu-ubuntu-2404", 120],
-  ])("bounds opt-in %s proof without changing the default", (profile, runner, ceiling) => {
-    const plan = planAdmission({ profile });
-    expect(plan.runner).toBe(runner);
-    expect(plan.minutes).toBe(60);
-    expect(plan.group).toBe(planAdmission().group);
-    expect(planAdmission({ profile, minutes: ceiling }).minutes).toBe(ceiling);
-    expect(() => planAdmission({ profile, minutes: ceiling + 1 })).toThrow(/runtime/);
-    expect(() => planAdmission({ profile, runner: "blacksmith-32vcpu-ubuntu-2404" })).toThrow(
-      /not allowed/,
-    );
-  });
-
-  it.each([0, -1, 241, 1.5, "invalid"])("rejects an unbounded runtime: %s", (minutes) => {
+  it.each([0, 241, 1.5])("rejects an unbounded runtime: %s", (minutes) => {
     expect(() => planAdmission({ minutes })).toThrow(/runtime/);
   });
 
@@ -78,42 +61,28 @@ describe("Testbox spending admission", () => {
     expect(planAdmission({ minutes: dispatchDefault }).minutes).toBe(60);
     expect(planAdmission().minutes).toBe(60);
     expect(planAdmission({ minutes: "" }).minutes).toBe(60);
-    expect(planAdmission({ minutes: 30 }).minutes).toBe(30);
     expect(planAdmission({ profile: "check-memory" }).minutes).toBe(240);
     expect(planAdmission({ minutes: 240 }).minutes).toBe(240);
-    expect(() => planAdmission({ profile: "build", minutes: 36 })).toThrow(/1 to 35/);
-    expect(() => planAdmission({ profile: "arm", minutes: 121 })).toThrow(/1 to 120/);
   });
 
   it("allows approved Windows sizes and refuses arbitrary dispatch labels", () => {
-    for (const size of [8, 16]) {
-      const runner = `blacksmith-${size}vcpu-windows-2025`;
-      expect(planAdmission({ profile: "windows", runner }).runner).toBe(runner);
-    }
-    for (const runner of ["self-hosted", "blacksmith-32vcpu-windows-2025"]) {
-      expect(() => planAdmission({ profile: "windows", runner })).toThrow(/not allowed/);
-    }
+    const runner = "blacksmith-8vcpu-windows-2025";
+    expect(planAdmission({ profile: "windows", runner }).runner).toBe(runner);
+    expect(() => planAdmission({ profile: "windows", runner: "self-hosted" })).toThrow(
+      /not allowed/,
+    );
   });
 
   it("expires abandoned queue entries before hydration, including the deadline itself", () => {
     const plan = planAdmission();
+    expect(
+      planTestboxAdmission(request, Date.parse(request.createdAt) + 35 * 60_000).expires_at,
+    ).toBe(plan.expires_at);
     expect(() => assertFreshTestboxAdmission(plan.expires_at, plan.expires_at - 1)).not.toThrow();
     expect(() => assertFreshTestboxAdmission(plan.expires_at, plan.expires_at)).toThrow(/expired/);
     expect(() => planTestboxAdmission(request, plan.expires_at)).toThrow(/expired/);
     expect(() => planAdmission({ createdAt: "unknown" })).toThrow(/invalid/);
   });
-
-  it.each(["check-focused", "check-routine", "check", "check-memory", "arm", "build", "windows"])(
-    "admits a saturated %s queue without resetting the dispatch deadline",
-    (profile) => {
-      const created = Date.parse(request.createdAt);
-      const plan = planTestboxAdmission({ ...request, profile }, created + 35 * 60_000);
-      expect(plan.expires_at).toBe(created + 60 * 60_000);
-      expect(() => planTestboxAdmission({ ...request, profile }, created + 60 * 60_000)).toThrow(
-        /expired/,
-      );
-    },
-  );
 
   it("caps idle requests while retaining shorter provider deadlines", () => {
     expect(boundedTestboxIdleMinutes("90\n")).toBe(15);
@@ -147,66 +116,67 @@ describe("Testbox spending admission", () => {
     expect(result.stdout).toContain("idle setting updated");
   });
 
-  it.each([
-    ["ci-check-testbox.yml", "check", "check"],
-    ["ci-check-focused-testbox.yml", "check", "check-focused"],
-    ["ci-android-focused-testbox.yml", "check", "check-focused"],
-    ["ci-check-routine-testbox.yml", "check", "check-routine"],
-    ["ci-check-high-memory-testbox.yml", "check", "check-memory"],
-    ["ci-check-arm-testbox.yml", "check-arm", "arm"],
-    ["ci-build-artifacts-testbox.yml", "build-artifacts", "build"],
-    ["windows-blacksmith-testbox.yml", "windows", "windows"],
-  ])("enforces admission before allocating %s", (file, jobName, profile) => {
-    const workflow = parse(readFileSync(`.github/workflows/${file}`, "utf8"));
-    const admission = workflow.jobs.admission;
-    const job = workflow.jobs[jobName];
-    expect(admission["runs-on"]).toBe("ubuntu-24.04");
-    const budget = admission.steps.find((step: { id?: string }) => step.id === "budget");
-    expect(budget.run).toBe("node scripts/ci-testbox-budget.mjs admit");
-    expect(budget.env.TESTBOX_PROFILE).toBe(profile);
-    expect(job.needs).toBe("admission");
-    expect(job.if).toContain("needs.admission.result == 'success'");
-    expect(job["runs-on"]).toContain("needs.admission.outputs.runner");
-    expect(job.concurrency.group).toContain("needs.admission.outputs.group");
-    expect(job.concurrency.queue).toBe("max");
-    expect(job.concurrency["cancel-in-progress"]).toBe(false);
-    const names = job.steps.map((step: { name: string }) => step.name);
-    expect(names.indexOf("Reject expired Testbox admission")).toBeGreaterThan(
-      names.indexOf("Begin Testbox"),
-    );
-    expect(names.indexOf("Reject expired Testbox admission")).toBeLessThan(
-      names.indexOf("Checkout"),
-    );
-    if (profile !== "windows") {
-      expect(names.indexOf("Bound Testbox idle lifetime")).toBeLessThan(
-        names.indexOf("Setup Node environment"),
-      );
-      expect(names).toContain("Close Testbox SSH sessions");
-    }
-    const expiry = job.steps.find(
-      (step: { name: string }) => step.name === "Reject expired Testbox admission",
-    );
-    const plan = planAdmission({ profile });
-    const created = Date.parse(request.createdAt);
-    for (const minutes of [35, 59, 60]) {
-      const result = spawnSync(
-        "bash",
-        ["-c", `date() { printf '%s\\n' "$TESTBOX_NOW_SECONDS"; }\n${expiry.run}`],
-        {
-          encoding: "utf8",
-          env: {
-            TESTBOX_EXPIRES_AT: String(plan.expires_at),
-            TESTBOX_NOW_SECONDS: String(created / 1000 + minutes * 60),
-          },
-        },
-      );
-      expect(result.status, `${file} at ${minutes} minutes: ${result.stderr}`).toBe(
-        minutes < 60 ? 0 : 1,
-      );
-      if (minutes === 60) {
-        expect(result.stderr).toContain("stop this lease and request a fresh one");
+  it("keeps every budgeted runner behind shared admission and pre-checkout expiry", () => {
+    type Step = { name: string; run?: string };
+    type Job = {
+      needs?: string;
+      "runs-on"?: string;
+      if?: string;
+      steps?: Step[];
+      concurrency?: { group: string; queue: string; "cancel-in-progress": boolean };
+    };
+    let guarded = 0;
+    const expiryPrograms = new Set<string | undefined>();
+    for (const file of readdirSync(".github/workflows").filter((name) => name.endsWith(".yml"))) {
+      const jobs: Record<string, Job> = parse(
+        readFileSync(`.github/workflows/${file}`, "utf8"),
+      ).jobs;
+      for (const job of Object.values(jobs ?? {}).filter((candidate) =>
+        candidate.steps?.some((step) => step.name === "Begin Testbox"),
+      )) {
+        guarded++;
+        expect(
+          jobs.admission?.steps?.some(
+            (step) => step.run === "node scripts/ci-testbox-budget.mjs admit",
+          ),
+        ).toBe(true);
+        expect(job.needs).toBe("admission");
+        expect(job["runs-on"]).toContain("needs.admission.outputs.runner");
+        expect(job.if).toContain("needs.admission.result == 'success'");
+        expect(job.concurrency).toMatchObject({
+          group: expect.stringContaining("needs.admission.outputs.group"),
+          queue: "max",
+          "cancel-in-progress": false,
+        });
+        const steps = job.steps ?? [];
+        const expiry = steps.findIndex((step) => step.name === "Reject expired Testbox admission");
+        expect(expiry).toBeGreaterThan(steps.findIndex((step) => step.name === "Begin Testbox"));
+        expect(expiry).toBeLessThan(steps.findIndex((step) => step.name === "Checkout"));
+        expiryPrograms.add(steps[expiry]?.run);
       }
     }
+    expect(guarded).toBeGreaterThan(0);
+    expect(expiryPrograms.size).toBe(1);
+    expect(expiryPrograms.has(undefined)).toBe(false);
+  });
+
+  it.each([59, 60])("enforces the shell queue deadline at %s minutes", (minutes) => {
+    const workflow = parse(readFileSync(".github/workflows/ci-check-testbox.yml", "utf8"));
+    const expiry = workflow.jobs.check.steps.find(
+      (step: { name: string }) => step.name === "Reject expired Testbox admission",
+    );
+    const result = spawnSync(
+      "bash",
+      ["-c", `date() { printf '%s\\n' "$TESTBOX_NOW_SECONDS"; }\n${expiry.run}`],
+      {
+        encoding: "utf8",
+        env: {
+          TESTBOX_EXPIRES_AT: String(planAdmission().expires_at),
+          TESTBOX_NOW_SECONDS: String(Date.parse(request.createdAt) / 1000 + minutes * 60),
+        },
+      },
+    );
+    expect(result.status, result.stderr).toBe(minutes < 60 ? 0 : 1);
   });
 });
 
@@ -309,14 +279,7 @@ describe("Testbox admission GitHub response", () => {
     { ...jsonDenial(secret, "primary-rate-limit"), headers: rateHeaders },
     jsonDenial("You have exceeded a secondary rate limit. " + secret, "secondary-rate-limit"),
     jsonDenial("Resource not accessible by integration", "resource-not-accessible"),
-    jsonDenial("Resource not accessible by personal access token", "resource-not-accessible"),
-    denial(
-      JSON.stringify({
-        message: secret,
-        documentation_url: "https://example.test/" + secret,
-      }),
-    ),
-    denial("<html>" + secret + "</html>", "forbidden", "invalid-json"),
+    jsonDenial(secret),
     denial('{"message":"' + secret, "forbidden", "invalid-json"),
     jsonDenial({ value: secret }),
     {

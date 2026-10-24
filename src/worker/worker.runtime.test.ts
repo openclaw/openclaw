@@ -99,6 +99,9 @@ import {
   createWorkerToolSurfaceForTest,
   createWorkerHelloForTest,
   createWorkerConnectionForTest,
+  buildWorkerExecToolCall,
+  WorkerExecApprovalFixture,
+  type WorkerExecFixtureOptions,
 } from "./worker-tool-surface.test-support.js";
 import { createWorkerRuntimeEnvironment, runWorkerDescriptor } from "./worker.runtime.js";
 
@@ -208,11 +211,8 @@ const USAGE = {
   cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 };
 
-type FakeGatewayOptions = {
+type FakeGatewayOptions = WorkerExecFixtureOptions & {
   admissionFailure?: "gateway-unavailable" | "invalid-credential" | "owner-epoch-mismatch";
-  backgroundCommand?: string;
-  backgroundYieldMs?: number;
-  execCommand?: string;
   execApprovals?: Parameters<typeof saveExecApprovals>[0];
   inferencePlans?: InferencePlan[];
   outageOnInferenceCancel?: boolean;
@@ -246,7 +246,7 @@ function assistantMessage(
   };
 }
 
-class FakeWorkerGateway {
+class FakeWorkerGateway extends WorkerExecApprovalFixture {
   config?: OpenClawConfig;
   toolSurface!: () => WorkerToolSurface;
   private readonly httpServer: Server;
@@ -286,6 +286,7 @@ class FakeWorkerGateway {
   }
 
   constructor(private readonly options: FakeGatewayOptions = {}) {
+    super(options);
     this.httpServer = createServer();
     this.webSocketServer = new WebSocketServer({ server: this.httpServer });
     this.webSocketServer.on("connection", (socket) => this.accept(socket));
@@ -360,6 +361,9 @@ class FakeWorkerGateway {
       return this.handleInferenceCancel(socket, parsed);
     }
     if (isRecord(parsed) && parsed.type === "req" && typeof parsed.id === "string") {
+      if (this.handleExecApproval(parsed, (id, payload) => this.reply(socket, id, payload))) {
+        return;
+      }
       if (parsed.method === "worker.gatewayTool.cancel") {
         this.methods.push(parsed.method);
         this.send(socket, { type: "res", id: parsed.id, ok: true, payload: { cancelled: false } });
@@ -689,31 +693,7 @@ class FakeWorkerGateway {
     output: InferenceOutput,
     options: { background: boolean; safe: boolean },
   ): void {
-    const toolCallId = "local-exec-call";
-    const args = options.background
-      ? {
-          // POSIX sleep avoids Node startup; Windows keeps the portable Node fixture.
-          command:
-            this.options.backgroundCommand ??
-            (process.platform === "win32"
-              ? `${JSON.stringify(process.execPath)} -e ${JSON.stringify(
-                  "setInterval(() => undefined, 1000)",
-                )}`
-              : "exec sleep 60"),
-          ...(this.options.backgroundYieldMs === undefined
-            ? { background: true }
-            : { yieldMs: this.options.backgroundYieldMs }),
-        }
-      : {
-          command:
-            this.options.execCommand ??
-            (options.safe ? "wc -c" : "printf worker-local > local-proof.txt"),
-        };
-    this.sendToolCallTurn(output, {
-      args,
-      toolCallId,
-      toolName: "exec",
-    });
+    this.sendToolCallTurn(output, buildWorkerExecToolCall(this.options, options));
   }
 
   private sendToolCallTurn(output: InferenceOutput, tool: ToolCallPlan): void {

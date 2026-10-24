@@ -52,7 +52,7 @@ import {
   retireChatMetadataRequests,
 } from "./chat-state-refresh.ts";
 import { resolveChatAgentId, selectedChatSessionRow } from "./chat-state-route.ts";
-import type { HumanMentionAccess } from "./components/chat-composer-mention-menu.tsx";
+import type { HumanMentionAccess } from "./components/chat-composer-mention-menu-state.ts";
 import { releaseChatMediaResourceOwner } from "./components/chat-message-media.ts";
 import { retireSessionWorkspaceCheckout } from "./components/chat-session-workspace.ts";
 import { retireChatPairingQr } from "./history-merge.ts";

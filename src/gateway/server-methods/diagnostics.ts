@@ -4,6 +4,7 @@ import {
   validateDiagnosticsHeapProfileParams,
   validateDiagnosticsHeapSnapshotParams,
 } from "../../../packages/gateway-protocol/src/schema/diagnostics.js";
+import { collectRuntimeCapabilities } from "../../infra/runtime-capabilities.js";
 import { getTrackedWorkerPoolSnapshot } from "../../infra/worker-cpu.js";
 import type { DiagnosticProfileOutcome } from "../../logging/diagnostic-profile.js";
 import {
@@ -60,6 +61,20 @@ function profileHandler<P>(
 }
 
 export const diagnosticsHandlers: GatewayRequestHandlers = {
+  "diagnostics.capabilities": ({ params, respond }) => {
+    if (params !== undefined && (!isRecord(params) || Object.keys(params).length !== 0)) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          "diagnostics.capabilities accepts only empty params",
+        ),
+      );
+      return;
+    }
+    respond(true, collectRuntimeCapabilities(), undefined);
+  },
   "diagnostics.cpuProfile": profileHandler(
     "CPU profile",
     (params): params is Record<string, unknown> =>

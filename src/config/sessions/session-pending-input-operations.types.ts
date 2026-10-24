@@ -30,6 +30,7 @@ export type PendingInputSourceSnapshot = {
   current: boolean;
   pending?: SessionPendingInputRow;
   committed?: PersistedUserTurnMessage;
+  committedMessageSeq?: number;
 };
 
 export type PendingInputSnapshot = {

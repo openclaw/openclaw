@@ -121,8 +121,24 @@ scope ceiling; it is not a new PR-only permission or a blanket grant to automati
 The stored tool cap, sandbox, and current tool denials still apply. Scheduled
 automation management remains self-scoped.
 
-This source is not inferred for existing jobs, guests, isolated/current targets,
-scripts, or another conversation. An authenticated owner update can bind it again
+The same applies to a new `isolated` or `current` `agentTurn` job that an
+authenticated operator turn links to its creating conversation. The job retains
+the creator's source privately, runs in its own detached session, and rechecks
+the original operator scopes, role, device, and access grant at each occurrence
+and before its effects. If the device or grant is revoked, or the role changes,
+the next occurrence is refused with a message asking you to recreate the
+automation from an authenticated turn, and the job is disabled. A revocation
+during a run stops that run's remaining operator effects.
+
+If the creating conversation is reset, a linked detached job keeps running
+unbound, without that conversation's workspace or memory, and still rechecks the
+creator's device and grant. A removed or archived conversation pauses the job.
+
+Stored jobs are unchanged: a source is never inferred for an existing job, so
+jobs created before this behavior keep their recorded ownership check. A source
+is also never captured for guests, scripts, unlinked jobs, jobs created without
+an authenticated operator turn (such as `cron.add` from the CLI), or another
+conversation. An authenticated owner update can bind it again
 to the updated task. Executable edits without that authentication discard it.
 Display-only edits and disabling or re-enabling the job preserve its stored
 source; names, schedules, and other executable inputs remain bound. A fresh

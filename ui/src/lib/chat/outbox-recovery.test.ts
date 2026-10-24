@@ -48,7 +48,7 @@ const recovery = (
   sourceScopeKey: sourceScope,
   session,
 });
-function fixture(kind: "queue" | "draft", sibling = false) {
+function fixture(kind: "queue" | "draft", sibling = false, originalScope = sourceScope) {
   const state = {
     settings: { gatewayUrl },
     connected: true,
@@ -67,7 +67,8 @@ function fixture(kind: "queue" | "draft", sibling = false) {
             queueItem({
               sendRunId: "original-attempt",
               sendAttempts: 1,
-              sendState: "unconfirmed",
+              sendState: "waiting-reconnect",
+              sessionId: "original-session",
             }),
           ],
         }),
@@ -80,7 +81,7 @@ function fixture(kind: "queue" | "draft", sibling = false) {
       gatewayOwner: gatewayUrl,
       recovery: {},
       sessions: {
-        [sourceScope]: session,
+        [originalScope]: session,
         ...(sibling
           ? { "agent:main:sibling\u0000agent:main": { draft: "untouched", updatedAt: 2 } }
           : {}),
@@ -88,7 +89,7 @@ function fixture(kind: "queue" | "draft", sibling = false) {
     }),
   );
   const entry = () =>
-    readChatOutboxRecovery(state).entries.find((row) => row.sourceScopeKey === sourceScope)!;
+    readChatOutboxRecovery(state).entries.find((row) => row.sourceScopeKey === originalScope)!;
   const destination = (scope = firstScope) => captureChatOutboxRecoveryDestination(state, scope)!;
   const stored = () => readStoredOutboxStore(sessionStorage, storageTargetForComposer(state));
   const entries = () => readChatOutboxRecovery(state).entries;
@@ -456,16 +457,83 @@ it.each(
   const scope = committed ? firstScope : secondScope;
   const sessions = f.stored().sessions;
   expect(Object.keys(sessions)).toEqual([scopeKey(scope)]);
-  expect(sessions[scopeKey(scope)]).toMatchObject(
-    kind === "draft"
-      ? { draft: f.session.draft }
-      : { queue: [{ ...f.session.queue![0], ...scope, storageScope }] },
-  );
+  if (kind === "draft") {
+    expect(sessions[scopeKey(scope)]).toMatchObject({ draft: f.session.draft });
+  } else {
+    const restored = sessions[scopeKey(scope)]?.queue?.[0];
+    expect(restored).toMatchObject({
+      id: "original-input",
+      text: "Retained queue 雪",
+      ...scope,
+      storageScope,
+      sendAttempts: 0,
+      sendState: "failed",
+    });
+    expect(restored).not.toHaveProperty("sendRunId");
+    expect(restored).not.toHaveProperty("sessionId");
+  }
   expect(f.entries().filter((row) => row.sourceScopeKey === sourceScope)).toEqual([]);
   if (stage === "retire-write") {
     expect(f.entries()[0]?.session.draft).toBe("untouched");
   }
 });
+
+it.each([
+  { source: sourceScope, destination: "agent:main:legacy", retained: true },
+  { source: "main\u0000agent:main", destination: "agent:main:main", retained: true },
+  {
+    source: sourceScope,
+    destination: firstScope.sessionKey,
+    retained: false,
+    attachments: [attachment],
+  },
+  {
+    source: sourceScope,
+    destination: firstScope.sessionKey,
+    retained: true,
+    intent: { kind: "session-goal-start", version: 1, issuedAtMs: 1 },
+  },
+  {
+    source: sourceScope,
+    destination: firstScope.sessionKey,
+    retained: true,
+    localCommandName: "clear",
+  },
+  { source: sourceScope, destination: firstScope.sessionKey, retained: true, queueMode: "steer" },
+] satisfies Array<
+  {
+    source: string;
+    destination: string;
+    retained: boolean;
+  } & Partial<ChatQueueItem>
+>)(
+  "preserves admission=$retained when restoring $source to $destination",
+  ({ source, destination, retained, ...input }) => {
+    const f = fixture("queue", false, source);
+    const legacy = f.legacy();
+    Object.assign(legacy.sessions[source]!.queue![0]!, input);
+    f.saveLegacy(legacy);
+    const scope = { sessionKey: destination, agentId: "main" };
+
+    expect(f.restore(f.entry(), scope)).toBe("restored");
+
+    const restored = f.stored().sessions[scopeKey(scope)]?.queue?.[0];
+    expect(restored).toMatchObject({
+      ...input,
+      sendAttempts: retained ? 1 : 0,
+      sendState: retained ? "held" : "failed",
+    });
+    if (retained) {
+      expect(restored).toMatchObject({
+        sendRunId: "original-attempt",
+        sessionId: "original-session",
+      });
+    } else {
+      expect(restored).not.toHaveProperty("sendRunId");
+      expect(restored).not.toHaveProperty("sessionId");
+    }
+  },
+);
 
 it.each([
   ...(["account", "client"] as const).map((change) => ({

@@ -72,6 +72,27 @@ retain restart behavior under a broader no-op prefix.
 
 ## Reusable runtime utilities
 
+### Runtime execution profile
+
+`getRuntimeExecutionProfile()` from `openclaw/plugin-sdk/runtime-env` returns
+`dynamic-execution` for Node/Bun installations and JIT/bytecode standalone hosts,
+or `embedded-aot` for an AOT standalone. The artifact owns this process-stable
+fact; it is not a user setting or an authorization grant.
+
+Before intentionally evaluating host JavaScript, call
+`assertRuntimeSupportsDynamicExecution("Your feature name")` from the same
+entrypoint. In an embedded AOT host it throws an error naming the required
+runtime and the next step. Propagate that error instead of switching to another
+host evaluator. Fixed programs should be ordinary source functions; runtime
+schemas and syntax checks need codegen-free validators and parsers.
+
+Installing a plugin after compilation does not embed it, even if it ships
+JavaScript rather than TypeScript. Run fetched code in a dynamic-execution host
+or rebuild the complete artifact with the plugin. Metadata discovery does not
+execute its runtime. See [Runtime execution profiles](/concepts/runtime-profiles).
+
+### Process and network utilities
+
 `runInDetachedAsyncContext` from `openclaw/plugin-sdk/concurrency-runtime` starts
 work in the host's context-free async root. Use it at an independently admitted
 service request boundary when a long-lived listener can retain its startup
