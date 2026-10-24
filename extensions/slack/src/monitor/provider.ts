@@ -71,7 +71,6 @@ import {
   withSlackPresenceLifecycleSignal,
 } from "./provider-workspace-client.js";
 import {
-  formatSlackSocketModeSharedConnectionWarning,
   registerSlackSocketModeConnectionDiagnostics,
   SLACK_SOCKET_RECONNECT_POLICY,
 } from "./reconnect-policy.js";
@@ -284,6 +283,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts) {
   const monitorContextRef: { current?: SlackMonitorContext } = {};
   const { app, receiver, socketClient, socketModeLogger } = createSlackBoltApp({
     interop: await getSlackBoltInterop(),
+    accountId: account.accountId,
     slackMode,
     token,
     appToken: slackMode === "socket" ? (appToken ?? undefined) : undefined,
@@ -359,9 +359,8 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts) {
   const unregisterSocketModeConnectionDiagnostics = socketClient
     ? registerSlackSocketModeConnectionDiagnostics({
         client: socketClient,
-        onSharedConnection: (activeConnections) => {
-          runtime.log?.(warn(formatSlackSocketModeSharedConnectionWarning(activeConnections)));
-        },
+        accountId: account.accountId,
+        log: runtime.log,
       })
     : () => {};
 
