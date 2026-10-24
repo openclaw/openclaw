@@ -43,6 +43,11 @@ import {
   readUpgradeSurvivorPaths,
   UPGRADE_SURVIVOR_PATHS_HELPER,
 } from "./upgrade-survivor-paths.test-support.js";
+import {
+  readJson as readDiagnosticJson,
+  successSummary,
+  writeJson as writeDiagnosticJson,
+} from "./upgrade-survivor-shard.test-support.js";
 
 const pendingChildCompletions = new Set<Promise<unknown>>();
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
@@ -178,17 +183,10 @@ chmod +x "$TMPDIR/bin/timeout"
 export PATH="$TMPDIR/bin:$PATH"`;
 
 const DOCKER_CIDFILE_PROBE = `local cidfile=""
-  local expect_cidfile=0
-  local arg
+  local previous="" arg
   for arg in "$@"; do
-    if [[ "$expect_cidfile" == "1" ]]; then
-      cidfile="$arg"
-      expect_cidfile=0
-      continue
-    fi
-    if [[ "$arg" == "--cidfile" ]]; then
-      expect_cidfile=1
-    fi
+    [[ "$previous" != "--cidfile" ]] || cidfile="$arg"
+    previous="$arg"
   done
   test -n "$cidfile"`;
 
@@ -772,54 +770,44 @@ ${source}`,
   };
 }
 
-async function forEachUpgradeSurvivorSystemctlShim(
-  signal: AbortSignal,
-  callback: (fixture: {
-    pid: number;
-    pidPath: string;
-    run: (procStat?: string, settled?: boolean) => number | null;
-    readLog: () => string[];
-    scriptPath: string;
-  }) => void | Promise<void>,
-): Promise<void> {
-  for (const scriptPath of [UPGRADE_SURVIVOR_UPDATE_RESTART_AUTH_PATH]) {
-    const workDir = tempDirs.make("openclaw-systemctl-shim-");
-    const binDir = join(workDir, "bin");
-    const pidPath = join(workDir, "gateway.pid");
-    const childPidPath = join(workDir, "child.pid");
-    const child = spawn(process.execPath, [writeTermIgnoringDescendant(workDir)], {
-      env: { ...process.env, DESCENDANT_PID_FILE: childPidPath },
-      stdio: ["ignore", "ignore", "ignore", "ipc"],
-    });
-    const exited = waitForProcessExit(child);
-    const ready = new Promise<void>((resolve) => {
-      child.once("message", () => resolve());
-    });
-    try {
-      await withinTest(
-        awaitGateBeforeSettlement(ready, exited, `file was not written: ${childPidPath}`),
-        signal,
-      );
-      const pid = Number.parseInt(readFileSync(childPidPath, "utf8"), 10);
-      writeFileSync(pidPath, `${pid}\n`);
-      const daemonLog = join(workDir, "gateway.log");
-      const fixtureEnv = {
-        HOME: workDir,
-        OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_LOG: join(workDir, "systemctl.log"),
-        OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_PID_FILE: pidPath,
-        OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_DAEMON_LOG: daemonLog,
-      };
-      const unitDir = join(workDir, ".config/systemd/user");
-      mkdirSync(unitDir, { recursive: true });
-      writeFileSync(
-        join(unitDir, "openclaw-gateway.service"),
-        buildSystemdUnit({
-          programArguments: [process.execPath, "gateway"],
-        }),
-      );
-      const shimPath = installUpgradeSurvivorSystemctlShim(workDir, fixtureEnv, scriptPath);
-      writeExecutables(binDir, {
-        cat: `#!/usr/bin/env bash
+async function expectSystemctlSettlement(signal: AbortSignal, zombie: boolean): Promise<void> {
+  const workDir = tempDirs.make("openclaw-systemctl-shim-");
+  const binDir = join(workDir, "bin");
+  const pidPath = join(workDir, "gateway.pid");
+  const childPidPath = join(workDir, "child.pid");
+  const child = spawn(process.execPath, [writeTermIgnoringDescendant(workDir)], {
+    env: { ...process.env, DESCENDANT_PID_FILE: childPidPath },
+    stdio: ["ignore", "ignore", "ignore", "ipc"],
+  });
+  const exited = waitForProcessExit(child);
+  const ready = new Promise<void>((resolve) => {
+    child.once("message", () => resolve());
+  });
+  try {
+    await withinTest(
+      awaitGateBeforeSettlement(ready, exited, `file was not written: ${childPidPath}`),
+      signal,
+    );
+    const pid = Number.parseInt(readFileSync(childPidPath, "utf8"), 10);
+    writeFileSync(pidPath, `${pid}\n`);
+    const daemonLog = join(workDir, "gateway.log");
+    const fixtureEnv = {
+      HOME: workDir,
+      OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_LOG: join(workDir, "systemctl.log"),
+      OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_PID_FILE: pidPath,
+      OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_DAEMON_LOG: daemonLog,
+    };
+    const unitDir = join(workDir, ".config/systemd/user");
+    mkdirSync(unitDir, { recursive: true });
+    writeFileSync(
+      join(unitDir, "openclaw-gateway.service"),
+      buildSystemdUnit({
+        programArguments: [process.execPath, "gateway"],
+      }),
+    );
+    const shimPath = installUpgradeSurvivorSystemctlShim(workDir, fixtureEnv);
+    writeExecutables(binDir, {
+      cat: `#!/usr/bin/env bash
 case "\${1:-}" in
   /proc/*/stat)
     printf 'proc-stat-read\\n' >>"$OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_LOG"
@@ -829,46 +817,60 @@ case "\${1:-}" in
   *) exec /bin/cat "$@" ;;
 esac
 `,
-        sleep: `#!/usr/bin/env bash
+      sleep: `#!/usr/bin/env bash
 printf 'wait\\n' >>"$OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_LOG"
 exit 97
 `,
-      });
-      const run = (procStat?: string, settled = false) => {
-        // The synthetic /proc observation and manager custody describe the same
-        // state: a zombie has retired; unreadable/malformed state stays owned.
-        writeFileSync(
-          `${daemonLog}.runtime.json`,
-          JSON.stringify({
-            pid: 0,
-            supervisorPid: settled ? 0 : pid,
-            groupPid: 0,
-          }),
-        );
-        writeFileSync(fixtureEnv.OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_LOG, "");
-        return spawnSync("bash", [shimPath, "--user", "stop", "openclaw-gateway.service"], {
-          encoding: "utf8",
-          env: {
-            ...process.env,
-            FAKE_PROC_STAT: procStat ?? "",
-            FAKE_PROC_STAT_MODE: procStat === undefined ? "unreadable" : "readable",
-            ...fixtureEnv,
-            PATH: `${binDir}:${process.env.PATH ?? ""}`,
-          },
-        }).status;
-      };
-      const readLog = () =>
+    });
+    const run = (procStat?: string, settled = false) => {
+      // The synthetic /proc observation and manager custody describe the same
+      // state: a zombie has retired; unreadable/malformed state stays owned.
+      writeFileSync(
+        `${daemonLog}.runtime.json`,
+        JSON.stringify({
+          pid: 0,
+          supervisorPid: settled ? 0 : pid,
+          groupPid: 0,
+        }),
+      );
+      writeFileSync(fixtureEnv.OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_LOG, "");
+      return spawnSync("bash", [shimPath, "--user", "stop", "openclaw-gateway.service"], {
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          FAKE_PROC_STAT: procStat ?? "",
+          FAKE_PROC_STAT_MODE: procStat === undefined ? "unreadable" : "readable",
+          ...fixtureEnv,
+          PATH: `${binDir}:${process.env.PATH ?? ""}`,
+        },
+      }).status;
+    };
+    const procTail = Array.from({ length: 49 }, (_, field) => field + 1).join(" ");
+    const stats = zombie
+      ? [`${pid} (gateway (old) worker) Z ${procTail}`]
+      : [undefined, `${pid} (gateway) Z`];
+    for (const procStat of stats) {
+      // Missing stat data must wait rather than being mistaken for exit.
+      expect(run(procStat, zombie), procStat ?? "unreadable").toBe(zombie ? 0 : 97);
+      expect(
         readFileSync(fixtureEnv.OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_LOG, "utf8")
           .trim()
-          .split("\n");
-
-      await callback({ pid, pidPath, run, readLog, scriptPath });
-    } finally {
-      if (child.exitCode === null && child.signalCode === null) {
-        child.kill("SIGKILL");
+          .split("\n"),
+      ).toEqual([
+        "--user stop openclaw-gateway.service",
+        "proc-stat-read",
+        zombie ? "proc-stat-read" : "wait",
+      ]);
+      expect(isPidAlive(pid)).toBe(true);
+      if (!zombie) {
+        expect(readFileSync(pidPath, "utf8")).toBe(`${pid}\n`);
       }
-      await waitForProcessExit(child).catch(() => undefined);
     }
+  } finally {
+    if (child.exitCode === null && child.signalCode === null) {
+      child.kill("SIGKILL");
+    }
+    await waitForProcessExit(child).catch(() => undefined);
   }
 }
 
@@ -1623,66 +1625,34 @@ set -e
 [[ ! -e "$TMPDIR/docker-seen" ]] || exit 1
 `,
     },
-    {
-      title: "removes functional Docker build package inputs after the build",
+    ...[false, true].map((provided) => ({
+      title: provided
+        ? "keeps caller-provided functional Docker build packages"
+        : "removes generated functional Docker build inputs",
       tempPrefix: "openclaw-docker-build-cleanup-",
       scriptSource: (workDir: string) => repoShell(workDir)`
-
-${PACKAGE_BUILDER_NODE_SCRIPT}
-
+${
+  provided
+    ? `
+external_dir="$TMPDIR/external-package"
+mkdir -p "$external_dir"
+printf fixture >"$external_dir/openclaw-current.tgz"
+export OPENCLAW_CURRENT_PACKAGE_TGZ="$external_dir/openclaw-current.tgz"
+`
+    : PACKAGE_BUILDER_NODE_SCRIPT
+}
 source "$ROOT_DIR/scripts/lib/docker-e2e-image.sh"
-
 ${PACKAGE_BUILD_CONTEXT_PROBE_SCRIPT}
-
-docker_e2e_build_or_reuse \\
-  openclaw-test-image \\
-  cleanup-proof \\
-  "$ROOT_DIR/scripts/e2e/Dockerfile" \\
-  "$ROOT_DIR" \\
-  functional
-
+docker_e2e_build_or_reuse openclaw-test-image cleanup-proof "$ROOT_DIR/scripts/e2e/Dockerfile" "$ROOT_DIR" functional
 test -f "$TMPDIR/build-context-seen"
-leftovers="$(find "$TMPDIR" -maxdepth 1 \\( \\
-  -name 'openclaw-docker-e2e-pack.*' \\
-  -o -name 'openclaw-docker-e2e-package-context.*' \\
-\\) -print)"
+${provided ? 'test -f "$OPENCLAW_CURRENT_PACKAGE_TGZ"' : ""}
+leftovers="$(find "$TMPDIR" -maxdepth 1 \\( -name 'openclaw-docker-e2e-pack.*' -o -name 'openclaw-docker-e2e-package-context.*' \\) -print)"
 if [[ -n "$leftovers" ]]; then
   printf 'leftover functional build inputs:\\n%s\\n' "$leftovers" >&2
   exit 1
 fi
 `,
-    },
-    {
-      title: "keeps caller-provided functional Docker build packages",
-      tempPrefix: "openclaw-docker-build-external-package-",
-      scriptSource: (workDir: string) => repoShell(workDir)`
-
-external_dir="$TMPDIR/external-package"
-mkdir -p "$external_dir"
-printf fixture >"$external_dir/openclaw-current.tgz"
-OPENCLAW_CURRENT_PACKAGE_TGZ="$external_dir/openclaw-current.tgz"
-export OPENCLAW_CURRENT_PACKAGE_TGZ
-
-source "$ROOT_DIR/scripts/lib/docker-e2e-image.sh"
-
-${PACKAGE_BUILD_CONTEXT_PROBE_SCRIPT}
-
-docker_e2e_build_or_reuse \\
-  openclaw-test-image \\
-  external-package-proof \\
-  "$ROOT_DIR/scripts/e2e/Dockerfile" \\
-  "$ROOT_DIR" \\
-  functional
-
-test -f "$TMPDIR/build-context-seen"
-test -f "$OPENCLAW_CURRENT_PACKAGE_TGZ"
-leftovers="$(find "$TMPDIR" -maxdepth 1 -name 'openclaw-docker-e2e-package-context.*' -print)"
-if [[ -n "$leftovers" ]]; then
-  printf 'leftover functional build context:\\n%s\\n' "$leftovers" >&2
-  exit 1
-fi
-`,
-    },
+    })),
     {
       title: "cleans generated package mounts after harness Docker runs",
       tempPrefix: "openclaw-docker-package-mount-cleanup-",
@@ -2357,14 +2327,7 @@ exec "$@"
     if (!childPid) {
       throw new Error("upgrade survivor process did not start");
     }
-    const exitPromise = ownChildCompletion(
-      new Promise<{
-        code: number | null;
-        signal: NodeJS.Signals | null;
-      }>((resolve) => {
-        child.once("exit", (code, childSignal) => resolve({ code, signal: childSignal }));
-      }),
-    );
+    const exitPromise = waitForProcessExit(child);
 
     try {
       await withinTest(
@@ -2378,18 +2341,15 @@ exec "$@"
       );
       expect(existsSync(markerPath)).toBe(true);
       process.kill(-childPid, "SIGTERM");
-      const exit = await withinTest(exitPromise, signal);
-
-      expect(exit).toEqual({ code: 143, signal: null });
-      const diagnostics = JSON.parse(
-        readFileSync(join(workDir, "artifacts", "diagnostics", "raw.json"), "utf8"),
-      );
-      expect(diagnostics).toMatchObject({
+      expect([await withinTest(exitPromise, signal), child.signalCode]).toEqual([143, null]);
+      expect(
+        readDiagnosticJson(join(workDir, "artifacts", "diagnostics", "raw.json")),
+      ).toMatchObject({
         phase: "install-baseline",
         exitStatus: 143,
         signal: "SIGTERM",
       });
-      const summary = JSON.parse(readFileSync(summaryPath, "utf8"));
+      const summary = readDiagnosticJson(summaryPath);
       expect(summary).toMatchObject({
         failure: {
           message: "phase install-baseline interrupted by SIGTERM",
@@ -2781,41 +2741,9 @@ printf '%s\n' "$status" >"$TMPDIR/status"
   it.skipIf(process.platform === "win32").for(["zombie", "unreadable or malformed"])(
     "settles a systemctl target only when proc stat proves exit (%s)",
     async (mode, { signal }) => {
-      await forEachUpgradeSurvivorSystemctlShim(
-        signal,
-        ({ pid, pidPath, run, readLog, scriptPath }) => {
-          const zombie = mode === "zombie";
-          const procTail = Array.from({ length: 49 }, (_, field) => field + 1).join(" ");
-          const stats = zombie
-            ? [`${pid} (gateway (old) worker) Z ${procTail}`]
-            : [undefined, `${pid} (gateway) Z`];
-          for (const procStat of stats) {
-            // The wait sentinel proves missing stat data was not mistaken for exit.
-            expect(run(procStat, zombie), `${scriptPath}: ${procStat ?? "unreadable"}`).toBe(
-              zombie ? 0 : 97,
-            );
-            expect(readLog()).toEqual([
-              "--user stop openclaw-gateway.service",
-              "proc-stat-read",
-              zombie ? "proc-stat-read" : "wait",
-            ]);
-            expect(isPidAlive(pid)).toBe(true);
-            if (!zombie) {
-              expect(readFileSync(pidPath, "utf8")).toBe(`${pid}\n`);
-            }
-          }
-        },
-      );
+      await expectSystemctlSettlement(signal, mode === "zombie");
     },
   );
-
-  function readDiagnosticJson(file: string) {
-    return JSON.parse(readFileSync(file, "utf8"));
-  }
-
-  function writeDiagnosticJson(file: string, value: unknown) {
-    writeFileSync(file, JSON.stringify(value));
-  }
 
   function runDiagnosticNode(args: string[], env: NodeJS.ProcessEnv) {
     return spawnSync(testNodeExecPath, args, { env, encoding: "utf8" });
@@ -2851,23 +2779,16 @@ fs.readFileSync = (file, ...args) => {
 };
 `,
     );
+    const delegatedArgv = [
+      "node",
+      "/package/dist/infra/update-migrated-finalize.worker.js",
+      "--post-core",
+    ];
     for (const [argv, marker, expected] of [
       [["openclaw-update"], "", ["update", "doctor"]],
-      [
-        ["node", "/package/dist/infra/update-migrated-finalize.worker.js", "--post-core"],
-        "OPENCLAW_UPDATE_POST_CORE=1",
-        ["update", "doctor"],
-      ],
-      [
-        ["node", "/package/dist/infra/update-migrated-finalize.worker.js", "--post-core"],
-        "",
-        ["doctor"],
-      ],
-      [
-        ["node", "/package/dist/infra/update-migrated-finalize.worker.js", "--post-core"],
-        "EACCES",
-        ["doctor"],
-      ],
+      [delegatedArgv, "OPENCLAW_UPDATE_POST_CORE=1", ["update", "doctor"]],
+      [delegatedArgv, "", ["doctor"]],
+      [delegatedArgv, "EACCES", ["doctor"]],
     ] as const) {
       const child = runDiagnosticNode(
         [
@@ -3686,13 +3607,7 @@ exit ${exitCode}
           { phase: "update-candidate", status: "passed", at: "2026-09-01T00:00:01.000Z" },
         ];
         const publicSummary = {
-          status: "passed",
-          baseline: { spec: "openclaw@2026.7.1-2", version: "2026.7.1-2" },
-          candidate: { kind: "tarball", version: "2026.8.1" },
-          scenario: "base",
-          installedVersion: "2026.8.1",
-          candidateInstallMode: "updater",
-          updateRestartMode: "manual",
+          ...successSummary("2026.7.1-2", "2026.8.1", { scenario: "base" }),
           updateOutcome: "recoverable",
           updateRecovery: "capability-consent",
           timings: { startupSeconds: 4, healthzSeconds: 1, readyzSeconds: 1, statusSeconds: 2 },
