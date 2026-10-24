@@ -64,6 +64,7 @@ export function createRuntimeProcessEntrypoints(currentModuleUrl: string) {
     sessionSharingStore: runtimeProcessEntrypoint("config/sessions/session-sharing-store.worker"),
     sessionForkDomain: runtimeProcessEntrypoint("config/sessions/session-fork-domain.worker"),
     sessionGoalOperations: runtimeProcessEntrypoint("config/sessions/goals-operations.worker"),
+    sessionQuestionOperations: runtimeProcessEntrypoint("config/sessions/session-questions.worker"),
     sessionLifecyclePlanningDomain: runtimeProcessEntrypoint(
       "config/sessions/session-lifecycle-projection.worker",
     ),

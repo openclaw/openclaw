@@ -1,14 +1,19 @@
 import fs from "node:fs";
-import { afterEach, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { setRuntimeConfigSnapshot } from "../../config/config.js";
-import {
-  loadSessionEntry,
-  upsertSessionEntryCore,
-} from "../../config/sessions/session-accessor.js";
+import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import * as sessionEntryReads from "../../config/sessions/session-entry-read-runtime.js";
+import {
+  executeSessionQuestionOperation,
+  readSessionQuestionCustody,
+} from "../../config/sessions/session-questions.js";
+import type { DurableQuestion } from "../../config/sessions/session-questions.types.js";
+import {
+  addSessionMember,
+  removeSessionMember,
+} from "../../config/sessions/session-sharing-store.js";
 import { projectionLane } from "../../config/sessions/session-transcript-worker-resources.js";
-import type { SessionEntry } from "../../config/sessions/types.js";
 import { releaseAgentRunDelegatedAuthority } from "../../infra/agent-run-registry.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { AsyncWorkScope } from "../../shared/async-work-scope.js";
@@ -17,29 +22,26 @@ import {
   closeOpenClawAgentDatabaseByPathAsync,
   resolveOpenClawAgentSqlitePath,
 } from "../../state/openclaw-agent-db.js";
-import {
-  withOpenClawTestState,
-  type OpenClawTestState,
-} from "../../test-utils/openclaw-test-state.js";
-import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";
+import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { installDurableQuestion } from "../durable-question-runtime.js";
+import { publishDurableQuestionResolution } from "../question-session-access.js";
+import { createDurableQuestionSessionAccess } from "../question-session-durable-access.js";
 import { createGatewayBroadcaster } from "../server-broadcast.js";
 import { GatewayClientRegistry } from "../server/client-registry.js";
-import type { GatewayWsClient } from "../server/ws-types.js";
 import { createSessionRowProjection } from "../session-row-projection.js";
 import { canReceiveSessionEvent, prepareProjectedSessionSharing } from "../session-sharing.js";
-import { roleClient, rolePolicyConfig } from "../session-sharing.test-utils.js";
 import { resolveSessionStoreIdentity } from "../session-store-key.js";
+import { createQuestionSessionAccessFixtureOwner } from "./question.session-access.test-support.js";
 import {
   adminRequestClient,
   broadcast,
-  callQuestionRpc,
   installQuestionTestHooks,
   manager,
   requesterAuthority,
   requestParams,
   secretRequestParams,
 } from "./question.test-support.js";
-import type { GatewayClient } from "./types.js";
+import type { GatewayRequestContext } from "./shared-types.js";
 
 installQuestionTestHooks();
 
@@ -52,103 +54,7 @@ function invalidateQuestionReadFacts() {
   });
 }
 
-const sourceReleases = new Set<() => void>();
-afterEach(() => {
-  for (const release of sourceReleases) {
-    release();
-  }
-  sourceReleases.clear();
-});
-
-function questionPeer(client: GatewayClient, connId: string) {
-  const send = vi.fn();
-  const socket = { readyState: 1, bufferedAmount: 0, send, close: vi.fn() };
-  const ws: GatewayWsClient = {
-    ...client,
-    authenticatedUserProfile: client.authenticatedUserProfile
-      ? {
-          ...client.authenticatedUserProfile,
-          avatarRevision: client.authenticatedUserProfile.avatarRevision ?? "",
-        }
-      : undefined,
-    connId,
-    usesSharedGatewayAuth: false,
-    socket: socket as unknown as GatewayWsClient["socket"],
-  };
-  return { ws, send };
-}
-
-async function fixture(state: OpenClawTestState) {
-  const owner = roleClient("view", "question-owner");
-  const viewer = roleClient("write", "question-viewer");
-  const cfg = rolePolicyConfig(["guest"]);
-  cfg.gateway!.roles!.definitions.view!.scopes.push("operator.questions");
-  cfg.gateway!.roles!.definitions.write!.sessions.others = "view";
-  cfg.gateway!.roles!.definitions.write!.scopes.push("operator.questions");
-  await state.writeConfig(cfg);
-  setRuntimeConfigSnapshot(cfg);
-  owner.connect.scopes = ["operator.sessions.write"];
-  viewer.connect.scopes = ["operator.sessions.read", "operator.sessions.write"];
-  const sourceController = new AbortController();
-  owner.internal = {
-    ...owner.internal,
-    operatorAccessAuthority: {
-      signal: sourceController.signal,
-      assertCurrent: () => sourceController.signal.throwIfAborted(),
-    },
-  };
-  const source = await captureGatewayOperatorRunAuthority({
-    client: owner,
-    context: { getRuntimeConfig: () => cfg },
-  });
-  if (!source) {
-    throw new Error("Expected admitted question source");
-  }
-  sourceReleases.add(source.release);
-  const producer: GatewayClient = {
-    ...owner,
-    internal: {
-      ...owner.internal,
-      operatorRunAuthority: source.authority,
-      agentRuntimeIdentity: adminRequestClient.internal!.agentRuntimeIdentity,
-    },
-  };
-  const entry = {
-    sessionId: "question-session",
-    lifecycleRevision: "question-generation",
-    updatedAt: 1,
-    visibility: "shared" as const,
-    createdActor: {
-      type: "human" as const,
-      source: "profile" as const,
-      id: owner.authenticatedUserProfile!.profileId,
-    },
-  };
-  const write = (delta: Partial<SessionEntry> = {}) =>
-    upsertSessionEntryCore(
-      { agentId: "main", sessionKey: requestParams.sessionKey },
-      { ...entry, ...delta },
-    );
-  await write();
-  expect(
-    loadSessionEntry({ agentId: "main", sessionKey: requestParams.sessionKey })?.createdActor,
-  ).toEqual(entry.createdActor);
-  const call = (
-    method: string,
-    params: Record<string, unknown>,
-    client = owner,
-    current?: () => boolean,
-  ) =>
-    callQuestionRpc(method, params, {
-      client,
-      cfg,
-      registered: true,
-      hasCurrentClientAuthority: current,
-    });
-  const request = (id = "ordinary-question", client = producer) =>
-    call("question.request", { ...requestParams, id, timeoutMs: 10_000 }, client);
-  return { owner, viewer, producer, cfg, entry, write, call, request, sourceController };
-}
+const { fixture, questionPeer, retainCleanup } = createQuestionSessionAccessFixtureOwner();
 
 it("keeps a trusted narrow question on worker-backed RPCs and fanout through label changes and completion", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
@@ -260,7 +166,7 @@ it("fans out requester-only questions after draft visibility changes with no glo
       "broad-questions",
     );
     const projection = await createSessionRowProjection({ cfg: f.cfg });
-    sourceReleases.add(() => projection.dispose());
+    retainCleanup(() => projection.dispose());
     await projection.ensureMaterialized();
     const broadcaster = createGatewayBroadcaster({
       clients: new GatewayClientRegistry([owner.ws, viewer.ws, broad.ws]),
@@ -625,6 +531,8 @@ it.each([
           );
           await closeOpenClawAgentDatabaseByPathAsync(replacement);
           const original = resolveOpenClawAgentSqlitePath({ agentId: "main", env: state.env });
+          // Offline replacement retires its canonical owner before changing the file.
+          await closeOpenClawAgentDatabaseByPathAsync(original);
           fs.renameSync(original, state.statePath("original.sqlite"));
           fs.copyFileSync(replacement, original);
         }
@@ -654,10 +562,24 @@ it.each([
         if (change === "unrelated") {
           expect(spy).toHaveBeenCalledOnce();
         }
-        if (change === "generation") {
+        if (["generation", "database replacement"].includes(change)) {
           expect(manager.get("ordinary-question")).toMatchObject({
             status: "answered",
             answers: answer,
+          });
+        }
+        if (change === "database replacement") {
+          // Retire the fixture's retained observation before admitting the successor.
+          manager.reset();
+          await expect(
+            sessionEntryReads.readSessionEntryReadOnlyInWorker({
+              agentId: "main",
+              storePath: resolveOpenClawAgentSqlitePath({ agentId: "main", env: state.env }),
+              sessionKey: requestParams.sessionKey,
+            }),
+          ).resolves.toMatchObject({
+            sessionId: f.entry.sessionId,
+            lifecycleRevision: f.entry.lifecycleRevision,
           });
         }
         if (change === "reused id") {
@@ -850,3 +772,226 @@ it.each(["source", "generation"] as const)(
     });
   },
 );
+
+it("publishes server-owned terminal receipts to current own-session recipients and denies revoked recipients", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const f = await fixture(state);
+    const owner = questionPeer(f.owner, "receipt-owner");
+    const revoked = questionPeer({ ...f.owner, invalidated: true }, "receipt-revoked");
+    const viewer = questionPeer(f.viewer, "receipt-viewer");
+    const broadcaster = createGatewayBroadcaster({
+      clients: new GatewayClientRegistry([owner.ws, revoked.ws, viewer.ws]),
+    });
+    broadcast.mockImplementation(broadcaster.broadcast);
+    expect((await f.request("server-receipt"))[0]).toBe(true);
+    const observation = manager.observe("server-receipt")!;
+    manager.resolve("server-receipt", { answers: { destination: ["Own answer"] } });
+    await manager.drain();
+    for (const peer of [owner, revoked, viewer]) {
+      peer.send.mockClear();
+    }
+    const publication = {
+      context: {
+        getRuntimeConfig: () => f.cfg,
+        broadcast: broadcaster.broadcast,
+      } as GatewayRequestContext,
+      event: {
+        id: "server-receipt",
+        status: "answered" as const,
+        answers: { answers: { destination: ["Own answer"] } },
+      },
+      observation,
+      assertCurrent() {},
+    };
+    await publishDurableQuestionResolution(publication);
+    expect(owner.send).toHaveBeenCalledOnce();
+    expect(revoked.send).not.toHaveBeenCalled();
+    expect(viewer.send).not.toHaveBeenCalled();
+    owner.send.mockClear();
+    f.sourceController.abort(new Error("Original source revoked"));
+    await publishDurableQuestionResolution(publication);
+    expect(owner.send).not.toHaveBeenCalled();
+  });
+});
+
+it.each(["original member", "configured-only member", "revoked original member"] as const)(
+  "reads and settles restored original-store custody after routing changes (%s)",
+  async (membership) => {
+    vi.useRealTimers();
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const f = await fixture(state);
+      expect((await f.request("original-store-question"))[0]).toBe(true);
+      const original = manager.observe("original-store-question")!;
+      const binding = original.sessionAccess?.durableBinding;
+      if (!binding) {
+        throw new Error("Expected native captured conversation binding");
+      }
+      const record = structuredClone(original.record);
+      const question: DurableQuestion = {
+        record,
+        sessionKey: binding.sessionKey,
+        sessionId: binding.sessionId,
+        lifecycleRevision: binding.lifecycleRevision,
+        sessionBinding: binding,
+        provenance: { issuer: "operator", sourceRunId: requestParams.runId },
+        continuation: { status: "pending" },
+      };
+      const canonical = await executeSessionQuestionOperation(
+        {
+          agentId: binding.agentId,
+          sessionKey: binding.sessionKey,
+          storePath: binding.storePath,
+          assertCurrent() {},
+        },
+        { kind: "register", question },
+      );
+      if (!canonical || Array.isArray(canonical)) {
+        throw new Error("Expected canonical native question registration");
+      }
+      manager.reset();
+      const continuationOwed = vi.fn();
+      installDurableQuestion(manager, canonical, continuationOwed);
+      const replacement = state.statePath("replacement", "catalog.sqlite");
+      await upsertSessionEntryCore(
+        { agentId: "main", storePath: replacement, sessionKey: requestParams.sessionKey },
+        { ...f.entry, sessionId: "different-configured-session" },
+      );
+      const memberId = f.viewer.authenticatedUserProfile!.profileId;
+      const originalScope = {
+        agentId: binding.agentId,
+        storePath: binding.storePath,
+        sessionKey: binding.sessionKey,
+      };
+      await addSessionMember(
+        { ...originalScope, storePath: replacement },
+        { identityId: memberId, addedBy: "owner" },
+      );
+      if (membership !== "configured-only member") {
+        await addSessionMember(originalScope, { identityId: memberId, addedBy: "owner" });
+      }
+      const caller = {
+        ...f.viewer,
+        connect: { ...f.viewer.connect, scopes: ["operator.questions"] },
+      };
+      f.cfg.gateway!.roles!.definitions.write!.agents = "*";
+      f.cfg.session = { ...f.cfg.session, store: replacement };
+      await state.writeConfig(f.cfg);
+      setRuntimeConfigSnapshot(f.cfg);
+      expect(await f.call("question.get", { id: record.id }, caller)).toEqual([
+        true,
+        { question: record },
+        undefined,
+      ]);
+      expect(await f.call("question.list", {}, caller)).toEqual([
+        true,
+        { questions: [record] },
+        undefined,
+      ]);
+      if (membership === "revoked original member") {
+        await removeSessionMember(originalScope, memberId);
+      }
+      const answers = { answers: { destination: ["Home"] } };
+      const resolution = await f.call("question.resolve", { id: record.id, answers }, caller);
+      if (membership !== "original member") {
+        expect(resolution).toMatchObject([
+          false,
+          undefined,
+          { details: { reason: "QUESTION_NOT_FOUND" } },
+        ]);
+        expect(continuationOwed).not.toHaveBeenCalled();
+        expect(await readSessionQuestionCustody(binding, record.id, () => {})).toMatchObject({
+          record: { status: "pending" },
+          continuation: { status: "pending" },
+        });
+      } else {
+        expect(resolution).toEqual([true, { status: "answered", answers }, undefined]);
+        expect(continuationOwed).toHaveBeenCalledOnce();
+        expect(await readSessionQuestionCustody(binding, record.id, () => {})).toMatchObject({
+          record: { status: "answered", answers },
+          continuation: { status: "owed" },
+        });
+      }
+      expect(
+        await executeSessionQuestionOperation(
+          {
+            agentId: "main",
+            sessionKey: binding.sessionKey,
+            storePath: replacement,
+            assertCurrent() {},
+          },
+          { kind: "get", id: record.id },
+        ),
+      ).toBeUndefined();
+      if (membership === "original member") {
+        expect(
+          await f.call("question.resolve", {
+            id: record.id,
+            answers: { answers: { destination: ["Office"] } },
+          }),
+        ).toEqual([true, { status: "answered", answers }, undefined]);
+      }
+      // A healthy old physical source stays usable; its generation still revokes access.
+      await upsertSessionEntryCore(
+        { agentId: "main", storePath: binding.storePath, sessionKey: binding.sessionKey },
+        { ...f.entry, lifecycleRevision: "original-store-successor" },
+      );
+      expect(await f.call("question.get", { id: record.id })).toMatchObject([
+        false,
+        undefined,
+        { details: { reason: "QUESTION_NOT_FOUND" } },
+      ]);
+    });
+  },
+);
+
+it("keeps durable broad terminal publication bound to the original conversation after producer retirement", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const f = await fixture(state);
+    expect((await f.request("durable-broad-receipt"))[0]).toBe(true);
+    const original = manager.observe("durable-broad-receipt")!;
+    const binding = original.sessionAccess?.durableBinding;
+    if (!binding) {
+      throw new Error("Expected native captured conversation binding");
+    }
+    manager.reset();
+    manager.request({
+      ...original.record,
+      timeoutMs: 900_000,
+      sessionAccess: createDurableQuestionSessionAccess(binding),
+    });
+    manager.resolve("durable-broad-receipt", { answers: { destination: ["Private answer"] } });
+    const observation = manager.observe("durable-broad-receipt")!;
+    const broad = questionPeer(
+      { ...f.viewer, connect: { ...f.viewer.connect, scopes: ["operator.questions"] } },
+      "durable-broad",
+    );
+    const admin = questionPeer(adminRequestClient, "durable-admin");
+    const broadcaster = createGatewayBroadcaster({
+      clients: new GatewayClientRegistry([broad.ws, admin.ws]),
+    });
+    const publication = {
+      context: {
+        getRuntimeConfig: () => f.cfg,
+        broadcast: broadcaster.broadcast,
+      } as GatewayRequestContext,
+      event: {
+        id: "durable-broad-receipt",
+        status: "answered" as const,
+        answers: { answers: { destination: ["Private answer"] } },
+      },
+      observation,
+      assertCurrent() {},
+    };
+    f.sourceController.abort(new Error("Retired asking producer"));
+    await publishDurableQuestionResolution(publication);
+    for (const recipient of [broad, admin]) {
+      expect(recipient.send).toHaveBeenCalledOnce();
+      recipient.send.mockClear();
+    }
+    await f.write({ lifecycleRevision: "successor" });
+    await publishDurableQuestionResolution(publication);
+    for (const recipient of [broad, admin]) {
+      expect(recipient.send).not.toHaveBeenCalled();
+    }
+  });
+});

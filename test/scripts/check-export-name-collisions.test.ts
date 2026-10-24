@@ -71,6 +71,16 @@ it.each([
     ],
   ],
   [
+    "bindSqliteWorkerBackend",
+    "otherBehavior",
+    "src/unrelated/extra.worker.ts",
+    [
+      "src/config/sessions/goals-operations.worker.ts",
+      "src/config/sessions/session-questions.worker.ts",
+      "src/config/sessions/session-sharing-store.worker.ts",
+    ],
+  ],
+  [
     "openExistingSqliteWorkerBackend",
     "bindSqliteWorkerBackend",
     "src/unrelated/extra.worker.ts",

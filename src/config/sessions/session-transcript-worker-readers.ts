@@ -285,6 +285,7 @@ export function createSessionHistoryWorkerReaders(
       (value) => value.snapshot,
     ),
     readPendingInputSource: reader("session-pending-input-source", (value) => value.snapshot),
+    readQuestions: reader("session-question-read", (value) => value.result),
     readConversationDelivery: reader("conversation-delivery", (value) => value.record),
     readGoalOperationReceipt: reader("goal-operation-receipt", (value) => value.result),
     readEntryResult: reader("session-entry-read", (value) => ({

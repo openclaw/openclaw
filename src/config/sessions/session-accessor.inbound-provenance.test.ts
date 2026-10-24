@@ -1,7 +1,13 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it } from "vitest";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { resolveDefaultSessionStorePath } from "./paths.js";
-import { loadSessionEntry, updateSessionLastRoute } from "./session-accessor.sqlite-entry.js";
+import {
+  loadSessionEntry,
+  recordInboundSessionMeta,
+  replaceSessionEntry,
+  updateSessionLastRoute,
+} from "./session-accessor.js";
 
 it("does not stamp a conversation route or blank name as the creating actor", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
@@ -50,3 +56,40 @@ it("does not stamp a conversation route or blank name as the creating actor", as
     expect(senderless?.createdActor).toBeUndefined();
   });
 });
+
+it.each(["metadata", "last-route"] as const)(
+  "creates one native generation through %s without rotating repeated or existing rows",
+  async (kind) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const storePath = resolveDefaultSessionStorePath("main");
+      const sessionKey = `agent:main:telegram:dm:inbound-${kind}`;
+      const scope = { storePath, sessionKey };
+      const ctx = {
+        Provider: "telegram",
+        Surface: "telegram",
+        ChatType: "direct",
+        SessionKey: sessionKey,
+      };
+      const write = (createIfMissing = true) =>
+        kind === "metadata"
+          ? recordInboundSessionMeta({ ...scope, ctx, createIfMissing })
+          : updateSessionLastRoute({ ...scope, channel: "telegram", to: "123", createIfMissing });
+      await write(false);
+      expect(loadSessionEntry(scope)).toBeUndefined();
+      await write();
+      const created = expectDefined(loadSessionEntry(scope), "created inbound row");
+      expect(created.lifecycleRevision).toEqual(expect.any(String));
+      expect(created.lifecycleRevision).not.toBe("");
+      await write();
+      expect(loadSessionEntry(scope)).toMatchObject({
+        sessionId: created.sessionId,
+        lifecycleRevision: created.lifecycleRevision,
+        updatedAt: created.updatedAt,
+      });
+      await replaceSessionEntry(scope, { sessionId: "legacy", updatedAt: 10 });
+      await write();
+      expect(loadSessionEntry(scope)).toMatchObject({ sessionId: "legacy", updatedAt: 10 });
+      expect(loadSessionEntry(scope)?.lifecycleRevision).toBeUndefined();
+    });
+  },
+);
