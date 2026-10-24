@@ -16,10 +16,7 @@ import {
   OPENCLAW_AGENT_SCHEMA_VERSION,
 } from "./openclaw-agent-db-contract.js";
 import { withAgentDatabaseMaintenanceLease } from "./openclaw-agent-db-maintenance-lease.js";
-import {
-  ensureOpenClawAgentDatabaseSchema,
-  ensureOpenClawAgentSchema,
-} from "./openclaw-agent-db-schema.js";
+import { ensureOpenClawAgentDatabaseSchema } from "./openclaw-agent-db-schema.js";
 import type { DB } from "./openclaw-agent-db.generated.js";
 import { removeCanonicalValidationFromHistoricalAgentFixture } from "./openclaw-agent-db.test-support.js";
 import { migrateAgentJsonPredicatesInTransaction } from "./openclaw-agent-json-predicate-schema.js";
@@ -34,12 +31,12 @@ import { assertOpenClawMigrationWitnessPreserved } from "./openclaw-migration-wi
 import {
   agentWitness as witness,
   expectVersion as expectSchemaVersion,
+  migrationFixture,
   refuseVersion,
   row as readRow,
   rows as readRows,
   seedVersion,
 } from "./schema-migration.test-support.js";
-import { assertSqliteMigrationScopePreserved } from "./sqlite-migration-scope.test-support.js";
 
 function expectVersion(database: DatabaseSync, version = OPENCLAW_AGENT_SCHEMA_VERSION) {
   expectSchemaVersion(database, version);
@@ -61,6 +58,22 @@ function seedSchema(database: DatabaseSync, version: 24 | 25 = 25) {
     VALUES ('history', 'agent:main:main', 1, 1);
   `);
 }
+
+const withV25Migration = migrationFixture({
+  seed: seedSchema,
+  predecessor: 25,
+  target: AGENT_JSON_PREDICATE_SCHEMA_VERSION,
+  scope: [
+    "schema_meta",
+    "session_nodes",
+    "session_reactions",
+    "session_windows",
+    "transcript_events",
+    "context_engine_turn_outbox",
+    "sqlite_stat1",
+    "sqlite_stat4",
+  ],
+});
 
 describe("agent JSON predicate migration", () => {
   it("keeps transcripts untouched while lazy predicates match canonical writer semantics", () => {
@@ -292,10 +305,7 @@ describe("agent JSON predicate migration", () => {
   it.each(["commit", "rollback", "without-outbox", "missing-additive-indexes"] as const)(
     "publishes both version markers only with the complete v26 migration (%s)",
     async (outcome) => {
-      await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-        const pathname = state.path("predicates-v25.sqlite");
-        using database = new DatabaseSync(pathname);
-        seedSchema(database);
+      await withV25Migration("predicates-v25.sqlite", async ({ database, migrate }) => {
         if (outcome === "without-outbox") {
           database.exec("DROP TABLE context_engine_turn_outbox");
         }
@@ -310,37 +320,7 @@ describe("agent JSON predicate migration", () => {
           VALUES ('history', 1, '{"type":"message","message":{"role":"user"}}', 1)`);
         database.exec("ANALYZE");
         const original = witness(database);
-        if (outcome === "rollback") {
-          refuseVersion(database, AGENT_JSON_PREDICATE_SCHEMA_VERSION);
-        }
-        await withAgentDatabaseMaintenanceLease({ env: state.env }, async () => {
-          const migrate = () =>
-            ensureOpenClawAgentSchema(
-              database,
-              "main",
-              pathname,
-              AGENT_JSON_PREDICATE_SCHEMA_VERSION,
-            );
-          if (outcome === "rollback") {
-            expect(migrate).toThrow(/authoriz/u);
-          } else {
-            await assertSqliteMigrationScopePreserved(
-              database,
-              [
-                "schema_meta",
-                "session_nodes",
-                "session_reactions",
-                "session_windows",
-                "transcript_events",
-                "context_engine_turn_outbox",
-                "sqlite_stat1",
-                "sqlite_stat4",
-              ],
-              migrate,
-            );
-          }
-        });
-        database.setAuthorizer(null);
+        await migrate(outcome);
         const expectedVersion = outcome === "rollback" ? 25 : AGENT_JSON_PREDICATE_SCHEMA_VERSION;
         expectVersion(database, expectedVersion);
         expect(assertOpenClawMigrationWitnessPreserved(original, witness(database))).toEqual({

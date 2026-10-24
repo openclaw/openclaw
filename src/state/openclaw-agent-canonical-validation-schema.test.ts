@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { constants, DatabaseSync } from "node:sqlite";
+import { DatabaseSync } from "node:sqlite";
 import { getEnvironmentData, setEnvironmentData } from "node:worker_threads";
 import { describe, expect, it } from "vitest";
 import {
@@ -29,6 +29,7 @@ import {
   assertOpenClawMigrationWitnessPreserved as assertPreserved,
   captureOpenClawMigrationWitness as captureWitness,
 } from "./openclaw-migration-witness.js";
+import { expectVersion, refuseVersion, seedVersion } from "./schema-migration.test-support.js";
 
 const key = "agent:main:target";
 const sibling = "agent:main:sibling";
@@ -39,22 +40,6 @@ const pendingTable = "session_canonical_validation_pending";
 const trigger = (name: string, table: string, event = "UPDATE", body = "SELECT 1") =>
   `CREATE TRIGGER ${name} AFTER ${event} ON ${table} BEGIN ${body}; END`;
 const driftTrigger = trigger("unexpected_node_validation", "session_nodes");
-
-const readVersion = (db: DatabaseSync) => ({
-  user: db.prepare("PRAGMA user_version").get()?.user_version,
-  schema: db.prepare("SELECT schema_version FROM schema_meta WHERE meta_key = 'primary'").get()
-    ?.schema_version,
-});
-
-function denyVersionPublication(db: DatabaseSync) {
-  db.setAuthorizer((action, name, value) =>
-    action === constants.SQLITE_PRAGMA &&
-    name === "user_version" &&
-    value === String(currentVersion)
-      ? constants.SQLITE_DENY
-      : constants.SQLITE_OK,
-  );
-}
 
 type MigrationFixture = {
   db: DatabaseSync;
@@ -75,9 +60,7 @@ function withMigrationDatabase(
         db.exec("PRAGMA journal_mode = WAL; PRAGMA wal_autocheckpoint = 0");
       }
       db.exec(version === 20 ? schema20 : OPENCLAW_AGENT_SCHEMA_V24_SQL);
-      db.exec(`PRAGMA user_version = ${version};
-        INSERT INTO schema_meta (meta_key, role, schema_version, agent_id, created_at, updated_at)
-        VALUES ('primary', 'agent', ${version}, 'main', 1, 1)`);
+      seedVersion(db, version);
       const options = { agentId: "main", env: state.env, path: pathname };
       await run({
         db,
@@ -343,13 +326,13 @@ it.each([false, true])(
         .all();
       await withMaintenance({ env }, async () => {
         if (rollback) {
-          denyVersionPublication(db);
+          refuseVersion(db, currentVersion);
           try {
             expect(migrate).toThrow(/authoriz/u);
           } finally {
             db.setAuthorizer(null);
           }
-          expect(readVersion(db)).toEqual({ user: 20, schema: 20 });
+          expectVersion(db, 20);
           expect(
             db.prepare(`SELECT name FROM sqlite_schema WHERE name = '${pendingTable}'`).get(),
           ).toBeUndefined();
@@ -369,10 +352,7 @@ it.each([false, true])(
           ),
       ).toEqual(before);
       expect(pendingKeys(db)).toEqual(rollback ? [key] : [key, sibling].toSorted());
-      expect(readVersion(db)).toEqual({
-        user: currentVersion,
-        schema: currentVersion,
-      });
+      expectVersion(db, currentVersion);
       assertSchema(db);
     });
   },
@@ -420,7 +400,7 @@ it.each(["commit", "missing-column", "rollback", "drift"] as const)(
         nodes: db.prepare(nodeRows).all(),
       };
       if (outcome === "rollback") {
-        denyVersionPublication(db);
+        refuseVersion(db, currentVersion);
       }
       await withMaintenance({ env }, async () => {
         if (outcome === "commit" || outcome === "missing-column") {
@@ -469,10 +449,7 @@ it.each(["commit", "missing-column", "rollback", "drift"] as const)(
         expect(pendingKeys(db)).toEqual([]);
         return;
       }
-      expect(readVersion(db)).toEqual({
-        user: currentVersion,
-        schema: currentVersion,
-      });
+      expectVersion(db, currentVersion);
       expect(
         db.prepare("SELECT canonical_ready FROM session_key_contract").get()?.canonical_ready,
       ).toBeNull();
