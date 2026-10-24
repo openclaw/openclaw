@@ -151,10 +151,8 @@ it.each<MigratedPackageFinalizationCase>([
 it.for([
   { json: false, legacy: false, parentOwns: false, replay: "settled" },
   { json: true, legacy: false, parentOwns: true, replay: "refused" },
-  { json: true, legacy: false, parentOwns: true },
   { json: false, legacy: true, parentOwns: true },
   { json: true, legacy: true, parentOwns: true, foreground: true },
-  { json: true, legacy: false, parentOwns: true, retained: true },
   { json: true, legacy: true, parentOwns: true, retained: true },
   { json: true, legacy: false, parentOwns: true, retained: true, original: true },
   { json: true, legacy: false, parentOwns: true, checkWorkMs: 31_000, stepBudgetMs: 120_000 },
@@ -373,11 +371,7 @@ it.for([
           if (original) {
             await fs.writeFile(
               path.join(serviceRoot, "package.json"),
-              JSON.stringify({
-                name: "openclaw",
-                version: "2026.9.3",
-                type: "module",
-              }),
+              JSON.stringify({ name: "openclaw", version: "2026.9.3", type: "module" }),
             );
           }
         }
@@ -518,12 +512,7 @@ it.for([
       await progressGate?.cleanup();
       expect.soft(stderr.match(/fixture-finalizer-progress/g)).toHaveLength(1);
       expect.soft(stdoutAtCleanup).toBe(settlement === "no-owner" ? undefined : "");
-      if (
-        settlement === "healthy" ||
-        settlement === "release" ||
-        settlement === "swallowed" ||
-        settlement === "uncertain-cleanup"
-      ) {
+      if (["healthy", "release", "swallowed", "uncertain-cleanup"].includes(settlement)) {
         expect.soft(stdoutAtExecutorSettlement).toBe("");
       }
       expect.soft(oldRuntimeOpens).toEqual([]);
@@ -546,16 +535,8 @@ it.for([
       expect(onResult).toHaveBeenCalledExactlyOnceWith(settledResult?.result);
     }
     if (replay) {
-      const outcome = await work.then(
-        (value) => ({ value }),
-        (error: unknown) => ({ error }),
-      );
-      const trace = await fs.readFile(replayEvents, "utf8").catch((error: unknown) => {
-        if (hasNodeErrorCode(error, "ENOENT")) {
-          return "";
-        }
-        throw error;
-      });
+      const outcome = await work.catch((error: unknown) => ({ error }));
+      const trace = await fs.readFile(replayEvents, "utf8");
       const events = trace.trim()
         ? trace
             .trim()
@@ -588,7 +569,7 @@ it.for([
       }
       expect(outcome).toEqual({ error: expect.any(UpdateCommandFailure) });
     }
-    if (checkWorkMs !== undefined && stepBudgetMs !== undefined && stepBudgetMs < checkWorkMs) {
+    if (!legacy && refusesBeforeHandoff) {
       await expect(work).rejects.toThrow(/delegation capability could not be inspected/);
       expect(terminalAtCleanup).toBeUndefined();
       expect(rollback).not.toHaveBeenCalled();

@@ -5,7 +5,6 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import { GatewayServiceStopUnsafeError } from "../../daemon/service-inspection-error.js";
 import { GatewayServiceAuthorityError } from "../../daemon/service-update-authority.js";
 import * as gatewayOwner from "../../infra/gateway-owner-lease.js";
-import type { PackageLauncherFingerprint } from "../../infra/package-update-integrity.js";
 import { stopSupervisedPredecessorGateway } from "../../infra/update-candidate-predecessor-stop.js";
 import * as updateLedger from "../../infra/update-run-ledger.js";
 import { createUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js";
@@ -23,10 +22,7 @@ import {
 import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
 import * as rollbackModule from "./update-command-rollback.js";
 import * as nativeCommand from "./update-command-service-command.js";
-import type {
-  OriginalManagedServiceRuntime,
-  PreManagedServiceStop,
-} from "./update-command-service-context-types.js";
+import type { PreManagedServiceStop } from "./update-command-service-context-types.js";
 import * as serviceMaintenance from "./update-command-service-maintenance.js";
 import * as serviceOperations from "./update-command-service.js";
 
@@ -549,33 +545,6 @@ export function registerBoundaryFinalizationControls({
           path.join(home, "package.json"),
           JSON.stringify({ name: "openclaw", type: "module" }),
         );
-        const launcherFingerprint: PackageLauncherFingerprint = {
-          type: "file",
-          mode: "33188",
-          uid: "0",
-          gid: "0",
-          contents: "fixture",
-        };
-        const original: OriginalManagedServiceRuntime = {
-          root: home,
-          nodeRunner: process.execPath,
-          version: "2026.9.3",
-          verified: true,
-          definition: {
-            command: { programArguments: [process.execPath, path.join(home, "dist/index.js")] },
-            fingerprint: "fixture-original",
-            runtimePin: { revision: "fixture-no-runtime-pin", stored: false },
-          },
-          service: { serviceEnv: { HOME: home } },
-          packageIdentity: { identity: "fixture-directory", version: "2026.9.3" },
-          launcher: {
-            path: "fixture",
-            realPath: "fixture",
-            fingerprint: launcherFingerprint,
-            targetFingerprint: launcherFingerprint,
-          },
-          nodeIdentity: "fixture-node",
-        };
         mocks.readServiceState.mockResolvedValue(managedServiceState(process.env));
         const actual = await vi.importActual<typeof import("./update-command-service.js")>(
           "./update-command-service.js",
@@ -596,7 +565,6 @@ export function registerBoundaryFinalizationControls({
             refreshServiceEnv: true,
             serviceRuntimeRefreshRequired: true,
             serviceInstallEnv: {},
-            originalManagedServiceRuntime: original,
             serviceUpdateVerdict: undefined,
             result: { ...params.result, root: home },
           }),
@@ -609,7 +577,11 @@ export function registerBoundaryFinalizationControls({
             originalServiceRecovery: "healthy",
           }));
         const finishing = finishSuccessfulPackageSwitch(undefined, {
-          originalManagedServiceRuntime: original,
+          packageTransaction: {
+            backupRoot: home,
+            rollback: vi.fn(),
+            complete: vi.fn(async () => {}),
+          },
         });
         if (scenario === "missing-entrypoint") {
           await expect(finishing).rejects.toMatchObject({
