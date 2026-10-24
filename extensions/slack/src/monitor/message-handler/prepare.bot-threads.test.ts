@@ -176,3 +176,70 @@ it("admits replies to roots verified by bot ID when bot-thread mentions are disa
   expect(prepared?.ctxPayload.RawBody).toBe("Continue here");
   expect(test.replies).toHaveBeenCalledTimes(1);
 });
+
+it("leaves an unmentioned reply to another bot's thread for that bot", async () => {
+  const test = fixture({ requireMention: false, channels: { C123: { ignoreOtherMentions: true } } });
+  test.message.parent_user_id = "U_OTHER_BOT";
+  test.replies.mockResolvedValue({
+    messages: [{ ts: test.threadTs, bot_id: "B_OTHER", user: "U_OTHER_BOT", text: "Root" }],
+  });
+
+  expect(await test.prepare()).toBeNull();
+  test.expectDrop("other-bot-thread");
+
+  test.message.text = "<@B1> Continue here";
+  expect((await test.prepare())?.ctxPayload.MentionSource).toBe("explicit_bot");
+});
+
+it("still accepts an unmentioned top-level post for the fallback bot", async () => {
+  const test = fixture({ requireMention: false, channels: { C123: { ignoreOtherMentions: true } } });
+  test.message.thread_ts = undefined;
+  test.message.parent_user_id = undefined;
+
+  expect((await test.prepare())?.ctxPayload.RawBody).toBe("Continue here");
+});
+
+it("routes the same Mailroom messages to exactly one of two bot accounts", async () => {
+  const slack: SlackConfig = {
+    channels: { C123: { requireMention: true } },
+    accounts: {
+      default: {
+        channels: { C123: { requireMentionInBotThreads: false, ignoreOtherMentions: true } },
+      },
+      newman: {
+        channels: { C123: { requireMention: false, ignoreOtherMentions: true } },
+      },
+    },
+  };
+  const owner = fixture(slack);
+  owner.replies.mockResolvedValue({
+    messages: [{ ts: owner.threadTs, bot_id: "B1", user: "B1", text: "Bot root" }],
+  });
+  expect((await owner.prepare())?.ctxPayload.RawBody).toBe("Continue here");
+  owner.message.text = "<@B2> Continue here";
+  expect(await owner.prepare()).toBeNull();
+  owner.expectDrop("other-mention");
+  owner.message.text = "Continue here";
+  owner.message.thread_ts = undefined;
+  owner.message.parent_user_id = undefined;
+  expect(await owner.prepare()).toBeNull();
+  owner.expectDrop("missing-mention");
+
+  const fallback = fixture(slack, "newman");
+  fallback.ctx.botUserId = "B2";
+  fallback.ctx.botId = "B2";
+  fallback.message.ts = owner.message.ts;
+  fallback.message.thread_ts = owner.threadTs;
+  fallback.message.parent_user_id = "B1";
+  fallback.replies.mockResolvedValue({
+    messages: [{ ts: owner.threadTs, bot_id: "B1", user: "B1", text: "Bot root" }],
+  });
+  expect(await fallback.prepare()).toBeNull();
+  fallback.expectDrop("other-bot-thread");
+  fallback.message.text = "<@B2> Continue here";
+  expect((await fallback.prepare())?.ctxPayload.MentionSource).toBe("explicit_bot");
+  fallback.message.text = "Continue here";
+  fallback.message.thread_ts = undefined;
+  fallback.message.parent_user_id = undefined;
+  expect((await fallback.prepare())?.ctxPayload.RawBody).toBe("Continue here");
+});
