@@ -30,7 +30,8 @@ import { resolveUiConversationIdentity } from "../../../lib/sessions/session-key
 import { HoverMarquee } from "../../../lib/solid/hover-marquee.tsx";
 import "../../../styles/chat/summary-automations.css";
 import { ChatDetailsDesktopSection } from "./chat-details-desktop-section.tsx";
-import { sessionAutomationSchedule } from "./session-automation-schedule.ts";
+import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
+import { createSessionAutomationSchedule } from "./session-automation-schedule-loader.ts";
 
 registerEnglishCatalog(registerChatSessionEnglish);
 
@@ -362,6 +363,7 @@ export function ChatSummaryAutomations(props: ChatSummaryAutomationsProps) {
     return 10;
   });
   const jobs = () => inventory.jobs().slice(0, shown());
+  const formatSchedule = createSessionAutomationSchedule();
   const hasCachedRows = () => inventory.jobs().length > shown();
   const more = () => hasCachedRows() || (inventory.hasMore() && !inventory.error());
 
@@ -455,7 +457,7 @@ export function ChatSummaryAutomations(props: ChatSummaryAutomationsProps) {
     if (inventory.connected() && job.runningAtMs !== undefined) {
       return t("common.running");
     }
-    return job.schedule ? sessionAutomationSchedule(job.schedule) : "";
+    return job.schedule ? formatSchedule(job.schedule) : "";
   }
   const errorNotice = () =>
     inventory.connected() && (
@@ -571,7 +573,7 @@ export function ChatSummaryAutomations(props: ChatSummaryAutomationsProps) {
   return (
     <openclaw-chat-summary-automations ref={(element) => (host = element)}>
       {inventory.lifecycle}
-      <Loading>
+      <ChatLazyBoundary>
         <Show when={inventory.readable()}>
           <Show when={inventory.jobs().length > 0}>
             <Show
@@ -612,7 +614,7 @@ export function ChatSummaryAutomations(props: ChatSummaryAutomationsProps) {
             }
           />
         </Show>
-      </Loading>
+      </ChatLazyBoundary>
     </openclaw-chat-summary-automations>
   );
 }
