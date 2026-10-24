@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import { sameFileIdentity, type FileIdentityStat } from "@openclaw/fs-safe/advanced";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import type { FileMutationFingerprint } from "./file-descriptor.js";
+import { sameFileMutationFingerprint, type FileMutationFingerprint } from "./file-descriptor.js";
 import { hashPublishedFileSync, sameFileStatFingerprint } from "./sqlite-snapshot-file.js";
 
 export function readSqliteIntegrityFileIdentity(
@@ -25,12 +25,32 @@ export type SqliteFileGeneration = {
   wal?: SqliteFileFingerprint;
 };
 
-function fingerprintFile(pathname: string): SqliteFileFingerprint {
+function fingerprintFile(
+  pathname: string,
+  verified: Map<string, SqliteFileFingerprint>,
+): SqliteFileFingerprint {
   const fd = fs.openSync(pathname, "r");
   try {
     const before = fs.fstatSync(fd, { bigint: true });
     if (!before.isFile()) {
       throw new Error("SQLite generation target must be a regular file");
+    }
+    const previous = verified.get(pathname);
+    if (
+      previous &&
+      before.dev !== 0n &&
+      before.ino !== 0n &&
+      sameFileMutationFingerprint(previous, before)
+    ) {
+      const after = fs.fstatSync(fd, { bigint: true });
+      const current = fs.statSync(pathname, { bigint: true });
+      if (
+        current.isFile() &&
+        sameFileMutationFingerprint(before, after) &&
+        sameFileMutationFingerprint(after, current)
+      ) {
+        return previous;
+      }
     }
     const { sha256 } = hashPublishedFileSync(fs.realpathSync.native(pathname), before);
     const after = fs.fstatSync(fd, { bigint: true });
@@ -39,7 +59,7 @@ function fingerprintFile(pathname: string): SqliteFileFingerprint {
       throw new Error(`SQLite generation target changed while hashing: ${pathname}`);
     }
     // Retain native descriptor IDs when Windows pathname stats report unknown IDs.
-    return {
+    const fingerprint = {
       birthtimeNs: after.birthtimeNs,
       ctimeNs: after.ctimeNs,
       dev: after.dev,
@@ -48,38 +68,55 @@ function fingerprintFile(pathname: string): SqliteFileFingerprint {
       sha256,
       size: after.size,
     };
+    // Timestamp drift still gets byte verification, but cannot seed digest reuse.
+    if (sameFileMutationFingerprint(before, after) && sameFileMutationFingerprint(after, current)) {
+      verified.set(pathname, fingerprint);
+    } else {
+      verified.delete(pathname);
+    }
+    return fingerprint;
   } finally {
     fs.closeSync(fd);
   }
 }
 
-function readOptionalFile(pathname: string): SqliteFileFingerprint | undefined {
+function readOptionalFile(
+  pathname: string,
+  verified: Map<string, SqliteFileFingerprint>,
+): SqliteFileFingerprint | undefined {
   try {
-    return fingerprintFile(pathname);
+    return fingerprintFile(pathname, verified);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      verified.delete(pathname);
       return undefined;
     }
     throw error;
   }
 }
 
-/** Provisional family observation; callers must verify it against a later stable read. */
-export function readSqliteFileGeneration(pathname: string): SqliteFileGeneration {
-  const database = fingerprintFile(pathname);
-  const journal = readOptionalFile(`${pathname}-journal`);
-  const wal = readOptionalFile(`${pathname}-wal`);
-  return {
-    database,
-    ...(journal ? { journal } : {}),
-    ...(wal ? { wal } : {}),
+/** One observation owns its digests; every read still checks the complete family. */
+export function createSqliteFileGenerationReader() {
+  const verified = new Map<string, SqliteFileFingerprint>();
+  return (pathname: string): SqliteFileGeneration => {
+    const database = fingerprintFile(pathname, verified);
+    const journal = readOptionalFile(`${pathname}-journal`, verified);
+    const wal = readOptionalFile(`${pathname}-wal`, verified);
+    return {
+      database,
+      ...(journal ? { journal } : {}),
+      ...(wal ? { wal } : {}),
+    };
   };
 }
 
 /** Raw source reads require an isolated process or a drained database owner. */
-export function readStableSqliteFileGeneration(pathname: string): SqliteFileGeneration {
-  const first = readSqliteFileGeneration(pathname);
-  const second = readSqliteFileGeneration(pathname);
+export function readStableSqliteFileGeneration(
+  pathname: string,
+  readGeneration = createSqliteFileGenerationReader(),
+): SqliteFileGeneration {
+  const first = readGeneration(pathname);
+  const second = readGeneration(pathname);
   if (!sameSqliteFileGeneration(first, second)) {
     throw new Error(`SQLite file generation changed while reading: ${pathname}`);
   }

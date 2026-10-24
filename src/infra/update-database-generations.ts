@@ -4,7 +4,7 @@ import { ignoreMissingPath } from "./errno.js";
 import { hashFileDescriptorSync } from "./file-descriptor.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import {
-  readSqliteFileGeneration,
+  createSqliteFileGenerationReader,
   readStableSqliteFileGeneration,
   sameSqliteFileGeneration,
   type SqliteFileGeneration,
@@ -126,9 +126,10 @@ function readDatabaseGeneration(
   const before = readWalIndexHeader(pathname);
   // Acquisition binds this provisional observation; the final stable read
   // below verifies the whole family before its generation can be published.
-  const generation = readSqliteFileGeneration(pathname);
+  const readGeneration = createSqliteFileGenerationReader();
+  const generation = readGeneration(pathname);
   const content = readCommittedContent(pathname, generation, inspectImage);
-  const current = readStableSqliteFileGeneration(pathname);
+  const current = readStableSqliteFileGeneration(pathname, readGeneration);
   const after = readWalIndexHeader(pathname);
   if (
     !sameSqliteFileGeneration(generation, current) ||

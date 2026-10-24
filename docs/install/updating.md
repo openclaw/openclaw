@@ -59,6 +59,15 @@ evidence. This preserves the installed updater's original fingerprint format.
 Changed committed data or write evidence still refuses migration and automatic
 restoration. The candidate must contain this repair.
 
+Within one database-generation observation, update and Doctor workers reuse a
+verified digest while the file's device, inode, size, and nanosecond birth,
+modification, and change times remain identical. Each family observation still
+checks the database, WAL, and rollback journal; private-copy verification and
+WAL commit checks remain in place. Changed or unavailable identities require
+hashing again. Reuse ends with that observation and does not cross Doctor
+invocations. The runtime performing the observation must contain this change;
+a newer candidate cannot change an older installed updater's own reads.
+
 Update snapshots and database backups accept a database whose only integrity
 findings are `malformed inverted index` reports on canonical, schema-validated
 agent FTS tables. A Node upgrade that changes SQLite tokenization (for example,

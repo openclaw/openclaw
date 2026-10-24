@@ -8,6 +8,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as nodeSqlite from "./node-sqlite.js";
 import {
+  createSqliteFileGenerationReader,
   readStableSqliteFileGeneration,
   sameSqliteFileGeneration,
 } from "./sqlite-file-generation.js";
@@ -287,7 +288,7 @@ it.each(["before acquisition", "after acquisition"] as const)(
   },
 );
 
-it("acquires one private payload with three source-family verification passes", async () => {
+it("reuses unchanged source digests while verifying one private payload", async () => {
   const { file, staging, prepare } = generationFixture();
   const database = new DatabaseSync(file);
   database.exec(
@@ -341,10 +342,10 @@ it("acquires one private payload with three source-family verification passes", 
   expect(readOnlyLocation.prepareSqliteReadOnlyLocationSyncInProcess).toHaveBeenCalledTimes(1);
   expect(isolatedCapture).not.toHaveBeenCalled();
   const size = Number(source.size);
-  expect(generationBytes).toBe(3 * size);
-  expect(sourceBytes).toBeGreaterThanOrEqual(3 * size);
+  expect(generationBytes).toBe(size);
+  expect(sourceBytes).toBeGreaterThanOrEqual(size);
   // A byte-copy fallback can add one source pass. Headers are bounded overhead.
-  expect(sourceBytes).toBeLessThanOrEqual(4 * size + 256);
+  expect(sourceBytes).toBeLessThanOrEqual(2 * size + 256);
   expect(privateBytes).toBe(size);
   expect(fs.readdirSync(staging)).toEqual([]);
 });
@@ -374,6 +375,35 @@ it("preserves update custody when database timestamps drift during hashing", asy
   fs.utimesSync(file, timestamp.atime, new Date(timestamp.mtimeMs + 1_000));
   expect(await readUpdatePhysicalDatabaseGenerations([file])).toEqual(before);
   expect(observations).toBeGreaterThan(1);
+});
+
+it("invalidates ctime-only source changes across interleaved files", () => {
+  const directory = dirs.make("update-generation-reuse-");
+  const first = path.join(directory, "first.sqlite");
+  const second = path.join(directory, "second.sqlite");
+  fs.writeFileSync(first, "before");
+  fs.writeFileSync(second, "second");
+  const read = createSqliteFileGenerationReader();
+  const before = read(first);
+  const other = read(second);
+  fs.writeFileSync(first, "after!");
+  const fstat = fs.fstatSync;
+  const stat = fs.statSync;
+  const preserveMtime = (current: fs.BigIntStats) => {
+    if (current.dev === before.database.dev && current.ino === before.database.ino) {
+      current.mtimeNs = before.database.mtimeNs;
+      current.ctimeNs = before.database.ctimeNs + 1n;
+    }
+    return current;
+  };
+  vi.spyOn(fs, "fstatSync").mockImplementation((...args) =>
+    args[1]?.bigint ? preserveMtime(fstat(args[0], { bigint: true })) : fstat(...args),
+  );
+  vi.spyOn(fs, "statSync").mockImplementation((...args) =>
+    args[1]?.bigint ? preserveMtime(stat(args[0], { bigint: true })) : stat(...args),
+  );
+  expect(read(first).database.sha256).toBe(createHash("sha256").update("after!").digest("hex"));
+  expect(read(second)).toEqual(other);
 });
 
 it.each(["dev", "ino"] as const)(
