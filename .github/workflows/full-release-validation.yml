@@ -174,7 +174,7 @@ env:
   FULL_RELEASE_PUBLICATION_ADMISSION_CONTRACT: "1"
   FULL_RELEASE_EXECUTION_PLAN_RESTORE_CONTRACT: "1"
   FULL_RELEASE_LANE_INPUTS_CONTRACT: "1"
-  FULL_RELEASE_ARTIFACT_RECOVERY_CONTRACT: "1"
+  FULL_RELEASE_ARTIFACT_RECOVERY_CONTRACT: "2"
   CHILD_EVIDENCE_REUSE: ${{ inputs.reuse_evidence && inputs.rerun_group == 'all' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release-ci/')) }}
 
 jobs:
