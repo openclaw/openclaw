@@ -1882,11 +1882,15 @@ async function measureColdRowReads(
     ...(startupAdmission
       ? [
           {
+            name: "models.list",
+            method: "models.list",
+            params: { agentId: "main", sessionKey, view: "configured" },
+          },
+          {
             name: "sessions.subscribe",
             method: "sessions.subscribe",
             params: { includeMessageBodies: false },
           },
-          { name: "models.list", method: "models.list", params: {} },
         ]
       : []),
     { name: "sessions.list:sidebar", method: "sessions.list", params: shapes[0]!.params },

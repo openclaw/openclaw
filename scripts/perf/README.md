@@ -370,12 +370,14 @@ paired-delta rules; the 70 first-read samples alone cannot qualify p95 or p99.
 
 Add `--startup-admission --waves 20` to the cold-row command to attribute the
 operator request-start backlog. This uses a fixed 20 batches per client instead
-of `--seconds`. Each batch sends an event-only `sessions.subscribe` and
-`models.list` first, immediately followed on the same socket by the
+of `--seconds`. Each batch sends a scoped `models.list` before an event-only
+`sessions.subscribe`, immediately followed on the same socket by the
 sidebar, roster, Board, `sessions.resolve`, `sessions.messages.subscribe`, and
 keyed `chat.startup` requests. Batches await all replies and retain the
 `--poll-ms` pacing. There are no artificial handler delays or held preparations.
 The first batch remains separate from later warm traffic in the latency report.
+The explicit catalog RPC reproduces the server's catalog-bootstrap admission
+order; this does not exercise capability negotiation or `models.snapshot` delivery.
 
 The `admission` result contains sample counts, total duration, p50/p90/p95/p99,
 and maxima for each method's queue wait, admission, handler, and first response.

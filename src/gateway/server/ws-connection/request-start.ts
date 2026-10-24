@@ -76,7 +76,9 @@ async function grantStarts(): Promise<void> {
         (work.preparation && preparations >= MAX_CONCURRENT_PREPARATIONS) ||
         (!work.independentRead && blockedConnections.has(work.connection.id))
       ) {
-        blockedConnections.add(work.connection.id);
+        if (!work.independentRead) {
+          blockedConnections.add(work.connection.id);
+        }
         return false;
       }
       return true;
@@ -155,6 +157,7 @@ export function scheduleGatewayRequestStart(
         request.method === "update.status" ||
         request.method === "update.run");
     const independentRead =
+      request.method === "models.list" ||
       request.method === "chat.history" ||
       request.method === "board.get" ||
       request.method === "sessions.resolve" ||

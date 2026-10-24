@@ -180,7 +180,10 @@ Roster subscriptions requesting a snapshot, catalog reads, and message subscript
 replay share four preparation slots. A slot remains occupied until its request
 settles, and each start yields to ready socket I/O. A request waiting for a
 preparation slot stays in the bounded queue while eligible requests start:
-Event-only `sessions.subscribe` calls do not reserve preparation slots.
+Event-only `sessions.subscribe` calls do not reserve preparation slots. A waiting
+`models.list` read still needs a preparation slot, but does not block later
+requests on its connection. Snapshot and approval subscriptions keep their
+ordering barrier for later mutations and unsubscribe requests.
 `chat.history`, `sessions.list`, `sessions.resolve`, and `board.get` reads can pass waiting preparations, as can
 ordinary requests on other connections. Other starts preserve FIFO order within
 each connection, including subscriptions and their later unsubscribe requests.

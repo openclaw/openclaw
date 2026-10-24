@@ -162,15 +162,40 @@ describe("Gateway request start fairness", () => {
     expect(starts.at(-1)).toBe("snapshot");
   });
 
+  it("keeps a parked catalog read from blocking later connection work", async () => {
+    const { held, start } = holdPreparations();
+    await start();
+    const starts: string[] = [];
+    const requests = [
+      { method: "models.list" },
+      { method: "sessions.subscribe", params: {} },
+      subscribeRequest,
+      { method: "sessions.messages.unsubscribe", params: { key: "session" } },
+      workRequest,
+    ].map((request) =>
+      requestStart(100, request, "viewer").then(() => starts.push(request.method)),
+    );
+    await nextTurn();
+    expect(starts).toEqual([
+      "sessions.subscribe",
+      "sessions.messages.subscribe",
+      "sessions.messages.unsubscribe",
+      "chat.send",
+    ]);
+    held[0]!.resolve();
+    await Promise.all(requests);
+    expect(starts.at(-1)).toBe("models.list");
+  });
+
   it("prioritizes lifecycle starts while preserving same-connection mutation order", async () => {
     const { held, start: startHeld } = holdPreparations();
     const events: string[] = [];
-    const start = (method: string, connId: string) =>
-      requestStart(100, { method }, connId).then(() => events.push(`${connId}:${method}`));
+    const start = (method: string, connId: string, params = {}) =>
+      requestStart(100, { method, params }, connId).then(() => events.push(`${connId}:${method}`));
     await startHeld();
     // The parked preparation wakes the queue, but unrelated lifecycle starts
     // must reach their handlers before the ordinary backlog resumes.
-    const parked = start("models.list", "blocked");
+    const parked = start("sessions.subscribe", "blocked", { limit: 100 });
     const mutation = start("chat.send", "blocked");
     const resume = start("gateway.suspend.resume", "blocked");
     const ordinary = start("chat.send", "ordinary");
@@ -187,7 +212,7 @@ describe("Gateway request start fairness", () => {
     held[0]!.resolve();
     await Promise.all([parked, mutation, resume, status, update, handoff, ordinary]);
     expect(events.slice(4)).toEqual([
-      "blocked:models.list",
+      "blocked:sessions.subscribe",
       "blocked:chat.send",
       "blocked:gateway.suspend.resume",
     ]);
