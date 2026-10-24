@@ -1,6 +1,5 @@
 import path from "node:path";
 import { extractArchive as extractArchiveSafe } from "../../infra/archive.js";
-import { sha256File } from "../../infra/directory-durability.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { root as fsSafeRoot } from "../../infra/fs-safe.js";
 
@@ -53,14 +52,11 @@ export async function extractSkillDownloadArchive(params: {
           if (entry.isDirectory) {
             await validateReadable(member);
           } else {
-            await using handle = (
-              await stagedRoot.open(path.join(stagedRoot.rootReal, member), {
-                symlinks: "reject",
-                hardlinks: "reject",
-              })
-            ).handle;
-            // Read every byte before publication; no digest comparison authorizes the file.
-            await sha256File(handle);
+            const { handle } = await stagedRoot.open(path.join(stagedRoot.rootReal, member), {
+              symlinks: "reject",
+              hardlinks: "reject",
+            });
+            await handle.close();
           }
         }
       };

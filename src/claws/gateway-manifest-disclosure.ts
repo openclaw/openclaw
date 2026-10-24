@@ -1,6 +1,5 @@
 import type { ClawManifestDisclosure } from "../../packages/gateway-protocol/src/schema/claws.js";
 import { isCanonicalClawHubPackageName } from "./schema-portability.js";
-import { parseClawManifest, parseClawOpenClawProfile } from "./schema.js";
 import type { ClawReadResult, ClawSourceIdentity } from "./types.js";
 
 type VerifiedClawSource = Extract<ClawReadResult, { ok: true }>;
@@ -24,17 +23,6 @@ export function projectClawManifestDisclosure(
     throw new Error("The Claw source identity cannot be disclosed safely.");
   }
 
-  const manifest = parseClawManifest(source.manifest);
-  if (!manifest.ok) {
-    throw new Error("The Claw grouped manifest cannot be disclosed safely.");
-  }
-  const profile = source.openClawProfile
-    ? parseClawOpenClawProfile(source.openClawProfile)
-    : undefined;
-  if (profile && !profile.ok) {
-    throw new Error("The Claw OpenClaw profile cannot be disclosed safely.");
-  }
-
   return {
     source: {
       packageName: identity.name,
@@ -42,7 +30,9 @@ export function projectClawManifestDisclosure(
       integrity: identity.integrity,
       byteLength: identity.byteLength,
     },
-    manifestJson: JSON.stringify(manifest.manifest, null, 2),
-    ...(profile?.ok ? { openClawProfileJson: JSON.stringify(profile.profile, null, 2) } : {}),
+    manifestJson: JSON.stringify(source.manifest, null, 2),
+    ...(source.openClawProfile
+      ? { openClawProfileJson: JSON.stringify(source.openClawProfile, null, 2) }
+      : {}),
   };
 }

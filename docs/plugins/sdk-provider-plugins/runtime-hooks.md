@@ -68,6 +68,10 @@ JSON types or maintaining a separate capability definition.
 
 ## Credential lookup cancellation
 
+`resolveApiKeyForProvider` and `getRuntimeAuthForModel` load the host's authentication
+runtime lazily. The host build selects that module, so SDK consumers do not need
+to locate JavaScript files on disk, including in standalone executables.
+
 Credential consumers using `resolveApiKeyForProvider` from
 `openclaw/plugin-sdk/provider-auth-runtime` should pass their request's optional
 `signal`. It ends the caller's wait for queued admission, a profile lock, or

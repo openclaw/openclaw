@@ -39,14 +39,11 @@ import {
 import { readRepositoryBranches } from "./branches.runtime.js";
 import { useInProcessWorktreeCapacityTransport } from "./capacity.test-support.js";
 import { hasWorktreeUnknownOutcome } from "./errors.js";
+import { git } from "./git-fixture.test-support.js";
 import { ManagedWorktreeService } from "./service.js";
 
 const execFileAsync = promisify(execFile);
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-
-async function git(cwd: string, ...args: string[]): Promise<string> {
-  return (await execFileAsync("git", ["-C", cwd, ...args])).stdout.trim();
-}
 
 function trackBaseLookupCallers(repo: string, count: number) {
   const current = new AsyncLocalStorage<number>();

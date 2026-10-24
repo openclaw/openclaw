@@ -466,13 +466,19 @@ it.each(["delete", "deleteMany"] as const)(
   "retains a confirmed %s without stale publication after reconnect",
   async (operationName) => {
     const deleteResponse = createDeferred<SessionsDeleteResult>();
-    const { publish, expectPreviousConnection, sessions } = createMutationHarness({
-      "sessions.delete": () => deleteResponse.promise,
+    const deleteDispatched = createDeferred();
+    const { publish, expectPreviousConnection, request, sessions } = createMutationHarness({
+      "sessions.delete": () => {
+        deleteDispatched.resolve();
+        return deleteResponse.promise;
+      },
     });
     const key = "agent:main:deleted-on-previous-connection";
 
     const operation =
       operationName === "delete" ? sessions.delete(key) : sessions.deleteMany([{ key }]);
+    await deleteDispatched.promise;
+    expect(request.mock.calls.filter(([method]) => method === "sessions.delete")).toHaveLength(1);
     reconnectSameClient(publish);
     const worktreePreserved = {
       id: "wt-busy",

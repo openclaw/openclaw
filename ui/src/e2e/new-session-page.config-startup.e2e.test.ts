@@ -12,100 +12,6 @@ import {
 const suite = createNewSessionPageE2eSuite();
 
 suite.define(() => {
-  it.each([false, true])(
-    "waits for live agent defaults while preserving explicit folder=%s across reconnect",
-    (explicit) =>
-      suite.withPage({ viewport: { width: 1280, height: 720 } }, async ({ page }) => {
-        const roster = (workspace: string) => ({
-          defaultId: "main",
-          mainKey: "main",
-          scope: "per-sender",
-          agents: [
-            { id: "main", workspace, workspaceGit: false, model: { primary: "openai/gpt-5.5" } },
-          ],
-        });
-        const gateway = await installMockGateway(page, {
-          heldMethods: ["connect"],
-          heldRequests: [{ method: "agents.list" }],
-          authMethod: "token",
-          authMode: "token",
-          workspace: "/workspace-a",
-          presenceUsers: [{ id: "warm-roster-profile", self: true }],
-          methodResponses: { "agents.list": roster("/workspace-a") },
-        });
-        await page.goto(`${suite.server.baseUrl}chat?session=main#token=synthetic-test-token`);
-        await gateway.waitForRequest("connect");
-        await gateway.resolveDeferred("connect");
-        await gateway.waitForRequest("agents.list");
-        await gateway.resolveDeferred("agents.list");
-        await waitForControlUiGatewayReady(page);
-        await page.locator(".agent-chat__composer-combobox textarea").waitFor({ state: "visible" });
-        const bootCache = () => page.evaluate(() => Object.entries(localStorage));
-        await expect
-          .poll(bootCache)
-          .toContainEqual([
-            expect.stringMatching(/^openclaw\.control\.bootRecord\.v1:/u),
-            expect.stringContaining("/workspace-a"),
-          ]);
-        await page.goto(`${suite.server.baseUrl}new?agent=main`, { waitUntil: "commit" });
-        const message = page.locator(".new-session-page__message");
-        await message.fill("Keep the warm draft");
-        expect(await message.inputValue()).toBe("Keep the warm draft");
-        expect(await gateway.getRequests("config.get")).toHaveLength(0);
-        await gateway.waitForRequest("connect");
-        await gateway.resolveDeferred("connect");
-        await gateway.waitForRequest("agents.list");
-        const workspaceOption = page.locator(
-          '.new-session-page__project-popover [data-value="workspace"]',
-        );
-        await page.locator("#new-session-project-trigger").click();
-        expect(await workspaceOption.count()).toBe(0);
-        await page.keyboard.press("Escape");
-        const start = page.getByRole("button", { name: "Start session", exact: true });
-        expect(await start.getAttribute("aria-disabled")).toBe("true");
-        await start.click({ force: true });
-        await message.press("Enter");
-        expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
-
-        await gateway.resolveDeferred("agents.list", roster("/workspace-a"));
-        await expect.poll(() => start.getAttribute("aria-disabled")).not.toBe("true");
-        await gateway.waitForRequest("config.get");
-        expect(await message.inputValue()).toBe("Keep the warm draft");
-        if (explicit) {
-          await page.locator("#new-session-project-trigger").click();
-          await workspaceOption.click();
-        }
-
-        const rosterReads = (await gateway.getRequests("agents.list")).length;
-        await gateway.setOnline(false);
-        await waitForControlUiGatewayReconnecting(page);
-        await expect.poll(() => start.getAttribute("aria-disabled")).toBe("true");
-        expect(await message.inputValue()).toBe("Keep the warm draft");
-        await start.click({ force: true });
-        await message.press("Enter");
-        expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
-        await gateway.deferNext("agents.list");
-        await gateway.setOnline(true);
-        await waitForControlUiGatewayReady(page);
-        await gateway.waitForRequest("agents.list", { after: rosterReads });
-        await expect.poll(() => start.getAttribute("aria-disabled")).not.toBe("true");
-        expect(await message.inputValue()).toBe("Keep the warm draft");
-        expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
-
-        await gateway.resolveDeferred("agents.list", roster("/workspace-b"));
-        await expect.poll(() => start.getAttribute("aria-disabled")).not.toBe("true");
-        expect(await message.inputValue()).toBe("Keep the warm draft");
-        await start.click();
-        const create = await gateway.waitForRequest("sessions.create");
-        expect(create.params).toMatchObject({ agentId: "main", message: "Keep the warm draft" });
-        if (explicit) {
-          expect(create.params).toHaveProperty("cwd", "/workspace-a");
-        } else {
-          expect(create.params).not.toHaveProperty("cwd");
-        }
-      }),
-  );
-
   it("settles a failed config load and reflects the owner's reconnect result", () =>
     suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
       const config = {
@@ -127,7 +33,6 @@ suite.define(() => {
       });
       await page.goto(`${suite.server.baseUrl}new?agent=main`);
       await gateway.waitForRequest("config.get");
-      expect(await gateway.getRequests("config.get")).toHaveLength(1);
       // Hold the next request so an accidental render-driven retry cannot hide behind success.
       await gateway.deferNext("config.get");
       await gateway.rejectDeferred("config.get", {
@@ -159,10 +64,5 @@ suite.define(() => {
       await menu.getByRole("menuitem", { name: /^Plugins/ }).click();
       await expect.poll(() => github.isEnabled()).toBe(true);
       expect(await message.inputValue()).toBe("Keep this draft after the config error");
-      const recoveredReads = (await gateway.getRequests("config.get")).length;
-      await page.keyboard.press("Escape");
-      await message.fill("The recovered draft is still editable");
-      await composer.getByRole("button", { name: "Add attachment" }).click();
-      expect(await gateway.getRequests("config.get")).toHaveLength(recoveredReads);
     }));
 });

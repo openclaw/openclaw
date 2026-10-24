@@ -313,6 +313,23 @@ it.each([false, true])(
   },
 );
 
+it("preserves the committed prefix when replacement option copying fails", async () => {
+  const { parent, payloads } = parentTransport();
+  await complete(parent);
+  const copy = vi
+    .spyOn(Blob.prototype, "arrayBuffer")
+    .mockRejectedValueOnce(new Error("Blob source is unavailable"));
+  await complete(
+    parent,
+    model,
+    { messages: [{ role: "user", content: "Replacement prefix", timestamp: 3 }] },
+    { metadata: { blob: new Blob(["Options"], { type: "application/x-unreadable" }) } },
+  );
+  copy.mockRestore();
+  await expect(fork()).resolves.toBe("Answer");
+  expectText(JSON.stringify(payloads.at(-1)?.input), ["Parent question"], ["Replacement prefix"]);
+});
+
 it("keeps fork snapshots without retaining completed parent contexts or payload hooks", async () => {
   const callers = new AsyncLocalStorage<object>();
   const references: WeakRef<object>[] = [];
@@ -321,14 +338,28 @@ it("keeps fork snapshots without retaining completed parent contexts or payload 
   async function completeParent() {
     const caller = { turn: "completed" };
     const parentContext = structuredClone(context);
+    const thinkingBudgets = { high: 4096 };
+    const hostedTools = new Set(["web_search"]);
     const onPayload = (payload: unknown) => {
       expect(callers.getStore()).toBe(caller);
       return payload;
     };
-    references.push(new WeakRef(caller), new WeakRef(parentContext), new WeakRef(onPayload));
+    references.push(
+      new WeakRef(caller),
+      new WeakRef(parentContext),
+      new WeakRef(onPayload),
+      new WeakRef(thinkingBudgets),
+      new WeakRef(hostedTools),
+    );
     const parent = wrapStreamFnWithSessionFork(transport(payloads), identity);
     await callers.run(caller, async () => {
-      await complete(parent, model, parentContext, { onPayload });
+      const options = {
+        onPayload,
+        thinkingBudgets,
+        openclawCodeModeAllowedHostedToolTypes: hostedTools,
+      };
+      await complete(parent, model, parentContext, options);
+      publishedResult("lookup", "lookup", "Result", { blob: new Blob(["Opaque result"]) });
     });
   }
 
@@ -473,7 +504,10 @@ it("preserves opaque publication details across isolated forks", async () => {
   }, identity);
   await complete(parent);
   const bytes = new Uint8Array([7]);
-  publishedResult("lookup", "lookup", "Result", { bytes, blob: new Blob(["Opaque result"]) });
+  publishedResult("lookup", "lookup", "Result", {
+    bytes,
+    blob: new Blob(["discard|Opaque result|discard"]).slice(8, 21),
+  });
   bytes[0] = 42;
   await expect(fork()).resolves.toBe("Answer");
   await expect(fork()).resolves.toBe("Answer");
@@ -482,6 +516,49 @@ it("preserves opaque publication details across isolated forks", async () => {
     { byte: 7, blob: "Opaque result" },
   ]);
 });
+
+it.each(["entry overhead", "opaque publications"] as const)(
+  "bounds retained snapshots including %s within 64 MiB",
+  async (kind) => {
+    const count = kind === "entry overhead" ? 64 : 3;
+    const payload = "x".repeat(kind === "entry overhead" ? 1024 * 1024 - 1024 : 1);
+    const ids = Array.from({ length: count }, (_, index) => ({
+      ...identity,
+      sessionId: `budget-${index}`,
+    }));
+    // The transport discards requests; only the production snapshot owner retains them.
+    const stream: StreamFn = async (requestModel, requestContext, options) => {
+      await options?.onPayload?.({ input: requestContext.messages }, requestModel);
+      const result = createAssistantMessageEventStream();
+      result.end(makeAgentAssistantMessage({ content: [{ type: "text", text: "Answer" }] }));
+      return result;
+    };
+    for (const id of ids) {
+      await complete(wrapStreamFnWithSessionFork(stream, id), model, {
+        messages: [{ role: "user", content: payload, timestamp: 1 }],
+      });
+      if (kind === "opaque publications") {
+        recordEmbeddedSessionForkMessage(
+          id.sessionId,
+          id.runId,
+          toolResult("lookup", "lookup", "Result", {
+            blob: new Blob([new Uint8Array(22 * 1024 * 1024)]),
+          }),
+        );
+      }
+    }
+    const review = (sessionId: string) =>
+      runEmbeddedSessionFork({
+        ...identity,
+        sessionId,
+        model,
+        question: "Review only",
+        assertCurrent() {},
+      });
+    await expect(review(ids[0]!.sessionId)).rejects.toThrow("requires a parent turn");
+    await expect(review(ids.at(-1)!.sessionId)).resolves.toBe("Answer");
+  },
+);
 
 it.each([
   ["openai-responses", false],
@@ -827,14 +904,17 @@ it("does not restore cleared context when an old publication arrives", async () 
   expect(payloads).toHaveLength(1);
 });
 
-it("retires optional replay if a published message cannot be retained", async () => {
-  const { parent } = parentTransport();
-  await complete(parent);
-  expect(() =>
-    publish({ ...toolResult("lookup", "lookup", "", { callback: () => {} }, 2), content: [] }),
-  ).not.toThrow();
-  await expect(fork()).rejects.toThrow("requires a parent turn");
-});
+it.each([{ callback: () => {} }, { bytes: new Uint8Array(new SharedArrayBuffer(16)) }])(
+  "retires optional replay if a published message cannot be retained: %j",
+  async (details) => {
+    const { parent } = parentTransport();
+    await complete(parent);
+    expect(() =>
+      publish({ ...toolResult("lookup", "lookup", "", details, 2), content: [] }),
+    ).not.toThrow();
+    await expect(fork()).rejects.toThrow("requires a parent turn");
+  },
+);
 
 it("isolates replayed wire data without re-entering the parent's one-shot payload hook", async () => {
   const { parent, physicalFetch } = guardedTransport();

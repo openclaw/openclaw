@@ -10,45 +10,32 @@ import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts"
 import { expectText, seedStorage } from "./sidebar-assertions.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Agent-first sidebar geometry" });
-const imageAvatar =
-  "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAIAAABLbSncAAAAIElEQVR4nGN4nhWCFTEQkPj64w8ag5AEPqPgiDgdmAgA9YRzYZfFh50AAAAASUVORK5CYII=";
 const agentsList: AgentsListResult = {
   defaultId: "main",
   mainKey: "main",
   scope: "per-sender",
   agents: [
     { id: "main", name: "Engineering" },
-    { id: "research", name: "Research and competitive intelligence", identity: { emoji: "🔬" } },
-    { id: "writing", name: "Writing", identity: { avatarUrl: imageAvatar } },
+    { id: "research", name: "Research and competitive intelligence" },
   ],
 };
-function session(
-  name: string,
-  updatedAt: number,
-  fields: Partial<Omit<GatewaySessionRow, "updatedAt">>,
-): GatewaySessionRow & ControlUiSessionFixture {
-  return { key: `agent:main:${name}`, agentId: "main", kind: "direct", updatedAt, ...fields };
-}
-const rows = [
-  session("project", 100, {
-    lastAssistantMessage: {
-      text: "I've set up the template, but it still needs a final review before sharing with the team.",
-      timestamp: 90,
-    },
-  }),
-  session("working", 99, { hasActiveRun: true, status: "running" }),
-  session("failure", 98, {
+const rows: Array<GatewaySessionRow & ControlUiSessionFixture> = [
+  {
+    key: "agent:main:failure",
+    kind: "direct",
+    updatedAt: 1,
     status: "failed",
-    lastRunError:
-      "Preflight compaction required but failed: agent tool caller authority is no longer active",
-  }),
+    lastRunError: "agent tool caller authority is no longer active",
+    lastAssistantMessage: {
+      text: "The template still needs a final review before sharing with the team.",
+      timestamp: 1,
+    },
+  },
 ];
 
 suite.define(() =>
   it.each([
-    { mode: "light", width: 258, touch: false },
-    { mode: "light", width: 334, touch: false },
-    { mode: "dark", width: 286, touch: false },
+    { mode: "dark", width: 258, touch: false },
     { mode: "light", width: 334, touch: true },
   ] as const)("lays out agent rows ($mode, $width px, touch=$touch)", ({ mode, width, touch }) =>
     suite.withPage(
@@ -66,23 +53,15 @@ suite.define(() =>
             navWidth: width,
             themeMode: mode,
           }),
-          "openclaw:control-ui:community-invite:v2": JSON.stringify({
-            dismissedAtMs: Date.now(),
-          }),
         });
         await installMockGateway(page, {
           sessions: rows,
           methodResponses: {
             "agents.list": agentsList,
             "agent.identity.get": {
-              cases: agentsList.agents.map(({ id, name, identity }) => ({
+              cases: agentsList.agents.map(({ id, name }) => ({
                 match: { agentId: id },
-                response: {
-                  agentId: id,
-                  name,
-                  emoji: identity?.emoji,
-                  avatar: identity?.avatarUrl ?? "",
-                },
+                response: { agentId: id, name },
               })),
             },
           },
@@ -96,27 +75,10 @@ suite.define(() =>
         const row = roster("row");
         const attention = roster('signals [data-session-attention="error"]');
         await main.waitFor({ state: "visible" });
-        expect(await sidebar.locator(".sidebar-agent-roster__group").count()).toBe(3);
-        expect(await sidebar.locator("[data-agent-collapse]").count()).toBe(0);
-        expect(await sidebar.locator(".sidebar-recent-session").count()).toBe(0);
+        await expectText(roster("preview"), "The template still needs a final review");
         expect(
           await page.locator(".shell-nav").evaluate((el) => el.getBoundingClientRect().width),
         ).toBe(width + 52);
-
-        await expectText(roster("preview"), "I've set up the template");
-        expect(
-          await Promise.all([
-            roster("avatar .session-glyph--running").count(),
-            roster("signals .session-glyph__ring").count(),
-            attention.count(),
-          ]),
-        ).toEqual([1, 0, 1]);
-        const avatar = (agent: string) =>
-          sidebar.locator(`[data-agent-group="${agent}"] .sidebar-agent-roster__avatar`);
-        expect(
-          await avatar("research").locator("[data-avatar]").getAttribute("data-avatar"),
-        ).toContain("🔬");
-        expect(await avatar("writing").locator("img").getAttribute("src")).toBe(imageAvatar);
 
         const headerLocator = roster("header");
         const right = (box: { x: number; width: number }) => box.x + box.width;

@@ -7,6 +7,7 @@ import { formatSqliteSessionFileMarker } from "../../config/sessions/legacy-sqli
 import * as manifestModelIdNormalization from "../../plugins/manifest-model-id-normalization.js";
 import { addSession, deleteSession } from "../bash-process-registry.js";
 import { createProcessSessionFixture } from "../bash-process-registry.test-helpers.js";
+import { configFor, modelDefinition } from "../model-auth.fixtures.test-support.js";
 import * as providerModelNormalizationRuntime from "../provider-model-normalization.runtime.js";
 import {
   buildEmbeddedCompactionRuntimeContext,
@@ -59,27 +60,17 @@ describe("resolveCompactionContextTokenBudget", () => {
     "caps requested=$requested by the authored native window despite a larger contextTokens cap",
     ({ requested, expected }) => {
       const budget = resolveCompactionContextTokenBudget({
-        config: {
-          models: {
-            providers: {
-              custom: {
-                baseUrl: "https://models.example.test/v1",
-                models: [
-                  {
-                    id: "tiny-model",
-                    name: "Tiny model",
-                    reasoning: false,
-                    input: ["text"],
-                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                    contextWindow: 3_000,
-                    contextTokens: 16_000,
-                    maxTokens: 256,
-                  },
-                ],
-              },
-            },
-          },
-        },
+        config: configFor("custom", "https://models.example.test/v1", {
+          models: [
+            modelDefinition("tiny-model", {
+              name: "Tiny model",
+              reasoning: false,
+              contextWindow: 3_000,
+              contextTokens: 16_000,
+              maxTokens: 256,
+            }),
+          ],
+        }),
         provider: "custom",
         modelId: "tiny-model",
         model: modelWithWindow(3_000),
@@ -276,14 +267,7 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
       try {
         const result = buildEmbeddedCompactionRuntimeContext({
           ...workspace,
-          config: {
-            agents: {
-              defaults: {
-                ...(models ? { models } : {}),
-                compaction: { model: "gpt-4o" },
-              },
-            },
-          } as OpenClawConfig,
+          config: compactionConfig("gpt-4o", models),
           provider: "openai",
           modelId: "gpt-3.5-turbo",
           authProfileId: "openai:p1",

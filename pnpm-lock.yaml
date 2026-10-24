@@ -212,8 +212,11 @@ packageExtensionsChecksum: sha256-0IIHieOIUT+o/+0r+0aLcYtVWCtpCxToLdTNWrJI0ZM=
 
 patchedDependencies:
   '@novnc/novnc@1.7.0': bfde0e1bda172da3525f9f5014d85ad28073325b74f09609084598a65d2f412d
+  '@openclaw/crabline@0.1.30': e20ebba9e5436726475f2e112d9c9322ff7078a0a8068c789716e1e6519b4cf0
+  '@shinyoshiaki/binary-data@0.6.1': 231e04c1ca6a2f66dda30dfe23c1178d2df9fbc2161d9eac7689e3a751a85a9b
   '@solidjs/signals@2.0.0-rc.18': 421b418083c0218bb54ceb3e12bd0eb74a84e86474ca26cc1f1114abbe58de48
   '@solidjs/web@2.0.0-rc.18': 6d6b2e52e607edf3c9cfcc1a26f331d013537d051f43bbb4f3e7877ed08fa5cf
+  apache-arrow@21.2.0: c8385fd9a8af8122fc1787481b5bba21fef95f61dc1a664e5d2c5e0cb9d5fd68
   baileys@7.0.0-rc14: c3c4601486630c689ffd1a0e7a34f4b8cf8e7231e41c312ad33afdf4487d8ded
   chrome-devtools-mcp@1.11.0: c2e391b196607620c519f04eb1563dc4a8f01aebed3b70bd77e6635ae03a5c9a
   ghostty-web@0.4.0: d4c6598b6840564dac4a469f3aa9b8df24fe6eab48a6744302707017e095a524
@@ -465,7 +468,7 @@ importers:
         version: 2.7.0(@opentelemetry/api@1.9.1)(@opentelemetry/exporter-trace-otlp-http@0.220.0(@opentelemetry/api@1.9.1))(@opentelemetry/resources@2.12.0(@opentelemetry/api@1.9.1))(@opentelemetry/sdk-trace-base@2.12.0(@opentelemetry/api@1.9.1))
       '@openclaw/crabline':
         specifier: 0.1.30
-        version: 0.1.30
+        version: 0.1.30(patch_hash=e20ebba9e5436726475f2e112d9c9322ff7078a0a8068c789716e1e6519b4cf0)
       '@openclaw/session-url-contract':
         specifier: workspace:*
         version: link:packages/session-url-contract
@@ -528,7 +531,7 @@ importers:
         version: 0.19.6
       apache-arrow:
         specifier: 21.2.0
-        version: 21.2.0
+        version: 21.2.0(patch_hash=c8385fd9a8af8122fc1787481b5bba21fef95f61dc1a664e5d2c5e0cb9d5fd68)
       baileys:
         specifier: 7.0.0-rc14
         version: 7.0.0-rc14(patch_hash=c3c4601486630c689ffd1a0e7a34f4b8cf8e7231e41c312ad33afdf4487d8ded)(audio-decode@3.12.0)(supports-color@10.2.2)
@@ -1695,7 +1698,7 @@ importers:
     dependencies:
       apache-arrow:
         specifier: 21.2.0
-        version: 21.2.0
+        version: 21.2.0(patch_hash=c8385fd9a8af8122fc1787481b5bba21fef95f61dc1a664e5d2c5e0cb9d5fd68)
       openai:
         specifier: 7.35.0
         version: 7.35.0(@aws-sdk/credential-provider-node@3.972.86)(@smithy/hash-node@4.5.2)(@smithy/signature-v4@5.7.4)(undici@8.12.2)(ws@8.22.0)(zod@4.6.7)
@@ -1705,7 +1708,7 @@ importers:
     devDependencies:
       '@lancedb/lancedb':
         specifier: 0.40.0
-        version: 0.40.0(@types/node@26.6.5)(apache-arrow@21.2.0)
+        version: 0.40.0(@types/node@26.6.5)(apache-arrow@21.2.0(patch_hash=c8385fd9a8af8122fc1787481b5bba21fef95f61dc1a664e5d2c5e0cb9d5fd68))
       '@openclaw/plugin-sdk':
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
@@ -2002,6 +2005,9 @@ importers:
 
   extensions/openai:
     dependencies:
+      '@shinyoshiaki/binary-data':
+        specifier: 0.6.1
+        version: 0.6.1(patch_hash=231e04c1ca6a2f66dda30dfe23c1178d2df9fbc2161d9eac7689e3a751a85a9b)
       jose:
         specifier: 6.2.12
         version: 6.2.12
@@ -2116,7 +2122,7 @@ importers:
         version: 2.3.1
       '@openclaw/crabline':
         specifier: 0.1.30
-        version: 0.1.30
+        version: 0.1.30(patch_hash=e20ebba9e5436726475f2e112d9c9322ff7078a0a8068c789716e1e6519b4cf0)
       '@openclaw/fs-safe':
         specifier: 0.26.13
         version: 0.26.13
@@ -12735,10 +12741,10 @@ snapshots:
   '@lancedb/lancedb-win32-x64-msvc@0.40.0':
     optional: true
 
-  '@lancedb/lancedb@0.40.0(@types/node@26.6.5)(apache-arrow@21.2.0)':
+  '@lancedb/lancedb@0.40.0(@types/node@26.6.5)(apache-arrow@21.2.0(patch_hash=c8385fd9a8af8122fc1787481b5bba21fef95f61dc1a664e5d2c5e0cb9d5fd68))':
     dependencies:
       '@opentelemetry/api': 1.9.1
-      apache-arrow: 21.2.0
+      apache-arrow: 21.2.0(patch_hash=c8385fd9a8af8122fc1787481b5bba21fef95f61dc1a664e5d2c5e0cb9d5fd68)
       reflect-metadata: 0.2.2
     optionalDependencies:
       '@lancedb/lancedb-darwin-arm64': 0.40.0
@@ -13160,7 +13166,7 @@ snapshots:
   '@openai/codex@0.162.1-win32-x64':
     optional: true
 
-  '@openclaw/crabline@0.1.30':
+  '@openclaw/crabline@0.1.30(patch_hash=e20ebba9e5436726475f2e112d9c9322ff7078a0a8068c789716e1e6519b4cf0)':
     dependencies:
       '@types/node': 22.20.5
       commander: 15.0.0
@@ -14060,7 +14066,7 @@ snapshots:
 
   '@shikijs/vscode-textmate@10.0.2': {}
 
-  '@shinyoshiaki/binary-data@0.6.1':
+  '@shinyoshiaki/binary-data@0.6.1(patch_hash=231e04c1ca6a2f66dda30dfe23c1178d2df9fbc2161d9eac7689e3a751a85a9b)':
     dependencies:
       generate-function: 2.3.1
       is-plain-object: 2.0.4
@@ -15226,7 +15232,7 @@ snapshots:
 
   anynum@1.0.1: {}
 
-  apache-arrow@21.2.0:
+  apache-arrow@21.2.0(patch_hash=c8385fd9a8af8122fc1787481b5bba21fef95f61dc1a664e5d2c5e0cb9d5fd68):
     dependencies:
       '@types/node': 25.9.9
       flatbuffers: 25.9.23
@@ -19378,7 +19384,7 @@ snapshots:
       '@fidm/x509': 1.2.1
       '@noble/curves': 1.9.7
       '@peculiar/x509': 1.14.3
-      '@shinyoshiaki/binary-data': 0.6.1
+      '@shinyoshiaki/binary-data': 0.6.1(patch_hash=231e04c1ca6a2f66dda30dfe23c1178d2df9fbc2161d9eac7689e3a751a85a9b)
       buffer: 6.0.3
       debug: 4.4.0(supports-color@10.2.2)
       mediabunny: 1.61.6

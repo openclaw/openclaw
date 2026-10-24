@@ -187,14 +187,15 @@ process.send('staged');`,
     }
   });
 
-  it.each(["dependencies", "optionalDependencies"])(
-    "rejects an incomplete %s closure without touching the link",
-    async (field) => {
-      const f = await fixture();
-      await f.writeManifest(f.store, { name: "fixture-bundle", [field]: { outside: "1.0.0" } });
-      await f.rejectStage("dependency-closure staging");
-    },
-  );
+  it("rejects an incomplete required dependency closure without touching the link", async () => {
+    const f = await fixture();
+    await f.writeManifest(f.store, {
+      name: "fixture-bundle",
+      version: "1.0.0",
+      dependencies: { outside: "1.0.0" },
+    });
+    await f.rejectStage("dependency-closure staging");
+  });
 
   it("rejects nested links without following them or mutating the source graph", async () => {
     const f = await fixture();

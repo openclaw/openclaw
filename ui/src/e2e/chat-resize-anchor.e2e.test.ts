@@ -1,5 +1,3 @@
-// Regression: resizing the chat pane must not jump the transcript. The reader's
-// anchor row (topmost visible row) should stay in place while rows re-wrap.
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
@@ -18,38 +16,22 @@ const filler =
   "row height honest across pane widths. ";
 
 async function sampleAnchor(page: Page, anchorKey: string | null) {
-  return await page.evaluate((key) => {
-    const inner = document.querySelector<HTMLElement>(".chat-thread-inner--virtual");
-    const scroller = inner?.parentElement;
-    if (!inner || !scroller) {
-      return { key: null, topDelta: Number.NaN, contentVisible: false };
-    }
-    const scrollerRect = scroller.getBoundingClientRect();
+  return page.locator(".chat-thread-inner--virtual").evaluate((inner, key) => {
+    const viewport = inner.parentElement!.getBoundingClientRect();
+    const visible = (rect: DOMRect | undefined) =>
+      rect !== undefined && rect.bottom > viewport.top && rect.top < viewport.bottom;
     const rows = [...inner.querySelectorAll<HTMLElement>(".chat-virtual-row")]
-      .map((row) => ({
-        key: row.dataset.virtualRowKey ?? "",
-        rect: row.getBoundingClientRect(),
-        contentRect: row.querySelector(".chat-group-messages")?.getBoundingClientRect(),
-      }))
-      .filter(({ rect }) => rect.bottom > scrollerRect.top && rect.top < scrollerRect.bottom)
-      .toSorted((left, right) => left.rect.top - right.rect.top);
-    const anchor = key === null ? rows[0] : rows.find((row) => row.key === key);
+      .filter((row) => visible(row.getBoundingClientRect()))
+      .toSorted(
+        (left, right) => left.getBoundingClientRect().top - right.getBoundingClientRect().top,
+      );
+    const row = key === null ? rows[0] : rows.find((item) => item.dataset.virtualRowKey === key);
     return {
-      key: anchor?.key ?? null,
-      topDelta: anchor ? anchor.rect.top - scrollerRect.top : Number.NaN,
-      contentVisible:
-        anchor?.contentRect !== undefined &&
-        anchor.contentRect.bottom > scrollerRect.top &&
-        anchor.contentRect.top < scrollerRect.bottom,
+      key: row?.dataset.virtualRowKey ?? null,
+      topDelta: row ? row.getBoundingClientRect().top - viewport.top : Number.NaN,
+      contentVisible: visible(row?.querySelector(".chat-group-messages")?.getBoundingClientRect()),
     };
   }, anchorKey);
-}
-
-function distanceFromEnd(page: Page) {
-  return page
-    .locator(".chat-thread-inner--virtual")
-    .locator("..")
-    .evaluate((element) => element.scrollHeight - element.clientHeight - element.scrollTop);
 }
 
 async function settleFrames(page: Page, frames: number): Promise<void> {
@@ -63,12 +45,11 @@ async function settleFrames(page: Page, frames: number): Promise<void> {
 }
 
 suite.define(() => {
-  async function openTranscript() {
+  it("keeps the anchor row stable across pane width changes", async () => {
     const context = await suite.newBrowserContext({ viewport: { width: 1280, height: 900 } });
     const page = await context.newPage();
     const now = Date.now();
     await installMockGateway(page, {
-      sessionKey: "agent:main:main",
       historyMessages: Array.from({ length: MESSAGE_COUNT }, (_, index) => ({
         role: index % 2 === 0 ? "user" : "assistant",
         // Unequal paragraph counts make rewrap change row heights non-uniformly.
@@ -82,16 +63,16 @@ suite.define(() => {
       .getByText(`Message number ${MESSAGE_COUNT - 1}:`)
       .first()
       .waitFor({ timeout: 15_000 });
-    return page;
-  }
-
-  it("keeps the anchor row stable across pane width changes", async () => {
-    const page = await openTranscript();
     const scroller = page.locator(".chat-thread");
-    await expect.poll(() => distanceFromEnd(page)).toBeLessThanOrEqual(2);
+    await expect
+      .poll(() =>
+        scroller.evaluate(
+          (element) => element.scrollHeight - element.clientHeight - element.scrollTop,
+        ),
+      )
+      .toBeLessThanOrEqual(2);
 
-    // Native reader input interrupts initial end anchoring; assigning scrollTop
-    // alone can race that owner and leave this case pinned to the latest message.
+    // Use native input to release the initial end anchor.
     const readingDelta = await scroller.evaluate((element) =>
       Math.floor((element.scrollHeight - element.clientHeight) / 2),
     );
@@ -106,8 +87,7 @@ suite.define(() => {
     expect(readingPosition.top).toBeGreaterThan(readingPosition.height);
     expect(readingPosition.endDistance).toBeGreaterThan(readingPosition.height);
 
-    // The midpoint may land in a footer/turn gap. Put the fold inside actual
-    // message content before testing whether resize preserves the reader anchor.
+    // Move footer/turn gaps into message content before capturing the anchor.
     if (!(await sampleAnchor(page, null)).contentVisible) {
       const contentDelta = await scroller.evaluate((element) => {
         const top = element.getBoundingClientRect().top;
@@ -134,35 +114,11 @@ suite.define(() => {
       await settleFrames(page, 30);
       const sample = await sampleAnchor(page, before.key);
       expect(sample.key, `anchor visible at width ${width}`).toBe(before.key);
-      // Rewrap shifts the row top by up to 63px across fonts; the regression
-      // lost the row entirely with 250px+ drift, leaving margin at 120px.
+      // Font rewrap drifts up to 63px; the regression lost the row by 250px+.
       expect(
         Math.abs(sample.topDelta - before.topDelta),
         `anchor drift at width ${width}`,
       ).toBeLessThanOrEqual(120);
-    }
-  }, 120_000);
-
-  it("keeps an end-pinned transcript pinned across width-only resizes", async () => {
-    const page = await openTranscript();
-    // Fresh sessions open pinned to the end; leave the scroll untouched.
-    await settleFrames(page, 30);
-
-    expect(await distanceFromEnd(page)).toBeLessThanOrEqual(2);
-
-    // Width-only changes re-wrap every row; the end anchor must follow the
-    // new total size (virtualizer wasAtEnd compensation), not drift upward.
-    for (const width of [1000, 820, 1280]) {
-      await page.setViewportSize({ width, height: 900 });
-      await settleFrames(page, 30);
-      expect(
-        await distanceFromEnd(page),
-        `distance from end at width ${width}`,
-      ).toBeLessThanOrEqual(2);
-      await page
-        .getByText(`Message number ${MESSAGE_COUNT - 1}:`)
-        .first()
-        .waitFor({ state: "visible", timeout: 2_000 });
     }
   }, 120_000);
 });

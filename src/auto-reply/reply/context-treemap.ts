@@ -331,15 +331,12 @@ function drawTreemap(canvas: PngCanvas, groups: TreemapGroup[], rect: Rect): voi
       rgb(248, 250, 252),
       groupRect.width > 260 && groupRect.height > 120 ? 2 : 1,
     );
-    const childRect = inset(
-      {
-        x: groupRect.x + TREEMAP_GAP,
-        y: groupRect.y + (groupRect.height > 92 ? 44 : TREEMAP_GAP),
-        width: groupRect.width - TREEMAP_GAP * 2,
-        height: groupRect.height - (groupRect.height > 92 ? 48 : TREEMAP_GAP * 2),
-      },
-      0,
-    );
+    const childRect = {
+      x: groupRect.x + TREEMAP_GAP,
+      y: groupRect.y + (groupRect.height > 92 ? 44 : TREEMAP_GAP),
+      width: groupRect.width - TREEMAP_GAP * 2,
+      height: groupRect.height - (groupRect.height > 92 ? 48 : TREEMAP_GAP * 2),
+    };
     const leafRects = layoutBinary(group.leaves, childRect);
     leafRects.forEach(({ item: leaf, rect: leafRect }, leafIndex) => {
       const shade = (leafIndex % 7) / 10 + (groupIndex % 2) * 0.08;
