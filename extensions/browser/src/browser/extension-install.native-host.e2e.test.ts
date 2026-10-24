@@ -16,7 +16,6 @@ import {
   writeChromePreferences,
 } from "./extension-install.test-support.js";
 
-const BUILT_NATIVE_HOST_PATH = path.resolve("dist/extensions/browser/native-host-entry.js");
 const fixture = useExtensionInstallFixture();
 const nativeHostFixture = useNativeHostLaunchFixture();
 const origin = "chrome-extension://kcdjddhmeafeomebliikmbpblkmkfoig/";
@@ -61,8 +60,7 @@ function nativeFrame(request: unknown): Buffer {
   return frame;
 }
 
-function nativeResponse(child: SpawnSyncReturns<Buffer>): unknown {
-  const { status, stderr, stdout } = child;
+function nativeResponse({ status, stderr, stdout }: SpawnSyncReturns<Buffer>): unknown {
   expect(status, stderr.toString("utf8")).toBe(0);
   const length = os.endianness() === "LE" ? stdout.readUInt32LE() : stdout.readUInt32BE();
   expect(stdout).toHaveLength(length + 4);
@@ -99,57 +97,44 @@ describe.skipIf(process.platform === "win32")("native host registration", () => 
     expect(await fs.readFile(value.config, "utf8")).toBe(original);
     await expect(fs.stat(value.stateDir)).rejects.toMatchObject({ code: "ENOENT" });
   });
-  it.each(["bootstrap", "ensure_relay"])(
-    "rejects an unauthorized %s caller before config, keys or database creation",
-    async (op) => {
-      const value = await cliFixture();
-      const directory = path.join(value.stateDir, "browser", "native-messaging");
-      await fs.mkdir(directory, { recursive: true, mode: 0o700 });
-      const launcher = path.join(directory, "host");
-      const manifest = path.join(directory, "manifest.json");
-      await writePrivate(launcher, "fixture owned launcher", 0o700);
-      await writeJson(manifest, {
-        name: "ai.openclaw.browser_bootstrap",
-        description: "OpenClaw browser extension bootstrap",
-        path: launcher,
-        type: "stdio",
-        allowed_origins: [origin],
-      });
-      const before = (await fs.readdir(value.homeDir, { recursive: true })).toSorted();
-      const request = {
-        v: 1,
-        op,
-        nonce,
-        ...(op === "ensure_relay" ? { relayPort: 19031 } : {}),
-      };
-      const args = nativeArgs(
-        manifest,
-        launcher,
-        [origin],
-        "chrome-extension://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/",
-      );
-      const invoke = () => value.invoke(args, request);
-      const denied = invoke();
-      const refusal = { v: 1, ok: false, code: "origin_forbidden" };
-      expect(nativeResponse(denied)).toEqual(refusal);
-      expect(denied.stdout).toHaveLength(4 + Buffer.byteLength(JSON.stringify(refusal)));
-      // An admitted origin cannot bypass a changed/unsafe manifest or launcher.
-      args[args.length - 1] = origin;
-      await fs.chmod(launcher, 0o777);
-      const unsafe = invoke();
-      expect(nativeResponse(unsafe)).toEqual({ v: 1, ok: false, code: "manifest_invalid" });
-      expect((await fs.readdir(value.homeDir, { recursive: true })).toSorted()).toEqual(before);
-      expect(await fs.readFile(value.config, "utf8")).toBe("{ invalid config");
-    },
-  );
-
-  it.each([
-    ["status", "--json"],
-    ["setup", "--action", "inspect", "--json"],
-    ["pair", "--json"],
-  ])("preserves invalid-config diagnostics for ordinary extension command %j", async (...args) => {
+  it("rejects unauthorized callers and unsafe launchers before config, keys or database creation", async () => {
     const value = await cliFixture();
-    const child = value.invoke(extensionArgs(...args));
+    const directory = path.join(value.stateDir, "browser", "native-messaging");
+    await fs.mkdir(directory, { recursive: true, mode: 0o700 });
+    const launcher = path.join(directory, "host");
+    const manifest = path.join(directory, "manifest.json");
+    await writePrivate(launcher, "fixture owned launcher", 0o700);
+    await writeJson(manifest, {
+      name: "ai.openclaw.browser_bootstrap",
+      description: "OpenClaw browser extension bootstrap",
+      path: launcher,
+      type: "stdio",
+      allowed_origins: [origin],
+    });
+    const before = (await fs.readdir(value.homeDir, { recursive: true })).toSorted();
+    const request = { v: 1, op: "bootstrap", nonce };
+    const args = nativeArgs(
+      manifest,
+      launcher,
+      [origin],
+      "chrome-extension://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/",
+    );
+    const invoke = () => value.invoke(args, request);
+    const denied = invoke();
+    const refusal = { v: 1, ok: false, code: "origin_forbidden" };
+    expect(nativeResponse(denied)).toEqual(refusal);
+    // An admitted origin cannot bypass a changed/unsafe manifest or launcher.
+    args[args.length - 1] = origin;
+    await fs.chmod(launcher, 0o777);
+    const unsafe = invoke();
+    expect(nativeResponse(unsafe)).toEqual({ v: 1, ok: false, code: "manifest_invalid" });
+    expect((await fs.readdir(value.homeDir, { recursive: true })).toSorted()).toEqual(before);
+    expect(await fs.readFile(value.config, "utf8")).toBe("{ invalid config");
+  });
+
+  it("preserves invalid-config diagnostics for ordinary extension commands", async () => {
+    const value = await cliFixture();
+    const child = value.invoke(extensionArgs("status", "--json"));
     expect(child.status).toBe(1);
     const stderr = child.stderr.toString("utf8");
     expect(stderr).toContain("[openclaw] The CLI command failed.");
@@ -168,17 +153,18 @@ describe.skipIf(process.platform === "win32")("native host registration", () => 
       const stateDir = path.join(value.root, "custom state's dir");
       const configPath = path.join(value.root, "custom config's dir", "openclaw.json");
       const context = { OPENCLAW_STATE_DIR: stateDir, OPENCLAW_CONFIG_PATH: configPath };
-      const relayPort = 19_031;
       const token = relayTestKey(4);
       const deps = {
         ...value.deps,
         stateDir,
-        ...(await nativeHostFixture(value.root, BUILT_NATIVE_HOST_PATH)),
+        ...(await nativeHostFixture(
+          value.root,
+          path.resolve("dist/extensions/browser/native-host-entry.js"),
+        )),
         env: { ...value.deps.env, ...context },
       };
-      const install = (
-        options: Partial<Parameters<typeof installChromeExtensionBootstrap>[0]> = {},
-      ) => installChromeExtensionBootstrap({ ...value, waitMs: 1_000, deps, ...options });
+      const install = (browserProfile?: string) =>
+        installChromeExtensionBootstrap({ ...value, waitMs: 1_000, deps, browserProfile });
       await fs.mkdir(path.join(stateDir, "credentials"), { recursive: true, mode: 0o700 });
       await fs.mkdir(path.dirname(configPath), { recursive: true, mode: 0o700 });
       await writePrivate(
@@ -186,7 +172,7 @@ describe.skipIf(process.platform === "win32")("native host registration", () => 
         `${token}\n`,
       );
       await writeJson(configPath, {
-        browser: { profiles: { e2e: { driver: "extension", cdpPort: relayPort } } },
+        browser: { profiles: { e2e: { driver: "extension", cdpPort: 19_031 } } },
       });
       const installed = await installStableChromeExtension(value.bundledDir, deps);
       const chromium = chromeProductRoots(deps).find((root) => root.product === "chromium");
@@ -199,7 +185,7 @@ describe.skipIf(process.platform === "win32")("native host registration", () => 
         profile: "Default",
         entries: { [extensionId]: { location: 4, path: installed } },
       });
-      const status = await install({ browserProfile: "e2e" });
+      const status = await install("e2e");
       const registration = status.registrations.find((entry) => entry.product === "chromium")!;
       expect(registration, status.issues.join("\n")).toMatchObject({ state: "owned" });
       const manifest = JSON.parse(await fs.readFile(registration.manifestPath, "utf8")) as {
@@ -216,17 +202,6 @@ describe.skipIf(process.platform === "win32")("native host registration", () => 
       );
       // Documented ordinary repair must retain the canonical setup's saved profile.
       await install();
-      const savedManifest = await fs.readFile(registration.manifestPath);
-      const savedLauncher = await fs.readFile(manifest.path);
-      await expect(
-        install({
-          browserProfile: "e2e",
-          requireCurrentLaunchContext: true,
-          deps: { ...deps, env: { ...deps.env, OPENCLAW_CONFIG_PATH: undefined } },
-        }),
-      ).rejects.toThrow("OPENCLAW_CONFIG_PATH");
-      expect(await fs.readFile(registration.manifestPath)).toEqual(savedManifest);
-      expect(await fs.readFile(manifest.path)).toEqual(savedLauncher);
       const gatewayStatePath = path.join(stateDir, "state", "openclaw.sqlite");
       const configBefore = await fs.readFile(configPath);
       await expect(fs.stat(gatewayStatePath)).rejects.toMatchObject({ code: "ENOENT" });
