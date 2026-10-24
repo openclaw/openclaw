@@ -1,6 +1,7 @@
-import { open, readdir } from "node:fs/promises";
+import { readFile, readdir } from "node:fs/promises";
 import os from "node:os";
 import { hasErrnoCode } from "../infra/errno.js";
+import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 
 /** Host exec budgets physical memory, not V8/Go's virtual address reservations. */
 export function resolveHostExecMemoryLimit(): number | undefined {
@@ -16,52 +17,39 @@ function formatChildMemoryLimit(limitBytes: number, observedBytes: number): stri
   return `Command killed for exceeding its host memory bound (${Math.ceil(observedBytes / 1024 ** 2)} MiB observed; ${Math.ceil(limitBytes / 1024 ** 2)} MiB limit). Reduce command concurrency or input size, split the work, or use a separately resource-limited worker.`;
 }
 
-// procfs reports a zero file size; readFile allocates scratch space even for
-// empty children files. One serialized sampler reuses this buffer across trees.
-const sampleBuffer = Buffer.allocUnsafe(4096);
 async function readProcNumbers(
   path: string,
   memory: boolean,
   consume: (value: number) => void,
 ): Promise<void> {
-  const file = await open(path, "r");
+  const data = await readFile(path);
   let column = 0;
   let rss = true;
   let swap = true;
   let value = 0;
   let digits = false;
-  try {
-    while (true) {
-      const { bytesRead } = await file.read(sampleBuffer, 0, sampleBuffer.length, null);
-      for (let i = 0; i < bytesRead; i++) {
-        const byte = sampleBuffer.readUInt8(i);
-        if (memory) {
-          rss &&= column >= 6 || byte === "VmRSS:".charCodeAt(column);
-          swap &&= column >= 7 || byte === "VmSwap:".charCodeAt(column);
-        }
-        if ((!memory || rss || swap) && byte >= 48 && byte <= 57) {
-          value = value * 10 + byte - 48;
-          digits = true;
-        } else if (digits) {
-          consume(value * (memory ? 1024 : 1));
-          value = 0;
-          digits = false;
-        }
-        column++;
-        if (byte === 10) {
-          column = 0;
-          rss = swap = true;
-        }
-      }
-      if (bytesRead === 0) {
-        if (digits) {
-          consume(value * (memory ? 1024 : 1));
-        }
-        return;
-      }
+  for (let i = 0; i < data.length; i++) {
+    const byte = data.readUInt8(i);
+    if (memory) {
+      rss &&= column >= 6 || byte === "VmRSS:".charCodeAt(column);
+      swap &&= column >= 7 || byte === "VmSwap:".charCodeAt(column);
     }
-  } finally {
-    await file.close();
+    if ((!memory || rss || swap) && byte >= 48 && byte <= 57) {
+      value = value * 10 + byte - 48;
+      digits = true;
+    } else if (digits) {
+      consume(value * (memory ? 1024 : 1));
+      value = 0;
+      digits = false;
+    }
+    column++;
+    if (byte === 10) {
+      column = 0;
+      rss = swap = true;
+    }
+  }
+  if (digits) {
+    consume(value * (memory ? 1024 : 1));
   }
 }
 
@@ -158,7 +146,7 @@ async function sample(): Promise<void> {
 }
 
 function scheduleSample() {
-  timer = setTimeout(() => void sample(), 1000);
+  timer = runInDetachedAsyncContext(() => setTimeout(() => void sample(), 1000));
   timer.unref();
 }
 
