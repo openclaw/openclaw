@@ -9,7 +9,6 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { GcSample } from "../infra/gc-observer.js";
 import { receiveWorkerMemoryPort, trackNativeWorkerForCpu } from "../infra/worker-cpu.js";
 import { serveWorkerMemorySamples } from "../infra/worker-memory.js";
-import { getWorkerMessageMetrics } from "../infra/worker-message-metrics.js";
 import { codeModeGcAttribution } from "../logging/code-mode-diagnostic.js";
 import { codeModeNodeInitialization, prepareCodeModeNodeCatalog } from "./code-mode-node-input.js";
 import { CodeModeNodeProgress } from "./code-mode-node-progress.js";
@@ -83,14 +82,16 @@ it("warns through the memory port with parked-cell attribution, bounded cadence,
   const attached = once(parent.port1, "message");
   const { close } = serveWorkerMemorySamples(parent.port2);
   const [message] = await attached;
+  let gcMessages = 0;
+  message.port.on("message", (record: Record<string, unknown>) => {
+    // Descriptor updates share this port; only GC envelopes belong to its cadence contract.
+    if ("gcStorm" in record || "retireWorkerId" in record) {
+      gcMessages++;
+    }
+  });
   const initial = once(message.port, "message");
   receiveWorkerMemoryPort(worker, message);
   await initial;
-  const memoryMessages = () =>
-    getWorkerMessageMetrics().find(
-      (row) => row.kind === "memory" && row.direction === "from_worker",
-    )?.unmeasuredMessages ?? 0;
-  const previousUnmeasured = memoryMessages();
   const config = {
     timeoutMs: 5_000,
     memoryLimitBytes: 64 * 1024 * 1024,
@@ -191,7 +192,7 @@ it("warns through the memory port with parked-cell attribution, bounded cadence,
     expect(retirements).toEqual([gcAttribution.workerId, gcAttribution.workerId]);
     expect(fixture.warn).toHaveBeenCalledTimes(2);
     expect(fixture.capture).toHaveBeenCalledTimes(1);
-    expect(memoryMessages()).toBe(previousUnmeasured + 4);
+    expect(gcMessages).toBe(4);
     capture.resolve({ status: "complete", result: profiles });
     await vi.waitFor(() => expect(fixture.warn).toHaveBeenCalledTimes(3));
     expect(fixture.warn.mock.calls[2]![1]).toMatchObject({
