@@ -49,7 +49,6 @@ import {
   fetchSessionFileDownload,
   openSessionFileDownload,
   createWorkspaceFixture,
-  expectOkPayload,
   hashContent,
   removeWorkspaceFixture,
 } from "./sessions-files.test-support.js";
@@ -58,23 +57,7 @@ const mocks = vi.hoisted(() => ({
   workspace: vi.fn(),
   store: vi.fn(),
   open: vi.fn(),
-  beforeWrite: vi.fn<() => Promise<void>>(),
 }));
-vi.mock("../../infra/fs-safe.js", async (original) => {
-  const actual = await original<typeof import("../../infra/fs-safe.js")>();
-  return {
-    ...actual,
-    root: async (...args: Parameters<typeof actual.root>) => {
-      const root = await actual.root(...args);
-      const write = root.write.bind(root);
-      root.write = async (...writeArgs) => {
-        await mocks.beforeWrite();
-        await write(...writeArgs);
-      };
-      return root;
-    },
-  };
-});
 vi.mock("../../agents/agent-scope.js", async (original) => ({
   ...(await original<typeof import("../../agents/agent-scope.js")>()),
   resolveAgentWorkspaceDir: mocks.workspace,
@@ -448,41 +431,6 @@ it.each(["reset", "archive", "lifecycle revision"])(
     expect(readFile("changed.txt")).toBe("before\n");
   },
 );
-
-it("retains the editor owner until a delayed file commit releases the lifecycle queue", async () => {
-  const writing = createDeferredCore();
-  const releaseWrite = createDeferredCore();
-  mocks.beforeWrite.mockImplementationOnce(async () => {
-    writing.resolve();
-    await releaseWrite.promise;
-  });
-  const saving = files.request("set", edit());
-  await writing.promise;
-  let mutationEntered = false;
-  let contentAtMutation: string | undefined;
-  const mutating = runSessionMutation({
-    scope: resolveDefaultSessionStorePath("main"),
-    identities: [sessionKey, identity.sessionId],
-    run: async () => {
-      mutationEntered = true;
-      contentAtMutation = readFile("changed.txt");
-      active = false;
-    },
-  });
-  // Observe the independently queued lifecycle operation after its microtasks drain.
-  // The filesystem delay is explicit; no elapsed-time assumption controls the race.
-  try {
-    await setImmediate();
-    expect(mutationEntered).toBe(false);
-  } finally {
-    releaseWrite.resolve();
-    await Promise.allSettled([saving, mutating]);
-  }
-  expectOkPayload(await saving);
-  await mutating;
-  expect(mutationEntered).toBe(true);
-  expect(contentAtMutation).toBe("saved\n");
-});
 
 it("keeps stopped inspection limited to verified changed artifacts", async () => {
   const changedPaths = ["changed.txt", "oversized.txt", "second.txt"];

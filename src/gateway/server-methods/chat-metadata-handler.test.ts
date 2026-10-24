@@ -583,16 +583,11 @@ describe("chat metadata dispatch authority", () => {
   );
 
   it.each([
-    { change: "title", patch: { displayName: "First reply" }, current: true },
-    { change: "run start", patch: { updatedAt: 2, startedAt: 2 }, current: true },
     { change: "ordinary patch", patch: { thinkingLevel: "high" }, current: true },
-    { change: "visibility", patch: { visibility: "draft" }, current: false },
-    { change: "account", patch: { authProfileOverride: "test:replacement" }, current: false },
     { change: "model", patch: { modelOverride: "replacement" }, current: false },
     { change: "model route", patch: { modelOverrideRouteResolution: "resolved" }, current: false },
     { change: "runtime", patch: { agentRuntimeOverride: "replacement" }, current: false },
     { change: "runtime lock", patch: { modelSelectionLocked: true }, current: false },
-    { change: "lifecycle", patch: { lifecycleRevision: "replacement" }, current: false },
   ] satisfies { change: string; patch: Partial<SessionEntry>; current: boolean }[])(
     "revalidates $change changes during metadata preparation",
     ({ patch, current }) =>

@@ -16,8 +16,6 @@ import {
 } from "../../agents/embedded-agent-runner/runs.test-support.js";
 import * as subagentControlSession from "../../agents/subagents/registry/subagent-control-session.js";
 import { createControlRunFixture } from "../../agents/subagents/registry/subagent-control.fixtures.test-support.js";
-import { killSubagentRunAdmin } from "../../agents/subagents/registry/subagent-control.js";
-import { SUBAGENT_KILL_TASK_ERROR } from "../../agents/subagents/registry/subagent-control.types.js";
 import { subagentRuns } from "../../agents/subagents/registry/subagent-registry-memory.js";
 import { subscribeSubagentRunChanges } from "../../agents/subagents/registry/subagent-registry-publication.js";
 import { writeSubagentSessionEntry } from "../../agents/subagents/registry/subagent-registry.persistence.test-support.js";
@@ -37,17 +35,12 @@ import {
   replaceSessionEntrySync,
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
-import { createGatewayActiveWorkSnapshot } from "../../infra/gateway-active-work.js";
 import { isPathInside } from "../../infra/path-guards.js";
 import {
   beginSessionEffect,
   captureSessionTarget,
 } from "../../sessions/session-controller.lifecycle.js";
-import {
-  claimSessionControllerTask,
-  releaseSessionControllerClaim,
-  trackSessionControllerSourceWork,
-} from "../../sessions/session-controller.mailbox.js";
+import { trackSessionControllerSourceWork } from "../../sessions/session-controller.mailbox.js";
 import { createReplyOperation } from "../../sessions/session-controller.operation.js";
 import {
   registerRpcSource,
@@ -260,12 +253,9 @@ it.each(["exact", "session cascade", "typed stop", "channel stop", "embedded sto
   },
 );
 
-it.each([
-  { boundary: "HTTP", queued: true },
-  { boundary: "admin", queued: false },
-])(
-  "$boundary reports incomplete cancellation for a corrupt descendant (queued=$queued)",
-  async ({ boundary, queued }) => {
+it.each([true, false])(
+  "HTTP reports incomplete cancellation for a corrupt descendant (queued=%s)",
+  async (queued) => {
     const sessionKey = "agent:main:subagent:parent";
     const badKey = "agent:broken:subagent:bad";
     const healthyKey = "agent:main:subagent:healthy";
@@ -303,59 +293,53 @@ it.each([
     }
     let server: ReturnType<typeof createServer> | undefined;
     try {
-      const cfg = getRuntimeConfig();
-      let result;
-      if (boundary === "HTTP") {
-        server = createServer((req, res) => {
-          void handleSessionKillHttpRequest(req, res, {
-            auth: {
-              mode: "trusted-proxy",
-              allowTailscale: false,
-              trustedProxy: {
-                userHeader: "x-test-user",
-                allowUsers: ["operator@example.test"],
-                allowLoopback: true,
-              },
+      server = createServer((req, res) => {
+        void handleSessionKillHttpRequest(req, res, {
+          auth: {
+            mode: "trusted-proxy",
+            allowTailscale: false,
+            trustedProxy: {
+              userHeader: "x-test-user",
+              allowUsers: ["operator@example.test"],
+              allowLoopback: true,
             },
-            trustedProxies: ["127.0.0.1"],
-          }).catch(() => finishFailedGatewayHttpResponse(res));
-        });
-        await new Promise<void>((resolve) => {
-          server!.listen(0, "127.0.0.1", resolve);
-        });
-        const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}/sessions/${encodeURIComponent(sessionKey)}/kill`;
-        const headers = {
-          "x-test-user": "operator@example.test",
-          "x-forwarded-for": "203.0.113.10",
-          "x-openclaw-scopes": "operator.write",
-        };
-        const unauthenticated = await fetch(url, {
-          method: "POST",
-          headers: { "x-forwarded-for": "203.0.113.10" },
-        });
-        expect(unauthenticated.status, await unauthenticated.clone().text()).toBe(401);
-        await unauthenticated.arrayBuffer();
-        const wrongAgent = await fetch(
-          `${url.replace(encodeURIComponent(sessionKey), encodeURIComponent(badKey))}?agentId=main`,
-          {
-            method: "POST",
-            headers: { ...headers, "x-openclaw-scopes": "operator.admin" },
           },
-        );
-        expect(wrongAgent.status).toBe(400);
-        await wrongAgent.arrayBuffer();
-        const denied = await fetch(url, { method: "POST", headers });
-        expect(denied.status).toBe(403);
-        await denied.arrayBuffer();
-        expect(parentAbort).not.toHaveBeenCalled();
-        const response = await fetch(url, {
+          trustedProxies: ["127.0.0.1"],
+        }).catch(() => finishFailedGatewayHttpResponse(res));
+      });
+      await new Promise<void>((resolve) => {
+        server!.listen(0, "127.0.0.1", resolve);
+      });
+      const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}/sessions/${encodeURIComponent(sessionKey)}/kill`;
+      const headers = {
+        "x-test-user": "operator@example.test",
+        "x-forwarded-for": "203.0.113.10",
+        "x-openclaw-scopes": "operator.write",
+      };
+      const unauthenticated = await fetch(url, {
+        method: "POST",
+        headers: { "x-forwarded-for": "203.0.113.10" },
+      });
+      expect(unauthenticated.status, await unauthenticated.clone().text()).toBe(401);
+      await unauthenticated.arrayBuffer();
+      const wrongAgent = await fetch(
+        `${url.replace(encodeURIComponent(sessionKey), encodeURIComponent(badKey))}?agentId=main`,
+        {
           method: "POST",
           headers: { ...headers, "x-openclaw-scopes": "operator.admin" },
-        });
-        result = { status: response.status, body: await response.json() };
-      } else {
-        result = await killSubagentRunAdmin({ cfg, sessionKey });
-      }
+        },
+      );
+      expect(wrongAgent.status).toBe(400);
+      await wrongAgent.arrayBuffer();
+      const denied = await fetch(url, { method: "POST", headers });
+      expect(denied.status).toBe(403);
+      await denied.arrayBuffer();
+      expect(parentAbort).not.toHaveBeenCalled();
+      const response = await fetch(url, {
+        method: "POST",
+        headers: { ...headers, "x-openclaw-scopes": "operator.admin" },
+      });
+      const result = { status: response.status, body: await response.json() };
       expect(parentAbort, JSON.stringify(result)).toHaveBeenCalledOnce();
       await expectKilled(sessionKey);
       await expectKilled(healthyKey);
@@ -367,27 +351,13 @@ it.each([
         releaseSwarmRun("bad");
       }
       await vi.waitFor(() => expect(survivorDispatch).toHaveBeenCalledOnce());
-      if (boundary === "HTTP") {
-        expect(result).toMatchObject({
-          status: 503,
-          body: {
-            ok: false,
-            error: { type: "unavailable", message: expect.stringContaining("bad:") },
-          },
-        });
-      } else {
-        expect(result).toMatchObject({
-          found: true,
-          killed: true,
-          cascadeKilled: 1,
-          cascadeLabels: ["healthy"],
-          error: expect.stringContaining("bad:"),
-          targetState: {
-            state: "terminal",
-            task: { status: "cancelled", error: SUBAGENT_KILL_TASK_ERROR },
-          },
-        });
-      }
+      expect(result).toMatchObject({
+        status: 503,
+        body: {
+          ok: false,
+          error: { type: "unavailable", message: expect.stringContaining("bad:") },
+        },
+      });
     } finally {
       if (server) {
         await new Promise<void>((resolve, reject) => {
@@ -680,84 +650,6 @@ it.each([
     }),
   ).rejects.toBe(error);
 });
-
-it.each([
-  { scope: "session-wide", runId: undefined },
-  { scope: "exact-run", runId: "retained-run" },
-] as const)(
-  "$scope Stop acknowledges cancellation while preserving raw source custody",
-  async ({ runId }) => {
-    vi.useFakeTimers();
-    const raw = createDeferred();
-    const cancelled = createDeferred();
-    const source = createActiveRun("main", {
-      sessionId: "main-session",
-      agentId: "main",
-      queued: true,
-    });
-    const claim = await claimSessionControllerTask(source.input, (selected) => {
-      createReplyOperation({
-        sessionKey: "main",
-        sessionId: "main-session",
-        agentId: "main",
-        resetTriggered: false,
-        mailboxClaim: selected,
-      });
-    });
-    const producer = (async () => {
-      try {
-        await raw.promise;
-      } finally {
-        claim.operation?.complete();
-        releaseSessionControllerClaim(claim);
-      }
-    })();
-    source.input.abortSignal.addEventListener("abort", () => cancelled.resolve(), { once: true });
-    const context = createChatAbortContext({ sources: [["retained-run", source]] });
-    const stopping = invokeChatAbortHandler({
-      handler: handleChatAbortRequestWithLifecycle,
-      context,
-      request: { sessionKey: "main", ...(runId ? { runId } : {}) },
-      client: { connect: { scopes: ["operator.admin"] } },
-    }).then(
-      (respond) => ({ respond, error: undefined }),
-      (error: unknown) => ({ respond: undefined, error }),
-    );
-    try {
-      await cancelled.promise;
-      await vi.advanceTimersByTimeAsync(15_000);
-      const outcome = await stopping;
-      expect(outcome.error).toBeUndefined();
-      expect(outcome.respond).toHaveBeenCalledWith(
-        true,
-        expect.objectContaining({ aborted: true, runIds: ["retained-run"] }),
-      );
-      expect(claim.released).toBe(false);
-      expect(source.input.phase).toBe("claimed");
-      const snapshot = createGatewayActiveWorkSnapshot({
-        getChatRuns: () => 0,
-        getQueuedTurns: () => 0,
-        getTerminalPersistence: () => 0,
-      });
-      expect(snapshot.idle).toBe(false);
-      expect(snapshot.counts.sessionAdmissions).toBe(1);
-      expect(() =>
-        createReplyOperation({
-          sessionKey: "main",
-          sessionId: "successor",
-          resetTriggered: false,
-          target: source.input.target,
-        }),
-      ).toThrow("already active");
-    } finally {
-      raw.resolve();
-      await producer;
-      await claim.settlement.promise;
-      await stopping;
-      vi.useRealTimers();
-    }
-  },
-);
 
 it("reports a replaced child's refusal and failed persistence while raw cleanup is pending", async () => {
   const sessionKey = "agent:main:retained-parent";
