@@ -52,6 +52,7 @@ function expectBoundedThread(
       "features.multi_agent": false,
       "features.multi_agent_v2": false,
       "features.plugins": false,
+      "features.reasoning_effort_override": true,
       "features.recommended_plugins": false,
       "features.shell_tool": false,
       "features.standalone_web_search": false,
