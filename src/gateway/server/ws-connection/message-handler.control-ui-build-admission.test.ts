@@ -164,7 +164,12 @@ afterEach(() => {
 });
 
 describe("Control UI build admission over WebSocket", () => {
-  it.each([undefined, "stale-build"])("rejects build %s before admission", async (buildId) => {
+  it.each([
+    { buildId: undefined, protocol: PROTOCOL_VERSION },
+    { buildId: "stale-build", protocol: PROTOCOL_VERSION },
+    { buildId: "stale-build", protocol: PROTOCOL_VERSION + 1 },
+    { buildId: "stale-build", protocol: PROTOCOL_VERSION - 1 },
+  ])("rejects $protocol / $buildId", async ({ buildId, protocol }) => {
     const connectionWork = new GatewayConnectionWork();
     const wss = new WebSocketServer({ host: "127.0.0.1", port: 0 });
     await withDeadline(once(wss, "listening"), "listen");
@@ -242,8 +247,8 @@ describe("Control UI build admission over WebSocket", () => {
           id: "connect-legacy-build",
           method: "connect",
           params: {
-            minProtocol: PROTOCOL_VERSION,
-            maxProtocol: PROTOCOL_VERSION,
+            minProtocol: protocol,
+            maxProtocol: protocol,
             client: {
               id: "openclaw-control-ui",
               version: "2026.8.1",
@@ -263,13 +268,22 @@ describe("Control UI build admission over WebSocket", () => {
       expect(rejection).toMatchObject({
         ok: false,
         error: {
-          code: ErrorCodes.UNAVAILABLE,
-          message: "protocol mismatch: Control UI updated; reload this page to continue",
+          code: protocol === PROTOCOL_VERSION ? ErrorCodes.UNAVAILABLE : ErrorCodes.INVALID_REQUEST,
+          message: expect.stringContaining("protocol mismatch"),
           retryable: false,
           details: {
             code: ConnectErrorDetailCodes.PROTOCOL_MISMATCH,
             gatewayBuildId: "gateway-build",
             reloadRequired: true,
+            ...(protocol === PROTOCOL_VERSION
+              ? {}
+              : {
+                  clientMinProtocol: protocol,
+                  clientMaxProtocol: protocol,
+                  minProtocol: PROTOCOL_VERSION,
+                  maxProtocol: PROTOCOL_VERSION,
+                  expectedProtocol: PROTOCOL_VERSION,
+                }),
           },
         },
       });
@@ -286,7 +300,9 @@ describe("Control UI build admission over WebSocket", () => {
           params: {},
         }),
       );
-      expect(await withDeadline(closed, "socket close")).toBe(1008);
+      expect(await withDeadline(closed, "socket close")).toBe(
+        protocol === PROTOCOL_VERSION ? 1008 : 1002,
+      );
       expect(handler?.getClient()).toBeNull();
       expect(await getPairedDevice(device.id)).toBeNull();
       expect(upsertPresenceMock).not.toHaveBeenCalled();

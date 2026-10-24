@@ -773,6 +773,17 @@ only an `agentId` and omit `sessionKey`. Pending preparation returns a retryable
 startup refusal. Failed inspection keeps refusing delivery with the recorded
 repair guidance after startup work settles.
 
+Deferred startup retries classified SQLite lock failures during opening or session
+migration up to four attempts with cancellable backoff. Each retry checks deletion
+status and the original database file identity again; migration retries retain the
+completed opening, and publication retries do not repeat migration. Corruption,
+incompatible schemas, changed file identities, and mixed cleanup failures remain
+terminal. If locks persist through the retry budget, the agent remains degraded
+with `database locked by another process` and guidance to close competing processes
+and restart the Gateway. There is no periodic or on-demand in-process admission
+retry after exhaustion; a new Gateway startup retries admission. No schema or
+configuration changes are required.
+
 Startup deletion-journal checks use at most eight concurrent reads, so releasing
 more than 128 agents from preparation readiness does not exhaust the shared
 state-read pool. If other readers saturate that pool, startup retries only the

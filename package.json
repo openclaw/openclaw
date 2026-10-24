@@ -2335,7 +2335,8 @@
     "verify": "node --import ./scripts/tsx.mjs scripts/verify.mts"
   },
   "bundleDependencies": [
-    "chrome-devtools-mcp"
+    "chrome-devtools-mcp",
+    "playwright-core"
   ],
   "dependencies": {
     "@agentclientprotocol/sdk": "1.9.0",
