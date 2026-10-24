@@ -284,7 +284,8 @@ describe("visitor-access plugin lifecycle", () => {
 
   it("persists invitation metadata and a CAS session reservation across restart and renewal", async () => {
     vi.stubGlobal("fetch", createPolicyFetch().fetcher);
-    const first = registerPlugin();
+    const publicOrigin = "https://team.example.com";
+    const first = registerPlugin({}, { gateway: { ...gatewayConfig.gateway, publicOrigin } });
     await first.start();
     await first.settle();
     const readDirectory = first.gatewayRequest.getMockImplementation()!;
@@ -293,7 +294,9 @@ describe("visitor-access plugin lifecycle", () => {
         ? { profile: { id: "inviter", displayName: "Inviter" } }
         : readDirectory(method, params),
     );
-    await first.execute("visitor_invite", { email: "visitor@example.test" });
+    const firstInvite = await first.execute("visitor_invite", { email: "visitor@example.test" });
+    const invitationText = expect.stringMatching(/^Inviter invited you.*\nSign in at https/u);
+    expect(firstInvite.details).toMatchObject({ signInUrl: publicOrigin, invitationText });
     expect(first.gatewayRequest).toHaveBeenCalledWith(
       "users.self",
       {},

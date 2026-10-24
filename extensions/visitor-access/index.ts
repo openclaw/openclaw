@@ -4,6 +4,7 @@ import { VisitorPolicyClient } from "./src/cloudflare.js";
 import { visitorConfigSchema, visitorPluginSchema } from "./src/config.js";
 import { visitorErrorText } from "./src/errors.js";
 import type { VisitorGrant } from "./src/grant-record.js";
+import { resolveVisitorSignInUrl } from "./src/invite-result.js";
 import { profileUsesVisitorRole, resolveVisitorRole } from "./src/roles.js";
 import { visitorRuntimeStore, type VisitorRuntime } from "./src/runtime.js";
 import { createVisitorTools } from "./src/tools.js";
@@ -66,6 +67,7 @@ function registerVisitorPlugin(api: OpenClawPluginApi): void {
         return undefined;
       }
     },
+    readSignInUrl: () => resolveVisitorSignInUrl(api.runtime.config.current()),
     errorText: (error) => visitorErrorText(error, config.apiToken),
   };
 
