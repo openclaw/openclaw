@@ -1,25 +1,20 @@
 import { Show } from "solid-js";
 import type { AgentIdentityResult, AgentsListResult } from "../../api/types.ts";
-import { currentThemeBranding, subscribeThemeBranding } from "../../app/theme-branding.ts";
 import type { AuthenticatedUser } from "../../app/user-profile.ts";
 import { AgentIdentityAvatar } from "../../components/solid/identity-avatar.tsx";
 import { SettingsGroup } from "../../components/solid/settings-ui.tsx";
+import { projectThemeBranding } from "../../components/theme-brand-icon.tsx";
 import { resolveAgentTextAvatar } from "../../lib/agents/display.ts";
 import "../../components/solid/viewer-facepile.tsx";
 import { resolveAgentAvatarUrl } from "../../lib/avatar.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import { projectSource } from "../../lib/reactive/projection.ts";
 
 export function ProfileHero(props: {
   user?: AuthenticatedUser | null;
   row: AgentsListResult["agents"][number];
   identity: AgentIdentityResult | null | undefined;
 }) {
-  const branding = projectSource(currentThemeBranding, {
-    read: (read) => read(),
-    subscribe: (_read, notify) => subscribeThemeBranding(notify),
-    equality: Object.is,
-  });
+  const branding = projectThemeBranding();
   const agentAvatar = () => ({
     id: props.row.id,
     name: name(),

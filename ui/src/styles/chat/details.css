@@ -260,7 +260,10 @@ openclaw-chat-details[mobile] {
   font: inherit;
   text-align: start;
 }
-.chat-details__row > svg {
+.chat-details__row > svg,
+.chat-environment__action > svg,
+.chat-environment-mobile__row > svg,
+.chat-environment__machine-trigger svg {
   flex: none;
   width: 15px;
   height: 15px;
@@ -648,17 +651,6 @@ button.chat-details__process:is(:hover, :focus-visible) {
   flex: none;
   margin-inline-start: auto;
 }
-.chat-details .chat-pr__actions-trigger {
-  display: grid;
-  place-items: center;
-  width: 24px;
-  height: 24px;
-  padding: 4px;
-  border: 0;
-  border-radius: 5px;
-  background: transparent;
-  color: var(--muted);
-}
 .chat-details .chat-pr__actions-trigger > .oc-menu-item__label {
   display: flex;
   align-items: center;
@@ -809,19 +801,13 @@ button.chat-details__process:is(:hover, :focus-visible) {
   text-align: start;
   cursor: var(--cursor-action);
 }
-.chat-environment__action > span:not(.chat-environment__counts) {
+.chat-environment__action > span:not(.chat-environment__counts),
+.chat-environment__machine-trigger > .oc-menu-item__label > span {
   flex: 1;
   min-width: 0;
   overflow: hidden;
   text-overflow: clip;
   white-space: nowrap;
-}
-.chat-environment__action > svg,
-.chat-environment-mobile__row > svg {
-  flex: none;
-  width: 15px;
-  height: 15px;
-  color: var(--muted);
 }
 .chat-environment__action > svg:last-child {
   width: 12px;
@@ -891,9 +877,7 @@ button.chat-details__process:is(:hover, :focus-visible) {
   outline-offset: 2px;
 }
 
-.chat-environment__machine .chat-pane__placement-control {
-  display: block;
-}
+.chat-environment__machine .chat-pane__placement-control,
 .chat-environment__machine .chat-pane__placement-menu {
   display: block;
 }
@@ -903,17 +887,4 @@ button.chat-details__process:is(:hover, :focus-visible) {
   align-items: center;
   gap: var(--details-row-gap, 9px);
   min-width: 0;
-}
-.chat-environment__machine-trigger > .oc-menu-item__label > span {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: clip;
-  white-space: nowrap;
-}
-.chat-environment__machine-trigger svg {
-  flex: none;
-  width: 15px;
-  height: 15px;
-  color: var(--muted);
 }

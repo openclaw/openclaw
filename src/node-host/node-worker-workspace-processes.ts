@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
-import { throwIfSettledRejected } from "../infra/error-graph-internal.js";
+import { throwCollectedErrors } from "../infra/error-graph-internal.js";
 import { resolveExecutablePath } from "../infra/executable-path.js";
 import {
   decodeWindowsOutputBuffer,
@@ -58,8 +58,10 @@ type WorkspaceProcess = {
 };
 
 async function joinWorkspaceCleanup(operations: Promise<void>[]): Promise<void> {
-  const results = await Promise.allSettled(operations);
-  throwIfSettledRejected(results, "Workspace process cleanup failed");
+  const failures = (await Promise.allSettled(operations)).flatMap((outcome) =>
+    outcome.status === "rejected" ? [outcome.reason] : [],
+  );
+  throwCollectedErrors(failures, "Workspace process cleanup failed");
 }
 
 /** A workspace owns preview processes across tool calls and joins their trees before retirement. */

@@ -1,4 +1,3 @@
-import { createChangeListeners } from "../../../src/shared/listeners.js";
 import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
 import type { ApplicationGateway } from "./gateway.ts";
 
@@ -37,7 +36,7 @@ export function createGuestWelcome(options: GuestWelcomeOptions) {
   let loading = false;
   let stopped = false;
   let stopOwner: (() => void) | undefined;
-  const listeners = createChangeListeners();
+  const listeners = new Set<() => void>();
   const load = async () => {
     if (
       loading ||
@@ -50,7 +49,7 @@ export function createGuestWelcome(options: GuestWelcomeOptions) {
       const { GuestWelcome } = await import("./guest-welcome.ts");
       if (!stopped) {
         owner = new GuestWelcome(options);
-        owner.subscribe(listeners.publish);
+        owner.subscribe(() => listeners.forEach((listener) => listener()));
         stopOwner = owner.start();
       }
     } catch {
@@ -63,7 +62,10 @@ export function createGuestWelcome(options: GuestWelcomeOptions) {
       return owner?.presentation ?? HIDDEN;
     },
     retry: () => owner?.retry(),
-    subscribe: listeners.subscribe,
+    subscribe(listener: () => void): () => void {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
     start(): () => void {
       const stopGateway = options.gateway.subscribe(() => void load());
       void load();

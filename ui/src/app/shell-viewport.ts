@@ -1,4 +1,3 @@
-import { createChangeListeners } from "../../../src/shared/listeners.js";
 import { listen } from "../lib/reactive/listener.ts";
 
 const KEYBOARD_MIN_SHRINK = 80;
@@ -14,19 +13,22 @@ export type ShellViewportSnapshot = Readonly<{
 }>;
 
 let snapshot: ShellViewportSnapshot | undefined;
-const listeners = createChangeListeners();
+const listeners = new Set<() => void>();
 
 /** Read-only facts from the existing observer; subscribing never starts a detector. */
 export const shellViewport = {
   get snapshot(): ShellViewportSnapshot | undefined {
     return snapshot;
   },
-  subscribe: listeners.subscribe,
+  subscribe(notify: () => void): () => void {
+    listeners.add(notify);
+    return () => listeners.delete(notify);
+  },
 };
 
 function publish(next: ShellViewportSnapshot | undefined): void {
   snapshot = next;
-  listeners.publish();
+  listeners.forEach((notify) => notify());
 }
 
 function hasKeyboardFocus(): boolean {

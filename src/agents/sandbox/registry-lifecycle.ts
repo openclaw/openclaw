@@ -1,4 +1,4 @@
-import { runWithSqliteAsyncCleanup } from "../../infra/sqlite-lifecycle-errors.js";
+import { throwSqliteLifecycleErrors } from "../../infra/sqlite-lifecycle-errors.js";
 import type { DatabasePathIdentity } from "../../infra/sqlite-worker-identity.js";
 import { GatewayRetainedWorkScope } from "../../shared/async-work-scope.js";
 import { registerOpenClawStatePathAsyncResource } from "../../state/openclaw-state-db-cache.js";
@@ -92,28 +92,28 @@ export async function finishSandboxRegistryRemoval(
   if (!store) {
     throw new Error("Sandbox removal lost its original shared database");
   }
-  await runWithSqliteAsyncCleanup(
-    {
-      async close() {
-        try {
-          await store.close();
-        } finally {
-          active = false;
-        }
-      },
-    },
-    "Sandbox removal settlement and worker cleanup failed",
-    () =>
-      runSqliteWorkerStoreOperation(
-        store,
-        (scope) => scope.execute({ type: "sandboxRegistry.finishRemoval", input: entry }),
-        cleanupContext,
+  const errors: unknown[] = [];
+  try {
+    await runSqliteWorkerStoreOperation(
+      store,
+      (scope) => scope.execute({ type: "sandboxRegistry.finishRemoval", input: entry }),
+      cleanupContext,
+      assertOwned,
+      withSandboxRegistryPublication(
+        createSqliteWorkerWriteAdmission(assertOwned, [context.admission.databasePath]),
+        () => identity.key,
         assertOwned,
-        withSandboxRegistryPublication(
-          createSqliteWorkerWriteAdmission(assertOwned, [context.admission.databasePath]),
-          () => identity.key,
-          assertOwned,
-        ),
       ),
-  );
+    );
+  } catch (error) {
+    errors.push(error);
+  }
+  try {
+    await store.close();
+  } catch (error) {
+    errors.push(error);
+  } finally {
+    active = false;
+  }
+  throwSqliteLifecycleErrors(errors, "Sandbox removal settlement and worker cleanup failed");
 }

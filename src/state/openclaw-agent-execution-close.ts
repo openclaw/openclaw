@@ -1,8 +1,5 @@
 import { isPostgresSqlConnection } from "../infra/sql-connection.js";
-import {
-  runWithSqliteAsyncCleanup,
-  throwSqliteLifecycleErrors,
-} from "../infra/sqlite-lifecycle-errors.js";
+import { throwSqliteLifecycleErrors } from "../infra/sqlite-lifecycle-errors.js";
 import { sqliteReaderDatabasePathKey } from "../infra/sqlite-reader-lifecycle.js";
 import {
   onSqliteWalCheckpoint,
@@ -45,13 +42,18 @@ export function createAgentDatabaseExecutionCloser(
       const { sharedBorrow, ...state } = capture();
       receipt = undefined;
       await state.database?.walMaintenance.stop();
-      await runWithSqliteAsyncCleanup(
-        { close: () => sharedBorrow?.releaseAsync() },
-        "Agent database cleanup failed",
-        () => {
-          receipt = closeAgentDatabaseExecution({ ...state, releaseSharedBorrow: () => {} });
-        },
-      );
+      const errors: unknown[] = [];
+      try {
+        receipt = closeAgentDatabaseExecution({ ...state, releaseSharedBorrow: () => {} });
+      } catch (error) {
+        errors.push(error);
+      }
+      try {
+        await sharedBorrow?.releaseAsync();
+      } catch (error) {
+        errors.push(error);
+      }
+      throwSqliteLifecycleErrors(errors, "Agent database cleanup failed");
     },
   };
 }
