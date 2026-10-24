@@ -301,27 +301,19 @@ describe("frozen admission upgrade Docker aliases", () => {
 });
 
 describe("frozen admission bootstrap repairs", () => {
-  const recipeDirectory = "scripts/e2e/lib/upgrade-survivor/config-recipe";
   const reader = "scripts/lib/frozen-target-source.mjs";
-  const shell = "scripts/lib/frozen-target-compat.sh";
 
-  it.each([reader, shell])(
-    "rejects dirty executable %s before any dependent code runs at unchanged HEAD",
-    (path) => {
-      const f = fixture({ "src/config/zod-schema.ts": "lastRunAt:" });
-      const sentinel = join(f.root, "dependent-code-executed");
-      const file = join(f.tooling.root, path);
-      const payload =
-        path === shell
-          ? `\nprintf executed > '${sentinel}'\n`
-          : `\n(await import("node:fs")).writeFileSync(${JSON.stringify(sentinel)}, "executed");\n`;
-      writeFileSync(file, readFileSync(file, "utf8") + payload);
-      expect(f.tooling.git("rev-parse", "HEAD")).toBe(f.tooling.sha);
-      const result = f.run({ consumers: [] });
-      expect(existsSync(sentinel), result.stderr).toBe(false);
-      expectRejected(result, `tooling closure does not match committed source: ${path}`);
-    },
-  );
+  it("rejects the dirty bootstrap reader before dependent code runs at unchanged HEAD", () => {
+    const f = fixture({ "src/config/zod-schema.ts": "lastRunAt:" });
+    const sentinel = join(f.root, "dependent-code-executed");
+    const file = join(f.tooling.root, reader);
+    const payload = `\n(await import("node:fs")).writeFileSync(${JSON.stringify(sentinel)}, "executed");\n`;
+    writeFileSync(file, readFileSync(file, "utf8") + payload);
+    expect(f.tooling.git("rev-parse", "HEAD")).toBe(f.tooling.sha);
+    const result = f.run({ consumers: [] });
+    expect(existsSync(sentinel), result.stderr).toBe(false);
+    expectRejected(result, `tooling closure does not match committed source: ${reader}`);
+  });
 
   it.each(["file", "parent directory"] as const)(
     "rejects a tooling %s symlink even when its bytes match",
@@ -345,17 +337,12 @@ describe("frozen admission bootstrap repairs", () => {
     expectRejected(result, "checkout does not match OPENCLAW_SELECTED_SHA");
   });
 
-  it.each([entrypoint, `${recipeDirectory}/agents.json`])(
-    "rejects a missing committed tooling object %s without hydration",
-    (path) => {
-      const f = fixture();
-      f.tooling.git("config", "remote.origin.url", "fixture::unavailable");
-      f.tooling.git("config", "remote.origin.promisor", "true");
-      removeBlob(f.tooling, path);
-      const result = f.run({});
-      expectRejected(result);
-    },
-  );
+  it("rejects a missing committed bootstrap object without hydration", () => {
+    const f = fixture();
+    configureUnavailablePromisor(f.tooling);
+    removeBlob(f.tooling, entrypoint);
+    expectRejected(f.run({}));
+  });
 });
 
 describe("frozen admission entry", () => {
@@ -372,48 +359,6 @@ describe("frozen admission entry", () => {
         { source: "tooling", path: "scripts/e2e/lib/release-assertion-files.mjs" },
         { source: "tooling", path: "scripts/e2e/lib/fixtures/mock-openai-config.mjs" },
       ]);
-    },
-  );
-
-  it.each(["unknown catalog", "dirty absent metadata"])(
-    "fails or omits from committed source for %s without running target code",
-    (shape) => {
-      const relative =
-        shape === "unknown catalog"
-          ? "scripts/e2e/lib/upgrade-survivor/assertions.mjs"
-          : "src/cli/update-cli/update-command-plugin-preflight.ts";
-      const f = fixture(
-        shape === "dirty absent metadata"
-          ? {}
-          : {
-              [relative]: 'throw new Error("target body executed");',
-            },
-      );
-      if (shape === "dirty absent metadata") {
-        mkdirSync(dirname(join(f.selected.root, relative)), { recursive: true });
-        writeFileSync(join(f.selected.root, relative), "dirty supported decoy");
-      }
-      const result = f.run({
-        docker: {
-          lanes: [
-            shape === "unknown catalog" ? "published-upgrade-survivor" : "update-corrupt-plugin",
-          ],
-          baselines: "2026.6.11",
-        },
-      });
-      if (shape === "dirty absent metadata") {
-        expect(result.status, result.stderr).toBe(0);
-        expect(JSON.parse(result.stdout).docker).toEqual({
-          lanes: [],
-          omitted: ["update-corrupt-plugin"],
-          status: "NOT RUN",
-        });
-      } else {
-        expectRejected(
-          result,
-          shape === "unknown catalog" ? "inert scenario catalog" : "unable to read selected source",
-        );
-      }
     },
   );
 

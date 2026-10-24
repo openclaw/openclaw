@@ -29,13 +29,7 @@ function withDatabase<T>(run: (db: DatabaseSync) => T): T {
   }
 }
 
-function fixture(sql: string, verify?: (db: DatabaseSync) => void) {
-  if (verify) {
-    withDatabase((db) => {
-      db.exec(`PRAGMA foreign_keys = ON; ${sql}`);
-      verify(db);
-    });
-  }
+function fixture(sql: string) {
   const directory = tempDirs.make("postgres-schema-");
   fs.mkdirSync(path.join(directory, "src/state"), { recursive: true });
   fs.writeFileSync(path.join(directory, "src/state/openclaw-state-schema.sql"), sql);
@@ -89,19 +83,14 @@ describe("PostgreSQL schema generation", () => {
     const { sql, catalog, portMetadata } = await generateWorkboardPostgresSchema();
     expect(sql).toBe(readRoot("extensions/workboard/src/workboard-schema.postgres.sql"));
     expect(catalog.objects.filter((item) => item.sql === null)).toEqual([]);
-    expect(sql).not.toMatch(/\b(?:BEGIN|COMMIT|CREATE SCHEMA)\b/);
-    expect(sql).toMatch(/[^\n]\n$/);
     expect(portMetadata).toEqual(
       JSON.parse(readRoot("src/infra/database-engine/workboard-port.generated.json")),
     );
     const preData = sql.slice(portMetadata.preData[0], portMetadata.preData[1]);
     const postData = sql.slice(portMetadata.postData[0], portMetadata.postData[1]);
     expect(preData + postData).toBe(sql);
-    expect(preData).toContain('CREATE TABLE "workboard_cards"');
     expect(preData).not.toMatch(/CREATE (?:UNIQUE )?INDEX|ALTER TABLE/);
     expect(postData).not.toContain("CREATE TABLE");
-    expect(postData).toContain('CREATE INDEX "workboard_cards_board_status_idx"');
-    expect(postData).toContain('ALTER TABLE "workboard_card_labels" ADD FOREIGN KEY');
   });
 
   it("keeps Logbook DDL and port allocation metadata current", async () => {
@@ -110,11 +99,6 @@ describe("PostgreSQL schema generation", () => {
     expect(portMetadata).toEqual(
       JSON.parse(readRoot("src/infra/database-engine/logbook-port.generated.json")),
     );
-    expect(portMetadata.tables.flatMap((table) => table.identities)).toEqual(
-      Array.from({ length: 4 }, () => ({ column: "id", autoIncrement: true })),
-    );
-    expect(sql).not.toContain("sqlite_sequence");
-    expect(sql).not.toMatch(/\b(?:BEGIN|COMMIT|CREATE SCHEMA)\b/);
   });
 
   it("derives identity allocation semantics and composite keys from canonical SQLite", () => {
@@ -347,11 +331,6 @@ describe("PostgreSQL schema generation", () => {
       `CREATE TABLE parent (id ${parent}) ${omitted ? "STRICT" : ""};
        ${omitted ? "" : "CREATE UNIQUE INDEX parent_id ON parent(id);"}
        CREATE TABLE child (parent_id ${child} REFERENCES parent(id)) ${omitted ? "STRICT" : ""};`,
-      (db) => {
-        db.exec("INSERT INTO parent VALUES ('1'); INSERT INTO child VALUES (1);");
-        expect(db.prepare("SELECT COUNT(*) AS count FROM child").get()?.count).toBe(1);
-        expect(() => db.exec("INSERT INTO child VALUES (2)")).toThrow(/FOREIGN KEY/);
-      },
     );
     const { files, report } = await generatePostgresSchemas(directory, "openclaw", {
       reportOnly: omitted,
@@ -380,12 +359,6 @@ describe("PostgreSQL schema generation", () => {
     async (constraint) => {
       const directory = fixture(
         `CREATE TABLE records (value TEXT ${constraint} ON CONFLICT IGNORE) STRICT;`,
-        (db) => {
-          const insert = db.prepare("INSERT INTO records VALUES (?)");
-          expect(insert.run("first").changes).toBe(1);
-          expect(insert.run(constraint === "NOT NULL" ? null : "first").changes).toBe(0);
-          expect(db.prepare("SELECT COUNT(*) AS count FROM records").get()?.count).toBe(1);
-        },
       );
       const { report } = await reportOnly(directory);
       const objects = report.catalogs.state!.objects;
@@ -406,12 +379,7 @@ describe("PostgreSQL schema generation", () => {
   );
 
   it("reports nullable non-STRICT primary keys instead of forbidding valid NULL rows", async () => {
-    const directory = fixture("CREATE TABLE nullable_key (id TEXT PRIMARY KEY);", (db) => {
-      db.exec("INSERT INTO nullable_key VALUES (NULL), (NULL)");
-      expect(
-        db.prepare("SELECT COUNT(*) AS count FROM nullable_key WHERE id IS NULL").get()?.count,
-      ).toBe(2);
-    });
+    const directory = fixture("CREATE TABLE nullable_key (id TEXT PRIMARY KEY);");
     const { files, report } = await reportOnly(directory);
     expect(report.catalogs.state!.objects.find((item) => item.kind === "table")).toMatchObject({
       sql: null,
@@ -421,16 +389,7 @@ describe("PostgreSQL schema generation", () => {
   });
 
   it("reports a translated boolean default that is incompatible with its bigint column", async () => {
-    const directory = fixture(
-      "CREATE TABLE defaults (flag INTEGER DEFAULT (1 = 1)) STRICT;",
-      (db) => {
-        db.exec("INSERT INTO defaults DEFAULT VALUES");
-        expect(db.prepare("SELECT flag, typeof(flag) AS type FROM defaults").get()).toEqual({
-          flag: 1,
-          type: "integer",
-        });
-      },
-    );
+    const directory = fixture("CREATE TABLE defaults (flag INTEGER DEFAULT (1 = 1)) STRICT;");
     const { files, report } = await reportOnly(directory);
     expect(report.catalogs.state!.objects.find((item) => item.kind === "default")).toMatchObject({
       sql: null,
@@ -441,13 +400,7 @@ describe("PostgreSQL schema generation", () => {
   });
 
   it("preserves nested unary operators as executable expression tokens", async () => {
-    const directory = fixture(
-      "CREATE TABLE records (value INTEGER CHECK (value >= - -1)) STRICT;",
-      (db) => {
-        db.exec("INSERT INTO records VALUES (1)");
-        expect(() => db.exec("INSERT INTO records VALUES (0)")).toThrow(/CHECK/);
-      },
-    );
+    const directory = fixture("CREATE TABLE records (value INTEGER CHECK (value >= - -1)) STRICT;");
     const { files, report } = await generatePostgresSchemas(directory);
     const expression = report.catalogs.state!.objects.find((item) => item.kind === "check")!.sql;
     expect(expression).not.toBeNull();

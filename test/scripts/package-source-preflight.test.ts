@@ -46,13 +46,7 @@ type WorkflowStep = Partial<Record<"if" | "name" | "run" | "uses", string>> & {
   with?: Record<string, unknown>;
 };
 
-type WorkflowJob = {
-  env?: Record<string, string>;
-  outputs?: Record<string, unknown>;
-  steps: WorkflowStep[];
-  with?: Record<string, unknown>;
-};
-type Workflow = { jobs: Record<string, WorkflowJob> };
+type Workflow = { jobs: Record<string, { steps: WorkflowStep[] }> };
 
 function readWorkflow(file: string): Workflow {
   return parse(readFileSync(file, "utf8")) as Workflow;
@@ -67,7 +61,6 @@ function workflowStep(workflow: Workflow, job: string, name: string): WorkflowSt
 function jobSteps(file: string, job: string) {
   const workflow = readWorkflow(`.github/workflows/${file}.yml`);
   return {
-    workflow,
     step: (name: string) => workflowStep(workflow, job, name),
     before: (earlier: WorkflowStep, ...later: WorkflowStep[]) => {
       const index = workflow.jobs[job]!.steps.indexOf(earlier);
@@ -96,7 +89,6 @@ function workflowFixture(prefix: string) {
   const file = (...parts: string[]) => path.join(root, ...parts);
   mkdirSync(file("bin"));
   return {
-    root,
     file,
     executable: (name: string, script: string) =>
       writeFileSync(file("bin", name), `#!/usr/bin/env bash\nset -euo pipefail\n${script}\n`, {
