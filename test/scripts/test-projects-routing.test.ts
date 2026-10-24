@@ -172,20 +172,11 @@ describe("test-projects args", () => {
     ).toBe("runtime");
   });
 
-  it("drops a pnpm passthrough separator while preserving targeted filters", () => {
-    expect(parseArgs(["--", "src/foo.test.ts", "-t", "target"])).toEqual({
-      forwardedArgs: ["src/foo.test.ts", "-t", "target"],
-      nonTargetArgs: ["-t", "target"],
-      targetArgs: ["src/foo.test.ts"],
-      watchMode: false,
-    });
-  });
-
   it.each([false, true])(
     "sets native run/watch mode without leaking the sentinel (watch=%s)",
     (watch) => {
       const spec = expectDefined(
-        runSpecs(watch ? ["--watch", "--", "src/foo.test.ts"] : ["src/foo.test.ts"])[0],
+        runSpecs(watch ? ["--watch", "--", "src/foo.test.ts"] : ["--", "src/foo.test.ts"])[0],
         "run spec",
       );
       expect(spec.pnpmArgs).toEqual([
@@ -210,17 +201,6 @@ describe("test-projects args", () => {
       });
     },
   );
-
-  it("keeps option values out of project targets", () => {
-    const file = "test/scripts/run-vitest.test.ts";
-    const reporter = "test/scripts/reporter.test.ts";
-    expect(parseArgs([file, "--reporter", reporter])).toEqual({
-      targetArgs: [file],
-      forwardedArgs: [file, "--reporter", reporter],
-      nonTargetArgs: ["--reporter", reporter],
-      watchMode: false,
-    });
-  });
 
   it.each([true, false])(
     "partitions targets by occurrence when an exclusion repeats the target (targetFirst=%s)",

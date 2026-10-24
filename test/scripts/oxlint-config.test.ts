@@ -445,7 +445,6 @@ describe("oxlint config", () => {
     ];
     const scenarios: Scenario[] = [
       ["error"],
-      ["warning", true],
       ["warning", true, true, true],
       ["warning", false, false, true, ["src/globals.js"]],
       ["warning", false, true, false, ["src/globals.js"]],

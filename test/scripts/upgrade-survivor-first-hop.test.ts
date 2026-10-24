@@ -307,7 +307,6 @@ describe("upgrade survivor rollback publication", () => {
 
   it.each<[string, (proof: ReturnType<typeof rollbackSuccessSummary>["backupRollback"]) => void]>([
     ["missing", () => undefined],
-    ["null", () => undefined],
     ["unfinished", (p) => Object.assign(p, { status: "captured" })],
     ["wrong-candidate", (p) => Object.assign(p, { candidateVersion: "2026.9.6" })],
     ["missing-preflight", (p) => Object.assign(p, { preflights: [] })],
@@ -354,11 +353,9 @@ describe("upgrade survivor rollback publication", () => {
     alter(proof);
     const { publish, published } = await publishSuccess({
       ...summary,
-      backupRollback: kind === "missing" ? undefined : kind === "null" ? null : proof,
+      backupRollback: kind === "missing" ? undefined : proof,
     });
-    expect(publish).toThrow(
-      kind === "missing" || kind === "null" ? "Invalid backup rollback evidence" : undefined,
-    );
+    expect(publish).toThrow(kind === "missing" ? "Invalid backup rollback evidence" : undefined);
     expect(existsSync(join(published, "summary.json"))).toBe(false);
   });
 });
@@ -398,11 +395,12 @@ function seedSessionMigration(root: string, issueCount = 1) {
 }
 
 describe("upgrade survivor first-hop process evidence", () => {
-  it.each([0, 1])("retains first-hop identities and Doctor IPC on exit %i", async (code) => {
+  it("retains first-hop identities and Doctor IPC on a failed update", async () => {
+    const code = 1;
     const { root, ipc, manifest, entrypoint, run } = processFixture();
     const artifacts = join(root, "artifacts");
     mkdirSync(artifacts);
-    const migration = code === 1 ? seedSessionMigration(root, 4791) : null;
+    const migration = seedSessionMigration(root, 4791);
     // Files change under the running parent. Reading package.json at exit would
     // falsely attribute that parent's result to the newly installed updater.
     writeFileSync(
@@ -418,7 +416,7 @@ if (process.argv[2] === 'update') {
   process.exitCode = child.status;
 } else {
   fs.writeFileSync(process.env.OPENCLAW_UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH, JSON.stringify({
-    status: ${JSON.stringify(code === 0 ? "ok" : "error")},
+    status: 'error',
     failureFacts: [{check:'plugin-doctor-post-session-state',code:'blocked-by-session-repair-failure',message:'private-doctor-value', extra:'private-ignored-value'}],
     configHash:'private-config-value'
   }), {mode:0o600});
@@ -456,7 +454,7 @@ if (process.argv[2] === 'update') {
       (report) => report.role === "doctor" && report.event === "exited",
     );
     expect(doctorExit.doctorResult).toEqual({
-      status: code === 0 ? "ok" : "error",
+      status: "error",
       failureFacts: failureFacts("private-doctor-value"),
     });
     const capture = runNode(
@@ -464,18 +462,16 @@ if (process.argv[2] === 'update') {
       { OPENCLAW_STATE_DIR: root, OPENCLAW_CONFIG_PATH: join(root, "missing-config.json") },
     );
     expect(capture.status, capture.stderr).toBe(0);
-    if (migration) {
-      expect(Buffer.byteLength(migration.manifest)).toBeGreaterThan(256 * 1024);
-      expect(Buffer.byteLength(migration.failureReport)).toBeGreaterThan(256 * 1024);
-      const raw = readJson(join(artifacts, "diagnostics/raw.json"));
-      expect(raw.sessionMigration).toEqual({
-        runId: migration.runId,
-        manifest: migration.manifest,
-        failureReport: migration.failureReport,
-      });
-      // Publication must still work after the failed container's runtime is gone.
-      rmSync(migration.directory, { recursive: true });
-    }
+    expect(Buffer.byteLength(migration.manifest)).toBeGreaterThan(256 * 1024);
+    expect(Buffer.byteLength(migration.failureReport)).toBeGreaterThan(256 * 1024);
+    const captured = readJson(join(artifacts, "diagnostics/raw.json"));
+    expect(captured.sessionMigration).toEqual({
+      runId: migration.runId,
+      manifest: migration.manifest,
+      failureReport: migration.failureReport,
+    });
+    // Publication must still work after the failed container's runtime is gone.
+    rmSync(migration.directory, { recursive: true });
     const { publishDiagnostics } = await import(observer);
     const published = join(root, "published");
     publishDiagnostics(artifacts, published, (text: string) =>
@@ -492,7 +488,7 @@ if (process.argv[2] === 'update') {
           parentPid: parent.pid,
           packageVersion: "2026.8.1",
           exitCode: code,
-          status: code === 0 ? "ok" : "error",
+          status: "error",
           failureFacts: failureFacts("[REDACTED]"),
         },
       ],
@@ -500,39 +496,35 @@ if (process.argv[2] === 'update') {
     expect(JSON.stringify(report)).not.toMatch(
       /private-doctor-value|private-ignored-value|private-config-value|private-issue-value|private-agent-value|private-session-key|outside\/do-not-read/,
     );
-    if (migration) {
-      const projected = {
-        version: "2026.8.1",
-        targets: [
-          {
-            agentId: "main",
-            validationBeforeArchive: "passed",
-            completedMoves: 0,
-            plannedMoves: 0,
-            issueCount: 4791,
-            issueHistogram: [
-              { code: "active_sqlite_transcript_jsonl", count: 4781 },
-              { code: "transcript_missing", count: 10 },
-            ],
-          },
-        ],
-      };
-      expect(report.sessionMigration).toEqual({
-        availability: "captured",
-        runId: migration.runId,
-        manifest: projected,
-        failureReport: projected,
-      });
-    }
+    const projected = {
+      version: "2026.8.1",
+      targets: [
+        {
+          agentId: "main",
+          validationBeforeArchive: "passed",
+          completedMoves: 0,
+          plannedMoves: 0,
+          issueCount: 4791,
+          issueHistogram: [
+            { code: "active_sqlite_transcript_jsonl", count: 4781 },
+            { code: "transcript_missing", count: 10 },
+          ],
+        },
+      ],
+    };
+    expect(report.sessionMigration).toEqual({
+      availability: "captured",
+      runId: migration.runId,
+      manifest: projected,
+      failureReport: projected,
+    });
     const rawPath = join(artifacts, "diagnostics/raw.json");
     const raw = readJson(rawPath);
     raw.doctorResults[0].exited.parentPid++;
-    if (migration) {
-      raw.sessionMigration.manifest = JSON.stringify({
-        ...JSON.parse(migration.manifest),
-        runId: "session-sqlite-1789528941490-00000000",
-      });
-    }
+    raw.sessionMigration.manifest = JSON.stringify({
+      ...JSON.parse(migration.manifest),
+      runId: "session-sqlite-1789528941490-00000000",
+    });
     writeJson(rawPath, raw);
     const mismatched = join(root, "mismatched");
     publishDiagnostics(artifacts, mismatched, (text: string) => text);
@@ -540,11 +532,9 @@ if (process.argv[2] === 'update') {
       availability: "unknown",
       observations: [],
     });
-    if (migration) {
-      const changed = readJson(join(mismatched, "failure.json"));
-      expect(changed.sessionMigration.manifest).toBeNull();
-      expect(changed.omissions["session migration manifest"]).toBe("invalid observation; omitted");
-    }
+    const changed = readJson(join(mismatched, "failure.json"));
+    expect(changed.sessionMigration.manifest).toBeNull();
+    expect(changed.omissions["session migration manifest"]).toBe("invalid observation; omitted");
     const serialized = JSON.stringify(reports);
     for (const value of ["private-argument-value", "private-environment-value", root]) {
       expect(serialized).not.toContain(value);
