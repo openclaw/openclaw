@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
   cleanup: vi.fn(),
   tail: vi.fn(),
   compact: vi.fn(),
+  storage: vi.fn(),
   lifecycle: vi.fn(),
   exportTrajectory: vi.fn(),
   ownerLoaded: vi.fn(),
@@ -38,6 +39,10 @@ vi.mock("../../commands/sessions-tail.js", () => {
 vi.mock("../../commands/sessions-compact.js", () => {
   mocks.ownerLoaded();
   return { sessionsCompactCommand: mocks.compact };
+});
+vi.mock("../../commands/sessions-storage.js", () => {
+  mocks.ownerLoaded();
+  return { sessionsStorageCommand: mocks.storage };
 });
 vi.mock("../../commands/sessions-lifecycle.js", async (importOriginal) => {
   mocks.ownerLoaded();
@@ -217,6 +222,51 @@ it("forwards delete keys with leaf scope and confirmation", async () => {
     json: true,
   });
 });
+it.each([
+  [
+    "sessions --store /tmp/other.sqlite --all-agents storage status --json",
+    mocks.storage,
+    "`sessions storage status` does not support the parent `sessions` options --store, --all-agents; cold-storage RPCs are Gateway-wide and ignore session-list filters.",
+  ],
+  [
+    "sessions --agent work storage run --timeout 0 --json",
+    mocks.storage,
+    "`sessions storage run` does not support the parent `sessions` option --agent; cold-storage RPCs are Gateway-wide and ignore session-list filters.",
+  ],
+  ["sessions storage status --timeout 0 --json", mocks.storage, timeoutError],
+] as const)("rejects %s before loading the storage owner", async (args, owner, message) => {
+  const execution = run(args);
+  await expect(execution).rejects.toBeInstanceOf(ExpectedCliError);
+  await expect(execution).rejects.toMatchObject({ message });
+  expectNoCalls(owner, mocks.ownerLoaded, mocks.runtime.error, mocks.runtime.exit);
+});
+
+it("forwards storage status RPC options and inherits parent JSON", async () => {
+  await run(
+    "sessions --json storage status --url ws://gateway.test --token test-token --password test-password --timeout 45000",
+  );
+  expect(mocks.storage).toHaveBeenCalledExactlyOnceWith(
+    "status",
+    {
+      url: "ws://gateway.test",
+      token: "test-token",
+      password: "test-password",
+      timeout: "45000",
+      json: true,
+    },
+    mocks.runtime,
+  );
+});
+
+it("forwards storage run with leaf JSON", async () => {
+  await run("sessions storage run --json");
+  expect(mocks.storage).toHaveBeenCalledExactlyOnceWith(
+    "run",
+    { timeout: undefined, url: undefined, token: undefined, password: undefined, json: true },
+    mocks.runtime,
+  );
+});
+
 it("documents retained delete archives and local memory cleanup", () => {
   const sessions = program().commands.find((command) => command.name() === "sessions");
   const command = sessions?.commands.find((child) => child.name() === "delete");
