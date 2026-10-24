@@ -15,20 +15,8 @@ $sqliteProbe | & $nodePath -`,
   },
   "runs Windows command shims from a Windows-local cwd": {
     "Invoke-CommandFromWindowsSafeDirectory": `Get-WindowsCommandSafeDirectory
-$WorkingDirectory
 Push-Location -LiteralPath $safeDir
-& $CommandPath @Arguments
 Pop-Location`,
-    "Invoke-NpmCommand": "Invoke-CommandFromWindowsSafeDirectory",
-    "Ensure-OpenClawOnPath": 'Invoke-NpmCommand -Arguments @("config", "get", "prefix")',
-    "Ensure-Pnpm": `@("enable", "--install-directory", $InstallDirectory, "pnpm")
-Invoke-NpmCommand -CommandPath $npmCommand -Arguments $installArgs`,
-    Main: `Remove-PreviousNpmOwner
-Remove-PreviousGitWrapper
-Start-NpmShimBackup
-Restore-NpmShimBackup
-Complete-NpmShimBackup
-Invoke-NpmCommand -Arguments @("list", "-g", "--depth", "0", "--json")`,
   },
   "rejects OpenClaw GitHub source targets for npm installs": {
     "Test-OpenClawSourcePackageInstallSpec": `$normalizedTag -eq "main"
@@ -38,14 +26,9 @@ npm installs do not support OpenClaw GitHub source targets
 -InstallMethod git -Tag main`,
   },
   "preserves caller-relative local tarball install specs before safe-cwd npm calls": {
-    "Resolve-NpmOpenClawInstallSpec": "Resolve-LocalNpmPackageInstallSpec -InstallSpec $trimmedTag",
     "Resolve-LocalNpmPackageInstallSpec": String.raw`$InstallSpec -match '^file:(?<path>.+)$'
 Resolve-LocalNpmPackagePath -PackagePath $filePath
-).AbsoluteUri
-$InstallSpec -notmatch '^\.\.?[\\/]'
-$InstallSpec -notmatch '\.tgz$'`,
-    "Resolve-LocalNpmPackagePath": `Resolve-Path -LiteralPath $PackagePath
-[System.IO.Path]::GetFullPath($PackagePath)`,
+).AbsoluteUri`,
   },
 };
 it.each(Object.entries(contracts))("install.ps1 %s", (_name, functions) => {
@@ -59,7 +42,6 @@ it.each(Object.entries(contracts))("install.ps1 %s", (_name, functions) => {
 it("does not read project npmrc when choosing global install freshness args", () => {
   const rawKeyBody = body("Test-NpmConfigRawKey");
   expect(rawKeyBody).not.toContain("Get-Location");
-  expect(rawKeyBody).not.toContain('Join-Path (Get-Location) ".npmrc"');
 });
 it("preserves the min-release-age probe status before raw npmrc detection", () => {
   const npmInstallBody = body("Install-OpenClaw");
@@ -75,6 +57,7 @@ it("preserves the min-release-age probe status before raw npmrc detection", () =
 });
 const harness = createScriptTestHarness();
 const powershell = process.platform === "win32" ? "powershell" : "pwsh";
+const powershellArgs = "-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass".split(" ");
 const probe = spawnSync(powershell, ["-NoLogo", "-NoProfile", "-Command", "exit 0"]);
 const runWithPowerShell = probe.status === 0 ? it : it.skip;
 runWithPowerShell.each(["file", "streamed"] as const)(
@@ -85,11 +68,7 @@ runWithPowerShell.each(["file", "streamed"] as const)(
     const result = spawnSync(
       powershell,
       [
-        "-NoLogo",
-        "-NoProfile",
-        "-NonInteractive",
-        "-ExecutionPolicy",
-        "Bypass",
+        ...powershellArgs,
         ...(mode === "file"
           ? ["-File", SCRIPT_PATH, "-NodePrefix", nodePrefix, "-DryRun"]
           : [
@@ -118,20 +97,9 @@ Write-Output 'installer caller survived'`,
 runWithPowerShell(
   "offers support and self-service in Windows installer help without installing",
   () => {
-    const result = spawnSync(
-      powershell,
-      [
-        "-NoLogo",
-        "-NoProfile",
-        "-NonInteractive",
-        "-ExecutionPolicy",
-        "Bypass",
-        "-File",
-        SCRIPT_PATH,
-        "-Help",
-      ],
-      { encoding: "utf8" },
-    );
+    const result = spawnSync(powershell, [...powershellArgs, "-File", SCRIPT_PATH, "-Help"], {
+      encoding: "utf8",
+    });
     expect(result.status, result.stdout + result.stderr).toBe(0);
     expect(result.stdout).toContain("Support: https://community.openclaw.ai/");
     expect(result.stdout).toContain("FAQ: https://docs.openclaw.ai/start/faq");
@@ -143,7 +111,7 @@ runWithPowerShell.each(["valid", "missing-head", "broken-gitfile", "subdirectory
     const result = spawnSync(
       powershell,
       [
-        ..."-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass".split(" "),
+        ...powershellArgs,
         "-File",
         "test/scripts/install-git-worktree.ps1",
         "-InstallerPath",

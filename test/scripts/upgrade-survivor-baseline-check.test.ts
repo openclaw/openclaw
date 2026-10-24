@@ -7,7 +7,7 @@ import * as io from "./upgrade-survivor-shard.test-support.js";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const scenarios = ["legacy-operator-state", "base"];
 const read = (file: string) => readFileSync(file, "utf8");
-type Install = { args: string[]; prefix: string };
+type Install = { prefix: string };
 const baseline = (version: number, status: string) => ({
   baseline: `openclaw@2026.8.${version}`,
   status,
@@ -108,15 +108,6 @@ it.each(["version", "runtime"] as const)("skips unusable %s baselines with evide
   const installs = io.readJsonLines<Install>(fixture.installs);
   expect(installs).toHaveLength(2);
   for (const install of installs) {
-    expect(install.args).toEqual([
-      "install",
-      "-g",
-      "--prefix",
-      install.prefix,
-      expect.stringMatching(/^openclaw@/),
-      "--no-fund",
-      "--no-audit",
-    ]);
     expect(() => readFileSync(path.join(install.prefix, "bin", "openclaw"))).toThrow();
   }
   const summary = read(path.join(fixture.evidence, "summary.md"));

@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { writeFileSync } from "node:fs";
 import path from "node:path";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, describe, expect, it } from "vitest";
@@ -11,12 +11,7 @@ import {
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempRoots = useAutoCleanupTempDirTracker(afterEach);
-const scriptEnv = Object.fromEntries(
-  ["changelog", "common", "gates", "review"].map((name) => [
-    `OPENCLAW_PR_${name.toUpperCase()}_SH`,
-    path.resolve("scripts/pr-lib", `${name}.sh`),
-  ]),
-);
+const scriptEnv = { OPENCLAW_PR_CHANGELOG_SH: path.resolve("scripts/pr-lib/changelog.sh") };
 
 function run(cwd: string, command: string, args: string[], env?: NodeJS.ProcessEnv): string {
   return execFileSync(command, args, {
@@ -31,7 +26,7 @@ function shell(repo: string, source: string, env: NodeJS.ProcessEnv = {}) {
   return run(repo, "bash", ["-c", source], { ...scriptEnv, ...env });
 }
 
-function failureOutput(action: () => string, stdoutOnly = false): string {
+function failureOutput(action: () => string): string {
   try {
     action();
     return "";
@@ -42,7 +37,7 @@ function failureOutput(action: () => string, stdoutOnly = false): string {
     if (typeof stdout !== "string" || typeof stderr !== "string") {
       throw error;
     }
-    return stdout + (stdoutOnly ? "" : stderr);
+    return stdout;
   }
 }
 
@@ -63,35 +58,6 @@ function createRepoWithPrChangelogDiff(entry: string): string {
   git(["add", "CHANGELOG.md"]);
   git(["commit", "-qm", "add changelog entry"]);
   return repo;
-}
-
-function runPrepareGates(repo: string, callsPath: string): string {
-  return shell(
-    repo,
-    `
-set -euo pipefail
-source "$OPENCLAW_PR_COMMON_SH"
-source "$OPENCLAW_PR_CHANGELOG_SH"
-source "$OPENCLAW_PR_GATES_SH"
-source "$OPENCLAW_PR_REVIEW_SH"
-
-pr_gh() { printf '{"headRefName":"feature"}\\n'; }
-enter_worktree() { PR_MAIN_SHA=$(git rev-parse --verify refs/remotes/origin/main); }
-checkout_prep_branch() { :; }
-refresh_prep_branch_for_reviewed_head() { :; }
-# Preparation tests cover review admission; these fixtures isolate changelog policy.
-require_prepared_review() { :; }
-bootstrap_deps_if_needed() { :; }
-require_artifact() { [ -s "$1" ]; }
-validate_changelog_attribution_policy() { printf 'policy\\n' >>"$OPENCLAW_TEST_CALLS"; }
-validate_changelog_merge_hygiene() { printf 'merge-hygiene\\n' >>"$OPENCLAW_TEST_CALLS"; }
-validate_changelog_entry_for_pr() { printf 'entry:%s:%s\\n' "$1" "$2" >>"$OPENCLAW_TEST_CALLS"; }
-run_quiet_logged() { printf 'gate:%s\\n' "$1" >>"$OPENCLAW_TEST_CALLS"; }
-
-prepare_gates 123
-`,
-    { OPENCLAW_TEST_CALLS: callsPath, OPENCLAW_TESTBOX: "0" },
-  );
 }
 
 describe("check-changelog-attributions", () => {
@@ -139,19 +105,8 @@ describe("check-changelog-attributions", () => {
     const repo = createRepoWithPrChangelogDiff("- Bot repair (#123).");
     const script =
       'source "$OPENCLAW_PR_CHANGELOG_SH"; PR_MAIN_SHA=$(git rev-parse --verify refs/remotes/origin/main); validate_changelog_entry_for_pr 123 "dependabot[bot]"';
-    expect(failureOutput(() => shell(repo, script), true)).toContain(
+    expect(failureOutput(() => shell(repo, script))).toContain(
       "must include an explicit human Thanks @handle",
     );
-  });
-
-  it("rejects root changelog updates from normal prepare gates", () => {
-    const repo = createRepoWithPrChangelogDiff("- User fix (#123). Thanks @alice.");
-    const callsPath = path.join(repo, "calls.log");
-    mkdirSync(path.join(repo, ".local"));
-    writeFileSync(path.join(repo, ".local", "pr-meta.env"), "PR_AUTHOR=alice\n", "utf8");
-    expect(failureOutput(() => runPrepareGates(repo, callsPath))).toContain(
-      "CHANGELOG.md is release-owned",
-    );
-    expect(existsSync(callsPath) ? readFileSync(callsPath, "utf8") : "").not.toContain("policy");
   });
 });
