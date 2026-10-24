@@ -14,7 +14,9 @@ useChatSendBrowserFixture();
 
 function useMemoryOnlyStorage() {
   vi.useFakeTimers();
-  onTestFinished(() => vi.useRealTimers());
+  onTestFinished(() => {
+    vi.useRealTimers();
+  });
   vi.spyOn(sessionStorage, "setItem").mockImplementation(() => {
     throw new Error("quota");
   });
