@@ -1,5 +1,7 @@
 // Builds the reusable AI package separately to keep provider bundling out of
 // the already-parallel main package graph.
+import fs from "node:fs";
+import path from "node:path";
 import type { UserConfig } from "tsdown";
 import { createDeclarationBoundaryHooks } from "./scripts/lib/tsdown-declaration-boundary.mts";
 import { cacheTsdownRuntimeConfigs } from "./scripts/lib/tsdown-runtime-cache.mts";
@@ -49,7 +51,22 @@ const config = {
   env: { NODE_ENV: "production" },
   format: "esm",
   outDir: "packages/ai/dist",
-  copy: [{ from: "node_modules/@mistralai/mistralai/LICENSE", rename: "mistral.LICENSE" }],
+  plugins: [
+    {
+      // The bundled Mistral SDK is Apache-2.0. Emit its license as a bundle asset, not a
+      // tsdown copy: the runtime cache restores only outputs the bundler reports.
+      name: "openclaw:mistral-license",
+      buildStart() {
+        const license = path.resolve("node_modules/@mistralai/mistralai/LICENSE");
+        this.addWatchFile(license);
+        this.emitFile({
+          type: "asset",
+          fileName: "mistral.LICENSE",
+          source: fs.readFileSync(license),
+        });
+      },
+    },
+  ],
   platform: "node",
   target: "node22",
   deps: {

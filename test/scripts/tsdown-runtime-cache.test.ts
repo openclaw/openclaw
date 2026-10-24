@@ -115,11 +115,19 @@ it("restores unchanged package artifacts and invalidates changed compiler inputs
   expect(fs.existsSync(output("b"))).toBe(false);
 });
 
-it("leaves direct builds and declaration configurations with the compiler", () => {
+it("leaves direct builds, declaration and copy configurations with the compiler", () => {
   const config: UserConfig = { entry: { index: "index.ts" }, dts: false };
   expect(cacheTsdownRuntimeConfigs([config])).toEqual([config]);
   vi.stubEnv(TSDOWN_CACHE_PENDING_ENV, "unused");
   vi.stubEnv("OPENCLAW_RUN_NODE_SKIP_DTS_BUILD", "1");
   const declaration = { ...config, dts: true };
   expect(cacheTsdownRuntimeConfigs([declaration])).toEqual([declaration]);
+  // tsdown copies outside the reported chunks, so a cached restore would drop them.
+  const root = createTempDir("tsdown-runtime-cache-copy-");
+  fs.writeFileSync(path.join(root, "package.json"), '{"type":"module"}');
+  vi.spyOn(process, "cwd").mockImplementation(() => root);
+  vi.stubEnv("BUILD_ALL_CACHE_ROOT", createTempDir("tsdown-runtime-cache-copy-store-"));
+  const copied = { ...config, outDir: "packages/a/dist", copy: ["LICENSE"] };
+  cacheTsdownRuntimeConfigs([copied]);
+  expect(copied).toEqual({ ...config, outDir: "packages/a/dist", copy: ["LICENSE"] });
 });

@@ -41,6 +41,10 @@ it("streams Mistral from the built AI package without installing the SDK", async
     expect(fs.readFileSync(path.join(outDir, "mistral.LICENSE"), "utf8")).toContain(
       "Apache License",
     );
+    // The runtime build cache records and restores only reported bundle outputs.
+    expect(bundles.flatMap((bundle) => bundle.chunks.map((chunk) => chunk.fileName))).toContain(
+      "mistral.LICENSE",
+    );
     const script = `
       import assert from "node:assert/strict";
       import { registerHooks } from "node:module";

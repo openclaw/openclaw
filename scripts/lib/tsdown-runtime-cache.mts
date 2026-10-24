@@ -31,7 +31,8 @@ export function cacheTsdownRuntimeConfigs(configs: UserConfig[]): UserConfig[] {
     (config) => !filters.length || filters.includes(config.name ?? ""),
   );
   // Declaration graphs and CLI overrides keep their original compiler ownership.
-  if (!selected.length || selected.some((config) => config.dts)) {
+  // tsdown copies files outside the reported chunks, so a restore would drop them.
+  if (!selected.length || selected.some((config) => config.dts || config.copy)) {
     return configs;
   }
   const groups = new Map<string, UserConfig[]>();
