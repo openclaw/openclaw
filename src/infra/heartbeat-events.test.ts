@@ -95,6 +95,31 @@ describe("heartbeat events", () => {
     },
   );
 
+  it("keeps an astral automation summary whole at the preview cap", () => {
+    emitLegacyHeartbeatCronOutcome({
+      jobId: "converted",
+      action: "finished",
+      status: "ok",
+      completionStatus: "succeeded",
+      delivered: true,
+      summary: `${"s".repeat(1999)}\u{1F600}summary tail`,
+    });
+    expect(getLastHeartbeatEvent()?.preview).toBe("s".repeat(1999));
+  });
+
+  it("keeps an automation summary that fits the preview cap unchanged", () => {
+    const summary = `${"s".repeat(1998)}\u{1F600}`;
+    emitLegacyHeartbeatCronOutcome({
+      jobId: "converted",
+      action: "finished",
+      status: "ok",
+      completionStatus: "succeeded",
+      delivered: true,
+      summary,
+    });
+    expect(getLastHeartbeatEvent()?.preview).toBe(summary);
+  });
+
   it("delivers events to the Gateway callback and isolates its failures", () => {
     const seen: string[] = [];
     heartbeatNotifications.onEvent = () => {
