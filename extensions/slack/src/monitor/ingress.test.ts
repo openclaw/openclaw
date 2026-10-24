@@ -186,7 +186,11 @@ describe("Slack durable ingress", () => {
         expect(order).toEqual(["ack-start", "ack-complete", "dispatch"]);
       } finally {
         ackGate.resolve();
-        await receiving.finally(() => ingress.stop());
+        try {
+          await receiving;
+        } finally {
+          await ingress.stop();
+        }
       }
     });
   });
