@@ -314,7 +314,11 @@ function report(metadata, result) {
   console.log(
     JSON.stringify({
       protocol: "sqlite-reply-transfer-v2",
-      mode: values.allocations ? "allocation" : "untraced",
+      mode: values.allocations
+        ? "allocation"
+        : process.execArgv.includes("--trace-gc-nvp")
+          ? "traced"
+          : "untraced",
       node: process.version,
       loadavg: loadavg(),
       ...metadata,
