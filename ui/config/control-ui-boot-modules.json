@@ -1742,6 +1742,7 @@
   "ui/src/pages/chat/components/chat-transcript-virtualizer-host.ts",
   "ui/src/pages/chat/components/chat-transcript-work-previews.ts",
   "ui/src/pages/chat/components/chat-turn-video-gallery.ts",
+  "ui/src/pages/chat/components/chat-work-group-summary.tsx",
   "ui/src/pages/chat/components/chat-working-indicator-surprise.ts",
   "ui/src/pages/chat/components/chat-working-indicator.tsx",
   "ui/src/pages/chat/components/chat-workspace-conflict.tsx",

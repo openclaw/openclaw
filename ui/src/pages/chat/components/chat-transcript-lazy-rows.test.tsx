@@ -24,7 +24,7 @@ it("loads stream and run rows without losing the adjacent message or the latest 
     { role: "user", content: "Keep this message", timestamp: 1 },
     "user",
   );
-  const groupOptions = { onReply: () => {} };
+  const groupOptions = { showReasoning: false, onReply: () => {} };
   const stable = row("message", { kind: "group", group: message, options: groupOptions });
   const initial = row("tail", {
     kind: "group",
@@ -32,7 +32,7 @@ it("loads stream and run rows without losing the adjacent message or the latest 
       { role: "assistant", content: "Before the run", timestamp: 2 },
       "assistant",
     ),
-    options: {},
+    options: { showReasoning: false },
   });
   const view = await mountTestTranscript("lazy-transcript", [stable, initial]);
   try {
@@ -113,7 +113,7 @@ it("loads stream and run rows without losing the adjacent message or the latest 
         },
         options: {
           streamOptions: {},
-          renderGroupOptions: () => ({}),
+          renderGroupOptions: () => ({ showReasoning: false }),
           isWorkExpanded: () => false,
           onToggleWork: () => {},
         },

@@ -6,6 +6,7 @@ import { ActivityGroup, MessageGroup } from "./chat-message-group-view.tsx";
 import { StreamGroup, UnplacedSubagentWait } from "./chat-message-stream-view.tsx";
 import { RealtimeTalkConversation } from "./chat-realtime-controls.tsx";
 import { TranscriptWorkPreviews } from "./chat-transcript-content.tsx";
+import { WorkGroupSummary } from "./chat-work-group-summary.tsx";
 import { TurnRecapRow } from "./chat-working-indicator.tsx";
 
 export const nativeRows = {
@@ -13,7 +14,7 @@ export const nativeRows = {
   group: MessageGroup,
   activity: ActivityGroup,
   stream: StreamGroup,
-  work: lazy(() => import("./chat-work-group-summary.tsx"), { export: "WorkGroupSummary" }),
+  work: WorkGroupSummary,
   frame: AgentRunFrame,
   wait: UnplacedSubagentWait,
   divider: lazy(() => import("./chat-divider.tsx"), { export: "ChatDivider" }),

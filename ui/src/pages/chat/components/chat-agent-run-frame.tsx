@@ -40,11 +40,9 @@ import {
 import { resolveGroupReplyLine } from "./chat-reply-attribution.ts";
 import { BrowserTabPreviews } from "./chat-tool-cards.solid.tsx";
 import { selectWorkGroupBrowserTabPreviews } from "./chat-tool-cards.ts";
+import { WorkGroupSummary } from "./chat-work-group-summary.tsx";
 import "../../../styles/chat/source-previews.css";
 
-const WorkGroupSummary = lazy(() => import("./chat-work-group-summary.tsx"), {
-  export: "WorkGroupSummary",
-});
 const ChatSourcePreviews = lazy(() => import("./chat-source-previews.tsx"), {
   export: "ChatSourcePreviews",
 });
@@ -315,19 +313,17 @@ function RunFrame(props: FrameProps) {
             <Match when={workPart()}>
               {(work) => (
                 <>
-                  <ChatLazyBoundary>
-                    <WorkGroupSummary
-                      item={timedWork()?.key === work().key ? timedWork()! : work()}
-                      options={{
-                        expanded: options().isWorkExpanded(work().key),
-                        bubbleMode: options().streamOptions.bubbleMode,
-                        onToggle: () =>
-                          options().onToggleWork(work().key, options().isWorkExpanded(work().key)),
-                        presentation: "continuation",
-                        browserTabPreviews: state().workPreviews.get(work().key),
-                      }}
-                    />
-                  </ChatLazyBoundary>
+                  <WorkGroupSummary
+                    item={timedWork()?.key === work().key ? timedWork()! : work()}
+                    options={{
+                      expanded: options().isWorkExpanded(work().key),
+                      bubbleMode: options().streamOptions.bubbleMode,
+                      onToggle: () =>
+                        options().onToggleWork(work().key, options().isWorkExpanded(work().key)),
+                      presentation: "continuation",
+                      browserTabPreviews: state().workPreviews.get(work().key),
+                    }}
+                  />
                   <Show when={options().isWorkExpanded(work().key)}>
                     <For each={work().groups} keyed={(group) => group.key}>
                       {(group) => (
