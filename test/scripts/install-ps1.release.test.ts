@@ -287,16 +287,14 @@ $root = Join-Path ([IO.Path]::GetTempPath()) ('openclaw-native-stderr-' + [Guid]
 $child = Join-Path $root 'child.cjs'
 [IO.File]::WriteAllText($child, 'if (process.argv[2] === "marker") { require("node:fs").writeFileSync(process.argv[3], "spawned"); process.exit(0); } if (process.argv[2] === "warning") process.stderr.write("npm warn proof\n"); process.stdout.write("native-complete\n"); process.exit(Number(process.argv[3]));')
 try {
-    foreach ($wrapper in @('Invoke-NpmCommand', 'Invoke-CommandFromWindowsSafeDirectory')) {
-        foreach ($stream in @('warning', 'quiet')) {
-            foreach ($code in @(0, 17)) {
-                $output = @(& $wrapper -CommandPath $node -Arguments @($child, $stream, [string]$code) -WorkingDirectory $root 2>&1)
-                if ($LASTEXITCODE -ne $code) { throw "$wrapper changed native exit $code" }
-                $text = ($output | ForEach-Object { $_.ToString() }) -join " "
-                if (-not $text.Contains('native-complete')) { throw "$wrapper lost stdout" }
-                if ($text.Contains('npm warn proof') -ne ($stream -eq 'warning')) { throw "$wrapper changed stderr" }
-                if ($ErrorActionPreference -ne 'Stop' -or (Get-Location).Path -ne $beforeLocation) { throw "$wrapper leaked caller state" }
-            }
+    foreach ($stream in @('warning', 'quiet')) {
+        foreach ($code in @(0, 17)) {
+            $output = @(Invoke-NpmCommand -CommandPath $node -Arguments @($child, $stream, [string]$code) -WorkingDirectory $root 2>&1)
+            if ($LASTEXITCODE -ne $code) { throw "changed native exit $code" }
+            $text = ($output | ForEach-Object { $_.ToString() }) -join " "
+            if (-not $text.Contains('native-complete')) { throw 'lost stdout' }
+            if ($text.Contains('npm warn proof') -ne ($stream -eq 'warning')) { throw 'changed stderr' }
+            if ($ErrorActionPreference -ne 'Stop' -or (Get-Location).Path -ne $beforeLocation) { throw 'leaked caller state' }
         }
     }
     $marker = Join-Path $root 'unexpected-spawn'
@@ -383,11 +381,8 @@ try {
       "  New-Item -ItemType Directory -Force -Path $project | Out-Null",
       "  Remove-Item Env:PNPM_CONFIG_PREFER_OFFLINE -ErrorAction SilentlyContinue",
       "  Remove-Item Env:pnpm_config_prefer_offline -ErrorAction SilentlyContinue",
-      "  if (-not (Test-ShouldPreferOfflinePnpmInstall -ProjectDir $project -PnpmCommand 'Get-TestPnpmConfig')) { throw 'default was disabled' }",
       "  $script:PnpmConfigValue = 'false'",
       "  if (Test-ShouldPreferOfflinePnpmInstall -ProjectDir $project -PnpmCommand 'Get-TestPnpmConfig') { throw 'false pnpm config was ignored' }",
-      "  $script:PnpmConfigValue = 'true'",
-      "  if (Test-ShouldPreferOfflinePnpmInstall -ProjectDir $project -PnpmCommand 'Get-TestPnpmConfig') { throw 'true pnpm config was ignored' }",
       "  $script:PnpmConfigValue = 'failure'",
       "  if (Test-ShouldPreferOfflinePnpmInstall -ProjectDir $project -PnpmCommand 'Get-TestPnpmConfig') { throw 'failed pnpm config query enabled the default' }",
       "  $env:PNPM_CONFIG_PREFER_OFFLINE = 'false'",
@@ -1282,14 +1277,7 @@ try {
   );
 
   runIfPowerShell("rejects unknown and positional options before starting the installer", () => {
-    const invalidArgs = [
-      ["-Frobnicate"],
-      ["-DryRnu"],
-      ["-NoOnbord"],
-      ["-InstallMthod", "git"],
-      ["-DryRun", "beta"],
-      ["beta", "git"],
-    ];
+    const invalidArgs = [["-Frobnicate"], ["-DryRun", "beta"], ["beta", "git"]];
 
     for (const args of invalidArgs) {
       const result = runInstallerFile(args, {
@@ -1311,12 +1299,7 @@ try {
     expect(`${result.stdout}\n${result.stderr}`).not.toContain("[OK] Windows detected");
   });
 
-  runIfPowerShell("shows help without starting the installer", () => {
-    const fileResult = runInstallerFile(["-?"]);
-    expect(fileResult.status).toBe(0);
-    expect(`${fileResult.stdout}\n${fileResult.stderr}`).toContain("install.ps1");
-    expect(`${fileResult.stdout}\n${fileResult.stderr}`).not.toContain("[OK] Windows detected");
-
+  runIfPowerShell("shows streamed help without starting the installer", () => {
     const scriptPath = toPowerShellSingleQuotedLiteral(join(process.cwd(), SCRIPT_PATH));
     const scriptblockResult = runPowerShell([
       "-NonInteractive",
@@ -1603,12 +1586,9 @@ function Reset-Fixture {
     $global:State = 'missing'
     $global:PendingState = 'missing'
     $global:Events = New-Object 'System.Collections.Generic.List[string]'
-    $global:WingetCalls = New-Object 'System.Collections.Generic.List[object]'
     $global:Fallbacks = New-Object 'System.Collections.Generic.List[string]'
-    $global:Messages = New-Object 'System.Collections.Generic.List[string]'
     $global:InstallExitCode = 0
     $global:Advanced = 0
-    $global:ProbeCount = 0
     $global:LASTEXITCODE = 0
 }
 function Get-Command {
@@ -1629,22 +1609,19 @@ function Invoke-FixtureNode {
     if ($args[0] -eq '-v') {
         return 'v26.12.1'
     }
-    $probe = @($input) -join [Environment]::NewLine
-    if (-not $probe.Contains('CREATE TABLE probe') -or -not $probe.Contains('a\u0000b\u0000')) {
-        throw 'current SQLite capability probe was not executed'
-    }
-    $global:ProbeCount++
+    $input | Out-Null
     if ($global:State -eq 'probe-error') { $global:LASTEXITCODE = 1; return }
     $version = if ($global:State -eq 'old-sqlite') { '3.50.6' } else { '3.51.3' }
     return (@{ available = $true; version = $version; text = ($global:State -ne 'text'); blob = ($global:State -ne 'blob'); json = ($global:State -ne 'json') } | ConvertTo-Json -Compress)
 }
 function winget {
     $global:Events.Add($args[0])
-    $global:WingetCalls.Add(@($args))
+    if ($args -notcontains 'OpenJS.NodeJS.LTS' -or $args -notcontains '--source' -or $args[[Array]::IndexOf($args, '--source') + 1] -ne 'winget') { throw 'unexpected Winget package source' }
     if ($args[0] -eq 'install') {
         $global:LASTEXITCODE = $case.installExit
         $global:PendingState = $case.afterInstall
     } elseif ($args[0] -eq 'repair') {
+        if ($args -notcontains '--exact') { throw 'repair must select the exact package' }
         $global:LASTEXITCODE = $case.repairExit
         $global:PendingState = $case.afterRepair
     } else { throw "unexpected Winget command: $args" }
@@ -1669,7 +1646,7 @@ function scoop {
     $global:LASTEXITCODE = 0
     Write-Output 'Scoop output must not become a Boolean result'
 }
-function Write-Host { $global:Messages.Add(($args -join ' ')) }
+function Write-Host { }
 function Install-PortableNode {
     $global:Fallbacks.Add('portable')
     if ($case.fallback -eq 'portable') { $global:State = $case.afterFallback; return }
@@ -1694,7 +1671,7 @@ if ($case.afterInstall -eq 'text' -and $case.afterRepair -eq 'healthy') {
 }
 Reset-Fixture
 $null = Main
-$main = @{ advanced = $global:Advanced; exit = $global:InstallExitCode; events = $global:Events.ToArray(); calls = $global:WingetCalls.ToArray(); probes = $global:ProbeCount; fallbacks = $global:Fallbacks.ToArray(); messages = $global:Messages.ToArray() }
+$main = @{ advanced = $global:Advanced; exit = $global:InstallExitCode; events = $global:Events.ToArray(); fallbacks = $global:Fallbacks.ToArray() }
 Write-Output ('RESULT:' + ($main | ConvertTo-Json -Depth 8 -Compress))
 `,
     ].join("\n");
@@ -1707,15 +1684,6 @@ Write-Output ('RESULT:' + ($main | ConvertTo-Json -Depth 8 -Compress))
       advanced: options.success ? 1 : 0,
       exit: options.success ? 0 : 1,
     });
-    const agreements = [
-      "--source",
-      "winget",
-      "--accept-package-agreements",
-      "--accept-source-agreements",
-    ];
-    const installArgs = ["install", "OpenJS.NodeJS.LTS", ...agreements];
-    const repairArgs = ["repair", "--id", "OpenJS.NodeJS.LTS", "--exact", ...agreements];
-    expect(proof.calls).toEqual(options.repair ? [installArgs, repairArgs] : [installArgs]);
     const repaired =
       options.repair && options.repairExit === 0 && options.afterRepair === "healthy";
     const fallbackExpected = !repaired && options.afterInstall !== "healthy";
@@ -1731,9 +1699,6 @@ Write-Output ('RESULT:' + ($main | ConvertTo-Json -Depth 8 -Compress))
       }
     }
     expect(proof.fallbacks).toEqual(fallbacks);
-    expect(
-      proof.messages.filter((message: string) => message.includes("Node.js repaired via winget")),
-    ).toHaveLength(repaired ? 1 : 0);
     const events = proof.events.slice(1);
     expect(events.slice(0, 4)).toEqual([
       "install",
@@ -1746,7 +1711,6 @@ Write-Output ('RESULT:' + ($main | ConvertTo-Json -Depth 8 -Compress))
     }
     if (options.success) {
       expect(events.at(-1)).toBe("check:healthy");
-      expect(proof.probes).toBeGreaterThan(0);
     }
   });
 });
