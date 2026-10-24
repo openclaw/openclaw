@@ -18,6 +18,7 @@ import * as channelOutbound from "openclaw/plugin-sdk/channel-outbound";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { withOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createAsyncGate as barrier } from "../../../test-support/async-gate.test-support.js";
 import * as ingressRuntime from "./ingress.js";
 import type { DiscordIngressLifecycle } from "./ingress.js";
 const createDiscordIngressMonitor = ingressRuntime.createDiscordIngressMonitor;
@@ -86,19 +87,6 @@ async function seedPendingFailure(queue: DiscordQueue, id: string, attempts = 1)
     });
   }
   return retryFacts(queue, id);
-}
-
-function barrier() {
-  const entered = createDeferred<void>();
-  const release = createDeferred<void>();
-  return {
-    entered: entered.promise,
-    release: () => release.resolve(),
-    wait: async () => {
-      entered.resolve();
-      await release.promise;
-    },
-  };
 }
 
 async function retryFacts(queue: DiscordQueue, id: string) {

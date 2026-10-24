@@ -284,13 +284,13 @@ it.each([false, true])(
     }),
 );
 
-it("captures config, environment, cwd and placement identity before discovery yields", () =>
+it("captures config, state directory and placement identity before discovery yields", () =>
   withState(async (state) => {
-    const store = path.relative(process.cwd(), state.statePath("captured.sqlite"));
+    const store = "captured.sqlite";
     const cfg: OpenClawConfig = { session: { store } };
     setRuntimeConfigSnapshot(cfg, cfg);
     const subject = await placement();
-    writeSession({ ...subject, storePath: store });
+    writeSession({ ...subject, storePath: state.statePath(store) });
     const gate = pauseRead("registry");
     const pending = createResolver([subject]);
     const originalRoot = process.env.OPENCLAW_STATE_DIR;

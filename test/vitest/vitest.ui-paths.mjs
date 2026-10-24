@@ -83,7 +83,6 @@ export const uiNodeDrivenBrowserTestFiles = [
   "ui/src/pages/chat/chat-search-layout.browser.test.ts",
   "ui/src/pages/chat/chat-footer-layout.browser.test.ts",
   "ui/src/pages/chat/chat-working-indicator.browser.test.ts",
-  "ui/src/pages/chat/components/chat-swarm-progress.browser.test.ts",
   "ui/src/pages/chat/components/chat-attachment-download-visibility.browser.test.ts",
   "ui/src/components/form-controls.browser.test.ts",
   "ui/src/components/sidebar-footer-layout.browser.test.ts",
@@ -138,7 +137,7 @@ export function isUiTestTarget(relative) {
 }
 
 export const uiE2eRealGatewayTestFiles = [
-  "ui/src/e2e/approval-lookup.real-gateway.e2e.test.ts",
+  "ui/src/e2e/plugin-inline-view.real-gateway.e2e.test.ts",
   "ui/src/e2e/deepseek-search.real-gateway.e2e.test.ts",
   "ui/src/e2e/peer-followup-restart.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-session-diff-folding.real-gateway.e2e.test.ts",

@@ -25,6 +25,7 @@ import * as chatAvatars from "./chat-avatar.ts";
 import { CHAT_ROUTE_READY_EVENT } from "./chat-history-events.ts";
 import { retireInitialChatSnapshot } from "./chat-history-state.ts";
 import { syncSelectedSessionMessageSubscription } from "./chat-history-subscription.ts";
+import { loadChatHistory } from "./chat-history.ts";
 import {
   type ChatAttachmentGatewayOwner,
   ChatPaneComposerHandoff,
@@ -441,15 +442,16 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
           state.modelAuthStatusResult = null;
           void refreshChatModelAuthStatus(state);
         }
-        if (
-          state &&
-          event.event === "sessions.changed" &&
-          asNonArrayRecord(event.payload).reason === "sharing"
-        ) {
-          // Revoked readers receive only a redacted catalog invalidation. Retire
-          // preview admission before the roster refresh can publish access loss.
-          state.mediaPolicyEpoch = (state.mediaPolicyEpoch ?? 0) + 1;
-          this.invalidateSessionSharing(event.payload);
+        if (state && event.event === "sessions.changed") {
+          const reason = asNonArrayRecord(event.payload).reason;
+          if (reason === "sharing") {
+            // Revoked readers receive only a redacted catalog invalidation. Retire
+            // preview admission before the roster refresh can publish access loss.
+            state.mediaPolicyEpoch = (state.mediaPolicyEpoch ?? 0) + 1;
+          }
+          if (reason === "sharing" || reason === "profile-identity") {
+            this.invalidateSessionSharing(event.payload);
+          }
         }
         if (event.event === "sessions.changed" || event.event === "session.message") {
           return;
@@ -468,6 +470,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
         }
         if (state) {
           if (event.event === "config.changed") {
+            this.invalidateSessionSharing(undefined);
             state.mediaPolicyEpoch = (state.mediaPolicyEpoch ?? 0) + 1;
           }
           if (event.event === "config.changed" || event.event === "agent.identity.changed") {
@@ -508,8 +511,12 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
         const state = this.state;
         if (state) {
           // Admit each accepted initial turn before waking followers parked behind recovery.
-          admitChatSubmission(state, getChatPendingInputs(state)?.page.items);
+          const admitted = admitChatSubmission(state, getChatPendingInputs(state)?.page.items);
           if (!parseCatalogSessionKey(state.sessionKey)) {
+            // A replay ACK may refer to collected input already outside the loaded user rows.
+            if (admitted) {
+              void loadChatHistory(state);
+            }
             void resumeStoredChatOutboxes(state);
           }
         }
@@ -636,8 +643,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
       gateway: this.context.gateway.snapshot,
       isConnected: () => this.isConnected,
       isPresented: () => this.presented && this.visuallyPresented,
-      commit: (layout, automaticResource) =>
-        this.commitSidebarLayout(layout, { persist: false, automaticResource }),
+      commit: (layout, options) => this.commitSidebarLayout(layout, { ...options, persist: false }),
     });
     if (this.state) {
       const layout = this.initializeBrowserSidebarLayout(this.state.sidebarLayout);

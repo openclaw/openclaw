@@ -348,31 +348,26 @@ async function buildHealthAccountRecord(params: {
     (params.accountId === params.defaultAccountId
       ? params.runtimeSnapshot?.channels[params.plugin.id]
       : undefined);
-  if (params.runtimeOnly && runtimeAccount) {
-    const snapshot = buildChannelAccountSnapshotFromRuntime(runtimeAccount);
-    const unavailable = resolveUnavailableChannelAccountSnapshot(params.cfg, {
-      channelId: params.plugin.id,
-      accountId: params.accountId,
-      runtime: snapshot,
-    });
-    if (unavailable) {
-      return unavailable;
-    }
-    const healthState = resolveChannelHealthState(snapshot, {
+  const runtimeOnlySnapshot =
+    params.runtimeOnly && runtimeAccount
+      ? buildChannelAccountSnapshotFromRuntime(runtimeAccount)
+      : undefined;
+  const unavailable = resolveUnavailableChannelAccountSnapshot(params.cfg, {
+    channelId: params.plugin.id,
+    accountId: params.accountId,
+    runtime: runtimeOnlySnapshot ?? runtimeSnapshot,
+  });
+  if (unavailable) {
+    return unavailable;
+  }
+  if (runtimeOnlySnapshot) {
+    const healthState = resolveChannelHealthState(runtimeOnlySnapshot, {
       channelId: params.plugin.id,
       now: Date.now(),
       staleEventThresholdMs: DEFAULT_CHANNEL_STALE_EVENT_THRESHOLD_MS,
       channelConnectGraceMs: DEFAULT_CHANNEL_CONNECT_GRACE_MS,
     });
-    return { ...snapshot, ...(healthState !== undefined ? { healthState } : {}) };
-  }
-  const unavailable = resolveUnavailableChannelAccountSnapshot(params.cfg, {
-    channelId: params.plugin.id,
-    accountId: params.accountId,
-    runtime: runtimeSnapshot,
-  });
-  if (unavailable) {
-    return unavailable;
+    return { ...runtimeOnlySnapshot, ...(healthState !== undefined ? { healthState } : {}) };
   }
   const { probeAccount, inspectedAccount, enabled, configured, diagnostics } =
     await resolveHealthAccountContext({

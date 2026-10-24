@@ -50,6 +50,8 @@ type RequesterToolPolicyResolution = {
   senderPolicy?: SandboxToolPolicy;
   subagentPolicy?: SandboxToolPolicy;
   inheritedToolPolicy?: SandboxToolPolicy;
+  /** The requester's own ceiling, excluding a completion's replayed authority. */
+  sessionInheritedToolPolicy?: SandboxToolPolicy;
   /** Full ancestor ceiling retained by descendants and completion, even when execution differs. */
   inheritedToolPolicyForSpawn?: SandboxToolPolicy;
   delegatedToolPolicy?: DelegatedToolPolicy;
@@ -139,6 +141,7 @@ function resolveDelegatedPolicy(
       delegated: true;
       source: Exclude<RequesterToolPolicySource, "current-request">;
       policy?: SandboxToolPolicy;
+      sessionPolicy?: SandboxToolPolicy;
       policyForSpawn?: SandboxToolPolicy;
       delegatedToolPolicy?: DelegatedToolPolicy;
       inheritedToolPolicySource?: "sender";
@@ -232,6 +235,7 @@ function resolveDelegatedPolicy(
       ? {
           delegated: true,
           source: "completion-handoff",
+          sessionPolicy: targetExecutionPolicy ?? policyFromEnvelope(targetEnvelope),
           policy: completionDeny.length
             ? { ...completionPolicy, deny: completionDeny }
             : completionPolicy,
@@ -398,6 +402,10 @@ export function resolveRequesterToolPolicies(
       senderPolicy,
       subagentPolicy,
       inheritedToolPolicy: delegatedPolicy.policy,
+      sessionInheritedToolPolicy:
+        delegatedPolicy.source === "completion-handoff"
+          ? delegatedPolicy.sessionPolicy
+          : delegatedPolicy.policy,
       inheritedToolPolicyForSpawn: delegatedPolicy.policyForSpawn ?? delegatedPolicy.policy,
       delegatedToolPolicy: delegatedPolicy.delegatedToolPolicy,
       inheritedToolPolicySource:
@@ -410,6 +418,11 @@ export function resolveRequesterToolPolicies(
     cfg: params.config,
     store: subagentStore,
   });
+  const inheritedToolPolicy = resolveInheritedToolPolicyForSession(
+    params.config,
+    subagentSessionKey,
+    { store: subagentStore },
+  );
   return {
     delegated: false,
     requesterPolicySource: "current-request",
@@ -423,8 +436,7 @@ export function resolveRequesterToolPolicies(
         : undefined,
 
     subagentPolicy,
-    inheritedToolPolicy: resolveInheritedToolPolicyForSession(params.config, subagentSessionKey, {
-      store: subagentStore,
-    }),
+    inheritedToolPolicy,
+    sessionInheritedToolPolicy: inheritedToolPolicy,
   };
 }

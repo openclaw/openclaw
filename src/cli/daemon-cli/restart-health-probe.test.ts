@@ -2,6 +2,8 @@
 import { once } from "node:events";
 import { createServer } from "node:http";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { retainGatewayResponsePayload } from "../../../packages/gateway-client/src/protocol-request.js";
+import { GatewayClientRequestError } from "../../../packages/gateway-client/src/request-error.js";
 import { GatewayCredentialsRequiredError } from "../../gateway/call-device-auth.js";
 import { gatewayHealthResponse } from "../../gateway/health-response.test-support.js";
 import { createGatewayCloseTransportError } from "../../gateway/transport-error.js";
@@ -185,6 +187,54 @@ describe("restart health", () => {
         : reason,
     );
     expect(callGateway).toHaveBeenCalledOnce();
+    expect(sleep).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { build: "candidate-build", outcome: "healthy" },
+    { build: "old-build", outcome: "build-id-mismatch" },
+  ])("settles an RPC protocol mismatch through HTTP identity ($build)", async (scenario) => {
+    // The updater runs the previous package, so a protocol bump or revert rejects its handshake.
+    const mismatch = new GatewayClientRequestError({
+      code: "INVALID_REQUEST",
+      message: "protocol mismatch",
+      details: {
+        code: "PROTOCOL_MISMATCH",
+        clientMinProtocol: 5,
+        clientMaxProtocol: 5,
+        expectedProtocol: 4,
+        minimumProbeProtocol: 3,
+      },
+    });
+    retainGatewayResponsePayload(mismatch, undefined);
+    callGateway.mockRejectedValue(mismatch);
+    inspectPortUsage.mockResolvedValue(ownedPortUsage);
+    requestStartupProbe.mockResolvedValue({
+      statusCode: 200,
+      body: JSON.stringify({
+        ok: true,
+        status: "started",
+        version: "2026.10.6",
+        buildId: scenario.build,
+      }),
+    });
+    requestReadinessProbe.mockResolvedValue({
+      statusCode: 200,
+      body: JSON.stringify({ ready: true }),
+    });
+    const snapshot = await waitForRunningGateway({
+      expectedVersion: "2026.10.6",
+      expectedBuildId: "candidate-build",
+      requirePluginHealth: false,
+      requireChannelHealth: false,
+      timeoutMs: 1_800_000,
+      delayMs: 30_000,
+    });
+    expect(snapshot.waitOutcome).toBe(scenario.outcome);
+    expect(snapshot.protocolMismatch).toBe(
+      "protocol mismatch: Control UI v5, Gateway v4, connection check min v3",
+    );
+    expect(snapshot.authenticationError).toBeUndefined();
     expect(sleep).not.toHaveBeenCalled();
   });
 

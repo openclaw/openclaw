@@ -53,6 +53,11 @@ For legacy SSE servers, reconnecting to the same session endpoint preserves the
 session. If the server announces a new endpoint, OpenClaw reconnects and
 initializes a fresh session before sending further tool calls.
 
+If a Streamable HTTP server does not confirm its session DELETE, OpenClaw logs a
+warning and continues local cleanup. Once the local transport and client close,
+the next turn can replace the runtime. Failed local cleanup still blocks
+replacement. The remote server may retain the abandoned session until it expires it.
+
 When OpenClaw's built-in MCP client cannot start a server, it retries with exponential backoff: 30 seconds, doubling up to 10 minutes. The runtime that encountered the first failure can retry once on its normal five-second catalog schedule, using a fresh connection after retiring the failed one. The first connection for a server configuration and requester still waits for bounded initialization and catalog listing. After a startup failure, turns never wait for retries: recovery runs in the background, and recovered tools become available at the next turn boundary. If that recovery attempt also fails, the same exponential backoff applies to it. Failure state survives ordinary session cleanup and is scoped to the server configuration and requester. The effective tool inventory keeps one unavailable notice per server while the failure persists, with that runtime's next retry time and a reachability check as the next step; recovery removes the notice without adding chat or transcript messages. Each failed retry logs once; skipped runs do not repeat the warning. A successful connection, config publication, or explicit MCP reload clears the backoff. Reload the process that owns the connection; a CLI reload does not reset a separate Gateway.
 
 ## Add a server from the composer

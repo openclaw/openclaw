@@ -24,6 +24,7 @@ import { bindPluginInstanceModuleLoader } from "./plugin-instance-module-loader.
 import { getPluginValueInstance, runPluginCleanup } from "./plugin-instance-scope.js";
 import { PluginInstance } from "./plugin-instance.js";
 import { PluginInvocationScope } from "./plugin-invocation-scope.js";
+import { createPluginManifestRecordFixture } from "./plugin-metadata.test-support.js";
 import { getPluginSetupModuleLoader } from "./plugin-setup-module.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 
@@ -56,18 +57,12 @@ function fixture(kind: "runtime" | "setup", native = false) {
       bindPluginInstanceModuleLoader({ instance, origin: "config", source, rootDir });
       return instance.loadModule(source);
     }
-    const record: PluginManifestRecord = {
+    const record: PluginManifestRecord = createPluginManifestRecordFixture({
       id: "disposal-setup",
       origin: "config",
       rootDir,
       source,
-      manifestPath: path.join(rootDir, "openclaw.plugin.json"),
-      channels: [],
-      providers: [],
-      cliBackends: [],
-      hooks: [],
-      skills: [],
-    };
+    });
     const load = getPluginSetupModuleLoader(record, source, rootDir);
     return load.initialize(() => load(source));
   }) as { filename: string; nativeFile?: string; read(): string };

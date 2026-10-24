@@ -30,6 +30,7 @@ import { createChatRunState } from "../server-chat-state.js";
 import { createWorkerSessionPlacementStore } from "../worker-environments/placement-store.js";
 import { advancePlacementFixtureToActive } from "../worker-environments/placement-test-fixtures.js";
 import { bindWorkerTurnOwner } from "../worker-environments/placement-turn-claim-events.js";
+import { createWorkerExecApprovalOwner } from "../worker-environments/worker-exec-approval.js";
 import * as workerRunOwner from "../worker-environments/worker-turn-run-owner.js";
 import { waitForApprovalRequested } from "./approval-request.test-support.js";
 import { createExecApprovalHandlers } from "./exec-approval.js";
@@ -135,6 +136,85 @@ async function pendingRecord(fixture: ApprovalFixture) {
 }
 
 describe("exec approval signed agent runtime", () => {
+  it("uses the existing human approval owner for an exact worker command", async (testContext) => {
+    const fixture = await createApproval(testContext);
+    await fixture.run(async () => {
+      const handlers = createExecApprovalHandlers(fixture.manager);
+      const opts = requestOptions(identity(false));
+      const worker = createWorkerExecApprovalOwner({
+        exec: { host: "gateway", mode: "ask", security: "allowlist", ask: "always" },
+        config: {},
+        agentId: "main",
+        signal: testContext.signal,
+        transcript: () => ({ entries: [], omittedEntries: 0, truncated: false }),
+      });
+      const authority: Parameters<typeof worker>[1] = {
+        assertCurrent() {},
+        environmentId: "worker-fixture",
+        call: async <T>(
+          method: "exec.approval.request" | "exec.approval.waitDecision",
+          params: Record<string, unknown>,
+        ): Promise<T> => {
+          const result = createDeferredCore<T>();
+          const respond: GatewayRequestHandlerOptions["respond"] = (ok, payload, error) => {
+            if (ok) {
+              result.resolve(payload as T);
+            } else {
+              result.reject(new Error(error?.message ?? "Approval failed"));
+            }
+          };
+          const handler = expectDefined(handlers[method], "existing exec approval handler");
+          void fixture.track(
+            Promise.resolve(
+              handler({ ...opts, params, req: { ...opts.req, method, params }, respond }),
+            ).catch(result.reject),
+          );
+          return result.promise;
+        },
+      };
+      const request = {
+        operation: "request",
+        id: "worker-human",
+        toolCallId: "exec-human",
+        binding: {
+          command: "echo human-approved",
+          execCommand: "/bin/echo human-approved",
+          cwd: "/workspace",
+          environment: "e".repeat(64),
+          pty: false,
+        },
+      } as const;
+      const registration = await worker(request, authority);
+      expect(registration).toMatchObject({ operation: "request", id: request.id });
+      const record = await pendingRecord(fixture);
+      expect(record.request).toMatchObject({
+        command: "/bin/echo human-approved",
+        cwd: "/workspace",
+        allowedDecisions: ["allow-once", "deny"],
+      });
+      await expect(
+        worker(
+          { ...request, operation: "wait", binding: { ...request.binding, command: "echo other" } },
+          authority,
+        ),
+      ).rejects.toThrow("does not match this turn and command");
+      const waiting = worker(
+        {
+          operation: "wait",
+          id: request.id,
+          toolCallId: request.toolCallId,
+          binding: request.binding,
+        },
+        authority,
+      );
+      await fixture.manager.resolve(request.id, "allow-once", "operator");
+      await expect(waiting).resolves.toMatchObject({
+        operation: "wait",
+        binding: registration.binding,
+        decision: "allow-once",
+      });
+    });
+  });
   it("binds the accepted expiry to the worker captured before registration yields", async (testContext) => {
     let active = true;
     const fixture = await createPreparedTestApprovalManager(testContext, {

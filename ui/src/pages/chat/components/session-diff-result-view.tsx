@@ -256,6 +256,7 @@ function createSessionDiffResultViews(bindings: SessionDiffViewBindings) {
                       result().truncated !== true ? (
                         desktop() ? (
                           <PanelEmptyState
+                            presentation="desktop"
                             icon={<Icon name="fileDiff" />}
                             heading={t("chat.sessionDiff.emptyTitle")}
                             description={t("chat.sessionDiff.empty")}

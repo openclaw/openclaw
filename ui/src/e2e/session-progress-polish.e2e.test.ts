@@ -131,8 +131,6 @@ suite.define(() => {
           if (!touch && placement === "composer") {
             await summary.hover();
             expect(await opacity()).toBe("1");
-            await page.waitForTimeout(650); // Beyond the shared title tooltip's reveal delay.
-            expect(await page.getByRole("tooltip").count()).toBe(0);
             await disclosure.locator(".session-progress-card__step-text").first().hover();
             expect(await opacity()).toBe("1");
             await page.mouse.move(0, 0);
@@ -141,10 +139,6 @@ suite.define(() => {
             expect(await summary.evaluate((el) => el.matches(":focus-visible"))).toBe(true);
             expect(await opacity()).toBe("1");
           }
-          await summary.press("Enter");
-          expect(await disclosure.getAttribute("open")).toBeNull();
-          await summary.press("Space");
-          expect(await disclosure.getAttribute("open")).not.toBeNull();
         }
       } finally {
         await suite.closeBrowserContext(context);

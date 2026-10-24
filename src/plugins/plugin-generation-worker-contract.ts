@@ -1,6 +1,5 @@
 import type { MessagePort } from "node:worker_threads";
 import type { PluginInstallRoots } from "./install-root-context.js";
-import type { BundledPluginReloadSource } from "./plugin-bundled-reload.js";
 import type { GenerationWireValue } from "./plugin-generation-worker-codec.js";
 import type { PluginSourceCaptureStorage } from "./plugin-instance-invocation.types.js";
 import type { AdmissionState } from "./plugin-native-admission-state.js";
@@ -11,7 +10,6 @@ export type GenerationWorkerInput = (
       captureId: number;
       rootDir: string;
       entryFile?: string | readonly string[];
-      bundledReloadSource?: BundledPluginReloadSource;
       storage: PluginSourceCaptureStorage;
       installRoots: PluginInstallRoots;
       readOnly: boolean;

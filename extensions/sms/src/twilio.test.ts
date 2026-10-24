@@ -729,7 +729,7 @@ describe("Twilio SMS helpers", () => {
     expect(body.get("MessagingServiceSid")).toBeNull();
   });
 
-  it("throws structured Twilio errors from JSON error bodies", async () => {
+  it("reports actionable Twilio errors from JSON error bodies", async () => {
     mockTwilioFetch(async () =>
       Response.json(
         {
@@ -749,12 +749,6 @@ describe("Twilio SMS helpers", () => {
     ).rejects.toMatchObject({
       name: "TwilioSmsApiError",
       message: "Twilio SMS send failed (400): The message From/To pair violates a blacklist rule.",
-      httpStatus: 400,
-      twilioCode: 21610,
-      responseText: JSON.stringify({
-        code: 21610,
-        message: "The message From/To pair violates a blacklist rule.",
-      }),
     });
   });
 
@@ -771,7 +765,7 @@ describe("Twilio SMS helpers", () => {
       });
     });
 
-    let caught: (Error & { responseText: string }) | undefined;
+    let caught: unknown;
     try {
       await sendSmsViaTwilio({
         account,
@@ -779,15 +773,13 @@ describe("Twilio SMS helpers", () => {
         text: "hello",
       });
     } catch (error) {
-      caught = error as Error & { responseText: string };
+      caught = error;
     }
 
     expect(caught).toMatchObject({
       message: "Twilio SMS send failed (503): upstream unavailable; Authorization: Basic ***",
-      responseText: "upstream unavailable; Authorization: Basic ***",
     });
-    expect(caught?.message).not.toContain(encodedCredential);
-    expect(caught?.responseText).not.toContain(encodedCredential);
+    expect(String(caught)).not.toContain(encodedCredential);
   });
 
   it("releases guarded Twilio egress on failed send responses", async () => {

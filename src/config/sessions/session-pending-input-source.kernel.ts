@@ -43,9 +43,9 @@ export function readPendingInputSourceInDatabase(
     }
     const pendingQuery = db
       .selectFrom("session_pending_inputs")
-      .where("session_key", "=", input.sessionKey)
-      .where("session_id", "=", input.sessionId)
-      .where("idempotency_key", "=", input.idempotencyKey);
+      .where("session_pending_inputs.session_key", "=", input.sessionKey)
+      .where("session_pending_inputs.session_id", "=", input.sessionId)
+      .where("session_pending_inputs.idempotency_key", "=", input.idempotencyKey);
     const pending = hasSessionPendingInputsSchema(database.db)
       ? executeSqliteQueryTakeFirstSync(
           database.db,
@@ -56,7 +56,32 @@ export function readPendingInputSourceInDatabase(
       if (pending.bytes > MAX_PAYLOAD_BYTES) {
         throw new Error("Submitted input exceeds the Gateway payload limit");
       }
-      snapshot.pending = executeSqliteQueryTakeFirstSync(database.db, pendingQuery.selectAll());
+      const retained = executeSqliteQueryTakeFirstSync(
+        database.db,
+        pendingQuery
+          .leftJoin("transcript_event_identities as consumed", (join) =>
+            join
+              .onRef("consumed.session_id", "=", "session_pending_inputs.session_id")
+              .onRef("consumed.event_id", "=", "session_pending_inputs.consumed_event_id"),
+          )
+          .leftJoin("session_transcript_active_events as active", (join) =>
+            join
+              .onRef("active.session_id", "=", "consumed.session_id")
+              .onRef("active.event_seq", "=", "consumed.seq"),
+          )
+          .selectAll("session_pending_inputs")
+          .select("active.message_position"),
+      );
+      if (retained) {
+        const { message_position, ...row } = retained;
+        snapshot.pending = row;
+        if (
+          message_position !== null &&
+          !sessionTranscriptIndexNeedsReconcile(database.db, input.sessionId)
+        ) {
+          snapshot.committedMessageSeq = message_position + 1;
+        }
+      }
     } else if (!input.pendingOnly) {
       if (sessionTranscriptIndexNeedsReconcile(database.db, input.sessionId)) {
         throw new SessionTranscriptProjectionUnavailableError(input.sessionId);
@@ -70,7 +95,13 @@ export function readPendingInputSourceInDatabase(
               .onRef("event.session_id", "=", "identity.session_id")
               .onRef("event.seq", "=", "identity.seq"),
           )
+          .leftJoin("session_transcript_active_events as active", (join) =>
+            join
+              .onRef("active.session_id", "=", "identity.session_id")
+              .onRef("active.event_seq", "=", "identity.seq"),
+          )
           .select(transcriptEventReadBytesSql("event").as("bytes"))
+          .select("active.message_position")
           .where("identity.session_id", "=", input.sessionId)
           .where("identity.message_idempotency_key", "=", input.idempotencyKey)
           .orderBy("identity.seq", "desc")
@@ -89,6 +120,9 @@ export function readPendingInputSourceInDatabase(
         snapshot.committed = committed
           ? parseSessionPendingInputMessage(JSON.stringify(committed.message))
           : undefined;
+        if (snapshot.committed && transcript.message_position !== null) {
+          snapshot.committedMessageSeq = transcript.message_position + 1;
+        }
       }
     }
     return snapshot;

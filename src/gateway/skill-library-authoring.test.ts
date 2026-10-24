@@ -447,12 +447,14 @@ it("serves worker Workshop through the same Gateway capability and rejects a los
         expect.objectContaining({ path: "data.bin", content: "AP+A", encoding: "base64" }),
         expect.objectContaining({
           path: "scripts/keep.sh",
-          content: Buffer.from("#!/bin/sh\nprintf preserved").toString("base64"),
+          content: "#!/bin/sh\nprintf preserved",
+          encoding: "utf8",
           executable: true,
         }),
         expect.objectContaining({
           path: "scripts/edit.sh",
-          content: Buffer.from("#!/bin/sh\nprintf changed").toString("base64"),
+          content: "#!/bin/sh\nprintf changed",
+          encoding: "utf8",
           executable: true,
         }),
       ]),

@@ -1,7 +1,7 @@
 .chat-session-versions-mobile--empty {
   display: grid;
   min-height: 100%;
-  align-content: center;
+  align-content: start;
 }
 
 .chat-session-versions-mobile__help {
@@ -128,32 +128,4 @@
 .chat-session-versions-mobile__more svg {
   width: 20px;
   height: 20px;
-}
-
-.chat-session-versions-mobile__empty {
-  display: grid;
-  justify-items: center;
-  gap: 8px;
-  padding: 24px;
-  text-align: center;
-}
-
-.chat-session-versions-mobile__empty > svg {
-  width: 36px;
-  height: 36px;
-  margin-bottom: 16px;
-  color: var(--muted);
-}
-
-.chat-session-versions-mobile__empty strong {
-  font-size: 20px;
-  font-weight: 500;
-  line-height: 26px;
-}
-
-.chat-session-versions-mobile__empty p {
-  margin: 0;
-  color: var(--muted);
-  font-size: 14px;
-  line-height: 20px;
 }

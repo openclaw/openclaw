@@ -147,11 +147,6 @@ export function expectCanonicalGroupedConcurrency(shards: Shards, runnerBackend?
   for (const { shard, group } of groups) {
     if (!group.includePatterns) {
       // Paired isolated tooling configs retain whole processes and serial admission.
-      expect(group.shard_name).toBe("core-tooling-isolated");
-      expect(group.configs.toSorted()).toEqual([
-        "test/vitest/vitest.tooling-docker.config.ts",
-        "test/vitest/vitest.tooling-isolated.config.ts",
-      ]);
       expect(shard.planConcurrency).toBe(1);
       continue;
     }

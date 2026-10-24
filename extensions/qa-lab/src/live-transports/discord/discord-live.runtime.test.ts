@@ -1,11 +1,8 @@
-import { once } from "node:events";
 import fs from "node:fs/promises";
-import { createServer } from "node:http";
-import type { AddressInfo } from "node:net";
 import path from "node:path";
 import * as discordApi from "@openclaw/discord/api.js";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
+import { useAutoCleanupTempDirTracker, withServer } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createFlowInput,
@@ -167,57 +164,51 @@ describe("discord live qa runtime", () => {
     const received: [string | undefined, string, string | undefined, string | undefined][] = [];
     const authorization = "Bot qa-token";
     const messagePath = "/api/v10/channels/123/messages";
-    const server = createServer((request, response) => {
-      const chunks: Buffer[] = [];
-      request.on("data", (chunk: Buffer) => chunks.push(chunk));
-      request.on("end", () => {
-        received.push([
-          request.headers.authorization,
-          Buffer.concat(chunks).toString("utf8"),
-          request.method,
-          request.url,
+    await withServer(
+      (request, response) => {
+        const chunks: Buffer[] = [];
+        request.on("data", (chunk: Buffer) => chunks.push(chunk));
+        request.on("end", () => {
+          received.push([
+            request.headers.authorization,
+            Buffer.concat(chunks).toString("utf8"),
+            request.method,
+            request.url,
+          ]);
+          if (request.method === "DELETE") {
+            response.writeHead(204).end();
+            return;
+          }
+          response.writeHead(200, { "content-type": "application/json" });
+          response.end(JSON.stringify({ ok: true }));
+        });
+      },
+      async (baseUrl) => {
+        const endpointFetch = createDiscordQaEndpointFetcher(`${baseUrl}/api/v10`);
+        const request = (method: string, suffix: string, body?: string) =>
+          endpointFetch(
+            new Request(`https://discord.com${messagePath}${suffix}`, {
+              method,
+              body,
+              headers: {
+                authorization,
+                ...(body ? { "content-type": "application/json" } : {}),
+              },
+            }),
+          );
+
+        const writeResponse = await request("POST", "", JSON.stringify({ content: "hello" }));
+        await expect(writeResponse.json()).resolves.toEqual({ ok: true });
+
+        const deleteResponse = await request("DELETE", "/456");
+        expect(deleteResponse.status).toBe(204);
+        expect(deleteResponse.body).toBeNull();
+        expect(received).toEqual([
+          [authorization, JSON.stringify({ content: "hello" }), "POST", messagePath],
+          [authorization, "", "DELETE", `${messagePath}/456`],
         ]);
-        if (request.method === "DELETE") {
-          response.writeHead(204).end();
-          return;
-        }
-        response.writeHead(200, { "content-type": "application/json" });
-        response.end(JSON.stringify({ ok: true }));
-      });
-    });
-    server.listen(0, "127.0.0.1");
-    await once(server, "listening");
-    const port = (server.address() as AddressInfo).port;
-    const endpointFetch = createDiscordQaEndpointFetcher(`http://127.0.0.1:${port}/api/v10`);
-    const request = (method: string, suffix: string, body?: string) =>
-      endpointFetch(
-        new Request(`https://discord.com${messagePath}${suffix}`, {
-          method,
-          body,
-          headers: {
-            authorization,
-            ...(body ? { "content-type": "application/json" } : {}),
-          },
-        }),
-      );
-
-    try {
-      const writeResponse = await request("POST", "", JSON.stringify({ content: "hello" }));
-      await expect(writeResponse.json()).resolves.toEqual({ ok: true });
-
-      const deleteResponse = await request("DELETE", "/456");
-      expect(deleteResponse.status).toBe(204);
-      expect(deleteResponse.body).toBeNull();
-      expect(received).toEqual([
-        [authorization, JSON.stringify({ content: "hello" }), "POST", messagePath],
-        [authorization, "", "DELETE", `${messagePath}/456`],
-      ]);
-    } finally {
-      server.closeAllConnections();
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-      });
-    }
+      },
+    );
   });
 
   it("resolves optional Discord QA voice channel env var", () => {

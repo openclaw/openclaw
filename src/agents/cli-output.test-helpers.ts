@@ -8,6 +8,12 @@ export const localCliBackend: CliJsonlStreamingParserOptions["backend"] = {
   sessionIdFields: ["session_id"],
 };
 
+export function createClaudeBackend(
+  command = "local-cli",
+): CliJsonlStreamingParserOptions["backend"] {
+  return { ...localCliBackend, command, sessionIdFields: ["session_id"] };
+}
+
 export function createPluginParser(overrides: Partial<CliJsonlStreamingParserOptions> = {}) {
   return createCliJsonlStreamingParser({
     backend: { command: "acme", output: "jsonl" },

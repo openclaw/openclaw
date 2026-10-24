@@ -256,31 +256,25 @@ async function synchronizeSelectedSessionMessageSubscription(
   paneRequests.pendingApprovalReplay = approvalReplayOwner;
   state.chatSessionApprovalQueue = [];
   try {
-    const unsubscribePromise =
-      shouldUnsubscribePrevious && previousSubscription
-        ? sessions.unsubscribeMessages(previousSubscription)
-        : Promise.resolve();
-    const subscribePromise = shouldSubscribe && isCurrent() ? subscribe() : Promise.resolve(null);
-    // Gateway subscriptions are independent canonical-key entries. Overlap the old
-    // release with the new acquire so a session switch pays one RTT, not two.
-    const [unsubscribeResult, subscribeResult] = await Promise.allSettled([
-      unsubscribePromise,
-      subscribePromise,
-    ]);
-    if (unsubscribeResult.status === "rejected") {
-      console.warn(
-        "[chat] Failed to release message subscription:",
-        formatUiError(unsubscribeResult.reason),
-      );
+    if (shouldUnsubscribePrevious && previousSubscription) {
+      // The capability retains failed releases for cleanup. An old observer
+      // must not delay readiness or fail history for the newly selected session.
+      void sessions.unsubscribeMessages(previousSubscription).catch((error: unknown) => {
+        console.warn("[chat] Failed to release message subscription:", formatUiError(error));
+      });
     }
-    const subscribed = subscribeResult.status === "fulfilled" ? subscribeResult.value : null;
-    if (!subscribed) {
+    const subscribePromise = shouldSubscribe && isCurrent() ? subscribe() : Promise.resolve(null);
+    const subscribed = await subscribePromise.catch((error: unknown) => {
       if (isCurrent() && shouldUnsubscribePrevious) {
         state.chatSessionMessageSubscriptionRequestedKey = null;
         state.chatSessionMessageSubscription = null;
       }
-      if (subscribeResult.status === "rejected") {
-        throw subscribeResult.reason;
+      throw error;
+    });
+    if (!subscribed) {
+      if (isCurrent() && shouldUnsubscribePrevious) {
+        state.chatSessionMessageSubscriptionRequestedKey = null;
+        state.chatSessionMessageSubscription = null;
       }
       return false;
     }
@@ -310,11 +304,7 @@ async function synchronizeSelectedSessionMessageSubscription(
       state.chatSessionApprovalQueue = [];
       state.chatSessionApprovalReplay = undefined;
     }
-    if (unsubscribeResult.status === "rejected") {
-      publishError(unsubscribeResult.reason);
-    } else {
-      clearRecoveredError();
-    }
+    clearRecoveredError();
     return true;
   } catch (err) {
     if (isCurrent()) {

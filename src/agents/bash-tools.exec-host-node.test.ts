@@ -5,13 +5,14 @@
  */
 import crypto from "node:crypto";
 import { setImmediate } from "node:timers/promises";
-import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MAX_SAFE_TIMEOUT_DELAY_MS } from "../../packages/gateway-client/src/timeouts.js";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { requiresExecApproval } from "../infra/exec-approvals-policy.js";
 import type { ExecAllowlistEntry } from "../infra/exec-approvals.types.js";
 import { executeNodeHostCommand } from "./bash-tools.exec-host-node.js";
 import type { ExecuteNodeHostCommandParams } from "./bash-tools.exec-host-node.types.js";
+import { captureProcessUnhandledRejections } from "./bash-tools.exec-runtime.test-support.js";
 
 type ExecAutoReviewer = typeof import("../infra/exec-auto-review.js").defaultExecAutoReviewer;
 type ExecAutoReviewDecision = Awaited<ReturnType<ExecAutoReviewer>>;
@@ -22,9 +23,6 @@ type MockAllowAlwaysPersistenceInput = Parameters<
 >[0];
 type MockAllowAlwaysPersistenceDecision =
   import("../infra/exec-approvals.js").AllowAlwaysPersistenceDecision;
-type MockExecApprovalDecision = import("../infra/exec-approvals.js").ExecApprovalDecision;
-type MockExecApprovalUnavailableDecision =
-  import("../infra/exec-approvals.js").ExecApprovalUnavailableDecision;
 type MockAllowlistSegment = {
   raw?: string;
   resolution: null;
@@ -44,17 +42,6 @@ type MockExecAllowlistEntry = {
   source?: "allow-always";
   commandText?: string;
 };
-type MockRegisteredExecApprovalRequest = {
-  approvalId: string;
-  approvalSlug: string;
-  warningText: string;
-  expiresAtMs: number;
-  preResolvedDecision: string | null | undefined;
-  initiatingSurface: unknown;
-  sentApproverDms: boolean;
-  unavailableReason: string | null;
-};
-
 type MockExecApprovalsResolved = {
   allowlist: MockExecAllowlistEntry[];
   file: { version: 1; agents: Record<string, unknown> };
@@ -69,29 +56,6 @@ type ShellAllowlistMockParams = {
   command?: string;
   allowlist?: unknown[];
   env?: NodeJS.ProcessEnv;
-};
-type RequiresExecApprovalMockParams = {
-  ask?: string;
-  security?: string;
-  analysisOk?: boolean;
-  allowlistSatisfied?: boolean;
-  durableApprovalSatisfied?: boolean;
-};
-type ApprovalState = {
-  baseDecision: { timedOut: boolean };
-  approvedByAsk: boolean;
-  deniedReason: string | null;
-};
-type TimeoutFallback = {
-  approvedByAsk: boolean;
-  deniedReason: string | null;
-  context?: unknown;
-};
-type ApprovalResolutionOptions = {
-  askFallback: ExecSecurity;
-  resolveTimedOut?: (state: ApprovalState) => TimeoutFallback | Promise<TimeoutFallback>;
-  requiresExplicitApproval: boolean | ((context: unknown) => boolean);
-  requiresAutoReviewHumanApproval?: boolean;
 };
 
 const INLINE_EVAL_HIT = {
@@ -153,7 +117,7 @@ const resolveAllowAlwaysPatternCoverageMock = vi.hoisted(() =>
 );
 const resolveExecApprovalsFromFileMock = vi.hoisted(() => vi.fn<() => MockExecApprovalsResolved>());
 const requiresExecApprovalMock = vi.hoisted(() =>
-  vi.fn((_raw?: RequiresExecApprovalMockParams) => true),
+  vi.fn<typeof import("../infra/exec-approvals-policy.js").requiresExecApproval>(),
 );
 const hasDurableExecApprovalMock = vi.hoisted(() => vi.fn(() => false));
 const resolveAllowAlwaysPersistenceDecisionMock = vi.hoisted(() =>
@@ -163,26 +127,7 @@ const resolveAllowAlwaysPersistenceDecisionMock = vi.hoisted(() =>
   })),
 );
 const resolveExecApprovalAllowedDecisionsMock = vi.hoisted(() =>
-  vi.fn(
-    (params?: {
-      ask?: string | null;
-      allowAlwaysPersistence?: { kind: string } | null;
-    }): readonly MockExecApprovalDecision[] =>
-      params?.ask === "always" || params?.allowAlwaysPersistence?.kind === "one-shot"
-        ? ["allow-once", "deny"]
-        : ["allow-once", "allow-always", "deny"],
-  ),
-);
-const resolveExecApprovalUnavailableDecisionsMock = vi.hoisted(() =>
-  vi.fn(
-    (params?: {
-      ask?: string | null;
-      allowAlwaysPersistence?: { kind: string } | null;
-    }): readonly MockExecApprovalUnavailableDecision[] =>
-      params?.ask === "always" || params?.allowAlwaysPersistence?.kind === "one-shot"
-        ? ["allow-always"]
-        : [],
-  ),
+  vi.fn<typeof import("../infra/exec-approvals.js").resolveExecApprovalAllowedDecisions>(),
 );
 const resolveExecHostApprovalContextMock = vi.hoisted(() =>
   vi.fn(() => ({
@@ -192,142 +137,19 @@ const resolveExecHostApprovalContextMock = vi.hoisted(() =>
     askFallback: "deny",
   })),
 );
-const createAndRegisterDefaultExecApprovalRequestMock = vi.hoisted(() =>
-  vi.fn(
-    (
-      _params?: unknown,
-    ): MockRegisteredExecApprovalRequest | Promise<MockRegisteredExecApprovalRequest> | undefined =>
-      undefined,
-  ),
-);
-const runAbortedApprovalError = vi.hoisted(() => new Error("approval owning run aborted"));
-const resolveApprovalDecisionOrUndefinedMock = vi.hoisted(() =>
-  vi.fn(
-    async (_params?: {
-      approvalId: string;
-      preResolvedDecision: string | null | undefined;
-      onFailure: () => void;
-    }): Promise<string | null | undefined> => "allow-once",
-  ),
-);
-const createExecApprovalDecisionStateMock = vi.hoisted(() =>
-  vi.fn((): ApprovalState => ({
-    baseDecision: { timedOut: false },
-    approvedByAsk: false,
-    deniedReason: null,
-  })),
-);
-const shouldResolveExecApprovalUnavailableInlineMock = vi.hoisted(() =>
-  vi.fn(
-    (_params: {
-      unavailableReason: string | null;
-      preResolvedDecision: string | null | undefined;
-    }) => false,
-  ),
+const resolveRegisteredExecApprovalDecisionMock = vi.hoisted(() =>
+  vi.fn<
+    typeof import("./bash-tools.exec-approval-request.js").resolveRegisteredExecApprovalDecision
+  >(),
 );
 const buildExecApprovalPendingToolResultMock = vi.hoisted(() => vi.fn());
 const sendExecApprovalFollowupResultMock = vi.hoisted(() =>
   vi.fn(async (_target: unknown, _resultText: string) => undefined),
 );
-const enforceStrictInlineEvalApprovalBoundaryMock = vi.hoisted(() =>
-  vi.fn(
-    (
-      value: ApprovalState & {
-        requiresInlineEvalApproval: boolean;
-        requiresAutoReviewHumanApproval?: boolean;
-      },
-    ) => ({
-      approvedByAsk: value.approvedByAsk,
-      deniedReason: value.deniedReason,
-    }),
-  ),
-);
-const resolveExecApprovalDecisionStateMock = vi.hoisted(() =>
-  vi.fn(async (params: ApprovalResolutionOptions & { decision: string | null }) => {
-    const initial = createExecApprovalDecisionStateMock();
-    let approvedByAsk = initial.approvedByAsk;
-    let deniedReason = initial.deniedReason;
-    let timeoutContext: unknown;
-    if (initial.baseDecision.timedOut && params.resolveTimedOut) {
-      const timedOut = await params.resolveTimedOut(initial);
-      approvedByAsk = timedOut.approvedByAsk;
-      deniedReason = timedOut.deniedReason;
-      timeoutContext = timedOut.context;
-    } else if (params.decision === "allow-once" || params.decision === "allow-always") {
-      approvedByAsk = true;
-    }
-    const requiresExplicitApproval =
-      typeof params.requiresExplicitApproval === "function"
-        ? params.requiresExplicitApproval(timeoutContext)
-        : params.requiresExplicitApproval;
-    const strict = enforceStrictInlineEvalApprovalBoundaryMock({
-      baseDecision: initial.baseDecision,
-      approvedByAsk,
-      deniedReason,
-      requiresInlineEvalApproval: requiresExplicitApproval,
-      ...(params.requiresAutoReviewHumanApproval !== undefined
-        ? { requiresAutoReviewHumanApproval: params.requiresAutoReviewHumanApproval }
-        : {}),
-    });
-    return { ...initial, ...strict, timeoutContext };
-  }),
-);
-const createExecApprovalRequestRouteMock = vi.hoisted(() =>
-  vi.fn(async (params: Record<string, unknown> & ApprovalResolutionOptions) => {
-    const request = await createAndRegisterDefaultExecApprovalRequestMock(params);
-    if (!request) {
-      throw new Error("missing test approval request");
-    }
-    const inline = shouldResolveExecApprovalUnavailableInlineMock({
-      unavailableReason: request.unavailableReason,
-      preResolvedDecision: request.preResolvedDecision,
-    });
-    if (!inline) {
-      return { ...request, kind: "wait" as const };
-    }
-    const state = await resolveExecApprovalDecisionStateMock({
-      ...params,
-      decision: request.preResolvedDecision ?? null,
-    });
-    return { ...request, kind: "inline" as const, preResolvedDecision: null, state };
-  }),
-);
-const resolveExecApprovalWaitOutcomeMock = vi.hoisted(() =>
-  vi.fn(
-    async (
-      params: ApprovalResolutionOptions & {
-        approvalId: string;
-        preResolvedDecision: string | null | undefined;
-        signal?: AbortSignal;
-      },
-    ) => {
-      let decision: string | null | undefined;
-      try {
-        decision = await resolveApprovalDecisionOrUndefinedMock({
-          approvalId: params.approvalId,
-          preResolvedDecision: params.preResolvedDecision,
-          onFailure: () => {},
-        });
-      } catch (error) {
-        return error === runAbortedApprovalError
-          ? { kind: "run-aborted" as const }
-          : { kind: "request-failed" as const };
-      }
-      if (decision === undefined) {
-        return { kind: "request-failed" as const };
-      }
-      if (params.signal?.aborted) {
-        return { kind: "run-aborted" as const };
-      }
-      const state = await resolveExecApprovalDecisionStateMock({ ...params, decision });
-      return params.signal?.aborted
-        ? { kind: "run-aborted" as const }
-        : { kind: "resolved" as const, decision, state };
-    },
-  ),
-);
 const registerExecApprovalRequestForHostOrThrowMock = vi.hoisted(() =>
-  vi.fn(async () => undefined),
+  vi.fn<
+    typeof import("./bash-tools.exec-approval-request.js").registerExecApprovalRequestForHostOrThrow
+  >(),
 );
 const detectInterpreterInlineEvalArgvMock = vi.hoisted(() =>
   vi.fn(
@@ -340,28 +162,25 @@ const detectInterpreterInlineEvalArgvMock = vi.hoisted(() =>
   ),
 );
 
-vi.mock("../infra/exec-approvals.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../infra/exec-approvals.js")>()),
-  countObsoleteGeneratedExecApprovalRules: vi.fn(() => 0),
-  evaluateShellAllowlist: evaluateShellAllowlistMock,
-  evaluateShellAllowlistWithAuthorization: evaluateShellAllowlistMock,
-  hasDurableExecApproval: hasDurableExecApprovalMock,
-  hasNodeCommandAllowAlwaysMarker: hasNodeCommandAllowAlwaysMarkerMock,
-  requiresExecApproval: requiresExecApprovalMock,
-  resolveAllowAlwaysPersistenceDecision: resolveAllowAlwaysPersistenceDecisionMock,
-  resolveAllowAlwaysPatternCoverage: resolveAllowAlwaysPatternCoverageMock,
-  resolveExecApprovalAllowedDecisions: resolveExecApprovalAllowedDecisionsMock,
-  resolveExecApprovalUnavailableDecisions: resolveExecApprovalUnavailableDecisionsMock,
-  resolveExecApprovalsFromFile: resolveExecApprovalsFromFileMock,
-  maxAsk: (a: ExecAsk, b: ExecAsk): ExecAsk => {
-    const order: Record<ExecAsk, number> = { off: 0, "on-miss": 1, always: 2 };
-    return order[a] >= order[b] ? a : b;
-  },
-  minSecurity: (a: ExecSecurity, b: ExecSecurity): ExecSecurity => {
-    const order: Record<ExecSecurity, number> = { deny: 0, allowlist: 1, full: 2 };
-    return order[a] <= order[b] ? a : b;
-  },
-}));
+vi.mock("../infra/exec-approvals.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../infra/exec-approvals.js")>();
+  resolveExecApprovalAllowedDecisionsMock.mockImplementation(
+    actual.resolveExecApprovalAllowedDecisions,
+  );
+  return {
+    ...actual,
+    countObsoleteGeneratedExecApprovalRules: vi.fn(() => 0),
+    evaluateShellAllowlist: evaluateShellAllowlistMock,
+    evaluateShellAllowlistWithAuthorization: evaluateShellAllowlistMock,
+    hasDurableExecApproval: hasDurableExecApprovalMock,
+    hasNodeCommandAllowAlwaysMarker: hasNodeCommandAllowAlwaysMarkerMock,
+    requiresExecApproval: requiresExecApprovalMock,
+    resolveAllowAlwaysPersistenceDecision: resolveAllowAlwaysPersistenceDecisionMock,
+    resolveAllowAlwaysPatternCoverage: resolveAllowAlwaysPatternCoverageMock,
+    resolveExecApprovalAllowedDecisions: resolveExecApprovalAllowedDecisionsMock,
+    resolveExecApprovalsFromFile: resolveExecApprovalsFromFileMock,
+  };
+});
 
 vi.mock("../infra/command-analysis/inline-eval.js", () => ({
   describeInterpreterInlineEval: vi.fn(() => "inline-eval"),
@@ -376,69 +195,51 @@ vi.mock("../infra/system-run-approval-context.js", () => ({
   parsePreparedSystemRunPayload: parsePreparedSystemRunPayloadMock,
 }));
 
-vi.mock("./bash-tools.exec-approval-request.js", () => ({
-  buildExecApprovalTurnSourceContext: vi.fn(() => ({})),
-  isExecApprovalRunAbortedError: (error: unknown) => error === runAbortedApprovalError,
-  registerExecApprovalRequestForHostOrThrow: registerExecApprovalRequestForHostOrThrowMock,
+vi.mock("node:crypto", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:crypto")>();
+  return { ...actual, default: { ...actual, randomUUID: () => "approval-1" } };
+});
+
+vi.mock("../infra/exec-approval-surface.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/exec-approval-surface.js")>()),
+  resolveExecApprovalInitiatingSurfaceStateAsync: async () => ({
+    kind: "enabled",
+    channel: "telegram",
+    channelLabel: "Telegram",
+  }),
 }));
 
-vi.mock("./bash-tools.exec-host-shared.js", () => ({
+vi.mock("./bash-tools.exec-approval-request.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./bash-tools.exec-approval-request.js")>()),
+  registerExecApprovalRequestForHostOrThrow: registerExecApprovalRequestForHostOrThrowMock,
+  resolveRegisteredExecApprovalDecision: resolveRegisteredExecApprovalDecisionMock,
+}));
+
+vi.mock("./bash-tools.exec-host-shared.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./bash-tools.exec-host-shared.js")>()),
   resolveExecHostApprovalContext: resolveExecHostApprovalContextMock,
-  buildDefaultExecApprovalRequestArgs: vi.fn(() => ({})),
-  createAndRegisterDefaultExecApprovalRequest: createAndRegisterDefaultExecApprovalRequestMock,
-  createExecApprovalRequestRoute: createExecApprovalRequestRouteMock,
-  shouldResolveExecApprovalUnavailableInline: shouldResolveExecApprovalUnavailableInlineMock,
-  resolveApprovalDecisionOrUndefined: resolveApprovalDecisionOrUndefinedMock,
-  resolveExecApprovalDecisionState: resolveExecApprovalDecisionStateMock,
-  resolveExecApprovalWaitOutcome: resolveExecApprovalWaitOutcomeMock,
-  createExecApprovalDecisionState: createExecApprovalDecisionStateMock,
-  enforceStrictInlineEvalApprovalBoundary: enforceStrictInlineEvalApprovalBoundaryMock,
   sendExecApprovalFollowupResult: sendExecApprovalFollowupResultMock,
   buildExecApprovalPendingToolResult: buildExecApprovalPendingToolResultMock,
-  buildHeadlessExecApprovalDeniedMessage: vi.fn(() => "denied"),
 }));
 
-vi.mock("./bash-tools.exec-runtime.js", () => ({
-  createApprovalSlug: vi.fn(() => "slug"),
+vi.mock("./bash-tools.exec-runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./bash-tools.exec-runtime.js")>()),
+  createApprovalSlug: vi.fn(() => "slug-1"),
 }));
 
 vi.mock("./tools/gateway.js", () => ({
   callGatewayTool: callGatewayToolMock,
 }));
 
-const resolveNodeIdFromListMock = vi.hoisted(() =>
-  vi.fn((nodes: Array<{ nodeId: string; displayName?: string }>, query?: string) => {
-    if (!query) {
-      if (nodes.length === 1) {
-        return expectDefined(nodes[0], "nodes[0] test invariant").nodeId;
-      }
-      throw new Error("node required");
-    }
-    const byId = nodes.find((n) => n.nodeId === query);
-    if (byId) {
-      return byId.nodeId;
-    }
-    const byName = nodes.find((n) => n.displayName === query);
-    if (byName) {
-      return byName.nodeId;
-    }
-    if (query.length >= 6) {
-      const byPrefix = nodes.find((n) => n.nodeId.startsWith(query));
-      if (byPrefix) {
-        return byPrefix.nodeId;
-      }
-    }
-    throw new Error(`unknown node: ${query}`);
-  }),
-);
-
-vi.mock("./tools/nodes-utils.js", () => ({
+vi.mock("./tools/nodes-utils.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./tools/nodes-utils.js")>()),
   listNodes: listNodesMock,
-  resolveNodeIdFromList: resolveNodeIdFromListMock,
 }));
 
-vi.mock("../logger.js", () => ({
+vi.mock("../logger.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../logger.js")>()),
   logInfo: vi.fn(),
+  logWarn: vi.fn(),
 }));
 
 function createNodeHostRequest(
@@ -531,10 +332,7 @@ function createNodeInvokeFailure(params: {
 }
 
 function requireRegisteredApprovalRequest(): Record<string, unknown> {
-  const calls = registerExecApprovalRequestForHostOrThrowMock.mock.calls as unknown as [
-    Record<string, unknown>,
-  ][];
-  const firstCall = calls[0];
+  const firstCall = registerExecApprovalRequestForHostOrThrowMock.mock.calls[0];
   if (!firstCall) {
     throw new Error("expected approval request registration");
   }
@@ -605,25 +403,6 @@ function mockGatewayInvokesWithNodeApprovals(file: Record<string, unknown>) {
   callGatewayToolMock.mockImplementation(createNodeGatewayHandler({ approvals: file }));
 }
 
-function usePolicyApprovalRequirementMock() {
-  requiresExecApprovalMock.mockImplementation((raw: unknown) => {
-    const params = raw as {
-      ask: string;
-      security: string;
-      analysisOk: boolean;
-      allowlistSatisfied: boolean;
-      durableApprovalSatisfied: boolean;
-    };
-    return (
-      params.ask === "always" ||
-      (params.ask === "on-miss" &&
-        params.security === "allowlist" &&
-        (!params.analysisOk || !params.allowlistSatisfied) &&
-        !params.durableApprovalSatisfied)
-    );
-  });
-}
-
 function buildAllowlistEvalResult(params?: {
   allowlistSatisfied?: boolean;
   segmentAllowlistEntry?: { pattern: string } | null;
@@ -642,19 +421,6 @@ function buildAllowlistEvalResult(params?: {
         : [null],
     segmentSatisfiedBy: [params?.allowlistSatisfied ? "allowlist" : null],
   };
-}
-
-function captureProcessUnhandledRejections() {
-  const reasons: unknown[] = [];
-  const originalProcessEmit = process.emit.bind(process);
-  const processEmit = vi.spyOn(process, "emit").mockImplementation((event, ...args) => {
-    if (event === "unhandledRejection") {
-      reasons.push(args[0]);
-      return true;
-    }
-    return originalProcessEmit(event, ...args);
-  });
-  return { reasons, restore: () => processEmit.mockRestore() };
 }
 
 const fullNodePolicy: MockExecApprovalsResolved["agent"] = {
@@ -677,14 +443,6 @@ function allowReviewer(risk: "low" | "medium" = "low") {
     risk,
     rationale: "safe command",
   }));
-}
-
-function timedOutDecision(approvedByAsk: boolean) {
-  createExecApprovalDecisionStateMock.mockReturnValue({
-    baseDecision: { timedOut: true },
-    approvedByAsk,
-    deniedReason: null,
-  });
 }
 
 function analysis(
@@ -772,58 +530,30 @@ describe("executeNodeHostCommand", () => {
     resolveExecApprovalsFromFileMock.mockReset();
     resolveExecApprovalsFromFileMock.mockReturnValue(createNodeApprovals([], fullNodePolicy));
     requiresExecApprovalMock.mockReset();
-    usePolicyApprovalRequirementMock();
+    requiresExecApprovalMock.mockImplementation(requiresExecApproval);
     resolveAllowAlwaysPersistenceDecisionMock.mockReset();
     resolveAllowAlwaysPersistenceDecisionMock.mockReturnValue({
       kind: "patterns",
       patterns: [{ pattern: "/trusted/bin/tool" }],
     });
     resolveExecApprovalAllowedDecisionsMock.mockClear();
-    resolveExecApprovalUnavailableDecisionsMock.mockClear();
     resolveExecHostApprovalContextMock.mockReset();
     resolveExecHostApprovalContextMock.mockReturnValue(createHostPolicy("full", "off"));
-    createAndRegisterDefaultExecApprovalRequestMock.mockReset();
-    createAndRegisterDefaultExecApprovalRequestMock.mockImplementation(async (args?: unknown) => {
-      const register =
-        args && typeof args === "object" && "register" in args
-          ? (args as { register?: (approvalId: string) => Promise<void> }).register
-          : undefined;
-      await register?.("approval-1");
-      return {
-        approvalId: "approval-1",
-        approvalSlug: "slug-1",
-        warningText: "",
-        expiresAtMs: Date.now() + 60_000,
-        preResolvedDecision: null,
-        initiatingSurface: "origin",
-        sentApproverDms: false,
-        unavailableReason: null,
-      };
-    });
-    resolveApprovalDecisionOrUndefinedMock.mockReset();
-    resolveApprovalDecisionOrUndefinedMock.mockResolvedValue("allow-once");
-    createExecApprovalDecisionStateMock.mockReset();
-    createExecApprovalDecisionStateMock.mockReturnValue({
-      baseDecision: { timedOut: false },
-      approvedByAsk: false,
-      deniedReason: null,
-    });
-    shouldResolveExecApprovalUnavailableInlineMock.mockReset();
-    shouldResolveExecApprovalUnavailableInlineMock.mockReturnValue(false);
+    registerExecApprovalRequestForHostOrThrowMock.mockReset();
+    registerExecApprovalRequestForHostOrThrowMock.mockImplementation(async ({ approvalId }) => ({
+      id: approvalId,
+      expiresAtMs: Date.now() + 60_000,
+    }));
+    resolveRegisteredExecApprovalDecisionMock.mockReset();
+    resolveRegisteredExecApprovalDecisionMock.mockResolvedValue("allow-once");
     buildExecApprovalPendingToolResultMock.mockReset();
     buildExecApprovalPendingToolResultMock.mockReturnValue({
       content: [],
       details: { status: "approval-pending" },
     });
     sendExecApprovalFollowupResultMock.mockReset();
-    enforceStrictInlineEvalApprovalBoundaryMock.mockReset();
-    enforceStrictInlineEvalApprovalBoundaryMock.mockImplementation((value) => ({
-      approvedByAsk: value.approvedByAsk,
-      deniedReason: value.deniedReason,
-    }));
     detectInterpreterInlineEvalArgvMock.mockReset();
     detectInterpreterInlineEvalArgvMock.mockReturnValue(null);
-    registerExecApprovalRequestForHostOrThrowMock.mockReset();
   });
 
   it("denies non-interactive approval requests without creating operator events", async () => {
@@ -841,7 +571,6 @@ describe("executeNodeHostCommand", () => {
       status: "failed",
       failureKind: "approval_required",
     });
-    expect(createAndRegisterDefaultExecApprovalRequestMock).not.toHaveBeenCalled();
     expect(registerExecApprovalRequestForHostOrThrowMock).not.toHaveBeenCalled();
   });
 
@@ -849,7 +578,9 @@ describe("executeNodeHostCommand", () => {
     const unhandledRejections = captureProcessUnhandledRejections();
 
     try {
-      resolveExecApprovalWaitOutcomeMock.mockResolvedValueOnce({ kind: "request-failed" });
+      resolveRegisteredExecApprovalDecisionMock.mockRejectedValueOnce(
+        new Error("approval request failed"),
+      );
       sendExecApprovalFollowupResultMock.mockRejectedValue(
         new Error("approval failure follow-up unavailable"),
       );
@@ -928,9 +659,9 @@ describe("executeNodeHostCommand", () => {
   });
 
   it("drops a detached node approval when cancellation wins before consumption", async () => {
-    const pendingDecision = createDeferred<string | null | undefined>();
+    const pendingDecision = createDeferred<string | null>();
     const abortController = new AbortController();
-    resolveApprovalDecisionOrUndefinedMock.mockReturnValueOnce(pendingDecision.promise);
+    resolveRegisteredExecApprovalDecisionMock.mockReturnValueOnce(pendingDecision.promise);
     resolveExecHostApprovalContextMock.mockReturnValue(createHostPolicy("full", "always"));
 
     const result = await executeNodeHostCommand(
@@ -938,12 +669,12 @@ describe("executeNodeHostCommand", () => {
     );
 
     expect(result.details?.status).toBe("approval-pending");
-    expect(resolveApprovalDecisionOrUndefinedMock).toHaveBeenCalledOnce();
+    expect(resolveRegisteredExecApprovalDecisionMock).toHaveBeenCalledOnce();
     abortController.abort();
     pendingDecision.resolve("allow-once");
     await setImmediate();
 
-    expect(createExecApprovalDecisionStateMock).not.toHaveBeenCalled();
+    expect(resolveExecHostApprovalContextMock).toHaveBeenCalledTimes(1);
     expect(sendExecApprovalFollowupResultMock).not.toHaveBeenCalled();
     expectNoSystemRun();
   });
@@ -1133,8 +864,7 @@ describe("executeNodeHostCommand", () => {
     resolveExecHostApprovalContextMock.mockReturnValue(
       createHostPolicy("allowlist", "always", "allowlist"),
     );
-    resolveApprovalDecisionOrUndefinedMock.mockResolvedValue(null);
-    timedOutDecision(false);
+    resolveRegisteredExecApprovalDecisionMock.mockResolvedValue(null);
 
     const result = await executeNodeHostCommand(
       createNodeHostRequest({
@@ -1159,8 +889,11 @@ describe("executeNodeHostCommand", () => {
 
   it("tags headless inline fallback before invoking the node", async () => {
     resolveExecHostApprovalContextMock.mockReturnValue(createHostPolicy("full", "always", "full"));
-    shouldResolveExecApprovalUnavailableInlineMock.mockReturnValue(true);
-    timedOutDecision(true);
+    registerExecApprovalRequestForHostOrThrowMock.mockResolvedValue({
+      id: "approval-1",
+      expiresAtMs: Date.now() + 60_000,
+      finalDecision: null,
+    });
 
     const result = await executeNodeHostCommand(
       createNodeHostRequest({
@@ -1191,8 +924,11 @@ describe("executeNodeHostCommand", () => {
           throw new Error("exec denied: host=node security=deny");
         });
       if (headless) {
-        shouldResolveExecApprovalUnavailableInlineMock.mockReturnValue(true);
-        timedOutDecision(true);
+        registerExecApprovalRequestForHostOrThrowMock.mockResolvedValue({
+          id: "approval-1",
+          expiresAtMs: Date.now() + 60_000,
+          finalDecision: null,
+        });
       }
       await expect(
         executeNodeHostCommand(
@@ -1216,8 +952,7 @@ describe("executeNodeHostCommand", () => {
     resolveExecHostApprovalContextMock.mockImplementationOnce(() => {
       throw new Error("exec denied: host=node security=deny");
     });
-    resolveApprovalDecisionOrUndefinedMock.mockResolvedValue(null);
-    timedOutDecision(true);
+    resolveRegisteredExecApprovalDecisionMock.mockResolvedValue(null);
 
     const result = await executeNodeHostCommand(
       createNodeHostRequest({ approvalFollowupMode: "agent", ask: "always" }),
@@ -1253,8 +988,7 @@ describe("executeNodeHostCommand", () => {
     resolveExecHostApprovalContextMock.mockReturnValue(
       createHostPolicy("allowlist", "always", "allowlist"),
     );
-    resolveApprovalDecisionOrUndefinedMock.mockResolvedValue(null);
-    timedOutDecision(false);
+    resolveRegisteredExecApprovalDecisionMock.mockResolvedValue(null);
 
     const result = await executeNodeHostCommand(
       createNodeHostRequest({
@@ -1354,7 +1088,6 @@ describe("executeNodeHostCommand", () => {
         ],
       },
     });
-    expect(createAndRegisterDefaultExecApprovalRequestMock).not.toHaveBeenCalled();
     expect(registerExecApprovalRequestForHostOrThrowMock).not.toHaveBeenCalled();
     expect(
       callGatewayToolMock.mock.calls
@@ -1395,7 +1128,7 @@ describe("executeNodeHostCommand", () => {
       throw new Error("provider\n\u001b[31mfailed\u001b[0m\u202e");
     });
     const warnings: string[] = [];
-    resolveApprovalDecisionOrUndefinedMock.mockResolvedValue("deny");
+    resolveRegisteredExecApprovalDecisionMock.mockResolvedValue("deny");
     resolveExecHostApprovalContextMock.mockReturnValue(createHostPolicy("allowlist", "on-miss"));
 
     const result = executeNodeHostCommand(
@@ -1408,9 +1141,9 @@ describe("executeNodeHostCommand", () => {
       }),
     );
 
-    await expect(result).rejects.toThrow("exec denied: approval-required");
+    await expect(result).rejects.toThrow("exec denied: user-denied");
     expect(autoReviewer).toHaveBeenCalledTimes(1);
-    expect(createAndRegisterDefaultExecApprovalRequestMock).toHaveBeenCalledTimes(1);
+    expect(registerExecApprovalRequestForHostOrThrowMock).toHaveBeenCalledTimes(1);
     expect(registerExecApprovalRequestForHostOrThrowMock).toHaveBeenCalledWith(
       expect.objectContaining({ approvalId: "approval-1", host: "node" }),
     );
@@ -1503,7 +1236,7 @@ describe("executeNodeHostCommand", () => {
         },
       }),
     );
-    expect(createAndRegisterDefaultExecApprovalRequestMock).toHaveBeenCalled();
+    expect(registerExecApprovalRequestForHostOrThrowMock).toHaveBeenCalled();
     expect(callGatewayToolMock).not.toHaveBeenCalledWith(
       "exec.approval.resolve",
       expect.anything(),
@@ -1574,7 +1307,7 @@ describe("executeNodeHostCommand", () => {
 
     expect(result.details?.status).toBe("completed");
     expect(autoReviewer).not.toHaveBeenCalled();
-    expect(createAndRegisterDefaultExecApprovalRequestMock).toHaveBeenCalled();
+    expect(registerExecApprovalRequestForHostOrThrowMock).toHaveBeenCalled();
   });
 
   it.each([["zsh", "-ic"]])(
@@ -1623,7 +1356,7 @@ describe("executeNodeHostCommand", () => {
 
       expect(result.details?.status).toBe("completed");
       expect(autoReviewer).not.toHaveBeenCalled();
-      expect(createAndRegisterDefaultExecApprovalRequestMock).toHaveBeenCalled();
+      expect(registerExecApprovalRequestForHostOrThrowMock).toHaveBeenCalled();
       expect(warnings).toContain(
         "Exec auto-review skipped: login or interactive shell startup requires human approval",
       );
@@ -1670,7 +1403,7 @@ describe("executeNodeHostCommand", () => {
 
     await expect(execution).rejects.toThrow("security=deny");
     expect(autoReviewer).not.toHaveBeenCalled();
-    expect(createAndRegisterDefaultExecApprovalRequestMock).not.toHaveBeenCalled();
+    expect(registerExecApprovalRequestForHostOrThrowMock).not.toHaveBeenCalled();
   });
 
   it.each(["unavailable node policy", "unparseable command"])(
@@ -1694,13 +1427,7 @@ describe("executeNodeHostCommand", () => {
       resolveExecHostApprovalContextMock.mockReturnValue(
         createHostPolicy("allowlist", "on-miss", "full"),
       );
-      resolveApprovalDecisionOrUndefinedMock.mockResolvedValue(null);
-      timedOutDecision(true);
-      enforceStrictInlineEvalApprovalBoundaryMock.mockImplementation((value) =>
-        value.requiresAutoReviewHumanApproval === true && value.baseDecision.timedOut
-          ? { approvedByAsk: false, deniedReason: "approval-timeout" }
-          : { approvedByAsk: value.approvedByAsk, deniedReason: value.deniedReason },
-      );
+      resolveRegisteredExecApprovalDecisionMock.mockResolvedValue(null);
       const result = executeNodeHostCommand(
         createNodeHostRequest({
           ...(reason === "unparseable command" ? { command: "echo 'unterminated" } : {}),
@@ -1738,7 +1465,7 @@ describe("executeNodeHostCommand", () => {
 
     expect(result.details?.status).toBe("approval-pending");
     expect(autoReviewer).not.toHaveBeenCalled();
-    expect(createAndRegisterDefaultExecApprovalRequestMock).toHaveBeenCalledTimes(1);
+    expect(registerExecApprovalRequestForHostOrThrowMock).toHaveBeenCalledTimes(1);
     expect(resolveExecApprovalAllowedDecisionsMock).toHaveBeenCalledWith({
       ask: "always",
       allowAlwaysPersistence: {
@@ -1800,13 +1527,7 @@ describe("executeNodeHostCommand", () => {
     resolveExecHostApprovalContextMock.mockReturnValue(
       createHostPolicy("allowlist", "on-miss", "full"),
     );
-    resolveApprovalDecisionOrUndefinedMock.mockResolvedValue(null);
-    timedOutDecision(true);
-    enforceStrictInlineEvalApprovalBoundaryMock.mockImplementation((value) =>
-      value.requiresAutoReviewHumanApproval === true && value.baseDecision.timedOut
-        ? { approvedByAsk: false, deniedReason: "approval-timeout" }
-        : { approvedByAsk: value.approvedByAsk, deniedReason: value.deniedReason },
-    );
+    resolveRegisteredExecApprovalDecisionMock.mockResolvedValue(null);
 
     const warnings: string[] = [];
     const result = executeNodeHostCommand(
@@ -1856,7 +1577,9 @@ describe("executeNodeHostCommand", () => {
       });
     });
     resolveExecHostApprovalContextMock.mockReturnValue(createHostPolicy("allowlist", "on-miss"));
-    resolveApprovalDecisionOrUndefinedMock.mockResolvedValue(undefined);
+    resolveRegisteredExecApprovalDecisionMock.mockRejectedValue(
+      new Error("approval request failed"),
+    );
 
     const result = executeNodeHostCommand(
       createNodeHostRequest({
@@ -1876,7 +1599,7 @@ describe("executeNodeHostCommand", () => {
     expect(evalEnvs.length).toBeGreaterThanOrEqual(2);
     expect(evalEnvs.every((env) => env?.PATH === "" && env?.Path === "")).toBe(true);
     await vi.waitFor(() => {
-      expect(resolveApprovalDecisionOrUndefinedMock).toHaveBeenCalledTimes(1);
+      expect(resolveRegisteredExecApprovalDecisionMock).toHaveBeenCalledTimes(1);
     });
   });
 
@@ -1949,7 +1672,7 @@ describe("executeNodeHostCommand", () => {
         reasons: ["no-reusable-pattern"],
       });
       resolveExecHostApprovalContextMock.mockReturnValue(createHostPolicy("allowlist", "on-miss"));
-      resolveApprovalDecisionOrUndefinedMock.mockResolvedValue("allow-always");
+      resolveRegisteredExecApprovalDecisionMock.mockResolvedValue("allow-always");
 
       await executeNodeHostCommand(
         createNodeHostRequest({
@@ -2001,7 +1724,9 @@ describe("executeNodeHostCommand", () => {
       );
       resolveAllowAlwaysPatternCoverageMock.mockReturnValue(coverage);
       resolveExecHostApprovalContextMock.mockReturnValue(createHostPolicy("allowlist", "on-miss"));
-      resolveApprovalDecisionOrUndefinedMock.mockResolvedValue(undefined);
+      resolveRegisteredExecApprovalDecisionMock.mockRejectedValue(
+        new Error("approval request failed"),
+      );
 
       await expect(
         executeNodeHostCommand(
@@ -2195,7 +1920,8 @@ describe("executeNodeHostCommand", () => {
     {
       requestedNode: "nonexistent-node",
       boundNode: undefined,
-      error: "requested node not found: nonexistent-node (unknown node: nonexistent-node)",
+      error:
+        "requested node not found: nonexistent-node (unknown node: nonexistent-node (known: home-wsl-debian))",
     },
   ])(
     "rejects requested target $requestedNode without dispatch",
@@ -2281,12 +2007,7 @@ describe("executeNodeHostCommand", () => {
 
   it("denies timed-out inline-eval requests instead of invoking the node", async () => {
     detectInterpreterInlineEvalArgvMock.mockReturnValue(INLINE_EVAL_HIT);
-    resolveApprovalDecisionOrUndefinedMock.mockResolvedValue(null);
-    timedOutDecision(true);
-    enforceStrictInlineEvalApprovalBoundaryMock.mockReturnValue({
-      approvedByAsk: false,
-      deniedReason: "approval-timeout",
-    });
+    resolveRegisteredExecApprovalDecisionMock.mockResolvedValue(null);
     resolveExecHostApprovalContextMock.mockReturnValue(createHostPolicy("full", "off", "full"));
 
     const result = executeNodeHostCommand(

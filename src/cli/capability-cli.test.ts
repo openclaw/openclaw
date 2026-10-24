@@ -135,10 +135,9 @@ const mocks = vi.hoisted(() => ({
     voiceCompatible: false,
     attempts: [],
   })),
-  setTtsProvider: vi.fn(),
+  updateTtsPrefsAsync: vi.fn(),
   getTtsProviderAsync: vi.fn(() => "openai"),
   listSpeechProviders: vi.fn(() => []),
-  setTtsPersona: vi.fn(),
   resolveTtsConfig: vi.fn(() => ({ providerConfigs: {} })),
   resolveExplicitTtsOverridesAsync: vi.fn(
     ({
@@ -408,19 +407,19 @@ vi.mock("../tts/tts.js", () => ({
   listSpeechVoices: vi.fn(async () => []),
   resolveTtsConfig: mocks.resolveTtsConfig,
   resolveTtsPrefsPathAsync: vi.fn(async () => "/tmp/tts.json"),
-  setTtsEnabled: vi.fn(),
-  setTtsPersona: mocks.setTtsPersona,
-  setTtsProvider: mocks.setTtsProvider,
   resolveExplicitTtsOverridesAsync: mocks.resolveExplicitTtsOverridesAsync,
   textToSpeech: mocks.textToSpeech,
 }));
 
-vi.mock("../tts/provider-registry.js", () => ({
+vi.mock("../tts/tts-settings-write-worker.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../tts/tts-settings-write-worker.js")>()),
+  updateTtsPrefsAsync: mocks.updateTtsPrefsAsync,
+}));
+
+vi.mock("../tts/provider-registry.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../tts/provider-registry.js")>()),
   canonicalizeSpeechProviderId: vi.fn((provider: string) => provider),
   listSpeechProviders: mocks.listSpeechProviders,
-  normalizeSpeechProviderId: vi.fn(
-    (provider: string | undefined) => provider?.trim().toLowerCase() || undefined,
-  ),
 }));
 
 // mock-isolation: Command routing uses fixture providers without the auth and plugin runtime graph.
@@ -1066,7 +1065,7 @@ describe("capability cli", () => {
       message: "error: option '--persona <id>' cannot be used with option '--off'",
     });
     expect(mocks.callGateway).not.toHaveBeenCalled();
-    expect(mocks.setTtsPersona).not.toHaveBeenCalled();
+    expect(mocks.updateTtsPrefsAsync).not.toHaveBeenCalled();
     expect(mocks.runtime.writeJson).not.toHaveBeenCalled();
   });
 
@@ -1766,7 +1765,7 @@ describe("capability cli", () => {
           disableFallback: true,
         });
       }
-      expect(mocks.setTtsProvider).not.toHaveBeenCalled();
+      expect(mocks.updateTtsPrefsAsync).not.toHaveBeenCalled();
       expect(mocks.setRuntimeConfigSnapshot).toHaveBeenLastCalledWith(expected, undefined);
     },
   );

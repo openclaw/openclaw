@@ -42,7 +42,7 @@ export function startSessionCostUsageProjectionLifetime(params: {
         }),
       );
     });
-  const refreshAll = () =>
+  const refreshAgents = (agentId?: string) =>
     inOwnerContext(() => {
       if (work.isClosing) {
         return;
@@ -51,7 +51,9 @@ export function startSessionCostUsageProjectionLifetime(params: {
         .track(async () => {
           const { agents } = await listGatewayAgentsBasic(params.getConfig());
           for (const agent of agents) {
-            refreshAgent(agent.id);
+            if (agentId === undefined || agent.id === agentId) {
+              refreshAgent(agent.id);
+            }
           }
         })
         .catch((error: unknown) => {
@@ -93,7 +95,17 @@ export function startSessionCostUsageProjectionLifetime(params: {
         change.scope === "stores" ||
         typeof change.scope === "object"
       ) {
-        refreshAll();
+        const scope = change.scope;
+        // Default stores are agent-local; custom selectors can share physical storage.
+        const agentId =
+          !change.factsInvalidated &&
+          typeof scope === "object" &&
+          scope.topology === true &&
+          scope.storePath === undefined &&
+          !params.getConfig().session?.store
+            ? scope.agentId
+            : undefined;
+        refreshAgents(agentId);
       }
     } else if (
       change.facts?.kind === "removed" &&
@@ -103,7 +115,7 @@ export function startSessionCostUsageProjectionLifetime(params: {
       if (change.agentId) {
         refreshAgent(change.agentId, change.storePath);
       } else {
-        refreshAll();
+        refreshAgents();
       }
     }
   });
@@ -115,11 +127,11 @@ export function startSessionCostUsageProjectionLifetime(params: {
         return;
       }
       pricingRevision = next;
-      refreshAll();
+      refreshAgents();
     }
   });
   // The same queue bounds startup and incremental batches and publishes partial progress.
-  refreshAll();
+  refreshAgents();
   return {
     async stop() {
       offTranscript();

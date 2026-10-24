@@ -17,25 +17,18 @@ export {
   parseInboundMediaUri,
 } from "./inbound-media-uri.js";
 
-type InboundMediaReference = {
-  id: string;
-  physicalPath: string;
-};
-
-type MediaReferenceSourceInfo = {
+/** Classifies media reference schemes before local resolution or sandbox rewriting. */
+export function classifyMediaReferenceSource(
+  source: string,
+  options?: { allowDataUrl?: boolean },
+): {
   hasUnsupportedScheme: boolean;
   isDataUrl: boolean;
   isFileUrl: boolean;
   isHttpUrl: boolean;
   isMediaStoreUrl: boolean;
   looksLikeWindowsDrivePath: boolean;
-};
-
-/** Classifies media reference schemes before local resolution or sandbox rewriting. */
-export function classifyMediaReferenceSource(
-  source: string,
-  options?: { allowDataUrl?: boolean },
-): MediaReferenceSourceInfo {
+} {
   const allowDataUrl = options?.allowDataUrl ?? true;
   const looksLikeWindowsDrivePath = /^[a-zA-Z]:[\\/]/.test(source);
   const hasScheme = /^[a-z][a-z0-9+.-]*:/i.test(source);
@@ -122,9 +115,10 @@ export function resolveMediaReferenceSandboxPath(
 }
 
 /** Resolves inbound media:// URIs or first-level inbound file paths to concrete store files. */
-export async function resolveInboundMediaReference(
-  source: string,
-): Promise<InboundMediaReference | null> {
+export async function resolveInboundMediaReference(source: string): Promise<{
+  id: string;
+  physicalPath: string;
+} | null> {
   const normalizedSource = normalizeMediaReferenceSource(source);
   if (!normalizedSource) {
     return null;

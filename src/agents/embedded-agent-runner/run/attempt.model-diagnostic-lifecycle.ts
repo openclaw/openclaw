@@ -34,6 +34,7 @@ import {
 import { formatPropagatedDiagnosticTraceparent } from "../../../infra/diagnostic-trace-propagation.js";
 import { emitDiagnosticsTimelineEvent } from "../../../infra/diagnostics-timeline.js";
 import { withModelTransportContext } from "../../../llm/model-transport-context.js";
+import type { ModelRequestHeaders } from "../../../llm/types.js";
 import { createModelCallStreamProgressReporter } from "../../../logging/diagnostic-model-stream-progress.js";
 import type { DiagnosticEmbeddedRunOwner } from "../../../logging/diagnostic-run-activity.js";
 import { recordReasoningSuppressedDiagnostic } from "../../../logging/diagnostic-session-state.js";
@@ -281,7 +282,7 @@ export function createModelLifecycle(params: {
     return originalOnResponse?.(response, model);
   };
 
-  const headers: Record<string, string> = {};
+  const headers: ModelRequestHeaders = {};
   for (const [key, value] of Object.entries(options?.headers ?? {})) {
     if (key.toLowerCase() === TRACEPARENT_HEADER_NAME) {
       continue;

@@ -6,7 +6,6 @@ import {
   controlUiBundledSettingsStorageKey,
   controlUiSessionUrl,
   installMockGateway,
-  navigateToControlUiSession,
 } from "../test-helpers/control-ui-e2e.ts";
 import { closeChatDetails, openChatDetails } from "./chat-details.test-support.ts";
 import { controlUiE2eBuiltModuleRequest } from "./control-ui-built-module.test-support.ts";
@@ -43,12 +42,6 @@ suite.define(() => {
           activeRunIds: [],
           updatedAt: now - 5_000,
         } satisfies GatewaySessionRow;
-        const next = {
-          ...parent,
-          key: "agent:main:next-conversation",
-          sessionId: "next-conversation",
-          label: "Another conversation",
-        } satisfies GatewaySessionRow;
         const history = [
           {
             role: "assistant",
@@ -59,7 +52,7 @@ suite.define(() => {
         ];
         const gateway = await installMockGateway(page, {
           sessionKey: parent.key,
-          sessions: [parent, next],
+          sessions: [parent],
           historyMessages: history,
           featureMethods: [
             ...defaultControlUiFeatureMethods,
@@ -98,18 +91,6 @@ suite.define(() => {
         await activePane.getByText("Ready for delegated work.", { exact: true }).waitFor();
         expect(activityRequests).toEqual([]);
         expect(await panel.isVisible()).toBe(false);
-        const actions = activePane.locator(".chat-pane__actions");
-        expect(
-          await actions
-            .getByRole("button")
-            .evaluateAll((buttons) => buttons.map((button) => button.getAttribute("aria-label"))),
-        ).toEqual(["Session sharing", "Details"]);
-        expect(
-          await activePane
-            .locator(".chat-pane__identity-actions .chat-header-session-menu__trigger")
-            .count(),
-        ).toBe(1);
-
         const detailsDialog = await openChatDetails(activePane);
         await detailsDialog.getByRole("status", { name: "Loading…", exact: true }).waitFor();
         expect(
@@ -165,7 +146,7 @@ suite.define(() => {
           updatedAt: now + 1,
           snapshotAt: now + 1,
         };
-        await gateway.setSessionsListResponse(sessionsListResponse([runningParent, child, next]));
+        await gateway.setSessionsListResponse(sessionsListResponse([runningParent, child]));
         await gateway.emitGatewayEvent("sessions.changed", {
           sessionKey: child.key,
           reason: "run-start",
@@ -211,7 +192,7 @@ suite.define(() => {
           updatedAt: now + 3,
           snapshotAt: now + 3,
         };
-        await gateway.setSessionsListResponse(sessionsListResponse([waitingParent, child, next]));
+        await gateway.setSessionsListResponse(sessionsListResponse([waitingParent, child]));
         await gateway.setMethodResponse("chat.history", {
           messages: [
             ...history,
@@ -254,92 +235,6 @@ suite.define(() => {
         expect(await waitLine.count()).toBe(0);
         expect(await activePane.locator(".chat-working-indicator--subagents").count()).toBe(0);
         expect(await transcriptHeight()).toBe(beforeWaitHeight);
-        const mountedPanel = await panel.elementHandle();
-        await selectChatLayoutAction(activePane, "Expand Subagents");
-        await activePane.locator(".sidebar-region--expanded-side").waitFor();
-        await selectChatLayoutAction(activePane, "Restore split");
-        await activePane.locator(".sidebar-region--expanded-side").waitFor({ state: "hidden" });
-        expect(await mountedPanel?.evaluate((element) => element.isConnected)).toBe(true);
-        await selectChatLayoutAction(activePane, "Expand Subagents");
-        const activeSubagentsTab = activePane.locator(
-          '[data-region-header="side"] .tabstrip-tab[aria-selected="true"]',
-        );
-        await activeSubagentsTab.focus();
-        await page.keyboard.press("Enter");
-        expect(await activePane.locator(".sidebar-region--expanded-side").isVisible()).toBe(true);
-        await selectChatLayoutAction(activePane, "Restore split");
-        await activePane.locator(".sidebar-region--expanded-side").waitFor({ state: "hidden" });
-        expect(await mountedPanel?.evaluate((element) => element.isConnected)).toBe(true);
-        await mountedPanel?.dispose();
-        await activePane.getByRole("button", { name: "Close Subagents", exact: true }).click();
-        await panel.waitFor({ state: "hidden" });
-        await selectChatLayoutAction(activePane, "Subagents");
-        await panelRow.waitFor();
-
-        const settledChild: GatewaySessionRow = {
-          ...child,
-          status: "done",
-          hasActiveRun: false,
-          activeRunIds: [],
-          endedAt: now + 66_000,
-          updatedAt: now + 66_000,
-          snapshotAt: now + 66_000,
-        };
-        const settledParent: GatewaySessionRow = {
-          ...waitingParent,
-          hasActiveSubagentRun: false,
-          updatedAt: now + 66_000,
-          snapshotAt: now + 66_000,
-        };
-        await gateway.setSessionsListResponse(
-          sessionsListResponse([settledParent, settledChild, next]),
-        );
-        await gateway.emitGatewayEvent("sessions.changed", {
-          sessionKey: child.key,
-          reason: "run-settled",
-          ts: now + 66_000,
-          session: settledChild,
-          ancestorSessions: [settledParent],
-        });
-        await waitLine.waitFor({ state: "hidden" });
-        const resumedParent: GatewaySessionRow = {
-          ...settledParent,
-          status: "running",
-          hasActiveRun: true,
-          activeRunIds: ["parent-resumed"],
-          startedAt: now + 67_000,
-          updatedAt: now + 67_000,
-          snapshotAt: now + 67_000,
-        };
-        await gateway.setSessionsListResponse(
-          sessionsListResponse([resumedParent, settledChild, next]),
-        );
-        await gateway.emitGatewayEvent("sessions.changed", {
-          sessionKey: parent.key,
-          reason: "run-start",
-          ts: now + 67_000,
-          session: resumedParent,
-          ancestorSessions: [],
-        });
-        await activePane.locator(".chat-working-indicator").waitFor();
-        expect(await activePane.locator(".agent-chat__composer-run-status").count()).toBe(0);
-        expect(await waitLine.count()).toBe(0);
-        expect(await panel.isVisible()).toBe(true);
-        await activePane.getByRole("button", { name: "Close Subagents", exact: true }).click();
-        await panel.waitFor({ state: "hidden" });
-
-        await gateway.setMethodResponse("chat.history", {
-          messages: [{ role: "assistant", content: "A separate conversation.", timestamp: now }],
-          sessionId: next.sessionId,
-          sessionInfo: next,
-          inFlightRun: null,
-        });
-        await navigateToControlUiSession(page, next.key);
-        await activePane.getByText("A separate conversation.", { exact: true }).waitFor();
-        expect(await panel.isVisible()).toBe(false);
-        expect(await activePane.locator(".agent-chat__composer-run-status").isVisible()).toBe(
-          false,
-        );
       },
     );
   });

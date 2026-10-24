@@ -77,8 +77,8 @@ resolver. Return `null` to skip the flush for provider-specific reasons.
 
 There are two resolver fields:
 
-- `flushPlanResolver` returns a complete `MemoryFlushPlan` or `null`. Its
-  contract is unchanged from earlier releases. Memory Core uses it.
+- `flushPlanResolver` returns a complete `MemoryFlushPlan` or `null`. Memory
+  Core uses it.
 - `providerFlushPlanResolver` returns a plan the host completes: a
   `MemoryFlushFilePlanDraft` (a complete `MemoryFlushPlan` is one such draft)
   or a `MemoryFlushToolsPlan`. When a plugin registers both, the host uses
@@ -86,12 +86,10 @@ There are two resolver fields:
 
 Each plan has `prompt`, `systemPrompt`, and one persistence arm. In plans from
 `providerFlushPlanResolver`, the `softThresholdTokens`,
-`forceFlushTranscriptBytes`, `reserveTokensFloor`, and `model` fields are
-deliberate provider overrides. The host fills omitted timing fields from its
-resolved timing, and fills an omitted `model` from `memoryFlush.model` for the
-tools arm only; a file plan without `model` keeps the session's model. A `model` override pins the turn
-to an exact `provider/model` reference, such as `ollama/qwen3:8b`, without
-inheriting the active fallback chain.
+`forceFlushTranscriptBytes`, and `reserveTokensFloor` fields are deliberate
+provider overrides. The host fills omitted timing fields from its resolved
+timing. All flush turns use the active session model and its normal fallback
+chain; resolvers do not select a separate model.
 
 Choose exactly one persistence arm:
 
@@ -211,6 +209,14 @@ Capabilities are enforced before provider code runs:
 | Automatic recall  | `candidates` array containing `"trigger"` and/or `"project"`        | `candidates({ kind })` names an undeclared kind                           |
 | Project filtering | `projectFilter: boolean`                                            | non-empty `activeProjectKeys` is supplied when project filtering is false |
 
+The selected memory slot owner can also join `/learn` by declaring
+`learnToolNames` and `learnGuidanceBuilder`. The host checks the declared tools
+against the turn's tool policy and calls the builder with the allowed subset;
+the builder returns guidance lines appended to the `/learn` prompt, or `[]`
+when those tools cannot persist lessons. The host adds a routing rule when
+Skill Workshop is also available. Unselected sidecars cannot contribute these
+fields.
+
 The selected memory slot owner can also declare `recallToolNames`. These are
 the concrete agent tools Active Memory uses for deep recall. A valid explicit
 Active Memory `toolsAllow` list takes precedence, followed by the selected
@@ -275,7 +281,11 @@ type MemoryAudience =
 - Operator-created root sessions record a `direct` chat type at creation, so
   sessions started later by `sessions_send`, cron, or the `agent` method resolve
   an audience. The turn's owner status still selects `owner-private` or
-  `conversation`.
+  `conversation`. `openclaw doctor --fix` records the same `direct` type on
+  dashboard chats created before that stamp existed: operator-created rows with
+  a generated `dashboard:` key, grouped under their agent's main session, and
+  with no spawn, fork, plugin owner, incognito boundary, or external delivery
+  route. Group and channel sessions never match.
 - Missing, malformed, cyclic, or stale lineage produces no audience. Unknown or
   missing durable chat type also produces no audience. The Gateway logs every
   denial as `memory_audience_denied` with the session key and reason.

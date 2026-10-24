@@ -18,6 +18,7 @@ import {
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import * as leaseHeartbeat from "../state/openclaw-state-lease-heartbeat.js";
 import { renewOpenClawStateLeaseInTransaction } from "../state/openclaw-state-lease-store.js";
+import { mockLinuxNamespace } from "./gateway-lock-namespace.test-support.js";
 import {
   GATEWAY_OWNER_HEARTBEAT_STALE_MS,
   readGatewayLockProcessNamespace,
@@ -32,6 +33,7 @@ import * as ownerLeaseRead from "./gateway-owner-lease.read.js";
 import * as stateOwners from "./gateway-state-owner.js";
 import { acquireGatewayStateOwner, tryAcquireGatewayStateOwner } from "./gateway-state-owner.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
+import { writeGatewayServiceRestartIntentSync } from "./restart-intent.js";
 import { readSqliteDatabaseCleanClose } from "./sqlite-database-admission.js";
 import { corruptSqliteIndexKey } from "./sqlite-index-corruption.test-support.js";
 import * as snapshotSource from "./sqlite-snapshot-source.js";
@@ -167,28 +169,6 @@ function captureCoordinator() {
   return () => coordinator;
 }
 
-function mockLinuxNamespace(root: string) {
-  if (process.platform !== "linux") {
-    vi.spyOn(bootReader, "createManagedHandoffBootIdentityReader").mockReturnValue(() => ({
-      platform: "linux",
-      identity: "01234567-89ab-cdef-0123-456789abcdef",
-    }));
-    const namespaceLink = `pid:[${fs.statSync(root, { bigint: true }).ino}]`;
-    const readlink = fs.readlinkSync.bind(fs);
-    vi.spyOn(fs, "readlinkSync").mockImplementation((file, options) =>
-      file === "/proc/self/ns/pid" ? namespaceLink : readlink(file, options),
-    );
-    const platform = vi.spyOn(process, "platform", "get").mockReturnValue("linux");
-    readGatewayLockProcessNamespace();
-    platform.mockRestore();
-  }
-  const namespace = readGatewayLockProcessNamespace();
-  if (!namespace || !("pidNsInode" in namespace)) {
-    throw new Error("Expected Linux process namespace identity");
-  }
-  return namespace;
-}
-
 function readFreshProcessNamespace() {
   const otherPlatform = process.platform === "linux" ? "darwin" : "linux";
   const platform = vi.spyOn(process, "platform", "get").mockReturnValue(otherPlatform);
@@ -198,6 +178,47 @@ function readFreshProcessNamespace() {
 }
 
 describe("Gateway owner lease", () => {
+  it.runIf(process.platform === "darwin")(
+    "records native restart intent after a hostname change in the same kernel boot",
+    async () => {
+      await using owner = fixture();
+      const service = { kind: "launchd" as const, name: "ai.openclaw.hostname-fixture" };
+      const lease = owner.acquire({ mode: "supervised", supervisor: service });
+      await lease.ready;
+      withOpenClawStateStartupMigrationCheckpointDatabase(
+        (db) => {
+          db.prepare(
+            "UPDATE state_leases SET payload_json = json_set(payload_json, '$.owner.host', ?, '$.owner.processNamespace.host', ?) WHERE scope = 'gateway-owner'",
+          ).run("previous-hostname", "previous-hostname");
+        },
+        { env: owner.env },
+      );
+      let clearIntent: (() => void) | undefined;
+      try {
+        expect(
+          writeGatewayServiceRestartIntentSync({
+            env: owner.env,
+            service,
+            nativeStopped: false,
+            nativePid: process.pid,
+            assertCurrent: () => undefined,
+            onRecorded: (clear) => {
+              clearIntent = clear;
+            },
+          }),
+        ).toBe(true);
+        expect(readGatewayOwnerLease({ env: owner.env })).toMatchObject({
+          owner: lease.owner,
+          pid: process.pid,
+          host: "previous-hostname",
+          state: "live",
+        });
+      } finally {
+        clearIntent?.();
+      }
+    },
+  );
+
   it.each([
     { kind: "crashed legacy", age: GATEWAY_OWNER_HEARTBEAT_STALE_MS + 1 },
     { kind: "crashed qualified", age: GATEWAY_OWNER_HEARTBEAT_STALE_MS + 1 },

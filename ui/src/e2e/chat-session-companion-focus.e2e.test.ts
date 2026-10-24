@@ -89,59 +89,63 @@ suite.define(() => {
     await typeFocused(page, side, " again", "Ready to ask again");
   });
   it.each([
-    { command: "/btw", action: "newer main focus" },
-    { command: "/side", action: "newer main focus" },
     { command: "/btw", action: "close" },
     { command: "/btw", action: "minimize" },
     { command: "/btw", action: "switch tabs" },
   ])("hands off delayed $command focus after $action", async ({ command, action }) => {
-    const { page, main, side, held } = await openChat({ holdRail: true });
+    const { page, side, held } = await openChat({ holdRail: true });
     await enterSideCommand(page, command);
     await held?.request;
     expect(await side.count()).toBe(0);
-    if (action === "newer main focus") {
-      expect(await main.inputValue()).toBe("");
-      await main.click();
-      held?.release();
-      await side.waitFor();
-      await typeFocused(page, main, "Keep typing here");
-      expect(await side.inputValue()).toBe("");
+    const tab = page.getByRole("tab", { name: "Side chat", exact: true });
+    await tab.waitFor();
+    if (action === "close") {
       const close = page.getByRole("button", { name: "Close Side chat", exact: true });
       await close.click();
       await close.waitFor({ state: "hidden" });
-      await openChatSidePanelType(page, "Side chat");
+    } else if (action === "minimize") {
+      await selectChatLayoutAction(page, "Minimize side panel");
     } else {
-      const tab = page.getByRole("tab", { name: "Side chat", exact: true });
-      await tab.waitFor();
-      if (action === "close") {
-        const close = page.getByRole("button", { name: "Close Side chat", exact: true });
-        await close.click();
-        await close.waitFor({ state: "hidden" });
-      } else if (action === "minimize") {
-        await selectChatLayoutAction(page, "Minimize side panel");
-      } else {
-        await openChatSidePanelType(page, "Files");
-      }
-      held?.release();
-      if (action === "close") {
-        await openChatSidePanelType(page, "Side chat");
-      } else if (action === "minimize") {
-        await selectChatLayoutAction(page, /^(Side panel|Minimize side panel)$/);
-      } else {
-        await tab.click();
-      }
+      await openChatSidePanelType(page, "Files");
+    }
+    held?.release();
+    if (action === "close") {
+      await openChatSidePanelType(page, "Side chat");
+    } else if (action === "minimize") {
+      await selectChatLayoutAction(page, /^(Side panel|Minimize side panel)$/);
+    } else {
+      await tab.click();
     }
     await expectFocus(side);
-    if (action !== "newer main focus") {
-      await typeFocused(page, side, "New opening");
-    }
+    await typeFocused(page, side, "New opening");
   });
 
-  it("opens Side chat when selecting /btw from the slash menu", async () => {
-    const { page, main, side } = await openChat();
+  it("opens Side chat when the slash catalog refreshes during selection", async () => {
+    const { page, gateway, main, side } = await openChat({
+      scenario: { deferredMethods: ["commands.list"] },
+    });
     await main.fill("/bt");
     await page.locator(".chat-send-btn--send:enabled").waitFor({ state: "visible" });
-    await page.getByRole("option").filter({ hasText: "/btw" }).click();
+    await gateway.waitForRequest("commands.list");
+    const option = page.getByRole("option").filter({ hasText: "/btw" });
+    await option.hover();
+    await page.mouse.down();
+    await gateway.resolveDeferred("commands.list", {
+      commands: [
+        {
+          name: "btcheck",
+          textAliases: ["/btcheck"],
+          description: "Catalog refresh arrived.",
+          source: "plugin",
+          scope: "text",
+          acceptsArgs: false,
+        },
+      ],
+    });
+    await page.getByRole("option").filter({ hasText: "/btcheck" }).waitFor();
+    // Keep the release on the pressed option after the menu grows upward.
+    await option.hover();
+    await page.mouse.up();
     await expectFocus(side);
     expect(await main.inputValue()).toBe("");
   });

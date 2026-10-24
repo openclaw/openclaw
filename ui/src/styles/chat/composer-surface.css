@@ -109,7 +109,6 @@
     .session-progress-card__body,
     .chat-queue__scroll,
     .agent-chat__goal-detail-objective,
-    .chat-swarm__tasks,
     .chat-error__diagnostic
   ) {
   overscroll-behavior: auto;
@@ -252,7 +251,7 @@
      second texture. Foreground/menu tokens retain their opaque surface color. */
   background: color-mix(in srgb, var(--chat-composer-surface) 78%, transparent);
 
-  &:where(.shell[data-background-managed] *) {
+  :where(.shell[data-background-managed]) & {
     /* Personal artwork never changes the writing surface's readability. */
     --chat-composer-fill: color-mix(in srgb, var(--chat-composer-surface) 78%, transparent);
     background:

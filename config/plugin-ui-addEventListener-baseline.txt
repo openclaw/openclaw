@@ -1,0 +1,6 @@
+# Plugin UI addEventListener calls; shrink only.
+# Run pnpm check:control-ui-controllers --prune after removing calls.
+extensions/nostr/browser/controller.ts	1
+extensions/workboard/browser/lib/listener.ts	1
+extensions/workboard/browser/pages/workboard/view-popover.ts	12
+extensions/workboard/browser/pages/workboard/view-scroll-fade.ts	1

@@ -559,6 +559,11 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
     policy: PASSIVE_STARTUP_POLICY,
     route: { id: "plugins-list" },
   },
+  {
+    commandPath: ["plugins", "lint"],
+    exact: true,
+    policy: PASSIVE_STARTUP_POLICY,
+  },
   // Authoring commands operate on a target package, not operator config, and a
   // scaffolded plugin build can run through an older CLI; the startup guard
   // would abort them on a host config they never read.

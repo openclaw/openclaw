@@ -3,7 +3,8 @@ import { expect, it } from "vitest";
 import { openChatSidePanelType } from "../e2e/chat-side-panel.test-support.ts";
 import { controlUiE2eBuiltModuleRequest } from "../e2e/control-ui-built-module.test-support.ts";
 import { createControlUiE2eSuite } from "../e2e/control-ui-e2e-suite.test-support.ts";
-import { waitForControlUiGatewayReady } from "./control-ui-e2e-readiness.ts";
+import { openChatPanels } from "./chat-layout-menu.ts";
+import { waitForConfirmModal, waitForControlUiGatewayReady } from "./control-ui-e2e-readiness.ts";
 import {
   defaultControlUiFeatureMethods,
   installMockGateway,
@@ -23,6 +24,110 @@ function trackReadinessRequests(page: Page) {
 }
 
 suite.define(() => {
+  it.each(["exec-approval-card", "gateway-switch", "session-worker-stop"])(
+    "waits for delayed %s confirmation content rather than an unrelated open modal",
+    async (contentClass) => {
+      await suite.withPage({}, async ({ page }) => {
+        // Exercise the helper's rendered-host contract without booting an unrelated page.
+        // DOM order is not modal ownership: an existing detail dialog may follow the confirm host.
+        await page.setContent(
+          '<div id="pending-confirm"></div>' +
+            '<openclaw-modal-dialog id="details"><dialog open>Channel details</dialog></openclaw-modal-dialog>' +
+            '<button id="publish">Render confirmation</button>',
+        );
+        await page.evaluate((content) => {
+          document.querySelector("#publish")!.addEventListener("click", () => {
+            document.querySelector("#pending-confirm")!.innerHTML =
+              '<openclaw-modal-dialog id="confirmation"><dialog open>' +
+              '<div class="' +
+              content +
+              '"><div>Confirm logout</div>' +
+              "<button>Cancel</button><button>Logout</button></div></dialog></openclaw-modal-dialog>";
+          });
+        }, contentClass);
+        expect(await page.locator("." + contentClass).count()).toBe(0);
+        const ready = waitForConfirmModal(
+          page,
+          page.locator("openclaw-modal-dialog").filter({ has: page.locator("." + contentClass) }),
+        );
+        await page.getByRole("button", { name: "Render confirmation", exact: true }).click();
+        const confirmation = await ready;
+        expect(await confirmation.getAttribute("id")).toBe("confirmation");
+        expect(
+          await confirmation.getByRole("button", { name: "Logout", exact: true }).isVisible(),
+        ).toBe(true);
+        expect(await page.locator("#details dialog").isVisible()).toBe(true);
+      });
+    },
+  );
+
+  it.each([
+    { mode: "mobile", stale: false },
+    { mode: "desktop", stale: false },
+    { mode: "mobile", stale: true },
+    { mode: "desktop", stale: true },
+  ] as const)(
+    "waits for the requested $mode Panels control (previous presentation visible: $stale)",
+    async ({ mode, stale }) => {
+      await suite.withPage({}, async ({ page }) => {
+        await page.setContent(
+          '<openclaw-chat-pane class="chat-pane-cache__pane--active"></openclaw-chat-pane>' +
+            '<button id="publish">Render panel controls</button>',
+        );
+        await page.evaluate(
+          ({ presentation, previous }) => {
+            const pane = document.querySelector("openclaw-chat-pane")!;
+            const renderControls = (mobile: boolean) => {
+              pane.innerHTML = mobile
+                ? '<div class="agent-chat__header--mobile"><openclaw-chat-header-session-menu>' +
+                  '<button class="chat-header-session-menu__trigger" aria-expanded="false">Session actions</button>' +
+                  '<div class="oc-menu" role="menu" hidden><button role="menuitem">Panels</button></div>' +
+                  '</openclaw-chat-header-session-menu></div><div class="chat-mobile-host" hidden>Panel sheet</div>'
+                : '<div class="sidebar-region__header">Session</div>' +
+                  '<div class="sidebar-region__panels-toggle"><button aria-expanded="false">Panels</button></div>';
+              const trigger = pane.querySelector("button")!;
+              trigger.addEventListener("click", () => {
+                pane.setAttribute(
+                  "data-trigger-clicks",
+                  String(Number(pane.getAttribute("data-trigger-clicks")) + 1),
+                );
+                trigger.setAttribute("aria-expanded", "true");
+                pane.querySelector(".oc-menu")?.removeAttribute("hidden");
+              });
+              pane.querySelector('[role="menuitem"]')?.addEventListener("click", () => {
+                pane.querySelector(".oc-menu")!.setAttribute("hidden", "");
+                pane.querySelector(".chat-mobile-host")!.removeAttribute("hidden");
+              });
+            };
+            if (previous) {
+              renderControls(presentation !== "mobile");
+            }
+            document.querySelector("#publish")!.addEventListener("click", () => {
+              renderControls(presentation === "mobile");
+            });
+          },
+          { presentation: mode, previous: stale },
+        );
+        const pane = page.locator("openclaw-chat-pane");
+        const target =
+          mode === "mobile"
+            ? pane.locator(".agent-chat__header--mobile")
+            : pane.locator(".sidebar-region__panels-toggle");
+        expect(await target.count()).toBe(0);
+        const opened = openChatPanels(page, mode);
+        // The caller owns the intended presentation; an old control can remain visible until commit.
+        await page.getByRole("button", { name: "Render panel controls", exact: true }).click();
+        const trigger = await opened;
+        expect(await trigger.getAttribute("aria-expanded")).toBe("true");
+        if (mode === "mobile") {
+          expect(await pane.locator(".chat-mobile-host").isVisible()).toBe(true);
+        }
+        await openChatPanels(pane, mode);
+        expect(await pane.getAttribute("data-trigger-clicks")).toBe("1");
+      });
+    },
+  );
+
   it("resolves navigation only after a delayed roster has rendered", async () => {
     await suite.withPage({}, async ({ page }) => {
       const key = "agent:main:roster-only";

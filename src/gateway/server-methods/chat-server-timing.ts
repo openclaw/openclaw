@@ -12,14 +12,6 @@ type ChatSendTimingContext = {
   session: { clientRunId: string; sessionKey: string; agentId: string; sessionLoadMs: number };
 };
 
-type ChatSendServerTimingPhase =
-  | "dispatch-started"
-  | "model-selected"
-  | "agent-run-started"
-  | "first-assistant-event"
-  | "dispatch-completed"
-  | "post-dispatch-completed";
-
 export function roundedChatSendTimingMs(value: number): number {
   return Math.max(0, Math.round(value * 1000) / 1000);
 }
@@ -115,7 +107,13 @@ export function createOperatorChatSendServerTiming({
     connId && isOperatorUiClient(client?.connect?.client) ? new Set([connId]) : undefined;
   const assistantTiming = chatSendTiming ?? { firstAssistantEventSent: false };
   const emit = (
-    phase: ChatSendServerTimingPhase,
+    phase:
+      | "dispatch-started"
+      | "model-selected"
+      | "agent-run-started"
+      | "first-assistant-event"
+      | "dispatch-completed"
+      | "post-dispatch-completed",
     extra?: Record<string, string | number>,
     dispatchStartedAtMs?: number,
   ) => {

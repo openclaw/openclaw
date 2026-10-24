@@ -1,6 +1,6 @@
-import { AsyncLocalStorage } from "node:async_hooks";
 import path from "node:path";
 import { racePromiseWithAbortSignal } from "../../packages/retry/src/index.js";
+import { AsyncContext } from "../shared/async-context.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { resolveIdentityPathViaExistingAncestorSync } from "./boundary-path.js";
@@ -17,9 +17,8 @@ const pending = resolveGlobalSingleton(
   Symbol.for("openclaw.sqliteDatabaseAdmissionTurns"),
   () => new Map<string, Promise<void>>(),
 );
-const current = resolveGlobalSingleton(
+const current = new AsyncContext<AdmissionTurnScope>(
   Symbol.for("openclaw.sqliteDatabaseAdmissionTurnContext"),
-  () => new AsyncLocalStorage<AdmissionTurnScope>(),
 );
 
 function reserveAdmissionTurn(locations: string | readonly string[], families: readonly string[]) {

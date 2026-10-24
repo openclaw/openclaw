@@ -96,6 +96,14 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
       ),
   });
   const { snapshot, baseConfig: baseCfg } = preflight;
+  if (!shouldRepair && !params.options.json) {
+    const { collectRecoveryDiskUsage, formatRecoveryDiskUsage } =
+      await import("./recovery-disk-usage.js");
+    note(
+      formatRecoveryDiskUsage(collectRecoveryDiskUsage({ cfg: baseCfg, env: process.env })),
+      "Recovery copies (read-only)",
+    );
+  }
   preparingResources.use(preflight.pluginCache);
   if (!snapshot.exists || snapshot.valid) {
     await setAppliedRuntimeConfigSnapshot(snapshot.runtimeConfig, snapshot.sourceConfig);

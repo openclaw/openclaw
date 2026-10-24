@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
+import { PROTOCOL_VERSION } from "@openclaw/gateway-protocol/version";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type {
@@ -164,7 +165,7 @@ function connect(
 const storedToken = { token: "synthetic-stored-token", scopes: ["operator.read"] };
 const hello = {
   type: "hello-ok",
-  protocol: 4,
+  protocol: PROTOCOL_VERSION,
   auth: { deviceToken: "synthetic-issued-token", role: "operator", scopes: ["operator.read"] },
 };
 

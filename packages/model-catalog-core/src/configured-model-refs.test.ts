@@ -57,7 +57,7 @@ it("collects agent, hook, message, and channel model refs with config paths", ()
         defaults: {
           utilityModel: "p/utility",
           mediaModels: { image: "p/image" },
-          compaction: { memoryFlush: { model: "p/flush" } },
+          compaction: { model: "p/compaction" },
         },
         entries: { custom: { model: "p/custom", utilityModel: "p/custom-utility" } },
       },
@@ -68,7 +68,7 @@ it("collects agent, hook, message, and channel model refs with config paths", ()
   ).toEqual([
     ref("agents.defaults.utilityModel", "p/utility"),
     ref("agents.defaults.mediaModels.image", "p/image", "literal"),
-    ref("agents.defaults.compaction.memoryFlush.model", "p/flush"),
+    ref("agents.defaults.compaction.model", "p/compaction"),
     ref("agents.entries.custom.model", "p/custom"),
     ref("agents.entries.custom.utilityModel", "p/custom-utility"),
     ref("channels.modelByChannel.discord.guild", "p/channel"),

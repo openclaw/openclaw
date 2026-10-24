@@ -20,6 +20,7 @@ const schema: StoreSchema = {
   id: "search",
   version: 1,
   sqlite: "",
+  postgresVectorSearchVersion: 2,
   postgres: `CREATE TABLE notes (
     id TEXT PRIMARY KEY, ordinal BIGINT NOT NULL UNIQUE, text TEXT NOT NULL,
     model TEXT NOT NULL, source TEXT NOT NULL, embedding BYTEA
@@ -163,6 +164,12 @@ function searchFixture(db: PostgresSyncConnection) {
   };
   const nearest = (vector: readonly number[], model = "model-a", source = "memory", limit = 1) => {
     const vectorIndex = search.vectors.notes!;
+    const scoped = () =>
+      k
+        .selectFrom("notes_vec as v")
+        .innerJoin("notes as n", "n.id", "v.id")
+        .where("n.model", "=", model)
+        .where("n.source", "=", source);
     const { pending } = withEngineStoreAdmission(() => ({
       pending: search.vector!.nearest({
         index: vectorIndex,
@@ -170,14 +177,17 @@ function searchFixture(db: PostgresSyncConnection) {
         limit,
         isRow: isVectorRow,
         scopeCount: k.selectFrom("notes").select(k.fn.countAll<number>().as("count")),
+        candidates: ({ match, distance, limit: candidateLimit }) =>
+          scoped()
+            .select("v.id")
+            .where(match)
+            .orderBy(distance)
+            .orderBy("v.id")
+            .limit(candidateLimit),
         query: ({ match, distance }) =>
-          k
-            .selectFrom("notes_vec as v")
-            .innerJoin("notes as n", "n.id", "v.id")
+          scoped()
             .select(["n.id", distance.as("distance")])
             .where(match)
-            .where("n.model", "=", model)
-            .where("n.source", "=", source)
             .orderBy(distance)
             .orderBy("n.id")
             .limit(limit),
@@ -206,6 +216,33 @@ const terms = (kind: "any" | "all", ...texts: string[]): TextQuery => ({
 });
 
 describe.skipIf(!connection)("PostgreSQL engine search conformance", () => {
+  it("keeps cover-density ranking by default and supports a frequency opt-in", async () => {
+    await fixture(({ db }) => {
+      const { add, search } = searchFixture(db);
+      add("adjacent", 1, "red fox");
+      const fullText = search.fullText!;
+      const index = search.text.notes!;
+      const query = terms("all", "red", "fox");
+      const row = executeSqliteQuerySync(
+        db,
+        getNodeSqliteKysely<SearchDB>(db)
+          .selectFrom("notes")
+          .select([
+            fullText.rank(index, query).value.as("default_rank"),
+            fullText
+              .rank(index, query, { postgres: { normalization: 0 } })
+              .value.as("cover_density"),
+            fullText
+              .rank(index, query, { postgres: { normalization: 0, rank: "frequency" } })
+              .value.as("frequency"),
+          ]),
+      ).rows[0]!;
+      expect(row.default_rank).toBeCloseTo(0.05, 6);
+      expect(row.cover_density).toBeCloseTo(0.1, 6);
+      expect(row.frequency).toBeCloseTo(0.09910322, 6);
+    });
+  });
+
   it("composes literal terms, phrases, final-lexeme prefixes and OR with bounded ranked snippets", async () => {
     await fixture(({ db }) => {
       const { add, text, ids, search } = searchFixture(db);
@@ -303,6 +340,38 @@ describe.skipIf(!connection)("PostgreSQL engine search conformance", () => {
     });
   });
 
+  it("prefilters within model/source scope and distinguishes negative vectors from zero", async () => {
+    await fixture(async ({ db }) => {
+      const { add, nearest } = searchFixture(db);
+      db.runTransaction(() => {
+        for (let i = 0; i < 20; i++) {
+          add(`decoy-${i}`, i + 1, "excluded", [-1, -0.01, 0], "other-model");
+          add(`source-${i}`, i + 21, "excluded", [-1, -0.01, 0], "model-a", "sessions");
+        }
+        add("a-far", 41, "negative", [-1, -5, -1]);
+        add("b-close", 42, "negative", [-1, -0.1, -0.1]);
+        add("c-orthogonal", 43, "orthogonal", [0, 1, 0]);
+        add("zero", 44, "ineligible", [0, 0, 0]);
+      });
+      expect(
+        db
+          .prepare(
+            "SELECT id, embedding_bits::text AS bits FROM notes_vec WHERE id IN ('b-close', 'zero') ORDER BY id",
+          )
+          .all(),
+      ).toEqual([
+        { id: "b-close", bits: "000" },
+        { id: "zero", bits: null },
+      ]);
+      const result = await nearest([-1, -0.01, 0], "model-a", "memory", 2);
+      expect(result.rows.map((row) => row.id)).toEqual(["b-close", "a-far"]);
+      expect(result.rows[0]!.distance).toBeCloseTo(
+        1 - 1.001 / (Math.hypot(1, 0.01) * Math.hypot(1, 0.1, 0.1)),
+        6,
+      );
+    });
+  });
+
   it("projects fresh and replacement vectors without deleting their projection first", async () => {
     await fixture(({ db }) => {
       const { add } = searchFixture(db);
@@ -377,6 +446,7 @@ FOR EACH STATEMENT EXECUTE FUNCTION reject_projection_delete();`);
 
   it.each([
     ["GIN index", "DROP INDEX notes_search_gin"],
+    ["binary projection", "ALTER TABLE notes_vec DROP COLUMN embedding_bits"],
     [
       "text configuration",
       "ALTER TEXT SEARCH CONFIGURATION openclaw_simple_unaccent ALTER MAPPING FOR word WITH pg_catalog.simple",

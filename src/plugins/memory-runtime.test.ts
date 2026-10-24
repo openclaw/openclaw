@@ -46,6 +46,11 @@ vi.mock("./loader.js", () => ({
   loadPluginRegistryHandle: mocks.loadPluginRegistryHandle,
 }));
 
+vi.mock("./manifest-registry.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./manifest-registry.js")>()),
+  loadPluginManifestRegistryCore: () => ({ plugins: [], diagnostics: [] }),
+}));
+
 vi.mock("./memory-state.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./memory-state.js")>();
   return { ...actual, getMemoryRuntime: mocks.getMemoryRuntime };
@@ -250,6 +255,8 @@ describe("memory runtime handles", () => {
       expect(mocks.loadPluginRegistryHandle).toHaveBeenCalledWith({
         activate: false,
         config: memoryConfig,
+        registrationConfigOrigin: memoryConfig,
+        manifestRegistry: { plugins: [], diagnostics: [] },
         onlyPluginIds: ["memory-core"],
         workspaceDir: "/workspace/main",
       });

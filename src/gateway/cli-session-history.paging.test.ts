@@ -6,7 +6,7 @@ import {
   formatCliImageTurnContext,
   hashCliImageTurnEntryId,
 } from "../agents/cli-image-turn-correlation.js";
-import { buildCliSessionDriftNote } from "../agents/cli-session.js";
+import { buildCliSessionDriftNote } from "../agents/cli-session-drift.js";
 import {
   appendTranscriptMessage,
   replaceSessionEntry,
@@ -21,6 +21,7 @@ import {
   withOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
+import { readChatHistoryPageKernel } from "./chat-history-page-kernel.js";
 import { prepareCliSessionHistoryReader, type CliHistoryReaders } from "./cli-session-history.js";
 import {
   claudeUser,
@@ -28,7 +29,6 @@ import {
   LEGACY_EXEC_COMPLETION_PROMPT,
   withClaudeProjectsDir,
 } from "./cli-session-history.test-support.js";
-import { readChatHistoryPageKernel } from "./server-methods/chat-history-page-kernel.js";
 import { createReadonlySessionHistoryReader } from "./session-history-readonly-reader.js";
 import { readChatHistoryMessageId, readChatHistoryMessageSeq } from "./session-history-tail.js";
 import { archiveSessionTranscriptPaths } from "./session-transcript-files.fs.js";

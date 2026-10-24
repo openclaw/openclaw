@@ -28,7 +28,6 @@ import { resolveFreshSessionTotalTokens, resolveSessionTotalTokens } from "../co
 import { resolveProjectedSessionContextTokens } from "../config/sessions/context-token-provenance.js";
 import { listSessionEntriesReadOnly } from "../config/sessions/session-accessor.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
-import type { SessionEntry } from "../config/sessions/types.js";
 import { resolveStoredSessionKeyForAgentStore } from "../gateway/session-store-key.js";
 import { info } from "../globals.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
@@ -51,8 +50,6 @@ import {
   formatSessionModelCell,
   toSessionDisplayRow,
 } from "./sessions-table.js";
-
-type SessionCandidate = { agentId: string; entry: SessionEntry; sessionKey: string };
 
 const DEFAULT_SESSIONS_LIMIT = 100;
 
@@ -85,10 +82,6 @@ function applyAcpModelOverlayIfNeeded(
   }
   const agentId = parseAgentSessionKey(sessionKey)?.agentId ?? "acp";
   return { provider: "acpx", model: `${agentId}-acp` };
-}
-
-function compareSessionRowsByUpdatedAt(a: SessionCandidate, b: SessionCandidate): number {
-  return (b.entry.updatedAt ?? 0) - (a.entry.updatedAt ?? 0);
 }
 
 function parseSessionsLimit(value: string | number | undefined): number | undefined | null {
@@ -230,18 +223,20 @@ export async function sessionsCommand(
       .map(({ sessionKey, entry }) => ({ agentId: target.agentId, entry, sessionKey }));
   });
   const totalCount = allEntries.length;
-  const sessionEntries = sortAndLimitBy(allEntries, limit, compareSessionRowsByUpdatedAt).map(
-    ({ agentId: storeAgentId, entry, sessionKey }) => {
-      const row = toSessionDisplayRow(sessionKey, entry);
-      const agentId = parseAgentSessionKey(row.key)?.agentId ?? storeAgentId;
-      const acpSessionKey = resolveStoredSessionKeyForAgentStore({
-        cfg,
-        agentId,
-        sessionKey: row.key,
-      });
-      return { acpSessionKey, agentId, entry, row };
-    },
-  );
+  const sessionEntries = sortAndLimitBy(
+    allEntries,
+    limit,
+    (a, b) => (b.entry.updatedAt ?? 0) - (a.entry.updatedAt ?? 0),
+  ).map(({ agentId: storeAgentId, entry, sessionKey }) => {
+    const row = toSessionDisplayRow(sessionKey, entry);
+    const agentId = parseAgentSessionKey(row.key)?.agentId ?? storeAgentId;
+    const acpSessionKey = resolveStoredSessionKeyForAgentStore({
+      cfg,
+      agentId,
+      sessionKey: row.key,
+    });
+    return { acpSessionKey, agentId, entry, row };
+  });
   const acpSessionMetadata = await readAcpSessionMetaForEntries({
     cfg,
     entries: sessionEntries.map(({ acpSessionKey, agentId, entry }) => ({

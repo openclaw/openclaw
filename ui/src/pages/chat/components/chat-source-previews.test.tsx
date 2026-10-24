@@ -36,6 +36,7 @@ it("does not request favicons after disposal before the first settlement", () =>
 it("requests a favicon once after settlement and ignores its result after disposal", async () => {
   const pending = Promise.withResolvers<string | null>();
   const fetchFavicon = vi.fn(() => pending.promise);
+  const revoke = vi.spyOn(URL, "revokeObjectURL");
   const view = mountSolid(() => (
     <ChatSourcePreviews
       fetchFavicon={fetchFavicon}
@@ -48,14 +49,17 @@ it("requests a favicon once after settlement and ignores its result after dispos
   const writes = vi.fn();
   try {
     setWriteHook(writes);
-    pending.resolve("https://held.test/favicon.png");
+    pending.resolve("blob:retired-source-favicon");
     await pending.promise;
     await Promise.resolve();
+    await Promise.resolve();
     expect(writes).not.toHaveBeenCalled();
+    expect(revoke).toHaveBeenCalledWith("blob:retired-source-favicon");
   } finally {
     setWriteHook(null);
     pending.resolve(null);
     view.unmount();
+    revoke.mockRestore();
   }
 });
 

@@ -7,6 +7,7 @@ import { configureAiTransportHost } from "../host.js";
 import { MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE } from "../transports/transport-utils.js";
 import type { Context, Model } from "../types.js";
 import { streamAnthropic } from "./anthropic.js";
+import { makeProviderModel } from "./provider-model.test-support.js";
 
 // Stands in for the payload class this path exposes: text the model emitted, which
 // reaches the SSE frame as ordinary assistant content.
@@ -48,19 +49,13 @@ function makeModel(
   baseUrl: string,
   overrides: Partial<Model<"anthropic-messages">> = {},
 ): Model<"anthropic-messages"> {
-  return {
-    id: "claude-sonnet-4-6",
+  return makeProviderModel("anthropic-messages", "anthropic", "claude-sonnet-4-6", {
     name: "Claude Sonnet 4.6",
-    provider: "anthropic",
-    api: "anthropic-messages",
     baseUrl,
-    reasoning: true,
-    input: ["text"],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     contextWindow: 200_000,
     maxTokens: 4_096,
     ...overrides,
-  } satisfies Model<"anthropic-messages">;
+  });
 }
 
 async function withLoopback<T>(

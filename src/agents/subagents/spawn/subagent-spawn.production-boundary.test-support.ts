@@ -72,7 +72,7 @@ export function createSpawnOperatorSource(
   scopes = ["operator.read", "operator.write"],
   policy?: Pick<
     AdmittedRunOperatorAuthority,
-    "modelPolicy" | "rolePolicy" | "readCurrentRoleAssignment"
+    "modelPolicy" | "rolePolicy" | "readCurrentRoleFacts"
   >,
 ) {
   const revocation = new AbortController();

@@ -97,22 +97,18 @@ export async function preserveSubagentRunForRestart(params: {
       if (entry.execution.status === "interrupted") {
         return { value: { preserved: true, observedEntry: entry } };
       }
+      const interrupted: SubagentRunRecord = {
+        ...entry,
+        execution: {
+          ...entry.execution,
+          status: "interrupted",
+          interruptedAt: params.terminal.endedAt ?? Date.now(),
+          interruptionReason: "gateway-restart",
+        },
+      };
       return {
-        value: { preserved: true, observedEntry: entry },
-        postimages: new Map([
-          [
-            entry.runId,
-            {
-              ...entry,
-              execution: {
-                ...entry.execution,
-                status: "interrupted" as const,
-                interruptedAt: params.terminal.endedAt ?? Date.now(),
-                interruptionReason: "gateway-restart" as const,
-              },
-            },
-          ],
-        ]),
+        value: { preserved: true, observedEntry: interrupted },
+        postimages: new Map([[entry.runId, interrupted]]),
       };
     },
     { runs: params.runs, context: params.context, assertCurrent: params.assertCurrent },

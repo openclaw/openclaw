@@ -353,6 +353,17 @@ export function summarizeResponsesPayload(params: unknown): string {
   return parts.join(" ");
 }
 
+const ABORT_REASON_LABELS = new Map([
+  ["LlmIdleTimeoutError", "idle_timeout"],
+  ["LlmNoProgressError", "no_progress"],
+  ["FirstStreamEventTimeoutError", "first_event_timeout"],
+  ["OPENCLAW_SESSION_WATCHDOG", "session_watchdog"],
+  ["degenerate_output", "degenerate_output"],
+  ["OPENCLAW_RESTART_ABORT", "restart"],
+  ["ERR_STALE_GATEWAY_LIFECYCLE", "restart"],
+  ["AGENT_RUN_SUPERSEDED_ABORT", "superseded"],
+]);
+
 export function summarizeOpenAITransportError(error: unknown, signal?: AbortSignal): string {
   const record = isRecord(error) ? error : undefined;
   const cause =
@@ -371,32 +382,12 @@ export function summarizeOpenAITransportError(error: unknown, signal?: AbortSign
     : [`type=${typeof error}`];
   if (signal?.aborted) {
     const reason = isRecord(signal.reason) ? signal.reason : undefined;
-    let abortReason = reason?.name === "TimeoutError" ? "request_deadline" : "caller_abort";
+    const defaultReason = reason?.name === "TimeoutError" ? "request_deadline" : "caller_abort";
     // Only classify the request signal; provider errors can echo message/tool content.
-    switch (reason?.code ?? reason?.name) {
-      case "LlmIdleTimeoutError":
-        abortReason = "idle_timeout";
-        break;
-      case "LlmNoProgressError":
-        abortReason = "no_progress";
-        break;
-      case "FirstStreamEventTimeoutError":
-        abortReason = "first_event_timeout";
-        break;
-      case "OPENCLAW_SESSION_WATCHDOG":
-        abortReason = "session_watchdog";
-        break;
-      case "degenerate_output":
-        abortReason = "degenerate_output";
-        break;
-      case "OPENCLAW_RESTART_ABORT":
-      case "ERR_STALE_GATEWAY_LIFECYCLE":
-        abortReason = "restart";
-        break;
-      case "AGENT_RUN_SUPERSEDED_ABORT":
-        abortReason = "superseded";
-        break;
-    }
+    const reasonKey = reason?.code ?? reason?.name;
+    const abortReason =
+      (typeof reasonKey === "string" ? ABORT_REASON_LABELS.get(reasonKey) : undefined) ??
+      defaultReason;
     parts.push(`abortReason=${abortReason}`);
   }
   return parts.join(" ");

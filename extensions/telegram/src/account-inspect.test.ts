@@ -4,8 +4,8 @@ import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { withEnv } from "openclaw/plugin-sdk/test-env";
 import { expect, it } from "vitest";
+import { telegramSetupPlugin } from "../setup-plugin-api.js";
 import { inspectTelegramAccount } from "./account-inspect.js";
-import { createTelegramPluginConfig } from "./config-adapter.js";
 
 function telegramConfig(
   telegram: NonNullable<OpenClawConfig["channels"]>["telegram"],
@@ -32,7 +32,7 @@ it.each([
       },
     });
     const inspected = inspectTelegramAccount({ cfg, accountId });
-    const config = createTelegramPluginConfig();
+    const config = telegramSetupPlugin.config;
     expect(inspected).toMatchObject({
       accountId,
       enabled: true,
@@ -66,7 +66,7 @@ it("keeps read-only accessors from resolving bot token SecretRefs", () => {
       },
     },
   );
-  const config = createTelegramPluginConfig();
+  const config = telegramSetupPlugin.config;
   expect(config.resolveAllowFrom?.({ cfg, accountId: "default" })).toEqual(["1128540374256849009"]);
   expect(config.resolveDefaultTo?.({ cfg, accountId: "default" })).toBe("1498959610751750304");
 });

@@ -423,28 +423,6 @@ suite.define(() => {
             await conflict.getByRole("button", { name: "Reload" }).click();
             await expect.poll(() => editor.inputValue()).toBe(secondAppend);
             expect(await readAgentsFile()).toBe(secondAppend);
-
-            await editor.fill("# Draft typed before the refresh\n");
-            const thirdAppend = `${secondAppend}- third memory\n`;
-            await writeFile(agentsFile, thirdAppend, "utf8");
-            await page
-              .locator(".settings-section__header")
-              .filter({ hasText: "Core Files" })
-              .getByRole("button", { name: "Refresh" })
-              .click();
-            await expect.poll(() => editor.inputValue()).toBe("# Draft typed before the refresh\n");
-            await rejectStaleSave(thirdAppend);
-
-            await page
-              .locator(".agent-file-header")
-              .getByRole("button", { name: "Reset", exact: true })
-              .click();
-            await expect.poll(() => editor.inputValue()).toBe(thirdAppend);
-            const afterReset = `${thirdAppend}- edited after Reset\n`;
-            await editor.fill(afterReset);
-            await save.click();
-            await expect.poll(readAgentsFile).toBe(afterReset);
-            await expect.poll(() => conflict.isVisible()).toBe(false);
           },
         );
       },

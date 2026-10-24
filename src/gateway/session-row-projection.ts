@@ -631,6 +631,7 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
     }),
     onSelectionChange: revisions.onSelectionChange,
     onFactsChange: revisions.onFactsChange,
+    readTaskPublicationRevision: revisions.taskPublication,
     get physicalPaths() {
       return scope.physicalPaths;
     },

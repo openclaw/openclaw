@@ -374,37 +374,8 @@ async function runToolOnlyTurn(params: {
   systemPrompt: string;
   tool: Tool;
 }) {
-  let prompt = `Call the tool \`${params.tool.name}\` with {}. IMPORTANT: respond ONLY with the tool call and no other text.`;
-  let response = await completeSimpleWithLiveTimeout(
-    params.model,
-    {
-      systemPrompt: params.systemPrompt,
-      messages: [
-        {
-          role: "user",
-          content: prompt,
-          timestamp: Date.now(),
-        },
-      ],
-      tools: [params.tool],
-    },
-    {
-      apiKey: params.apiKey,
-      cacheRetention: params.cacheRetention,
-      sessionId: params.sessionId,
-      maxTokens: 128,
-      temperature: 0,
-      ...(params.providerTag === "openai" ? { reasoning: "none" as unknown as never } : {}),
-    },
-    `${params.providerTag} tool-only turn`,
-    params.providerTag === "openai" ? OPENAI_TIMEOUT_MS : ANTHROPIC_TIMEOUT_MS,
-  );
-
-  let toolCall = extractFirstToolCall(response);
-  let text = extractEmbeddedAssistantText(response);
-  for (let attempt = 0; attempt < 2 && (!toolCall || text.length > 0); attempt += 1) {
-    prompt = `Return only a tool call for \`${params.tool.name}\` with {}. No text.`;
-    response = await completeSimpleWithLiveTimeout(
+  const complete = (prompt: string, label: string) =>
+    completeSimpleWithLiveTimeout(
       params.model,
       {
         systemPrompt: params.systemPrompt,
@@ -425,9 +396,18 @@ async function runToolOnlyTurn(params: {
         temperature: 0,
         ...(params.providerTag === "openai" ? { reasoning: "none" as unknown as never } : {}),
       },
-      `${params.providerTag} tool-only retry ${attempt + 1}`,
+      label,
       params.providerTag === "openai" ? OPENAI_TIMEOUT_MS : ANTHROPIC_TIMEOUT_MS,
     );
+
+  let prompt = `Call the tool \`${params.tool.name}\` with {}. IMPORTANT: respond ONLY with the tool call and no other text.`;
+  let response = await complete(prompt, `${params.providerTag} tool-only turn`);
+
+  let toolCall = extractFirstToolCall(response);
+  let text = extractEmbeddedAssistantText(response);
+  for (let attempt = 0; attempt < 2 && (!toolCall || text.length > 0); attempt += 1) {
+    prompt = `Return only a tool call for \`${params.tool.name}\` with {}. No text.`;
+    response = await complete(prompt, `${params.providerTag} tool-only retry ${attempt + 1}`);
     toolCall = extractFirstToolCall(response);
     text = extractEmbeddedAssistantText(response);
   }
@@ -445,203 +425,39 @@ async function runToolOnlyTurn(params: {
   };
 }
 
-async function runOpenAiToolCacheProbe(params: {
-  apiKey: string;
-  model: Awaited<ReturnType<typeof resolveLiveDirectModel>>["model"];
-  sessionId: string;
-  suffix: string;
-}): Promise<CacheRun> {
-  const toolTurn = await runToolOnlyTurn({
-    apiKey: params.apiKey,
-    cacheRetention: "short",
-    model: params.model,
-    providerTag: "openai",
-    sessionId: params.sessionId,
-    systemPrompt: OPENAI_PREFIX,
-    tool: NOOP_TOOL,
-  });
-  const response = await completeSimpleWithLiveTimeout(
-    params.model,
-    {
-      systemPrompt: OPENAI_PREFIX,
-      messages: [
-        {
-          role: "user",
-          content: toolTurn.prompt,
-          timestamp: Date.now(),
-        },
-        toolTurn.response,
-        buildToolResultMessage(toolTurn.toolCall.id, NOOP_TOOL.name, "ok"),
-        makeAssistantHistoryTurn("TOOL HISTORY ACKNOWLEDGED", params.model),
-        makeUserHistoryTurn("Keep the tool output stable in history."),
-        makeAssistantHistoryTurn("TOOL HISTORY PRESERVED", params.model),
-        {
-          role: "user",
-          content: `Reply with exactly CACHE-OK ${params.suffix}.`,
-          timestamp: Date.now(),
-        },
-      ],
-      tools: [NOOP_TOOL],
-    },
-    {
-      apiKey: params.apiKey,
-      cacheRetention: "short",
-      sessionId: params.sessionId,
-      maxTokens: 64,
-      temperature: 0,
-      reasoning: "none" as unknown as never,
-    },
-    `openai cache probe ${params.suffix}`,
-    OPENAI_TIMEOUT_MS,
-  );
-  const text = extractEmbeddedAssistantText(response);
-  expect(text.toLowerCase()).toContain(params.suffix.toLowerCase());
-  return {
-    suffix: params.suffix,
-    text,
-    usage: response.usage,
-    hitRate: computeCacheHitRate(response.usage),
-  };
-}
-
-async function runOpenAiCacheProbe(params: {
-  apiKey: string;
-  model: Awaited<ReturnType<typeof resolveLiveDirectModel>>["model"];
-  sessionId: string;
-  suffix: string;
-}): Promise<CacheRun> {
-  const response = await completeSimpleWithLiveTimeout(
-    params.model,
-    {
-      systemPrompt: OPENAI_PREFIX,
-      messages: [
-        {
-          role: "user",
-          content: `Reply with exactly CACHE-OK ${params.suffix}.`,
-          timestamp: Date.now(),
-        },
-      ],
-    },
-    {
-      apiKey: params.apiKey,
-      cacheRetention: "short",
-      sessionId: params.sessionId,
-      maxTokens: 32,
-      temperature: 0,
-    },
-    `openai cache probe ${params.suffix}`,
-    OPENAI_TIMEOUT_MS,
-  );
-  const text = extractEmbeddedAssistantText(response);
-  expect(text.toLowerCase()).toContain(params.suffix.toLowerCase());
-  return {
-    suffix: params.suffix,
-    text,
-    usage: response.usage,
-    hitRate: computeCacheHitRate(response.usage),
-  };
-}
-
-async function runOpenAiImageCacheProbe(params: {
-  apiKey: string;
-  model: Awaited<ReturnType<typeof resolveLiveDirectModel>>["model"];
-  sessionId: string;
-  suffix: string;
-}): Promise<CacheRun> {
-  const response = await completeSimpleWithLiveTimeout(
-    params.model,
-    {
-      systemPrompt: OPENAI_PREFIX,
-      messages: [
-        makeImageUserTurn(
-          "An image is attached. Ignore image semantics but keep the bytes in history.",
-        ),
-        makeAssistantHistoryTurn("IMAGE HISTORY ACKNOWLEDGED", params.model),
-        makeUserHistoryTurn("Keep the earlier image turn stable in context."),
-        makeAssistantHistoryTurn("IMAGE HISTORY PRESERVED", params.model),
-        makeUserHistoryTurn(`Reply with exactly CACHE-OK ${params.suffix}.`),
-      ],
-    },
-    {
-      apiKey: params.apiKey,
-      cacheRetention: "short",
-      sessionId: params.sessionId,
-      maxTokens: 64,
-      temperature: 0,
-      reasoning: "none" as unknown as never,
-    },
-    `openai image cache probe ${params.suffix}`,
-    OPENAI_TIMEOUT_MS,
-  );
-  const text = extractEmbeddedAssistantText(response);
-  expect(text.toLowerCase()).toContain(params.suffix.toLowerCase());
-  return {
-    suffix: params.suffix,
-    text,
-    usage: response.usage,
-    hitRate: computeCacheHitRate(response.usage),
-  };
-}
-
-async function runAnthropicCacheProbe(params: {
-  apiKey: string;
-  model: Awaited<ReturnType<typeof resolveLiveDirectModel>>["model"];
-  sessionId: string;
-  suffix: string;
+type DirectCacheProbeParams = LiveResolvedModel & {
+  providerTag: "anthropic" | "openai";
   cacheRetention: "none" | "short" | "long";
-}): Promise<CacheRun> {
-  const response = await completeSimpleWithLiveTimeout(
-    params.model,
-    {
-      systemPrompt: ANTHROPIC_PREFIX,
-      messages: [
-        {
-          role: "user",
-          content: `Reply with exactly CACHE-OK ${params.suffix}.`,
-          timestamp: Date.now(),
-        },
-      ],
-    },
-    {
-      apiKey: params.apiKey,
-      cacheRetention: params.cacheRetention,
-      sessionId: params.sessionId,
-      maxTokens: 32,
-      temperature: 0,
-    },
-    `anthropic cache probe ${params.suffix} (${params.cacheRetention})`,
-    ANTHROPIC_TIMEOUT_MS,
-  );
+  sessionId: string;
+  suffix: string;
+};
+
+function cacheRunFromResponse(response: AssistantMessage, suffix: string): CacheRun {
   const text = extractEmbeddedAssistantText(response);
-  expect(text.toLowerCase()).toContain(params.suffix.toLowerCase());
+  expect(text.toLowerCase()).toContain(suffix.toLowerCase());
   return {
-    suffix: params.suffix,
+    suffix,
     text,
     usage: response.usage,
     hitRate: computeCacheHitRate(response.usage),
   };
 }
 
-async function runAnthropicToolCacheProbe(params: {
-  apiKey: string;
-  model: Awaited<ReturnType<typeof resolveLiveDirectModel>>["model"];
-  sessionId: string;
-  suffix: string;
-  cacheRetention: "none" | "short" | "long";
-}): Promise<CacheRun> {
+async function runToolCacheProbe(params: DirectCacheProbeParams): Promise<CacheRun> {
+  const prefix = params.providerTag === "openai" ? OPENAI_PREFIX : ANTHROPIC_PREFIX;
   const toolTurn = await runToolOnlyTurn({
     apiKey: params.apiKey,
     cacheRetention: params.cacheRetention,
     model: params.model,
-    providerTag: "anthropic",
+    providerTag: params.providerTag,
     sessionId: params.sessionId,
-    systemPrompt: ANTHROPIC_PREFIX,
+    systemPrompt: prefix,
     tool: NOOP_TOOL,
   });
   const response = await completeSimpleWithLiveTimeout(
     params.model,
     {
-      systemPrompt: ANTHROPIC_PREFIX,
+      systemPrompt: prefix,
       messages: [
         {
           role: "user",
@@ -667,31 +483,45 @@ async function runAnthropicToolCacheProbe(params: {
       sessionId: params.sessionId,
       maxTokens: 64,
       temperature: 0,
+      ...(params.providerTag === "openai" ? { reasoning: "none" as unknown as never } : {}),
     },
-    `anthropic cache probe ${params.suffix} (${params.cacheRetention})`,
-    ANTHROPIC_TIMEOUT_MS,
+    `${params.providerTag} cache probe ${params.suffix}${params.providerTag === "anthropic" ? ` (${params.cacheRetention})` : ""}`,
+    params.providerTag === "openai" ? OPENAI_TIMEOUT_MS : ANTHROPIC_TIMEOUT_MS,
   );
-  const text = extractEmbeddedAssistantText(response);
-  expect(text.toLowerCase()).toContain(params.suffix.toLowerCase());
-  return {
-    suffix: params.suffix,
-    text,
-    usage: response.usage,
-    hitRate: computeCacheHitRate(response.usage),
-  };
+  return cacheRunFromResponse(response, params.suffix);
 }
 
-async function runAnthropicImageCacheProbe(params: {
-  apiKey: string;
-  model: Awaited<ReturnType<typeof resolveLiveDirectModel>>["model"];
-  sessionId: string;
-  suffix: string;
-  cacheRetention: "none" | "short" | "long";
-}): Promise<CacheRun> {
+async function runTextCacheProbe(params: DirectCacheProbeParams): Promise<CacheRun> {
   const response = await completeSimpleWithLiveTimeout(
     params.model,
     {
-      systemPrompt: ANTHROPIC_PREFIX,
+      systemPrompt: params.providerTag === "openai" ? OPENAI_PREFIX : ANTHROPIC_PREFIX,
+      messages: [
+        {
+          role: "user",
+          content: `Reply with exactly CACHE-OK ${params.suffix}.`,
+          timestamp: Date.now(),
+        },
+      ],
+    },
+    {
+      apiKey: params.apiKey,
+      cacheRetention: params.cacheRetention,
+      sessionId: params.sessionId,
+      maxTokens: 32,
+      temperature: 0,
+    },
+    `${params.providerTag} cache probe ${params.suffix}${params.providerTag === "anthropic" ? ` (${params.cacheRetention})` : ""}`,
+    params.providerTag === "openai" ? OPENAI_TIMEOUT_MS : ANTHROPIC_TIMEOUT_MS,
+  );
+  return cacheRunFromResponse(response, params.suffix);
+}
+
+async function runImageCacheProbe(params: DirectCacheProbeParams): Promise<CacheRun> {
+  const response = await completeSimpleWithLiveTimeout(
+    params.model,
+    {
+      systemPrompt: params.providerTag === "openai" ? OPENAI_PREFIX : ANTHROPIC_PREFIX,
       messages: [
         makeImageUserTurn(
           "An image is attached. Ignore image semantics but keep the bytes in history.",
@@ -708,18 +538,12 @@ async function runAnthropicImageCacheProbe(params: {
       sessionId: params.sessionId,
       maxTokens: 64,
       temperature: 0,
+      ...(params.providerTag === "openai" ? { reasoning: "none" as unknown as never } : {}),
     },
-    `anthropic image cache probe ${params.suffix} (${params.cacheRetention})`,
-    ANTHROPIC_TIMEOUT_MS,
+    `${params.providerTag} image cache probe ${params.suffix}${params.providerTag === "anthropic" ? ` (${params.cacheRetention})` : ""}`,
+    params.providerTag === "openai" ? OPENAI_TIMEOUT_MS : ANTHROPIC_TIMEOUT_MS,
   );
-  const text = extractEmbeddedAssistantText(response);
-  expect(text.toLowerCase()).toContain(params.suffix.toLowerCase());
-  return {
-    suffix: params.suffix,
-    text,
-    usage: response.usage,
-    hitRate: computeCacheHitRate(response.usage),
-  };
+  return cacheRunFromResponse(response, params.suffix);
 }
 
 describeCacheLive("embedded agent runner prompt caching (live)", () => {
@@ -788,7 +612,9 @@ describeCacheLive("embedded agent runner prompt caching (live)", () => {
     it(
       "hits the expected OpenAI cache plateau on repeated stable prefixes",
       async () => {
-        const warmup = await runOpenAiCacheProbe({
+        const warmup = await runTextCacheProbe({
+          providerTag: "openai",
+          cacheRetention: "short",
           ...fixture,
           sessionId: OPENAI_SESSION_ID,
           suffix: "warmup",
@@ -798,12 +624,16 @@ describeCacheLive("embedded agent runner prompt caching (live)", () => {
         );
 
         const hitRuns = [
-          await runOpenAiCacheProbe({
+          await runTextCacheProbe({
+            providerTag: "openai",
+            cacheRetention: "short",
             ...fixture,
             sessionId: OPENAI_SESSION_ID,
             suffix: "hit-a",
           }),
-          await runOpenAiCacheProbe({
+          await runTextCacheProbe({
+            providerTag: "openai",
+            cacheRetention: "short",
             ...fixture,
             sessionId: OPENAI_SESSION_ID,
             suffix: "hit-b",
@@ -828,7 +658,9 @@ describeCacheLive("embedded agent runner prompt caching (live)", () => {
     it(
       "keeps the expected OpenAI cache plateau across tool-call followup turns",
       async () => {
-        const warmup = await runOpenAiToolCacheProbe({
+        const warmup = await runToolCacheProbe({
+          providerTag: "openai",
+          cacheRetention: "short",
           ...fixture,
           sessionId: `${OPENAI_SESSION_ID}-tool`,
           suffix: "tool-warmup",
@@ -837,12 +669,16 @@ describeCacheLive("embedded agent runner prompt caching (live)", () => {
           `openai tool warmup cacheRead=${warmup.usage.cacheRead} input=${warmup.usage.input} rate=${warmup.hitRate.toFixed(3)}`,
         );
 
-        const hitA = await runOpenAiToolCacheProbe({
+        const hitA = await runToolCacheProbe({
+          providerTag: "openai",
+          cacheRetention: "short",
           ...fixture,
           sessionId: `${OPENAI_SESSION_ID}-tool`,
           suffix: "tool-hit-a",
         });
-        const hitB = await runOpenAiToolCacheProbe({
+        const hitB = await runToolCacheProbe({
+          providerTag: "openai",
+          cacheRetention: "short",
           ...fixture,
           sessionId: `${OPENAI_SESSION_ID}-tool`,
           suffix: "tool-hit-b",
@@ -861,7 +697,9 @@ describeCacheLive("embedded agent runner prompt caching (live)", () => {
     it(
       "keeps the expected OpenAI cache plateau across image-heavy followup turns",
       async () => {
-        const warmup = await runOpenAiImageCacheProbe({
+        const warmup = await runImageCacheProbe({
+          providerTag: "openai",
+          cacheRetention: "short",
           ...fixture,
           sessionId: `${OPENAI_SESSION_ID}-image`,
           suffix: "image-warmup",
@@ -870,12 +708,16 @@ describeCacheLive("embedded agent runner prompt caching (live)", () => {
           `openai image warmup cacheRead=${warmup.usage.cacheRead} input=${warmup.usage.input} rate=${warmup.hitRate.toFixed(3)}`,
         );
 
-        const hitA = await runOpenAiImageCacheProbe({
+        const hitA = await runImageCacheProbe({
+          providerTag: "openai",
+          cacheRetention: "short",
           ...fixture,
           sessionId: `${OPENAI_SESSION_ID}-image`,
           suffix: "image-hit-a",
         });
-        const hitB = await runOpenAiImageCacheProbe({
+        const hitB = await runImageCacheProbe({
+          providerTag: "openai",
+          cacheRetention: "short",
           ...fixture,
           sessionId: `${OPENAI_SESSION_ID}-image`,
           suffix: "image-hit-b",
@@ -1040,7 +882,8 @@ describeCacheLive("embedded agent runner prompt caching (live)", () => {
     it(
       "writes cache on warmup and reads it back on repeated stable prefixes",
       async () => {
-        const warmup = await runAnthropicCacheProbe({
+        const warmup = await runTextCacheProbe({
+          providerTag: "anthropic",
           ...fixture,
           sessionId: ANTHROPIC_SESSION_ID,
           suffix: "warmup",
@@ -1052,13 +895,15 @@ describeCacheLive("embedded agent runner prompt caching (live)", () => {
         expect(warmup.usage.cacheWrite ?? 0).toBeGreaterThan(0);
 
         const hitRuns = [
-          await runAnthropicCacheProbe({
+          await runTextCacheProbe({
+            providerTag: "anthropic",
             ...fixture,
             sessionId: ANTHROPIC_SESSION_ID,
             suffix: "hit-a",
             cacheRetention: "short",
           }),
-          await runAnthropicCacheProbe({
+          await runTextCacheProbe({
+            providerTag: "anthropic",
             ...fixture,
             sessionId: ANTHROPIC_SESSION_ID,
             suffix: "hit-b",
@@ -1082,7 +927,8 @@ describeCacheLive("embedded agent runner prompt caching (live)", () => {
     it(
       "keeps high cache-read rates across tool-call followup turns",
       async () => {
-        const warmup = await runAnthropicToolCacheProbe({
+        const warmup = await runToolCacheProbe({
+          providerTag: "anthropic",
           ...fixture,
           sessionId: `${ANTHROPIC_SESSION_ID}-tool`,
           suffix: "tool-warmup",
@@ -1093,13 +939,15 @@ describeCacheLive("embedded agent runner prompt caching (live)", () => {
         );
         expect(warmup.usage.cacheWrite ?? 0).toBeGreaterThan(0);
 
-        const hitA = await runAnthropicToolCacheProbe({
+        const hitA = await runToolCacheProbe({
+          providerTag: "anthropic",
           ...fixture,
           sessionId: `${ANTHROPIC_SESSION_ID}-tool`,
           suffix: "tool-hit-a",
           cacheRetention: "short",
         });
-        const hitB = await runAnthropicToolCacheProbe({
+        const hitB = await runToolCacheProbe({
+          providerTag: "anthropic",
           ...fixture,
           sessionId: `${ANTHROPIC_SESSION_ID}-tool`,
           suffix: "tool-hit-b",
@@ -1119,7 +967,8 @@ describeCacheLive("embedded agent runner prompt caching (live)", () => {
     it(
       "keeps high cache-read rates across image-heavy followup turns",
       async () => {
-        const warmup = await runAnthropicImageCacheProbe({
+        const warmup = await runImageCacheProbe({
+          providerTag: "anthropic",
           ...fixture,
           sessionId: `${ANTHROPIC_SESSION_ID}-image`,
           suffix: "image-warmup",
@@ -1129,13 +978,15 @@ describeCacheLive("embedded agent runner prompt caching (live)", () => {
           `anthropic image warmup cacheWrite=${warmup.usage.cacheWrite} cacheRead=${warmup.usage.cacheRead} input=${warmup.usage.input} rate=${warmup.hitRate.toFixed(3)}`,
         );
 
-        const hitA = await runAnthropicImageCacheProbe({
+        const hitA = await runImageCacheProbe({
+          providerTag: "anthropic",
           ...fixture,
           sessionId: `${ANTHROPIC_SESSION_ID}-image`,
           suffix: "image-hit-a",
           cacheRetention: "short",
         });
-        const hitB = await runAnthropicImageCacheProbe({
+        const hitB = await runImageCacheProbe({
+          providerTag: "anthropic",
           ...fixture,
           sessionId: `${ANTHROPIC_SESSION_ID}-image`,
           suffix: "image-hit-b",
@@ -1155,7 +1006,8 @@ describeCacheLive("embedded agent runner prompt caching (live)", () => {
     it(
       "does not report meaningful cache activity when retention is disabled",
       async () => {
-        const disabled = await runAnthropicCacheProbe({
+        const disabled = await runTextCacheProbe({
+          providerTag: "anthropic",
           ...fixture,
           sessionId: `${ANTHROPIC_SESSION_ID}-disabled`,
           suffix: "no-cache",

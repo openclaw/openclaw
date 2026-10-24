@@ -1,10 +1,6 @@
-import { writeFile } from "node:fs/promises";
-import path from "node:path";
-import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { defaultControlUiFeatureMethods } from "../test-helpers/control-ui-e2e-defaults.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
-import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   controlUiSessionUrl,
   installMockGateway,
@@ -25,17 +21,6 @@ const withPage = (
     { locale: "en-US", serviceWorkers: "block", viewport: { width, height: 900 }, ...options },
     run,
   );
-
-async function captureStatus(page: Page, name: string, surface: Locator, content: Locator[]) {
-  const frame = await takeControlUiScreenshotFrame(page, surface, content, {
-    elements: content,
-    animations: "disabled",
-  });
-  await writeFile(path.join(suite.artifactDir, `${name}.png`), frame.png);
-  for (const [index, element] of frame.elements.entries()) {
-    await writeFile(path.join(suite.artifactDir, `${name}-${index + 1}.png`), element.png);
-  }
-}
 
 suite.define(() => {
   it("keeps shared chat usable without polling operator-only surfaces", async () => {
@@ -229,7 +214,6 @@ suite.define(() => {
           );
         }),
       ).toBe(true);
-      await captureStatus(page, "collapsed-avatar-flag", flag, [retainedStatus, flag]);
       await page.mouse.move(600, 400);
       await flag.waitFor({ state: "hidden" });
       await pauseVirtualClock(page);
@@ -250,7 +234,6 @@ suite.define(() => {
       await page.clock.runFor(200);
       await flag.waitFor({ state: "hidden" });
       await identityTooltip.waitFor({ state: "visible" });
-      await captureStatus(page, "collapsed-avatar-overlap", composer, [retainedStatus, composer]);
       await retainedStatus.focus();
       expect(await flag.isVisible()).toBe(false);
       expect(await retainedStatus.getAttribute("aria-label")).toContain("Reconnecting…");
@@ -333,10 +316,6 @@ suite.define(() => {
         expect(await connectionStatus.getAttribute("role")).toBeNull();
         expect(await footer.textContent()).not.toContain("in outbox");
         expect(await gateway.getRequests("chat.send")).toHaveLength(0);
-        await captureStatus(page, "desktop-footer-queued", connectionStatus, [
-          identityStatus,
-          connectionStatus,
-        ]);
 
         await page.setViewportSize({ width: 390, height: 844 });
         const mobileStatus = page.locator(".mobile-header__notices:visible");
@@ -361,10 +340,6 @@ suite.define(() => {
         // The shell owns the single live announcement, including queued messages.
         expect(await mobileStatus.getAttribute("role")).toBeNull();
         expect(await mobileStatus.getAttribute("aria-live")).toBeNull();
-        await captureStatus(page, "mobile-header-queued", mobileStatus, [
-          page.getByRole("button", { name: "Expand sidebar" }),
-          mobileStatus,
-        ]);
         await page.setViewportSize({ width: 1280, height: 900 });
         await footer.waitFor({ state: "visible" });
 

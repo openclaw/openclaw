@@ -517,6 +517,19 @@ function ChatPaneHeaderChrome(
               </openclaw-tooltip>
             </Show>
           </div>
+          {/* Inactive panes hide session actions, but must keep their close control. */}
+          <Show when={!props.mergedChrome && props.onClosePane}>
+            <button
+              type="button"
+              class="btn btn--ghost btn--icon chat-icon-btn chat-pane__close"
+              aria-label={t("chat.splitView.closePane")}
+              title={t("chat.splitView.closePane")}
+              disabled={props.actionsDisabled}
+              onClick={() => props.onClosePane?.(props.paneId)}
+            >
+              <Icon name="x" />
+            </button>
+          </Show>
         </div>
         <Show when={props.narrow && (props.mergedChrome || !props.detailsControl)}>
           <RunningSubagents count={props.runningSubagentCount} />

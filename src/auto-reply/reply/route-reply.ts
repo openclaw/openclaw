@@ -6,6 +6,7 @@ import { createChannelReplyTransform } from "../../channels/message/reply-transf
 import { getBundledChannelPlugin } from "../../channels/plugins/bundled.js";
 import { getLoadedChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
 import { normalizeChatChannelId } from "../../channels/registry.js";
+import type { SessionDeliveryGeneration } from "../../config/sessions/session-delivery-generation.types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
@@ -49,6 +50,8 @@ type RouteReplyParams = {
   to: string;
   /** Session key for deriving agent identity defaults (multi-agent). */
   sessionKey?: string;
+  /** Original session generation retained by durable delivery after producer settlement. */
+  sessionGeneration?: SessionDeliveryGeneration;
   /** Prepared owner for unscoped sessions; an agent-scoped target remains authoritative. */
   agentId?: string;
   /** Session key for policy resolution when native-command delivery targets a different session. */
@@ -345,11 +348,19 @@ async function routeReplyOperation(
     } satisfies Omit<Parameters<typeof sendDurableMessageBatchCore>[0], "payloads">;
     const send =
       operation.kind === "prepared"
-        ? await sendStructuredDurableMessageBatchCore({
-            ...sendParams,
-            plan: createStructuredOutboundPayloadPlan([deliveryPayload]),
-          })
-        : await sendDurableMessageBatchCore({ ...sendParams, payloads: [deliveryPayload] });
+        ? await sendStructuredDurableMessageBatchCore(
+            {
+              ...sendParams,
+              plan: createStructuredOutboundPayloadPlan([deliveryPayload]),
+            },
+            params.sessionGeneration,
+          )
+        : await sendDurableMessageBatchCore(
+            { ...sendParams, payloads: [deliveryPayload] },
+            undefined,
+            undefined,
+            params.sessionGeneration,
+          );
     if (send.status === "failed" || send.status === "partial_failed") {
       const delivery = summarizeVisibleRouteReplyDelivery(
         send.status === "failed" ? [] : send.results,

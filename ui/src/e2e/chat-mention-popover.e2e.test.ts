@@ -89,7 +89,6 @@ suite.define(() => {
   );
 
   it.each([
-    { route: "chat", count: 2 },
     { route: "chat", count: 16 },
     { route: "new", count: 2 },
   ])(

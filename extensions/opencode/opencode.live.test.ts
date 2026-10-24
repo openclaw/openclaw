@@ -1,14 +1,15 @@
-import {
-  completeSimple,
-  streamSimple,
-  type AssistantMessage,
-  type Model,
-  type Tool,
-} from "openclaw/plugin-sdk/llm";
+import { completeSimple, streamSimple, type Model } from "openclaw/plugin-sdk/llm";
 import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { extractNonEmptyAssistantText, isLiveTestEnabled } from "openclaw/plugin-sdk/test-live";
-import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
+import {
+  createLiveValueTool,
+  requireLiveToolCall,
+} from "../test-support/live-value-tool.test-support.js";
+import {
+  makeTextToolResult,
+  makeUserMessage,
+} from "../test-support/message-fixtures.test-support.js";
 import plugin from "./index.js";
 import {
   buildOpencodeZenLiveProviderConfig,
@@ -52,27 +53,6 @@ async function resolveOpencodeToolLiveModel() {
     input,
   };
   return { model, reasoningOptions: reasoning ? { reasoning } : {} };
-}
-
-function liveEchoTool(): Tool {
-  return {
-    name: "live_echo",
-    description: "Return the supplied value.",
-    parameters: Type.Object(
-      {
-        value: Type.String(),
-      },
-      { additionalProperties: false },
-    ),
-  };
-}
-
-function requireToolCall(message: AssistantMessage) {
-  const toolCall = message.content.find((block) => block.type === "toolCall");
-  if (toolCall?.type !== "toolCall") {
-    throw new Error(`OpenCode Zen live model did not call a tool: ${message.stopReason}`);
-  }
-  return toolCall;
 }
 
 async function fetchOpencodeZenModelIds(): Promise<string[]> {
@@ -120,7 +100,7 @@ describeLive("opencode Zen live catalog drift", () => {
 describeLive("opencode plugin live", () => {
   it("completes a discovered live tool-call round trip", async () => {
     const { model, reasoningOptions } = await resolveOpencodeToolLiveModel();
-    const tool = liveEchoTool();
+    const tool = createLiveValueTool("live_echo");
     const options = {
       apiKey: OPENCODE_API_KEY,
       ...reasoningOptions,
@@ -131,11 +111,10 @@ describeLive("opencode plugin live", () => {
       model,
       {
         messages: [
-          {
-            role: "user",
-            content: "You must call the live_echo tool with value ok. Do not answer directly.",
-            timestamp: Date.now(),
-          },
+          makeUserMessage(
+            "You must call the live_echo tool with value ok. Do not answer directly.",
+            Date.now(),
+          ),
         ],
         tools: [tool],
       },
@@ -146,31 +125,19 @@ describeLive("opencode plugin live", () => {
       throw new Error(first.errorMessage || "OpenCode Zen first turn returned an error");
     }
 
-    const toolCall = requireToolCall(first);
+    const toolCall = requireLiveToolCall(first, "OpenCode Zen live model did not call a tool: ");
 
     const second = await completeSimple(
       model,
       {
         messages: [
-          {
-            role: "user",
-            content: "You must call the live_echo tool with value ok. Do not answer directly.",
-            timestamp: Date.now() - 3,
-          },
+          makeUserMessage(
+            "You must call the live_echo tool with value ok. Do not answer directly.",
+            Date.now() - 3,
+          ),
           first,
-          {
-            role: "toolResult",
-            toolCallId: toolCall.id,
-            toolName: toolCall.name,
-            content: [{ type: "text", text: "ok" }],
-            isError: false,
-            timestamp: Date.now() - 1,
-          },
-          {
-            role: "user",
-            content: "Reply with exactly: ok",
-            timestamp: Date.now(),
-          },
+          makeTextToolResult(toolCall.id, toolCall.name, "ok", false, Date.now() - 1),
+          makeUserMessage("Reply with exactly: ok", Date.now()),
         ],
         tools: [tool],
       },
@@ -206,11 +173,7 @@ describeLive("opencode plugin live", () => {
         model,
         {
           messages: [
-            {
-              role: "user",
-              content: "What is 17 times 23? Reply with the number only.",
-              timestamp: Date.now(),
-            },
+            makeUserMessage("What is 17 times 23? Reply with the number only.", Date.now()),
           ],
         },
         {

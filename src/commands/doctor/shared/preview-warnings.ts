@@ -548,6 +548,15 @@ export async function collectDoctorPreviewNotes(params: {
         warnings.push(stalePluginWarnings.join("\n"));
       }
     }
+    const { collectContextEnginePluginIdSelectorWarnings } =
+      await import("./context-engine-plugin-id-selector.js");
+    warnings.push(
+      ...collectContextEnginePluginIdSelectorWarnings({
+        cfg: params.cfg,
+        doctorFixCommand: params.doctorFixCommand,
+        env,
+      }),
+    );
   }
 
   const { collectCodexRouteWarnings } = await import("./codex-route-warnings.js");

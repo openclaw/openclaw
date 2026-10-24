@@ -1,7 +1,8 @@
 // @vitest-environment node
 import { expect, it } from "vitest";
+import { BOARD_GRID_COLUMNS } from "./grid-constants.ts";
 import type { BoardGridItem, BoardGridRect } from "./grid.ts";
-import { BOARD_GRID_COLUMNS, layout, nudge, previewDrag, resize } from "./grid.ts";
+import { layout, nudge, previewDrag, resize } from "./grid.ts";
 function item(name: string, w: number, h: number, order: number): BoardGridItem {
   return { name, w, h, order };
 }

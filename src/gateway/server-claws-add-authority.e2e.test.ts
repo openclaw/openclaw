@@ -13,6 +13,7 @@ import {
 import { approveDevicePairing } from "../infra/device-pairing-approval.js";
 import { rotateDeviceToken } from "../infra/device-pairing-tokens.js";
 import { requestDevicePairing } from "../infra/device-pairing.js";
+import { clawHubSecurityResponse } from "../plugins/clawhub.test-fixtures.js";
 import { createClawHubArchiveFactory } from "../plugins/clawhub.test-support.js";
 import { readPersistedInstalledPluginIndexInstallRecordsAsync } from "../plugins/installed-plugin-index-records.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
@@ -20,6 +21,7 @@ import { createDeferredCore } from "../shared/deferred.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { GatewayClient, type GatewayClientOptions } from "./client.js";
 import { startGatewayServerCore } from "./server-start.js";
+import { KERNEL_TEST_ENV } from "./test-helpers.env.js";
 import { acquireGatewayE2ePortBlock, startClaimedGateway } from "./test-helpers.listener.js";
 
 const token = "claw-add-authority-test-token";
@@ -185,7 +187,9 @@ function setClawHubFixtures(fixtures: Fixture[]) {
   clawhub.security.mockImplementation(async ({ name }: { name: string }) => {
     const { fixture, kind } = lookup(name);
     return {
+      ...clawHubSecurityResponse(name, version, { moderationState: "approved" }),
       package: { name, displayName: name, family: kind === "claw" ? "claw" : "code-plugin" },
+      securityAuditUrl: `https://clawhub.ai/${kind}s/${name}/security-audit`,
       release:
         kind === "claw"
           ? {
@@ -195,17 +199,6 @@ function setClawHubFixtures(fixtures: Fixture[]) {
               npmIntegrity: "sha512-test-fixture",
             }
           : { version },
-      overview: "Synthetic clean fixture",
-      verdict: "clean",
-      securityAuditUrl: `https://clawhub.ai/${kind}s/${name}/security-audit`,
-      trust: {
-        scanStatus: "clean",
-        moderationState: "approved",
-        blockedFromDownload: false,
-        reasons: [],
-        pending: false,
-        stale: false,
-      },
     };
   });
   clawhub.download.mockImplementation(async ({ name }: { name: string }) => {
@@ -229,17 +222,10 @@ describe("Claw Add dependency consent authority (real Gateway RPC)", () => {
     const state = await createOpenClawTestState({
       label: "claw-add-authority",
       env: {
-        OPENCLAW_GATEWAY_TOKEN: undefined,
-        OPENCLAW_GATEWAY_PASSWORD: undefined,
+        ...KERNEL_TEST_ENV,
         OPENCLAW_CLAWHUB_URL: undefined,
         CLAWHUB_URL: undefined,
         OPENCLAW_TEST_MINIMAL_GATEWAY: "0",
-        OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
-        OPENCLAW_SKIP_CANVAS_HOST: "1",
-        OPENCLAW_SKIP_CHANNELS: "1",
-        OPENCLAW_SKIP_CRON: "1",
-        OPENCLAW_SKIP_GMAIL_WATCHER: "1",
-        OPENCLAW_SKIP_PROVIDERS: "1",
         OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
       },
     });
@@ -338,6 +324,13 @@ describe("Claw Add dependency consent authority (real Gateway RPC)", () => {
           extension: Boolean(extension),
         };
       };
+      const expectNotInstalled = async (fixture: Fixture) => {
+        expect(await installed(fixture)).toEqual({
+          agent: undefined,
+          plugin: undefined,
+          extension: false,
+        });
+      };
 
       const allowedPlan = await plan(reader.client, allowedFixture);
       expect(allowedPlan.pluginReviews).toHaveLength(1);
@@ -345,11 +338,7 @@ describe("Claw Add dependency consent authority (real Gateway RPC)", () => {
       await expect(
         reader.client.request("claws.add.apply", applyParams(allowedFixture, allowedPlan)),
       ).rejects.toThrow("missing scope: operator.admin");
-      expect(await installed(allowedFixture)).toEqual({
-        agent: undefined,
-        plugin: undefined,
-        extension: false,
-      });
+      await expectNotInstalled(allowedFixture);
 
       const allowed = await admin.client.request<{ status: string }>(
         "claws.add.apply",
@@ -423,11 +412,7 @@ describe("Claw Add dependency consent authority (real Gateway RPC)", () => {
         reply,
         "Claw Add settled before final effect",
       );
-      expect(await installed(revokedFixture)).toEqual({
-        agent: undefined,
-        plugin: undefined,
-        extension: false,
-      });
+      await expectNotInstalled(revokedFixture);
       expect(recoveryRestart).not.toHaveBeenCalled();
       await admin.client.request("device.token.revoke", {
         deviceId: identity.deviceId,
@@ -437,11 +422,7 @@ describe("Claw Add dependency consent authority (real Gateway RPC)", () => {
       release.resolve();
       expect(await withinTest(settled.promise, signal)).toBeDefined();
       await reply;
-      expect(await installed(revokedFixture)).toEqual({
-        agent: undefined,
-        plugin: undefined,
-        extension: false,
-      });
+      await expectNotInstalled(revokedFixture);
     } finally {
       release.resolve();
       clawhub.pauseBeforeEffect = async () => {};

@@ -45,12 +45,6 @@ import {
   type MSTeamsSendHandoff,
 } from "./send-handoff.js";
 
-type MSTeamsReplyRenderOptions = {
-  textChunkLimit: number;
-  tableMode: MarkdownTableMode;
-  chunkMode?: ChunkMode;
-};
-
 /**
  * A rendered message that preserves media vs text distinction.
  * When mediaUrl is present, it will be sent as a Bot Framework attachment.
@@ -63,15 +57,6 @@ export type MSTeamsRenderedMessage = {
 
 const MSTEAMS_SEND_ATTEMPTS = 3;
 const MSTEAMS_SEND_RETRY_MAX_DELAY_MS = 10_000;
-
-type MSTeamsSendRetryEvent = {
-  messageIndex: number;
-  messageCount: number;
-  nextAttempt: number;
-  maxAttempts: number;
-  delayMs: number;
-  classification: ReturnType<typeof classifyMSTeamsSendError>;
-};
 
 export function buildConversationReference(ref: StoredConversationReference) {
   const conversationId = ref.conversation?.id?.trim();
@@ -112,7 +97,11 @@ export function buildConversationReference(ref: StoredConversationReference) {
 
 export function renderReplyPayloadsToMessages(
   replies: ReplyPayload[],
-  options: MSTeamsReplyRenderOptions,
+  options: {
+    textChunkLimit: number;
+    tableMode: MarkdownTableMode;
+    chunkMode?: ChunkMode;
+  },
 ): MSTeamsRenderedMessage[] {
   const out: MSTeamsRenderedMessage[] = [];
   const chunkLimit = Math.min(options.textChunkLimit, 4000);
@@ -159,7 +148,14 @@ export async function sendMSTeamsMessages(
     conversationRef: StoredConversationReference;
     context?: { sendActivity: (activity: MSTeamsActivityLike) => Promise<unknown> };
     messages: MSTeamsRenderedMessage[];
-    onRetry?: (event: MSTeamsSendRetryEvent) => void;
+    onRetry?: (event: {
+      messageIndex: number;
+      messageCount: number;
+      nextAttempt: number;
+      maxAttempts: number;
+      delayMs: number;
+      classification: ReturnType<typeof classifyMSTeamsSendError>;
+    }) => void;
     onMessageSent?: (messageId: string, messageIndex: number) => Promise<void> | void;
     /** Token provider for SharePoint uploads in group chats/channels */
     tokenProvider?: MSTeamsAccessTokenProvider;

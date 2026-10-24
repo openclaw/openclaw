@@ -370,6 +370,7 @@ it.each([false, true])(
       group.setState("gone");
       fixture.child.stdout?.emit("data", Buffer.from("after timeout"));
       fixture.child.stdout?.emit("close");
+      fixture.close();
     });
     const command = runChild(fixture, {
       timeoutMs: 100,

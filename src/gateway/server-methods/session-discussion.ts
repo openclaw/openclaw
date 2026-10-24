@@ -16,6 +16,7 @@ import { hasExplicitSessionName } from "../session-title-state.js";
 import { withGatewaySessionStoreTarget } from "../session-utils-store-lookup.js";
 import { resolveCanonicalSessionEntryFromStoreKeys } from "../session-utils-store.js";
 import { formatForLog } from "../ws-log.js";
+import { respondError } from "./response.js";
 import { emitSessionTitleChanged } from "./session-change-event.js";
 import { measureSessionCollaborationPhase } from "./sessions-collaboration-diagnostics.js";
 import type {
@@ -141,13 +142,10 @@ function sessionDiscussionHandler(operation: "info" | "open"): GatewayRequestHan
         respond(true, result, undefined);
       } catch (error) {
         // Only an absent provider means "none"; hiding a failed provider would suppress retries.
-        respond(
-          false,
-          undefined,
-          errorShape(
-            ErrorCodes.UNAVAILABLE,
-            error instanceof Error ? error.message : "session discussion provider failed",
-          ),
+        respondError(
+          respond,
+          ErrorCodes.UNAVAILABLE,
+          error instanceof Error ? error.message : "session discussion provider failed",
         );
       }
     },

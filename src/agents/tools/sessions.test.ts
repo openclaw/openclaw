@@ -116,6 +116,22 @@ function requireGatewayRequest(index = 0) {
   return requireRecord(callGatewayMock.mock.calls[index]?.[0], `gateway request ${index}`);
 }
 
+function mockGatewayMethods(responses: Record<string, () => unknown>) {
+  callGatewayMock.mockImplementation(
+    async ({ method }: { method?: string }) => responses[method ?? ""]?.() ?? {},
+  );
+}
+
+function createAllSessionsConfig(): OpenClawConfig {
+  return {
+    session: { scope: "per-sender", mainKey: "main" },
+    tools: {
+      agentToAgent: { enabled: false },
+      sessions: { visibility: "all" },
+    },
+  };
+}
+
 beforeAll(async () => {
   ({ createSessionsListTool } = await import("./sessions-list-tool.js"));
   const { createSessionsSendTool: createTool } = await import("./sessions-send-tool.js");
@@ -189,18 +205,12 @@ async function executeFireAndForgetA2AFrom(
       sessions: { visibility: "all" },
     },
   });
-  callGatewayMock.mockImplementation(async (opts: unknown) => {
-    const request = opts as { method?: string };
-    if (request.method === "sessions.list") {
-      return {
-        path: "/tmp/sessions.json",
-        sessions: [{ key: targetSessionKey, kind: "group" }],
-      };
-    }
-    if (request.method === "agent") {
-      return { runId: "run-fire-and-forget", acceptedAt: 123 };
-    }
-    return {};
+  mockGatewayMethods({
+    "sessions.list": () => ({
+      path: "/tmp/sessions.json",
+      sessions: [{ key: targetSessionKey, kind: "group" }],
+    }),
+    agent: () => ({ runId: "run-fire-and-forget", acceptedAt: 123 }),
   });
   const tool = createSessionsSendTool({
     agentSessionKey: requesterSessionKey,
@@ -599,21 +609,13 @@ describe("sessions_send gating", () => {
           spawnedBy: requesterSessionKey,
         },
       );
-      callGatewayMock.mockImplementation(async (opts: unknown) => {
-        const request = opts as { method?: string };
-        if (request.method === "sessions.list") {
-          return {
-            path: storePath,
-            sessions: [{ key: targetSessionKey, kind: "direct" }],
-          };
-        }
-        if (request.method === "agent") {
-          return { runId: "run-exact-send", acceptedAt: 123 };
-        }
-        if (request.method === "agent.wait") {
-          return { runId: "run-exact-send", status: "timeout" };
-        }
-        return {};
+      mockGatewayMethods({
+        "sessions.list": () => ({
+          path: storePath,
+          sessions: [{ key: targetSessionKey, kind: "direct" }],
+        }),
+        agent: () => ({ runId: "run-exact-send", acceptedAt: 123 }),
+        "agent.wait": () => ({ runId: "run-exact-send", status: "timeout" }),
       });
       const tool = createSessionsSendTool({
         agentSessionKey: requesterSessionKey,
@@ -757,13 +759,7 @@ describe("sessions_send gating", () => {
 
   it("rejects label targets that resolve to canonical thread sessions", async () => {
     setActivePluginRegistry(createSessionConversationTestRegistry());
-    setRuntimeConfigSnapshot({
-      session: { scope: "per-sender", mainKey: "main" },
-      tools: {
-        agentToAgent: { enabled: false },
-        sessions: { visibility: "all" },
-      },
-    });
+    setRuntimeConfigSnapshot(createAllSessionsConfig());
     const threadSessionKey = "agent:main:discord:channel:123456:thread:987654";
     callGatewayMock.mockResolvedValueOnce({ key: threadSessionKey });
     const tool = createMainSessionsSendTool();
@@ -799,15 +795,9 @@ describe("sessions_send gating", () => {
       { agentId: "main", sessionKey: threadSessionKey },
       { sessionId: threadSessionKey, updatedAt: 1 },
     );
-    callGatewayMock.mockImplementation(async (opts: unknown) => {
-      const request = opts as { method?: string };
-      if (request.method === "sessions.resolve") {
-        return { key: threadSessionKey };
-      }
-      if (request.method === "agent") {
-        return { runId: "run-thread-opt-in", acceptedAt: 123 };
-      }
-      return {};
+    mockGatewayMethods({
+      "sessions.resolve": () => ({ key: threadSessionKey }),
+      agent: () => ({ runId: "run-thread-opt-in", acceptedAt: 123 }),
     });
     const tool = createMainSessionsSendTool();
 
@@ -830,13 +820,7 @@ describe("sessions_send gating", () => {
 
   it("does not disclose a resolved thread session key from a sessionId target", async () => {
     setActivePluginRegistry(createSessionConversationTestRegistry());
-    setRuntimeConfigSnapshot({
-      session: { scope: "per-sender", mainKey: "main" },
-      tools: {
-        agentToAgent: { enabled: false },
-        sessions: { visibility: "all" },
-      },
-    });
+    setRuntimeConfigSnapshot(createAllSessionsConfig());
     const threadSessionKey = "agent:other:discord:channel:123456:thread:987654";
     callGatewayMock.mockResolvedValueOnce({ key: threadSessionKey });
     const tool = createMainSessionsSendTool();
@@ -887,13 +871,7 @@ describe("sessions_send gating", () => {
     const tool = createSessionsSendTool({
       agentSessionKey: MAIN_AGENT_SESSION_KEY,
       agentChannel: MAIN_AGENT_CHANNEL,
-      config: {
-        session: { scope: "per-sender", mainKey: "main" },
-        tools: {
-          agentToAgent: { enabled: false },
-          sessions: { visibility: "all" },
-        },
-      } as never,
+      config: createAllSessionsConfig(),
     });
     const freshPrivateFinal = {
       role: "assistant",
@@ -901,28 +879,18 @@ describe("sessions_send gating", () => {
       timestamp: 21,
     };
 
-    callGatewayMock.mockImplementation(async (opts: unknown) => {
-      const request = opts as { method?: string; params?: Record<string, unknown> };
-      if (request.method === "sessions.list") {
-        return {
-          path: "/tmp/sessions.json",
-          sessions: [{ key: targetSessionKey, kind: "direct" }],
-        };
-      }
-      if (request.method === "agent") {
-        return { runId: "run-stale-send", acceptedAt: 123 };
-      }
-      if (request.method === "agent.wait") {
-        return {
-          runId: "run-stale-send",
-          status: "ok",
-          terminalReply: { disposition: "silent" },
-        };
-      }
-      if (request.method === "chat.history") {
-        return { messages: [freshPrivateFinal] };
-      }
-      return {};
+    mockGatewayMethods({
+      "sessions.list": () => ({
+        path: "/tmp/sessions.json",
+        sessions: [{ key: targetSessionKey, kind: "direct" }],
+      }),
+      agent: () => ({ runId: "run-stale-send", acceptedAt: 123 }),
+      "agent.wait": () => ({
+        runId: "run-stale-send",
+        status: "ok",
+        terminalReply: { disposition: "silent" },
+      }),
+      "chat.history": () => ({ messages: [freshPrivateFinal] }),
     });
 
     const result = await tool.execute("call-stale-send", {
@@ -952,10 +920,7 @@ describe("sessions_send gating", () => {
       const tool = createSessionsSendTool({
         agentSessionKey: MAIN_AGENT_SESSION_KEY,
         agentChannel: MAIN_AGENT_CHANNEL,
-        config: {
-          session: { scope: "per-sender", mainKey: "main" },
-          tools: { agentToAgent: { enabled: false }, sessions: { visibility: "all" } },
-        } as never,
+        config: createAllSessionsConfig(),
       });
 
       callGatewayMock.mockImplementation(async (opts: unknown) => {
@@ -1085,18 +1050,12 @@ describe("sessions_send gating", () => {
         tools: { agentToAgent: { enabled: false } },
       } as never,
     });
-    callGatewayMock.mockImplementation(async (opts: unknown) => {
-      const request = opts as { method?: string };
-      if (request.method === "sessions.list") {
-        return {
-          path: "/tmp/sessions.json",
-          sessions: [{ key: MAIN_AGENT_SESSION_KEY, kind: "direct" }],
-        };
-      }
-      if (request.method === "agent") {
-        return { runId: "run-alias-fire-and-forget", acceptedAt: 123 };
-      }
-      return {};
+    mockGatewayMethods({
+      "sessions.list": () => ({
+        path: "/tmp/sessions.json",
+        sessions: [{ key: MAIN_AGENT_SESSION_KEY, kind: "direct" }],
+      }),
+      agent: () => ({ runId: "run-alias-fire-and-forget", acceptedAt: 123 }),
     });
 
     const result = await tool.execute("call-aliased-fire-and-forget-same-session", {
@@ -1145,13 +1104,7 @@ describe("sessions_send gating", () => {
     const tool = createSessionsSendTool({
       agentSessionKey: MAIN_AGENT_SESSION_KEY,
       agentChannel: MAIN_AGENT_CHANNEL,
-      config: {
-        session: { scope: "per-sender", mainKey: "main" },
-        tools: {
-          agentToAgent: { enabled: false },
-          sessions: { visibility: "all" },
-        },
-      } as never,
+      config: createAllSessionsConfig(),
     });
     const waitTimeouts: unknown[] = [];
 
