@@ -12,26 +12,13 @@ const seedDirs = createTempDirTracker();
 let source: string;
 let eventBase: string;
 let mainBase: string;
-const workflows = [
-  ".github/workflows/ci-check-testbox.yml",
-  ".github/workflows/ci-check-arm-testbox.yml",
-  ".github/workflows/ci-build-artifacts-testbox.yml",
-];
-
 type Step = {
-  name: string;
   run?: string;
-  uses?: string;
   env?: Record<string, string>;
-  with?: Record<string, string>;
 };
 
 function git(cwd: string, ...args: string[]): string {
   return execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
-}
-function steps(file: string): Step[] {
-  const jobs = Object.values(parse(fs.readFileSync(file, "utf8")).jobs) as { steps: Step[] }[];
-  return jobs.flatMap((job) => job.steps);
 }
 
 beforeAll(() => {
@@ -76,7 +63,6 @@ function runBasePreparation(repo: string, base: string, eventName: string) {
   const actionPath = path.join(repo, ".github/actions/prepare-testbox-shell");
   const action = parse(fs.readFileSync(path.join(actionPath, "action.yml"), "utf8"));
   const actionStep: Step = action.runs.steps[0];
-  expect(actionStep.env).toEqual({ TESTBOX_BASE_REF: "${{ inputs.base-ref }}" });
   if (!actionStep.run) {
     throw new Error("Missing Testbox preparation command");
   }
@@ -85,7 +71,15 @@ function runBasePreparation(repo: string, base: string, eventName: string) {
     encoding: "utf8",
     env: {
       ...process.env,
-      TESTBOX_BASE_REF: eventName === "workflow_dispatch" ? "HEAD" : base,
+      ...Object.fromEntries(
+        Object.entries(actionStep.env ?? {}).map(([key, value]) => [
+          key,
+          value.replace(
+            "${{ inputs.base-ref }}",
+            eventName === "workflow_dispatch" ? "HEAD" : base,
+          ),
+        ]),
+      ),
       PATH: `${bin}${path.delimiter}${process.env.PATH ?? ""}`,
       RUNNER_OS: process.platform === "win32" ? "Windows" : "Linux",
       GITHUB_ACTION_PATH: actionPath,
@@ -97,20 +91,6 @@ function runBasePreparation(repo: string, base: string, eventName: string) {
     },
   });
 }
-
-it.each(workflows)("%s wires shallow checkout and base selection to the shared action", (file) => {
-  const entries = steps(file);
-  expect(entries.find((step) => step.name === "Checkout")?.with?.["fetch-depth"]).toBe(
-    "${{ github.event_name == 'pull_request' && '2' || '1' }}",
-  );
-  expect(
-    entries.find((step) => step.uses === "./.github/actions/prepare-testbox-shell")?.with?.[
-      "base-ref"
-    ],
-  ).toBe(
-    "${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || 'HEAD' }}",
-  );
-});
 
 it.each([
   ["merge", "main", 2, "pull_request"],

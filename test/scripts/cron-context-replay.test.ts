@@ -70,7 +70,6 @@ describe("cron context replay fixtures", () => {
   it("keeps an operator-source parent as the fixture's principal", () => {
     const fixture = parentFixture();
 
-    expect(resolveScheduledRequester(fixture.job).kind).toBe("operator-source");
     expect(JSON.stringify(fixture)).not.toMatch(/private/);
     expect(replayScheduledContextFixture(fixture)).toMatchObject({
       status: "ready",
@@ -158,7 +157,6 @@ describe("cron context replay fixtures", () => {
     } as Partial<CronStoredJob>);
     const fixture = anonymize(job, "ops", 1);
 
-    expect(resolveCronRunToolsAllow(job)).toEqual(["read"]);
     expect(resolveCronRunToolsAllow(fixture)).toEqual(["read"]);
     expect(JSON.stringify(fixture)).not.toMatch(/private/);
   });

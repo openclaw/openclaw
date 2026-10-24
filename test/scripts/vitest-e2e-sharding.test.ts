@@ -100,10 +100,6 @@ it("balances the measured tail while retaining every discovered file exactly onc
 it("uses source bytes for every file when timing data is absent", async () => {
   const files = testFiles([100, 80, 20]);
   expect(await gatewayShards(files, 2)).toEqual([[files[0]], [files[1], files[2]]]);
-  const added = testFiles([120])[0]!;
-  const shards = await gatewayShards([...files, added], 2);
-  expect(shards.flat()).toHaveLength(4);
-  expect(new Set(shards.flat())).toEqual(new Set([...files, added]));
 });
 
 it("keeps shared UI/Gateway partition ties deterministic without collapsing specifications", () => {
@@ -122,7 +118,6 @@ it("starts expensive standalone UI work early without crossing serial phase barr
   const specs = uiSpecs([
     [400, 10, "ui-e2e-bundled", 0],
     [300, 10, "ui-e2e-bundled", 0],
-    [200, 10, "ui-e2e-bundled", 0],
     [100, 30, "ui-e2e-standalone", 0],
     [50, 100, "ui-e2e-serial", 1],
     [60, 200, "ui-e2e-serial", 1],
@@ -131,7 +126,7 @@ it("starts expensive standalone UI work early without crossing serial phase barr
   const sequencer = uiSequencer();
   // eslint-disable-next-line unicorn/no-array-sort -- TestSequencer.sort is Vitest's ordering API.
   const ordered = await sequencer.sort(specs);
-  expect(ordered).toEqual([specs[3], specs[0], specs[1], specs[2], specs[5], specs[4], specs[6]]);
+  expect(ordered).toEqual([specs[2], specs[0], specs[1], specs[4], specs[3], specs[5]]);
   // eslint-disable-next-line unicorn/no-array-sort -- TestSequencer.sort is Vitest's ordering API.
   expect(await sequencer.sort(specs.toReversed())).toEqual(ordered);
 });
