@@ -1,4 +1,6 @@
 import type { WorkerProtocolCloseReason } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
+import type { FastMode } from "../../shared/fast-mode.js";
+import type { GatewayContextResolver } from "../server-methods/types.js";
 import type { WorkerInstallationArtifact } from "./bundle.js";
 import type { createWorkerInferenceManager } from "./inference.js";
 import type { WorkerLiveEventReceiver, WorkerLiveEventApplicationResult } from "./live-events.js";
@@ -47,6 +49,7 @@ export type WorkerInferenceServiceResult<K extends "start" | "cancel"> =
   | { ok: false; closeReason: WorkerProtocolCloseReason };
 
 export type WorkerTurnRpcOptions = {
+  resolveGatewayContext?: GatewayContextResolver;
   store: WorkerEnvironmentStore;
   prepareInstallation: (
     install: WorkerInstallationArtifact["install"],
@@ -60,3 +63,11 @@ export type WorkerTurnRpcOptions = {
   now: () => number;
   withLock: <T>(environmentId: string, task: () => Promise<T>) => Promise<T>;
 };
+
+export type WorkerTurnPromptCacheContext = Readonly<{
+  boundaryCount: number;
+  promptCacheKey?: string;
+  fastMode?: FastMode;
+  fastModeStartedAtMs?: number;
+  fastModeAutoOnSeconds?: number;
+}>;

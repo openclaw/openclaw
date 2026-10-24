@@ -511,6 +511,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/worker-environments/worker-turn-launcher.test.ts",
   "src/gateway/worker-environments/worker-turn-media.boundary.test.ts",
   "src/gateway/worker-environments/worker-turn-rpc.computer.test.ts",
+  "src/gateway/worker-environments/worker-exec-approval.test.ts",
   "src/gateway/worker-environments/worker-turn-rpc.gateway-tools.test.ts",
   "src/gateway/worker-environments/worker-turn-rpc.inference-publication.test.ts",
   "src/gateway/worker-environments/worker-turn-rpc.inference-reconnect.test.ts",

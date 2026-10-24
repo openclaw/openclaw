@@ -106,6 +106,18 @@ afterEach(() => {
 });
 
 describe("resolveWorkerToolAuthority", () => {
+  it.each(["auto", "ask"] as const)(
+    "preserves %s exec mode without withholding worker shell tools",
+    async (mode) => {
+      const config = { tools: { exec: { host: "gateway" as const, mode } } };
+      const result = await resolvedAuthority({ config, toolsAllow: ["exec", "process"] });
+      expect(result.exec).toMatchObject({ mode });
+      expect(result.execUnavailable).toBe(false);
+      expect(await authority({ config, toolsAllow: ["exec", "process"] })).toEqual(
+        expect.arrayContaining(["exec", "process"]),
+      );
+    },
+  );
   it("refuses an existing delegated session before exporting worker tool authority", async () => {
     const sessionKey = "agent:main:dashboard:delegated";
     const config = {
@@ -234,12 +246,16 @@ describe("resolveWorkerToolAuthority", () => {
   });
 
   it.each([
-    ["deny", { permissionMode: "read-only" }, { security: "deny", ask: "off" }],
-    ["approval", { permissionMode: "guarded" }, { security: "allowlist", ask: "on-miss" }],
+    ["deny", { permissionMode: "read-only" }, { mode: "deny", security: "deny", ask: "off" }],
+    [
+      "approval",
+      { permissionMode: "guarded" },
+      { mode: "ask", security: "allowlist", ask: "on-miss" },
+    ],
     [
       "node binding",
       { ...sessionNode, execCwd: " /remote/session/workspace " },
-      { host: "node", node: "session-node", security: "full", ask: "off" },
+      { host: "node", mode: "full", node: "session-node", security: "full", ask: "off" },
     ],
   ] as const)(
     "preserves effective exec authority for session %s",
