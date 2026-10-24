@@ -178,6 +178,11 @@ function formatUpdateVersion(identity: UpdateRunRecord["after"]): string | undef
   return identity.version ? `${identity.version}${sha ? ` (${sha})` : ""}` : sha;
 }
 
+function isRepairFailure(run: Pick<ReportInput, "reason" | "steps">): boolean {
+  // Specific failure codes replace repair-failed; the retained phase records operation identity.
+  return run.reason === "repair-failed" || run.steps.some((step) => step.step === "repairing");
+}
+
 function recoveryHints(run: ReportInput, nextAction?: string): string[] {
   if (run.target?.installationMethod === "ocm") {
     return nextAction ? [] : run.origin.nextAction ? [run.origin.nextAction] : [];
@@ -214,7 +219,7 @@ function recoveryHints(run: ReportInput, nextAction?: string): string[] {
   const hints = hint ? [hint] : [];
   if (!nextAction) {
     hints.push(
-      run.reason === "repair-failed"
+      isRepairFailure(run)
         ? "Run openclaw triage to diagnose this repair failure."
         : "Run openclaw triage to diagnose and repair the failed update.",
     );
@@ -292,7 +297,7 @@ export function renderUpdateRunReport(
           ? `ℹ️ OpenClaw update abandoned: ${reason}.`
           : runtimeCheckFailed
             ? "⚠️ OpenClaw could not complete the update. A required system check failed."
-            : `⚠️ OpenClaw ${run.reason === "repair-failed" ? "repair" : "update"} failed: ${reason}.`;
+            : `⚠️ OpenClaw ${isRepairFailure(run) ? "repair" : "update"} failed: ${reason}.`;
       break;
     case "skipped":
       headline =

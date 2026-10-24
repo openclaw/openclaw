@@ -7,6 +7,7 @@ import path from "node:path";
 import { expect, it, vi } from "vitest";
 import * as doctorAdmission from "../../commands/doctor-maintenance-admission.js";
 import { beginDoctorMaintenance } from "../../commands/doctor-maintenance.js";
+import { assertDoctorMaintenanceInspection } from "../../commands/doctor-maintenance-inspection.js";
 import * as doctorServicePolicy from "../../commands/doctor-service-repair-policy.js";
 import { readScheduledTaskRuntime } from "../../daemon/schtasks-runtime.js";
 import {
@@ -18,6 +19,7 @@ import { readGatewayServiceState, type GatewayService } from "../../daemon/servi
 import { collectNestedErrorCandidates } from "../../infra/error-graph-internal.js";
 import * as openClawTmp from "../../infra/tmp-openclaw-dir.js";
 import { createManagedHandoffLeaseStore } from "../../infra/update-managed-service-handoff-lease.js";
+import { DoctorMaintenanceRefusalError } from "../../infra/update-doctor-result.js";
 import { createUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { mockProcessPlatform } from "../../test-utils/vitest-spies.js";
@@ -48,6 +50,36 @@ const {
   mockMaintenanceService,
   expectNoServiceCalls,
 } = await import("./update-command-service-maintenance.test-support.js");
+
+it("preserves managed-service failure facts in a Doctor maintenance refusal", () => {
+  const inspection = {
+    stopped: false,
+    inspected: true,
+    runtimeInspected: true,
+    running: true,
+    serviceMutationAllowed: false,
+    serviceUpdateVerdict: {
+      kind: "owned" as const,
+      root: process.cwd(),
+      fingerprint: "fixture-service",
+      refreshDefinition: false,
+    },
+    blockMessage: "This process is inside the Gateway process tree.",
+    blockFailureFacts: [{ check: "managed-service", code: "inside-gateway-process-tree" }],
+  };
+
+  let refusal: unknown;
+  try {
+    assertDoctorMaintenanceInspection(inspection, process.env);
+  } catch (error) {
+    refusal = error;
+  }
+
+  expect(refusal).toBeInstanceOf(DoctorMaintenanceRefusalError);
+  expect((refusal as DoctorMaintenanceRefusalError).failureFacts).toEqual(
+    inspection.blockFailureFacts,
+  );
+});
 
 it("preserves the shared service inspection deadline phase in recovery guidance", () =>
   withServiceHome(async (home) => {

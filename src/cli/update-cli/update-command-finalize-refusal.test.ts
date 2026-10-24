@@ -55,6 +55,7 @@ const native = vi.hoisted(() => ({
   root: "",
   absent: false,
   realOwner: false,
+  ancestryBlock: false,
 }));
 vi.mock("../../config/paths.js", async (original) => ({
   ...(await original<typeof import("../../config/paths.js")>()),
@@ -117,6 +118,25 @@ vi.mock("./update-command-service-maintenance.js", async (original) => {
           serviceMutationAllowed: false,
           serviceUpdateVerdict: { kind: "absent" },
         };
+      }
+      if (native.ancestryBlock && params.phase === "inspect") {
+        return {
+          stopped: false,
+          inspected: true,
+          runtimeInspected: true,
+          running: true,
+          serviceMutationAllowed: false,
+          serviceUpdateVerdict: {
+            kind: "owned",
+            root: native.root,
+            fingerprint: "fixture-service",
+            refreshDefinition: false,
+          },
+          blockMessage: "This process is inside the Gateway process tree.",
+          blockFailureFacts: [
+            { check: "managed-service", code: "inside-gateway-process-tree" },
+          ],
+        } satisfies PreManagedServiceStop;
       }
       if (params.phase !== "inspect") {
         if (native.failStop) {
@@ -225,6 +245,7 @@ beforeEach(async () => {
   native.root = path.join(base, "package");
   native.absent = false;
   native.realOwner = false;
+  native.ancestryBlock = false;
   await fs.mkdir(native.root);
   await prepareFinalizationPackage(native.root);
   vi.stubEnv("OPENCLAW_STATE_DIR", path.join(base, ".openclaw"));
@@ -362,6 +383,40 @@ it.each([true, false])(
     expect(plugins.updatePluginsAfterCoreUpdate).not.toHaveBeenCalled();
   },
 );
+
+it("preserves a Doctor-managed ancestry refusal in standalone repair history", async () => {
+  native.ancestryBlock = true;
+
+  await expect(updateRepairCommand({ json: true, yes: true })).rejects.toThrow(
+    "Doctor could not enter maintenance",
+  );
+
+  const run = listUpdateRuns()[0]!;
+  expect(run).toMatchObject({ status: "failed", reason: "inside-gateway-process-tree" });
+  expect(run.steps).toContainEqual(
+    expect.objectContaining({ step: "repairing", status: "failed" }),
+  );
+  expect(run.steps).toContainEqual(
+    expect.objectContaining({
+      step: "finalize:doctor",
+      status: "failed",
+      failureFacts: [
+        expect.objectContaining({
+          check: "managed-service",
+          code: "inside-gateway-process-tree",
+        }),
+      ],
+    }),
+  );
+  expect(verifyUpdateFailureRecovery).toHaveBeenLastCalledWith(
+    expect.objectContaining({
+      result: expect.objectContaining({ reason: "inside-gateway-process-tree" }),
+    }),
+  );
+  expect(renderUpdateRunReport(run).headline).toBe(
+    "⚠️ OpenClaw repair failed: inside-gateway-process-tree.",
+  );
+});
 
 it("reports retained update custody beside deferred Doctor maintenance", async () => {
   const retained = {

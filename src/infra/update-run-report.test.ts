@@ -647,6 +647,29 @@ it.each<[string | null, string[], string]>([
   expectChatBudget(report.markdown);
 });
 
+it.each([
+  [true, "repair", "this repair failure"],
+  [false, "update", "the failed update"],
+] as const)(
+  "uses retained phase identity for a specific failure code (repair=%s)",
+  (repair, operation, guidance) => {
+    const report = renderRecord(
+      failed({
+        reason: "inside-gateway-process-tree",
+        steps: [
+          ...(repair ? [{ step: "repairing", status: "completed" as const }] : []),
+          failedStep("finalize:doctor"),
+        ],
+      }),
+    );
+
+    expect(report.headline).toBe(
+      `⚠️ OpenClaw ${operation} failed: inside-gateway-process-tree.`,
+    );
+    expect(report.markdown).toContain(`diagnose ${guidance}`);
+  },
+);
+
 it.each<[UpdateRunRecord["status"], string | null, string]>([
   ["succeeded", null, "✅ OpenClaw updated to 2026.9.2 (from 2026.9.1)."],
   ["running", null, "⬆️ OpenClaw update in progress: verifying."],
