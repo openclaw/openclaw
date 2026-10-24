@@ -88,7 +88,9 @@ function inspectCreatedDockerMounts(containerName: string | undefined) {
 }
 
 async function spawnDockerProcess(commandAndArgs: string[]) {
-  const [command = "", ...args] = commandAndArgs;
+  const [command = "", ...rawArgs] = commandAndArgs;
+  // Local Docker contexts pin subsequent commands to the captured daemon.
+  const args = rawArgs[0] === "--host" ? rawArgs.slice(2) : rawArgs;
   spawnCalls.push({
     command,
     args,
@@ -103,7 +105,18 @@ async function spawnDockerProcess(commandAndArgs: string[]) {
     args[2] === "{{.State.Running}}";
   const code = command === "docker" && !shouldFailContainerInspect ? 0 : 1;
   let stdout = "";
-  if (command === "docker" && args[0] === "create") {
+  if (command === "docker" && args[0] === "context" && args[1] === "inspect") {
+    stdout = JSON.stringify({ Host: "unix:///fixture-docker.sock", SkipTLSVerify: false });
+  } else if (command === "docker" && args[0] === "info") {
+    stdout = "fixture-daemon";
+  } else if (command === "docker" && args[0] === "inspect" && args[2] === "{{json .State}}") {
+    stdout = JSON.stringify({
+      Running: true,
+      Paused: false,
+      Pid: 123,
+      StartedAt: "2026-01-01T00:00:00.000Z",
+    });
+  } else if (command === "docker" && args[0] === "create") {
     stdout = inspectCreatedDockerMounts(args[args.indexOf("--name") + 1]).containerId;
   } else if (command === "docker" && args[0] === "inspect" && args[2] === "{{.Id}}") {
     stdout = inspectCreatedDockerMounts(args[3]).containerId;

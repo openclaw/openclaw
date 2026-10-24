@@ -1,11 +1,15 @@
 import { asRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   prepareColdLoadTraceEvent,
+  summarizeCpuProfile,
+  type ColdLoadCpuFrame,
   type ColdLoadCpuProfile,
   type ColdLoadTraceEvent,
 } from "./control-ui-cold-load-trace.ts";
 
 type Interval = { start: number; end: number };
+
+export type MainThreadTaskInterval = { startUs: number; endUs: number; durationMs: number };
 
 const scriptEvents = new Set([
   "EvaluateScript",
@@ -222,6 +226,11 @@ export function summarizeInteractionTrace(
     busyMs: durationMs(taskIntervals),
     longTasks: longTasks.length,
     longTaskMs: durationMs(longTasks),
+    longTaskIntervals: longTasks.map((task) => ({
+      startUs: task.start,
+      endUs: task.end,
+      durationMs: (task.end - task.start) / 1_000,
+    })),
     longestTaskMs: Math.max(0, ...taskIntervals.map((task) => (task.end - task.start) / 1_000)),
     scriptCount: scripts.length,
     scriptMs: durationMs(scripts),
@@ -239,6 +248,7 @@ export function clipInteractionCpuProfile(
   profile: ColdLoadCpuProfile & { startTime: number; endTime: number },
   startUs: number,
   endUs: number,
+  options: { allowEmpty?: boolean } = {},
 ) {
   if (
     ![profile.startTime, profile.endTime, startUs, endUs].every(Number.isFinite) ||
@@ -249,7 +259,10 @@ export function clipInteractionCpuProfile(
   }
   const sourceSamples = profile.samples ?? [];
   const sourceDeltas = profile.timeDeltas ?? [];
-  if (!sourceSamples.length || sourceSamples.length !== sourceDeltas.length) {
+  if (
+    sourceSamples.length !== sourceDeltas.length ||
+    (!sourceSamples.length && !options.allowEmpty)
+  ) {
     throw new Error("Interaction CPU profile needs matching samples and time deltas");
   }
   let timestamp = profile.startTime;
@@ -277,8 +290,62 @@ export function clipInteractionCpuProfile(
       timeDeltas.push(delta);
     }
   }
-  if (!samples.length) {
+  if (!samples.length && !options.allowEmpty) {
     throw new Error("Interaction CPU profile has no samples in the marked interval");
   }
   return { ...profile, startTime, endTime, samples, timeDeltas };
+}
+
+/** Attribute each task once per sample to its nearest source-mapped application caller. */
+export function summarizeLongTaskCpuProfiles(
+  profile: ColdLoadCpuProfile & { startTime: number; endTime: number },
+  intervals: readonly MainThreadTaskInterval[],
+) {
+  const nodes = new Map(profile.nodes.map((node) => [node.id, node]));
+  const parents = new Map(
+    profile.nodes.flatMap((node) => (node.children ?? []).map((child) => [child, node.id])),
+  );
+  return intervals.map((interval) => {
+    const clipped = clipInteractionCpuProfile(profile, interval.startUs, interval.endUs, {
+      allowEmpty: true,
+    });
+    const owners = new Map<string, ColdLoadCpuFrame & { attributedMs: number }>();
+    let unattributedMs = 0;
+    for (const [index, id] of clipped.samples.entries()) {
+      const selfMs = clipped.timeDeltas[index]! / 1_000;
+      let current: number | undefined = id;
+      while (current !== undefined) {
+        const frame = nodes.get(current)?.callFrame;
+        if (frame?.url && !URL.canParse(frame.url) && !frame.url.includes("node_modules")) {
+          const key = JSON.stringify([
+            frame.url,
+            frame.functionName,
+            frame.lineNumber,
+            frame.columnNumber,
+          ]);
+          const owner = owners.get(key) ?? { ...frame, attributedMs: 0 };
+          owner.attributedMs += selfMs;
+          owners.set(key, owner);
+          break;
+        }
+        current = parents.get(current);
+      }
+      if (current === undefined) {
+        unattributedMs += selfMs;
+      }
+    }
+    const sourceOwners = [...owners.values()].toSorted((a, b) => b.attributedMs - a.attributedMs);
+    const cpu = clipped.samples.length
+      ? summarizeCpuProfile(clipped)
+      : { sampledMs: 0, hotspots: [] };
+    return {
+      ...interval,
+      sampledMs: cpu.sampledMs,
+      uncoveredMs: Math.max(0, interval.durationMs - cpu.sampledMs),
+      unattributedMs,
+      owner: sourceOwners[0] ?? null,
+      sourceOwners: sourceOwners.slice(0, 5),
+      hotspots: cpu.hotspots.slice(0, 5),
+    };
+  });
 }

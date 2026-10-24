@@ -36,6 +36,7 @@ export function readStandaloneRuntimeManifestForRoot(
 ): StandaloneRuntimeManifest | undefined;
 export function isStandaloneRuntimeExecutable(executable?: string): boolean;
 export function getEmbeddedStandaloneRuntimeRoot(): string | undefined;
+export function runtimeHasSourceLoader(): boolean;
 export function resolveStandaloneNpmCliPath(): string | undefined;
 export function resolveRuntimeScriptEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv;
 export function resolveOpenClawCliInvocation(params?: {

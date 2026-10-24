@@ -76,6 +76,33 @@ experimental AOT compiler. Selecting `--compile-aot` with a Bun that lacks that
 capability stops with a diagnostic; it does not silently fall back to JIT or
 bytecode. An AOT artifact needs its own runtime and signing qualification.
 
+### WebAssembly in AOT builds
+
+AOT builds import the retained host WebAssembly assets at compile time, including
+Photon, PDFium, Opus, the tree-sitter engine and Bash grammar, QuickJS and its
+encoding extension, Matrix crypto, and the fs-safe archive parser. Byte-identical
+assets share one compiler input. The existing lazy library loaders still read and
+instantiate their own bytes; the registry adds no runtime loader or global patch.
+Standard JIT and bytecode builds keep their existing packaging.
+
+The inventory comes from the same resource plan as the sidecar, so omitted plugins
+contribute no assets. `embedded.webAssembly` records each source, its byte size,
+and SHA-256. Content-addressed imports also include these bytes in the shared
+module graph fingerprint. The inline Opus payload is decoded during the build without evaluating
+package code; an unsupported decoder shape stops the build. Compiled WASM adds
+machine code to the AOT executable. Plugins installed after shipment are outside
+this compile-time inventory.
+
+For focused measurements with an AOT-capable compiler, run:
+
+```bash
+node scripts/bench-standalone-wasm.mjs "$AOT_BUN" ./wasm-probe
+```
+
+Choose a fresh output directory. The script compiles only small dependency
+workloads, checks matching results in JIT and AOT, and reports interleaved CPU and
+wall-time samples, including QuickJS module transfer to a real worker.
+
 ## Matched JIT support build
 
 Use `--support-output` with AOT to produce a JIT companion from the **same staged

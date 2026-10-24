@@ -341,7 +341,7 @@ critical path.
 ## Search on PostgreSQL
 
 The engine search contract supports native PostgreSQL full text, literal trigram
-contains, and exact cosine search. Memory body and path retrieval, agent
+contains, and cosine search. Memory body and path retrieval, agent
 transcript text search, and standing-intent matching use this contract.
 It does not enable PostgreSQL for an unported store.
 
@@ -366,7 +366,7 @@ CREATE EXTENSION IF NOT EXISTS vector WITH SCHEMA public;
 ```
 
 `unaccent` is required for full text, `pg_trgm` for a declared trigram index,
-and `vector` for semantic search. Extensions are database-wide; the store's
+and `vector` 0.7 or newer for semantic memory search. Extensions are database-wide; the store's
 schema declaration identifies their namespace when it differs from `public`.
 The engine checks availability and privileges once at store admission. It never
 installs extensions automatically. An unavailable capability refuses admission
@@ -376,11 +376,11 @@ administrator. The runtime role needs `CREATE` in the store schema, or database
 `CREATE` privilege when bootstrapping a new schema, plus ownership/access to its
 tables, indexes, functions, and text-search configuration.
 
-| Search mode                                                     | PostgreSQL implementation                                           | Required extensions                                                         |
-| --------------------------------------------------------------- | ------------------------------------------------------------------- | --------------------------------------------------------------------------- |
-| Memory body keywords, transcript text, standing-intent keywords | Full text with literal terms, phrases, and supported prefix queries | `unaccent`                                                                  |
-| Memory trigram tokenizer                                        | Literal contains matching with native similarity ranking            | `unaccent`, `pg_trgm`                                                       |
-| Memory semantic or hybrid retrieval                             | Exact cosine over the admitted embedding model and eligible sources | `unaccent`, `vector`; also `pg_trgm` when the trigram tokenizer is selected |
+| Search mode                                                     | PostgreSQL implementation                                           | Required extensions                                                              |
+| --------------------------------------------------------------- | ------------------------------------------------------------------- | -------------------------------------------------------------------------------- |
+| Memory body keywords, transcript text, standing-intent keywords | Full text with literal terms, phrases, and supported prefix queries | `unaccent`                                                                       |
+| Memory trigram tokenizer                                        | Literal contains matching with native similarity ranking            | `unaccent`, `pg_trgm`                                                            |
+| Memory semantic or hybrid retrieval                             | Binary prefilter followed by exact cosine reranking                 | `unaccent`, `vector` 0.7+; also `pg_trgm` when the trigram tokenizer is selected |
 
 Missing `pg_trgm` refuses a declared trigram index; it does not silently change
 the tokenizer. Missing `unaccent` refuses full-text admission. In either case,
@@ -408,8 +408,9 @@ sizes; WAL and reusable-file bytes are zero because those are server-owned,
 not local SQLite files.
 
 The public memory search path uses the admitted PostgreSQL projections. Vector
-queries filter model aliases, sources, and any candidate IDs before exact cosine
-ordering and the result limit. Keyword queries
+queries filter model aliases, sources, exclusions, and any candidate IDs before
+the binary prefilter and exact cosine reranking. Small candidate-ID scopes stay
+on the exact path. Keyword queries
 use native full-text ranking, or literal contains predicates for the configured
 trigram tokenizer. Only bounded result payloads cross into JavaScript. Hybrid
 merging keeps the existing default weights of 0.7 vector and 0.3 text; PostgreSQL
@@ -432,13 +433,22 @@ contains uses its own GIN index and escaped literal `ILIKE`; it is not a univers
 fallback for full-text queries. Trigram matches rank by native `word_similarity`
 before the result limit; multi-term memory queries average their term scores.
 
-Semantic search uses exact float32 `vector(n)` cosine distance, with model and
-source eligibility in the same query before ordering and limit. The canonical
-embedding remains its original little-endian binary64 BLOB; source-transaction
-triggers maintain the derived float32 projection. Exact vectors support up to
-16,000 dimensions. A dimension change requires a matching schema and a derived
-index rebuild. There is no ANN, HNSW, IVFFlat, half-precision storage, or transfer
-of the PostgreSQL corpus into JavaScript for per-query scoring.
+PostgreSQL memory vector search is approximate: a stored binary sketch selects a
+bounded candidate set by Hamming distance, then exact float32 `vector(n)` cosine
+distance reranks those candidates. Model and source eligibility apply before
+candidate selection. This recall-tuned path is enabled by default and has no
+separate configuration option; it can return different neighbors from exact
+search. SQLite memory vector search stays exact.
+
+The canonical embedding remains its original little-endian binary64 BLOB;
+source-transaction triggers maintain the derived float32 projection, and a
+stored generated column maintains its binary sketch. Zero vectors remain
+ineligible, while valid all-negative vectors retain a non-null sketch. Vectors
+support up to 16,000 dimensions. A dimension change requires a matching schema
+and a derived-index rebuild. No HNSW build or half-precision conversion is
+required, and the PostgreSQL corpus is not transferred into JavaScript for
+per-query scoring. The agent schema migration backfills sketches in existing
+stores; ports and backups reconstruct them from canonical embeddings.
 
 Search sees committed index inserts, updates, and deletes immediately. Memory
 files must first pass through normal indexing; changing a file alone does not

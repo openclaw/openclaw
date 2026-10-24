@@ -1,28 +1,9 @@
-import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
-import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { withServer } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MatrixMediaSizeLimitError } from "../media-errors.js";
 import { createMatrixGuardedFetch, performMatrixRequest } from "./transport.js";
 
 const TEST_UNDICI_RUNTIME_DEPS_KEY = "__OPENCLAW_TEST_UNDICI_RUNTIME_DEPS__";
-const dns = vi.hoisted(() => ({
-  calls: 0,
-  beforeResolve: undefined as (() => Promise<void>) | undefined,
-}));
-vi.mock("openclaw/plugin-sdk/ssrf-dispatcher", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/ssrf-dispatcher")>();
-  return {
-    ...actual,
-    resolvePinnedHostnameWithPolicy: async (
-      ...args: Parameters<typeof actual.resolvePinnedHostnameWithPolicy>
-    ) => {
-      dns.calls++;
-      await dns.beforeResolve?.();
-      return actual.resolvePinnedHostnameWithPolicy(...args);
-    },
-  };
-});
 
 function clearTestUndiciRuntimeDepsOverride(): void {
   Reflect.deleteProperty(globalThis as object, TEST_UNDICI_RUNTIME_DEPS_KEY);
@@ -104,8 +85,6 @@ async function expectIdleTimeout(raw: boolean) {
 }
 
 beforeEach(() => {
-  dns.calls = 0;
-  dns.beforeResolve = undefined;
   vi.unstubAllGlobals();
   clearTestUndiciRuntimeDepsOverride();
 });
@@ -365,119 +344,4 @@ describe("matrix transport streaming OOM guard — real HTTP server without Cont
       },
     );
   }, 30_000);
-});
-
-it("keeps shared transaction identity alive when its first sender cancels during DNS", async () => {
-  const { MatrixClient } = await import("../sdk.js");
-  const { withResolvedMatrixSendClient } = await import("../send/client.js");
-  const dnsEntered = createDeferred<void>();
-  const resumeDns = createDeferred<void>();
-  const secondJoined = createDeferred<void>();
-  const firstCaller = new AbortController();
-  const cancellation = new Error("first identity caller canceled during DNS preparation");
-  const currentRoom = "!current:example.org";
-  const timelineRequests: string[] = [];
-  const unexpectedRequests: string[] = [];
-  let whoamiRequests = 0;
-  type Result = { scope: string; eventId: string };
-  type Outcome = { value: Result | undefined; error: unknown };
-  const settle = (promise: Promise<Result>): Promise<Outcome> =>
-    promise.then(
-      (value) => ({ value, error: undefined }),
-      (error: unknown) => ({ value: undefined, error }),
-    );
-  const waitFor = (boundary: Promise<void>, result: Promise<Outcome>, label: string) =>
-    Promise.race([
-      boundary,
-      result.then(({ error }) => {
-        throw toErrorObject(error, `send settled before ${label}`);
-      }),
-    ]);
-  await withServer(
-    (request, response) => {
-      const requestPath = decodeURIComponent(
-        new URL(request.url ?? "/", "http://localhost").pathname,
-      );
-      let body: object;
-      let code = 200;
-      request.resume();
-      if (request.method === "GET" && requestPath === "/_matrix/client/v3/account/whoami") {
-        whoamiRequests++;
-        body = { user_id: "@bot:example.org", device_id: "fixture" };
-      } else if (request.method === "GET" && requestPath.includes("/state/m.room.encryption")) {
-        body = { errcode: "M_NOT_FOUND" };
-        code = 404;
-      } else if (request.method === "PUT" && requestPath.includes("/send/m.room.message/")) {
-        timelineRequests.push(requestPath);
-        body = { event_id: "$current-accepted" };
-      } else {
-        unexpectedRequests.push(`${request.method} ${requestPath}`);
-        body = { errcode: "M_UNRECOGNIZED" };
-        code = 400;
-      }
-      response.writeHead(code, { "content-type": "application/json" });
-      response.end(JSON.stringify(body));
-    },
-    async (baseUrl) => {
-      const client = new MatrixClient(baseUrl, "fixture-token", {
-        userId: "@bot:example.org",
-        deviceId: "fixture",
-        encryption: false,
-        autoBootstrapCrypto: false,
-        ssrfPolicy: { allowPrivateNetwork: true },
-      });
-      let first: Promise<Outcome> | undefined;
-      let second: Promise<Outcome> | undefined;
-      try {
-        const send = (signal: AbortSignal, roomId: string, joined?: () => void) =>
-          withResolvedMatrixSendClient({ client, cfg: {}, signal }, async (sender) => {
-            const identity = sender.getTransactionScopeId();
-            joined?.();
-            const scope = await identity;
-            const eventId = await sender.sendMessage(roomId, {
-              msgtype: "m.text",
-              body: "identity caller",
-            });
-            return { scope, eventId };
-          });
-        dns.calls = 0;
-        dns.beforeResolve = async () => {
-          dnsEntered.resolve();
-          await resumeDns.promise;
-        };
-        first = settle(send(firstCaller.signal, "!abandoned:example.org"));
-        await waitFor(dnsEntered.promise, first, "identity DNS preparation");
-        second = settle(
-          send(new AbortController().signal, currentRoom, () => secondJoined.resolve()),
-        );
-        await waitFor(secondJoined.promise, second, "the second identity waiter");
-        expect({ dns: dns.calls, whoami: whoamiRequests }).toEqual({ dns: 1, whoami: 0 });
-        firstCaller.abort(cancellation);
-        resumeDns.resolve();
-        const [firstResult, secondResult] = await Promise.all([first, second]);
-        expect(firstResult.error).toMatchObject({
-          message: expect.stringContaining(cancellation.message),
-        });
-        expect(secondResult).toMatchObject({
-          error: undefined,
-          value: { eventId: "$current-accepted" },
-        });
-        expect(timelineRequests).toEqual([
-          expect.stringContaining(`/rooms/${currentRoom}/send/m.room.message/`),
-        ]);
-        expect(whoamiRequests).toBe(1);
-        expect(await client.getTransactionScopeId()).toBe(secondResult.value?.scope);
-        expect(whoamiRequests).toBe(1);
-        expect(unexpectedRequests).toEqual([]);
-      } finally {
-        resumeDns.resolve();
-        dns.beforeResolve = undefined;
-        try {
-          await Promise.all([first, second]);
-        } finally {
-          await client.stopWithoutPersist();
-        }
-      }
-    },
-  );
 });

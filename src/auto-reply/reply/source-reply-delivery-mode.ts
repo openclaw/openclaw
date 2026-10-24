@@ -98,6 +98,10 @@ export function resolveSourceReplyExpectation(params: {
   cfg: OpenClawConfig;
   scheduledAutomation?: boolean;
 }): ReplyExpectation {
+  // Scheduling permits silence even when the saved session has an internal source.
+  if (params.scheduledAutomation) {
+    return "optional";
+  }
   const commandExpectation = resolveCommandReplyExpectation({
     cfg: params.cfg,
     sessionKey: params.ctx.SessionKey,
@@ -110,7 +114,6 @@ export function resolveSourceReplyExpectation(params: {
   if (
     isSyntheticSourceReplyTurn({
       inputProvenance: params.ctx.InputProvenance,
-      scheduledAutomation: params.scheduledAutomation,
     })
   ) {
     return "optional";
