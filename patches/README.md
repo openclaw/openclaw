@@ -17,12 +17,11 @@ that the first select and its enclosing form are collectible after disposal.
 
 `@solidjs/signals@2.0.0-rc.16`, from the same upstream revision, has an approved
 idle-disposal patch in production, development, and observe builds. Disposing a
-staged computation now schedules the existing pending-queue drain only while
-the queue has entries, even when no observer created a held transaction.
-Already-drained loading nodes keep their staged flag but do not schedule empty flushes. This releases the last retired Workboard
-tree from its bundled runtime while preserving the existing transaction and
-stale-reader scheduling conditions. It neither flushes synchronously nor scans
-the queue during disposal.
+computation schedules the existing pending-queue drain when the queue has
+entries, including readers queued by an idle rejection without a staged flag.
+Already-drained nodes do not schedule empty flushes. This preserves the existing
+transaction and stale-reader scheduling conditions without a synchronous flush
+or queue scan during disposal.
 
 Remove this patch and its exact-version guard entry when the dependency probe
 passes with an upstream release. The idle case requires collection without
