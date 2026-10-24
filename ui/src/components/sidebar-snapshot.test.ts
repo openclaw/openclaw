@@ -5,6 +5,7 @@ import { createDeferred } from "../../../test/helpers/promise.ts";
 import { clearBootRecords, type BootRecord } from "../app/boot-record.ts";
 import { makeBootRoster } from "../app/bootstrap.test-support.ts";
 import type { ApplicationGateway, ApplicationGatewaySnapshot } from "../app/gateway.ts";
+import * as avatarLoader from "../lib/identity-avatar-loader.ts";
 import { createSessionCapability } from "../lib/sessions/index.ts";
 import { bootRosterSchema } from "../lib/sessions/session-boot-roster-schema.ts";
 import { sessionsResult } from "../lib/sessions/session-capability.test-support.ts";
@@ -552,6 +553,30 @@ describe("sidebar snapshot lifecycle", () => {
     }
     await saved;
     expect(test.snapshotOwner.read().saved).toBe(true);
+  });
+
+  it("does not overwrite a newer snapshot when an older avatar capture finishes", async () => {
+    const test = await warmFixture();
+    const images = createDeferred<avatarLoader.IdentityAvatarSnapshot[]>();
+    vi.spyOn(avatarLoader, "captureIdentityAvatarSnapshot").mockReturnValue(images.promise);
+    const writes = vi.spyOn(SessionSnapshotStore.prototype, "writeSidebar");
+    test.publish();
+    void test.settle({
+      ...model,
+      footer: { id: "profile-a", avatarUrl: "/api/users/profile-a/avatar?v=1" },
+    });
+    test.snapshotOwner.synchronize();
+    await capture(test.snapshotOwner);
+    const latest = { ...model, brand: { ...model.brand, name: "Current workspace" } };
+    const saved = test.settle(latest);
+    await capture(test.snapshotOwner);
+    await saved;
+    images.resolve([]);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(writes).toHaveBeenCalledTimes(1);
+    expect(
+      await test.store.readSidebar(sidebarSnapshotScopeKey(scope), parseSidebarSnapshot),
+    ).toEqual(latest);
   });
 
   it("waits for a reverted model to finish writing after a different model was queued", async () => {

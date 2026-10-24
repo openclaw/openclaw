@@ -283,10 +283,10 @@ export function createSidebarSnapshot(host: SidebarSnapshotHost) {
       let stored = model;
       if (urls.length > 0) {
         const avatarImages = await captureIdentityAvatarSnapshot(urls);
-        if (!current()) {
-          return;
-        }
         stored = { ...model, avatarImages };
+      }
+      if (!current() || nextSerialized !== serialized) {
+        return;
       }
       const written = await store.writeSidebar(key, stored, parseSidebarSnapshot);
       if (written && current() && nextSerialized === serialized) {
