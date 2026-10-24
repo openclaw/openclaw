@@ -25,6 +25,7 @@ import {
   resolveOpenClawPluginToolsForOptions,
   resolveOpenClawPluginToolsForOptionsAsync,
 } from "./openclaw-plugin-tools.js";
+import { resolveSessionToolListingClientCaps } from "./openclaw-tools.client-caps.js";
 import { finalizeOpenClawTools } from "./openclaw-tools.finalize.js";
 import { createHostedGatewayTools } from "./openclaw-tools.gateway.js";
 import {
@@ -43,6 +44,7 @@ import { createRequesterYieldCallback } from "./openclaw-tools.requester-yield.j
 import { createOpenClawSwarmToolGroups } from "./openclaw-tools.swarm.js";
 import { resolveTranscriptsTool } from "./openclaw-tools.transcripts.js";
 import type { OpenClawToolsOptions } from "./openclaw-tools.types.js";
+import { withLegacySessionCapabilityRead } from "./subagents/spawn/subagent-session-store-legacy.js";
 import {
   withPreparedToolConstruction,
   type PreparedToolConstruction,
@@ -154,6 +156,9 @@ export async function createOpenClawToolsWithPreparation(
 /** @deprecated Use createOpenClawToolsAsync for runtime construction. */
 export function createOpenClawTools(options?: OpenClawToolsOptions): AnyAgentTool[] {
   const captured = { ...options };
+  captured.listingClientCaps ??= withLegacySessionCapabilityRead(() =>
+    resolveSessionToolListingClientCaps(captured),
+  );
   const { sessionAgentId } = resolveSessionAgentIds({
     sessionKey: captured.runSessionKey ?? captured.agentSessionKey,
     config: captured.config,
@@ -242,7 +247,8 @@ function* createOpenClawToolsSteps(
     widgetPresenters,
     widgetPresenterContext,
   );
-  const inlineWidgetClientAvailable = options?.clientCaps?.includes("inline-widgets") === true;
+  const inlineWidgetClientAvailable =
+    (options?.listingClientCaps ?? options?.clientCaps)?.includes("inline-widgets") === true;
   const sessionKey = normalizeOptionalString(options?.runSessionKey ?? options?.agentSessionKey);
   const gatewayCallerAccountId = options?.gatewayCallerAccountId ?? options?.agentAccountId;
   const deliveryContext = {

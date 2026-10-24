@@ -50,6 +50,18 @@ export function projectCanonicalSessionEntryShape(value: Record<string, unknown>
       delete canonicalValue[key];
     }
   };
+  setOptionalField(
+    "clientCapabilities",
+    Array.isArray(canonicalValue.clientCapabilities)
+      ? [
+          ...new Set(
+            canonicalValue.clientCapabilities.filter(
+              (cap): cap is string => typeof cap === "string",
+            ),
+          ),
+        ].toSorted()
+      : undefined,
+  );
   const icon =
     typeof canonicalValue.icon === "string" ? normalizeSessionIconValue(canonicalValue.icon) : null;
   setOptionalField("icon", icon);
