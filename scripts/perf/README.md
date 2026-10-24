@@ -4674,3 +4674,19 @@ alternating samples per side, counterbalance launch order and CPU placement, and
 keep CPU timing separate from heap inspection and allocation sampling. Compare
 absolute CPU per retain and table bytes; report the owner source hashes, total
 estimated residency, entry counts, and sample counts. Estimates must match exactly.
+
+### Session-fork request closure retention
+
+`session-fork-closure-retention.ts` exercises the real fork wrapper and Responses
+transport with synthetic sockets and fetch responses. Run one fresh Node process
+per sample with `--expose-gc --import ./scripts/tsx.mjs`; supply `--model` with a
+configured model supporting native steering. It makes no provider network calls.
+Use `--sessions 32 --turns 4 --history 128` on both source revisions, alternating
+five samples per side. The final turn in each session accepts steering, leaving
+the cached connection and its continuation alive during four forced collections.
+The script reports surviving request options/contexts, heap bytes per settled
+request and per session, external bytes, and ArrayBuffer bytes separately. Fork
+replay checks run after measurement. `--expect-released` asserts no request graph
+survives; `--snapshot <path>` captures the synthetic heap with non-enumerable
+`__forkClosureProbe` markers for tracing strong retainers. This is owner retention
+evidence, not a Gateway latency, CPU, allocation-rate, or promotion measurement.
