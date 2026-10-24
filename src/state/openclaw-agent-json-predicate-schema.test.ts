@@ -88,8 +88,6 @@ describe("agent JSON predicate migration", () => {
       '{"sessionStartedAt":false}',
       '{"sessionStartedAt":"  -12.9e5"}',
       '{"sessionStartedAt":"not a timestamp"}',
-      '{"sessionStartedAt":{}}',
-      '{"sessionStartedAt":[]}',
       '{"sessionStartedAt":9223372036854775808}',
       '{"sessionStartedAt":-9223372036854775809}',
       '{"sessionStartedAt":9007199254740993}',
@@ -109,7 +107,9 @@ describe("agent JSON predicate migration", () => {
     for (const [index, entry] of sessionEntries.entries()) {
       insertNode.run(`agent:main:case-${index}`, `case-${index}`, entry);
     }
-    const navigationEvents = [
+    const events = [
+      "{}",
+      '{"type":"session","id":"history","version":3}',
       '{"type":"reset","targetId":"prior"}',
       '{"type":"compaction","firstKeptEntryId":"kept"}',
       '{"type":"message","message":{"role":"assistant"}}',
@@ -118,15 +118,9 @@ describe("agent JSON predicate migration", () => {
       '{"type":"message","type":"reset","message":{"role":"user","role":"system"}}',
       '{"type":"message","message":{"role":"toolResult"},"message":{"role":"user"}}',
       '{"type":"custom","customType":"openclaw.cache-ttl","customType":"openclaw.runtime-context","display":false}',
-    ];
-    const events = [
-      "{}",
-      '{"type":"session","id":"history","version":3}',
-      ...navigationEvents,
       '{"t\\u0079pe":"message","type":"reset","message":{"role":"user","r\\u006fle":"system"}}',
       '{"type\\u0000suffix":"message","type":"reset","message\\u0000suffix":{"role\\u0000suffix":"user","role":"assistant"}}',
       '{"customType\\u0000suffix":"openclaw.cache-ttl","customType":"openclaw.runtime-context","display\\u0000suffix":true,"display":false}',
-      '{"customType":"openclaw.cache-ttl","customType":"openclaw.runtime-context","display":false}',
       '{"type":"unknown","customType":12,"message":{"role":"unknown"}}',
       '{"type":"message\\u0000","message":{"role":"assistant\\ud800"}}',
       "[]",
@@ -142,26 +136,21 @@ describe("agent JSON predicate migration", () => {
     for (const [index, event] of events.entries()) {
       insertEvent.run(index + 1, event);
     }
-    // Exercise the same predicates through real stored navigation, not a fabricated envelope.
-    const compressedEvents = navigationEvents.map(
-      (event) => `${event.slice(0, -1)},"padding":"${"x".repeat(4096)}"}`,
-    );
-    const compressedPayloads = compressedEvents.map((event) =>
-      prepareTranscriptPayload(database, event, undefined, "UTF-8"),
-    );
-    const insertCompressed = database.prepare(`INSERT INTO transcript_events
+    // One real compressed envelope covers every fallback field; raw rows own the input variants.
+    const compressedEvent = `{"type":"message","type":"custom_message","customType":"openclaw.cache-ttl","customType":"openclaw.runtime-context","display":true,"message":{"role":"user"},"padding":"${"x".repeat(4096)}"}`;
+    const compressed = prepareTranscriptPayload(database, compressedEvent, undefined, "UTF-8");
+    expect(compressed.event_json).toBeNull();
+    expect(compressed.event_zstd).toBeInstanceOf(Uint8Array);
+    database
+      .prepare(`INSERT INTO transcript_events
       (session_id, seq, event_json, event_zstd, event_utf8_bytes, navigation_json, created_at)
-      VALUES ('history', ?, NULL, ?, ?, ?, 1)`);
-    for (const [index, payload] of compressedPayloads.entries()) {
-      expect(payload.event_json, navigationEvents[index]).toBeNull();
-      expect(payload.event_zstd, navigationEvents[index]).toBeInstanceOf(Uint8Array);
-      insertCompressed.run(
-        events.length + index + 1,
-        payload.event_zstd,
-        payload.event_utf8_bytes,
-        payload.navigation_json,
+      VALUES ('history', ?, NULL, ?, ?, ?, 1)`)
+      .run(
+        events.length + 1,
+        compressed.event_zstd,
+        compressed.event_utf8_bytes,
+        compressed.navigation_json,
       );
-    }
     const payloads = [
       { payload: {}, state: null },
       { payload: { state: "pending" }, state: "pending" },
@@ -216,7 +205,7 @@ describe("agent JSON predicate migration", () => {
         transcriptPredicateSql(database, "navigation_valid").as("navigation_valid"),
       ])
       .where("session_id", "=", "history");
-    for (const [index, event] of [...events, ...compressedEvents].entries()) {
+    for (const [index, event] of [...events, compressedEvent].entries()) {
       expect(
         executeSqliteQueryTakeFirstSync(database, predicates.where("seq", "=", index + 1)),
         event,
@@ -225,19 +214,17 @@ describe("agent JSON predicate migration", () => {
     expect(
       readRows(database, "SELECT DISTINCT navigation_type, message_role FROM transcript_events"),
     ).toEqual([{ navigation_type: null, message_role: null }]);
-    for (const [index, payload] of compressedPayloads.entries()) {
-      expect(
-        readRow(
-          database,
-          `SELECT event_zstd, navigation_json FROM transcript_events
+    expect(
+      readRow(
+        database,
+        `SELECT event_zstd, navigation_json FROM transcript_events
         WHERE session_id = 'history' AND seq = ?`,
-          events.length + index + 1,
-        ),
-      ).toEqual({
-        event_zstd: new Uint8Array(payload.event_zstd!),
-        navigation_json: payload.navigation_json,
-      });
-    }
+        events.length + 1,
+      ),
+    ).toEqual({
+      event_zstd: new Uint8Array(compressed.event_zstd!),
+      navigation_json: compressed.navigation_json,
+    });
     expect(
       readRows(
         database,

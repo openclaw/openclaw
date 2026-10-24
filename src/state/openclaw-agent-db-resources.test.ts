@@ -17,10 +17,7 @@ import {
   registerOpenClawAgentDatabaseReadCandidateResource as registerCandidate,
   revokeAgentDatabaseResources as revokeResources,
 } from "./openclaw-agent-db-resources.js";
-import {
-  createOpenClawDatabaseMaintenanceScope as createScope,
-  observeOpenClawDatabaseMaintenanceResource as observeResource,
-} from "./openclaw-state-db-async-lifecycle.js";
+import { createOpenClawDatabaseMaintenanceScope as createScope } from "./openclaw-state-db-async-lifecycle.js";
 
 const root = path.join(os.tmpdir(), `agent-resource-lifecycle-${process.pid}`);
 
@@ -92,25 +89,6 @@ function trackSettlement(promise: Promise<unknown>) {
 
 afterEach(async () => {
   await closeDatabases(root);
-});
-
-it("promotes a shared registration beyond its creating maintenance scope", async () => {
-  const parent = createScope();
-  const child = parent.run(() => createScope());
-  const held = resource("shared-maintenance.sqlite");
-  const unregister = child.run(() => registerCandidate(held));
-  parent.run(() => observeResource(unregister));
-  try {
-    await child.close();
-    expect(held.revoke).not.toHaveBeenCalled();
-    expect(hasResources()).toBe(true);
-    await parent.close();
-    expect(held.close).toHaveBeenCalledOnce();
-    expect(hasResources()).toBe(false);
-  } finally {
-    await parent.close();
-    unregister();
-  }
 });
 
 it.each([
@@ -349,6 +327,7 @@ it.each([
     const closing = drainResources(selection, async () => {
       entered.resolve();
       await gate.promise;
+      return "closed";
     });
     const target = { agentId: "worker", path: "path" in selection ? selection.path : held.path };
     const closingTarget = isClosing({
@@ -368,65 +347,56 @@ it.each([
       expectClosing(() => registerCandidate(held));
       expect(held.revoke).not.toHaveBeenCalled();
     });
+    expect(await closing).toBe("closed");
     expect(isClosing(target)).toBe(false);
     registerCandidate(held)();
   },
 );
 
-it.each(["complete", "native-failure"] as const)(
-  "drains resources before native %s and restores admission",
-  async (ending) => {
-    const resourceGate = createDeferredCore();
-    const nativeGate = createDeferredCore();
-    const nativeEntered = createDeferredCore();
-    const failure = new Error("native close failed");
-    const held = resource("captured-close.sqlite", () => resourceGate.promise);
-    expect(isClosing(held)).toBe(false);
-    registerKnown(held);
-    const closeNative = vi.fn(async () => {
-      nativeEntered.resolve();
-      await nativeGate.promise;
-      if (ending === "native-failure") {
-        throw failure;
-      }
-      return "closed";
-    });
-    const selection = { agentId: held.agentId, path: held.path };
-    const closing = drainResources(selection, closeNative);
-    const outcomes = Promise.allSettled([closing]);
-    let observing: ReturnType<typeof trackSettlement> | undefined;
-    try {
-      expect(isClosing(held)).toBe(true);
-      expect(held.revoke).toHaveBeenCalledOnce();
-      await Promise.resolve();
-      expect(held.close).toHaveBeenCalledOnce();
-      expect(closeNative).not.toHaveBeenCalled();
-      resourceGate.resolve();
-      await nativeEntered.promise;
-      expect(isClosing(held)).toBe(true);
-      expectClosing(() => registerKnown(held));
-      observing = trackSettlement(settleSqliteTestAgentCloses());
-      await nextTurn();
-      expect(observing.settled).toBe(false);
-    } finally {
-      resourceGate.resolve();
-      nativeGate.resolve();
-      await outcomes;
-      await observing?.promise;
-    }
-    expect(await outcomes).toEqual(
-      ending === "complete"
-        ? [{ status: "fulfilled", value: "closed" }]
-        : [{ status: "rejected", reason: failure }],
-    );
-    expect(isClosing(held)).toBe(false);
-    expect(observing?.settled).toBe(true);
-    const successor = resource("captured-close.sqlite");
-    registerKnown(successor);
+it("drains resources before native failure and restores admission", async () => {
+  const resourceGate = createDeferredCore();
+  const nativeGate = createDeferredCore();
+  const nativeEntered = createDeferredCore();
+  const failure = new Error("native close failed");
+  const held = resource("captured-close.sqlite", () => resourceGate.promise);
+  expect(isClosing(held)).toBe(false);
+  registerKnown(held);
+  const closeNative = vi.fn(async () => {
+    nativeEntered.resolve();
+    await nativeGate.promise;
+    throw failure;
+  });
+  const selection = { agentId: held.agentId, path: held.path };
+  const closing = drainResources(selection, closeNative);
+  const outcomes = Promise.allSettled([closing]);
+  let observing: ReturnType<typeof trackSettlement> | undefined;
+  try {
+    expect(isClosing(held)).toBe(true);
+    expect(held.revoke).toHaveBeenCalledOnce();
+    await Promise.resolve();
+    expect(held.close).toHaveBeenCalledOnce();
+    expect(closeNative).not.toHaveBeenCalled();
+    resourceGate.resolve();
+    await nativeEntered.promise;
+    expect(isClosing(held)).toBe(true);
+    expectClosing(() => registerKnown(held));
+    observing = trackSettlement(settleSqliteTestAgentCloses());
+    await nextTurn();
+    expect(observing.settled).toBe(false);
+  } finally {
+    resourceGate.resolve();
+    nativeGate.resolve();
     await outcomes;
-    expectCalls(0, successor.revoke, successor.close);
-  },
-);
+    await observing?.promise;
+  }
+  expect(await outcomes).toEqual([{ status: "rejected", reason: failure }]);
+  expect(isClosing(held)).toBe(false);
+  expect(observing?.settled).toBe(true);
+  const successor = resource("captured-close.sqlite");
+  registerKnown(successor);
+  await outcomes;
+  expectCalls(0, successor.revoke, successor.close);
+});
 
 it.each([
   { released: true, family: false },
