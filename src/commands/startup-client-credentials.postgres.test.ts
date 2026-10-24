@@ -374,7 +374,9 @@ describe.skipIf(!connection)("PostgreSQL missing credential Doctor CLI recovery"
     );
     const explicit = await doctor(sqlite);
     expect(ordinary.code, ordinary.stderr).toBe(2);
-    expect(JSON.parse(ordinary.stdout).error.message).toBe(missingMessage);
+    expect(JSON.parse(ordinary.stdout).error.message).toBe(
+      "Client credential migration is incomplete or stale; run openclaw doctor --fix before using this client.",
+    );
     expect(explicit.code, explicit.stderr).not.toBe(0);
     expect((explicit.stdout + explicit.stderr).replace(/[│\s]+/g, " ")).toContain(missingMessage);
     expect(fs.existsSync(sqlite.local)).toBe(false);
