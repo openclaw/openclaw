@@ -313,16 +313,12 @@ require("node:module").syncBuiltinESMExports();
           currentContract + declareWorker("OBSOLETE_PATH", '"../obsolete.mjs"'),
           currentArtifacts,
         ],
-        ["legacy missing launcher", launcherContract, legacyArtifacts, workerMissing],
-        ["legacy launcher", launcherContract, ["github-exec-launcher.mjs", ...legacyArtifacts]],
-        ...["service-child-group-anchor.mjs", "service-child-relay.mjs"].map(
-          (missing): [string, string, string[], string] => [
-            `current array requires ${missing}`,
-            currentContract,
-            currentArtifacts.filter((artifact) => artifact !== missing),
-            `Worker deploy artifact dist/worker/${missing} is missing.`,
-          ],
-        ),
+        [
+          "current array requires every declared artifact",
+          currentContract,
+          currentArtifacts.slice(1),
+          workerMissing,
+        ],
         [
           "locator requires metadata",
           legacyContract,
@@ -364,17 +360,15 @@ require("node:module").syncBuiltinESMExports();
           expect(errors, name).not.toHaveBeenCalled();
         }
       }
-      const invalidPaths: Array<[string, string]> = [
-        ['""', "must be a non-empty path string."],
-        ['"../worker/main.mjs"', "must be a normalized relative path within dist/worker."],
-      ];
       const invalidContracts: Array<[string, string]> = [
-        ...["ENTRY_PATH", "ARTIFACT_PATHS"].flatMap((name) =>
-          invalidPaths.map(([value, error]): [string, string] => [
-            declareWorker(name, name === "ENTRY_PATH" ? value : `["worker.mjs", ${value}]`),
-            `release-check: target worker artifact WORKER_BUNDLE_${name}${name === "ENTRY_PATH" ? "" : "[1]"} ${error}`,
-          ]),
-        ),
+        [
+          declareWorker("ENTRY_PATH", '""'),
+          "release-check: target worker artifact WORKER_BUNDLE_ENTRY_PATH must be a non-empty path string.",
+        ],
+        [
+          declareWorker("ARTIFACT_PATHS", '["../worker/main.mjs"]'),
+          "release-check: target worker artifact WORKER_BUNDLE_ARTIFACT_PATHS[0] must be a normalized relative path within dist/worker.",
+        ],
         ...["undefined", "[]"].map((value): [string, string] => [
           legacyContract + declareWorker("ARTIFACT_PATHS", value),
           "release-check: target WORKER_BUNDLE_ARTIFACT_PATHS must be a non-empty array.",

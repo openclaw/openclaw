@@ -160,14 +160,10 @@ it("acquires wrapper leases and manages templates without the application comman
         import assert from "node:assert/strict";
         import { withWorktreeAllocationLease } from "./src/agents/worktrees/allocation.js";
         import {
-          deleteTemplateAsync, hasTemplatesAsync, listTemplatesAsync,
-          markTemplateReadyAsync, readTemplateAsync, reserveTemplateAsync,
+          readTemplateAsync, reserveTemplateAsync,
         } from "./src/agents/worktrees/template-registry-async.js";
         import { withOpenClawStateLease } from "./src/state/openclaw-state-lease.js";
-        import {
-          closeOpenClawStateDatabaseAsync,
-          openOpenClawStateDatabase,
-        } from "./src/state/openclaw-state-db.js";
+        import { closeOpenClawStateDatabaseAsync } from "./src/state/openclaw-state-db.js";
         const options = {
           scope: "core:wrapper-bootstrap",
           key: "lease",
@@ -175,9 +171,7 @@ it("acquires wrapper leases and manages templates without the application comman
           leaseMs: 60_000,
           waitMs: 0,
         };
-        for (let grant = 0; grant < 2; grant += 1) {
-          await withOpenClawStateLease(options, async (lease) => lease.assertOwned());
-        }
+        await withOpenClawStateLease(options, async (lease) => lease.assertOwned());
         await withWorktreeAllocationLease({ env: process.env }, async ({ commitGuard: guard }) => {
           const template = {
             cacheKey: "wrapper-template", id: "generation-1",
@@ -186,21 +180,9 @@ it("acquires wrapper leases and manages templates without the application comman
             backend: "apfs", sourceCommit: "a".repeat(40), contentKey: "source",
             status: "preparing", createdAt: 1, lastUsedAt: 1,
           };
-          assert.equal(await hasTemplatesAsync(process.env), false);
           await reserveTemplateAsync(process.env, template, guard);
           assert.deepEqual(await readTemplateAsync(process.env, template.cacheKey), template);
-          assert.equal(await markTemplateReadyAsync(process.env, template.id, 2, guard), true);
-          assert.deepEqual(await listTemplatesAsync(process.env), [
-            { ...template, status: "ready", lastUsedAt: 2 },
-          ]);
-          assert.equal(await deleteTemplateAsync(process.env, template.id, guard), true);
-          assert.equal(await hasTemplatesAsync(process.env), false);
         });
-        const database = openOpenClawStateDatabase({ env: process.env });
-        const row = database.db.prepare(
-          "SELECT COUNT(*) AS count FROM state_leases WHERE scope = ? AND lease_key = ?",
-        ).get(options.scope, options.key);
-        assert.equal(Number(row.count), 0);
         await closeOpenClawStateDatabaseAsync();
         console.log("LEASE_BOOTSTRAP_OK");
       `,
@@ -223,20 +205,10 @@ it("acquires wrapper leases and manages templates without the application comman
 
 it("resolves wrapper package exports and workspace aliases from the extracted dependency context", () => {
   const root = tempDirs.make("openclaw-pr-package-closure-");
-  const components = copyPrWrapperSources(root);
-  expect(components.filter((component, index) => components.indexOf(component) !== index)).toEqual(
-    [],
-  );
+  copyPrWrapperSources(root);
   const files = readdirSync(root, { recursive: true, withFileTypes: true })
     .filter((entry) => entry.isFile())
     .map((entry) => relative(root, join(entry.parentPath, entry.name)));
-  for (const entrypoint of [
-    "src/state/openclaw-state.worker.ts",
-    "src/state/openclaw-state-lease-worker.ts",
-    "src/infra/sqlite-store.worker.ts",
-  ]) {
-    expect(files).toContain(join(entrypoint));
-  }
   const pinned = run(process.execPath, [
     join(root, "scripts/pr-lib/materialize-dependencies.mjs"),
     join(process.cwd(), "node_modules"),

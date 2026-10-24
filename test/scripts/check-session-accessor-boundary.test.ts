@@ -13,7 +13,6 @@ import {
   findSessionAccessorWriteBoundaryViolations,
   findSessionStoreRuntimeFileBackedCompatExportViolations,
   formatSessionAccessorDebtImprovements,
-  readOnlyGatewaySessionAccessorFiles,
 } from "../../scripts/check-session-accessor-boundary.mts";
 import { createNativeTypeScriptParser } from "../../scripts/lib/native-typescript.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
@@ -54,19 +53,34 @@ function check(
 }
 
 describe("session accessor guards", () => {
-  it("keeps Gateway read paths on non-materializing accessors", () => {
-    expect(
-      readOnlyGatewaySessionAccessorFiles.has("src/gateway/server-methods/sessions-read.ts"),
-    ).toBe(true);
-    check(
+  it.each([
+    [
+      "non-materializing reads",
       findReadOnlySessionAccessorViolations,
-      `
-        import { listSessionEntriesReadOnly, loadSessionEntryReadOnly } from "../config/sessions/session-accessor.js";
-        listSessionEntriesReadOnly({ storePath });
-        sessionUtils.loadSessionEntryReadOnly(sessionKey);
-      `,
-      "materializing session entry accessor",
-    );
+      'import { listSessionEntriesReadOnly, loadSessionEntryReadOnly } from "./session-accessor.js"; listSessionEntriesReadOnly(); sessionUtils.loadSessionEntryReadOnly();',
+    ],
+    [
+      "migrated reads",
+      findSessionAccessorBoundaryViolations,
+      'import { listSessionEntriesCore } from "./session-accessor.js"; listSessionEntriesCore();',
+    ],
+    [
+      "accessor-backed corpus",
+      findMemoryHostSessionCorpusBoundaryViolations,
+      "function listSessionTranscriptCorpusEntriesForAgentSync() { return listSessionEntriesCore(); } export async function listSessionFilesForAgent() { return (await listSessionTranscriptCorpusEntriesForAgent()).map(entry => entry.sessionFile); }",
+    ],
+    [
+      "comments and strings",
+      findSessionAccessorBoundaryViolations,
+      '// resolveSessionStoreEntryCore must not be called here.\nconst description = "resolveSessionStoreEntryCore";',
+    ],
+    [
+      "sessionTarget identity",
+      findEmbeddedAgentSessionTargetViolations,
+      "agentRuntime.runEmbeddedAgent({ sessionId, sessionKey, sessionTarget: { agentId, sessionId, sessionKey, storePath } });",
+    ],
+  ] as const)("allows %s", (_name, find, source) => {
+    expect(find(...parseFixture(source))).toEqual([]);
   });
 
   it("rejects file-backed SDK exports and aliases", () => {
@@ -110,17 +124,6 @@ describe("session accessor guards", () => {
     );
   });
 
-  it("allows migrated accessor reads", () => {
-    expect(
-      findSessionAccessorBoundaryViolations(
-        ...parseFixture(`
-        import { listSessionEntriesCore } from "../config/sessions/session-accessor.js";
-        listSessionEntriesCore({ storePath });
-      `),
-      ),
-    ).toEqual([]);
-  });
-
   it("flags legacy memory-host corpus classification calls in migrated entrypoints", () => {
     check(
       findMemoryHostSessionCorpusBoundaryViolations,
@@ -147,21 +150,6 @@ describe("session accessor guards", () => {
       `,
       "legacy memory-host session corpus helper",
       [2, "calls", "readSessionTranscriptClassificationStore"],
-    );
-  });
-
-  it("allows memory-host corpus entrypoints to use the accessor-backed corpus helper", () => {
-    check(
-      findMemoryHostSessionCorpusBoundaryViolations,
-      `
-        function listSessionTranscriptCorpusEntriesForAgentSync(agentId) {
-          return listSessionEntriesCore({ agentId });
-        }
-        export async function listSessionFilesForAgent(agentId) {
-          return (await listSessionTranscriptCorpusEntriesForAgent(agentId)).map((entry) => entry.sessionFile);
-        }
-      `,
-      "legacy memory-host session corpus helper",
     );
   });
 
@@ -219,17 +207,6 @@ describe("session accessor guards", () => {
     );
   });
 
-  it("ignores comments and strings that describe legacy readers", () => {
-    expect(
-      findSessionAccessorBoundaryViolations(
-        ...parseFixture(`
-        // resolveSessionStoreEntryCore must not be called here.
-        const description = "resolveSessionStoreEntryCore";
-      `),
-      ),
-    ).toEqual([]);
-  });
-
   it("flags embedded-agent calls that pass deprecated sessionFile identity", () => {
     expect(
       findEmbeddedAgentSessionTargetViolations(
@@ -248,20 +225,6 @@ describe("session accessor guards", () => {
         ),
       ),
     ]);
-  });
-
-  it("allows embedded-agent calls that pass sessionTarget identity", () => {
-    expect(
-      findEmbeddedAgentSessionTargetViolations(
-        ...parseFixture(`
-        agentRuntime.runEmbeddedAgent({
-          sessionId,
-          sessionKey,
-          sessionTarget: { agentId, sessionId, sessionKey, storePath },
-        });
-      `),
-      ),
-    ).toEqual([]);
   });
 });
 

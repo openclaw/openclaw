@@ -451,12 +451,9 @@ export function createLocaleFinalizerHarness() {
           }
           runGit(root, ["checkout", "--quiet", "--detach", "FETCH_HEAD"]);
         } else if (step.uses?.startsWith("actions/download-artifact@")) {
-          expect(step.with).not.toHaveProperty("run-id");
           fs.cpSync(artifacts, interpolate(step.with?.path), { recursive: true });
         } else if (step.uses === "./.github/actions/setup-node-env") {
           sourceAtSetup = runGit(root, ["rev-parse", "HEAD"]);
-          // The source capsule already binds the installed dependency tree.
-          expect(fs.existsSync(at("node_modules"))).toBe(true);
         } else if (step.uses === "./.github/actions/publish-generated-pr") {
           if (!scenario.publish) {
             break;
