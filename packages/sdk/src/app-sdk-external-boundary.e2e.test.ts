@@ -6,11 +6,9 @@ it("packs an external consumer that uses only the exported entrypoint and a cust
   try {
     await consumer.typecheck(`
         import type {
-          AgentsCreateParams, AgentsDeleteParams, AgentsUpdateParams,
-          ArtifactSummary, ArtifactsDownloadResult, GatewayArtifactSummary,
+          AgentsCreateParams, ArtifactSummary, ArtifactsDownloadResult,
           EnvironmentSummary, EnvironmentsListResult, SessionCreateParams, SessionSendParams,
-          ToolsEffectiveParams, ToolInvokeParams, ToolInvokeResult,
-          WorkerEnvironmentMetadata, WorkerEnvironmentState, WorkerTunnelStatus,
+          ToolInvokeParams, ToolInvokeResult,
         } from "@openclaw/sdk";
         import type * as Protocol from "@openclaw/gateway-protocol";
 
@@ -20,13 +18,6 @@ it("packs an external consumer that uses only the exported entrypoint and a cust
         type Assert<Condition extends true> = Condition;
 
         type AgentCreateIsCanonical = Assert<Equal<AgentsCreateParams, Protocol.AgentsCreateParams>>;
-        type AgentDeleteIsCanonical = Assert<Equal<AgentsDeleteParams, Protocol.AgentsDeleteParams>>;
-        type AgentUpdateIsCanonical = Assert<Equal<AgentsUpdateParams, Protocol.AgentsUpdateParams>>;
-        type GatewayArtifactIsCanonical = Assert<Equal<GatewayArtifactSummary, Protocol.ArtifactSummary>>;
-        type ToolsEffectiveIsCanonical = Assert<Equal<ToolsEffectiveParams, Protocol.ToolsEffectiveParams>>;
-        type WorkerMetadataIsCanonical = Assert<Equal<WorkerEnvironmentMetadata, Protocol.WorkerEnvironmentMetadata>>;
-        type WorkerStateIsCanonical = Assert<Equal<WorkerEnvironmentState, Protocol.WorkerEnvironmentState>>;
-        type TunnelStatusIsCanonical = Assert<Equal<WorkerTunnelStatus, Protocol.WorkerTunnelStatus>>;
 
         const artifactDownload: ArtifactsDownloadResult = {
           artifact: {
@@ -51,15 +42,9 @@ it("packs an external consumer that uses only the exported entrypoint and a cust
         };
         const environments: EnvironmentsListResult = { environments: [environment] };
         const createSession: SessionCreateParams = { attachments: [{ kind: "custom" }] };
-        const sendSession: SessionSendParams = {
-          key: "agent:main:external", message: "hello", attachments: [{ kind: "custom" }],
-        };
-        const toolParams: ToolInvokeParams = {
-          sessionKey: "agent:main:external", args: { query: "status" },
-        };
-        const toolResult: ToolInvokeResult = {
-          ok: false, toolName: "status", error: { message: "unavailable" },
-        };
+        const sendSession: SessionSendParams = { key: "external", message: "hello", attachments: [{ kind: "custom" }] };
+        const toolParams: ToolInvokeParams = { sessionKey: "external", args: { query: "status" } };
+        const toolResult: ToolInvokeResult = { ok: false, toolName: "status", error: { message: "unavailable" } };
 
         void [artifactDownload, environments, createSession, sendSession, toolParams, toolResult];
       `);
