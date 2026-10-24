@@ -81,6 +81,28 @@ afterEach(() => {
   ]);
 });
 
+function withUsage(model: Model, text: string, input: number) {
+  const assistant = createAssistant(model, [{ type: "text", text }], "stop", input);
+  assistant.usage.output = Math.ceil(text.length / 4);
+  assistant.usage.totalTokens = input + assistant.usage.output;
+  assistant.usage.contextUsage = {
+    state: "available",
+    promptTokens: input,
+    totalTokens: assistant.usage.totalTokens,
+  };
+  return assistant;
+}
+
+function captureBudgets(fixture: ReturnType<typeof createFixture>) {
+  const budgets: CompactionRequestBudget[] = [];
+  fixture.input.attempt.onCompactionRequestBudget = (budget) => {
+    if (budget) {
+      budgets.push(budget);
+    }
+  };
+  return budgets;
+}
+
 describe("runEmbeddedAttemptPromptPhase", () => {
   it("submits an unchanged turn without a registered policy gate", async () => {
     const fixture = createFixture();
@@ -236,20 +258,7 @@ describe("runEmbeddedAttemptPromptPhase", () => {
             }),
           ).length / 4,
         );
-        const priorText = "Recorded current facts. ".repeat(800);
-        const prior = createAssistant(
-          testModel,
-          [{ type: "text", text: priorText }],
-          "stop",
-          priorInput,
-        );
-        prior.usage.output = Math.ceil(priorText.length / 4);
-        prior.usage.totalTokens = priorInput + prior.usage.output;
-        prior.usage.contextUsage = {
-          state: "available",
-          promptTokens: priorInput,
-          totalTokens: prior.usage.totalTokens,
-        };
+        const prior = withUsage(testModel, "Recorded current facts. ".repeat(800), priorInput);
         expect(prior.usage.totalTokens).toBeGreaterThan(24_576);
         expect(prior.usage.totalTokens).toBeLessThan(testModel.contextWindow!);
         manager.appendMessage(prior);
@@ -329,12 +338,7 @@ describe("runEmbeddedAttemptPromptPhase", () => {
         runtimeContextMessageForCurrentTurn: nextCarrier,
         systemPromptForHook: session.systemPrompt,
       }));
-      const budgets: CompactionRequestBudget[] = [];
-      fixture.input.attempt.onCompactionRequestBudget = (budget) => {
-        if (budget) {
-          budgets.push(budget);
-        }
-      };
+      const budgets = captureBudgets(fixture);
       const { submitEmbeddedAttemptPrompt } = await vi.importActual<
         typeof import("./attempt-prompt-submit.js")
       >("./attempt-prompt-submit.js");
@@ -359,14 +363,7 @@ describe("runEmbeddedAttemptPromptPhase", () => {
             : "Project archive summary. "
                 .repeat(700)
                 .slice(0, (options?.maxTokens ?? model.maxTokens) * 4);
-          const response = createAssistant(model, [{ type: "text", text }], "stop", tokens);
-          response.usage.output = Math.ceil(text.length / 4);
-          response.usage.totalTokens = tokens + response.usage.output;
-          response.usage.contextUsage = {
-            state: "available",
-            promptTokens: tokens,
-            totalTokens: response.usage.totalTokens,
-          };
+          const response = withUsage(model, text, tokens);
           expect(response.usage.totalTokens).toBeLessThanOrEqual(model.contextWindow!);
           return createAssistantResultStream(response);
         },
@@ -408,88 +405,70 @@ describe("runEmbeddedAttemptPromptPhase", () => {
     },
   );
 
-  it.each([
-    {
-      persisted: true,
-      skip: false,
-      pendingPrompt: "",
-      pendingImageCount: 1,
-      expectedKey: "current:user",
-    },
-  ])(
-    "captures pending text/images and exact ingress identity (persisted=$persisted, skip=$skip, images=$pendingImageCount)",
-    async ({ persisted, skip, pendingPrompt, pendingImageCount, expectedKey }) => {
-      const fixture = createFixture({ pendingPrompt, pendingImageCount });
-      const { activeSession } = fixture.input.prepared.sessionRuntime.agentSession;
-      const currentUser = {
-        role: "user" as const,
-        content: pendingPrompt,
-        timestamp: 1,
-        idempotencyKey: "current:user",
+  it("captures pending images and exact persisted ingress identity", async () => {
+    const fixture = createFixture({ pendingPrompt: "", pendingImageCount: 1 });
+    const { activeSession } = fixture.input.prepared.sessionRuntime.agentSession;
+    const currentUser = {
+      role: "user" as const,
+      content: "",
+      timestamp: 1,
+      idempotencyKey: "current:user",
+    };
+    const recorder = createUserTurnTranscriptRecorder({
+      message: { ...currentUser, idempotencyKey: "draft:user" },
+      target: async () => undefined,
+    });
+    recorder.markRuntimePersisted(currentUser);
+    fixture.input.attempt.userTurnTranscriptRecorder = recorder;
+    fixture.input.attempt.skipPreparedUserTurnMessage = false;
+    const budgets = captureBudgets(fixture);
+    const tool = {
+      name: "read",
+      label: "Read",
+      description: "Read a file",
+      parameters: Type.Object({ path: Type.String() }),
+      execute: async () => ({ content: [], details: {} }),
+    };
+    activeSession.agent.state.tools = [tool];
+    let compacting = false;
+    Object.defineProperty(activeSession, "isCompacting", { get: () => compacting });
+    mocks.preparePromptPreflight.mockImplementation(async (input: PromptPreflightCall) => {
+      expect(budgets).toHaveLength(1);
+      expect(budgets[0]).toMatchObject({ contextWindow: 32_000, reserveTokens: 77 });
+      expect(budgets[0]?.pendingTokens).toBeGreaterThan(0);
+      expect(budgets[0]?.pendingUserIdempotencyKey).toBe("current:user");
+      return input.state;
+    });
+    mocks.submitPrompt.mockImplementation(async (submission: PromptSubmissionCall) => {
+      expect(submission.compactionRequestBudget).toBe(budgets[0]);
+      const model = fixture.input.attempt.model;
+      const context = {
+        systemPrompt: "Current foreground context. ".repeat(200),
+        messages: [],
+        tools: [{ ...tool, description: "Complete schema guidance. ".repeat(100) }],
       };
-      const recorder = createUserTurnTranscriptRecorder({
-        message: { ...currentUser, idempotencyKey: "draft:user" },
-        target: async () => undefined,
+      await activeSession.agent.streamFn(model, context);
+      expect(budgets).toHaveLength(2);
+      expect(budgets[1]).toMatchObject({
+        contextWindow: 32_000,
+        reserveTokens: 77,
+        pendingTokens: 0,
       });
-      if (persisted) {
-        recorder.markRuntimePersisted(currentUser);
-      }
-      fixture.input.attempt.userTurnTranscriptRecorder = recorder;
-      fixture.input.attempt.skipPreparedUserTurnMessage = skip;
-      const budgets: CompactionRequestBudget[] = [];
-      fixture.input.attempt.onCompactionRequestBudget = (budget) => {
-        if (budget) {
-          budgets.push(budget);
-        }
-      };
-      const tool = {
-        name: "read",
-        label: "Read",
-        description: "Read a file",
-        parameters: Type.Object({ path: Type.String() }),
-        execute: async () => ({ content: [], details: {} }),
-      };
-      activeSession.agent.state.tools = [tool];
-      let compacting = false;
-      Object.defineProperty(activeSession, "isCompacting", { get: () => compacting });
-      mocks.preparePromptPreflight.mockImplementation(async (input: PromptPreflightCall) => {
-        expect(budgets).toHaveLength(1);
-        expect(budgets[0]).toMatchObject({ contextWindow: 32_000, reserveTokens: 77 });
-        expect(budgets[0]?.pendingTokens).toBeGreaterThan(0);
-        expect(budgets[0]?.pendingUserIdempotencyKey).toBe(expectedKey);
-        return input.state;
-      });
-      mocks.submitPrompt.mockImplementation(async (submission: PromptSubmissionCall) => {
-        expect(submission.compactionRequestBudget).toBe(budgets[0]);
-        const model = fixture.input.attempt.model;
-        const context = {
-          systemPrompt: "Current foreground context. ".repeat(200),
-          messages: [],
-          tools: [{ ...tool, description: "Complete schema guidance. ".repeat(100) }],
-        };
-        await activeSession.agent.streamFn(model, context);
-        expect(budgets).toHaveLength(2);
-        expect(budgets[1]).toMatchObject({
-          contextWindow: 32_000,
-          reserveTokens: 77,
-          pendingTokens: 0,
-        });
-        expect(budgets[1]?.fixedTokens).toBeGreaterThan(budgets[0]?.fixedTokens ?? 0);
-        expect(budgets[1]?.pendingUserIdempotencyKey).toBeUndefined();
-        compacting = true;
-        await activeSession.agent.streamFn(
-          { ...model, contextWindow: 200_000 },
-          { systemPrompt: "Separate summarizer", messages: [], tools: [] },
-        );
-        expect(budgets).toHaveLength(2);
-        compacting = false;
-      });
+      expect(budgets[1]?.fixedTokens).toBeGreaterThan(budgets[0]?.fixedTokens ?? 0);
+      expect(budgets[1]?.pendingUserIdempotencyKey).toBeUndefined();
+      compacting = true;
+      await activeSession.agent.streamFn(
+        { ...model, contextWindow: 200_000 },
+        { systemPrompt: "Separate summarizer", messages: [], tools: [] },
+      );
+      expect(budgets).toHaveLength(2);
+      compacting = false;
+    });
 
-      await runEmbeddedAttemptPromptPhase(fixture.input, fixture.promptState);
+    await runEmbeddedAttemptPromptPhase(fixture.input, fixture.promptState);
 
-      expect(fixture.readState().promptError).toBeNull();
-    },
-  );
+    expect(fixture.readState().promptError).toBeNull();
+  });
 
   it("withholds prompt hooks and submission after its owner retires during context lookup", async () => {
     const fixture = createFixture();

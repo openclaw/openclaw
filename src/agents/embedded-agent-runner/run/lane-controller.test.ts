@@ -55,12 +55,7 @@ afterEach(() => {
 
 const key = "agent:main:controller-execution";
 const globalLane = "test:controller-global";
-function create(
-  runId: string,
-  enqueue?: CommandQueueEnqueueFn,
-  overrides: Partial<RunEmbeddedAgentParams> = {},
-  lane = globalLane,
-) {
+function create(runId: string, overrides: Partial<RunEmbeddedAgentParams> = {}, lane = globalLane) {
   const params: RunEmbeddedAgentParams & { sessionFile: string } = {
     admittedRunContext: overrides.admittedRunContext ?? createTestAdmittedRunContext(runId),
     sessionKey: key,
@@ -71,7 +66,6 @@ function create(
     prompt: "test",
     timeoutMs: 60_000,
     trigger: "user",
-    enqueue,
     ...overrides,
   };
   return createLaneControllerFixture(params, { globalLane: lane, configureRuntime: false });
@@ -92,6 +86,37 @@ function pauseSession(
   return { entered: entered.promise, finish: finish.resolve, run };
 }
 
+const result = async () => ({ meta: { durationMs: 1 } });
+const replyOperation = (sessionId = "incarnation") =>
+  createReplyOperation({ sessionKey: key, sessionId, resetTriggered: false });
+
+function pauseGlobal(
+  { controller }: ReturnType<typeof create>,
+  options?: CommandQueueEnqueueOptions,
+  rawFailure?: Error,
+) {
+  const entered = createDeferred();
+  const raw = createDeferred();
+  const task = () =>
+    controller.enqueueGlobal(async () => {
+      entered.resolve();
+      await raw.promise;
+      if (rawFailure) {
+        throw rawFailure;
+      }
+      controller.throwIfAborted();
+      return { meta: { durationMs: 1 } };
+    }, options);
+  return { entered: entered.promise, raw, task };
+}
+
+async function tickAt(time: number, ...states: ReturnType<typeof create>[]) {
+  vi.setSystemTime(time);
+  for (const state of states) {
+    await state.getParams().replyOperation!.watchdog.tick();
+  }
+}
+
 describe("controller-owned execution guard", () => {
   it.each([
     ["same physical session", false, false, false, true],
@@ -103,7 +128,7 @@ describe("controller-owned execution guard", () => {
     async (_name, otherId, otherStore, detached, queued) => {
       const sessionId = "native-sessionless-owner";
       const storePath = "/synthetic/native-sessionless/sessions.sqlite";
-      const first = create("native-sessionless-first", undefined, {
+      const first = create("native-sessionless-first", {
         sessionKey: undefined,
         sessionId,
         sessionFile: sessionId,
@@ -134,7 +159,7 @@ describe("controller-owned execution guard", () => {
         }
       });
       await Promise.race([entered.promise, predecessor]);
-      const second = create("native-sessionless-second", undefined, {
+      const second = create("native-sessionless-second", {
         sessionKey: undefined,
         sessionId: otherId ? "native-sessionless-other" : sessionId,
         sessionFile: otherId ? "native-sessionless-other" : sessionId,
@@ -164,8 +189,8 @@ describe("controller-owned execution guard", () => {
 
   it("registers a keyless native attempt borrowed from a routable outer turn", async () => {
     const sessionId = "native-sessionless-borrowed";
-    const operation = createReplyOperation({ sessionKey: key, sessionId, resetTriggered: false });
-    const owned = create("native-sessionless-borrowed", undefined, {
+    const operation = replyOperation(sessionId);
+    const owned = create("native-sessionless-borrowed", {
       sessionKey: undefined,
       sessionId,
       sessionFile: sessionId,
@@ -187,13 +212,9 @@ describe("controller-owned execution guard", () => {
   });
 
   it("keeps a borrowed outer turn active when its nested caller cancels", async () => {
-    const operation = createReplyOperation({
-      sessionKey: key,
-      sessionId: "incarnation",
-      resetTriggered: false,
-    });
+    const operation = replyOperation();
     const caller = new AbortController();
-    const state = create("nested", undefined, {
+    const state = create("nested", {
       replyOperation: operation,
       abortSignal: caller.signal,
     });
@@ -221,27 +242,16 @@ describe("controller-owned execution guard", () => {
   });
 
   it("starts the preflight deadline after mailbox admission, not before its queue wait", async () => {
-    const first = create("deadline-predecessor");
-    const {
-      entered: firstEntered,
-      finish: firstFinish,
-      run: predecessor,
-    } = pauseSession(first, undefined, async () => {});
-    await firstEntered;
+    const first = pauseSession(create("deadline-predecessor"), undefined, async () => {});
+    await first.entered;
     const second = create("deadline-successor");
-    const {
-      entered: secondEntered,
-      finish: secondFinish,
-      run: successor,
-    } = pauseSession(second, {
-      taskTimeoutMs: 25,
-    });
-    const outcome = successor.catch((error: unknown) => error);
+    const successor = pauseSession(second, { taskTimeoutMs: 25 });
+    const outcome = successor.run.catch((error: unknown) => error);
     try {
       vi.setSystemTime(2_000);
-      firstFinish();
-      await predecessor;
-      await secondEntered;
+      first.finish();
+      await first.run;
+      await successor.entered;
       const operation = second.getParams().replyOperation;
       if (!operation) {
         throw new Error("Successor did not own a controller operation");
@@ -252,9 +262,9 @@ describe("controller-owned execution guard", () => {
       await operation.watchdog.tick();
       expect(second.controller.abortSignal.aborted).toBe(true);
     } finally {
-      firstFinish();
-      secondFinish();
-      await Promise.allSettled([predecessor, outcome]);
+      first.finish();
+      successor.finish();
+      await Promise.allSettled([first.run, outcome]);
     }
   });
 
@@ -269,23 +279,19 @@ describe("controller-owned execution guard", () => {
       for (const trigger of ["user", "cron"] as const) {
         let observedOptions: Parameters<CommandQueueEnqueueFn>[1];
         const refused = new Error("queue admission refused");
-        const { controller } = create(
-          "child-run",
-          (_task, options) => {
+        const { controller } = create("child-run", {
+          enqueue: (_task, options) => {
             observedOptions = options;
             if (refusal === "asynchronous") {
               return Promise.reject(refused);
             }
             throw refused;
           },
-          {
-            trigger,
-            sessionKey: "agent:example:subagent:child",
-            spawnedBy: "agent:example:main",
-          },
-        );
-        const enterGlobal = () =>
-          controller.enqueueGlobal(async () => ({ meta: { durationMs: 1 } }));
+          trigger,
+          sessionKey: "agent:example:subagent:child",
+          spawnedBy: "agent:example:main",
+        });
+        const enterGlobal = () => controller.enqueueGlobal(result);
 
         await expect(async () =>
           enqueueMethod === "enqueueSession"
@@ -304,14 +310,16 @@ describe("controller-owned execution guard", () => {
 
   it("uses injected queues only for global capacity, never session admission or timeout races", async () => {
     const enqueue = vi.fn<(opts: Parameters<CommandQueueEnqueueFn>[1]) => void>();
-    const { controller, getParams } = create("direct", async (task, opts) => {
-      enqueue(opts);
-      return await task();
+    const { controller, getParams } = create("direct", {
+      enqueue: async (task, opts) => {
+        enqueue(opts);
+        return await task();
+      },
     });
     await controller.enqueueSession(async () => {
       expect(enqueue).not.toHaveBeenCalled();
       expect(getSessionControllerOperation(key)).toBe(getParams().replyOperation);
-      return controller.enqueueGlobal(async () => ({ meta: { durationMs: 1 } }));
+      return controller.enqueueGlobal(result);
     });
     expect(enqueue).toHaveBeenCalledOnce();
     expect(enqueue.mock.calls[0]?.[0]).toMatchObject({
@@ -328,8 +336,7 @@ describe("controller-owned execution guard", () => {
     const operation = first.getParams().replyOperation!;
     const dispatch = vi.fn(async () => "successor");
     const second = create("second").controller.enqueueSession(dispatch);
-    vi.setSystemTime(1_025);
-    await operation.watchdog.tick();
+    await tickAt(1_025, first);
     expect(first.controller.abortSignal.aborted).toBe(true);
     expect(dispatch).not.toHaveBeenCalled();
     expect(getSessionControllerOperation(key)).toBe(operation);
@@ -347,16 +354,15 @@ describe("controller-owned execution guard", () => {
 
   it("fences late preflight resumption before global admission without claiming timeout settlement", async () => {
     const state = create("late-preflight");
-    const { controller, getParams } = state;
-    const execute = vi.fn(async () => ({ meta: { durationMs: 1 } }));
+    const { controller } = state;
+    const execute = vi.fn(result);
     const { entered, finish, run } = pauseSession(state, { taskTimeoutMs: 25 }, async () => {
       controller.throwIfAborted();
       await controller.enqueueGlobal(execute);
     });
     const failed = expect(run).rejects.toThrow();
     await entered;
-    vi.setSystemTime(1_025);
-    await getParams().replyOperation!.watchdog.tick();
+    await tickAt(1_025, state);
     expect(getCommandLaneSnapshot(globalLane).activeCount).toBe(0);
     finish();
     await failed;
@@ -366,52 +372,36 @@ describe("controller-owned execution guard", () => {
   it("keeps a queued session alive while another session's stalled global producer settles", async () => {
     setCommandLaneConcurrency(globalLane, 1);
     const first = create("stalled-global-owner");
-    const second = create("global-successor", undefined, {
+    const second = create("global-successor", {
       sessionKey: "agent:main:global-successor",
       sessionId: "global-successor",
       sessionFile: "global-successor.jsonl",
     });
-    const entered = createDeferred();
-    const raw = createDeferred();
     const queued = createDeferred();
-    const stalled = first.controller.enqueueSession(() =>
-      first.controller.enqueueGlobal(
-        async () => {
-          entered.resolve();
-          await raw.promise;
-          first.controller.throwIfAborted();
-          return { meta: { durationMs: 1 } };
-        },
-        { taskTimeoutMs: 25 },
-      ),
-    );
+    const { entered, raw, task } = pauseGlobal(first, { taskTimeoutMs: 25 });
+    const stalled = first.controller.enqueueSession(task);
     const failed = expect(stalled).rejects.toMatchObject({ name: "CommandLaneTaskTimeoutError" });
-    await entered.promise;
+    await entered;
     const successor = second.controller.enqueueSession(
       () =>
-        second.controller.enqueueGlobal(async () => ({ meta: { durationMs: 1 } }), {
+        second.controller.enqueueGlobal(result, {
           onQueued: () => queued.resolve(),
         }),
       { taskTimeoutMs: 25 },
     );
     try {
       await queued.promise;
-      vi.setSystemTime(1_024);
-      await first.getParams().replyOperation!.watchdog.tick();
-      await second.getParams().replyOperation!.watchdog.tick();
+      await tickAt(1_024, first, second);
       expect(first.controller.abortSignal.aborted).toBe(false);
       expect(second.controller.abortSignal.aborted).toBe(false);
       expect(getCommandLaneSnapshot(globalLane)).toMatchObject({ activeCount: 1, queuedCount: 1 });
 
-      vi.setSystemTime(1_025);
-      await first.getParams().replyOperation!.watchdog.tick();
-      await second.getParams().replyOperation!.watchdog.tick();
+      await tickAt(1_025, first, second);
       expect(first.controller.abortSignal.aborted).toBe(true);
       expect(second.controller.abortSignal.aborted).toBe(false);
       // A deadline requests cancellation; raw settlement still owns global capacity.
       expect(getCommandLaneSnapshot(globalLane)).toMatchObject({ activeCount: 1, queuedCount: 1 });
-      vi.setSystemTime(3_600_000);
-      await second.getParams().replyOperation!.watchdog.tick();
+      await tickAt(3_600_000, second);
       expect(second.controller.abortSignal.aborted).toBe(false);
       raw.resolve();
       await failed;
@@ -425,26 +415,17 @@ describe("controller-owned execution guard", () => {
   });
 
   it("does not let another queued global task shield an active stalled producer or release its capacity", async () => {
-    const { controller, getParams } = create("parallel-capacity");
-    const entered = createDeferred();
-    const raw = createDeferred();
+    const state = create("parallel-capacity");
+    const { controller } = state;
+    const { entered, raw, task } = pauseGlobal(state, { taskTimeoutMs: 25 });
     const secondTask = vi.fn(async () => ({ meta: { durationMs: 2 } }));
     const run = controller.enqueueSession(async () => {
-      const first = controller.enqueueGlobal(
-        async () => {
-          entered.resolve();
-          await raw.promise;
-          controller.throwIfAborted();
-          return { meta: { durationMs: 1 } };
-        },
-        { taskTimeoutMs: 25 },
-      );
+      const first = task();
       const second = controller.enqueueGlobal(secondTask);
       return await Promise.allSettled([first, second]);
     });
-    await entered.promise;
-    vi.setSystemTime(1_025);
-    await getParams().replyOperation!.watchdog.tick();
+    await entered;
+    await tickAt(1_025, state);
     expect(getCommandLaneSnapshot(globalLane).activeCount).toBe(1);
     expect(secondTask).not.toHaveBeenCalled();
     raw.resolve();
@@ -462,9 +443,8 @@ describe("exact attempt deadline transfer", () => {
     const admission = prepareSystemAgentRunAdmission({}, runId, "main", "watchdog-controls");
     cleanups.push(admission.close);
     const admittedRunContext = await admission.admit("embedded");
-    const { controller, getParams } = create(
+    const state = create(
       runId,
-      undefined,
       {
         admittedRunContext,
         sessionId: "attempt-owner-incarnation",
@@ -476,24 +456,14 @@ describe("exact attempt deadline transfer", () => {
       },
       attemptLane,
     );
-    const entered = createDeferred();
-    const raw = createDeferred();
-    const run = controller.enqueueSession(() =>
-      controller.enqueueGlobal(async () => {
-        entered.resolve();
-        await raw.promise;
-        if (rawFailure) {
-          throw rawFailure;
-        }
-        controller.throwIfAborted();
-        return { meta: { durationMs: 1 } };
-      }),
-    );
+    const { controller, getParams } = state;
+    const { entered, raw, task } = pauseGlobal(state, undefined, rawFailure);
+    const run = controller.enqueueSession(task);
     cleanups.push(async () => {
       raw.resolve();
       await run.catch(() => {});
     });
-    await entered.promise;
+    await entered;
     const operation = getParams().replyOperation!;
     const controls = (
       options: Omit<

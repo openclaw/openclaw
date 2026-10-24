@@ -56,6 +56,36 @@ async function seedSession(
   return { dir, target };
 }
 
+async function seedTurn(sessionId: string, sessionKey?: string) {
+  const seeded = await seedSession(sessionId, sessionKey);
+  const message = { role: "user" as const, content: "hello", timestamp: 1 };
+  const persisted = await appendTranscriptMessage(seeded.target, {
+    cwd: seeded.dir,
+    eventId: "user-1",
+    message,
+    now: 1,
+  });
+  if (!persisted?.anchor) {
+    throw new Error("expected persisted user anchor");
+  }
+  const recorder = createUserTurnTranscriptRecorder({ message, target: async () => undefined });
+  return { ...seeded, message, anchor: persisted.anchor, recorder };
+}
+
+function sessionAttempt(
+  target: Awaited<ReturnType<typeof seedSession>>["target"],
+  runId = target.sessionId,
+) {
+  return {
+    runId,
+    sessionId: target.sessionId,
+    sessionKey: target.sessionKey,
+    sessionTarget: target,
+    sessionFile: target.sessionKey,
+    contextTokenBudget: 180_000,
+  };
+}
+
 function streamInput(messages: unknown[] = [], currentAttemptAssistant?: unknown) {
   const runAbortDeadlineAtMs = Date.now() + 60_000;
   const sessionManager = Object.assign(SessionManager.inMemory(), {
@@ -254,23 +284,12 @@ describe("embedded attempt phase lifecycle state", () => {
   it.each(["complete", "missing admission", "missing terminal"] as const)(
     "handles %s candidate anchors without skipping later lifecycle work",
     async (boundary) => {
-      const { dir, target } = await seedSession("session-1", "agent:main:main");
-      const userMessage = { role: "user" as const, content: "hello", timestamp: 1 };
-      const persistedUser = await appendTranscriptMessage(target, {
-        cwd: dir,
-        eventId: "user-1",
-        message: userMessage,
-        now: 1,
-      });
-      if (!persistedUser?.anchor) {
-        throw new Error("expected persisted user anchor");
-      }
-      const recorder = createUserTurnTranscriptRecorder({
-        message: userMessage,
-        target: async () => undefined,
-      });
+      const { dir, target, message, anchor, recorder } = await seedTurn(
+        "session-1",
+        "agent:main:main",
+      );
       if (boundary !== "missing admission") {
-        recorder.markRuntimePersisted(userMessage, persistedUser.anchor);
+        recorder.markRuntimePersisted(message, anchor);
       }
       const sessionManager =
         boundary === "missing terminal"
@@ -283,7 +302,7 @@ describe("embedded attempt phase lifecycle state", () => {
         }),
       );
       const expectedTerminalAnchor = readActiveTranscriptEntryAnchor({
-        ...persistedUser.anchor,
+        ...anchor,
         entryId: terminalEntryId,
       });
       if (boundary === "complete" && !expectedTerminalAnchor) {
@@ -301,16 +320,11 @@ describe("embedded attempt phase lifecycle state", () => {
         {
           ...finalizationInput(prepared(sessionManager)),
           attempt: {
-            runId: "run-1",
-            sessionId: target.sessionId,
-            sessionKey: target.sessionKey,
-            sessionTarget: target,
-            sessionFile: target.sessionKey,
+            ...sessionAttempt(target, "run-1"),
             provider: "test",
             modelId: "model",
             model: { api: "openai-responses", contextWindow: 120_000 },
             modelContextWindow: 200_000,
-            contextTokenBudget: 180_000,
             workspaceDir: dir,
             cwd: dir,
             authProfileId: "profile-1",
@@ -398,22 +412,8 @@ describe("embedded attempt phase lifecycle state", () => {
     ["no leaf", false],
     ["real manager marker", true],
   ] as const)("records terminal candidates with %s", async (scenario, allowed) => {
-    const { dir, target } = await seedSession("candidate-tail");
-    const userMessage = { role: "user" as const, content: "hello", timestamp: 1 };
-    const persisted = await appendTranscriptMessage(target, {
-      cwd: dir,
-      eventId: "user-1",
-      message: userMessage,
-      now: 1,
-    });
-    if (!persisted?.anchor) {
-      throw new Error("expected persisted admission");
-    }
-    const recorder = createUserTurnTranscriptRecorder({
-      message: userMessage,
-      target: async () => undefined,
-    });
-    recorder.markRuntimePersisted(userMessage, persisted.anchor);
+    const { dir, target, message, anchor, recorder } = await seedTurn("candidate-tail");
+    recorder.markRuntimePersisted(message, anchor);
     const sessionManager = SessionManager.open(target, dir);
     const terminalId = await sessionManager.appendMessageAsync(
       makeAgentAssistantMessage({ content: [{ type: "text", text: "done" }], timestamp: 2 }),
@@ -422,7 +422,7 @@ describe("embedded attempt phase lifecycle state", () => {
       throw new Error("expected persisted terminal id");
     }
     const base = sessionManager.getEntry(terminalId);
-    const terminal = readActiveTranscriptEntryAnchor({ ...persisted.anchor, entryId: terminalId });
+    const terminal = readActiveTranscriptEntryAnchor({ ...anchor, entryId: terminalId });
     if (!base || !terminal) {
       throw new Error("expected persisted terminal");
     }
@@ -468,14 +468,9 @@ describe("embedded attempt phase lifecycle state", () => {
         {
           ...finalizationInput(prepared(sessionManager, false)),
           attempt: {
-            runId: "candidate-tail",
-            sessionId: target.sessionId,
-            sessionKey: target.sessionKey,
-            sessionTarget: target,
-            sessionFile: target.sessionKey,
+            ...sessionAttempt(target),
             provider: "test",
             modelId: "model",
-            contextTokenBudget: 180_000,
             userTurnTranscriptRecorder: recorder,
             onContextEngineTurnCandidate,
           },
@@ -652,14 +647,7 @@ describe("embedded attempt phase lifecycle state", () => {
       afterTurn = completeEmbeddedAttemptAfterTurn(
         {
           ...finalizationInput(prepared(sessionManager, scenario !== "completion not requested")),
-          attempt: {
-            runId: "after-turn",
-            contextTokenBudget: 180_000,
-            sessionId: target.sessionId,
-            sessionKey: target.sessionKey,
-            sessionTarget: target,
-            sessionFile: target.sessionKey,
-          },
+          attempt: sessionAttempt(target),
           agentDir: dir,
           setup: { effectiveWorkspace: dir, sessionAgentId: target.agentId },
           sessionLock: {
