@@ -497,7 +497,9 @@ describe("Activity recap lifecycle with the canonical session store", () => {
     expect(settlementReads.queries.some((sql) => transcriptSql.test(sql))).toBe(false);
     settlementReads.restore();
     expect(view()?.state).toBe("current");
-    await awaitPublication(() => terminal(service));
+    const currentRefresh = new AsyncWorkScope();
+    await currentRefresh.track(() => terminal(service));
+    await currentRefresh.drain();
     expect(read()).toMatchObject({
       sessionId: before.sessionId,
       lifecycleRevision: before.lifecycleRevision,

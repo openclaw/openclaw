@@ -270,7 +270,9 @@ export function registerActivitySummaryRunTests(
         await prewarmSessionHistoryWorker({ agentId: "main", env: state.env });
         const projection = await createSessionRowProjection({ cfg, getConfig: () => cfg });
         await projection.ensureMaterialized();
-        installHandlerFactory(() => Object.assign(vi.fn(), { dispose: vi.fn() }));
+        installHandlerFactory(() =>
+          Object.assign(vi.fn(), { retireTranscript: vi.fn(), dispose: vi.fn(async () => {}) }),
+        );
         const clock = createGatewaySchedulerClock(Date.now());
         const unsubs = start({
           ...createParams(),

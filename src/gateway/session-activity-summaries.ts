@@ -356,22 +356,6 @@ export function createSessionActivitySummaries(deps: {
         text = text.slice(0, -OMISSION_NOTICE.length).trimEnd();
       }
       if (notes.length || (restyle && text)) {
-        const { hasAvailableUtilityCompletionAuth } =
-          await import("../agents/utility-completion.js");
-        const prepared = await defaultPrepareModel({
-          cfg: deps.getConfig(),
-          agentId: state.agentId,
-          modelRef: ref,
-          useUtilityModel: true,
-        });
-        if (!(await hasAvailableUtilityCompletionAuth(prepared))) {
-          assertCurrentOwner(state, ref);
-          state.retryAt = now() + RETRY_MS;
-          publish(state, "unavailable");
-          log.info("recap unavailable: no Gateway model credential", { agentId: state.agentId });
-          return;
-        }
-        state.calls += 1;
         const controller = new AbortController();
         state.controller = controller;
         const timer = setTimeout(
@@ -387,7 +371,25 @@ export function createSessionActivitySummaries(deps: {
             assertCurrentEntry(state, state.entry);
           };
           const execute = async () => {
+            const { hasAvailableUtilityCompletionAuth } =
+              await import("../agents/utility-completion.js");
+            const prepared = await defaultPrepareModel({
+              cfg: deps.getConfig(),
+              agentId: state.agentId,
+              modelRef: ref,
+              useUtilityModel: true,
+            });
+            const available = await hasAvailableUtilityCompletionAuth(prepared);
             assertRequestCurrent();
+            if (!available) {
+              state.retryAt = now() + RETRY_MS;
+              publish(state, "unavailable");
+              log.info("recap unavailable: no Gateway model credential", {
+                agentId: state.agentId,
+              });
+              return undefined;
+            }
+            state.calls += 1;
             const result = await defaultCompleteModel({
               ...prepared,
               purpose: "session-activity-summary",
@@ -406,18 +408,15 @@ export function createSessionActivitySummaries(deps: {
             });
             return result.text;
           };
-          text = truncateUtf16Safe(
-            (
-              await racePromiseWithAbortSignal(
-                ownedWork.track(execute),
-                controller.signal,
-                (signal) => toErrorObject(signal.reason, "Activity recap cancelled"),
-              )
-            )
-              .replace(/\s+/gu, " ")
-              .trim(),
-            450,
+          const completed = await racePromiseWithAbortSignal(
+            ownedWork.track(execute),
+            controller.signal,
+            (signal) => toErrorObject(signal.reason, "Activity recap cancelled"),
           );
+          if (completed === undefined) {
+            return;
+          }
+          text = truncateUtf16Safe(completed.replace(/\s+/gu, " ").trim(), 450);
           if (!text) {
             throw new Error("Activity recap returned no visible text");
           }
