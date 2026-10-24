@@ -18,9 +18,9 @@ import { createDeferred } from "../../../test/helpers/promise.ts";
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.ts";
 import { pairControlUiPage } from "../test-helpers/control-ui-browser-pairing.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
-import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { pollCount } from "./new-session-page.test-support.ts";
 
 const sessionKey = "agent:main:managed-media-order";
 const prompt = "Show the two prepared image cards in their numbered sections.";
@@ -43,13 +43,11 @@ async function startProvider() {
   const echoReleased = createDeferred();
   const requests: string[] = [];
   const failures: string[] = [];
-  const routes: string[] = [];
   let reply = "";
   const reservation = await reserveTestPortListener({
     offsets: [0],
     createListener: () =>
       createServer((request, response) => {
-        routes.push(`${request.method} ${request.url?.split("?")[0]}`);
         if (request.method !== "POST" || request.url !== "/v1/responses") {
           request.resume();
           response.writeHead(404).end();
@@ -97,7 +95,6 @@ async function startProvider() {
     port: reservation.claim.port,
     requests,
     failures,
-    routes,
     setReply(text: string) {
       reply = text;
     },
@@ -131,18 +128,22 @@ const suite = createControlUiE2eSuite({
         () => provider.close(),
       );
     try {
+      const noProxy = [
+        process.env.no_proxy ?? process.env.NO_PROXY,
+        "127.0.0.1",
+        "localhost",
+        "::1",
+      ]
+        .filter(Boolean)
+        .join(",");
       instance = await createOpenClawTestInstance({
         name: "managed-media-order",
         entrypoint: ["dist/index.js"],
         env: {
           HOME: process.env.HOME,
           // Preserve external proxy routing while exempting this owned loopback fixture.
-          NO_PROXY: [process.env.no_proxy ?? process.env.NO_PROXY, "127.0.0.1", "localhost", "::1"]
-            .filter(Boolean)
-            .join(","),
-          no_proxy: [process.env.no_proxy ?? process.env.NO_PROXY, "127.0.0.1", "localhost", "::1"]
-            .filter(Boolean)
-            .join(","),
+          NO_PROXY: noProxy,
+          no_proxy: noProxy,
           OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
           VITEST: undefined,
         },
@@ -234,8 +235,6 @@ async function callGateway(method: string, params: Record<string, unknown>) {
   );
 }
 
-const writeEvidence = (name: string, value: unknown) =>
-  writeFile(path.join(suite.artifactDir, name), JSON.stringify(value, null, 2) + "\n");
 const privateFixtureValues = () => ({
   gatewayToken: instance.gatewayToken,
   hookToken: instance.hookToken,
@@ -245,32 +244,13 @@ const privateFixtureValues = () => ({
   fixtureKey,
 });
 
-async function capture(page: Page, bubble: Locator, name: string) {
+async function assertRenderedOrder(page: Page, bubble: Locator) {
   const body = (await page.locator("body").textContent()) ?? "";
   for (const [field, value] of Object.entries(privateFixtureValues())) {
-    expect(body.includes(value), `Capture must not expose ${field}`).toBe(false);
+    expect(body.includes(value), `Rendered page must not expose ${field}`).toBe(false);
   }
   expect(new URL(page.url()).hash).toBe("");
-  const content = [
-    bubble.getByText(intro, { exact: true }),
-    bubble.getByRole("heading", { name: firstHeading, exact: true }),
-    bubble.getByRole("heading", { name: secondHeading, exact: true }),
-    bubble.locator("img.chat-message-image").nth(0),
-    bubble.locator("img.chat-message-image").nth(1),
-    bubble.getByText(closing, { exact: true }),
-  ];
-  const frame = await takeControlUiScreenshotFrame(page, bubble, content, {
-    animations: "disabled",
-    scrollTo: bubble,
-    elements: [bubble],
-  });
-  await writeFile(path.join(suite.artifactDir, `${name}.png`), frame.png);
-  await writeFile(path.join(suite.artifactDir, `${name}-message.png`), frame.elements[0]!.png);
-}
-
-async function captureOrder(page: Page, bubble: Locator, phase: "live" | "reloaded") {
-  await capture(page, bubble, phase === "live" ? "01-live" : "02-reloaded");
-  return assertRenderedOrder(bubble);
+  await expect.poll(() => renderedOrder(bubble)).toEqual(expectedOrder);
 }
 
 async function renderedOrder(bubble: Locator) {
@@ -289,17 +269,6 @@ async function renderedOrder(bubble: Locator) {
         return text ? [text] : [];
       }),
     );
-}
-
-async function assertRenderedOrder(bubble: Locator) {
-  let order: string[] = [];
-  await expect
-    .poll(async () => {
-      order = await renderedOrder(bubble);
-      return order;
-    })
-    .toEqual(expectedOrder);
-  return order;
 }
 
 async function runManagedMediaScenario() {
@@ -340,17 +309,15 @@ async function runManagedMediaScenario() {
       const bubble = page.locator(".chat-group.assistant .chat-bubble").filter({ hasText: intro });
       const renderedImages = bubble.locator("img.chat-message-image");
       // A durable reply can briefly overlap its live tail until the run retires.
-      await expect.poll(() => bubble.count()).toBeGreaterThan(0);
+      await pollCount(bubble).toBeGreaterThan(0);
       await page
         .getByRole("button", { name: "Stop generating", exact: true })
         .waitFor({ state: "detached" });
       await bubble.getByText(closing, { exact: true }).waitFor();
       const assertDecoded = async () => {
-        await expect.poll(() => bubble.count()).toBe(1);
-        await expect
-          .poll(() => page.locator(".chat-group.assistant img.chat-message-image").count())
-          .toBe(2);
-        await expect.poll(() => renderedImages.count()).toBe(2);
+        await pollCount(bubble).toBe(1);
+        await pollCount(page.locator(".chat-group.assistant img.chat-message-image")).toBe(2);
+        await pollCount(renderedImages).toBe(2);
         await renderedImages.evaluateAll(async (images) => {
           await Promise.all(
             images.map(async (image) => {
@@ -394,14 +361,9 @@ async function runManagedMediaScenario() {
           .filter((label) => text.includes(label))
           .toSorted((left, right) => text.indexOf(left) - text.indexOf(right));
       });
-      expect(persistedOrder).toEqual([
-        intro,
-        firstHeading,
-        "image",
-        secondHeading,
-        "image",
-        closing,
-      ]);
+      expect(persistedOrder).toEqual(
+        expectedOrder.map((entry) => (entry.startsWith("image:") ? "image" : entry)),
+      );
       const images = blocks.filter((block) => block?.type === "image");
       expect(images).toHaveLength(2);
       const artifactIds = images.map((image) => image?.artifactId);
@@ -413,11 +375,9 @@ async function runManagedMediaScenario() {
       expect(JSON.stringify(assistants)).not.toContain(instance.stateDir);
 
       // Wait for durable managed images, not transient stream previews.
-      await expect
-        .poll(() => bubble.locator(".chat-image-frame--managed img.chat-message-image").count())
-        .toBe(2);
+      await pollCount(bubble.locator(".chat-image-frame--managed img.chat-message-image")).toBe(2);
       await assertDecoded();
-      const liveOrder = await captureOrder(page, bubble, "live");
+      await assertRenderedOrder(page, bubble);
       expect(await bubble.textContent()).not.toContain("MEDIA:");
       expect(sends).toEqual([prompt]);
       expect(provider.requests.filter((model) => model === "echo")).toHaveLength(1);
@@ -427,44 +387,22 @@ async function runManagedMediaScenario() {
       await waitForControlUiGatewayReady(page);
       await bubble.getByText(closing, { exact: true }).waitFor();
       await assertDecoded();
-      const reloadedOrder = await captureOrder(page, bubble, "reloaded");
+      await assertRenderedOrder(page, bubble);
       expect(await page.locator(".chat-group.assistant .chat-bubble").count()).toBe(1);
       expect(sends).toEqual([prompt]);
       expect(provider.requests.filter((model) => model === "echo")).toHaveLength(1);
-      await writeEvidence("proof.json", {
-        gateway: "isolated real Gateway serving the built Control UI",
-        inference: "synthetic loopback OpenAI Responses endpoint",
-        liveOrder,
-        persistedOrder,
-        reloadedOrder,
-        assistantMessages: assistants.length,
-        managedImages: artifactIds.length,
-        chatSends: sends.length,
-        primaryProviderRequests: provider.requests.filter((model) => model === "echo").length,
-      });
     },
   );
 }
 
 suite.define(() => {
-  it("keeps headings, managed images and trailing prose ordered live and after reload without duplicates", async (test) => {
-    try {
-      await suite.runScenario(test, {
+  it(
+    "keeps headings, managed images and trailing prose ordered live and after reload without duplicates",
+    (test) =>
+      suite.runScenario(test, {
         retainedState: () => instance.stateDir,
         run: runManagedMediaScenario,
-      });
-    } catch (error) {
-      let gatewayLog = instance.logs();
-      for (const value of Object.values(privateFixtureValues())) {
-        gatewayLog = gatewayLog.replaceAll(value, "<fixture>");
-      }
-      await writeEvidence("failure.json", {
-        providerRequests: provider.requests,
-        providerFailures: provider.failures,
-        providerRoutes: provider.routes,
-        gatewayLog,
-      });
-      throw error;
-    }
-  }, 180_000);
+      }),
+    180_000,
+  );
 });
