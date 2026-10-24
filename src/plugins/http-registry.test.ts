@@ -381,91 +381,71 @@ describe("registerPluginHttpRoute", () => {
     expect(registry.httpRoutes).toHaveLength(2);
   });
 
-  it.each([false, true])(
-    "releases retired registry graphs captured by async resources (leased: %s)",
-    async (leased) => {
+  it.each([
+    { name: "retired HTTP", adopt: false, leased: false, withScope: withHttpRegistry },
+    { name: "leased HTTP", adopt: false, leased: true, withScope: withHttpRegistry },
+    { name: "adopted HTTP", adopt: true, leased: false, withScope: withHttpRegistry },
+    { name: "adopted Gateway", adopt: true, leased: false, withScope: withGatewayRegistry },
+  ])(
+    "collects captured registries and preserves $name authority",
+    async ({ adopt, leased, withScope }) => {
       class RetainedService {
         id = "retained-service";
         start() {}
       }
-      const lease = leased ? createPluginRuntimeCapabilityLease("retention test") : undefined;
-      const resources = Array.from({ length: 24 }, () => {
-        const registry = registryWithService(RetainedService);
-        const resource = withHttpRegistry(
-          registry,
-          () => new AsyncResource("plugin-http-retention"),
-          lease,
-        );
-        markPluginRegistryRetired(registry);
-        return resource;
-      });
       const currentRegistry = createEmptyPluginRegistry();
-      setActivePluginRegistry(currentRegistry);
+      const lease = leased ? createPluginRuntimeCapabilityLease("retention test") : undefined;
+      const captures = Array.from({ length: adopt ? 1 : 24 }, () => {
+        const registry = registryWithService(RetainedService);
+        const record = createPluginRecord({ id: "adopted-plugin" });
+        if (adopt) {
+          registry.plugins.push(record);
+        }
+        const instance = adopt ? new PluginInstance(record.id, { record, registry }) : undefined;
+        const handler = instance ? instance.wrap(() => true) : () => true;
+        const capture = () => new AsyncResource("plugin-http-retention");
+        const resource = leased
+          ? withHttpRegistry(registry, capture, lease)
+          : withScope(registry, capture);
+        if (adopt) {
+          currentRegistry.plugins.push(record);
+          markPluginRegistryActive(currentRegistry);
+        }
+        markPluginRegistryRetired(registry);
+        return { resource, instance, handler };
+      });
+      if (!adopt) {
+        setActivePluginRegistry(currentRegistry);
+      }
       try {
         // Weak references keep targets alive until the creating job ends.
         await setImmediate();
         expect(queryObjects(RetainedService)).toBe(0);
-        for (const resource of resources) {
-          expect(() =>
-            resource.runInAsyncScope(() =>
-              registerHttp({ path: "/retired-webhook", handler: () => true }),
-            ),
-          ).toThrow("plugin HTTP route owner is no longer active");
+        for (const { resource, handler } of captures) {
+          const register = () =>
+            resource.runInAsyncScope(() => registerHttp({ path: "/captured-webhook", handler }));
+          if (adopt) {
+            const unregister = register();
+            expect(currentRegistry.httpRoutes).toEqual([
+              {
+                path: "/captured-webhook",
+                auth: "plugin",
+                match: "exact",
+                handler: expect.any(Function),
+              },
+            ]);
+            unregister();
+          } else {
+            expect(register).toThrow("plugin HTTP route owner is no longer active");
+          }
         }
         expect(currentRegistry.httpRoutes).toHaveLength(0);
       } finally {
         lease?.revoke();
-        for (const resource of resources) {
+        for (const { resource, instance } of captures) {
           resource.emitDestroy();
+          await instance?.dispose();
         }
-      }
-    },
-  );
-
-  it.each([
-    { name: "HTTP", withScope: withHttpRegistry },
-    { name: "Gateway", withScope: withGatewayRegistry },
-  ])(
-    "registers through an adopted instance after its captured $name registry is collected",
-    async ({ withScope }) => {
-      class RetainedService {
-        id = "retired-service";
-        start() {}
-      }
-      const currentRegistry = createEmptyPluginRegistry();
-      const { resource, instance, handler } = (() => {
-        const registry = registryWithService(RetainedService);
-        const record = createPluginRecord({ id: "adopted-plugin" });
-        registry.plugins.push(record);
-        const adoptedInstance = new PluginInstance(record.id, { record, registry });
-        const adoptedHandler = adoptedInstance.wrap(() => true);
-        const capturedResource = withScope(
-          registry,
-          () => new AsyncResource("plugin-http-adoption"),
-        );
-        currentRegistry.plugins.push(record);
-        markPluginRegistryActive(currentRegistry);
-        markPluginRegistryRetired(registry);
-        return { resource: capturedResource, instance: adoptedInstance, handler: adoptedHandler };
-      })();
-      try {
-        await setImmediate();
-        expect(queryObjects(RetainedService)).toBe(0);
-        const unregister = resource.runInAsyncScope(() =>
-          registerHttp({ path: "/adopted-webhook", handler }),
-        );
-        expect(currentRegistry.httpRoutes).toEqual([
-          {
-            path: "/adopted-webhook",
-            auth: "plugin",
-            match: "exact",
-            handler: expect.any(Function),
-          },
-        ]);
-        unregister();
-      } finally {
-        resource.emitDestroy();
-        await instance.dispose();
       }
     },
   );

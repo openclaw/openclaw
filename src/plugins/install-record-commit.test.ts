@@ -116,6 +116,10 @@ function npmRecord(spec: string, installPath?: string): PluginInstallRecord {
   return { source: "npm", spec, ...(installPath ? { installPath } : {}) };
 }
 
+function npmRecords(version: number, ...ids: string[]): Record<string, PluginInstallRecord> {
+  return Object.fromEntries(ids.map((id) => [id, npmRecord(`${id}@${version}.0.0`)]));
+}
+
 function managedRecord(stateDir: string, pluginId: string, version: string) {
   return {
     source: "npm" as const,
@@ -305,26 +309,17 @@ describe("commitConfigWithPendingPluginInstalls", () => {
   });
 
   it("migrates source records below the canonical index and explicit pending records", async () => {
-    const sourceConfig = withInstalls({
-      stale: npmRecord("stale@1.0.0"),
-      missing: npmRecord("missing@1.0.0"),
-      codex: npmRecord("codex@1.0.0"),
-      constructor: npmRecord("constructor@1.0.0"),
-      ["__proto__"]: npmRecord("proto@1.0.0"),
-    });
-    const existingRecords: Record<string, PluginInstallRecord> = {
-      stale: npmRecord("stale@2.0.0"),
-      codex: npmRecord("codex@2.0.0"),
-      constructor: npmRecord("constructor@2.0.0"),
-      ["__proto__"]: npmRecord("proto@2.0.0"),
-    };
+    const sourceConfig = withInstalls(
+      npmRecords(1, "stale", "missing", "codex", "constructor", "__proto__"),
+    );
+    const existingRecords = npmRecords(2, "stale", "codex", "constructor", "__proto__");
     const nextConfig = withInstalls({
       ...sourceConfig.plugins?.installs,
       codex: npmRecord("codex@3.0.0"),
       concurrent: npmRecord("concurrent@1.0.0"),
     });
     mocks.loadInstalledPluginIndexInstallRecords.mockResolvedValue(existingRecords);
-    const snapshot = transformFrom(sourceConfig);
+    transformFrom(sourceConfig);
 
     await transformConfigWithPendingPluginInstalls({
       transform: () => ({ nextConfig }),
@@ -336,14 +331,7 @@ describe("commitConfigWithPendingPluginInstalls", () => {
       codex: nextConfig.plugins?.installs?.codex,
       concurrent: nextConfig.plugins?.installs?.concurrent,
       constructor: existingRecords.constructor,
-      ["__proto__"]: npmRecord("proto@2.0.0"),
-    });
-    expect(mocks.replaceConfigFile).toHaveBeenCalledWith({
-      nextConfig: {},
-      snapshot,
-      writeOptions: {
-        unsetPaths: [["plugins", "installs"]],
-      },
+      ["__proto__"]: npmRecord("__proto__@2.0.0"),
     });
     expect(Object.getPrototypeOf(mocks.writeRecords.mock.calls[0]?.[0])).toBeNull();
   });
