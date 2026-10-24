@@ -147,7 +147,7 @@ function prepareSlackConversationRouteOwner(
 }
 
 export const slackConversationRouteOwners = {
-  async prepareConversationRouteOwnersAsync(inputs, inspectBindings) {
+  prepareConversationRouteOwnersAsync: async (inputs, inspectBindings) => {
     const prepared = inputs.map(prepareSlackConversationRouteOwner);
     const refs = prepared.flatMap((item) =>
       item.kind === "prepared" && item.route.bindingsEnabled
