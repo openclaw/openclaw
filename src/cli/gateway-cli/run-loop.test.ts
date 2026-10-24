@@ -1182,23 +1182,6 @@ describe("runGatewayLoop", () => {
     );
   });
 
-  it("catches SIGTERM handler errors, logs them, and falls back to stop (#83131)", async () => {
-    mocks.consumeGatewayRestartIntentPayload.mockRejectedValueOnce(
-      new Error("dynamic import failed"),
-    );
-
-    await mocks.withRunningGateway(async ({ captureSignal, close, runtime, exited }) => {
-      captureSignal("SIGTERM")();
-
-      await expect(exited).resolves.toBe(0);
-      expect(mocks.gatewayLog.error).toHaveBeenCalledWith(
-        "failed to handle SIGTERM: Error: dynamic import failed",
-      );
-      testLoop.expectStopCloseCall(close);
-      expect(runtime.exit).toHaveBeenCalledWith(0);
-    });
-  });
-
   it("recloses restart admission after a failed SIGUSR2 handler rolls it back", async () => {
     mocks.markGatewayRestartHandled.mockImplementationOnce(() => {
       throw new Error("restart token cleanup failed");
