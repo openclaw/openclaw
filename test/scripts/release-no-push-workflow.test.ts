@@ -28,6 +28,7 @@ const LIVE_E2E = ".github/workflows/openclaw-live-and-e2e-checks-reusable.yml";
 const INSTALL_SMOKE = ".github/workflows/install-smoke.yml";
 const SHARED_IMAGE_PUBLISHER = ".github/workflows/openclaw-shared-image-publish-reusable.yml";
 const SCHEDULED_LIVE = ".github/workflows/openclaw-scheduled-live-checks.yml";
+const SCHEDULED_REPO_E2E = ".github/workflows/openclaw-scheduled-repo-e2e.yml";
 const DOCKER_RELEASE = ".github/workflows/docker-release.yml";
 const DOCKER_PREPARE = ".github/workflows/docker-release-prepare.yml";
 const UPDATE_MIGRATION = ".github/workflows/update-migration.yml";
@@ -1141,6 +1142,7 @@ describe("release validation no-push transport", () => {
       [INSTALL_SMOKE, "install_smoke"],
       [SCHEDULED_LIVE, "live_and_openwebui_checks"],
       [SCHEDULED_LIVE, "weekly_upgrade_survivors"],
+      [SCHEDULED_REPO_E2E, "repo_e2e"],
       [UPDATE_MIGRATION, "update_migration"],
     ] as const;
     for (const [workflowPath, jobName] of readOnlyCalls) {
@@ -1825,10 +1827,12 @@ describe("release validation no-push transport", () => {
   it("keeps Docker-save validation artifacts unreachable from package writers", () => {
     const liveWorkflow = readWorkflow(LIVE_E2E);
     const scheduled = readWorkflow(SCHEDULED_LIVE);
+    const scheduledRepoE2e = readWorkflow(SCHEDULED_REPO_E2E);
     expect(existsSync(SHARED_IMAGE_PUBLISHER)).toBe(false);
     expect(liveWorkflow.on?.workflow_call?.outputs?.publication_manifest).toBeUndefined();
     expect(liveWorkflow.jobs?.collect_shared_image_publication).toBeUndefined();
     expect(scheduled.jobs?.publish_shared_images).toBeUndefined();
+    expect(scheduledRepoE2e.jobs?.publish_shared_images).toBeUndefined();
 
     const scheduledWriters = Object.entries(scheduled.jobs ?? {})
       .filter(
@@ -1836,6 +1840,11 @@ describe("release validation no-push transport", () => {
       )
       .map(([name]) => name);
     expect(scheduledWriters).toEqual([]);
+    expect(
+      Object.values(scheduledRepoE2e.jobs ?? {}).filter(
+        (workflowJob) => permissionAt(workflowJob.permissions, "packages", "none") === "write",
+      ),
+    ).toEqual([]);
 
     const publisherCallers = readdirSync(".github/workflows")
       .filter((name) => name.endsWith(".yml") || name.endsWith(".yaml"))
@@ -1847,6 +1856,7 @@ describe("release validation no-push transport", () => {
     expect(publisherCallers).toEqual([]);
     expect(JSON.stringify(liveWorkflow.jobs)).not.toContain("docker image push");
     expect(JSON.stringify(scheduled.jobs)).not.toContain("docker image push");
+    expect(JSON.stringify(scheduledRepoE2e.jobs)).not.toContain("docker image push");
 
     const scheduledValidation = job(scheduled, "live_and_openwebui_checks");
     const weeklyUpgradeSurvivors = job(scheduled, "weekly_upgrade_survivors");
@@ -1864,6 +1874,15 @@ describe("release validation no-push transport", () => {
       shared_image_policy: "no-push-artifact",
     });
     expect(weeklyUpgradeSurvivors.secrets).toBeUndefined();
+    const repoE2e = job(scheduledRepoE2e, "repo_e2e");
+    expect(permissionAt(scheduledRepoE2e.permissions, "packages", "none")).toBe("read");
+    expectReadOnlyPackagePermission(repoE2e);
+    expect(repoE2e.with).toMatchObject({
+      allow_unreleased_changelog: true,
+      shared_image_artifact_namespace: "scheduled-repo-e2e",
+      shared_image_policy: "no-push-artifact",
+    });
+    expect(repoE2e.secrets).toBeUndefined();
 
     const dockerPrepare = readWorkflow(DOCKER_PREPARE);
     const attestedBuilds = Object.values(dockerPrepare.jobs ?? {}).flatMap((workflowJob) =>

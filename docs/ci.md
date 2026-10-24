@@ -50,6 +50,12 @@ import graph.
 This page is an index. CI is documented on nine pages, one per reader
 job. Open the page that matches your task.
 
+Full repository E2E runs separately in [OpenClaw Scheduled Repo E2E](/ci/scheduled-workflows#daily-repo-e2e)
+at 03:53 UTC daily. Its Gateway, UI, Agent plugin Gateway, and OpenShell failures
+are independent of the 04:23 live-provider workflow. Existing E2E compute moves
+to that caller; the split adds one selected-ref validation and one small hosted
+matrix-planning job per day, without changing runners or concurrency limits.
+
 Storage-engine PRs, scheduled main runs, and manual CI validations include three hosted PostgreSQL 17
 [conformance shards](/help/testing/suites#postgresql-conformance), required by the CI gate when selected.
 They run in parallel with separate databases and unchanged three-worker test limits,

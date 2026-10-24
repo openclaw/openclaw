@@ -208,6 +208,31 @@ The slot does not cover manual/PR iOS jobs or runs admitted by an older workflow
 This removes workflow admission blocking, not runner-capacity waits. No measured
 cost savings or strict completion interval is claimed.
 
+## Daily repo E2E
+
+`OpenClaw Scheduled Repo E2E` (`openclaw-scheduled-repo-e2e.yml`) runs daily
+at **03:53 UTC** (`53 3 * * *`) and on manual dispatch. It validates the selected
+SHA, plans the reusable workflow matrices, and runs the four Gateway shards,
+four UI shards, Agent plugin Gateway, and OpenShell repo E2E, with their existing
+build jobs. It passes no secrets and runs no live-provider suites, release-path
+Docker lanes, OpenWebUI, or release-evidence jobs. A red run is a repo E2E or its
+setup/build failure, not an unrelated live-provider failure.
+
+The 03:53 slot moves the existing daily repo E2E work away from the 04:23
+`OpenClaw Scheduled Live And E2E Checks` launch and the hourly `:23` CI burst.
+The live workflow retains live providers, OpenWebUI, release-path checks, and its
+weekly upgrade-survivor run. Runner sizes, shard counts, and concurrency limits
+are unchanged. The split adds one selected-ref validation job and one small
+hosted matrix-planning job per day; long runs and GitHub scheduling delays can
+still overlap.
+
+The triage owner is **@steipete**, following the named-owner convention for
+scheduled checks. Inspect the failed job and route product or fixture failures
+to its owner. GitHub sends scheduled-run notifications to the workflow creator
+or latest cron editor, subject to their Actions notification settings; it does
+not notify every maintainer. Keep those notifications enabled when taking
+ownership. See [GitHub's workflow notification rules](https://docs.github.com/en/actions/concepts/workflows-and-actions/notifications-for-workflow-runs).
+
 ## Weekly mobile store releases
 
 **iOS Store Release** and **Android Store Release** run every Monday at
