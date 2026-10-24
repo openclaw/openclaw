@@ -11,6 +11,8 @@ OpenClaw supports camera capture for agent workflows on paired **iOS**, **Androi
 
 When a capture request includes `deviceId`, the selected camera must match that ID exactly. An unknown ID fails instead of capturing from a different camera; run `camera.list` to refresh device IDs, which change when cameras are reconnected.
 
+`openclaw nodes camera list` accepts the device array under either `devices` (iOS, Android, Linux, macOS) or `cameras` (openclaw-windows-node). Windows payloads use PascalCase `DeviceId`/`Name` fields; the CLI maps them to `id`/`name` so a Windows node’s cameras appear without a node update.
+
 The macOS app can also physically pan, tilt, and zoom supported USB UVC cameras. PTZ moves the camera hardware; it does not rotate, crop, or otherwise transform a captured image.
 
 All camera access is gated behind a user-controlled setting per platform.
