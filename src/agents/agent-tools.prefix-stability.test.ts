@@ -11,6 +11,7 @@ import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { inspectOpenDictionaryToolSchemas } from "../plugins/tool-schema-diagnostics.js";
 import { createSessionConversationTestRegistry } from "../test-utils/session-conversation-registry.js";
 import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
+import { createAdmittedRunOperatorAuthority } from "./admitted-run-context.js";
 import { createOpenClawCodingTools } from "./agent-tools.js";
 import {
   applyCodeModeCatalog,
@@ -20,6 +21,7 @@ import {
 import { prepareConversationCapabilityProfile } from "./conversation-capability-profile.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
 import { clearToolSearchCatalog, createToolSearchCatalogRef } from "./tool-search-catalog.js";
+import { withGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
 
 vi.mock("./openclaw-plugin-tools.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./openclaw-plugin-tools.js")>()),
@@ -60,7 +62,7 @@ function surface(tools: ReturnType<typeof createOpenClawCodingTools>) {
   );
 }
 
-async function webchatSession() {
+async function webchatSession(clientKind: "browser" | "cli" = "browser") {
   const sessionKey = "agent:main:dashboard:prefix-proof";
   const store = path.join(sessionDirs.make(), "sessions.json");
   const sessionConfig: OpenClawConfig = { ...config, session: { store } };
@@ -75,7 +77,11 @@ async function webchatSession() {
       deriveSessionMetaPatch({ ctx, existing, sessionKey }),
     );
   const client = createSessionMutationTestClient();
-  client.connect.caps = ["ui-commands", "inline-widgets"];
+  if (clientKind === "cli") {
+    client.connect.client = { ...client.connect.client, id: "cli", mode: "cli" };
+  } else {
+    client.connect.caps = ["ui-commands", "inline-widgets"];
+  }
   const callerContext = resolveChatSendCallerContext(client, undefined, "webchat");
   await update(callerContext);
   const operator: ToolOptions = {
@@ -98,45 +104,68 @@ async function webchatSession() {
       sourceTool: "subagent_announce",
     },
   };
-  return { operator, wake, update, callerContext };
+  return { sessionKey, operator, wake, update, callerContext };
 }
 
-it("keeps the WebChat tool definitions and catalog across wakes and recovery", async () => {
-  const { operator, wake, update, callerContext } = await webchatSession();
-  const render = (options: ToolOptions) => {
-    const tools = createOpenClawCodingTools(options);
-    const catalogRef = createToolSearchCatalogRef();
-    const ctx = { config: options.config, catalogRef };
-    onTestFinished(() => clearToolSearchCatalog(ctx));
-    const compacted = applyCodeModeCatalog({
-      ...ctx,
-      tools: [...createCodeModeTools(ctx), ...tools],
-    });
-    return {
-      definitions: surface(tools),
-      compacted: surface(compacted.tools),
-      prompt: buildCodeModeCatalogPrompt(ctx, catalogRef.current?.entries ?? []),
+it.each(["browser", "cli"] as const)(
+  "keeps the %s WebChat catalog across wakes and recovery",
+  async (clientKind) => {
+    const { sessionKey, operator, wake, update, callerContext } = await webchatSession(clientKind);
+    const render = (options: ToolOptions) => {
+      const tools = createOpenClawCodingTools(options);
+      const catalogRef = createToolSearchCatalogRef();
+      const ctx = { config: options.config, catalogRef };
+      onTestFinished(() => clearToolSearchCatalog(ctx));
+      const compacted = applyCodeModeCatalog({
+        ...ctx,
+        tools: [...createCodeModeTools(ctx), ...tools],
+      });
+      return {
+        names: tools.map((tool) => tool.name),
+        definitions: surface(tools),
+        compacted: surface(compacted.tools),
+        prompt: buildCodeModeCatalogPrompt(ctx, catalogRef.current?.entries ?? []),
+      };
     };
-  };
-  const expected = render(operator);
-  expect(createOpenClawCodingTools(operator).map((tool) => tool.name)).toContain("screen");
-  await update({
-    Provider: "webchat",
-    GatewayClientCaps: [],
-    InputProvenance: wake.inputProvenance,
-  });
-  expect(render(wake)).toEqual(expected);
-  await update({
-    ...callerContext,
-    GatewayClientCaps: [],
-    InputProvenance: { kind: "internal_system", sourceTool: "main_session_restart_recovery" },
-  });
-  expect(render({ ...wake, inputProvenance: undefined, trigger: "event" })).toEqual(expected);
+    const operatorAuthority = createAdmittedRunOperatorAuthority({
+      profileId: "prefix-operator",
+      scopes: ["operator.write"],
+      signal: new AbortController().signal,
+      assertCurrent: () => {},
+    });
+    const expected = await withGatewayToolCallerIdentity(
+      { agentId: "main", sessionKey, operatorAuthority },
+      () => render(operator),
+    );
+    expect(expected.names).toContain("sessions_create");
+    expect(createOpenClawCodingTools(operator).some((tool) => tool.name === "screen")).toBe(
+      clientKind === "browser",
+    );
+    await update({
+      Provider: "webchat",
+      GatewayClientCaps: [],
+      InputProvenance: wake.inputProvenance,
+    });
+    const wakeSurface = render(wake);
+    expect(wakeSurface.names).toEqual(expected.names);
+    expect(wakeSurface).toEqual(expected);
+    const refused = await createOpenClawCodingTools(wake)
+      .find((tool) => tool.name === "sessions_create")!
+      .execute("wake-create", {});
+    expect(refused.details).toMatchObject({ gated: true });
+    expect(JSON.stringify(refused.content)).toContain("session write authority");
+    await update({
+      ...callerContext,
+      GatewayClientCaps: [],
+      InputProvenance: { kind: "internal_system", sourceTool: "main_session_restart_recovery" },
+    });
+    expect(render({ ...wake, inputProvenance: undefined, trigger: "event" })).toEqual(expected);
 
-  // A new operator declaration replaces the old client's capabilities.
-  await update({ ...callerContext, GatewayClientCaps: [] });
-  expect(createOpenClawCodingTools(operator).map((tool) => tool.name)).not.toContain("screen");
-});
+    // A new operator declaration replaces the old client's capabilities.
+    await update({ ...callerContext, GatewayClientCaps: [] });
+    expect(createOpenClawCodingTools(operator).map((tool) => tool.name)).not.toContain("screen");
+  },
+);
 
 it("refuses a wake-turn screen call without a requesting UI through the execution gate", async () => {
   const { wake } = await webchatSession();
