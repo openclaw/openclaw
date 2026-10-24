@@ -397,14 +397,14 @@ model configuration, provider credentials, and session access rules still apply.
 
 ## Composer capability menu
 
-Select **+** beside the chat composer to open attachments and session capabilities in one menu:
+Select **+** beside the chat or New Session composer to open one menu. **Attach** labels the available attachment actions, and **Capabilities** labels the session controls:
 
 - **Skills** enables or disables individual skills for this session.
 - **Plugins** enables or disables configured MCP servers for this session. A **session** tag marks values that differ from the inherited configuration.
 - **Web search** enables or disables managed web search plus native OpenAI and Codex search for this session.
 - **Manage plugins** opens the Plugins page.
 
-These controls are sparse session overrides, like the model and thinking settings in the chat header. A capability with no override inherits the current agent or global configuration, and OpenClaw applies the resolved values when the next run materializes its tools and skills. When overrides are set, open **+** and select **1 override** or **N overrides** at the bottom of the menu to clear all capability overrides for this session and return to inherited settings.
+These controls are sparse session overrides, like the model and thinking settings in the chat header. A capability with no override inherits the current agent or global configuration, and OpenClaw applies the resolved values when the next run materializes its tools and skills. When overrides are set, open **+** and select **1 override** or **N overrides** above **Manage plugins** to clear all capability overrides for this session and return to inherited settings.
 
 When `tools.web.search.enabled` is `false`, **Web search** stays off in Chat and New Session. The disabled control explains the global setting. If a session has an older enable override, selecting the control clears that override while search stays off. An explicit session disable remains saved.
 

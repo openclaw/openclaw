@@ -350,6 +350,22 @@
   color: var(--text);
 }
 
+.agent-chat__capability-menu-heading {
+  flex-shrink: 0;
+  padding: var(--chat-composer-menu-row-padding);
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 400;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+
+.agent-chat__capability-menu-item[data-value="manage-plugins"] > .oc-menu-item__label {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 400;
+}
+
 .agent-chat__capability-menu-divider {
   height: 1px;
   margin: 4px 6px;

@@ -48,6 +48,15 @@ function rootItems(menu: ChatComposerPlusMenuContentProps): MenuEntry[] {
   const entries: MenuEntry[] = [];
   const canUpload = uploadsEnabled(menu.attachments.uploadConfig);
   if (canUpload) {
+    entries.push({
+      kind: "content",
+      id: "attachment-heading",
+      content: (
+        <div class="agent-chat__capability-menu-heading">
+          {t("chat.composer.menu.attachSection")}
+        </div>
+      ),
+    });
     for (const [id, icon, label] of useSingleAttachmentPicker()
       ? ([["file", "paperclip", t("chat.composer.attach")]] as const)
       : ([
@@ -70,6 +79,15 @@ function rootItems(menu: ChatComposerPlusMenuContentProps): MenuEntry[] {
     if (canUpload) {
       entries.push(menuDivider("attachment-divider"));
     }
+    entries.push({
+      kind: "content",
+      id: "capability-heading",
+      content: (
+        <div class="agent-chat__capability-menu-heading">
+          {t("chat.composer.menu.capabilitiesSection")}
+        </div>
+      ),
+    });
     entries.push(...(menu.rootToggles ?? []).map(renderCapabilityToggleRow));
   }
   if (!menu.showCapabilities) {
@@ -130,19 +148,6 @@ function rootItems(menu: ChatComposerPlusMenuContentProps): MenuEntry[] {
       icon: "globe",
       checkbox: true,
     }),
-    menuDivider("manage-divider"),
-    {
-      id: "manage-plugins",
-      label: t("chat.composer.menu.managePlugins"),
-      href: pathForRoute("plugins", menu.basePath),
-      class: "agent-chat__capability-menu-item",
-      content: (
-        <span class="agent-chat__capability-menu-link">
-          {t("chat.composer.menu.managePlugins")}
-        </span>
-      ),
-      icon: <Icon name="plug" />,
-    },
   );
   const overrideCount = countSessionToolOverrides(menu.toolOverrides);
   if (overrideCount > 0) {
@@ -164,6 +169,16 @@ function rootItems(menu: ChatComposerPlusMenuContentProps): MenuEntry[] {
       closeOnSelect: false,
     });
   }
+  entries.push(menuDivider("manage-divider"), {
+    id: "manage-plugins",
+    label: t("chat.composer.menu.managePlugins"),
+    href: pathForRoute("plugins", menu.basePath),
+    class: "agent-chat__capability-menu-item",
+    content: (
+      <span class="agent-chat__capability-menu-link">{t("chat.composer.menu.managePlugins")}</span>
+    ),
+    icon: <Icon name="plug" />,
+  });
   return entries;
 }
 

@@ -2,6 +2,7 @@ import { createMemo, createSignal } from "solid-js";
 import { expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../../api/gateway.ts";
+import { createApplicationConfigCapability } from "../../../app/config.ts";
 import { projectMutableSource } from "../../../lib/reactive/projection.ts";
 import type { SessionToolOverrides } from "../../../lib/sessions/patch.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
@@ -90,6 +91,70 @@ it("keeps current editing state when suggestion rows load after dismissal", asyn
   await waitForSolid(() => expect(view.getByRole("option", { selected: true })).toBeTruthy());
   expect(view.getByRole("option", { selected: true }).textContent).toContain("/status");
 });
+
+it.each([
+  { uploads: true, capabilities: true, imagesOnly: false, headings: ["Attach", "Capabilities"] },
+  { uploads: true, capabilities: false, imagesOnly: true, headings: ["Attach"] },
+  { uploads: false, capabilities: true, imagesOnly: false, headings: ["Capabilities"] },
+  { uploads: false, capabilities: false, imagesOnly: false, headings: [] },
+])(
+  "labels only populated root sections (uploads=$uploads, capabilities=$capabilities)",
+  async ({ uploads, capabilities, imagesOnly, headings }) => {
+    const config = createApplicationConfigCapability({ resourceBasePath: "" });
+    const onPatchToolOverrides = vi.fn();
+    const view = mountSolid(() => (
+      <ChatComposerPlusMenu
+        menu={makeMenu({
+          open: true,
+          attachments: {
+            imagesOnly,
+            uploadConfig: { ...config, current: { ...config.current, uploadsEnabled: uploads } },
+          },
+          toolOverrides: capabilities ? { webSearch: false } : null,
+          capabilityMenu: capabilities ? makeCapabilities({ onPatchToolOverrides }) : undefined,
+        })}
+      />
+    ));
+    if (!headings.length) {
+      expect(view.queryByRole("button", { name: "Add attachment" })).toBeNull();
+      expect(view.queryByRole("separator", { hidden: true })).toBeNull();
+      return;
+    }
+    await waitForSolid(() =>
+      expect(
+        view.queryByRole("menuitem", {
+          name: uploads ? "Photo" : "Skills",
+          hidden: true,
+        }),
+      ).not.toBeNull(),
+    );
+    const labels = [
+      ...view.container.querySelectorAll<HTMLElement>(".agent-chat__capability-menu-heading"),
+    ];
+    expect(labels.map((label) => label.textContent)).toEqual(headings);
+    for (const label of labels) {
+      expect(label.tabIndex).toBe(-1);
+      expect(label.closest('[role^="menuitem"]')).toBeNull();
+    }
+    expect(view.queryAllByRole("separator", { hidden: true })).toHaveLength(
+      capabilities ? (uploads ? 2 : 1) : 0,
+    );
+    expect(view.queryByRole("menuitem", { name: "File", hidden: true }) !== null).toBe(
+      uploads && !imagesOnly,
+    );
+    if (capabilities) {
+      const items = view.container.querySelectorAll('[role^="menuitem"]');
+      expect(items[items.length - 1]?.textContent).toContain("Manage plugins");
+      expect(
+        view
+          .getByRole("menuitemcheckbox", { name: "Web search", hidden: true })
+          .getAttribute("aria-checked"),
+      ).toBe("false");
+      view.getByRole("menuitem", { name: "1 override", hidden: true }).click();
+      expect(onPatchToolOverrides).toHaveBeenCalledExactlyOnceWith(null);
+    }
+  },
+);
 
 it("uses the current focus policy on a retained suggestion option", () => {
   let setPreserveFocus!: (value: boolean) => void;

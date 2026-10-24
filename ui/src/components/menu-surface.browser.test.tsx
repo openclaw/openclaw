@@ -1,5 +1,7 @@
 import { createComponent, createSignal } from "solid-js";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { i18n } from "../i18n/index.ts";
+import { de } from "../i18n/locales/de.ts";
 import { subscribeNativeOverlayOcclusion } from "../lib/native-overlay-occlusion.ts";
 import { BrowserTabCardHost } from "../pages/chat/components/browser-tab-card.tsx";
 import { composerLibraryMenuItems } from "../pages/chat/components/chat-composer-library-menu.tsx";
@@ -357,6 +359,55 @@ describe.skipIf(!hasPopoverApi)("platform menu hover", () => {
       await hoverBackground(skills, attachmentHover);
     },
   );
+
+  it("wraps translated composer headings without adding keyboard stops", async () => {
+    await i18n.setLocale("en");
+    onTestFinished(async () => {
+      await i18n.setLocale("en");
+      i18n.registerTranslation("de", de);
+    });
+    i18n.registerTranslation("de", {
+      ...de,
+      chat: {
+        composer: {
+          menu: {
+            attachSection: "Vorhandene Dateien und Bilder anhängen",
+            capabilitiesSection: "Verfügbare Funktionen für diese Sitzung",
+          },
+        },
+      },
+    });
+    await i18n.setLocale("de");
+    const { host, page } = await themeFixture("dark", "440px 12px 0");
+    await page.viewport(320, 800);
+    mountSolid(
+      () => <ChatComposerPlusMenu menu={makeMenu({ capabilityMenu: makeCapabilities() })} />,
+      { container: host },
+    );
+    const trigger = host.querySelector<HTMLElement>('[aria-haspopup="menu"]')!;
+    await page.elementLocator(trigger).click();
+    await expect
+      .poll(() => host.querySelectorAll(".agent-chat__capability-menu-heading").length)
+      .toBe(2);
+    const panel = host.querySelector<HTMLElement>(".agent-chat__capability-menu-panel")!;
+    for (const heading of host.querySelectorAll<HTMLElement>(
+      ".agent-chat__capability-menu-heading",
+    )) {
+      const bounds = heading.getBoundingClientRect();
+      expect(heading.scrollWidth).toBeLessThanOrEqual(heading.clientWidth);
+      expect(bounds.left).toBeGreaterThanOrEqual(panel.getBoundingClientRect().left);
+      expect(bounds.right).toBeLessThanOrEqual(panel.getBoundingClientRect().right);
+      expect(heading.tabIndex).toBe(-1);
+    }
+    const { userEvent } = await import("vitest/browser");
+    host.querySelector<HTMLElement>('[data-value="photo"]')!.focus();
+    await userEvent.keyboard("{ArrowDown}");
+    await expect.poll(() => document.activeElement?.getAttribute("data-value")).toBe("file");
+    await userEvent.keyboard("{ArrowDown}");
+    await expect.poll(() => document.activeElement?.getAttribute("data-value")).toBe("open-skills");
+    await userEvent.keyboard("{Escape}");
+    await expect.poll(() => document.activeElement).toBe(trigger);
+  });
 
   it.each(["dark", "light"] as const)(
     "uses platform hover for library actions in %s mode",
