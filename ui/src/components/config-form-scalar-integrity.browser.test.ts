@@ -457,6 +457,48 @@ describe("config form scalar integrity", () => {
     }
   });
 
+  it("keeps a stored secret input focused across multiple keystrokes without a reveal control", async () => {
+    const { userEvent } = await import("vitest/browser");
+    const container = document.createElement("div");
+    document.body.append(container);
+    let value: unknown = "__OPENCLAW_REDACTED__";
+    const onPatch = vi.fn((_path: Array<string | number>, next: unknown) => {
+      value = next;
+      draw();
+      return true;
+    });
+    const draw = () =>
+      renderTextInputFixture(container, {
+        schema: { type: "string" },
+        value,
+        path: ["secret"],
+        hints: { secret: { sensitive: true } },
+        inputType: "text",
+        maskSensitive: true,
+        onPatch,
+        onRemove: vi.fn(),
+      });
+
+    try {
+      draw();
+      const input = () =>
+        expectElement(container.querySelector<HTMLInputElement>("input"), "secret input");
+      const replace = expectElement(
+        container.querySelector<HTMLButtonElement>('button[aria-label="Replace stored value"]'),
+        "replace stored secret button",
+      );
+      await userEvent.click(replace);
+      await userEvent.click(input());
+      await userEvent.keyboard("xy");
+
+      expect(value).toBe("xy");
+      expect(onPatch).toHaveBeenLastCalledWith(["secret"], "xy");
+      expect(document.activeElement).toBe(input());
+    } finally {
+      container.remove();
+    }
+  });
+
   it("keeps a stored secret when replacement is opened and abandoned", async () => {
     const { userEvent } = await import("vitest/browser");
     const container = document.createElement("div");
