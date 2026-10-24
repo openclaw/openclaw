@@ -47,7 +47,7 @@ export async function runPluginsListCommand(
     { getTerminalTableWidth, renderTable },
     { theme },
     { formatCliCommand },
-    { formatPluginLine, formatPluginStatus },
+    { formatPluginLine, formatPluginStatus, formatPluginTrustLabel },
   ] = await Promise.all([
     import("../plugins/source-display.js"),
     import("../../packages/terminal-core/src/table.js"),
@@ -106,6 +106,7 @@ export async function runPluginsListCommand(
         Status: formatPluginStatus(plugin),
         Source: desc ? `${formattedSource.value}\n${desc}` : formattedSource.value,
         Version: plugin.version ?? "",
+        Trust: formatPluginTrustLabel(plugin),
       };
     });
 
@@ -134,6 +135,7 @@ export async function runPluginsListCommand(
           { key: "Status", header: "Status", minWidth: 10 },
           { key: "Source", header: "Source", minWidth: 26, flex: true },
           { key: "Version", header: "Version", minWidth: 8 },
+          { key: "Trust", header: "Trust", minWidth: 12 },
         ],
         rows,
       }).trimEnd(),

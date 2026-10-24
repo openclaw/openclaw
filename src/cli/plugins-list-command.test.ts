@@ -8,6 +8,8 @@ type SnapshotPlugin = {
   enabled: boolean;
   commands?: string[];
   agentHarnessIds?: string[];
+  name?: string;
+  trust?: { reason: string; registryPath: string | null; origin: string } | undefined;
 };
 
 function mockPluginListSnapshot(
@@ -37,26 +39,41 @@ function mockPluginListSnapshot(
 }
 
 function mockHumanListModules(importedModules: string[] = []): void {
-  const identity = (value: string) => value;
-  const modules = {
-    "../plugins/source-display.js": {
-      formatPluginSourceForTable: vi.fn(),
+  // mock-isolation: source-display returns a stable source cell so table rows render without real plugin roots.
+  vi.doMock("../plugins/source-display.js", () => {
+    importedModules.push("source-display");
+    return {
+      formatPluginSourceForTable: vi.fn(() => ({
+        value: "/workspace/plugins",
+        rootKey: undefined,
+      })),
       resolvePluginSourceRoots: vi.fn(),
-    },
-    "../../packages/terminal-core/src/table.js": {
-      getTerminalTableWidth: vi.fn(),
-      renderTable: vi.fn(),
-    },
-    "../../packages/terminal-core/src/theme.js": { theme: { muted: identity, warn: identity } },
-    "./command-format.js": { formatCliCommand: (value: string) => `formatted(${value})` },
-    "./plugins-list-format.js": { formatPluginLine: vi.fn(), formatPluginStatus: vi.fn() },
-  };
-  for (const [module, exports] of Object.entries(modules)) {
-    vi.doMock(module, () => {
-      importedModules.push(module);
-      return exports;
-    });
-  }
+    };
+  });
+  // Only stub terminal width; the real renderTable covers column layout and wrapping.
+  vi.doMock("../../packages/terminal-core/src/table.js", async (importOriginal) => {
+    importedModules.push("table");
+    const actual =
+      await importOriginal<typeof import("../../packages/terminal-core/src/table.js")>();
+    return { ...actual, getTerminalTableWidth: () => 120 };
+  });
+
+  // mock-isolation: only formatCliCommand is replaced so rendered help text stays deterministic.
+  vi.doMock("./command-format.js", async (importOriginal) => {
+    importedModules.push("command-format");
+    const actual = await importOriginal<typeof import("./command-format.js")>();
+    return { ...actual, formatCliCommand: (value: string) => `formatted(${value})` };
+  });
+  // mock-isolation: only formatPluginLine is stubbed (verbose path); table formatters use real implementations.
+  vi.doMock("./plugins-list-format.js", async (importOriginal) => {
+    importedModules.push("plugins-list-format");
+    const actual = await importOriginal<typeof import("./plugins-list-format.js")>();
+    return {
+      formatPluginLine: vi.fn(),
+      formatPluginStatus: actual.formatPluginStatus,
+      formatPluginTrustLabel: actual.formatPluginTrustLabel,
+    };
+  });
 }
 
 async function runList(options: PluginsListOptions) {
@@ -140,4 +157,27 @@ it("makes omitted workspace plugin scope visible in human output", async () => {
     "",
     "No plugins found. Run formatted(openclaw plugins install <plugin>) to add one, or formatted(openclaw plugins list --json) to inspect raw discovery state.",
   ]);
+});
+
+it("includes a trust column with recorded reasons in the table output", async () => {
+  mockPluginListSnapshot([
+    {
+      id: "trusted",
+      enabled: true,
+      name: "Trusted Plugin",
+      trust: { reason: "trusted-official", registryPath: null, origin: "global" },
+    },
+    {
+      id: "untrusted",
+      enabled: true,
+      name: "Untrusted Plugin",
+      trust: { reason: "provenance-missing", registryPath: null, origin: "global" },
+    },
+  ]);
+  const writes = await runList({});
+
+  const tableOutput = writes.find((entry) => typeof entry === "string" && entry.includes("Trust"));
+  expect(String(tableOutput)).toContain("Trust");
+  expect(String(tableOutput)).toContain("trusted-official");
+  expect(String(tableOutput)).toContain("provenance-missing");
 });

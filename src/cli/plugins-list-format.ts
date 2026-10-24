@@ -4,6 +4,15 @@ import type { PluginBundleFormat } from "../plugins/manifest-types.js";
 import type { PluginRecord } from "../plugins/registry.js";
 import { shortenHomePath } from "../utils.js";
 
+/** Compact trust label shown in list/table output; empty when no trust record exists. */
+export function formatPluginTrustLabel(plugin: Pick<PluginRecord, "trust">): string {
+  if (!plugin.trust) {
+    return "";
+  }
+  const trusted = plugin.trust.reason === "bundled" || plugin.trust.reason === "trusted-official";
+  return trusted ? theme.success(plugin.trust.reason) : theme.warn(plugin.trust.reason);
+}
+
 export function formatPluginBundleFormat(bundleFormat: PluginBundleFormat): string {
   return bundleFormat === "agent" ? "agent (Agent Plugins)" : bundleFormat;
 }
@@ -39,6 +48,10 @@ export function formatPluginLine(plugin: PluginRecord): string {
   }
   if (plugin.version) {
     parts.push(`  version: ${plugin.version}`);
+  }
+  const trustLabel = formatPluginTrustLabel(plugin);
+  if (trustLabel) {
+    parts.push(`  trust: ${trustLabel}`);
   }
   for (const [label, value] of [
     ["activated", plugin.activated],
