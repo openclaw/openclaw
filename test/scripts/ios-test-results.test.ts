@@ -36,6 +36,8 @@ function result(cases: unknown[], bundleOverrides: Record<string, unknown> = {})
     ],
   };
 }
+const passed = (ids: string[]) =>
+  ids.map((testIdentifier) => ({ testIdentifier, testResult: "Passed" }));
 
 const childRuns = (nodeType: string, ...results: string[]) => ({
   children: results.map((runResult) => ({ nodeType, result: runResult })),
@@ -48,17 +50,12 @@ describe("exact XCTest results", () => {
         result([testCase(QUALIFICATION_TEST, childRuns("Test Case Run", "Passed"))]),
         [QUALIFICATION_TEST],
       ),
-    ).toEqual([{ testIdentifier: QUALIFICATION_TEST, testResult: "Passed" }]);
+    ).toEqual(passed([QUALIFICATION_TEST]));
   });
 
   it("returns all four screenshot methods in requested order regardless of XCTest order", () => {
     const tree = result(SCREENSHOT_TESTS.toSorted().map((identifier) => testCase(identifier)));
-    expect(requireExactTestResults(tree, SCREENSHOT_TESTS)).toEqual([
-      { testIdentifier: SCREENSHOT_TESTS[0], testResult: "Passed" },
-      { testIdentifier: SCREENSHOT_TESTS[1], testResult: "Passed" },
-      { testIdentifier: SCREENSHOT_TESTS[2], testResult: "Passed" },
-      { testIdentifier: SCREENSHOT_TESTS[3], testResult: "Passed" },
-    ]);
+    expect(requireExactTestResults(tree, SCREENSHOT_TESTS)).toEqual(passed(SCREENSHOT_TESTS));
   });
 
   it.each([
