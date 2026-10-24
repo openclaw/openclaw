@@ -76,8 +76,8 @@ it("serializes concurrent Settings builders with checkout artifact writers", asy
     const codes = await Promise.all(builders.map((builder) => builder.done));
     expect(codes, builders.map((builder) => builder.output()).join("\n")).toEqual([0, 0]);
   }
-  const distribution = fixtureFiles(files.at("dist/extensions/fixture"));
-  const manifest = distribution.json("openclaw.plugin.json");
+  const distribution = fixtureFiles(files.file("dist/extensions/fixture"));
+  const manifest = JSON.parse(distribution.read("openclaw.plugin.json"));
   expect(manifest.controlUi.settingsViews).toEqual([{ section: "memory", panel: "overview" }]);
   expect(distribution.read(manifest.controlUi.entry)).toContain("Fixture");
   expect(

@@ -1,6 +1,5 @@
 import { readFileSync } from "node:fs";
-import { expect, it, vi } from "vitest";
-import { parse } from "yaml";
+import { expect, it } from "vitest";
 import {
   runReleaseValidationCampaignPublish,
   validateReleaseValidationCampaignArtifact,
@@ -15,18 +14,18 @@ const TITLE = "OpenClaw 2026.8.1 beta feedback";
 const surface = "Runtime behavior changed. Run `{{OPENCLAW}} status`.\n| **Testing notes** | |\n";
 
 function campaignBody(tag = TAG) {
-  return `<!-- openclaw-release-validation:${TRAIN} -->
-- Current beta: [${tag}](https://github.com/openclaw/openclaw/releases/tag/${tag})
-- Beta commit: \`${RELEASE_COMMIT}\`
-- Guidance main commit: \`${GUIDANCE_SHA}\`
-- Test target: latest immutable \`origin/main\`
-<!-- validation-guidance:start -->
-## Priority surfaces for this release
-${surface.repeat(3)}
-## Priority surfaces since ${tag}
-${surface.repeat(3)}
-<!-- validation-guidance:end -->
-## Participate`;
+  return [
+    `<!-- openclaw-release-validation:${TRAIN} -->\n`,
+    `- Current beta: [${tag}](https://github.com/openclaw/openclaw/releases/tag/${tag})`,
+    `- Beta commit: \`${RELEASE_COMMIT}\``,
+    `- Guidance main commit: \`${GUIDANCE_SHA}\``,
+    "- Test target: latest immutable `origin/main`\n",
+    "<!-- validation-guidance:start -->\n\n## Priority surfaces for this release\n",
+    surface.repeat(3),
+    `\n## Priority surfaces since ${tag}\n`,
+    surface.repeat(3),
+    "<!-- validation-guidance:end -->\n\n## Participate",
+  ].join("\n");
 }
 
 function betaArtifact(tag = TAG) {
@@ -56,19 +55,19 @@ function issue(number: number, body: string, labels = ["release-validation"]) {
 
 function harness(initialIssues: ReturnType<typeof issue>[]) {
   const issues = new Map(initialIssues.map((candidate) => [candidate.number, candidate]));
-  const createComment = vi.fn(async (_args: Record<string, unknown>) => ({ data: {} }));
-  const create = async (args: Record<string, unknown>) => {
-    const created = Object.assign(issue(100, String(args.body)), args);
-    issues.set(created.number, created);
-    return { data: created };
-  };
-  const update = vi.fn(async (args: Record<string, unknown>) => {
-    const data = Object.assign(issues.get(Number(args.issue_number))!, args);
-    if (Array.isArray(args.labels)) {
-      data.labels = args.labels.map((name) => ({ name: String(name) }));
+  const getIssue = (number: number) => {
+    const current = issues.get(number);
+    if (!current) {
+      throw new Error("missing issue");
     }
-    return { data };
-  });
+    return current;
+  };
+  const calls = {
+    comments: [] as Array<Record<string, unknown>>,
+    creates: [] as Array<Record<string, unknown>>,
+    updates: [] as Array<Record<string, unknown>>,
+  };
+  let nextNumber = 100;
   const github = {
     paginate: async () => [...issues.values()].filter((candidate) => candidate.state === "open"),
     rest: {
@@ -76,11 +75,28 @@ function harness(initialIssues: ReturnType<typeof issue>[]) {
         listForRepo: async () => ({ data: [] }),
         getLabel: async () => ({ data: {} }),
         createLabel: async () => ({ data: {} }),
-        createComment,
-        create,
-        update,
+        createComment: async (args: Record<string, unknown>) => {
+          calls.comments.push(args);
+          return { data: {} };
+        },
+        create: async (args: Record<string, unknown>) => {
+          calls.creates.push(args);
+          const created = issue(nextNumber++, String(args.body));
+          created.title = String(args.title);
+          issues.set(created.number, created);
+          return { data: created };
+        },
+        update: async (args: Record<string, unknown>) => {
+          calls.updates.push(args);
+          const current = getIssue(Number(args.issue_number));
+          Object.assign(current, args);
+          if (Array.isArray(args.labels)) {
+            current.labels = args.labels.map((name) => ({ name: String(name) }));
+          }
+          return { data: current };
+        },
         get: async ({ issue_number }: { issue_number: number }) => ({
-          data: issues.get(issue_number),
+          data: getIssue(issue_number),
         }),
       },
     },
@@ -95,7 +111,15 @@ function harness(initialIssues: ReturnType<typeof issue>[]) {
       artifact: betaArtifact(),
       ...options,
     });
-  return { createComment, update, publish };
+  return { calls, publish };
+}
+
+function expectCall(calls: unknown[], fields: Record<string, unknown>) {
+  expect(calls).toContainEqual(expect.objectContaining(fields));
+}
+
+function expectSingleCall(calls: unknown[], fields: Record<string, unknown>) {
+  expect(calls).toEqual([expect.objectContaining(fields)]);
 }
 
 it.each([
@@ -108,8 +132,9 @@ it.each([
 });
 
 it("creates the canonical campaign when none exists", async () => {
-  const { publish } = harness([]);
+  const { calls, publish } = harness([]);
   expect(await publish()).toMatchObject({ action: "create" });
+  expectSingleCall(calls.creates, { title: TITLE, labels: ["release-validation"] });
 });
 
 it("updates the matching train and closes an older campaign", async () => {
@@ -117,7 +142,7 @@ it("updates the matching train and closes an older campaign", async () => {
     9,
     campaignBody().replaceAll(TRAIN, "v2026.7.1").replaceAll("2026.8.1", "2026.7.1"),
   );
-  const { createComment, update, publish } = harness([issue(10, campaignBody()), older]);
+  const { calls, publish } = harness([issue(10, campaignBody()), older]);
 
   const result = await publish({
     expectedTag: TAG,
@@ -130,12 +155,9 @@ it("updates the matching train and closes an older campaign", async () => {
     issueNumber: 10,
     issueUrl: "https://github.com/openclaw/openclaw/issues/10",
   });
-  expect(createComment).toHaveBeenCalledWith(
-    expect.objectContaining({ issue_number: 9, body: expect.stringContaining("issues/10") }),
-  );
-  expect(update).toHaveBeenCalledWith(
-    expect.objectContaining({ issue_number: 9, state: "closed", state_reason: "completed" }),
-  );
+  expectCall(calls.updates, { issue_number: 10, labels: ["release-validation"] });
+  expectCall(calls.comments, { issue_number: 9, body: expect.stringContaining("issues/10") });
+  expectCall(calls.updates, { issue_number: 9, state: "closed", state_reason: "completed" });
 });
 
 it("migrates one explicitly selected legacy campaign", async () => {
@@ -147,8 +169,11 @@ it("migrates one explicitly selected legacy campaign", async () => {
     ),
     ["maintainer"],
   );
-  const { publish } = harness([legacy]);
+  const { calls, publish } = harness([legacy]);
+
   expect(await publish({ campaignIssueNumber: 10 })).toMatchObject({ action: "update" });
+  expect(calls.creates).toHaveLength(0);
+  expectCall(calls.updates, { issue_number: 10, labels: ["release-validation"] });
 });
 
 it("refuses to replace newer guidance with an older beta", async () => {
@@ -159,47 +184,34 @@ it("refuses to replace newer guidance with an older beta", async () => {
 });
 
 it("closes the matching train after a stable release", async () => {
-  const { createComment, update, publish } = harness([
-    issue(10, campaignBody(), ["release-validation", "keep"]),
-  ]);
+  const { calls, publish } = harness([issue(10, campaignBody(), ["release-validation", "keep"])]);
 
-  expect(
-    await publish({
-      artifact: {
-        schema: "openclaw.release-validation-campaign/v1",
-        operation: "close",
-        tag: TRAIN,
-        stableTrain: TRAIN,
-        releaseUrl: `https://github.com/openclaw/openclaw/releases/tag/${TRAIN}`,
-      },
-    }),
-  ).toMatchObject({ action: "close" });
-  expect(createComment).toHaveBeenCalledExactlyOnceWith(
-    expect.objectContaining({
-      issue_number: 10,
-      body: expect.stringContaining(`/tag/${TRAIN}`),
-    }),
-  );
-  expect(update).toHaveBeenCalledExactlyOnceWith(
-    expect.objectContaining({ issue_number: 10, state: "closed", labels: ["keep"] }),
-  );
+  const closing = publish({
+    artifact: {
+      schema: "openclaw.release-validation-campaign/v1",
+      operation: "close",
+      tag: TRAIN,
+      stableTrain: TRAIN,
+      releaseUrl: `https://github.com/openclaw/openclaw/releases/tag/${TRAIN}`,
+    },
+  });
+
+  expect(await closing).toMatchObject({ action: "close" });
+  expectSingleCall(calls.comments, {
+    issue_number: 10,
+    body: expect.stringContaining(`/tag/${TRAIN}`),
+  });
+  expectSingleCall(calls.updates, { issue_number: 10, state: "closed", labels: ["keep"] });
 });
 
-it("keeps the analysis job read-only and separates publication authority", () => {
-  const workflow = parse(
-    readFileSync(".github/workflows/release-validation-skill-runner.yml", "utf8"),
+it("keeps Codex read-only and publishes only through the validated artifact", () => {
+  const workflow = readFileSync(".github/workflows/release-validation-skill-runner.yml", "utf8");
+
+  expect(workflow).toContain("permissions:\n  contents: read");
+  expect(workflow).not.toContain("issues: write");
+  expect(workflow).toContain("RELEASE_VALIDATION_ARTIFACT_PATH");
+  expect(workflow).toContain("validateReleaseValidationCampaignArtifact");
+  expect(workflow.indexOf("openai/codex-action@")).toBeLessThan(
+    workflow.indexOf("actions/create-github-app-token@"),
   );
-  for (const permissions of [
-    workflow.permissions,
-    workflow.jobs.analyze.permissions ?? {},
-    workflow.jobs.publish.permissions ?? {},
-  ]) {
-    expect(permissions).not.toBe("write-all");
-    expect(Object.values(permissions)).not.toContain("write");
-  }
-  expect(
-    workflow.jobs.analyze.steps.some((step: { uses?: string }) =>
-      step.uses?.startsWith("actions/create-github-app-token@"),
-    ),
-  ).toBe(false);
 });

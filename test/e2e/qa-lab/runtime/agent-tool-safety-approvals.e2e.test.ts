@@ -155,9 +155,7 @@ describe("agent tool safety approvals", () => {
       expect(getBeforeToolCallFailureDisposition(denied)).toBe("blocked");
       expect(execute).not.toHaveBeenCalled();
       expect(broker.listPending()).toEqual([]);
-      expect(resolutions).toEqual([
-        { toolCallId: "call-deny", resolution: PluginApprovalResolutions.DENY },
-      ]);
+      expect(resolutions).toEqual([{ toolCallId: "call-deny", resolution: "deny" }]);
       expect(brokerEvents.at(-1)).toMatchObject({
         event: "plugin.approval.resolved",
         payload: { id: pending.id, decision: "deny", request: pending.request },

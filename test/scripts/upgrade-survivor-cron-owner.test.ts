@@ -80,8 +80,36 @@ it.each([
       return;
     }
     expect(result.status, result.stdout + result.stderr).toBe(0);
-    const rows = db.prepare("SELECT job_json FROM cron_jobs ORDER BY sort_order").all();
-    expect(rows.length).toBeGreaterThan(0);
+    const rows = db
+      .prepare("SELECT job_id, agent_id, job_json FROM cron_jobs ORDER BY sort_order")
+      .all();
+    expect(rows.map((row) => [row.job_id, row.agent_id])).toEqual([
+      ["owner-proof-historical", null],
+      ["owner-proof-explicit", "research"],
+      ["owner-proof-session", null],
+      ["owner-proof-sql-owner", "research"],
+      ...["missing", "null", "alias", "announce-case", "none-case", "webhook-case"].map((name) => [
+        `owner-proof-delivery-${name}`,
+        "ops",
+      ]),
+    ]);
+    expect(JSON.parse(String(rows[0]?.job_json))).not.toHaveProperty("agentId");
+    expect(JSON.parse(String(rows[2]?.job_json))).toHaveProperty(
+      "sessionKey",
+      "agent:research:main",
+    );
+    expect(JSON.parse(String(rows[3]?.job_json))).not.toHaveProperty("agentId");
+    const deliveries = rows.slice(4).map((row) => JSON.parse(String(row.job_json)).delivery);
+    expect(deliveries).toEqual([
+      ...[undefined, null, "deliver", " ANNOUNCE "].map((mode) =>
+        Object.assign(
+          { channel: "telegram", to: "synthetic-target" },
+          mode === undefined ? {} : { mode },
+        ),
+      ),
+      { mode: " NoNe " },
+      { mode: " WeBhOoK ", to: "https://example.invalid/cron" },
+    ]);
     const saved = readJson(f.configPath);
     expect(saved.agents).not.toHaveProperty("ownership");
     expect(saved.agents.entries.ops.default).toBe(true);
@@ -129,12 +157,23 @@ ${source.slice(start, end)}
       10_000,
     );
     const phases = readFileSync(events, "utf8").trim().split("\n");
-    const assertion = phases.indexOf("assert-cron-owner-update");
-    const before = (first: string, last: string) => {
-      expect(phases.indexOf(first)).toBeGreaterThanOrEqual(0);
-      expect(phases.indexOf(last)).toBeGreaterThan(phases.indexOf(first));
+    const ordered = (...names: string[]) => {
+      names.forEach((name, index) => {
+        const previous = names[index - 1];
+        expect(phases.indexOf(name)).toBeGreaterThanOrEqual(0);
+        expect(phases.indexOf(name)).toBeGreaterThan(
+          previous === undefined ? -1 : phases.indexOf(previous),
+        );
+      });
     };
-    before("update-cron-owner-candidate", "assert-cron-owner-update");
+    ordered(
+      "seed-cron-owner-session",
+      "cron-owner-baseline-gateway-stop",
+      "seed-cron-owner-state",
+      "backup-cron-owner-state",
+      "update-cron-owner-candidate",
+      "assert-cron-owner-update",
+    );
     if (failAssertion) {
       expect(result.status).toBe(42);
       expect(phases).not.toContain("cron-owner-repeat-doctor");
@@ -142,10 +181,13 @@ ${source.slice(start, end)}
       expect(result.stdout).not.toContain("Cron ownership survived");
     } else {
       expect(result.status, result.stdout + result.stderr).toBe(0);
-      expect(phases.indexOf("cron-owner-repeat-doctor")).toBeGreaterThan(assertion);
-      before("assert-cron-owner-idempotence", "cron-owner-candidate-gateway-start");
-      before("cron-owner-candidate-gateway-start", "cron-owner-candidate-startup");
-      before("cron-owner-candidate-startup", "run-cron-owner-runtime");
+      ordered("assert-cron-owner-update", "cron-owner-repeat-doctor");
+      ordered(
+        "assert-cron-owner-idempotence",
+        "cron-owner-candidate-gateway-start",
+        "cron-owner-candidate-startup",
+        "run-cron-owner-runtime",
+      );
       expect(readFileSync(path.join(root, "startup-arguments"), "utf8").trim().split("\n")).toEqual(
         [
           "cron-owner-candidate-startup",
@@ -155,7 +197,7 @@ ${source.slice(start, end)}
           path.join(root, "cron-owner-startup.json"),
         ],
       );
-      before("cron-owner-candidate-gateway-stop", "assert-cron-owner-runtime");
+      ordered("cron-owner-candidate-gateway-stop", "assert-cron-owner-runtime");
     }
   },
 );

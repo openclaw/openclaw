@@ -1,7 +1,21 @@
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  copyFileSync,
+  existsSync,
+  linkSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  symlinkSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
+import { restoreDoctorMigrationBackup } from "../../src/commands/doctor-migration-backup-restore.js";
 import { CLIENT_CREDENTIAL_LEGACY_TABLES_SQL } from "../../src/infra/client-credential-schema.js";
 import { generateStoredDeviceIdentity } from "../../src/infra/device-identity-material.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../../src/state/openclaw-state-db-contract.js";
@@ -32,7 +46,7 @@ function extractUnclassifiedWrapper() {
 }
 
 describePosix("repository-owned PR provisioning state", () => {
-  it.each(schemaCases)("preserves private schema v%i state from %s", (version, source) => {
+  it.each(schemaCases)("preserves private schema v%i state from %s", async (version, source) => {
     const f = createProvisionOwnerFixture(
       tempDirs.make("openclaw-pr-schema-"),
       "native",
@@ -100,6 +114,16 @@ describePosix("repository-owned PR provisioning state", () => {
         ).toBeUndefined();
       }
     }
+    if (version === 28) {
+      await restoreDoctorMigrationBackup({
+        sourcePath: databasePath,
+        backupPath: join(stateDir, "state", backups[0]!),
+        env: { ...f.env, OPENCLAW_STATE_DIR: stateDir },
+      });
+      using restored = new DatabaseSync(databasePath, { readOnly: true });
+      expect(restored.prepare("SELECT * FROM device_identities").all()).toEqual([identityRow]);
+      expect(restored.prepare("PRAGMA user_version").get()).toEqual({ user_version: 28 });
+    }
     expect(existsSync(join(f.home, ".openclaw"))).toBe(false);
   });
 
@@ -115,18 +139,31 @@ describePosix("repository-owned PR provisioning state", () => {
       expectProvisionComplete(f);
     },
   );
-  it.each(["native", "managed"] as const)(
-    "isolates %s state from HOME and operator overrides",
-    (mode) => {
+  it.each([
+    { mode: "native", override: false },
+    { mode: "native", override: true },
+    { mode: "managed", override: false },
+    { mode: "managed", override: true },
+  ] as const)(
+    "isolates $mode state from HOME (operator override=$override)",
+    ({ mode, override }) => {
       const f = createProvisionOwnerFixture(tempDirs.make("openclaw-pr-state-"), mode);
       // On supported filesystems, this also exercises the template registry writer.
       writeFileSync(f.env.OPENCLAW_CONFIG_PATH!, "{}\n");
       const operator = join(f.root, "operator-state");
-      mkdirSync(operator);
-      writeFileSync(join(operator, "operator-evidence"), "leave untouched");
-      f.env.OPENCLAW_STATE_DIR = operator;
+      if (override) {
+        mkdirSync(operator);
+        writeFileSync(join(operator, "operator-evidence"), "leave untouched");
+        f.env.OPENCLAW_STATE_DIR = operator;
+      } else {
+        delete f.env.OPENCLAW_CONFIG_PATH;
+      }
       // The native entrypoints carry explicit argv binding, not NODE_OPTIONS.
-      f.env.NODE_OPTIONS = "--no-warnings";
+      if (override) {
+        f.env.NODE_OPTIONS = "--no-warnings";
+      } else {
+        delete f.env.NODE_OPTIONS;
+      }
       const result = f.run();
       expect(result.status, result.stderr).toBe(0);
       f.isolation.assertProvisioner();
@@ -134,24 +171,70 @@ describePosix("repository-owned PR provisioning state", () => {
       expect(existsSync(join(f.canonical, ".local", "pr-state", "state", "openclaw.sqlite"))).toBe(
         true,
       );
-      expect(readdirSync(operator)).toEqual(["operator-evidence"]);
-      expect(readFileSync(join(operator, "operator-evidence"), "utf8")).toBe("leave untouched");
+      if (override) {
+        expect(readdirSync(operator)).toEqual(["operator-evidence"]);
+        expect(readFileSync(join(operator, "operator-evidence"), "utf8")).toBe("leave untouched");
+      } else {
+        expect(existsSync(operator)).toBe(false);
+      }
     },
   );
 
-  it("refuses a stripped handoff binding before opening either store", () => {
-    const f = createProvisionOwnerFixture(tempDirs.make("openclaw-pr-binding-identity-"));
-    const quote = (value: string) => `'${value.replace(/'/gu, `'\\''`)}'`;
-    // Keep the observer but remove this child's resolver; a parent witness cannot qualify it.
-    writeFileSync(
-      join(f.isolation.bin, "node"),
-      `#!/bin/sh\nexec ${quote(requireNodeTool("node"))} ${quote(f.isolation.nodeArgs[1]!)} "$@"\n`,
-    );
+  it.each(["stripped", "missing", "replaced"] as const)(
+    "refuses a %s handoff binding before opening either store",
+    (fault) => {
+      const f = createProvisionOwnerFixture(tempDirs.make("openclaw-pr-binding-identity-"));
+      const preload = fileURLToPath(f.isolation.binding.nodeOption.slice("--import=".length));
+      if (fault === "stripped") {
+        const quote = (value: string) => `'${value.replace(/'/gu, `'\\''`)}'`;
+        // Keep the observer but remove this child's resolver; a parent witness cannot qualify it.
+        writeFileSync(
+          join(f.isolation.bin, "node"),
+          `#!/bin/sh\nexec ${quote(requireNodeTool("node"))} ${quote(f.isolation.nodeArgs[1]!)} "$@"\n`,
+        );
+      } else if (fault === "missing") {
+        unlinkSync(preload);
+      } else {
+        const retained = join(f.root, "replaced-handoff");
+        renameSync(f.isolation.binding.directory, retained);
+        mkdirSync(f.isolation.binding.directory, { mode: 0o700 });
+        copyFileSync(join(retained, "handoff-resolver-preload.mjs"), preload);
+      }
+      const result = f.run();
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toMatch(
+        fault === "stripped"
+          ? /Missing private provisioner handoff preload/
+          : fault === "missing"
+            ? /ERR_MODULE_NOT_FOUND/
+            : /directory identity changed/,
+      );
+      expect(readFileSync(f.isolation.observations, "utf8")).toBe("");
+      expect(existsSync(f.isolation.binding.databasePath)).toBe(false);
+      expect(existsSync(f.isolation.stateDatabase)).toBe(false);
+    },
+  );
+
+  it.each([
+    { kind: "symlink", suffix: "" },
+    { kind: "hardlink", suffix: "" },
+    { kind: "symlink", suffix: "-wal" },
+    { kind: "hardlink", suffix: "-wal" },
+  ] as const)("refuses a handoff $kind $suffix before store access", ({ kind, suffix }) => {
+    const f = createProvisionOwnerFixture(tempDirs.make("openclaw-pr-binding-alias-"));
+    const target = join(f.root, "private-negative-control");
+    writeFileSync(target, "do not open", { mode: 0o600 });
+    const alias = f.isolation.binding.databasePath + suffix;
+    if (kind === "symlink") {
+      symlinkSync(target, alias);
+    } else {
+      linkSync(target, alias);
+    }
     const result = f.run();
     expect(result.status).not.toBe(0);
-    expect(result.stderr).toMatch(/Missing private provisioner handoff preload/);
+    expect(result.stderr).toMatch(/database (alias|hardlink) is forbidden/);
+    expect(readFileSync(target, "utf8")).toBe("do not open");
     expect(readFileSync(f.isolation.observations, "utf8")).toBe("");
-    expect(existsSync(f.isolation.binding.databasePath)).toBe(false);
     expect(existsSync(f.isolation.stateDatabase)).toBe(false);
   });
 });
