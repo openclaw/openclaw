@@ -277,6 +277,22 @@ export function createGatewayHttpRequestHandler(
       const pluginPathContext = resolvePluginRoutePathContext(scopedRequestPath);
       const nodeCapability = resolvePluginNodeCapabilityRoute?.(pluginPathContext);
       if (ingressAttribution.kind === "unattributable-proxy") {
+        if (probeKind === "ready" || probeKind === "startup") {
+          // Proxy health checks need no client identity. Serve only the bounded
+          // aggregate response; the probe handler keeps details local/authenticated.
+          await handleGatewayProbeRequest(
+            req,
+            res,
+            scopedRequestPath,
+            getResolvedAuth(),
+            trustedProxies,
+            allowRealIpFallback,
+            rateLimiter,
+            getReadiness,
+            getStartup,
+          );
+          return undefined;
+        }
         opts.reportUnattributableProxy?.(ingressAttribution);
         if (
           !nodeCapability &&

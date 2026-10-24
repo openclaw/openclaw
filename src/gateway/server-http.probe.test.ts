@@ -384,6 +384,67 @@ describe("gateway probe endpoints", () => {
     });
   });
 
+  it("serves bounded probes to headerless trusted proxies", async () => {
+    const cfg = {
+      gateway: {
+        trustedProxies: ["10.0.0.1"],
+      },
+    };
+    await withTempConfig({
+      prefix: "probe-trusted-proxy-without-forwarding",
+      cfg,
+      run: () =>
+        withProbeServer(
+          {
+            getRuntimeConfig: () => cfg,
+            getReadiness: () => unready,
+            getStartup: () => ({
+              ok: false,
+              status: "starting",
+              uptimeMs: 1_000,
+              pendingReason: "probe-test",
+            }),
+          },
+          async (probe) => {
+            const ingress = { remoteAddress: "10.0.0.1", host: "gateway.test" };
+            for (const [path, status, body] of [
+              ["/ready", 503, { ready: false }],
+              ["/readyz", 503, { ready: false }],
+              ["/startup", 503, { ok: false, status: "starting" }],
+              ["/startupz", 503, { ok: false, status: "starting" }],
+              ["/health", 200, { ok: true, status: "live" }],
+              ["/healthz", 200, { ok: true, status: "live" }],
+              ["/livez", 200, { ok: true, status: "live" }],
+            ] as const) {
+              for (const method of ["GET", "HEAD"] as const) {
+                const { res, getBody, setHeader } = await probe.request({
+                  ...ingress,
+                  path,
+                  method,
+                });
+                const label = `${method} ${path}`;
+                const serialized = JSON.stringify(body);
+                expect(res.statusCode, label).toBe(status);
+                expect(getBody(), label).toBe(method === "HEAD" ? "" : serialized);
+                expect(setHeader, label).toHaveBeenCalledWith(
+                  "Content-Length",
+                  String(Buffer.byteLength(serialized)),
+                );
+              }
+            }
+
+            const protectedResponse = await probe.request({
+              ...ingress,
+              path: "/api/nodes/watch/node-1",
+            });
+            expect(protectedResponse.res.statusCode).toBe(403);
+            expect(protectedResponse.getBody()).toContain("proxy_attribution_required");
+          },
+          AUTH_TOKEN,
+        ),
+    });
+  });
+
   it("returns typed internal error payload when readiness evaluation throws", async () => {
     await withProbeServer(
       {
@@ -513,7 +574,7 @@ describe("gateway probe endpoints", () => {
     });
     await withProbeServer({ getRuntimeConfig, getResolvedAuth }, async (probe) => {
       const liveBody = JSON.stringify({ ok: true, status: "live" });
-      for (const path of ["/health", "/healthz"]) {
+      for (const path of ["/health", "/healthz", "/livez"]) {
         for (const method of ["GET", "HEAD"] as const) {
           const { res, getBody, setHeader } = await probe.request({ path, method });
 

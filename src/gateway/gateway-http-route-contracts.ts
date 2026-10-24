@@ -1,6 +1,7 @@
 const GATEWAY_PROBE_ROUTES = new Map<string, "live" | "ready" | "startup">([
   ["/health", "live"],
   ["/healthz", "live"],
+  ["/livez", "live"],
   ["/ready", "ready"],
   ["/readyz", "ready"],
   ["/startup", "startup"],
