@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import type { ServerResponse } from "node:http";
 import path from "node:path";
 import { text as readText } from "node:stream/consumers";
+import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { expect, it, vi } from "vitest";
 import { createOpenAiResponsesModelConfig } from "../../test/helpers/openai-responses-model-fixture.js";
 import {
@@ -58,7 +59,7 @@ async function runRepairEnvelope(params: UpdateRepairParams): Promise<UpdateRepa
       stdio: ["ignore", "ignore", "inherit", "ipc"],
     },
   );
-  let failure: unknown;
+  let failure: Error | undefined;
   let result: UpdateRepairResult | undefined;
   const closed = once(child, "close");
   const timer = setTimeout(() => {
@@ -85,7 +86,7 @@ async function runRepairEnvelope(params: UpdateRepairParams): Promise<UpdateRepa
           result = message.result;
         }
       } catch (error) {
-        failure = error;
+        failure = toErrorObject(error);
         child.kill("SIGKILL");
       }
     });
