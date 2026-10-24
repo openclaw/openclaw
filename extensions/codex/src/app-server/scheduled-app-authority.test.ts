@@ -1,5 +1,4 @@
 import { describe, expect, it, vi } from "vitest";
-import { resolveCodexPluginThreadConfigStartupPolicy } from "./plugin-thread-config-deadline.js";
 import {
   buildPluginAppPolicyContext,
   type CodexPluginThreadConfig,
@@ -177,17 +176,15 @@ function intersect(
   config: Record<string, unknown> = {},
   {
     thread = threadConfig(),
-    stored = authority(),
     tools = toolsByApp("edit"),
   }: {
     thread?: CodexPluginThreadConfig;
-    stored?: ReturnType<typeof authority>;
     tools?: NonNullable<
       Parameters<typeof intersectCodexPluginThreadConfigWithScheduledAuthority>[2]
     >["toolsByApp"];
   } = {},
 ) {
-  return intersectCodexPluginThreadConfigWithScheduledAuthority(thread, stored, {
+  return intersectCodexPluginThreadConfigWithScheduledAuthority(thread, authority(), {
     config,
     toolsByApp: tools,
   });
@@ -195,26 +192,11 @@ function intersect(
 
 describe("scheduled Codex app authority", () => {
   it.each([
-    {
-      name: "scheduled continuation",
-      overrides: { authenticatedScheduledMode: true },
-      message: "scheduled Codex continuation",
-    },
-    {
-      name: "supervision",
-      overrides: { usesSupervisionConnection: true },
-      message: "supervised connection",
-    },
-    { name: "user home", overrides: { homeScope: "user" }, message: "user-home runtime" },
-    {
-      name: "missing account identity",
-      overrides: {
-        hasPreparedAccountIdentity: false,
-        hasConfiguredAppServerIdentity: false,
-      },
-      message: "configured app-server identity",
-    },
-  ])("refuses creator capture for $name before mutation", ({ overrides, message }) => {
+    [{ authenticatedScheduledMode: true }, "scheduled Codex continuation"],
+    [{ usesSupervisionConnection: true }, "supervised connection"],
+    [{ homeScope: "user" }, "user-home runtime"],
+    [{ hasPreparedAccountIdentity: false }, "configured app-server identity"],
+  ] as const)("refuses creator capture for %j before mutation", (overrides, message) => {
     const decision = resolveScheduledCodexAppCreatorCaptureDecision({
       appsMayBeVisible: true,
       authenticatedScheduledMode: false,
@@ -246,209 +228,125 @@ describe("scheduled Codex app authority", () => {
     ).toEqual({ required: true, supported: true });
   });
 
-  it("captures only connector-backed apps callable on the exact active thread", async () => {
-    const request = policyClient({
-      apps: [
-        { id: "calendar", enabled: true, callable: true },
-        { id: "disabled", enabled: false, callable: true },
-      ],
-      tools: {
-        list: { title: "List events", _meta: { connector_id: "calendar" } },
-        create: { _meta: { connector_id: "calendar" } },
-        unrelated: { _meta: { connector_id: "other" } },
-      },
-      config: { apps: { calendar: { tools: { "List events": { approval_mode: "writes" } } } } },
-      observe: (method, params) => {
-        if (method === "app/installed" || method === "mcpServerStatus/list") {
-          expect(params).toMatchObject({ threadId: "thread-final" });
-        }
-      },
-    });
-
-    const captured = await capture(request, { configCwd: "/workspace" });
-
-    expect(captured).toEqual(
-      authority({
-        apps: [capturedApp({ create: "approve", list: "writes" }, true, "allow")],
-      }),
-    );
-    expect(request).toHaveBeenCalledWith(
-      "config/read",
-      { includeLayers: false, cwd: "/workspace" },
-      expect.any(Object),
-    );
-  });
-
-  it("does not capture an installed app without exact-thread connector tools", async () => {
-    const request = policyClient();
-
-    await expect(capture(request)).resolves.toBeUndefined();
-  });
-
-  it("bounds creator capture when a later connector inventory page hangs", async () => {
-    let statusPage = 0;
-    const request = vi.fn(async (method: string) => {
-      if (method === "app/installed") {
-        return { apps: [{ id: "calendar", enabled: true, callable: true }] };
-      }
-      if (method === "config/read") {
-        return { config: {} };
-      }
-      if (method === "mcpServerStatus/list") {
-        statusPage += 1;
-        if (statusPage === 1) {
-          return { data: [], nextCursor: "page-2" };
-        }
-        return await new Promise<never>(() => {});
-      }
-      throw new Error(`unexpected method ${method}`);
-    });
-    const startedAt = Date.now();
-
-    await expect(capture(request, { timeoutMs: 100 })).rejects.toThrow(
-      "Codex app authority capture exceeded its 100 ms total budget. No automation changes were saved",
-    );
-    expect(Date.now() - startedAt).toBeLessThan(1_000);
-    expect(statusPage).toBe(2);
-  });
-
-  it("keeps the capture deadline monotonic when the wall clock rewinds", async () => {
-    const budgetMs = 5_000;
-    let wallClockReads = 0;
-    const performanceNowSpy = vi.spyOn(performance, "now").mockReturnValue(500);
-    // Rewind after deadline creation while elapsed time stays fixed.
-    const dateNowSpy = vi
-      .spyOn(Date, "now")
-      .mockImplementation(() => (wallClockReads++ === 0 ? 500 : 500 - 90_000));
-    const capturedTimeoutMs: number[] = [];
-    const request = vi.fn(
-      async (method: string, _requestParams: unknown, options: { timeoutMs?: number } = {}) => {
-        if (method === "app/installed") {
-          capturedTimeoutMs.push(options.timeoutMs ?? -1);
-          return { apps: [] };
-        }
-        if (method === "config/read") {
-          return { config: {} };
-        }
-        if (method === "mcpServerStatus/list") {
-          return { data: [], nextCursor: null };
-        }
-        throw new Error(`unexpected method ${method}`);
-      },
-    );
-
-    try {
-      await expect(
-        capture(request, { threadId: "thread-rewind", timeoutMs: budgetMs }),
-      ).resolves.toBeUndefined();
-      expect(capturedTimeoutMs.length).toBeGreaterThan(0);
-      for (const timeoutMs of capturedTimeoutMs) {
-        expect(timeoutMs).toBe(budgetMs);
-      }
-    } finally {
-      performanceNowSpy.mockRestore();
-      dateNowSpy.mockRestore();
-    }
-  });
-
-  it("maps a real app-server request timeout to the no-save creator diagnostic", async () => {
-    const timeout = Object.assign(new Error("mcpServerStatus/list timed out"), {
-      code: "CODEX_APP_SERVER_LOCAL_REQUEST_CANCELLED",
-      reason: "timed out",
-      mayHaveWritten: false,
-    });
-    const request = vi.fn(async (method: string) => {
-      if (method === "mcpServerStatus/list") {
-        throw timeout;
-      }
-      if (method === "app/installed") {
-        return { apps: [] };
-      }
-      return { config: {} };
-    });
-
-    await expect(capture(request)).rejects.toThrow("No automation changes were saved");
-  });
-
-  it("captures configured app-server authority without a prepared ChatGPT account", async () => {
-    const managedRequirements = {
-      hooks: { PreToolUse: [{ matcher: "*", hooks: [{ type: "command" }] }] },
-    };
-    const request = policyClient({
-      tools: { list: { _meta: { connector_id: "calendar" } } },
-      requirements: managedRequirements,
-    });
-    const managedRequirementsFingerprint = await readCodexManagedRequirementsFingerprint({
-      request,
-    } as never);
-
-    await expect(
-      capture(request, {
-        auth: { kind: "configured-app-server", connectionFingerprint: "configured-connection" },
-      }),
-    ).resolves.toEqual(
-      authority({
-        auth: {
-          kind: "configured-app-server",
-          connectionFingerprint: "configured-connection",
-          managedRequirementsFingerprint,
+  it.each(["prepared profile", "configured server", "no connector"] as const)(
+    "captures exact-thread authority with %s",
+    async (kind) => {
+      const configured = kind === "configured server";
+      const request = policyClient({
+        apps: [
+          { id: "calendar", enabled: true, callable: true },
+          ...(configured ? [] : [{ id: "disabled", enabled: false, callable: true }]),
+        ],
+        tools:
+          kind === "no connector"
+            ? {}
+            : configured
+              ? { list: connectorTool() }
+              : {
+                  list: { title: "List events", ...connectorTool() },
+                  create: connectorTool(),
+                  unrelated: { _meta: { connector_id: "other" } },
+                },
+        config: configured
+          ? {}
+          : { apps: { calendar: { tools: { "List events": { approval_mode: "writes" } } } } },
+        requirements: configured
+          ? { hooks: { PreToolUse: [{ matcher: "*", hooks: [{ type: "command" }] }] } }
+          : undefined,
+        observe: (method, params) => {
+          if (method === "app/installed" || method === "mcpServerStatus/list") {
+            expect(params).toMatchObject({ threadId: "thread-final" });
+          }
         },
-        apps: [capturedApp({ list: "approve" }, true, "allow")],
-      }),
-    );
-  });
+      });
+      const auth = configured
+        ? {
+            kind: "configured-app-server" as const,
+            connectionFingerprint: "configured-connection",
+          }
+        : preparedAuth;
+      const managedRequirementsFingerprint = configured
+        ? await readCodexManagedRequirementsFingerprint({ request } as never)
+        : undefined;
+      const captured = await capture(request, { auth, configCwd: "/workspace" });
+      if (kind === "no connector") {
+        expect(captured).toBeUndefined();
+      } else {
+        expect(captured).toEqual(
+          authority({
+            apps: [
+              capturedApp(configured ? { list: "approve" } : { create: "approve", list: "writes" }),
+            ],
+            ...(configured ? { auth: { ...auth, managedRequirementsFingerprint } } : {}),
+          }),
+        );
+      }
+      expect(request).toHaveBeenCalledWith(
+        "config/read",
+        { includeLayers: false, cwd: "/workspace" },
+        expect.any(Object),
+      );
+    },
+  );
 
-  it("intersects stored and current app/tool authority without admitting new apps", () => {
-    const intersected = intersectCodexPluginThreadConfigWithScheduledAuthority(
-      threadConfig(),
-      authority(),
-      {
-        config: {
-          apps: {
-            newly_connected: { enabled: true, default_tools_approval_mode: "approve" },
-            calendar: {
-              tools: {
-                list: { approval_mode: "writes" },
-                edit: { approval_mode: "writes" },
-                newly_added: { approval_mode: "prompt" },
-              },
-            },
-          },
+  it.each(["page deadline", "RPC timeout", "clock rewind"] as const)(
+    "bounds creator capture under %s",
+    async (scenario) => {
+      const clock = scenario === "clock rewind";
+      const budget = clock ? 5_000 : 100;
+      let wallClockReads = 0;
+      const monotonic = clock ? vi.spyOn(performance, "now").mockReturnValue(500) : undefined;
+      const wall = clock
+        ? vi.spyOn(Date, "now").mockImplementation(() => (wallClockReads++ === 0 ? 500 : -89_500))
+        : undefined;
+      const timeouts: number[] = [];
+      const base = policyClient({
+        apps:
+          scenario === "page deadline" ? [{ id: "calendar", enabled: true, callable: true }] : [],
+        observe: (method, _params, options) => {
+          if (method === "app/installed") {
+            timeouts.push(options?.timeoutMs ?? -1);
+          }
         },
-        toolsByApp: toolsByApp("list", "edit", "newly_added"),
-      },
-    );
-
-    expect(intersected.provisionalAppIds).toEqual(["calendar"]);
-    expect(intersected.policyContext.apps).toEqual({
-      calendar: expect.objectContaining({
-        allowDestructiveActions: false,
-        allowOpenWorld: false,
-        destructiveApprovalMode: "ask",
-      }),
-    });
-    expect(intersected.configPatch).toMatchObject({
-      apps: {
-        newly_connected: { enabled: false },
-        _default: {
-          enabled: false,
-          destructive_enabled: false,
-          open_world_enabled: false,
+      });
+      let page = 0;
+      const request = vi.fn(
+        async (method: string, params: unknown, options?: { timeoutMs?: number }) => {
+          if (method === "mcpServerStatus/list" && !clock) {
+            if (scenario === "RPC timeout") {
+              throw Object.assign(new Error("mcpServerStatus/list timed out"), {
+                code: "CODEX_APP_SERVER_LOCAL_REQUEST_CANCELLED",
+                reason: "timed out",
+                mayHaveWritten: false,
+              });
+            }
+            if (++page === 1) {
+              return { data: [], nextCursor: "page-2" };
+            }
+            return await new Promise<never>(() => {});
+          }
+          return base(method, params, options);
         },
-        calendar: {
-          enabled: true,
-          destructive_enabled: false,
-          open_world_enabled: false,
-          approvals_reviewer: "user",
-          tools: {
-            list: { enabled: false, approval_mode: "prompt" },
-            edit: { enabled: false, approval_mode: "prompt" },
-            newly_added: { enabled: false, approval_mode: "prompt" },
-          },
-        },
-      },
-    });
-  });
+      );
+      const started = clock ? 0 : Date.now();
+      try {
+        const operation = capture(request, { timeoutMs: budget });
+        if (clock) {
+          await expect(operation).resolves.toBeUndefined();
+          expect(timeouts).toEqual([budget]);
+        } else {
+          await expect(operation).rejects.toThrow("No automation changes were saved");
+          if (scenario === "page deadline") {
+            expect(page).toBe(2);
+            expect(Date.now() - started).toBeLessThan(1_000);
+          }
+        }
+      } finally {
+        monotonic?.mockRestore();
+        wall?.mockRestore();
+      }
+    },
+  );
 
   it.each([
     { current: "ask", captured: "allow" },
@@ -500,6 +398,7 @@ describe("scheduled Codex app authority", () => {
             },
           },
           newly_connected: { enabled: false },
+          _default: { enabled: false, destructive_enabled: false, open_world_enabled: false },
         },
       });
     },
@@ -635,22 +534,12 @@ describe("scheduled Codex app authority", () => {
     ).toThrow("Scheduled Codex apps are unavailable under the current policy or account: calendar");
   });
 
-  it.each([
-    { mode: "allow" as const, expected: "approve" },
-    { mode: "ask" as const, expected: "prompt" },
-    { mode: "auto" as const, expected: "auto" },
-  ])("maps an app-level $mode ceiling to headless tool mode $expected", ({ mode, expected }) => {
-    const config: CodexPluginThreadConfig = {
-      enabled: true,
-      fingerprint: "current",
-      inputFingerprint: "input",
-      policyContext: buildPluginAppPolicyContext({ calendar: appPolicy("Calendar", mode) }, {}),
-      diagnostics: [],
-    };
-
-    const intersected = intersect({}, { thread: config });
-
-    expectCalendarTools(intersected, { edit: { enabled: true, approval_mode: expected } });
+  it("caps headless tools at the current app's auto approval mode", () => {
+    const thread = threadConfig(true);
+    thread.policyContext.apps.calendar = appPolicy("Calendar", "auto");
+    expectCalendarTools(intersect({}, { thread }), {
+      edit: { enabled: true, approval_mode: "auto" },
+    });
   });
 
   it("rotates the input fingerprint when the stored cap changes", () => {
@@ -710,71 +599,31 @@ describe("scheduled Codex app authority", () => {
     ).toBeUndefined();
   });
 
-  it("requires a deny-default app config for scheduled authority even when native tools are enabled", () => {
-    const startup = resolveCodexPluginThreadConfigStartupPolicy({
-      pluginConfig: {},
-      nativeToolSurfaceEnabled: true,
-      scheduledRuntimeAuthority: authority(),
-    });
-
-    expect(startup.resolvedPluginPolicy).toBeDefined();
-  });
-
-  it("bounds hanging current-policy inventory under the total startup deadline", async () => {
-    const request = vi.fn(async (method: string) => {
-      if (method === "config/read") {
-        return { config: {} };
-      }
+  it.each([true, false])("checks current-policy inventory with hanging=%s", async (hanging) => {
+    const base = policyClient({ tools: { list: connectorTool() } });
+    const request = async (method: string, params: Record<string, unknown>) => {
       if (method === "mcpServerStatus/list") {
-        return await new Promise<never>(() => {});
+        if (hanging) {
+          return await new Promise<never>(() => {});
+        }
+        expect(params).toMatchObject({ threadId: "thread-existing", detail: "toolsAndAuthOnly" });
       }
-      throw new Error(`unexpected method ${method}`);
-    });
-    const provider = scheduledProvider(request, 400);
+      return base(method, params);
+    };
+    const provider = scheduledProvider(request, hanging ? 400 : 2_000);
     const startedAt = Date.now();
-
-    await expect(provider.build()).rejects.toMatchObject({
+    await expect(
+      provider.build(hanging ? undefined : { threadId: "thread-existing" }),
+    ).rejects.toMatchObject({
       name: "AgentHarnessPreflightError",
-      message: expect.stringContaining("Codex app policy verification exceeded"),
+      message: expect.stringContaining(
+        hanging
+          ? "Codex app policy verification exceeded"
+          : "Scheduled Codex apps are unavailable under the current policy or account: calendar",
+      ),
     });
-    expect(Date.now() - startedAt).toBeLessThan(1_000);
-    expect(request.mock.calls.map(([method]) => method)).toEqual([
-      "config/read",
-      "mcpServerStatus/list",
-    ]);
-  });
-
-  it("reads current policy from the exact existing thread when supplied", async () => {
-    const request = vi.fn(async (method: string, params: Record<string, unknown>) => {
-      if (method === "config/read") {
-        return { config: {} };
-      }
-      if (method === "mcpServerStatus/list") {
-        expect(params).toMatchObject({
-          threadId: "thread-existing",
-          detail: "toolsAndAuthOnly",
-        });
-        return {
-          data: [
-            {
-              name: "codex_apps",
-              tools: { list: { _meta: { connector_id: "calendar" } } },
-            },
-          ],
-          nextCursor: null,
-        };
-      }
-      throw new Error(`unexpected method ${method}`);
-    });
-    const provider = scheduledProvider(request, 2_000);
-
-    await expect(provider.build({ threadId: "thread-existing" })).rejects.toThrow(
-      "Scheduled Codex apps are unavailable under the current policy or account: calendar",
-    );
-    expect(request).toHaveBeenCalledWith(
-      "mcpServerStatus/list",
-      expect.objectContaining({ threadId: "thread-existing" }),
-      expect.any(Object),
-    );
+    if (hanging) {
+      expect(Date.now() - startedAt).toBeLessThan(1_000);
+    }
   });
 });

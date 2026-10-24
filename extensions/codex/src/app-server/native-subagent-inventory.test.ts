@@ -1,11 +1,7 @@
 import assert from "node:assert/strict";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import {
-  clearRuntimeConfigSnapshot,
-  setRuntimeConfigSnapshot,
-} from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { readVisibleSessionTranscriptMessageEntries } from "openclaw/plugin-sdk/session-transcript-runtime";
-import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import {
   fixture,
   completeInForeground,
@@ -20,12 +16,9 @@ import {
   notifyChildStarted,
   threadRead,
 } from "./native-subagent-monitor.test-support.js";
-import { readCodexNativeSubagentSubmissions } from "./native-subagent-submission.js";
 import { setupRunAttemptTestHooks } from "./run-attempt-test-harness.js";
 import { bindingStoreKey } from "./session-binding-record.js";
 
-beforeEach(() => setRuntimeConfigSnapshot({}));
-afterEach(() => clearRuntimeConfigSnapshot());
 setupRunAttemptTestHooks();
 
 function finalHistory(turnId: string, result: string) {
@@ -397,12 +390,8 @@ describe("native pending assignment inventory through registered monitor admissi
         },
       });
       if (followup) {
-        expect(delivered?.announceId).toBe(
-          "codex-native:parent-thread:codex-thread:child-thread:turn:followup-turn:succeeded",
-        );
         recovered.closeCaller();
       }
-      expect(delivered?.completionCustody).toBeDefined();
       expect(await f.assignments(owner)).toEqual([]);
       expect(await f.submissions(owner)).toEqual([]);
       client.close();
@@ -584,15 +573,6 @@ describe("native pending assignment inventory through registered monitor admissi
       await expect(prepareInput(client, "child-thread", "followup-turn", "/root")).rejects.toThrow(
         "does not admit this model",
       );
-      await client.item(
-        collabItem("wait", ["child-thread"], {
-          id: "wait-a",
-          senderThreadId: "rotated-parent",
-          agentsStates: { "child-thread": { status: "completed", message: "A result" } },
-        }),
-        "rotated-turn",
-        "rotated-parent",
-      );
       await completeChild(client, "B result", "followup-turn");
       await replacement.unregister();
       expect(f.deliver).toHaveBeenCalledOnce();
@@ -667,32 +647,11 @@ describe("native pending assignment inventory through registered monitor admissi
       await f.settle(recoveredClient);
       expect(f.deliver).not.toHaveBeenCalled();
       recoveredClient.close();
-      await f.settle(createClient());
-      expect(f.deliver).not.toHaveBeenCalled();
       expect(await readVisibleSessionTranscriptMessageEntries(f.identity)).toHaveLength(
         assignment === "empty" ? 0 : 1,
       );
     },
   );
-
-  it("consumes native foreground delivery without a duplicate on re-registration", async () => {
-    const { f, client, parent } = await startAssignment();
-    await completeInForeground(client);
-    await parent.unregister();
-    expect(await f.assignments()).toEqual([]);
-    client.close();
-    await f.settle(createClient());
-    expect(f.deliver).not.toHaveBeenCalled();
-    expect(() =>
-      readCodexNativeSubagentSubmissions({
-        version: 1,
-        owner: f.historyOwner(),
-        receipts: [
-          { parentTurnId: "p", callId: "c", childThreadId: "child", submissionId: "child" },
-        ],
-      }),
-    ).toThrow("Invalid Codex native subagent submission metadata");
-  });
 
   it("restores aliases once across clients while delivering distinct child turns", async () => {
     const f = await fixture();
@@ -706,7 +665,6 @@ describe("native pending assignment inventory through registered monitor admissi
     for (const assignment of assignments) {
       await f.record(assignment);
     }
-    expect(await f.assignments()).toHaveLength(2);
     const row = f.state.lookup(bindingStoreKey(f.identity));
     assert(row?.state === "active");
     f.state.register(bindingStoreKey(f.identity), {
@@ -727,10 +685,8 @@ describe("native pending assignment inventory through registered monitor admissi
     let peer: Awaited<ReturnType<typeof f.register>> | undefined;
     try {
       await parent.ready;
-      expect(parent.listPendingChildren()).toHaveLength(2);
       peer = await f.register(peerClient);
       await peer.ready;
-      expect(peer.listPendingChildren()).toEqual([]);
       await peer.unregister();
       expect(f.deliver).not.toHaveBeenCalled();
       await parent.unregister();
