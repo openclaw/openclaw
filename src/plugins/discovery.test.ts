@@ -1208,5 +1208,51 @@ describe("discoverOpenClawPlugins", () => {
     expect(bundledOnly.candidates.map((candidate) => candidate.idHint)).toEqual(["bundled-plugin"]);
     expect(bundledOnly.diagnostics).toEqual([]);
   });
+
+  it("keeps overlapping-root installs untrusted without official install provenance", () => {
+    const homeDir = path.join(testRoot, "home-untrusted");
+    const configDir = path.join(homeDir, ".openclaw");
+    const codexDir = path.join(configDir, "extensions", "codex");
+    createPlugin(codexDir, "@openclaw/codex", "codex");
+    const env = discoveryEnv(testRoot, {
+      OPENCLAW_STATE_DIR: configDir,
+      HOME: homeDir,
+      USERPROFILE: homeDir,
+    });
+    const cases: Array<{
+      name: string;
+      installRecords: Record<string, PluginInstallRecord>;
+      reason: string;
+    }> = [
+      { name: "untracked", installRecords: {}, reason: "record-missing" },
+      {
+        name: "local path",
+        installRecords: {
+          codex: { source: "path", installPath: codexDir, sourcePath: codexDir },
+        },
+        reason: "origin-path",
+      },
+    ];
+    for (const testCase of cases) {
+      // Skipping the overlapping workspace scan must not turn the global scan into
+      // an official-trust decision: only a matching install record can do that.
+      const discovery = discoverOpenClawPlugins({
+        workspaceDir: homeDir,
+        installRecords: testCase.installRecords,
+        env,
+      });
+      expect(discovery.candidates.filter((candidate) => candidate.idHint === "codex")).toHaveLength(
+        1,
+      );
+      const registry = loadPluginManifestRegistryCore({
+        discovery,
+        installRecords: testCase.installRecords,
+        env,
+      });
+      const plugin = registry.plugins.find((entry) => entry.id === "codex");
+      expect(plugin).toMatchObject({ origin: "global", trust: { reason: testCase.reason } });
+      expect(plugin?.trustedOfficialInstall).not.toBe(true);
+    }
+  });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
