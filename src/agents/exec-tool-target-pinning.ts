@@ -7,6 +7,7 @@
 import { asNonArrayRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { requireValidExecTarget } from "../infra/exec-approvals-core.js";
+import { isPluginToolExecutionSource } from "../plugins/plugin-tool-execution.js";
 import { markToolExecutionNotStarted } from "./tool-effect-receipt.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
@@ -138,17 +139,29 @@ export function readCronScheduledToolProjection(tool: {
   return projection.info;
 }
 
-/** Preserves projection identity across shallow tool-object copies made by tool plumbing. */
+/** Preserve exact executors and privately attested plugin execution views. */
 export function copyCronScheduledToolProjection(source: AnyAgentTool, target: AnyAgentTool): void {
   const projection = scheduledToolProjections.get(source);
   if (
     projection &&
     source.name === projection.sourceToolName &&
     target.name === projection.sourceToolName &&
-    source.execute === projection.execute &&
-    target.execute === projection.execute
+    source.execute === projection.execute
   ) {
-    scheduledToolProjections.set(target, projection);
+    if (target.execute === projection.execute) {
+      scheduledToolProjections.set(target, projection);
+    } else if (isPluginToolExecutionSource(target, projection.execute)) {
+      scheduledToolProjections.set(target, {
+        ...projection,
+        execute: target.execute,
+        assertActive: () => {
+          readCronScheduledToolProjection(source);
+          if (!isPluginToolExecutionSource(target, projection.execute)) {
+            throw new Error("scheduled tool projection executable changed after host creation");
+          }
+        },
+      });
+    }
   }
 }
 
