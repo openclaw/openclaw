@@ -13,6 +13,7 @@ const { values } = parseArgs({
     "state-dir": { type: "string" },
     packs: { type: "string", default: "32" },
     "blobs-per-pack": { type: "string", default: "128" },
+    consolidate: { type: "boolean" },
     help: { type: "boolean" },
   },
 });
@@ -33,6 +34,8 @@ Dependency-free native Git MIDX probe (Node's built-in TypeScript support):
 This fixture contains 2,097,152 unique 16-byte blobs (32 MiB payload), written in
 sequential packs. The probe times the old full MIDX write and repeated cat-file
 lookups with/without that optional cache; it does not invoke the maintenance owner.
+Add --consolidate to perform one native equivalent of its 512 MiB pack / 32 MiB
+index batch before the probe. This consumes the fixture's fragmented layout.
 The caller supplies the quiet-slot lock, swapped CPU placement, production guard,
 MemoryMax, and low CPU/IO priority. RSS is not an aggregate process-tree bound.`);
   process.exit(0);
@@ -215,15 +218,87 @@ if (values.mode === "prepare" || values.mode === "prepare-midx") {
     objectCount?: number;
   } = JSON.parse(await fs.readFile(marker, "utf8"));
   assert.equal(fixture.version, 1);
-  assert.equal(await packs(), fixture.packs, "Use a fresh prepared fixture for each run");
+  if (!nativeMidx) {
+    assert.equal(await packs(), fixture.packs, "Use a fresh prepared fixture for each run");
+  }
   if (values.mode === "measure-midx") {
     assert(fixture.nativeMidx, "Use a prepare-midx fixture");
     await checkDirty();
     const packDirectory = path.join(repo, ".git", "objects", "pack");
     const indexPath = path.join(packDirectory, "multi-pack-index");
+    let consolidation: { packsBefore: number; packsAfter: number; selected: number } | undefined;
+    await fs.rm(indexPath, { force: true });
+    if (values.consolidate) {
+      const inventory = [];
+      for (const name of await fs.readdir(packDirectory)) {
+        if (name.endsWith(".pack")) {
+          inventory.push({
+            name,
+            bytes: (await fs.stat(path.join(packDirectory, name))).size,
+            indexBytes: (await fs.stat(path.join(packDirectory, name.replace(/\.pack$/, ".idx"))))
+              .size,
+          });
+        }
+      }
+      assert(inventory.length >= 16, "Native consolidation requires at least 16 fixture packs");
+      const selected: string[] = [];
+      let bytes = 0;
+      let indexBytes = 0;
+      for (const pack of inventory.toSorted(
+        (a, b) => a.bytes - b.bytes || a.name.localeCompare(b.name),
+      )) {
+        if (pack.indexBytes > 32 * 1024 * 1024) {
+          continue;
+        }
+        if (
+          bytes + pack.bytes > 512 * 1024 * 1024 ||
+          indexBytes + pack.indexBytes > 32 * 1024 * 1024 ||
+          selected.length >= 1024
+        ) {
+          break;
+        }
+        selected.push(pack.name);
+        bytes += pack.bytes;
+        indexBytes += pack.indexBytes;
+      }
+      assert(selected.length >= 2, "No bounded consolidation batch fits");
+      await run("git", [
+        "-C",
+        packDirectory,
+        "-c",
+        "pack.threads=1",
+        "verify-pack",
+        "--object-format=sha1",
+        ...selected,
+      ]);
+      const published = await git(
+        [
+          "-c",
+          "alias.fixture-consolidate=!git pack-objects --stdin-packs --stdout --window=0 --threads=1 | git index-pack --stdin --threads=1",
+          "fixture-consolidate",
+        ],
+        `${selected.join("\n")}\n`,
+      );
+      const hash = /^pack\s+([a-f0-9]{40})$/.exec(published)?.[1];
+      assert(hash, "Native consolidation did not publish a pack identity");
+      for (const name of selected) {
+        if (name === `pack-${hash}.pack`) {
+          continue;
+        }
+        for (const extension of ["idx", "pack", "rev"]) {
+          await fs.rm(path.join(packDirectory, name.replace(/\.pack$/, `.${extension}`)), {
+            force: true,
+          });
+        }
+      }
+      consolidation = {
+        packsBefore: inventory.length,
+        packsAfter: await packs(),
+        selected: selected.length,
+      };
+    }
     const indexNames = (await fs.readdir(packDirectory)).filter((name) => name.endsWith(".idx"));
     const timingPath = path.join(root, "midx.time.txt");
-    await fs.rm(indexPath, { force: true });
     const started = performance.now();
     await run(
       "/usr/bin/time",
@@ -274,7 +349,8 @@ if (values.mode === "prepare" || values.mode === "prepare-midx") {
         {
           mode: values.mode,
           objectCount: fixture.objectCount,
-          packs: fixture.packs,
+          packs: await packs(),
+          consolidation,
           payloadBytes: fixture.payloadBytes,
           elapsedMs,
           peakProcessRssKiB,
