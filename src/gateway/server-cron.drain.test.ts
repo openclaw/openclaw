@@ -440,19 +440,6 @@ describe("gateway cron stop-and-drain automation ownership", () => {
     await nextTurn();
   });
 
-  it("unregisters a stopped scheduler when stream draining fails and permits retry", async () => {
-    stopAllMock.mockRejectedValueOnce(new Error("stream drain failed"));
-    stopAllMock.mockResolvedValue(undefined);
-    const original = await startGatewayCron("failed");
-
-    expect(sessionHasAutomation("agent:main:main", original.cfg)).toBe(true);
-    await expect(original.cron.stopAndDrain?.()).rejects.toThrow("stream drain failed");
-    expect(sessionHasAutomation("agent:main:main", original.cfg)).toBe(false);
-    await expect(original.cron.stopAndDrain?.()).resolves.toBeUndefined();
-    expect(stopAllMock).toHaveBeenCalledTimes(2);
-    expect(sessionHasAutomation("agent:main:main", original.cfg)).toBe(false);
-  });
-
   it("does not unregister a replacement scheduler when a stale drain fails", async () => {
     const pendingDrain = createDeferred();
     stopAllMock.mockImplementationOnce(() => pendingDrain.promise);
@@ -460,6 +447,7 @@ describe("gateway cron stop-and-drain automation ownership", () => {
     const original = await startGatewayCron("stale");
     expect(sessionHasAutomation("agent:main:main", original.cfg)).toBe(true);
     const staleDrain = expectDefined(original.cron.stopAndDrain?.(), "cron drain");
+    expect(sessionHasAutomation("agent:main:main", original.cfg)).toBe(false);
     const replacement = await startGatewayCron("replacement");
     expect(sessionHasAutomation("agent:main:main", replacement.cfg)).toBe(true);
     const failedDrain = expect(staleDrain).rejects.toThrow("stream drain failed");

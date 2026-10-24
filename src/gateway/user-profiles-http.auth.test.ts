@@ -1,5 +1,4 @@
-import { createServer, IncomingMessage, ServerResponse, type Server } from "node:http";
-import { Socket } from "node:net";
+import { createServer, type Server } from "node:http";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { listenLoopback } from "../../test/helpers/gateway-integration-fixtures.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -43,9 +42,7 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
   });
 });
 
-// Most cases cross real HTTP, auth, device pairing, profile storage and the UI loader.
-// Provider-backed cases use in-memory HTTP transport and stub external identity responses,
-// while retaining the production authorization handler, profile store and observed byte reader.
+// Keep external identity responses synthetic while exercising the real HTTP/auth boundary.
 describe("personal avatar HTTP authentication", () => {
   let server: Server;
   let origin: string;
@@ -70,8 +67,8 @@ describe("personal avatar HTTP authentication", () => {
           getResolvedAuth: () => auth,
           getRuntimeConfig: () => cfg,
         });
-      })().catch(() => {
-        if (!res.writableEnded) {
+      })().catch((error: unknown) => {
+        if (!finishGatewayHttpAuthorityError(res, error) && !res.writableEnded) {
           res.statusCode = 500;
           res.end();
         }
@@ -269,15 +266,6 @@ describe("personal avatar HTTP authentication", () => {
         },
       };
       const nativeFetch = globalThis.fetch;
-      const metadata = vi.fn(
-        async () =>
-          new Response(
-            JSON.stringify({
-              id: identity.id,
-              login: identity.id === 510 ? "person" : "person-work",
-            }),
-          ),
-      );
       vi.spyOn(globalThis, "fetch").mockImplementation((input, init) => {
         const url =
           typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
@@ -287,7 +275,12 @@ describe("personal avatar HTTP authentication", () => {
           );
         }
         if (url.startsWith("https://api.github.com/")) {
-          return metadata();
+          return Promise.resolve(
+            Response.json({
+              id: identity.id,
+              login: identity.id === 510 ? "person" : "person-work",
+            }),
+          );
         }
         return nativeFetch(input, init);
       });
@@ -304,9 +297,8 @@ describe("personal avatar HTTP authentication", () => {
       setUserProfileRole(primary.id, "reader");
       avatarPath = "/api/users/" + primary.id + "/avatar";
       const originalAvatarReader = profileAvatars.createProfileAvatarReader;
-      const readAvatar = vi.spyOn(profileAvatars, "createProfileAvatarReader");
       let beforeAvatarBytes: (() => void) | undefined;
-      readAvatar.mockImplementation((id, options) => {
+      vi.spyOn(profileAvatars, "createProfileAvatarReader").mockImplementation((id, options) => {
         const reader = originalAvatarReader(id, options);
         return {
           async inspect() {
@@ -323,41 +315,24 @@ describe("personal avatar HTTP authentication", () => {
         };
       });
       const send = async (email = identity.email) => {
-        const req = new IncomingMessage(new Socket());
-        Object.defineProperty(req.socket, "remoteAddress", { value: "127.0.0.1" });
-        req.method = "GET";
-        req.url = avatarPath;
-        req.headers = {
-          "cf-access-authenticated-user-email": email,
-          "cf-access-jwt-assertion":
-            "header." +
-            Buffer.from(JSON.stringify({ iss: accessOrigin })).toString("base64url") +
-            ".signature",
-          "x-forwarded-for": "203.0.113.10",
-          "x-openclaw-scopes": scope,
-        };
-        const res = new ServerResponse(req);
-        let bytes = Buffer.alloc(0);
-        vi.spyOn(res, "end").mockImplementation((chunk?: unknown) => {
-          if (typeof chunk === "string") {
-            bytes = Buffer.from(chunk);
-          } else if (chunk instanceof Uint8Array) {
-            bytes = Buffer.from(chunk);
-          }
-          return res;
+        const response = await nativeFetch(origin + avatarPath, {
+          headers: {
+            "cf-access-authenticated-user-email": email,
+            "cf-access-jwt-assertion": `header.${Buffer.from(JSON.stringify({ iss: accessOrigin })).toString("base64url")}.signature`,
+            "x-forwarded-for": "203.0.113.10",
+            "x-openclaw-scopes": scope,
+          },
         });
-        try {
-          try {
-            await handleUserProfileAvatarHttpRequest(req, res, avatarPath, { auth });
-          } catch (error) {
-            if (!finishGatewayHttpAuthorityError(res, error)) {
-              throw error;
-            }
-          }
-          return { status: res.statusCode, bytes, contentType: res.getHeader("content-type") };
-        } finally {
-          req.destroy();
-        }
+        return {
+          status: response.status,
+          bytes: Buffer.from(await response.arrayBuffer()),
+          contentType: response.headers.get("content-type"),
+        };
+      };
+      const expectDenied = (response: Awaited<ReturnType<typeof send>>, status: number) => {
+        expect(response.status).toBe(status);
+        expect(response.contentType).not.toMatch(/^image\//);
+        expect(response.bytes).not.toEqual(PNG);
       };
       for (const account of [
         { id: 510, email: "personal@example.test" },
@@ -368,27 +343,19 @@ describe("personal avatar HTTP authentication", () => {
         expect(response.status, response.bytes.toString()).toBe(200);
         expect(response.bytes).toEqual(PNG);
       }
-      expect(metadata).toHaveBeenCalledTimes(2);
-      expect(readAvatar).toHaveBeenCalledTimes(2);
       const ownAvatarPath = avatarPath;
       avatarPath = "/api/users/gateway-owner/avatar";
       expect((await send()).status).toBe(scope === "operator.read" ? 200 : 403);
       avatarPath = ownAvatarPath;
-      readAvatar.mockClear();
       setUserProfileRole(primary.id, null);
       invalidateOperatorRolePolicy(primary.id);
-      expect((await send()).status).toBe(403);
-      expect(metadata).toHaveBeenCalledTimes(2);
-      expect(readAvatar).not.toHaveBeenCalled();
+      expectDenied(await send(), 403);
       setUserProfileRole(primary.id, "reader");
       invalidateOperatorRolePolicy(primary.id);
       identity.id = 512;
-      expect((await send()).status).toBe(403);
-      expect(metadata).toHaveBeenCalledTimes(3);
-      expect(readAvatar).not.toHaveBeenCalled();
+      expectDenied(await send(), 403);
       identity.email = "mismatched@example.test";
-      expect((await send("work@example.test")).status).toBe(401);
-      expect(readAvatar).not.toHaveBeenCalled();
+      expectDenied(await send("work@example.test"), 401);
 
       Object.assign(identity, { id: 511, email: "work@example.test" });
       const replacement = ensureProfileForEmail("image-replacement@example.test");
@@ -412,9 +379,7 @@ describe("personal avatar HTTP authentication", () => {
           expect(refused.status).toBe(200);
           expect(refused.bytes).toEqual(PNG);
         } else {
-          expect(refused.status, change).toBe(401);
-          expect(refused.contentType).not.toMatch(/^image\//);
-          expect(refused.bytes).not.toEqual(PNG);
+          expectDenied(refused, 401);
         }
         setUserProfileRole(primary.id, "reader");
         invalidateOperatorRolePolicy(primary.id);

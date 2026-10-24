@@ -1,11 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
-import {
-  createAdmittedRunOperatorAuthority,
-  createOperationalRunInstanceRef,
-  prepareAgentRunAdmission,
-} from "../agents/admitted-run-context.js";
+import { createAdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
 import { testing as cliBackendsTesting } from "../agents/cli-backends.test-support.js";
 import {
   buildDefaultTestCliBackend,
@@ -33,6 +29,7 @@ import {
   revokeAttachGrant,
   transferMcpLoopbackClientGrant,
 } from "./mcp-grant-store.js";
+import * as mcp from "./mcp-http-request.test-support.js";
 import { closeMcpLoopbackServer, ensureMcpLoopbackServer } from "./mcp-http.js";
 import { setMinimalCliPrepareDeps } from "./mcp-http.test-support.js";
 import * as toolResolution from "./tool-resolution.js";
@@ -188,23 +185,13 @@ function createQuestionFixture(
   const requests: Promise<McpResponse>[] = [];
   const persist = vi.fn(async () => {});
   const request = async (token: string, method: "tools/list" | "tools/call", attached = false) => {
-    const response = await fetch(`http://127.0.0.1:${runtime.port}/mcp`, {
-      method: "POST",
-      signal: requestSignal,
-      headers: {
-        authorization: `Bearer ${token}`,
-        "content-type": "application/json",
-        ...(attached ? {} : { "x-openclaw-cli-capture-key": captureKey }),
-      },
-      body: JSON.stringify({
-        jsonrpc: "2.0",
-        id: 1,
-        method,
-        ...(method === "tools/call"
-          ? { params: { name: "ask_user", arguments: questionArgs } }
-          : {}),
-      }),
-    });
+    const response = await mcp.request(
+      runtime,
+      method === "tools/call"
+        ? mcp.toolCall("ask_user", questionArgs)
+        : { jsonrpc: "2.0", id: 1, method },
+      { token, signal: requestSignal, captureKey: attached ? undefined : captureKey },
+    );
     expect(response.status).toBe(200);
     return (await response.json()) as McpResponse;
   };
@@ -216,15 +203,9 @@ function createQuestionFixture(
       ) => {
         signal.throwIfAborted();
         const source = new AbortController();
-        const admission = prepareAgentRunAdmission({
+        const admission = mcp.prepareAdmission(runId, "mcp-question-test", {
           cfg: config,
           operatorAuthority,
-          facts: {
-            runId,
-            agentId: "main",
-            ingress: { kind: "system", boundary: "mcp-question-test", state: "present" },
-          },
-          operationalRunInstance: createOperationalRunInstanceRef(runId),
         });
         admissionCleanups.push(() => admission.close());
         const originalToolsAllow = ["ask_user"];
