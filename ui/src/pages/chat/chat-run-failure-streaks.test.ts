@@ -3,7 +3,7 @@ import { beforeEach, expect, it } from "vitest";
 import type { ChatItem } from "../../lib/chat/chat-types.ts";
 import { projectRunFailureStreaks } from "./chat-run-failure-streaks.ts";
 import { buildChatItems } from "./chat-thread-build.ts";
-import { createProps } from "./chat-thread.test-support.ts";
+import { buildItems, createProps } from "./chat-thread.test-support.ts";
 import { resetChatThreadState } from "./chat-thread.ts";
 
 beforeEach(() => resetChatThreadState());
@@ -103,3 +103,21 @@ it.each([false, true])(
     ]);
   },
 );
+
+it("updates a cached failure's repeat count when older history loads", () => {
+  const summary = "Rate-limit recovery stopped";
+  const persistedFailure = (runId: string, seq: number) => ({
+    role: "custom",
+    content: summary,
+    timestamp: seq,
+    openclawRunError: { runId, summary },
+    __openclaw: { id: runId, seq },
+  });
+  const latest = persistedFailure("latest", 2);
+  const notices = (messages: unknown[]) =>
+    buildItems({ messages }).filter((item) => item.kind === "notice" && item.runError);
+  expect(notices([latest])).toMatchObject([{ runError: { runId: "latest" } }]);
+  expect(notices([persistedFailure("older", 1), latest])).toMatchObject([
+    { runError: { runId: "latest" }, repeatCount: 2 },
+  ]);
+});
