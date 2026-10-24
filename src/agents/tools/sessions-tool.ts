@@ -77,6 +77,9 @@ import {
 } from "./sessions-tool-schema.js";
 
 const GROUP_NAME_MAX_LENGTH = 512;
+// Upper bound on archive attempts, counting waits on competing session turns, so a
+// deferred self-archive cannot retry forever when every attempt fails retryably.
+const DEFERRED_SELF_ARCHIVE_MAX_ATTEMPTS = 10;
 const log = createSubsystemLogger("agents/sessions");
 
 type SessionsToolOptions = {
@@ -589,7 +592,12 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
                     archived: true,
                     ...expectedSessionIdentity,
                   };
-                  while (true) {
+                  for (let attempt = 1; ; attempt += 1) {
+                    if (attempt > DEFERRED_SELF_ARCHIVE_MAX_ATTEMPTS) {
+                      throw new Error(
+                        `archive not confirmed after ${DEFERRED_SELF_ARCHIVE_MAX_ATTEMPTS} attempts`,
+                      );
+                    }
                     const competingRelease = captureSessionControllerSettlement({
                       target: archiveTarget,
                     });

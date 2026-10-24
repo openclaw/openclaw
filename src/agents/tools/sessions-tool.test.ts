@@ -850,6 +850,60 @@ describe("sessions tool", () => {
     });
   });
 
+  it("gives up a deferred self-archive that keeps failing retryably", async () => {
+    const dir = sessionDirs.make();
+    const storePath = path.join(dir, "sessions.json");
+    const sessionKey = "agent:main:subagent:archive-retry";
+    const sessionId = "archive-retry-session";
+    await upsertSessionEntryCore(
+      { agentId: "main", sessionKey, storePath },
+      { sessionId, updatedAt: 1 },
+    );
+    let archiveAttempts = 0;
+    const callGateway = vi.fn(async (request: { params?: { archived?: boolean } }) => {
+      if (request.params?.archived !== true) {
+        return { ok: true as const, path: storePath, key: sessionKey, entry: {} };
+      }
+      archiveAttempts += 1;
+      // Keep a competing turn pending so every retryable failure is retried.
+      const competing = await beginSessionEffect({
+        scope: storePath,
+        identities: [sessionKey, sessionId],
+        assertAllowed: () => {},
+      });
+      setTimeout(() => competing.release(), 0);
+      throw Object.assign(new Error("transient archive failure"), { retryable: true });
+    });
+    const tool = createSessionsTool({
+      agentSessionKey: sessionKey,
+      agentSessionId: sessionId,
+      config: { session: { store: storePath } },
+      callGateway: callGateway as never,
+    });
+    const admission = await beginSessionEffect({
+      scope: storePath,
+      identities: [sessionKey, sessionId],
+      assertAllowed: () => {},
+    });
+
+    try {
+      await admission.run(
+        async () =>
+          await tool.execute("archive-retry", {
+            action: "patch",
+            archived: true,
+            model: "openai/luna",
+          }),
+      );
+    } finally {
+      admission.release();
+    }
+
+    await vi.waitFor(() => expect(archiveAttempts).toBeGreaterThanOrEqual(10));
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    expect(archiveAttempts).toBe(10);
+  });
+
   it("rejects an empty patch", async () => {
     const callGateway = vi.fn();
     const tool = createSessionsTool({
