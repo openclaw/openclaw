@@ -274,7 +274,7 @@ export function buildCodexRuntimeThreadConfig(
   const merged = expectDefined(
     mergeCodexThreadConfigs(
       // Codex owns model eligibility, history replay, and the pinned request effort.
-      // TODO(2026-11-07): Review removal once the minimum supported Codex release
+      // Cleanup review (2026-11-07): Remove once the minimum supported Codex release
       // defaults this on and native tests still prove opt-out and unsupported-model
       // compatibility. This is a review date, not a runtime expiry.
       { "features.reasoning_effort_override": true },
