@@ -176,6 +176,12 @@ replies and fixture media remain synthetic. The benchmark fetches the public
 the Gateway's route-specific preload selection. Real session-entry authorization
 is outside this measurement. Each run also saves `run-N.requests.json`, including
 browser request initiators, to distinguish parser preloads from chained imports.
+Use `--viewport mobile` for a 390×844 viewport; the default desktop viewport is
+1719×1179. Combine it with `--color-scheme light` or `--color-scheme dark` for
+responsive theme comparisons. The report records the viewport name and dimensions.
+Mobile measures the actual responsive boot with the navigation drawer closed;
+it does not require desktop sidebar rows to render. Sidebar-specific options
+can still deliver owner events without presenting the closed drawer.
 Font loading completions are recorded separately from composer and transcript
 readiness. The fixture mirrors
 the Gateway's terminal policy to preserve the document's CSP contract.
