@@ -12,6 +12,7 @@ struct DashboardRouteMapTests {
         #expect(DashboardRouteMap.skillsPagePath == "/skills")
         #expect(DashboardRouteMap.cronJobsPagePath == "/automations")
         #expect(DashboardRouteMap.sessionsPagePath == "/sessions")
+        #expect(DashboardRouteMap.systemsPagePath == "/systems")
         #expect(DashboardRouteMap.devicesSettingsPath == "/settings/devices")
     }
 
@@ -21,6 +22,7 @@ struct DashboardRouteMapTests {
         DashboardRouteMap.activityPagePath, DashboardRouteMap.workboardPagePath,
         DashboardRouteMap.skillWorkshopPagePath, DashboardRouteMap.devicesSettingsPath,
         DashboardRouteMap.dreamingPagePath, DashboardRouteMap.usagePagePath,
+        DashboardRouteMap.systemsPagePath,
     ])
     func `same-app path validation accepts rooted paths`(_ path: String) {
         #expect(DashboardRouteMap.isValidSameAppPath(path))

@@ -128,6 +128,7 @@ navigation chrome:
 | Sidebar destination | Dashboard path            |
 | ------------------- | ------------------------- |
 | Activity            | `/activity`               |
+| Systems             | `/systems`                |
 | Workboard           | `/workboard`              |
 | Skill Workshop      | `/skills/workshop`        |
 | Instances           | `/settings/devices`       |
