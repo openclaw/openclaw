@@ -45,6 +45,11 @@ const ELEVENLABS_TTS_MODELS = [
   "eleven_monolingual_v1",
 ] as const;
 
+type PronunciationDictionaryLocator = {
+  pronunciationDictionaryId: string;
+  versionId: string;
+};
+
 type ElevenLabsTtsRequestParams = {
   text: string;
   apiKey: string;
@@ -56,6 +61,7 @@ type ElevenLabsTtsRequestParams = {
   applyTextNormalization?: string;
   languageCode?: string;
   latencyTier?: number;
+  pronunciationDictionaryLocators?: PronunciationDictionaryLocator[];
   voiceSettings: typeof DEFAULT_ELEVENLABS_VOICE_SETTINGS;
   timeoutMs: number;
 };
@@ -71,6 +77,7 @@ async function requestElevenLabsTts(params: ElevenLabsTtsRequestParams, stream: 
     applyTextNormalization,
     languageCode,
     latencyTier,
+    pronunciationDictionaryLocators,
     voiceSettings,
   } = params;
   if (!isValidElevenLabsVoiceId(voiceId)) {
@@ -93,6 +100,16 @@ async function requestElevenLabsTts(params: ElevenLabsTtsRequestParams, stream: 
     seed,
     apply_text_normalization: normalizedNormalization,
     language_code: normalizedLanguage,
+    ...(pronunciationDictionaryLocators?.length
+      ? {
+          pronunciation_dictionary_locators: pronunciationDictionaryLocators.map(
+            ({ pronunciationDictionaryId, versionId }) => ({
+              pronunciation_dictionary_id: pronunciationDictionaryId,
+              version_id: versionId,
+            }),
+          ),
+        }
+      : {}),
     voice_settings: {
       stability: voiceSettings.stability,
       similarity_boost: voiceSettings.similarityBoost,
@@ -196,6 +213,39 @@ function normalizeVoiceSettings(
   });
 }
 
+function normalizePronunciationDictionaryLocators(
+  value: unknown,
+): PronunciationDictionaryLocator[] | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (!Array.isArray(value)) {
+    throw new Error("tts.providers.elevenlabs.pronunciationDictionaryLocators must be an array");
+  }
+  if (value.length > 3) {
+    throw new Error(
+      "tts.providers.elevenlabs.pronunciationDictionaryLocators supports at most three entries",
+    );
+  }
+  if (value.length === 0) {
+    return undefined;
+  }
+  return value.map((entry, index) => {
+    const locator = asOptionalRecord(entry);
+    const pronunciationDictionaryId =
+      typeof locator?.pronunciationDictionaryId === "string"
+        ? locator.pronunciationDictionaryId.trim()
+        : "";
+    const versionId = typeof locator?.versionId === "string" ? locator.versionId.trim() : "";
+    if (!pronunciationDictionaryId || !versionId) {
+      throw new Error(
+        `tts.providers.elevenlabs.pronunciationDictionaryLocators[${index}] requires non-empty pronunciationDictionaryId and versionId strings`,
+      );
+    }
+    return { pronunciationDictionaryId, versionId };
+  });
+}
+
 function normalizeElevenLabsProviderConfig(rawConfig: Record<string, unknown>) {
   const providers = asOptionalRecord(rawConfig.providers);
   const raw = asOptionalRecord(providers?.elevenlabs);
@@ -212,6 +262,9 @@ function normalizeElevenLabsProviderConfig(rawConfig: Record<string, unknown>) {
     seed: normalizeElevenLabsSeed(raw?.seed),
     applyTextNormalization: trimToUndefined(raw?.applyTextNormalization),
     languageCode: trimToUndefined(raw?.languageCode),
+    pronunciationDictionaryLocators: normalizePronunciationDictionaryLocators(
+      raw?.pronunciationDictionaryLocators,
+    ),
     voiceSettings: {
       ...DEFAULT_ELEVENLABS_VOICE_SETTINGS,
       ...normalizeVoiceSettings(rawVoiceSettings),
@@ -260,6 +313,7 @@ function resolveElevenLabsTtsRequest(
       trimToUndefined(overrides.applyTextNormalization) ?? config.applyTextNormalization,
     languageCode: trimToUndefined(overrides.languageCode) ?? config.languageCode,
     latencyTier: options.latencyTier,
+    pronunciationDictionaryLocators: config.pronunciationDictionaryLocators,
     voiceSettings: {
       ...config.voiceSettings,
       ...normalizeVoiceSettings(asOptionalRecord(overrides.voiceSettings)),
