@@ -102,7 +102,10 @@ reproduction state and launch the entry recorded in `build.debugEntry`:
 ./standalone-support/debug/bin/bun --inspect-brk ./standalone-support/debug/entry.mjs
 ```
 
-The debug entry starts the selected source runtime with its build facts. Keep
+The debug entry starts the selected source runtime with its build facts and
+defaults to its bundled SQLite library, while preserving `OPENCLAW_SQLITE_LIBRARY`
+overrides. Its bootstrap preload survives normal startup respawns. If a respawn
+starts a new inspector listener, attach to the child's reported URL. Keep
 `debug/` together with the companion; it is intentionally excluded from support
 exports. The AOT artifact does not gain debugger permissions. The compiled JIT
 companion and the source debugger use the same commit and selected plugins, but
@@ -177,7 +180,7 @@ runtime in `runtime/npm/` is retained regardless of the plugin selection.
 | --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `schemaVersion` | Manifest schema version, `1`.                                                                                                                    |
 | `build`         | Shared build `id`, `flavor` (`standard` or `support`), `pluginSetSha256`, `moduleGraphSha256`, and the support artifact's relative `debugEntry`. |
-| `debug`         | Support only: debugger entry, ordinary Bun executable digest, and selected source-runtime inventory.                                             |
+| `debug`         | Support only: debugger entry and bootstrap digests, ordinary Bun executable digest, and selected source-runtime inventory.                       |
 | `nativeModules` | Target-selected native package names, versions, relative artifact paths, backend scope, and explicit `unverified` qualification.                 |
 | `mode`          | `jit`, `bytecode`, or `aot`.                                                                                                                     |
 | `target`        | `platform` and `arch` for the compiled executable.                                                                                               |

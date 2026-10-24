@@ -709,6 +709,7 @@ const artifactsToPublish = compileStandaloneArtifacts({
   openclaw: openclawIdentity,
   plugins,
   nativeModules,
+  sqlite: sqlite.manifest,
   buildId,
 });
 const pruning = pruneStandaloneRuntime(resourcePlan);

@@ -168,7 +168,7 @@ function stageSupportRuntime({ runtimeRoot, outputRoot, bunExecutable, omittedDi
  * @param {{runtimeRoot: string, outputRoot: string, destination: string, supportDestination?: string, mode: BuildInfo["mode"], compileFlags: string[],
  * compileRoot: string, compileCwd: string, mainEntry: string, compiledEntries: string[], compileEntries: Set<string>, external: string[],
  * bunExecutable: string, bun: BuildInfo["bun"], openclaw: BuildInfo["openclaw"], plugins: NonNullable<BuildInfo["plugins"]> & {omittedDirs: string[]},
- * nativeModules: NativeModules, buildId: string}} options
+ * nativeModules: NativeModules, sqlite: {path?: string}, buildId: string}} options
  * @returns {CompiledArtifact[]}
  */
 export function compileStandaloneArtifacts({
@@ -189,6 +189,7 @@ export function compileStandaloneArtifacts({
   openclaw,
   plugins,
   nativeModules,
+  sqlite,
   buildId,
 }) {
   const provenance = {
@@ -228,7 +229,7 @@ export function compileStandaloneArtifacts({
       flavor: artifact.flavor,
       ...(artifact.flavor === "support" ? { debugEntry: "debug/entry.mjs" } : {}),
     };
-    const restoreStamp = stampStandaloneBuild(compiledEntries, {
+    const buildInfo = {
       mode: artifact.mode,
       build,
       openclaw,
@@ -236,7 +237,8 @@ export function compileStandaloneArtifacts({
       target: { platform: process.platform, arch: process.arch },
       plugins: { embedded: plugins.embedded.toSorted(), omitted: plugins.omitted.toSorted() },
       nativeModules,
-    });
+    };
+    const restoreStamp = stampStandaloneBuild(compiledEntries, buildInfo);
     try {
       const compiled = spawnSync(
         bunExecutable,
@@ -266,8 +268,14 @@ export function compileStandaloneArtifacts({
         throw new Error(`Standalone ${artifact.flavor} compilation failed (${compiled.status})`);
       }
       if (artifact.flavor === "support") {
-        const entry = `import { fileURLToPath } from "node:url";
-globalThis.__openclawStandaloneBuildInfo = Object.freeze(${JSON.stringify({ mode: artifact.mode, build, openclaw, bun, target: { platform: process.platform, arch: process.arch }, plugins: { embedded: plugins.embedded.toSorted(), omitted: plugins.omitted.toSorted() }, nativeModules })});
+        const bootstrap = `import { fileURLToPath } from "node:url";
+globalThis.__openclawStandaloneBuildInfo = Object.freeze(${JSON.stringify(buildInfo)});
+${sqlite.path ? `if (!process.env.OPENCLAW_SQLITE_LIBRARY?.trim()) { process.env.OPENCLAW_SQLITE_LIBRARY = fileURLToPath(new URL(${JSON.stringify("./runtime/" + sqlite.path)}, import.meta.url)); }` : ""}
+`;
+        fs.writeFileSync(path.join(artifact.outputRoot, "debug/bootstrap.mjs"), bootstrap);
+        const entry = `import "./bootstrap.mjs";
+import { fileURLToPath } from "node:url";
+process.execArgv.push("--import", fileURLToPath(new URL("./bootstrap.mjs", import.meta.url)));
 const entry = new URL("./runtime/openclaw.mjs", import.meta.url);
 process.argv[1] = fileURLToPath(entry);
 await import(entry.href);
@@ -299,6 +307,7 @@ export async function publishStandaloneArtifacts({ artifacts, runtimeRoot, manif
   }
   for (const artifact of artifacts) {
     const debugEntry = path.join(artifact.outputRoot, "debug/entry.mjs");
+    const debugBootstrap = path.join(artifact.outputRoot, "debug/bootstrap.mjs");
     const debugExecutable = path.join(artifact.outputRoot, "debug/bin/bun");
     const debug =
       artifact.flavor === "support"
@@ -307,6 +316,11 @@ export async function publishStandaloneArtifacts({ artifacts, runtimeRoot, manif
               path: "debug/entry.mjs",
               sizeBytes: fs.statSync(debugEntry).size,
               sha256: await sha256File(debugEntry),
+            },
+            bootstrap: {
+              path: "debug/bootstrap.mjs",
+              sizeBytes: fs.statSync(debugBootstrap).size,
+              sha256: await sha256File(debugBootstrap),
             },
             executable: {
               path: "debug/bin/bun",

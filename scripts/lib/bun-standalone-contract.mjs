@@ -230,7 +230,7 @@ export async function describeStandaloneRuntime(root) {
  * packageManager?: {name: string, version: string, entrypoint: string, fileCount: number, sizeBytes: number},
  * build?: import("../../cli-invocation.mjs").StandaloneBuildInfo["build"],
  * nativeModules?: import("../../cli-invocation.mjs").StandaloneBuildInfo["nativeModules"],
- * debug?: {entry: {path: string, sizeBytes: number, sha256: string}, executable: {path: string, sizeBytes: number, sha256: string}, runtime: Awaited<ReturnType<typeof describeStandaloneRuntime>>}
+ * debug?: {entry: {path: string, sizeBytes: number, sha256: string}, bootstrap: {path: string, sizeBytes: number, sha256: string}, executable: {path: string, sizeBytes: number, sha256: string}, runtime: Awaited<ReturnType<typeof describeStandaloneRuntime>>}
  * }} options
  */
 export async function createStandaloneManifest({

@@ -24,8 +24,30 @@ function fixture(failSupport = false) {
   fs.symlinkSync("asset.txt", path.join(runtimeRoot, "asset-link"));
   fs.writeFileSync(
     path.join(runtimeRoot, "openclaw.mjs"),
-    `import { answer } from "./leaf.mjs"; console.log(JSON.stringify({answer, mode: globalThis.__openclawStandaloneBuildInfo.mode}));`,
+    `import { spawnSync } from "node:child_process";
+import { getStandaloneRuntimeBuild, resolveOpenClawCliRespawn } from "./cli-invocation.mjs";
+import { answer } from "./leaf.mjs";
+if (!process.argv.includes("--debug-child")) {
+  const launch = resolveOpenClawCliRespawn({ args: ["--debug-child"] });
+  const child = spawnSync(launch.command, launch.args, { encoding: "utf8", env: launch.env });
+  process.stdout.write(child.stdout);
+  process.stderr.write(child.stderr);
+  process.exit(child.status ?? 1);
+}
+console.log(JSON.stringify({ answer, mode: getStandaloneRuntimeBuild()?.mode ?? null, sqliteLibrary: process.env.OPENCLAW_SQLITE_LIBRARY ?? null }));`,
   );
+  for (const filename of [
+    "cli-invocation.mjs",
+    "cli-parent-lifetime.mjs",
+    "gateway-shutdown-budget.mjs",
+  ]) {
+    fs.copyFileSync(
+      new URL(`../../${filename}`, import.meta.url),
+      path.join(runtimeRoot, filename),
+    );
+  }
+  fs.mkdirSync(path.join(runtimeRoot, "lib"));
+  fs.writeFileSync(path.join(runtimeRoot, "lib/test-sqlite.dylib"), "synthetic SQLite library");
   fs.writeFileSync(path.join(runtimeRoot, "leaf.mjs"), "export const answer = 42;");
   fs.writeFileSync(path.join(runtimeRoot, "leaf.mjs.map"), '{"version":3}');
   fs.mkdirSync(path.join(runtimeRoot, "node_modules"));
@@ -72,6 +94,7 @@ function compile(input: ReturnType<typeof fixture>) {
     openclaw: { version: "2026.10.3", commit: "a".repeat(40) },
     plugins: { embedded: ["slack", "codex"], omitted: ["matrix"], omittedDirs: ["matrix"] },
     nativeModules: [],
+    sqlite: { path: "lib/test-sqlite.dylib" },
     buildId: "matched-build",
   });
 }
@@ -84,7 +107,14 @@ describe("matched standalone support artifacts", () => {
       const artifacts = compile(input);
       expect(fs.existsSync(path.join(input.root, "aot"))).toBe(false);
       expect(fs.readFileSync(input.mainEntry, "utf8")).toBe(input.source);
-      for (const name of ["openclaw.mjs", "leaf.mjs", "leaf.mjs.map"]) {
+      for (const name of [
+        "openclaw.mjs",
+        "leaf.mjs",
+        "leaf.mjs.map",
+        "cli-invocation.mjs",
+        "cli-parent-lifetime.mjs",
+        "gateway-shutdown-budget.mjs",
+      ]) {
         fs.unlinkSync(path.join(input.runtimeRoot, name));
       }
       fs.rmSync(path.join(input.runtimeRoot, "node_modules"), { recursive: true });
@@ -98,7 +128,10 @@ describe("matched standalone support artifacts", () => {
           nativeModules: [],
           embedded: { modules: 1, plugins: 2, workers: 0, inlineWorkers: 0 },
           pruning: {
-            categories: { dependencyAssets: { files: 1, bytes: 14 } },
+            categories: {
+              dependencyAssets: { files: 1, bytes: 14 },
+              nativeLibraries: { files: 1, bytes: Buffer.byteLength("synthetic SQLite library") },
+            },
             sidecarPlugins: [],
           },
           sqlite: { version: "3.53.4" },
@@ -148,11 +181,37 @@ describe("matched standalone support artifacts", () => {
       ).toBe(false);
       const debug = spawnSync(
         path.join(input.root, "support/debug/bin/bun"),
-        [path.join(input.root, "support/debug/entry.mjs")],
-        { encoding: "utf8" },
+        [path.join(input.root, "support/debug/entry.mjs"), "--debug-child"],
+        { encoding: "utf8", env: { ...process.env, OPENCLAW_SQLITE_LIBRARY: "" } },
       );
       expect(debug.status, debug.stderr).toBe(0);
-      expect(JSON.parse(debug.stdout)).toEqual({ answer: 42, mode: "jit" });
+      const bundledSqlite = path.join(input.root, "support/debug/runtime/lib/test-sqlite.dylib");
+      expect
+        .soft(JSON.parse(debug.stdout))
+        .toEqual({ answer: 42, mode: "jit", sqliteLibrary: bundledSqlite });
+      const respawned = spawnSync(
+        path.join(input.root, "support/debug/bin/bun"),
+        [path.join(input.root, "support/debug/entry.mjs")],
+        { encoding: "utf8", env: { ...process.env, OPENCLAW_SQLITE_LIBRARY: "" } },
+      );
+      expect(respawned.status, respawned.stderr).toBe(0);
+      expect
+        .soft(JSON.parse(respawned.stdout))
+        .toEqual({ answer: 42, mode: "jit", sqliteLibrary: bundledSqlite });
+      const overridden = spawnSync(
+        path.join(input.root, "support/debug/bin/bun"),
+        [path.join(input.root, "support/debug/entry.mjs")],
+        {
+          encoding: "utf8",
+          env: { ...process.env, OPENCLAW_SQLITE_LIBRARY: "synthetic-override" },
+        },
+      );
+      expect(overridden.status, overridden.stderr).toBe(0);
+      expect(JSON.parse(overridden.stdout)).toEqual({
+        answer: 42,
+        mode: "jit",
+        sqliteLibrary: "synthetic-override",
+      });
     },
   );
 
