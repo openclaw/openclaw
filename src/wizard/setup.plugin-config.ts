@@ -131,15 +131,64 @@ async function listEnabledConfigurableManifestPlugins(params: {
   config: OpenClawConfig;
   workspaceDir?: string;
 }): Promise<readonly PluginManifestRecord[]> {
-  const { loadPluginMetadataSnapshot } = await loadPluginMetadataSnapshotModule();
+  const [
+    { loadPluginMetadataSnapshot },
+    { applyPluginAutoEnable },
+    { withBundledPluginEnablementCompat },
+    { isBundledProviderCompatPlugin },
+    { resolvePluginActivationSourceConfig },
+    { createPluginActivationSource, normalizePluginsConfig, resolveEffectivePluginActivationState },
+    { isPluginEnabledByDefaultForPlatform },
+  ] = await Promise.all([
+    loadPluginMetadataSnapshotModule(),
+    import("../config/plugin-auto-enable.js"),
+    import("../plugins/bundled-compat.js"),
+    import("../plugins/bundled-provider-compat.js"),
+    import("../plugins/activation-source-config.js"),
+    import("../plugins/config-state.js"),
+    import("../plugins/default-enablement.js"),
+  ]);
   const snapshot = loadPluginMetadataSnapshot({
     config: params.config,
     workspaceDir: params.workspaceDir,
     env: process.env,
   });
+  // Activation is a local projection; skipping must preserve the caller's authored config.
+  const autoEnabled = applyPluginAutoEnable({
+    config: params.config,
+    env: process.env,
+    manifestRegistry: snapshot.manifestRegistry,
+    discovery: snapshot.discovery,
+  });
+  const normalized = normalizePluginsConfig(autoEnabled.config.plugins);
+  // Legacy allowlists include bundled providers without widening policy for other owners.
+  const bundledConfig = withBundledPluginEnablementCompat({
+    config: autoEnabled.config,
+    env: process.env,
+    pluginIds: snapshot.plugins.filter(isBundledProviderCompatPlugin).map((plugin) => plugin.id),
+    activation: "defaults",
+  });
+  const bundledNormalized =
+    bundledConfig === autoEnabled.config
+      ? normalized
+      : normalizePluginsConfig(bundledConfig?.plugins);
+  const sourceConfig = resolvePluginActivationSourceConfig({ config: params.config });
+  const activationSource = createPluginActivationSource({
+    config: sourceConfig,
+    plugins: sourceConfig.plugins === autoEnabled.config.plugins ? normalized : undefined,
+  });
   return snapshot.plugins.filter((plugin) => {
-    const entry = params.config.plugins?.entries?.[plugin.id];
-    return plugin.enabledByDefault || entry?.enabled === true;
+    const bundledProvider = isBundledProviderCompatPlugin(plugin);
+    return resolveEffectivePluginActivationState({
+      id: plugin.id,
+      origin: plugin.origin,
+      channelIds: plugin.channels,
+      config: bundledProvider ? bundledNormalized : normalized,
+      rootConfig: bundledProvider ? bundledConfig : autoEnabled.config,
+      enabledByDefault: isPluginEnabledByDefaultForPlatform(plugin),
+      activationSource,
+      autoEnabledReason: autoEnabled.autoEnabledReasons[plugin.id]?.join("; "),
+    }).activated;
   });
 }
 
