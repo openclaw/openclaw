@@ -75,6 +75,11 @@ last session only on the default landing and matching-agent short routes. Other
 pages do not prewarm the transcript database. The route loader still owns name
 and short-ID resolution; a speculative read cannot select a conversation.
 
+An ambiguous dashboard name may prewarm the last-viewed dashboard for the same
+agent. Only the route's exact cache key can consume that candidate. A name that
+resolves elsewhere leaves one unused scoped read; it never changes selection
+or delays connection/history. Forced literal keys and other agents stay exact.
+
 The pane publishes scoped saved rows without waiting for the first connect
 request or route revalidation. Cached board startup retains its separate timing.
 History requests use a cursor that has already arrived, but never wait for
@@ -133,11 +138,10 @@ duplicate row keys, and recorded zero CLS during live adoption. Whole-page CLS
 remained about 0.112 because earlier virtualizer, sidebar, and details updates
 still move content. Zero whole-page CLS is not established by this change.
 
-The final production artifact, including workspace-icon admission, is 281,281 B
+The final production artifact, including workspace-icon admission, is 281,367 B
 gzip with seven JavaScript requests and one CSS request (base: 281,184 B).
-Chat boot is 1,274,943 B (+146 B); New Session is 771,014 B (+126 B). The
-97 B startup increase carries the route-aware prewarm selection; startup raw
-bytes are unchanged by the workspace-icon follow-up.
+Chat boot is 1,274,888 B (+91 B); New Session is 771,094 B (+206 B). The
+183 B startup increase includes the route-aware prewarm selection.
 
 Cached widgets keep their normal shell and learned height before admission;
 their active content and controls wait. Dashboard board-and-transcript restoration

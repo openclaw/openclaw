@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 281281,
-  "reason": "Earlier saved transcript display: repaired final artifact 281281 B gzip, same startup requests; 20-pair remote visible median 509.3 to 304.7 ms.",
+  "startupJsGzipBytes": 281367,
+  "reason": "Earlier scoped warm transcript with dashboard alias candidate: final artifact 281367 B gzip, unchanged requests; 20-pair remote visible median 509.3 to 304.7 ms.",
   "updatedAt": "2026-10-24"
 }

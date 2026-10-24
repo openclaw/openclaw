@@ -1,7 +1,11 @@
 import { gatewayCredentialScope } from "@openclaw/gateway-client/browser";
 import type { RouteLocation } from "@openclaw/uirouter";
 import { sessionRefFromPath } from "../app-session-route-paths.ts";
-import { buildAgentMainSessionKey, parseAgentSessionKey } from "../lib/sessions/session-key.ts";
+import {
+  buildAgentMainSessionKey,
+  isDashboardSessionKey,
+  parseAgentSessionKey,
+} from "../lib/sessions/session-key.ts";
 import { clearStoredChatSnapshots } from "../pages/chat/session-snapshot-invalidation.runtime.ts";
 import { resolveChatSnapshotKey } from "../pages/chat/session-snapshot-key.ts";
 import { prewarmChatSnapshot } from "../pages/chat/session-snapshot-prewarm.ts";
@@ -31,8 +35,17 @@ export function prewarmBootChat(
   if (!target && path !== "" && path !== "/chat") {
     return;
   }
-  const sessionKey =
-    target?.kind === "main"
+  // Dashboard names are ambiguous until the roster resolves them. Warm one
+  // same-agent last-viewed candidate; only the route's exact key can consume it.
+  const savedDashboardCandidate =
+    target?.namespace === "dashboard" &&
+    target.kind === "literal" &&
+    target.slugCandidate &&
+    isDashboardSessionKey(lastSessionKey) &&
+    parseAgentSessionKey(lastSessionKey)?.agentId === target.agentId;
+  const sessionKey = savedDashboardCandidate
+    ? lastSessionKey
+    : target?.kind === "main"
       ? buildAgentMainSessionKey({ agentId: target.agentId, mainKey: record.agents.mainKey })
       : target?.kind === "literal"
         ? target.sessionKey
