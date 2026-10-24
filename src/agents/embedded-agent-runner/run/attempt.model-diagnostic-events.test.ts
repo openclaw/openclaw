@@ -532,9 +532,7 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents stream proxy", () => {
       () => {
         messages[1]!.content[0]!.text = "mutable edit";
       },
-      () => {
-        messages.splice(0, 50);
-      },
+      () => messages.splice(0, 50),
     ]) {
       change();
       const expected = JSON.stringify(messages).length;
@@ -561,20 +559,31 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents stream proxy", () => {
     const expected = [JSON.stringify(messages).length, JSON.stringify([first, second]).length];
     const nativeStringify = JSON.stringify;
     const visits: string[] = [];
-    const stringify = vi.spyOn(JSON, "stringify").mockImplementation((value, replacer) => {
-      if (typeof replacer !== "function") {
-        return nativeStringify(value, replacer);
-      }
-      return nativeStringify(value, function (key, part: unknown) {
-        if (key === "text" && typeof part === "string") {
-          visits.push(part);
+    type FunctionReplacer = (this: unknown, key: string, part: unknown) => unknown;
+    const stringify = vi.spyOn(JSON, "stringify");
+    stringify.mockImplementation(
+      (
+        value: unknown,
+        replacer?: FunctionReplacer | (string | number)[] | null,
+        space?: string | number,
+      ) => {
+        if (typeof replacer !== "function") {
+          return nativeStringify(value, replacer, space);
         }
-        return replacer.call(this, key, part);
-      });
-    });
-    let events: DiagnosticEventPayload[];
+        return nativeStringify(
+          value,
+          function (key, part: unknown) {
+            if (key === "text" && typeof part === "string") {
+              visits.push(part);
+            }
+            return replacer.call(this, key, part);
+          },
+          space,
+        );
+      },
+    );
     try {
-      events = await collectModelCallEvents(async () => {
+      const events = await collectModelCallEvents(async () => {
         await wrapped({} as never, { messages });
         visits.length = 0;
         await wrapped({} as never, { messages });
@@ -583,14 +592,14 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents stream proxy", () => {
         await wrapped({} as never, { messages });
         expect(visits).toEqual(["owned append"]);
       });
+      expect(
+        events.flatMap((event) =>
+          event.type === "model.call.started" ? [event.promptStats?.inputMessagesChars] : [],
+        ),
+      ).toEqual([expected[0], expected[0], expected[1]]);
     } finally {
       stringify.mockRestore();
     }
-    expect(
-      events.flatMap((event) =>
-        event.type === "model.call.started" ? [event.promptStats?.inputMessagesChars] : [],
-      ),
-    ).toEqual([expected[0], expected[0], expected[1]]);
   });
 
   it("reuses prompt text sizes across appends while observing rewrites and compaction", async () => {
