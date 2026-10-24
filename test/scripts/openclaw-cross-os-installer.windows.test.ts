@@ -16,9 +16,13 @@ function installerTempFiles(dir: string) {
   return readdirSync(dir).filter((entry) => entry.startsWith("openclaw-installer-"));
 }
 
-function installer(baseUrl: string, route: string, platform: "linux" | "win32") {
+function installer(baseUrl: string, route: string) {
   return buildInstallerSmokeScript(
-    { installerUrl: `${baseUrl}/${route}`, installTarget: "proof-target", platform },
+    {
+      installerUrl: `${baseUrl}/${route}`,
+      installTarget: "proof-target",
+      platform: windows ? "win32" : "linux",
+    },
     { connectTimeoutSeconds: 2, requestTimeoutSeconds: 1 },
   );
 }
@@ -75,36 +79,22 @@ it("buffers installers before execution and cleans up timed-out downloads", asyn
             OPENCLAW_PROOF_STALL_MARKER: stalledMarker,
           }),
     };
-    if (!windows) {
-      const healthy = await runShell(
-        installer(baseUrl, "healthy", "linux"),
-        dir,
-        env,
-        join(dir, "healthy.log"),
-      );
-      expect(healthy.exitCode).toBe(0);
-      expect(readFileSync(healthyMarker, "utf8")).toBe("--version|proof-target|--no-onboard");
-      expect(installerTempFiles(dir)).toEqual([]);
-    }
+    const scripts = [installer(baseUrl, "healthy"), installer(baseUrl, "stalled")];
     const result = await runShell(
       windows
-        ? [
-            "[Console]::Out.WriteLine('OPENCLAW_INSTALLER_PROOF:started ' + [DateTime]::UtcNow.ToString('O'))",
-            installer(baseUrl, "healthy", "win32"),
-            "if (-not $?) { throw 'Healthy installer command failed' }",
-            "[Console]::Out.WriteLine('OPENCLAW_INSTALLER_PROOF:healthy-complete ' + [DateTime]::UtcNow.ToString('O'))",
-            installer(baseUrl, "stalled", "win32"),
-          ].join("\n")
-        : installer(baseUrl, "stalled", "linux"),
+        ? scripts.join("\nif (-not $?) { throw 'Healthy installer command failed' }\n")
+        : // Each POSIX installer owns an EXIT trap; subshells keep their cleanup separate.
+          scripts.map((script) => `(\n${script}\n)`).join(" && "),
       dir,
       env,
       logPath,
     );
 
+    expect(readFileSync(healthyMarker, "utf8")).toBe(
+      windows ? "tag=proof-target noOnboard=True" : "--version|proof-target|--no-onboard",
+    );
+    expect(requests).toEqual(["/healthy", "/stalled"]);
     if (windows) {
-      expect(result.stdout, result.stderr).toContain("OPENCLAW_INSTALLER_PROOF:healthy-complete ");
-      expect(readFileSync(healthyMarker, "utf8")).toBe("tag=proof-target noOnboard=True");
-      expect(requests).toEqual(["/healthy", "/stalled"]);
       expect(result.exitCode).not.toBe(0);
       expect(`${result.stdout}\n${result.stderr}`).toContain("exit 28");
     } else {

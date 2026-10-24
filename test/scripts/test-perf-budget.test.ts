@@ -7,22 +7,6 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-function checkReport(
-  payload: unknown,
-  expected: string | { fileCount: number; totalFileDurationMs: number },
-) {
-  const reportPath = path.join(tempDirs.make("perf-report-"), "report.json");
-  fs.writeFileSync(
-    reportPath,
-    typeof payload === "string" ? payload : `${JSON.stringify(payload)}\n`,
-  );
-  if (typeof expected === "string") {
-    expect(() => testing.collectPerfReportStats(reportPath)).toThrow(expected);
-  } else {
-    expect(testing.collectPerfReportStats(reportPath)).toEqual(expected);
-  }
-}
-
 it.each([
   { actions: "", childExitCode: 0, expectedExitCode: 1 },
   { actions: "true", childExitCode: 0, expectedExitCode: 0 },
@@ -41,7 +25,7 @@ it.each([
       import { syncBuiltinESMExports } from "node:module";
       childProcess.spawnSync = (_command, args) => {
         fs.writeFileSync(args[args.indexOf("--outputFile") + 1], JSON.stringify({
-          testResults: [{ startTime: 1000, endTime: 1001 }],
+          testResults: [{ startTime: 1000, endTime: 1400 }],
         }));
         return { status: ${childExitCode} };
       };
@@ -70,6 +54,9 @@ it.each([
       },
     );
     expect(result.status, result.stderr).toBe(expectedExitCode);
+    if (childExitCode === 0) {
+      expect(result.stdout).toContain("file-sum=400.0ms files=1");
+    }
     if (actions && childExitCode === 0) {
       expect(result.stderr).toContain("::warning file=");
       expect(fs.readFileSync(summaryPath, "utf8")).toContain("Test wall-time budget");
@@ -121,15 +108,15 @@ it.each([
   expect(() => testing.parseArgs(args, {})).toThrow(message);
 });
 
-it("requires timed file evidence in the Vitest JSON report", () => {
-  checkReport(
-    { testResults: [{ startTime: 1000, endTime: 1400 }] },
-    { fileCount: 1, totalFileDurationMs: 400 },
-  );
-  checkReport({ testResults: [] }, "Vitest JSON report contained no timed file results");
-  checkReport(
+it.each([
+  [{ testResults: [] }, "Vitest JSON report contained no timed file results"],
+  [
     { testResults: [{ name: "missing-timing" }] },
     "Vitest JSON report contained no timed file results",
-  );
-  checkReport("{", "failed to read Vitest JSON report");
+  ],
+  ["{", "failed to read Vitest JSON report"],
+] as const)("rejects reports without timed file evidence: %j", (payload, message) => {
+  const reportPath = path.join(tempDirs.make("perf-report-"), "report.json");
+  fs.writeFileSync(reportPath, typeof payload === "string" ? payload : JSON.stringify(payload));
+  expect(() => testing.collectPerfReportStats(reportPath)).toThrow(message);
 });
