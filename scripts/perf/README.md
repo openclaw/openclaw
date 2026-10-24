@@ -21,6 +21,23 @@ Run at least five alternating samples at 100 and 1,000 reads on the approved
 benchmark host. This is forced-GC owner retention proof, not a latency, allocation,
 promotion, or production GC benchmark.
 
+## Session-fork snapshots
+
+`node --expose-gc scripts/perf/session-fork-retention-measure.mjs <baseline-root> <candidate-root>`
+compares the fork snapshot owner with 64 near-budget requests, 1,000 requests
+with nested options, and three requests with 22 MiB Blob publications sliced from
+64 MiB backing stores. The roots
+need only the four source files listed in the script. Six alternating samples per
+side each capture and replace the same sessions twice, then verify retained
+prefixes, publications, and opaque-data isolation through public fork calls.
+Run on an approved benchmark host under its shared guard. Acceptance is bounded
+snapshot data within the unchanged 64 MiB budget, with latest-prefix replay and
+replacement cleanup preserved. Output includes source hashes, live-entry counts,
+and post-GC heapUsed, external, and arrayBuffers deltas. Their sum is a conservative
+aggregate because pooled buffers can overlap the external and arrayBuffers counters.
+These whole-process deltas exclude unreported native storage and shared transport runtime ownership; they are not
+exact dominator sizes or whole-Gateway CPU, GC, or promotion measurements.
+
 ## Private-array copies
 
 `node --expose-gc scripts/perf/private-array-copies-measure.mjs <baseline-root> <candidate-root>`
