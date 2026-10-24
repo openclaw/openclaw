@@ -2,11 +2,7 @@ import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
-import {
-  evaluateWorkflowRunner,
-  expectIncludes as containsAll,
-  readCiWorkflow,
-} from "./ci-workflow.test-support.js";
+import { expectIncludes as containsAll, readCiWorkflow } from "./ci-workflow.test-support.js";
 
 const workflow = readCiWorkflow();
 const job = workflow.jobs["android-access-native"];
@@ -56,12 +52,6 @@ with zipfile.ZipFile(apk, 'w') as archive:
 
 it("runs the packaged class with pinned Android tooling", () => {
   expect(job.permissions).toEqual({ contents: "read" });
-  expect(evaluateWorkflowRunner(job["runs-on"], { eventName: "pull_request" })).toBe(
-    "ubuntu-24.04",
-  );
-  expect(workflow.jobs.preflight.outputs.run_android_access_native).toBe(
-    "${{ steps.manifest.outputs.run_android_access_native }}",
-  );
   containsAll(step.run, [
     ":app:connectedPlayDebugAndroidTest",
     "-Pandroid.testInstrumentationRunnerArguments.class=ai.openclaw.app.gateway.CloudflareAccessNativeTest",

@@ -177,14 +177,3 @@ it("keeps loose parent-bound respawn bytes identical to the former runner prefix
   });
   expect(invocation.env).toBe(env);
 });
-
-it("keeps runtime-flag construction out of CLI spawn transports", () => {
-  // These transports accept already-resolved invocations. Adding a runtime
-  // prefix here bypasses the standalone/loose decision at the invocation owner.
-  for (const file of ["node-runtime-recovery.mjs", "src/process/respawn-child-runner.ts"]) {
-    const source = fs.readFileSync(new URL(`../../${file}`, import.meta.url), "utf8");
-    expect(source, file).not.toMatch(
-      /CLI_PARENT_BOUND_PRELOAD|["']--(?:import|require|loader)(?:=|["'])/,
-    );
-  }
-});

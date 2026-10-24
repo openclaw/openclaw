@@ -1,9 +1,8 @@
 import { spawnSync } from "node:child_process";
-import { chmodSync } from "node:fs";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { cleanupTempDirs, makeTempDir } from "../helpers/temp-dir.js";
+import { afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const SCRIPT = path.join(process.cwd(), "scripts", "ios-team-id.sh");
 const BASH_BIN = process.platform === "win32" ? "bash" : "/bin/bash";
@@ -11,14 +10,9 @@ const BASH_ARGS = process.platform === "win32" ? [SCRIPT] : ["--noprofile", "--n
 const BASE_PATH = process.env.PATH ?? "/usr/bin:/bin";
 const BASE_LANG = process.env.LANG ?? "C";
 const CANONICAL_TEAM_ID = "FWJYW4S8P8";
-let sharedBinDir = "";
-let sharedHomeDir = "";
-let sharedFakePythonPath = "";
-const tempDirs: string[] = [];
-async function writeExecutable(filePath: string, body: string): Promise<void> {
-  await writeFile(filePath, body, "utf8");
-  chmodSync(filePath, 0o755);
-}
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const writeExecutable = (filePath: string, body: string) =>
+  writeFileSync(filePath, `#!/usr/bin/env bash\n${body}`, { mode: 0o755 });
 
 function runScript(
   homeDir: string,
@@ -29,7 +23,7 @@ function runScript(
     env: {
       HOME: homeDir,
       LANG: BASE_LANG,
-      PATH: [path.join(homeDir, "bin"), sharedBinDir, BASE_PATH].join(path.delimiter),
+      PATH: [path.join(homeDir, "bin"), BASE_PATH].join(path.delimiter),
       ...extraEnv,
     },
     encoding: "utf8",
@@ -38,45 +32,24 @@ function runScript(
   return { ok: status === 0, stdout: stdout?.trim() ?? "", stderr: stderr?.trim() ?? "" };
 }
 
-async function makeHome() {
-  const homeDir = makeTempDir(tempDirs, "openclaw-ios-team-id-");
-  await mkdir(path.join(homeDir, "bin"), { recursive: true });
+function makeHome() {
+  const homeDir = tempDirs.make("openclaw-ios-team-id-");
+  mkdirSync(path.join(homeDir, "bin"));
   const preferences = path.join(homeDir, "Library", "Preferences");
-  await mkdir(preferences, { recursive: true });
-  await writeFile(path.join(preferences, "com.apple.dt.Xcode.plist"), "");
+  mkdirSync(preferences, { recursive: true });
+  writeFileSync(path.join(preferences, "com.apple.dt.Xcode.plist"), "");
+  writeExecutable(path.join(homeDir, "bin", "plutil"), "echo '{}'");
+  writeExecutable(path.join(homeDir, "bin", "defaults"), "exit 0");
   return homeDir;
 }
 
 describe("scripts/ios-team-id.sh", () => {
-  beforeAll(async () => {
-    const fixtureRoot = makeTempDir(tempDirs, "openclaw-ios-team-id-");
-    sharedBinDir = path.join(fixtureRoot, "shared-bin");
-    await mkdir(sharedBinDir, { recursive: true });
-    sharedHomeDir = await makeHome();
-    await writeExecutable(
-      path.join(sharedBinDir, "plutil"),
-      `#!/usr/bin/env bash
-echo '{}'`,
-    );
-    await writeExecutable(path.join(sharedBinDir, "defaults"), "#!/usr/bin/env bash\nexit 0\n");
-    sharedFakePythonPath = path.join(sharedHomeDir, "bin", "fake-python");
-    await writeExecutable(
-      sharedFakePythonPath,
-      `#!/usr/bin/env bash
-printf 'AAAAA11111\\t1\\tAlpha Team\\r\\n'
-printf 'BBBBB22222\\t0\\tBeta Team\\r\\n'`,
-    );
-  });
-
-  afterAll(() => cleanupTempDirs(tempDirs));
-
-  it("prefers the canonical OpenClaw iOS team when it is present", async () => {
-    const homeDir = await makeHome();
+  it("prefers the canonical OpenClaw iOS team when it is present", () => {
+    const homeDir = makeHome();
     const fakePythonPath = path.join(homeDir, "bin", "fake-python");
-    await writeExecutable(
+    writeExecutable(
       fakePythonPath,
-      `#!/usr/bin/env bash
-printf 'AAAAA11111\\t0\\tAlpha Team\\r\\n'
+      `printf 'AAAAA11111\\t0\\tAlpha Team\\r\\n'
 printf '${CANONICAL_TEAM_ID}\\t0\\tOpenClaw\\r\\n'`,
     );
 
@@ -84,12 +57,11 @@ printf '${CANONICAL_TEAM_ID}\\t0\\tOpenClaw\\r\\n'`,
     expect(result).toMatchObject({ ok: true, stdout: CANONICAL_TEAM_ID });
   });
 
-  it("loads teams from Xcode account identifier team metadata", async () => {
-    const homeDir = await makeHome();
-    await writeExecutable(
+  it("loads teams from Xcode account identifier team metadata", () => {
+    const homeDir = makeHome();
+    writeExecutable(
       path.join(homeDir, "bin", "plutil"),
-      `#!/usr/bin/env bash
-if [[ "$1" == "-extract" && "$2" == "IDEProvisioningTeamByIdentifier" ]]; then
+      `if [[ "$1" == "-extract" && "$2" == "IDEProvisioningTeamByIdentifier" ]]; then
   cat <<'JSON'
 {"account-id":[{"teamID":"FWJYW4S8P8","teamName":"OpenClaw Foundation","isFreeProvisioningTeam":false,"teamType":"Company"}]}
 JSON
@@ -103,9 +75,13 @@ echo '{}'`,
   });
 
   it("fails canonical-only resolution when only fallback teams are available", () => {
-    const result = runScript(sharedHomeDir, { IOS_PYTHON_BIN: sharedFakePythonPath }, [
-      "--require-canonical",
-    ]);
+    const homeDir = makeHome();
+    const fakePythonPath = path.join(homeDir, "bin", "fake-python");
+    writeExecutable(
+      fakePythonPath,
+      "printf 'AAAAA11111\\t1\\tAlpha Team\\r\\nBBBBB22222\\t0\\tBeta Team\\r\\n'",
+    );
+    const result = runScript(homeDir, { IOS_PYTHON_BIN: fakePythonPath }, ["--require-canonical"]);
     expect(result).toMatchObject({
       ok: false,
       stderr: expect.stringContaining(
@@ -115,7 +91,7 @@ echo '{}'`,
   });
 
   it("rejects explicit non-canonical teams in canonical-only mode", () => {
-    const result = runScript(sharedHomeDir, { IOS_DEVELOPMENT_TEAM: "BBBBB22222" }, [
+    const result = runScript(makeHome(), { IOS_DEVELOPMENT_TEAM: "BBBBB22222" }, [
       "--require-canonical",
     ]);
     expect(result).toMatchObject({
