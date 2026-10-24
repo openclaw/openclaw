@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -71,6 +72,41 @@ afterEach(() => {
 });
 
 describe("database port startup exclusion", () => {
+  it.skipIf(process.platform === "win32")(
+    "refuses a FIFO manifest without waiting for a writer",
+    () => {
+      fs.mkdirSync(path.dirname(fixed), { recursive: true });
+      expect(spawnSync("mkfifo", [fixed]).status).toBe(0);
+      const probe = spawnSync(
+        process.execPath,
+        [
+          "--import",
+          "./scripts/tsx.mjs",
+          "--input-type=module",
+          "-e",
+          `
+        import { assertDatabasePortStartupAllowed, DatabasePortRecoveryError } from "./src/infra/database-port-recovery.ts";
+        try {
+          assertDatabasePortStartupAllowed(process.argv[1]);
+          process.exitCode = 2;
+        } catch (error) {
+          if (!(error instanceof DatabasePortRecoveryError)) throw error;
+          console.log(error.message);
+        }
+      `,
+          stateDir,
+        ],
+        { encoding: "utf8", timeout: 10_000 },
+      );
+      expect(probe.error).toBeUndefined();
+      expect(probe.status).toBe(0);
+      expect(probe.stdout).toContain("Database port recovery required");
+      expect(probe.stdout).toContain("--resume");
+      expect(probe.stdout).toContain("--rollback");
+      expect(fs.lstatSync(fixed).isFIFO()).toBe(true);
+    },
+  );
+
   it.skipIf(process.platform === "win32").each(["preparing", "publishing"] as const)(
     "refuses %s with both recovery commands",
     (state) => {
