@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { stableStringify } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import "../../agents/test-helpers/fast-bash-tools.js";
 import "../../agents/test-helpers/fast-coding-tools.js";
@@ -106,6 +107,33 @@ afterEach(() => {
 });
 
 describe("resolveWorkerToolAuthority", () => {
+  it.each<{ name: string; overrides: TurnOverrides }>([
+    { name: "default", overrides: {} },
+    {
+      name: "configured review",
+      overrides: {
+        config: { tools: { exec: { host: "gateway", mode: "auto", strictInlineEval: true } } },
+      },
+    },
+    {
+      name: "scheduled approval",
+      overrides: {
+        scheduledToolPolicy: {
+          version: 1,
+          mode: "account",
+          ownerSessionKey: "agent:main:cron:owner",
+          ownerAccountId: "default",
+          execTarget: { host: "gateway", ask: "always" },
+        },
+      },
+    },
+  ])("preserves launch fingerprint bytes across JSON for $name policy", async ({ overrides }) => {
+    const { exec } = await resolvedAuthority(overrides);
+    // The node supervisor fingerprints the projection before and after JSON transport.
+    // oxlint-disable-next-line unicorn/prefer-structured-clone -- Exercise JSON transport, which omits undefined fields.
+    expect(stableStringify(JSON.parse(JSON.stringify(exec)))).toBe(stableStringify(exec));
+  });
+
   it.each(["auto", "ask"] as const)(
     "preserves %s exec mode without withholding worker shell tools",
     async (mode) => {

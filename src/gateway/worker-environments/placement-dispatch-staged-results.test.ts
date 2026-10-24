@@ -1,10 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { beforeEach, describe, expect, vi } from "vitest";
-import {
-  WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE,
-  WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
-} from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { createCommandTest } from "../../../test/helpers/command-fixture.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
@@ -21,6 +17,7 @@ import {
   seedActivePlacement,
 } from "./placement-dispatch-test-fixtures.js";
 import { createHarness } from "./placement-dispatch-test-harness.js";
+import { WORKER_PROTOCOL_FEATURES } from "./placement-lifecycle.test-support.js";
 import { placementTurnOwner } from "./placement-record.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
 import { createWorkerSessionPlacementGate } from "./placement-worker-gate.js";
@@ -244,10 +241,7 @@ describe("worker placement result recovery", () => {
       });
       support.testState.prepareInstallation = async () => ({
         ...support.BUNDLE_ARTIFACT,
-        protocolFeatures: [
-          WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
-          WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE,
-        ],
+        protocolFeatures: [...WORKER_PROTOCOL_FEATURES],
       });
       const environments = support.createService(support.createProvider({ destroy }), {
         tunnelManager: tunnels,

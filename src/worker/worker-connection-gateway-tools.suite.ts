@@ -8,10 +8,8 @@ import {
 } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { validateWorkerExecApprovalParams } from "../../packages/gateway-protocol/src/schema/worker-exec-approval.js";
 import { createWorkerConnection } from "./worker-connection.js";
-import {
-  createWorkerExecApprovalTransport,
-  workerExecApprovalDigest,
-} from "./worker-exec-approval.js";
+import { workerExecApprovalDigest } from "./worker-exec-approval-binding.js";
+import { createWorkerExecApprovalTransport } from "./worker-exec-approval.js";
 
 function createGatewayToolConnectionFixture(
   connectParams: WorkerConnectParams,

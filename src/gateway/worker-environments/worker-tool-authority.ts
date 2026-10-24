@@ -107,12 +107,13 @@ export async function resolveWorkerToolAuthority(params: {
         turn.scheduledToolPolicy?.execTarget !== undefined && defaults.effectiveHost !== "gateway";
       const { effectiveHost: host, security, node: configuredNode } = defaults;
       const node = configuredNode?.trim();
+      const strictInlineEval = resolveExecToolConfig({
+        cfg: turn.config,
+        agentId: params.placement.agentId,
+      }).strictInlineEval;
       const exec: NonNullable<WorkerToolAuthority["exec"]> = {
-        mode: policy.mode,
-        strictInlineEval: resolveExecToolConfig({
-          cfg: turn.config,
-          agentId: params.placement.agentId,
-        }).strictInlineEval,
+        ...(policy.mode !== undefined ? { mode: policy.mode } : {}),
+        ...(strictInlineEval !== undefined ? { strictInlineEval } : {}),
         security: policy.security ?? security,
         ask: policy.ask ?? defaults.ask,
         safeBins: [],

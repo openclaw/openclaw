@@ -29,7 +29,6 @@ import { LruCache } from "../infra/lru-cache.js";
 import { logWarn } from "../logger.js";
 import { registerExecApprovalFollowupRuntimeHandoff } from "./bash-tools.exec-approval-followup-state.js";
 import {
-  type ExecApprovalRegistration,
   isExecApprovalRunAbortedError,
   resolveRegisteredExecApprovalDecision,
 } from "./bash-tools.exec-approval-request.js";
@@ -39,7 +38,7 @@ import {
 } from "./bash-tools.exec-runtime.js";
 import type { ExecElevatedDefaults, ExecToolDetails } from "./bash-tools.exec-types.js";
 import { isExecDeniedResultText } from "./exec-approval-result.js";
-import type { ExecApprovalTransport } from "./exec-approval-transport.js";
+import type { ExecApprovalRegistration, ExecApprovalTransport } from "./exec-approval-transport.js";
 import type { AgentToolResult } from "./runtime/index.js";
 
 const MAX_EXEC_APPROVAL_FOLLOWUP_FAILURE_LOG_KEYS = 256;

@@ -44,7 +44,7 @@ import { createWorkerComputerTool } from "./computer-runtime.js";
 import { buildWorkerConnectParams, type WorkerLaunchDescriptor } from "./launch-descriptor.js";
 import { runWorkerCommand } from "./worker-command.runtime.js";
 import { createWorkerConnection } from "./worker-connection.js";
-import { workerExecApprovalDigest } from "./worker-exec-approval.js";
+import { workerExecApprovalDigest } from "./worker-exec-approval-binding.js";
 import { createWorkerPlacementTools } from "./worker-placement-tools.js";
 import {
   buildWorkerProcessTurn,

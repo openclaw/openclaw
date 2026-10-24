@@ -17,27 +17,20 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { DEFAULT_EXEC_APPROVAL_TIMEOUT_MS } from "../../infra/exec-approvals-core.js";
 import type { ExecAutoReviewTranscript } from "../../infra/exec-auto-review.js";
 import type { WorkerToolAuthority } from "../../worker/launch-descriptor.js";
-import { workerExecApprovalDigest } from "../../worker/worker-exec-approval.js";
-import type { AgentRuntimeIdentity } from "../agent-runtime-identity-token.js";
+import { workerExecApprovalDigest } from "../../worker/worker-exec-approval-binding.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
 import {
   getWorkerTurnExecApproval,
   assertWorkerTurnInputAdmitted,
 } from "./placement-turn-claim-events.js";
+import type {
+  WorkerExecApprovalOwner,
+  WorkerExecApprovalTurnSource,
+} from "./worker-exec-approval-contract.js";
 import type { WorkerTurnRpcOptions } from "./worker-turn-rpc.types.js";
 
-type ApprovalTurnSource = Pick<
-  AgentRuntimeIdentity,
-  "turnSourceChannel" | "turnSourceTo" | "turnSourceAccountId" | "turnSourceThreadId"
->;
-type ApprovalCall = <T>(
-  method: "exec.approval.request" | "exec.approval.waitDecision",
-  params: Record<string, unknown>,
-  turnSource: ApprovalTurnSource | undefined,
-) => Promise<T>;
 type Registration = { id: string; expiresAtMs: number; decision?: "allow-once" | "deny" | null };
 type Decision = { decision: "allow-once" | "deny" | null; terminalReason?: string };
-export type WorkerExecApprovalOwner = ReturnType<typeof createWorkerExecApprovalOwner>;
 
 /** Retained by the admitted turn, with the same configured reviewer as local exec. */
 export function createWorkerExecApprovalOwner(params: {
@@ -46,8 +39,8 @@ export function createWorkerExecApprovalOwner(params: {
   agentId: string;
   signal: AbortSignal;
   transcript: () => ExecAutoReviewTranscript;
-  turnSource?: ApprovalTurnSource;
-}) {
+  turnSource?: WorkerExecApprovalTurnSource;
+}): WorkerExecApprovalOwner {
   const pending = new Map<string, { binding: string; toolCallId: string }>();
   params.signal.addEventListener("abort", () => pending.clear(), { once: true });
   // Retain model/plugin preparation without replacing the approval RPC's caller scope.
@@ -64,12 +57,7 @@ export function createWorkerExecApprovalOwner(params: {
   );
   return async (
     request: WorkerExecApprovalParams,
-    authority: {
-      assertCurrent(): void;
-      call: ApprovalCall;
-      signal?: AbortSignal;
-      environmentId: string;
-    },
+    authority: Parameters<WorkerExecApprovalOwner>[1],
   ): Promise<WorkerExecApprovalResult> => {
     const assertCurrent = () => {
       params.signal.throwIfAborted();
@@ -248,7 +236,7 @@ export function createWorkerExecApprovalRpc(
             call: async <T>(
               method: "exec.approval.request" | "exec.approval.waitDecision",
               params: Record<string, unknown>,
-              turnSource: ApprovalTurnSource | undefined,
+              turnSource: WorkerExecApprovalTurnSource | undefined,
             ) => {
               assertCurrent();
               if (!options.resolveGatewayContext?.()) {

@@ -1,5 +1,11 @@
 import type { ExecAutoReviewDecision, ExecAutoReviewInput } from "../infra/exec-auto-review.js";
-import type { ExecApprovalRegistration } from "./bash-tools.exec-approval-request.js";
+
+/** Registration result returned before an approval decision is available. */
+export type ExecApprovalRegistration = {
+  id: string;
+  expiresAtMs: number;
+  finalDecision?: string | null;
+};
 
 export type ExecApprovalExecution = {
   command: string;

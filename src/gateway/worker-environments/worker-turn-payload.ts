@@ -80,7 +80,7 @@ import type { WorkerTurnProcessResult } from "./tunnel-contract.js";
 import type { WorkerReplyMediaPreparer } from "./worker-reply-media.types.js";
 import { WorkerTurnExecutionError } from "./worker-turn-failure.js";
 import type { prepareWorkerTurnPrompt } from "./worker-turn-prompt.js";
-import type { WorkerTurnPromptCacheContext } from "./worker-turn-rpc.types.js";
+import type { WorkerTurnPromptCacheContext } from "./worker-turn-prompt.types.js";
 import {
   captureWorkerTurnTranscriptSource,
   resolveWorkerTurnTranscriptTarget,

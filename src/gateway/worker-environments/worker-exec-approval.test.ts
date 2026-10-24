@@ -4,9 +4,10 @@ import type { WorkerExecApprovalResponseFrame } from "../../../packages/gateway-
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { resetProcessRegistryForTests } from "../../agents/bash-process-registry.test-support.js";
 import type { ExecApprovalTransport } from "../../agents/exec-approval-transport.js";
-import { preparedModel, response } from "../../agents/exec-auto-review.test-support.js";
 import { prepareCoreToolPolicy } from "../../agents/prepared-tool-surface.js";
 import * as completion from "../../agents/simple-completion-runtime.js";
+import { makeAgentAssistantMessage } from "../../agents/test-helpers/agent-message-fixtures.js";
+import { makeProviderModelFixture } from "../../agents/test-helpers/provider-model-fixture.js";
 import { createToolSurfacePresentationForTest } from "../../agents/tool-surface-plan.test-support.js";
 import { callGatewayTool } from "../../agents/tools/gateway.js";
 import { saveExecApprovals } from "../../infra/exec-approvals-store.test-support.js";
@@ -37,6 +38,27 @@ vi.mock("../../agents/tools/gateway.js", async (importOriginal) => ({
 
 support.setupWorkerEnvironmentServiceSuite();
 
+const reviewerModel = makeProviderModelFixture({
+  provider: "openrouter",
+  id: "reviewer",
+  api: "openai-completions",
+  baseUrl: "https://example.invalid/v1",
+});
+
+function reviewerResponse() {
+  return makeAgentAssistantMessage({
+    api: reviewerModel.api,
+    provider: reviewerModel.provider,
+    model: reviewerModel.id,
+    content: [
+      {
+        type: "text",
+        text: JSON.stringify({ decision: "allow", risk: "low", rationale: "reviewer fixture" }),
+      },
+    ],
+  });
+}
+
 describe.skipIf(process.platform === "win32")("worker exec approval boundary", () => {
   let supervisor: ReturnType<typeof createProcessSupervisor>;
   beforeEach(() => {
@@ -56,8 +78,19 @@ describe.skipIf(process.platform === "win32")("worker exec approval boundary", (
     supervisor = createProcessSupervisor();
     spawn.mockReset().mockImplementation((input) => supervisor.spawn(input));
     vi.mocked(callGatewayTool).mockClear();
-    vi.spyOn(completion, "acquireSimpleCompletionModelForAgent").mockResolvedValue(preparedModel());
-    vi.spyOn(completion, "completeWithPreparedSimpleCompletionModel").mockResolvedValue(response());
+    vi.spyOn(completion, "acquireSimpleCompletionModelForAgent").mockResolvedValue({
+      selection: {
+        provider: reviewerModel.provider,
+        modelId: reviewerModel.id,
+        agentDir: "/agent",
+      },
+      model: reviewerModel,
+      auth: { apiKey: "synthetic-reviewer", mode: "api-key", source: "fixture" },
+      [Symbol.asyncDispose]: async () => {},
+    });
+    vi.spyOn(completion, "completeWithPreparedSimpleCompletionModel").mockResolvedValue(
+      reviewerResponse(),
+    );
   });
   afterEach(async () => {
     await supervisor.shutdown();
@@ -204,7 +237,7 @@ describe.skipIf(process.platform === "win32")("worker exec approval boundary", (
     vi.mocked(completion.completeWithPreparedSimpleCompletionModel).mockImplementation(async () => {
       entered.resolve();
       await release.promise;
-      return response();
+      return reviewerResponse();
     });
     const h = await fixture();
     const execution = h.tool.execute("worker-revoked", { command: "/bin/echo worker-approved" });

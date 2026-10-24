@@ -9,20 +9,7 @@ import type {
   ExecApprovalTransport,
 } from "../agents/exec-approval-transport.js";
 import type { WorkerConnection } from "./worker-connection.js";
-
-export function workerExecApprovalDigest(binding: WorkerExecApprovalBinding): string {
-  return createHash("sha256")
-    .update(
-      JSON.stringify([
-        binding.command,
-        binding.execCommand,
-        binding.cwd,
-        binding.environment,
-        binding.pty,
-      ]),
-    )
-    .digest("hex");
-}
+import { workerExecApprovalDigest } from "./worker-exec-approval-binding.js";
 
 function bindExecution({ env, ...input }: ExecApprovalExecution): WorkerExecApprovalBinding {
   return {

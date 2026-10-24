@@ -35,11 +35,11 @@ import { notifyListeners } from "../../shared/listeners.js";
 import type { WorkerConnectionIdentity, WorkerInferenceExecutor } from "./connection-identity.js";
 import type { WorkerSessionTurnClaim } from "./placement-record.js";
 import type { PlacementTurnClaimAuthority } from "./placement-turn-authority.js";
-import type { WorkerExecApprovalOwner } from "./worker-exec-approval.js";
+import type { WorkerExecApprovalOwner } from "./worker-exec-approval-contract.js";
 import type { WorkerGatewayToolRuntime } from "./worker-gateway-tool-contract.js";
 import type { WorkerGitHubBindingGrant } from "./worker-github-binding-contract.js";
 import type { WorkerReplyMediaPreparer } from "./worker-reply-media.types.js";
-import type { WorkerTurnPromptCacheContext } from "./worker-turn-rpc.types.js";
+import type { WorkerTurnPromptCacheContext } from "./worker-turn-prompt.types.js";
 
 type TurnClaimReleaseWaiter = (error?: Error) => void;
 

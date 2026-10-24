@@ -22,7 +22,7 @@ import {
   DEFAULT_APPROVAL_REQUEST_TIMEOUT_MS,
   DEFAULT_APPROVAL_TIMEOUT_MS,
 } from "./bash-tools.exec-runtime.js";
-import type { ExecApprovalTransport } from "./exec-approval-transport.js";
+import type { ExecApprovalRegistration, ExecApprovalTransport } from "./exec-approval-transport.js";
 import {
   getGatewayToolCallerIdentity,
   captureGatewayToolCallerAssertion,
@@ -88,13 +88,6 @@ function parseDecision(value: unknown): ParsedDecision {
 function resolveDefaultExecApprovalExpiresAtMs(): number {
   return resolveExpiresAtMsFromDurationMs(DEFAULT_APPROVAL_TIMEOUT_MS) ?? 0;
 }
-
-/** Registration result returned before an approval decision is available. */
-export type ExecApprovalRegistration = {
-  id: string;
-  expiresAtMs: number;
-  finalDecision?: string | null;
-};
 
 class ExecApprovalRunAbortedError extends Error {
   constructor() {
