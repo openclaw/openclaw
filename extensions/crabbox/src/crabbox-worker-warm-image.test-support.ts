@@ -82,7 +82,7 @@ export function checkpointResult(
 export function createWarmProvider(
   command?: (call: CommandCall) => SpawnResult | Promise<SpawnResult | undefined> | undefined,
   stateDir = tempDirs.make("openclaw-crabbox-warm-image-"),
-  dependencies: Pick<ProviderFixtureDependencies, "sleep" | "warmImagePolicy"> = {},
+  dependencies: Pick<ProviderFixtureDependencies, "sleep" | "warmImagePolicy" | "info"> = {},
 ) {
   vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
   vi.spyOn(managedBinary, "ensureManagedCrabboxBinary").mockImplementation(async (params) => ({

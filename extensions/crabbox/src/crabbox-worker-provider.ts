@@ -85,6 +85,7 @@ type CrabboxWorkerProviderDependencies = {
   wallpaperPath: string;
   state: CrabboxState;
   warn?: (message: string) => void;
+  info?: (message: string) => void;
   warmImagePolicy?: CrabboxWarmImagePolicy;
 };
 
@@ -111,6 +112,7 @@ export function createCrabboxWorkerProvider(
   const warmImages = createCrabboxWarmImageManager({
     state: dependencies.state,
     warn,
+    info: dependencies.info,
     policy: dependencies.warmImagePolicy,
     prepareCapture: async (context) => {
       heartbeats.start({ ...context.profile, ...context });
