@@ -3633,7 +3633,9 @@ exercise live refusal lookup without opening databases. For the built Gateway
 comparison, generate a fixture at `<synthetic-home>/.openclaw` and pass
 `--default-state-dir` to `transcript-broadcast-measure.ts`. This starts the child
 with the isolated `OPENCLAW_HOME` and no state-directory override, so startup
-must prepare the default itself. The ordinary mode retains its explicit override.
+must prepare the default itself. Its generated config is written beside the
+fixture config, keeping the config and state roots aligned without overwriting
+`openclaw.json`. The ordinary mode retains its explicit override.
 
 ## Tool schema preparation
 

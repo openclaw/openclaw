@@ -1541,7 +1541,9 @@ const toolPaths = Array.from({ length: retentionScenario ? 3 : 1 }, (_, index) =
   );
   return file;
 });
-const configPath = path.join(output, "openclaw.json");
+const configPath = values["default-state-dir"]
+  ? path.join(root, `${path.basename(output)}.json`)
+  : path.join(output, "openclaw.json");
 writeFileSync(configPath, JSON.stringify(cfg));
 const chunk = "Synthetic streamed answer. ";
 function responseEvents(chunks: string[]) {
