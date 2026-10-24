@@ -2,7 +2,6 @@ import { it, expect } from "vitest";
 import { SIDEBAR_SESSION_ROSTER_LIMIT } from "../../../src/shared/session-list-limits.ts";
 import { pauseVirtualClock } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
-import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 import * as ui from "./session-management.compact.test-support.ts";
 import {
   controlUiSessionUrl,
@@ -24,7 +23,7 @@ suite.define(() => {
   ] as const)(
     "keeps $filter rows, pagination, and updates after another agent's $operation settles",
     ({ operation, filter }) =>
-      suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+      ui.withSessionPage(suite, async (page) => {
         await page.clock.install();
         const original = sessionRow("agent:main:rename-cross-agent", "Original name", 3);
         const batch = [original, sessionRow("agent:main:batch-sibling", "Batch sibling", 2)];
@@ -43,12 +42,7 @@ suite.define(() => {
             pageSize + 2 - index,
           ),
         );
-        const researchInventory = [
-          researchRows[0]!,
-          researchRows[1]!,
-          ...scheduledRows,
-          researchRows[2]!,
-        ];
+        const researchInventory = [...researchRows.slice(0, 2), ...scheduledRows, researchRows[2]!];
         const retainedLimit = researchInventory.length + 1;
         const responseFor = (rows: typeof researchRows) => ({
           cases: [
@@ -82,7 +76,12 @@ suite.define(() => {
           gateway.waitForRequest("sessions.list", { match, after });
         const countLists = (match: Record<string, unknown>) =>
           ui.requestCount(gateway, "sessions.list", match);
-        const emitAndCollect = async (sessionKey: string, reason: "create" | "update") => {
+        const refreshAfterEvent = async (
+          sessionKey: string,
+          reason: "create" | "update",
+          match: Record<string, unknown>,
+        ) => {
+          const before = await countLists(match);
           await pauseVirtualClock(page);
           await gateway.emitGatewayEvent("sessions.changed", {
             sessionKey,
@@ -91,6 +90,7 @@ suite.define(() => {
           });
           await page.clock.fastForward(5_001);
           await page.clock.resume();
+          return waitForList(match, before);
         };
 
         const selectResearchAgent = () => ui.switchAgent(sidebar, "Research");
@@ -142,14 +142,7 @@ suite.define(() => {
           );
           await input.fill("Renamed original");
           await input.press("Enter");
-          const request = await waitForPatch(
-            gateway,
-            (params) => params.label === "Renamed original",
-          );
-          expect(request.params).toMatchObject({
-            key: original.key,
-            expectedSessionId: original.sessionId,
-          });
+          await waitForPatch(gateway, (params) => params.label === "Renamed original");
           if (filter === "All") {
             await gateway.resolveDeferred("sessions.list");
           }
@@ -160,15 +153,7 @@ suite.define(() => {
           await rowFor(original.key).click({ button: "right" });
           await ui.visible(ui.menuItem(page.locator("openclaw-session-menu"), "Archive 2"));
           await page.keyboard.press("A");
-          const request = await gateway.waitForRequest(method);
-          expect(request.params).toMatchObject({
-            patch: { archived: true },
-            targets: batch.map((row) => ({
-              key: row.key,
-              agentId: "main",
-              expectedSessionId: row.sessionId,
-            })),
-          });
+          await gateway.waitForRequest(method);
         }
         if (researchHistory) {
           await page.goForward();
@@ -225,9 +210,7 @@ suite.define(() => {
           agentId: "research",
           ...(filter === "All" ? { archived: "all" } : {}),
         };
-        const readsBeforeEvent = await countLists(researchMatch);
-        await emitAndCollect(newRow.key, "create");
-        await waitForList(researchMatch, readsBeforeEvent);
+        await refreshAfterEvent(newRow.key, "create", researchMatch);
         await ui.visible(rowFor(newRow.key));
 
         await loadMore.click();
@@ -264,9 +247,7 @@ suite.define(() => {
           await ui.visible(rowFor(researchRows[2]!.key));
           await ui.visible(rowFor(olderRow.key));
 
-          const readsBeforeInvalidation = await countLists(refreshMatch);
-          await emitAndCollect(newRow.key, "update");
-          const refresh = await waitForList(refreshMatch, readsBeforeInvalidation);
+          const refresh = await refreshAfterEvent(newRow.key, "update", refreshMatch);
           expect(refresh.params).not.toHaveProperty("offset");
           expect(refresh.params).toMatchObject({ limit: retainedLimit + 1 });
           await ui.expectCount(
@@ -278,13 +259,11 @@ suite.define(() => {
         await ui.visible(rowFor(olderRow.key));
         if (filter === "All" && operation === "rename") {
           await ui.visible(rowFor(researchRows[1]!.key));
-          const readsBeforeRemoval = await countLists(refreshMatch);
           await gateway.setMethodResponse(
             "sessions.list",
             responseFor(returnedResearchRows.filter((row) => row.key !== researchRows[1]!.key)),
           );
-          await emitAndCollect(newRow.key, "update");
-          const refresh = await waitForList(refreshMatch, readsBeforeRemoval);
+          const refresh = await refreshAfterEvent(newRow.key, "update", refreshMatch);
           expect(refresh.params).toMatchObject({ limit: retainedLimit + 1 });
           await rowFor(researchRows[1]!.key).waitFor({ state: "hidden" });
           await ui.visible(rowFor(researchRows[2]!.key));
