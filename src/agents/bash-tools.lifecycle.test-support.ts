@@ -1,10 +1,39 @@
 import { expectDefined } from "@openclaw/normalization-core/expect";
-import { assert, expect } from "vitest";
+import { assert, expect, vi } from "vitest";
+import type { dispatchInboundMessageWithRoutedChannelDispatcher } from "../auto-reply/dispatch.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ExecToolDetails } from "./bash-tools.exec-types.js";
 import type { RunEmbeddedAgentParams } from "./embedded-agent-runner/run/params.js";
 
 export const fullGatewayExec = { host: "gateway", security: "full", ask: "off" } as const;
+
+export function createDeferredExecDispatchMock(label = "notification") {
+  return {
+    dispatchInboundMessageWithRoutedChannelDispatcher: vi.fn<
+      typeof dispatchInboundMessageWithRoutedChannelDispatcher
+    >(async ({ replyOptions }) => {
+      const lifecycle = expectDefined(replyOptions?.turnAdoptionLifecycle, `${label} lifecycle`);
+      const signal = expectDefined(lifecycle.abortSignal, `${label} cancellation`);
+      lifecycle.onDeferred?.();
+      const onAbort = async () => {
+        try {
+          await lifecycle.onAbandoned?.();
+        } finally {
+          await lifecycle.onSettled?.();
+        }
+      };
+      signal.addEventListener("abort", () => void onAbort(), { once: true });
+      if (signal.aborted) {
+        await onAbort();
+      }
+      return {
+        deferredToActiveRun: "followup",
+        queuedFinal: false,
+        counts: { tool: 0, block: 0, final: 0 },
+      };
+    }),
+  };
+}
 
 export function runningSession(details: ExecToolDetails) {
   assert(details.status === "running", "Expected a background process handle");

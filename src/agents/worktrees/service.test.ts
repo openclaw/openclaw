@@ -17,7 +17,10 @@ import {
   closeOpenClawStateDatabaseForTest,
 } from "../../state/openclaw-state-db.js";
 import { InvalidWorktreeBaseRefError } from "./base-ref.js";
-import { useInProcessWorktreeCapacityTransport } from "./capacity.test-support.js";
+import {
+  createWorktreeCapacityStatfs,
+  useInProcessWorktreeCapacityTransport,
+} from "./capacity.test-support.js";
 import * as worktreeGit from "./git.js";
 import * as worktreeRegistry from "./registry.js";
 import {
@@ -1029,16 +1032,9 @@ describe("ManagedWorktreeService", () => {
 
       useInProcessWorktreeCapacityTransport();
       const disk = fsSync.statfsSync(root);
-      vi.spyOn(fsSync, "statfsSync").mockReturnValue({
-        type: disk.type,
-        files: disk.files,
-        frsize: disk.frsize,
-        ffree: disk.ffree,
-        bsize: 4096,
-        blocks: 1024 ** 4 / 4096,
-        bavail: (100 * 1024 ** 3) / 4096,
-        bfree: (100 * 1024 ** 3) / 4096,
-      });
+      vi.spyOn(fsSync, "statfsSync").mockReturnValue(
+        createWorktreeCapacityStatfs(disk, 100 * 1024 ** 3),
+      );
       const created = await service.create({
         repoRoot: repo,
         name: "submodules",

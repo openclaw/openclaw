@@ -2,7 +2,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { clearRuntimeConfigSnapshot } from "../../config/config.js";
 import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../context-engine/host-compat.js";
-import type { ContextEngine } from "../../context-engine/types.js";
 import { emitAgentEvent, resetAgentEventsForTest } from "../../infra/agent-events.js";
 import {
   resetDiagnosticEventsForTest,
@@ -20,6 +19,7 @@ import {
   markCoreTtsAttemptResult,
 } from "../tools/tts-tool-result-provenance.js";
 import { createOpenClawAgentHarness } from "./builtin-openclaw.js";
+import { createContextEngineRequiringAssembly } from "./context-engine-lifecycle.test-support.js";
 import { AgentHarnessPreflightError, resolveAgentHarnessPreflightOwner } from "./errors.js";
 import {
   runAgentHarnessLifecycleAttempt,
@@ -36,31 +36,6 @@ import {
 } from "./lifecycle.test-support.js";
 import { EmptySettledTurnFinalizationError } from "./settled-turn-finalization-outcome.js";
 import type { AgentHarness, AgentHarnessAttemptResult } from "./types.js";
-
-function createContextEngineRequiringAssembly(): ContextEngine {
-  // Requires the harness to advertise assemble-before-prompt. Tests use this
-  // to prove context-engine capabilities are enforced before runAttempt.
-  return {
-    info: {
-      id: "lossless-claw",
-      name: "Lossless",
-      hostRequirements: {
-        "agent-run": {
-          requiredCapabilities: ["assemble-before-prompt"],
-        },
-      },
-    },
-    async ingest() {
-      return { ingested: true };
-    },
-    async assemble({ messages }) {
-      return { messages, estimatedTokens: 0 };
-    },
-    async compact() {
-      return { ok: true, compacted: false };
-    },
-  };
-}
 
 describe("AgentHarness lifecycle runner", () => {
   afterEach(() => {

@@ -48,8 +48,8 @@ import { setUserProfileRole } from "../../state/user-profile-writes.worker.js";
 import { getCommandOwnerAuthority } from "../command-owner-authority.js";
 import { buildPluginCommandContext } from "./commands-context.js";
 import { handlePluginCommand } from "./commands-plugin.js";
+import { createPersistedPluginCommandParams } from "./commands-plugin.test-support.js";
 import type { HandleCommandsParams } from "./commands-types.js";
-import { buildCommandTestParams } from "./commands.test-harness.js";
 import { runWithCommandNativeSubagents } from "./dispatch-native-subagent.js";
 import { finalizeInboundContext } from "./inbound-context.js";
 
@@ -143,30 +143,7 @@ async function withCommandPlugin(
       { sessionId: "command-parent", lifecycleRevision: "revision-1", updatedAt: 1 },
     );
     await state.writeConfig(cfg);
-    const params = (body = "/review-panel") => {
-      const value = buildCommandTestParams(
-        body,
-        cfg,
-        {
-          ...inbound,
-          Body: body,
-          CommandBody: body,
-          RawBody: body,
-          // The fixture ingress was created with plain text; project this as the
-          // authenticated command turn, as real command dispatch does.
-          CommandAuthorized: true,
-          CommandTurn: undefined,
-        },
-        { workspaceDir: state.workspaceDir },
-      );
-      value.sessionKey = sessionKey;
-      value.storePath = storePath;
-      value.sessionEntry = expectDefined(
-        loadSessionEntry({ agentId: "main", sessionKey, storePath }),
-        "persisted command requester",
-      );
-      return value;
-    };
+    const params = createPersistedPluginCommandParams(cfg, inbound, state, sessionKey, storePath);
     const userInputs = async () => {
       const events = await loadTranscriptEvents({
         agentId: "main",
