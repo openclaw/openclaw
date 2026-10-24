@@ -65,43 +65,34 @@ type Scenario = {
   downloaded?: boolean;
   options?: Partial<ClawHubFixtureOptions>;
 };
+function remoteScenario(options: Partial<ClawHubFixtureOptions> = {}, error?: string): Scenario {
+  return {
+    spec: `clawhub:${PACKAGE}@${VERSION}`,
+    source: error ? null : "clawhub",
+    valid: true,
+    options,
+    error,
+  };
+}
 const scenarios: Scenario[] = [
   { spec: `${PACKAGE}@${VERSION}`, source: null },
   { spec: `clawhub:${PACKAGE}@${VERSION}`, source: null },
   { spec: `npm:${PACKAGE}@${VERSION}`, source: "npm" },
   { spec: PLUGIN, source: "path" },
   { spec: PLUGIN, source: "npm", unbundled: true },
-  { spec: `${PACKAGE}@${VERSION}`, source: "clawhub", valid: true, repeat: true },
+  { ...remoteScenario(), spec: `${PACKAGE}@${VERSION}`, repeat: true },
+  remoteScenario({ telemetryStatus: 503 }),
+  remoteScenario(
+    { packageCompatibility: { pluginApiRange: ">=9999.0.0" }, artifactCompatibility: null },
+    "requires plugin API >=9999.0.0",
+  ),
+  remoteScenario(
+    { artifactCompatibility: { minGatewayVersion: "9999.0.0" } },
+    "requires OpenClaw >=9999.0.0",
+  ),
   {
-    spec: `clawhub:${PACKAGE}@${VERSION}`,
-    source: "clawhub",
-    valid: true,
-    options: { telemetryStatus: 503 },
-  },
-  {
-    spec: `clawhub:${PACKAGE}@${VERSION}`,
-    source: null,
-    valid: true,
-    options: {
-      packageCompatibility: { pluginApiRange: ">=9999.0.0" },
-      artifactCompatibility: null,
-    },
-    error: "requires plugin API >=9999.0.0",
-  },
-  {
-    spec: `clawhub:${PACKAGE}@${VERSION}`,
-    source: null,
-    valid: true,
-    options: { artifactCompatibility: { minGatewayVersion: "9999.0.0" } },
-    error: "requires OpenClaw >=9999.0.0",
-  },
-  {
-    spec: `clawhub:${PACKAGE}@${VERSION}`,
-    source: null,
-    valid: true,
-    options: { artifactSha256: "0".repeat(64) },
+    ...remoteScenario({ artifactSha256: "0".repeat(64) }, "ClawHub archive integrity mismatch"),
     downloaded: true,
-    error: "ClawHub archive integrity mismatch",
   },
 ];
 
