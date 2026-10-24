@@ -24,6 +24,7 @@ const nodesByRevision = new WeakMap<object, Map<EntryRow["generation"], Publicat
 // Display rows retire with sharing publications, independently of long-lived lineage.
 const rowsByRevision = new WeakMap<object, Map<PublicationNode, Row>>();
 
+/** Traverse the row owner's indexed lineage; neither checkout nor transcript is evidence. */
 export function selectTaskPublicationSessions(
   projection: SessionRowProjection,
   root: PublicationRow,
