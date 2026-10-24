@@ -131,7 +131,8 @@ vi.mock("./channel-doctor.js", () => ({
 }));
 
 // Keep metadata discovery synthetic while exercising the actual blocker policy.
-vi.mock("../../../channels/plugins/bundled-ids.js", () => ({
+vi.mock("../../../channels/plugins/bundled-ids.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../channels/plugins/bundled-ids.js")>()),
   listBundledChannelIds: () => manifestState.plugins.flatMap((plugin) => plugin.channels),
 }));
 

@@ -71,7 +71,8 @@ function forbidManifestRegistryScan() {
 }
 
 async function loadPolicyResolver(scope: string, loader: (params: { dirName: string }) => unknown) {
-  vi.doMock("./public-surface-loader.js", () => ({
+  vi.doMock("./public-surface-loader.js", async (importOriginal) => ({
+    ...(await importOriginal<typeof import("./public-surface-loader.js")>()),
     loadBundledPluginPublicArtifactModuleFromCandidatesSync: loader,
   }));
   return (
