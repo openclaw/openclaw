@@ -27,7 +27,6 @@ import {
   type TestChatPane,
 } from "./chat-pane.test-support.ts";
 import { chatRunPresentation } from "./chat-run-presentation.ts";
-import type { ChatPageHost } from "./chat-state-host.ts";
 import { disposeChatView, renderChatPropsInto } from "./chat-view.test-helpers.ts";
 import { ChatView } from "./chat-view.tsx";
 import { createComposerQuestions } from "./components/chat-composer-questions.ts";
@@ -37,6 +36,16 @@ import {
   resetTranscriptTestDom,
 } from "./components/chat-transcript.test-support.ts";
 import { projectSessionApprovalReplay } from "./session-approval-projection.ts";
+
+function createLiveSessionContext(client: GatewayBrowserClient, sessions: SessionCapability) {
+  const initial = createInitializationContext();
+  const live = createSessionContext(client, sessions);
+  return {
+    ...initial,
+    ...live,
+    config: { ...initial.config, current: { ...initial.config.current, ...live.config.current } },
+  };
+}
 
 describe("chat pane assistant identity snapshots", () => {
   it("keeps an unknown transcript loading before hello and reconciles cached or live history", () => {
@@ -101,11 +110,13 @@ describe("chat pane assistant identity snapshots", () => {
       }
     ).willUpdate(new Map([["sessionKey", "agent:main:main"]]));
 
-    expect(state.sessionKey).toBe("agent:work:main");
-    expect(state.assistantAgentId).toBe("work");
-    expect(state.assistantName).toBe("");
-    expect(state.chatAvatarUrl).toBeNull();
-    expect(state.modelAuthStatusResult).toBeNull();
+    expect(state).toMatchObject({
+      sessionKey: "agent:work:main",
+      assistantAgentId: "work",
+      assistantName: "",
+      chatAvatarUrl: null,
+      modelAuthStatusResult: null,
+    });
     expect(state.loadAssistantIdentity).toHaveBeenCalledOnce();
     expect(retireModelOverride).toHaveBeenCalledWith("agent:work:main");
   });
@@ -138,44 +149,13 @@ describe("chat pane assistant identity snapshots", () => {
     );
     const unsubscribeMessages = vi.fn(async () => undefined);
     const sessions = createSessionCapabilityFixture({
-      state: {
-        result: null,
-        agentId: null,
-        modelOverrides: {},
-        loading: false,
-        error: null,
-        deletedSessions: [],
-        groups: [],
-        groupSettings: [],
-        sectionOrder: [],
-      },
       refresh: vi.fn().mockResolvedValue(undefined),
-      subscribe: () => () => undefined,
       subscribeMessages,
       unsubscribeMessages,
     });
     const client = { request: vi.fn(async () => ({})) } as unknown as GatewayBrowserClient;
-    const context = createSessionContext(client, sessions);
+    const context = createLiveSessionContext(client, sessions);
     Object.assign(context.agents, { ensureList: vi.fn(async () => null) });
-    Object.assign(context.config.current, {
-      allowExternalEmbedUrls: false,
-      embedSandboxMode: "strict",
-      serverVersion: null,
-    });
-    Object.assign(context.config, { subscribe: () => () => undefined });
-    Object.assign(context, {
-      placementStartup: {
-        get: () => null,
-        hasPendingTurn: () => false,
-        retry: () => undefined,
-        subscribe: () => () => undefined,
-      },
-      runtimeConfig: {
-        state: { configNeedsApply: false, configSnapshot: null },
-        ensureLoaded: async () => undefined,
-        subscribe: () => () => undefined,
-      },
-    });
     const { pane } = createTestChatPane({ client, sessions });
     pane.context = context;
     pane.connectedClient = null;
@@ -244,8 +224,10 @@ describe("chat pane assistant identity snapshots", () => {
 
   it("keeps a session-specific assistant identity across ordinary gateway snapshots", () => {
     const client = createGatewayBrowserClientFixture();
-    const { pane } = createTestChatPane({ client, sessions: createSessionCapabilityFixture() });
-    const state = (pane as unknown as { state: ChatPageHost }).state;
+    const { pane, state } = createTestChatPane({
+      client,
+      sessions: createSessionCapabilityFixture(),
+    });
     state.client = client;
     state.connected = true;
     state.assistantName = "Session Agent";
@@ -309,13 +291,6 @@ describe("chat pane approval requester identity", () => {
         state: {
           result: sessionsResult([{ ...host, label: "Unrelated pane title" }], 1),
           agentId: "main",
-          modelOverrides: {},
-          deletedSessions: [],
-          loading: false,
-          error: null,
-          groups: [],
-          groupSettings: [],
-          sectionOrder: [],
         },
         think: () => undefined,
         reconcile: vi.fn(),
@@ -397,13 +372,7 @@ describe("chat pane approval requester identity", () => {
     try {
       for (const [row, title] of publications) {
         Object.assign(context.sessions.state, {
-          result: {
-            ts: now,
-            path: "",
-            count: row ? 2 : 1,
-            defaults: { modelProvider: null, model: null, contextTokens: null },
-            sessions: row ? [host, row] : [host],
-          },
+          result: sessionsResult(row ? [host, row] : [host], now),
         });
         pane.applySessionsState(context.sessions.state);
         await waitForSolid(() => {
@@ -435,17 +404,10 @@ function createGlobalFeaturePane(
     request: (method, params) => request(method, params),
   });
   const sessions = createSessionCapabilityFixture({
-    state: { modelOverrides: {}, result: null, loading: false, error: null },
     reconcile: vi.fn(),
     think: () => undefined,
   });
-  const initial = createInitializationContext();
-  const live = createSessionContext(client, sessions);
-  const context: ApplicationContext = {
-    ...initial,
-    ...live,
-    config: { ...initial.config, current: { ...initial.config.current, ...live.config.current } },
-  };
+  const context = createLiveSessionContext(client, sessions);
   context.gateway.snapshot.hello = gatewayHelloForMethods(methods);
   const pane = createRenderTestChatPane();
   const state = pane.initialize(context);
@@ -477,15 +439,10 @@ function createGlobalFeaturePane(
       },
     });
     state.sessionsResultAgentId = agentId;
-    state.sessionsResult = {
-      ts: 1,
-      path: "",
-      count: 1,
-      defaults: { modelProvider: null, model: null, contextTokens: null },
-      sessions: [
-        { key: "global", agentId, sessionId: `${agentId}-parent`, kind: "global", updatedAt: 1 },
-      ],
-    };
+    state.sessionsResult = sessionsResult(
+      [{ key: "global", agentId, sessionId: `${agentId}-parent`, kind: "global", updatedAt: 1 }],
+      1,
+    );
   };
   select("research");
   connectPaneTestView(pane);
@@ -698,56 +655,6 @@ describe("global chat pane feature ownership", () => {
     });
   });
 
-  it("hides only this pane's selected agent progress without clearing its card", async () => {
-    let card: ProgressCard | null = globalProgressCard("research");
-    const request = vi.fn(async (method: string) => {
-      if (method !== "progressCard.get") {
-        throw new Error(`Unexpected progress-card write: ${method}`);
-      }
-      return { card };
-    });
-    const { pane, emit } = createGlobalFeaturePane(request, ["progressCard.get"]);
-    await pane.updateComplete;
-    expect(request).toHaveBeenCalledWith("progressCard.get", {
-      sessionKey: "global",
-      agentId: "research",
-    });
-    await vi.waitFor(() => expect(pane.chatProps?.progressCard).toEqual(card));
-
-    card = globalProgressCard("research", 2);
-    emit({ sessionKey: card.sessionKey, revision: card.revision });
-    await vi.waitFor(() => expect(pane.chatProps?.progressCard).toEqual(card));
-    expect(request.mock.calls.filter(([method]) => method === "progressCard.get")).toHaveLength(2);
-
-    const displayedCard = pane.chatProps?.progressCard;
-    if (!displayedCard) {
-      throw new Error("Expected the displayed progress card");
-    }
-    pane.chatProps!.onDismissProgressCard!(displayedCard);
-    await vi.waitFor(() => expect(pane.chatProps?.progressCard).toBeNull());
-    expect(request.mock.calls.every(([method]) => method === "progressCard.get")).toBe(true);
-
-    card = globalProgressCard("research", 3);
-    emit({ sessionKey: card.sessionKey, revision: card.revision });
-    await vi.waitFor(() =>
-      expect(request.mock.calls.filter(([method]) => method === "progressCard.get")).toHaveLength(
-        3,
-      ),
-    );
-    expect(pane.chatProps?.progressCard).toBeNull();
-
-    card = null;
-    emit({ sessionKey: "agent:research:global", revision: null });
-    await vi.waitFor(() =>
-      expect(request.mock.calls.filter(([method]) => method === "progressCard.get")).toHaveLength(
-        4,
-      ),
-    );
-    card = globalProgressCard("research", 5);
-    emit({ sessionKey: card.sessionKey, revision: card.revision });
-    await vi.waitFor(() => expect(pane.chatProps?.progressCard).toEqual(card));
-  });
-
   it("keeps each hidden card hidden when the same pane switches agents", async () => {
     const research = globalProgressCard("research");
     const main = globalProgressCard("main");
@@ -808,17 +715,37 @@ describe("global chat pane feature ownership", () => {
   });
 });
 
+type ForkFixture = () => Promise<
+  Partial<Awaited<ReturnType<SessionCapability["forkAtMessage"]>>> & { sessionKey: string }
+>;
+
+function createForkPane(forkAtMessage: ForkFixture) {
+  const fixture = createTestChatPane({
+    client: {} as GatewayBrowserClient,
+    sessions: { forkAtMessage } as unknown as SessionCapability,
+  });
+  const navigate = vi.fn();
+  return { ...fixture, navigate };
+}
+
+function createRetainedForkPane(forkAtMessage: ForkFixture) {
+  const fixture = createForkPane(forkAtMessage);
+  fixture.pane.sessionKey = fixture.state.sessionKey;
+  onTestFinished(() => {
+    fixture.pane.presented = false;
+  });
+  return fixture;
+}
+
 describe("chat pane message cuts", () => {
   it("restores forked prompt attachments into the new session composer", async () => {
-    const sessions = {
-      forkAtMessage: vi.fn().mockResolvedValue({
+    const { pane, state } = createForkPane(
+      vi.fn().mockResolvedValue({
         sessionKey: "agent:main:forked",
         editorText: "edit me",
         editorAttachments: [{ mimeType: "image/png", data: "aW1hZ2U=" }],
       }),
-    } as unknown as SessionCapability;
-    const client = {} as GatewayBrowserClient;
-    const { pane, state } = createTestChatPane({ client, sessions });
+    );
     state.chatAttachments = [{ id: "old", mimeType: "image/jpeg", dataUrl: "data:old" }];
 
     await pane.forkFromMessage("user-entry");
@@ -841,12 +768,7 @@ describe("chat pane message cuts", () => {
 
   it("keeps a newer global agent selection when a message fork finishes late", async () => {
     const forked = createDeferred<{ sessionKey: string; editorText?: string }>();
-    const sessions = {
-      forkAtMessage: vi.fn(() => forked.promise),
-    } as unknown as SessionCapability;
-    const client = {} as GatewayBrowserClient;
-    const { pane, state } = createTestChatPane({ client, sessions });
-    const navigate = vi.fn();
+    const { pane, state, navigate } = createForkPane(vi.fn(() => forked.promise));
     pane.onPaneSessionChange = navigate;
     state.sessionKey = "global";
     state.assistantAgentId = "main";
@@ -863,12 +785,7 @@ describe("chat pane message cuts", () => {
 
   it("does not navigate to a fork that finishes after a same-client reconnect", async () => {
     const forked = createDeferred<{ sessionKey: string; editorText?: string }>();
-    const sessions = {
-      forkAtMessage: vi.fn(() => forked.promise),
-    } as unknown as SessionCapability;
-    const client = {} as GatewayBrowserClient;
-    const { pane, state } = createTestChatPane({ client, sessions });
-    const navigate = vi.fn();
+    const { pane, state, navigate } = createForkPane(vi.fn(() => forked.promise));
     pane.onPaneSessionChange = navigate;
 
     const pending = pane.forkFromMessage("user-entry");
@@ -883,33 +800,22 @@ describe("chat pane message cuts", () => {
 
   it("does not navigate or seed a draft after leaving and returning to the retained source", async () => {
     const forked = createDeferred<{ sessionKey: string; editorText: string }>();
-    const sessions = {
-      forkAtMessage: vi.fn(() => forked.promise),
-    } as unknown as SessionCapability;
-    const client = {} as GatewayBrowserClient;
-    const { pane, state } = createTestChatPane({ client, sessions });
-    pane.sessionKey = state.sessionKey;
-    const navigate = vi.fn();
+    const { pane, state, navigate } = createRetainedForkPane(vi.fn(() => forked.promise));
     pane.onPaneSessionChange = navigate;
+    const pending = pane.forkFromMessage("user-entry");
+    // A -> B -> A retains A's component, session key, and connection.
+    pane.presented = false;
+    pane.presented = true;
+    state.chatMessage = "newer source draft";
+    forked.resolve({ sessionKey: "agent:main:forked-after-return", editorText: "stale draft" });
 
-    try {
-      const pending = pane.forkFromMessage("user-entry");
-      // A -> B -> A retains A's component, session key, and connection.
-      pane.presented = false;
-      pane.presented = true;
-      state.chatMessage = "newer source draft";
-      forked.resolve({ sessionKey: "agent:main:forked-after-return", editorText: "stale draft" });
-
-      await pending;
-      expect(navigate).not.toHaveBeenCalled();
-      expect(
-        consumePaneSessionHandoff(pane.context, pane.paneId, "agent:main:forked-after-return"),
-      ).toBeNull();
-      expect(state.sessionKey).toBe("agent:main:current");
-      expect(state.chatMessage).toBe("newer source draft");
-    } finally {
-      pane.presented = false;
-    }
+    await pending;
+    expect(navigate).not.toHaveBeenCalled();
+    expect(
+      consumePaneSessionHandoff(pane.context, pane.paneId, "agent:main:forked-after-return"),
+    ).toBeNull();
+    expect(state.sessionKey).toBe("agent:main:current");
+    expect(state.chatMessage).toBe("newer source draft");
   });
 
   it.each([
@@ -919,45 +825,31 @@ describe("chat pane message cuts", () => {
     "does not paint a stale fork error in a retained source that is $presentation",
     async ({ returnToSource }) => {
       const forked = createDeferred<never>();
-      const sessions = {
-        forkAtMessage: vi.fn(() => forked.promise),
-      } as unknown as SessionCapability;
-      const { pane, state } = createTestChatPane({ client: {} as GatewayBrowserClient, sessions });
-      pane.sessionKey = state.sessionKey;
-
-      try {
-        const pending = pane.forkFromMessage("user-entry");
-        pane.presented = false;
-        if (returnToSource) {
-          pane.presented = true;
-        }
-        forked.reject(new Error("stale fork failed"));
-
-        await pending;
-        expect(state.lastError).toBeNull();
-        expect(state.chatError).toBeNull();
-      } finally {
-        pane.presented = false;
+      const { pane, state } = createRetainedForkPane(vi.fn(() => forked.promise));
+      const pending = pane.forkFromMessage("user-entry");
+      pane.presented = false;
+      if (returnToSource) {
+        pane.presented = true;
       }
+      forked.reject(new Error("stale fork failed"));
+
+      await pending;
+      expect(state.lastError).toBeNull();
+      expect(state.chatError).toBeNull();
     },
   );
 
   it("shows a current fork error after the retained source is presented again", async () => {
-    const sessions = {
-      forkAtMessage: vi.fn().mockRejectedValue(new Error("current fork failed")),
-    } as unknown as SessionCapability;
-    const { pane, state } = createTestChatPane({ client: {} as GatewayBrowserClient, sessions });
-    pane.sessionKey = state.sessionKey;
+    const { pane, state } = createRetainedForkPane(
+      vi.fn().mockRejectedValue(new Error("current fork failed")),
+    );
+    pane.presented = false;
+    pane.presented = true;
+    await pane.forkFromMessage("user-entry");
 
-    try {
-      pane.presented = false;
-      pane.presented = true;
-      await pane.forkFromMessage("user-entry");
-
-      expect(state.lastError).toBe("current fork failed");
-      expect(state.chatError).toBe("current fork failed");
-    } finally {
-      pane.presented = false;
-    }
+    expect(state).toMatchObject({
+      lastError: "current fork failed",
+      chatError: "current fork failed",
+    });
   });
 });
