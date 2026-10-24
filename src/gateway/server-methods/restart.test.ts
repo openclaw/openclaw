@@ -33,7 +33,7 @@ vi.mock("../../infra/gateway-lock.js", () => ({
 
 const restartTarget = { pid: process.pid, ownerId: "gateway-owner", port: 18_789 };
 
-function invokeRestartRequest(params: unknown) {
+function invokeRestartRequest(params: unknown, sessionMutationCommitGuard?: () => void) {
   const respond = vi.fn();
   const handler = expectDefined(
     restartHandlers["gateway.restart.request"],
@@ -43,7 +43,7 @@ function invokeRestartRequest(params: unknown) {
     handler({
       respond,
       params,
-      // The handler only reads `params` and `respond`; remaining fields are unused.
+      sessionMutationCommitGuard,
     } as unknown as Parameters<typeof handler>[0]),
   ).then(() => respond);
 }
@@ -139,6 +139,19 @@ describe("gateway restart handlers", () => {
   afterEach(() => {
     resetGatewayWorkAdmission();
   });
+
+  it.each([false, true])(
+    "refuses stale authority before restart effects (targeted=%s)",
+    async (targeted) => {
+      await expect(
+        invokeRestartRequest(targeted ? { target: restartTarget } : {}, () => {
+          throw new Error("requester revoked");
+        }),
+      ).rejects.toThrow("requester revoked");
+      expect(scheduleSafeGatewayRestart).not.toHaveBeenCalled();
+      expect(requestGatewayRestartWithSignalAdmission).not.toHaveBeenCalled();
+    },
+  );
 
   it("keeps the deprecated read-only preflight response shape", async () => {
     const preflight = {

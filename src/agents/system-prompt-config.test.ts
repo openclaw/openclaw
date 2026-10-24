@@ -169,7 +169,7 @@ describe("buildConfiguredAgentSystemPrompt", () => {
       });
       expect(disabled).not.toContain("`/update`");
       expect(disabled).not.toContain("`/restart`");
-      expect(disabled).toContain("openclaw update");
+      expect(disabled).toContain("maintenance tools, not exec or detached jobs");
       expect(disabled).toContain("Toggle /reasoning; /status shows when enabled.");
       const enabled = buildConfiguredAgentSystemPrompt({ ...params, config: {} });
       expect(enabled).toContain("`/update`");
