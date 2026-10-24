@@ -24,12 +24,8 @@ function fixture(role = "normalCi") {
     name,
     run_id: 101,
     run_attempt: 1,
-    head_sha: workflowSha,
     status: conclusion === null ? "in_progress" : "completed",
     conclusion,
-    started_at: "2026-09-23T00:00:00Z",
-    completed_at: conclusion === null ? null : "2026-09-23T00:01:00Z",
-    html_url: `https://example.invalid/jobs/${id}`,
   });
   const jobs = [job(1, "resolve target"), job(2, "node tests"), job(3, PUBLISHER, null)];
   return {

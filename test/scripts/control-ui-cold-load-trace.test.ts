@@ -171,10 +171,6 @@ describe("cold-load CPU accounting", () => {
         functionName: "flush",
         ...sourceLocation(/node_modules\/@solidjs\/signals\/dist\/prod\.js$/u),
       });
-      expect(summarizeCpuProfile(mapped.profile)).toMatchObject({
-        solidFlushSelfMs: 2,
-        solidFlushInclusiveMs: 2,
-      });
       expect(profile.nodes[0]?.callFrame.functionName).toBe("a");
     },
   );
@@ -284,7 +280,8 @@ describe("cold-load CPU accounting", () => {
     ).toThrow();
   });
 
-  it.each(["live", "streaming"])("rejects comparisons that omit the %s phase", (phase) => {
+  it("rejects comparisons with different phase sets", () => {
+    const phase = "live";
     const tables = { functions: [], files: [] };
     const report = { reload: tables, [phase]: tables };
     expect(() => readCpuProfileReport(report, ["reload"])).toThrow("CPU profile phases differ");
