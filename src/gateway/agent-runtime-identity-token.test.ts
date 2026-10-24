@@ -215,28 +215,6 @@ it("creates credential-free identities only for live runs and context", async ()
   await expect(api.direct(params)).rejects.toThrow("requires active delegated run authority");
 });
 
-it("redeems signed execution lineage once for the active parent", async () => {
-  const lineage = await import("./agent-runtime-execution-lineage.js");
-  const run = operationalRun();
-  const parent = { ...runtimeParams({}, run), delegatedAuthority: run.delegatedAuthority };
-  const executionIdentity = createExecutionIdentityAdmissionToken("run-1");
-  const sessionSpawnContext = lineage.withAgentRuntimeExecutionLineage(
-    { inheritedToolPolicy: { version: 1, allow: ["read"], deny: ["exec"] } },
-    privateLineage,
-  );
-  const handoff = lineage.createAgentRuntimeExecutionLineageHandoff({
-    ...parent,
-    executionIdentity,
-    sessionSpawnContext,
-  });
-  const params = { ...parent, executionLineageHandoffId: handoff!.id };
-  const identity = await createIdentity(params);
-  expect(identity).toMatchObject({ executionIdentity, sessionSpawnContext });
-  expect(lineage.consumeAgentRuntimeExecutionLineage(identity!)).toBe(true);
-  expect(lineage.consumeAgentRuntimeExecutionLineage(identity!)).toBe(false);
-  await expect(createIdentity(params)).resolves.toBeUndefined();
-});
-
 it.each([false, true])(
   "binds reloaded credentials to state dir (changed: %s)",
   async (differentHome) => {

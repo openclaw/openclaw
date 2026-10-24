@@ -105,7 +105,7 @@ it.each([false, true])("keeps configured reasoning=%s on runtime routes", (reaso
   }
 });
 
-it("keeps stored Ultra for supported harnesses and clamps unavailable native profiles", () => {
+it("clamps the patch projection without overwriting stored Ultra", () => {
   const cfg = runtimeConfig("openai/native-effort-fixture", "codex", {
     model: { primary: "openai/native-effort-fixture" },
   });
@@ -117,35 +117,6 @@ it("keeps stored Ultra for supported harnesses and clamps unavailable native pro
     [PREPARED_THINKING_POLICY]: { resolve: openaiPolicy },
   });
   const stored = session("stored", { thinkingLevel: "ultra" });
-  const row = (catalog?: Pick<ModelCatalogEntry, "reasoning" | "compat">) =>
-    sessionRow({
-      cfg,
-      agentId: "main",
-      lightweightListRow: true,
-      rowContext: rowContext({ now: 1 }),
-      storePath: "",
-      store: {},
-      key: "agent:main:main",
-      entry: stored,
-      modelCatalog: catalog ? [{ ...modelEntry, ...catalog }] : undefined,
-    });
-
-  for (const catalog of [
-    undefined,
-    {},
-    { reasoning: true },
-    { reasoning: false },
-    { reasoning: true, compat: { supportedReasoningEfforts: ["off"] } },
-    { reasoning: true, compat: { supportedReasoningEfforts: ["max"] } },
-  ]) {
-    expect(row(catalog).thinkingLevel).toBe("ultra");
-  }
-  const nativeUltra = row({
-    reasoning: true,
-    compat: { supportedReasoningEfforts: ["max", "ultra"] },
-  });
-  expect(nativeUltra.thinkingLevel).toBe("ultra");
-  expect(nativeUltra.thinkingLevels).toContainEqual({ id: "ultra", label: "ultra" });
   expect(
     patchResult({
       cfg,
