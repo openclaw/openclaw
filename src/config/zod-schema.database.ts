@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { SQLITE_WORKER_MAX_STORES_LIMIT } from "../infra/sqlite-worker-broker-limits.js";
 import { projectConfigFieldMetadata } from "./schema.field-metadata.js";
 import { SecretInputSchema } from "./zod-schema.secret-input.js";
 import { configUiMetadata, sensitive } from "./zod-schema.sensitive.js";
@@ -9,6 +10,25 @@ const DatabaseFamilyEngineSchema = z.enum(["sqlite", "postgres"]).register(confi
 });
 
 const DatabaseFamilySchema = z.strictObject({ engine: DatabaseFamilyEngineSchema }).optional();
+
+const SqliteDatabaseConfigSchema = z
+  .strictObject({
+    maxStores: z
+      .number()
+      .int()
+      .min(1)
+      .max(SQLITE_WORKER_MAX_STORES_LIMIT)
+      .optional()
+      .register(configUiMetadata, {
+        label: "SQLite Worker Store Limit",
+        help: "Maximum SQLite worker stores retained per Gateway process. Defaults to the larger of 64 or twice the configured agent count. Lower values reduce resource use; higher values support larger fleets.",
+      }),
+  })
+  .optional()
+  .register(configUiMetadata, {
+    label: "SQLite",
+    help: "SQLite worker-store limits for local and safety databases.",
+  });
 
 export const DatabaseConfigSchema = z
   .strictObject({
@@ -29,6 +49,7 @@ export const DatabaseConfigSchema = z
         label: "Family Database Engines",
         help: "Optional engine overrides for state, agent, workboard, logbook, and team-reports. Each override requires engine. State and agent families may use different engines; local safety journals are not configurable. All PostgreSQL families share database.postgres.",
       }),
+    sqlite: SqliteDatabaseConfigSchema,
     postgres: z
       .strictObject({
         connection: SecretInputSchema.refine(

@@ -26,6 +26,7 @@ import {
   validateSqliteWorkerDatabaseLocator,
 } from "./sqlite-worker-broker-admission.js";
 import { createSqliteWorkerLifecycle } from "./sqlite-worker-broker-lifecycle.js";
+import { currentSqliteWorkerMaxStores } from "./sqlite-worker-broker-limits.js";
 import {
   settleSqliteWorkerJob,
   dispatchSqliteWorkerJob,
@@ -65,7 +66,6 @@ import { sqliteWorkerRequestBytes } from "./sqlite-worker-state-context.js";
 import { resolveSqliteBrokerWorkerCount } from "./worker-pool-sizing.js";
 import { trackWorkerRequest, type WorkerRequestObservation } from "./worker-request-diagnostics.js";
 
-const MAX_STORES = 64;
 const MAX_QUEUED_COMMAND_BYTES = 64 * 1024 * 1024;
 export const SQLITE_WORKER_MAX_REQUESTS_PER_WORKER = 128;
 const SQLITE_WORKER_MAX_QUEUED_BYTES = 256 * 1024 * 1024;
@@ -106,7 +106,7 @@ export class SqliteWorkerBroker {
     maxQueuedBytes: SQLITE_WORKER_MAX_QUEUED_BYTES,
     maxQueuedInputBytes: MAX_QUEUED_COMMAND_BYTES,
     maxMessageBytes: SQLITE_WORKER_MAX_MESSAGE_BYTES,
-    maxPendingOpens: MAX_STORES,
+    maxPendingOpens: currentSqliteWorkerMaxStores,
   });
   private draining?: Promise<void>;
 
@@ -134,8 +134,9 @@ export class SqliteWorkerBroker {
     const client = {};
     let reserved: boolean;
     let snapshot: PreparedSqliteWorkerOpen;
+    const maxStores = currentSqliteWorkerMaxStores();
     try {
-      reserved = reserveSqliteWorkerClient(this.clients, this.stores.values(), MAX_STORES, client);
+      reserved = reserveSqliteWorkerClient(this.clients, this.stores.values(), maxStores, client);
       snapshot = captureSqliteWorkerOpen(options, stateContext, assertCurrent, custody);
       const generation = options.runtimeGeneration;
       generation?.retain(this, async () => {
@@ -158,7 +159,7 @@ export class SqliteWorkerBroker {
               snapshot,
               this.stores.values(),
               () =>
-                reserveSqliteWorkerClient(this.clients, this.stores.values(), MAX_STORES, client),
+                reserveSqliteWorkerClient(this.clients, this.stores.values(), maxStores, client),
               () => this.draining !== undefined,
             );
           }
@@ -244,7 +245,7 @@ export class SqliteWorkerBroker {
     } else {
       const slot = await this.lifecycle.acquireSlot(
         options,
-        { maxWorkers: this.maxWorkers, maxStores: MAX_STORES },
+        { maxWorkers: this.maxWorkers, maxStores: currentSqliteWorkerMaxStores() },
         (replySlot) => this.createReplyOwner(replySlot),
       );
       try {

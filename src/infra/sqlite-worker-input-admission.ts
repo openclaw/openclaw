@@ -20,7 +20,7 @@ export class SqliteWorkerInputAdmission {
       maxQueuedBytes: number;
       maxQueuedInputBytes: number;
       maxMessageBytes: number;
-      maxPendingOpens: number;
+      maxPendingOpens: () => number;
     },
   ) {}
 
@@ -47,7 +47,7 @@ export class SqliteWorkerInputAdmission {
     sharedState = false,
   ): Promise<T> {
     if (
-      this.opens.size >= this.owner.maxPendingOpens ||
+      this.opens.size >= this.owner.maxPendingOpens() ||
       bytes > this.owner.maxMessageBytes ||
       this.owner.queuedBytes() + this.bytes + bytes > this.owner.maxQueuedBytes
     ) {
