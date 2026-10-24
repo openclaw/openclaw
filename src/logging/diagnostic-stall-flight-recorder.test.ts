@@ -7,6 +7,7 @@ const native = vi.hoisted(() => ({
   versions: { node: "26.6.0", bun: undefined as string | undefined },
   conflict: vi.fn(() => false),
   mainThread: true,
+  platform: "linux" as NodeJS.Platform,
 }));
 vi.mock("node:v8", async (original) => ({
   ...(await original<typeof import("node:v8")>()),
@@ -15,6 +16,9 @@ vi.mock("node:v8", async (original) => ({
 vi.mock("node:process", async (original) => ({
   ...(await original<typeof import("node:process")>()),
   versions: native.versions,
+  get platform() {
+    return native.platform;
+  },
 }));
 vi.mock("node:worker_threads", async (original) => ({
   ...(await original<typeof import("node:worker_threads")>()),
@@ -40,6 +44,7 @@ beforeEach(() => {
   native.conflict.mockReset().mockReturnValue(false);
   native.versions.node = "26.6.0";
   native.mainThread = true;
+  native.platform = "linux";
   vi.spyOn(process, "getBuiltinModule").mockImplementation((id) =>
     id === "inspector"
       ? { url: () => undefined }
@@ -81,21 +86,25 @@ function capture(json: string) {
   const fixtureState = fixture(json);
   return { ...fixtureState, result: fixtureState.sampleAt(1_500) };
 }
-it("rotates without a sampling gap and reports only the recent stall's inclusive frames", () => {
-  const { recorder, handles, sampleAt } = fixture();
-  expect(sampleAt(5_000, 0)).toBeUndefined();
-  expect(native.start.mock.invocationCallOrder[1]).toBeLessThan(
-    handles[0]!.stop.mock.invocationCallOrder[0]!,
-  );
-  const result = sampleAt(6_500);
-  expect(result).toContain('inclusive=[["work1@node:timers:10",2]]');
-  expect(result).toContain("samples=2 intervalMs=10 truncated=false");
-  expect(result).not.toContain("work0");
-  recorder.stop();
-  expect(handles[2]![Symbol.dispose]).toHaveBeenCalledOnce();
-  expect(sampleAt(12_000)).toBeUndefined();
-  expect(native.start).toHaveBeenCalledTimes(3);
-});
+it.each(["linux", "win32"] as const)(
+  "rotates without a sampling gap and reports recent stall frames on %s",
+  (platform) => {
+    native.platform = platform;
+    const { recorder, handles, sampleAt } = fixture();
+    expect(sampleAt(5_000, 0)).toBeUndefined();
+    expect(native.start.mock.invocationCallOrder[1]).toBeLessThan(
+      handles[0]!.stop.mock.invocationCallOrder[0]!,
+    );
+    const result = sampleAt(6_500);
+    expect(result).toContain('inclusive=[["work1@node:timers:10",2]]');
+    expect(result).toContain("samples=2 intervalMs=10 truncated=false");
+    expect(result).not.toContain("work0");
+    recorder.stop();
+    expect(handles[2]![Symbol.dispose]).toHaveBeenCalledOnce();
+    expect(sampleAt(12_000)).toBeUndefined();
+    expect(native.start).toHaveBeenCalledTimes(3);
+  },
+);
 
 it.each([
   [
@@ -144,6 +153,19 @@ it("caps oversized windows and disables failed capture without failing the sampl
   expect(warn).toHaveBeenCalledWith("stall flight recorder unavailable: profiler-capture-failed");
   expect(handles[1]![Symbol.dispose]).toHaveBeenCalledOnce();
   expect(recorder.sample(1_500)).toBeUndefined();
+});
+
+it("never starts the automatic native sampler on macOS", () => {
+  native.platform = "darwin";
+  const { recorder, sampleAt, warn } = fixture();
+  expect(sampleAt(5_000, 0)).toBeUndefined();
+  expect(sampleAt(6_500)).toBeUndefined();
+  recorder.stop();
+  expect(sampleAt(12_000)).toBeUndefined();
+  expect(native.start).not.toHaveBeenCalled();
+  expect(warn).toHaveBeenCalledExactlyOnceWith(
+    "stall flight recorder unavailable: macos-native-profiler-deadlock-risk",
+  );
 });
 
 it.each([
