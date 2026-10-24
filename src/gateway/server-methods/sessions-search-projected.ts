@@ -137,7 +137,7 @@ export async function searchProjectedSessionTranscripts(params: {
     const published = await withReadySessionRows(
       projection,
       () =>
-        Array.from(matchedRows, (row) => ({
+        [...matchedRows].map((row) => ({
           agentId: row.agentId,
           key: row.key,
           storePath: row.storeTarget.storePath,
