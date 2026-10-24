@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { createHash, randomUUID } from "node:crypto";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
@@ -46,6 +47,7 @@ import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { normalizeMessagesForLlmBoundary } from "../embedded-agent-runner/run/attempt-llm-boundary.js";
 import { convertToLlm } from "../sessions/messages.js";
+import { completionModel } from "../simple-completion.test-support.js";
 import { withGatewayToolCallerIdentity } from "../tools/gateway-caller-context.js";
 import type { ContextEngineLogicalTurnLease } from "./context-engine-logical-turn.js";
 import {
@@ -115,21 +117,11 @@ async function prepareAdmission(
     expectedLifecycleRevision: "initial",
     expectedWriterRunId: runId,
   };
+  const entry = { sessionId: target.sessionId, updatedAt: 1, lifecycleRevision: "initial" };
   if (options.cronBaseKey) {
-    await upsertSessionEntryCore(
-      { ...target, sessionKey: options.cronBaseKey },
-      {
-        sessionId: target.sessionId,
-        updatedAt: 1,
-        lifecycleRevision: "initial",
-      },
-    );
+    await upsertSessionEntryCore({ ...target, sessionKey: options.cronBaseKey }, entry);
   }
-  await upsertSessionEntryCore(target, {
-    sessionId: target.sessionId,
-    updatedAt: 1,
-    lifecycleRevision: "initial",
-  });
+  await upsertSessionEntryCore(target, { ...entry, activeWriterRunId: runId });
   const patchSession = (patch: Record<string, unknown>) =>
     runOpenClawAgentWriteTransaction(
       (database) => {
@@ -140,7 +132,6 @@ async function prepareAdmission(
       },
       { agentId: target.agentId },
     );
-  patchSession({ activeWriterRunId: runId });
   const prior = expectDefined(
     await appendTranscriptMessage(target, {
       message: { role: "user", content: "prior", timestamp: 1 },
@@ -422,18 +413,12 @@ describe("host-owned current admission annotation", () => {
               upstreamUserText: "native prompt",
             },
           });
-          const model = {
+          const model = completionModel({
             api: "openai-completions",
             provider: "openai",
             id: "gpt-5.5",
-            name: "GPT-5.5",
             baseUrl: "https://api.openai.com/v1",
-            reasoning: false,
-            input: ["text"],
-            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-            contextWindow: 100000,
-            maxTokens: 4096,
-          } satisfies Parameters<typeof convertMessages>[0];
+          });
           const modelBytes = (message: typeof originalMessage) =>
             JSON.stringify(
               convertMessages(
@@ -546,29 +531,19 @@ describe("host-owned current admission annotation", () => {
       const pending = f.annotate();
       const refused = expect(pending).rejects.toThrow();
       try {
-        if (reason === "host-close") {
-          f.closeHost();
-        }
-        if (reason === "admission-close") {
-          f.closeAdmission();
-        }
-        if (reason === "abort") {
-          f.controller.abort();
-        }
-        if (reason === "writer") {
-          f.patchSession({ activeWriterRunId: "successor" });
-        }
-        if (reason === "session") {
-          f.patchSession({ sessionId: "successor" });
-        }
-        if (reason === "blocked") {
-          f.recorder.markBlocked();
-        }
-        if (reason === "replacement") {
-          const replacement = await createAdmittedHostCapabilityTestFixture(f.attempt);
-          replacement.closeHost();
-          replacement.closeAdmission();
-        }
+        await {
+          "host-close": f.closeHost,
+          "admission-close": f.closeAdmission,
+          abort: () => f.controller.abort(),
+          writer: () => f.patchSession({ activeWriterRunId: "successor" }),
+          session: () => f.patchSession({ sessionId: "successor" }),
+          blocked: () => f.recorder.markBlocked(),
+          replacement: async () => {
+            const replacement = await createAdmittedHostCapabilityTestFixture(f.attempt);
+            replacement.closeHost();
+            replacement.closeAdmission();
+          },
+        }[reason]();
       } finally {
         await release();
       }
