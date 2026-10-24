@@ -294,7 +294,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +3: shared Decisions support/evaluation functions and the canonical capability schema.
       // +2: openRecord and ToolArgumentValidationError on the existing tool-plugin facade.
       // +2: shared SystemOne question/response codecs for native Decision providers.
-      3817,
+      // +4: capability-aware runtime auth context/model types on core and plugin-entry.
+      3821,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(

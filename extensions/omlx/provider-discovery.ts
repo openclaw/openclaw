@@ -49,7 +49,7 @@ export default {
       mode: "api-key",
     };
   },
-  prepareRuntimeAuth: async ({ config, provider, model, apiKey }) => {
+  prepareRuntimeAuthV2: async ({ config, provider, model, apiKey }) => {
     const [
       { CUSTOM_LOCAL_AUTH_MARKER, findNormalizedProviderValue },
       { getModelProviderRequestTransport },

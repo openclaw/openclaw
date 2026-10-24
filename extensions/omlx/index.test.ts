@@ -465,6 +465,7 @@ function runtimeContext(
   model = chatModel(providerConfig.baseUrl),
 ) {
   return {
+    capability: "chat" as const,
     config: { models: { providers: { omlx: providerConfig } } },
     env: {},
     provider: "omlx",
@@ -593,7 +594,7 @@ it.each<{
     .soft(provider?.resolveSyntheticAuth?.({ provider: "omlx", config, providerConfig }))
     .toEqual({ apiKey: "omlx-local", source: "oMLX local server", mode: "api-key" });
   expect(
-    await provider?.prepareRuntimeAuth?.(runtimeContext(providerConfig, scenario.sourceApiKey)),
+    await provider?.prepareRuntimeAuthV2?.(runtimeContext(providerConfig, scenario.sourceApiKey)),
   ).toEqual({ apiKey: scenario.runtimeApiKey });
 });
 
@@ -639,7 +640,7 @@ it.each<{
   );
 
   await expect(
-    provider?.prepareRuntimeAuth?.(runtimeContext(providerConfig, "fixture-profile-key", model)),
+    provider?.prepareRuntimeAuthV2?.(runtimeContext(providerConfig, "fixture-profile-key", model)),
   ).resolves.toEqual(scenario.expectedAuth);
 });
 
@@ -651,7 +652,7 @@ it("lets custom request auth override a configured profile credential", async ()
   });
 
   await expect(
-    provider?.prepareRuntimeAuth?.(runtimeContext(providerConfig, "fixture-profile-key")),
+    provider?.prepareRuntimeAuthV2?.(runtimeContext(providerConfig, "fixture-profile-key")),
   ).resolves.toEqual({ apiKey: CUSTOM_LOCAL_AUTH_MARKER });
 });
 
@@ -674,7 +675,7 @@ it("keeps configured keys and unoverridden profile credentials authoritative", a
     chatProvider({ request: { auth: { mode: "provider-default" } } }),
   ]) {
     expect(
-      await provider?.prepareRuntimeAuth?.(runtimeContext(providerConfig, "fixture-profile-key")),
+      await provider?.prepareRuntimeAuthV2?.(runtimeContext(providerConfig, "fixture-profile-key")),
     ).toBeUndefined();
   }
 });
