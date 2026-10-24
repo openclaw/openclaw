@@ -29,7 +29,7 @@ import {
   dockerPersistentTargetFromEngineTarget,
   dockerPersistentTargetToEngineTarget,
 } from "./docker-persistent-target.js";
-import { prepareSandboxMountPlan, sandboxMountPlanMatchesContainer } from "./mount-plan.js";
+import { compareSandboxMountPlan, prepareSandboxMountPlan } from "./mount-plan.js";
 import type { DockerPersistentExecTarget } from "./persistent-exec.types.js";
 import {
   assertPodmanSandboxTarget,
@@ -265,24 +265,43 @@ async function ensureSandboxContainerLifecycle(
       const { hasSandboxPersistentExecCustody } = await import("./persistent-exec.js");
       const persistent = await hasSandboxPersistentExecCustody({ containerName, containerId });
       params.assertCurrent?.();
-      const isHot =
+      let isHot =
         persistent ||
         (running &&
           (typeof lastUsedAtMs !== "number" || now - lastUsedAtMs < HOT_CONTAINER_WINDOW_MS));
       if (isHot) {
-        const mountsMatch =
-          params.requireCurrentConfig ||
-          (await sandboxMountPlanMatchesContainer({ engine, containerName, plan: mountPlan }));
-        handleHotSandboxConfigMismatch({
-          containerName,
-          scope: params.cfg.scope,
-          sessionKey: params.scopeKey,
-          mountsChanged: !mountsMatch,
-          ...(params.requireCurrentConfig !== undefined
-            ? { requireCurrentConfig: params.requireCurrentConfig }
-            : {}),
-        });
-      } else {
+        const mounts = params.requireCurrentConfig
+          ? "match"
+          : await compareSandboxMountPlan({ engine, containerName: containerId, plan: mountPlan });
+        if (
+          mounts === "protected-mounts-added" &&
+          !persistent &&
+          typeof lastUsedAtMs === "number" &&
+          lastUsedAtMs < performance.timeOrigin
+        ) {
+          // A deploy can add protected overlays before the first resumed turn.
+          // Keep writable layers and all recorded exec custody for explicit recovery.
+          const root = await execContainer(
+            engine,
+            ["inspect", "--format", "{{.HostConfig.ReadonlyRootfs}}", containerId],
+            { signal: AbortSignal.timeout(5_000) },
+          );
+          isHot = root.stdout.trim() !== "true";
+        }
+        params.assertCurrent?.();
+        if (isHot) {
+          handleHotSandboxConfigMismatch({
+            containerName,
+            scope: params.cfg.scope,
+            sessionKey: params.scopeKey,
+            mountsChanged: mounts !== "match",
+            ...(params.requireCurrentConfig !== undefined
+              ? { requireCurrentConfig: params.requireCurrentConfig }
+              : {}),
+          });
+        }
+      }
+      if (!isHot) {
         params.assertCurrent?.();
         const removed = await execContainer(engine, ["rm", "-f", containerId], {
           allowFailure: true,

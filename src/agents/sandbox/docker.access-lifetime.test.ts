@@ -66,7 +66,7 @@ vi.mock("./registry.js", () => ({
 }));
 vi.mock("./mount-plan.js", () => ({
   prepareSandboxMountPlan: vi.fn(async () => ({ binds: [], skippedBinds: [] })),
-  sandboxMountPlanMatchesContainer: vi.fn(async () => true),
+  compareSandboxMountPlan: vi.fn(async () => "match"),
   resolveSandboxContainerOnlyMounts: vi.fn(async () => []),
 }));
 // mock-isolation: simulate container commands and failures without invoking a container engine.
