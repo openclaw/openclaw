@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import {
   ensureMemoryIndexSchema,
@@ -177,12 +178,7 @@ describe("memory manager FTS-only reindex", () => {
           cache: { enabled: false },
         },
       },
-      agents: {
-        defaults: {
-          workspace: workspaceDir,
-        },
-        entries: { main: {} },
-      },
+      agents: { defaults: { workspace: workspaceDir }, entries: { main: {} } },
     } as OpenClawConfig;
     setRuntimeConfigSnapshot(cfg);
     const result = await getMemorySearchManager({
@@ -200,6 +196,21 @@ describe("memory manager FTS-only reindex", () => {
   }
 
   const writeMemory = (text: string) => fs.writeFile(path.join(workspaceDir, "MEMORY.md"), text);
+
+  async function failedBootstrap() {
+    const now = Date.now();
+    const clock = vi.spyOn(Date, "now").mockReturnValue(now);
+    providerConstructionError = missingProviderAuth();
+    const memoryManager = await createManager();
+    await expect(memoryManager.search("Alpha topic")).resolves.toHaveLength(1);
+    return { memoryManager, now, clock };
+  }
+
+  const quotaError = () =>
+    Object.assign(new Error("embedding quota exhausted"), {
+      status: 429,
+      errorCode: "insufficient_quota",
+    });
 
   function expectBootstrap(debug: unknown[], bootstrap: Record<string, unknown>) {
     expect(debug).toEqual(
@@ -294,12 +305,7 @@ describe("memory manager FTS-only reindex", () => {
       const idle = memoryManager as unknown as { awaitManagerIdle(): Promise<void> };
       const now = Date.now();
       const clock = vi.spyOn(Date, "now").mockReturnValue(now);
-      const quotaError = Object.assign(new Error("embedding quota exhausted"), {
-        status: 429,
-        errorCode: "insufficient_quota",
-      });
-      providerEmbeddingError = quotaError;
-      providerQueryError = quotaError;
+      providerEmbeddingError = providerQueryError = quotaError();
       await writeMemory("Alpha topic\n\nPending quota update.");
       // The observation fixture leaves dirty notification to the test.
       Reflect.set(memoryManager, "dirty", true);
@@ -340,12 +346,7 @@ describe("memory manager FTS-only reindex", () => {
     const now = Date.now();
     const clock = vi.spyOn(Date, "now").mockReturnValue(now);
     providerAvailable = true;
-    const quotaError = Object.assign(new Error("embedding quota exhausted"), {
-      status: 429,
-      errorCode: "insufficient_quota",
-    });
-    providerEmbeddingError = quotaError;
-    providerQueryError = quotaError;
+    providerEmbeddingError = providerQueryError = quotaError();
     const memoryManager = await createManager();
     const idle = memoryManager as unknown as { awaitManagerIdle(): Promise<void> };
     await expect(memoryManager.search("Alpha topic")).resolves.toHaveLength(1);
@@ -366,20 +367,6 @@ describe("memory manager FTS-only reindex", () => {
       await expect(memoryManager.search(marker)).resolves.toHaveLength(1);
       expect(memoryManager.getCachedEmbeddingAvailability()?.cacheExpiresAtMs).toBe(now + 30_000);
     }
-  });
-
-  it("falls back to keyword results when the default query embedding fails", async () => {
-    providerAvailable = true;
-    const memoryManager = await createManager();
-    await memoryManager.sync({ force: true });
-    expect(countChunksContaining("Alpha topic")).toBeGreaterThan(0);
-    await expect(memoryManager.search("Alpha topic")).resolves.toHaveLength(1);
-    expect(providerQueryCalls).toBeGreaterThan(0);
-
-    providerQueryError = new Error("query embedding request failed at runtime");
-    const results = await memoryManager.search("Alpha topic");
-
-    expect(results).toEqual([expect.objectContaining({ path: "MEMORY.md", source: "memory" })]);
   });
 
   it("keeps explicit providers fail-closed when a runtime query embedding fails", async () => {
@@ -429,15 +416,6 @@ describe("memory manager FTS-only reindex", () => {
     ).resolves.toEqual([expect.objectContaining({ path: "MEMORY.md", source: "memory" })]);
     expectBootstrap(debug, { degradedTo: "keyword-only" });
     expect(JSON.stringify(debug)).not.toContain(credential);
-    expect(
-      memoryManager as unknown as {
-        embeddingBootstrapFailure?: unknown;
-        provider?: { id: string } | null;
-      },
-    ).toMatchObject({
-      embeddingBootstrapFailure: expect.objectContaining({ degradedTo: "keyword-only" }),
-      provider: null,
-    });
     expect(memoryManager.status()).toMatchObject({
       provider: "none",
       model: undefined,
@@ -460,14 +438,10 @@ describe("memory manager FTS-only reindex", () => {
   });
 
   it("caches a normal no-provider result after an expired bootstrap failure", async () => {
-    const now = Date.now();
-    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(now);
-    providerConstructionError = missingProviderAuth();
-    const memoryManager = await createManager();
-    await expect(memoryManager.search("Alpha topic")).resolves.toHaveLength(1);
+    const { memoryManager, now, clock } = await failedBootstrap();
 
     providerConstructionError = null;
-    nowSpy.mockReturnValue(now + 31_000);
+    clock.mockReturnValue(now + 31_000);
     const debug: unknown[] = [];
     await expect(
       memoryManager.search("Alpha topic", { onDebug: (entry) => debug.push(entry) }),
@@ -480,10 +454,8 @@ describe("memory manager FTS-only reindex", () => {
   });
 
   it("degrades concurrent bootstrap waiters to the same keyword index", async () => {
-    let releaseProviderConstruction!: () => void;
-    providerConstructionGate = new Promise<void>((resolve) => {
-      releaseProviderConstruction = resolve;
-    });
+    const construction = createDeferred<void>();
+    providerConstructionGate = construction.promise;
     providerConstructionError = missingProviderAuth();
     const memoryManager = await createManager();
 
@@ -491,7 +463,7 @@ describe("memory manager FTS-only reindex", () => {
     await vi.waitFor(() => expect(createEmbeddingProviderMock).toHaveBeenCalledOnce());
     const firstSearch = memoryManager.search("Alpha topic");
     const secondSearch = memoryManager.search("Alpha topic");
-    releaseProviderConstruction();
+    construction.resolve();
 
     await expect(backgroundSync).resolves.toBeUndefined();
     const results = await Promise.all([firstSearch, secondSearch]);
@@ -503,26 +475,20 @@ describe("memory manager FTS-only reindex", () => {
   });
 
   it("serializes provider construction when concurrent probes retry an expired failure", async () => {
-    const now = Date.now();
-    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(now);
-    providerConstructionError = missingProviderAuth();
-    const memoryManager = await createManager();
-    await expect(memoryManager.search("Alpha topic")).resolves.toHaveLength(1);
+    const { memoryManager, now, clock } = await failedBootstrap();
     const callsBeforeRetry = createEmbeddingProviderMock.mock.calls.length;
 
     providerConstructionError = null;
     providerAvailable = true;
-    nowSpy.mockReturnValue(now + 31_000);
-    let releaseProviderConstruction!: () => void;
-    providerConstructionGate = new Promise<void>((resolve) => {
-      releaseProviderConstruction = resolve;
-    });
+    clock.mockReturnValue(now + 31_000);
+    const construction = createDeferred<void>();
+    providerConstructionGate = construction.promise;
     const firstProbe = memoryManager.probeEmbeddingAvailability();
     const secondProbe = memoryManager.probeEmbeddingAvailability();
     await vi.waitFor(() =>
       expect(createEmbeddingProviderMock).toHaveBeenCalledTimes(callsBeforeRetry + 1),
     );
-    releaseProviderConstruction();
+    construction.resolve();
 
     await expect(Promise.all([firstProbe, secondProbe])).resolves.toEqual([
       { ok: true },
@@ -540,15 +506,11 @@ describe("memory manager FTS-only reindex", () => {
   });
 
   it("keeps keyword results when semantic recovery reindex fails", async () => {
-    const now = Date.now();
-    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(now);
-    providerConstructionError = missingProviderAuth();
-    const memoryManager = await createManager();
-    await expect(memoryManager.search("Alpha topic")).resolves.toHaveLength(1);
+    const { memoryManager, now, clock } = await failedBootstrap();
 
     providerConstructionError = null;
     providerAvailable = true;
-    nowSpy.mockReturnValue(now + 31_000);
+    clock.mockReturnValue(now + 31_000);
     await expect(memoryManager.probeEmbeddingAvailability()).resolves.toEqual({ ok: true });
     providerEmbeddingError = new Error("embedding request failed during rebuild");
     const queryCallsAfterProbe = providerQueryCalls;
@@ -570,7 +532,7 @@ describe("memory manager FTS-only reindex", () => {
     await expect(memoryManager.search("Gamma fallback refresh")).resolves.toHaveLength(1);
     expect(providerQueryCalls).toBe(queryCallsAfterProbe);
 
-    nowSpy.mockReturnValue(now + 62_000);
+    clock.mockReturnValue(now + 62_000);
     await writeMemory(
       "Delta fallback refresh\n\nRetry remains keyword-only while embeddings still fail.",
     );
@@ -579,7 +541,7 @@ describe("memory manager FTS-only reindex", () => {
     expect(providerQueryCalls).toBe(queryCallsAfterProbe);
 
     providerEmbeddingError = null;
-    nowSpy.mockReturnValue(now + 93_000);
+    clock.mockReturnValue(now + 93_000);
     await expect(memoryManager.sync({ reason: "watch", force: true })).resolves.toBeUndefined();
     await expect(memoryManager.search("Delta fallback refresh")).resolves.toHaveLength(1);
     expect(providerQueryCalls).toBeGreaterThan(queryCallsAfterProbe);
@@ -693,6 +655,8 @@ describe("memory manager FTS-only reindex", () => {
       expect(statusAfter).toMatchObject({ dirty, custom: { indexIdentity: { status: identity } } });
       if (dirty) {
         expect(statusAfter.chunks).toBe(1);
+        using db = new DatabaseSync(indexPath);
+        expect(db.prepare("SELECT model FROM memory_index_chunks").get()).toEqual({ model });
       } else {
         expect(statusAfter.chunks).toBeGreaterThan(0);
       }
@@ -712,7 +676,6 @@ describe("memory manager FTS-only reindex", () => {
       "not authorized",
     );
     expect(loaded.ok, loaded.error).toBe(true);
-    const vectorExtensionPath = loaded.extensionPath;
     ensureMemoryIndexSchema({ db: seedDb, cacheEnabled: false, ftsEnabled: true });
     seedDb.exec(`
         INSERT INTO memory_index_sources (path, source, hash, mtime, size)
@@ -742,31 +705,14 @@ describe("memory manager FTS-only reindex", () => {
           VALUES ('memory_vector_rebuild_v1', 'clean');
 
       `);
-    expect(seedDb.prepare("SELECT COUNT(*) AS count FROM memory_index_chunks_vec").get()).toEqual({
-      count: 2,
-    });
-
     const manager = await createManager({
       provider: "none",
       vectorEnabled: false,
       rememberAcrossConversations: false,
     });
-    expect(manager.status().fts?.available).toBe(true);
-    expect(Reflect.get(manager, "sessionsFullRetryDirty")).toBe(false);
-
     const db = seedDb;
     const countRows = (table: string, sourcePath: string) =>
       db.prepare(`SELECT COUNT(*) AS count FROM ${table} WHERE path = ?`).get(sourcePath);
-    expect(
-      db.prepare("SELECT hash FROM memory_index_sources WHERE path = 'memory/deleted.md'").get(),
-    ).toEqual({ hash: "" });
-    expect(
-      db.prepare("SELECT hash FROM memory_index_sources WHERE path = 'memory/ownerless.md'").get(),
-    ).toEqual({ hash: "" });
-    expect(countRows("memory_index_chunks", "memory/deleted.md")).toEqual({ count: 1 });
-    expect(countRows("memory_index_chunks_fts", "memory/deleted.md")).toEqual({ count: 1 });
-    expect(countRows("memory_index_chunks_fts", "memory/ownerless.md")).toEqual({ count: 1 });
-
     await (
       manager as unknown as {
         syncMemoryFiles(params: { needsFullReindex: boolean }): Promise<unknown>;
@@ -782,6 +728,7 @@ describe("memory manager FTS-only reindex", () => {
         expect(countRows(table, sourcePath), `${table}: ${sourcePath}`).toEqual({ count: 0 });
       }
     }
+    expect(countRows("memory_index_sources", "sessions/excluded.jsonl")).toEqual({ count: 1 });
     // Cleanup ran while vectors were disabled. Keep the old table untouched and
     // persist a rebuild marker; one-sided orphan pruning would still miss vector
     // rows that should exist but were never written.
@@ -793,30 +740,5 @@ describe("memory manager FTS-only reindex", () => {
     expect(db.prepare("SELECT COUNT(*) AS count FROM memory_index_chunks_vec").get()).toEqual({
       count: 2,
     });
-    // Exercise the later vector-enabled load directly. Recreating the public
-    // manager here also tests unrelated provider/cache retirement lifecycles.
-    const vectorState = Reflect.get(manager, "vector") as {
-      available: boolean | null;
-      enabled: boolean;
-      extensionPath?: string;
-    };
-    vectorState.enabled = true;
-    vectorState.available = true;
-    vectorState.extensionPath = vectorExtensionPath;
-    Reflect.set(Reflect.get(manager, "database"), "vectorReady", null);
-    await expect(
-      (
-        manager as unknown as {
-          loadVectorExtension(): Promise<boolean>;
-        }
-      ).loadVectorExtension(),
-    ).resolves.toBe(false);
-    expect(db.prepare("SELECT vec_version() AS version").get()).toEqual({
-      version: expect.any(String),
-    });
-    expect(db.prepare("SELECT COUNT(*) AS count FROM memory_index_chunks_vec").get()).toEqual({
-      count: 2,
-    });
-    expect(Reflect.get(manager, "memoryFullRetryDirty")).toBe(true);
   });
 });

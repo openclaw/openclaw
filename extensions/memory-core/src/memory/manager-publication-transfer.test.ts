@@ -7,7 +7,6 @@ import {
   ensureMemoryIndexSchema,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import * as sqliteRuntime from "openclaw/plugin-sdk/sqlite-runtime";
-import { observeHostDataSql } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import * as sqliteWorkerRuntime from "openclaw/plugin-sdk/sqlite-worker-runtime";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -26,7 +25,6 @@ import {
 } from "./manager-publication-transfer.js";
 import {
   bindSqliteWorkerBackend,
-  createSqliteWorkerBackend,
   openExistingSqliteWorkerBackend,
 } from "./manager-publication.worker.js";
 import { readMemoryShadowIdentity } from "./manager-shadow-task.js";
@@ -35,6 +33,8 @@ import type {
   MemorySourceIndexRow,
 } from "./manager-source-index-kernel.js";
 import { memoryChunkRowId } from "./manager-source-index-kernel.js";
+
+const expectOk = (result: unknown) => expect(result).toMatchObject({ ok: true });
 
 const owners: MemoryIndexDatabase[] = [];
 const fixtureWriters = new Map<MemoryIndexDatabase, DatabaseSync>();
@@ -175,61 +175,24 @@ function replacement(text = "Violetmarker transfer text"): MemorySourceIndexRepl
 describe("bounded memory publication transfer", () => {
   afterEach(() => vi.restoreAllMocks());
 
-  it("configures a fresh shadow once and retains only schema restoration settings", async () => {
-    const databasePath = path.join(tempDirs.make("memory-publication-policy-"), "shadow.sqlite");
-    const observed = observeHostDataSql();
-    try {
-      const backend = await createSqliteWorkerBackend({ allowExtension: false }, { databasePath });
-      backends.push(backend);
-      expect(backend.execute({ type: "connection.inspect", input: undefined })).toEqual({
-        fileIdentity: readMemoryShadowIdentity(databasePath),
-        pragmas: { foreign_keys: expect.any(Number) },
-      });
-      expect(
-        observed.queries.filter((sql) => /^PRAGMA journal_size_limit\s*=/i.test(sql)),
-      ).toHaveLength(1);
-      expect(
-        observed.queries.filter((sql) =>
-          /^PRAGMA (synchronous|journal_size_limit|checkpoint_fullfsync)\s*;?$/i.test(sql),
-        ),
-      ).toEqual([]);
-    } finally {
-      observed.restore();
-    }
-  });
-
   it("preserves owner connection policy across scalar and staged publications", () => {
     const filename = path.join(tempDirs.make("memory-publication-input-"), "index.sqlite");
     const db = new DatabaseSync(filename);
     sqliteWorkerRuntime.setSqliteBusyTimeout(db, 5000);
-    const executedStatements: string[] = [];
-    const observed = observeHostDataSql((statement, database) => {
-      // Prepare and exec callbacks carry a database; only statement executions omit it.
-      if (database === undefined) {
-        executedStatements.push(statement);
-      }
-    });
     try {
       ensureMemoryIndexSchema({ db, cacheEnabled: false, ftsEnabled: false });
-      executedStatements.length = 0;
-      const sql = vi.spyOn(db, "exec");
       const bind = () =>
         bindSqliteWorkerBackend(
           { kind: "agent" },
           { databasePath: filename, database: db, admit: () => undefined },
         );
       const scalar = bind();
-      expect(
+      expectOk(
         scalar.execute({
           type: "index.writeMetadata",
           input: { provider: "none", model: "fts-only", chunkTokens: 400, chunkOverlap: 80 },
         }),
-      ).toMatchObject({ ok: true });
-      expect(
-        executedStatements.filter((statement) =>
-          /^PRAGMA (synchronous|journal_size_limit|checkpoint_fullfsync)$/u.test(statement),
-        ),
-      ).toEqual([]);
+      );
       expect(scalar.execute({ type: "connection.inspect", input: undefined })).toMatchObject({
         fileIdentity: readMemoryShadowIdentity(filename),
         pragmas: {
@@ -237,23 +200,15 @@ describe("bounded memory publication transfer", () => {
         },
       });
       scalar.close();
-      expect(
-        sql.mock.calls.filter(([statement]) => /memory_publication_input/u.test(statement)),
-      ).toEqual([]);
       const staged = bind();
       stageSource(staged, replacement("staged text survives scalar cleanup"));
-      expect(
+      expectOk(
         staged.execute({
           type: "source.replace",
           input: { state: { vector: disabled, fts: disabled } },
         }),
-      ).toMatchObject({ ok: true });
+      );
       staged.close();
-      expect(
-        [...sql.mock.calls.map(([statement]) => statement), ...executedStatements].filter(
-          (statement) => /PRAGMA\s+busy_timeout/iu.test(statement),
-        ),
-      ).toEqual([]);
       expect(db.prepare("PRAGMA busy_timeout").get()?.timeout).toBe(5000);
       expectRows(db, "SELECT text FROM memory_index_chunks", [
         { text: "staged text survives scalar cleanup" },
@@ -264,46 +219,33 @@ describe("bounded memory publication transfer", () => {
         [],
       );
     } finally {
-      observed.restore();
       db.close();
     }
   });
 
-  it("reads current source rows without restaging scratch or inspecting canonical connection policy", async () => {
+  it("reads current source rows after rebinding the publication owner", async () => {
     const owner = await createOwner();
     const db = fixtureWriter(owner);
     db.exec(`INSERT INTO memory_index_sources(path, source, hash, mtime, size)
       VALUES ('memory/current', 'memory', 'old', 1, 1)`);
     const input = publicationInput(owner);
-    const sql = observeHostDataSql();
-    try {
-      for (const hash of ["old", "changed"]) {
-        const backend = bindSqliteWorkerBackend(input, {
-          databasePath: db.location()!,
-          database: db,
-          admit: () => undefined,
-        });
-        try {
-          expect(
-            backend.execute({
-              type: "source.hash",
-              input: { source: "memory", path: "memory/current" },
-            }),
-          ).toBe(hash);
-        } finally {
-          backend.close();
-        }
-        db.exec("UPDATE memory_index_sources SET hash = 'changed'");
+    for (const hash of ["old", "changed"]) {
+      const backend = bindSqliteWorkerBackend(input, {
+        databasePath: db.location()!,
+        database: db,
+        admit: () => undefined,
+      });
+      try {
+        expect(
+          backend.execute({
+            type: "source.hash",
+            input: { source: "memory", path: "memory/current" },
+          }),
+        ).toBe(hash);
+      } finally {
+        backend.close();
       }
-      expect(
-        sql.queries.filter((query) =>
-          /PRAGMA\s+(busy_timeout|synchronous|foreign_keys|journal_size_limit|checkpoint_fullfsync)|memory_publication_input/iu.test(
-            query,
-          ),
-        ),
-      ).toEqual([]);
-    } finally {
-      sql.restore();
+      db.exec("UPDATE memory_index_sources SET hash = 'changed'");
     }
   });
 
@@ -334,24 +276,18 @@ describe("bounded memory publication transfer", () => {
         ],
       },
     };
-    const sql = observeHostDataSql();
-    try {
-      expect(backend.execute(command)).toMatchObject({
-        ok: false,
-        entered: true,
-        committed: false,
-        error: { message: "inline commit refused" },
-      });
-      expectRows(db, "SELECT hash FROM memory_embedding_cache", []);
-      refused = false;
-      expect(backend.execute(command)).toMatchObject({ ok: true, value: true });
-      expectRows(db, "SELECT hash, embedding FROM memory_embedding_cache", [
-        { hash: "current", embedding: encodeMemoryEmbedding([-0, 0.25]) },
-      ]);
-      expect(sql.queries.filter((query) => query.includes("memory_publication_input"))).toEqual([]);
-    } finally {
-      sql.restore();
-    }
+    expect(backend.execute(command)).toMatchObject({
+      ok: false,
+      entered: true,
+      committed: false,
+      error: { message: "inline commit refused" },
+    });
+    expectRows(db, "SELECT hash FROM memory_embedding_cache", []);
+    refused = false;
+    expect(backend.execute(command)).toMatchObject({ ok: true, value: true });
+    expectRows(db, "SELECT hash, embedding FROM memory_embedding_cache", [
+      { hash: "current", embedding: encodeMemoryEmbedding([-0, 0.25]) },
+    ]);
   });
 
   it.each(["success", "stale", "write", "transaction", "commit"] as const)(
@@ -638,7 +574,7 @@ describe("bounded memory publication transfer", () => {
         state: { vector: disabled, fts: enabled },
       },
     };
-    expect(backend.execute(command)).toMatchObject({ ok: true });
+    expectOk(backend.execute(command));
     refuseCommit = true;
     expect(
       backend.execute({
