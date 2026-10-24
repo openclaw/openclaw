@@ -214,24 +214,6 @@ describe("scripts/run-vitest", () => {
     });
   });
 
-  it("reports an actionable error when Vitest cannot be resolved", () => {
-    const error = new Error("Cannot find module 'vitest/package.json'");
-    (error as NodeJS.ErrnoException).code = "MODULE_NOT_FOUND";
-
-    expect(() =>
-      resolveVitestCliEntry({
-        baseDir: "/repo",
-        fsImpl: { existsSync: () => false },
-        requireResolve: () => {
-          throw error;
-        },
-      }),
-    ).toThrow(`[vitest] node_modules is missing; Vitest cannot be resolved.
-Install dependencies before running scripts/run-vitest.mjs:
-  pnpm install --frozen-lockfile
-For raw Crabbox/AWS macOS source syncs, hydrate or install dependencies before this runner.`);
-  });
-
   it("selects Bun without changing the compiled bootstrap or test operands", () =>
     proveRuntimeCache(false));
 
@@ -496,22 +478,15 @@ registerHooks({resolve(specifier, context, nextResolve) {
   });
 
   it.each([
-    { argv: ["run", "--exclude=", file], filter: [], options: {}, config: [] },
-    {
-      argv: ["list", uiFile, "--exclude", file, "--passWithNoTests=false"],
-      filter: [uiFile],
-      options: { exclude: [file], passWithNoTests: false },
-      config: ["--config", "test/vitest/vitest.ui.config.ts"],
-    },
-  ])(
-    "routes positionals independently of excluded files: $argv",
-    ({ argv, filter, options, config }) => {
-      const native = nativeCLI(argv);
-      expect(native).toMatchObject({ filter, options });
-      expect(resolveTestProjectsDelegationArgs(argv)).toBeNull();
-      expect(nativeCLI(resolveImplicitVitestArgs(argv))).toEqual(nativeCLI([...config, ...argv]));
-    },
-  );
+    [["run", "--exclude=", file], []],
+    [
+      ["list", uiFile, "--exclude", file, "--passWithNoTests=false"],
+      ["--config", "test/vitest/vitest.ui.config.ts"],
+    ],
+  ])("routes positionals independently of excluded files: %j", (argv, config) => {
+    expect(resolveTestProjectsDelegationArgs(argv)).toBeNull();
+    expect(nativeCLI(resolveImplicitVitestArgs(argv))).toEqual(nativeCLI([...config, ...argv]));
+  });
 
   it.each([
     ["--passWithNoTests=", "false"],

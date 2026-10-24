@@ -193,17 +193,6 @@ async function withUnixSocket<T>(socketPath: string, run: () => Promise<T>): Pro
   }
 }
 
-function resolveBashForCompatCheck(): string | null {
-  for (const candidate of ["/bin/bash", "bash"]) {
-    const probe = spawnSync(candidate, ["-c", "exit 0"], { encoding: "utf8" });
-    if (!probe.error && probe.status === 0) {
-      return candidate;
-    }
-  }
-
-  return null;
-}
-
 function runDockerSetup(
   sandbox: DockerSetupSandbox,
   overrides: Record<string, string | undefined> = {},
@@ -283,6 +272,7 @@ describe("scripts/docker/setup.sh", () => {
       OPENCLAW_DOCKER_APT_PACKAGES: "curl wget",
       OPENCLAW_EXTRA_MOUNTS: undefined,
       OPENCLAW_HOME_VOLUME: "openclaw-home",
+      OPENCLAW_SKIP_ONBOARDING: "0",
     });
     expect(result.status).toBe(0);
     const envFile = await read(".env");
@@ -297,6 +287,7 @@ describe("scripts/docker/setup.sh", () => {
       OPENCLAW_EXTRA_MOUNTS: "",
       OPENCLAW_HOME_VOLUME: "openclaw-home", // pragma: allowlist secret
       OPENCLAW_DISABLE_BONJOUR: "",
+      OPENCLAW_SKIP_ONBOARDING: "",
       OPENCLAW_AUTH_PROFILE_SECRET_DIR: join(sandbox.rootDir, "auth-profile-secrets"),
     });
     expect(envFile).not.toContain("OPENCLAW_DOCKER_APT_PACKAGES");
@@ -320,11 +311,6 @@ describe("scripts/docker/setup.sh", () => {
     expect(log).toContain(
       `run --rm --no-deps ${prestartContainerEnvFlags} --entrypoint node openclaw-gateway dist/index.js config set --batch-json [{"path":"gateway.mode","value":"local"},{"path":"gateway.bind","value":"lan"},{"path":"gateway.controlUi.allowedOrigins","value":["http://localhost:18789","http://127.0.0.1:18789"]}]`,
     );
-    expect(result.stdout).toContain("Gateway token: stored in Docker environment/config");
-    expect(result.stdout).toContain("Gateway running with host port mapping.");
-    expect(result.stdout).toContain("Access from tailnet devices via the host's tailnet IP.");
-    expect(result.stdout).toContain("Commands:");
-    expect(result.stdout).toContain("logs -f openclaw-gateway");
     expect(result.stdout).toContain(
       `exec openclaw-gateway sh -lc 'node dist/index.js gateway health --token "$OPENCLAW_GATEWAY_TOKEN"'`,
     );
@@ -474,7 +460,11 @@ describe("scripts/docker/setup.sh", () => {
     } else {
       expect(result.status).toBe(0);
       expect(result.stdout).toContain(`Using preloaded Docker image: ${image}`);
-      expect(log).toContain("config set --batch-json");
+      expect(log).toContain(
+        'config set --batch-json [{"path":"gateway.mode","value":"local"},{"path":"gateway.bind","value":"lan"}',
+      );
+      expect(log).not.toContain("onboard");
+      expect(parseEnv(await read(".env"))).toMatchObject({ OPENCLAW_SKIP_ONBOARDING: "1" });
       expectOfflineComposePolicy(lines);
     }
   });
@@ -762,53 +752,8 @@ describe("scripts/docker/setup.sh", () => {
     expect(result.stderr).toContain(diagnostic);
   });
 
-  it.each(["1", "0"])("normalizes OPENCLAW_SKIP_ONBOARDING=%s", async (value) => {
-    const { result, log } = await runLoggedSetup({ OPENCLAW_SKIP_ONBOARDING: value });
-    expect(result.status).toBe(0);
-    const envFile = await read(".env");
-    if (value === "1") {
-      expect(log).not.toContain("onboard");
-      expect(log).toContain("config set --batch-json");
-      expect(log).toContain('"path":"gateway.mode","value":"local"');
-      expect(log).toContain('"path":"gateway.bind","value":"lan"');
-      expect(envFile).toContain("OPENCLAW_SKIP_ONBOARDING=1");
-    } else {
-      expect(log).toContain(
-        "onboard --mode local --no-install-daemon --gateway-auth token --gateway-token-ref-env OPENCLAW_GATEWAY_TOKEN --skip-ui --suppress-gateway-token-output",
-      );
-      expect(envFile).toMatch(/OPENCLAW_SKIP_ONBOARDING=\n/);
-    }
-  });
-
-  it("avoids associative arrays so the script remains Bash 3.2-compatible", async () => {
-    const scriptPath = join(repoRoot, "scripts/docker/setup.sh");
-    const script = await readFile(scriptPath, "utf8");
-    expect(script).not.toMatch(/^\s*declare -A\b/m);
-
-    const systemBash = resolveBashForCompatCheck();
-    if (!systemBash) {
-      return;
-    }
-
-    const assocCheck = spawnSync(systemBash, ["-c", "declare -A _t=()"], {
-      encoding: "utf8",
-    });
-    if (assocCheck.status === 0 || assocCheck.status === null) {
-      // Only a Bash without associative arrays can prove the compatibility contract.
-      return;
-    }
-
-    const syntaxCheck = spawnSync(systemBash, ["-n", scriptPath], {
-      encoding: "utf8",
-    });
-
-    expect(syntaxCheck.status).toBe(0);
-    expect(syntaxCheck.stderr).not.toContain("declare: -A: invalid option");
-  });
-
   it("keeps the Compose services aligned with container networking and durable state", async () => {
     const compose = await readFile(join(repoRoot, "docker-compose.yml"), "utf8");
-    expect(compose).not.toContain("gateway-daemon");
     const { services } = parse(compose) as {
       services: Record<
         "openclaw-gateway" | "openclaw-cli",

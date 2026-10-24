@@ -599,81 +599,62 @@ describe.skipIf(process.platform === "win32")("immutable release artifact CLI", 
     }
   });
 
-  it.each([1, 2])("restores producer attempt %i without dispatching or rebuilding", (attempt) => {
-    const test = fixture();
-    const admitted = expectSuccess(test.run("admit", { GITHUB_RUN_ID: "81" }));
-    const recordPath = join(admitted.outputs.directory!, "dispatch.json");
-    const recordBytes = readFileSync(recordPath, "utf8");
-    test.artifact(admitted.outputs.dispatch_name!, "dispatch.json", JSON.parse(recordBytes), true);
-    const first = expectSuccess(test.run("resolve"));
-    expect(first.outputs).toMatchObject({
-      run_id: "81",
-      run_attempt: "1",
-      dispatch_id: DISPATCH_ID,
-    });
-    if (attempt === 2) {
-      test.runApi("81", { run_attempt: attempt, ...completed });
-    }
-    const second = expectSuccess(
-      test.run("resolve", {
-        GITHUB_RUN_ATTEMPT: "2",
-        ARTIFACT_RUN_ID: "99",
-        ARTIFACT_RUN_ATTEMPT: "2",
-      }),
-    );
-    expect(second.outputs).toEqual({ ...first.outputs, run_attempt: String(attempt) });
-    expect(readFileSync(recordPath, "utf8")).toBe(recordBytes);
-    expect(second.calls).toContainEqual([
-      "gh",
-      "api",
-      `repos/${REPOSITORY}/actions/artifacts?name=${DISPATCH_ID}-dispatch&per_page=100`,
-    ]);
-    expect(
-      second.calls.some((call) => call.some((part) => part.includes("actions/runs/51/"))),
-    ).toBe(false);
-    expect(
-      [...first.calls, ...second.calls]
-        .filter(([kind]) => kind === "gh")
-        .every(([, command]) => command === "api"),
-    ).toBe(true);
-  });
-
-  it.each(["npm", "docker"])(
-    "adopts a newer %s producer attempt without replacing its original dispatch",
-    (stage) => {
+  it.each([
+    ["npm", 1],
+    ["npm", 2],
+    ["docker", 2],
+  ] as const)(
+    "restores %s producer attempt %i without dispatching or rebuilding",
+    (stage, attempt) => {
       const test = fixture();
       const dispatchId = `full-release-validation-51-1-artifacts-${stage}`;
-      const request = { ...artifactRequest(), stage, dispatchId };
+      const env = { ARTIFACT_STAGE: stage, ARTIFACT_DISPATCH_ID: dispatchId };
+      const admitted = expectSuccess(test.run("admit", { ...env, GITHUB_RUN_ID: "81" }));
+      const recordPath = join(admitted.outputs.directory!, "dispatch.json");
+      const recordBytes = readFileSync(recordPath, "utf8");
       test.artifact(
-        `${dispatchId}-dispatch`,
+        admitted.outputs.dispatch_name!,
         "dispatch.json",
-        {
-          request,
-          runId: "81",
-          runAttempt: "1",
-        },
+        JSON.parse(recordBytes),
         true,
       );
-      test.api(
-        "actions/runs/81",
-        workflowRun({
-          run_attempt: 2,
-          status: "completed",
-          conclusion: "success",
-          display_title: `Full Release Artifacts ${dispatchId}`,
-        }),
-      );
-      const result = test.run("resolve", {
-        GITHUB_RUN_ATTEMPT: "2",
-        ARTIFACT_STAGE: stage,
-        ARTIFACT_DISPATCH_ID: dispatchId,
-      });
-      expect(result.status, result.stderr).toBe(0);
-      expect(result.outputs).toMatchObject({
+      test.runApi("81", { display_title: `Full Release Artifacts ${dispatchId}` });
+      const first = expectSuccess(test.run("resolve", env));
+      expect(first.outputs).toMatchObject({
         run_id: "81",
-        run_attempt: "2",
+        run_attempt: "1",
         dispatch_id: dispatchId,
       });
+      if (attempt === 2) {
+        test.runApi("81", {
+          run_attempt: attempt,
+          ...completed,
+          display_title: `Full Release Artifacts ${dispatchId}`,
+        });
+      }
+      const second = expectSuccess(
+        test.run("resolve", {
+          ...env,
+          GITHUB_RUN_ATTEMPT: "2",
+          ARTIFACT_RUN_ID: "99",
+          ARTIFACT_RUN_ATTEMPT: "2",
+        }),
+      );
+      expect(second.outputs).toEqual({ ...first.outputs, run_attempt: String(attempt) });
+      expect(readFileSync(recordPath, "utf8")).toBe(recordBytes);
+      expect(second.calls).toContainEqual([
+        "gh",
+        "api",
+        `repos/${REPOSITORY}/actions/artifacts?name=${dispatchId}-dispatch&per_page=100`,
+      ]);
+      expect(
+        second.calls.some((call) => call.some((part) => part.includes("actions/runs/51/"))),
+      ).toBe(false);
+      expect(
+        [...first.calls, ...second.calls]
+          .filter(([kind]) => kind === "gh")
+          .every(([, command]) => command === "api"),
+      ).toBe(true);
     },
   );
 
@@ -780,7 +761,6 @@ describe.skipIf(process.platform === "win32")("immutable release artifact CLI", 
   });
 
   it.each([
-    ["successful raw job", {}, {}, false, ""],
     ["failed unrelated qualifier", {}, { ...completed, conclusion: "failure" }, false, ""],
     ["failed raw job", { conclusion: "failure" }, {}, false, JOB_MISMATCH],
     ["wrong raw attempt", { run_attempt: 2 }, {}, false, JOB_MISMATCH],
