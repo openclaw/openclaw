@@ -1062,23 +1062,22 @@ const configs: UserConfig[] = [
       false,
     ),
   ),
-  ...Object.entries(runtimeProcessHelperManifest).map(([name, entry]) => ({
-    ...workerHelperBuildConfig(
+  ...Object.entries(runtimeProcessHelperManifest).map(([name, entry]) => {
+    const helperConfig = workerHelperBuildConfig(
       { ["worker/" + name]: entry.source },
       entry.sealed ? { WORKER_DEPLOY_BUILD: "true", SEALED_RUNTIME_BUILD: "true" } : undefined,
-    ),
-    ...(name === "github-exec-launcher"
-      ? {
-          // Credential reads need fs-safe's relocated metadata/helper, but no runtime state schemas.
-          plugins: [
-            createFsSafeWindowsHelperAssetPlugin(
-              process.cwd(),
-              `worker/${WORKER_BUNDLE_WINDOWS_SECURITY_HELPER_PATH}`,
-            ),
-          ],
-        }
-      : {}),
-  })),
+    );
+    if (name === "github-exec-launcher") {
+      // Credential reads need fs-safe's relocated metadata/helper, but no runtime state schemas.
+      helperConfig.plugins = [
+        createFsSafeWindowsHelperAssetPlugin(
+          process.cwd(),
+          `worker/${WORKER_BUNDLE_WINDOWS_SECURITY_HELPER_PATH}`,
+        ),
+      ];
+    }
+    return helperConfig;
+  }),
   // The build wrapper must select exactly one of the full and SDK-only declaration groups.
   ...(TSDOWN_DECLARATIONS
     ? buildUnifiedDeclarationGroups(unifiedDistEntries).map(({ name, sources }) =>
