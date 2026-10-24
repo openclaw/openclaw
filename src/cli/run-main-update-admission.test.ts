@@ -1,5 +1,6 @@
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
+import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
 import { isUpdateAdmissionAuthorityEnvKey } from "../infra/update-admission-contract.js";
 import { resetLogger } from "../logging/logger.js";
 import { loggingState } from "../logging/state.js";
@@ -8,8 +9,8 @@ import { defaultRuntime } from "../runtime.js";
 import { resolveCliArgvInvocation } from "./argv-invocation.js";
 import { tryRunUpdateAdmissionBeforeStartup } from "./run-main-update-admission.js";
 
-// mock-isolation: The real command's inspection is covered by update-command-admit tests and the
-// published-driver cell; this fixture emits the SQLite budget debug line admission logs mid-inspection.
+// The real command's inspection is covered by update-command-admit tests and the published-driver cell.
+// mock-isolation: emits the SQLite budget debug line admission logs mid-inspection, then the verdict.
 vi.mock("./update-cli/update-command-admit.js", () => ({
   updateAdmitCommand: vi.fn(async () => {
     createSubsystemLogger("state/sqlite").debug(
@@ -68,6 +69,7 @@ it("routes raised-level console logs to stderr so stdout carries only the verdic
   ).resolves.toBe(true);
 
   expect(JSON.parse(stdout)).toEqual({ protocol: 1, verdict: "admit" });
-  expect(stderr).toContain("[state/sqlite] SQLite read-only snapshot for /fixture/");
+  // CI colorizes the subsystem prefix.
+  expect(stripAnsi(stderr)).toContain("[state/sqlite] SQLite read-only snapshot for /fixture/");
   expect(process.exitCode).toBe(initialExitCode);
 });

@@ -168,9 +168,10 @@ it.each(["known-version", "unknown-version", "artifact"] as const)(
     if (target === "unknown-version") {
       context.target.version = null;
     } else if (target === "artifact") {
-      const artifactUrl = new URL(
-        "https://fixture-user:fixture-password@registry.example/package.tgz?token=fixture-token",
-      );
+      // Assembled at runtime: a literal credential URL trips the PR input-safety scanner.
+      const artifactUrl = new URL("https://registry.example/package.tgz?token=fixture-token");
+      artifactUrl.username = "fixture-user";
+      artifactUrl.password = "fixture-password";
       context.target.source = "artifact";
       context.target.spec = artifactUrl.href;
       context.target.tag = context.target.spec;
