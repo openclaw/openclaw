@@ -55,13 +55,16 @@ suite.define(() => {
       await expectBrowser(owner).toHaveAccessibleName("Owners: My sessions");
       await page.reload();
       await expectBrowser(owner).toHaveAccessibleName("Owners: My sessions");
-      const storageKeys = await page.evaluate(() =>
+      const [storageKey, ...otherKeys] = await page.evaluate(() =>
         Object.keys(localStorage).filter((key) =>
           key.startsWith("openclaw.control.sidebarSessionOwnerFilter.v1:"),
         ),
       );
-      expect(storageKeys).toHaveLength(1);
-      expect(await page.evaluate((key) => localStorage.getItem(key), storageKeys[0])).toBe(
+      expect(otherKeys).toEqual([]);
+      if (!storageKey) {
+        throw new Error("expected the guest's saved owner filter");
+      }
+      expect(await page.evaluate((key) => localStorage.getItem(key), storageKey)).toBe(
         `owner:${sam.id}`,
       );
 
@@ -70,11 +73,11 @@ suite.define(() => {
         ["all", "All owners"],
         [`owner:${josh.id}`, josh.label],
         ["involving-me", "Involving me"],
-      ]) {
-        await page.evaluate(
-          ([key, value]) => localStorage.setItem(key, value),
-          [storageKeys[0], saved],
-        );
+      ] as const) {
+        await page.evaluate(({ key, value }) => localStorage.setItem(key, value), {
+          key: storageKey,
+          value: saved,
+        });
         await page.reload();
         await expectBrowser(owner).toHaveAccessibleName(`Owners: ${label}`);
       }
