@@ -151,6 +151,32 @@ other writers, revalidate release/source/inventory and immutable bytes, and
 read back both endpoints. Version/hash inputs or current Gateway `latest` alone
 cannot establish forward order. Stop on ambiguous history.
 
+## Windows Gateway Microsoft Store
+
+Regular stable publication to npm `latest` requests `Windows Gateway Store Request`
+after GitHub activation, through both `OpenClaw Release Publish` and `OpenClaw
+Release Button`. The detached request builds the exact signed Gateway source in
+`openclaw/openclaw-windows-packaging`, checks both the payload and the independently
+selected MSIX release identity, then dispatches that build's existing Microsoft
+Store publisher. Beta and extended-stable do not request Store publication.
+No sideload signing or packaging GitHub release is requested.
+
+The release GitHub App must be installed on core and packaging with Actions write,
+Contents read, and Variables read. Keep packaging's effective `MSSTORE_ENABLED`
+unset or disabled (including inherited organization variables): its automatic
+`workflow_run` publisher would submit before this caller
+checks the exact-source snapshot. Store credentials and the `microsoft-store`
+environment policy remain in packaging; this handoff does not add reviewer rules
+or move publishing to `openclaw/releases`.
+
+A successful request means the Store publisher was dispatched, not that Microsoft
+accepted or certified the update. Follow the linked packaging publisher and its
+`openclaw-gateway-store-submission-evidence` commit receipt. Core/npm publication
+does not wait for MSIX builds or Store acceptance. Repeated publication reuses the
+original request, including failed requests. Recover its retained packaging/Store
+run IDs through the downstream native workflows; do not rerun the entire request
+or start a duplicate after an ambiguous dispatch. Evidence is retained for 90 days.
+
 ## Windows Hub
 
 The optional parent inputs `windows_node_tag` and
