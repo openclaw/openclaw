@@ -1,3 +1,4 @@
+import { formatErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import {
   ErrorCodes,
   errorShape,
@@ -19,6 +20,7 @@ import {
   captureGatewayToolCallerAssertion,
   getGatewayToolCallerIdentity,
 } from "../../agents/tools/gateway-caller-context.js";
+import { logWarn } from "../../logger.js";
 import { capturePluginLifecycleAuthority } from "../../plugins/registry-lifecycle.js";
 import { getPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { getActiveSecretsRuntimeConfigSnapshot } from "../../secrets/runtime-state.js";
@@ -225,7 +227,14 @@ export const toolsGitHubHandlers: GatewayRequestHandlers = {
             selectedScope: params.scope,
           }),
         );
-      } catch {
+      } catch (error) {
+        // The client-facing response stays generic by design; the caught cause
+        // is preserved in Gateway diagnostics so operators can tell a missing
+        // `gh` CLI, an expired handoff, and hard failures apart. The raw
+        // normalized message is handed to the logging owner untouched — file
+        // records stay raw and console/egress redaction happens at the
+        // subsystem logger's output boundary, not before storage.
+        logWarn(`tools-github: GitHub identity setup failed: ${formatErrorMessage(error)}`);
         respond(
           false,
           undefined,

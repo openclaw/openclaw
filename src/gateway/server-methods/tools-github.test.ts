@@ -1,7 +1,10 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { logWarn } from "../../logger.js";
 import { GitHubCliUnavailableError } from "../github-cli-preflight.js";
 import { toolsGitHubHandlers } from "./tools-github.js";
+
+const logWarnMock = vi.mocked(logWarn);
 
 const github = vi.hoisted(() => ({
   createProfileId: vi.fn(() => "ghp_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"),
@@ -32,6 +35,10 @@ vi.mock("../github-tool-identity-config.js", () => ({
 }));
 vi.mock("../../secrets/store/secret-store.js", () => ({
   consumeGitHubSetupHandoff: secrets.consumeHandoff,
+}));
+vi.mock("../../logger.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../logger.js")>()),
+  logWarn: vi.fn(),
 }));
 vi.mock("../../agents/agent-scope.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../agents/agent-scope.js")>()),
@@ -344,6 +351,48 @@ describe("tools.github handlers", () => {
 
     expect(github.install).not.toHaveBeenCalled();
     expect(respond.mock.calls[0]?.[0]).toBe(false);
+  });
+
+  it("logs the setup failure cause while responding with the generic error", async () => {
+    secrets.consumeHandoff.mockReturnValue(undefined);
+    const respond = await invoke("tools.github.configure", {
+      scope: "system",
+      agentId: "main",
+      mode: "managed",
+      secretName: "github-setup-55555555555555555555555555555555",
+    });
+
+    expect(respond.mock.calls[0]?.[0]).toBe(false);
+    expect(JSON.stringify(respond.mock.calls)).toContain("GitHub identity setup failed");
+    expect(logWarnMock).toHaveBeenCalledWith(
+      expect.stringContaining("temporary GitHub credential is unavailable"),
+    );
+    expect(JSON.stringify(respond.mock.calls)).not.toContain(
+      "temporary GitHub credential is unavailable",
+    );
+  });
+
+  it("hands the raw cause to the logging owner without pre-redaction", async () => {
+    secrets.consumeHandoff.mockReturnValue("temporary-test-token");
+    github.install.mockRejectedValue(
+      new Error("install failed for token=ghp_1234567890abcdefghijklmnop in profile dir"),
+    );
+
+    const respond = await invoke("tools.github.configure", {
+      scope: "system",
+      agentId: "main",
+      mode: "managed",
+      secretName: "github-setup-66666666666666666666666666666666",
+    });
+
+    expect(respond.mock.calls[0]?.[0]).toBe(false);
+    // Redaction belongs to the logging egress boundary, not the handler: the
+    // raw cause must reach the logging owner intact (a pre-redacting
+    // formatter would collapse the token-bearing text before file storage).
+    expect(logWarnMock).toHaveBeenCalledWith(
+      expect.stringContaining("token=ghp_1234567890abcdefghijklmnop"),
+    );
+    expect(JSON.stringify(respond.mock.calls)).not.toContain("temporary-test-token");
   });
 
   it("consumes the setup handoff before gh validation can fail", async () => {
