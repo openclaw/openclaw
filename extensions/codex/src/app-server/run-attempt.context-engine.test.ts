@@ -18,7 +18,7 @@ import { readSessionTranscriptEvents } from "openclaw/plugin-sdk/session-transcr
 import { formatSqliteSessionFileMarker } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { readStringValue } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { awaitGateBeforeSettlement } from "openclaw/plugin-sdk/test-fixtures";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   assistantMessage,
   setupRunAttemptTestHooks,
@@ -41,25 +41,39 @@ import {
 import { readCodexAppServerBinding } from "./session-binding.test-helpers.js";
 
 const CODEX_TURN_START_TEXT_INPUT_MAX_CHARS = 1 << 20;
+let sessionFile: string;
+let workspaceDir: string;
+
+function promptHook(handler: Parameters<typeof createMockPluginRegistry>[0][number]["handler"]) {
+  initializeGlobalHookRunner(
+    createMockPluginRegistry([{ hookName: "before_prompt_build", handler }]),
+  );
+}
+
+const runtimeSettings = {
+  runtime: { mode: "degraded" },
+  model: { requested: "gpt-5.4-codex-primary", resolved: "gpt-5.4-codex" },
+  diagnostics: { fallbackReason: "provider_unavailable", degradedReason: "context_overflow" },
+};
 
 async function createSqliteParams(
-  workspaceDir: string,
+  sqliteWorkspaceDir: string,
   storeName: string,
 ): Promise<EmbeddedRunAttemptParams> {
   const sessionId = "session-1";
   const sessionKey = "agent:main:session-1";
   const storePath = path.join(tempDir, `${storeName}.sqlite`);
-  const sessionFile = formatSqliteSessionFileMarker({
+  const sqliteSessionFile = formatSqliteSessionFileMarker({
     agentId: "main",
     sessionId,
     storePath,
   });
-  const params = createParams(sessionFile, workspaceDir);
+  const params = createParams(sqliteSessionFile, sqliteWorkspaceDir);
   await upsertSessionEntry({
     agentId: "main",
     sessionKey,
     storePath,
-    entry: { sessionFile, sessionId, updatedAt: Date.now() },
+    entry: { sessionFile: sqliteSessionFile, sessionId, updatedAt: Date.now() },
   });
   params.sessionTarget = {
     agentId: "main",
@@ -103,11 +117,13 @@ function expectRequestInputTextContains(
 }
 
 setupRunAttemptTestHooks();
+beforeEach(() => {
+  sessionFile = path.join(tempDir, "session.jsonl");
+  workspaceDir = path.join(tempDir, "workspace");
+});
 
 describe("runCodexAppServerAttempt context-engine lifecycle", () => {
   it("bootstraps and assembles a compaction summary before the Codex turn starts", async () => {
-    const sessionFile = path.join(tempDir, "session.jsonl");
-    const workspaceDir = path.join(tempDir, "workspace");
     const sessionManager = openFileBackedSessionManagerForTest(sessionFile, {
       sessionId: "session-1",
     });
@@ -161,17 +177,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     expect(bootstrapParams.sessionId).toBe("session-1");
     expect(bootstrapParams.sessionKey).toBe("agent:main:session-1");
     expect(bootstrapParams.sessionFile).toBe(sessionFile);
-    expect(bootstrapParams.runtimeSettings).toMatchObject({
-      runtime: { mode: "degraded" },
-      model: {
-        requested: "gpt-5.4-codex-primary",
-        resolved: "gpt-5.4-codex",
-      },
-      diagnostics: {
-        fallbackReason: "provider_unavailable",
-        degradedReason: "context_overflow",
-      },
-    });
+    expect(bootstrapParams.runtimeSettings).toMatchObject(runtimeSettings);
 
     expect(contextEngine["assemble"]).toHaveBeenCalledTimes(1);
     const assembleParams = requireFirstCallArg(contextEngine["assemble"], "assemble") as Parameters<
@@ -182,17 +188,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     expect(assembleParams.tokenBudget).toBe(321);
     expect(assembleParams.citationsMode).toBe("on");
     expect(assembleParams.model).toBe("gpt-5.4-codex");
-    expect(assembleParams.runtimeSettings).toMatchObject({
-      runtime: { mode: "degraded" },
-      model: {
-        requested: "gpt-5.4-codex-primary",
-        resolved: "gpt-5.4-codex",
-      },
-      diagnostics: {
-        fallbackReason: "provider_unavailable",
-        degradedReason: "context_overflow",
-      },
-    });
+    expect(assembleParams.runtimeSettings).toMatchObject(runtimeSettings);
     expect(assembleParams.prompt).toBe(params.prompt);
     const summaryRole = "compactionSummary";
     expect(assembleParams.messages.map((message) => message.role)).toEqual([
@@ -224,8 +220,6 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
   });
 
   it("places inert sender provenance beside a continuity-projected request without escaping request mentions", async () => {
-    const sessionFile = path.join(tempDir, "session-current-sender-continuity.jsonl");
-    const workspaceDir = path.join(tempDir, "workspace-current-sender-continuity");
     const { harness, params } = await createCurrentInputContinuityHarness(
       sessionFile,
       workspaceDir,
@@ -267,16 +261,8 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
 
   it("keeps current image-only input stable through continuity projection", async () => {
     const beforePromptBuild = vi.fn(async (_event: unknown) => undefined);
-    initializeGlobalHookRunner(
-      createMockPluginRegistry([
-        {
-          hookName: "before_prompt_build",
-          handler: beforePromptBuild,
-        },
-      ]),
-    );
-    const sessionFile = path.join(tempDir, "session-current-request.jsonl");
-    const workspaceDir = path.join(tempDir, "workspace-current-request");
+    promptHook(beforePromptBuild);
+
     const { harness, params, currentUserMessageId } = await createCurrentInputContinuityHarness(
       sessionFile,
       workspaceDir,
@@ -318,16 +304,8 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     async (recorderKind) => {
       const withRecorder = recorderKind !== "none";
       const beforePromptBuild = vi.fn(async (_event: unknown) => undefined);
-      initializeGlobalHookRunner(
-        createMockPluginRegistry([
-          {
-            hookName: "before_prompt_build",
-            handler: beforePromptBuild,
-          },
-        ]),
-      );
-      const sessionFile = path.join(tempDir, "session-runtime-refresh.jsonl");
-      const workspaceDir = path.join(tempDir, "workspace-runtime-refresh");
+      promptHook(beforePromptBuild);
+
       const harness = createStartedThreadHarness();
       const params = createParams(sessionFile, workspaceDir);
       params.prompt = "Transport context and media wrapping, or continue after runtime refresh.";
@@ -369,19 +347,11 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
   );
 
   it("bounds active context-engine projections when prompt hooks append context", async () => {
-    initializeGlobalHookRunner(
-      createMockPluginRegistry([
-        {
-          hookName: "before_prompt_build",
-          handler: async (event) => ({
-            appendContext: `${(event as { prompt: string }).prompt}\n\nhook append marker`,
-            prependContext: "hook prefix context",
-          }),
-        },
-      ]),
-    );
-    const sessionFile = path.join(tempDir, "session.jsonl");
-    const workspaceDir = path.join(tempDir, "workspace");
+    promptHook(async (event) => ({
+      appendContext: `${(event as { prompt: string }).prompt}\n\nhook append marker`,
+      prependContext: "hook prefix context",
+    }));
+
     const contextEngine = createContextEngine({
       assemble: vi.fn(async () => ({
         messages: [
@@ -415,16 +385,8 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
   });
 
   it("bounds hook-appended prompts after delivery metadata is relocated", async () => {
-    initializeGlobalHookRunner(
-      createMockPluginRegistry([
-        {
-          hookName: "before_prompt_build",
-          handler: async () => ({ appendContext: `hook context ${"h".repeat(1_100_000)}` }),
-        },
-      ]),
-    );
-    const sessionFile = path.join(tempDir, "session-delivery-hint.jsonl");
-    const workspaceDir = path.join(tempDir, "workspace-delivery-hint");
+    promptHook(async () => ({ appendContext: `hook context ${"h".repeat(1_100_000)}` }));
+
     const harness = createStartedThreadHarness();
     const params = createParams(sessionFile, workspaceDir);
     params.prompt = `${MESSAGE_TOOL_DELIVERY_HINTS[0]}\n\ncurrent prompt survives`;
@@ -442,18 +404,10 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
   });
 
   it("bounds hook-appended output for an empty prompt without an active context engine", async () => {
-    initializeGlobalHookRunner(
-      createMockPluginRegistry([
-        {
-          hookName: "before_prompt_build",
-          handler: async () => ({
-            appendContext: `hook context ${"h".repeat(1_100_000)} hook tail`,
-          }),
-        },
-      ]),
-    );
-    const sessionFile = path.join(tempDir, "session.jsonl");
-    const workspaceDir = path.join(tempDir, "workspace");
+    promptHook(async () => ({
+      appendContext: `hook context ${"h".repeat(1_100_000)} hook tail`,
+    }));
+
     const harness = createStartedThreadHarness();
     const params = createParams(sessionFile, workspaceDir);
     params.prompt = "";
@@ -472,8 +426,6 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
   it.each(["byte guard", "token pressure", "inactive engine"] as const)(
     "preserves bootstrap ownership under %s",
     async (scenario) => {
-      const sessionFile = path.join(tempDir, "session.jsonl");
-      const workspaceDir = path.join(tempDir, "workspace");
       const agentDir = path.join(tempDir, "agent");
       const resumed = scenario === "byte guard";
       const active = scenario !== "inactive engine";
@@ -585,8 +537,6 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
   );
 
   it("keeps mirrored history when an inactive per-turn context-engine binding starts fresh", async () => {
-    const sessionFile = path.join(tempDir, "session.jsonl");
-    const workspaceDir = path.join(tempDir, "workspace");
     const sessionManager = openFileBackedSessionManagerForTest(sessionFile, {
       sessionId: "session-1",
     });
@@ -645,8 +595,6 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
   ])(
     "starts fresh and reprojects after a context-engine $change change",
     async ({ previousEpoch, epoch, tokenBudget }) => {
-      const sessionFile = path.join(tempDir, "session.jsonl");
-      const workspaceDir = path.join(tempDir, "workspace");
       await writeCodexAppServerBinding(
         sessionFile,
         makeThreadBootstrapBinding({
@@ -721,8 +669,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
         }),
       }),
     );
-    const sessionFile = path.join(tempDir, "session.jsonl");
-    const workspaceDir = path.join(tempDir, "workspace");
+
     try {
       await writeCodexAppServerBinding(
         sessionFile,
@@ -795,7 +742,6 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
   });
 
   it("returns an exact terminal anchor for Cron turns without finalizing inside Codex", async () => {
-    const workspaceDir = path.join(tempDir, "workspace");
     const afterTurn = vi.fn(
       async (_params: Parameters<NonNullable<ContextEngine["afterTurn"]>>[0]) => undefined,
     );
@@ -825,7 +771,6 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
   });
 
   it("persists the admitted user prompt before an async item buffered during turn startup", async () => {
-    const workspaceDir = path.join(tempDir, "workspace-early-async");
     const params = await createSqliteParams(workspaceDir, "early-async-order");
     const delivered = Promise.withResolvers<void>();
     params.onBlockReply = vi.fn(() => delivered.resolve());
@@ -899,8 +844,6 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
   });
 
   it("logs assemble failures as a formatted message instead of the raw error object", async () => {
-    const sessionFile = path.join(tempDir, "session.jsonl");
-    const workspaceDir = path.join(tempDir, "workspace");
     openFileBackedSessionManagerForTest(sessionFile, { sessionId: "session-1" }).appendMessage(
       assistantMessage("first baseline message", 1) as never,
     );
@@ -909,17 +852,10 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     );
     let preassemblyMessages: AgentMessage[] = [];
     let promptHookMessages: AgentMessage[] = [];
-    initializeGlobalHookRunner(
-      createMockPluginRegistry([
-        {
-          hookName: "before_prompt_build",
-          handler: async (event) => {
-            promptHookMessages = (event as { messages: AgentMessage[] }).messages;
-            return {};
-          },
-        },
-      ]),
-    );
+    promptHook(async (event) => {
+      promptHookMessages = (event as { messages: AgentMessage[] }).messages;
+      return {};
+    });
     const rawError = new Error("Authorization: Bearer sk-abcdefghijklmnopqrstuv");
     const contextEngine = createContextEngine({
       assemble: vi.fn(async ({ messages }) => {
@@ -971,7 +907,7 @@ describe("Codex configured context budget", () => {
     async (withImages) => {
       const { contextEngine, assemble, bootstrap } = createBudgetProbeEngine();
       const harness = createStartedThreadHarness();
-      const sessionFile = path.join(tempDir, "context-budget.jsonl");
+
       const sessionManager = openFileBackedSessionManagerForTest(sessionFile, {
         sessionId: "session-1",
       });

@@ -46,6 +46,40 @@ async function startAssignment(observeTurn = true) {
   return { f, client, parent };
 }
 
+async function detachedAssignment(observeTurn = true) {
+  const { f, client, parent } = await startAssignment(observeTurn);
+  await parent.unregister();
+  client.close();
+  return f;
+}
+
+async function pauseRecovery(f: Awaited<ReturnType<typeof fixture>>, client = createClient()) {
+  const entered = createDeferred<void>();
+  const history = createDeferred<ReturnType<typeof threadRead>>();
+  client.setThreadReadFactory("child-thread", () => {
+    entered.resolve();
+    return history.promise;
+  });
+  const parent = await f.register(client);
+  await Promise.race([
+    entered.promise,
+    parent.ready.then(() => {
+      throw new Error("Recovery completed without reading pending history");
+    }),
+  ]);
+  return { client, parent, history };
+}
+
+function completeChild(client: ReturnType<typeof createClient>, text: string, turnId?: string) {
+  return client.notify(
+    childTurnCompletedNotification({
+      ...(turnId ? { turnId } : {}),
+      status: "completed",
+      items: [{ id: "final", type: "agentMessage", phase: "final_answer", text }],
+    }),
+  );
+}
+
 async function startNestedAssignment() {
   const f = await fixture();
   const client = createClient();
@@ -380,9 +414,7 @@ describe("native pending assignment inventory through registered monitor admissi
   it.each([false, true])(
     "does not infer fork provenance from the current parent history (observed turn: %s)",
     async (observeTurn) => {
-      const { f, client: firstClient, parent: first } = await startAssignment(observeTurn);
-      await first.unregister();
-      firstClient.close();
+      const f = await detachedAssignment(observeTurn);
       const client = createClient();
       const history = finalHistory("copied-parent-turn", "Parent final copied before rollback");
       history.thread.forkedFromId = "parent-thread";
@@ -419,9 +451,7 @@ describe("native pending assignment inventory through registered monitor admissi
   it.each(["missing-lineage", "wrong-lineage", "connection", "lifecycle", "session"])(
     "does not adopt pending native work under %s history ownership",
     async (scenario) => {
-      const { f, client: initialClient, parent: initial } = await startAssignment();
-      await initial.unregister();
-      initialClient.close();
+      const f = await detachedAssignment();
       let owner = f.historyOwner();
       if (scenario === "connection") {
         owner = { ...owner, connectionFingerprint: "f".repeat(64) };
@@ -450,23 +480,8 @@ describe("native pending assignment inventory through registered monitor admissi
   it.each(["binding", "gateway"] as const)(
     "revalidates %s authority after an awaited history read",
     async (authority) => {
-      const { f, client: firstClient, parent: first } = await startAssignment();
-      await first.unregister();
-      firstClient.close();
-      const entered = createDeferred<void>();
-      const history = createDeferred<ReturnType<typeof threadRead>>();
-      const client = createClient();
-      client.setThreadReadFactory("child-thread", () => {
-        entered.resolve();
-        return history.promise;
-      });
-      const recovered = await f.register(client);
-      await Promise.race([
-        entered.promise,
-        recovered.ready.then(() => {
-          throw new Error("Recovery completed without reading pending history");
-        }),
-      ]);
+      const f = await detachedAssignment();
+      const { parent: recovered, history } = await pauseRecovery(f);
       if (authority === "binding") {
         await f.store.retireSessionGeneration(f.identity);
       } else {
@@ -698,15 +713,7 @@ describe("native pending assignment inventory through registered monitor admissi
       }
       const turnId = assignment === "followup" ? "followup-turn" : "child-turn";
       if (assignment !== "empty") {
-        await client.notify(
-          childTurnCompletedNotification({
-            turnId,
-            status: "completed",
-            items: [
-              { id: "final", type: "agentMessage", phase: "final_answer", text: "Pending result" },
-            ],
-          }),
-        );
+        await completeChild(client, "Pending result", turnId);
       }
       client.setLoadedThreads([]);
       await client.notify(closeAgentNotification({ method: "item/started" }));
@@ -872,12 +879,7 @@ describe("native pending assignment inventory through registered monitor admissi
           return await mutate(identity, mutation, guard, authority);
         },
       );
-      await client.notify(
-        childTurnCompletedNotification({
-          status: "completed",
-          items: [{ id: "final", type: "agentMessage", phase: "final_answer", text: "Result" }],
-        }),
-      );
+      await completeChild(client, "Result");
       await parent.unregister();
       expect(await f.assignments()).toHaveLength(failure === "lost reply" ? 0 : 1);
       expect(await readVisibleSessionTranscriptMessageEntries(f.identity)).toHaveLength(0);
@@ -987,22 +989,9 @@ describe("native pending assignment inventory through registered monitor admissi
   it("does not restore an assignment retired while native history was being read", async () => {
     const { f, client, parent } = await startAssignment();
     f.deliver.mockResolvedValue({ delivered: false, path: "none", error: "Unavailable" });
-    await client.notify(
-      childTurnCompletedNotification({
-        status: "completed",
-        items: [{ id: "final", type: "agentMessage", phase: "final_answer", text: "Result" }],
-      }),
-    );
+    await completeChild(client, "Result");
     await parent.unregister();
-    const entered = createDeferred<void>();
-    const history = createDeferred<ReturnType<typeof threadRead>>();
-    const replacementClient = createClient();
-    replacementClient.setThreadReadFactory("child-thread", () => {
-      entered.resolve();
-      return history.promise;
-    });
-    const replacement = await f.register(replacementClient);
-    await entered.promise;
+    const { client: replacementClient, parent: replacement, history } = await pauseRecovery(f);
     await vi.advanceTimersByTimeAsync(600_000);
     expect(await f.assignments()).toEqual([]);
     const attempts = f.deliver.mock.calls.length;
