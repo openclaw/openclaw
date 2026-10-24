@@ -135,14 +135,6 @@ The preload retains the original deserializer so command attribution does not
 pollute the profile's existing `.deserialize.json` observer. Counts and samples
 are diagnostic evidence; these instrumented runs are not timing gates.
 
-Replay a captured synthetic `sessions.patch` reply without a source checkout:
-`node scripts/perf/sqlite-reply-transfer-measure.mjs --serialized-reply
-<profile>.reply-session.entries.replace.bin --operations 500000 --start-at <epoch-ms>`.
-The replay hashes its input and verifies the fixture's independently expected
-maintenance plan with empty work lists and zero counters. Compare captures with the same fixed
-operation count; this measures ordinary reply decoding and excludes producer, IPC,
-SQL, and Gateway work.
-
 `node scripts/perf/sqlite-reply-transfer-measure.mjs <source-root> --shape 16384
 --operations 500000 --start-at <epoch-ms>` exercises the complete transfer receiver
 with prepared synthetic session-entry frames. The source capsule needs the receiver,

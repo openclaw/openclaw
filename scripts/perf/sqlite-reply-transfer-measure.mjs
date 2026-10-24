@@ -15,7 +15,7 @@ import {
 import { setImmediate, setTimeout } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
-import { deserialize, serialize } from "node:v8";
+import { serialize } from "node:v8";
 
 const { values, positionals: roots } = parseArgs({
   allowPositionals: true,
@@ -24,14 +24,12 @@ const { values, positionals: roots } = parseArgs({
     operations: { type: "string" },
     "start-at": { type: "string" },
     allocations: { type: "boolean", default: false },
-    "serialized-reply": { type: "string" },
   },
 });
 assert(
-  roots.length || values["serialized-reply"],
-  "usage: node sqlite-reply-transfer-measure.mjs ROOT [ROOT...] [--shape BYTES] | --serialized-reply FILE; options: --operations N --start-at EPOCH_MS --allocations",
+  roots.length,
+  "usage: node sqlite-reply-transfer-measure.mjs ROOT [ROOT...] [--shape BYTES]; options: --operations N --start-at EPOCH_MS --allocations",
 );
-assert(!values["serialized-reply"] || roots.length === 0, "reply replay does not use source roots");
 const positiveInteger = (value) => {
   const number = Number(value);
   assert(Number.isSafeInteger(number) && number > 0, `invalid positive integer: ${value}`);
@@ -42,9 +40,7 @@ const shapes =
 const operations = values.operations === undefined ? undefined : positiveInteger(values.operations);
 const startAt = values["start-at"] === undefined ? undefined : positiveInteger(values["start-at"]);
 assert(
-  startAt === undefined ||
-    values["serialized-reply"] ||
-    (roots.length === 1 && shapes.length === 1),
+  startAt === undefined || (roots.length === 1 && shapes.length === 1),
   "--start-at requires one root and one shape",
 );
 const generated = mkdtempSync(path.join(tmpdir(), "sqlite-reply-transfer-"));
@@ -143,41 +139,6 @@ function prepare(owner, size) {
     },
     payloadBytes: serialize(payload).byteLength,
     frames: frames.length - 1,
-  };
-}
-
-function prepareSerializedReply(file) {
-  const bytes = readFileSync(file);
-  const expectedPlans = [
-    {
-      archivedEntries: [],
-      entryRemovals: [],
-      stateDeletePlans: [],
-      archived: 0,
-      capArchived: 0,
-      modelRunPruned: 0,
-      pruned: 0,
-      capped: 0,
-    },
-  ];
-  let consumed = 0;
-  let last;
-  const run = () => {
-    last = deserialize(bytes);
-    // The synthetic sessions.patch workload has no scheduled maintenance work.
-    assert.equal(last.maintenancePlans.length, 1);
-    consumed++;
-  };
-  run();
-  assert.deepEqual(last.maintenancePlans, expectedPlans);
-  return {
-    run,
-    verify(expectedCount) {
-      assert.equal(consumed, expectedCount);
-      assert.deepEqual(last.maintenancePlans, expectedPlans);
-    },
-    payloadBytes: bytes.byteLength,
-    inputSha256: createHash("sha256").update(bytes).digest("hex"),
   };
 }
 
@@ -327,22 +288,6 @@ function report(metadata, result) {
   );
 }
 
-if (values["serialized-reply"]) {
-  const file = path.resolve(values["serialized-reply"]);
-  const workload = prepareSerializedReply(file);
-  report(
-    {
-      scope:
-        "Recorded synthetic ordinary reply decoding; excludes producer, IPC, SQL, and Gateway work. Natural GC only. Allocation runs are diagnostic, not timing gates.",
-      input: file,
-      inputSha256: workload.inputSha256,
-    },
-    await measure(
-      workload,
-      (frame) => frame.url === "node:v8" && frame.functionName === "deserialize",
-    ),
-  );
-}
 for (const [index, root] of roots.entries()) {
   const owner = await loadOwner(root, index);
   for (const size of shapes) {

@@ -83,6 +83,7 @@ export function createAgentDatabaseMaintenanceOwner(context: {
       const opened = context.openWriter();
       const previous = new Map<string, SessionEntry>();
       const current = new Map<string, SessionEntry>();
+      let publication: ReturnType<typeof preparePublication> | undefined;
       const selected =
         input.kind === "maintenance-plan"
           ? expectDefined(preparation, "Session maintenance preparation")
@@ -111,7 +112,7 @@ export function createAgentDatabaseMaintenanceOwner(context: {
             current.set(sessionKey, after);
           },
           beforeCommit(database, maintenancePlan) {
-            const publication = preparePublication(
+            publication = preparePublication(
               {
                 pendingArchiveRecovery: false,
                 previous,
@@ -136,6 +137,7 @@ export function createAgentDatabaseMaintenanceOwner(context: {
             kind: "committed" as const,
             workerThreadId: threadId,
             value,
+            publication: expectDefined(publication, "Session maintenance commit receipt"),
           };
     },
   };

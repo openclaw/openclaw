@@ -20,7 +20,7 @@ export function compareSessionProviderReviewInWorker(
     stage: "transaction" | "commit",
     publication?: SessionEntryReplacementPublication,
   ) => void,
-): { entry: SessionEntry } {
+): { entry: SessionEntry; publication: SessionEntryReplacementPublication } {
   return runOpenClawAgentWriteTransaction(
     (current) => {
       if (current.db !== database.db) {
@@ -54,7 +54,7 @@ export function compareSessionProviderReviewInWorker(
       );
       deferSqliteWorkerCommitReceipt(current.db, publication);
       admit("commit", publication);
-      return { entry: updated };
+      return { entry: updated, publication };
     },
     options,
     { operationLabel: "session.provider-review.compare" },

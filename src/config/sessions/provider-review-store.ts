@@ -97,7 +97,7 @@ export async function compareSessionProviderReview(
         assertHeld,
         async (worker) => {
           const result = await worker.execute({ type: "session.providerReview.compare", input });
-          return { kind: "committed", value: result.entry };
+          return { kind: "committed", value: result.entry, publication: result.publication };
         },
         { identityAgentId: options.agentId },
         {

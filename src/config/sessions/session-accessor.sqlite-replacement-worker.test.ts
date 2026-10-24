@@ -1,6 +1,5 @@
 import { statSync } from "node:fs";
 import { DatabaseSync, StatementSync } from "node:sqlite";
-import { serialize } from "node:v8";
 import { expect, it as baseIt, vi } from "vitest";
 import {
   observeHostDataSql,
@@ -605,7 +604,6 @@ it.each([
   });
   const followup = vi.fn();
   let verifiedCommits = 0;
-  let replyBytes = 0;
   const restoreFaults: Array<() => void> = [];
   const original = workerStore.runSqliteWorkerStoreOperation;
   const observer = vi
@@ -632,7 +630,6 @@ it.each([
                 if (!replacing) {
                   return result;
                 }
-                replyBytes = serialize(result).byteLength;
                 // Read committed first: its owner drains queued native port messages.
                 expect(nativeAdmission?.committed).toMatchObject({
                   facts: { kind: "session-entry-replacements", changedKeys: [sessionKey] },
@@ -715,8 +712,6 @@ it.each([
       (error: unknown) => ({ kind: "failed" as const, error }),
     );
     expect(verifiedCommits).toBe(1);
-    // Keep the maintenance plan; publication postimages belong to the native receipt.
-    expect(replyBytes).toBeLessThan(256);
     if (outcome.kind !== "failed") {
       throw new Error("Uncertain replacement unexpectedly continued");
     }

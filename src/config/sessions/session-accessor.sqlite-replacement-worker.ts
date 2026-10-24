@@ -441,7 +441,9 @@ export async function initializeSessionTranscriptInWorker(
   );
 }
 
-export type SessionEntryWorkerMutationResult<T> = { kind: "committed" | "not-committed"; value: T };
+export type SessionEntryWorkerMutationResult<T> =
+  | { kind: "committed"; value: T; publication: SessionEntryReplacementPublication }
+  | { kind: "not-committed"; value: T };
 
 export async function runSessionEntryWorkerMutation<T>(
   options: ReplacementDatabaseOptions,
@@ -490,6 +492,8 @@ export async function runSessionEntryWorkerMutation<T>(
     if (isRecord(facts) && facts.kind === "session-entry-replacements") {
       // SAFETY: This retained command's paired native kernel owns the tagged publication receipt.
       receipt = facts as SessionEntryReplacementPublication;
+    } else if (completed?.kind === "committed") {
+      receipt = completed.publication;
     }
     const unknown =
       admitted.admission.settlement?.kind !== "completed" ||
@@ -618,7 +622,7 @@ export async function commitSessionEntryReplacementsInWorker(
   },
   retainedExecution?: OpenClawAgentDatabaseExecution,
   nativeDeletion?: ReturnType<typeof captureNativeSessionWorkerDeletion>,
-): Promise<Pick<SessionEntryReplacementCommitted, "maintenancePlans">> {
+): Promise<SessionEntryReplacementCommitted> {
   const source = await prepareSessionSourceAuthority(assertCurrent);
   const sameStore = source.checks.every(
     ({ predicate }) => predicate.source.databaseIdentity === databaseIdentity,
@@ -680,7 +684,7 @@ export async function commitSessionEntryReplacementsInWorker(
         },
       });
     }
-    return await runSessionEntryWorkerMutation(
+    return await runSessionEntryWorkerMutation<SessionEntryReplacementCommitted>(
       options,
       databaseIdentity,
       source.assertCurrent,
@@ -692,7 +696,7 @@ export async function commitSessionEntryReplacementsInWorker(
         if ("kind" in value) {
           throw new Error("Session replacement returned an unexpected native binding receipt");
         }
-        return { kind: "committed", value };
+        return { kind: "committed", value, publication: value.publication };
       },
       lifecycle,
       {
