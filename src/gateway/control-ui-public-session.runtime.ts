@@ -1,18 +1,30 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { buildControlUiPublicSessionCardPath } from "@openclaw/session-url-contract/public-share";
+import { isCoreCanvasHostEnabled } from "../canvas/config.js";
 import { resolveGatewayPublicOrigin } from "../config/gateway-public-origin.js";
 import { resolveSessionPublicShare } from "../config/sessions/session-public-share.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import type { ControlUiPublicSessionRequestGate } from "./control-ui-public-session-admission.js";
-import { buildPublicSessionMediaBaseUrl } from "./control-ui-public-session-attachments.js";
+import {
+  buildPublicSessionMediaBaseUrl,
+  buildPublicSessionWidgetUrl,
+} from "./control-ui-public-session-attachments.js";
 import { isSecurePublicSessionIngress } from "./control-ui-public-session-ingress.js";
+import { projectPublicSessionItems } from "./control-ui-public-session-project.js";
+import {
+  isPublicSessionShareActive,
+  readPublicSessionShare,
+} from "./control-ui-public-session-read.js";
 import {
   PUBLIC_SESSION_CONTENT_SECURITY_POLICY,
   renderPublicSessionDocument,
 } from "./control-ui-public-session-render.js";
-import { servePublicSessionRepresentation } from "./control-ui-public-session-response.js";
-import { mintExistingPublicSessionShareToken } from "./control-ui-public-session-token.js";
+import {
+  mintExistingPublicSessionShareToken,
+  mintPublicSessionWidgetToken,
+  type PublicSessionShareLocator,
+} from "./control-ui-public-session-token.js";
 import {
   buildControlUiSessionEntryUrl,
   parseControlUiSessionReturnPath,
@@ -22,6 +34,114 @@ import { resolveControlUiShareOrigin } from "./control-ui-share.js";
 import type { GatewayAttributedIngress } from "./ingress-attribution.js";
 import { withReadySessionRows } from "./session-row-prepared-read.js";
 import type { SessionRowProjection } from "./session-row-projection.js";
+
+export { PUBLIC_SESSION_CONTENT_SECURITY_POLICY };
+
+/** Both public routes recheck publication in the synchronous response frame, including 304s. */
+export async function servePublicSessionRepresentation(params: {
+  req: IncomingMessage;
+  res: ServerResponse;
+  config: OpenClawConfig;
+  gate: ControlUiPublicSessionRequestGate;
+  locator: PublicSessionShareLocator;
+  projection: SessionRowProjection;
+  offset: number;
+  requestKey: string;
+  document: Pick<
+    Parameters<typeof renderPublicSessionDocument>[0],
+    | "latestUrl"
+    | "canonicalUrl"
+    | "cardUrl"
+    | "entryUrl"
+    | "clientAuthBasePath"
+    | "assetBasePath"
+    | "mediaBaseUrl"
+  >;
+  olderUrl: (offset: number) => string;
+  unavailable: (status: 404 | 429 | 503, retryAfterSeconds?: number) => true | Promise<true>;
+}): Promise<true> {
+  const { req, res, config, gate, locator, projection, offset, unavailable } = params;
+  const result = await gate.run({
+    kind: "transcript",
+    publicationKey: locator.shareId,
+    sessionKey: locator.sessionKey,
+    config,
+    requestKey: params.requestKey,
+    work: async () => {
+      const session = await readPublicSessionShare(config, locator, { offset, projection });
+      if (!session) {
+        return null;
+      }
+      const widgetUrls = new Map<string, string>();
+      // Disabled hosting serves no widget documents; omit their frames rather than link 404s.
+      const items = isCoreCanvasHostEnabled(config)
+        ? projectPublicSessionItems(session.messages)
+        : [];
+      for (const item of items) {
+        if (item.kind !== "message") {
+          continue;
+        }
+        for (const { docId } of item.embeds.filter((embed) => embed.kind === "widget")) {
+          const token = await mintPublicSessionWidgetToken(locator, docId);
+          if (token) {
+            widgetUrls.set(
+              docId,
+              buildPublicSessionWidgetUrl(params.document.assetBasePath ?? "", token),
+            );
+          }
+        }
+      }
+      return renderPublicSessionDocument({
+        ...session,
+        ...params.document,
+        widgetUrls,
+        isLatest: offset === 0,
+        ...(session.olderOffset !== undefined
+          ? { olderUrl: params.olderUrl(session.olderOffset) }
+          : {}),
+      });
+    },
+    consume: (representation) =>
+      withReadySessionRows(
+        projection,
+        () => [{ key: locator.sessionKey, agentId: locator.agentId }],
+        () => {
+          if (!representation || !isPublicSessionShareActive(config, locator, projection)) {
+            return 404 as const;
+          }
+          if (!representation.isCurrent()) {
+            return false as const;
+          }
+          const { body, etag } = representation;
+          if (typeof body !== "string") {
+            return 503 as const;
+          }
+          res.setHeader("ETag", etag);
+          if (req.headers["if-none-match"] === etag) {
+            res.statusCode = 304;
+            res.end();
+          } else {
+            res.statusCode = 200;
+            res.setHeader("Content-Type", "text/html; charset=utf-8");
+            res.setHeader("Content-Length", Buffer.byteLength(body));
+            res.end(body);
+          }
+          return undefined;
+        },
+      ),
+  });
+  if (result.kind !== "ok") {
+    await unavailable(
+      result.kind === "rate-limited" ? 429 : 503,
+      result.kind === "rate-limited" ? result.retryAfterSeconds : undefined,
+    );
+    return true;
+  }
+  if (result.value !== undefined) {
+    await unavailable(result.value);
+  }
+  return true;
+}
 
 export async function serveControlUiPublicChat(params: {
   req: IncomingMessage;
