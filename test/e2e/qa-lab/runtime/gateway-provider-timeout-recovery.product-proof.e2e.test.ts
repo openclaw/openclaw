@@ -1,14 +1,12 @@
 import { randomUUID } from "node:crypto";
 import { writeSync } from "node:fs";
-import { createServer } from "node:http";
 import { setTimeout as sleep } from "node:timers/promises";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createQaGatewayChild, type QaGatewayChild } from "../../../../extensions/qa-lab/api.js";
-import { closeHttpServer } from "../../../helpers/gateway-integration-fixtures.js";
+import { startOpenAiResponsesModelServer } from "../../../helpers/openai-responses-model-fixture.js";
 import { createDeferred } from "../../../helpers/promise.js";
 import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 import {
-  listenLoopback,
   messageText,
   sendChat,
   waitForRun,
@@ -44,17 +42,10 @@ function writeProgress(phase: string, details: Record<string, unknown> = {}): vo
 async function startControlledProvider() {
   const responseGate = createDeferred();
   const proof: ProviderProof = {};
-  const server = createServer((request, response) => {
-    void (async () => {
-      if (request.method === "GET" && request.url === "/v1/models") {
-        response.writeHead(200, { "content-type": "application/json" });
-        response.end(JSON.stringify({ data: [{ id: "gpt-5.6-luna", object: "model" }] }));
-        return;
-      }
-      if (request.method !== "POST" || request.url !== "/v1/responses") {
-        response.writeHead(404).end();
-        return;
-      }
+  const server = await startOpenAiResponsesModelServer({
+    modelId: "gpt-5.6-luna",
+    bindError: "controlled provider did not bind a loopback port",
+    onRequest: async (request, response) => {
       for await (const chunk of request) {
         // Consume the real provider request before holding its response open.
         void chunk;
@@ -73,21 +64,15 @@ async function startControlledProvider() {
         "provider-timeout-recovery-proof-message",
         "provider-timeout-recovery-proof-response",
       );
-    })().catch((error: unknown) => {
-      if (!response.headersSent) {
-        response.writeHead(500);
-      }
-      response.end(error instanceof Error ? error.message : String(error));
-    });
+    },
   });
-  const baseUrl = await listenLoopback(server, "controlled provider did not bind a loopback port");
   return {
-    baseUrl,
+    baseUrl: server.baseUrl,
     proof,
     release: () => responseGate.resolve(),
     stop: async () => {
       responseGate.resolve();
-      await closeHttpServer(server);
+      await server.close();
     },
   };
 }

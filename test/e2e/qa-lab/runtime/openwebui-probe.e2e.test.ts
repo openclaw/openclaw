@@ -1,7 +1,6 @@
 import { once } from "node:events";
 // OpenWebUI probe tests cover QA Lab OpenAI-compatible API evidence.
 import { createServer, type RequestListener, type Server as HttpServer } from "node:http";
-import { createServer as createTcpServer, type Server as TcpServer, type Socket } from "node:net";
 import path from "node:path";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { expect, it } from "vitest";
@@ -10,7 +9,7 @@ import { runNodeScript } from "../../../helpers/run-node-script.js";
 
 const probePath = path.resolve("scripts/e2e/openwebui-probe.mjs");
 
-async function listen(server: HttpServer | TcpServer): Promise<string> {
+async function listen(server: HttpServer): Promise<string> {
   await once(server.listen(0, "127.0.0.1"), "listening");
   const address = server.address();
   if (!address || typeof address === "string") {
@@ -80,33 +79,14 @@ function expectFailure(result: Awaited<ReturnType<typeof runProbe>>, message: st
 }
 
 it("uses a short control-plane timeout for stalled sign-in requests", async () => {
-  const sockets = new Set<Socket>();
-  const server = createTcpServer((socket) => {
-    sockets.add(socket);
-    socket.on("close", () => sockets.delete(socket));
-    socket.on("data", () => {});
-  });
-  const baseUrl = await listen(server);
   const startedAt = Date.now();
-  try {
-    const result = await runProbe(
-      baseUrl,
-      {
-        OPENWEBUI_CONTROL_TIMEOUT_MS: "25",
-        OPENWEBUI_FETCH_TIMEOUT_MS: "5000",
-      },
-      2_000,
-    );
-    const elapsedMs = Date.now() - startedAt;
-
-    expectFailure(result, "Open WebUI signin timed out after 25ms");
-    expect(elapsedMs).toBeLessThan(1500);
-  } finally {
-    for (const socket of sockets) {
-      socket.destroy();
-    }
-    server.close();
-  }
+  const result = await probe(
+    { "/api/v1/auths/signin": () => {} },
+    { OPENWEBUI_CONTROL_TIMEOUT_MS: "25", OPENWEBUI_FETCH_TIMEOUT_MS: "5000" },
+    2_000,
+  );
+  expectFailure(result, "Open WebUI signin timed out after 25ms");
+  expect(Date.now() - startedAt).toBeLessThan(1500);
 });
 
 it("keeps the control-plane timeout active while reading sign-in bodies", async () => {
