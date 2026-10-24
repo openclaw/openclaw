@@ -6,6 +6,7 @@ import {
 } from "@openclaw/normalization-core/string-normalization";
 import pLimit from "p-limit";
 import { runCommandWithTimeout } from "../process/exec.js";
+import { formatUrlHost } from "./net/hostname.js";
 import { isTailnetIPv4 } from "./tailnet.js";
 import { MAX_TCP_PORT, parseTcpPort } from "./tcp-port.js";
 import { resolveWideAreaDiscoveryDomain } from "./widearea-dns.js";
@@ -54,7 +55,7 @@ export function resolveGatewayDiscoveryEndpoint(
     host,
     port,
     gatewayTlsFingerprintSha256: beacon.gatewayTlsFingerprintSha256,
-    wsUrl: `${scheme}://${host}:${port}`,
+    wsUrl: `${scheme}://${formatUrlHost(host)}:${port}`,
   };
 }
 

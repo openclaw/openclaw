@@ -10,6 +10,7 @@ import {
   type GatewayReconnectPausedInfo,
 } from "../gateway/client.js";
 import { throwIfSettledRejected } from "../infra/error-graph-internal.js";
+import { formatUrlHost } from "../infra/net/hostname.js";
 import type { ComputerUseCapabilityDescriptor } from "../plugins/computer-use-contract.js";
 import type { NodeHostGatewayConfig } from "./config.js";
 
@@ -47,8 +48,7 @@ type GatewayCandidateConnectionParams = {
 
 export function formatGatewayCandidateUrl(gateway: NodeHostGatewayConfig): string {
   const host = gateway.host ?? "127.0.0.1";
-  const urlHost =
-    host.includes(":") && !(host.startsWith("[") && host.endsWith("]")) ? `[${host}]` : host;
+  const urlHost = formatUrlHost(host);
   const port = gateway.port ?? 18789;
   const scheme = gateway.tls ? "wss" : "ws";
   const contextPath = gateway.contextPath

@@ -10,3 +10,8 @@ export function normalizeHostname(hostname: string): string {
   }
   return normalized;
 }
+
+/** Bracket an IPv6 literal for a URL authority or `host:port` target. */
+export function formatUrlHost(host: string): string {
+  return host.includes(":") && !(host.startsWith("[") && host.endsWith("]")) ? `[${host}]` : host;
+}

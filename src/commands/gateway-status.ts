@@ -19,6 +19,7 @@ import {
   buildGatewayDiscoveryTarget,
   serializeGatewayDiscoveryBeacon,
 } from "../infra/gateway-discovery-targets.js";
+import { formatUrlHost } from "../infra/net/hostname.js";
 import { pickBestEffortPrimaryTailnetIPv4 } from "../infra/network-discovery-display.js";
 import type { SshTunnel } from "../infra/ssh-tunnel.js";
 import { resolveWideAreaDiscoveryDomain } from "../infra/widearea-dns.js";
@@ -52,7 +53,7 @@ function buildSshTarget(input: { user?: string; host?: string; port?: number }):
     return null;
   }
   const user = normalizeOptionalString(input.user) ?? "";
-  const base = user ? `${user}@${host}` : host;
+  const base = user ? `${user}@${formatUrlHost(host)}` : formatUrlHost(host);
   const port = input.port ?? 22;
   if (input.port !== undefined && port) {
     return `${base}:${port}`;

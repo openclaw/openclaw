@@ -876,6 +876,20 @@ describe("gateway-status command", () => {
     });
   });
 
+  it("brackets an IPv6 remote host in the inferred SSH target", async () => {
+    const { runtime } = createRuntimeCapture();
+    await withEnvAsync({ USER: "me" }, async () => {
+      readBestEffortConfig.mockResolvedValueOnce(
+        makeRemoteGatewayConfig("wss://[2001:db8::10]:18789"),
+      );
+      resolveSshConfig.mockResolvedValueOnce(null);
+
+      await runGatewayStatus(runtime, { timeout: "1000", json: true });
+
+      expect(requireSshForwardCall().target).toBe("me@[2001:db8::10]");
+    });
+  });
+
   it("keeps explicit SSH identity even when ssh config provides one", async () => {
     const { runtime } = createRuntimeCapture();
 
