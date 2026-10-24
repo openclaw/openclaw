@@ -27,10 +27,25 @@ type QuestionSessionCurrentRead = {
   assertCurrent: () => void;
 };
 
+/** Plain generation binding; correlation never substitutes for current caller authorization. */
+export type DurableQuestionSessionBinding = {
+  agentId: string;
+  sessionKey: string;
+  storePath: string;
+  databasePath: string;
+  databaseIdentity: { identity: string; birthtime?: string };
+  sessionId: string;
+  lifecycleRevision: string;
+  profileId?: string;
+};
+
 /** Original source and database generation survive until the manager retires this entry. */
 export type QuestionSessionAccess = {
   readonly agentId: string;
   readonly sessionKey: string;
+  readonly durableBinding?: DurableQuestionSessionBinding;
+  /** Native durable custody requires its exact conversation at every publication boundary. */
+  readonly durableCustody?: true;
   /** Pure original-person selection, before session reads or liveness transitions. */
   canSelect: (client: GatewayClient | null) => boolean;
   assertSourceCurrent: () => void;

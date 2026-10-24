@@ -43,6 +43,7 @@ export const SCHEMA_MIGRATION_BACKUP_TABLES: Record<
     39: ["transcript_events"],
     // New receipt table only; existing session data is not rewritten.
     40: ["session_creation_operations"],
+    41: ["session_questions"],
   },
   state: {
     [CLIENT_CREDENTIAL_CUTOVER_SCHEMA_VERSION]: [

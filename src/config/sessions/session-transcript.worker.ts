@@ -20,6 +20,7 @@ import {
   withHistoryDatabase,
   pruneClosedHistoryDatabaseScopes,
 } from "./session-transcript-worker-scopes.js";
+import { sessionTranscriptTransferList } from "./session-transcript-worker-transfer.js";
 import type {
   SessionTranscriptWorkerRequest,
   SessionTranscriptWorkerReply,
@@ -551,6 +552,11 @@ serveOwnedWorkerTasks(
         );
         return { kind: "conversation-delivery", record: result.found ? result.value : undefined };
       }
+      if (request.kind === "session-question-read") {
+        const { readSessionQuestionOperation } =
+          await import("./session-questions.kernel.worker.js");
+        return { kind: "session-question-read", result: readSessionQuestionOperation(request) };
+      }
       if (request.kind === "goal-operation-receipt") {
         const { withOpenClawAgentDatabaseReadOnly } =
           await import("../../state/openclaw-agent-db-readonly.js");
@@ -677,26 +683,7 @@ serveOwnedWorkerTasks(
     }
   },
   {
-    transferList(reply) {
-      if (!reply.ok) {
-        return [];
-      }
-      const value = reply.value;
-      if (typeof value !== "object" || value === null || !("kind" in value)) {
-        return [];
-      }
-      const body =
-        value.kind === "rpc"
-          ? value.page.encodedResponse?.messages
-          : value.kind === "artifacts" && value.result.kind === "download-response"
-            ? value.result.response?.body
-            : undefined;
-      const deflated = value.kind === "rpc" ? value.page.encodedMessagesDeflate : undefined;
-      const activity = value.kind === "rpc" ? value.page.encodedResponse?.activity : undefined;
-      return [body?.buffer, deflated?.buffer, activity?.buffer].filter(
-        (buffer) => buffer !== undefined,
-      );
-    },
+    transferList: sessionTranscriptTransferList,
     closeResource: (key) => {
       const request = decodeAgentDatabaseReaderRequest(key);
       if (request?.kind !== "close") {

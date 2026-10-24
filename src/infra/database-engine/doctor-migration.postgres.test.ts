@@ -1,6 +1,6 @@
 import fs from "node:fs";
-import "./backup-worker.test-support.js";
 import path from "node:path";
+import "./backup-worker.test-support.js";
 import { getEnvironmentData } from "node:worker_threads";
 import { Client } from "pg";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
@@ -17,7 +17,6 @@ import { agentEngineSchema, openAgentEngineStore } from "../../state/openclaw-ag
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import { preflightOpenClawDatabaseSchemas } from "../../state/openclaw-database-preflight.js";
 import { stateEngineSchema } from "../../state/openclaw-state-db-engine.js";
-import { withOpenClawStateReadOnlyLocation } from "../../state/openclaw-state-db-read-connection.js";
 import {
   closeOpenClawStateDatabaseForTest,
   runOpenClawStateWriteTransaction,
@@ -25,14 +24,8 @@ import {
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { createMockStateReadSource } from "../../state/openclaw-state-read-mock.test-support.js";
 import type * as StateReadWorker from "../../state/openclaw-state-read-worker.js";
-import type {
-  OpenClawStateReadCommand,
-  OpenClawStateReadLocation,
-} from "../../state/openclaw-state-read.types.js";
-import { stateBootstrapReadOperations } from "../../state/state-bootstrap-read.worker.js";
 import { VERSION } from "../../version.js";
 import { acquireGatewayLock } from "../gateway-lock.js";
-import { inspectGatewayOwnerLease } from "../gateway-owner-lease.worker.js";
 import { defaultPayload } from "../gateway-state-owner-record.js";
 import { acquireGatewayStateOwner } from "../gateway-state-owner.js";
 import { openNodeSqliteDatabase } from "../node-sqlite.js";
@@ -47,6 +40,7 @@ import { createUpdateDatabaseBackupWithFixtureTransport } from "./backup-capture
 import { installDatabaseEngineSelection } from "./context.js";
 import { resetDatabaseEngineSelectionForTest } from "./context.test-support.js";
 import type { StoreSchema } from "./contract.js";
+import { readInProcess } from "./doctor-migration.postgres.test-support.js";
 import { openEngineStore } from "./open.js";
 import { getPostgresPhysicalFacts } from "./physical-facts.js";
 import type { PortDescriptor } from "./port-descriptor.js";
@@ -66,32 +60,6 @@ vi.mock("../../state/openclaw-state-read-worker.js", () => ({
   captureOpenClawStateReadSource: reads.capture,
   retireIdleOpenClawStateReadWorkers: reads.retire,
 }));
-
-async function readInProcess(command: OpenClawStateReadCommand, source: OpenClawStateReadLocation) {
-  const databasePath = source.context.admission.databasePath;
-  if (command.type === "stateBootstrap.inspect" || command.type === "stateBootstrap.ownership") {
-    return withEngineStoreAdmission(() =>
-      withOpenClawStateReadOnlyLocation(
-        ({ db }) => ({
-          ok: true as const,
-          sourceAdmitted: true as const,
-          ...(command.type === "stateBootstrap.inspect"
-            ? stateBootstrapReadOperations[command.type](command.input, db)
-            : stateBootstrapReadOperations[command.type](command.input, db)),
-        }),
-        databasePath,
-        source.location,
-      ),
-    );
-  }
-  if (command.type !== "gatewayOwnerLease.read") {
-    throw new Error(`Unexpected fixture read: ${command.type}`);
-  }
-  const lease = withEngineStoreAdmission(() =>
-    inspectGatewayOwnerLease({ ...source, databasePath }, () => {}, command.schemaMaintenance),
-  );
-  return { ok: true as const, type: command.type, sourceAdmitted: true as const, lease };
-}
 
 const configured: unknown = getEnvironmentData("openclaw.test.state.conformance.connection");
 const connection = typeof configured === "string" ? configured : undefined;
@@ -675,6 +643,7 @@ describe.skipIf(!connection)("Doctor PostgreSQL version migration", () => {
     [32, false],
     [33, false],
     [34, false],
+    [40, false],
   ] as const)(
     "keeps the real agent v%s→current rollback exact (foreign write: %s)",
     async (sourceVersion, foreignWrite) => {
@@ -795,6 +764,21 @@ describe.skipIf(!connection)("Doctor PostgreSQL version migration", () => {
           indexname,
           indexdef: indexdef.replaceAll(agentNamespace, "fixture_namespace"),
         }));
+      const readMemoryRevisionTriggers = async () =>
+        (
+          await client.query<{ tgname: string }>(
+            `SELECT t.tgname FROM pg_trigger t
+              JOIN pg_class c ON c.oid = t.tgrelid
+              JOIN pg_namespace n ON n.oid = c.relnamespace
+              WHERE n.nspname = $1 AND NOT t.tgisinternal
+                AND t.tgname ~ '^memory_index_(sources|chunks)_revision_after_(insert|update|delete)$'
+              ORDER BY t.tgname`,
+            [agentNamespace],
+          )
+        ).rows;
+      const beforeMemoryRevisionTriggers = await readMemoryRevisionTriggers();
+      // Schema31 retired these triggers; rollback restores the selected historical contract.
+      expect(beforeMemoryRevisionTriggers).toHaveLength(sourceVersion < 31 ? 6 : 0);
       const beforeIndexes = await readIndexes();
       expect(beforeIndexes).toEqual(
         sourceVersion === 27
@@ -1019,6 +1003,7 @@ describe.skipIf(!connection)("Doctor PostgreSQL version migration", () => {
             `SELECT entry_key, origin_class FROM "${agentNamespace}".memory_entry_origins`,
           ),
         ).toEqual([{ entry_key: "retained-memory", origin_class: "owner" }]);
+        expect(await readMemoryRevisionTriggers()).toEqual(beforeMemoryRevisionTriggers);
         expect(admit(installed, agentPath)?.version).toBe(sourceVersion);
         await client.query(`INSERT INTO "${agentNamespace}".memory_index_sources (path, source, hash, mtime, size)
             VALUES ('restored.md', 'memory', 'hash', 1, 1);`);

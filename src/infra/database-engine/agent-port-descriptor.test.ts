@@ -172,3 +172,44 @@ it("ports retained cold navigation without decoding absent payloads", async () =
   expect(omitted).not.toContain("session_transcript_active_events");
   expect(omitted).not.toContain("session_transcript_index_state");
 });
+
+it.each([31, 32, 39, 40])(
+  "keeps v%s port backups question-free before upgrading the private copy",
+  async (version) => {
+    const historical = await loadAgentPortDescriptor(version);
+    const current = await loadAgentPortDescriptor();
+    expect(historical.tables.some((table) => table.name === "session_questions")).toBe(false);
+    expect(historical.expectedCatalog?.some((fact) => fact.table === "session_questions")).toBe(
+      false,
+    );
+    expect(historical.preData + historical.postData).not.toContain('"session_questions"');
+    expect(historical.triggers).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ name: "memory_index_sources_revision_after_insert" }),
+      ]),
+    );
+    const directory = tempDirs.make("agent-port-v31-questions-");
+    const source = path.join(directory, "source.sqlite");
+    const copy = path.join(directory, "private.sqlite");
+    {
+      using db = openNodeSqliteDatabase(source);
+      db.exec(historical.sqlite);
+      db.exec(`PRAGMA user_version = ${version};
+      INSERT INTO schema_meta VALUES ('primary', 'agent', ${version}, 'previous', NULL, 1, 1);
+      INSERT INTO cache_entries (scope, key, value_json, updated_at)
+      VALUES ('retained', 'key', '{"value":1}', 1)`);
+      const inspected = await inspectDatabasePort({ engine: "sqlite", db }, historical);
+      expect(inspected.tables).not.toHaveProperty("session_questions");
+    }
+    const before = await fs.readFile(source);
+    await fs.copyFile(source, copy);
+    const result = await migrateDatabasePortSource(copy, current, version, () => {});
+    expect(result.tables.session_questions?.rows).toBe(0);
+    using migrated = openNodeSqliteDatabase(copy);
+    expect(migrated.prepare("PRAGMA user_version").get()?.user_version).toBe(41);
+    expect(migrated.prepare("SELECT value_json FROM cache_entries").get()?.value_json).toBe(
+      '{"value":1}',
+    );
+    expect(await fs.readFile(source)).toEqual(before);
+  },
+);

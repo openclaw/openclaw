@@ -42,6 +42,7 @@ import {
   copySessionClaimForRepair,
   writeSessionClaimForRepair,
 } from "./session-claim-repair-copy.js";
+import { assertQuestionAliasRelocation } from "./session-question-recovery-owner.js";
 
 export function samePhysicalStore(left: PhysicalStore, right: PhysicalStore): boolean {
   return isSameOpenClawAgentDatabasePath(left.path, right.path);
@@ -138,6 +139,11 @@ function migrateClaimsInPlace(params: {
           : currentCanonical !== undefined)
       ) {
         return undefined;
+      }
+      for (const claim of currentAliases) {
+        if (claim && claim.key !== params.canonicalKey) {
+          assertQuestionAliasRelocation(claim.entry);
+        }
       }
       if (!currentCanonical) {
         writeSessionClaimForRepair(database, params.canonicalKey, params.winner.entry);
@@ -299,6 +305,7 @@ function quarantineClaim(params: {
           break;
         }
       }
+      assertQuestionAliasRelocation(fresh.entry);
       writeSessionClaimForRepair(database, quarantineKey, params.claim.entry);
       deleteLegacySessionEntryRows(database, [params.claim.key], quarantineKey, {
         rehomeMembers: true,

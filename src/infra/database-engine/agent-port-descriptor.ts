@@ -44,6 +44,7 @@ import {
   LEGACY_MEMORY_REVISION_SQLITE_TRIGGERS,
   withLegacyAgentPostgresMemoryRevisionTriggers,
 } from "../../state/openclaw-agent-memory-revision-migration.js";
+import { withoutSessionQuestionsPostgresSchema } from "../../state/openclaw-agent-questions-schema.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "../../state/openclaw-agent-schema.js";
 import { agentTranscriptSearchSchema } from "../../state/openclaw-agent-search-schema.js";
 import { withLegacyAgentPostgresTrajectoryStorage } from "../../state/openclaw-agent-trajectory-storage-migration.js";
@@ -193,8 +194,8 @@ export async function loadAgentPortDescriptor(
     // Pin the remaining shared layout so future DDL gets its own descriptor.
     if (
       backup ||
-      OPENCLAW_AGENT_SCHEMA_VERSION !== 40 ||
-      ![27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39].includes(sourceVersion)
+      OPENCLAW_AGENT_SCHEMA_VERSION !== 41 ||
+      ![27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40].includes(sourceVersion)
     ) {
       throw new DatabasePortDataError(
         `Missing agent PostgreSQL backup descriptor for version ${sourceVersion}`,
@@ -206,12 +207,14 @@ export async function loadAgentPortDescriptor(
   ): fact is typeof fact & { value: PortTable["columns"][number] } => fact.kind === "column";
   const historical = sourceVersion !== agentEngineSchema.version;
   const legacyColdArchive = sourceVersion < AGENT_COLD_ARCHIVE_CHUNKS_SCHEMA_VERSION;
+  const legacyQuestions = sourceVersion < 41;
   const legacyCreation = sourceVersion < AGENT_CREATION_OPERATIONS_SCHEMA_VERSION;
   const legacyTrajectory = sourceVersion < 30;
   const catalog = agentPostgresRuntime.expectedCatalog.filter(
     (fact) =>
       !(legacyColdArchive && fact.table === "session_transcript_cold_archive_chunks") &&
       !(legacyCreation && fact.table === "session_creation_operations") &&
+      !(legacyQuestions && fact.table === "session_questions") &&
       (!legacyTrajectory ||
         fact.table !== "trajectory_runtime_events" ||
         !isColumn(fact) ||
@@ -231,7 +234,8 @@ export async function loadAgentPortDescriptor(
         .filter(
           ({ name }) =>
             !(legacyColdArchive && name === "session_transcript_cold_archive_chunks") &&
-            !(legacyCreation && name === "session_creation_operations"),
+            !(legacyCreation && name === "session_creation_operations") &&
+            !(legacyQuestions && name === "session_questions"),
         )
         .map(({ name, identities }) => ({
           name,
@@ -476,7 +480,8 @@ export async function loadAgentPortDescriptor(
   const withoutLegacyColdArchive = (sql: string) =>
     legacyColdArchive ? withoutAgentPostgresColdArchiveChunks(sql) : sql;
   const withoutLaterSchema = (sql: string) => {
-    const creation = legacyCreation ? withoutAgentPostgresCreationOperations(sql) : sql;
+    const questions = legacyQuestions ? withoutSessionQuestionsPostgresSchema(sql) : sql;
+    const creation = legacyCreation ? withoutAgentPostgresCreationOperations(questions) : questions;
     return sourceVersion < AGENT_COLD_NAVIGATION_SCHEMA_VERSION
       ? withoutAgentPostgresColdNavigation(creation)
       : creation;

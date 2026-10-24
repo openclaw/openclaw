@@ -1,5 +1,4 @@
 import type { OpenClawMigrationWitness } from "./openclaw-migration-witness.schema.js";
-import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-schema-versions.js";
 
 /** Unrefreshed aliases retain the exact registry observations from the original backup. */
 export function assertMigrationWitnessRegistryPreserved(
@@ -25,7 +24,8 @@ export function assertMigrationWitnessRegistryPreserved(
     if (
       !before ||
       before.store !== row.store ||
-      (row.schemaVersion !== OPENCLAW_AGENT_SCHEMA_VERSION && row.sha256 !== before.sha256)
+      before.expectedSchemaVersion !== row.expectedSchemaVersion ||
+      (row.schemaVersion !== row.expectedSchemaVersion && row.sha256 !== before.sha256)
     ) {
       throw new Error("Unrefreshed registry alias changed during migration");
     }

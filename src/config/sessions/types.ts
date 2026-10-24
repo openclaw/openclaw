@@ -43,6 +43,7 @@ import type {
 } from "./session-entry-provenance.js";
 import type { AgentPatchedSessionModelFallback } from "./session-model-fallback.js";
 import type { SessionSkillSnapshot } from "./session-prompt-types.js";
+import type { DurableQuestionRecoveryOwner } from "./session-question-recovery-owner.types.js";
 import type { SessionSystemPromptReport } from "./session-system-prompt-report.js";
 import type { SessionToolOverrides } from "./session-tool-overrides.js";
 import type { PendingSessionWorktree } from "./session-worktree-intent.js";
@@ -642,6 +643,8 @@ export type SessionProfileInvolvement = {
 };
 
 export type InternalSessionEntryCore = SessionEntryCore & {
+  /** Bounded durable-question ownership excludes either run from generic restart replay. */
+  durableQuestionOwners?: DurableQuestionRecoveryOwner[];
   /** Atomic history-cut receipt for the exact settled local projection, cleared after adoption. */
   localWorkspaceHandoff?: {
     worktreeId: string;

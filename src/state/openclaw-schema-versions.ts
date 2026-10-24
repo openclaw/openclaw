@@ -9,7 +9,8 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 // v34 aligns non-null PostgreSQL index keys with default query ordering.
 // v33 adds a stored PostgreSQL binary vector candidate projection.
 // v32 replaces the PostgreSQL vector decoder without rewriting canonical rows.
-export const OPENCLAW_AGENT_SCHEMA_VERSION = 40;
+// v41 adds dormant durable question custody.
+export const OPENCLAW_AGENT_SCHEMA_VERSION = 41;
 
 // v39 retains worker policy and uncertain pause/resume operations across restart.
 // v38 retains repository disk authority and the original authority of pending results.

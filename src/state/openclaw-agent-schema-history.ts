@@ -21,6 +21,10 @@ import {
 } from "./openclaw-agent-db-contract.js";
 import { withLegacyAgentIndexes } from "./openclaw-agent-index-retirement-migration.js";
 import { withLegacyAgentMemoryRevisionTriggers } from "./openclaw-agent-memory-revision-migration.js";
+import {
+  DURABLE_QUESTIONS_SCHEMA_VERSION,
+  withoutSessionQuestionsSchema,
+} from "./openclaw-agent-questions-schema.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
 import {
   SESSION_ENTRY_SNAPSHOTS_SCHEMA_VERSION,
@@ -311,8 +315,9 @@ function withLegacyAgentWriteLayout(schema: string): string {
     );
 }
 
-const AGENT_SCHEMA_BEFORE_CREATION_OPERATIONS =
-  withoutAgentCreationOperations(OPENCLAW_AGENT_SCHEMA_SQL);
+const AGENT_SCHEMA_BEFORE_CREATION_OPERATIONS = withoutAgentCreationOperations(
+  withoutSessionQuestionsSchema(OPENCLAW_AGENT_SCHEMA_SQL),
+);
 
 // Same-version schema-39 additions must not rewrite earlier admission contracts.
 const AGENT_SCHEMA_BEFORE_SESSION_DELETION_INDEXES =
@@ -328,7 +333,9 @@ export function getOpenClawAgentMigrationSchema(targetVersion: number): string {
       ? AGENT_SCHEMA_BEFORE_SESSION_DELETION_INDEXES
       : targetVersion < AGENT_CREATION_OPERATIONS_SCHEMA_VERSION
         ? AGENT_SCHEMA_BEFORE_CREATION_OPERATIONS
-        : OPENCLAW_AGENT_SCHEMA_SQL;
+        : targetVersion < DURABLE_QUESTIONS_SCHEMA_VERSION
+          ? withoutSessionQuestionsSchema(OPENCLAW_AGENT_SCHEMA_SQL)
+          : OPENCLAW_AGENT_SCHEMA_SQL;
   const navigationSchemaSql =
     targetVersion < AGENT_COLD_NAVIGATION_SCHEMA_VERSION
       ? withoutAgentColdNavigation(schemaSql)

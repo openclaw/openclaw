@@ -445,6 +445,28 @@ CREATE TABLE "session_progress_cards" (
   PRIMARY KEY ("session_key")
 );
 
+CREATE TABLE "session_questions" (
+  "question_id" text COLLATE "C" NOT NULL,
+  "session_key" text COLLATE "C" NOT NULL,
+  "session_id" text COLLATE "C" NOT NULL,
+  "lifecycle_revision" text COLLATE "C" NOT NULL,
+  "definition_json" text COLLATE "C" NOT NULL,
+  "provenance_json" text COLLATE "C" NOT NULL,
+  "session_binding_json" text COLLATE "C" NOT NULL,
+  "result_json" text COLLATE "C",
+  "resolution_id" text COLLATE "C",
+  "continuation_state" text COLLATE "C" NOT NULL,
+  "continuation_run_id" text COLLATE "C",
+  "gateway_epoch" text COLLATE "C",
+  "continuation_reason" text COLLATE "C",
+  "terminal_at" bigint,
+  PRIMARY KEY ("question_id"),
+  CHECK (("continuation_state" IN ('pending', 'owed', 'claimed', 'settled', 'interrupted', 'blocked'))),
+  CHECK ((("result_json" IS NULL) = ("resolution_id" IS NULL))),
+  CHECK (((("continuation_state" = 'pending')) = ("result_json" IS NULL))),
+  CHECK (("continuation_state" <> 'claimed') OR ("continuation_run_id" IS NOT NULL AND "gateway_epoch" IS NOT NULL))
+);
+
 CREATE TABLE "session_reactions" (
   "session_key" text COLLATE "C" NOT NULL,
   "session_id" text COLLATE "C" NOT NULL,
@@ -755,6 +777,10 @@ CREATE INDEX "idx_agent_session_nodes_status" ON "session_nodes" (("status") ASC
 CREATE INDEX "idx_agent_session_nodes_updated_at" ON "session_nodes" (("updated_at") DESC, ("session_key") ASC);
 
 CREATE INDEX "idx_agent_session_pending_inputs_session" ON "session_pending_inputs" (("session_key") ASC, ("session_id") ASC, ("seq") DESC);
+
+CREATE INDEX "idx_agent_session_questions_continuation" ON "session_questions" (("continuation_state") ASC, ("session_key") ASC);
+
+CREATE UNIQUE INDEX "idx_agent_session_questions_pending" ON "session_questions" (("session_key") ASC, ("session_id") ASC, ("lifecycle_revision") ASC) WHERE ("continuation_state" = 'pending');
 
 CREATE INDEX "idx_agent_session_suggestions_author_created" ON "session_suggestions" (("author_id") ASC, ("created_at") ASC, ("id") ASC);
 
