@@ -879,3 +879,20 @@ it("saves explicit appearance clearing without sending legacy null values", asyn
     }),
   );
 });
+
+it("captures the board opener before the host dialog can defer mounting", async () => {
+  const page = mountPage({ connected: true });
+  const opener = await afterWorkboardUpdate(() =>
+    expectDefined(
+      page.container.querySelector<HTMLButtonElement>(".workboard-new-board"),
+      "new board trigger",
+    ),
+  );
+  opener.focus();
+  opener.click();
+  await afterWorkboardUpdate(() => {
+    const props = vi.mocked(page.fixture.host.components.mountDialog).mock.lastCall?.[1];
+    expect(props?.label).toBe("New board");
+    expect(props?.returnFocusTarget).toBe(opener);
+  });
+});
