@@ -1344,7 +1344,6 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
       ...pageStyles["chat"],
     ],
   },
-  pageWatch("ui/src/e2e/native-gateway-health.e2e.test.ts", ["new-session"]),
   pageWatch("ui/src/e2e/native-session-discovery-settings.e2e.test.ts", [
     "chat",
     "config",
