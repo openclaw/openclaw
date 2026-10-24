@@ -123,7 +123,13 @@ function Text(props) {
   );
   return (
     <span class={["a2ui-text", variant()]} style={{ flex: props.value("weight") }}>
-      <Show when={isHeading() || variant() === "caption"} fallback={<span innerHTML={html()} />}>
+      <Show
+        when={isHeading() || variant() === "caption"}
+        fallback={
+          // oxlint-disable-next-line solid/no-innerhtml -- DOMPurify above allowlists Markdown tags and strips all attributes.
+          <span innerHTML={html()} />
+        }
+      >
         <Dynamic component={isHeading() ? variant() : "em"}>{text()}</Dynamic>
       </Show>
     </span>
