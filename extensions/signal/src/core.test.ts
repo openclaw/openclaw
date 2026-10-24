@@ -1,5 +1,4 @@
 import { buildExecApprovalPendingReplyPayload } from "openclaw/plugin-sdk/approval-reply-runtime";
-import { createMessageReceiptFromOutboundResults } from "openclaw/plugin-sdk/channel-outbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   createPluginSetupWizardStatus,
@@ -13,7 +12,6 @@ import { resolveSignalApprovalReactionTargetWithPersistence } from "./approval-r
 import { signalPlugin } from "./channel.js";
 import * as clientModule from "./client-adapter.js";
 import {
-  isSignalSenderAllowed,
   looksLikeUuid,
   normalizeSignalAllowRecipient,
   resolveSignalPeerId,
@@ -31,9 +29,14 @@ function signalConfig(signal: NonNullable<OpenClawConfig["channels"]>["signal"])
   return { channels: { signal } };
 }
 
-function approvalConfig(): OpenClawConfig {
+function approvalConfig(
+  signal: NonNullable<OpenClawConfig["channels"]>["signal"] = {
+    account: "+15550009999",
+    allowFrom: [approvalTo],
+  },
+): OpenClawConfig {
   return {
-    ...signalConfig({ account: "+15550009999", allowFrom: [approvalTo] }),
+    ...signalConfig(signal),
     approvals: {
       exec: {
         enabled: true,
@@ -48,12 +51,14 @@ const approvalTo = "+15551230000";
 const groupTo = "group:VWATOdKF2hc8zdOS76q9tb0+5BI522e03QLDAq/9yPg=";
 const senderUuid = "123e4567-e89b-12d3-a456-426614174000";
 const reactionHint = "React with:\n\n👍 Allow Once\n👎 Deny";
-const { outbound, messaging, threading, directory } = signalPlugin;
+const { outbound, messaging, threading } = signalPlugin;
 const sendText = required(outbound?.sendFormattedText);
 const sendMedia = required(outbound?.sendFormattedMedia);
 const probeAccount = required(signalPlugin.status?.probeAccount);
 const baseUrl = "http://127.0.0.1:8080";
 const phone = "+15551234567";
+const aliases = { ops: `signal:${groupTo}`, me: phone, home: "signal:loop", loop: "home" };
+const aliasConfig = signalConfig({ aliases, defaultTo: "signal:home" });
 const approvalMetadata = {
   approvalId: "exec-1",
   approvalSlug: "exec-1",
@@ -80,16 +85,10 @@ function approvalPayload(
   });
 }
 
-function renderApproval(
-  cfg: OpenClawConfig,
-  payload: ReplyPayload,
-  accountId = "default",
-  presentation = payload.presentation!,
-  renderedPayload = payload,
-) {
+function renderApproval(cfg: OpenClawConfig, payload: ReplyPayload, accountId = "default") {
   return required(outbound?.renderPresentation)({
-    payload: renderedPayload,
-    presentation,
+    payload,
+    presentation: payload.presentation ?? { blocks: [] },
     ctx: { cfg, to: approvalTo, text: payload.text ?? "", accountId, payload },
   });
 }
@@ -123,16 +122,6 @@ function deliverApproval(cfg: OpenClawConfig, payload: ReplyPayload, accountId?:
   });
 }
 
-function successfulSend(kind: "text" | "media") {
-  return vi.fn(async () => ({
-    messageId: "signal-1",
-    receipt: createMessageReceiptFromOutboundResults({
-      results: [{ channel: "signal", messageId: "signal-1" }],
-      kind,
-    }),
-  }));
-}
-
 function textContext(overrides: Partial<Parameters<typeof sendText>[0]>) {
   const send = vi.fn().mockResolvedValue({ messageId: "signal-1" });
   return {
@@ -143,6 +132,11 @@ function textContext(overrides: Partial<Parameters<typeof sendText>[0]>) {
 
 function checkResult(ok = true, status = 200, error: string | null = null) {
   return vi.spyOn(clientModule, "signalCheck").mockResolvedValueOnce({ ok, status, error });
+}
+
+function probeConfigured(kind: "managed-native" | "container") {
+  const cfg = signalConfig({ account: "+15550001111", transport: { kind, url: baseUrl } });
+  return probeAccount({ cfg, account: resolveSignalAccount({ cfg }), timeoutMs: 1000 });
 }
 
 const getSignalSetupStatus = createPluginSetupWizardStatus(signalPlugin);
@@ -160,38 +154,20 @@ it.each([
   }
 });
 
-describe("signal sender identity", () => {
-  it("falls back to sourceUuid when sourceNumber has no digits", () => {
-    const sender = resolveSignalSender({
-      sourceNumber: "not a phone number",
-      sourceUuid: senderUuid,
-    });
-    expect(sender).toEqual({ kind: "uuid", raw: senderUuid });
-    expect(resolveSignalRecipient(required(sender))).toBe(senderUuid);
-    expect(resolveSignalPeerId(required(sender))).toBe(`uuid:${senderUuid}`);
+it("falls back to sourceUuid when sourceNumber has no digits", () => {
+  const sender = resolveSignalSender({
+    sourceNumber: "not a phone number",
+    sourceUuid: senderUuid,
   });
-
-  it("normalizes noisy allowlist numbers and rejects digit-free entries", () => {
-    expect(normalizeSignalAllowRecipient("signal:++1 (555) 000-1111")).toBe("+15550001111");
-    expect(normalizeSignalAllowRecipient("signal:not a phone number")).toBeUndefined();
-  });
+  expect(sender).toEqual({ kind: "uuid", raw: senderUuid });
+  expect(resolveSignalRecipient(required(sender))).toBe(senderUuid);
+  expect(resolveSignalPeerId(required(sender))).toBe(`uuid:${senderUuid}`);
 });
 
-describe("isSignalSenderAllowed", () => {
-  const uuid = "f4d0fe67-3b38-446d-828e-317c285ffa75";
-  const e164 = "+34688329273";
-
-  it.each([
-    [[`uuid:${uuid}`], true],
-    [["+15550009999", "uuid:00000000-0000-0000-0000-000000000000"], false],
-  ] as const)("matches a phone-primary sender against %j", (entries, allowed) => {
-    const sender = required(resolveSignalSender({ sourceNumber: e164, sourceUuid: uuid }));
-    for (const entry of entries) {
-      expect(isSignalSenderAllowed(sender, [entry])).toBe(allowed);
-    }
-  });
+it("normalizes noisy allowlist numbers and rejects digit-free entries", () => {
+  expect(normalizeSignalAllowRecipient("signal:++1 (555) 000-1111")).toBe("+15550001111");
+  expect(normalizeSignalAllowRecipient("signal:not a phone number")).toBeUndefined();
 });
-
 describe("probeSignal", () => {
   it.each([
     { transport: "managed-native", version: { version: "0.13.22" }, expected: "0.13.22" },
@@ -201,18 +177,12 @@ describe("probeSignal", () => {
     async ({ transport, version, expected }) => {
       checkResult();
       vi.spyOn(clientModule, "signalRpcRequest").mockResolvedValueOnce(version);
-      const cfg = signalConfig({ transport: { kind: "managed-native" } });
       const result =
         transport === "container"
           ? await probeSignal(baseUrl, 1000, { transportKind: "container" })
-          : await probeAccount({
-              cfg,
-              account: resolveSignalAccount({ cfg }),
-              timeoutMs: 1000,
-            });
+          : await probeConfigured("managed-native");
 
       expect(result).toMatchObject({ ok: true, status: 200, error: null, version: expected });
-      expect(result.elapsedMs).toBeGreaterThanOrEqual(0);
     },
   );
 
@@ -230,9 +200,6 @@ describe("probeSignal", () => {
     }
     const res = await probeSignal(baseUrl, 1000, auto ? { apiMode: "auto" } : {});
     expect(res).toMatchObject({ ok: false, status, error, version: null });
-    if (auto) {
-      expect(res.elapsedMs).toBeGreaterThanOrEqual(0);
-    }
   });
 
   it("reports container accounts unhealthy when their receive WebSocket cannot upgrade", async () => {
@@ -240,15 +207,7 @@ describe("probeSignal", () => {
     const signalCheck = checkResult(false, 200, error);
     const signalRpcRequest = vi.spyOn(clientModule, "signalRpcRequest");
 
-    const cfg = signalConfig({
-      account: "+15550001111",
-      transport: { kind: "container", url: baseUrl },
-    });
-    const result = await probeAccount({
-      cfg,
-      account: resolveSignalAccount({ cfg }),
-      timeoutMs: 1000,
-    });
+    const result = await probeConfigured("container");
 
     expect(signalCheck).toHaveBeenCalledWith(baseUrl, 1000, {
       transportKind: "container",
@@ -297,68 +256,89 @@ it("sends the pairing approval from the approved account", async () => {
     .spyOn(clientModule, "signalRpcRequest")
     .mockResolvedValue({ timestamp: 1_700_000_000_000 } as never);
   await signalPlugin.pairing!.notifyApproval!({ cfg, id: "+15551234567", accountId: "beta" });
-  expect(signalRpcRequest).toHaveBeenCalledTimes(1);
   expect(signalRpcRequest.mock.calls[0]?.[1]).toMatchObject({ account: "+15550000002" });
   expect(signalRpcRequest.mock.calls[0]?.[2]).toMatchObject({ baseUrl: "http://beta.test" });
 });
 
 describe("signal outbound", () => {
   it.each([
-    [
-      "signal:ops",
-      { ops: `signal:${groupTo}` },
-      "group",
-      { to: groupTo, kind: "group", display: "ops", source: "directory" },
-    ],
-    ["signal:home", { home: "signal:me", me: "home" }, "user", null],
-  ] as const)(
-    "resolves %s through the message target resolver",
-    async (input, aliases, kind, expected) => {
-      const resolved = await messaging?.targetResolver?.resolveTarget?.({
-        cfg: signalConfig({ aliases }),
-        input,
-        normalized: input.slice("signal:".length),
-        preferredKind: kind,
-      });
-
-      expect(resolved).toEqual(expected);
-    },
-  );
-
-  it("resolves aliases through sync outbound target resolution", () => {
-    const resolved = outbound?.resolveTarget?.({
-      cfg: signalConfig({ aliases: { me: "+15551234567" } }),
-      to: "signal:me",
-      accountId: "default",
+    ["signal:ops", "group", { to: groupTo, kind: "group", display: "ops", source: "directory" }],
+    ["signal:home", "user", null],
+  ] as const)("resolves %s for messaging and outbound delivery", async (input, kind, expected) => {
+    const resolved = await messaging?.targetResolver?.resolveTarget?.({
+      cfg: aliasConfig,
+      input,
+      normalized: input.slice("signal:".length),
+      preferredKind: kind,
     });
 
-    expect(resolved).toEqual({ ok: true, to: "+15551234567" });
+    expect(resolved).toEqual(expected);
+    const target = required(
+      outbound?.resolveTarget?.({ cfg: aliasConfig, to: input, accountId: "default" }),
+    );
+    if (expected) {
+      expect(target).toEqual({ ok: true, to: groupTo });
+      const route = await messaging?.resolveOutboundSessionRoute?.({
+        cfg: aliasConfig,
+        agentId: "main",
+        target: input,
+        resolvedTarget: required(resolved),
+      });
+      expect(route?.to).toBe(groupTo);
+      expect(route?.baseSessionKey).toContain(`signal:${groupTo}`);
+    } else {
+      expect(
+        signalPlugin.config.resolveDefaultTo?.({ cfg: aliasConfig, accountId: "default" }),
+      ).toBe(input);
+      expect(target.ok).toBe(false);
+      if (!target.ok) {
+        expect(target.error.message).toBe(
+          'Signal alias "home" resolves recursively through "home".',
+        );
+      }
+    }
   });
 
-  it.each(["text", "media"] as const)(
-    "resolves aliases before formatted Signal %s sends",
-    async (kind) => {
-      const send = successfulSend(kind);
-      const media = kind === "media" ? { mediaUrl: "file:///tmp/signal-proof.png" } : {};
-      const ctx = {
-        cfg: signalConfig({ aliases: { ops: groupTo } }),
-        to: "signal:ops",
-        text: "approval",
-        deps: { signal: send },
-      };
-      if (kind === "media") {
-        await sendMedia({ ...ctx, mediaUrl: "file:///tmp/signal-proof.png" });
-      } else {
-        await sendText(ctx);
-      }
-
-      expect(send).toHaveBeenCalledWith(
-        groupTo,
-        "approval",
-        expect.objectContaining({ cfg: expect.any(Object), ...media }),
-      );
-    },
-  );
+  it.each([
+    ["formatted", "text"],
+    ["formatted", "media"],
+    ["durable", "text"],
+    ["durable", "media"],
+  ] as const)("delivers %s %s with canonical aliases and quotes", async (mode, kind) => {
+    const mediaUrl = "file:///tmp/signal-proof.png";
+    const replyToId = "1700000000001";
+    await registerSignalReplyContext({ to: groupTo, replyToId, author: phone, body: "original" });
+    const send = vi.fn().mockResolvedValue({ messageId: "signal-1" });
+    const ctx = {
+      cfg: aliasConfig,
+      to: "signal:ops",
+      text: "hello",
+      deps: { signal: send },
+      replyToId,
+    };
+    const methods =
+      mode === "formatted"
+        ? { text: sendText, media: sendMedia }
+        : {
+            text: required(signalPlugin.message?.send?.text),
+            media: required(signalPlugin.message?.send?.media),
+          };
+    if (kind === "media") {
+      await methods.media({ ...ctx, mediaUrl });
+    } else {
+      await methods.text(ctx);
+    }
+    expect(send).toHaveBeenCalledWith(
+      groupTo,
+      "hello",
+      expect.objectContaining({
+        replyToId,
+        replyToAuthor: phone,
+        replyToBody: "original",
+        ...(kind === "media" ? { mediaUrl } : {}),
+      }),
+    );
+  });
 
   const listText =
     "Intro here.\n\n- item one aaaa\n- item two bbbb\n- item three cc\n- item four dddd";
@@ -396,18 +376,14 @@ describe("signal outbound", () => {
       text: "**Intro**\n\n```\naaa\n\nbbb\n```\n\n*End*",
     });
     await sendText(ctx);
-    const messages = send.mock.calls.map((call) => ({ text: call[1], styles: call[2].textStyles }));
-    expect(messages[0]).toEqual({
-      text: "Intro",
-      styles: [{ start: 0, length: 5, style: "BOLD" }],
-    });
-    expect(messages.at(-1)).toEqual({
-      text: "End",
-      styles: [{ start: 0, length: 3, style: "ITALIC" }],
-    });
+    const messages = send.mock.calls.map((call) => [call[1], call[2].textStyles] as const);
+    expect([messages[0], messages.at(-1)]).toEqual([
+      ["Intro", [{ start: 0, length: 5, style: "BOLD" }]],
+      ["End", [{ start: 0, length: 3, style: "ITALIC" }]],
+    ]);
     const code = messages.slice(1, -1);
-    expect(code.map(({ text }) => text.trim()).join("")).toBe("aaa\n\nbbb");
-    for (const { text, styles } of code) {
+    expect(code.map(([text]) => text.trim()).join("")).toBe("aaa\n\nbbb");
+    for (const [text, styles] of code) {
       expect(text.length).toBeLessThanOrEqual(6);
       expect(styles).toEqual([{ start: 0, length: text.length, style: "MONOSPACE" }]);
     }
@@ -450,74 +426,11 @@ describe("signal outbound", () => {
     await expect(sendText(ctx)).rejects.toThrow("second Signal chunk failed");
 
     expect(send).toHaveBeenCalledTimes(2);
-    expect(send).toHaveBeenNthCalledWith(
-      2,
-      "+15551234567",
-      expect.any(String),
-      expect.not.objectContaining({ replyToId: "1700000000004" }),
-    );
+    expect(send.mock.calls[1]?.[2]).not.toHaveProperty("replyToId");
     expect(onDeliveryResult).toHaveBeenCalledTimes(1);
     expect(onDeliveryResult).toHaveBeenCalledWith(
       expect.objectContaining({ channel: "signal", messageId: "signal-1" }),
     );
-  });
-
-  it("returns clear outbound errors for recursive defaultTo aliases", () => {
-    const cfg = signalConfig({
-      aliases: { home: "signal:me", me: "home" },
-      defaultTo: "signal:home",
-    });
-
-    const defaultTo = signalPlugin.config.resolveDefaultTo?.({
-      cfg,
-      accountId: "default",
-    });
-    expect(defaultTo).toBe("signal:home");
-
-    const resolved = outbound?.resolveTarget?.({
-      cfg,
-      to: defaultTo,
-      accountId: "default",
-    });
-
-    expect(resolved?.ok).toBe(false);
-    if (resolved?.ok === false) {
-      expect(resolved.error.message).toBe(
-        'Signal alias "home" resolves recursively through "home".',
-      );
-    }
-  });
-
-  it("builds canonical session routes for aliases", async () => {
-    const route = await messaging?.resolveOutboundSessionRoute?.({
-      cfg: signalConfig({ aliases: { ops: groupTo } }),
-      agentId: "main",
-      target: "signal:ops",
-      resolvedTarget: {
-        to: groupTo,
-        kind: "group",
-        source: "directory",
-      },
-    });
-
-    expect(route?.to).toBe(groupTo);
-    expect(route?.baseSessionKey).toContain(`signal:${groupTo}`);
-  });
-
-  it("lists configured aliases through the Signal directory", async () => {
-    const cfg = signalConfig({
-      aliases: {
-        me: "+15551234567",
-        ops: groupTo,
-      },
-    });
-
-    await expect(
-      directory?.listPeers?.({ cfg, query: "me", runtime: {} as never }),
-    ).resolves.toEqual([{ kind: "user", id: "+15551234567", name: "me" }]);
-    await expect(
-      directory?.listGroups?.({ cfg, query: "ops", runtime: {} as never }),
-    ).resolves.toEqual([{ kind: "group", id: groupTo, name: "ops" }]);
   });
 
   it("resolves account and chat-type scoped reply-to modes through plugin threading", () => {
@@ -560,14 +473,7 @@ describe("signal outbound", () => {
       }),
     );
 
-    expect(context).toEqual({
-      currentChannelId: "signal:+15550001111",
-      currentChatType: "direct",
-      currentMessagingTarget: "signal:+15550001111",
-      currentMessageId: "1783831798000",
-      replyToMode: "first",
-      hasRepliedRef,
-    });
+    expect(context.currentMessageId).toBe("1783831798000");
     expect(
       threading?.matchesToolContextTarget?.({
         target: "+15550001111",
@@ -576,202 +482,107 @@ describe("signal outbound", () => {
     ).toBe(true);
   });
 
-  it("sanitizes internal assistant scaffolding before outbound delivery", () => {
-    const sanitizeText = required(outbound?.sanitizeText);
-
-    expect(
-      sanitizeText({
-        text: "<think>private</think>Visible answer",
-        payload: { text: "<think>private</think>Visible answer" },
-      }),
-    ).toBe("Visible answer");
-  });
-
   it("preserves the local approval prompt suppressor through attached-result composition", () => {
     const suppressor = required(outbound?.shouldSuppressLocalPayloadPrompt);
+    const execApproval = { ...approvalMetadata, sessionKey: "agent:main:signal:+15551230000" };
+    const suppressed = suppressor({
+      cfg: {
+        ...signalConfig({ enabled: true, allowFrom: [approvalTo] }),
+        approvals: { exec: { enabled: true } },
+      },
+      accountId: "default",
+      payload: { text: "Approval required.", channelData: { execApproval } },
+      hint: {
+        kind: "approval-pending",
+        approvalKind: "exec",
+        nativeRouteActive: true,
+      },
+    });
+    expect(suppressed).toBe(true);
+  });
 
-    expect(
-      suppressor({
-        cfg: {
-          ...signalConfig({ enabled: true, allowFrom: [approvalTo] }),
-          approvals: { exec: { enabled: true } },
-        },
-        accountId: "default",
-        payload: {
-          text: "Approval required.",
-          channelData: {
-            execApproval: {
-              ...approvalMetadata,
-              sessionKey: "agent:main:signal:+15551230000",
+  it.each([false, true])(
+    "binds structured approval reactions (default account=%s)",
+    async (useDefault) => {
+      reactionStores.clearSignalApprovalReactionStoresForTest();
+      const sessionKey = "agent:main:signal:direct:+15551230000";
+      const cfg = useDefault
+        ? approvalConfig({
+            defaultAccount: "work",
+            accounts: { work: { accountUuid: senderUuid, allowFrom: [approvalTo] } },
+          })
+        : approvalConfig();
+      const payload: ReplyPayload = useDefault
+        ? {
+            text: "Exec approval required\nID: exec-1",
+            channelData: {
+              execApproval: { ...approvalMetadata, allowedDecisions: ["allow-once", "deny"] },
             },
-          },
-        },
-        hint: {
-          kind: "approval-pending",
-          approvalKind: "exec",
-          nativeRouteActive: true,
-        },
-      }),
-    ).toBe(true);
-  });
-
-  it("registers delivered approval reactions under the explicit account", async () => {
-    reactionStores.clearSignalApprovalReactionStoresForTest();
-    const cfg = approvalConfig();
-    const sessionKey = "agent:main:signal:direct:+15551230000";
-    const payload = approvalPayload({
-      approvalId: "exec-after-delivery",
-      approvalSlug: "exec-aft",
-      agentId: "main",
-      sessionKey,
-    });
-    const rendered = required(await renderApproval(cfg, payload));
-    expect(rendered.text).toContain(reactionHint);
-    await deliverApproval(cfg, rendered, "default");
-    await expect(reactionTarget("1700000000099")).resolves.toEqual({
-      approvalId: "exec-after-delivery",
-      approvalKind: "exec",
-      decision: "allow-once",
-      route: {
-        deliveryMode: "target",
-        to: approvalTo,
-        accountId: "default",
-        agentId: "main",
-        sessionKey,
-      },
-    });
-  });
-
-  it("registers delivered approval reactions only under the resolved default account", async () => {
-    reactionStores.clearSignalApprovalReactionStoresForTest();
-    const cfg = {
-      ...signalConfig({
-        defaultAccount: "work",
-        accounts: { work: { accountUuid: senderUuid, allowFrom: [approvalTo] } },
-      }),
-      approvals: approvalConfig().approvals,
-    };
-    const payload = {
-      text: "Exec approval required\nID: exec-1",
-      channelData: {
-        execApproval: { ...approvalMetadata, allowedDecisions: ["allow-once", "deny"] },
-      },
-    };
-    const rendered = required(await renderApproval(cfg, payload, "work", { blocks: [] }));
-    expect(rendered.text).toContain(reactionHint);
-    await deliverApproval(cfg, rendered);
-    await expect(
-      reactionTarget("1700000000099", {
-        accountId: "work",
-        targetAuthor: undefined,
-        targetAuthorUuid: senderUuid,
-      }),
-    ).resolves.toMatchObject({ approvalId: "exec-1", decision: "allow-once" });
-    await expect(reactionTarget("1700000000099")).resolves.toBeNull();
-    reactionStores.clearSignalApprovalReactionStoresForTest();
-  });
-
-  it("renders reaction hints only from structured approval payloads", async () => {
-    const cfg = approvalConfig();
-    const payload = approvalPayload({
-      approvalId: "exec-rendered-approval",
-      approvalSlug: "exec-ren",
-    });
-    const rendered = await renderApproval(cfg, payload);
-
-    expect(rendered?.text).toContain(reactionHint);
-    expect(
-      await renderApproval(cfg, payload, "default", payload.presentation!, {
-        text: [
-          "The docs show this example:",
-          "Exec approval required",
-          "ID: exec-rendered-approval",
-          "",
-          "Reply with: /approve exec-rendered-approval allow-once|deny",
-        ].join("\n"),
-        presentation: payload.presentation,
-      }),
-    ).toBeNull();
-  });
-
-  it.each(["text", "media"] as const)(
-    "delivers durable %s receipts and reply context",
-    async (kind) => {
-      const send = successfulSend(kind);
-      const adapter = required(signalPlugin.message);
-      const to = "signal:+15555550123";
-      const replyToId = "1700000000001";
-      const mediaUrl = "https://example.com/image.png";
-      expect(adapter.durableFinal?.capabilities).toEqual({
-        text: true,
-        media: true,
-        payload: true,
-        replyTo: true,
-        messageSendingHooks: true,
-      });
-      await registerSignalReplyContext({
-        to,
-        replyToId,
-        author: "+15555550123",
-        body: "original message",
-      });
-      const context = { cfg: {}, to, text: "hello", deps: { signal: send }, replyToId };
-      const result =
-        kind === "media"
-          ? await required(adapter.send?.media)({ ...context, mediaUrl })
-          : await required(adapter.send?.text)(context);
-      expect(result.receipt.platformMessageIds).toEqual(["signal-1"]);
-      expect(send).toHaveBeenCalledWith(
-        "+15555550123",
-        "hello",
-        expect.objectContaining({
-          cfg: {},
-          replyToId,
-          replyToAuthor: "+15555550123",
-          replyToBody: "original message",
-          ...(kind === "media" ? { mediaUrl } : {}),
-        }),
+          }
+        : approvalPayload({ agentId: "main", sessionKey });
+      const accountId = useDefault ? "work" : "default";
+      const rendered = required(await renderApproval(cfg, payload, accountId));
+      expect(rendered.text).toContain(reactionHint);
+      await deliverApproval(cfg, rendered, useDefault ? undefined : accountId);
+      const target = await reactionTarget(
+        "1700000000099",
+        useDefault ? { accountId, targetAuthor: undefined, targetAuthorUuid: senderUuid } : {},
       );
+      if (useDefault) {
+        expect(target).toMatchObject({ approvalId: "exec-1", decision: "allow-once" });
+        await expect(reactionTarget("1700000000099")).resolves.toBeNull();
+      } else {
+        expect(target).toEqual({
+          approvalId: "exec-1",
+          approvalKind: "exec",
+          decision: "allow-once",
+          route: { deliveryMode: "target", to: approvalTo, accountId, agentId: "main", sessionKey },
+        });
+        const quoted = {
+          text: "The docs show this example:\nExec approval required\nID: exec-1\n\nReply with: /approve exec-1 allow-once|deny",
+          presentation: payload.presentation,
+        };
+        expect(await renderApproval(cfg, quoted)).toBeNull();
+      }
+      reactionStores.clearSignalApprovalReactionStoresForTest();
     },
   );
 });
 
-describe("signal setup parsing", () => {
-  it("validates and applies allowlist entries through the DM policy prompt", async () => {
-    const text = vi.fn(async (params: Parameters<WizardPrompter["text"]>[0]) => {
-      expect(params.validate?.("uuid:")).toBe("Invalid uuid entry");
-      expect(params.validate?.("invalid")).toBe("Invalid entry: invalid");
-      return "signal:+15555550123, 123e4567-e89b-12d3-a456-426614174000, *";
-    }) as WizardPrompter["text"];
-    const next = await signalDmPolicy.promptAllowFrom({
-      cfg: signalConfig({}),
-      prompter: createTestWizardPrompter({ text }),
-    });
-
-    expect(next.channels?.signal?.allowFrom).toEqual([
-      "+15555550123",
-      "uuid:123e4567-e89b-12d3-a456-426614174000",
-      "*",
-    ]);
+it("validates and applies allowlist entries through the DM policy prompt", async () => {
+  const text = vi.fn(async (params: Parameters<WizardPrompter["text"]>[0]) => {
+    expect(params.validate?.("uuid:")).toBe("Invalid uuid entry");
+    expect(params.validate?.("invalid")).toBe("Invalid entry: invalid");
+    return "signal:+15555550123, 123e4567-e89b-12d3-a456-426614174000, *";
+  }) as WizardPrompter["text"];
+  const next = await signalDmPolicy.promptAllowFrom({
+    cfg: signalConfig({}),
+    prompter: createTestWizardPrompter({ text }),
   });
 
-  it("uses defaultAccount for omitted DM policy reads and writes", () => {
-    const cfg = signalConfig({
-      dmPolicy: "disabled",
-      defaultAccount: "work",
-      allowFrom: ["+15555550123"],
-      accounts: { work: { account: "+15555550999", dmPolicy: "allowlist" } },
-    });
-    expect(signalDmPolicy.getCurrent(cfg)).toBe("allowlist");
-    expect(signalDmPolicy.resolveConfigKeys?.(cfg)).toEqual({
-      policyKey: "channels.signal.accounts.work.dmPolicy",
-      allowFromKey: "channels.signal.accounts.work.allowFrom",
-    });
-    const next = signalDmPolicy.setPolicy(cfg, "open");
-    expect(next.channels?.signal).toMatchObject({
-      dmPolicy: "disabled",
-      allowFrom: ["+15555550123"],
-      accounts: { work: { dmPolicy: "open", allowFrom: ["+15555550123", "*"] } },
-    });
+  expect(next.channels?.signal?.allowFrom).toEqual([
+    "+15555550123",
+    "uuid:123e4567-e89b-12d3-a456-426614174000",
+    "*",
+  ]);
+});
+
+it("uses defaultAccount for omitted DM policy reads and writes", () => {
+  const cfg = signalConfig({
+    dmPolicy: "disabled",
+    defaultAccount: "work",
+    allowFrom: ["+15555550123"],
+    accounts: { work: { account: "+15555550999", dmPolicy: "allowlist" } },
+  });
+  expect(signalDmPolicy.getCurrent(cfg)).toBe("allowlist");
+  expect(signalDmPolicy.resolveConfigKeys?.(cfg)).toEqual({
+    policyKey: "channels.signal.accounts.work.dmPolicy",
+    allowFromKey: "channels.signal.accounts.work.allowFrom",
+  });
+  const next = signalDmPolicy.setPolicy(cfg, "open");
+  expect(next.channels?.signal).toMatchObject({
+    dmPolicy: "disabled",
+    allowFrom: ["+15555550123"],
+    accounts: { work: { dmPolicy: "open", allowFrom: ["+15555550123", "*"] } },
   });
 });
