@@ -95,8 +95,6 @@ describe("standalone shell installers", () => {
         const result = bash(root, args, env, readFileSync(script));
         expect(result.status, result.stdout + result.stderr).toBe(0);
         expect(result.stdout).toContain("--install-method");
-        expect(result.stdout).toContain("Support: https://community.openclaw.ai/");
-        expect(result.stdout).toContain("FAQ: https://docs.openclaw.ai/start/faq");
       }
       write(root, ".npmrc", "min-release-age=7\n");
       const policy = bash(

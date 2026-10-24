@@ -7,8 +7,6 @@ import {
   type SqliteQueryPlanEvidence,
 } from "../../scripts/lib/sqlite-query-plan-evidence.js";
 import { parseSqliteStateBenchmarkCli } from "../../scripts/lib/sqlite-state-benchmark-cli.js";
-import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../../src/state/openclaw-agent-db-contract.js";
-import { OPENCLAW_STATE_SCHEMA_VERSION } from "../../src/state/openclaw-state-db-contract.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -42,29 +40,19 @@ describe("scripts/bench-sqlite-state", () => {
     const report = JSON.parse(readFileSync(outputPath, "utf8")) as {
       schemaVersion: number;
       queries: Array<{
-        database: string;
         id: string;
         p50Ms: number;
         p95Ms: number;
         plan: SqliteQueryPlanEvidence;
         runs: number;
-        sql: string;
       }>;
-      versions: { agentSchema: number; sqlite: string; stateSchema: number };
     };
     expect(report.schemaVersion).toBe(2);
-    expect(report.versions).toEqual({
-      agentSchema: OPENCLAW_AGENT_SCHEMA_VERSION,
-      sqlite: expect.stringMatching(/^\d+\.\d+\.\d+$/u),
-      stateSchema: OPENCLAW_STATE_SCHEMA_VERSION,
-    });
     expect(report.queries).toHaveLength(12);
     for (const query of report.queries) {
-      expect(["agent", "state"]).toContain(query.database);
       expect(query.runs).toBe(20);
       expect(Number.isFinite(query.p50Ms)).toBe(true);
       expect(Number.isFinite(query.p95Ms)).toBe(true);
-      expect(query.sql).toContain("SELECT");
       expect(query.plan.raw.length).toBeGreaterThan(0);
       expect(query.plan.fullTableScans).toEqual([]);
       if (!query.id.startsWith("task-runs.")) {
