@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { expect, it } from "vitest";
 import {
@@ -80,28 +80,12 @@ function sourceCommit(
     const path = join(directory, "scripts/pr-lib/review.sh");
     writeFileSync(path, readFileSync(path, "utf8") + "\n# Current canonical workflow fixture.\n");
   }
-  const index = join(f.root, "source.index");
-  const run = (args: string[], input?: string) => {
-    const result = spawnSync("git", ["-C", f.repo, ...args], {
-      env: { ...createIndependentPrFixtureEnv(), GIT_INDEX_FILE: index },
-      input,
-      encoding: "utf8",
+  const run = (args: string[]) =>
+    f.git(["--work-tree", directory, ...args], undefined, f.repo, {
+      GIT_INDEX_FILE: join(f.root, "source.index"),
     });
-    expect(result.status, result.stderr).toBe(0);
-    return result.stdout.trim();
-  };
   run(["read-tree", parent]);
-  const paths = readdirSync(directory, { recursive: true, withFileTypes: true })
-    .filter((entry) => entry.isFile())
-    .map((entry) => join(entry.parentPath, entry.name).slice(directory.length + 1));
-  const blobs = run(
-    ["hash-object", "-w", "--stdin-paths"],
-    paths.map((path) => JSON.stringify(join(directory, path))).join("\n") + "\n",
-  ).split("\n");
-  run(
-    ["update-index", "--index-info"],
-    paths.map((path, position) => `100644 ${blobs[position]}\t${path}\n`).join(""),
-  );
+  run(["add", "--ignore-removal", "--force", "--chmod=-x", directory]);
   linkPrWrapperDependencies(directory);
   return f.commit(
     run(["write-tree"]),
@@ -110,13 +94,18 @@ function sourceCommit(
   );
 }
 
-const cancelled = reuseCompletedSetup((confirmed = true) => {
-  const f = fixture();
+function retainWorkflow(f: MergeFixture) {
   const retainedDirectory = join(f.root, "retained-source");
   const source = sourceCommit(f, f.base, retainedDirectory, false);
   f.git(["push", "-q", "origin", `${source}:refs/heads/main`]);
   f.workflowSource(source, retainedDirectory);
   f.bindWorkflow();
+  return source;
+}
+
+const cancelled = reuseCompletedSetup((confirmed = true) => {
+  const f = fixture();
+  const source = retainWorkflow(f);
   configureMerge(f, { mode: "pending", pr: { mergeStateStatus: "BLOCKED" } });
   expectExit(f.run(true), 0);
   const original = f.git(["rev-parse", outcomeRef]);
@@ -127,9 +116,9 @@ const cancelled = reuseCompletedSetup((confirmed = true) => {
   const binding = f.git(["rev-parse", bindingRef]);
   const replacement = f.replacePreparedHead();
   const main = f.git(["--git-dir=" + f.remote, "rev-parse", "main"]);
-  const { directory } = publishCurrentWorkflow(f, main, source);
+  const { directory, current } = publishCurrentWorkflow(f, main, source);
   configureMerge(f, { mode: "success", pr: { mergeStateStatus: "CLEAN" } });
-  return { f, outcome, binding, replacement, original, source, directory };
+  return { f, outcome, binding, replacement, original, source, directory, current };
 });
 
 function nativeRecovery(f: MergeFixture, args: string[]) {
@@ -151,11 +140,7 @@ function nativeRecovery(f: MergeFixture, args: string[]) {
 const { preExistingCandidate } = createPriorCiCandidateFactory(fixture);
 const rejectedAdmin = reuseCompletedSetup(() => {
   const f = preExistingCandidate();
-  const retainedDirectory = join(f.root, "retained-source");
-  const source = sourceCommit(f, f.base, retainedDirectory, false);
-  f.git(["push", "-q", "origin", `${source}:refs/heads/main`]);
-  f.workflowSource(source, retainedDirectory);
-  f.bindWorkflow();
+  const source = retainWorkflow(f);
   const refusal = readFileSync("test/fixtures/pr-admin-base-modified-405.txt", "utf8");
   configureMerge(f, { restMergeRefusal: refusal });
   expectExit(f.adminPriorCi(f.path), 1);
@@ -168,10 +153,6 @@ const rejectedAdmin = reuseCompletedSetup(() => {
   configureMerge(f, { restMergeRefusal: "", comment: "lost" });
   return { f, outcome, binding, source, current };
 });
-
-function recoverAdmin(setup: ReturnType<typeof rejectedAdmin>) {
-  return recoverCurrent(setup.f, setup.outcome, "", true);
-}
 
 describePosix("current-main recovery of a retained workflow", () => {
   it("native entrypoint admits only the explicit admin shape and refuses a stale outcome before execution", () => {
@@ -207,52 +188,53 @@ describePosix("current-main recovery of a retained workflow", () => {
     expectBinding(f, binding, outcome);
   });
 
-  it("explicitly selects current workflow for qualified same-head admin rejection recovery", () => {
-    const setup = rejectedAdmin();
-    const { f, outcome, binding, source, current } = setup;
-    const captures = f.captures();
-    const recovered = recoverAdmin(setup);
-    expectExit(recovered, 1);
-    expect(f.record(), recovered.output).toMatchObject({
-      phase: "commenting",
-      head: f.head,
-      accepted: true,
-      workflowRecovery: { binding, from: source, to: current },
-      recovery: { outcome, providerRejection: { kind: "github-base-modified-405" } },
-    });
-    expect(f.record().recovery).not.toHaveProperty("replacementHead");
-    expectBinding(f, binding);
-    expectAncestors(f, [outcome, binding, source, current], outcomeRef);
-    expectCapturedFiles(f, captures, outcomeRef);
-  });
-
-  it("retains the binding and cancelled history through real recovery and ordinary reconciliation", () => {
-    const setup = cancelled();
-    const { f, outcome, binding, replacement, original, source, directory } = setup;
-    const captures = f.captures();
-    const main = f.git(["--git-dir=" + f.remote, "rev-parse", "main"]);
-    // Lost comment acknowledgement leaves ordinary reconciliation meaningful.
-    configureMerge(f, { comment: "lost" });
-    f.useScripts(join(directory, "scripts"));
-    const recovery = recoverCurrent(f, outcome, replacement);
-    expectExit(recovery, 1);
-    const successor = f.git(["rev-parse", outcomeRef]);
-    expect(f.record(), recovery.output).toMatchObject({
-      phase: "commenting",
-      head: replacement,
-      recovery: { outcome, replacementHead: replacement },
-      workflowRecovery: { binding, from: source, to: main },
-    });
-    expectBinding(f, binding);
-    expectAncestors(f, [original, outcome, binding, source, main], outcomeRef);
-    expectCapturedFiles(f, captures, outcomeRef);
-    f.recover();
-    expectExit(f.run(), 0);
-    expect(f.record()).toMatchObject({ phase: "commented" });
-    expect(f.state()).toMatchObject({ mutations: 2, cancellations: 1, posts: 1 });
-    expectBinding(f, binding);
-    expect(f.git(["merge-base", "--is-ancestor", successor, outcomeRef])).toBe("");
-  });
+  it.each(["admin", "cancelled auto"])(
+    "recovers %s with current source and retains history",
+    (route) => {
+      const setup = route === "admin" ? rejectedAdmin() : cancelled();
+      const { f, outcome, binding, source, current } = setup;
+      const auto = "replacement" in setup ? setup : undefined;
+      const captures = f.captures();
+      configureMerge(f, { comment: "lost" });
+      if (auto) {
+        f.useScripts(join(auto.directory, "scripts"));
+      }
+      const recovery = recoverCurrent(f, outcome, auto?.replacement, !auto);
+      expectExit(recovery, 1);
+      const successor = f.git(["rev-parse", outcomeRef]);
+      expect(f.record(), recovery.output).toMatchObject({
+        phase: "commenting",
+        head: auto?.replacement ?? f.head,
+        recovery: auto
+          ? { outcome, replacementHead: auto.replacement }
+          : {
+              outcome,
+              providerRejection: { kind: "github-base-modified-405" },
+            },
+        workflowRecovery: { binding, from: source, to: current },
+      });
+      if (!auto) {
+        expect(f.record()).toHaveProperty("accepted", true);
+        expect(f.record().recovery).not.toHaveProperty("replacementHead");
+      }
+      expectBinding(f, binding);
+      expectAncestors(
+        f,
+        [...(auto ? [auto.original] : []), outcome, binding, source, current],
+        outcomeRef,
+      );
+      expectCapturedFiles(f, captures, outcomeRef);
+      if (!auto) {
+        return;
+      }
+      f.recover();
+      expectExit(f.run(), 0);
+      expect(f.record()).toMatchObject({ phase: "commented" });
+      expect(f.state()).toMatchObject({ mutations: 2, cancellations: 1, posts: 1 });
+      expectBinding(f, binding);
+      expect(f.git(["merge-base", "--is-ancestor", successor, outcomeRef])).toBe("");
+    },
+  );
 
   it.each(["source", "outcome", "head"])(
     "refuses late %s drift without another dispatch",

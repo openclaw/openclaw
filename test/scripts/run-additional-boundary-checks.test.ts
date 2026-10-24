@@ -88,6 +88,25 @@ const waitForReady = (file: string, operation: PromiseLike<unknown>) =>
     () => fs.existsSync(file) && fs.readFileSync(file, "utf8").length > 0,
   );
 
+function descendantScript(exitOnTerm = false) {
+  const child = [
+    "import fs from 'node:fs';",
+    fixtureReceiptClientSource(receipts.endpoint),
+    "process.on('SIGTERM', () => {});",
+    "setInterval(() => {}, 1000);",
+    "const file = process.env.OPENCLAW_TEST_CHILD_PID;",
+    "fs.writeFileSync(file + '.tmp', String(process.pid));",
+    "fs.renameSync(file + '.tmp', file);",
+    "sendReceipt(file, 'ready');",
+  ].join("\n");
+  return [
+    "const { spawn } = require('node:child_process');",
+    `spawn(process.execPath, ['--input-type=module', '-e', ${JSON.stringify(child)}], { stdio: 'ignore' });`,
+    exitOnTerm ? "process.on('SIGTERM', () => process.exit(0));" : "",
+    "setInterval(() => {}, 1000);",
+  ].join("\n");
+}
+
 describe("run-additional-boundary-checks", () => {
   it("normalizes concurrency input", () => {
     expect(resolveConcurrency("6")).toBe(6);
@@ -225,24 +244,9 @@ describe("run-additional-boundary-checks", () => {
       let completion!: ReturnType<typeof runSingleCheck>;
       await runQaGatewayFixture(
         async () => {
-          const childScript = [
-            "import fs from 'node:fs';",
-            fixtureReceiptClientSource(receipts.endpoint),
-            "process.on('SIGTERM', () => {});",
-            "setInterval(() => {}, 1000);",
-            "fs.writeFileSync(process.env.OPENCLAW_TEST_CHILD_PID + '.tmp', String(process.pid));",
-            "fs.renameSync(process.env.OPENCLAW_TEST_CHILD_PID + '.tmp', process.env.OPENCLAW_TEST_CHILD_PID);",
-            "sendReceipt(process.env.OPENCLAW_TEST_CHILD_PID, 'ready');",
-          ].join("\n");
-          const parentScript = [
-            "const { spawn } = require('node:child_process');",
-            `spawn(process.execPath, ['--input-type=module', '-e', ${JSON.stringify(childScript)}], { stdio: 'ignore' });`,
-            "setInterval(() => {}, 1000);",
-          ].join("");
-
           releaseAndWait = startProcessWatchdogFixture(
             () =>
-              (completion = runNodeCheck("wrapper-exits", parentScript, {
+              (completion = runNodeCheck("wrapper-exits", descendantScript(), {
                 checkTimeoutMs: 100,
                 env: { ...process.env, OPENCLAW_TEST_CHILD_PID: childPidPath },
               })),
@@ -277,23 +281,6 @@ describe("run-additional-boundary-checks", () => {
       let runner: ReturnType<typeof spawn> | undefined;
       let closed: Promise<unknown[]> | undefined;
       try {
-        const childScript = [
-          "process.on('SIGTERM', () => {});",
-          "process.send(process.pid);",
-          "setInterval(() => {}, 1000);",
-        ].join("");
-        const parentScript = [
-          "import { spawn } from 'node:child_process';",
-          "import fs from 'node:fs';",
-          fixtureReceiptClientSource(receipts.endpoint),
-          `const child = spawn(process.execPath, ['-e', ${JSON.stringify(childScript)}], { stdio: ['ignore', 'ignore', 'ignore', 'ipc'] });`,
-          "child.once('message', (pid) => {",
-          "  fs.writeFileSync(process.env.OPENCLAW_TEST_CHILD_PID, String(pid));",
-          "  sendReceipt(process.env.OPENCLAW_TEST_CHILD_PID, 'ready');",
-          "});",
-          "process.on('SIGTERM', () => process.exit(0));",
-          "setInterval(() => {}, 1000);",
-        ].join("\n");
         const runnerScript = `
 import { runChecks } from ${JSON.stringify(
           new URL("../../scripts/run-additional-boundary-checks.mts", import.meta.url).href,
@@ -303,7 +290,7 @@ const completion = runChecks(
   [{
     label: "parent-signal",
     command: process.execPath,
-    args: ["--input-type=module", "-e", ${JSON.stringify(parentScript)}],
+    args: ["-e", ${JSON.stringify(descendantScript(true))}],
   }],
   {
     checkTimeoutMs: 30000,

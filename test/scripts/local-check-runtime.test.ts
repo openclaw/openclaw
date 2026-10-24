@@ -211,7 +211,7 @@ it("keeps prep and oxlint resource policies separate", () => {
   const oxlintPath = path.join(cwd, "node_modules", ".bin", "oxlint");
   const captureSource = `
 const goEnv = Object.fromEntries(["GOMAXPROCS", "GOGC", "GOMEMLIMIT"].map(key => [key, process.env[key] ?? null]));
-fs.appendFileSync(process.env.CAPTURE_PATH, JSON.stringify({ step, goEnv, args: process.argv.slice(2) }) + "\\n");
+fs.appendFileSync(process.env.CAPTURE_PATH, JSON.stringify([step, ...Object.values(goEnv), process.argv.slice(2)]) + "\\n");
 `;
   writeFiles(cwd, {
     "scripts/prepare-extension-package-boundary-artifacts.mts": `import fs from "node:fs";\nconst step = "prep";\n${captureSource}`,
@@ -237,25 +237,20 @@ fs.appendFileSync(process.env.CAPTURE_PATH, JSON.stringify({ step, goEnv, args: 
     .split("\n")
     .map((line) => JSON.parse(line));
   expect(children).toEqual([
-    {
-      step: "prep",
-      goEnv: { GOMAXPROCS: null, GOGC: null, GOMEMLIMIT: null },
-      args: ["--mode=package-boundary"],
-    },
-    {
-      step: "lint",
-      goEnv: {
-        ...throttledGoEnv,
-        GOMAXPROCS: String(Math.min(2, Math.max(1, os.availableParallelism()))),
-      },
-      args: [
+    ["prep", null, null, null, ["--mode=package-boundary"]],
+    [
+      "lint",
+      String(Math.min(2, Math.max(1, os.availableParallelism()))),
+      "30",
+      "3GiB",
+      [
         ...extensions,
         "--type-aware",
         "--report-unused-disable-directives-severity",
         "error",
         "--threads=1",
       ],
-    },
+    ],
   ]);
 });
 
@@ -336,13 +331,11 @@ it.each(["configured", "directory", "link", "empty alias", "npm fallback"])(
     const local = path.join(checkout, "node_modules");
     const ownedCheckout = kind === "directory" || kind === "link";
     if (ownedCheckout) {
-      const owned = path.join(checkout, "owned");
+      const owned = kind === "directory" ? local : path.join(checkout, "owned");
       fs.cpSync(modules, owned, { recursive: true });
       writeFiles(owned, { "fixture-dependency/index.js": 'export default "owned";\n' });
       if (kind === "link") {
         fs.symlinkSync(owned, local, process.platform === "win32" ? "junction" : "dir");
-      } else {
-        fs.renameSync(owned, local);
       }
     }
     const before = fs.lstatSync(ownedCheckout ? local : modules);

@@ -1,13 +1,5 @@
 import { execFileSync } from "node:child_process";
-import {
-  closeSync,
-  copyFileSync,
-  mkdirSync,
-  openSync,
-  readFileSync,
-  statSync,
-  writeFileSync,
-} from "node:fs";
+import { copyFileSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { afterEach, beforeEach, expect, it } from "vitest";
 import {
@@ -30,16 +22,10 @@ it("records and reuses a lease with more than a buffer of source deletions", () 
   ).join("");
   fixture.git(["update-index", "--index-info"], entries);
   fixture.advanceBase();
-  const outputPath = join(fixture.root, "status.txt");
-  const output = openSync(outputPath, "w");
-  try {
-    execFileSync("git", ["-C", fixture.root, "status", "--porcelain=v1"], {
-      stdio: ["ignore", output, "pipe"],
-    });
-  } finally {
-    closeSync(output);
-  }
-  expect(statSync(outputPath).size).toBeGreaterThan(1024 * 1024);
+  const output = execFileSync("git", ["-C", fixture.root, "status", "--porcelain=v1"], {
+    maxBuffer: 2 * 1024 * 1024,
+  });
+  expect(output.byteLength).toBeGreaterThan(1024 * 1024);
   const prepared = fixture.allocate();
   expect(prepared).not.toBeNull();
   expect(fixture.reuse()?.current).toEqual(prepared?.current);
@@ -116,28 +102,18 @@ it("preserves failed-command allocation provenance across unchanged and changed 
 });
 
 it.each([
-  {
-    caller: "claude",
-    env: { CODEX_THREAD_ID: undefined, CLAUDE_CODE_SESSION_ID: "session-one" },
-    changes: [{ CLAUDE_CODE_SESSION_ID: "session-two" }],
-  },
-  {
-    caller: "github-actions",
-    env: {
-      CODEX_THREAD_ID: undefined,
-      GITHUB_REPOSITORY: "example/project",
-      GITHUB_RUN_ID: "100",
-      GITHUB_RUN_ATTEMPT: "1",
-      GITHUB_JOB: "check",
-    },
-    changes: [{ GITHUB_RUN_ID: "101" }, { GITHUB_RUN_ATTEMPT: "2" }, { GITHUB_JOB: "build" }],
-  },
-])("binds reuse to the $caller task", ({ caller, env, changes }) => {
+  ["claude", ["CLAUDE_CODE_SESSION_ID"]],
+  ["github-actions", ["GITHUB_REPOSITORY", "GITHUB_RUN_ID", "GITHUB_RUN_ATTEMPT", "GITHUB_JOB"]],
+] as const)("binds reuse to the %s task", (caller, keys) => {
+  const env = {
+    ...Object.fromEntries(keys.map((key) => [key, "original"])),
+    CODEX_THREAD_ID: undefined,
+  };
   const prepared = fixture.allocate([], env);
   expect(prepared?.current.caller).toBe(caller);
   expect(fixture.reuse([], env)?.current).toEqual(prepared?.current);
-  for (const change of changes) {
-    expect(() => fixture.reuse([], { ...env, ...change })).toThrow("taskKey");
+  for (const key of keys) {
+    expect(() => fixture.reuse([], { ...env, [key]: "changed" })).toThrow("taskKey");
   }
 });
 
@@ -161,11 +137,7 @@ it("keeps raw checkout, session, label, and payload values out of provenance", (
     { CODEX_THREAD_ID: session },
   );
   recordTestboxLeaseFreshness(prepared, "tbx_fixture");
-  const serialized = JSON.stringify({
-    current: prepared?.current,
-    attribution: prepared?.attribution,
-    saved: JSON.parse(readFileSync(fixture.statePath, "utf8")),
-  });
+  const serialized = JSON.stringify([prepared?.current, prepared?.attribution, fixture.receipt()]);
   for (const value of [fixture.root, session, label, payload]) {
     expect(serialized).not.toContain(value);
   }
@@ -190,14 +162,14 @@ it.each([
 ] as const)("rejects changed %s=%s without refreshing provenance", (field, value, message) => {
   fixture.allocate();
   const admitted = fixture.reuse();
-  const original = readFileSync(fixture.statePath, "utf8");
+  const original = fixture.receipt();
   expect(() => admitted?.assertCurrent()).not.toThrow();
-  const receipt = { ...JSON.parse(original), [field]: value };
+  const receipt = { ...original, [field]: value };
   const changedReceipt = JSON.stringify(receipt);
   writeFileSync(fixture.statePath, changedReceipt);
   expect(() => admitted?.assertCurrent()).toThrow(message);
   expect(() => fixture.reuse()).toThrow(message);
-  expect(admitted?.current.headSha).toBe(JSON.parse(original).headSha);
+  expect(admitted?.current.headSha).toBe(original.headSha);
   expect(readFileSync(fixture.statePath, "utf8")).toBe(changedReceipt);
 });
 
@@ -277,8 +249,7 @@ function createLeaseFixture() {
     copyFileSync(new URL("../../" + relative, import.meta.url), file);
   }
   write("package.json", '{"name":"lease-fixture","private":true}\n');
-  write("packages/example/package.json", '{"name":"workspace-fixture"}\n');
-  write("pnpm-lock.yaml", "lockfileVersion: '9.0'\nimporters:\n  .: {}\n  packages/example: {}\n");
+  write("pnpm-lock.yaml", "lockfileVersion: '9.0'\nimporters:\n  .: {}\n");
   git(["add", "."]);
   const tree = git(["write-tree"]);
   const initial = git(["commit-tree", tree], "Initial fixture\n");
@@ -309,6 +280,7 @@ function createLeaseFixture() {
     prepare,
     advanceHead,
     statePath: join(stateDir, "tbx_fixture.json"),
+    receipt: () => JSON.parse(readFileSync(join(stateDir, "tbx_fixture.json"), "utf8")),
     advanceBase() {
       git(["update-ref", "refs/remotes/origin/main", advanceHead()]);
     },
