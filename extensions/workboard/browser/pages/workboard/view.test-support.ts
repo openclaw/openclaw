@@ -5,7 +5,7 @@ import type {
   ControlUiAgentPickerProps,
   ControlUiComponents,
 } from "openclaw/plugin-sdk/control-ui";
-import { createEffect, createSignal, flush } from "solid-js";
+import { createEffect, createMemo, createSignal, flush } from "solid-js";
 import { afterEach, vi } from "vitest";
 import { getWorkboardState, subscribeWorkboard } from "../../lib/workboard/runtime.ts";
 import { workboardTestHost } from "../../test/host.setup.ts";
@@ -83,10 +83,9 @@ export function renderInto(container: HTMLElement, props: WorkboardRenderProps) 
       },
     });
     const dispose = render(() => {
-      createEffect(
-        () => current().host,
-        (host) => subscribeWorkboard(host, publishPresentation),
-      );
+      // Prop-only renders must not re-subscribe during an owner notification.
+      const host = createMemo(() => current().host);
+      createEffect(host, (host) => subscribeWorkboard(host, publishPresentation));
       return createComponent(WorkboardView, reactiveProps);
     }, container);
     renderedViews.set(container, {
