@@ -54,6 +54,7 @@ jobs:
       desktop_test_bundles: ${{ steps.request.outputs.desktop_test_bundles }}
       release_tag: ${{ steps.request.outputs.release_tag }}
       tag_sha: ${{ steps.ancestry.outputs.tag_sha }}
+      tooling_sha: ${{ steps.request.outputs.workflow_sha }}
       updater_pubkey: ${{ steps.updater_trust.outputs.updater_pubkey }}
       already_published: ${{ steps.completion.outputs.already_published }}
       # Opt-in desktop-test bundles include the Windows installer, so they build it
@@ -65,15 +66,8 @@ jobs:
         env:
           REQUEST_TITLE: ${{ github.event.workflow_run.display_title }}
           REQUEST_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
-          WORKFLOW_SHA: ${{ github.workflow_sha }}
         run: |
           set -euo pipefail
-          # Reject stale requests visibly before selected code runs; a job-level
-          # SHA gate would silently skip the whole release when main advances.
-          if [[ "$REQUEST_HEAD_SHA" != "$WORKFLOW_SHA" ]]; then
-            echo "::error::Main advanced after this Linux release request. Dispatch a new Linux App Release Request from main with the same inputs." >&2
-            exit 1
-          fi
           pattern='^Linux App Release Request \[(v[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*(-[1-9][0-9]*)?)\] desktop=(true|false)$'
           if [[ ! "${REQUEST_TITLE}" =~ ${pattern} ]]; then
             echo "Release request title does not match the trusted request contract"
@@ -81,6 +75,7 @@ jobs:
           fi
           echo "release_tag=${BASH_REMATCH[1]}" >> "$GITHUB_OUTPUT"
           echo "desktop_test_bundles=${BASH_REMATCH[3]}" >> "$GITHUB_OUTPUT"
+          echo "workflow_sha=$REQUEST_HEAD_SHA" >> "$GITHUB_OUTPUT"
 
       - name: Prepare Git owner
         uses: openclaw/openclaw/.github/actions/git-owner@88095dc00eef288c3829909d4dc64a9e249fa7ef
@@ -95,7 +90,7 @@ jobs:
       - name: Checkout trusted release tooling
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.workflow_sha }}
+          ref: ${{ steps.request.outputs.workflow_sha }}
           path: .release-tooling
           fetch-depth: 1
           persist-credentials: false
@@ -118,7 +113,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           WORKFLOW_FULL_REF: ${{ github.ref }}
           WORKFLOW_REF: ${{ github.ref_name }}
-          WORKFLOW_SHA: ${{ github.workflow_sha }}
+          WORKFLOW_SHA: ${{ steps.request.outputs.workflow_sha }}
         run: |
           set -euo pipefail
           node .release-tooling/scripts/release-tooling-identity.mjs verify \
@@ -151,7 +146,7 @@ jobs:
         id: ancestry
         env:
           RELEASE_TAG: ${{ steps.request.outputs.release_tag }}
-          WORKFLOW_SHA: ${{ github.workflow_sha }}
+          WORKFLOW_SHA: ${{ steps.request.outputs.workflow_sha }}
         run: |
           set -euo pipefail
           exec python3 -I -S "$CI_GIT_OWNER" --policy - <<'PYTHON'
@@ -243,7 +238,7 @@ jobs:
           REQUEST_RUN_ID: ${{ github.event.workflow_run.id }}
           REQUEST_RUN_ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
           REQUEST_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
-          WORKFLOW_SHA: ${{ github.workflow_sha }}
+          WORKFLOW_SHA: ${{ steps.request.outputs.workflow_sha }}
           RELEASE_TAG: ${{ steps.request.outputs.release_tag }}
           TAG_SHA: ${{ steps.ancestry.outputs.tag_sha }}
           ADMISSION_STATUS: ${{ job.status }}
@@ -353,7 +348,7 @@ jobs:
       - name: Checkout trusted Linux packaging tooling
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.workflow_sha }}
+          ref: ${{ needs.validate_release.outputs.tooling_sha }}
           path: .release-tooling
           fetch-depth: 1
           persist-credentials: false
@@ -468,7 +463,7 @@ jobs:
         env:
           RELEASE_TAG: ${{ needs.validate_release.outputs.release_tag }}
           TAG_SHA: ${{ needs.validate_release.outputs.tag_sha }}
-          WORKFLOW_SHA: ${{ github.workflow_sha }}
+          WORKFLOW_SHA: ${{ needs.validate_release.outputs.tooling_sha }}
           FINALIZE_OUTCOME: ${{ steps.finalize-appimage.outcome }}
           STAGING_OUTCOME: ${{ steps.stage-bundles.outcome }}
           RUNTIME_OUTCOME: ${{ steps.packaged-runtime.outcome }}
@@ -1022,7 +1017,7 @@ jobs:
       - name: Checkout trusted Linux updater publication tooling
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.workflow_sha }}
+          ref: ${{ needs.validate_release.outputs.tooling_sha }}
           fetch-depth: 1
           persist-credentials: false
           sparse-checkout: |
@@ -1155,7 +1150,7 @@ jobs:
           DESKTOP_TEST_BUNDLES: ${{ needs.validate_release.outputs.desktop_test_bundles }}
           LOCAL_INPUTS: ${{ needs.validate_release.outputs.already_published != 'true' }}
           TAG_SHA: ${{ needs.validate_release.outputs.tag_sha }}
-          WORKFLOW_SHA: ${{ github.workflow_sha }}
+          WORKFLOW_SHA: ${{ needs.validate_release.outputs.tooling_sha }}
           WORKFLOW_REF: ${{ github.ref_name }}
           WORKFLOW_FULL_REF: ${{ github.ref }}
           REQUEST_RUN_ID: ${{ github.event.workflow_run.id }}
