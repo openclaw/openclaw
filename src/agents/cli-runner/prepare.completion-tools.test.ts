@@ -906,12 +906,12 @@ describe("restricted CLI tool preparation", () => {
           [
             "write",
             { path: deniedPath, content: "must not execute" },
-            "write is outside the authority this completion turn carries from its requester. Do not retry write.",
+            "write is not available during a child-completion turn because it is outside the authority carried from its requester. Do not retry write.",
           ],
           [
             "gateway",
             { action: "config.get" },
-            "gateway needs the owner's authority, and this turn was not started by the owner. Do not retry gateway.",
+            "gateway is not available during a child-completion turn because it is outside the authority carried from its requester. Do not retry gateway.",
           ],
           [
             "intent",
