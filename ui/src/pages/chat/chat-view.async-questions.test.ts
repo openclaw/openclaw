@@ -21,6 +21,7 @@ import type { ChatProps } from "./chat-view.tsx";
 import { createComposerQuestions } from "./components/chat-composer-questions.ts";
 import { getTranscriptState } from "./components/chat-thread-interactions.ts";
 import {
+  flushDeferredRowPrune,
   installTranscriptDomMocks,
   resetTranscriptTestDom,
 } from "./components/chat-transcript.test-support.ts";
@@ -282,6 +283,7 @@ it.each(["discard", "consumed"] as const)(
         host.chatMessages = [question, ...["question-run", "later-run"].map(terminal)];
         refresh();
       }
+      await flushDeferredRowPrune();
       const discard = () =>
         first.element.querySelector<HTMLButtonElement>(".chat-send-status__discard")!;
       expect(discard()).not.toBeNull();

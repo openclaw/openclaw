@@ -92,6 +92,7 @@ export function SidebarAgentRoster(props: RosterProps) {
     );
   }, presented);
   const agentLinks = new Map<string, HTMLAnchorElement>();
+  let focusAfterPin: string | undefined;
   const createAgentLinkRef = (card: () => { id: string }) => {
     let link: HTMLAnchorElement | undefined;
     onSettled(() => {
@@ -99,6 +100,10 @@ export function SidebarAgentRoster(props: RosterProps) {
       const id = card().id;
       if (link) {
         agentLinks.set(id, link);
+        if (focusAfterPin === id) {
+          focusAfterPin = undefined;
+          link.focus();
+        }
       }
       return () => {
         if (agentLinks.get(id) === link) {
@@ -225,9 +230,10 @@ export function SidebarAgentRoster(props: RosterProps) {
   const selectAgentMenuItem = (itemId: string, card: AgentMenuCard) => {
     switch (itemId) {
       case "pin":
+        // The destination row registers after the pinned/unpinned branch changes.
+        focusAfterPin = card.id;
+        rosterWindow.focus(card.id);
         togglePinnedAgent(context.navigation, card.id);
-        // Pinning moves the agent between the gallery and the roster; keep keyboard focus on it.
-        onSettled(() => agentLinks.get(card.id)?.focus());
         break;
       case "sessions":
         context.agentSelection.setScope(card.id);

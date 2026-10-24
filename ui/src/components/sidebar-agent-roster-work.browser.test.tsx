@@ -118,3 +118,53 @@ it("mounts only viewport roster rows and retains the focused row while scrolling
     expect(mounted.container.querySelector('[data-agent-group="agent-99"]')).toBeNull();
   });
 });
+
+it("restores focus when unpinning an agent outside the roster viewport", async () => {
+  const agents = Array.from({ length: 100 }, (_, index) => ({
+    id: index === 0 ? "main" : `agent-${index}`,
+    name: `Agent ${index}`,
+  }));
+  const { sidebar, context } = await mountRoster({ ...roster, agents });
+  context.navigation.update({ pinnedAgentIds: ["agent-99"] });
+  sidebar.sidebarAgentsMode = "roster";
+  await settleRoster(sidebar);
+  const owner = getAppSidebarOwner(sidebar.hostElement)!;
+  let viewport!: HTMLDivElement;
+  const mounted = mountSolid(() => (
+    <ApplicationProvider value={context}>
+      <div
+        ref={(element) => (viewport = element)}
+        style={{ width: "280px", height: "230px", overflow: "auto" }}
+      >
+        <SidebarScrollContext
+          value={{
+            element: () => viewport,
+            content: () => undefined,
+            readAnchor: () => undefined,
+            captureAnchor() {},
+            subscribeScroll: () => () => {},
+          }}
+        >
+          <SidebarAgentRoster host={owner} active={true} sections={[]} />
+        </SidebarScrollContext>
+      </div>
+    </ApplicationProvider>
+  ));
+  const pinned = mounted.container.querySelector<HTMLAnchorElement>(
+    '[data-pinned-agent="agent-99"] a',
+  )!;
+  pinned.focus();
+  pinned.dispatchEvent(
+    new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 40, clientY: 60 }),
+  );
+  await waitForSolid(() =>
+    expect(mounted.container.querySelector('[data-value="pin"]')).not.toBeNull(),
+  );
+  mounted.container.querySelector<HTMLElement>('[data-value="pin"]')!.click();
+  await waitForSolid(() => {
+    const row = mounted.container.querySelector('[data-agent-group="agent-99"] a');
+    expect(row).not.toBeNull();
+    expect(document.activeElement).toBe(row);
+    expect(pinned.isConnected).toBe(false);
+  });
+});
