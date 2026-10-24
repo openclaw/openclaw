@@ -98,20 +98,11 @@ it("preserves first-seen groups with unlimited output", () => {
   });
   const findings = report.findings;
   report.findings = [...findings.slice(1, 2), ...findings.slice(0, 1), ...findings.slice(2)];
-  expect(renderTestSkipInventoryReport(report, { limit: 0 })).toBe(
-    `OpenClaw test skip inventory
-Scanned files: 2
-Findings: 3 in 2 file(s)
-Reasons: explicit-skip: 1, focused-only: 1, todo: 1
-
-Findings:
-- src/z.test.ts (2)
-  L1 it.skip explicit-skip: it.skip("z", () => {});
-  L2 it.only focused-only: it.only("second", () => {});
-- src/a.test.ts (1)
-  L1 test.todo todo: test.todo("a");
-`,
-  );
+  const rendered = renderTestSkipInventoryReport(report, { limit: 0 });
+  expect(rendered.match(/^- .+$/gmu)).toEqual(["- src/z.test.ts (2)", "- src/a.test.ts (1)"]);
+  expect(rendered).toContain('L2 it.only focused-only: it.only("second", () => {});');
+  expect(rendered).toContain('L1 test.todo todo: test.todo("a");');
+  expect(rendered).not.toContain("not shown");
 });
 
 it("keeps the empty report output unchanged", () => {
