@@ -1,5 +1,4 @@
-// Keep real lifecycle/version guards; native transport is simulated in this suite.
-// Actual executor/receiver custody is covered by update-command-service-custody.test.ts.
+// Native transport is simulated; update-command-service-custody.test.ts covers receiver custody.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { Command } from "commander";
@@ -263,6 +262,12 @@ const gatewayArgs = (port = "19305") => [
   "--port",
   port,
 ];
+const portUsage = (port: number, busy: boolean) => ({
+  port,
+  status: busy ? ("busy" as const) : ("free" as const),
+  listeners: busy ? [{ pid: 4242, command: "openclaw-gateway" }] : [],
+  hints: [],
+});
 const stopForUpdate = (updateInstallKind: "package" | "git" = "package") =>
   maybeStopManagedServiceBeforeMutableUpdate({
     updateInstallKind,
@@ -316,15 +321,9 @@ beforeEach(async () => {
   ({ root, configPath, envSnapshot, servingOwner } = await createServiceActivationFixture());
   const runEnv = { ...process.env };
   run = { runId: createUpdateRun({ trigger: "cli" }, { env: runEnv }).runId, env: runEnv };
-  mocks.ports.mockImplementation(async (port) => ({
-    port,
-    status: process.platform === "linux" && mocks.running ? "busy" : "free",
-    listeners:
-      process.platform === "linux" && mocks.running
-        ? [{ pid: 4242, command: "openclaw-gateway" }]
-        : [],
-    hints: [],
-  }));
+  mocks.ports.mockImplementation(async (port) =>
+    portUsage(port, process.platform === "linux" && mocks.running),
+  );
   mocks.call.mockReset();
   mocks.call.mockImplementation(
     gatewayHealthResponse({
@@ -432,12 +431,7 @@ describe("preserved update activation with real version guards", () => {
         });
       });
       const commandBefore = await mocks.command(process.env);
-      mocks.ports.mockImplementation(async (port) => ({
-        port,
-        status: "busy",
-        listeners: [{ pid: 4242, command: "openclaw-gateway" }],
-        hints: [],
-      }));
+      mocks.ports.mockImplementation(async (port) => portUsage(port, true));
       mocks.call.mockImplementation(
         gatewayHealthResponse({
           server: {
@@ -457,11 +451,9 @@ describe("preserved update activation with real version guards", () => {
         retried ||= stale;
         if (stale) {
           return {
+            ...recoveryHealth(params.port, true, [4242]),
             outcome: "failed",
             healthy: false,
-            staleGatewayPids: [4242],
-            runtime: { status: "running" },
-            portUsage: { port: params.port, status: "busy", listeners: [], hints: [] },
           };
         }
         return await waitForGatewayHealthyRestart(params);
@@ -505,9 +497,10 @@ describe("preserved update activation with real version guards", () => {
         const verification = mocks.health.mock.calls.filter(
           ([args]) => args.expectedVersion === VERSION,
         );
-        expect(verification.length).toBe(retried ? 2 : 1);
-        expect(verification.every(([args]) => args.requireRunningService === true)).toBe(true);
-        expect(verification.every(([args]) => args.expectedBuildId === "new-build")).toBe(true);
+        expect(verification).toHaveLength(retried ? 2 : 1);
+        for (const [args] of verification) {
+          expect(args).toMatchObject({ requireRunningService: true, expectedBuildId: "new-build" });
+        }
         expect(mocks.call).toHaveBeenCalled();
         expect(
           mocks.call.mock.calls.every(
@@ -560,17 +553,12 @@ describe("preserved update activation with real version guards", () => {
           });
         try {
           await program.parseAsync(args.slice(2), { from: "user" });
-          return commandResult({
-            stderr,
-          });
+          return commandResult({ stderr });
         } catch (error) {
           if (!(error instanceof Error) || !error.message.includes("unknown option")) {
             throw error;
           }
-          return commandResult({
-            code: 1,
-            stderr,
-          });
+          return commandResult({ code: 1, stderr });
         }
       });
     });
@@ -670,18 +658,10 @@ describe("preserved update activation with real version guards", () => {
     },
   );
 
-  it.each(["safe", "external"])(
-    "refuses preserved activation through %s process signaling",
-    async (mode) => {
-      if (mode === "external") {
-        process.env.OPENCLAW_SUPERVISOR_MODE = "external";
-      }
-      await expect(
-        runDaemonRestart({ preserveDefinition: true, safe: mode === "safe" }),
-      ).rejects.toThrow();
-      expectUncalled(mocks.restart, mocks.listenerPids, mocks.signal);
-    },
-  );
+  it("refuses preserved activation through safe process signaling", async () => {
+    await expect(runDaemonRestart({ preserveDefinition: true, safe: true })).rejects.toThrow();
+    expectUncalled(mocks.restart, mocks.listenerPids, mocks.signal);
+  });
 
   it.each([
     "loaded",

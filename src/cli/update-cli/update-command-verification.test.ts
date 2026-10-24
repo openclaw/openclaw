@@ -62,9 +62,31 @@ let serviceEnv: NodeJS.ProcessEnv;
 let candidate: { version: string; buildId: string };
 type VerifyParams = Parameters<typeof verifyUpdatedGateway>[0];
 type RestartParams = Parameters<typeof maybeRestartService>[0];
-function useService(
-  runtime: Parameters<typeof restart.makeGatewayService>[0] = { status: "running", pid: 8000 },
+const withRun = (runId: string) => ({ json: true, run: { runId, env: {} } });
+const running = { status: "running", pid: 8000 } as const;
+function pendingHealth(waitOutcome: "still-starting" | "stopped-free", port = 18789) {
+  return {
+    healthy: false,
+    waitOutcome,
+    runtime: waitOutcome === "still-starting" ? running : { status: "stopped" as const },
+    portUsage: { port, status: "free" as const, listeners: [], hints: [] },
+    staleGatewayPids: [],
+  };
+}
+function healthResponse(version: string | undefined, buildId?: string, bootId = "candidate-boot") {
+  return gatewayHealthResponse({ server: { version, buildId, bootId } });
+}
+function expectRecorded(
+  runId: string,
+  facts: Partial<NonNullable<UpdateRunRecord["verification"]>>,
 ) {
+  expect(recordUpdateRunVerification).toHaveBeenCalledWith(
+    runId,
+    expect.objectContaining(facts),
+    expect.anything(),
+  );
+}
+function useService(runtime: Parameters<typeof restart.makeGatewayService>[0] = running) {
   const service = restart.makeGatewayService(runtime);
   vi.spyOn(gatewayService, "resolveGatewayService").mockReturnValue(service);
   return service;
@@ -136,7 +158,7 @@ async function verifyHealth(
   readiness?: { ready: false; coreReady?: boolean; failing: string[] },
 ) {
   const version = recovery ? "2026.9.8" : "2026.10.3";
-  const service = useService(recovery ? { status: "stopped" } : { status: "running", pid: 8000 });
+  const service = useService(recovery ? { status: "stopped" } : running);
   if (!recovery) {
     service.isLoaded = vi.fn(async () => true);
   }
@@ -214,9 +236,7 @@ it.each([
         ? async () => {
             throw new Error("gateway timeout after 3000ms");
           }
-        : gatewayHealthResponse({
-            server: { version, buildId, bootId: "watcher-successor" },
-          }),
+        : healthResponse(version, buildId, "watcher-successor"),
     );
     Object.assign(result, {
       mode,
@@ -224,7 +244,7 @@ it.each([
     });
     await listen();
     const outcome = await restartGateway({
-      opts: { json: true, restart: false, run: { runId: "watcher-restart", env: {} } },
+      opts: { ...withRun("watcher-restart"), restart: false },
       shouldRestart: false,
       requireRunningServiceAfterRestart: undefined,
       observePackageReplacement: true,
@@ -242,13 +262,9 @@ it.each([
     expect(result.steps[0]?.advisory?.message).toEqual(
       verified ? undefined : expect.stringContaining("--no-restart"),
     );
-    expect(recordUpdateRunVerification).toHaveBeenCalledWith(
-      "watcher-restart",
-      expect.objectContaining({
-        versionMatch: state === "starting" ? undefined : verified,
-      }),
-      expect.anything(),
-    );
+    expectRecorded("watcher-restart", {
+      versionMatch: state === "starting" ? undefined : verified,
+    });
     const facts = vi.mocked(recordUpdateRunVerification).mock.calls.at(-1)?.[1];
     expect(facts && isUpdateRunVerificationConfirmed(facts)).toBe(verified);
     if (state === "old-build") {
@@ -289,31 +305,30 @@ it.each(["transient-timeout", "mixed"])(
     await listen();
     const onVerified = vi.fn();
     const verification = await verifyGateway({
-      opts: { json: true, run: { runId: "collection-timeout", env: {} } },
+      opts: withRun("collection-timeout"),
       expectedVersion: "2026.9.8",
       expectedBuildId: "candidate",
       requireRunningService: true,
       onVerified,
     });
     expect(verification.ok).toBe(true);
+    expect(verification.summary).toContain("channel warnings need attention");
+    expect(verification.pluginWarnings).toBeUndefined();
     expect(onVerified).toHaveBeenCalledOnce();
     expect(result.steps[0]?.exitCode).toBe(0);
-    expect(recordUpdateRunVerification).toHaveBeenCalledWith(
-      "collection-timeout",
-      expect.objectContaining({
-        serviceRunning: true,
-        versionMatch: true,
-        readyz: true,
-        settled: true,
-        channelsReady: false,
-      }),
-      expect.anything(),
-    );
+    expectRecorded("collection-timeout", {
+      serviceRunning: true,
+      versionMatch: true,
+      readyz: true,
+      settled: true,
+      channelsReady: false,
+    });
     const facts = vi.mocked(recordUpdateRunVerification).mock.calls.at(-1)?.[1];
     expect(facts && isUpdateRunVerificationConfirmed(facts)).toBe(true);
-    expect(renderUpdateRunReport(updateRunReportInputFromResult(result)).markdown).toContain(
-      "telegram: health collection timed out after 7000ms",
-    );
+    const report = reportFor(result);
+    expect(report).toContain("telegram: health collection timed out after 7000ms");
+    expect(report).toContain("openclaw channels status --probe");
+    expect(report).toContain("openclaw health --json");
     expect(result.steps[0]?.warnings?.join("\n")).toContain(
       "telegram: health collection timed out after 7000ms",
     );
@@ -435,22 +450,13 @@ it.each(["first read", "after listener observation", "recovery"])(
         : undefined;
     const settle = vi.fn();
     pendingVerification = verifyGateway({
-      opts: { json: true, run: { runId: "stalled-readiness", env: {} } },
+      opts: withRun("stalled-readiness"),
       expectedBuildId: undefined,
       requireRunningService: true,
       timeoutMs: 1_000,
       onVerified,
       recoverHealth,
-      health:
-        phase === "recovery"
-          ? {
-              healthy: false,
-              waitOutcome: "stopped-free",
-              runtime: { status: "stopped" },
-              portUsage: { port: 18789, status: "free", listeners: [], hints: [] },
-              staleGatewayPids: [],
-            }
-          : undefined,
+      health: phase === "recovery" ? pendingHealth("stopped-free") : undefined,
     }).then(settle, settle);
     try {
       await entered.promise;
@@ -477,18 +483,12 @@ it("prefers a pending recovery observation over previously saved healthy facts",
   result.status = "error";
   await expect(
     verifyGateway({
-      opts: { json: true, run: { runId: "pending-recovery", env: {} } },
+      opts: withRun("pending-recovery"),
       purpose: "recovery",
       gatewayPort: 19101,
       expectedVersion: "2026.9.5",
       expectedBuildId: undefined,
-      health: {
-        healthy: false,
-        waitOutcome: "still-starting",
-        runtime: { status: "running", pid: 8000 },
-        portUsage: { port: 19101, status: "free", listeners: [], hints: [] },
-        staleGatewayPids: [],
-      },
+      health: pendingHealth("still-starting", 19101),
     }),
   ).resolves.toMatchObject({ ok: false, stopReason: "still-starting" });
   const saved: UpdateRunRecord["verification"] = {
@@ -536,7 +536,7 @@ it.each(["runtime", "port", "command"] as const)(
     probe.mockRejectedValue(cleanup);
     Object.assign(result, { status: "error", reason: "post-update-plugins" });
     const verification = verifyGateway({
-      opts: { json: true, run: { runId: "observed-recovery", env: {} } },
+      opts: withRun("observed-recovery"),
       purpose: "recovery",
       expectedVersion: "2026.9.5",
     });
@@ -563,9 +563,7 @@ it.each([
       if (remainingMs < responseMs) {
         throw new Error("Gateway health response exceeded its remaining allowance");
       }
-      return gatewayHealthResponse({
-        server: { version: "2026.9.4", buildId: "candidate-build", bootId: "settling-boot" },
-      })(opts);
+      return healthResponse("2026.9.4", "candidate-build", "settling-boot")(opts);
     });
     let httpRequests = 0;
     await listen((_req, res) => {
@@ -691,7 +689,7 @@ it.each([
     const health = supplied ? await waitForGatewayHealthyRestart(probeParams) : undefined;
     const onVerified = vi.fn();
     const verification = verifyGateway({
-      opts: { json: true, run: { runId: "synthetic-update", env: {} } },
+      opts: withRun("synthetic-update"),
       health,
       expectedVersion: "2026.9.1",
       requireRunningService: true,
@@ -766,66 +764,45 @@ it.each([true, false, undefined])(
   },
 );
 
-it.each(["channel probe", "plugin load"] as const)(
-  "completes verified activation with a named warning (%s)",
-  async (fault) => {
-    const { validation, onVerified } = await verifyHealth({
-      channels:
-        fault === "channel probe"
-          ? { whatsapp: { probe: { ok: false, error: "re-pair required" } } }
-          : {},
-      ...(fault === "plugin load"
-        ? {
-            plugins: { errors: [{ id: "whatsapp", activated: true, error: "dependency missing" }] },
-          }
-        : {}),
-    });
-    expect(validation.ok).toBe(true);
-    if (fault === "plugin load") {
-      expect(validation.summary).toBe(
-        "Gateway service, version, channels, and readiness verified; plugin failures need a retry.",
-      );
-      expect(validation.pluginWarnings).toEqual([
-        expect.objectContaining({
-          pluginId: "whatsapp",
-          reason: "dependency missing",
-          message:
-            'Plugin "whatsapp" could not be loaded. Run `openclaw doctor --fix` to check and repair the load problem.',
-          guidance: ["openclaw doctor --fix"],
-        }),
-      ]);
-    } else {
-      expect(validation.summary).toContain("channel warnings need attention");
-      expect(validation.pluginWarnings).toBeUndefined();
-    }
-    expect(onVerified).toHaveBeenCalledOnce();
-    expect(result.steps[0]).toMatchObject({ exitCode: 0 });
-    expect(result.steps[0]?.failureFacts).toBeUndefined();
-    const complete = vi.fn<PackageUpdateTransaction["complete"]>(async () => undefined);
-    await expect(
-      recordUpdatePackageCompletion(
-        {
-          root: "/synthetic-package",
-          opts: { json: true },
-          packageTransaction: { backupRoot: "/synthetic-backup", complete, rollback: vi.fn() },
-        },
-        result,
-        () => {},
-      ),
-    ).resolves.toBeUndefined();
-    expect(complete).toHaveBeenCalledExactlyOnceWith(
-      { activationVerified: true },
-      expect.any(Function),
-    );
-    const report = reportFor(result);
-    if (fault === "channel probe") {
-      expect(report).toContain("whatsapp: re-pair required");
-      expect(report).toContain("openclaw channels status --probe");
-      expect(report).toContain("openclaw health --json");
-    }
-    expect(report).not.toContain("restart remains unsafe");
-  },
-);
+it("completes verified activation with a plugin load warning", async () => {
+  const { validation, onVerified } = await verifyHealth({
+    channels: {},
+    plugins: { errors: [{ id: "whatsapp", activated: true, error: "dependency missing" }] },
+  });
+  expect(validation.ok).toBe(true);
+  expect(validation.summary).toBe(
+    "Gateway service, version, channels, and readiness verified; plugin failures need a retry.",
+  );
+  expect(validation.pluginWarnings).toEqual([
+    expect.objectContaining({
+      pluginId: "whatsapp",
+      reason: "dependency missing",
+      message:
+        'Plugin "whatsapp" could not be loaded. Run `openclaw doctor --fix` to check and repair the load problem.',
+      guidance: ["openclaw doctor --fix"],
+    }),
+  ]);
+  expect(onVerified).toHaveBeenCalledOnce();
+  expect(result.steps[0]).toMatchObject({ exitCode: 0 });
+  expect(result.steps[0]?.failureFacts).toBeUndefined();
+  const complete = vi.fn<PackageUpdateTransaction["complete"]>(async () => undefined);
+  await expect(
+    recordUpdatePackageCompletion(
+      {
+        root: "/synthetic-package",
+        opts: { json: true },
+        packageTransaction: { backupRoot: "/synthetic-backup", complete, rollback: vi.fn() },
+      },
+      result,
+      () => {},
+    ),
+  ).resolves.toBeUndefined();
+  expect(complete).toHaveBeenCalledExactlyOnceWith(
+    { activationVerified: true },
+    expect.any(Function),
+  );
+  expect(reportFor(result)).not.toContain("restart remains unsafe");
+});
 
 it.each([false, true])("warns about stopped channels after repair (json=%s)", async (json) => {
   const { validation } = await verifyHealth(
