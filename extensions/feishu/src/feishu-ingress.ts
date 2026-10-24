@@ -217,6 +217,34 @@ export function buildFeishuFlushIngressLifecycle(
     releaseReplayClaims();
     await transportLifecycle.onAbandoned();
   };
+  const commitReplayClaims = async () => {
+    const results = await Promise.allSettled(replayClaims.map((claim) => claim.commit()));
+    for (const result of results) {
+      if (result.status === "rejected") {
+        options?.onReplayCommitError?.(result.reason);
+      }
+    }
+  };
+  const dropAll = async (
+    reason: Parameters<NonNullable<FeishuIngressLifecycle["onDropped"]>>[0],
+  ) => {
+    if (settled) {
+      return;
+    }
+    settled = true;
+    if (!transportLifecycle.onDropped) {
+      releaseReplayClaims();
+      await transportLifecycle.onAbandoned();
+      return;
+    }
+    try {
+      await transportLifecycle.onDropped(reason);
+    } catch (error) {
+      releaseReplayClaims();
+      throw error;
+    }
+    await commitReplayClaims();
+  };
   const adoptAll = async () => {
     if (settled) {
       return;
@@ -232,12 +260,7 @@ export function buildFeishuFlushIngressLifecycle(
       throw error;
     }
     // Commit twin suppression only after the durable turn is adopted.
-    const results = await Promise.allSettled(replayClaims.map((claim) => claim.commit()));
-    for (const result of results) {
-      if (result.status === "rejected") {
-        options?.onReplayCommitError?.(result.reason);
-      }
-    }
+    await commitReplayClaims();
   };
   return {
     lifecycle: {
@@ -260,6 +283,10 @@ export function buildFeishuFlushIngressLifecycle(
       onAbandoned: async () => {
         handedOff = true;
         await abandonAll();
+      },
+      onDropped: async (reason) => {
+        handedOff = true;
+        await dropAll(reason);
       },
     },
     // A gated/no-turn envelope is terminal for transport replay, but its

@@ -135,7 +135,7 @@ export function enqueueFollowupRun(
       countPendingQueueItems(queue.items, queue.inFlight) - supersededGoals.length >= queue.cap
     ) {
       run.onQueueDisposition?.("queue-cap-new");
-      completeFollowupRunLifecycle(run);
+      completeFollowupRunLifecycle(run, { kind: "dropped", reason: "queue-cap-new" });
       return false;
     }
     // Deferred publication wakes Gateway waiters, which must already see the queued phase.
@@ -195,6 +195,15 @@ export function enqueueFollowupRun(
           }
           return onAbandoned?.();
         };
+        const onDropped = lifecycle.onDropped;
+        if (onDropped) {
+          lifecycle.onDropped = (reason) => {
+            if (mailbox.recentSources.get(recentMessageIdKey)?.input === recentInput) {
+              mailbox.recentSources.delete(recentMessageIdKey);
+            }
+            return onDropped(reason);
+          };
+        }
       }
     }
     if (runFollowup) {
@@ -276,7 +285,7 @@ function applyFollowupQueueOverflow(
           item.controllerInput.payload = "unbound";
         }
         item.onQueueDisposition?.("queue-cap-old");
-        completeFollowupRunLifecycle(item);
+        completeFollowupRunLifecycle(item, { kind: "dropped", reason: "queue-cap-old" });
       }
     },
     isProtected: (item) => item.protectFromQueueOverflow === true,
@@ -318,8 +327,15 @@ function applyFollowupQueueOverflow(
     }
   }
   if (!shouldEnqueue) {
-    run.onQueueDisposition?.(queue.dropPolicy === "new" ? "queue-cap-new" : "queue-cap");
-    completeFollowupRunLifecycle(run);
+    const reason = queue.dropPolicy === "new" ? "queue-cap-new" : "queue-cap";
+    run.onQueueDisposition?.(reason);
+    // A full queue with no evictable victim is transient backpressure, not a
+    // policy drop. Its durable ingress claim must remain retryable.
+    if (reason === "queue-cap") {
+      completeFollowupRunLifecycle(run);
+    } else {
+      completeFollowupRunLifecycle(run, { kind: "dropped", reason });
+    }
   }
   return shouldEnqueue;
 }

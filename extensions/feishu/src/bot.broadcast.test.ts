@@ -1,5 +1,6 @@
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { describe, expect, it, vi } from "vitest";
+import { createFeishuBroadcastIngressSettlement } from "./bot-broadcast.js";
 import { createRuntimeEnv, setupFeishuBroadcastTestHarness } from "./bot.broadcast.test-support.js";
 import { feishuDedupeState } from "./dedup-state.js";
 import type { FeishuMessageProcessingClaim } from "./dedup.js";
@@ -55,6 +56,51 @@ function mockBroadcastClaims(key: string, redelivery = false) {
   });
   return { broadcastClaim, susanClaim, mainClaim, retryClaim, retrySusanClaim };
 }
+
+it("terminally drops a broadcast source when one queued lane is policy-discarded", async () => {
+  const transport = { ...createIngressLifecycle(), onDropped: vi.fn(async () => {}) };
+  const sharedClaim = createReplayClaim("shared-drop");
+  const droppedClaim = createReplayClaim("dropped-lane");
+  const keptClaim = createReplayClaim("kept-lane");
+  const settlement = createFeishuBroadcastIngressSettlement({
+    lifecycle: transport,
+    replayClaim: sharedClaim,
+  });
+  const dropped = settlement.createLane(droppedClaim);
+  const kept = settlement.createLane(keptClaim);
+
+  await dropped.lifecycle.onDropped?.("queue-cap-old");
+  await kept.lifecycle.onAdopted();
+  await settlement.onDispatchComplete();
+
+  expect(transport.onDropped).toHaveBeenCalledExactlyOnceWith("queue-cap-old");
+  expect(transport.onAbandoned).not.toHaveBeenCalled();
+  expectClaim(sharedClaim, true);
+  expectClaim(droppedClaim, true);
+  expectClaim(keptClaim, true);
+});
+
+it("releases the shared broadcast claim if terminal drop settlement fails", async () => {
+  const transport = {
+    ...createIngressLifecycle(),
+    onDropped: vi.fn(async () => {
+      throw new Error("drop settlement failed");
+    }),
+  };
+  const sharedClaim = createReplayClaim("shared-drop-failure");
+  const droppedClaim = createReplayClaim("dropped-lane-failure");
+  const settlement = createFeishuBroadcastIngressSettlement({
+    lifecycle: transport,
+    replayClaim: sharedClaim,
+  });
+  const dropped = settlement.createLane(droppedClaim);
+  await dropped.lifecycle.onDropped?.("queue-cap-new");
+
+  await expect(settlement.onDispatchComplete()).rejects.toThrow("drop settlement failed");
+  expect(transport.onAbandoned).toHaveBeenCalledOnce();
+  expectClaim(sharedClaim, false);
+  expectClaim(droppedClaim, false);
+});
 
 describe("broadcast dispatch", () => {
   const {

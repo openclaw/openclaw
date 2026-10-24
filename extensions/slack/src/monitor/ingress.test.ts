@@ -195,6 +195,43 @@ describe("Slack durable ingress", () => {
     });
   });
 
+  it("forwards a terminal queue drop through the routed durable lifecycle", async () => {
+    await withQueue(async (queue) => {
+      const captured =
+        createDeferred<NonNullable<ReturnType<typeof resolveSlackIngressTurnLifecycle>>>();
+      const releaseFirst = createDeferred<void>();
+      const processEvent = vi.fn(async (event: ReceiverEvent) => {
+        const lifecycle = resolveSlackIngressTurnLifecycle(event.customProperties)!;
+        if ((event.body as { event_id: string }).event_id === "Ev-queue-drop") {
+          captured.resolve(lifecycle);
+          await releaseFirst.promise;
+          return;
+        }
+        await lifecycle.onAdopted();
+      });
+      const { ingress, receive } = attachIngress(queue, processEvent);
+      ingress.start();
+      try {
+        await receive(createReceiverEvent("Ev-queue-drop"));
+        const routed = await captured.promise;
+        await routed.onSessionRouted?.("agent:main:slack:channel:C_TEST");
+        expect(routed.onDropped).toBeTypeOf("function");
+        await routed.onDropped?.("queue-cap-old");
+        await vi.waitFor(async () =>
+          expect(await queue.listFailed?.({ limit: "all" })).toMatchObject([
+            { reason: "queue-cap-old" },
+          ]),
+        );
+        expect(await queue.listPending({ limit: "all" })).toEqual([]);
+        await receive(createReceiverEvent("Ev-after-drop", undefined, { ts: "1700000001.000100" }));
+        await vi.waitFor(() => expect(processEvent).toHaveBeenCalledTimes(2), { timeout: 500 });
+      } finally {
+        releaseFirst.resolve();
+        await ingress.stop();
+      }
+    });
+  });
+
   it("releases a waiting duplicate's channel lane while preserving its migration fence", async () => {
     await withQueue(async (queue) => {
       const duplicate = createDeferred<boolean>();
