@@ -176,7 +176,7 @@ export async function materializeMissingBundledDependencies(
   sourceDir: string,
   packedRoot: string,
   timeoutMs: number,
-  pluginRoots: readonly string[] = [],
+  bundleOwners: ReadonlyMap<string, string> = new Map(),
 ): Promise<boolean> {
   if (!(await fs.lstat(packedRoot)).isDirectory()) {
     throw new Error(`Bundled package destination is not a directory: ${packedRoot}`);
@@ -184,23 +184,6 @@ export async function materializeMissingBundledDependencies(
   const manifest: unknown = JSON.parse(
     await fs.readFile(path.join(packedRoot, "package.json"), "utf8"),
   );
-  const owners = new Map<string, string>();
-  if (pluginRoots.length) {
-    const sourceManifest: unknown = JSON.parse(
-      await fs.readFile(path.join(sourceDir, "package.json"), "utf8"),
-    );
-    const coreBundles = new Set(listBundleDependencies(sourceManifest));
-    for (const pluginRoot of pluginRoots) {
-      const pluginManifest: unknown = JSON.parse(
-        await fs.readFile(path.join(pluginRoot, "package.json"), "utf8"),
-      );
-      for (const name of listBundleDependencies(pluginManifest)) {
-        if (!coreBundles.has(name) && !owners.has(name)) {
-          owners.set(name, pluginRoot);
-        }
-      }
-    }
-  }
   let changed = false;
   for (const name of new Set(listBundleDependencies(manifest))) {
     validatePackageName(name);
@@ -216,7 +199,7 @@ export async function materializeMissingBundledDependencies(
       }
       return undefined;
     });
-    const owner = owners.get(name);
+    const owner = bundleOwners.get(name);
     if (existing) {
       if (!existing.isDirectory()) {
         throw new Error(`Bundled package destination is occupied: ${destination}`);

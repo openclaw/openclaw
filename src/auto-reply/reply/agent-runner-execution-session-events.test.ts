@@ -27,6 +27,8 @@ import {
   type FallbackRunnerParams,
   setupAgentRunnerExecutionTestState,
 } from "./agent-runner-execution.test-support.js";
+import { createQueueCase } from "./queue.case.test-support.js";
+import { clearFollowupQueue, getExistingFollowupQueue } from "./queue/state.js";
 import type {
   ScheduledSessionAutomation,
   SessionEventExecution,
@@ -89,6 +91,89 @@ function expectedCompletionEvidence(runtime: "embedded" | "cli") {
 }
 
 describe("ordinary session event execution", () => {
+  it.for(["embedded", "cli"] as const)(
+    "restores exec guidance after queue overflow in the %s turn without changing the system prefix",
+    async (runtime, { signal, onTestFinished }) => {
+      const queue = createQueueCase({ cap: 1 }, 2);
+      onTestFinished(() => {
+        clearFollowupQueue(queue.key);
+      });
+      const completion = createFollowupRun({
+        inputProvenance: { kind: "internal_system", sourceTool: "exec" },
+        extraSystemPrompt: "Existing shared session instructions",
+        extraSystemPromptStatic: "Stable shared session instructions",
+      });
+      completion.prompt = `Exec completed (job-1234, code 0) :: ${"output ".repeat(40)}`;
+      completion.summaryLine = completion.prompt;
+      const next = {
+        ...completion,
+        prompt: "A plugin event",
+        summaryLine: "A plugin event",
+        run: {
+          ...completion.run,
+          inputProvenance: { kind: "internal_system" as const, sourceTool: "plugin" },
+        },
+      };
+      queue.add(completion);
+      queue.add(next);
+      const settlements = getExistingFollowupQueue(queue.key)!.entries.map(
+        (input) => input.settlement.promise,
+      );
+      const observed: (RunEmbeddedAgentInternalParams | RunCliAgentParams)[] = [];
+      const inspect = async (params: RunEmbeddedAgentInternalParams | RunCliAgentParams) => {
+        observed.push(params);
+        return { payloads: [{ text: "done" }], meta: {} };
+      };
+      state.runEmbeddedAgentMock.mockImplementation(inspect);
+      const staticPrompts: (string | undefined)[] = [];
+      state.runCliAgentMock.mockImplementation((params: RunCliAgentParams) => {
+        staticPrompts.push(params.extraSystemPromptStatic);
+        return inspect(params);
+      });
+      const failures: unknown[] = [];
+      await withinTest(
+        queue.drain(async (followupRun) => {
+          try {
+            if (runtime === "cli") {
+              useCliFallback(followupRun);
+            }
+            const result = await executeAgentTurn({
+              ...createMinimalRunAgentTurnParams({ followupRun }),
+              commandBody: followupRun.prompt,
+            });
+            expect(result.outcome).toMatchObject({ kind: "settled", status: "ok" });
+          } catch (error) {
+            failures.push(error);
+          } finally {
+            await queue.runFollowup(followupRun);
+          }
+        }),
+        signal,
+      );
+      await Promise.allSettled(settlements);
+      expect(failures).toEqual([]);
+      expect(observed).toHaveLength(2);
+      const prompt = observed[0]!.prompt;
+      expect(prompt).toContain("[Queue overflow]");
+      expect(prompt).not.toContain(completion.prompt);
+      expect(prompt).toContain("[OpenClaw exec completion]");
+      expect(prompt).toContain("internal continuation, not a new user request");
+      expect(prompt).toContain("requested results not yet delivered");
+      expect(prompt).toContain("duplicate or superseded results");
+      expect(prompt).toContain("reply NO_REPLY only");
+      expect(observed[1]!.prompt).toBe("A plugin event");
+      for (const params of observed) {
+        expect(params.extraSystemPrompt).toBe("Existing shared session instructions");
+      }
+      if (runtime === "cli") {
+        expect(staticPrompts).toEqual([
+          "Stable shared session instructions",
+          "Stable shared session instructions",
+        ]);
+      }
+    },
+  );
+
   it("captures a structured result before event settlement consumes the invocation", async () => {
     const runId = "automation-result-capture";
     const automation = createScheduledAutomation();

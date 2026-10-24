@@ -749,7 +749,7 @@ async function normalizeOpenClawTarballModes(
   tarballPath: string,
   sourceDir: string,
   normalizeModes: boolean,
-  pluginIds: readonly string[],
+  bundleOwners: ReadonlyMap<string, string>,
 ) {
   // npm can retain restrictive source read bits. Normalize those for non-root
   // installers while preserving the archive's executable intent.
@@ -762,7 +762,7 @@ async function normalizeOpenClawTarballModes(
       sourceDir,
       path.join(stageDir, "package"),
       resolveTimeoutMs("OPENCLAW_DOCKER_PACKAGE_PACK_TIMEOUT_MS", DEFAULT_PACKAGE_PACK_TIMEOUT_MS),
-      pluginIds.map((id) => path.join(sourceDir, "extensions", id)),
+      bundleOwners,
     );
     if (!normalizeModes && !repaired) {
       return;
@@ -960,17 +960,20 @@ export async function packOpenClawPackageForDocker(
   try {
     let cleanupBundledAiRuntime = async () => {};
     let cleanupBundledPlugins = async () => {};
+    let bundledPluginOwners: ReadonlyMap<string, string> = new Map();
     const cleanupFailures = new Set<unknown>();
     const onCleanupFailure = (error: unknown) => void cleanupFailures.add(error);
     try {
       await cleanPackedOpenClawTarballs(outputPath);
       if (packageOptions.bundlePlugins?.length) {
         const { preparePackageBundledPlugins } = await import("./lib/package-bundled-plugins.mts");
-        cleanupBundledPlugins = await preparePackageBundledPlugins(
+        const prepared = await preparePackageBundledPlugins(
           sourcePath,
           packageOptions.bundlePlugins,
           onCleanupFailure,
         );
+        cleanupBundledPlugins = prepared.cleanup;
+        bundledPluginOwners = prepared.bundleOwners;
       }
       cleanupBundledAiRuntime = await prepareBundledAiRuntime(
         sourcePath,
@@ -1058,7 +1061,7 @@ export async function packOpenClawPackageForDocker(
           tarball,
           sourcePath,
           !packageOptions.pnpmPack,
-          packageOptions.bundlePlugins ?? [],
+          bundledPluginOwners,
         );
       }
     }

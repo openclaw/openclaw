@@ -5,6 +5,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { isMainThread, workerData } from "node:worker_threads";
 import type { JitiOptions, JitiResolveOptions } from "jiti";
 import { isPathInside } from "../infra/path-guards.js";
+import { assertRuntimeSupportsPluginModule } from "../infra/runtime-profile.js";
 import { resolveGlobalMap, resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { createJiti } from "./jiti-factory.js";
 import {
@@ -232,6 +233,7 @@ function retainedNativeEsmExecution(retained: RetainedNativeEsm) {
 
 /** Runtime and setup share code identity policy while keeping separate instance authority. */
 export function bindPluginInstanceModuleLoader(input: PluginInstanceModuleLoaderParams): void {
+  assertRuntimeSupportsPluginModule(input.source);
   const params =
     input.origin === "bundled" && input.reloadBundledCode && !input.bundledReloadSource
       ? { ...input, bundledReloadSource: resolveBundledPluginReloadSource(input.rootDir) }

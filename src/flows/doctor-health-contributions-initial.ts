@@ -1,3 +1,4 @@
+import { note } from "../../packages/terminal-core/src/note.js";
 import { noteBackupDoctorHint } from "../commands/backup-health.js";
 import { isLegacyParentWritableUpdateDoctorPass } from "../commands/doctor/shared/update-phase.js";
 import { copyConfigResolutionFactsThroughRewrite } from "../config/resolution-facts.js";
@@ -85,6 +86,17 @@ export function resolveInitialDoctorHealthContributions(params: {
       async run(ctx) {
         const { runCoreHealthFindingNote } = await import("./doctor-health-contribution-core.js");
         await runCoreHealthFindingNote(ctx, "core/doctor/node-runtime");
+      },
+    }),
+    createDoctorHealthContribution("doctor:runtime-capabilities", "Runtime capabilities", {
+      healthCheckIds: ["core/doctor/runtime-capabilities"],
+      async run() {
+        const { collectRuntimeCapabilities, formatRuntimeCapabilities } =
+          await import("../infra/runtime-capabilities.js");
+        note(
+          formatRuntimeCapabilities(collectRuntimeCapabilities()),
+          "Runtime capabilities (Doctor process)",
+        );
       },
     }),
     createDoctorHealthContribution("doctor:gateway-config", "Gateway config", {

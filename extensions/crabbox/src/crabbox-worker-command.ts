@@ -207,6 +207,7 @@ export function isUnrecognizedLease(
   result: SpawnResult,
   identifier: string,
   action: "inspect" | "stop",
+  requireConfirmedAbsence = false,
 ): boolean {
   const output = `${result.stderr}\n${result.stdout}`;
   if (
@@ -252,6 +253,10 @@ export function isUnrecognizedLease(
           /^:\s*(?:not_found|\{\s*"error"\s*:\s*"not_found"\s*\})\s*$/u.test(response[5] ?? ""),
       )
     );
+  }
+  if (requireConfirmedAbsence) {
+    // Other text-only misses can describe lost local custody, not provider absence.
+    return result.code === 4 && output.trim() === `aws instance not found: ${identifier}`;
   }
   return (
     (result.code === 4 &&

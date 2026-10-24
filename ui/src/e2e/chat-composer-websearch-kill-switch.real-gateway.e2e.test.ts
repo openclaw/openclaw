@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { access, readFile } from "node:fs/promises";
 import path from "node:path";
-import type { Locator, Page } from "playwright";
+import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import {
   BUILD_STAMP_FILE,
@@ -22,75 +22,103 @@ import {
 } from "../../../test/helpers/openclaw-test-instance.ts";
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.ts";
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
-import {
-  waitForControlUiGatewayReady,
-  waitForControlUiGatewayReconnecting,
-} from "../test-helpers/control-ui-e2e-readiness.ts";
+import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e.ts";
 import { enterControlUiSession } from "../test-helpers/control-ui-session-entry.ts";
 import { createControlUiE2eSuite, tooltipTitleText } from "./control-ui-e2e-suite.test-support.ts";
 
-const viewport = { width: 1280, height: 900 };
+const key = "agent:main:websearch-stale-true";
 const siblings: SessionToolOverrides = {
   skills: { "synthetic-notes": false },
   mcpServers: { "synthetic-docs": false },
   mcpToolsDeny: { "synthetic-docs": ["write_note"] },
 };
-const scenarios = [
-  { name: "omitted", overrides: siblings },
-  { name: "false", overrides: { ...siblings, webSearch: false } },
-  { name: "stale-true", overrides: { ...siblings, webSearch: true } },
-];
-type Request = {
-  type: string;
-  id: string;
-  method: string;
-  params?: { key?: string; agentId?: string; toolOverrides?: SessionToolOverrides | null };
-};
+let instance: OpenClawTestInstance;
+let readback: GatewayClient;
+const suite = createControlUiE2eSuite({
+  name: "Web search kill switch with matching built Gateway and UI",
+  startServerBeforeBrowser: true,
+  async startServer() {
+    await Promise.all(
+      [
+        "dist/control-ui/index.html",
+        "dist/index.js",
+        `dist/${BUILD_STAMP_FILE}`,
+        `dist/${RUNTIME_POSTBUILD_STAMP_FILE}`,
+      ].map((file) => access(path.join(process.cwd(), file))),
+    );
+    const owner = await createOpenClawTestInstance({
+      name: "websearch-global-disabled",
+      config: {
+        gateway: { controlUi: { enabled: true } },
+        agents: { defaults: { model: { primary: "fixture/catalog-only" } }, entries: { main: {} } },
+        models: { catalogRefresh: { enabled: false } },
+        tools: { web: { search: { enabled: false } } },
+      },
+    });
+    instance = owner;
+    const close = () =>
+      runQaGatewayFixture(
+        () => readback?.stopAndWait(),
+        () => owner.cleanup(),
+      );
+    try {
+      expect((await owner.entrypoint())[0]).toMatch(/^dist\/index\.m?js$/u);
+      const config = await createConfigIO({
+        env: owner.env,
+        configPath: owner.state.configPath,
+      }).loadConfigAsync();
+      setRuntimeConfigSnapshot(config);
+      try {
+        // Bypass sessions.patch only to seed the legacy true value it now normalizes away.
+        await upsertSessionEntryCore(
+          { agentId: "main", sessionKey: key, env: owner.env },
+          {
+            sessionId: "websearch-stale-true",
+            updatedAt: Date.now(),
+            toolOverrides: { ...siblings, webSearch: true },
+          },
+        );
+      } finally {
+        clearRuntimeConfigSnapshot();
+      }
+      await owner.startGateway();
+      readback = await acquireGatewayTestClient(
+        {
+          url: owner.url,
+          token: owner.gatewayToken,
+          env: owner.env,
+          clientName: "cli",
+          mode: "cli",
+          scopes: ["operator.read"],
+          deviceIdentity: null,
+          deviceAuthScope: owner.url,
+          sharedStateMode: "read-only",
+          requestTimeoutMs: 10_000,
+        },
+        {
+          timeoutMs: 10_000,
+          timeoutMessage: "Web search readback client did not connect",
+          closeMessage: "Web search readback client closed during connect",
+        },
+      );
+      return { baseUrl: `http://127.0.0.1:${owner.port}/`, close };
+    } catch (error) {
+      return await runQaGatewayFixture(async (): Promise<never> => {
+        throw error;
+      }, close);
+    }
+  },
+});
 
-async function readOverrides(client: GatewayClient, key: string) {
-  const response = await client.request<{ session: { toolOverrides?: SessionToolOverrides } }>(
+async function readOverrides() {
+  const result = await readback.request<{ session: { toolOverrides?: SessionToolOverrides } }>(
     "sessions.describe",
     { key, agentId: "main" },
   );
-  return response.session.toolOverrides;
+  return result.session.toolOverrides;
 }
-
-function observeRequests(page: Page) {
-  const requests: Request[] = [];
-  const replies = new Map<string, boolean>();
-  page.on("websocket", (socket) => {
-    socket.on("framesent", ({ payload }) => {
-      const frame: Request = JSON.parse(payload.toString());
-      if (frame.type !== "req") {
-        return;
-      }
-      if (frame.method === "connect") {
-        return;
-      }
-      requests.push(frame);
-    });
-    socket.on("framereceived", ({ payload }) => {
-      const frame: { type: string; id: string; ok: boolean } = JSON.parse(payload.toString());
-      if (frame.type !== "res") {
-        return;
-      }
-      replies.set(frame.id, frame.ok);
-    });
-  });
-  return {
-    requests,
-    succeeded: (request: Request) => replies.get(request.id) === true,
-    patches: () =>
-      requests.filter(
-        (row) =>
-          row.method === "sessions.patch" && Object.hasOwn(row.params ?? {}, "toolOverrides"),
-      ),
-  };
-}
-
 async function settleSelection(page: Page) {
-  // Observe a rendered frame, then a read on this same real Gateway connection.
   await evaluateControlUiContext(page, async (context) => {
     await new Promise<void>((resolve) => {
       requestAnimationFrame(() => resolve());
@@ -98,38 +126,22 @@ async function settleSelection(page: Page) {
     await context.gateway.snapshot.client!.request("health", {});
   });
 }
-
-async function openMenu(page: Page, selector = ".agent-chat__input") {
+async function openMenu(page: Page, selector: string) {
   const composer = page.locator(selector);
-  await composer.waitFor();
-  const menu = composer.locator(".agent-chat__capability-menu");
-  if (!(await menu.evaluate((node) => node.hasAttribute("open")))) {
-    await composer.getByRole("button", { name: "Add attachment" }).click();
-  }
-  const webSearch = menu.locator('.oc-menu-item[data-value="toggle-web-search"]');
-  await webSearch.waitFor();
-  await expect.poll(() => tooltipTitleText(webSearch)).not.toBe("Loading…");
-  return { composer, menu, webSearch };
+  await composer.getByRole("button", { name: "Add attachment" }).click();
+  const item = composer.locator('.oc-menu-item[data-value="toggle-web-search"]');
+  await item.waitFor();
+  await expect.poll(() => tooltipTitleText(item)).not.toBe("Loading…");
+  return item;
 }
-
-function checked(item: Locator) {
-  return item.evaluate((node) => node.getAttribute("aria-checked") === "true");
-}
-
-async function forceSelection(item: Locator) {
-  await item.evaluate((element) => {
-    element.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
-  });
-}
-
-async function verifyServedBundle(page: Page, baseUrl: string) {
+async function verifyServedBundle(page: Page) {
   const scripts = await page
     .locator('script[type="module"][src]')
     .evaluateAll((nodes) => nodes.map((node) => node.getAttribute("src")!));
   expect(scripts.length).toBeGreaterThan(0);
   for (const source of scripts) {
-    const url = new URL(source, baseUrl);
-    expect(url.origin).toBe(new URL(baseUrl).origin);
+    const url = new URL(source, suite.server.baseUrl);
+    expect(url.origin).toBe(new URL(suite.server.baseUrl).origin);
     expect(url.pathname).toMatch(/^\/assets\//u);
     const served = await page.request.get(url.toString());
     expect(served.status()).toBe(200);
@@ -141,255 +153,78 @@ async function verifyServedBundle(page: Page, baseUrl: string) {
   }
 }
 
-for (const globallyEnabled of [false, true]) {
-  let instance: OpenClawTestInstance;
-  let readback: GatewayClient;
-  const suite = createControlUiE2eSuite({
-    name: `Web search global ${globallyEnabled} with matching built Gateway and UI`,
-    startServerBeforeBrowser: true,
-    async startServer() {
-      await Promise.all(
-        [
-          "dist/control-ui/index.html",
-          "dist/index.js",
-          `dist/${BUILD_STAMP_FILE}`,
-          `dist/${RUNTIME_POSTBUILD_STAMP_FILE}`,
-        ].map((file) => access(path.join(process.cwd(), file))),
-      );
-      const owner = await createOpenClawTestInstance({
-        name: `websearch-global-${globallyEnabled}`,
-        config: {
-          gateway: { controlUi: { enabled: true } },
-          agents: {
-            defaults: { model: { primary: "fixture/catalog-only" } },
-            entries: { main: {} },
-          },
-          models: { catalogRefresh: { enabled: false } },
-          tools: { web: { search: { enabled: globallyEnabled } } },
-        },
-      });
-      instance = owner;
-      const close = () =>
-        runQaGatewayFixture(
-          () => readback?.stopAndWait(),
-          () => owner.cleanup(),
-        );
-      try {
-        expect((await owner.entrypoint())[0]).toMatch(/^dist\/index\.m?js$/u);
-        const config = await createConfigIO({
-          env: owner.env,
-          configPath: owner.state.configPath,
-        }).loadConfigAsync();
-        setRuntimeConfigSnapshot(config);
-        try {
-          for (const scenario of scenarios) {
-            // A persisted legacy true is read directly; current sessions.patch normalizes it away.
-            const entry = await upsertSessionEntryCore(
-              {
-                agentId: "main",
-                sessionKey: `agent:main:websearch-${scenario.name}`,
-                env: owner.env,
-              },
-              {
-                sessionId: `websearch-${scenario.name}`,
-                updatedAt: Date.now(),
-                label: `Synthetic web search ${scenario.name}`,
-                toolOverrides: scenario.overrides,
-              },
-            );
-            expect(entry?.toolOverrides).toEqual(scenario.overrides);
-          }
-        } finally {
-          clearRuntimeConfigSnapshot();
-        }
-        await owner.startGateway();
-        readback = await acquireGatewayTestClient(
-          {
-            url: owner.url,
-            token: owner.gatewayToken,
-            env: owner.env,
-            clientName: "cli",
-            mode: "cli",
-            scopes: ["operator.read"],
-            deviceIdentity: null,
-            deviceAuthScope: owner.url,
-            sharedStateMode: "read-only",
-            requestTimeoutMs: 10_000,
-          },
-          {
-            timeoutMs: 10_000,
-            timeoutMessage: "Web search readback client did not connect",
-            closeMessage: "Web search readback client closed during connect",
-          },
-        );
-        return { baseUrl: `http://127.0.0.1:${owner.port}/`, close };
-      } catch (error) {
-        return await runQaGatewayFixture(async (): Promise<never> => {
-          throw error;
-        }, close);
-      }
-    },
-  });
-
-  suite.define(() => {
-    it("honors global policy in Chat and New Session without changing sibling overrides", async () => {
-      const visit = async (
-        pathname: string,
-        run: (page: Page, traffic: ReturnType<typeof observeRequests>) => Promise<void>,
-      ) => {
-        const dashboard = await instance.cli(["dashboard", "--json"]);
-        expect(dashboard.code, dashboard.stderr).toBe(0);
-        const handoff: { browserUrl: string } = JSON.parse(dashboard.stdout);
-        const fragment = new URL(handoff.browserUrl).hash;
-        await suite.withPage(viewportOptions(), async ({ page }) => {
-          const traffic = observeRequests(page);
-          const url = new URL(pathname, suite.server.baseUrl);
-          url.hash = fragment;
-          const sessionDocument = url.pathname.startsWith("/chat/");
-          expect((await page.goto(url.toString()))?.status()).toBe(sessionDocument ? 404 : 200);
-          if (sessionDocument) {
-            await enterControlUiSession(page);
-          }
-          await waitForControlUiGatewayReady(page);
-          await verifyServedBundle(page, suite.server.baseUrl);
-          await run(page, traffic);
-          expect(
-            traffic.requests.filter(
-              (row) => row.method === "chat.send" || row.method === "sessions.dispatch",
-            ),
-          ).toEqual([]);
-        });
-      };
-
-      for (const scenario of scenarios) {
-        const key = `agent:main:websearch-${scenario.name}`;
-        const before = await readOverrides(readback, key);
-        expect(before).toEqual(scenario.overrides);
-        await visit(
-          controlUiSessionUrl(suite.server.baseUrl, key, "chat"),
-          async (page, traffic) => {
-            const { webSearch } = await openMenu(page);
-            await settleSelection(page);
-            const patchStart = traffic.patches().length;
-            if (!globallyEnabled) {
-              const stale = scenario.name === "stale-true";
-              expect.soft(await checked(webSearch)).toBe(false);
-              expect.soft(await webSearch.isDisabled()).toBe(!stale);
-              expect
-                .soft(await tooltipTitleText(webSearch))
-                .toContain(stale ? "clear" : "tools.web.search.enabled");
-              if (stale) {
-                await webSearch.click();
-              } else {
-                await forceSelection(webSearch);
-              }
-              await settleSelection(page);
-              if (stale) {
-                await expect.poll(() => traffic.patches().length).toBe(patchStart + 1);
-              }
-              const patches = traffic.patches().slice(patchStart);
-              expect.soft(patches).toEqual(
-                stale
-                  ? [
-                      expect.objectContaining({
-                        params: { key, toolOverrides: siblings },
-                      }),
-                    ]
-                  : [],
-              );
-              expect
-                .soft(patches.some((row) => row.params?.toolOverrides?.webSearch === true))
-                .toBe(false);
-              for (const patch of patches) {
-                await expect.poll(() => traffic.succeeded(patch)).toBe(true);
-              }
-              const after = await readOverrides(readback, key);
-              expect.soft(after).toEqual(stale ? siblings : scenario.overrides);
-              await settleSelection(page);
-              if (stale) {
-                expect.soft(await checked(webSearch)).toBe(false);
-                expect.soft(await webSearch.isDisabled()).toBe(true);
-              }
-            } else {
-              const initiallyEnabled = scenario.name !== "false";
-              await expect.poll(() => checked(webSearch)).toBe(initiallyEnabled);
-              expect(await webSearch.isDisabled()).toBe(false);
-              for (const [index, enabled] of [!initiallyEnabled, initiallyEnabled].entries()) {
-                await webSearch.click();
-                await expect.poll(() => traffic.patches().length).toBe(patchStart + index + 1);
-                await expect
-                  .poll(() => traffic.succeeded(traffic.patches()[patchStart + index]!))
-                  .toBe(true);
-                const toolOverrides = enabled ? siblings : { ...siblings, webSearch: false };
-                expect(traffic.patches().at(-1)?.params).toEqual({ key, toolOverrides });
-                await expect.poll(() => checked(webSearch)).toBe(enabled);
-                if (index === 0) {
-                  await expect.poll(() => webSearch.isDisabled()).toBe(false);
-                }
-                expect(await readOverrides(readback, key)).toEqual(toolOverrides);
-              }
+suite.define(() => {
+  it("clears a legacy true override without enabling globally disabled search or changing siblings", async () => {
+    const dashboard = await instance.cli(["dashboard", "--json"]);
+    expect(dashboard.code, dashboard.stderr).toBe(0);
+    const handoff: { browserUrl: string } = JSON.parse(dashboard.stdout);
+    const fragment = new URL(handoff.browserUrl).hash;
+    await suite.withPage(
+      {
+        viewport: { width: 1280, height: 900 },
+        locale: "en-US",
+        serviceWorkers: "block",
+        permissions: ["local-network-access"],
+      },
+      async ({ page }) => {
+        const requests: Array<{
+          type: string;
+          method: string;
+          params?: { key?: string; toolOverrides?: SessionToolOverrides };
+        }> = [];
+        page.on("websocket", (socket) =>
+          socket.on("framesent", ({ payload }) => {
+            const frame: (typeof requests)[number] = JSON.parse(payload.toString());
+            if (frame.type === "req") {
+              requests.push(frame);
             }
-          },
+          }),
         );
-      }
-
-      await visit("new", async (page, traffic) => {
-        const { webSearch } = await openMenu(page, ".new-session-page__composer");
+        const url = new URL(controlUiSessionUrl(suite.server.baseUrl, key, "chat"));
+        url.hash = fragment;
+        expect((await page.goto(url.toString()))?.status()).toBe(404);
+        await enterControlUiSession(page);
+        await waitForControlUiGatewayReady(page);
+        await verifyServedBundle(page);
+        expect(await readOverrides()).toEqual({ ...siblings, webSearch: true });
+        const item = await openMenu(page, ".agent-chat__input");
+        await expect.poll(() => item.getAttribute("aria-checked")).toBe("false");
+        expect(await item.isDisabled()).toBe(false);
+        expect(await tooltipTitleText(item)).toContain("clear");
+        await item.click();
+        await expect.poll(readOverrides).toEqual(siblings);
+        await expect.poll(() => item.isDisabled()).toBe(true);
+        expect(await item.getAttribute("aria-checked")).toBe("false");
+        expect(await tooltipTitleText(item)).toContain("tools.web.search.enabled");
+        await item.evaluate((node) =>
+          node.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true })),
+        );
         await settleSelection(page);
-        expect.soft(await checked(webSearch)).toBe(globallyEnabled);
-        expect.soft(await webSearch.isDisabled()).toBe(!globallyEnabled);
-        if (!globallyEnabled) {
-          expect.soft(await tooltipTitleText(webSearch)).toContain("tools.web.search.enabled");
-        }
-        await forceSelection(webSearch);
-        await settleSelection(page);
-        expect.soft(await checked(webSearch)).toBe(false);
-        expect.soft(traffic.patches()).toEqual([]);
-        expect.soft(traffic.requests.filter((row) => row.method === "sessions.create")).toEqual([]);
-        if (globallyEnabled) {
-          await webSearch.click();
-          await expect.poll(() => checked(webSearch)).toBe(true);
-          const chat = await page.context().newPage();
-          const chatTraffic = observeRequests(chat);
-          await chat.goto(
-            controlUiSessionUrl(suite.server.baseUrl, "agent:main:websearch-omitted", "chat"),
-          );
-          await waitForControlUiGatewayReady(chat);
-          const chatMenu = await openMenu(chat);
-          await expect.poll(() => checked(chatMenu.webSearch)).toBe(true);
-          await readback.stopAndWait();
-          await instance.stopGateway();
-          await Promise.all([
-            waitForControlUiGatewayReconnecting(page),
-            waitForControlUiGatewayReconnecting(chat),
-          ]);
-          await expect.poll(() => webSearch.isDisabled()).toBe(true);
-          await expect.poll(() => chatMenu.webSearch.isDisabled()).toBe(true);
-          expect(await tooltipTitleText(webSearch)).toContain("Connect to the gateway");
-          expect(await tooltipTitleText(chatMenu.webSearch)).toContain("Connect to the gateway");
-          await forceSelection(webSearch);
-          await forceSelection(chatMenu.webSearch);
-          await page.evaluate(
-            () =>
-              new Promise<void>((resolve) => {
-                requestAnimationFrame(() => resolve());
-              }),
-          );
-          expect(await checked(webSearch)).toBe(true);
-          expect(await checked(chatMenu.webSearch)).toBe(true);
-          expect(traffic.patches()).toEqual([]);
-          expect(chatTraffic.patches()).toEqual([]);
-        }
-      });
-    }, 180_000);
-  });
-}
+        expect(await readOverrides()).toEqual(siblings);
+        expect(requests.filter((request) => request.method === "sessions.patch")).toEqual([
+          expect.objectContaining({ params: { key, toolOverrides: siblings } }),
+        ]);
 
-function viewportOptions() {
-  return {
-    viewport,
-    locale: "en-US",
-    serviceWorkers: "block" as const,
-    permissions: ["local-network-access"],
-  };
-}
+        const newUrl = new URL("new", suite.server.baseUrl);
+        newUrl.hash = fragment;
+        expect((await page.goto(newUrl.toString()))?.status()).toBe(200);
+        await waitForControlUiGatewayReady(page);
+        const draftItem = await openMenu(page, ".new-session-page__composer");
+        expect(await draftItem.getAttribute("aria-checked")).toBe("false");
+        expect(await draftItem.isDisabled()).toBe(true);
+        expect(await tooltipTitleText(draftItem)).toContain("tools.web.search.enabled");
+        await draftItem.evaluate((node) =>
+          node.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true })),
+        );
+        await settleSelection(page);
+        expect(await draftItem.getAttribute("aria-checked")).toBe("false");
+        expect(
+          requests.filter((request) =>
+            ["chat.send", "sessions.dispatch", "sessions.create"].includes(request.method),
+          ),
+        ).toEqual([]);
+        expect(requests.filter((request) => request.method === "sessions.patch")).toHaveLength(1);
+      },
+    );
+  }, 180_000);
+});

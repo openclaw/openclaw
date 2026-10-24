@@ -15,6 +15,7 @@ import {
   type UserConfig,
 } from "vite";
 import { mermaidClassicBundlePlugin } from "../packages/mermaid-renderer/vite-plugin.ts";
+import { isControlUiOptionalAsset } from "../scripts/lib/control-ui-optional-assets.ts";
 import {
   CONTROL_UI_BUILD_ID_ATTRIBUTE,
   isControlUiVersionedPublicAsset,
@@ -516,6 +517,29 @@ export async function refreshControlUiBuildOutput(
             .digest("base64"),
       })),
   };
+  const bootPaths = new Set(selectedBootAssets);
+  const deferredSize = { count: 0, rawBytes: 0, gzipBytes: 0 };
+  const deferredAssets = fs
+    .readdirSync(path.join(buildOutDir, "assets"))
+    .map((name) => `assets/${name}`)
+    .filter(
+      (file) =>
+        /^assets\/[^/]+-[\w-]{8,}\.(?:js|css)$/u.test(file) &&
+        !bootPaths.has(file) &&
+        !isControlUiOptionalAsset(file),
+    )
+    .toSorted()
+    .map((file) => {
+      const assetSource = fs.readFileSync(path.join(buildOutDir, file));
+      // Inventory must work before compression sidecars have been written.
+      deferredSize.count++;
+      deferredSize.rawBytes += assetSource.byteLength;
+      deferredSize.gzipBytes += gzip(assetSource, 11).byteLength;
+      return {
+        path: file,
+        integrity: "sha256-" + createHash("sha256").update(assetSource).digest("base64"),
+      };
+    });
   // Same-commit source rebuilds must not pair a new document with an old shell.
   const { module: csp } = await runnerImport<typeof import("../src/gateway/control-ui-csp.ts")>(
     path.join(repoRoot, "src/gateway/control-ui-csp.ts"),
@@ -523,12 +547,16 @@ export async function refreshControlUiBuildOutput(
   );
   const offlineBuild = {
     ...offlineShell,
+    deferredAssets,
     csp: csp.buildControlUiCspHeader({
       inlineScriptHashes: csp.computeInlineScriptHashes(offlineShell.html),
     }),
     publicAssetVersion: cacheId,
     publicAssets: publicAssets.filter(isControlUiVersionedPublicAsset),
-    id: createHash("sha256").update(JSON.stringify(offlineShell)).digest("hex").slice(0, 16),
+    id: createHash("sha256")
+      .update(JSON.stringify({ ...offlineShell, deferredAssets }))
+      .digest("hex")
+      .slice(0, 16),
   };
   const offlinePlaceholder = "const OFFLINE_BOOT = null;";
   if (!source.includes(placeholder) || !source.includes(offlinePlaceholder)) {
@@ -539,6 +567,7 @@ export async function refreshControlUiBuildOutput(
     .replace(offlinePlaceholder, () => `const OFFLINE_BOOT = ${JSON.stringify(offlineBuild)};`);
   fs.mkdirSync(buildOutDir, { recursive: true });
   fs.writeFileSync(swPath, updated);
+  return deferredSize;
 }
 
 function controlUiBuildOutputPlugin(
@@ -640,11 +669,14 @@ function controlUiBuildOutputPlugin(
         .toSorted();
       fs.writeFileSync(path.join(buildOutDir, ".build-inputs.json"), JSON.stringify(inputs));
       const bootAssets = collectControlUiBootAssets(bundle);
-      await refreshControlUiBuildOutput(
+      const deferred = await refreshControlUiBuildOutput(
         buildOutDir,
         buildInfo,
         [...bootAssets.chat, ...bootAssets.new, ...bootAssets.login],
         publicDir,
+      );
+      logger.info(
+        `Control UI deferred offline inventory: ${deferred.count} assets, ${deferred.rawBytes} B raw, ${deferred.gzipBytes} B gzip`,
       );
     },
   };

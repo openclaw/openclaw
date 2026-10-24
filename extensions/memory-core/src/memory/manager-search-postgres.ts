@@ -178,7 +178,7 @@ function bodyStatement(
   if (query.sourceFilter.excludedSessionPaths?.length) {
     selected = selected.where(sessionExclusion(query.sourceFilter.excludedSessionPaths));
   }
-  return selected.orderBy(rank, "desc").orderBy("id").limit(query.limit);
+  return selected.orderBy("rank", "desc").orderBy("id").limit(query.limit);
 }
 
 function projectBodyRows(

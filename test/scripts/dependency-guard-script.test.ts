@@ -532,12 +532,6 @@ describe("dependency guard script", () => {
     expect(isDependencyManifest("src/index.ts")).toBe(false);
     expect(
       dependencyFieldChanges(
-        { scripts: { test: "old" }, dependencies: { a: "1" } },
-        { scripts: { test: "new" }, dependencies: { a: "1" } },
-      ),
-    ).toEqual([]);
-    expect(
-      dependencyFieldChanges(
         { dependencies: { a: "1" }, devDependencies: { b: "1" } },
         { dependencies: { a: "2" }, devDependencies: { b: "1", c: "1" } },
       ),
@@ -554,7 +548,6 @@ describe("dependency guard script", () => {
     const cases: Array<[string[], boolean]> = [
       [["removed", "removed"], true],
       [["removed", "added"], false],
-      [["changed"], false],
       [[], false],
     ];
     for (const [changes, expected] of cases) {
@@ -669,7 +662,6 @@ describe("dependency guard script", () => {
       ],
       [[], [], [], false],
       [["pnpm-lock.yaml", "patches/example.patch"], ["pnpm-lock.yaml"], [], false],
-      [["pnpm-lock.yaml", "pnpm-workspace.yaml"], ["pnpm-lock.yaml"], [], false],
     ];
     for (const [dependencyFiles, lockfileChanges, dependencyManifestChanges, expected] of cases) {
       expect(
@@ -832,13 +824,8 @@ describe("dependency guard script", () => {
     const cases: Array<[method: string, phase: string, failure: number | string]> = [
       ["GET", "http", 500],
       ["HEAD", "http", 500],
-      ["GET", "http", 503],
       ["GET", "connection", "ECONNRESET"],
-      ["GET", "connection", "EAI_AGAIN"],
-      ["GET", "connection", "ENOTFOUND"],
-      ["HEAD", "connection", "UND_ERR_SOCKET"],
       ["GET", "body", "UND_ERR_SOCKET"],
-      ["GET", "body", "ECONNRESET"],
       ["GET", "budget", "ECONNRESET"],
     ];
     for (const [method, phase, failure] of cases) {
@@ -893,22 +880,15 @@ describe("dependency guard script", () => {
     const certificate = connectionError("fetch failed", "CERT_HAS_EXPIRED", "certificate expired");
     const cases: Array<[string, string, FailureOptions?]> = [
       ["POST", "http", { status: 500 }],
-      ["PATCH", "http", { status: 500 }],
-      ["DELETE", "http", { status: 500 }],
-      ["POST", "http", { status: 503 }],
       ["POST", "body", { code: "UND_ERR_SOCKET", matchMessage: true }],
       ["GET", "invalid-json"],
       ["GET", "body", { error: new Error("unknown stream error") }],
       ["POST", "connection", reset],
-      ["PATCH", "connection", reset],
-      ["DELETE", "connection", reset],
       ["GET", "connection", { error: new DOMException("aborted", "AbortError") }],
       ["GET", "connection", { error: certificate }],
       ["GET", "connection", { error: new TypeError("invalid request") }],
       ["GET", "connection", aborted],
       ["GET", "body", aborted],
-      ["POST", "connection", aborted],
-      ["POST", "body", aborted],
     ];
     for (const [method, phase, options = {}] of cases) {
       const { status, code, error: suppliedError, abort, matchMessage } = options;

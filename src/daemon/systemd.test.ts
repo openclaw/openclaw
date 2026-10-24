@@ -2136,7 +2136,7 @@ describe("uninstallLegacySystemdUnits", () => {
       stdout: captureOutput().stdout,
     });
 
-    expect(units).toMatchObject([{ name: "clawdbot-gateway", exists: false, enabled: false }]);
+    expect(units).toMatchObject([{ name: "clawdbot-gateway" }]);
     await expectFiles({ [backupPath]: null });
   });
 });

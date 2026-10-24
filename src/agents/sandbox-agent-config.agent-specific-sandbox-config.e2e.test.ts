@@ -190,14 +190,9 @@ async function resolveContext(config: OpenClawConfig, sessionKey: string, worksp
 }
 
 function expectDockerSetupCommand(command: string) {
-  const matched = spawnCalls.some(
-    (call) =>
-      call.command === "docker" &&
-      call.args[0] === "exec" &&
-      call.args.includes("-lc") &&
-      call.args.includes(command),
-  );
-  expect(matched, `expected docker setup command; calls=${JSON.stringify(spawnCalls)}`).toBe(true);
+  expect(
+    spawnCalls.filter((call) => call.command === "docker" && call.args[0] === "exec"),
+  ).toContainEqual({ command: "docker", args: expect.arrayContaining(["-lc", command]) });
 }
 
 function sandboxConfig(
@@ -304,23 +299,13 @@ describe("Agent-specific sandbox config", () => {
   });
 
   it("enforces required allowlist tools in default and explicit sandbox configs", () => {
-    for (const scenario of [
-      {
-        cfg: sandboxConfig(),
-        expected: ["session_status", "view_image"],
-      },
-      {
-        cfg: {
-          tools: { sandbox: { tools: { allow: ["bash", "read"], deny: [] } } },
-          ...sandboxConfig(),
-        } satisfies OpenClawConfig,
-        expected: ["view_image"],
-      },
-    ]) {
-      const sandbox = resolveSandboxConfigForAgent(scenario.cfg, "main");
-      for (const tool of scenario.expected) {
-        expect(sandbox.tools.allow).toContain(tool);
-      }
-    }
+    expect(resolveSandboxConfigForAgent(sandboxConfig(), "main").tools.allow).toEqual(
+      expect.arrayContaining(["session_status", "view_image"]),
+    );
+    const cfg = {
+      ...sandboxConfig(),
+      tools: { sandbox: { tools: { allow: ["bash", "read"], deny: [] } } },
+    } satisfies OpenClawConfig;
+    expect(resolveSandboxConfigForAgent(cfg, "main").tools.allow).toContain("view_image");
   });
 });
