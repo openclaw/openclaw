@@ -22,7 +22,9 @@ function fixture(files: Record<string, string>) {
 
 it("keeps exclusive aggregates out of cold canonical metadata discovery", async () => {
   vi.resetModules();
-  onTestFinished(() => vi.resetModules());
+  onTestFinished(() => {
+    vi.resetModules();
+  });
   const { nodeTestConfigRequiresCanonicalMetadata } =
     await import("../../scripts/lib/ci-node-test-plan.mts");
   const { isExclusiveCiTestConfig } = await import("../../scripts/lib/local-check-runtime.mts");

@@ -13,6 +13,9 @@ const modes = [
   ["recovery", true],
   ["canonical", true],
   ["untrusted", false],
+  ["wrong-workflow", false],
+  ["wrong-path", false],
+  ["wrong-source", false],
   ["candidate-publisher", false],
 ] as const;
 const releaseBranch = "extended-stable/2026.7.33";
@@ -63,15 +66,26 @@ function verifyPluginRun(mode: (typeof modes)[number][0]) {
     "bin/gh",
     `#!/bin/sh
 set -eu
-case "$*" in
-  'api repos/openclaw/openclaw/actions/runs/123') cat "$PLUGIN_RUN_FIXTURE" ;;
-  'api repos/openclaw/openclaw/actions/workflows/247919831 --jq .name') echo 'Plugin NPM Release' ;;
-  *) echo "Unexpected GitHub API call: $*" >&2; exit 1 ;;
+test "$1" = api
+case "$2" in
+  repos/openclaw/openclaw/actions/runs/123) fixture="$PLUGIN_RUN_FIXTURE" ;;
+  repos/openclaw/openclaw/actions/workflows/247919831) fixture="$PLUGIN_WORKFLOW_FIXTURE" ;;
+  *) echo "Unexpected GitHub API endpoint: $2" >&2; exit 1 ;;
 esac
+shift 2
+if [ "$#" -eq 0 ]; then
+  cat "$fixture"
+else
+  test "$1" = --jq
+  jq -r "$2" "$fixture"
+fi
 `,
     0o755,
   );
-  const runTitle = `Plugin NPM Release [extended-stable] ${sourceSha}`;
+  const runTitle = `Plugin NPM Release [extended-stable] ${mode === "wrong-source" ? "c".repeat(40) : sourceSha}`;
+  const workflowFile = write("workflow.json", {
+    name: mode === "wrong-workflow" ? "CI" : "Plugin NPM Release",
+  });
   const runFile = write("run.json", {
     // Real REST runs expose their dynamic title in both fields, not the workflow name.
     name: runTitle,
@@ -82,7 +96,7 @@ esac
     conclusion: "success",
     head_branch: mode === "canonical" ? releaseBranch : "main",
     head_sha: mode === "canonical" ? sourceSha : mode === "untrusted" ? untrustedSha : toolingSha,
-    path: ".github/workflows/plugin-npm-release.yml",
+    path: `.github/workflows/${mode === "wrong-path" ? "ci" : "plugin-npm-release"}.yml`,
   });
   const workflow = parse(
     readFileSync(".github/workflows/openclaw-npm-release.yml", "utf8"),
@@ -100,6 +114,7 @@ esac
       ...process.env,
       PATH: `${join(root, "bin")}:${process.env.PATH}`,
       PLUGIN_RUN_FIXTURE: runFile,
+      PLUGIN_WORKFLOW_FIXTURE: workflowFile,
       PLUGIN_NPM_RUN_ID: "123",
       GITHUB_REPOSITORY: "openclaw/openclaw",
       RELEASE_NPM_DIST_TAG: "extended-stable",
