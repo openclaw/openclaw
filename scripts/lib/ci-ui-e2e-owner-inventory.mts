@@ -416,7 +416,6 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
     ["ui/src/components/login-gate-solid.tsx"],
   ),
   pageWatch("ui/src/e2e/chat-cli-history-redaction.e2e.test.ts", ["chat"]),
-  pageWatch("ui/src/e2e/chat-collaborator-scroll.e2e.test.ts", ["chat", "profile"]),
   pageWatch(
     "ui/src/e2e/chat-collapsed-reply-reveal.e2e.test.ts",
     ["chat"],
@@ -1699,11 +1698,6 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
     [...sessionMenuOwnerRoots, "ui/src/pages/chat/chat-pane.ts"],
   ),
   pageWatch(
-    "ui/src/e2e/session-management.optimistic-pin.e2e.test.ts",
-    ["chat"],
-    sessionMenuOwnerRoots,
-  ),
-  pageWatch(
     "ui/src/e2e/session-management.queue.e2e.test.ts",
     ["chat"],
     ["ui/src/components/app-sidebar.ts", "ui/src/components/session-glyph.ts"],
@@ -1896,11 +1890,6 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
       "ui/src/lib/cron/types.ts",
     ],
     ["ui/src/styles/sidebar-update-card.css"],
-  ),
-  pageWatch(
-    "ui/src/e2e/sidebar-cached-list-stability.e2e.test.ts",
-    ["chat"],
-    [...sessionMenuOwnerRoots, "ui/src/components/app-sidebar-session-navigation.ts"],
   ),
   pageWatch(
     "ui/src/e2e/sidebar-cron-inventory.e2e.test.ts",

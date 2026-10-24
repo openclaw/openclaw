@@ -4983,7 +4983,6 @@ const PR_EXEMPT_RUNTIME_TEST_FILES = [
   "ui/src/e2e/settings-reload-devices-draft.e2e.test.ts",
   "ui/src/e2e/settings-typography-search.e2e.test.ts",
   "ui/src/e2e/sidebar-account-footer.e2e.test.ts",
-  "ui/src/e2e/sidebar-cached-list-stability.e2e.test.ts",
   "ui/src/e2e/sidebar-name-marquee.e2e.test.ts",
   "ui/src/e2e/sidebar-outbox.e2e.test.ts",
   "ui/src/e2e/sidebar-per-tab-visibility.capture.e2e.test.ts",
