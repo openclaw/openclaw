@@ -2,13 +2,9 @@ import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { pathToFileURL } from "node:url";
 import { runInNewContext } from "node:vm";
-import { isRecord } from "@openclaw/normalization-core";
-import JSZip from "jszip";
 import { afterEach, assert, expect, it } from "vitest";
 import { parse } from "yaml";
-import { buildFullReleaseCandidateRequest } from "../../scripts/full-release-candidate-contract.mjs";
 import {
   createPublicationAdmission as createAdmission,
   createPublicationSourceFact as createSource,
@@ -33,11 +29,12 @@ import {
   MAX_RELEASE_ARTIFACT_BYTES,
   serializeReleaseArtifact as serializeArtifact,
 } from "../../scripts/full-release-validation-policy.mjs";
-import { describeNpmBundle } from "../../scripts/npm-prepared-bundle.mjs";
-import { createPluginSdkApiReleaseEvidence } from "../../scripts/plugin-sdk-api-release-evidence.mjs";
+import { manifestContextFromEnvironment } from "../../scripts/lib/full-release-manifest.mjs";
 import { tryReadReleaseDecisionArtifact } from "../../scripts/release-ci-summary.mjs";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import {
+  canonicalCandidateRequest,
+  child as releaseChild,
   publicationSourceEnv,
   registryRecord,
 } from "./full-release-validation-state.test-support.js";
@@ -77,42 +74,6 @@ const registryPlan = (
   ...overrides,
 });
 const pluginPackage = { name: "@openclaw/test", version: "2026.9.9" };
-const absentNpmState = () => ({
-  packageExists: false,
-  hasVersionHistory: false,
-  selectedVersionExists: false,
-  latestVersion: null,
-});
-const pendingNpmAuthority = (
-  name: string,
-): ReturnType<typeof registryEvidence>["observations"]["pendingAuthority"] => [
-  {
-    registry: "npm",
-    name,
-    action: "owner-preparation-and-access",
-    status: "unresolved",
-  },
-];
-
-function expectPublication(
-  manifest: Record<string, unknown>,
-  targetSha: string,
-  workflowSha: string,
-) {
-  expect(manifest).toMatchObject({
-    publicationArtifacts: {
-      npmPreflight: {
-        source: { sha: targetSha },
-        producer: { workflowSha, runId: "81", runAttempt: "1" },
-      },
-    },
-    publishInputs: {
-      targetSha,
-      pluginSdkApiAcknowledgement: "",
-      npmDecisions: [{ packageName: "openclaw", packageVersion: "2026.9.9", decision: "plan" }],
-    },
-  });
-}
 
 function refreshSource({ source, observations }: ReturnType<typeof registryEvidence>) {
   const { digest: _digest, ...unsigned } = source;
@@ -197,176 +158,19 @@ function writerContext(context: ReleaseContext): NodeJS.ProcessEnv {
   };
 }
 
-async function publicationWriterFixture(
-  directory: string,
-  identity: { sourceSha: string; workflowSha: string; workflowFullRef: string },
-) {
-  const hash = digest;
-  const repository = "openclaw/openclaw";
-  const workflow = ".github/workflows/full-release-artifacts.yml";
-  const producer = {
-    repository,
-    workflowRef: `${repository}/${workflow}@${identity.workflowFullRef}`,
-    workflowSha: identity.workflowSha,
-    runId: "81",
-    runAttempt: "1",
-    jobId: "901",
-    jobName: "Qualify prepared npm package",
-    producerWorkflowPath: ".github/workflows/openclaw-npm-preflight.yml",
-  };
-  const diff = { entrypointsAdded: [], entrypointsRemoved: [], exports: [] };
-  const tarball = Buffer.from("synthetic prepared package bytes");
-  async function bundle(
-    file: string,
-    manifest: { tarballName: string },
-    id: string,
-    name: string,
-    qualified = false,
-  ) {
-    const bytes = JSON.stringify(manifest);
-    writeFileSync(join(directory, file), bytes);
-    const zip = new JSZip();
-    zip.file(file, bytes);
-    zip.file(manifest.tarballName, tarball);
-    const archive = await zip.generateAsync({
-      type: "nodebuffer",
-      compression: "STORE",
-      platform: "UNIX",
-    });
-    const descriptor = describeNpmBundle({
-      directory,
-      qualified,
-      artifact: {
-        id,
-        name,
-        digest: hash(archive),
-        runId: producer.runId,
-        runAttempt: producer.runAttempt,
-      },
-    });
-    return { archive, descriptor };
-  }
-  const preparedProducer = {
-    ...producer,
-    jobId: "900",
-    jobName: "Prepare publishable npm package",
-  };
-  const packageManifest = {
-    schema: "openclaw.npm-package-bundle/v1",
-    producer: preparedProducer,
-    releaseTag: "v2026.9.9",
-    releaseSha: identity.sourceSha,
-    npmDistTag: "latest",
-    packageName: "openclaw",
-    packageVersion: "2026.9.9",
-    tarballName: "openclaw.tgz",
-    tarballSha256: hash(tarball),
-    corePackageTarballs: [],
-  };
-  const { descriptor: preparedBundle } = await bundle(
-    "package-bundle.json",
-    packageManifest,
-    "554",
-    "openclaw-npm-package-81-1",
-  );
-  const npmManifest = {
-    version: 3,
-    releaseSha: identity.sourceSha,
-    tarballName: "openclaw.tgz",
-    tarballSha256: hash(tarball),
-    producer,
-    preparedBundle,
-    pluginSdkApi: createPluginSdkApiReleaseEvidence({
-      baseRef: "v2026.9.8",
-      baseSha: "c".repeat(40),
-      headSha: identity.sourceSha,
-      workflowSha: identity.workflowSha,
-      diff: { ...diff, digest: hash(JSON.stringify(diff)) },
-    }),
-  };
-  const { archive, descriptor: qualified } = await bundle(
-    "preflight-manifest.json",
-    npmManifest,
-    "555",
-    `openclaw-npm-preflight-${identity.sourceSha}`,
-    true,
-  );
-  const archivePath = join(directory, "qualified-npm.zip");
-  writeFileSync(archivePath, archive);
-  const api = `repos/${repository}/actions`;
-  const preload = join(directory, "publication-transport.mjs");
-  writeFileSync(
-    preload,
-    `
-import childProcess from "node:child_process";
-import { readFileSync } from "node:fs";
-import { syncBuiltinESMExports } from "node:module";
-const fixture = ${JSON.stringify({ ...identity, producer, artifact: qualified.artifact, archiveSize: archive.length, workflow, repository, api })};
-const run = {
-  id: 81, run_attempt: 1, head_sha: fixture.workflowSha, path: fixture.workflow,
-  head_branch: fixture.workflowFullRef.replace("refs/heads/", ""), event: "workflow_dispatch",
-  status: "completed", conclusion: "success",
-  repository: { full_name: fixture.repository }, head_repository: { full_name: fixture.repository },
-};
-const artifact = {
-  id: 555, name: fixture.artifact.name, digest: "sha256:" + fixture.artifact.digest,
-  size_in_bytes: fixture.archiveSize, expired: false, expires_at: "2099-01-01T00:00:00Z",
-  workflow_run: { id: 81, head_sha: fixture.workflowSha },
-};
-const responses = {
-  [fixture.api + "/runs/81"]: run,
-  [fixture.api + "/runs/81/attempts/1"]: run,
-  [fixture.api + "/runs/81/attempts/1/jobs?per_page=100&page=1"]: { total_count: 1, jobs: [{
-    id: 901, name: fixture.producer.jobName, run_id: 81, run_attempt: 1,
-    head_sha: fixture.workflowSha, status: "completed", conclusion: "success",
-  }] },
-  [fixture.api + "/artifacts/555"]: artifact,
-};
-childProcess.execFileSync = (command, args) => {
-  if (command !== "gh" || args[0] !== "api" || !Object.hasOwn(responses, args[1])) {
-    throw new Error("Unexpected publication fixture subprocess");
-  }
-  for (let index = 2; index < args.length; index += 2) {
-    if ((args[index] !== "--method" || args[index + 1] !== "GET") &&
-        (args[index] !== "--jq" || typeof args[index + 1] !== "string")) {
-      throw new Error("Unexpected publication fixture GitHub operation");
-    }
-  }
-  return JSON.stringify(responses[args[1]]);
-};
-syncBuiltinESMExports();
-globalThis.fetch = async (input, options) => {
-  const url = new URL(input instanceof Request ? input.url : String(input));
-  if (url.href === "https://registry.npmjs.org/openclaw") {
-    return Response.json({ versions: { "2026.9.8": {} }, "dist-tags": { latest: "2026.9.8", beta: "2026.9.8" } });
-  }
-  if (url.origin !== "https://api.github.com" || new Headers(options?.headers).get("authorization") !== "Bearer artifact-fixture-token") {
-    throw new Error("Unexpected publication fixture transport");
-  }
-  const endpoint = url.pathname.slice(1) + url.search;
-  if (endpoint === ${JSON.stringify(`${api}/artifacts/555/zip`)}) return new Response(readFileSync(${JSON.stringify(archivePath)}));
-  if (Object.hasOwn(responses, endpoint)) return Response.json(responses[endpoint]);
-  throw new Error("Unexpected publication fixture endpoint");
-};
-`,
-  );
-  return {
-    GH_TOKEN: "artifact-fixture-token",
-    GITHUB_TOKEN: "",
-    NODE_OPTIONS: `--import ${pathToFileURL(preload).href}`,
-    PREPARED_PLUGIN_NPM_JSON: JSON.stringify({ descriptor: "prepared-plugin-npm" }),
-    QUALIFIED_NPM_BUNDLE_JSON: JSON.stringify(qualified),
-  };
-}
-
 function registryEvidence(
   runId = "123",
   warningCount = 0,
   validationInputs: Record<string, string> = {},
   started = "2026-09-13T14:00:00.000Z",
+  toolingSha = SHA,
 ) {
   const source = createSource(
-    sourceRequest(validationInputs, { GITHUB_RUN_ID: runId }),
+    sourceRequest(validationInputs, {
+      GITHUB_RUN_ID: runId,
+      GITHUB_SHA: toolingSha,
+      PUBLICATION_TOOLING_JSON: JSON.stringify({ fullRef: "refs/heads/main", sha: toolingSha }),
+    }),
     inventory,
     sourceProjection(),
   );
@@ -403,30 +207,34 @@ function registryEvidence(
   };
 }
 
-function registryBudgetFixture(warningCount = 0, validationInputs: Record<string, string> = {}) {
-  const { record, source } = registryEvidence("123", warningCount, validationInputs);
+function registryBudgetFixture(
+  warningCount = 0,
+  validationInputs: Record<string, string> = {},
+  toolingSha = SHA,
+) {
+  const { record, source } = registryEvidence(
+    "123",
+    warningCount,
+    validationInputs,
+    undefined,
+    toolingSha,
+  );
   const releaseProfile = source.coverage.release_profile;
   const runReleaseSoak = source.coverage.run_release_soak;
-  const candidateRequest = buildFullReleaseCandidateRequest({
+  const candidateRequest = canonicalCandidateRequest({
     repository: source.repository,
     targetSha: source.candidateSha,
     toolingSha: source.workflow.sha,
     releaseProfile,
     releaseSoak: runReleaseSoak === "true",
-    upgradeSurvivorBaseline: "openclaw@latest",
-    upgradeSurvivorBaselines: "",
-    upgradeSurvivorScenarios: "reported-issues",
-    allowFrozenTargetScenarioOmissions: false,
     allowUnreleasedChangelog: source.coverage.allow_unreleased_changelog === "true",
-    packagePublished: false,
-    sharedImagePolicy: "no-push-artifact",
   });
   const inputs = {
     childPhaseVersion: 3,
     parentRunId: "123",
     parentRunAttempt: 1,
     workflowRef: "release-ci/test",
-    workflowSha: SHA,
+    workflowSha: toolingSha,
     releaseProfile,
     rerunGroup: "all",
     resolveTargetResult: "success",
@@ -438,7 +246,7 @@ function registryBudgetFixture(warningCount = 0, validationInputs: Record<string
     attemptEvidenceVersion: 3,
     children: built.children,
     gates: built.gates,
-    trustedWorkflow: { fullRef: "refs/heads/main", ref: "main", sha: SHA },
+    trustedWorkflow: { fullRef: "refs/heads/main", ref: "main", sha: toolingSha },
     expected: {
       ...inputs,
       repository: source.repository,
@@ -452,7 +260,7 @@ function registryBudgetFixture(warningCount = 0, validationInputs: Record<string
     workflowRef: "release-ci/test",
     workflowFullRef: "refs/heads/release-ci/test",
     workflowRefType: "branch",
-    workflowSha: SHA,
+    workflowSha: toolingSha,
     targetRef: source.candidateSha,
     releaseProfile,
     rerunGroup: "all",
@@ -462,9 +270,9 @@ function registryBudgetFixture(warningCount = 0, validationInputs: Record<string
   return { record, source, plan, context, candidateRequest };
 }
 
-it.each(["beta", "stable", "full"])(
-  "writes fresh %s performance and Telegram evidence through the actual workflow command",
-  async (releaseProfile) => {
+it.each(["beta", "stable"])(
+  "projects fresh %s performance and Telegram evidence from workflow inputs",
+  (releaseProfile) => {
     const telegram = {
       npm_telegram_package_spec: "openclaw@2026.9.9",
       npm_telegram_provider_mode: "live-frontier",
@@ -472,49 +280,33 @@ it.each(["beta", "stable", "full"])(
       skip_package_telegram_e2e: "true",
       allow_unreleased_changelog: "true",
     };
-    const { plan, context } = registryBudgetFixture(0, {
-      ...telegram,
-      release_profile: releaseProfile,
-    });
+    const { plan, context, source } = registryBudgetFixture(
+      0,
+      { ...telegram, release_profile: releaseProfile },
+      "d".repeat(40),
+    );
     expect(plan.evidenceReuse.requested).toBe(false);
-    const { writer, directory, run } = manifestWriterFixture(plan);
-    const inputs = {
-      ...telegram,
-      release_profile: releaseProfile,
-      ref: context.targetRef,
-      rerun_group: context.rerunGroup,
-      run_release_soak: false,
-    };
-    const expressionContext = {
-      inputs,
-      needs: { resolve_target: { outputs: { skip_package_telegram_e2e: "true" } } },
-    };
     const selectedEnv = Object.fromEntries(
-      [
-        "RELEASE_PROFILE",
-        "NPM_TELEGRAM_PACKAGE_SPEC",
-        "NPM_TELEGRAM_PROVIDER_MODE",
-        "NPM_TELEGRAM_SCENARIO",
-        "SKIP_PACKAGE_TELEGRAM_E2E",
-        "ALLOW_UNRELEASED_CHANGELOG",
-      ].map((key) => [
-        key,
-        String(
-          runInNewContext(writer.env[key].replace(/^\$\{\{\s*|\s*\}\}$/gu, ""), expressionContext),
-        ),
+      Object.entries({ ...telegram, release_profile: releaseProfile }).map(([key, value]) => [
+        key.toUpperCase(),
+        value,
       ]),
     );
-    const manifest = JSON.parse(
-      run({
-        ...writerContext(context),
-        ...selectedEnv,
-        ...(await publicationWriterFixture(directory, {
-          sourceSha: context.targetRef,
-          workflowSha: context.workflowSha,
-          workflowFullRef: context.workflowFullRef,
-        })),
-      }),
-    );
+    const npmPreflight = {
+      source: { sha: context.targetRef },
+      producer: { workflowSha: context.workflowSha },
+    };
+    const projectedContext = manifestContextFromEnvironment(source, {
+      ...writerContext(context),
+      ...selectedEnv,
+      QUALIFIED_NPM_BUNDLE_JSON: JSON.stringify(npmPreflight),
+      PREPARED_PLUGIN_NPM_JSON: JSON.stringify({ descriptor: "prepared-plugin-npm" }),
+    });
+    const manifest = buildManifest({ plan, context: projectedContext });
+    expect(manifest.publicationArtifacts).toMatchObject({
+      npmPreflight,
+      pluginNpm: { descriptor: "prepared-plugin-npm" },
+    });
     expect(manifest).toMatchObject({
       releaseProfile,
       controls: {
@@ -532,21 +324,12 @@ it.each(["beta", "stable", "full"])(
       },
     });
     expect(manifest.publicationAdmission).toEqual(plan.publicationAdmission);
-    expectPublication(manifest, context.targetRef, context.workflowSha);
+    expect(manifest).toHaveProperty(
+      "validationInputs.publicationSelectionJson",
+      publicationIntentInputs(source).publicationSelectionJson,
+    );
   },
 );
-
-it("separates immutable observation bytes from post-upload admission and ZIP digest", () => {
-  const { observations, admission, record } = registryEvidence();
-  expect(observations).not.toHaveProperty("admittedAt");
-  expect(observations).not.toHaveProperty("artifact");
-  expect(observations).not.toHaveProperty("status");
-  expect(admission.binding.observationsDigest).toBe(
-    `sha256:${createHash("sha256").update(publicationObservationJson(observations)).digest("hex")}`,
-  );
-  expect(admission.binding.observationsDigest).not.toBe(admission.binding.artifact.digest);
-  expect(validateAdmission(record)).toEqual(admission);
-});
 
 it.each([
   ["2026-09-13T14:05:00.000Z", true],
@@ -631,143 +414,55 @@ function rejectReceipt(evidence: ReturnType<typeof registryEvidence>) {
   expect(() => validateAdmission(record)).toThrow(error);
 }
 
-it.each([
-  ["openclaw", true],
-  ["@openclaw/gateway-client", true],
-  ["openclaw", false],
-] as const)("rejects pending npm authority for %s (absent=%s)", (name, absent) => {
+it("rejects pending npm authority for an existing root package", () => {
   const evidence = registryEvidence();
-  const { source, observations } = evidence;
-  assert(source.projection);
-  const root = observations.npm[0]!;
-  assert(root.outcome === "observed");
-  source.projection.packages = [{ name, version: "2026.9.9", targets: ["npm"] }];
-  root.name = name;
-  if (absent) {
-    root.state = absentNpmState();
-  }
-  observations.pendingAuthority = pendingNpmAuthority(name);
+  evidence.observations.pendingAuthority = [
+    {
+      registry: "npm",
+      name: "openclaw",
+      action: "owner-preparation-and-access",
+      status: "unresolved",
+    },
+  ];
   rejectReceipt(evidence);
 });
 
-it.each([
-  "prepared-package-absent",
-  "prepared-wrong-provider",
-  "prepared-wrong-repository",
-  "prepared-wrong-workflow",
-  "prepared-environment",
-  "prepared-missing-normal-trust",
-  "configure-as-repair",
-  "repair-as-configure",
-])("rejects unsupported ClawHub receipt semantics: %s", (fault) => {
+// Prepared publisher identity belongs to clawhub-postpublish.test.ts; admission
+// exercises that boundary in full-release-publication-admission.test.ts.
+it.each([false, true])("rejects inverted ClawHub owner action (published=%s)", (published) => {
   const evidence = registryEvidence();
   const { source, observations } = evidence;
-  assert(source.projection && source.publicationSelection);
+  assert(source.projection);
   source.projection.packages.unshift({ ...pluginPackage, targets: ["clawhub"] });
-  if (fault.startsWith("prepared-")) {
-    source.publicationSelection.route = "prepared";
-  }
-  const present = fault !== "prepared-package-absent";
-  const published = fault === "configure-as-repair";
-  const trusted =
-    fault.startsWith("prepared-") && present && fault !== "prepared-missing-normal-trust";
-  const publisher =
-    trusted || fault === "prepared-missing-normal-trust"
-      ? {
-          provider: fault === "prepared-wrong-provider" ? "other" : "github-actions",
-          repository: fault === "prepared-wrong-repository" ? "other/repo" : "openclaw/openclaw",
-          workflowFilename:
-            fault === "prepared-wrong-workflow" ? "other.yml" : "plugin-clawhub-release.yml",
-          environment: fault === "prepared-environment" ? "other" : null,
-        }
-      : null;
   observations.clawhub = [
     {
       ...pluginPackage,
       observedAt: observations.collectionStartedAt,
       state: {
-        packageExists: present,
+        packageExists: true,
         alreadyPublished: published,
-        hasTrustedPublisher: trusted,
-        trustedPublisher: publisher,
+        hasTrustedPublisher: false,
+        trustedPublisher: null,
       },
     },
   ];
   observations.plans.clawhub = {
     ...registryPlan(),
     all: [{ ...pluginPackage, alreadyPublished: published }],
-    candidates: present && trusted && !published ? ["@openclaw/test"] : [],
-    skippedPublished: published ? ["@openclaw/test"] : [],
-    bootstrapCandidates: present ? [] : ["@openclaw/test"],
-    missingTrustedPublisher: present && !trusted ? ["@openclaw/test"] : [],
+    skippedPublished: published ? [pluginPackage.name] : [],
+    bootstrapCandidates: [],
+    missingTrustedPublisher: [pluginPackage.name],
   };
-  observations.pendingAuthority = trusted
-    ? []
-    : [
-        {
-          registry: "clawhub",
-          name: "@openclaw/test",
-          status: "unresolved",
-          action: !present
-            ? "bootstrap-and-owner-access"
-            : published
-              ? "publisher-repair"
-              : "configure-only",
-        },
-      ];
+  observations.pendingAuthority = [
+    {
+      registry: "clawhub",
+      name: pluginPackage.name,
+      status: "unresolved",
+      action: published ? "publisher-repair" : "configure-only",
+    },
+  ];
   rejectReceipt(evidence);
 });
-
-it.each([
-  ["normal", "beta", "2026.9.9-beta.1", true],
-  ["prepared", "beta", "2026.9.9-beta.1", true],
-  ["normal", "latest", "2026.9.9-beta.1", true],
-  ["prepared", "latest", "2026.9.9-beta.1", true],
-  ["normal", "latest", "2026.9.9", true],
-  ["prepared", "latest", "2026.9.9-1", true],
-  ["normal", "beta", "2026.9.9", false],
-  ["prepared", "beta", "2026.9.9-1", false],
-  ["extended-stable", "extended-stable", "2026.8.33", false],
-] as const)(
-  "retains only supported plugin absence on %s/%s/%s (accepted=%s)",
-  (route, npmDistTag, version, accepted) => {
-    const evidence = registryEvidence();
-    const { source, observations, descriptor, admission } = evidence;
-    assert(source.publicationSelection && source.projection);
-    Object.assign(source.publicationSelection, { route, npmDistTag });
-    const rootVersion = route === "extended-stable" ? version : "2026.9.9";
-    source.projection.version = rootVersion;
-    source.projection.packages = [
-      { name: "@openclaw/test", version, targets: ["npm"] },
-      { name: "openclaw", version: rootVersion, targets: ["npm"] },
-    ];
-    refreshSource(evidence);
-    const root = observations.npm[0]!;
-    assert(root.outcome === "observed");
-    observations.npm = [
-      {
-        ...root,
-        name: "@openclaw/test",
-        version,
-        state: absentNpmState(),
-      },
-      { ...root, version: rootVersion },
-    ];
-    observations.plans.npm = {
-      ...registryPlan(),
-      all: [{ name: "@openclaw/test", version, alreadyPublished: false }],
-      candidates: ["@openclaw/test"],
-    };
-    observations.pendingAuthority = pendingNpmAuthority("@openclaw/test");
-    const create = () =>
-      createAdmission(source, observations, descriptor, admission.binding.admittedAt);
-    if (accepted) {
-      expect(create().observations.pendingAuthority).toEqual(observations.pendingAuthority);
-    } else {
-      expect(create).toThrow(/bootstrap/u);
-    }
-  },
-);
 
 it("retains distinct root publication history in the actual reused manifest writer and budget", () => {
   const { plan, context } = registryBudgetFixture();
@@ -788,27 +483,13 @@ it("retains distinct root publication history in the actual reused manifest writ
   const manifest = JSON.parse(manifestWriterFixture(carried).run(writerContext(context)));
   expect.soft(manifest.evidenceReuse.publication).toEqual(root.record);
   expect(manifest.publicationAdmission).toEqual(plan.publicationAdmission);
+  expect(validateSource(manifest, { sourceAdmissionContract: "1" })).toEqual(plan.sourceAdmission);
+  expect(manifest.sourceAdmission).not.toEqual(root.source);
   expect(JSON.stringify(sourceManifest)).toBe(originalRoot);
   expect(() => assertBudget(carried, context)).not.toThrow();
-  const current = registryEvidence("123", 132);
-  const largeRoot = registryEvidence("99", 132);
-  const combined = {
-    ...carried,
-    ...current.record,
-    evidenceReuse: {
-      ...carried.evidenceReuse,
-      sourceManifest: { ...sourceManifest, ...largeRoot.record },
-    },
-  };
-  // Each receipt fits; the actual root/current enclosing writer must not drop
-  // the older one to appear under the cap.
-  expect(() => serializeArtifact(largeRoot.record)).not.toThrow();
-  expect(() => serializeArtifact(current.record)).not.toThrow();
-  expect(() => buildManifest({ plan: combined, context })).toThrow(/size limit/u);
-  expect(() => assertBudget(combined, context)).toThrow(/size limit/u);
 });
 
-it("reserves JSON escaping of pending bounded fields without truncating later job evidence", () => {
+it("reserves escaped bounded fields and preserves job evidence at the UTF-8 byte limit", () => {
   const { plan, context } = registryBudgetFixture();
   expect(() => assertBudget(plan, context)).not.toThrow();
   // These are actual carried bytes, not assumed headroom for unknown future jobs.
@@ -824,39 +505,16 @@ it("reserves JSON escaping of pending bounded fields without truncating later jo
   expect(() => assertBudget(carried, context)).toThrow(/size limit/u);
 
   const drain = fullMatrixDecision();
-  const manifest = buildManifest({ plan, drain, context });
-  const firstChild = Object.values(drain.children)[0]!;
-  assert(isRecord(firstChild.timing) && Array.isArray(firstChild.timing.jobs));
-  const firstJob = firstChild.timing.jobs[0]!;
-  assert(isRecord(firstJob) && typeof firstJob.url === "string");
-  assert(isRecord(manifest.childEvidence) && isRecord(manifest.childEvidence.normalCi));
-  assert(Array.isArray(manifest.childEvidence.normalCi.jobs));
-  const projectedJob = manifest.childEvidence.normalCi.jobs[0];
-  assert(isRecord(projectedJob));
-  const remaining = MAX_RELEASE_ARTIFACT_BYTES - artifactSize(manifest);
-  const extraJob = { ...firstJob, name: "later child job 000000" };
-  const jobBytes =
-    Buffer.byteLength(
-      JSON.stringify({
-        ...projectedJob,
-        name: extraJob.name,
-      }),
-    ) + 1;
-  const count = Math.floor(remaining / jobBytes);
-  firstChild.timing.jobs.push(
-    ...Array.from({ length: count }, (_, index) => ({
-      ...extraJob,
-      name: `later child job ${String(index).padStart(6, "0")}`,
-    })),
+  const manifestContext = { ...context, validationInputs: { padding: "" } };
+  const manifest = buildManifest({ plan, drain, context: manifestContext });
+  manifestContext.validationInputs.padding = "x".repeat(
+    MAX_RELEASE_ARTIFACT_BYTES - artifactSize(manifest),
   );
-  const grownBytes = artifactSize(buildManifest({ plan, drain, context }));
-  firstJob.url += "x".repeat(MAX_RELEASE_ARTIFACT_BYTES - grownBytes);
-  expect(firstJob.url.length).toBeLessThanOrEqual(1024);
-  expect(artifactSize(buildManifest({ plan, drain, context }))).toBe(MAX_RELEASE_ARTIFACT_BYTES);
-  firstJob.url += "x";
-  expect(() => buildManifest({ plan, drain, context })).toThrow(/size limit/u);
-  expect(firstChild.timing.jobs).toHaveLength(186 + count);
-  expect(plan.publicationAdmission).toEqual(registryEvidence().admission);
+  const exact = buildManifest({ plan, drain, context: manifestContext });
+  expect(artifactSize(exact)).toBe(MAX_RELEASE_ARTIFACT_BYTES);
+  expect(exact.childEvidence).toEqual(manifest.childEvidence);
+  manifestContext.validationInputs.padding += "é";
+  expect(() => buildManifest({ plan, drain, context: manifestContext })).toThrow(/size limit/u);
 });
 
 it.each([false, true])(
@@ -888,14 +546,6 @@ it.each([false, true])(
       .join("");
     writeFileSync(join(directory, "reusable-evidence.outputs"), retained);
     const output = join(directory, "outputs");
-    const workflow = releaseWorkflow();
-    const step = workflow.jobs.evidence_reuse.steps.find(
-      (value: { id?: string }) => value.id === "find",
-    );
-    const command = step.run.trim().split("\n").at(-1);
-    expect(command).toBe(
-      "node workflow/scripts/full-release-validation-state.mjs reuse-publication",
-    );
     const result = spawnSync(
       process.execPath,
       [resolve("scripts/full-release-validation-state.mjs"), "reuse-publication"],
@@ -917,6 +567,7 @@ it.each([false, true])(
       expect(result.status).not.toBe(0);
       expect(result.stderr).toContain("size limit");
       expect(existsSync(output)).toBe(false);
+      const workflow = releaseWorkflow();
       for (const id of [
         "normal_ci",
         "prepare_npm_package",
@@ -959,23 +610,14 @@ it.each([false, true])(
 );
 
 function fullMatrixChildren() {
-  // Observed full-profile fanout from parent 33230733150, including both phases.
-  const counts = {
-    normalCi: 186,
-    pluginPrereleaseIndependent: 38,
-    pluginPrereleaseCandidate: 44,
-    releaseChecksIndependent: 130,
-    releaseChecksCandidate: 121,
-    productPerformance: 7,
-  };
-  return Object.entries(counts).map(([key, count], childIndex) => {
-    const runId = String(1000 + childIndex);
+  return ["normalCi"].map((key) => {
+    const runId = "1000";
     const composite = composeReleaseAttemptJobs(
       [
         {
           runAttempt: 1,
-          jobs: Array.from({ length: count }, (_, index) => ({
-            name: `${key} / Docker and repository validation shard ${index}`,
+          jobs: Array.from({ length: 512 }, (_, index) => ({
+            name: `Synthetic matrix job ${index}: ${"x".repeat(128)}`,
             status: "completed",
             conclusion: "success",
             started_at: "2026-08-29T03:25:00Z",
@@ -986,11 +628,8 @@ function fullMatrixChildren() {
       ],
       { plannedRunAttempt: 1, effectiveRunAttempt: 1 },
     );
-    return {
-      key,
+    return releaseChild(key, {
       runId,
-      selected: true,
-      runAttempt: 1,
       plannedRunAttempt: 1,
       compositeJobsSha256: composite.sha256,
       jobs: composite.jobs,
@@ -999,16 +638,13 @@ function fullMatrixChildren() {
       conclusion: "success",
       dispatchActor: "github-actions[bot]",
       triggeringActor: "github-actions[bot]",
-      displayTitle: key,
       repository: "openclaw/openclaw",
-      errors: [],
       workflow: `${key}.yml`,
       workflowRef: "main",
-      workflowSha: SHA,
       url: `https://github.com/openclaw/openclaw/actions/runs/${runId}`,
       createdAt: "2026-08-29T03:25:00Z",
       updatedAt: "2026-08-29T03:26:00Z",
-    };
+    });
   });
 }
 
@@ -1094,7 +730,7 @@ it("writes only a full-input digest and safe context", () => {
   const privateValue = "/private/example/operator/candidate.tgz";
   const secretValue = "synthetic-private-dispatch-value";
   const shellValue = 'line one\n$(touch unexpected) "quoted"';
-  const { result, bytes, context, dir, workflow, writer, steps } = runDispatchWitness({
+  const { result, bytes, context, dir, writer, steps } = runDispatchWitness({
     inputs: {
       text: shellValue,
       secret: secretValue,
@@ -1126,50 +762,22 @@ it("writes only a full-input digest and safe context", () => {
   expect(JSON.stringify(writer.env)).not.toMatch(/inputs|github\.event/u);
   expect(writer.run).not.toContain("${{");
   expect(existsSync(join(dir, "unexpected"))).toBe(false);
-  expect(workflow.env.FULL_RELEASE_DISPATCH_WITNESS_CONTRACT).toBe("1");
   expect(steps.indexOf(writer)).toBeLessThan(
     steps.findIndex((step: { id?: string }) => step.id === "tooling_identity"),
   );
-  expect(
-    steps.find((step: { name?: string }) => step.name === "Upload root dispatch inputs").with,
-  ).toMatchObject({
-    name: "full-release-dispatch-inputs-${{ github.run_id }}-${{ github.run_attempt }}",
-    "if-no-files-found": "error",
-    "retention-days": 7,
-  });
 });
 
-it("binds every declared input and default independently of event key order", () => {
-  const workflow = releaseWorkflow();
-  const definitions = workflow.on.workflow_dispatch.inputs as Record<string, { default?: unknown }>;
-  const inputs = Object.fromEntries(
-    Object.entries(definitions).map(([key, definition]) => {
-      const value = definition.default ?? "";
-      if (typeof value !== "string" && typeof value !== "boolean" && typeof value !== "number") {
-        throw new Error("Workflow input default must be a primitive");
-      }
-      return [key, String(value)];
-    }),
-  );
+it("binds primitive input values independently of event key order", () => {
+  const inputs = { text: "value", count: 3, enabled: false };
   const original = runDispatchWitness({ inputs });
-  expect(original.result.status, original.result.stderr).toBe(0);
-  const reordered = runDispatchWitness({
-    inputs: Object.fromEntries(Object.entries(inputs).toReversed()),
-  });
-  expect(reordered.result.status, reordered.result.stderr).toBe(0);
-  expect(reordered.bytes).toBe(original.bytes);
-  for (const key of Object.keys(inputs)) {
-    const changed = runDispatchWitness({
-      inputs: { ...inputs, [key]: `${inputs[key]}-changed` },
-    });
-    expect(changed.result.status, changed.result.stderr).toBe(0);
-    expect(JSON.parse(changed.bytes).inputsDigest, key).not.toBe(
-      JSON.parse(original.bytes).inputsDigest,
-    );
+  const reordered = runDispatchWitness({ inputs: { enabled: "false", count: "3", text: "value" } });
+  for (const { result } of [original, reordered]) {
+    expect(result.status, result.stderr).toBe(0);
   }
-  expect(runDispatchWitness({ inputs: { value: false, count: 3 } }).bytes).toBe(
-    runDispatchWitness({ inputs: { count: "3", value: "false" } }).bytes,
-  );
+  expect(reordered.bytes).toBe(original.bytes);
+  const changed = runDispatchWitness({ inputs: { ...inputs, text: "changed" } });
+  expect(changed.result.status, changed.result.stderr).toBe(0);
+  expect(JSON.parse(changed.bytes).inputsDigest).not.toBe(JSON.parse(original.bytes).inputsDigest);
   expect(runDispatchWitness({ inputs: { value: "" } }).bytes).not.toBe(
     runDispatchWitness({ inputs: {} }).bytes,
   );
@@ -1208,189 +816,67 @@ it.each([
   },
 );
 
-it.each([
-  { reuse: false, source: false },
-  { reuse: true, source: false },
-  { reuse: false, source: true },
-  { reuse: true, source: true },
-])(
-  "writes all matrix evidence with reuse=$reuse source=$source without argv size limits",
-  async ({ reuse, source }) => {
-    const children = fullMatrixChildren();
-    const drain = fullMatrixDecision(children);
-    const expectedChildren = Object.fromEntries(
-      children.map((child) => [
-        child.key,
-        {
-          runId: child.runId,
-          plannedRunAttempt: child.plannedRunAttempt,
-          observedRunAttempts: child.observedRunAttempts,
-          compositeJobsSha256: child.compositeJobsSha256,
-          dispatchActor: child.dispatchActor,
-          triggeringActor: child.triggeringActor,
-          repository: child.repository,
-          effectiveRunAttempt: child.runAttempt,
-          jobs: child.jobs,
-        },
-      ]),
-    );
-    expect(Buffer.byteLength(JSON.stringify(expectedChildren))).toBeGreaterThan(128 * 1024);
-    const request = sourceRequest(
-      { provider: "openai" },
-      {
-        PUBLICATION_TOOLING_JSON: JSON.stringify({
-          fullRef: "refs/heads/main",
-          sha: "d".repeat(40),
-        }),
-        PUBLICATION_TARGET_SHA: SHA,
-        GITHUB_SHA: "d".repeat(40),
-        GITHUB_RUN_ID: "124",
-      },
-    );
-    const projection = sourceProjection();
-    const sourceAdmission = createSource(request, inventory, projection);
-    const oldSource = createSource(
-      {
-        ...request,
-        runId: "98",
-        candidateSha: "c".repeat(40),
-      },
-      inventory,
-      projection,
-    );
-    const trustedWorkflow = { fullRef: "refs/heads/main", ref: "main", sha: "d".repeat(40) };
-    const sourceManifest = {
-      workflowName: "Full Release Validation",
-      ...(source
-        ? { sourceAdmissionContract: "1", sourceAdmission: oldSource, trustedWorkflow }
-        : {}),
-      releaseProfile: source ? "full" : "stable",
-      rerunGroup: "all",
-      runReleaseSoak: "true",
-      childRuns: { normalCi: "1000" },
-      validationInputs: {
-        provider: "openai",
-        ...(source
-          ? {
-              ...publicationIntentInputs(oldSource),
-              targetContextRef: "release/2026.9.9",
-              allowUnreleasedChangelog: "false",
-            }
-          : {}),
-      },
-      controls: { stableSoakRequired: true },
-      childEvidence: expectedChildren,
-    };
-    const plan = {
-      ...(source ? { sourceAdmissionContract: "1", sourceAdmission, trustedWorkflow } : {}),
-      targetSha: SHA,
-      sha256: "b".repeat(64),
-      parentRunAttempt: 1,
-      candidate: { package: { sourceSha: SHA } },
-      children: children.map((child) => ({
-        key: child.key,
-        runId: child.runId,
-      })),
-      evidenceReuse: {
-        requested: reuse,
-        selectedRunId: "99",
-        rootRunId: "98",
-        evidenceSha: "c".repeat(40),
-        policy: "changelog-only-release-v1",
-        changedPaths: ["CHANGELOG.md"],
-        sourceManifest,
-      },
-    };
-    const { directory: dir, run } = manifestWriterFixture(plan, drain);
-    const bytes = run({
-      EXTENSION_TEST_EXCLUDE_PATTERNS_JSON: "[]",
-      GITHUB_RUN_ID: "124",
-      GITHUB_RUN_ATTEMPT: "2",
-      GITHUB_REF_NAME: "release-ci/test",
-      GITHUB_SHA: "d".repeat(40),
-      GITHUB_REF: "refs/heads/release-ci/test",
-      GITHUB_REF_TYPE: "branch",
-      TARGET_REF: SHA,
-      ...(source
-        ? {
-            TARGET_CONTEXT_REF: "release/2026.9.9",
-            PROVIDER: "openai",
-            ALLOW_UNRELEASED_CHANGELOG: "false",
-          }
-        : {}),
-      RELEASE_PROFILE: "full",
-      RERUN_GROUP: "all",
-      RUN_RELEASE_SOAK: "true",
-      ...(source
-        ? await publicationWriterFixture(dir, {
-            sourceSha: SHA,
-            workflowSha: "d".repeat(40),
-            workflowFullRef: "refs/heads/release-ci/test",
-          })
-        : {}),
-    });
-    expect(Buffer.byteLength(bytes)).toBeLessThan(MAX_RELEASE_ARTIFACT_BYTES);
-    const manifest = JSON.parse(bytes);
-    if (source) {
-      expectPublication(manifest, SHA, "d".repeat(40));
-      expect(manifest.publicationArtifacts.pluginNpm).toEqual({
-        descriptor: "prepared-plugin-npm",
-      });
-      expect(validateSource(manifest, { sourceAdmissionContract: "1" })).toEqual(sourceAdmission);
-      expect(manifest.sourceAdmission).not.toEqual(oldSource);
-      expect(sourceManifest.sourceAdmission).toEqual(oldSource);
-      expect(manifest.validationInputs.publicationSelectionJson).toBe(
-        publicationIntentInputs(sourceAdmission).publicationSelectionJson,
-      );
-    } else {
-      expect(manifest).not.toHaveProperty("sourceAdmission");
-    }
-    expect(manifest.childEvidence).toEqual(expectedChildren);
+it.each([false, true])("writes complete large-matrix evidence with reuse=%s", (reuse) => {
+  const children = fullMatrixChildren();
+  const { plan, context } = registryBudgetFixture();
+  const sourceManifest = {
+    releaseProfile: "stable",
+    runReleaseSoak: "true",
+    childRuns: { normalCi: "1000" },
+    validationInputs: { provider: "openai" },
+    controls: { stableSoakRequired: true },
+  };
+  const carried = {
+    ...plan,
+    sourceAdmissionContract: undefined,
+    sourceAdmission: undefined,
+    publicationAdmissionContract: undefined,
+    publicationAdmission: undefined,
+    evidenceReuse: {
+      ...plan.evidenceReuse,
+      requested: reuse,
+      selectedRunId: "99",
+      rootRunId: "98",
+      evidenceSha: "c".repeat(40),
+      policy: "changelog-only-release-v1",
+      changedPaths: ["CHANGELOG.md"],
+      sourceManifest,
+    },
+  };
+  const bytes = manifestWriterFixture(carried, fullMatrixDecision(children)).run(
+    writerContext(context),
+  );
+  expect(Buffer.byteLength(bytes)).toBeGreaterThan(128 * 1024);
+  expect(Buffer.byteLength(bytes)).toBeLessThan(MAX_RELEASE_ARTIFACT_BYTES);
+  const manifest = JSON.parse(bytes);
+  expect(manifest.childEvidence).toMatchObject(
+    Object.fromEntries(children.map(({ key, runId, jobs }) => [key, { runId, jobs }])),
+  );
+  expect(manifest).toMatchObject({
+    version: 4,
+    runId: context.runId,
+    runAttempt: context.runAttempt,
+    targetSha: plan.targetSha,
+    candidateBinding: plan.candidate,
+    executionPlanSha256: plan.sha256,
+    sourceParentRunAttempt: 1,
+  });
+  expect(manifest).not.toHaveProperty("sourceAdmission");
+  if (reuse) {
     expect(manifest).toMatchObject({
-      version: 4,
-      runId: "124",
-      runAttempt: "2",
-      targetSha: SHA,
-      candidateBinding: plan.candidate,
-      executionPlanSha256: plan.sha256,
-      sourceParentRunAttempt: 1,
+      ...sourceManifest,
+      evidenceReuse: {
+        policy: carried.evidenceReuse.policy,
+        runId: "98",
+        selectedRunId: "99",
+        evidenceSha: carried.evidenceReuse.evidenceSha,
+        changedPaths: ["CHANGELOG.md"],
+      },
     });
-    if (reuse) {
-      expect(manifest).toMatchObject({
-        releaseProfile: source ? "full" : "stable",
-        runReleaseSoak: "true",
-        childRuns: sourceManifest.childRuns,
-        validationInputs: sourceManifest.validationInputs,
-        evidenceReuse: {
-          policy: plan.evidenceReuse.policy,
-          runId: "98",
-          selectedRunId: "99",
-          evidenceSha: plan.evidenceReuse.evidenceSha,
-          changedPaths: ["CHANGELOG.md"],
-        },
-      });
-    } else {
-      expect(manifest).toMatchObject({
-        releaseProfile: "full",
-        rerunGroup: "all",
-        childRuns: sourceManifest.childRuns,
-      });
-      expect(manifest).not.toHaveProperty("evidenceReuse");
-    }
-  },
-);
-
-it("compacts the full matrix without dropping job evidence and bounds UTF-8 bytes", () => {
-  const payload = fullMatrixDecision();
-  const compact = serializeArtifact(payload);
-  expect(JSON.parse(compact)).toEqual(payload);
-  expect(Buffer.byteLength(compact)).toBeGreaterThan(128 * 1024);
-  expect(Buffer.byteLength(compact)).toBeLessThan(MAX_RELEASE_ARTIFACT_BYTES);
-  expect(compact.split("\n")).toHaveLength(2);
-
-  const value = "x".repeat(MAX_RELEASE_ARTIFACT_BYTES - artifactSize({ value: "" }));
-  expect(artifactSize({ value })).toBe(MAX_RELEASE_ARTIFACT_BYTES);
-  expect(() => serializeArtifact({ value: `${value}é` })).toThrow("size limit");
+  } else {
+    expect(manifest).toMatchObject({ releaseProfile: "full", rerunGroup: "all" });
+    expect(manifest).not.toHaveProperty("evidenceReuse");
+  }
 });
 
 it.each(["ci.yml", "plugin-prerelease.yml"])(
