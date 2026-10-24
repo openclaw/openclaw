@@ -38,6 +38,8 @@ export const MODEL_FIELD_HELP: Record<string, string> = {
     "Static HTTP headers merged into provider requests for tenant routing, proxy auth, or custom gateway requirements. Use this sparingly and keep sensitive header values in secrets.",
   "models.providers.*.authHeader":
     "When true, credentials are sent via the HTTP Authorization header even if alternate auth is possible. Use this only when your provider or proxy explicitly requires Authorization forwarding.",
+  "models.providers.*.failureCopy":
+    "Plain text people see instead of the built-in failure message when a request to this provider fails with one of these error types, keyed by the `type` in the provider's error body (for example `insufficient_balance`; up to 64 letters, digits, `_`, `.`, `:` or `-`). Use it for refusals your own provider or proxy defines, such as an empty prepaid balance behind a 401. Static text of up to 300 characters, shown with a leading ⚠️ like the built-in messages: the provider's own message is never shown. Failure classification, fallback and cooldowns are unchanged, so while the failure class keeps the key or profile cooling down, requests fail before reaching the provider and show the built-in message.",
   "models.providers.*.agentRuntime":
     "Optional low-level agent runtime policy for this provider. Use provider/model runtime policy instead of agent-wide runtime pins; omitted/default lets OpenClaw choose the runtime for the selected provider.",
   "models.providers.*.agentRuntime.id":

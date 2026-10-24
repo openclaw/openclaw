@@ -80,6 +80,7 @@ Configuring a custom/local provider `baseUrl` is also the narrow network trust d
     - `models.providers.*.authHeader`: force credential transport in the `Authorization` header when required.
     - `models.providers.*.baseUrl`: upstream API base URL.
     - `models.providers.*.headers`: extra static headers for proxy/tenant routing.
+    - `models.providers.*.failureCopy`: text people see instead of the built-in failure message when a request to this provider fails with one of these error types, keyed by the `type` in the provider's error body (up to 64 letters, digits, `_`, `.`, `:` or `-`). Use it for refusals your own provider or proxy defines, such as an empty prepaid balance sent as a 401, which OpenClaw otherwise words as a failed sign-in. Plain text only, up to 300 characters, shown with a leading ⚠️ like the built-in messages: the provider's own message is never shown. For example, `{ "insufficient_balance": "Your balance is empty. Top it up on the billing page." }`. Applies to chat replies and run errors, also when the last model of a fallback chain fails so. Classification, fallback and cooldowns are unchanged: while the failure class keeps the key or auth profile cooling down, requests fail before reaching the provider and show the built-in message, and chat history shows the built-in message too.
 
   </Accordion>
   <Accordion title="Request transport overrides">

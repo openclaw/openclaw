@@ -24,6 +24,7 @@ import {
   type EmbeddedAgentParams,
   type FallbackRunnerParams,
   createTestFallbackSummaryError,
+  createFollowupRun,
 } from "./agent-runner-execution.test-support.js";
 import type { AgentTurnParams } from "./agent-runner-execution.types.js";
 import { buildKnownAgentRunFailureReplyPayload } from "./agent-runner-failure-reply.js";
@@ -117,6 +118,56 @@ function createOpenAiServiceUnavailableError() {
 }
 
 describe("executeAgentTurn: provider failures", () => {
+  describe("a provider refusal with operator copy", () => {
+    // A prepaid proxy's refusal at an empty balance, sent as a 401 the runner classifies as auth (synthetic).
+    const copy = "Your prepaid balance is empty. Top it up on the billing page.";
+    const refused = (errorType: string) =>
+      new FailoverError(`⚠️ ${copy}`, {
+        reason: "auth",
+        provider: "acme-proxy",
+        model: "test-model",
+        status: 401,
+        code: "401",
+        errorType,
+        rawError: "401 Your balance is empty. Top up to continue.",
+      });
+    const reply = async (error: FailoverError) => {
+      const followupRun = createFollowupRun();
+      followupRun.run.config = {
+        models: {
+          providers: {
+            "acme-proxy": {
+              baseUrl: "https://proxy.example.test/v1",
+              models: [],
+              failureCopy: { insufficient_balance: copy },
+            },
+          },
+        },
+      };
+      state.runEmbeddedAgentMock.mockRejectedValueOnce(error);
+      return finalPayload(
+        await executeTestTurn({ followupRun, sessionCtx: createDirectFailureSessionCtx() }),
+      );
+    };
+
+    it.each(["chat app", "control UI"])(
+      "replies with the operator's text for the provider's error type: %s",
+      async (surface) => {
+        state.isInternalMessageChannelMock.mockReturnValue(surface === "control UI");
+        const payload = await reply(refused("insufficient_balance"));
+        expect(payload).toMatchObject({ isError: true, text: `⚠️ ${copy}` });
+        expect(payload.text).not.toContain("Top up to continue");
+      },
+    );
+
+    it("keeps the failure class's copy for another error type", async () => {
+      expect(await reply(refused("invalid_api_key"))).toMatchObject({
+        isError: true,
+        text: PROVIDER_AUTHENTICATION_ERROR_USER_MESSAGE,
+      });
+    });
+  });
+
   it("surfaces provider authentication failures in non-direct chats", async () => {
     const rawError =
       "unexpected status 401 Unauthorized: Missing bearer or basic authentication in header, url: https://api.openai.com/v1/responses";

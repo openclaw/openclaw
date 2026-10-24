@@ -547,6 +547,8 @@ export function describeFailoverError(err: unknown): {
   reason?: FailoverReason;
   status?: number;
   code?: string;
+  /** The provider's own error type, as its error body names it. */
+  errorType?: string;
   provider?: string;
   model?: string;
   profileId?: string;
@@ -569,6 +571,7 @@ export function describeFailoverError(err: unknown): {
       reason: err.reason,
       status: normalizeFailoverStatus(err.status, err.code),
       code: err.code,
+      errorType: err.errorType,
       provider: err.provider,
       model: err.model,
       profileId: err.profileId,
@@ -632,6 +635,7 @@ export function coerceToFailoverError(
           authMode: err.authMode ?? context?.authMode,
           status,
           code: err.code,
+          errorType: err.errorType,
           rawError:
             err.rawError ??
             (context?.rateLimitRetriesExhausted !== undefined ? message : undefined),

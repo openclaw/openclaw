@@ -34,6 +34,7 @@ import {
 } from "../failover/classify.js";
 import { isReasoningConstraintErrorMessage } from "../failover/context-overflow-tables.js";
 import { resolveExecutionApprovalFailureMessage } from "../failover/message-patterns.js";
+import { renderProviderFailureCopy } from "../failover/provider-failure-copy.js";
 import type { PreparedProviderFailoverOwner } from "../failover/provider-patterns.js";
 import {
   AUTH_INVALID_TOKEN_USER_TEXT,
@@ -320,6 +321,14 @@ export function formatUserFacingAssistantErrorText(
   }
   if (msg.errorCode === REPEATED_TOOL_ERROR_CODE) {
     return REPEATED_TOOL_ERROR_MESSAGE;
+  }
+  const providerCopy = renderProviderFailureCopy({
+    cfg: opts?.cfg,
+    provider: opts?.provider ?? msg.provider,
+    errorType: msg.errorType,
+  });
+  if (providerCopy) {
+    return providerCopy;
   }
   const modelLoadCopy = renderModelLoadFailureCopy(msg);
   if (modelLoadCopy) {

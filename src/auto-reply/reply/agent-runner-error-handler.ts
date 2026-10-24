@@ -7,6 +7,7 @@ import { isCompactionFailureError } from "../../agents/embedded-agent-helpers/co
 import { findCliTimeoutError, isFailoverError } from "../../agents/failover-error.js";
 import { isLikelyContextOverflowError } from "../../agents/failover/context-overflow.js";
 import { isCliPartialOutputRejected } from "../../agents/failover/error.js";
+import { renderProviderFailureCopy } from "../../agents/failover/provider-failure-copy.js";
 import { resolveReplyFailoverFacts } from "../../agents/failover/request-error-facts.js";
 import {
   GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
@@ -272,6 +273,20 @@ export async function handleAgentExecutionError(params: {
     return finalFailure(buildContextOverflowRecoveryText());
   }
   const replayPrevented = findCliTimeoutError(err)?.cliTimeout.observedActivity === true;
+  // The operator's text for the provider's own refusal wins over its failure class's copy on every surface, as in the
+  // run's error: it is static operator text, never the provider's.
+  const providerFailureCopy = renderProviderFailureCopy({
+    cfg: params.runtimeConfig,
+    provider: failoverFacts.provider,
+    errorType: failoverFacts.errorType,
+  });
+  if (providerFailureCopy) {
+    if (!providerRequestError) {
+      // The same log line as below, which a provider request error skips.
+      defaultRuntime.error(`Embedded agent failed before reply: ${message}`);
+    }
+    return await settleFailure({ text: providerFailureCopy });
+  }
   if (providerRequestError) {
     return await settleFailure({
       // Recorded retry exhaustion is more specific than generic quota guidance.

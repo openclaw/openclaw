@@ -504,6 +504,11 @@ function buildFailedCandidateAttempt(
     authMode: described.authMode,
     status: described.status,
     code: described.code,
+    // The type a provider named is this candidate's only when the error is from its provider.
+    errorType:
+      !described.provider || described.provider === candidate.provider
+        ? described.errorType
+        : undefined,
   };
 }
 
@@ -621,6 +626,7 @@ export function throwFallbackFailureSummary(params: {
     status: lastAttempt?.status,
     rateLimitRetriesExhausted: lastAttempt?.rateLimitRetriesExhausted,
     code: lastAttempt?.code,
+    errorType: lastAttempt?.errorType,
     cause: params.lastError instanceof Error ? params.lastError : undefined,
     sessionId: params.attribution?.sessionId,
     lane: params.attribution?.lane,

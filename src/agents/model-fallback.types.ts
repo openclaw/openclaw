@@ -21,6 +21,8 @@ export type FallbackAttempt = ModelCandidate & {
   authMode?: string;
   status?: number;
   code?: string;
+  /** The provider's own error type, as its error body names it. */
+  errorType?: string;
 };
 
 /** Original route plus the outer fallback stage that admitted one real attempt. */

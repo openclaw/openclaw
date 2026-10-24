@@ -18,6 +18,7 @@ export const MODEL_FIELD_LABELS: Record<string, string> = {
   "models.providers.*.params": "Model Provider Runtime Parameters",
   "models.providers.*.headers": "Model Provider Headers",
   "models.providers.*.authHeader": "Model Provider Authorization Header",
+  "models.providers.*.failureCopy": "Model Provider Failure Copy",
   "models.providers.*.agentRuntime": "Model Provider Runtime",
   "models.providers.*.agentRuntime.id": "Model Provider Runtime ID",
   "models.providers.*.localService": "Model Provider Local Service",

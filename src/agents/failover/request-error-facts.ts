@@ -29,6 +29,7 @@ export function resolveReplyFailoverFacts(error: unknown, message: string) {
   return {
     reason: reason || undefined,
     code: described.code,
+    errorType: described.errorType,
     provider: described.provider,
     model: described.model,
     status,

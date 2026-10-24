@@ -44,6 +44,8 @@ export class FailoverError extends Error {
   readonly authMode?: string;
   readonly status?: number;
   readonly code?: string;
+  /** The provider's own error type, as its error body names it (the assistant message's `errorType`). */
+  readonly errorType?: string;
   readonly rawError?: string;
   /** Controller-owned count exhaustion; zero means retries were disabled. Not a provider fact. */
   readonly rateLimitRetriesExhausted?: number;
@@ -73,6 +75,7 @@ export class FailoverError extends Error {
     this.authMode = params.authMode;
     this.status = params.status;
     this.code = params.code;
+    this.errorType = params.errorType;
     this.rawError = params.rawError;
     this.rateLimitRetriesExhausted = params.rateLimitRetriesExhausted;
     this.requestSizeCeiling = isProviderRequestSizeCeilingError(params.rawError ?? message);

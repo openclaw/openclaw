@@ -91,3 +91,63 @@ describe("formatAssistantErrorText streaming JSON parse classification", () => {
     },
   );
 });
+
+describe("provider failure copy", () => {
+  // A prepaid proxy's refusal at an empty balance, sent as a 401, as the provider error projection records it.
+  const refusal = makeAssistantMessageFixture({
+    api: "openai-completions",
+    provider: "acme-proxy",
+    errorMessage: "401 Your balance is empty. Top up to continue.",
+    errorCode: "401",
+    errorType: "insufficient_balance",
+    content: [],
+  });
+  const withCopy = (failureCopy: Record<string, string>, provider = "acme-proxy"): OpenClawConfig =>
+    ({
+      models: {
+        providers: {
+          [provider]: { baseUrl: "https://proxy.example.test/v1", models: [], failureCopy },
+        },
+      },
+    }) as OpenClawConfig;
+  const copy = "Your prepaid balance is empty. Top it up on the billing page.";
+
+  it("shows the operator's text for the provider's error type instead of the sign-in copy", () => {
+    expect(formatUserFacingAssistantErrorText(refusal, { provider: "acme-proxy" })).toContain(
+      "Couldn't sign in",
+    );
+    expect(
+      formatUserFacingAssistantErrorText(refusal, {
+        cfg: withCopy({ insufficient_balance: copy }),
+        provider: "acme-proxy",
+      }),
+    ).toBe(`⚠️ ${copy}`);
+    // Provider ids match as configured ids do elsewhere.
+    expect(
+      formatUserFacingAssistantErrorText(refusal, {
+        cfg: withCopy({ insufficient_balance: copy }, "ACME-Proxy"),
+      }),
+    ).toBe(`⚠️ ${copy}`);
+    // Text already marked is marked once.
+    expect(
+      formatUserFacingAssistantErrorText(refusal, {
+        cfg: withCopy({ insufficient_balance: `⚠️ ${copy}` }),
+        provider: "acme-proxy",
+      }),
+    ).toBe(`⚠️ ${copy}`);
+  });
+
+  it("keeps the built-in copy for another error type or provider, and never shows the provider's text", () => {
+    const builtIn = formatUserFacingAssistantErrorText(refusal, { provider: "acme-proxy" });
+    for (const [cfg, message] of [
+      [withCopy({ quota_exceeded: copy }), refusal],
+      [withCopy({ insufficient_balance: copy }, "other-proxy"), refusal],
+      [withCopy({ insufficient_balance: copy }), { ...refusal, errorType: undefined }],
+      [withCopy({ insufficient_balance: copy }), { ...refusal, errorType: "toString" }],
+    ] as const) {
+      const text = formatUserFacingAssistantErrorText(message, { cfg, provider: "acme-proxy" });
+      expect(text).toBe(builtIn);
+      expect(text).not.toContain("Top up to continue");
+    }
+  });
+});

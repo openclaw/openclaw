@@ -352,6 +352,14 @@ const ModelProviderSchema = z.strictObject({
   headers: z.record(z.string(), SecretInputSchema.register(sensitive)).optional(),
   /** Whether default Authorization header injection is enabled. */
   authHeader: z.boolean().optional(),
+  /**
+   * Operator text shown instead of the built-in failure copy when a request to this provider fails with one of
+   * these error types, as the provider names them in its error body. At most 300 characters, so a run's error event,
+   * whose text preview stops at 400, carries it whole.
+   */
+  failureCopy: z
+    .record(z.string().regex(/^[A-Za-z0-9_.:-]{1,64}$/), z.string().trim().min(1).max(300))
+    .optional(),
   /** Provider request transport/retry overrides. */
   request: ConfiguredModelProviderRequestSchema,
   models: z.array(ModelDefinitionSchema).optional(),
