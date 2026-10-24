@@ -5533,6 +5533,18 @@ try {
   };
   writeFileSync(path.join(output, "result.json"), JSON.stringify(result, null, 2));
   console.log(`RESULT ${path.join(output, "result.json")}`);
+} catch (error) {
+  if (values["github-options-observe"]) {
+    writeFileSync(
+      path.join(output, "github-options-failure.json"),
+      JSON.stringify({
+        stages: githubStages,
+        upstreamRequests: githubFixtureRequests,
+        observations: githubOptionsObservations,
+      }),
+    );
+  }
+  throw error;
 } finally {
   await cleanup();
 }

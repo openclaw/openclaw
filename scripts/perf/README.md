@@ -2221,6 +2221,9 @@ cleanup. Source workers also log `GITHUB_RECEIPT_IMPORT` for fallback-handler im
 taking at least 10 ms, with thread, command, source module, and epoch timing. These
 records distinguish cold command loading from database work without logging request
 contents. All compared sides must enable the same observer.
+Failed observed runs save their collected stages, upstream timings, and options
+observations in `github-options-failure.json`; this partial snapshot is diagnostic
+evidence, not a completed measurement.
 These durations overlap, and stale refresh work may finish after its originating
 handler. Use request IDs and timestamps to distinguish the critical path from
 background work; never add stage totals together. Gateway diagnostics separately
