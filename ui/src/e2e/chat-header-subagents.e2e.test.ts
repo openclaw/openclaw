@@ -15,7 +15,7 @@ import { sessionsListResponse } from "./session-management.test-support.ts";
 const suite = createControlUiE2eSuite({ name: "Chat header and delegated work" });
 
 suite.define(() => {
-  it("keeps new batches collapsed until Subagents is opened manually without duplicate wait status", async () => {
+  it("keeps new batches in Details and opens Subagents manually without duplicate wait status", async () => {
     await suite.withPage(
       {
         locale: "en-US",
@@ -60,9 +60,6 @@ suite.define(() => {
             "session.members.listEvidence",
           ],
         });
-        const activityModule = controlUiE2eBuiltModuleRequest(
-          "ui/src/pages/chat/components/chat-subagent-activity-live.tsx",
-        );
         const detailsChunk = Promise.withResolvers<void>();
         await page.route(
           controlUiE2eBuiltModuleRequest("ui/src/pages/chat/components/chat-details-session.tsx"),
@@ -71,25 +68,11 @@ suite.define(() => {
             await route.continue();
           },
         );
-        const activityChunk = Promise.withResolvers<void>();
-        const activityRequested = Promise.withResolvers<void>();
-        await page.route(activityModule, async (route) => {
-          activityRequested.resolve();
-          await activityChunk.promise;
-          await route.continue();
-        });
-        const activityRequests: string[] = [];
-        page.on("request", (request) => {
-          if (activityModule.test(request.url())) {
-            activityRequests.push(request.url());
-          }
-        });
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, parent.key));
         const activePane = page.locator(".chat-pane-cache__pane--active");
         const panel = activePane.locator("openclaw-chat-subagents-panel");
         const waitLine = activePane.locator(".agent-chat__composer-run-status--waiting");
         await activePane.getByText("Ready for delegated work.", { exact: true }).waitFor();
-        expect(activityRequests).toEqual([]);
         expect(await panel.isVisible()).toBe(false);
         const detailsDialog = await openChatDetails(activePane);
         await detailsDialog.getByRole("status", { name: "Loading…", exact: true }).waitFor();
@@ -219,21 +202,23 @@ suite.define(() => {
           state: "final",
           yielded: true,
         });
-        await activityRequested.promise;
-        const pendingStatus = activePane.locator(".chat-working-indicator");
-        await pendingStatus.locator(".chat-reading-indicator").waitFor();
-        expect(await pendingStatus.isVisible()).toBe(true);
-        expect(await pendingStatus.textContent()).toContain("Working");
-        expect(await activePane.locator(".chat-subagent-activity").count()).toBe(0);
-        activityChunk.resolve();
         await activePane
-          .locator(".chat-subagent-activity")
-          .getByText("Backend review", { exact: true })
+          .locator(".chat-thread p")
+          .getByText("Waiting for the backend review.", { exact: true })
           .waitFor();
-        expect(activityRequests).toHaveLength(1);
-        await pendingStatus.waitFor({ state: "hidden" });
+        const pendingStatus = activePane.locator(".chat-working-indicator");
+        await pendingStatus
+          .getByRole("button", { name: "1 subagent running", exact: true })
+          .waitFor();
+        expect(await pendingStatus.count()).toBe(1);
+        await expect.poll(() => pendingStatus.locator(".chat-reading-indicator").count()).toBe(0);
+        expect(await pendingStatus.locator("openclaw-working-phrase").count()).toBe(0);
+        expect(await pendingStatus.textContent()).not.toContain("Backend review");
+        expect(
+          await activePane.locator(".chat-thread openclaw-chat-subagent-activity").count(),
+        ).toBe(0);
+        expect(await activePane.locator('[data-test-id="chat-delegation"]').count()).toBe(0);
         expect(await waitLine.count()).toBe(0);
-        expect(await activePane.locator(".chat-working-indicator--subagents").count()).toBe(0);
         expect(await transcriptHeight()).toBe(beforeWaitHeight);
       },
     );

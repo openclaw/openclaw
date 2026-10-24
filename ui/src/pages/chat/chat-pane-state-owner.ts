@@ -476,7 +476,6 @@ export abstract class ChatPaneStateOwner {
   ) {
     const sessions = target ? this.swarm.hydrator?.rows : undefined;
     return {
-      swarm: target && this.swarm.enabled ? { ...target, sessions: sessions ?? [] } : undefined,
       subagentSessions: sessions,
       subagentSessionsHydrated: Boolean(target && this.swarm.hydrator?.hydrated),
       subagentSessionsPending: Boolean(target && this.swarm.hydrator?.pendingChildRead),
