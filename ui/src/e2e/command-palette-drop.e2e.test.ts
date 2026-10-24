@@ -1,9 +1,6 @@
-import { writeFile } from "node:fs/promises";
-import path from "node:path";
 import { devices, type Locator } from "playwright";
 import { expect, it } from "vitest";
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
-import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { reconnectMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import {
   expectForegroundUnchanged,
@@ -21,6 +18,17 @@ import {
 import { controlUiSessionUrl, installMockGateway } from "./new-session-page.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "command palette file drops" });
+const profile = (id: string, displayName: string) => ({
+  id,
+  displayName,
+  emails: [],
+  avatarMime: null,
+  hasAvatar: false,
+  githubIdentity: null,
+  mergedInto: null,
+  createdAt: 1,
+  updatedAt: 1,
+});
 
 async function attach(target: Locator, kind: "paste" | "drop" | "drag") {
   return target.evaluate((element, eventKind) => {
@@ -70,17 +78,7 @@ suite.define(() => {
         page,
         scenario({
           "users.self": {
-            profile: {
-              id: "alice",
-              displayName: "Alice",
-              emails: [],
-              avatarMime: null,
-              hasAvatar: false,
-              githubIdentity: null,
-              mergedInto: null,
-              createdAt: 1,
-              updatedAt: 1,
-            },
+            profile: profile("alice", "Alice"),
           },
         }),
       );
@@ -98,17 +96,7 @@ suite.define(() => {
       await input.press("Escape");
       await input.waitFor({ state: "hidden" });
       await gateway.setMethodResponse("users.self", {
-        profile: {
-          id: "bob",
-          displayName: "Bob",
-          emails: [],
-          avatarMime: null,
-          hasAvatar: false,
-          githubIdentity: null,
-          mergedInto: null,
-          createdAt: 1,
-          updatedAt: 1,
-        },
+        profile: profile("bob", "Bob"),
       });
       const beforeAccountChange = await gateway.deferNext("users.self");
       await reconnectMockGateway(page, gateway);
@@ -277,27 +265,10 @@ suite.define(() => {
           await attach(input, "paste");
           const images = palette.locator(".chat-attachment-thumb img");
           await expect.poll(() => images.count()).toBe(1);
-          const frame = await takeControlUiScreenshotFrame(page, surface, [input, images], {
-            animations: "disabled",
-            elements: [surface],
-          });
-          await writeFile(path.join(suite.artifactDir, "files-only-" + width + ".png"), frame.png);
-          await writeFile(
-            path.join(suite.artifactDir, "palette-" + width + ".png"),
-            frame.elements[0]!.png,
-          );
           await palette.getByRole("button", { name: "Remove launcher.png", exact: true }).click();
           await expect.poll(() => images.count()).toBe(0);
           await attach(surface, "drag");
           expect(await surface.getAttribute("data-attachment-drop-active")).not.toBeNull();
-          const drag = await takeControlUiScreenshotFrame(page, surface, [input], {
-            animations: "disabled",
-            elements: [surface],
-          });
-          await writeFile(
-            path.join(suite.artifactDir, "drag-" + width + ".png"),
-            drag.elements[0]!.png,
-          );
           const imageContent = await attach(surface, "drop");
           await expect.poll(() => palette.locator(".chat-attachment-thumb").count()).toBe(2);
           await expect
@@ -312,16 +283,6 @@ suite.define(() => {
             await palette.locator(".cmd-palette__search").getAttribute("inert"),
           ).not.toBeNull();
           expect(await input.getAttribute("aria-controls")).toBeNull();
-          const mixed = await takeControlUiScreenshotFrame(
-            page,
-            surface,
-            [input, images, palette.locator(".chat-attachment-file__name")],
-            { animations: "disabled", elements: [surface] },
-          );
-          await writeFile(
-            path.join(suite.artifactDir, "mixed-" + width + ".png"),
-            mixed.elements[0]!.png,
-          );
           await input.fill("Review these");
           await input.press("Enter");
           expect(await input.inputValue()).toBe(width === 390 ? "Review these\n" : "Review these");

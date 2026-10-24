@@ -1,7 +1,5 @@
-import { writeFile } from "node:fs/promises";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
-import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   defaultControlUiFeatureMethods,
   installMockGateway,
@@ -32,6 +30,22 @@ async function editComment(ui: Awaited<ReturnType<typeof openChat>>, comment: st
   await button(editor, "Save").click();
   await chip.hover();
   await preview.getByText(comment, { exact: true }).waitFor({ state: "visible" });
+}
+
+async function sendComment(page: Page, gateway: Awaited<ReturnType<typeof installMockGateway>>) {
+  await button(page, "Send message").click();
+  const { params } = await gateway.waitForRequest("chat.send");
+  const sent = params as {
+    message: string;
+    idempotencyKey: string;
+    sessionKey: string;
+    attachments: Array<{ content: string }>;
+  };
+  expect(sent.attachments).toHaveLength(1);
+  return {
+    ...sent,
+    attachment: Buffer.from(sent.attachments[0]!.content, "base64").toString("utf8"),
+  };
 }
 
 async function sendWithoutComments(
@@ -119,20 +133,12 @@ suite.define(() => {
             "Keep all of the selected context.\nExplain the rollback steps before changing the deployment.";
           const { source, gateway } = await openChat(page, undefined, selected);
           await addComment(page, source, comment);
-          await button(page, "Send message").click();
-          const request = await gateway.waitForRequest("chat.send");
-          // SAFETY: the real send path supplies the chat.send request captured by the fixture.
-          const params = request.params as {
-            idempotencyKey: string;
-            sessionKey: string;
-            message: string;
-            attachments: Array<{ content: string }>;
-          };
+          const params = await sendComment(page, gateway);
           expect(params.message).toBe("");
-          expect(params.attachments).toHaveLength(1);
-          const payload = Buffer.from(params.attachments[0]!.content, "base64").toString("utf8");
-          expect(payload).toContain(`Selected text:\n${selected}\n\nUser comment:\n${comment}`);
-          expect(payload).toContain("Source session:");
+          expect(params.attachment).toContain(
+            `Selected text:\n${selected}\n\nUser comment:\n${comment}`,
+          );
+          expect(params.attachment).toContain("Source session:");
           await gateway.emitChatFinal({
             runId: params.idempotencyKey,
             sessionKey: params.sessionKey,
@@ -149,14 +155,6 @@ suite.define(() => {
           await inline.waitFor();
           const authored = inline.locator(".chat-sent-comments-inline__comment");
           await expect.poll(() => authored.textContent()).toBe(comment);
-          if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
-            const frame = await takeControlUiScreenshotFrame(page, inline, [authored], {
-              elements: [inline],
-              scrollTo: inline,
-              animations: "disabled",
-            });
-            await writeFile(`${suite.artifactDir}/annotation-${width}-${theme}.png`, frame.png);
-          }
           const selection = inline.getByRole("button", { name: selected });
           await selection.waitFor();
           const geometry = await selection.evaluate((element) => ({
@@ -204,7 +202,6 @@ suite.define(() => {
           await page.getByRole("alert").filter({ hasText: "Fixture composer failed" }).waitFor();
         }
         await page.mouse.move(0, 0);
-        await page.screenshot({ path: `${suite.artifactDir}/${replacement}.png` });
         expect(await chip.count()).toBe(1);
         expect(await chip.textContent()).toContain("2 comments");
         expect(await composer.inputValue()).toBe("Keep this draft through the composer change.");
@@ -214,17 +211,10 @@ suite.define(() => {
         expect(await chip.count()).toBe(1);
         expect(await preview.isVisible()).toBe(true);
         await expectFocus(button(preview, "Delete comment"));
-        await button(page, "Send message").click();
-        const request = await gateway.waitForRequest("chat.send");
-        const params = request.params as {
-          message: string;
-          attachments: Array<{ content: string }>;
-        };
+        const params = await sendComment(page, gateway);
         expect(params.message).toBe("Keep this draft through the composer change.");
-        expect(params.attachments).toHaveLength(1);
-        const attachment = Buffer.from(params.attachments[0]!.content, "base64").toString("utf8");
-        expect(attachment).toContain("Edited after the composer changed.");
-        expect(attachment).not.toContain("Remove this extra comment.");
+        expect(params.attachment).toContain("Edited after the composer changed.");
+        expect(params.attachment).not.toContain("Remove this extra comment.");
         await expect
           .poll(() =>
             page
@@ -300,7 +290,6 @@ suite.define(() => {
       await expectFocus(composer);
       expect(await composer.inputValue()).toBe("Preserve the draft.");
       expect(await page.locator("openclaw-toast-host [role=status]").count()).toBe(0);
-      await page.screenshot({ path: `${suite.artifactDir}/comments-cleared.png` });
       await sendWithoutComments(page, gateway);
     });
   });
