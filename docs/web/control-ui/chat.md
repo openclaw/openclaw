@@ -710,6 +710,8 @@ group-targeted New Session remains immediate.
 
 Panes share outbox recovery for the same conversation. Activity in another
 conversation does not restart that recovery; reconnecting checks every saved outbox.
+Memory-only messages retained after a storage failure share that conversation queue
+and remain available when you leave and reopen the conversation in the same tab.
 
 Files remain in the composer while a submitted message waits for attachment
 storage. If you begin another draft during that wait, saving the first message
