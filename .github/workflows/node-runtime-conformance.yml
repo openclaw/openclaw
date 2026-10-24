@@ -149,7 +149,7 @@ jobs:
         run: rustup toolchain install 1.99.0 --profile minimal --component clippy,rustfmt
 
       - name: Cache Cargo
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
           # Keep reusable dependencies, not stale workspace binaries or incremental state.
           prefix-key: node-runtime
