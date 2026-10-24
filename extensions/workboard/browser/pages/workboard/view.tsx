@@ -5,18 +5,20 @@ import { icons } from "../../components/icons.tsx";
 import { WorkboardToast } from "../../components/toast.tsx";
 import { t } from "../../i18n/index.ts";
 import { listSelectableAgents } from "../../lib/agents/display.ts";
-import { groupWorkboardCardsByStatus } from "../../lib/workboard/derived.ts";
-import "../../styles/workboard.css";
 import {
-  dispatchWorkboard,
-  loadWorkboard,
   filterWorkboardCards,
+  groupWorkboardCardsByStatus,
   workboardCardMatchesHealthKey,
-  workboardHasActiveWrites,
+} from "../../lib/workboard/derived.ts";
+import { loadWorkboard } from "../../lib/workboard/loading.ts";
+import { dispatchWorkboard } from "../../lib/workboard/mutations.ts";
+import { workboardHasActiveWrites } from "../../lib/workboard/runtime.ts";
+import {
   WORKBOARD_PRIORITIES,
   type WorkboardCard,
   type WorkboardStatus,
-} from "../../lib/workboard/index.ts";
+} from "../../lib/workboard/types.ts";
+import "../../styles/workboard.css";
 import { agentDisplayName, buildAgentFilterOptions } from "./agent-filter.ts";
 import { buildBoardFilterOptions, WORKBOARD_ALL_BOARDS_FILTER } from "./board-filter.ts";
 import { getVisibleDetailCard, CardDetailsPanel } from "./view-card-details.tsx";

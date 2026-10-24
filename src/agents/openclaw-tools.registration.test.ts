@@ -540,9 +540,7 @@ describe("gateway client capability tool filtering", () => {
     async ({ scope, publishing, deny, managed, expected, actions }) => {
       const cfg = withDefaultRoster(deny ? { tools: { deny: ["github_publish"] } } : {});
       const sessionKey = "agent:main:nonpublishing-parent";
-      const inheritedPublicationToolRef: {
-        current?: ReturnType<typeof createOpenClawTools>[number];
-      } = {};
+      const additionalInheritedToolNamesRef: string[] = [];
       const tools = await withGatewayToolCallerIdentity(
         {
           agentId: "main",
@@ -563,7 +561,7 @@ describe("gateway client capability tool filtering", () => {
               tools: resolveSandboxToolPolicyForAgent(cfg, "main"),
             }),
             githubPublicationAvailable: managed ? publishing : undefined,
-            inheritedPublicationToolRef,
+            additionalInheritedToolNamesRef,
             senderIsOwner: false,
             wrapBeforeToolCallHook: false,
             toolConstructionPlan: {
@@ -575,7 +573,9 @@ describe("gateway client capability tool filtering", () => {
             },
           }),
       );
-      expect(Boolean(inheritedPublicationToolRef.current)).toBe(managed && !publishing && !deny);
+      expect(additionalInheritedToolNamesRef.includes("github_publish")).toBe(
+        managed && !publishing && !deny,
+      );
       if (!expected) {
         expect(hasTool(tools, "github_publish")).toBe(false);
         return;
@@ -589,21 +589,26 @@ describe("gateway client capability tool filtering", () => {
         }),
       ).toBe(actions);
       expect(Value.Check(tool.parameters, { title: "Publish workspace" })).toBe(publishing);
-      expect(Value.Check(tool.parameters, { action: "publish" })).toBe(publishing && actions);
-      expect(Value.Check(tool.parameters, { action: "refresh_base" })).toBe(publishing);
+      expect(Value.Check(tool.parameters, { action: "publish" })).toBe(publishing);
+      expect(
+        Value.Check(tool.parameters, {
+          action: "prepare_pr",
+          pullRequestUrl: "https://github.com/example/repository/pull/1",
+        }),
+      ).toBe(false);
+      expect(Value.Check(tool.parameters, { action: "refresh_base" })).toBe(false);
       expect(Value.Check(tool.parameters, { action: "edit" })).toBe(publishing);
       expect(Value.Check(tool.parameters, { action: "ready" })).toBe(publishing || actions);
       expect(
         Value.Check(tool.parameters, { action: "ready", publishingSessionKey: "agent:main:child" }),
       ).toBe(actions);
-      expect(Value.Check(tool.parameters, { action: "upload_evidence" })).toBe(publishing);
+      expect(Value.Check(tool.parameters, { action: "upload_evidence" })).toBe(false);
       if (!publishing) {
         expect(tool.description).toContain("cannot publish its own workspace");
       } else if (!actions) {
         expect(tool.parameters).toHaveProperty("properties", {
           action: expect.any(Object),
-          conflictsResolved: expect.any(Object),
-          baseCommit: expect.any(Object),
+          pullRequestUrl: expect.any(Object),
           draft: expect.any(Object),
           title: expect.any(Object),
           body: expect.any(Object),
@@ -611,7 +616,6 @@ describe("gateway client capability tool filtering", () => {
           expectedHeadCommit: expect.any(Object),
           expectedTitle: expect.any(Object),
           expectedBody: expect.any(Object),
-          evidence: expect.any(Object),
         });
         expect(tool.parameters).toHaveProperty("additionalProperties", false);
         expect(tool.description).not.toContain("use inspect");

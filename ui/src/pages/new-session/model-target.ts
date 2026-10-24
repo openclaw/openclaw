@@ -194,7 +194,7 @@ export function resolveDraftModelTarget(
   };
 }
 
-export function resolveDraftModelUnavailableReason(params: {
+function resolveDraftModelUnavailableReason(params: {
   model: string;
   agentRuntime?: string;
   metadata: NewSessionModelMetadata;

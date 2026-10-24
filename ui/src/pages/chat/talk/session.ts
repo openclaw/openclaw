@@ -4,8 +4,8 @@ import type {
   TalkClientCreateParams,
   TalkConfigResult,
 } from "@openclaw/gateway-protocol";
-import type { SchemaContract } from "../../../../../packages/gateway-protocol/src/schema-contract.js";
 import type { RealtimeVoiceCloseOptions } from "../../../../../src/talk/provider-types.js";
+import { normalizeTalkTransport } from "../../../../../src/talk/talk-session-controller.js";
 import { VOICE_TRANSCRIPT_QUEUE_POLICY } from "../../../../../src/talk/voice-transcript.js";
 import type { GatewayBrowserClient } from "../../../api/gateway.ts";
 import { t } from "../../../i18n/index.ts";
@@ -26,12 +26,12 @@ import {
   reserveClientVoiceSessionOwner,
   retryVoiceTranscriptPersistence,
 } from "./transcript-owner.ts";
-import { normalizeLaunchTransport, type RealtimeTalkLaunchTransport } from "./transport.ts";
 
 export type { RealtimeTalkStatus };
 
-type RealtimeTalkLaunchOptions = SchemaContract<
-  Omit<TalkClientCreateParams, "sessionKey" | "voiceSessionId" | "mode" | "brain" | "capabilities">
+type RealtimeTalkLaunchOptions = Pick<
+  TalkClientCreateParams,
+  "voice" | "voiceChangeId" | "transport"
 >;
 
 type RealtimeTalkLocalOptions = {
@@ -65,7 +65,7 @@ export async function switchActiveRealtimeTalkCameras(
 
 export class RealtimeTalkSession {
   private transport: RealtimeTalkTransport | null = null;
-  private selectedTransport: RealtimeTalkLaunchTransport | undefined;
+  private selectedTransport: RealtimeTalkSessionResult["transport"] | undefined;
   private pendingStartup: Pick<RealtimeTalkTransport, "stop"> | null = null;
   private closed = false;
   private closeCompletion: Promise<void> = Promise.resolve();
@@ -298,15 +298,9 @@ export class RealtimeTalkSession {
       return false;
     }
     try {
-      const requestedProvider = this.options.provider?.trim();
-      const requestedModel = this.options.model?.trim();
       const catalog = await this.client.request<TalkCatalogResult>(
         "talk.catalog",
-        {
-          sessionKey: this.sessionKey,
-          ...(requestedProvider ? { provider: requestedProvider } : {}),
-          ...(requestedModel ? { model: requestedModel } : {}),
-        },
+        { sessionKey: this.sessionKey },
         { timeoutMs: DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS },
       );
       const selectedProvider = catalog.realtime.activeProvider;
@@ -350,33 +344,23 @@ export class RealtimeTalkSession {
       ) {
         throw error;
       }
-      let transport = options.transport;
-      if (!transport) {
-        let result: TalkConfigResult;
-        try {
-          result = await this.client.request<TalkConfigResult>(
-            "talk.config",
-            {},
-            { timeoutMs: DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS },
-          );
-        } catch {
-          throw error;
-        }
-        if (!result.config || typeof result.config !== "object") {
-          throw error;
-        }
-        const configuredTransport = result.config?.talk?.realtime?.transport;
-        if (configuredTransport !== undefined) {
-          transport = normalizeLaunchTransport(configuredTransport);
-          if (!transport) {
-            throw error;
-          }
-        }
+      let result: TalkConfigResult;
+      try {
+        result = await this.client.request<TalkConfigResult>(
+          "talk.config",
+          {},
+          { timeoutMs: DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS },
+        );
+      } catch {
+        throw error;
       }
+      const configuredTransport = result.config?.talk?.realtime?.transport;
       if (
+        !result.config ||
         this.closed ||
         this.lifecycleGeneration !== lifecycleGeneration ||
-        (transport && transport !== "gateway-relay")
+        (configuredTransport !== undefined &&
+          normalizeTalkTransport(configuredTransport) !== "gateway-relay")
       ) {
         throw error;
       }
@@ -415,7 +399,7 @@ export class RealtimeTalkSession {
     return this.closed ? undefined : this.voiceSessionId;
   }
 
-  getTransport(): RealtimeTalkLaunchTransport | undefined {
+  getTransport(): RealtimeTalkSessionResult["transport"] | undefined {
     return this.closed ? undefined : this.selectedTransport;
   }
 

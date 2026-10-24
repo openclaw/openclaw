@@ -1074,8 +1074,12 @@ extension QuickChatModel {
         guard self.isCurrentPresentation(presentationID), let target = self.routingTarget else { return }
         switch push {
         case let .event(event):
-            guard event.event == "config.changed" || event.event == "chat.metadata.changed" else { return }
-            if case .modelSelectionChanged = OpenClawChatGatewayPayloadCodec.event(from: event) {
+            guard event.event == "config.changed" || event.event == "chat.metadata.changed",
+                  let metadata = OpenClawChatGatewayPayloadCodec.event(from: event),
+                  metadata.refreshesModelCatalog(
+                      forAgentID: target.agentID ?? OpenClawChatSessionKey.agentID(from: target.sessionKey))
+            else { return }
+            if case .modelSelectionChanged = metadata {
                 self.invalidateModelChoices()
             }
         case .snapshot, .seqGap:

@@ -1,5 +1,4 @@
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
-import { createMessageInjectionAuthority } from "../../auto-reply/reply/message-injection-authority.js";
 import {
   getAgentEventLifecycleGeneration,
   isAgentEventLifecycleGenerationCurrent,
@@ -15,7 +14,6 @@ import {
   markDiagnosticEmbeddedRunStarted,
   markDiagnosticRunProgress,
 } from "../../logging/diagnostic-run-activity.js";
-import { logMessageQueuedWithBacklogPolicy } from "../../logging/diagnostic-runtime.js";
 import { diagnosticLogger as diag, logSessionStateChange } from "../../logging/diagnostic.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import type {
@@ -28,16 +26,12 @@ import {
   type ReplyOperation,
   waitForReplyOperationOwnerSettlement,
 } from "../../sessions/session-controller.js";
-import {
-  waitForCapturedSessionNativeAttemptEnd,
-  waitForSessionNativeAttemptEnd,
-} from "../../sessions/session-controller.native-runtime.js";
+import { waitForCapturedSessionNativeAttemptEnd } from "../../sessions/session-controller.native-runtime.js";
 import {
   assertSessionControllerOperation,
   getAttachedBackend,
   getSessionControllerEntryForOperation,
   getSessionControllerOperation,
-  isCurrentSessionControllerOperation,
   markReplyOperationExecutionStarted,
   readSessionControllerOperationState,
   resolveReplyRunForCurrentSessionId,
@@ -89,6 +83,7 @@ import { normalizeSessionFileRegistryKey } from "./runs.session-index.js";
 import { createEmbeddedRunsTestApi } from "./runs.test-cleanup.js";
 
 export type { EmbeddedAgentQueueHandle, EmbeddedAgentQueueMessageOptions } from "./run-state.js";
+export { claimPendingEmbeddedAgentQuestionAnswer } from "./runs.question-answer.js";
 
 export type EmbeddedRunTimeoutRecoveryMarker = AbandonedEmbeddedRun;
 
@@ -181,13 +176,10 @@ export function markActiveEmbeddedRunAbandoned(params: {
 }
 
 export function resolveEmbeddedRunAbandonment(
-  params: AbandonmentQuery,
+  params: Omit<AbandonmentQuery, "sessionFile">,
 ): AbandonedEmbeddedRun["reason"] | undefined {
-  const query = { ...params, sessionFile: normalizeSessionFileRegistryKey(params.sessionFile) };
-  const matches = [...ABANDONED_EMBEDDED_RUNS].filter(
-    ([owner, abandoned]) =>
-      (!query.sessionFile || abandoned.sessionFile === query.sessionFile) &&
-      matchesAbandonment(owner, abandoned, query),
+  const matches = [...ABANDONED_EMBEDDED_RUNS].filter(([owner, abandoned]) =>
+    matchesAbandonment(owner, abandoned, params),
   );
   return matches.length === 1 ? matches[0]![1].reason : undefined;
 }
@@ -235,69 +227,12 @@ export function restoreEmbeddedRunTimeoutAbandonment(
   return true;
 }
 
-function logActiveRunMessageAccepted(sessionId: string): void {
-  // Active-run steering is consumed by the current turn, not queued as another
-  // turn for the single idle transition to drain. Keep the event and activity.
-  logMessageQueuedWithBacklogPolicy(
-    {
-      sessionId,
-      source: "embedded-agent-runner",
-    },
-    false,
-  );
-}
-
 function clearEmbeddedRunAbortability(handle: EmbeddedAgentQueueHandle): void {
   getEmbeddedRunAttachment(handle)?.humanInputWaits?.clear();
   if (!handle.runId || ACTIVE_EMBEDDED_RUNS_BY_RUN_ID.get(handle.runId)?.handle !== handle) {
     return;
   }
   ACTIVE_EMBEDDED_RUNS_BY_RUN_ID.delete(handle.runId);
-}
-
-/** TUI preflight requires V2 ownership; failure leaves ordinary input to local queue policy. */
-export async function claimPendingEmbeddedAgentQuestionAnswer(
-  operation: ReplyOperation,
-  text: string,
-): Promise<{ runId: string } | null> {
-  const registration = getControllerEmbeddedAttachment(operation);
-  const handle = registration?.handle;
-  const guarded = handle?.messageInjectionV2;
-  if (!handle?.runId?.trim() || guarded?.version !== 2 || !guarded.claimPendingUserInputAnswer) {
-    return null;
-  }
-  const runId = handle.runId;
-  let isCurrent: () => boolean;
-  try {
-    // Retain the selected physical owner instead of re-resolving a shared session ID.
-    isCurrent = () =>
-      isCurrentSessionControllerOperation(operation) &&
-      getControllerEmbeddedAttachment(operation) === registration &&
-      getAttachedBackend(operation) === registration?.backend;
-    registration?.toolAuthority?.assertActive();
-    if (!guarded.isAvailable() || !isCurrent()) {
-      return null;
-    }
-  } catch {
-    return null;
-  }
-  // V2 carries the captured owner assertion through persistence and final dispatch.
-  // An unconfirmed answer must propagate; queue fallback could replay accepted input.
-  const assertCurrent = createMessageInjectionAuthority(() => {
-    registration?.toolAuthority?.assertActive();
-    return isCurrent();
-  });
-  const claimed = await guarded.claimPendingUserInputAnswer(
-    text,
-    { isInboundUserMessage: true },
-    assertCurrent,
-    "run",
-  );
-  if (!claimed) {
-    return null;
-  }
-  logActiveRunMessageAccepted(operation.sessionId);
-  return { runId };
 }
 
 /** Interrupt aborts the exact turn and keeps its waiting inputs and children. */
@@ -437,29 +372,6 @@ export function abortEmbeddedAgentRun(
     }
   }
   return replyAborted || aborted;
-}
-
-type EmbeddedHeartbeatPreemptionResult = "not-heartbeat" | "drained" | "timed-out";
-
-export async function preemptAndDrainEmbeddedHeartbeatRun(
-  sessionId: string,
-  timeoutMs: number,
-): Promise<EmbeddedHeartbeatPreemptionResult> {
-  const handle = getActiveNativeAttempt(sessionId);
-  if (!handle?.preemptByVisibleTurn) {
-    return "not-heartbeat";
-  }
-  const drainPromise = waitForSessionNativeAttemptEnd(sessionId, timeoutMs, handle);
-  try {
-    if (!handle.preemptByVisibleTurn()) {
-      return "not-heartbeat";
-    }
-  } catch (err) {
-    diag.warn(`heartbeat preemption failed: sessionId=${sessionId} err=${String(err)}`);
-  } finally {
-    notifyGatewayWorkMetricsChanged();
-  }
-  return (await drainPromise) ? "drained" : "timed-out";
 }
 
 export function prepareEmbeddedAgentRunCompletionClaim(
@@ -990,7 +902,7 @@ export function attachActiveEmbeddedRun(
     EMBEDDED_RUN_FORCED_TERMINAL_SETTLEMENTS.delete(previousHandle);
   }
   try {
-    toolAuthority?.assertActive();
+    toolAuthority?.assertRegistrationActive();
   } catch (error) {
     revokeCompletionClaim(sessionId, handle.runId, completionTarget);
     throw error;
@@ -1082,7 +994,8 @@ export function attachActiveEmbeddedRun(
   }
   if (operation) {
     if (toolAuthority?.sourceTurnId) {
-      getSessionControllerEntryForOperation(operation).sourceTurnId = toolAuthority.sourceTurnId;
+      // Native attempts may carry an execution ID; durable admission owns the logical source.
+      getSessionControllerEntryForOperation(operation).sourceTurnId ??= toolAuthority.sourceTurnId;
     }
     markReplyOperationExecutionStarted(operation);
     if (operation.phase === "queued") {
@@ -1188,7 +1101,7 @@ export function detachActiveEmbeddedRun(
   ACTIVE_EMBEDDED_RUN_SNAPSHOTS.delete(registration);
   notifyGatewayWorkMetricsChanged();
   if (operation && backend) {
-    operation.detachBackend(backend);
+    operation.detachBackend(backend.handle);
   }
   // Generation-fenced: closing cannot retire a successor's diagnostic owner.
   handle.closeDiagnostics?.();

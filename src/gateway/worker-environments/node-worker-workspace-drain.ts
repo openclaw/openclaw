@@ -8,7 +8,6 @@ import {
   NODE_WORKER_ENVIRONMENT_SESSION_VERSION,
 } from "../../infra/node-runner-inventory.js";
 import type { WorkerExecutionMode } from "../../plugins/types.js";
-import { getProcessCleanupBudget } from "../../process/supervisor/cleanup-budget.js";
 import {
   NODE_WORKSPACE_DRAIN_COMMAND,
   parseNodeWorkerWorkspaceExecResult,
@@ -50,6 +49,7 @@ type NodeWorkerWorkspaceDrainRequest = {
   ownerEpoch: number;
   deviceFolder?: string;
   timeoutMs: number;
+  signal?: AbortSignal;
   findNode: (signal: AbortSignal) => Promise<{
     transport: NodeWorkerSupervisorTransport;
     node: NodeWorkerSupervisorNodeProof;
@@ -61,46 +61,15 @@ type NodeWorkerWorkspaceDrainRequest = {
 export async function stopNodeWorkerWorkspaceOwner(
   owner: {
     executionMode: WorkerExecutionMode;
-    shutdownDeadline?: number;
     drainLocalWork?: () => Promise<void>;
   },
   params: NodeWorkerWorkspaceDrainRequest,
   reason?: WorkerTunnelStopReason,
 ) {
-  const budget = getProcessCleanupBudget();
-  const shutdownDeadline = budget
-    ? Math.min(owner.shutdownDeadline ?? Infinity, budget.deadline, performance.now() + 10_000)
-    : undefined;
-  owner.shutdownDeadline = shutdownDeadline;
   const run = (
     name: string,
     operation: (request: NodeWorkerWorkspaceDrainRequest) => Promise<void>,
-  ) =>
-    measureGatewayCloseStep(`shutdown.worker-environment.node-${name}`, async () => {
-      const timeoutMs =
-        shutdownDeadline === undefined
-          ? params.timeoutMs
-          : Math.ceil(shutdownDeadline - performance.now());
-      const expired = () =>
-        new WorkerTunnelOwnerDisconnectedError(
-          "Node workspace cleanup exceeded the Gateway shutdown deadline; retry on reconnect",
-        );
-      if (timeoutMs <= 0) {
-        throw expired();
-      }
-      try {
-        await operation({ ...params, timeoutMs });
-      } catch (error) {
-        if (
-          shutdownDeadline !== undefined &&
-          error instanceof Error &&
-          error.name === "TimeoutError"
-        ) {
-          throw expired();
-        }
-        throw error;
-      }
-    });
+  ) => measureGatewayCloseStep(`shutdown.worker-environment.node-${name}`, () => operation(params));
   // Stop native processes before joining queues they may hold. Remote-exec
   // attachments retain their independently owned app processes across shutdown.
   const remoteStop =
@@ -120,23 +89,29 @@ export async function stopNodeWorkerWorkspaceOwner(
 export async function drainNodeWorkerWorkspace(
   params: NodeWorkerWorkspaceDrainRequest,
 ): Promise<void> {
-  const signal = AbortSignal.timeout(params.timeoutMs);
+  const signal = AbortSignal.any([
+    AbortSignal.timeout(params.timeoutMs),
+    ...(params.signal ? [params.signal] : []),
+  ]);
   const { transport, node } = await params.findNode(signal);
-  const result = await transport.invoke({
-    node,
-    command: NODE_WORKER_WORKSPACE_EXEC_COMMAND,
-    params: {
-      gatewayNamespace: params.gatewayNamespace,
-      environmentId: params.environmentId,
-      sessionId: params.sessionId,
-      generation: params.ownerEpoch,
-      ...(params.deviceFolder === undefined ? {} : { deviceFolder: params.deviceFolder }),
-      argv: [NODE_WORKSPACE_DRAIN_COMMAND],
-    },
-    timeoutMs: params.timeoutMs,
+  const result = await raceNodeWorkerOperation(
+    transport.invoke({
+      node,
+      command: NODE_WORKER_WORKSPACE_EXEC_COMMAND,
+      params: {
+        gatewayNamespace: params.gatewayNamespace,
+        environmentId: params.environmentId,
+        sessionId: params.sessionId,
+        generation: params.ownerEpoch,
+        ...(params.deviceFolder === undefined ? {} : { deviceFolder: params.deviceFolder }),
+        argv: [NODE_WORKSPACE_DRAIN_COMMAND],
+      },
+      timeoutMs: params.timeoutMs,
+      signal,
+      isDispatchAuthorized: params.isAuthorized,
+    }),
     signal,
-    isDispatchAuthorized: params.isAuthorized,
-  });
+  );
   if (!result.ok) {
     throw new WorkerTunnelOwnerDisconnectedError(
       `Node workspace operations have not drained (${result.error?.code ?? "UNAVAILABLE"}); reconnect the session runner before retrying`,
@@ -155,7 +130,10 @@ export async function drainNodeWorkerWorkspace(
 async function stopNodeWorkerWorkspaceEnvironment(
   params: NodeWorkerWorkspaceDrainRequest,
 ): Promise<void> {
-  const signal = AbortSignal.timeout(params.timeoutMs);
+  const signal = AbortSignal.any([
+    AbortSignal.timeout(params.timeoutMs),
+    ...(params.signal ? [params.signal] : []),
+  ]);
   const { transport, node } = await params.findNode(signal);
   if (node.workerHost.environmentSession !== NODE_WORKER_ENVIRONMENT_SESSION_VERSION) {
     throw createNodeRunnerInventoryIssueError(node.nodeId, NODE_RUNNER_UPDATE_REQUIRED_ISSUE);

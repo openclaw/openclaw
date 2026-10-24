@@ -19,6 +19,7 @@ import {
 } from "./database-port-recovery.js";
 import { makeDatabasePortManifest } from "./database-port-recovery.test-support.js";
 import { acquireEmbeddedStateLock } from "./embedded-state-lock.js";
+import * as gatewayLockProcessModule from "./gateway-lock-process.js";
 import { acquireGatewayLock, resolveGatewayLockPaths } from "./gateway-lock.js";
 import * as ownerLease from "./gateway-owner-lease.js";
 
@@ -163,13 +164,15 @@ describe.skipIf(process.platform === "win32")("port recovery admission", () => {
       role: "gateway",
     });
     await fs.writeFile(paths.configLockPath, record);
+    vi.spyOn(gatewayLockProcessModule, "readGatewayLockProcessStartTime").mockImplementation(
+      () => 123,
+    );
     await expect(
       acquireGatewayLock({
         env,
         role: "agent-embedded",
         ...lockOptions,
         databasePortRecovery: intent,
-        readProcessStartTime: () => 123,
       }),
     ).rejects.toThrow("holder");
     expect(await fs.readFile(paths.configLockPath, "utf8")).toBe(record);

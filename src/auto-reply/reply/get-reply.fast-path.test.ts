@@ -106,10 +106,10 @@ function expectNativePayload(reply: Awaited<ReturnType<typeof getReplyFromConfig
 describe("getReplyFromConfig fast test bootstrap", () => {
   let state: OpenClawTestState;
   let storePath: string;
-  const config = (model = "openai/gpt-5.5", heartbeat?: Record<string, never>) =>
+  const config = (model = "openai/gpt-5.5") =>
     markCompleteReplyConfig({
       agents: {
-        defaults: { model, workspace: state.workspaceDir, ...(heartbeat ? { heartbeat } : {}) },
+        defaults: { model, workspace: state.workspaceDir },
       },
       session: { store: storePath },
     });
@@ -200,6 +200,26 @@ describe("getReplyFromConfig fast test bootstrap", () => {
     expect(vi.mocked(loadConfigMock)).not.toHaveBeenCalled();
   });
 
+  it("keeps ordinary model-looking messages unchanged", async () => {
+    const body = "openai/gpt-5.5 summarize";
+    const resetModule = await import("./session-reset-model.js");
+    const actualReset = await vi.importActual<typeof resetModule>("./session-reset-model.js");
+    const applyReset = vi.mocked(resetModule.applyResetModelOverride);
+    applyReset.mockImplementation(actualReset.applyResetModelOverride);
+    try {
+      await expect(
+        getReplyFromConfig(commandCtx(body, { BodyForAgent: body }), undefined, config()),
+      ).resolves.toEqual({ text: "ok" });
+      expect(mocks.resolveReplyDirectives).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sessionCtx: expect.objectContaining({ BodyStripped: body, agentText: body }),
+        }),
+      );
+    } finally {
+      applyReset.mockReset();
+    }
+  });
+
   it("returns a clean rejection when session bootstrap rejects a locked reset", async () => {
     vi.stubEnv("OPENCLAW_ALLOW_SLOW_REPLY_TESTS", "1");
     mocks.initSessionState.mockRejectedValueOnce(
@@ -216,34 +236,6 @@ describe("getReplyFromConfig fast test bootstrap", () => {
     expect(runState.preRunRejection).toBe("model-selection-locked");
     expect(mocks.resolveReplyDirectives).not.toHaveBeenCalled();
     expect(vi.mocked(runPreparedReplyMock)).not.toHaveBeenCalled();
-  });
-
-  it.each([
-    ["clears stale ack-only heartbeat pending delivery", "HEARTBEAT_OK", true],
-    [
-      "does not replay private pending delivery during heartbeat",
-      "private prior user answer",
-      false,
-    ],
-  ] as const)("%s", async (_name, text, cleared) => {
-    await seedSession({
-      sessionId: "pending-final",
-      updatedAt: Date.now() - (cleared ? 0 : 60_000),
-      pendingFinalDelivery: {
-        kind: "replayable",
-        text,
-        createdAt: 1,
-        intentId: "stale-heartbeat-intent",
-      },
-    });
-    await expect(
-      getReplyFromConfig(buildGetReplyCtx(), { isHeartbeat: true }, config("openai/gpt-5.5", {})),
-    ).resolves.toEqual({ text: "ok" });
-    if (cleared) {
-      expect(readSession().pendingFinalDelivery).toBeUndefined();
-    } else {
-      expect(readSession().pendingFinalDelivery).toMatchObject({ kind: "replayable", text });
-    }
   });
 
   it("uses the target session thinking override for native /status", async () => {

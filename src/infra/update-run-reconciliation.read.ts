@@ -1,6 +1,7 @@
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import type { DB } from "../state/openclaw-state-db.generated.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
+import { readRestartSentinelRowSync } from "./restart-sentinel-store.js";
 import type { EngineConnection } from "./sql-connection.js";
 import { inspectUpdateRunAbandonment } from "./update-run-activity.js";
 import { decodeRun, hasStoredUpdateRecovery } from "./update-run-read.kernel.js";
@@ -18,12 +19,29 @@ export function inspectUpdateRunReconciliation(
   record: UpdateRunRecord,
   input: UpdateRunReconciliationInput,
 ): UpdateRunReconciliationCandidate {
-  return {
-    record,
-    rule: hasStoredUpdateRecovery(db, record.runId)
-      ? undefined
-      : inspectUpdateRunAbandonment(record, input),
-  };
+  const rule = hasStoredUpdateRecovery(db, record.runId)
+    ? undefined
+    : inspectUpdateRunAbandonment(record, input);
+  if (
+    rule &&
+    !input.explicit &&
+    record.trigger !== "cli" &&
+    (record.phase === "restarting" || record.phase === "verifying") &&
+    tableExists(db, "gateway_restart_sentinel")
+  ) {
+    const sentinel = readRestartSentinelRowSync(db);
+    const payload = sentinel.kind === "valid" ? sentinel.sentinel.payload : undefined;
+    if (
+      payload?.kind === "update" &&
+      payload.status === "ok" &&
+      payload.stats?.runId === record.runId &&
+      !payload.stats.handoffId
+    ) {
+      // The foreground updater exits before its replacement Gateway verifies this handoff.
+      return { record, rule: undefined };
+    }
+  }
+  return { record, rule };
 }
 
 export function readUpdateRunReconciliationCandidates(

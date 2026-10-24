@@ -105,8 +105,6 @@ export function createCodexAppServerConfig({
       agentDir?: string;
       codexConfigToml?: string | null;
       requirementsToml?: string | null;
-      requirementsPath?: string;
-      readRequirementsFile?: (path: string) => string | undefined;
       platform?: NodeJS.Platform;
       hostName?: string;
       openClawSandboxActive?: boolean;
@@ -504,6 +502,10 @@ export function codexAppServerStartOptionsKey(
       .toSorted(([left], [right]) => left.localeCompare(right))
       .map(([key, value]) => [key, hashSecretForKey(value, `env:${key}`)]),
     clearEnv: [...(options.clearEnv ?? [])].toSorted(),
+    managedGitConfigParameters: hashSecretForKey(
+      options.managedGitConfigParameters,
+      "managedGitConfigParameters",
+    ),
     authProfileId: params.authProfileId ?? null,
     authBindingFingerprint: params.authBindingFingerprint ?? null,
     agentDir: params.agentDir ?? null,

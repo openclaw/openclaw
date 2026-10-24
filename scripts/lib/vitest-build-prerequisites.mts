@@ -68,7 +68,7 @@ const runtimeConsumers = [
   {
     file: "src/gateway/setup-inference.first-signin.integration.test.ts",
     configs: [
-      "test/vitest/vitest.gateway-database-workers.config.ts",
+      "test/vitest/vitest.gateway-server-isolated.config.ts",
       "test/vitest/vitest.gateway.config.ts",
     ],
     mode: "runtime",
@@ -170,6 +170,13 @@ const runtimeConsumers = [
     mode: "runtime" as const,
     dir: "src/agents",
   })),
+  {
+    // Its cold catalog worker imports the bundled provider's built public SDK.
+    file: "src/agents/clawrouter-catalog-discovery.e2e.test.ts",
+    configs: ["test/vitest/vitest.e2e.config.ts"],
+    mode: "runtime",
+    dir: "src/agents",
+  },
   {
     file: "src/plugins/plugin-module-generation.sdk.test.ts",
     configs: ["test/vitest/vitest.plugins.config.ts"],

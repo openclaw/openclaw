@@ -1,5 +1,6 @@
 import { addTimerTimeoutGraceMs } from "@openclaw/normalization-core/number-coercion";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import type { PluginRuntime, RuntimeLogger } from "../plugins/runtime/types.js";
 import { resolveTranscriptsConfig } from "../transcripts/config.js";
 import {
@@ -249,7 +250,11 @@ function createMeetingChromeTransportWithAudioPolicy<
       const engine = await startRealtimeEngine(params, transport);
       return audioBridge.local(engine, params.audio);
     } catch (error) {
-      await transport.dispose().catch(() => {});
+      await transport.dispose().catch((cleanupError: unknown) => {
+        params.logger.warn(
+          `${options.platform.logScope} audio transport cleanup after realtime startup failure did not complete: ${formatErrorMessage(cleanupError)}`,
+        );
+      });
       throw error;
     }
   }
@@ -491,7 +496,11 @@ function createMeetingChromeTransportWithAudioPolicy<
         tab: browser.tab,
       };
     } catch (error) {
-      await audioTransport?.dispose().catch(() => {});
+      await audioTransport?.dispose().catch((cleanupError: unknown) => {
+        params.logger.warn(
+          `${options.platform.logScope} node audio transport cleanup after realtime startup failure did not complete: ${formatErrorMessage(cleanupError)}`,
+        );
+      });
       if (options.startupFailurePolicy === "owned") {
         if (!audioTransport && startedBridgeId) {
           await params.runtime.nodes
@@ -501,7 +510,11 @@ function createMeetingChromeTransportWithAudioPolicy<
               params: { action: "stop", bridgeId: startedBridgeId },
               timeoutMs: 5_000,
             })
-            .catch(() => {});
+            .catch((cleanupError: unknown) => {
+              params.logger.warn(
+                `${options.platform.logScope} node bridge cleanup after realtime startup failure did not complete: ${formatErrorMessage(cleanupError)}`,
+              );
+            });
         }
       } else {
         await params.runtime.nodes
@@ -511,7 +524,11 @@ function createMeetingChromeTransportWithAudioPolicy<
             params: { action: "stopByUrl", url: params.url, mode: params.mode },
             timeoutMs: 5_000,
           })
-          .catch(() => {});
+          .catch((cleanupError: unknown) => {
+            params.logger.warn(
+              `${options.platform.logScope} node meeting cleanup after realtime startup failure did not complete: ${formatErrorMessage(cleanupError)}`,
+            );
+          });
       }
       if (!options.preserveTrackedBrowserOnEngineFailure || !params.trackedTargetId) {
         await rollbackBrowserJoin({

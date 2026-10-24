@@ -1,5 +1,5 @@
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { FaceTimeCallStatusEvent, AuthenticatedFaceTimeOwner } from "./call-events.js";
-import { FaceTimeCallInstance } from "./call-lifecycle.js";
 import type { HelperActionResult } from "./helper-results.js";
 import type { FaceTimeHelperPeer } from "./helper-rpc.js";
 import type { FaceTimeHelperSupervisorStatus } from "./helper-supervisor.js";
@@ -7,13 +7,32 @@ import type { FaceTimeDialMode, PendingFaceTimeDial } from "./outbound-call.js";
 import type { FaceTimeTalkDriver } from "./talk-driver.js";
 import type { FaceTimeTalkEventSummary } from "./talk-events-summary.js";
 
-export class ActiveFaceTimeCall extends FaceTimeCallInstance {
+type FaceTimeCarrierMode = "ringing" | "muted" | "active" | "closing" | "closed";
+
+type FaceTimeModelMediaMode = "starting" | "ready" | "active" | "suspended" | "closed";
+
+type FaceTimeCallPhase = "ringing" | "answering" | "active" | "closing" | "closed";
+
+function normalizeCallIdentity(value: string): string {
+  return value.trim().toLowerCase();
+}
+
+export class ActiveFaceTimeCall {
+  readonly lifecycleAbort = new AbortController();
+  readonly aliases = new Set<string>();
+  generation = 1;
+  phase: FaceTimeCallPhase;
+  carrierMode: FaceTimeCarrierMode;
+  modelMediaMode: FaceTimeModelMediaMode = "starting";
+  #carrierClosure = createDeferred<void>();
+  readonly carrierClosure = this.#carrierClosure.promise;
+  #commandTail: Promise<void> = Promise.resolve();
+
   readonly carrierCallUUIDs: Set<string>;
   readonly retiredCarrierCallUUIDs = new Set<string>();
   carrierCallUUID: string;
   readonly carrierPeers = new Map<number, FaceTimeHelperPeer>();
   readonly senderId: string;
-  readonly senderIsOwner: true = true;
   handle?: string;
   callStatus?: number;
   isSendingAudio?: boolean;
@@ -36,7 +55,6 @@ export class ActiveFaceTimeCall extends FaceTimeCallInstance {
     feedDevice: string;
     microphoneDevice: string;
     processInputVerified: boolean;
-    processOutputSuppressed: boolean;
   };
   lastHelperAction?: HelperActionResult;
   lastRoutingError?: string;
@@ -56,7 +74,9 @@ export class ActiveFaceTimeCall extends FaceTimeCallInstance {
     handle?: string;
     peer?: FaceTimeHelperPeer;
   }) {
-    super(params.callUUID, params.phase);
+    this.phase = params.phase;
+    this.carrierMode = params.phase === "ringing" ? "ringing" : "muted";
+    this.aliases.add(normalizeCallIdentity(params.callUUID));
     this.callUUID = params.callUUID;
     this.carrierCallUUID = params.callUUID;
     this.carrierCallUUIDs = new Set([params.callUUID]);
@@ -67,6 +87,96 @@ export class ActiveFaceTimeCall extends FaceTimeCallInstance {
     }
   }
 
+  assertCurrent(generation: number, allowClosing = false): void {
+    const phaseAllowed = allowClosing
+      ? this.phase !== "closed" && this.carrierMode !== "closed"
+      : this.phase !== "closing" && this.phase !== "closed";
+    if (
+      generation !== this.generation ||
+      !phaseAllowed ||
+      (!allowClosing && this.lifecycleAbort.signal.aborted)
+    ) {
+      throw new Error("FaceTime call lifecycle changed during carrier command");
+    }
+  }
+
+  async runCarrierCommand<T>(params: {
+    generation: number;
+    allowClosing?: boolean;
+    action: () => Promise<T>;
+  }): Promise<T> {
+    const previous = this.#commandTail;
+    const { promise, resolve: release } = createDeferred<void>();
+    this.#commandTail = promise;
+    await previous;
+    try {
+      this.assertCurrent(params.generation, params.allowClosing);
+      const result = await params.action();
+      this.assertCurrent(params.generation, params.allowClosing);
+      return result;
+    } finally {
+      release();
+    }
+  }
+
+  beginAnswering(): number {
+    if (this.phase !== "ringing") {
+      throw new Error(`cannot answer FaceTime call in ${this.phase} phase`);
+    }
+    this.phase = "answering";
+    this.carrierMode = "muted";
+    return this.generation;
+  }
+
+  markCarrierActive(generation: number): void {
+    this.assertCurrent(generation);
+    this.phase = "active";
+    this.carrierMode = "active";
+  }
+
+  markModelReady(generation: number): void {
+    this.assertCurrent(generation);
+    this.modelMediaMode = "ready";
+  }
+
+  markModelActive(generation: number): void {
+    this.assertCurrent(generation);
+    this.modelMediaMode = "active";
+  }
+
+  suspendModelMedia(): void {
+    if (this.modelMediaMode !== "closed") {
+      this.modelMediaMode = "suspended";
+    }
+  }
+
+  beginClosing(): number {
+    if (this.phase === "closed") {
+      return this.generation;
+    }
+    if (this.phase !== "closing") {
+      this.generation += 1;
+      this.phase = "closing";
+      this.carrierMode = "closing";
+      this.suspendModelMedia();
+      this.lifecycleAbort.abort(new Error("FaceTime call is closing"));
+    }
+    return this.generation;
+  }
+
+  // Carrier proof releases startup before local media teardown can be joined.
+  markCarrierClosed(): void {
+    this.beginClosing();
+    this.carrierMode = "closed";
+    this.#carrierClosure.resolve(undefined);
+  }
+
+  markClosed(): void {
+    this.phase = "closed";
+    this.carrierMode = "closed";
+    this.modelMediaMode = "closed";
+  }
+
   promoteCarrierCallUUID(callUUID: string): void {
     if (callUUID !== this.carrierCallUUID) {
       this.retiredCarrierCallUUIDs.add(this.carrierCallUUID);
@@ -74,6 +184,54 @@ export class ActiveFaceTimeCall extends FaceTimeCallInstance {
     }
     this.carrierCallUUIDs.add(callUUID);
     this.carrierCallUUID = callUUID;
+  }
+}
+
+export class FaceTimeCallRegistry {
+  #active: ActiveFaceTimeCall | undefined;
+
+  get active(): ActiveFaceTimeCall | undefined {
+    return this.#active;
+  }
+
+  get size(): number {
+    return this.#active && this.#active.phase !== "closed" ? 1 : 0;
+  }
+
+  values(): IterableIterator<ActiveFaceTimeCall> {
+    return (this.#active && this.#active.phase !== "closed" ? [this.#active] : [])[
+      Symbol.iterator
+    ]();
+  }
+
+  get(identity: string): ActiveFaceTimeCall | undefined {
+    return this.#active?.aliases.has(normalizeCallIdentity(identity)) ? this.#active : undefined;
+  }
+
+  has(identity: string): boolean {
+    return this.get(identity) !== undefined;
+  }
+
+  create(call: ActiveFaceTimeCall): void {
+    if (this.#active && this.#active.phase !== "closed") {
+      throw new Error("another FaceTime call lifecycle is already active");
+    }
+    this.#active = call;
+  }
+
+  retainAlias(call: ActiveFaceTimeCall, identity: string): void {
+    if (this.#active !== call || call.phase === "closed") {
+      throw new Error("cannot retain an alias for an inactive FaceTime call");
+    }
+    call.aliases.add(normalizeCallIdentity(identity));
+  }
+
+  close(call: ActiveFaceTimeCall): void {
+    if (this.#active !== call) {
+      return;
+    }
+    call.markClosed();
+    this.#active = undefined;
   }
 }
 
@@ -129,7 +287,9 @@ export type FaceTimeRuntimeStatus = {
     maxRemoteMeterLevel?: number;
     realtimeActive: boolean;
     audioReady: boolean;
-    audioTransport?: ActiveFaceTimeCall["audioTransport"];
+    audioTransport?: ActiveFaceTimeCall["audioTransport"] & {
+      processOutputSuppressed: boolean;
+    };
     lastHelperAction?: HelperActionResult;
     lastRoutingError?: string;
     carrierHangupPending?: boolean;

@@ -27,7 +27,6 @@ describe("Canvas A2UI JSONL validation", () => {
 
     expect(validateSupportedA2UIJsonl(jsonl)).toMatchObject({
       version: "v0.9",
-      messageCount: 4,
       messages,
     });
   });

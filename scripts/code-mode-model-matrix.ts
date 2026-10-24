@@ -1366,9 +1366,10 @@ function summarizeResults(results: CodeModeMatrixCellResult[]) {
       p50WallMs: summarizeMetric(group.map((result) => result.elapsedMs)).p50 ?? 0,
       metrics: {
         assistantTurns: summarizeMetric(group.map((result) => result.assistantTurns)),
-        outerToolCalls: summarizeMetric(
-          group.map((result) => result.toolSummary?.calls ?? result.gateway?.outerCalls),
-        ),
+        // Embedded tool summaries include nested terminals; only Gateway traces
+        // observe outer calls. Keep scopes separate rather than filling gaps.
+        toolCalls: summarizeMetric(group.map((result) => result.toolSummary?.calls)),
+        outerToolCalls: summarizeMetric(group.map((result) => result.gateway?.outerCalls)),
         bridgeSearchCalls: summarizeMetric(group.map((result) => result.bridgeCalls?.search)),
         bridgeDescribeCalls: summarizeMetric(group.map((result) => result.bridgeCalls?.describe)),
         bridgeToolCalls: summarizeMetric(group.map((result) => result.bridgeCalls?.call)),

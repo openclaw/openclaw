@@ -18,7 +18,10 @@ import {
   resolveSubagentRegistryContextEngine,
 } from "./subagent-registry-deps.js";
 import { safeRemoveAttachmentsDir } from "./subagent-registry-helpers.js";
-import { buildSafeLifecycleErrorMeta } from "./subagent-registry-lifecycle-log.js";
+import {
+  buildSafeLifecycleErrorMeta,
+  subagentRegistryLog as log,
+} from "./subagent-registry-lifecycle-log.js";
 import { getCurrentSubagentRunOwner, subagentRuns } from "./subagent-registry-memory.js";
 import {
   assertSubagentRegistryWriteOutcomeKnown,
@@ -34,9 +37,7 @@ import { getSubagentRunRuntimeKey, isSameSubagentRunOwner } from "./subagent-run
 
 export function createSubagentRegistryContextCleanup(config: {
   isEndedHookOwnerCurrent: (entry: SubagentRunRecord) => boolean;
-  warn: (message: string, meta?: Record<string, unknown>) => void;
 }) {
-  const { warn } = config;
   const endedHookInFlightOwners = new Set<object>();
   const endedHookEmittedOwners = new WeakSet<object>();
 
@@ -83,7 +84,7 @@ export function createSubagentRegistryContextCleanup(config: {
       await runContextEngineSubagentEnded(params, options);
       return true;
     } catch (err) {
-      warn(warning, {
+      log.warn(warning, {
         error: buildSafeLifecycleErrorMeta(err),
         childSessionKey: params.childSessionKey,
         reason: params.reason,
@@ -124,7 +125,7 @@ export function createSubagentRegistryContextCleanup(config: {
         await removeInternalSessionEffectsSession(entry.execution.transcriptTarget);
       } catch (err) {
         internalEffectsRemoved = false;
-        warn("failed to remove collector internal session effects", {
+        log.warn("failed to remove collector internal session effects", {
           runId: entry.runId,
           childSessionKey: entry.childSessionKey,
           err,
@@ -292,7 +293,7 @@ export function createSubagentRegistryContextCleanup(config: {
       if (hasSqliteWorkerOutcomeUnknown(err)) {
         throw err;
       }
-      warn("subagent_ended hook failed (best-effort)", { phase: "plugin-runtime", err });
+      log.warn("subagent_ended hook failed (best-effort)", { phase: "plugin-runtime", err });
     }
   }
 
@@ -307,8 +308,5 @@ export function createSubagentRegistryContextCleanup(config: {
       reason: SubagentLifecycleEndedReason;
     }) => params.reason === SUBAGENT_ENDED_REASON_KILLED || params.entry.spawnMode !== "session",
     emitSubagentEndedHookForRun,
-    reset: () => {
-      endedHookInFlightOwners.clear();
-    },
   };
 }

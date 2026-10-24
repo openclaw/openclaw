@@ -19,7 +19,7 @@ import { createOpenClawAgentDatabasePathMatcher } from "../state/openclaw-agent-
 import type { GatewaySessionStoreSourceRequest } from "./session-utils-store.types.js";
 
 type GatewaySessionStoreDiscovery = {
-  existing: SessionStoreTarget[];
+  existing: readonly Readonly<SessionStoreTarget>[];
   fallback: SessionStoreTarget;
 };
 
@@ -72,7 +72,7 @@ export function resolveGatewaySessionStoreLookupCandidates(params: {
 }): {
   configured: boolean;
   fallback: SessionStoreTarget;
-  candidates: SessionStoreTarget[];
+  candidates: readonly Readonly<SessionStoreTarget>[];
   readSources?: SessionEntryReadSource[];
 } {
   const configured = isConfiguredSessionStoreAgentId(params.cfg, params.agentId);
@@ -127,7 +127,7 @@ export function sessionStoreRoutingConfig(
   };
 }
 
-/** Native discovery policy shared by synchronous readers and the admitted history worker. */
+/** Resolve captured native discovery facts inside the admitted history worker. */
 export function resolveGatewaySessionStoreReadSources(params: GatewaySessionStoreSourceRequest) {
   const cfg = sessionStoreRoutingConfig(params.routing);
   return withAgentRosterFactsBatch(cfg, () => {
@@ -210,7 +210,6 @@ export function resolveGatewaySessionStoreReadSources(params: GatewaySessionStor
     }
     return {
       sources: Object.fromEntries(sources),
-      isCurrent: () => isSameDatabasePath.isCurrent(),
     };
   });
 }

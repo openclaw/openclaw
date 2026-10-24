@@ -1,5 +1,4 @@
 import { Command } from "commander";
-import { repoInstallSpec } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { loggingState } from "../../logging/state.js";
 import { captureEnv } from "../../test-utils/env.js";
@@ -10,8 +9,6 @@ import {
   registerNativeExecutorPreActionTests,
 } from "./preaction.test-helpers.js";
 import { expectNoCalls } from "./program.test-helpers.js";
-
-const DISCORD_REPO_INSTALL_SPEC = repoInstallSpec("discord");
 
 const setVerboseMock = vi.fn();
 const emitCliBannerMock = vi.fn();
@@ -30,13 +27,13 @@ const runtimeMock = {
   exit: vi.fn(),
 };
 
-// mock-isolation: Capture CLI output setup without changing process-wide logging or terminal output.
+// mock-isolation: Capture startup effects without changing process-wide logging or terminal output.
 vi.mock("../../globals.js", () => ({ setVerbose: setVerboseMock }));
-// mock-isolation: Capture CLI output setup without changing process-wide logging or terminal output.
+// mock-isolation: Capture startup effects without changing process-wide logging or terminal output.
 vi.mock("../../runtime.js", () => ({ defaultRuntime: runtimeMock }));
-// mock-isolation: Capture CLI output setup without changing process-wide logging or terminal output.
+// mock-isolation: Capture startup effects without changing process-wide logging or terminal output.
 vi.mock("../banner.js", () => ({ emitCliBanner: emitCliBannerMock }));
-// mock-isolation: Capture CLI output setup without changing process-wide logging or terminal output.
+// mock-isolation: Capture startup effects without changing process-wide logging or terminal output.
 vi.mock("../../logging/console.js", () => ({ routeLogsToStderr: routeLogsToStderrMock }));
 // mock-isolation: Control config readiness while testing preaction ordering.
 vi.mock("./config-guard.js", () => ({ ensureConfigReady: configReadyMock }));
@@ -60,8 +57,6 @@ vi.mock("../gateway-cli/pre-bootstrap.js", () => ({
 let registerPreActionHooks: typeof import("./preaction.js").registerPreActionHooks;
 let originalProcessArgv: string[];
 let originalProcessTitle: string;
-let originalProcessTitleDescriptor: PropertyDescriptor | undefined;
-let observedProcessTitle: string;
 let originalEnv: ReturnType<typeof captureEnv>;
 let originalForceStderr: boolean;
 let originalEarlyConsoleRoutingRestore: boolean | null;
@@ -70,21 +65,9 @@ beforeEach(() => {
   vi.clearAllMocks();
   originalProcessArgv = [...process.argv];
   originalProcessTitle = process.title;
-  originalProcessTitleDescriptor = Object.getOwnPropertyDescriptor(process, "title");
-  observedProcessTitle = originalProcessTitle;
   originalEnv = captureEnv(["NODE_NO_WARNINGS", "OPENCLAW_HIDE_BANNER"]);
   originalForceStderr = loggingState.forceConsoleToStderr;
   originalEarlyConsoleRoutingRestore = loggingState.earlyConsoleRoutingRestore;
-  // Worker-thread Vitest runs do not reliably mutate the real process title,
-  // so capture writes at the property boundary instead.
-  Object.defineProperty(process, "title", {
-    configurable: true,
-    enumerable: originalProcessTitleDescriptor?.enumerable ?? true,
-    get: () => observedProcessTitle,
-    set: (value: string) => {
-      observedProcessTitle = value;
-    },
-  });
   loggingState.forceConsoleToStderr = false;
   loggingState.earlyConsoleRoutingRestore = null;
   delete process.env.NODE_NO_WARNINGS;
@@ -93,16 +76,7 @@ beforeEach(() => {
 
 afterEach(() => {
   process.argv = originalProcessArgv;
-  if (originalProcessTitleDescriptor && "value" in originalProcessTitleDescriptor) {
-    Object.defineProperty(process, "title", {
-      ...originalProcessTitleDescriptor,
-      value: originalProcessTitle,
-    });
-  } else if (originalProcessTitleDescriptor) {
-    Object.defineProperty(process, "title", originalProcessTitleDescriptor);
-  } else {
-    process.title = originalProcessTitle;
-  }
+  process.title = originalProcessTitle;
   loggingState.forceConsoleToStderr = originalForceStderr;
   loggingState.earlyConsoleRoutingRestore = originalEarlyConsoleRoutingRestore;
   originalEnv.restore();
@@ -115,8 +89,7 @@ describe("registerPreActionHooks", () => {
   function buildProgram() {
     const programLocal = new Command().name("openclaw").enablePositionalOptions();
     registerPreActionCommandFixtures(programLocal);
-    const config = programLocal.command("config");
-    config.option("--section <section>");
+    const config = programLocal.command("config").option("--section <section>");
     setCommandJsonMode(config.command("set"), "parse-only", ({ argv }) =>
       isConfigSetJsonParseOnly(argv),
     )
@@ -218,9 +191,7 @@ describe("registerPreActionHooks", () => {
   it("loads plugins for text local agent runs", async () => {
     await runPreAction(["agent"], ["node", "openclaw", "agent", "--local", "--message", "hi"]);
     expectConfig(["agent"]);
-    expect(loadPluginsMock).toHaveBeenCalledWith({
-      scope: "all",
-    });
+    expect(loadPluginsMock).toHaveBeenCalledWith({ scope: "all" });
   });
 
   it.each([["onboard"], ["channels", "add"]])("keeps %j manifest-first", async (...commandPath) => {
@@ -233,38 +204,6 @@ describe("registerPreActionHooks", () => {
     await runPreAction(["channels"]);
 
     expectNoCalls(emitCliBannerMock, setVerboseMock, configReadyMock, loadPluginsMock);
-  });
-
-  it("only allows invalid config when the selected install source owns recovery", async () => {
-    const scenarios: Array<{ args: string[]; allowInvalid?: true }> = [
-      { args: ["npm:@openclaw/discord"], allowInvalid: true },
-      { args: ["npm:@openclaw/discord@2026.5.22"], allowInvalid: true },
-      { args: ["npm:@openclaw/brave-plugin"], allowInvalid: true },
-      { args: ["npm:@openclaw/slack"], allowInvalid: true },
-      { args: ["discord"], allowInvalid: true },
-      { args: ["brave"], allowInvalid: true },
-      { args: ["@openclaw/discord"] },
-      { args: ["@openclaw/discord@2026.5.22"] },
-      { args: ["@openclaw/brave-plugin"] },
-      { args: ["@openclaw/slack"] },
-      { args: ["clawhub:@openclaw/discord"] },
-      { args: ["clawhub:discord"] },
-      { args: ["alpha"] },
-      { args: [DISCORD_REPO_INSTALL_SPEC], allowInvalid: true },
-      { args: ["@openclaw/discord", "--marketplace", "local/repo"] },
-      { args: ["npm:@openclaw/discord", "--marketplace", "local/repo"] },
-    ];
-    for (const { args, allowInvalid } of scenarios) {
-      vi.clearAllMocks();
-      await runPreAction(["plugins", "install", ...args]);
-
-      expect(configReadyMock, args.join(" ")).toHaveBeenCalledWith({
-        runtime: runtimeMock,
-        measure: expect.any(Function),
-        commandPath: ["plugins", "install"],
-        ...(allowInvalid ? { allowInvalid } : {}),
-      });
-    }
   });
 
   it("skips help/version preaction and respects banner opt-out", async () => {

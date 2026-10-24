@@ -260,7 +260,7 @@ credential-bearing URLs retain their masking.
 
 JSON console output and log tails preserve valid JSON while masking decoded values and serialized record context. Later rules see earlier masks. Structured credential fields use full masks; matched numbers, booleans, and null become the JSON string `"***"`. Log tails retain built-in credential patterns when custom patterns are configured.
 
-Diagnostics exports and captured provider/WebSocket console output retain redaction. `logging.redactPatterns` supplies deployment-specific patterns at these egress boundaries. Log IDs, sizes, and outcomes rather than message text, prompts, tool arguments, or tool results. WebSocket agent-event summaries contain character counts instead of assistant text or tool metadata.
+Formatted health failures, Doctor Gateway connection notes, diagnostics exports, and captured provider/WebSocket console output retain redaction. `logging.redactPatterns` supplies deployment-specific patterns at these egress boundaries. Log IDs, sizes, and outcomes rather than message text, prompts, tool arguments, or tool results. WebSocket agent-event summaries contain character counts instead of assistant text or tool metadata.
 
 ## Gateway WebSocket logs
 
@@ -297,6 +297,12 @@ handoff). Nested fields `deviceLookupMs`, `deviceTokensMs`,
 including cache hits and worker queue/lock waits. Nested times overlap their parent interval;
 do not add them to the total. These are elapsed times, so event-loop stalls during
 awaited work also count. Unused or unreached sub-phases are absent.
+
+The hello interval includes `snapshotMs` (presence, session defaults, update details,
+and cached health) and `helloDescriptorsMs` (method and event descriptors). These
+are nested wall times, not additional phases. Model catalog publication runs after
+hello and is outside these intervals. Hello replies remain uncompressed even when
+the connection negotiates permessage-deflate, because they can contain credentials.
 
 With `diagnostics.enabled: true` and warning logging enabled, `sessions.list`
 handlers and `sessions.subscribe` snapshot handlers taking at least one second

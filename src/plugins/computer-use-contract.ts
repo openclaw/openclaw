@@ -337,6 +337,9 @@ const ComputerObservationSchema = closedObject({
 
 export const ComputerActResultSchema = closedObject({
   ok: Type.Boolean(),
+  // v2026.8.1 nodes return these coordinates after input and upgrade independently.
+  cursorX: Type.Optional(Type.Number()),
+  cursorY: Type.Optional(Type.Number()),
   effect: Type.Optional(
     Type.Enum(["confirmed", "unverifiable", "suspected_noop"] as const, {
       type: "string",

@@ -37,7 +37,8 @@ const managedRuntime = vi.hoisted(() => ({
   disposeProfile: vi.fn(),
 }));
 
-vi.mock("../agents/bash-process-registry.js", () => ({
+vi.mock("../agents/bash-process-registry.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../agents/bash-process-registry.js")>()),
   getActiveBackgroundExecSessionCount: () => managedRuntime.backgroundCount,
   waitForExecScope: managedRuntime.waitForExecScope,
 }));

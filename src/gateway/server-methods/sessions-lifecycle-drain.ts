@@ -167,23 +167,9 @@ export async function prepareSessionLifecycleDrain(
         });
         params.authorize?.();
         if (params.sessionId) {
-          const reservation = getWorkerInferenceSessionControl(workerService)?.reserveSessionDrain(
+          workerDrain = getWorkerInferenceSessionControl(workerService)?.reserveSessionDrain(
             params.sessionId,
           );
-          try {
-            workerDrain = reservation?.accept();
-          } catch (error) {
-            try {
-              reservation?.release();
-            } catch (releaseError) {
-              if (releaseError !== error) {
-                throw new AggregateError([error, releaseError], "Worker drain reservation failed", {
-                  cause: releaseError,
-                });
-              }
-            }
-            throw error;
-          }
           if (workerDrain) {
             workerDrained = workerDrain.drained;
             void workerDrained.catch(() => {});

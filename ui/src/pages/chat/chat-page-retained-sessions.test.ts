@@ -37,7 +37,8 @@ import { sessionNavigationTarget } from "../../lib/sessions/route-navigation.ts"
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { QUEUED_EDIT_RETENTION_CHANGE_EVENT } from "./chat-page-retained-sessions.ts";
 import { settleChatPage, setNavigationContext, stubMatchMedia } from "./chat-page.test-support.ts";
-import "./chat-page.ts";
+import "./chat-page.tsx";
+import { registerChatPane } from "./chat-pane-elements.ts";
 import { routeDraft } from "./route-draft.ts";
 import type { SessionChatRouteData } from "./route-loader.ts";
 
@@ -90,6 +91,7 @@ function composer(pane: HTMLElement) {
   const textarea = document.createElement("textarea");
   combobox.append(textarea);
   pane.append(combobox);
+  Object.defineProperty(pane, "composerElement", { configurable: true, value: textarea });
   return textarea;
 }
 function unknownLayout(key: string) {
@@ -474,6 +476,7 @@ describe("chat page retained sessions", () => {
         replacementPane.active = true;
         replacementPane.sessionKey = "main";
         const replacementTextarea = composer(replacementPane);
+        registerTestCleanup(registerChatPane(replacementPane));
         pane.replaceWith(replacementPane);
 
         vi.advanceTimersByTime(250);
@@ -642,7 +645,7 @@ describe("chat page retained sessions", () => {
     const commit = vi.fn(() => true);
     try {
       // The router advances history before a cold route replaces the visible Chat page.
-      window.history.pushState(null, "", "/agents");
+      window.history.pushState(null, "", "/sessions");
       expect(page.presented).toBe(true);
       runSessionNavigationIntent(paneB, {
         commit,
@@ -694,10 +697,8 @@ describe("chat page retained sessions", () => {
       });
 
       expect(returnToA).toHaveBeenCalledOnce();
-      expect(paneA.classList.contains("chat-pane-cache__pane--visible")).toBe(true);
-      expect(paneA.hasAttribute("inert")).toBe(false);
-      expect(paneB.classList.contains("chat-pane-cache__pane--visible")).toBe(false);
-      expect(paneB.hasAttribute("inert")).toBe(true);
+      expectPresentation(paneA, { visible: true, inert: false });
+      expectPresentation(paneB, { visible: false, inert: true });
     } finally {
       page.remove();
       history.replaceState(null, "", originalHref);

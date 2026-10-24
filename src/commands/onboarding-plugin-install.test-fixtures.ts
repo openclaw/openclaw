@@ -1,5 +1,25 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { OnboardingPluginInstallEntry } from "./onboarding-plugin-install.types.js";
+import type {
+  OnboardingPluginInstallEntry,
+  OnboardingPluginInstallResult,
+} from "./onboarding-plugin-install.types.js";
+
+export function installedPlugin<T extends object>(fields: T) {
+  return {
+    ok: true,
+    pluginId: "demo-plugin",
+    targetDir: "/tmp/demo-plugin",
+    version: "1.2.3",
+    ...fields,
+  };
+}
+
+export function notInstalled(
+  status: "failed" | "skipped" | "timed_out",
+  fields: Partial<OnboardingPluginInstallResult> = {},
+) {
+  return { cfg: {}, installed: false, pluginId: "demo-plugin", status, ...fields };
+}
 
 export function installEntry(
   install: OnboardingPluginInstallEntry["install"],

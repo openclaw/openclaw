@@ -14,7 +14,7 @@ export function createInterval(callback: () => void, delay: () => number | undef
 /** A restartable one-shot; a reactive delay arms it automatically, and undefined pauses it. */
 export function createTimeout(
   callback: () => void,
-  milliseconds: number | (() => number | undefined),
+  milliseconds: number | (() => number | undefined) = 0,
 ) {
   let timer: ReturnType<typeof globalThis.setTimeout> | undefined;
   const cancel = () => {
@@ -39,8 +39,7 @@ export function createTimeout(
   onCleanup(cancel);
   return {
     cancel,
-    schedule() {
-      const delay = typeof milliseconds === "function" ? milliseconds() : milliseconds;
+    schedule(delay = typeof milliseconds === "function" ? milliseconds() : milliseconds) {
       if (delay === undefined) {
         cancel();
       } else {

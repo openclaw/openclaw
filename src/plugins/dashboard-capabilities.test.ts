@@ -59,7 +59,6 @@ type Capability = readonly [
   options?: {
     scope?: "operator.read" | "operator.write";
     registeredMethod?: string;
-    paramShape?: object;
   },
 ];
 
@@ -70,7 +69,6 @@ function writeDashboardPlugin(id: string, ...capabilities: Capability[]): TempPl
       id: capabilityId,
       method,
       description: "Fixture capability",
-      ...(options.paramShape && { paramShape: options.paramShape }),
     });
     const scope = options.scope ?? (kind === "dataBindings" ? "operator.read" : "operator.write");
     return `api.registerGatewayMethod(${JSON.stringify(options.registeredMethod ?? method)},
@@ -224,31 +222,13 @@ it("keeps dotted plugin owners and literal escape markers distinct", () => {
   const registry = loadFixture(dataPlugin, actionPlugin, literalEscapePlugin);
 
   expect(registry.plugins.filter((entry) => entry.status === "loaded")).toHaveLength(3);
-  expect(registry.dashboardDataBindings.has("a.b.c")).toBe(true);
-  expect(registry.dashboardActionVerbs.has("a%2Eb.c")).toBe(true);
+  expect(registry.dashboardDataBindings.get("a.b.c")).toMatchObject({
+    pluginId: "a",
+    method: "a.read",
+  });
+  expect(registry.dashboardActionVerbs.get("a%2Eb.c")).toMatchObject({
+    pluginId: "a.b",
+    method: "b.write",
+  });
   expect(registry.dashboardDataBindings.has("a%252Eb.c")).toBe(true);
-});
-
-it("publishes validated dashboard bindings and action verbs", () => {
-  const plugin = writeDashboardPlugin(
-    "valid",
-    ["dataBindings", "items", "valid.items"],
-    [
-      "actionVerbs",
-      "refresh",
-      "valid.refresh",
-      { paramShape: { type: "object", additionalProperties: false } },
-    ],
-  );
-
-  const registry = loadFixture(plugin);
-  expect(registry.plugins.find((entry) => entry.id === plugin.id)?.status).toBe("loaded");
-  expect(registry.dashboardDataBindings.get("valid.items")).toMatchObject({
-    pluginId: plugin.id,
-    method: "valid.items",
-  });
-  expect(registry.dashboardActionVerbs.get("valid.refresh")).toMatchObject({
-    pluginId: plugin.id,
-    method: "valid.refresh",
-  });
 });

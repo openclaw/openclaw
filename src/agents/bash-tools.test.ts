@@ -377,50 +377,6 @@ describe("background completion notifications", () => {
     await state.cleanup();
   });
 
-  it("routes an ordinary completion event to the originating session", async () => {
-    const id = await startAndFinish(
-      notifyTool({
-        messageProvider: "telegram",
-        currentChannelId: "telegram:-100123:topic:47",
-        currentThreadTs: "47",
-      }),
-      shellEcho("notify"),
-    );
-    const receipt = expectDefined(receipts[0], "completion receipt");
-    await expect(receipt.accepted).resolves.toEqual({ ok: true });
-    expect(getFinishedSession(id)).toMatchObject({ id, terminalStatus: "completed", exitCode: 0 });
-    expect(sessionEvents.enqueueSessionEventForHost).toHaveBeenCalledExactlyOnceWith(
-      expect.stringContaining("notify"),
-      expect.objectContaining({
-        agentId: "main",
-        sessionKey,
-        source: "exec",
-        expectedTarget: expect.objectContaining({ sessionId: "bash-origin", sessionKey }),
-      }),
-    );
-    expect(peekSystemEventEntries(sessionKey)).toContainEqual(
-      expect.objectContaining({
-        id: receipt.id,
-        contextKey: `exec:${id}`,
-        deliveryContext: {
-          channel: "telegram",
-          to: "telegram:-100123:topic:47",
-          threadId: "47",
-          accountId: undefined,
-        },
-      }),
-    );
-    expect(
-      await drainFormattedSystemEvents({
-        cfg: {},
-        agentId: "main",
-        sessionKey,
-        isMainSession: false,
-        isNewSession: false,
-      }),
-    ).toBeUndefined();
-  });
-
   it.each([
     {
       name: "defaults to notifying chat providers",
@@ -430,15 +386,40 @@ describe("background completion notifications", () => {
     { name: "honors an explicit silent override", notifyOnExitEmptySuccess: false, emits: false },
   ])("$name on empty success", async ({ notifyOnExitEmptySuccess, emits }) => {
     const id = await startAndFinish(
-      notifyTool({ messageProvider: " Telegram ", notifyOnExitEmptySuccess }),
+      notifyTool({
+        messageProvider: " Telegram ",
+        currentChannelId: "telegram:-100123:topic:47",
+        currentThreadTs: "47",
+        notifyOnExitEmptySuccess,
+      }),
       isWin ? "$null" : ":",
     );
-    expect(getFinishedSession(id)?.terminalStatus).toBe("completed");
+    expect(getFinishedSession(id)).toMatchObject({ id, terminalStatus: "completed", exitCode: 0 });
     expect(receipts).toHaveLength(emits ? 1 : 0);
     if (emits) {
-      await expect(expectDefined(receipts[0], "completion receipt").accepted).resolves.toEqual({
-        ok: true,
-      });
+      const receipt = expectDefined(receipts[0], "completion receipt");
+      await expect(receipt.accepted).resolves.toEqual({ ok: true });
+      expect(peekSystemEventEntries(sessionKey)).toContainEqual(
+        expect.objectContaining({
+          id: receipt.id,
+          contextKey: `exec:${id}`,
+          deliveryContext: {
+            channel: "telegram",
+            to: "telegram:-100123:topic:47",
+            threadId: "47",
+            accountId: undefined,
+          },
+        }),
+      );
+      expect(
+        await drainFormattedSystemEvents({
+          cfg: {},
+          agentId: "main",
+          sessionKey,
+          isMainSession: false,
+          isNewSession: false,
+        }),
+      ).toBeUndefined();
     }
     expect(peekSystemEvents(sessionKey)).toEqual(
       emits ? [`Exec completed (${id.slice(0, 8)}, code 0)`] : [],

@@ -1,4 +1,3 @@
-// Sessions cleanup tests cover stale session cleanup and runtime output.
 import { spawnSync } from "node:child_process";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { stripAnsi, visibleWidth } from "../../packages/terminal-core/src/ansi.js";
@@ -6,6 +5,7 @@ import { GatewayCredentialsRequiredError } from "../gateway/call.js";
 import { GatewayTransportError } from "../gateway/transport-error.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { sessionsCleanupLargeLabelsEntrypoint } from "./sessions-cleanup-runtime.test-support.js";
+import { cleanupSummary } from "./sessions-cleanup-summary.test-support.js";
 import { createCapturingTestRuntime as makeRuntime } from "./test-runtime-config-helpers.js";
 
 const mocks = vi.hoisted(() => ({
@@ -47,8 +47,7 @@ vi.mock("../gateway/call.js", async (importOriginal) => ({
 import { sessionsCleanupCommand } from "./sessions-cleanup.js";
 
 function expectLogsToInclude(logs: readonly string[], text: string): void {
-  const matches = logs.filter((line) => line.includes(text));
-  expect(matches.length).toBeGreaterThan(0);
+  expect(logs.some((line) => line.includes(text))).toBe(true);
 }
 
 function gatewayTransportError(kind: "closed" | "timeout", code?: number): GatewayTransportError {
@@ -88,22 +87,13 @@ function cleanupPreview(
   entries: Partial<Omit<CleanupPreview, "summary">> = {},
 ) {
   return {
-    summary: {
-      agentId: "main",
+    summary: cleanupSummary({
       storePath: "/resolved/sessions.json",
-      mode: "warn",
-      dryRun: true,
       beforeCount: 1,
-      afterCount: 0,
-      missing: 0,
-      dmScopeRetired: 0,
-      modelRunPruned: 0,
-      pruned: 0,
-      capped: 0,
-      diskBudget: null,
       wouldMutate: true,
+      unreferencedArtifacts: undefined,
       ...summary,
-    },
+    }),
     beforeStore: {},
     missingKeys: new Set<string>(),
     staleKeys: new Set<string>(),
@@ -116,6 +106,14 @@ function cleanupPreview(
 
 function previewEntry(sessionId: string, updatedAt: number, label?: string) {
   return { sessionId, updatedAt, model: "test:opus", ...(label === undefined ? {} : { label }) };
+}
+
+function mockPreviews(...previewResults: ReturnType<typeof cleanupPreview>[]) {
+  mocks.runSessionsCleanup.mockResolvedValue({
+    mode: "warn",
+    previewResults,
+    appliedSummaries: [],
+  });
 }
 
 describe("sessionsCleanupCommand", () => {
@@ -135,11 +133,7 @@ describe("sessionsCleanupCommand", () => {
       { agentId: "main", storePath: "/resolved/sessions.json" },
     ]);
     mocks.callGateway.mockResolvedValue(null);
-    mocks.runSessionsCleanup.mockResolvedValue({
-      mode: "warn",
-      previewResults: [],
-      appliedSummaries: [],
-    });
+    mockPreviews();
   });
 
   afterEach(() => {
@@ -193,12 +187,11 @@ describe("sessionsCleanupCommand", () => {
       storePath: "/resolved/openclaw-agent.sqlite",
     });
     expect(mocks.runSessionsCleanup).toHaveBeenCalledOnce();
-    const cleanupCall = mocks.runSessionsCleanup.mock.calls[0]?.[0];
-    expect(cleanupCall?.cfg).toEqual({ session: { store: "/cfg/sessions.json" } });
-    expect(cleanupCall?.opts).toMatchObject({ enforce: true, activeKey: "agent:main:main" });
-    expect(cleanupCall?.targets).toEqual([
-      { agentId: "main", storePath: "/resolved/sessions.json" },
-    ]);
+    expect(mocks.runSessionsCleanup.mock.calls[0]?.[0]).toEqual({
+      cfg: { session: { store: "/cfg/sessions.json" } },
+      opts: expect.objectContaining({ enforce: true, activeKey: "agent:main:main" }),
+      targets: [{ agentId: "main", storePath: "/resolved/sessions.json" }],
+    });
   });
 
   it.each([
@@ -299,46 +292,47 @@ describe("sessionsCleanupCommand", () => {
   });
 
   it("renders a dry-run action table with keep/archive/prune actions", async () => {
-    mocks.runSessionsCleanup.mockResolvedValue({
-      mode: "warn",
-      previewResults: [
-        cleanupPreview(
-          {
-            beforeCount: 4,
-            afterCount: 3,
-            archived: 1,
-            capArchived: 1,
-            pruned: 1,
-            capped: 1,
-            unreferencedArtifacts: {
-              scannedFiles: 5,
-              removedFiles: 2,
-              freedBytes: 128,
-              olderThanMs: 604800000,
-            },
+    mockPreviews(
+      cleanupPreview(
+        {
+          beforeCount: 4,
+          afterCount: 3,
+          archived: 1,
+          capArchived: 1,
+          pruned: 1,
+          capped: 1,
+          unreferencedArtifacts: {
+            scannedFiles: 5,
+            removedFiles: 2,
+            freedBytes: 128,
+            olderThanMs: 604800000,
           },
-          {
-            beforeStore: {
-              ageArchived: previewEntry("age-archived", 0),
-              stale: previewEntry("stale", 1),
-              fresh: previewEntry("fresh", 2),
-              capArchived: previewEntry("cap-archived", 0),
-            },
-            staleKeys: new Set(["stale"]),
-            ageArchivedKeys: new Set(["ageArchived"]),
-            capArchivedKeys: new Set(["capArchived"]),
+        },
+        {
+          beforeStore: {
+            ageArchived: previewEntry("age-archived", 0),
+            stale: previewEntry("stale", 1),
+            fresh: previewEntry("fresh", 2),
+            capArchived: previewEntry("cap-archived", 0),
           },
-        ),
-      ],
-      appliedSummaries: [],
-    });
+          staleKeys: new Set(["stale"]),
+          ageArchivedKeys: new Set(["ageArchived"]),
+          capArchivedKeys: new Set(["capArchived"]),
+        },
+      ),
+    );
     await cleanup({ dryRun: true });
 
-    expectLogsToInclude(logs, "Session store: /resolved/openclaw-agent.sqlite");
-    expectLogsToInclude(logs, "Planned session actions:");
-    expectLogsToInclude(logs, "Would prune unreferenced artifacts: 2");
-    expectLogsToInclude(logs, "Would archive cap overflow: 1");
-    expectLogsToInclude(logs, "Would archive inactive sessions: 1");
+    for (const text of [
+      "Session store: /resolved/openclaw-agent.sqlite",
+      "Planned session actions:",
+      "Would prune unreferenced artifacts: 2",
+      "Would archive cap overflow: 1",
+      "Would archive inactive sessions: 1",
+      "Total: 3 kept, 1 pruned",
+    ]) {
+      expectLogsToInclude(logs, text);
+    }
     const actionKeys = logs
       .flatMap((entry) => stripAnsi(entry).split("\n"))
       .map((line) =>
@@ -352,7 +346,6 @@ describe("sessionsCleanupCommand", () => {
     expect(actionKeys).toContainEqual(["prune-stale", "stale"]);
     expect(actionKeys).toContainEqual(["archive-cap", "capArchived"]);
     expect(actionKeys).toContainEqual(["archive-age", "ageArchived"]);
-    expectLogsToInclude(logs, "Total: 3 kept, 1 pruned");
   });
 
   it("finishes a large distinct-label preview with the normal CLI process stack", () => {
@@ -382,43 +375,39 @@ describe("sessionsCleanupCommand", () => {
   });
 
   it("renders a dry-run summary grouped by session label", async () => {
-    mocks.runSessionsCleanup.mockResolvedValue({
-      mode: "warn",
-      previewResults: [
-        cleanupPreview(
-          {
-            beforeCount: 7,
-            afterCount: 3,
-            pruned: 3,
-            capped: 1,
-            unreferencedArtifacts: {
-              scannedFiles: 0,
-              removedFiles: 0,
-              freedBytes: 0,
-              olderThanMs: 604800000,
-            },
+    mockPreviews(
+      cleanupPreview(
+        {
+          beforeCount: 7,
+          afterCount: 3,
+          pruned: 3,
+          capped: 1,
+          unreferencedArtifacts: {
+            scannedFiles: 0,
+            removedFiles: 0,
+            freedBytes: 0,
+            olderThanMs: 604800000,
           },
-          {
-            beforeStore: {
-              cronKept: previewEntry("cron-kept", 4, "Cron: 🔥修复"),
-              cronPruned: previewEntry("cron-pruned", 3, "Cron: 🔥修复"),
-              directKept: previewEntry("direct-kept", 2),
-              directCapped: previewEntry("direct-capped", 1),
-              literalUnlabeled: previewEntry("literal-unlabeled", 1, "Unlabeled"),
-              unsafePruned: previewEntry("unsafe-pruned", 1, "\u001b[31mAlert\nInjected"),
-              malformedLabelPruned: previewEntry(
-                "malformed-label-pruned",
-                1,
-                {} as unknown as string,
-              ),
-            },
-            staleKeys: new Set(["cronPruned", "unsafePruned", "malformedLabelPruned"]),
-            cappedKeys: new Set(["directCapped"]),
+        },
+        {
+          beforeStore: {
+            cronKept: previewEntry("cron-kept", 4, "Cron: 🔥修复"),
+            cronPruned: previewEntry("cron-pruned", 3, "Cron: 🔥修复"),
+            directKept: previewEntry("direct-kept", 2),
+            directCapped: previewEntry("direct-capped", 1),
+            literalUnlabeled: previewEntry("literal-unlabeled", 1, "Unlabeled"),
+            unsafePruned: previewEntry("unsafe-pruned", 1, "\u001b[31mAlert\nInjected"),
+            malformedLabelPruned: previewEntry(
+              "malformed-label-pruned",
+              1,
+              {} as unknown as string,
+            ),
           },
-        ),
-      ],
-      appliedSummaries: [],
-    });
+          staleKeys: new Set(["cronPruned", "unsafePruned", "malformedLabelPruned"]),
+          cappedKeys: new Set(["directCapped"]),
+        },
+      ),
+    );
     await cleanup({ dryRun: true });
 
     expectLogsToInclude(logs, "Summary by Label:");
@@ -438,35 +427,16 @@ describe("sessionsCleanupCommand", () => {
   });
 
   it("returns grouped JSON for --all-agents dry-runs", async () => {
-    mocks.resolveCommandSessionStoreTargets.mockReturnValue([
-      { agentId: "main", storePath: "/resolved/main-sessions.json" },
-      { agentId: "work", storePath: "/resolved/work-sessions.json" },
-    ]);
-    mocks.runSessionsCleanup.mockResolvedValue({
-      mode: "warn",
-      previewResults: [
-        cleanupPreview(
-          {
-            storePath: "/resolved/main-sessions.json",
-            pruned: 1,
-          },
-          {
-            staleKeys: new Set(["stale"]),
-          },
-        ),
-        cleanupPreview(
-          {
-            agentId: "work",
-            storePath: "/resolved/work-sessions.json",
-            pruned: 1,
-          },
-          {
-            staleKeys: new Set(["stale"]),
-          },
-        ),
-      ],
-      appliedSummaries: [],
-    });
+    const targets = ["main", "work"].map((agentId) => ({
+      agentId,
+      storePath: `/resolved/${agentId}-sessions.json`,
+    }));
+    mocks.resolveCommandSessionStoreTargets.mockReturnValue(targets);
+    mockPreviews(
+      ...targets.map((target) =>
+        cleanupPreview({ ...target, pruned: 1 }, { staleKeys: new Set(["stale"]) }),
+      ),
+    );
     await cleanup({
       json: true,
       dryRun: true,

@@ -24,7 +24,12 @@ const native = vi.hoisted(() => ({
   running: vi.fn<typeof import("./schtasks-runtime.js").waitForScheduledTaskRunningEvidence>(),
   stop: vi.fn<typeof import("./schtasks-control.js").stopRegisteredScheduledTask>(),
 }));
-vi.mock("./schtasks-exec.js", () => ({ execSchtasks: native.exec }));
+// mock-isolation: Install recovery changes only the task registration modeled by this fixture.
+vi.mock("./schtasks-exec.js", () => ({
+  execSchtasks: native.exec,
+  execScheduledTaskEnabledChange: (taskName: string, enabled: boolean) =>
+    native.exec(["/Change", "/TN", taskName, enabled ? "/ENABLE" : "/DISABLE"]),
+}));
 vi.mock("./schtasks-control.js", async (original) => ({
   ...(await original<typeof import("./schtasks-control.js")>()),
   runScheduledTaskOrThrow: native.run,
@@ -119,6 +124,38 @@ async function fixture(enabled = false) {
   };
   return { args, scriptPath, launcherPath, original, registration, assertRestored, assertBackups };
 }
+
+it.each([false, true])(
+  "accepts publication timestamp settlement and restores after activation failure (%s)",
+  async (failActivation) => {
+    const f = await fixture();
+    const rename = fs.rename;
+    vi.spyOn(fs, "rename").mockImplementation(async (from, to) => {
+      await rename(from, to);
+      if (to === f.scriptPath || to === f.launcherPath) {
+        const stat = await fs.stat(to);
+        // Windows can settle the writer's mtime after the staged snapshot.
+        await fs.utimes(to, stat.atime, new Date(stat.mtimeMs + 10));
+      }
+    });
+    const failure = new Error("Synthetic activation failure");
+    if (failActivation) {
+      native.run.mockRejectedValueOnce(failure);
+      await expect(installScheduledTask(f.args)).rejects.toBe(failure);
+      await f.assertRestored();
+    } else {
+      await expect(installScheduledTask(f.args)).resolves.toEqual({ scriptPath: f.scriptPath });
+      expect((await readScheduledTaskCommand(f.args.env))?.programArguments).toEqual(
+        f.args.programArguments,
+      );
+    }
+    await f.assertBackups();
+    expect(f.args.stdout.read(f.args.stdout.readableLength)?.toString()).toContain(
+      `${f.scriptPath}.task.xml.bak and launcher .bak files beside it are retained for recovery`,
+    );
+    expect(f.args.warn).not.toHaveBeenCalled();
+  },
+);
 
 it.each(
   ["runtime", "arguments", "environment"].flatMap((change) => [

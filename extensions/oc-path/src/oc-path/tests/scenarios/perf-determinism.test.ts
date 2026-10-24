@@ -23,7 +23,7 @@ describe("CPU budgets + determinism", () => {
 
   it("resolves 100k OcPaths on parsed AST within a 500 ms CPU budget", () => {
     const raw = `## A\n- a1\n- a2\n## B\n- b1\n- b2\n## C\n- c1: cv\n`;
-    const { ast } = parseMd(raw);
+    const ast = parseMd(raw);
     const path = { file: "X.md", section: "b", item: "b1" };
     expectWithinCpuBudget(() => {
       for (let i = 0; i < 100_000; i++) {
@@ -34,7 +34,7 @@ describe("CPU budgets + determinism", () => {
 
   it("resolveOcPath is non-mutating", () => {
     const raw = `## A\n- a: x\n## B\n- b\n`;
-    const { ast } = parseMd(raw);
+    const ast = parseMd(raw);
     const before = JSON.stringify(ast);
     resolveOcPath(ast, { file: "X.md", section: "a", item: "a", field: "a" });
     resolveOcPath(ast, { file: "X.md", section: "b" });

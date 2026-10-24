@@ -50,13 +50,8 @@ export function createEvent(params: {
   parentId: string | null;
   timestamp: number;
 }): FixtureEvent {
-  return {
-    type: "message",
-    id: params.id,
-    parentId: params.parentId,
-    timestamp: params.timestamp,
-    message: params.message,
-  };
+  const { id, parentId, timestamp, message } = params;
+  return { type: "message", id, parentId, timestamp, message };
 }
 
 export function createLegacyDatabaseFixture(params: {
@@ -77,8 +72,8 @@ export function createLegacyDatabaseFixture(params: {
     : openOpenClawAgentDatabase(options).path;
   closeOpenClawAgentDatabasesForTest();
   fs.mkdirSync(path.dirname(databasePath), { recursive: true });
-  const database = openNodeSqliteDatabase(databasePath);
-  try {
+  {
+    using database = openNodeSqliteDatabase(databasePath);
     if (legacy) {
       seedOpenClawAgentSchemaV21(database, agentId);
     }
@@ -148,8 +143,6 @@ export function createLegacyDatabaseFixture(params: {
         reconcileSessionTranscriptIndexInTransaction(database, sessionId);
       }
     }
-  } finally {
-    database.close();
   }
   registerOpenClawAgentDatabase({
     agentId,
@@ -215,84 +208,60 @@ function seedHistoricalTranscriptProjection(
 
 export function readDatabaseSnapshot(databasePath: string) {
   const { DatabaseSync } = requireNodeSqlite();
-  const database = new DatabaseSync(databasePath);
-  try {
-    const version = database.prepare("PRAGMA user_version").get() as { user_version: number };
-    const rows = executeSqliteQuerySync(
-      database,
-      getNodeSqliteKysely<Pick<DB, "transcript_events">>(database)
-        .selectFrom("transcript_events")
-        .select(["session_id", "seq", "created_at"])
-        .select(
-          (version.user_version < 22
-            ? sql.ref<string>("transcript_events.event_json") // kysely-allow-raw: frozen pre22 TEXT NOT NULL.
-            : transcriptEventJsonSql(database)
-          ).as("event_json"),
-        )
-        .orderBy("session_id")
-        .orderBy("seq"),
-    ).rows;
-    const identities = database
-      .prepare(
-        "SELECT session_id,event_id,seq,event_type,parent_id,message_idempotency_key,created_at FROM transcript_event_identities ORDER BY session_id,seq",
+  using database = new DatabaseSync(databasePath);
+  const select = (query: string) => database.prepare(query).all();
+  const version = database.prepare("PRAGMA user_version").get() as { user_version: number };
+  const rows = executeSqliteQuerySync(
+    database,
+    getNodeSqliteKysely<Pick<DB, "transcript_events">>(database)
+      .selectFrom("transcript_events")
+      .select(["session_id", "seq", "created_at"])
+      .select(
+        (version.user_version < 22
+          ? sql.ref<string>("transcript_events.event_json") // kysely-allow-raw: frozen pre22 TEXT NOT NULL.
+          : transcriptEventJsonSql(database)
+        ).as("event_json"),
       )
-      .all();
-    const activeBranch = database
-      .prepare(
-        "SELECT session_id,active_position,event_seq,message_position FROM session_transcript_active_events ORDER BY session_id,active_position",
-      )
-      .all();
-    const windows = database
-      .prepare(
-        "SELECT session_id,session_key,created_at,updated_at,transcript_observed_at FROM session_windows ORDER BY session_id",
-      )
-      .all();
-    const generations = database
-      .prepare(
-        "SELECT session_id,generation FROM transcript_rewrite_watermarks ORDER BY session_id",
-      )
-      .all();
-    const trajectoryCount = database
-      .prepare("SELECT count(*) AS count FROM trajectory_runtime_events")
-      .get() as { count: number };
-    const trajectoryRows = database
-      .prepare(
-        "SELECT session_id,seq,run_id,event_json,created_at FROM trajectory_runtime_events ORDER BY session_id,seq",
-      )
-      .all() as Array<{
-      session_id: string;
-      seq: number;
-      run_id: string | null;
-      event_json: string;
-      created_at: number;
-    }>;
-    return {
-      activeBranch,
-      generations,
-      identities,
-      rows,
-      trajectoryCount: trajectoryCount.count,
-      trajectoryRows,
-      version,
-      windows,
-    };
-  } finally {
-    database.close();
-  }
+      .orderBy("session_id")
+      .orderBy("seq"),
+  ).rows;
+  const trajectoryRows = select(
+    "SELECT session_id,seq,run_id,event_json,created_at FROM trajectory_runtime_events ORDER BY session_id,seq",
+  ) as Array<{
+    session_id: string;
+    seq: number;
+    run_id: string | null;
+    event_json: string;
+    created_at: number;
+  }>;
+  return {
+    activeBranch: select(
+      "SELECT session_id,active_position,event_seq,message_position FROM session_transcript_active_events ORDER BY session_id,active_position",
+    ),
+    generations: select(
+      "SELECT session_id,generation FROM transcript_rewrite_watermarks ORDER BY session_id",
+    ),
+    identities: select(
+      "SELECT session_id,event_id,seq,event_type,parent_id,message_idempotency_key,created_at FROM transcript_event_identities ORDER BY session_id,seq",
+    ),
+    rows,
+    trajectoryCount: trajectoryRows.length,
+    trajectoryRows,
+    version,
+    windows: select(
+      "SELECT session_id,session_key,created_at,updated_at,transcript_observed_at FROM session_windows ORDER BY session_id",
+    ),
+  };
 }
 
 export function writeArchive(filePath: string, events: FixtureEvent[], compressed: boolean): void {
   const content = `${events.map((event) => JSON.stringify(event)).join("\n")}\n`;
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  if (!compressed) {
-    fs.writeFileSync(filePath, content);
-    return;
-  }
-  const encoded = encodeSessionArchiveContent(content);
-  if (encoded.suffix !== SESSION_ARCHIVE_ZSTD_SUFFIX) {
+  const encoded = compressed ? encodeSessionArchiveContent(content) : undefined;
+  if (encoded && encoded.suffix !== SESSION_ARCHIVE_ZSTD_SUFFIX) {
     throw new Error("test runtime does not support zstd");
   }
-  fs.writeFileSync(filePath, encoded.bytes);
+  fs.writeFileSync(filePath, encoded?.bytes ?? content);
 }
 
 export function cleanupMediaPersistenceFixtures(tempDirs: string[]): void {

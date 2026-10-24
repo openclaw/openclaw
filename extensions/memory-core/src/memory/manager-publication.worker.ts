@@ -7,6 +7,9 @@ import { admitStoreSearch } from "openclaw/plugin-sdk/database-engine-worker-run
 import {
   ensureMemoryIndexSchema,
   loadSqliteVecExtensionFromPath,
+  MEMORY_INDEX_FTS_TABLE,
+  MEMORY_INDEX_PATHS_FTS_TABLE,
+  MEMORY_INDEX_VECTOR_TABLE,
   stageMemoryIndexSchemaExtension,
 } from "openclaw/plugin-sdk/memory-core-host-engine-schema";
 import {
@@ -28,7 +31,6 @@ import {
   readSqliteDatabaseScopedWriteToken,
   runSqliteImmediateTransactionSync,
   runSqliteSingleStatementSync,
-  setSqliteBusyTimeout,
   stageOpenClawAgentDatabaseSchemaExtension,
   supportsNodeSqliteExtensionLoading,
   tableExists,
@@ -43,6 +45,7 @@ import {
   countMemoryEmbeddingCache,
   pruneMemoryEmbeddingCache,
   upsertMemoryEmbeddingCache,
+  type MemoryEmbeddingCacheSize,
 } from "./manager-embedding-cache.js";
 import {
   upgradeMemoryIndexProviderKey,
@@ -83,16 +86,16 @@ type PublicationConnection =
   | MemoryShadowConnection
   | {
       kind: "agent";
-      pragmas: Pick<MemoryShadowConnection["pragmas"], "busy_timeout" | "foreign_keys">;
+      pragmas: MemoryShadowConnection["pragmas"];
     };
 
-// The agent owner configures these once; temporary transaction settings restore them.
-const agentConnectionPragmas = new WeakMap<
-  DatabaseSync,
-  Pick<MemoryShadowConnection["pragmas"], "busy_timeout" | "foreign_keys">
->();
+// Schema admission restores the foreign-key policy captured from the agent owner.
+const agentConnectionPragmas = new WeakMap<DatabaseSync, MemoryShadowConnection["pragmas"]>();
 const loadedExtensions = new WeakMap<DatabaseSync, string>();
-const embeddingCacheSizes = new WeakMap<DatabaseSync, { size: number; token?: string }>();
+const embeddingCacheSizes = new WeakMap<
+  DatabaseSync,
+  MemoryEmbeddingCacheSize & { token?: string }
+>();
 
 function failure(error: unknown): MemoryShadowFailure {
   return {
@@ -152,7 +155,7 @@ async function openShadowBackend(
       pragmas: readMemoryConnectionPragmas(db, "Invalid memory publication connection policy"),
     };
     return {
-      ...createPublicationBackend(connection, databasePath, db, true, (stage) =>
+      ...createPublicationBackend(connection, databasePath, db, (stage) =>
         requestSqliteWorkerOperationAdmission({ stage, facts: undefined }),
       ),
       close,
@@ -179,10 +182,7 @@ export function bindSqliteWorkerBackend(
   const db = context.database;
   let pragmas = agentConnectionPragmas.get(db);
   if ("kind" in input && !pragmas) {
-    pragmas = {
-      busy_timeout: readConnectionPragma(db, "busy_timeout"),
-      foreign_keys: readConnectionPragma(db, "foreign_keys"),
-    };
+    pragmas = readMemoryConnectionPragmas(db, "Invalid memory publication connection policy");
     agentConnectionPragmas.set(db, pragmas);
   }
   const connection: PublicationConnection =
@@ -192,28 +192,15 @@ export function bindSqliteWorkerBackend(
           pragmas: pragmas!,
         }
       : input;
-  return createPublicationBackend(connection, context.databasePath, db, false, (stage) =>
+  return createPublicationBackend(connection, context.databasePath, db, (stage) =>
     context.admit(stage),
   );
-}
-
-function readConnectionPragma(
-  db: DatabaseSync,
-  name: keyof MemoryShadowConnection["pragmas"],
-): number {
-  const row = db.prepare(`PRAGMA ${name}`).get();
-  const value = row?.[name] ?? row?.timeout;
-  if (typeof value !== "number" || !Number.isSafeInteger(value)) {
-    throw new Error("Invalid memory publication connection policy");
-  }
-  return value;
 }
 
 function createPublicationBackend(
   input: PublicationConnection,
   databasePath: string,
   db: DatabaseSync,
-  ownsConnection: boolean,
   admit: (stage: "transaction" | "commit") => void,
 ) {
   const vectorIndex = admitMemoryVectorIndex(db);
@@ -237,15 +224,6 @@ function createPublicationBackend(
       loadedExtensions.set(db, extensionPath);
     }
   };
-  for (const [name, value] of Object.entries(input.pragmas)) {
-    if (ownsConnection) {
-      if (name === "busy_timeout") {
-        setSqliteBusyTimeout(db, value);
-      } else {
-        db.exec(`PRAGMA ${name} = ${value}`);
-      }
-    }
-  }
   const discard = () => {
     staged = undefined;
   };
@@ -261,21 +239,10 @@ function createPublicationBackend(
     let entered = false;
     let committed = false;
     let writeToken: string | undefined;
-    let restoredBusyTimeout = false;
-    const restoreBusyTimeout = () => {
-      if (!restoredBusyTimeout) {
-        setSqliteBusyTimeout(db, input.pragmas.busy_timeout);
-        restoredBusyTimeout = true;
-      }
-    };
     try {
-      // Failed BEGIN is returned to the preparing host without sleeping here.
-      // It revalidates memory-file input before every retry, as before.
-      setSqliteBusyTimeout(db, 0);
       const value = run({
         onBegin: () => {
           entered = true;
-          restoreBusyTimeout();
           admit("transaction");
         },
         withCommit: (commit) => {
@@ -288,10 +255,6 @@ function createPublicationBackend(
       return { ok: true, value, writeToken };
     } catch (error) {
       return { ok: false, error: failure(error), entered, committed };
-    } finally {
-      if (db.isOpen) {
-        restoreBusyTimeout();
-      }
     }
   };
   const write = <T>(
@@ -310,14 +273,11 @@ function createPublicationBackend(
       ),
     );
   const writeSingleStatement = <T>(statement: () => T): MemoryPublicationResult<T> => {
-    let statementStarted = false;
     let committed = false;
     try {
       admit("transaction");
       // Autocommit makes the statement the effect boundary.
       admit("commit");
-      setSqliteBusyTimeout(db, 0);
-      statementStarted = true;
       const value = withSqliteDatabaseWriteScope(db, [MEMORY_INDEX_WRITE_SCOPE], () =>
         runSqliteSingleStatementSync(db, statement),
       );
@@ -325,39 +285,52 @@ function createPublicationBackend(
       const writeToken = readSqliteDatabaseScopedWriteToken(db, MEMORY_INDEX_WRITE_SCOPE);
       return { ok: true, value, writeToken };
     } catch (error) {
-      const detail = failure(error);
-      // Only a native lock refusal proves that the autocommit statement did not enter.
-      const lockRefused =
-        statementStarted &&
-        !committed &&
-        detail.errcode !== undefined &&
-        [5, 6].includes(detail.errcode & 0xff);
-      return { ok: false, error: detail, entered: !lockRefused, committed };
-    } finally {
-      if (statementStarted && db.isOpen) {
-        setSqliteBusyTimeout(db, input.pragmas.busy_timeout);
-      }
+      return { ok: false, error: failure(error), entered: true, committed };
     }
   };
-  const withFacts = <T>(result: MemoryPublicationResult<T>): MemoryPublicationResult<T> =>
-    result.ok ? { ...result, facts: readMemoryDatabaseFacts(db) } : result;
+  const withFacts = <T>(
+    result: MemoryPublicationResult<T>,
+    includeSearchSchema = false,
+  ): MemoryPublicationResult<T> => {
+    if (!result.ok) {
+      return result;
+    }
+    const facts = readMemoryDatabaseFacts(db);
+    // DDL receipts carry the admitted SQL verbatim, including sqlite-vec's exact declaration.
+    const schema = includeSearchSchema && getAdmittedSqliteSchemaFacts(db)!.tableSql;
+    return {
+      ...result,
+      facts,
+      ...(schema
+        ? {
+            searchSchema: {
+              fts: schema.get(MEMORY_INDEX_FTS_TABLE) ?? null,
+              paths: schema.get(MEMORY_INDEX_PATHS_FTS_TABLE) ?? null,
+              vector: schema.get(MEMORY_INDEX_VECTOR_TABLE) ?? null,
+            },
+          }
+        : {}),
+    };
+  };
   const cacheSize = () => {
     const token = readSqliteDatabaseScopedWriteToken(db, MEMORY_EMBEDDING_CACHE_WRITE_SCOPE);
     let retained = embeddingCacheSizes.get(db);
     if (!retained || retained.token !== token) {
-      retained = { size: countMemoryEmbeddingCache(db), token };
+      retained = { size: countMemoryEmbeddingCache(db), exact: true, token };
       embeddingCacheSizes.set(db, retained);
     }
-    return retained.size;
+    return retained;
   };
-  const writeCache = (run: (size: number) => number): MemoryPublicationResult<boolean> => {
+  const writeCache = (
+    run: (size: MemoryEmbeddingCacheSize) => MemoryEmbeddingCacheSize,
+  ): MemoryPublicationResult<boolean> => {
     const size = cacheSize();
     const result = write(() => run(size), [MEMORY_EMBEDDING_CACHE_WRITE_SCOPE]);
     if (!result.ok) {
       return result;
     }
     embeddingCacheSizes.set(db, {
-      size: result.value,
+      ...result.value,
       token: readSqliteDatabaseScopedWriteToken(db, MEMORY_EMBEDDING_CACHE_WRITE_SCOPE),
     });
     return { ...result, value: true };
@@ -407,8 +380,7 @@ function createPublicationBackend(
         command.type === "source.state" ||
         command.type === "source.hash" ||
         command.type === "source.chunks" ||
-        command.type === "cache.read" ||
-        command.type === "session.current"
+        command.type === "cache.read"
       ) {
         return readMemoryIndex(db, command).value;
       }
@@ -416,11 +388,14 @@ function createPublicationBackend(
         // Storage/STRICT migration must disable foreign keys before BEGIN.
         db.exec("PRAGMA foreign_keys = OFF");
         try {
-          const result = write(() => ensureMemoryIndexSchema({ ...command.input, db }));
+          const result = write(() => {
+            stageOpenClawAgentDatabaseSchemaExtension(db);
+            return ensureMemoryIndexSchema({ ...command.input, db });
+          });
           if (result.ok) {
             admitSqliteSchema(db);
           }
-          const published = withFacts(result);
+          const published = withFacts(result, true);
           return published.ok && "kind" in input
             ? {
                 ...published,
@@ -429,7 +404,6 @@ function createPublicationBackend(
                   admission: {
                     hasIndex: true,
                     ftsAvailable: published.value.ftsAvailable,
-                    schemaVersion: getAdmittedSqliteSchemaFacts(db)?.userVersion,
                     identity: readOpenClawAgentDatabaseIdentity({ db }),
                     facts: published.facts,
                   },
@@ -483,15 +457,23 @@ function createPublicationBackend(
         return undefined;
       }
       if (command.type === "cache.prune") {
-        if (cacheSize() <= command.input.maxEntries) {
+        if (cacheSize().size <= command.input.maxEntries) {
           return { ok: true, value: false };
         }
-        return writeCache((size) => pruneMemoryEmbeddingCache(db, size, command.input.maxEntries));
+        return writeCache((size) =>
+          pruneMemoryEmbeddingCache(
+            db,
+            size,
+            command.input.maxEntries,
+            command.input.unreferencedFirst,
+          ),
+        );
       }
       if (command.type === "cache.clear") {
-        return writeCache(
-          (size) => size - clearMemoryEmbeddingCacheIdentities(db, command.input.identities),
-        );
+        return writeCache((size) => ({
+          ...size,
+          size: size.size - clearMemoryEmbeddingCacheIdentities(db, command.input.identities),
+        }));
       }
       if (command.type === "cache.write" || command.type === "cache.write.inline") {
         let header: MemoryEmbeddingCacheHeader;
@@ -568,7 +550,9 @@ function createPublicationBackend(
           write(() => {
             stageMemoryIndexSchemaExtension(db);
             stageOpenClawAgentDatabaseSchemaExtension(db);
-            vectorIndex.capability.drop(vectorIndex.index);
+            if (hasVectorTable) {
+              vectorIndex.capability.drop(vectorIndex.index);
+            }
             vectorIndex.capability.create(vectorIndex.index, dimensions);
             admitStoreSearch(db, memoryVectorSearchSchema(dimensions), {
               extension: "memory.vector",
@@ -577,6 +561,7 @@ function createPublicationBackend(
               writeMemoryIndexMetadata(db, { ...meta, vectorDims: dimensions });
             }
           }),
+          true,
         );
       }
       loadExtension(command.input.state.extensionPath);
@@ -590,6 +575,7 @@ function createPublicationBackend(
               targetDb: db,
               onBegin: () => {
                 hooks.onBegin();
+                stageOpenClawAgentDatabaseSchemaExtension(db);
                 assertMemoryShadowIdentity(publication.sourcePath, publication.sourceIdentity);
               },
               withCommit: hooks.withCommit,

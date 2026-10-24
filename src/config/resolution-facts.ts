@@ -77,7 +77,14 @@ export function copyConfigResolutionFactsExcept(
   target: unknown,
   paths: readonly string[],
 ): void {
-  const facts = getConfigResolutionFacts(source);
+  applyConfigResolutionFactsExcept(getConfigResolutionFacts(source), target, paths);
+}
+
+function applyConfigResolutionFactsExcept(
+  facts: ConfigResolutionFacts,
+  target: unknown,
+  paths: readonly string[],
+): void {
   if (facts === null) {
     setConfigResolutionFacts(target, null);
     return;
@@ -199,7 +206,42 @@ function readConfigFactPathValue(
 }
 
 /**
+ * Captures recorded path values before a rewrite can mutate shared parents.
+ * Carry only facts whose own value and concrete path survive on the result.
+ */
+export function captureConfigResolutionFactsThroughRewrite(
+  source: unknown,
+): (target: unknown) => void {
+  const facts = getConfigResolutionFacts(source);
+  if (facts === null) {
+    return (target) => setConfigResolutionFacts(target, null);
+  }
+  const recorded = new Set([...facts, ...(envSecretRefsByFacts.get(facts)?.keys() ?? [])]);
+  const observations = [...recorded].map((path) => {
+    let tokens: ConcreteConfigPathSegment[];
+    try {
+      tokens = parseConcreteConfigPathTokens(path);
+    } catch {
+      return { path, tokens: undefined, before: undefined };
+    }
+    return { path, tokens, before: readConfigFactPathValue(source, tokens) };
+  });
+  return (target) =>
+    applyConfigResolutionFactsExcept(
+      facts,
+      target,
+      observations
+        .filter(({ tokens, before }) => {
+          const after = tokens && readConfigFactPathValue(target, tokens);
+          return !before || !after || !Object.is(before.value, after.value);
+        })
+        .map(({ path }) => path),
+    );
+}
+
+/**
  * Carries recorded facts onto a rewritten config, dropping the paths the rewrite invalidated.
+ * The source must still have its original values; capture facts before in-place rewrites.
  *
  * Repair and migration rebuild config through `structuredClone`, so the result reaches its callers
  * without the facts keyed to the original object. A path whose value survived the rewrite unchanged
@@ -207,27 +249,7 @@ function readConfigFactPathValue(
  * not, so it must not keep answering path lookups on the rewritten config.
  */
 export function copyConfigResolutionFactsThroughRewrite(source: unknown, target: unknown): void {
-  const facts = getConfigResolutionFacts(source);
-  if (facts === null) {
-    setConfigResolutionFacts(target, null);
-    return;
-  }
-  const recorded = new Set([...facts, ...(envSecretRefsByFacts.get(facts)?.keys() ?? [])]);
-  copyConfigResolutionFactsExcept(
-    source,
-    target,
-    [...recorded].filter((path) => {
-      let tokens: ConcreteConfigPathSegment[];
-      try {
-        tokens = parseConcreteConfigPathTokens(path);
-      } catch {
-        return true;
-      }
-      const before = readConfigFactPathValue(source, tokens);
-      const after = readConfigFactPathValue(target, tokens);
-      return !before || !after || !Object.is(before.value, after.value);
-    }),
-  );
+  captureConfigResolutionFactsThroughRewrite(source)(target);
 }
 
 /** Reads inline references from authored facts and structured references from their values. */

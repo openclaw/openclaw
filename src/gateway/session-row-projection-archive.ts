@@ -135,7 +135,12 @@ export function createSessionRowProjectionArchive(params: {
           if (!catalogOnly) {
             records.invalidateDatabaseFacts(current);
           }
-          if (current.preparedAcpMeta === undefined || current.hasBoard === undefined) {
+          // Catalog policy can expire native ownership while retaining ACP and Board facts.
+          if (
+            current.preparedAcpMeta === undefined ||
+            current.preparedRuntimeOwnership === undefined ||
+            current.hasBoard === undefined
+          ) {
             params.dirty.add(records.identity(current));
           }
           continue;

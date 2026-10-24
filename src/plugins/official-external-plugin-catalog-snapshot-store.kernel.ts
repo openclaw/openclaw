@@ -90,11 +90,11 @@ function readMonotonicStateFromBody(body: string): StoredHostedCatalogMonotonicS
 }
 
 function assertSignedSnapshotWriteIsMonotonic(params: {
-  candidate: HostedOfficialExternalPluginCatalogSnapshotMonotonicState | undefined;
+  candidate: HostedOfficialExternalPluginCatalogSnapshotMonotonicState;
   candidateBody: string;
   current: HostedCatalogSnapshotRow | undefined;
 }): void {
-  if (params.candidate?.mode !== "signed-feed" || params.current?.trust_mode !== "signed") {
+  if (params.current?.trust_mode !== "signed") {
     return;
   }
   const current = readMonotonicStateFromBody(params.current.body);

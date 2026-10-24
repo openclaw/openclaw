@@ -101,6 +101,7 @@ describe("node worker launch wire", () => {
       let resolveWaveFinalizationStarted: ((startedAt: number) => void) | undefined;
       let workerAuditBeforeRestart: string | undefined;
       let cleanupStartedAfterMs: number | undefined;
+      const baselineStatusObserved = createDeferred();
       const pendingCleanupOwners = new Set<string>();
       const loadTerminals = new Map<string, (payload: Record<string, unknown>) => void>();
       let phase = "provider startup";
@@ -147,7 +148,14 @@ describe("node worker launch wire", () => {
         context,
         async ({ signal, createTempDir }) => {
           const root = createTempDir("openclaw-node-worker-launch-wire-");
-          provider = await startMidturnProvider();
+          provider = await startMidturnProvider({
+            beforeBaselineReply: async () => {
+              if (launchId) {
+                // Keep the launched turn running through reconnect until status crosses the wire.
+                await baselineStatusObserved.promise;
+              }
+            },
+          });
           markPhase("workspace publication");
           const published = (publishedResource = await createPublishedWireWorkspace(root));
           const settlement = createWireWorkspaceSettlementWaiter();
@@ -164,8 +172,14 @@ describe("node worker launch wire", () => {
             role: "operator",
             identity: null,
             onEvent: (event) => {
-              settlement.onEvent(event);
               const payload = event.payload;
+              if (event.event === "sessions.changed" && isRecord(payload)) {
+                // An older snapshot cannot prove this turn's workspace has settled.
+                settlement.onEvent({
+                  event: event.event,
+                  payload: { sessionKey: payload.sessionKey },
+                });
+              }
               if (
                 event.event === "chat" &&
                 isRecord(payload) &&
@@ -188,6 +202,9 @@ describe("node worker launch wire", () => {
             capacity: FINALIZATION_LOAD_CONCURRENCY,
             bundlePrewarm: true,
             onInvoke: (frame) => {
+              if (frame.command === NODE_WORKER_SUPERVISOR_STATUS_COMMAND) {
+                baselineStatusObserved.resolve();
+              }
               if (frame.command === NODE_WORKER_WORKSPACE_EXEC_COMMAND && frame.paramsJSON) {
                 const workspaceCommand = JSON.parse(frame.paramsJSON) as {
                   transfer?: { direction?: unknown };
@@ -271,6 +288,9 @@ describe("node worker launch wire", () => {
             throw new Error("active worker placement did not expose a remote workspace directory");
           }
           const baseManifestRef = placement?.workspaceBaseManifestRef;
+          if (typeof baseManifestRef !== "string" || !baseManifestRef) {
+            throw new Error("Baseline workspace has no dispatched manifest reference");
+          }
           await expect(
             fs.readFile(path.join(remoteWorkspaceDir, "gateway-push.txt"), "utf8"),
           ).resolves.toBe("dirty gateway workspace\n");
@@ -311,7 +331,7 @@ describe("node worker launch wire", () => {
               `node worker turn failed: ${JSON.stringify(completed)}\n${gateway.logs().slice(-12_000)}`,
             );
           }
-          await settlement.wait(operator, SESSION_KEY, signal);
+          await settlement.wait(operator, SESSION_KEY, signal, baseManifestRef);
           markPhase("baseline node invocations");
           await workerNode.waitForInvokes();
           expect(workerNode.invokeErrors).toEqual([]);
@@ -357,7 +377,7 @@ describe("node worker launch wire", () => {
             session?: {
               execCwd?: string;
               spawnedCwd?: string;
-              placement?: Record<string, unknown>;
+              placement?: { workspaceBaseManifestRef?: string };
             };
           };
           expect(described.session?.placement).toMatchObject({
@@ -365,6 +385,10 @@ describe("node worker launch wire", () => {
             remoteWorkspaceDir,
           });
           expect(described.session?.placement?.workspaceBaseManifestRef).not.toBe(baseManifestRef);
+          const permissionBaseManifestRef = described.session?.placement?.workspaceBaseManifestRef;
+          if (!permissionBaseManifestRef) {
+            throw new Error("Baseline workspace has no accepted manifest reference");
+          }
           const reconciledLocalDir = described.session?.execCwd ?? described.session?.spawnedCwd;
           expect(reconciledLocalDir).toBeTruthy();
           await expect(
@@ -424,7 +448,8 @@ describe("node worker launch wire", () => {
               }),
             ).slice(0, 8_000),
           ).toMatchObject({ status: "ok" });
-          await settlement.wait(operator, SESSION_KEY, signal);
+          // The reply can arrive before this turn reserves its workspace result.
+          await settlement.wait(operator, SESSION_KEY, signal, permissionBaseManifestRef);
           await workerNode.waitForInvokes();
           expect(workerNode.invokeErrors).toEqual([]);
 
@@ -483,6 +508,7 @@ describe("node worker launch wire", () => {
               }
             },
           });
+          expect(legacyWorkerNode.identity.deviceId).not.toBe(workerNode.identity.deviceId);
           markPhase("legacy workspace dispatch");
           const legacySessionKey = `${SESSION_KEY}-legacy-node`;
           await operator.request("sessions.create", {
@@ -719,6 +745,7 @@ describe("node worker launch wire", () => {
           markPhase("fixture cleanup");
         },
         async () => {
+          baselineStatusObserved.resolve();
           cleanupStartedAfterMs = Math.round(performance.now() - testStartedAt);
           markPhase("fixture cleanup start");
           const cleanups = {

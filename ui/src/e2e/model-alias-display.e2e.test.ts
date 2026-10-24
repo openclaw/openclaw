@@ -1,60 +1,33 @@
-import { writeFile } from "node:fs/promises";
-import path from "node:path";
-import { beforeEach, expect, it } from "vitest";
-import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
-import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
+import { expect, it } from "vitest";
+import { revealChatModelOption } from "../test-helpers/select-picker-e2e.ts";
 import { createChatFlowE2eSuite, installMockGateway } from "./chat-flow.test-support.ts";
+import { configSnapshot } from "./model-setup-fixtures.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
 
+const model = (provider: string, id: string, name: string, alias: string) => ({
+  provider,
+  id,
+  name,
+  alias,
+});
 const models = [
-  {
-    id: "claude-opus-4-8",
-    name: "Opus 4.8",
-    alias: "opus",
-    provider: "anthropic",
-  },
-  {
-    id: "claude-sonnet-5",
-    name: "Sonnet 5",
-    alias: "sonnet",
-    provider: "anthropic",
-  },
-  {
-    id: "moonshotai/kimi-k2.5",
-    name: "Kimi K2.5",
-    alias: "Kimi K2.5 (NVIDIA)",
-    provider: "nvidia",
-  },
+  model("anthropic", "claude-opus-4-8", "Opus 4.8", "opus"),
+  model("anthropic", "claude-sonnet-5", "Sonnet 5", "sonnet"),
+  model("nvidia", "moonshotai/kimi-k2.5", "Kimi K2.5", "Kimi K2.5 (NVIDIA)"),
 ];
 
-let proofDir: string | null;
-beforeEach(() => {
-  proofDir =
-    process.env.OPENCLAW_CAPTURE_UI_PROOF === "1"
-      ? createControlUiE2eArtifactDir("model-alias-display")
-      : null;
-});
-
-async function createProofContext() {
+async function createContext() {
   return suite.newBrowserContext({
     locale: "en-US",
     serviceWorkers: "block",
     viewport: { height: 900, width: 1280 },
-    ...(proofDir
-      ? {
-          recordVideo: {
-            dir: proofDir,
-            size: { height: 900, width: 1280 },
-          },
-        }
-      : {}),
   });
 }
 
 suite.define(() => {
   it("keeps model versions and custom aliases visible in the chat picker", async () => {
-    const context = await createProofContext();
+    const context = await createContext();
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
       featureMethods: ["models.list", "chat.startup", "sessions.patch"],
@@ -69,51 +42,33 @@ suite.define(() => {
       await picker.waitFor({ state: "visible", timeout: 10_000 });
       await picker.click();
 
-      const opus = main.locator(
-        '[data-chat-model-option="anthropic/claude-opus-4-8"] .chat-controls__model-option-name',
-      );
-      const sonnet = main.locator(
-        '[data-chat-model-option="anthropic/claude-sonnet-5"] .chat-controls__model-option-name',
-      );
+      const option = (ref: string) =>
+        main.locator(`[data-chat-model-option="${ref}"] .chat-controls__model-option-name`);
+      const opus = option("anthropic/claude-opus-4-8");
+      const sonnet = option("anthropic/claude-sonnet-5");
+      await revealChatModelOption(main, "anthropic/claude-opus-4-8");
       await expect.poll(() => opus.textContent()).toBe("Opus 4.8 · opus");
       await expect.poll(() => sonnet.textContent()).toBe("Sonnet 5 · sonnet");
 
-      if (proofDir) {
-        await writeFile(
-          path.join(proofDir, "anthropic-versioned-model-aliases.png"),
-          await takeControlUiViewportScreenshot(page, page.locator(".shell"), [opus, sonnet]),
-        );
-      }
-
-      const nvidia = main.locator(
-        '[data-chat-model-option="nvidia/moonshotai/kimi-k2.5"] .chat-controls__model-option-name',
-      );
+      const nvidia = option("nvidia/moonshotai/kimi-k2.5");
+      await revealChatModelOption(main, "nvidia/moonshotai/kimi-k2.5");
       await expect.poll(() => nvidia.textContent()).toBe("Kimi K2.5");
       expect(await gateway.getRequests("sessions.patch")).toHaveLength(0);
-
-      if (proofDir) {
-        await writeFile(
-          path.join(proofDir, "preserved-nvidia-model-alias.png"),
-          await takeControlUiViewportScreenshot(page, page.locator(".shell"), [nvidia]),
-        );
-      }
     } finally {
       await suite.closeBrowserContext(context);
     }
   });
 
   it("uses the same versioned catalog labels in the Agents model picker", async () => {
-    const context = await createProofContext();
+    const context = await createContext();
     const page = await context.newPage();
     const config = {
       agents: {
         defaults: {
           model: { primary: "anthropic/claude-opus-4-8" },
-          models: {
-            "anthropic/claude-opus-4-8": { alias: "opus" },
-            "anthropic/claude-sonnet-5": { alias: "sonnet" },
-            "nvidia/moonshotai/kimi-k2.5": { alias: "Kimi K2.5 (NVIDIA)" },
-          },
+          models: Object.fromEntries(
+            models.map(({ provider, id, alias }) => [`${provider}/${id}`, { alias }]),
+          ),
         },
         entries: { main: {} },
       },
@@ -128,14 +83,7 @@ suite.define(() => {
           mainKey: "main",
           scope: "agent",
         },
-        "config.get": {
-          config,
-          sourceConfig: config,
-          hash: "versioned-model-aliases",
-          issues: [],
-          raw: JSON.stringify(config),
-          valid: true,
-        },
+        "config.get": configSnapshot(config, "versioned-model-aliases"),
       },
     });
 
@@ -153,29 +101,16 @@ suite.define(() => {
       );
       await select.waitFor({ state: "visible", timeout: 10_000 });
       await select.locator(".picker-select__trigger").click();
-      await expect
-        .poll(() =>
-          select.locator('[role="option"][data-value="anthropic/claude-opus-4-8"]').textContent(),
-        )
-        .toContain("Opus 4.8 · opus");
-      await expect
-        .poll(() =>
-          select.locator('[role="option"][data-value="anthropic/claude-sonnet-5"]').textContent(),
-        )
-        .toContain("Sonnet 5 · sonnet");
-      await expect
-        .poll(() =>
-          select.locator('[role="option"][data-value="nvidia/moonshotai/kimi-k2.5"]').textContent(),
-        )
-        .toContain("Kimi K2.5 (NVIDIA)");
-      expect(await gateway.getRequests("config.set")).toHaveLength(0);
-
-      if (proofDir) {
-        await writeFile(
-          path.join(proofDir, "agents-versioned-model-aliases.png"),
-          await takeControlUiViewportScreenshot(page, page.locator(".shell"), [select]),
-        );
+      for (const [ref, label] of [
+        ["anthropic/claude-opus-4-8", "Opus 4.8 · opus"],
+        ["anthropic/claude-sonnet-5", "Sonnet 5 · sonnet"],
+        ["nvidia/moonshotai/kimi-k2.5", "Kimi K2.5 (NVIDIA)"],
+      ]) {
+        await expect
+          .poll(() => select.locator(`[role="option"][data-value="${ref}"]`).textContent())
+          .toContain(label);
       }
+      expect(await gateway.getRequests("config.set")).toHaveLength(0);
     } finally {
       await suite.closeBrowserContext(context);
     }

@@ -208,7 +208,8 @@ it("refits precise command selections independently by worker policy and retains
         const group = sole(job.groups);
         expect(group).toMatchObject({ includePatterns: targets, configs: [commandsConfig] });
         expect(group.env?.OPENCLAW_VITEST_MAX_WORKERS).toBeUndefined();
-        expect(job.planConcurrency).toBe(cell.workers === 2 ? 2 : 1);
+        expect(job.planConcurrency).toBe(1);
+        expect(job.env?.OPENCLAW_VITEST_MAX_WORKERS).toBe(cell.workers === 2 ? "2" : undefined);
         return Object.assign({}, cell, { job, group });
       });
       mockHost();

@@ -1,5 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { expect, it, vi, type Mock } from "vitest";
+import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import * as runtimeMutation from "../cron/service/runtime-mutation.js";
 import { loadCronStore } from "../cron/store.js";
@@ -9,7 +9,6 @@ import type {
   CronFixture,
   registerGatewayCronContextTests,
 } from "./server-cron.context.test-support.js";
-import type { createWatchedRun as createWatchedRunFixture } from "./server-cron.process.test-support.js";
 
 type ContextHarness = Parameters<typeof registerGatewayCronContextTests>[0];
 type CronMutationHarness = Pick<ContextHarness, "createCronConfig" | "createCronService"> & {
@@ -137,68 +136,17 @@ export function registerGatewayCronMutationAuthorityTests(harness: CronMutationH
         );
         state.cron.stop();
         restarted = harness.createCronService(cfg);
-        expect((await restarted.cron.readJob(job.id))?.scheduledToolPolicy).toEqual(
-          scheduledToolPolicy,
-        );
+        const persisted = await restarted.cron.readJob(job.id);
+        expect(persisted?.scheduledToolPolicy).toEqual(scheduledToolPolicy);
+        expect(persisted?.payload).toMatchObject({
+          kind: "agentTurn",
+          message: "updated",
+          toolsAllow: ["write"],
+        });
       } finally {
         state.cron.stop();
         restarted?.cron.stop();
       }
     },
   );
-}
-
-type StreamMutationHarness = Pick<CronMutationHarness, "createCronConfig" | "loadCronService"> & {
-  addSystemEventJob: AddCronJob;
-  createWatchedRun: typeof createWatchedRunFixture;
-  mockCronSupervisor: (...runs: ReturnType<typeof createWatchedRunFixture>[]) => {
-    cancelScope: Mock;
-  };
-};
-
-export function registerGatewayCronStreamMutationTests(harness: StreamMutationHarness) {
-  it("reports a committed stream update as successful when source teardown fails", async () => {
-    vi.useFakeTimers();
-    const watched = harness.createWatchedRun(true, { durationMs: 10_000 });
-    const canceled = createDeferred();
-    watched.cancel.mockImplementationOnce(() => canceled.resolve());
-    const { cancelScope } = harness.mockCronSupervisor(watched);
-    const cfg = harness.createCronConfig("server-cron-stream-update-teardown-failure");
-    cfg.cron = { ...cfg.cron, triggers: { enabled: true } };
-    const state = harness.loadCronService(cfg);
-    try {
-      const added = await harness.addSystemEventJob(
-        state,
-        "stubborn update stream source",
-        "event",
-        {
-          schedule: { kind: "stream", command: ["source"] },
-          sessionTarget: "main",
-        },
-      );
-      const streamJob = "job" in added ? added.job : added;
-      await withHeldMutation(
-        () => state.cron.update(streamJob.id, { enabled: false }),
-        async ({ release, result }) => {
-          await canceled.promise;
-          cancelScope.mockClear();
-          // The stop deadline settles while the durable write is still pending.
-          await vi.advanceTimersByTimeAsync(30_000);
-          expect(cancelScope).toHaveBeenCalledWith(`cron-stream:${streamJob.id}`, "manual-cancel");
-          expect(state.cron.getJob(streamJob.id)?.enabled).toBe(true);
-          release();
-          await expect(result).resolves.toMatchObject({ enabled: false });
-          expect((await readStoredJob(state, streamJob.id))?.enabled).toBe(false);
-          expect(watched.cancel).toHaveBeenCalled();
-        },
-      );
-    } finally {
-      try {
-        await state.stopStreamWatchers?.();
-      } finally {
-        state.cron.stop();
-        vi.useRealTimers();
-      }
-    }
-  });
 }

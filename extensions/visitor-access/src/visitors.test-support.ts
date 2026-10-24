@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/plugin-entry";
-import { vi } from "vitest";
+import { afterEach, beforeEach, vi } from "vitest";
 import type { PluginRuntime, PluginStateKeyedStore } from "../api.js";
 import { createVisitorAccessReader } from "./access.js";
 import { VisitorPolicyClient, type VisitorTarget } from "./cloudflare.js";
@@ -11,14 +12,40 @@ export const NOW = Date.parse("2026-08-28T12:00:00.000Z");
 export const DAY_MS = 86_400_000;
 const services = new Set<VisitorAccessService>();
 
+const unexpected = async (): Promise<never> => {
+  throw new Error("Unexpected visitor fixture operation");
+};
+
+export function useVisitorFixtures() {
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    vi.setSystemTime(NOW);
+  });
+  afterEach(() => {
+    closeVisitorFixtures();
+    vi.useRealTimers();
+  });
+}
+
+export function visitorGate() {
+  const entered = createDeferred<void>();
+  const release = createDeferred<void>();
+  return {
+    entered: entered.promise,
+    release: release.resolve,
+    wait: async () => {
+      entered.resolve();
+      await release.promise;
+    },
+  };
+}
+
 export function closeVisitorFixtures(): void {
-  for (const service of services) {
-    service.close();
-  }
+  services.forEach((service) => service.close());
   services.clear();
 }
 
-const config: VisitorAccessConfig = {
+export const visitorConfig: VisitorAccessConfig = {
   accountId: "test-account",
   appId: "test-app",
   apiToken: "test-token",
@@ -27,10 +54,17 @@ const config: VisitorAccessConfig = {
   maxVisitors: 50,
 };
 const policiesPath = "/client/v4/accounts/test-account/access/apps/test-app/policies";
-const githubProvider = {
+export const githubProvider = {
   issuer: "https://example.cloudflareaccess.com",
   providerId: "github-provider",
   githubAccountIdClaim: "github_account_id",
+};
+export const githubRule = {
+  oidc: {
+    identity_provider_id: githubProvider.providerId,
+    claim_name: githubProvider.githubAccountIdClaim,
+    claim_value: "42",
+  },
 };
 export type GatewayRoles = NonNullable<NonNullable<OpenClawConfig["gateway"]>["roles"]>;
 export const guestRole: GatewayRoles["definitions"][string] = {
@@ -47,19 +81,32 @@ export const staffRole: GatewayRoles["definitions"][string] = {
   scopes: ["operator.admin"],
 };
 
-export function requestUrl(input: Parameters<typeof fetch>[0]): URL {
+function requestUrl(input: Parameters<typeof fetch>[0]): URL {
   return new URL(input instanceof Request ? input.url : input);
 }
 
-type PolicyFixture = {
-  id: string;
-  name: string;
-  decision: string;
-  include: Array<
-    | { email: { email: string } }
-    | { oidc: { identity_provider_id: string; claim_name: string; claim_value: string } }
-  >;
-};
+type PolicyFixture = ReturnType<typeof namedPolicy>;
+
+export function namedPolicy(
+  targets: VisitorTarget[] = ["first@example.com"],
+  name = visitorConfig.policyName,
+  provider = githubProvider,
+) {
+  const oidc = {
+    identity_provider_id: provider.providerId,
+    claim_name: provider.githubAccountIdClaim,
+  };
+  return {
+    id: "visitors",
+    name,
+    decision: "allow",
+    include: targets.map((target) =>
+      typeof target === "string"
+        ? { email: { email: target } }
+        : { oidc: { ...oidc, claim_value: String(target) } },
+    ),
+  };
+}
 
 type GrantOverrides = Partial<Omit<VisitorGrant, "email" | "githubAccountId">>;
 
@@ -81,7 +128,7 @@ export function visitorGrant(target: VisitorTarget, overrides: GrantOverrides = 
   };
 }
 
-type ProfileFixture = {
+export type ProfileFixture = {
   id: string;
   emails: readonly string[];
   role?: string;
@@ -115,15 +162,15 @@ export function visitorProfileFixture(
   > = async ({ profileId, emails, githubAccountIds }, run) => {
     const assertCurrent = () => {
       const profile = profiles.find(({ id }) => id === profileId);
+      const linkedAccounts = new Set(
+        githubProfiles
+          .filter((identity) => identity.profileId === profileId)
+          .map((identity) => identity.accountId),
+      );
       if (
         !profile ||
         emails.some((email) => !profile.emails.includes(email)) ||
-        githubAccountIds?.some(
-          (accountId) =>
-            !githubProfiles.some(
-              (identity) => identity.accountId === accountId && identity.profileId === profileId,
-            ),
-        )
+        githubAccountIds?.some((accountId) => !linkedAccounts.has(accountId))
       ) {
         throw new Error("Profile bindings changed");
       }
@@ -133,21 +180,13 @@ export function visitorProfileFixture(
   };
   const gateway: PluginRuntime["gateway"] = {
     isAvailable: async () => true,
-    async request() {
-      throw new Error("Expected a mocked Gateway request");
-    },
+    request: unexpected,
     subscribeSessionChanges() {
       throw new Error("Unexpected session change subscription");
     },
-    async readSessionFacts() {
-      throw new Error("Unexpected session facts request");
-    },
-    async withSessionFacts() {
-      throw new Error("Unexpected selected session facts request");
-    },
-    async openPluginPanel() {
-      throw new Error("Unexpected plugin panel request");
-    },
+    readSessionFacts: unexpected,
+    withSessionFacts: unexpected,
+    openPluginPanel: unexpected,
     withUserProfileIdentity,
     resolveGitHubAccount: async ({ login }) => ({ accountId: 42, login }),
   };
@@ -177,7 +216,7 @@ export function visitorFixture(
     gateway?: PluginRuntime["gateway"];
   } = {},
 ) {
-  const resolved = { ...config, ...options.config };
+  const resolved = { ...visitorConfig, ...options.config };
   const oidcProvider =
     options.gatewayConfig?.gateway?.auth?.trustedProxy?.cloudflareAccessOidc ?? githubProvider;
   const grants = new Map(
@@ -188,37 +227,18 @@ export function visitorFixture(
   );
   const targets: VisitorTarget[] = [...(options.emails ?? []), ...(options.githubAccountIds ?? [])];
   const store: PluginStateKeyedStore<VisitorGrant> = {
-    async register(key, grant) {
-      grants.set(key, structuredClone(grant));
-    },
-    async registerIfAbsent(key, grant) {
-      if (grants.has(key)) {
-        return false;
-      }
-      grants.set(key, structuredClone(grant));
-      return true;
-    },
-    async lookup(key) {
-      return structuredClone(grants.get(key));
-    },
-    async consume(key) {
-      const grant = grants.get(key);
-      grants.delete(key);
-      return structuredClone(grant);
-    },
-    async delete(key) {
-      return grants.delete(key);
-    },
-    async entries() {
-      return [...grants].map(([key, value]) => ({
+    register: async (key, grant) => void grants.set(key, structuredClone(grant)),
+    registerIfAbsent: unexpected,
+    lookup: async (key) => structuredClone(grants.get(key)),
+    consume: unexpected,
+    delete: async (key) => grants.delete(key),
+    entries: async () =>
+      [...grants].map(([key, value]) => ({
         key,
         value: structuredClone(value),
         createdAt: value.createdAt,
-      }));
-    },
-    async clear() {
-      grants.clear();
-    },
+      })),
+    clear: unexpected,
     withCurrent({ assertCurrent }) {
       const bind =
         <Args extends unknown[], Value>(operation: (...args: Args) => Promise<Value>) =>
@@ -226,52 +246,26 @@ export function visitorFixture(
           assertCurrent();
           return operation(...args);
         };
-      const unused = async (): Promise<never> => {
-        throw new Error("Unexpected visitor fixture store operation");
-      };
       return Object.freeze({
         register: bind(store.register.bind(store)),
-        registerIfAbsent: bind(store.registerIfAbsent.bind(store)),
+        registerIfAbsent: unexpected,
         lookup: bind(store.lookup.bind(store)),
-        consume: bind(store.consume.bind(store)),
+        consume: unexpected,
         delete: bind(store.delete.bind(store)),
         entries: bind(store.entries.bind(store)),
-        clear: bind(store.clear.bind(store)),
-        observe: unused,
-        compareAndApply: unused,
-        deleteIfEqual: unused,
-        lookupMany: unused,
-        entriesInKeyRange: unused,
-        moveEntriesFrom: unused,
-        count: unused,
+        clear: unexpected,
+        observe: unexpected,
+        compareAndApply: unexpected,
+        deleteIfEqual: unexpected,
+        lookupMany: unexpected,
+        entriesInKeyRange: unexpected,
+        moveEntriesFrom: unexpected,
+        count: unexpected,
       });
     },
   };
-  const cloudflare: {
-    policy: PolicyFixture | undefined;
-    failWrites: boolean;
-    loseWriteResponse: boolean;
-    beforeWrite: () => Promise<void>;
-    afterWrite: () => void;
-  } = {
-    policy: targets.length
-      ? {
-          id: "visitors",
-          name: resolved.policyName,
-          decision: "allow",
-          include: targets.map((target) =>
-            typeof target === "string"
-              ? { email: { email: target } }
-              : {
-                  oidc: {
-                    identity_provider_id: oidcProvider.providerId,
-                    claim_name: oidcProvider.githubAccountIdClaim,
-                    claim_value: String(target),
-                  },
-                },
-          ),
-        }
-      : undefined,
+  const cloudflare = {
+    policy: targets.length ? namedPolicy(targets, resolved.policyName, oidcProvider) : undefined,
     failWrites: false,
     loseWriteResponse: false,
     beforeWrite: async () => {},
@@ -281,28 +275,26 @@ export function visitorFixture(
   const fetcher = vi.fn<typeof fetch>(async (input, init) => {
     const url = requestUrl(input);
     const method = init?.method ?? "GET";
+    const collection = url.pathname === policiesPath;
+    const detail = url.pathname === `${policiesPath}/visitors`;
     if (url.origin !== "https://api.cloudflare.com" || !url.pathname.startsWith(policiesPath)) {
       throw new Error("Unexpected Cloudflare endpoint");
     }
     if (method === "GET") {
-      if (url.pathname === policiesPath) {
-        return response(cloudflare.policy ? [cloudflare.policy] : []);
+      if (!collection && !(detail && cloudflare.policy)) {
+        throw new Error("Unknown policy read");
       }
-      if (url.pathname === `${policiesPath}/visitors` && cloudflare.policy) {
-        return response(cloudflare.policy);
-      }
-      throw new Error("Unknown policy read");
+      return response(
+        collection ? (cloudflare.policy ? [cloudflare.policy] : []) : cloudflare.policy,
+      );
     }
     await cloudflare.beforeWrite();
     if (cloudflare.failWrites) {
       return new Response("Unavailable", { status: 503 });
     }
-    if (method === "DELETE" && url.pathname === `${policiesPath}/visitors`) {
+    if (method === "DELETE" && detail) {
       cloudflare.policy = undefined;
-    } else if (
-      (method === "POST" && url.pathname === policiesPath) ||
-      (method === "PUT" && url.pathname === `${policiesPath}/visitors`)
-    ) {
+    } else if ((method === "POST" && collection) || (method === "PUT" && detail)) {
       if (typeof init?.body !== "string") {
         throw new Error("Expected a JSON policy");
       }
@@ -327,12 +319,8 @@ export function visitorFixture(
     gateway: options.gateway ?? directory.gateway,
     config: {
       current: () => gatewayConfig,
-      async mutateConfigFile() {
-        throw new Error("Visitor operations must not change Gateway configuration");
-      },
-      async replaceConfigFile() {
-        throw new Error("Visitor operations must not replace Gateway configuration");
-      },
+      mutateConfigFile: unexpected,
+      replaceConfigFile: unexpected,
     },
   };
   const resolveGitHubAccount = vi
@@ -362,14 +350,22 @@ export function visitorFixture(
     setProfiles: directory.setProfiles,
     logger,
     service,
+    authorize: service.authorize.bind(service),
+    resume: service.resume.bind(service),
     store,
     authority: { assertCurrent },
+    revokeAuthority: () =>
+      assertCurrent.mockImplementation(() => {
+        throw new Error("Visitor authority is no longer current");
+      }),
+    invite: (input: unknown) => service.invite(input, { assertCurrent }),
+    revoke: (input: unknown) => service.revoke(input, assertCurrent),
+    list: () => service.list(assertCurrent),
     emails: () =>
-      cloudflare.policy?.include.flatMap((rule) => ("email" in rule ? [rule.email.email] : [])) ??
-      [],
+      cloudflare.policy?.include.flatMap((rule) => (rule.email ? [rule.email.email] : [])) ?? [],
     targets: () =>
       cloudflare.policy?.include.map((rule) =>
-        "email" in rule ? rule.email.email : Number(rule.oidc.claim_value),
+        rule.email ? rule.email.email : Number(rule.oidc.claim_value),
       ) ?? [],
     mutations: () =>
       fetcher.mock.calls.filter(([, init]) => init?.method !== "GET" && init?.method),

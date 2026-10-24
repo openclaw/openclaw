@@ -25,7 +25,7 @@ type LifecycleSession = {
   onCleanupError?: (error: unknown) => void;
 };
 
-export class McpClientConnectTimeoutError extends Error {}
+class McpClientConnectTimeoutError extends Error {}
 
 /** Matches an expired HTTP session without treating stateless HTTP 404s as expiration. */
 export function isMcpHttpSessionExpired(
@@ -104,6 +104,47 @@ export async function connectMcpClient(params: {
   }
 }
 
+/** Single-flight connection state remains on the calling session owner. */
+export async function ensureMcpSessionConnected(
+  session: {
+    client: Pick<Client, "connect" | "close">;
+    transport: Transport;
+    serverName: string;
+    retiring: boolean;
+    connected: boolean;
+    connectPromise?: Promise<void>;
+  },
+  connectionTimeoutMs: number,
+): Promise<void> {
+  if (session.retiring) {
+    throw new Error(`bundle-mcp server "${session.serverName}" is retiring`);
+  }
+  if (session.connected) {
+    return;
+  }
+  session.connectPromise ??= connectMcpClient({
+    client: session.client,
+    transport: session.transport,
+    timeoutMs: connectionTimeoutMs,
+  })
+    .catch((error: unknown) => {
+      if (error instanceof McpClientConnectTimeoutError) {
+        throw new Error(
+          `MCP server "${session.serverName}" timed out: did not complete initialize within ${connectionTimeoutMs / 1_000}s`,
+          { cause: error },
+        );
+      }
+      throw error;
+    })
+    .then(() => {
+      session.connected = true;
+    })
+    .finally(() => {
+      session.connectPromise = undefined;
+    });
+  await session.connectPromise;
+}
+
 export async function disposeMcpClient(
   session: LifecycleSession,
   timeoutMs = 5_000,
@@ -177,12 +218,9 @@ export function createMcpRequestLifecycle(humanInputTimeoutMs: number) {
     ): Promise<T> => {
       const requestSignal = parentSignal ?? getSessionMcpRequestSignal();
       const abortController = new AbortController();
-      const onParentAbort = () => abortController.abort(requestSignal?.reason);
-      if (requestSignal?.aborted) {
-        onParentAbort();
-      } else {
-        requestSignal?.addEventListener("abort", onParentAbort, { once: true });
-      }
+      const signal = requestSignal
+        ? AbortSignal.any([requestSignal, abortController.signal])
+        : abortController.signal;
       const timeoutError = new SdkError(SdkErrorCode.RequestTimeout, "Request timed out", {
         timeout: timeoutMs,
       });
@@ -208,7 +246,7 @@ export function createMcpRequestLifecycle(humanInputTimeoutMs: number) {
           armTimeout(deadline + humanInputRemainingMs);
         }
         return () => {
-          if (--humanInputWaits === 0 && !finished && !abortController.signal.aborted) {
+          if (--humanInputWaits === 0 && !finished && !signal.aborted) {
             const elapsed = Math.min(Date.now() - humanInputStartedAt, humanInputRemainingMs);
             humanInputRemainingMs -= elapsed;
             deadline += elapsed;
@@ -217,7 +255,6 @@ export function createMcpRequestLifecycle(humanInputTimeoutMs: number) {
         };
       };
       try {
-        const signal = abortController.signal;
         signal.throwIfAborted();
         const result = await request(signal, holdForHumanInput);
         requestSignal?.throwIfAborted();
@@ -227,7 +264,6 @@ export function createMcpRequestLifecycle(humanInputTimeoutMs: number) {
         throw error;
       } finally {
         finished = true;
-        requestSignal?.removeEventListener("abort", onParentAbort);
         clearTimeout(timeout);
       }
     },

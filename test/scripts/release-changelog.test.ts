@@ -3,6 +3,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, test } from "vitest";
+import { createDocsMarkdown } from "../../scripts/lib/docs-markdown.mjs";
 import * as changelog from "../../scripts/lib/release-changelog.mjs";
 import * as docs from "../../scripts/lib/release-docs-mirror.mjs";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
@@ -206,6 +207,118 @@ describe("release docs mirrors", () => {
     ]) {
       expect(result).toContain(text);
     }
+  });
+
+  it("keeps inline patch disclosures in the same tight list through the native CLI", () => {
+    const f = mirrorFixture();
+    const input = [
+      "# Release title",
+      "",
+      `AI agents and tools can read these release notes as [plain Markdown](https://raw.githubusercontent.com/openclaw/openclaw/main/CHANGELOG/${version}.md).`,
+      "",
+      "## Messaging",
+      "",
+      "- First reader-facing fix.",
+      "",
+      '  <details class="release-source-inline release-source-toggle" id="first">',
+      "  <summary>More details</summary>",
+      "",
+      "  [#42](https://github.com/openclaw/openclaw/pull/42). Thanks to [@alice](https://github.com/alice).",
+      "",
+      "  </details>",
+      "",
+      "- Second reader-facing fix.",
+      "",
+      '  <details class="release-source-toggle  release-source-inline">',
+      "  <summary>More details</summary>",
+      "",
+      "  [Guide](/channels/example) and `literal` remain in order.",
+      "",
+      "  </details>",
+      "",
+    ].join("\n");
+    f.write(source, input);
+    const output = f.file(`CHANGELOG/${version}.md`);
+    const rendered = f.cli("--version", version, "--source", source, "--output", output);
+    expect(rendered.status, rendered.stderr).toBe(0);
+    const mirror = fs.readFileSync(output, "utf8");
+    expect(mirror.slice(mirror.indexOf("\n\n") + 2)).toBe(
+      [
+        `## ${version}`,
+        "",
+        "### Release title",
+        "",
+        `For formatted release notes, [read this release on the docs site](https://docs.openclaw.ai/releases/${version}).`,
+        "",
+        "#### Messaging",
+        "",
+        "- First reader-facing fix.",
+        "  [#42](https://github.com/openclaw/openclaw/pull/42). Thanks to [@alice](https://github.com/alice).",
+        "- Second reader-facing fix.",
+        "  [Guide](https://docs.openclaw.ai/channels/example) and `literal` remain in order.",
+        "",
+      ].join("\n"),
+    );
+    expect(f.read(source)).toBe(input);
+    const checked = f.cli("--check", "--version", version);
+    expect(checked.status, checked.stderr).toBe(0);
+  });
+
+  it("preserves intentional detail paragraphs, literal code and non-inline disclosures", () => {
+    const literal = [
+      "  ```md",
+      '  <details class="release-source-inline">',
+      "  <summary>More details</summary>",
+      "",
+      "  - Literal example.",
+      "  </details>",
+      "  ```",
+    ].join("\n");
+    const input = [
+      "# Release title",
+      "",
+      "- A fix.",
+      "",
+      '  <details class="release-source-toggle release-source-inline">',
+      "  <summary>More details</summary>",
+      "",
+      "      Initial indented code.",
+      "",
+      "  First supporting paragraph.",
+      "",
+      "  Second supporting paragraph.",
+      "",
+      literal,
+      "",
+      "  </details>",
+      "",
+      "      - Literal list marker in indented code.",
+      "",
+      "## Supporting updates",
+      "",
+      '<details class="release-source-toggle release-source-inline-extra">',
+      "<summary>Full sources</summary>",
+      "",
+      "Unchanged standalone detail.",
+      "",
+      "</details>",
+      "",
+    ].join("\n");
+    const result = docs.flattenReleaseDocs(input, source);
+    const codeBlocks = createDocsMarkdown({ html: false })
+      .parse(result, {})
+      .filter((token) => token.type === "code_block")
+      .map((token) => token.content);
+    expect(codeBlocks).toEqual([
+      "Initial indented code.\n",
+      "- Literal list marker in indented code.\n",
+    ]);
+    expect(result).toContain(
+      "  First supporting paragraph.\n\n  Second supporting paragraph.\n\n" + literal,
+    );
+    expect(result).toMatch(
+      /#### Supporting updates\n[\s\S]*?##### Full sources\n[\s\S]*?Unchanged standalone detail\./,
+    );
   });
 
   it("binds source bytes and explicit multi-page order, preserving landing navigation", () => {

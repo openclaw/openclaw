@@ -3,7 +3,6 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { expect, it, vi } from "vitest";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getPluginInstance } from "../../plugins/plugin-instance-scope.js";
 import { clearPluginMetadataLifecycleCaches } from "../../plugins/plugin-metadata-lifecycle.js";
 import { PluginRegistryInspectionResources } from "../../plugins/registry-inspection-resources.js";
@@ -16,6 +15,7 @@ import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { closePreparedModelRuntimeSnapshots } from "../prepared-model-runtime.lifecycle.js";
 import { waitForSessionMaintenance } from "../session-maintenance/coordinator.js";
 import { compactEmbeddedAgentSession } from "./compact.queued.js";
+import { createCompactionResourceProvider } from "./compact.resources.test-support.js";
 
 it("keeps an actual prepared registration alive through queued engine maintenance and disposal", async () => {
   await withOpenClawTestState(
@@ -34,23 +34,24 @@ it("keeps an actual prepared registration alive through queued engine maintenanc
         values: [] as unknown[],
       };
       Object.defineProperty(globalThis, key, { configurable: true, value: bridge });
-      fs.mkdirSync(pluginRoot, { recursive: true });
       fs.mkdirSync(state.workspaceDir, { recursive: true });
       fs.mkdirSync(state.agentDir(), { recursive: true });
+      const { plugin, config: providerConfig } = createCompactionResourceProvider({
+        pluginRoot,
+        providerId: pluginId,
+        workspaceDir: state.workspaceDir,
+        contextWindow: 8192,
+        compaction: {},
+      });
+      const config = {
+        ...providerConfig,
+        plugins: {
+          ...providerConfig.plugins,
+          slots: { memory: "none", contextEngine: pluginId },
+        },
+      };
       fs.writeFileSync(
-        path.join(pluginRoot, "package.json"),
-        JSON.stringify({
-          name: pluginId,
-          version: "1.0.0",
-          openclaw: { extensions: ["./index.cjs"] },
-        }),
-      );
-      fs.writeFileSync(
-        path.join(pluginRoot, "openclaw.plugin.json"),
-        JSON.stringify({ id: pluginId, providers: [pluginId], configSchema: { type: "object" } }),
-      );
-      fs.writeFileSync(
-        path.join(pluginRoot, "index.cjs"),
+        plugin.runtimeSource,
         `
 const { DatabaseSync } = require('node:sqlite');
 module.exports = { id: '${pluginId}', register(api) {
@@ -73,47 +74,13 @@ module.exports = { id: '${pluginId}', register(api) {
 } };
 `,
       );
-      const config: OpenClawConfig = {
-        agents: {
-          defaults: { workspace: state.workspaceDir, model: { primary: `${pluginId}/model` } },
-        },
-        models: {
-          providers: {
-            [pluginId]: {
-              api: "openai-completions",
-              apiKey: "synthetic-fixture",
-              baseUrl: "https://fixture.invalid/v1",
-              models: [
-                {
-                  id: "model",
-                  name: "Model",
-                  reasoning: false,
-                  input: ["text"],
-                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                  contextWindow: 8192,
-                  maxTokens: 1024,
-                },
-              ],
-            },
-          },
-        },
-        plugins: {
-          allow: [pluginId],
-          load: { paths: [pluginRoot] },
-          slots: { memory: "none", contextEngine: pluginId },
-          entries: { [pluginId]: { enabled: true } },
-        },
-      };
       await state.writeConfig(config);
       const donor = createPluginRegistry({
         runtime: createPluginRuntime(),
         logger: { info() {}, warn() {}, error() {}, debug() {} },
         activateGlobalSideEffects: false,
       });
-      const record = createPluginRecord({
-        id: pluginId,
-        source: path.join(pluginRoot, "index.cjs"),
-      });
+      const record = createPluginRecord({ id: pluginId, source: plugin.runtimeSource });
       const source = new PluginRegistryInspectionResources(async () => {
         await getPluginInstance(record)?.dispose();
       });
@@ -190,8 +157,7 @@ module.exports = { id: '${pluginId}', register(api) {
         expect.soft(registration.db.isOpen).toBe(true);
         bridge.resume.resolve();
         await bridge.disposalEntered.promise;
-        expect.soft(registration.db.isOpen).toBe(true);
-        expect.soft(registration.disposals).toBe(0);
+        expect.soft(registration).toMatchObject({ db: { isOpen: true }, disposals: 0 });
         bridge.finishDisposal.resolve();
         await waitForSessionMaintenance(target.sessionKey);
         await bridge.closed.promise;
@@ -199,8 +165,7 @@ module.exports = { id: '${pluginId}', register(api) {
           expect(bridge.connections.every((connection) => connection.disposals === 1)).toBe(true),
         );
         expect(bridge.values).toEqual([42, 42]);
-        expect(registration.disposals).toBe(1);
-        expect(registration.db.isOpen).toBe(false);
+        expect(registration).toMatchObject({ db: { isOpen: false }, disposals: 1 });
         const reopened = new DatabaseSync(registration.file, { readOnly: true });
         try {
           expect(reopened.prepare("SELECT value FROM answer").get()?.value).toBe(42);

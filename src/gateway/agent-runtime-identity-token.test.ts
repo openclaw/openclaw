@@ -12,6 +12,7 @@ import {
   rotateAgentRunRegistryLifecycleGeneration,
   validateAgentRunDelegatedAuthority,
 } from "../infra/agent-run-registry.js";
+import { runClientCredentialOperation } from "../infra/client-credential-store.js";
 import { readExecApprovalsSnapshot } from "../infra/exec-approvals-store.js";
 import { testing as execApprovalsStoreTesting } from "../infra/exec-approvals-store.test-support.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
@@ -74,6 +75,11 @@ function useTempHome(): string {
   return home;
 }
 
+function readSocketToken(): string | undefined {
+  const result = runClientCredentialOperation(process.env, { kind: "socket.read" });
+  return result.kind === "socket" ? (result.socket?.socket_token ?? undefined) : undefined;
+}
+
 function rewriteSignedPayload(
   token: string,
   changes: Record<string, unknown>,
@@ -90,7 +96,7 @@ function rewriteSignedPayload(
   if (!resign) {
     return `${rewritten}.${originalSignature}`;
   }
-  const secret = readExecApprovalsSnapshot().file.socket?.token;
+  const secret = readSocketToken();
   if (!secret) {
     throw new Error("missing signing secret");
   }
@@ -209,7 +215,7 @@ it("creates direct identities without credentials and rejects inactive runs or e
     kind: "agentRuntime",
     ...params,
   });
-  expect(readExecApprovalsSnapshot().exists).toBe(false);
+  expect(readSocketToken()).toBeUndefined();
   await expect(
     api.direct({
       ...params,
@@ -260,7 +266,7 @@ it.each([false, true])(
     const firstProcess = await importRuntimeTokenModule();
     const params = runtimeParams();
     const token = await firstProcess.mint(params);
-    const persistedToken = readExecApprovalsSnapshot().file.socket?.token;
+    const persistedToken = readSocketToken();
     expect(persistedToken).toEqual(expect.any(String));
     expect(persistedToken).not.toHaveLength(0);
     if (differentHome) {
@@ -506,7 +512,7 @@ it("carries a signed live native requester grant without claiming complete tool 
 
 it("does not mint local credentials while rejecting invalid presented tokens", async () => {
   await expect(api.verify("not-a-valid-token")).resolves.toBeUndefined();
-  expect(readExecApprovalsSnapshot().exists).toBe(false);
+  expect(readSocketToken()).toBeUndefined();
 });
 
 it("rejects a shortened signature or a changed requesting UI", async () => {

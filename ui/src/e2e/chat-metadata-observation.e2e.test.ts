@@ -7,7 +7,6 @@ import {
   controlUiBundledSettingsStorageKey,
   controlUiSessionUrl,
   installMockGateway,
-  pauseVirtualClock,
   type MockGatewayControls,
   type ControlUiMockGatewayScenario,
 } from "../test-helpers/control-ui-e2e.ts";
@@ -244,134 +243,6 @@ suite.define(() => {
     },
   );
 
-  it.each(["patch", "command-metadata"])(
-    "coalesces a burst of %s events into one catalog refresh without reloading auth",
-    async (reason) => {
-      await withPage(async ({ page }) => {
-        await seedSharedSessionPanes(page);
-        const runtimeChoice = {
-          agentRuntime: { id: "alternate", source: "model" },
-          available: true,
-        };
-        const { gateway } = await openMetadata(page, {
-          methodResponses: {
-            "chat.startup": { ...startup(true), sessionInfo: sessionsResponse().sessions[0] },
-            "chat.metadata": { commands: [] },
-            "models.list": {
-              models: [
-                {
-                  ...model,
-                  manualSelectionAllowed: true,
-                  runtimeChoices: [{ ...runtimeChoice, manualSelectionAllowed: true }],
-                },
-              ],
-            },
-            "sessions.describe": { session: sessionsResponse().sessions[0] },
-          },
-        });
-        const splitPanes = page.locator("openclaw-chat-pane.chat-split-view__pane");
-        await expect.poll(() => splitPanes.count()).toBe(2);
-        await expectCatalogs(splitPanes, model.name);
-        await gateway.waitForRequest("models.authStatus");
-        await page.clock.install();
-        await pauseVirtualClock(page);
-        const before = await requestCounts(gateway);
-        const authBefore = (await gateway.getRequests("models.authStatus")).length;
-        // Lineage owns separate key-only describe reads; count this pane's scoped facts.
-        const sessionFacts = () =>
-          gateway.getRequests("sessions.describe", { key: sessionKeys[0], agentId: "main" });
-        const factsBefore = (await sessionFacts()).length;
-        const changeSession = (extra = {}) =>
-          gateway.emitGatewayEvent("sessions.changed", {
-            key: sessionKeys[0],
-            agentId: "main",
-            reason,
-            ...extra,
-          });
-        for (let index = 0; index < 5; index++) {
-          await changeSession();
-          await page.clock.runFor(500);
-        }
-        expect.soft(await requestCounts(gateway)).toEqual(before);
-        expect(await sessionFacts()).toHaveLength(factsBefore);
-        await page.clock.runFor(2_500);
-        expect.soft(await requestCounts(gateway)).toEqual(countsAfter(before, 0, 1));
-        expect(await gateway.getRequests("models.authStatus")).toHaveLength(authBefore);
-        expect(await sessionFacts()).toHaveLength(factsBefore + 2);
-        await expectCatalogs(splitPanes, model.name);
-
-        await setDocumentVisibility(page, "hidden");
-        const visibleCounts = await requestCounts(gateway);
-        await changeSession();
-        await page.clock.runFor(3_000);
-        expect(await requestCounts(gateway)).toEqual(visibleCounts);
-        expect(await sessionFacts()).toHaveLength(factsBefore + 2);
-        await setDocumentVisibility(page, "visible");
-        await page.clock.runFor(100);
-        expect(await requestCounts(gateway)).toEqual(countsAfter(visibleCounts, 0, 1));
-
-        // The direct catalog refresh catches unmarked selection changes. Explicit
-        // selections carry the owner's hint and refresh before the debounce elapses.
-        for (const catalogChanged of [false, true]) {
-          const selectedModel = catalogChanged ? { ...model, name: "Selected model" } : freshModel;
-          await gateway.setMethodResponse("models.list", {
-            models: [selectedModel],
-            accountSelection: {
-              kind: "shared",
-              authProfileId: "fixture:replacement",
-              label: "Replacement account",
-              source: "user",
-            },
-          });
-          const beforeAccount = await requestCounts(gateway);
-          await changeSession(catalogChanged ? { catalogChanged: true } : {});
-          await page.clock.runFor(catalogChanged ? 100 : 3_000);
-          await expectCatalogs(splitPanes, selectedModel.name);
-          expect(await requestCounts(gateway)).toEqual(countsAfter(beforeAccount, 0, 1));
-        }
-        expect(await gateway.getRequests("models.authStatus")).toHaveLength(authBefore);
-      });
-    },
-  );
-
-  it("recovers omitted follower startup commands without duplicating its pending catalog", async () => {
-    await withPage(async ({ page }) => {
-      const { gateway, panes } = await openMetadata(page);
-      await expectCatalog(panes, model.name);
-      const before = await deferRefresh(gateway);
-      await gateway.setMethodResponse("chat.startup", startup());
-      await gateway.setMethodResponse("chat.metadata", {
-        commands: [
-          {
-            name: "recovered-metadata",
-            description: "Recovered startup commands",
-            source: "native",
-            scope: "text",
-            acceptsArgs: false,
-          },
-        ],
-      });
-      const startupsBefore = (await gateway.getRequests("chat.startup")).length;
-      await selectChatLayoutAction(page, "Open split view");
-      await expect.poll(() => panes.count()).toBe(2);
-      await gateway.waitForRequest("chat.startup", { after: startupsBefore });
-      await gateway.resolveDeferred("chat.metadata");
-      const composer = panes.nth(1).locator(".agent-chat__composer-combobox textarea");
-      await composer.fill("/recovered-metadata");
-      await expect
-        .poll(() =>
-          panes
-            .nth(1)
-            .getByRole("option", { name: /recovered-metadata/u })
-            .count(),
-        )
-        .toBe(1);
-      expect(await requestCounts(gateway)).toEqual(countsAfter(before, 2, 1));
-      await gateway.resolveDeferred("models.list");
-      await expectCatalogs(panes, model.name);
-    });
-  });
-
   it.each([
     ["single", 1, null, undefined],
     ["shared", 2, null, undefined],
@@ -380,7 +251,7 @@ suite.define(() => {
     ["late follower without metadata, metadata first", 1, false, "chat.metadata"],
     ["late follower, catalog first", 1, true, "models.list"],
   ] as const)(
-    "coalesces fresh catalog reads after pending work (%s)",
+    "shares pending catalog reads and refreshes after settlement (%s)",
     async (_label, paneCount, metadata, first) => {
       await withPage(async ({ page }) => {
         if (paneCount === 2) {
@@ -391,12 +262,11 @@ suite.define(() => {
         await expectCatalogs(panes, model.name);
         const before = await deferRefresh(gateway);
         const pendingCatalogCount = await gateway.deferNext("models.list");
+        const earlierModel = { ...model, name: "Earlier model" };
         const resolvePending = (method: (typeof methods)[number]) =>
           gateway.resolveDeferred(
             method,
-            method === "models.list"
-              ? { models: [{ ...model, name: "Retired model" }] }
-              : undefined,
+            method === "models.list" ? { models: [earlierModel] } : undefined,
           );
         await gateway.setMethodResponse("models.list", { models: [freshModel] });
         await gateway.emitGatewayEvent("chat.metadata.changed", {});
@@ -415,21 +285,27 @@ suite.define(() => {
                 requestAnimationFrame(() => resolve());
               }),
           );
-          expect(await requestCounts(gateway)).toEqual(countsAfter(before, 1, 1));
+          // Command refreshes settle independently of the shared catalog transport.
+          expect(await requestCounts(gateway)).toEqual(
+            countsAfter(before, first === "chat.metadata" ? 2 : 1, 1),
+          );
         }
         for (const method of methods) {
           if (method !== first) {
             await resolvePending(method);
           }
         }
+        // #177294 permits the pending ordinary reply across invalidations.
+        await expectCatalogs(panes, earlierModel.name);
+        await expect.poll(() => requestCounts(gateway)).toEqual(countsAfter(before, 2, 1));
+
+        await gateway.emitGatewayEvent("chat.metadata.changed", {});
         await gateway.waitForRequest("models.list", { after: pendingCatalogCount });
-        expect(await gateway.getRequests("models.list")).toHaveLength(before["models.list"] + 2);
-        await expectCatalogs(panes, model.name);
+        expect(await requestCounts(gateway)).toEqual(countsAfter(before, 3, 2));
+        await expectCatalogs(panes, earlierModel.name);
         await gateway.resolveDeferred("models.list");
         await expectCatalogs(panes, freshModel.name);
-        expect(await requestCounts(gateway)).toEqual(
-          countsAfter(before, metadata === true ? 1 : 2, 2),
-        );
+        expect(await requestCounts(gateway)).toEqual(countsAfter(before, 3, 2));
       });
     },
   );

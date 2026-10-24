@@ -126,19 +126,8 @@ async function resolveDiscordHistoryMediaForPendingRecord(params: {
       abortSignal: params.preflight.abortSignal,
     },
   );
-  const stickerStartIndex = Math.max(0, mediaList.length - stickers.length);
   return (await toInboundMediaFactsWithMetadata(mediaList, { messageId: params.message.id })).map(
-    (media, index) => ({
-      path: media.path,
-      url: media.url,
-      contentType: media.contentType,
-      kind: index >= stickerStartIndex ? "sticker" : (media.kind ?? "image"),
-      durationMs: media.durationMs,
-      width: media.width,
-      height: media.height,
-      transcribed: media.transcribed,
-      messageId: media.messageId,
-    }),
+    (media) => Object.assign({}, media, { kind: media.kind ?? "image" }),
   );
 }
 
@@ -258,7 +247,6 @@ export async function preflightDiscordMessage(
         Boolean(injectedBoundThreadBinding) &&
         isDiscordThreadChannelMessage({
           isGuildMessage,
-          message,
           channelInfo,
         }),
     )
@@ -380,7 +368,6 @@ export async function preflightDiscordMessage(
     configuredBinding,
     boundSessionKey,
     effectiveRoute,
-    boundAgentId,
     baseSessionKey,
   } = routeState;
   const isBoundThreadSession = Boolean(threadBinding && threadChannel);
@@ -753,13 +740,7 @@ export async function preflightDiscordMessage(
     }
   }
 
-  if (
-    author.bot &&
-    !sender.isPluralKit &&
-    allowBotsMode !== "off" &&
-    params.botUserId &&
-    author.id !== params.botUserId
-  ) {
+  if (author.bot && !sender.isPluralKit && params.botUserId) {
     const botLoopResult = recordChannelBotPairLoopAndCheckSuppression({
       scopeId: params.accountId,
       conversationId: messageChannelId,
@@ -855,12 +836,10 @@ export async function preflightDiscordMessage(
     messageText,
     ...(preflightTranscript !== undefined ? { preflightAudioTranscript: preflightTranscript } : {}),
     preparedMedia,
-    wasMentioned,
     conversationAvatar,
     route: effectiveRoute,
     threadBinding,
     boundSessionKey: boundSessionKey || undefined,
-    boundAgentId,
     guildInfo,
     guildSlug,
     threadChannel,

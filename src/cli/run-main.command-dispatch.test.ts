@@ -10,7 +10,7 @@ import {
   closeActiveMemorySearchManagersMock,
   outputRootHelpMock,
   outputPrecomputedRootHelpTextMock,
-  outputPrecomputedNodesHelpTextMock,
+  outputPrecomputedCommandHelpTextMock,
   loadRootHelpRenderOptionsForConfigSensitivePluginsMock,
   tryOutputSetupOnboardConfigureHelpMock,
   buildProgramMock,
@@ -86,12 +86,12 @@ describe("runCli exit behavior", () => {
   });
 
   it("renders nodes help from startup metadata without building the full program", async () => {
-    outputPrecomputedNodesHelpTextMock.mockReturnValueOnce(true);
+    outputPrecomputedCommandHelpTextMock.mockReturnValueOnce(true);
 
     await runCli(cliArgs("nodes", "--help"));
 
     expect(tryRouteCliMock).not.toHaveBeenCalled();
-    expect(outputPrecomputedNodesHelpTextMock).toHaveBeenCalledTimes(1);
+    expect(outputPrecomputedCommandHelpTextMock.mock.calls).toEqual([["nodes"]]);
     expect(buildProgramMock).not.toHaveBeenCalled();
     expect(registerSubCliByNameMock).not.toHaveBeenCalled();
   });
@@ -101,13 +101,13 @@ describe("runCli exit behavior", () => {
     const parseAsync = vi.fn().mockResolvedValueOnce(undefined);
     const program = makeProgram("nodes", parseAsync);
     loadRootHelpRenderOptionsForConfigSensitivePluginsMock.mockResolvedValueOnce({ env: {} });
-    outputPrecomputedNodesHelpTextMock.mockReturnValueOnce(true);
+    outputPrecomputedCommandHelpTextMock.mockReturnValueOnce(true);
     buildProgramMock.mockReturnValueOnce(program);
 
     await runCli(argv);
 
     expect(loadRootHelpRenderOptionsForConfigSensitivePluginsMock).toHaveBeenCalledTimes(1);
-    expect(outputPrecomputedNodesHelpTextMock).not.toHaveBeenCalled();
+    expect(outputPrecomputedCommandHelpTextMock).not.toHaveBeenCalled();
     expect(registerSubCliByNameMock.mock.calls).toEqual([[program, "nodes", argv]]);
     expect(parseAsync).toHaveBeenCalledWith(argv);
   });

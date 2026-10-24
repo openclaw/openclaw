@@ -12,8 +12,6 @@ import { WizardSession } from "../wizard/session.js";
 import {
   ensureCodexRuntimePluginForModelSelection,
   ensureCodexRuntimePluginForSupervision,
-} from "./codex-runtime-plugin-install.js";
-import {
   ensureModelSelectionRuntimePlugins,
   repairModelSelectionRuntimePlugins,
 } from "./runtime-plugin-install.js";
@@ -80,13 +78,9 @@ describe("Codex runtime plugin install repair", () => {
     mocks.ensureOnboardingPluginInstalled.mockResolvedValue(installerResult("failed"));
   });
 
-  it.each([
-    { accepted: false, promptError: undefined },
-    { accepted: true, promptError: undefined },
-    { accepted: false, promptError: new WizardCancelledError() },
-  ])(
-    "requires consent for runtime capabilities: accepted=$accepted promptError=$promptError",
-    async ({ accepted, promptError }) => {
+  it.each([false, true, new WizardCancelledError()])(
+    "requires consent for runtime capabilities: %s",
+    async (answer) => {
       await withTestDir({ prefix: "openclaw-runtime-consent-" }, async (artifactDir) => {
         createColdPluginFixture({
           rootDir: artifactDir,
@@ -107,20 +101,19 @@ describe("Codex runtime plugin install repair", () => {
           enabled: false,
           origin: "global",
           installRecord: record,
+          contracts: { tools: ["runtime.write"] },
         });
-        const manifest = metadata.byPluginId.get("codex")!;
-        manifest.rootDir = artifactDir;
-        manifest.contracts = { tools: ["runtime.write"] };
+        metadata.byPluginId.get("codex")!.rootDir = artifactDir;
         metadata.index.plugins[0]!.rootDir = artifactDir;
         mocks.metadata.mockReturnValue(metadata);
         const cfg: OpenClawConfig = { plugins: { entries: { codex: { enabled: false } } } };
         const beforePersistentEffect = vi.fn();
         const confirm = vi.fn(async () => {
           expect(beforePersistentEffect).not.toHaveBeenCalled();
-          if (promptError) {
-            throw promptError;
+          if (answer instanceof Error) {
+            throw answer;
           }
-          return accepted;
+          return answer;
         });
 
         const pending = selectRuntime({
@@ -129,15 +122,15 @@ describe("Codex runtime plugin install repair", () => {
           runtime: runtime(),
           beforePersistentEffect,
         });
-        if (promptError) {
-          await expect(pending).rejects.toBe(promptError);
+        if (answer instanceof Error) {
+          await expect(pending).rejects.toBe(answer);
           expect(mocks.writeInstallRecords).not.toHaveBeenCalled();
           return;
         }
         const result = await pending;
         expect(cfg.plugins?.entries?.codex?.enabled).toBe(false);
         expect(confirm).toHaveBeenCalledOnce();
-        if (accepted) {
+        if (answer) {
           expect(result).toMatchObject({
             ok: true,
             cfg: { plugins: { entries: { codex: { enabled: true } } } },
@@ -197,24 +190,21 @@ describe("Codex runtime plugin install repair", () => {
   });
 
   it("surfaces non-fatal Copilot repair notices to command callers", async () => {
-    const pluginId = "copilot";
-    const provider = "github-copilot";
     const reviewNotice = "REVIEW RECOMMENDED - ClawHub has not completed a fresh clean check";
     mocks.repairMissingPluginInstallsForIds.mockResolvedValue({
-      changes: [`Repaired missing configured plugin "${pluginId}".`],
+      changes: ['Repaired missing configured plugin "copilot".'],
       warnings: [],
       notices: [reviewNotice],
     });
 
     const result = await repairModelSelectionRuntimePlugins({
-      cfg: providerRuntime(provider, pluginId, "https://provider.example.test"),
-      model: `${provider}/gpt-5.5`,
+      cfg: providerRuntime("github-copilot", "copilot", "https://provider.example.test"),
+      model: "github-copilot/gpt-5.5",
       env: {},
     });
 
-    expect(mocks.repairMissingPluginInstallsForIds).toHaveBeenCalledOnce();
-    expect(mocks.repairMissingPluginInstallsForIds).toHaveBeenCalledWith(
-      expect.objectContaining({ pluginIds: [pluginId], env: {} }),
+    expect(mocks.repairMissingPluginInstallsForIds).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ pluginIds: ["copilot"], env: {} }),
     );
     expect(result).toStrictEqual([reviewNotice]);
   });
@@ -309,10 +299,107 @@ describe("Codex runtime plugin install repair", () => {
     });
 
     expect(result).toEqual({ ok: true, cfg: installedConfig, codexInstalled: false });
-    expect(mocks.ensureOnboardingPluginInstalled).toHaveBeenCalledOnce();
-    expect(mocks.ensureOnboardingPluginInstalled).toHaveBeenCalledWith(
+    expect(mocks.ensureOnboardingPluginInstalled).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({ entry: expect.objectContaining({ pluginId: "copilot" }) }),
     );
+  });
+
+  const builtInConfig: OpenClawConfig = { agents: { entries: { main: {} } } };
+  const copilotModelOverrideConfig: OpenClawConfig = {
+    ...builtInConfig,
+    models: {
+      providers: {
+        "github-copilot": {
+          baseUrl: "https://api.githubcopilot.com",
+          agentRuntime: { id: "copilot" },
+          models: [
+            {
+              id: "gpt-4o",
+              name: "GPT-4o",
+              reasoning: false,
+              input: ["text"],
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+              contextWindow: 128_000,
+              maxTokens: 16_384,
+              agentRuntime: { id: "pi" },
+            },
+          ],
+        },
+      },
+    },
+  };
+  it.each<{
+    name: string;
+    model?: string;
+    cfg: OpenClawConfig;
+    install: boolean;
+  }>([
+    {
+      name: "built-in Copilot without explicit runtime opt-in",
+      model: "github-copilot/gpt-4o",
+      cfg: builtInConfig,
+      install: false,
+    },
+    {
+      name: "model override opting out of provider runtime",
+      model: "github-copilot/gpt-4o",
+      cfg: copilotModelOverrideConfig,
+      install: false,
+    },
+    {
+      name: "another model inheriting provider runtime",
+      model: "github-copilot/claude-sonnet-4",
+      cfg: copilotModelOverrideConfig,
+      install: true,
+    },
+    {
+      name: "another provider explicitly configured with Copilot runtime",
+      model: "openai/gpt-4o",
+      cfg: {
+        ...builtInConfig,
+        ...providerRuntime("openai", "copilot", "https://provider.example.test"),
+      },
+      install: false,
+    },
+    {
+      name: "Anthropic built-in",
+      model: "anthropic/claude-3",
+      cfg: builtInConfig,
+      install: false,
+    },
+    {
+      name: "OpenAI without Copilot runtime opt-in",
+      model: "openai/gpt-4o",
+      cfg: {
+        agents: {
+          entries: { main: {} },
+          defaults: { models: { "openai/gpt-4o": { agentRuntime: { id: "pi" } } } },
+        },
+      },
+      install: false,
+    },
+    { name: "undefined ref", cfg: builtInConfig, install: false },
+    { name: "empty ref", model: "", cfg: builtInConfig, install: false },
+    { name: "unprefixed ref", model: "gpt-4o", cfg: builtInConfig, install: false },
+    { name: "empty model id", model: "github-copilot/", cfg: builtInConfig, install: false },
+  ])("only installs an opted-in Copilot runtime: $name", async ({ model, cfg, install }) => {
+    if (install) {
+      mockInstall("installed", cfg, { pluginId: "copilot" });
+    }
+    const result = await selectRuntimes({
+      cfg,
+      model,
+      prompter: createWizardPrompter(),
+      runtime: runtime(),
+    });
+    expect(result).toEqual({ ok: true, cfg, codexInstalled: false });
+    if (install) {
+      expect(mocks.ensureOnboardingPluginInstalled).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ entry: expect.objectContaining({ pluginId: "copilot" }) }),
+      );
+    } else {
+      expect(mocks.ensureOnboardingPluginInstalled).not.toHaveBeenCalled();
+    }
   });
 
   it("keeps runtime installation prompt-free for silent supervision", async () => {

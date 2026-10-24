@@ -15,7 +15,7 @@ import {
 installPwToolsCoreTestHooks();
 const sessionMocks = getPwToolsCoreSessionMocks();
 const { takeScreenshotViaPlaywright: capture, screenshotWithLabelsViaPlaywright: captureLabels } =
-  await import("./pw-tools-core.interactions.js");
+  await import("./pw-tools-core.interactions.content.js");
 const downloads = await import("./pw-tools-core.downloads.js");
 
 const target = { cdpUrl: "http://127.0.0.1:18792", targetId: "T1" };

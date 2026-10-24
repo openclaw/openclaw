@@ -1,6 +1,5 @@
-import { randomUUID } from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
+import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import { hasGeneratedMediaCompletionEvent } from "../../agents/internal-event-contract.js";
 import {
   resolveAgentMainSessionKey,
@@ -25,7 +24,7 @@ import {
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { loadGatewaySessionEntryReadOnlyInWorker } from "../session-utils-store-worker.js";
 import type { AgentRunRequest } from "./agent-request-types.js";
-import { evaluateAgentSessionReuse } from "./agent-session-patch.js";
+import { respondError } from "./response.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
 type PrepareAgentSessionParams = {
@@ -38,7 +37,7 @@ type PrepareAgentSessionParams = {
   request: AgentRunRequest;
   canUseCronRunContinuation: boolean;
   lifecycleGeneration: string;
-  effectiveBootstrapContextRunKind?: "default" | "heartbeat" | "cron";
+  effectiveBootstrapContextRunKind?: "default" | "cron";
   preAttachmentSession?: { canonicalKey: string; sessionId?: string };
   respond: GatewayRequestHandlerOptions["respond"];
   assertCurrent?: () => void;
@@ -94,13 +93,10 @@ async function prepareAdmittedAgentSession(
   const { cfg, storePath, entry, canonicalKey, legacyKey, storeKeys } = selected;
   const canonicalSessionAgentId = parseAgentSessionKey(canonicalKey)?.agentId ?? requestedAgentId;
   if (params.expectedExistingSessionId && entry?.sessionId !== params.expectedExistingSessionId) {
-    params.respond(
-      false,
-      undefined,
-      errorShape(
-        ErrorCodes.UNAVAILABLE,
-        `Session "${canonicalKey}" changed before expected work could start.`,
-      ),
+    respondError(
+      params.respond,
+      ErrorCodes.UNAVAILABLE,
+      `Session "${canonicalKey}" changed before expected work could start.`,
     );
     return undefined;
   }
@@ -114,13 +110,10 @@ async function prepareAdmittedAgentSession(
     parseCronRunScopeSuffix(canonicalKey).runId !== undefined;
   if (isGeneratedMediaCronContinuation) {
     if (!params.canUseCronRunContinuation) {
-      params.respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          "cron run completion handoffs are reserved for server-owned callers",
-        ),
+      respondError(
+        params.respond,
+        ErrorCodes.INVALID_REQUEST,
+        "cron run completion handoffs are reserved for server-owned callers",
       );
       return undefined;
     }
@@ -130,32 +123,21 @@ async function prepareAdmittedAgentSession(
       marker?.phase === "continuing" &&
       marker.ownerLifecycleGeneration !== params.lifecycleGeneration;
     if (staleClaim || (marker?.phase === "ready" && marker.basePersisted !== true)) {
-      params.respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          staleClaim
-            ? "cron run continuation owner was lost during gateway restart"
-            : "cron run continuation base session was not persisted",
-        ),
+      respondError(
+        params.respond,
+        ErrorCodes.INVALID_REQUEST,
+        staleClaim
+          ? "cron run continuation owner was lost during gateway restart"
+          : "cron run continuation base session was not persisted",
       );
       return undefined;
     }
     if (!marker || marker.phase !== "ready" || !continuationSessionId) {
-      params.respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.UNAVAILABLE, "cron run continuation is not ready"),
-      );
+      respondError(params.respond, ErrorCodes.UNAVAILABLE, "cron run continuation is not ready");
       return undefined;
     }
     if (params.requestedSessionId && params.requestedSessionId !== continuationSessionId) {
-      params.respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.UNAVAILABLE, "cron run continuation session changed"),
-      );
+      respondError(params.respond, ErrorCodes.UNAVAILABLE, "cron run continuation session changed");
       return undefined;
     }
     restoredCronContinuationIdentity = {
@@ -173,13 +155,10 @@ async function prepareAdmittedAgentSession(
     sessionExistedBeforeAttachmentSetup &&
     (!entry || entry.sessionId !== sessionExistedBeforeAttachmentSetup.sessionId)
   ) {
-    params.respond(
-      false,
-      undefined,
-      errorShape(
-        ErrorCodes.INVALID_REQUEST,
-        `Session "${canonicalKey}" ${entry ? "changed" : "was deleted"} while starting work. Retry.`,
-      ),
+    respondError(
+      params.respond,
+      ErrorCodes.INVALID_REQUEST,
+      `Session "${canonicalKey}" ${entry ? "changed" : "was deleted"} while starting work. Retry.`,
     );
     return undefined;
   }
@@ -196,7 +175,7 @@ async function prepareAdmittedAgentSession(
   }
   const archivedSessionError = resolveAgentSessionWorkStartError(canonicalKey, entry);
   if (archivedSessionError) {
-    params.respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, archivedSessionError));
+    respondError(params.respond, ErrorCodes.INVALID_REQUEST, archivedSessionError);
     return undefined;
   }
 
@@ -209,33 +188,10 @@ async function prepareAdmittedAgentSession(
       channel: sessionDeliveryChannel(entry) ?? params.recipientChannel,
     }),
   });
-  const isSystemGatewayRun =
-    effectiveBootstrapContextRunKind === "cron" || effectiveBootstrapContextRunKind === "heartbeat";
+  const isSystemGatewayRun = effectiveBootstrapContextRunKind === "cron";
   const visibleRequest = !isSystemGatewayRun && !params.request.internalEvents?.length;
   const mainSessionKey = resolveAgentMainSessionKey({ cfg, agentId: canonicalSessionAgentId });
-  const reuse = freshChild
-    ? {
-        sessionId: freshChild.entry.sessionId,
-        isNewSession: false,
-        usableRequestedSessionId: undefined,
-        freshness: { fresh: true },
-      }
-    : await evaluateAgentSessionReuse({
-        freshEntry: entry,
-        cfg,
-        sessionAgentId: canonicalSessionAgentId,
-        canonicalSessionKey: canonicalKey,
-        storePath,
-        expectedExistingSessionId: params.expectedExistingSessionId,
-        hasRestoredCronContinuation: restoredCronContinuationIdentity !== undefined,
-        resetPolicy,
-        now,
-        requestedSessionId: params.requestedSessionId,
-        isSystemGatewayRun,
-        visibleRequest,
-      });
   params.assertCurrent?.();
-  const sessionId = reuse.sessionId ?? randomUUID();
   return {
     cfg,
     storePath,
@@ -247,14 +203,9 @@ async function prepareAdmittedAgentSession(
     canonicalSessionAgentId,
     resetPolicy,
     now,
-    freshness: reuse.freshness,
     visibleRequest,
     mainSessionKey,
     isSystemGatewayRun,
-    usableRequestedSessionId: reuse.usableRequestedSessionId,
-    sessionId,
-    isNewSession: reuse.isNewSession,
-    rotatedSessionId: Boolean(entry?.sessionId && entry.sessionId !== sessionId),
     touchInteraction: visibleRequest,
     sessionPersistedBeforeGatewayAdmission: entry !== undefined,
     effectiveBootstrapContextRunKind,

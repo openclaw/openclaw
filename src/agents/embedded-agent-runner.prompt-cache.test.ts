@@ -45,7 +45,7 @@ import * as promptCacheRequestObserver from "./embedded-agent-runner/prompt-cach
 import { clearEmbeddedSessionPromptStates } from "./embedded-agent-runner/session-prompt-state.js";
 import type { AgentInternalEvent } from "./internal-events.js";
 import { RUNTIME_EVENT_USER_PROMPT } from "./internal-runtime-context.js";
-import { SUBAGENT_PRIVATE_COMPLETION_INSTRUCTION } from "./subagents/completion/subagent-completion-instructions.js";
+import { buildSubagentPrivateCompletionInstruction } from "./subagents/completion/subagent-completion-instructions.js";
 import { startPromptCacheMcpServer } from "./test-helpers/prompt-cache-mcp.test-support.js";
 
 const cases = [
@@ -90,12 +90,24 @@ function responseFor(api: WireApi, model: string, request: number, tool: boolean
   });
 }
 
+function rateLimitResponse(api: WireApi) {
+  const message = "Synthetic tokens-per-minute limit";
+  const body =
+    api === "anthropic-messages"
+      ? { type: "error", error: { type: "rate_limit_error", message } }
+      : { error: { message, type: "tokens", param: null, code: "rate_limit_exceeded" } };
+  return new Response(JSON.stringify(body), {
+    status: 429,
+    headers: { "content-type": "application/json", "retry-after-ms": "10" },
+  });
+}
+
 afterEach(async () => {
   await clearActivePluginRegistry();
 });
 
 it.for(cases)(
-  "preserves $route prefixes across tool loops, hooks, images, errors, refresh and reopen",
+  "preserves $route prefixes across tool loops, hooks, images, errors, rate-limit retries, refresh and reopen",
   { timeout: 120_000 },
   async ({ api, provider, model, route }, { signal }) => {
     await withOpenClawTestState({ label: `prompt-cache-${route}` }, async (state) => {
@@ -292,13 +304,17 @@ it.for(cases)(
               if (requestsThisTurn > 4) {
                 throw new Error(`Unexpected provider retry in synthetic turn ${turn}`);
               }
+              // A rate-limited tool continuation retries the same model from the transcript.
+              if (turn === 10 && requestsThisTurn === 2) {
+                return rateLimitResponse(api);
+              }
               // Replay the error in turn 6, then verify those sent bytes after reopen in turn 7.
               const failure = api === "openai-responses" && turn === 5 && requestsThisTurn === 1;
               const result = responseFor(
                 api,
                 model,
                 requests.length,
-                (turn === 1 && requestsThisTurn === 1) || failure,
+                ((turn === 1 || turn === 10) && requestsThisTurn === 1) || failure,
                 failure,
               );
               if (effectiveInput) {
@@ -317,7 +333,7 @@ it.for(cases)(
           },
         });
         try {
-          for (turn = 1; turn <= 10; turn++) {
+          for (turn = 1; turn <= 11; turn++) {
             requestsThisTurn = 0;
             if (turn === 3) {
               const runtime = peekSessionMcpRuntime({ sessionKey });
@@ -360,7 +376,7 @@ it.for(cases)(
                     status: "ok",
                     statusLabel: "completed successfully",
                     result: "Synthetic child verification completed.",
-                    replyInstruction: SUBAGENT_PRIVATE_COMPLETION_INSTRUCTION,
+                    replyInstruction: buildSubagentPrivateCompletionInstruction(undefined),
                   },
                 ]
               : undefined;
@@ -482,7 +498,11 @@ it.for(cases)(
               admission.close();
             }
           }
-          expect(requests.length).toBe(12);
+          expect(requests.length).toBe(15);
+          expect(
+            requests.filter((request) => request.turn === 10),
+            "the rate-limited continuation was retried",
+          ).toHaveLength(3);
           const historyAt = (value: number) =>
             requests.find((request) => request.turn === value)!.prefix.history.join("");
           if (api === "openai-responses") {

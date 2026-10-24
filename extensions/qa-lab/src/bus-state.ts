@@ -60,12 +60,10 @@ export function createQaBusState() {
     });
   const waiters = createQaBusWaiterStore(getSnapshot);
 
-  const pushEvent = (event: QaBusEventSeed): QaBusEvent => {
+  const pushEvent = (event: QaBusEventSeed): void => {
     cursor += 1;
-    const finalized = { cursor, ...event };
-    events.push(finalized);
+    events.push({ cursor, ...event });
     waiters.settle();
-    return finalized;
   };
 
   const publishMessage = (

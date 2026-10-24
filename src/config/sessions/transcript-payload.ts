@@ -135,17 +135,24 @@ export function createTranscriptEventInserter(database: EngineConnection, sessio
       insert(prepared);
     }
   };
-  const createIdentityInsert = () =>
-    prepareSqliteQueryTakeFirstSync<StoredRow & { eventId: string }, { seq: number }>(
-      database,
-      (parameter) =>
-        kysely
-          .insertInto("transcript_events")
-          .columns(columns)
-          .expression(
-            kysely
-              .selectNoFrom(columns.map((column) => parameter((row) => row[column]).as(column)))
-              .where((eb) =>
+  type StoredIdentity = DB["transcript_event_identities"];
+  type Identity = {
+    eventId: StoredIdentity["event_id"];
+    eventType: StoredIdentity["event_type"];
+    parentId: StoredIdentity["parent_id"];
+    messageIdempotencyKey: StoredIdentity["message_idempotency_key"];
+  };
+  type SingleRow = StoredRow & { eventId?: string; identity?: Identity };
+  const createSingleInsert = (checkEventId: boolean, includeIdentity: boolean) =>
+    prepareSqliteQueryTakeFirstSync<SingleRow, { seq: number }>(database, (parameter) => {
+      const event = kysely
+        .insertInto("transcript_events")
+        .columns(columns)
+        .expression(
+          kysely
+            .selectNoFrom(columns.map((column) => parameter((row) => row[column]).as(column)))
+            .$if(checkEventId, (query) =>
+              query.where((eb) =>
                 eb.not(
                   eb.exists(
                     eb
@@ -155,25 +162,77 @@ export function createTranscriptEventInserter(database: EngineConnection, sessio
                       .where(
                         "event_id",
                         "=",
-                        parameter((row) => row.eventId),
+                        parameter((row) => row.eventId!),
                       ),
                   ),
                 ),
               ),
+            ),
+        );
+      if (!includeIdentity) {
+        return event.returning("seq");
+      }
+      return (
+        kysely
+          .with("inserted_event", () => event.returning(["session_id", "seq"]))
+          .with("inserted_identity", (db) =>
+            db
+              .insertInto("transcript_event_identities")
+              .columns([
+                "session_id",
+                "event_id",
+                "seq",
+                "event_type",
+                "parent_id",
+                "message_idempotency_key",
+                "created_at",
+              ])
+              .expression(
+                db
+                  .selectFrom("inserted_event")
+                  .select([
+                    "session_id",
+                    parameter((row) => row.identity!.eventId).as("event_id"),
+                    "seq",
+                    parameter((row) => row.identity!.eventType).as("event_type"),
+                    parameter((row) => row.identity!.parentId).as("parent_id"),
+                    parameter((row) => row.identity!.messageIdempotencyKey).as(
+                      "message_idempotency_key",
+                    ),
+                    parameter((row) => row.created_at).as("created_at"),
+                  ]),
+              )
+              .onConflict((conflict) => conflict.columns(["session_id", "event_id"]).doNothing())
+              .returning("seq"),
           )
-          .returning("seq"),
-    );
-  let insertIdentity: ReturnType<typeof createIdentityInsert> | undefined;
+          // Event acceptance is independent of an ignored identity conflict.
+          .selectFrom("inserted_event")
+          .select("seq")
+      );
+    });
+  let insertIdentity: ReturnType<typeof createSingleInsert> | undefined;
+  const fusedInserts = new Map<boolean, ReturnType<typeof createSingleInsert>>();
+  const withIdentity = isPostgresSqlConnection(database)
+    ? (row: TranscriptEventInsertRow, identity: Identity): boolean => {
+        const checkEventId = row.eventId !== undefined;
+        let insert = fusedInserts.get(checkEventId);
+        if (!insert) {
+          insert = createSingleInsert(checkEventId, true);
+          fusedInserts.set(checkEventId, insert);
+        }
+        return insert({ ...prepareRow(row), eventId: row.eventId, identity }) !== undefined;
+      }
+    : undefined;
   return Object.assign(
     (row: TranscriptEventInsertRow): boolean => {
       if (row.eventId === undefined) {
         batch([row]);
         return true;
       }
-      insertIdentity ??= createIdentityInsert();
+      insertIdentity ??= createSingleInsert(true, false);
       return insertIdentity({ ...prepareRow(row), eventId: row.eventId }) !== undefined;
     },
-    { batch },
+    { batch, withIdentity },
   );
 }
 
@@ -515,15 +574,14 @@ export function transcriptEventModelNavigationSql(
 export function transcriptEventModelBytesSql(
   database: EngineConnection,
   omitCheckpoint: Expression<number>,
-  alias: TranscriptPayloadAlias = "transcript_events",
 ): RawBuilder<number> {
   const metadata =
     /* kysely-allow-raw: closed transcript aliases select native projection accounting. */ sql.ref(
-      `${alias}.navigation_json`,
+      "transcript_events.navigation_json",
     );
   const identity =
     /* kysely-allow-raw: closed transcript aliases select the native identity fallback. */ sql.ref<string>(
-      `${alias}.event_json`,
+      "transcript_events.event_json",
     );
   return /* kysely-allow-raw: native fallback preserves UTF-16 byte units; metadata excludes the JSONL separator. */ sql<number>`CASE WHEN ${metadata} IS NULL
     THEN octet_length(${projectModelContextEventSql(database, identity, omitCheckpoint)})

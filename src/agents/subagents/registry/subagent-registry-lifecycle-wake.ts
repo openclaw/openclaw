@@ -1,5 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
 import { WorkerTaskError } from "@openclaw/worker-runtime";
+import { revokeGoalContinuationReturn } from "../../../auto-reply/reply/goal-continuation-return.js";
 import { runWithoutOwnedSessionTranscriptWrites } from "../../../config/sessions/transcript-write-context.js";
 import { hasSqliteWorkerOutcomeUnknown } from "../../../infra/sqlite-worker-contract.js";
 import { isGatewayRestartDrainError } from "../../../process/gateway-work-admission.js";
@@ -195,6 +196,7 @@ export async function retireSubagentObligationsInContext(
           return;
         }
         clearRequesterSettleWait(context, scope);
+        revokeGoalContinuationReturn(published);
         const requesterAgentId = resolveSubagentRequesterAgentId(
           context.options.getRuntimeConfig(),
           published,
@@ -375,7 +377,7 @@ export function scheduleRequesterSettleWake(
     batch: readonly SubagentRunRecord[],
     rearmGeneration: number | undefined,
     outcome?: Parameters<typeof settleRequesterSettleWakeBatch>[3],
-    onCommitted?: () => void,
+    onCommitted?: () => void | Promise<void>,
   ) => {
     // A retirement may have replaced the pause notice this evaluation was delivering.
     entry = currentSubagentRunOrObserved(params.runs, entry);
@@ -421,7 +423,7 @@ export function scheduleRequesterSettleWake(
           }
         }
         if (settlesMembers) {
-          onCommitted?.();
+          await onCommitted?.();
           releaseRequesterSettleWakeBatch(context, members, rearmGeneration);
         }
       },

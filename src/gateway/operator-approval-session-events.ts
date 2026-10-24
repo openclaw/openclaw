@@ -2,9 +2,9 @@ import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coer
 import type {
   PendingApprovalSnapshot,
   SessionApprovalEvent,
+  SessionApprovalReplay,
 } from "../../packages/gateway-protocol/src/index.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
-import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
 import { resolveApprovalSourceStreamKey } from "./approval-session-audience.js";
 import { normalizeControlUiBasePath } from "./control-ui-shared.js";
 import type {
@@ -60,8 +60,6 @@ export function createOperatorApprovalSessionEventRuntime(params: {
   sessionMessageSubscribers: Pick<SessionMessageSubscriberRegistry, "getApprovals">;
   broadcastToConnIds: GatewayBroadcastToConnIdsFn;
   controlUiBasePath?: string;
-  databaseOptions?: OpenClawStateDatabaseOptions;
-  now?: () => number;
   reconcileTerminal?: (record: OperatorApprovalRecord) => boolean | Promise<boolean>;
   getLiveManager?: (
     kind: OperatorApprovalRecord["kind"],
@@ -69,7 +67,6 @@ export function createOperatorApprovalSessionEventRuntime(params: {
   isCurrent?: () => boolean;
 }): OperatorApprovalSessionEventRuntime {
   const controlUiBasePath = normalizeControlUiBasePath(params.controlUiBasePath);
-  const now = params.now ?? Date.now;
   const replayScopes = new Map<string, ApprovalReplayScope>();
 
   const authorizedRecipients = (
@@ -115,7 +112,7 @@ export function createOperatorApprovalSessionEventRuntime(params: {
       manager?.runtimeEpoch === event.record.runtimeEpoch &&
       live &&
       live.resolvedAtMs === undefined &&
-      live.expiresAtMs > now() &&
+      live.expiresAtMs > Date.now() &&
       request?.runId === source.runId &&
       request?.sessionId === source.sessionId &&
       request?.sessionKey === source.sessionKey,
@@ -174,13 +171,12 @@ export function createOperatorApprovalSessionEventRuntime(params: {
 
   const prepareReplay = async (scope: ApprovalReplayScope): Promise<ApprovalReplaySnapshot> => {
     const { sessionKey, reviewerDeviceId } = scope;
-    const snapshotAtMs = now();
+    const snapshotAtMs = Date.now();
     const input = {
       audienceSessionKey: sessionKey,
       reviewerDeviceId,
       limit: MAX_SESSION_APPROVAL_REPLAY + 1,
       nowMs: snapshotAtMs,
-      databaseOptions: params.databaseOptions,
     };
     const readRevision = scope.revision;
     const prepared = await prepareOperatorApprovalReplay(input);
@@ -205,10 +201,7 @@ export function createOperatorApprovalSessionEventRuntime(params: {
     const truncated = records.length > MAX_SESSION_APPROVAL_REPLAY;
     for (const record of records) {
       if (approvals.length === MAX_SESSION_APPROVAL_REPLAY) {
-        return {
-          replay: { sessionKey, updatedAtMs: snapshotAtMs, approvals, truncated: true },
-          isCurrent,
-        };
+        break;
       }
       const approval = projectOperatorApprovalSnapshot(record, controlUiBasePath);
       if (approval?.status === "pending") {
@@ -219,7 +212,13 @@ export function createOperatorApprovalSessionEventRuntime(params: {
         });
       }
     }
-    return { replay: { sessionKey, updatedAtMs: snapshotAtMs, approvals, truncated }, isCurrent };
+    const replay: SessionApprovalReplay = {
+      sessionKey,
+      updatedAtMs: snapshotAtMs,
+      approvals,
+      truncated,
+    };
+    return { replay, isCurrent };
   };
 
   return {
@@ -227,7 +226,12 @@ export function createOperatorApprovalSessionEventRuntime(params: {
     replay: async (sessionKey, client) => {
       if (!canReviewOperatorApproval(client)) {
         return {
-          replay: { sessionKey, updatedAtMs: now(), approvals: [], truncated: false },
+          replay: {
+            sessionKey,
+            updatedAtMs: Date.now(),
+            approvals: [],
+            truncated: false,
+          },
           isCurrent: () => !canReviewOperatorApproval(client),
           release: () => {},
         };
@@ -252,7 +256,12 @@ export function createOperatorApprovalSessionEventRuntime(params: {
       const key = JSON.stringify([sessionKey, reviewerDeviceId]);
       let scope = replayScopes.get(key);
       if (!scope) {
-        scope = { sessionKey, reviewerDeviceId, references: 0, revision: 0 };
+        scope = {
+          sessionKey,
+          reviewerDeviceId,
+          references: 0,
+          revision: 0,
+        };
         replayScopes.set(key, scope);
       }
       const retained = scope;

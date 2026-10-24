@@ -21,6 +21,7 @@ import {
   type BundleFixture,
   type BundleFixtureOptions,
 } from "./node-worker-bundle-installer.test-support.js";
+import { listen } from "./node-worker-transfer-client.test-support.js";
 
 const bundleWarnings = vi.hoisted(() => vi.fn());
 vi.mock("../logging/subsystem.js", async (importOriginal) => {
@@ -94,6 +95,26 @@ describe("node worker bundle installer", () => {
     };
   }
 
+  const bundleDirectory = (fixture: BundleFixture) =>
+    path.join(root, fixture.input.gatewayNamespace, "bundles", fixture.input.build.bundleHash);
+
+  function installation(
+    fixture: BundleFixture,
+    gatewayUrl: string,
+    options: ConstructorParameters<typeof NodeWorkerBundleInstaller>[0] = {},
+  ) {
+    const installer = new NodeWorkerBundleInstaller({ root, ...options });
+    const { gatewayNamespace, build } = fixture.input;
+    return {
+      installer,
+      ensure: (extra: Partial<Parameters<typeof installer.ensure>[0]> = {}) =>
+        installer.ensure({ input: fixture.input, gatewayUrl, ...extra }),
+      inspect: () => installer.inspect({ gatewayNamespace, bundleHash: build.bundleHash }),
+      retain: (bundleHashes = [build.bundleHash]) =>
+        installer.retain({ gatewayNamespace, bundleHashes }),
+    };
+  }
+
   async function serve(
     archive: Buffer,
     token: string,
@@ -117,15 +138,149 @@ describe("node worker bundle installer", () => {
       });
       res.end(archive);
     });
-    await new Promise<void>((resolve) => {
-      server!.listen(0, "127.0.0.1", resolve);
-    });
-    const address = server.address();
-    if (!address || typeof address === "string") {
-      throw new Error("test server did not bind a TCP port");
-    }
-    return { gatewayUrl: `ws://127.0.0.1:${address.port}`, requests };
+    return { gatewayUrl: await listen(server), requests };
   }
+
+  async function setup(options?: BundleFixtureOptions) {
+    const fixture = await bundleFixture(options);
+    const served = await serve(fixture.archive, fixture.input.archive.token);
+    return { fixture, served, ...installation(fixture, served.gatewayUrl) };
+  }
+
+  it("stages a verified archive without activation and reuses it for the first session", async () => {
+    const { fixture, served, installer, ensure, inspect } = await setup();
+    const prefetch = () =>
+      installer.ensure({
+        input: { ...fixture.input, prefetch: 1 },
+        gatewayUrl: served.gatewayUrl,
+      });
+
+    await prefetch();
+    await prefetch();
+
+    expect(served.requests).toHaveBeenCalledTimes(1);
+    await expect(fs.readdir(bundleDirectory(fixture))).resolves.toEqual(["bundle.tgz"]);
+    await expect(inspect()).resolves.toMatchObject({ status: "missing" });
+    await expect(ensure()).resolves.toEqual(fixture.input.build);
+    expect(served.requests).toHaveBeenCalledTimes(1);
+    await expect(inspect()).resolves.toMatchObject({ status: "installed" });
+    expect(existsSync(path.join(bundleDirectory(fixture), "bundle.tgz"))).toBe(false);
+  });
+
+  it.each(["session", "disconnect"])("cancels unfinished prefetch on %s", async (reason) => {
+    const fixture = await bundleFixture();
+    const started = createDeferredCore();
+    let requests = 0;
+    const served = await serve(
+      fixture.archive,
+      fixture.input.archive.token,
+      undefined,
+      (_req, res) => {
+        res.writeHead(200, { "content-length": fixture.archive.length });
+        if (++requests === 1) {
+          res.flushHeaders();
+          started.resolve();
+        } else {
+          res.end(fixture.archive);
+        }
+      },
+    );
+    const { installer, ensure, inspect } = installation(fixture, served.gatewayUrl);
+    const connection = new AbortController();
+    const prefetch = installer.ensure({
+      input: { ...fixture.input, prefetch: 1 },
+      gatewayUrl: served.gatewayUrl,
+      signal: connection.signal,
+    });
+    const interrupted = expect(prefetch).rejects.toThrow(
+      reason === "session" ? "yielded to a session" : "node disconnected",
+    );
+    await started.promise;
+    if (reason === "disconnect") {
+      connection.abort(new Error("node disconnected"));
+    }
+
+    await expect(ensure()).resolves.toEqual(fixture.input.build);
+    await interrupted;
+
+    expect(served.requests).toHaveBeenCalledTimes(2);
+    await expect(inspect()).resolves.toMatchObject({ status: "installed" });
+  });
+
+  it("does not enqueue prefetch behind a foreground acquisition", async () => {
+    const fixture = await bundleFixture();
+    const started = createDeferredCore<http.ServerResponse>();
+    const served = await serve(
+      fixture.archive,
+      fixture.input.archive.token,
+      undefined,
+      (_req, res) => {
+        started.resolve(res);
+      },
+    );
+    const { installer, ensure } = installation(fixture, served.gatewayUrl);
+    const foreground = ensure();
+    const response = await started.promise;
+
+    await installer.ensure({
+      input: { ...fixture.input, prefetch: 1 },
+      gatewayUrl: served.gatewayUrl,
+    });
+    response.writeHead(200, { "content-length": fixture.archive.length }).end(fixture.archive);
+    await foreground;
+
+    expect(served.requests).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(["failed download", "corrupt staged archive"])(
+    "falls back to session acquisition after %s",
+    async (failure) => {
+      const fixture = await bundleFixture();
+      let prefetching = true;
+      const served = await serve(
+        fixture.archive,
+        fixture.input.archive.token,
+        undefined,
+        (_req, res) => {
+          res.writeHead(200, { "content-length": fixture.archive.length });
+          res.end(
+            prefetching && failure === "failed download"
+              ? Buffer.alloc(fixture.archive.length)
+              : fixture.archive,
+          );
+        },
+      );
+      const { installer, ensure, inspect } = installation(fixture, served.gatewayUrl);
+      const prefetch = installer.ensure({
+        input: { ...fixture.input, prefetch: 1 },
+        gatewayUrl: served.gatewayUrl,
+      });
+      if (failure === "failed download") {
+        await expect(prefetch).rejects.toThrow("integrity validation");
+      } else {
+        await prefetch;
+        await fs.writeFile(path.join(bundleDirectory(fixture), "bundle.tgz"), "corrupt");
+      }
+      prefetching = false;
+
+      await expect(ensure()).resolves.toEqual(fixture.input.build);
+
+      expect(served.requests).toHaveBeenCalledTimes(2);
+      await expect(inspect()).resolves.toMatchObject({ status: "installed" });
+    },
+  );
+
+  it("prunes unretained prefetched archives through normal bundle retention", async () => {
+    const { fixture, served, installer, retain } = await setup();
+    await installer.ensure({
+      input: { ...fixture.input, prefetch: 1 },
+      gatewayUrl: served.gatewayUrl,
+    });
+
+    await expect(retain([])).resolves.toMatchObject({ deleted: 1, hasMore: false });
+
+    expect(existsSync(bundleDirectory(fixture))).toBe(false);
+  });
 
   it.each([1, 4])(
     "resumes an authenticated download after %i interruptions",
@@ -156,11 +311,9 @@ describe("node worker bundle installer", () => {
           }
         },
       );
-      const installer = new NodeWorkerBundleInstaller({ root });
+      const { ensure, inspect } = installation(fixture, served.gatewayUrl);
 
-      await expect(
-        installer.ensure({ input: fixture.input, gatewayUrl: served.gatewayUrl }),
-      ).resolves.toEqual(fixture.input.build);
+      await expect(ensure()).resolves.toEqual(fixture.input.build);
 
       expect(served.requests.mock.calls.map(([, headers]) => headers.range)).toEqual([
         undefined,
@@ -169,12 +322,7 @@ describe("node worker bundle installer", () => {
           (_, index) => `bytes=${(index + 1) * partialBytes}-`,
         ),
       ]);
-      await expect(
-        installer.inspect({
-          gatewayNamespace: fixture.input.gatewayNamespace,
-          bundleHash: fixture.input.build.bundleHash,
-        }),
-      ).resolves.toMatchObject({ status: "installed" });
+      await expect(inspect()).resolves.toMatchObject({ status: "installed" });
       await expect(
         fs.readdir(path.join(root, fixture.input.gatewayNamespace, "bundles")),
       ).resolves.toEqual([fixture.input.build.bundleHash]);
@@ -203,11 +351,9 @@ describe("node worker bundle installer", () => {
           }
         },
       );
-      const installer = new NodeWorkerBundleInstaller({ root });
+      const { ensure } = installation(fixture, served.gatewayUrl);
 
-      await expect(
-        installer.ensure({ input: fixture.input, gatewayUrl: served.gatewayUrl }),
-      ).rejects.toThrow("3 consecutive no-progress failures");
+      await expect(ensure()).rejects.toThrow("3 consecutive no-progress failures");
 
       expect(served.requests.mock.calls.map(([, headers]) => headers.range)).toEqual(
         mode !== "no bytes"
@@ -247,15 +393,9 @@ describe("node worker bundle installer", () => {
       fixture.archive.length,
       (_req, res) => res.destroy(),
     );
-    const installer = new NodeWorkerBundleInstaller({ root });
+    const { ensure } = installation(fixture, served.gatewayUrl);
 
-    await expect(
-      installer.ensure({
-        input: fixture.input,
-        gatewayUrl: served.gatewayUrl,
-        signal: controller.signal,
-      }),
-    ).rejects.toThrow("download cancelled");
+    await expect(ensure({ signal: controller.signal })).rejects.toThrow("download cancelled");
     expect(served.requests).toHaveBeenCalledOnce();
     await expect(
       fs.readdir(path.join(root, fixture.input.gatewayNamespace, "bundles")),
@@ -268,12 +408,7 @@ describe("node worker bundle installer", () => {
       const fixture = await bundleFixture();
       await prepareLocalArchive(fixture);
       const installer = new NodeWorkerBundleInstaller({ root });
-      const destination = path.join(
-        root,
-        fixture.input.gatewayNamespace,
-        "bundles",
-        fixture.input.build.bundleHash,
-      );
+      const destination = bundleDirectory(fixture);
       if (receiptState === "malformed") {
         await fs.mkdir(destination, { recursive: true });
         await fs.writeFile(path.join(destination, "bootstrap-receipt.json"), "{invalid");
@@ -309,12 +444,7 @@ describe("node worker bundle installer", () => {
       const installer = new NodeWorkerBundleInstaller({ root });
       const install = { input: fixture.input, gatewayUrl: "ws://127.0.0.1:1" };
       await installer.ensure(install);
-      const destination = path.join(
-        root,
-        fixture.input.gatewayNamespace,
-        "bundles",
-        fixture.input.build.bundleHash,
-      );
+      const destination = bundleDirectory(fixture);
       const failure = Object.assign(new Error("synthetic private message and tool content"), {
         code: errorCode,
         request: { body: "synthetic private request" },
@@ -372,20 +502,12 @@ describe("node worker bundle installer", () => {
     const fixture = await bundleFixture();
     const archivePath = await prepareLocalArchive(fixture);
     const served = await serve(fixture.archive, fixture.input.archive.token);
-    const installer = new NodeWorkerBundleInstaller({ root });
+    const { ensure } = installation(fixture, served.gatewayUrl);
 
-    await expect(
-      installer.ensure({ input: fixture.input, gatewayUrl: served.gatewayUrl }),
-    ).resolves.toEqual(fixture.input.build);
+    await expect(ensure()).resolves.toEqual(fixture.input.build);
 
     expect(served.requests).not.toHaveBeenCalled();
-    const receipt = path.join(
-      root,
-      fixture.input.gatewayNamespace,
-      "bundles",
-      fixture.input.build.bundleHash,
-      "bootstrap-receipt.json",
-    );
+    const receipt = path.join(bundleDirectory(fixture), "bootstrap-receipt.json");
     expect(JSON.parse(await fs.readFile(receipt, "utf8"))).toEqual(fixture.input.build);
     await expect(fs.readFile(archivePath)).resolves.toEqual(fixture.archive);
   });
@@ -417,7 +539,7 @@ describe("node worker bundle installer", () => {
       const fixture = await bundleFixture();
       await prepareLocalArchive(fixture);
       const served = await serve(fixture.archive, fixture.input.archive.token);
-      const installer = new NodeWorkerBundleInstaller({ root });
+      const { installer, ensure } = installation(fixture, served.gatewayUrl);
       const controller = new AbortController();
       const open = fs.open.bind(fs);
       vi.spyOn(fs, "open").mockImplementation(async (...args) => {
@@ -430,13 +552,7 @@ describe("node worker bundle installer", () => {
         return await open(...args);
       });
 
-      await expect(
-        installer.ensure({
-          input: fixture.input,
-          gatewayUrl: served.gatewayUrl,
-          signal: controller.signal,
-        }),
-      ).rejects.toThrow(
+      await expect(ensure({ signal: controller.signal })).rejects.toThrow(
         failure === "cancel" ? "local acquisition cancelled" : "staging disappeared",
       );
 
@@ -472,26 +588,25 @@ describe("node worker bundle installer", () => {
         }
       }
       const served = await serve(fixture.archive, fixture.input.archive.token);
-      const installer = new NodeWorkerBundleInstaller({ root });
+      const { ensure, inspect } = installation(fixture, served.gatewayUrl);
 
-      await expect(
-        installer.ensure({ input: fixture.input, gatewayUrl: served.gatewayUrl }),
-      ).rejects.toThrow("worker-bundle-install-failed");
+      await expect(ensure()).rejects.toThrow(
+        kind === "corrupt"
+          ? "worker bundle archive failed integrity validation"
+          : "worker-bundle-install-failed",
+      );
 
       expect(served.requests).not.toHaveBeenCalled();
-      await expect(
-        installer.inspect({
-          gatewayNamespace: fixture.input.gatewayNamespace,
-          bundleHash: fixture.input.build.bundleHash,
-        }),
-      ).resolves.toEqual({ bundleHash: fixture.input.build.bundleHash, status: "missing" });
+      await expect(inspect()).resolves.toEqual({
+        bundleHash: fixture.input.build.bundleHash,
+        status: "missing",
+      });
+      await expect(fs.access(bundleDirectory(fixture))).rejects.toThrow();
     },
   );
 
   it("does not publish an HTTP bundle when cancellation arrives during receipt staging", async () => {
-    const fixture = await bundleFixture();
-    const served = await serve(fixture.archive, fixture.input.archive.token);
-    const installer = new NodeWorkerBundleInstaller({ root });
+    const { fixture, served, ensure } = await setup();
     const controller = new AbortController();
     const open = fs.open.bind(fs);
     vi.spyOn(fs, "open").mockImplementation(async (...args) => {
@@ -502,13 +617,7 @@ describe("node worker bundle installer", () => {
       return handle;
     });
 
-    await expect(
-      installer.ensure({
-        input: fixture.input,
-        gatewayUrl: served.gatewayUrl,
-        signal: controller.signal,
-      }),
-    ).rejects.toThrow("installer cancelled");
+    await expect(ensure({ signal: controller.signal })).rejects.toThrow("installer cancelled");
     expect(served.requests).toHaveBeenCalledOnce();
     await expect(
       fs.readdir(path.join(root, fixture.input.gatewayNamespace, "bundles")),
@@ -519,7 +628,7 @@ describe("node worker bundle installer", () => {
     const fixture = await bundleFixture();
     await prepareLocalArchive(fixture);
     const served = await serve(fixture.archive, fixture.input.archive.token);
-    const installer = new NodeWorkerBundleInstaller({ root });
+    const { ensure } = installation(fixture, served.gatewayUrl);
     const bundlesRoot = path.join(root, fixture.input.gatewayNamespace, "bundles");
     const destination = path.join(bundlesRoot, fixture.input.build.bundleHash);
     await fs.mkdir(destination, { recursive: true });
@@ -533,13 +642,7 @@ describe("node worker bundle installer", () => {
       }
     });
 
-    await expect(
-      installer.ensure({
-        input: fixture.input,
-        gatewayUrl: served.gatewayUrl,
-        signal: controller.signal,
-      }),
-    ).rejects.toThrow("publication cancelled");
+    await expect(ensure({ signal: controller.signal })).rejects.toThrow("publication cancelled");
 
     await expect(fs.readdir(bundlesRoot)).resolves.toEqual([fixture.input.build.bundleHash]);
     await expect(fs.readdir(destination)).resolves.toEqual(["prior-install"]);
@@ -594,10 +697,8 @@ describe("node worker bundle installer", () => {
   });
 
   it("does not renew retention when cancelled while validating an installed bundle", async () => {
-    const fixture = await bundleFixture();
-    const served = await serve(fixture.archive, fixture.input.archive.token);
-    const installer = new NodeWorkerBundleInstaller({ root });
-    await installer.ensure({ input: fixture.input, gatewayUrl: served.gatewayUrl });
+    const { served, ensure, retain } = await setup();
+    await ensure();
     const controller = new AbortController();
     const stat = fs.stat.bind(fs);
     vi.spyOn(fs, "stat").mockImplementation(async (...args) => {
@@ -608,27 +709,14 @@ describe("node worker bundle installer", () => {
       return result;
     });
 
-    await expect(
-      installer.ensure({
-        input: fixture.input,
-        gatewayUrl: served.gatewayUrl,
-        signal: controller.signal,
-      }),
-    ).rejects.toThrow("cached install cancelled");
+    await expect(ensure({ signal: controller.signal })).rejects.toThrow("cached install cancelled");
 
     expect(served.requests).toHaveBeenCalledOnce();
-    await expect(
-      installer.retain({
-        gatewayNamespace: fixture.input.gatewayNamespace,
-        bundleHashes: [fixture.input.build.bundleHash],
-      }),
-    ).resolves.toEqual({ deleted: 0, hasMore: false, generation: 1 });
+    await expect(retain()).resolves.toEqual({ deleted: 0, hasMore: false, generation: 1 });
   });
 
   it("rejects cancellation during final cleanup without renewing retention or removing published bytes", async () => {
-    const fixture = await bundleFixture();
-    const served = await serve(fixture.archive, fixture.input.archive.token);
-    const installer = new NodeWorkerBundleInstaller({ root });
+    const { fixture, ensure, inspect, retain } = await setup();
     const controller = new AbortController();
     const rm = fs.rm.bind(fs);
     vi.spyOn(fs, "rm").mockImplementation(async (...args) => {
@@ -638,26 +726,15 @@ describe("node worker bundle installer", () => {
       }
     });
 
-    await expect(
-      installer.ensure({
-        input: fixture.input,
-        gatewayUrl: served.gatewayUrl,
-        signal: controller.signal,
-      }),
-    ).rejects.toThrow("install cleanup cancelled");
+    await expect(ensure({ signal: controller.signal })).rejects.toThrow(
+      "install cleanup cancelled",
+    );
 
-    await expect(
-      installer.inspect({
-        gatewayNamespace: fixture.input.gatewayNamespace,
-        bundleHash: fixture.input.build.bundleHash,
-      }),
-    ).resolves.toEqual({ bundleHash: fixture.input.build.bundleHash, status: "installed" });
-    await expect(
-      installer.retain({
-        gatewayNamespace: fixture.input.gatewayNamespace,
-        bundleHashes: [fixture.input.build.bundleHash],
-      }),
-    ).resolves.toEqual({ deleted: 0, hasMore: false, generation: 0 });
+    await expect(inspect()).resolves.toEqual({
+      bundleHash: fixture.input.build.bundleHash,
+      status: "installed",
+    });
+    await expect(retain()).resolves.toEqual({ deleted: 0, hasMore: false, generation: 0 });
   });
 
   it("atomically installs, reuses, and cleans prior-hash crash staging", async () => {
@@ -676,47 +753,26 @@ describe("node worker bundle installer", () => {
     );
     await fs.mkdir(staleStaging, { recursive: true });
     const served = await serve(fixture.archive, fixture.input.archive.token);
-    const installer = new NodeWorkerBundleInstaller({
-      root,
+    const { ensure } = installation(fixture, served.gatewayUrl, {
       env: { ...process.env, NODE_DISABLE_COMPILE_CACHE: undefined },
     });
 
-    await expect(
-      installer.ensure({ input: fixture.input, gatewayUrl: served.gatewayUrl }),
-    ).resolves.toEqual(fixture.input.build);
-    await expect(
-      installer.ensure({ input: fixture.input, gatewayUrl: served.gatewayUrl }),
-    ).resolves.toEqual(fixture.input.build);
+    await expect(ensure()).resolves.toEqual(fixture.input.build);
+    await expect(ensure()).resolves.toEqual(fixture.input.build);
 
     expect(served.requests).toHaveBeenCalledOnce();
     await expect(fs.readFile(prewarmMarker, "utf8")).resolves.toBe("ready");
     await expect(fs.access(staleStaging)).rejects.toThrow();
     await expect(
-      fs.readFile(
-        path.join(
-          root,
-          fixture.input.gatewayNamespace,
-          "bundles",
-          fixture.input.build.bundleHash,
-          "bootstrap-receipt.json",
-        ),
-        "utf8",
-      ),
+      fs.readFile(path.join(bundleDirectory(fixture), "bootstrap-receipt.json"), "utf8"),
     ).resolves.toContain(fixture.input.build.bundleHash);
   });
 
   it("shares an in-flight prewarmed bundle check without sharing cancellation or later trust", async () => {
-    const fixture = await bundleFixture({ bundlePrewarm: 1 });
-    const served = await serve(fixture.archive, fixture.input.archive.token);
-    const installer = new NodeWorkerBundleInstaller({ root });
+    const { fixture, served, installer, retain } = await setup({ bundlePrewarm: 1 });
     const install = { input: fixture.input, gatewayUrl: served.gatewayUrl };
     await installer.ensure(install);
-    const bundleDir = path.join(
-      root,
-      fixture.input.gatewayNamespace,
-      "bundles",
-      fixture.input.build.bundleHash,
-    );
+    const bundleDir = bundleDirectory(fixture);
     const controller = new AbortController();
     const readdir = fs.readdir.bind(fs);
     let scans = 0;
@@ -743,12 +799,7 @@ describe("node worker bundle installer", () => {
       Array.from({ length: 11 }, () => ({ status: "fulfilled", value: fixture.input.build })),
     );
     expect(scans).toBe(1);
-    await expect(
-      installer.retain({
-        gatewayNamespace: fixture.input.gatewayNamespace,
-        bundleHashes: [fixture.input.build.bundleHash],
-      }),
-    ).resolves.toMatchObject({ generation: 12 });
+    await expect(retain()).resolves.toMatchObject({ generation: 12 });
 
     // A later request must hash the files again, including same-length edits.
     await fs.writeFile(path.join(bundleDir, "worker.mjs"), "export {};!");
@@ -762,17 +813,10 @@ describe("node worker bundle installer", () => {
   it("validates again when retention separates overlapping install requests", async ({
     signal,
   }) => {
-    const fixture = await bundleFixture({ bundlePrewarm: 1 });
-    const served = await serve(fixture.archive, fixture.input.archive.token);
-    const installer = new NodeWorkerBundleInstaller({ root });
+    const { fixture, served, installer, retain } = await setup({ bundlePrewarm: 1 });
     const install = { input: fixture.input, gatewayUrl: served.gatewayUrl };
     await installer.ensure(install);
-    const bundleDir = path.join(
-      root,
-      fixture.input.gatewayNamespace,
-      "bundles",
-      fixture.input.build.bundleHash,
-    );
+    const bundleDir = bundleDirectory(fixture);
     const scanning = createDeferredCore();
     const release = createDeferredCore();
     const readdir = fs.readdir.bind(fs);
@@ -788,10 +832,7 @@ describe("node worker bundle installer", () => {
     const first = installer.ensure(install);
     try {
       await withinTest(scanning.promise, signal);
-      const retained = installer.retain({
-        gatewayNamespace: fixture.input.gatewayNamespace,
-        bundleHashes: [],
-      });
+      const retained = retain([]);
       const second = installer.ensure(install);
       release.resolve();
       await expect(first).resolves.toEqual(fixture.input.build);
@@ -815,27 +856,23 @@ describe("node worker bundle installer", () => {
       compileCacheDisabled: false,
     });
     const served = await serve(fixture.archive, fixture.input.archive.token);
-    const installer = new NodeWorkerBundleInstaller({
-      root,
+    const { ensure } = installation(fixture, served.gatewayUrl, {
       env: {
         ...process.env,
         NODE_COMPILE_CACHE: "/tmp/ambient-host-compile-cache",
         NODE_DISABLE_COMPILE_CACHE: "1",
-        OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.node",
+        OPENCLAW_PROFILE: "work",
+        OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.node.work",
         OPENCLAW_SERVICE_KIND: "node",
       },
     });
 
-    await expect(
-      installer.ensure({ input: fixture.input, gatewayUrl: served.gatewayUrl }),
-    ).resolves.toEqual(fixture.input.build);
+    await expect(ensure()).resolves.toEqual(fixture.input.build);
     await expect(fs.readFile(prewarmMarker, "utf8")).resolves.toBe("ready");
   });
 
   it("reuses a v1 install when Windows cannot retain Unix artifact modes", async () => {
-    const fixture = await bundleFixture();
-    const served = await serve(fixture.archive, fixture.input.archive.token);
-    const installer = new NodeWorkerBundleInstaller({ root });
+    const { fixture, served, ensure } = await setup();
     const readStats = fs.lstat.bind(fs);
     vi.spyOn(process, "platform", "get").mockReturnValue("win32");
     vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {
@@ -847,12 +884,8 @@ describe("node worker bundle installer", () => {
     });
 
     try {
-      await expect(
-        installer.ensure({ input: fixture.input, gatewayUrl: served.gatewayUrl }),
-      ).resolves.toEqual(fixture.input.build);
-      await expect(
-        installer.ensure({ input: fixture.input, gatewayUrl: served.gatewayUrl }),
-      ).resolves.toEqual(fixture.input.build);
+      await expect(ensure()).resolves.toEqual(fixture.input.build);
+      await expect(ensure()).resolves.toEqual(fixture.input.build);
       expect(served.requests).toHaveBeenCalledOnce();
     } finally {
       vi.restoreAllMocks();
@@ -860,14 +893,10 @@ describe("node worker bundle installer", () => {
   });
 
   it("rejects the Cloudflare Access pair before a plaintext bundle transfer", async () => {
-    const fixture = await bundleFixture();
-    const served = await serve(fixture.archive, fixture.input.archive.token);
-    const installer = new NodeWorkerBundleInstaller({ root });
+    const { served, ensure } = await setup();
 
     await expect(
-      installer.ensure({
-        input: fixture.input,
-        gatewayUrl: served.gatewayUrl,
+      ensure({
         gatewayCloudflareAccess: {
           clientId: "cf-bundle-id",
           clientSecret: "cf-bundle-secret",
@@ -879,10 +908,8 @@ describe("node worker bundle installer", () => {
   });
 
   it("prunes superseded bundle artifacts in bounded passes while retaining the latest install", async () => {
-    const fixture = await bundleFixture();
-    const served = await serve(fixture.archive, fixture.input.archive.token);
-    const installer = new NodeWorkerBundleInstaller({ root });
-    await installer.ensure({ input: fixture.input, gatewayUrl: served.gatewayUrl });
+    const { fixture, ensure, retain } = await setup();
+    await ensure();
     const bundlesRoot = path.join(root, fixture.input.gatewayNamespace, "bundles");
     const staleHashes = Array.from({ length: 18 }, (_, index) =>
       (index + 1).toString(16).padStart(64, "0"),
@@ -894,17 +921,11 @@ describe("node worker bundle installer", () => {
     await fs.mkdir(path.join(bundlesRoot, `.staging-${"d".repeat(64)}-crash`));
     await fs.mkdir(path.join(bundlesRoot, "operator-owned"));
 
-    const first = await installer.retain({
-      gatewayNamespace: fixture.input.gatewayNamespace,
-      bundleHashes: [fixture.input.build.bundleHash],
-    });
+    const first = await retain();
     expect(first).toEqual({ deleted: 16, hasMore: true, generation: 1 });
     let result = first;
     while (result.hasMore) {
-      result = await installer.retain({
-        gatewayNamespace: fixture.input.gatewayNamespace,
-        bundleHashes: [fixture.input.build.bundleHash],
-      });
+      result = await retain();
     }
 
     await fs.access(path.join(bundlesRoot, fixture.input.build.bundleHash));
@@ -915,46 +936,21 @@ describe("node worker bundle installer", () => {
   });
 
   it("reinstalls when executable dependency material appears outside the bundle hash", async () => {
-    const fixture = await bundleFixture({ packageShell: true });
-    const served = await serve(fixture.archive, fixture.input.archive.token);
-    const installer = new NodeWorkerBundleInstaller({ root });
-    const bundleDir = path.join(
-      root,
-      fixture.input.gatewayNamespace,
-      "bundles",
-      fixture.input.build.bundleHash,
-    );
+    const { fixture, served, ensure, inspect } = await setup({ packageShell: true });
+    const bundleDir = bundleDirectory(fixture);
     const tamperedDependency = path.join(bundleDir, "node_modules", "tampered", "index.js");
 
-    await installer.ensure({ input: fixture.input, gatewayUrl: served.gatewayUrl });
+    await ensure();
     await fs.mkdir(path.dirname(tamperedDependency), { recursive: true });
     await fs.writeFile(tamperedDependency, "export const trusted = false;\n");
-    await expect(
-      installer.inspect({
-        gatewayNamespace: fixture.input.gatewayNamespace,
-        bundleHash: fixture.input.build.bundleHash,
-      }),
-    ).resolves.toEqual({ bundleHash: fixture.input.build.bundleHash, status: "missing" });
-    await installer.ensure({ input: fixture.input, gatewayUrl: served.gatewayUrl });
+    await expect(inspect()).resolves.toEqual({
+      bundleHash: fixture.input.build.bundleHash,
+      status: "missing",
+    });
+    await ensure();
 
     expect(served.requests).toHaveBeenCalledTimes(2);
     await expect(fs.access(tamperedDependency)).rejects.toThrow();
-  });
-
-  it("rejects archive digest mismatch without publishing a bundle", async () => {
-    const fixture = await bundleFixture();
-    fixture.input.archive.sha256 = "f".repeat(64);
-    const served = await serve(fixture.archive, fixture.input.archive.token);
-    const installer = new NodeWorkerBundleInstaller({ root });
-
-    await expect(
-      installer.ensure({ input: fixture.input, gatewayUrl: served.gatewayUrl }),
-    ).rejects.toThrow("worker bundle archive failed integrity validation");
-    await expect(
-      fs.access(
-        path.join(root, fixture.input.gatewayNamespace, "bundles", fixture.input.build.bundleHash),
-      ),
-    ).rejects.toThrow();
   });
 
   it("rejects an unexpected content length before publication", async () => {
@@ -964,11 +960,9 @@ describe("node worker bundle installer", () => {
       fixture.input.archive.token,
       fixture.archive.byteLength + 1,
     );
-    const installer = new NodeWorkerBundleInstaller({ root });
+    const { ensure } = installation(fixture, served.gatewayUrl);
 
-    await expect(
-      installer.ensure({ input: fixture.input, gatewayUrl: served.gatewayUrl }),
-    ).rejects.toThrow("gateway returned an unexpected worker bundle length");
+    await expect(ensure()).rejects.toThrow("gateway returned an unexpected worker bundle length");
   });
 
   it("cancels prewarming and releases the namespace queue for the next install", async ({
@@ -1000,14 +994,7 @@ describe("node worker bundle installer", () => {
       });
       res.end(archive);
     });
-    await new Promise<void>((resolve) => {
-      server!.listen(0, "127.0.0.1", resolve);
-    });
-    const address = server.address();
-    if (!address || typeof address === "string") {
-      throw new Error("test server did not bind a TCP port");
-    }
-    const gatewayUrl = `ws://127.0.0.1:${address.port}`;
+    const gatewayUrl = await listen(server);
     const installer = new NodeWorkerBundleInstaller({ root });
     const controller = new AbortController();
     const cleanupController = new AbortController();

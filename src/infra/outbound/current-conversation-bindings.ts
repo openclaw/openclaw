@@ -507,9 +507,6 @@ export async function inspectCurrentConversationBindingRecordAsync(
   if (!result) {
     return null;
   }
-  if (!result.ok || result.type !== "conversationBindings.inspect") {
-    throw new Error("Unexpected current conversation binding inspection result");
-  }
   return result.record;
 }
 

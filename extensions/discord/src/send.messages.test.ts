@@ -36,43 +36,38 @@ describe("Discord message reads", () => {
     const { getMock, opts } = client();
     const results = { messages: [], total_results: 0 };
     getMock.mockResolvedValueOnce(results);
-    await expect(
-      searchMessagesDiscord(
-        {
-          guildId: "G1",
-          content: "release & review",
-          channelIds: ["c1", "c2"],
-          authorIds: ["u1", "u2"],
-          limit: 99,
-        },
-        opts,
-      ),
-    ).resolves.toEqual(results);
+    const query = {
+      guildId: "G1",
+      content: "release & review",
+      channelIds: ["c1", "c2"],
+      authorIds: ["u1", "u2"],
+      limit: 99,
+    };
+    await expect(searchMessagesDiscord(query, opts)).resolves.toEqual(results);
     expect(getMock).toHaveBeenCalledWith(
       "/guilds/G1/messages/search?content=release+%26+review&channel_id=c1&channel_id=c2&author_id=u1&author_id=u2&limit=25",
     );
   });
 
   it.each([
-    {
-      response: {
+    [
+      {
         message: "Index not yet available. Try again later",
         code: 110000,
         documents_indexed: 0,
         retry_after: 2,
       },
-      error:
-        "Discord message search unavailable: Index not yet available. Try again later (retry after 2s)",
-    },
-    {
-      response: { total_results: 1 },
-      error: "Unexpected Discord response for message search: expected messages array.",
-    },
-    {
-      response: "\u001f\ufffd\u0008raw gzip bytes",
-      error: "Unexpected Discord response for message search: expected object.",
-    },
-  ])("rejects invalid search responses: $error", async ({ response, error }) => {
+      "Discord message search unavailable: Index not yet available. Try again later (retry after 2s)",
+    ],
+    [
+      { total_results: 1 },
+      "Unexpected Discord response for message search: expected messages array.",
+    ],
+    [
+      "\u001f\ufffd\u0008raw gzip bytes",
+      "Unexpected Discord response for message search: expected object.",
+    ],
+  ] as const)("rejects invalid search response %#", async (response, error) => {
     const { getMock, opts } = client();
     getMock.mockResolvedValueOnce(response);
     await expect(searchMessagesDiscord({ guildId: "G1", content: "test" }, opts)).rejects.toThrow(
@@ -82,21 +77,18 @@ describe("Discord message reads", () => {
 });
 
 describe("Discord voice status", () => {
-  it.each([new Error("DiscordError: Unknown Voice State")])(
-    "recognizes an absent voice state: %s",
-    async (error) => {
-      const { getMock, opts } = client();
-      getMock.mockRejectedValueOnce(error);
-      await expect(fetchVoiceStatusDiscord("g1", "u1", opts)).resolves.toEqual({
-        guild_id: "g1",
-        user_id: "u1",
-        channel_id: null,
-        connected: false,
-        absent: true,
-        reason: "unknown_voice_state",
-      });
-    },
-  );
+  it("recognizes an absent voice state", async () => {
+    const { getMock, opts } = client();
+    getMock.mockRejectedValueOnce(new Error("DiscordError: Unknown Voice State"));
+    await expect(fetchVoiceStatusDiscord("g1", "u1", opts)).resolves.toEqual({
+      guild_id: "g1",
+      user_id: "u1",
+      channel_id: null,
+      connected: false,
+      absent: true,
+      reason: "unknown_voice_state",
+    });
+  });
 
   it("propagates other Discord failures", async () => {
     const { getMock, opts } = client();

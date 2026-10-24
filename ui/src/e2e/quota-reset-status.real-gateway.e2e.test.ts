@@ -93,32 +93,20 @@ function clearSavedBlock(fixture: QuotaFixture): SavedClearReceipt {
 async function captureFinalStatus(
   fixture: QuotaFixture,
   artifactDir: string,
-  observations: unknown[],
+  recordProfile: (profile: unknown) => void,
 ) {
   const cli = await fixture.gateway.cli(["models", "status", "--json"]);
-  observations.push({ action: "models-status", ...cli });
   expect(cli.code, cli.stderr).toBe(0);
   const status: ModelsStatus = JSON.parse(cli.stdout);
-  observations.push({
-    action: "models-profile-status",
-    profile: status.auth.oauth.profiles.find((entry) => entry.profileId === fixture.profileId),
-  });
+  const profile = status.auth.oauth.profiles.find((entry) => entry.profileId === fixture.profileId);
+  recordProfile(profile);
   expect
     .soft(status.auth.unusableProfiles)
     .not.toContainEqual(expect.objectContaining({ profileId: fixture.profileId }));
   // Refreshed fixture credentials stay valid for two days, outside the CLI
   // 24-hour expiry warning; original-credential expiry scenarios remain separate.
-  expect
-    .soft(status.auth.oauth.profiles)
-    .toContainEqual(
-      expect.objectContaining({ profileId: fixture.profileId, type: "oauth", status: "ok" }),
-    );
-  expect
-    .soft(
-      status.auth.oauth.profiles.find((profile) => profile.profileId === fixture.profileId)
-        ?.remainingMs,
-    )
-    .toBeGreaterThan(0);
+  expect.soft(profile).toMatchObject({ profileId: fixture.profileId, type: "oauth", status: "ok" });
+  expect.soft(profile?.remainingMs).toBeGreaterThan(0);
 
   // Gateway readiness does not join its background UI build; dashboard --json intentionally
   // fails immediately while assets are preparing. Wait only at the browser-proof boundary.
@@ -146,31 +134,6 @@ async function captureFinalStatus(
     });
     const page = await context.newPage();
     page.setDefaultTimeout(60_000);
-    page.on("websocket", (socket) => {
-      const methods = new Map<string, string>();
-      socket.on("framesent", ({ payload }) => {
-        const frame = JSON.parse(String(payload));
-        if (frame.type === "req") {
-          methods.set(frame.id, frame.method);
-        }
-      });
-      socket.on("framereceived", ({ payload }) => {
-        const frame = JSON.parse(String(payload));
-        if (
-          frame.type === "event" &&
-          (frame.event === "chat.metadata.changed" || frame.event === "models.snapshot")
-        ) {
-          observations.push({ action: "browser-event", frame });
-        }
-        const method = methods.get(frame.id);
-        if (method?.startsWith("models.")) {
-          observations.push({ action: "browser-rpc", method, frame });
-        }
-      });
-    });
-    page.on("pageerror", (error) =>
-      observations.push({ action: "browser-error", message: error.message }),
-    );
     await page.addInitScript(() => {
       localStorage.setItem(
         "openclaw:control-ui:community-invite:v2",
@@ -182,57 +145,22 @@ async function captureFinalStatus(
       await waitForControlUiGatewayReady(page);
       const card = page.locator('[data-provider-id="openai"]');
       await card.waitFor({ state: "visible" });
+      // The ordinary turn already proved automatic quota recovery. Initial catalog
+      // publication is best effort; Refresh explicitly asks for its settled status.
+      await page.locator(".model-providers__refresh-button").click();
       const badge = card.locator(".model-providers__head .settings-status");
-      let previousStatus: string | undefined;
       await expect
-        .poll(
-          async () => {
-            const badgeStatus = (await badge.textContent())?.trim();
-            if (badgeStatus !== previousStatus) {
-              observations.push({
-                action: "provider-status-poll",
-                ts: Date.now(),
-                status: badgeStatus,
-              });
-              previousStatus = badgeStatus;
-            }
-            return badgeStatus;
-          },
-          { timeout: 60_000 },
-        )
+        .poll(async () => (await badge.textContent())?.trim(), { timeout: 60_000 })
         .toBe("Ready");
-      observations.push({
-        action: "control-ui-provider-status",
-        status: (await badge.textContent())?.trim(),
-        text: await card.textContent(),
-      });
       expect(await page.locator(".community-invite-card").count()).toBe(0);
       await page.screenshot({
         path: path.join(artifactDir, "provider-status.png"),
         animations: "disabled",
       });
     } catch (error) {
-      const latestResponse = (method: string) => {
-        const observation = observations.findLast(
-          (entry) => isRecord(entry) && entry.action === "browser-rpc" && entry.method === method,
-        );
-        return isRecord(observation) ? observation.frame : undefined;
-      };
-      const snapshot = observations.findLast(
-        (entry) =>
-          isRecord(entry) &&
-          entry.action === "browser-event" &&
-          isRecord(entry.frame) &&
-          entry.frame.event === "models.snapshot",
-      );
       await captureControlUiE2eFailureDiagnostics(page, {
         error: error instanceof Error ? error : new Error("Quota final-status failure"),
         label: "quota-final-status",
-        modelResponses: {
-          list: latestResponse("models.list"),
-          snapshot: isRecord(snapshot) ? snapshot.frame : undefined,
-          authStatus: latestResponse("models.authStatus"),
-        },
       });
       throw error;
     } finally {
@@ -261,12 +189,12 @@ describe.each(["automatic", "saved-clear", "automatic-during-catalog"] as const)
       { timeout: 600_000 },
       async (context) => {
         const artifactDir = createControlUiE2eArtifactDir(`quota-refresh-${recovery}`);
-        const observations: unknown[] = [];
         const fixture = await createQuotaResetFixture(context, {
           source: "codex_rate_limits",
           controlUi: true,
         });
         const { gateway, client, provider, turn, stats, advanceClock, clock, evidence } = fixture;
+        let finalProfile: unknown;
         const gatewayProcess = gateway.child;
         let catalogHold: ReturnType<typeof provider.holdNextCatalog> | undefined;
         let catalogRefresh:
@@ -279,7 +207,6 @@ describe.each(["automatic", "saved-clear", "automatic-during-catalog"] as const)
           provider.setPhase("initial-exhaustion");
           expect((await turn()).status, evidence()).toBe("error");
           const blocked = stats();
-          observations.push({ action: "provider-created-block", state: blocked });
           expect(blocked, evidence()).toMatchObject({
             blockedReason: "subscription_limit",
             blockedSource: "codex_rate_limits",
@@ -299,7 +226,6 @@ describe.each(["automatic", "saved-clear", "automatic-during-catalog"] as const)
                 (error: unknown) => ({ ok: false as const, error }),
               );
             const captured = await catalogHold.arrived;
-            observations.push({ action: "catalog-held-before-recovery", captured, state: stats() });
             expect(captured.phase, evidence()).toBe("initial-exhaustion");
             expect(stats()?.blockedUntil, evidence()).toBe(blocked?.blockedUntil);
             const discovering = await client.request<ModelsListResult>("models.list", {
@@ -319,14 +245,12 @@ describe.each(["automatic", "saved-clear", "automatic-during-catalog"] as const)
               throw new Error("Recent saved-block proof requires the previous health observation.");
             }
             expect(Date.now() + clock.offset - lastProbeAt).toBeLessThan(300_000);
-            const cleared = clearSavedBlock(fixture);
-            observations.push({ action: "saved-only-external-clear", receipt: cleared });
+            clearSavedBlock(fixture);
             expect(stats()?.blockedUntil).toBeUndefined();
             const refreshed = await client.request<ModelAuthStatusResult>("models.authStatus", {
               agentId: "main",
               refresh: true,
             });
-            observations.push({ action: "models-auth-status-refresh", result: refreshed });
             expect(refreshed.unavailable).toBeUndefined();
             expect(clock.offset).toBe(0);
             expect(Date.now() - lastProbeAt).toBeLessThan(300_000);
@@ -339,10 +263,6 @@ describe.each(["automatic", "saved-clear", "automatic-during-catalog"] as const)
             provider.observeNextSuccess(
               () => {
                 beforeRecoveryReply = stats();
-                observations.push({
-                  action: "recovery-response-started",
-                  state: beforeRecoveryReply,
-                });
               },
               { model: "gpt-5.5", path: "/v1/responses" },
             );
@@ -371,7 +291,6 @@ describe.each(["automatic", "saved-clear", "automatic-during-catalog"] as const)
               quotaRequestMode(body) === "inference"
             );
           });
-          observations.push({ action: "next-ordinary-turn", result: nextTurn, state: stats() });
           expect.soft(nextTurn, evidence()).toEqual({ status: "ok", output: [MARKER] });
           expect(primaryInference, evidence()).toHaveLength(1);
           for (const request of inference) {
@@ -405,7 +324,6 @@ describe.each(["automatic", "saved-clear", "automatic-during-catalog"] as const)
                 };
               })
               .toEqual({ pending: false, available: true });
-            observations.push({ action: "catalog-published-after-recovery", result: published });
             expect
               .soft(published?.models, evidence())
               .toContainEqual(
@@ -413,7 +331,6 @@ describe.each(["automatic", "saved-clear", "automatic-during-catalog"] as const)
               );
             catalogHold.release();
             const refreshed = await catalogRefresh;
-            observations.push({ action: "held-catalog-refresh", result: refreshed });
             // Recovery changes availability, so the held generation must not publish stale facts.
             expect(refreshed, evidence()).toMatchObject({
               ok: false,
@@ -427,23 +344,17 @@ describe.each(["automatic", "saved-clear", "automatic-during-catalog"] as const)
             });
             expect(provider.heldCatalogResponses[0]?.releaseReason, evidence()).toBe("explicit");
           }
-          await captureFinalStatus(fixture, artifactDir, observations);
+          await captureFinalStatus(fixture, artifactDir, (profile) => {
+            finalProfile = profile;
+          });
           expect(provider.errors, evidence()).toEqual([]);
         } finally {
           catalogHold?.release();
           await catalogRefresh;
-          await fs.writeFile(
-            path.join(artifactDir, "observations.json"),
-            JSON.stringify(observations, null, 2),
-          );
           await fs.writeFile(path.join(artifactDir, "gateway-evidence.json"), evidence());
-          const finalStatus = observations.findLast(
-            (entry) => isRecord(entry) && entry.action === "models-profile-status",
-          );
-          const profile = isRecord(finalStatus) ? finalStatus.profile : undefined;
           await fs.writeFile(
             path.join(artifactDir, "quota.public.json"),
-            JSON.stringify(await fixture.publicDiagnostics(profile), null, 2),
+            JSON.stringify(await fixture.publicDiagnostics(finalProfile), null, 2),
           );
         }
       },

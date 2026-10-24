@@ -6,13 +6,13 @@ import {
   validateQaEvidenceSummaryJson,
 } from "./evidence-summary.js";
 import { resolveQaScriptRuntimeExecutable } from "./test-file-scenario-runner-commands.js";
-import { runQaTestFileScenarios } from "./test-file-scenario-runner.js";
 import {
   buildScriptProducerEvidence,
   createScenarioRunnerTestHarness,
   makeTestFileScenario,
   writeScriptProducerEvidence,
   resolveScriptAttemptOutputDir,
+  runQaTestFileScenariosWithCommand as runQaTestFileScenarios,
   QA_TEST_RUNNER_DEFAULTS,
   writeFixtureJson,
 } from "./test-file-scenario-runner.test-support.js";

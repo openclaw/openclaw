@@ -4,11 +4,16 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveContextEngineCapabilities } from "../../agents/embedded-agent-runner/context-engine-capabilities.js";
 import { runContextEngineMaintenance } from "../../agents/embedded-agent-runner/context-engine-maintenance.js";
 import { buildAfterTurnRuntimeContext } from "../../agents/embedded-agent-runner/run/attempt-prompt-helpers.js";
+import {
+  PreparedModelRuntimeOwnerNotPublishedError,
+  PreparedModelRuntimePluginGenerationRetiredError,
+} from "../../agents/prepared-model-runtime.errors.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginEntryConfig } from "../../config/types.plugins.js";
+import { AsyncWorkScopeClosedError } from "../../shared/async-work-scope.js";
+import { PluginInventoryRetiredError } from "../plugin-instance-error.js";
 import { withPluginRuntimePluginScope } from "./gateway-request-scope.js";
 import { createRuntimeLlm } from "./runtime-llm.runtime.js";
-import type { RuntimeLogger } from "./types-core.js";
 
 const hoisted = vi.hoisted(() => ({
   acquireSimpleCompletionModelForAgent:
@@ -17,12 +22,23 @@ const hoisted = vi.hoisted(() => ({
     >(),
   completeWithPreparedSimpleCompletionModel: vi.fn(),
   resolveSimpleCompletionSelectionForAgent: vi.fn(),
+  logger: {
+    debug: vi.fn(),
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+  },
 }));
 
 vi.mock("../../agents/simple-completion-runtime.js", () => ({
   acquireSimpleCompletionModelForAgent: hoisted.acquireSimpleCompletionModelForAgent,
   completeWithPreparedSimpleCompletionModel: hoisted.completeWithPreparedSimpleCompletionModel,
   resolveSimpleCompletionSelectionForAgent: hoisted.resolveSimpleCompletionSelectionForAgent,
+}));
+
+vi.mock(import("./runtime-logging.js"), async (importOriginal) => ({
+  ...(await importOriginal()),
+  writeRuntimeLog: (_logger, level, message, meta) => hoisted.logger[level](message, meta),
 }));
 
 const cfg = {
@@ -67,15 +83,6 @@ function createPreparedModel(
       source: "test",
       mode: "api-key",
     },
-  };
-}
-
-function createLogger(): RuntimeLogger {
-  return {
-    debug: vi.fn(),
-    info: vi.fn(),
-    warn: vi.fn(),
-    error: vi.fn(),
   };
 }
 
@@ -160,6 +167,7 @@ describe("runtime.llm.complete", () => {
     hoisted.acquireSimpleCompletionModelForAgent.mockReset();
     hoisted.completeWithPreparedSimpleCompletionModel.mockReset();
     hoisted.resolveSimpleCompletionSelectionForAgent.mockReset();
+    Object.values(hoisted.logger).forEach((method) => method.mockClear());
     primeCompletionMocks();
   });
 
@@ -207,6 +215,48 @@ describe("runtime.llm.complete", () => {
       purpose: "memory-maintenance",
       sessionKey: "agent:ada:session:abc",
     });
+  });
+
+  it.each([
+    new PreparedModelRuntimeOwnerNotPublishedError(
+      "Model runtime replacement is in progress; admitted plugin work cannot wait for the reload. Retry after the plugin reload completes.",
+      { admissionBlocked: true },
+    ),
+    new PreparedModelRuntimePluginGenerationRetiredError("plugin generation retired"),
+    new PluginInventoryRetiredError(),
+    new AsyncWorkScopeClosedError(),
+  ])("codes host lifecycle refusals so callers can retry later: $message", async (refusal) => {
+    hoisted.acquireSimpleCompletionModelForAgent.mockRejectedValue(refusal);
+    const runtimeContext = resolveContextEngineCapabilities({
+      config: cfg,
+      sessionKey: "agent:main:session:abc",
+      purpose: "context-engine.compaction",
+    });
+
+    const error = await runtimeContext
+      .llm!.complete({ messages: [{ role: "user", content: "summarize" }] })
+      .catch((caught: unknown) => caught);
+
+    expect(error).toMatchObject({
+      name: "LlmCompleteError",
+      code: "LLM_RUNTIME_LIFECYCLE",
+      message: refusal.message,
+      cause: refusal,
+    });
+  });
+
+  it("keeps a missing published owner a completion failure", async () => {
+    const missingOwner = new PreparedModelRuntimeOwnerNotPublishedError(
+      "owner was never published",
+    );
+    hoisted.acquireSimpleCompletionModelForAgent.mockRejectedValue(missingOwner);
+    const llm = createRuntimeLlm({ getConfig: () => cfg });
+
+    const error = await llm
+      .complete({ messages: [{ role: "user", content: "summarize" }] })
+      .catch((caught: unknown) => caught);
+
+    expect(error).toBe(missingOwner);
   });
 
   it("does not trust a fallback-derived agent in the after-turn caller", async () => {
@@ -434,10 +484,9 @@ describe("runtime.llm.complete", () => {
   });
 
   it("uses runtime-scoped config and the host preparation/dispatch path", async () => {
-    const logger = createLogger();
+    const logger = hoisted.logger;
     const llm = createRuntimeLlm({
       getConfig: () => cfg,
-      logger,
       authority: {
         caller: { kind: "host", id: "runtime-test" },
         allowComplete: true,
@@ -512,10 +561,9 @@ describe("runtime.llm.complete", () => {
   });
 
   it("uses scoped plugin identity and ignores caller-shaped spoofing input", async () => {
-    const logger = createLogger();
+    const logger = hoisted.logger;
     const llm = createRuntimeLlm({
       getConfig: () => cfg,
-      logger,
       authority: {
         caller: { kind: "host", id: "ignored-host" },
         allowComplete: true,
@@ -668,10 +716,9 @@ describe("runtime.llm.complete", () => {
   );
 
   it("denies completions when runtime authority disables the capability", async () => {
-    const logger = createLogger();
+    const logger = hoisted.logger;
     const llm = createRuntimeLlm({
       getConfig: () => cfg,
-      logger,
       authority: {
         allowComplete: false,
         denyReason: "not trusted",

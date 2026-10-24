@@ -4,7 +4,6 @@ import { createRenderedMessageBatchPlan } from "../../channels/message/rendered-
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveOutboundMediaMaxBytes } from "../../media/configured-max-bytes.js";
 import type { HookRunner } from "../../plugins/hooks.js";
-import { getOrCreatePromise } from "../../shared/lazy-promise.js";
 import {
   movePendingDeliveryQueueEntryNamespace,
   replacePendingDeliveryQueueEntry,
@@ -267,11 +266,7 @@ async function failInterruptedLegacyPreparation(params: {
   await releaseSpoolArtifacts(
     collectEntrySpoolPaths(params.entry.payloads, params.stateDir),
     params.stateDir,
-  ).catch((error: unknown) => {
-    params.log.warn(
-      `Legacy delivery ${params.entry.id} failed preparation media cleanup failed: ${String(error)}`,
-    );
-  });
+  );
 }
 
 function claimLegacyPreparation(params: {
@@ -384,11 +379,7 @@ async function finalizePreparedMigration(params: {
       await releaseSpoolArtifacts(
         collectEntrySpoolPaths(acceptedPayloads, params.stateDir),
         params.stateDir,
-      ).catch((error: unknown) => {
-        params.log.warn(
-          `Legacy delivery ${params.entry.id} moved but old media cleanup failed: ${String(error)}`,
-        );
-      });
+      );
     }
     return "moved";
   } finally {
@@ -405,8 +396,6 @@ type LegacyOutboundDeliveryMigrationResult = {
   remaining: number;
 };
 
-const activeLegacyMigrations = new Map<string, Promise<LegacyOutboundDeliveryMigrationResult>>();
-
 /** Migrates every unchanged pre-D4 pending row before canonical recovery scans. */
 export async function migrateLegacyPendingOutboundDeliveries(params: {
   cfg: OpenClawConfig;
@@ -414,18 +403,6 @@ export async function migrateLegacyPendingOutboundDeliveries(params: {
   stateDir?: string;
   hookRunner?: HookRunner;
 }): Promise<LegacyOutboundDeliveryMigrationResult> {
-  const migrationKey = params.stateDir ?? "<default-state>";
-  return await getOrCreatePromise(
-    activeLegacyMigrations,
-    migrationKey,
-    () => migrateLegacyPendingOutboundDeliveriesOwned(params),
-    { evictOnSettled: true },
-  );
-}
-
-async function migrateLegacyPendingOutboundDeliveriesOwned(
-  params: Parameters<typeof migrateLegacyPendingOutboundDeliveries>[0],
-): Promise<LegacyOutboundDeliveryMigrationResult> {
   let moved = 0;
   let skipped = 0;
   const ownerId = randomUUID();

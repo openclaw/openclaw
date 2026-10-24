@@ -9,9 +9,9 @@ import { AttachmentPreview, AttachmentReadStatus } from "./chat-attachments.tsx"
 const imports = vi.hoisted(() => ({ previews: 0 }));
 
 // mock-isolation: observe loading while retaining the real preview renderer.
-vi.mock("./chat-composer-pasted-text.tsx", async (importOriginal) => {
+vi.mock("./chat-attachment-preview-strip.tsx", async (importOriginal) => {
   imports.previews += 1;
-  return importOriginal<typeof import("./chat-composer-pasted-text.tsx")>();
+  return importOriginal<typeof import("./chat-attachment-preview-strip.tsx")>();
 });
 
 it("loads preview rendering only for the first attachment without delaying read status", async () => {

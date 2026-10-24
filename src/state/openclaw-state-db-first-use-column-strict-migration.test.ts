@@ -16,6 +16,10 @@ import {
   repairOpenClawStateDatabaseSchema as repairSchema,
 } from "./openclaw-state-db.js";
 import { OPENCLAW_STATE_SCHEMA_SQL as SCHEMA_SQL } from "./openclaw-state-schema.js";
+import {
+  addPreCutoverClientCredentialTablesForTest,
+  withStateMigrationBackupForTest,
+} from "./openclaw-state-schema.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -35,6 +39,7 @@ function makePreStrictDatabaseWithoutColumns(params: {
 
   const { DatabaseSync } = requireNodeSqlite();
   using legacy = new DatabaseSync(databasePath);
+  addPreCutoverClientCredentialTablesForTest(legacy);
   const strictCreateSql = (
     readRow(
       legacy,
@@ -126,7 +131,7 @@ it.each([
   { tableName: "device_bootstrap_tokens", doctor: true },
   { tableName: "session_groups", doctor: true },
   { tableName: "device_bootstrap_tokens", doctor: false },
-])("migrates $tableName to STRICT (doctor: $doctor)", ({ tableName, doctor }) => {
+])("migrates $tableName to STRICT (doctor: $doctor)", async ({ tableName, doctor }) => {
   const stateDir = tempDirs.make("openclaw-state-first-use-");
   const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
   const bootstrap = tableName === "device_bootstrap_tokens";
@@ -145,9 +150,15 @@ it.each([
       : undefined,
   });
   // Regression: STRICT rebuild rolled back and reported an unrelated audit migration.
-  if (doctor) {
-    expect(repairSchema(options).warnings).toEqual([]);
+  if (!doctor) {
+    expect(() => openState(options)).toThrow(/backed-up migration custody/);
   }
+  await withStateMigrationBackupForTest(options, () => {
+    if (doctor) {
+      expect(repairSchema(options).warnings).toEqual([]);
+    }
+    openState(options);
+  });
   const { db } = openState(options);
   expectRow(db, "PRAGMA user_version", { user_version: SCHEMA_VERSION });
   expectRow(db, "SELECT strict FROM pragma_table_list WHERE name = ?", { strict: 1 }, tableName);

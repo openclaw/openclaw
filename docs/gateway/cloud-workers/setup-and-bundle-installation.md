@@ -27,7 +27,9 @@ Private package access uses [setup secrets](/gateway/config-cloud-workers#setup-
 
 ### Native Windows prerequisites
 
-For `windows/normal`, Crabbox executes `settings.setup` with Windows PowerShell. Write setup commands for PowerShell; Linux, macOS, and Windows (WSL2) continue to use POSIX scripts. For example, this prerequisite check uses the machine's existing Node and npm installation:
+For `windows/normal`, Crabbox executes `settings.setup` with Windows PowerShell. Write setup commands for PowerShell; Linux, macOS, and Windows (WSL2) continue to use POSIX scripts. A profile with setup cannot override its OS across that interpreter boundary: OpenClaw rejects the request before allocation and omits incompatible OS and machine choices. Use a separate profile with `settings.target: "windows/normal"` and PowerShell setup for native Windows. Profiles without setup retain all backend-supported OS choices. OpenClaw does not inspect or translate scripts; you remain responsible for compatibility between POSIX targets.
+
+For example, this prerequisite check uses the machine's existing Node and npm installation:
 
 ```powershell
 $ErrorActionPreference = 'Stop'
@@ -40,6 +42,8 @@ exit $LASTEXITCODE
 Use a Crabbox bootstrap or image that supplies a supported Node.js release and npm on the machine `PATH`, with npm's CLI installed beside `node.exe` under `node_modules/npm`. OpenClaw fails enrollment with a prerequisite message if Node or that npm installation is missing; it does not install Node. npm installs the node runtime archive, and OpenClaw extracts worker bundles with its Node archive library.
 
 Headless Windows guests must include Crabbox's managed launcher at `C:\Program Files\Crabbox\bin\Start-CrabboxDetachedProcess.ps1`. It keeps the node alive after Crabbox closes its SSH command. Enrollment fails with guidance if the launcher is absent. A hidden PowerShell parent redirects node output to `node.log` under its isolated state directory because the launcher does not inherit SSH output handles.
+
+New native Windows workers use a short, account- and lease-specific state directory on the profile's drive, leaving more path-length headroom for tools launched from their workspaces. Existing workers keep their original state directory across enrollment retries and recovery; reprovision a worker to use the shorter layout. Linux and macOS paths are unchanged.
 
 Desktop-enabled Windows workers use Crabbox's interactive desktop service; see [native desktop prerequisites](/gateway/cloud-workers/desktop#native-windows-prerequisites).
 

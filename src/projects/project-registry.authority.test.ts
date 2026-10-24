@@ -1,25 +1,20 @@
 import path from "node:path";
-import { MessageChannel } from "node:worker_threads";
+import { setImmediate } from "node:timers/promises";
 import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
-import { withWorktreeAllocationLease } from "../agents/worktrees/allocation.js";
-import {
-  takeSqliteWorkerOperationAdmissionAttachment,
-  withSqliteWorkerOperationAdmission,
-  type SqliteWorkerAdmissionFactory,
-} from "../infra/sqlite-worker-operation-admission.js";
+import type { SqliteWorkerAdmissionFactory } from "../infra/sqlite-worker-operation-admission.js";
 import type { SqliteWorkerOperationSettlement } from "../infra/sqlite-worker-operation-settlement.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { observe } from "../state/openclaw-state-lease-async.test-support.js";
 import { OpenClawStateLeaseError } from "../state/openclaw-state-lease-error.js";
-import { leaseHeartbeatState } from "../state/openclaw-state-lease-heartbeat-shared.js";
-import type { startOpenClawStateLeaseHeartbeat } from "../state/openclaw-state-lease-heartbeat.js";
-import type { createOpenClawStateLeaseWorkerStorage } from "../state/openclaw-state-lease-worker-storage.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
 import { removeClonedProjectCheckout } from "./project-clone.js";
 import { selectStoredProjectRegistry } from "./project-registry.js";
 import type { ProjectRegistryRecord } from "./project-registry.types.js";
+
+// Capture before fake timers: settlement needs a real event-loop turn.
+const nextMessageTurn = setImmediate;
 
 const fixture = vi.hoisted(() => ({
   expiresAt: 40_000,
@@ -32,7 +27,6 @@ const fixture = vi.hoisted(() => ({
   captureWorkerGuard: vi.fn<(assertCurrent: () => void) => void>(),
   assertDatabaseCurrent: vi.fn<() => void>(),
   release: vi.fn(),
-  startHeartbeat: vi.fn<typeof startOpenClawStateLeaseHeartbeat>(),
   forbiddenNative: vi.fn(() => {
     throw new Error("Project authority controls must not open SQLite, Git, or heartbeat workers");
   }),
@@ -91,56 +85,7 @@ vi.mock("../state/openclaw-state-db-async-lifecycle.js", async (importOriginal) 
 vi.mock("../state/openclaw-state-lease-worker-storage.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../state/openclaw-state-lease-worker-storage.js")>()),
   acquireLease: async () => ({ kind: "acquired", expiresAt: fixture.expiresAt }),
-  createOpenClawStateLeaseWorkerStorage: (
-    context: OpenClawStateWorkerContext,
-  ): ReturnType<typeof createOpenClawStateLeaseWorkerStorage> => ({
-    path: context.admission.databasePath,
-    assertCurrent: () => context.admission.assertCurrent(),
-    async withRetainedStartup(run, assertCurrent) {
-      context.admission.assertCurrent();
-      assertCurrent();
-      return await run(context);
-    },
-    async acquire(owner) {
-      return await owner.runLifecycle("acquire", async (admission) => {
-        admission.assertCurrent();
-        const settled = createDeferredCore<SqliteWorkerOperationSettlement>();
-        const retained = admission.createAdmission({ settled: settled.promise });
-        try {
-          const attachment = withSqliteWorkerOperationAdmission(
-            retained.admission,
-            takeSqliteWorkerOperationAdmissionAttachment,
-          );
-          if (
-            !isRecord(attachment) ||
-            attachment.kind !== "state-lease-expiry" ||
-            !(attachment.observation instanceof SharedArrayBuffer)
-          ) {
-            throw new Error("Missing owner-bound expiry observation");
-          }
-          expect(attachment.identity).toEqual(admission.identity);
-          Atomics.store(
-            new BigInt64Array(attachment.observation),
-            leaseHeartbeatState.expiresAt,
-            BigInt(fixture.expiresAt),
-          );
-          return { kind: "acquired" as const, expiresAt: fixture.expiresAt };
-        } finally {
-          retained.admission.finish();
-          settled.resolve({ kind: "completed" });
-        }
-      });
-    },
-    verify: fixture.forbiddenNative,
-    renew: fixture.forbiddenNative,
-    startTimer: fixture.forbiddenNative,
-    async release(owner) {
-      await owner.runLifecycle("release", async (admission) => {
-        admission.assertCurrent();
-        fixture.release();
-      });
-    },
-  }),
+  createOpenClawStateLeaseWorkerStorage: fixture.forbiddenNative,
 }));
 vi.mock("../state/openclaw-state-lease-storage.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../state/openclaw-state-lease-storage.js")>()),
@@ -167,8 +112,9 @@ vi.mock("../state/openclaw-state-lease-storage.js", async (importOriginal) => ({
   },
   releaseOpenClawStateLease: fixture.release,
 }));
+// mock-isolation: project checkout leases must not start native heartbeat workers.
 vi.mock("../state/openclaw-state-lease-heartbeat.js", () => ({
-  startOpenClawStateLeaseHeartbeat: fixture.startHeartbeat,
+  startOpenClawStateLeaseHeartbeat: fixture.forbiddenNative,
 }));
 
 type WorkerOptions = {
@@ -198,10 +144,6 @@ vi.mock("../state/openclaw-state-worker-store.js", () => ({
     try {
       return await operation({
         execute: (command) => {
-          if (command.type === "worktrees.recoverPending") {
-            settled.resolve({ kind: "completed" });
-            return Promise.resolve();
-          }
           settled.resolve(fixture.settlement());
           return command.type === "projects.removeCheckoutReference"
             ? fixture.removeReference()
@@ -236,17 +178,24 @@ async function select(signal?: AbortSignal): Promise<Selection> {
   return selected;
 }
 
-async function nextMessageTurn(): Promise<void> {
-  const { port1, port2 } = new MessageChannel();
+function thrownBy(run: () => void): unknown {
   try {
-    await new Promise<void>((resolve) => {
-      port1.once("message", () => resolve());
-      port2.postMessage(undefined);
-    });
-  } finally {
-    port1.close();
-    port2.close();
+    run();
+  } catch (error) {
+    return error;
   }
+  return undefined;
+}
+
+function observeFailure(operation: Promise<unknown>) {
+  const observed = observe(operation);
+  const error = observed.outcome.then((result) => {
+    if (result.ok) {
+      throw new Error("Operation unexpectedly succeeded");
+    }
+    return result.error;
+  });
+  return { settled: observed.settled, error };
 }
 
 beforeEach(() => {
@@ -254,7 +203,6 @@ beforeEach(() => {
   fixture.forbiddenNative.mockImplementation(() => {
     throw new Error("Project authority controls must not open SQLite, Git, or heartbeat workers");
   });
-  fixture.startHeartbeat.mockImplementation(fixture.forbiddenNative);
   fixture.resolveProject.mockResolvedValue(project);
   fixture.removeReference.mockResolvedValue("final");
   fixture.removeCheckout.mockResolvedValue();
@@ -278,47 +226,29 @@ it("retains only live checkout rollback authority after cancellation inside the 
   const selected = await select(caller.signal);
   let escaped: Current | undefined;
   let workerGuard: (() => void) | undefined;
-  let observedProject: ProjectRegistryRecord | undefined;
-  let signalAborted: boolean | undefined;
-  let signalReason: unknown;
-  let operationFailure: unknown;
-  let workerFailure: unknown;
+  const inspect = vi.fn((current: Current) => ({
+    project: current.project,
+    signalAborted: current.signal.aborted,
+    signalReason: current.signal.reason,
+    operationFailure: thrownBy(current.assertCurrent),
+    workerFailure: thrownBy(() => workerGuard?.()),
+    workerGuard,
+    checkoutCurrent: current.assertCheckoutCurrent(),
+  }));
   let revokedDatabaseFailure: unknown;
-  const rollbackEffect = vi.fn();
-  const forwardEffect = vi.fn();
   fixture.captureWorkerGuard.mockImplementation((guard) => {
     workerGuard = guard;
   });
 
   const operation = selected.withCurrent(async (current) => {
     escaped = current;
-    observedProject = current.project;
     caller.abort(abortCause);
-    signalAborted = current.signal.aborted;
-    signalReason = current.signal.reason;
-    try {
-      current.assertCurrent();
-      forwardEffect();
-    } catch (error) {
-      operationFailure = error;
-    }
-    try {
-      workerGuard?.();
-    } catch (error) {
-      workerFailure = error;
-    }
-    current.assertCheckoutCurrent();
-    rollbackEffect();
-    try {
-      fixture.assertDatabaseCurrent.mockImplementation(() => {
-        throw changedDatabase;
-      });
-      current.assertCheckoutCurrent();
-    } catch (error) {
-      revokedDatabaseFailure = error;
-    } finally {
-      fixture.assertDatabaseCurrent.mockReset();
-    }
+    inspect(current);
+    fixture.assertDatabaseCurrent.mockImplementation(() => {
+      throw changedDatabase;
+    });
+    revokedDatabaseFailure = thrownBy(current.assertCheckoutCurrent);
+    fixture.assertDatabaseCurrent.mockReset();
     throw abortCause;
   });
 
@@ -326,15 +256,14 @@ it("retains only live checkout rollback authority after cancellation inside the 
     code: "OPENCLAW_STATE_LEASE_ABORTED",
     cause: abortCause,
   });
-  expect(observedProject).toEqual(project);
-  expect(signalAborted).toBe(true);
-  expect(signalReason).toBe(abortCause);
-  expect(rollbackEffect).toHaveBeenCalledOnce();
-  expect(operationFailure).toBe(abortCause);
-  expect(workerGuard).toBeTypeOf("function");
-  expect(workerFailure).toBe(abortCause);
+  const observed = inspect.mock.results[0]?.value;
+  expect(observed?.project).toEqual(project);
+  expect(observed?.signalAborted).toBe(true);
+  expect(observed?.signalReason).toBe(abortCause);
+  expect(observed?.operationFailure).toBe(abortCause);
+  expect(observed?.workerGuard).toBeTypeOf("function");
+  expect(observed?.workerFailure).toBe(abortCause);
   expect(revokedDatabaseFailure).toBe(changedDatabase);
-  expect(forwardEffect).not.toHaveBeenCalled();
   expect(escaped).toBeDefined();
   expect(() => escaped?.assertCheckoutCurrent()).toThrow();
   expect(() => escaped?.assertCurrent()).toThrow();
@@ -357,32 +286,21 @@ it.each([
     const abortCause = new Error("Caller canceled during settlement drain");
     const settlementError = new Error("Native result remained unknown");
     let escaped: Current | undefined;
-    let observed = false;
     fixture.settlement.mockReturnValue(retained.promise);
     fixture.afterCallback.mockImplementation(() => callbackExited.resolve());
     const operation = selected.withCurrent(async (current) => {
       escaped = current;
       throw failure;
     });
-    const joined = operation.then(
-      (value) => {
-        observed = true;
-        return { ok: true as const, value };
-      },
-      (error: unknown) => {
-        observed = true;
-        return { ok: false as const, error };
-      },
-    );
+    const { settled, error: joined } = observeFailure(operation);
     try {
-      await Promise.race([
+      await awaitGateBeforeSettlement(
         callbackExited.promise,
-        joined.then(() => {
-          throw new Error("Selector settled before its retained worker callback exited");
-        }),
-      ]);
+        joined,
+        "Selector settled before its retained worker callback exited",
+      );
       await nextMessageTurn();
-      expect(observed).toBe(false);
+      expect(settled()).toBe(false);
       expect(fixture.release).not.toHaveBeenCalled();
       expect(escaped).toBeDefined();
       expect(() => escaped?.assertCheckoutCurrent()).toThrow();
@@ -391,25 +309,21 @@ it.each([
         caller.abort(abortCause);
       }
       await nextMessageTurn();
-      expect(observed).toBe(false);
+      expect(settled()).toBe(false);
       retained.resolve(
         kind === "completed"
           ? { kind }
           : { kind, error: kind === "unknown" ? settlementError : failure },
       );
-      const result = await joined;
-      expect(result.ok).toBe(false);
-      if (result.ok) {
-        throw new Error("Selector unexpectedly succeeded");
-      }
-      const causes = collectNestedErrorCandidates(result.error);
+      const error = await joined;
+      const causes = collectNestedErrorCandidates(error);
       if (cancel) {
-        expect(result.error).toMatchObject({
+        expect(error).toMatchObject({
           code: kind === "unknown" ? "outcome-unknown" : "OPENCLAW_STATE_LEASE_ABORTED",
         });
         expect(causes).toContain(abortCause);
       } else {
-        expect(result.error).toBe(failure);
+        expect(error).toBe(failure);
       }
       if (kind === "unknown") {
         expect(causes).toContain(failure);
@@ -417,89 +331,6 @@ it.each([
         expect(fixture.release).not.toHaveBeenCalled();
       } else {
         expect(fixture.release).toHaveBeenCalledOnce();
-      }
-    } finally {
-      retained.resolve({ kind: "completed" });
-      await joined;
-    }
-  },
-);
-
-it.each(["known", "unknown", "wrapped-unknown"] as const)(
-  "preserves the selected %s outcome through allocation cancellation",
-  async (outcome) => {
-    fixture.startHeartbeat.mockReturnValueOnce({
-      ready: Promise.resolve(),
-      assertRunning: vi.fn(),
-      verify: async () => fixture.expiresAt,
-      renew: fixture.forbiddenNative,
-      holdOwnerFence: fixture.forbiddenNative,
-      close: fixture.forbiddenNative,
-      stop: async () => 0,
-    });
-    const caller = new AbortController();
-    const abortCause = new Error("Caller canceled the allocated operation");
-    const callbackFailure = new Error("Selected callback failed");
-    const settlementError = new Error("Selected native outcome remained unknown");
-    const cleanupFailure = new Error("Related cleanup failed");
-    const retained = createDeferredCore<SqliteWorkerOperationSettlement>();
-    fixture.settlement.mockReturnValue(retained.promise);
-    let selectedFailure: unknown;
-    const operation = withWorktreeAllocationLease(
-      { env: { OPENCLAW_STATE_DIR: "/synthetic-state" }, signal: caller.signal },
-      async (allocation) => {
-        const selected = await select(allocation.signal);
-        try {
-          return await selected.withCurrent(async () => {
-            caller.abort(abortCause);
-            retained.resolve(
-              outcome === "known"
-                ? { kind: "completed" }
-                : { kind: "unknown", error: settlementError },
-            );
-            throw callbackFailure;
-          });
-        } catch (error) {
-          selectedFailure =
-            outcome === "wrapped-unknown"
-              ? new AggregateError([error, cleanupFailure], "Selected work and cleanup failed", {
-                  cause: error,
-                })
-              : error;
-          throw selectedFailure;
-        }
-      },
-    );
-    const joined = operation.then(
-      (value) => ({ ok: true as const, value }),
-      (error: unknown) => ({ ok: false as const, error }),
-    );
-    try {
-      const result = await joined;
-      expect(result.ok).toBe(false);
-      if (result.ok) {
-        throw new Error("Cancelled allocation unexpectedly succeeded");
-      }
-      const causes = collectNestedErrorCandidates(result.error);
-      expect(causes).toContain(abortCause);
-      if (outcome === "known") {
-        expect(result.error).toMatchObject({
-          code: "OPENCLAW_STATE_LEASE_ABORTED",
-          message: "managed worktree allocation lease operation was aborted",
-          cause: abortCause,
-        });
-      } else {
-        expect(result.error).toMatchObject({ code: "outcome-unknown" });
-        if (outcome === "wrapped-unknown") {
-          expect(causes).toContain(selectedFailure);
-        } else {
-          expect(result.error).toBe(selectedFailure);
-        }
-        expect(causes).toContain(callbackFailure);
-        expect(causes).toContain(settlementError);
-        if (outcome === "wrapped-unknown") {
-          expect(causes).toContain(cleanupFailure);
-        }
       }
     } finally {
       retained.resolve({ kind: "completed" });

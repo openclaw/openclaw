@@ -41,8 +41,8 @@ function createFixture(stateDir: string) {
     queue,
     monitor: (options: Parameters<MakeMonitor>[0]) =>
       createTelegramIngressMonitor({ queue, ...monitorDefaults, ...options }),
-    enqueue: async (updateId: number) => {
-      const payload = updatePayload(updateId);
+    enqueue: async (updateId: number, callback = false) => {
+      const payload = callback ? callbackPayload(updateId) : updatePayload(updateId);
       const eventId = String(updateId).padStart(16, "0");
       const laneKey = telegramSpooledUpdateLaneKey(payload.update);
       await queue.enqueue(eventId, payload, { laneKey });
@@ -70,6 +70,22 @@ function updatePayload(updateId: number) {
     update: {
       update_id: updateId,
       message: { text: "hello", from: { id: 111 }, chat: { id: 111, type: "private" } },
+    },
+  } satisfies TelegramSpooledUpdatePayload;
+}
+
+function callbackPayload(updateId: number) {
+  const payload = updatePayload(updateId);
+  return {
+    ...payload,
+    update: {
+      update_id: updateId,
+      callback_query: {
+        id: `callback-${updateId}`,
+        data: "choice",
+        from: { id: 111 },
+        message: payload.update.message,
+      },
     },
   } satisfies TelegramSpooledUpdatePayload;
 }
@@ -110,13 +126,7 @@ async function createTelegramMessageDispatchReplayForgetError(): Promise<unknown
   throw new Error("expected Telegram dispatch rollback failure");
 }
 
-function deferred<T = void>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((res) => {
-    resolve = res;
-  });
-  return { promise, resolve };
-}
+const deferred = <T = void>() => Promise.withResolvers<T>();
 
 async function startDeferred(makeMonitor: MakeMonitor, name: string) {
   const participant: { current?: TelegramSpooledReplayDeferredParticipant } = {};
@@ -139,6 +149,40 @@ async function waitPending(queue: Queue, rows: Array<Record<string, unknown>>) {
 
 describe("createTelegramIngressMonitor", () => {
   it.each([
+    {
+      name: "wrapped callback authority rejection",
+      callback: true,
+      error: new Error("spooled callback failed", {
+        cause: new Error("Gateway requester authority changed"),
+      }),
+      reason: "callback-authority-changed",
+      message: "Gateway requester authority changed",
+    },
+    {
+      name: "deferred callback authority rejection",
+      callback: true,
+      deferred: true,
+      error: new Error("Gateway requester authority changed"),
+      reason: "callback-authority-changed",
+      message: "Gateway requester authority changed",
+    },
+    {
+      name: "expired callback query",
+      callback: true,
+      error: new GrammyError(
+        "Call to 'answerCallbackQuery' failed",
+        {
+          ok: false,
+          error_code: 400,
+          description:
+            "Bad Request: query is too old and response timeout expired or query ID is invalid",
+        },
+        "answerCallbackQuery",
+        { callback_query_id: "expired-callback" },
+      ),
+      reason: "callback-query-expired",
+      message: "query is too old",
+    },
     {
       name: "blocked Telegram recipient",
       error: telegramSendError(403, "Forbidden: bot was blocked by the user"),
@@ -165,18 +209,38 @@ describe("createTelegramIngressMonitor", () => {
       reason: "session-archived",
       message: "Restore the archived session before starting work.",
     },
-  ])("dead-letters a $name without retrying it", async ({ error, reason, message }) => {
+  ])("dead-letters a $name and releases the next same-chat update", async (testCase) => {
+    const { error, reason, message } = testCase;
+    const callback = "callback" in testCase && testCase.callback;
     await withTempState(async ({ queue, monitor: makeMonitor, enqueue }) => {
-      const { eventId } = await enqueue(3);
-      const dispatch = vi.fn(async () => ({ kind: "failed-retryable" as const, error }));
+      const { eventId } = await enqueue(3, callback);
+      await enqueue(4);
+      const dispatch = vi
+        .fn<MonitorOptions["dispatch"]>()
+        .mockImplementationOnce(async () => {
+          if ("deferred" in testCase && testCase.deferred) {
+            const participant = createTelegramSpooledReplayDeferredParticipant("callback");
+            participant?.settle({ kind: "failed-retryable", error });
+            return undefined;
+          }
+          return { kind: "failed-retryable", error };
+        })
+        .mockResolvedValue({ kind: "completed" });
       const monitor = makeMonitor({ dispatch });
 
       monitor.start();
       await monitor.waitForIdle();
 
-      expect(dispatch).toHaveBeenCalledOnce();
+      expect(dispatch.mock.calls.map(([update]) => update)).toEqual([
+        (callback ? callbackPayload(3) : updatePayload(3)).update,
+        updatePayload(4).update,
+      ]);
       expect(await queue.listFailed?.({ limit: "all" })).toEqual([
-        expect.objectContaining({ id: eventId, reason, message: expect.stringContaining(message) }),
+        expect.objectContaining({
+          id: eventId,
+          reason,
+          message: expect.stringContaining(message),
+        }),
       ]);
       expect(await queue.listPending({ limit: "all" })).toEqual([]);
       await monitor.stop();
@@ -184,82 +248,71 @@ describe("createTelegramIngressMonitor", () => {
   });
 
   it("keeps a fresh admission lane when the forum cache changes during ACK", async () => {
-    await withOpenClawTestState(
-      { layout: "state-only", prefix: "openclaw-telegram-ingress-drain-", applyEnv: false },
-      async ({ stateDir }) => {
-        const queue = createChannelIngressQueueForTests<TelegramSpooledUpdatePayload>({
-          channelId: "telegram",
-          accountId: "default",
-          stateDir,
-        });
-        const update = {
-          update_id: 17,
-          message: {
-            text: "hello",
-            from: { id: 111 },
-            chat: { id: -9017, type: "supergroup" },
-          },
-        };
+    await withTempState(async ({ queue, monitor: makeMonitor }) => {
+      const update = {
+        update_id: 17,
+        message: {
+          text: "hello",
+          from: { id: 111 },
+          chat: { id: -9017, type: "supergroup" },
+        },
+      };
+      await resolveTelegramForumFlag({
+        chatId: -9017,
+        chatType: "supergroup",
+        isGroup: true,
+        isForum: false,
+      });
+      const ackEntered = deferred();
+      const ackRelease = deferred();
+      const receivedAt = 1_700_000_000_000;
+      const delivered: Array<{ laneKey: string | undefined; receivedAt: number }> = [];
+      const monitor = makeMonitor({
+        botInfo: telegramBotInfoForTest,
+        onDurableAdmission: async () => {
+          ackEntered.resolve();
+          await ackRelease.promise;
+        },
+        dispatch: async (raw, lifecycle) => {
+          const [claim] = await queue.listClaims();
+          delivered.push({
+            laneKey: claim?.laneKey,
+            receivedAt: resolveTelegramUpdateReceivedAtSeconds(raw),
+          });
+          await lifecycle.onAdopted();
+          return { kind: "completed" };
+        },
+      });
+      monitor.start();
+      await monitor.waitForIdle();
+      const admission = monitor.admit(update, { receivedAt });
+      try {
+        await ackEntered.promise;
+        expect(await queue.listClaims()).toEqual([
+          expect.objectContaining({ laneKey: "telegram:-9017", attempts: 0 }),
+        ]);
+        expect(delivered).toEqual([]);
         await resolveTelegramForumFlag({
           chatId: -9017,
           chatType: "supergroup",
           isGroup: true,
-          isForum: false,
+          isForum: true,
         });
-        const ackEntered = deferred();
-        const ackRelease = deferred();
-        const receivedAt = 1_700_000_000_000;
-        const delivered: Array<{ laneKey: string | undefined; receivedAt: number }> = [];
-        const monitor = createTelegramIngressMonitor({
-          queue,
-          getConfig: () => cfg,
-          accountId: "default",
-          botInfo: telegramBotInfoForTest,
-          onDurableAdmission: async () => {
-            ackEntered.resolve();
-            await ackRelease.promise;
-          },
-          dispatch: async (raw, lifecycle) => {
-            const [claim] = await queue.listClaims();
-            delivered.push({
-              laneKey: claim?.laneKey,
-              receivedAt: resolveTelegramUpdateReceivedAtSeconds(raw),
-            });
-            await lifecycle.onAdopted();
-            return { kind: "completed" };
-          },
-        });
-        monitor.start();
+        ackRelease.resolve();
+        await admission;
         await monitor.waitForIdle();
-        const admission = monitor.admit(update, { receivedAt });
-        try {
-          await ackEntered.promise;
-          expect(await queue.listClaims()).toEqual([
-            expect.objectContaining({ laneKey: "telegram:-9017", attempts: 0 }),
-          ]);
-          expect(delivered).toEqual([]);
-          await resolveTelegramForumFlag({
-            chatId: -9017,
-            chatType: "supergroup",
-            isGroup: true,
-            isForum: true,
-          });
-          ackRelease.resolve();
-          await admission;
-          await monitor.waitForIdle();
-          expect(delivered).toEqual([{ laneKey: "telegram:-9017", receivedAt: 1_700_000_000 }]);
-          expect(await monitor.admit(update)).toMatchObject({
-            kind: "durable",
-            queueResult: { kind: "completed" },
-          });
-          expect(delivered).toHaveLength(1);
-        } finally {
-          ackRelease.resolve();
-          await admission;
-          await monitor.stop();
-        }
-      },
-    );
+        expect(delivered).toEqual([{ laneKey: "telegram:-9017", receivedAt: 1_700_000_000 }]);
+        expect(await monitor.admit(update)).toMatchObject({
+          kind: "durable",
+          queueResult: { kind: "completed" },
+        });
+        expect(delivered).toHaveLength(1);
+      } finally {
+        ackRelease.resolve();
+        await admission;
+        await monitor.stop();
+      }
+    });
   });
 
   it("reconciles a cached General topic when private bot topics are disabled", async () => {
@@ -382,6 +435,7 @@ describe("createTelegramIngressMonitor", () => {
 
   it.each([
     new Error("late provider blip"),
+    new Error("Gateway requester authority changed"),
     Object.assign(new Error("workspace is not ready"), {
       name: "SessionWorkStartError",
       reason: "workspace_pending",

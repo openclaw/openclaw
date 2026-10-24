@@ -2,8 +2,10 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { UserModelAccount } from "../../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
 import type { ModelCatalogResult } from "../../api/types.ts";
+import { flush } from "../../test-helpers/solid-settle.ts";
+import { backgroundCreateOptions } from "./draft-submission-flow.test-support.ts";
 import { createDraftTitleFixture } from "./draft-title.test-support.ts";
-import { renderControl } from "./model-control.test-support.ts";
+import { renderControl, waitForModelControl } from "./model-control.test-support.ts";
 
 let releaseAccount: (() => void) | undefined;
 beforeEach(() => {
@@ -79,8 +81,15 @@ function accountTitleFixture(preview?: ReturnType<typeof createDeferred<ModelCat
   Object.assign(context.gateway.snapshot, { selfUser: { id: "person-a", name: "Person A" } });
   place.modelControl.load(context, "main", true, { agent: place.selectedAgent() });
   const draw = () => renderControl(place.modelControl, context, "main", place.selectedAgent());
-  const select = (value: string) =>
-    draw().querySelector<HTMLButtonElement>(`[data-chat-account-option="${value}"]`)!.click();
+  const select = (value: string) => {
+    const container = draw();
+    const selector = `[data-chat-account-option="${value}"]`;
+    if (!container.querySelector(selector)) {
+      container.querySelector<HTMLButtonElement>("[data-chat-account-group-toggle]")!.click();
+      flush();
+    }
+    container.querySelector<HTMLButtonElement>(selector)!.click();
+  };
   releaseAccount = () => {
     preview?.resolve(confirmed);
     place.modelControl.reset();
@@ -92,7 +101,13 @@ function accountTitleFixture(preview?: ReturnType<typeof createDeferred<ModelCat
     titleRequest,
     select,
     chooseAccount: async (account: UserModelAccount) => {
-      draw().querySelector<HTMLButtonElement>("[data-chat-account-group-toggle]")!.click();
+      const container = await waitForModelControl(
+        place.modelControl,
+        context,
+        "main",
+        place.selectedAgent(),
+      );
+      container.querySelector<HTMLButtonElement>("[data-chat-account-group-toggle]")!.click();
       await vi.advanceTimersByTimeAsync(0);
       expect(draw().textContent).toContain(account.label);
       select(`account:${account.authProfileId}`);
@@ -121,7 +136,7 @@ it("keeps a title handoff on the selected draft account before update", async ()
     expect.objectContaining({
       model: `test/primary@${accounts[1].authProfileId}`,
     }),
-    { reconciliation: "background" },
+    backgroundCreateOptions,
   );
   expect(createdParams(context)).not.toHaveProperty("displayName");
 });
@@ -191,7 +206,7 @@ it.each(["explicit worktree", "pending", "incognito", "retry", "stale"] as const
           displayName: "Repair naming",
           worktreeName: "my-explicit-branch",
         }),
-        { reconciliation: "background" },
+        backgroundCreateOptions,
       );
     } else if (state === "retry") {
       await flow.submit();

@@ -43,6 +43,8 @@ export async function readArtwork(shell: Locator) {
     const tokenImage = getComputedStyle(probe).backgroundImage;
     const canvasColor = getComputedStyle(probe).backgroundColor;
     const mutedColor = getComputedStyle(probe).color;
+    probe.style.backgroundColor = "var(--bg)";
+    const nativeCanvasColor = getComputedStyle(probe).backgroundColor;
     probe.remove();
 
     const match = /^url\(["']?(.*?)["']?\)$/u.exec(style.backgroundImage);
@@ -99,6 +101,9 @@ export async function readArtwork(shell: Locator) {
     if (!anchor) {
       throw new Error("Expected a real composer or Appearance description on the app canvas");
     }
+    const nativeCanvas = anchor.closest<HTMLElement>(".sidebar-region--mobile-host");
+    const nativeStyle = nativeCanvas ? getComputedStyle(nativeCanvas) : null;
+    const nativeBounds = nativeCanvas?.getBoundingClientRect();
     for (const start of [anchor, transcript]) {
       for (
         let parent: Element | null | undefined = start;
@@ -108,9 +113,10 @@ export async function readArtwork(shell: Locator) {
         const parentStyle = getComputedStyle(parent);
         ancestorCount++;
         if (
-          color(parentStyle.backgroundColor)[3] !== 0 ||
-          parentStyle.backgroundImage !== "none" ||
-          Number(parentStyle.opacity) !== 1
+          parent !== nativeCanvas &&
+          (color(parentStyle.backgroundColor)[3] !== 0 ||
+            parentStyle.backgroundImage !== "none" ||
+            Number(parentStyle.opacity) !== 1)
         ) {
           opaqueAncestors.push(parent.className);
         }
@@ -146,6 +152,18 @@ export async function readArtwork(shell: Locator) {
       image.naturalWidth * scale,
       image.naturalHeight * scale,
     );
+
+    // The approved mobile pane owns an opaque reading canvas above the app
+    // artwork. Contrast must include that surface before the composer fill.
+    if (nativeStyle && nativeBounds) {
+      pixels.fillStyle = nativeStyle.backgroundColor;
+      pixels.fillRect(
+        nativeBounds.x - bounds.x,
+        nativeBounds.y - bounds.y,
+        nativeBounds.width,
+        nativeBounds.height,
+      );
+    }
 
     const luminance = (red: number, green: number, blue: number) => {
       const linear = (channel: number) => {
@@ -203,6 +221,7 @@ export async function readArtwork(shell: Locator) {
     }
     return {
       backgroundImage: style.backgroundImage,
+      canvasOwner: nativeCanvas ? "native-mobile" : "shell-artwork",
       canvasContrast,
       composerContrast,
       maxColorSpread,
@@ -215,7 +234,15 @@ export async function readArtwork(shell: Locator) {
           centered: style.backgroundPosition === "50% 50%",
           cover: style.backgroundSize === "cover",
           painted: paintedPixels > 0,
-          visible: visiblePaintedPixels > 0,
+          visible: nativeBounds
+            ? nativeBounds.width > 0 && nativeBounds.height > 0
+            : visiblePaintedPixels > 0,
+          nativeCanvas:
+            !nativeStyle ||
+            (nativeStyle.backgroundColor === nativeCanvasColor &&
+              color(nativeStyle.backgroundColor)[3] === 255 &&
+              nativeStyle.backgroundImage === "none" &&
+              Number(nativeStyle.opacity) === 1),
           ancestors: ancestorCount > 0,
           sidebars: readingSurfaces.length > 0 && readingSurfaces.every((alpha) => alpha === 255),
         })
@@ -232,6 +259,8 @@ export function expectAppArtwork(artwork: Awaited<ReturnType<typeof readArtwork>
 }
 
 export async function expectMobileComposer(composer: Locator) {
+  // Sample the final editor surface, after its focus-triggered height reveal.
+  await composer.evaluate(finishElementAnimations);
   const layout = await composer.evaluate((element) => {
     const rect = element.getBoundingClientRect();
     const textarea = element.querySelector("textarea");

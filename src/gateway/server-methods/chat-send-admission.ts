@@ -428,7 +428,7 @@ export async function admitChatSend(params: ChatSendAdmissionParams) {
   try {
     using workPhase = diagnostics?.scope("detail.admission.work");
     const preparedInterrupt = await prepareChatSendInterruptAdmission({
-      operator: { ...params, runId: clientRunId },
+      operator: { ...params, runId: clientRunId, spawnedBy: session.entry?.spawnedBy },
       interruptCapture: runInterruptCapture,
       entry: admittedRunAbort.entry,
       assertCurrent: params.assertCurrent,

@@ -593,7 +593,7 @@ describe("inference relay capacity", () => {
         const stale = await open();
         const next = await open();
         const streams = await holdUploads();
-        const registration = proxy.context.register({
+        const registration = await proxy.context.register({
           threadId: "root",
           text: "synthetic persona",
           signal: new AbortController().signal,
@@ -684,7 +684,8 @@ describe("inference relay capacity", () => {
   ])(
     "expires a stalled upstream $phase by $expiry and reclaims admission",
     async ({ phase, expiry }) => {
-      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+      // The relay and ws both compare the elapsed deadline while timers advance.
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date", "performance"] });
       const handlers = server.listeners("upgrade");
       server.removeAllListeners("upgrade");
       const received = createDeferred<void>();

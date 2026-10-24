@@ -10,6 +10,17 @@ import config from "../../tsdown.ai.config.ts";
 import { createScriptTestHarness } from "./test-helpers.js";
 
 const { createTempDir } = createScriptTestHarness();
+function linkDependencies(root: string, dependencies: Record<string, string>) {
+  for (const dependency of Object.keys(dependencies)) {
+    const destination = path.join(root, "node_modules", dependency);
+    fs.mkdirSync(path.dirname(destination), { recursive: true });
+    fs.symlinkSync(
+      fs.realpathSync(path.join("packages/ai/node_modules", dependency)),
+      destination,
+      "junction",
+    );
+  }
+}
 
 it("streams Mistral from the built AI package without installing the SDK", async () => {
   const root = createTempDir("openclaw-ai-package-");
@@ -26,15 +37,7 @@ it("streams Mistral from the built AI package without installing the SDK", async
     logLevel: "silent",
   });
   try {
-    for (const dependency of Object.keys(manifest.dependencies)) {
-      const destination = path.join(root, "node_modules", dependency);
-      fs.mkdirSync(path.dirname(destination), { recursive: true });
-      fs.symlinkSync(
-        fs.realpathSync(path.join("packages/ai/node_modules", dependency)),
-        destination,
-        "junction",
-      );
-    }
+    linkDependencies(root, manifest.dependencies);
     expect(fs.readFileSync(path.join(outDir, "mistral.LICENSE"), "utf8")).toContain(
       "Apache License",
     );
@@ -82,15 +85,7 @@ it("streams Mistral from the built AI package without installing the SDK", async
     `;
     for (const mode of ["without-telemetry", "with-telemetry"]) {
       if (mode === "with-telemetry") {
-        for (const dependency of Object.keys(manifest.peerDependencies)) {
-          const destination = path.join(root, "node_modules", dependency);
-          fs.mkdirSync(path.dirname(destination), { recursive: true });
-          fs.symlinkSync(
-            fs.realpathSync(path.join("packages/ai/node_modules", dependency)),
-            destination,
-            "junction",
-          );
-        }
+        linkDependencies(root, manifest.peerDependencies);
       }
       await promisify(execFile)(
         resolveTestNodeExecPath(),

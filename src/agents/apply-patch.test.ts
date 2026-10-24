@@ -20,6 +20,12 @@ function makeDir(workspace = false) {
   return tempDirs.make("openclaw-patch-", workspace ? process.cwd() : undefined);
 }
 
+async function makeFile(content: string, name = "source.txt", dir = makeDir()) {
+  const file = path.join(dir, name);
+  await fs.writeFile(file, content);
+  return { dir, file };
+}
+
 function buildAddFilePatch(targetPath: string, content = "escaped"): string {
   return `*** Begin Patch\n*** Add File: ${targetPath}\n+${content}\n*** End Patch`;
 }
@@ -34,9 +40,7 @@ function buildUpdatePatch(target: string, hunk: string, moveTo?: string): string
 }
 
 it("fences apply_patch after a file read when permissions change", async () => {
-  const dir = makeDir();
-  const target = path.join(dir, "permission.txt");
-  await fs.writeFile(target, "original\n");
+  const { dir, file: target } = await makeFile("original\n", "permission.txt");
   const generation = new AbortController();
   const readFile = fs.readFile.bind(fs);
   const read = vi
@@ -53,10 +57,7 @@ it("fences apply_patch after a file read when permissions change", async () => {
     await expect(
       tool.execute(
         "permission-patch",
-        {
-          input:
-            "*** Begin Patch\n*** Update File: permission.txt\n@@\n-original\n+replacement\n*** End Patch",
-        },
+        { input: buildUpdatePatch("permission.txt", "-original\n+replacement") },
         generation.signal,
       ),
     ).rejects.toThrow("Permission change");
@@ -76,19 +77,17 @@ describe("applyPatch", () => {
     { name: "syntax", input: "bad patch", message: "The first line of the patch" },
     {
       name: "missing anchor",
-      input: "*** Begin Patch\n*** Update File: source.txt\n@@\n-absent\n+after\n*** End Patch",
+      input: buildUpdatePatch("source.txt", "-absent\n+after"),
       message: "Failed to find expected lines",
     },
     {
       name: "ambiguous anchor",
-      input: "*** Begin Patch\n*** Update File: source.txt\n@@\n-target\n+after\n*** End Patch",
+      input: buildUpdatePatch("source.txt", "-target\n+after"),
       message: "Found 2 occurrences",
     },
   ])("classifies $name failures as trusted tool input errors", async ({ input, message }) => {
-    const dir = makeDir();
-    const file = path.join(dir, "source.txt");
     const content = "target\ntarget\n";
-    await fs.writeFile(file, content);
+    const { dir, file } = await makeFile(content);
     const error = await createApplyPatchTool({ cwd: dir })
       .execute("invalid-patch", { input })
       .catch((caught: unknown) => caught);
@@ -100,10 +99,7 @@ describe("applyPatch", () => {
 
   const priceUpdatePatch = buildUpdatePatch("source.txt", "-price: 5\n+price: 7");
 
-  it.each([
-    { name: "workspace-confined host", workspaceOnly: true },
-    { name: "unconfined host", workspaceOnly: false },
-  ])("rejects invalid UTF-8 in $name updates without changing bytes", async ({ workspaceOnly }) => {
+  it.each([true, false])("rejects invalid UTF-8 (workspaceOnly=%s)", async (workspaceOnly) => {
     const dir = makeDir();
     const filePath = path.join(dir, "source.txt");
     const original = Buffer.concat([Buffer.from("heading\nprice: 5\n"), Buffer.from([0xff, 0xfe])]);
@@ -125,15 +121,14 @@ describe("applyPatch", () => {
     expect(memory.files.get("/sandbox/source.txt")).toBe("\uFEFFheading\nprice: 7\n");
   });
 
-  it.each([
-    { name: "workspace-confined host", workspaceOnly: true },
-    { name: "unconfined host", workspaceOnly: false },
-  ])(
-    "keeps existing contents in $name when an add hunk targets them",
-    async ({ workspaceOnly }) => {
-      const dir = makeDir(true);
-      const target = path.join(dir, "notes.txt");
-      await fs.writeFile(target, "IMPORTANT USER DATA\nsecond line\n", "utf8");
+  it.each([true, false])(
+    "refuses add over existing contents (workspaceOnly=%s)",
+    async (workspaceOnly) => {
+      const { dir, file: target } = await makeFile(
+        "IMPORTANT USER DATA\nsecond line\n",
+        "notes.txt",
+        makeDir(true),
+      );
       const tool = createApplyPatchTool({ cwd: dir, workspaceOnly });
       const patch = buildAddFilePatch("notes.txt", "replacement");
 
@@ -188,13 +183,10 @@ describe("applyPatch", () => {
     },
   );
 
-  it("allows an add hunk after the same path is deleted in the patch", async () => {
+  it("allows an add after deleting the same path", async () => {
     const memory = createMemoryPatchSandbox({ "notes.txt": "old\n" });
-    const patch = `*** Begin Patch
-*** Delete File: notes.txt
-*** Add File: notes.txt
-+new
-*** End Patch`;
+    const patch =
+      "*** Begin Patch\n*** Delete File: notes.txt\n*** Add File: notes.txt\n+new\n*** End Patch";
 
     const result = await applyPatch(patch, memory.options);
 
@@ -213,9 +205,7 @@ describe("applyPatch", () => {
   });
 
   it("updates and moves a file", async () => {
-    const memory = createMemoryPatchSandbox({
-      "source.txt": "foo\nbar\n",
-    });
+    const memory = createMemoryPatchSandbox({ "source.txt": "foo\nbar\n" });
     const patch = buildUpdatePatch("source.txt", " foo\n-bar\n+baz", "dest.txt");
 
     const result = await applyPatch(patch, memory.options);
@@ -228,9 +218,7 @@ describe("applyPatch", () => {
   it.each(["./source.txt", "/sandbox/./source.txt", "/sandbox//source.txt"])(
     "updates in place when legacy bridge move target %s names the source file",
     async (movePath) => {
-      const memory = createMemoryPatchSandbox({
-        "source.txt": "foo\nbar\n",
-      });
+      const memory = createMemoryPatchSandbox({ "source.txt": "foo\nbar\n" });
       // The public bridge contract permits resolved container paths with dot
       // segments. Its filesystem still treats these spellings as one file.
       memory.bridge.resolvePath = ({ filePath }) => ({
@@ -307,9 +295,7 @@ describe("applyPatch", () => {
     ] as const;
 
     for (const [sourceLine, patchLine] of cases) {
-      const memory = createMemoryPatchSandbox({
-        "source.txt": `${sourceLine}\n`,
-      });
+      const memory = createMemoryPatchSandbox({ "source.txt": `${sourceLine}\n` });
       const patch = buildUpdatePatch("source.txt", `-${patchLine}\n+updated`);
 
       await applyPatch(patch, memory.options);
@@ -363,8 +349,7 @@ describe("applyPatch", () => {
       // validation path ("unsafe path") instead of a symlink-specific message.
       /path is not a regular file under root|symlink open blocked|unsafe path/i,
     );
-    const contents = await fs.readFile(target, "utf8");
-    expect(contents).toBe("initial\n");
+    await expect(fs.readFile(target, "utf8")).resolves.toBe("initial\n");
   });
 
   it("rejects delete path traversal via symlink directories by default", async () => {
@@ -381,8 +366,7 @@ describe("applyPatch", () => {
     const patch = buildDeletePatch("linkdir/victim.txt");
 
     await expect(applyPatch(patch, { cwd: dir })).rejects.toThrow(/Symlink escapes sandbox root/);
-    const stillThere = await fs.readFile(outsideFile, "utf8");
-    expect(stillThere).toBe("victim\n");
+    await expect(fs.readFile(outsideFile, "utf8")).resolves.toBe("victim\n");
   });
 
   it("allows path traversal when workspaceOnly is explicitly disabled", async () => {
@@ -394,8 +378,7 @@ describe("applyPatch", () => {
 
     const result = await applyPatch(patch, { cwd: dir, workspaceOnly: false });
     expect(result.summary.added.length).toBe(1);
-    const contents = await fs.readFile(escapedPath, "utf8");
-    expect(contents).toBe("escaped\n");
+    await expect(fs.readFile(escapedPath, "utf8")).resolves.toBe("escaped\n");
   });
 
   it("allows deleting a symlink itself even if it points outside cwd", async () => {
@@ -414,8 +397,7 @@ describe("applyPatch", () => {
     const result = await applyPatch(patch, { cwd: dir });
     expect(result.summary.deleted).toEqual(["link"]);
     await expectMissingPath(fs.lstat(linkDir));
-    const outsideContents = await fs.readFile(outsideTarget, "utf8");
-    expect(outsideContents).toBe("keep\n");
+    await expect(fs.readFile(outsideTarget, "utf8")).resolves.toBe("keep\n");
   });
 
   it("rejects move targets whose parent path is a symlink outside cwd", async () => {
@@ -567,8 +549,8 @@ describe("applyPatch through directory aliases", () => {
       await fs.writeFile(path.join(dir, "source.txt"), "original\n");
       const input =
         operation === "add"
-          ? "*** Begin Patch\n*** Add File: alias/new.txt\n+new\n*** End Patch"
-          : "*** Begin Patch\n*** Update File: source.txt\n*** Move to: alias/new.txt\n@@\n-original\n+new\n*** End Patch";
+          ? buildAddFilePatch("alias/new.txt", "new")
+          : buildUpdatePatch("source.txt", "-original\n+new", "alias/new.txt");
 
       await expect(applyPatch(input, { cwd: dir })).rejects.toMatchObject({
         name: "FsSafeError",
@@ -703,8 +685,8 @@ describe("apply_patch mutation authority", () => {
       const tool = createApplyPatchTool({ cwd: root });
       const input =
         operation === "create"
-          ? "*** Begin Patch\n*** Add File: nested/new.txt\n+new\n*** End Patch"
-          : "*** Begin Patch\n*** Delete File: existing.txt\n*** End Patch";
+          ? buildAddFilePatch("nested/new.txt", "new")
+          : buildDeletePatch("existing.txt");
       const pending = withGatewayToolCallerIdentity(
         {
           agentId: "main",

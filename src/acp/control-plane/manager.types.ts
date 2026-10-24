@@ -1,4 +1,3 @@
-/** Shared types and dependency wiring for the ACP session manager control plane. */
 import type {
   AcpElicitationHandler,
   AcpRuntime,

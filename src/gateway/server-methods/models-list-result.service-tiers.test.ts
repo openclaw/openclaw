@@ -6,6 +6,7 @@ import {
   dualRoutes,
   platformRoute,
   routeResolverFactory,
+  mockRouteResolverFactory,
   subscriptionRoute,
 } from "../../agents/model-auth-availability.test-support.js";
 import { resolveSelectedModelCredential } from "../../agents/model-auth-selected-credential.js";
@@ -21,7 +22,7 @@ import {
   readPreparedCatalog,
   registerGatewayModelCatalogPrivateAccess,
 } from "../server-model-catalog-auth.js";
-import { prepareModelsListResult } from "./models-list-result.js";
+import { buildModelsListResult, prepareModelsListResult } from "./models-list-result.js";
 import {
   createModelsListTestContext,
   WITHOUT_OPENAI_ENV_AUTH,
@@ -72,11 +73,11 @@ async function installAccountCatalog(
 }
 
 function preparePublic(context: ReturnType<typeof createModelsListTestContext>) {
+  mockRouteResolverFactory(routeResolverFactory(dualRoutes));
   return prepareModelsListResult({
     source: { kind: "gateway", context },
     agentId: "main",
     params: { view: "all", preparedOnly: true, includeDefaultModels: false },
-    routeResolverFactory: routeResolverFactory(dualRoutes),
   });
 }
 
@@ -126,16 +127,37 @@ it.each(["profile", "direct"] as const)(
       responseTier: "priority",
     };
     record(observation);
+    const priority = { ...observation, requestedTier: "priority", responseTier: "fast" };
+    record(priority);
     for (const projection of [first, await preparePublic(context)]) {
       expect(projection.read().models.find((row) => row.id === model.id)).toMatchObject({
         serviceTiers: advertisedTiers,
         supportsServiceTierRecovery: true,
-        serviceTierObservation: { requestedTier: "ultrafast", responseTier: "priority" },
+        serviceTierObservation: { requestedTier: "priority", responseTier: "fast" },
+        serviceTierObservations: [
+          { requestedTier: "priority", responseTier: "fast" },
+          { requestedTier: "ultrafast", responseTier: "priority" },
+        ],
       });
     }
+    record(observation);
+    expect(first.read().models.find((row) => row.id === model.id)).toMatchObject({
+      serviceTierObservation: { requestedTier: "ultrafast", responseTier: "priority" },
+      serviceTierObservations: [
+        { requestedTier: "priority", responseTier: "fast" },
+        { requestedTier: "ultrafast", responseTier: "priority" },
+      ],
+    });
     record({ ...observation, responseTier: "ultrafast" });
+    expect(first.read().models.find((row) => row.id === model.id)).toMatchObject({
+      serviceTierObservations: [{ requestedTier: "priority", responseTier: "fast" }],
+    });
+    record({ ...priority, responseTier: "priority" });
     expect(first.read().models.find((row) => row.id === model.id)).not.toHaveProperty(
       "serviceTierObservation",
+    );
+    expect(first.read().models.find((row) => row.id === model.id)).not.toHaveProperty(
+      "serviceTierObservations",
     );
   },
 );
@@ -215,23 +237,29 @@ it.for(["codex", "openclaw"] as const)(
         });
         let current = true;
         await installAccountCatalog(context, () => current);
-        const prepare = (profile: string, preparedOnly = false, refresh = false) =>
-          prepareModelsListResult({
-            source: { kind: "gateway", context },
+        const requestParams = (
+          profile: string,
+          preparedOnly = false,
+          refresh = false,
+        ): Parameters<typeof prepareModelsListResult>[0] => ({
+          source: { kind: "gateway", context },
+          agentId: "main",
+          params: { view: "all", preparedOnly, ...(refresh ? { refresh: true } : {}) },
+          readScope: {
             agentId: "main",
-            params: { view: "all", preparedOnly, ...(refresh ? { refresh: true } : {}) },
-            readScope: {
-              agentId: "main",
-              sessionKey: "agent:main:tiers",
-              sessionEntry: {
-                authProfileOverride: profile,
-                authProfileOverrideSource: "user",
-                providerOverride: "openai",
-                modelOverride: model.id,
-              },
+            sessionKey: "agent:main:tiers",
+            sessionEntry: {
+              authProfileOverride: profile,
+              authProfileOverrideSource: "user",
+              providerOverride: "openai",
+              modelOverride: model.id,
             },
-            routeResolverFactory: routeResolverFactory(dualRoutes),
-          });
+          },
+        });
+        const prepare = (profile: string, preparedOnly = false, refresh = false) => {
+          mockRouteResolverFactory(routeResolverFactory(dualRoutes));
+          return prepareModelsListResult(requestParams(profile, preparedOnly, refresh));
+        };
         const a = await prepare(accountA, false, true);
         const readRuntime = (result: typeof a, runtimeId: string) => {
           const row = result.read().models.find((entry) => entry.id === model.id);
@@ -294,9 +322,13 @@ it.for(["codex", "openclaw"] as const)(
         expect(discover).toHaveBeenCalledTimes(3);
         expect(a.isCurrent()).toBe(false);
         current = false;
-        expect(() => readRuntime(a, "codex")).toThrow(
+        // Descriptive rows may survive retirement, but cannot carry tiers or publish a result.
+        expect(readRuntime(a, "codex")?.serviceTiers).toBeUndefined();
+        expect(readRuntime(a, "openclaw")?.serviceTiers).toBeUndefined();
+        await expect(buildModelsListResult(requestParams(accountA, true))).rejects.toThrow(
           PreparedModelRuntimePublicationSupersededError,
         );
+        expect(discover).toHaveBeenCalledTimes(3);
       },
     ),
 );

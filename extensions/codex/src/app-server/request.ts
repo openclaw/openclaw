@@ -146,6 +146,8 @@ type CodexAppServerJsonClientOptions = Pick<
   signal?: AbortSignal;
   assertCurrent?: () => void;
   assertCurrentAsync?: () => Promise<void>;
+  /** Fresh effect check at each physical request, after client acquisition. */
+  assertDispatchCurrentAsync?: () => Promise<void>;
   catalogPreview?: true;
   catalogPreviewCache?: CodexCatalogPreviewCache;
   catalogRows?: number;
@@ -225,7 +227,7 @@ const CODEX_USAGE_DEADLINE_RESERVE_MS =
   CODEX_USAGE_ISOLATED_SHUTDOWN.exitTimeoutMs +
   CODEX_ACCOUNT_READ_DEADLINE_MARGIN_MS;
 
-/** Reads rate limits and best-effort account identity from one isolated app-server session. */
+/** Reuses live quota notifications, falling back to an isolated read-only app-server session. */
 export async function readCodexAppServerUsage(
   options: Pick<
     CodexAppServerJsonClientOptions,
@@ -239,9 +241,32 @@ export async function readCodexAppServerUsage(
   > & { timeoutMs: number; authProfileId?: string },
 ): Promise<{ rateLimits: JsonValue; accountEmail?: string }> {
   const deadline = performance.now() + options.timeoutMs;
+  options.signal?.throwIfAborted();
+  options.assertCurrent?.();
+  const { readSharedCodexAppServerUsage } = await import("./shared-client-usage.js");
+  const cached = await withAbortableTimeout({
+    timeoutMs: options.timeoutMs,
+    signal: options.signal,
+    timeoutMessage: "codex app-server usage read timed out",
+    promise: readSharedCodexAppServerUsage(
+      { ...options, abandonSignal: options.signal },
+      options.config?.models?.usage?.cacheTtlMs ?? 60_000,
+    ),
+  });
+  options.signal?.throwIfAborted();
+  options.assertCurrent?.();
+  if (cached) {
+    // The Gateway report starts its own TTL on reuse: idle data can be up to
+    // two TTLs old, while ongoing turns supply newer authoritative notifications.
+    return cached;
+  }
+  const remainingMs = deadline - performance.now();
+  if (remainingMs <= 0) {
+    throw new Error("codex app-server usage read timed out");
+  }
   return await withCodexAppServerJsonClient(
     {
-      timeoutMs: options.timeoutMs,
+      timeoutMs: remainingMs,
       signal: options.signal,
       timeoutMessage: "codex app-server usage read timed out",
       agentDir: options.agentDir,
@@ -438,6 +463,7 @@ export async function withCodexAppServerJsonClient<T>(
                   await params.assertCurrentAsync?.();
                   await request.assertCurrentAsync?.();
                   await sandboxGuard.assertCurrent();
+                  await params.assertDispatchCurrentAsync?.();
                   write();
                 },
               };

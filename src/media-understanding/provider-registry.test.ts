@@ -1,6 +1,7 @@
 // Provider registry tests cover runtime provider loading, normalization aliases,
 // manifest-only image capability, and config-derived image providers.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../config/types.js";
 import {
   buildMediaUnderstandingRegistry,
   getMediaUnderstandingProvider,
@@ -35,6 +36,65 @@ describe("media-understanding provider registry", () => {
   beforeEach(() => {
     resolvePluginCapabilityProvidersMock.mockReset();
     resolvePluginCapabilityProvidersMock.mockReturnValue([]);
+  });
+
+  it("adds configured image only for static opt-ins without mutating registrations or overrides", () => {
+    const cfg: OpenClawConfig = {
+      models: {
+        providers: {
+          acme: {
+            baseUrl: "https://fixture.invalid",
+            models: [
+              {
+                id: "vision",
+                name: "Vision",
+                input: ["text", "image"],
+                reasoning: false,
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                maxTokens: 1024,
+              },
+            ],
+          },
+        },
+      },
+    };
+    const registered = Object.freeze(
+      createMediaProvider({
+        id: "acme",
+        capabilities: ["audio"],
+        inheritConfiguredImageCapability: true,
+      }),
+    );
+    const projected = requireMediaProvider(
+      buildMediaUnderstandingRegistry(undefined, cfg, [registered]),
+      "acme",
+    );
+    expect(projected.capabilities).toEqual(["audio", "image"]);
+    expect(projected).not.toBe(registered);
+    expect(registered.capabilities).toEqual(["audio"]);
+    expect(
+      requireMediaProvider(buildMediaUnderstandingRegistry(undefined, {}, [registered]), "acme")
+        .capabilities,
+    ).toEqual(["audio"]);
+    for (const inheritConfiguredImageCapability of [false, undefined]) {
+      expect(
+        requireMediaProvider(
+          buildMediaUnderstandingRegistry(undefined, cfg, [
+            { ...registered, inheritConfiguredImageCapability },
+          ]),
+          "acme",
+        ).capabilities,
+      ).toEqual(["audio"]);
+    }
+    expect(
+      requireMediaProvider(
+        buildMediaUnderstandingRegistry({ acme: { id: "acme", capabilities: ["video"] } }, cfg, [
+          registered,
+        ]),
+        "acme",
+      ).capabilities,
+    ).toEqual(["video"]);
+    expect(registered.capabilities).toEqual(["audio"]);
   });
 
   it("preserves partial native overrides for dispatch", () => {

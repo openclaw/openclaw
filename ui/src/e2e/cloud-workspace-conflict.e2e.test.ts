@@ -273,10 +273,21 @@ suite.define(() => {
             expect(Math.min(...bounds.edges)).toBeGreaterThanOrEqual(0);
             expect(bounds.overflowX).toBeLessThanOrEqual(1);
             expect(bounds.overflowY).toBeGreaterThan(0);
+            const compact = width === 320 && failedState !== "request";
+            const firstAction = compact
+              ? alert.getByRole("button", { name: "Refresh", exact: true })
+              : copy;
             await page.keyboard.press("Tab");
-            expect(await copy.evaluate((node) => node === document.activeElement)).toBe(true);
+            expect(await firstAction.evaluate((node) => node === document.activeElement)).toBe(
+              true,
+            );
             await page.keyboard.press("Tab");
             expect(await diagnostic.evaluate((node) => node === document.activeElement)).toBe(true);
+            if (compact) {
+              await page.keyboard.press("Tab");
+              expect(await copy.evaluate((node) => node === document.activeElement)).toBe(true);
+              await page.keyboard.press("Shift+Tab");
+            }
             await page.keyboard.press("PageDown");
             await expect
               .poll(() => diagnostic.evaluate((node) => node.scrollTop))

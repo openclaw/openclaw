@@ -51,30 +51,24 @@ it("refreshes a retained pane from a persisted profile-only selection through th
       { ...entry, sessionId: "other-session" },
     );
     const request = makeRequestMock({
-      "chat.metadata": async () => ({ commands: [] }),
+      "chat.metadata": { commands: [] },
       "models.list": async (params: unknown) => {
-        const selected = (
-          await loadGatewaySessionEntryReadOnlyAsync(
-            (params as { sessionKey: string }).sessionKey,
-            { agentId: "main" },
-          )
-        ).entry;
+        const { entry: selected } = await loadGatewaySessionEntryReadOnlyAsync(
+          (params as { sessionKey: string }).sessionKey,
+          { agentId: "main" },
+        );
         const available = selected?.authProfileOverride === "anthropic:restored";
         return {
-          commands: [],
           models: [
             { ...model, available, ...(available ? {} : { unavailableReason: "missing-auth" }) },
           ],
         };
       },
-      "sessions.list": async () => ({ sessions: [], defaults: {}, count: 0, path: "", ts: 0 }),
+      "sessions.list": { sessions: [], defaults: {}, count: 0, path: "", ts: 0 },
     });
     const client = createTestGatewayClient(request);
-    const retained = makeChatHost({
-      sessionKey,
-      chatMessage: "Keep this draft",
-      client,
-    }) as ChatPageHost;
+    const draft = "Keep this draft";
+    const retained = makeChatHost({ sessionKey, chatMessage: draft, client }) as ChatPageHost;
     const sibling = makeChatHost({ sessionKey: otherKey, client }) as ChatPageHost;
     const shell = new ShellGatewayOwner({
       context: {
@@ -87,9 +81,7 @@ it("refreshes a retained pane from a persisted profile-only selection through th
       desktopNavigationExpanded: false,
       lastLocalePrefSignature: null,
       outboxStoreImport: { load: async () => undefined },
-      observeDeletedSessions() {},
-      recoverDeletedActiveSession() {},
-      selectChatSession() {},
+      shellNavigation: { recoverDeletedActiveSession() {}, selectChatSession() {} },
       invalidate() {},
     });
     await refreshChatMetadata(retained);
@@ -139,7 +131,7 @@ it("refreshes a retained pane from a persisted profile-only selection through th
       await waitForFast(() => expect(retained.chatModelCatalog[0]?.available).toBe(true));
       expect(sibling.chatModelCatalog[0]?.available).toBe(false);
       expect(request.mock.calls.filter(([method]) => method === "chat.metadata")).toHaveLength(2);
-      expect(retained.chatMessage).toBe("Keep this draft");
+      expect(retained.chatMessage).toBe(draft);
       expect(retained.chatMessages).toBe(transcript);
     } finally {
       unsubscribe();

@@ -21,7 +21,7 @@ import {
   formatWebSearchNotConfiguredMessage,
   isMissingCredentialCode,
 } from "../../web-search/runtime-error.js";
-import { MAX_SEARCH_COUNT } from "./web-search-provider-common.js";
+import { externalContentStamp, MAX_SEARCH_COUNT } from "./web-search-provider-common.js";
 
 const WebSearchExternalContentSchema = Type.Object(
   {
@@ -32,7 +32,6 @@ const WebSearchExternalContentSchema = Type.Object(
   },
   { additionalProperties: false },
 );
-type WebSearchExternalContent = Static<typeof WebSearchExternalContentSchema>;
 
 const WebSearchResultSchema = Type.Object(
   {
@@ -159,10 +158,6 @@ function consumeUrlBudget(url: string, budget: WebSearchOutputBudget): boolean {
   }
   budget.remaining -= url.length;
   return true;
-}
-
-function externalContentStamp(provider: string): WebSearchExternalContent {
-  return { untrusted: true, source: "web_search", wrapped: true, provider };
 }
 
 function normalizeCitations(

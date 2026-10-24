@@ -1,9 +1,6 @@
-// Gateway server chat tests cover WebSocket chat flow, history construction,
-// NO_REPLY handling, agent events, and connected control-UI delivery.
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import { afterAll, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
 import { createDeferred } from "../../test/helpers/promise.js";
 import * as harnessRegistry from "../agents/harness/registry.js";
@@ -12,7 +9,6 @@ import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission
 import { extractFirstTextBlock } from "../shared/chat-message-content.js";
 import { installGatewayServerChatTestSuite } from "./server.chat.gateway-server-chat.test-support.js";
 import { collectHistoryTextValues } from "./session-history-fixtures.test-support.js";
-import { removeChatTestDirectory as removeTempDir } from "./session-test-directories.test-support.js";
 import {
   connectOk,
   dispatchInboundMessageMock,
@@ -21,7 +17,6 @@ import {
   rpcReq,
   testState,
   trackConnectChallengeNonce,
-  writeSessionStore,
 } from "./test-helpers.js";
 import { agentCommandMock } from "./test-helpers.runtime-state.js";
 
@@ -50,7 +45,8 @@ beforeAll(async () => {
     .spyOn(admission, "tryBeginGatewayRootWorkAdmission")
     .mockImplementation((origin) => {
       const lease = beginRoot(origin);
-      return lease && origin === "ws:connect"
+      // Handler completion can precede release of retained request work.
+      return lease && (origin === "ws:connect" || origin === "ws:chat.send")
         ? {
             ...lease,
             run: (run) =>
@@ -104,339 +100,305 @@ const {
   withMainSessionStore,
 } = gatewaySuite;
 
-describe("gateway server chat", () => {
-  test("chat.send does not persist verboseLevel for operator.write callers", async () => {
+function sessionEntry(sessionKey = "agent:main:main") {
+  const storePath = testState.sessionStorePath;
+  if (!storePath) {
+    throw new Error("session store path was not initialized");
+  }
+  return loadSessionEntry({ sessionKey, storePath });
+}
+
+async function withOperator(scopes: string[], run: (socket: WebSocket) => Promise<void>) {
+  const socket = new WebSocket(`ws://127.0.0.1:${port}`);
+  trackConnectChallengeNonce(socket);
+  try {
+    await new Promise<void>((resolve) => {
+      socket.once("open", resolve);
+    });
+    await connectOk(socket, { scopes });
+    await run(socket);
+  } finally {
+    socket.close();
+  }
+}
+
+async function useRealReply() {
+  const { getReplyFromConfig } = await import("../auto-reply/reply/get-reply.js");
+  const { withFullRuntimeReplyConfig } = await import("../auto-reply/reply/get-reply-fast-path.js");
+  mockGetReplyFromConfigOnce((ctx, opts, cfg) =>
+    getReplyFromConfig(ctx, opts, cfg ? withFullRuntimeReplyConfig(cfg) : cfg),
+  );
+}
+
+async function sendUntilTerminal(
+  socket: WebSocket,
+  runId: string,
+  message: string,
+  states: string[],
+) {
+  const terminal = onceMessage(
+    socket,
+    (event) =>
+      event.type === "event" &&
+      event.event === "chat" &&
+      event.payload?.runId === runId &&
+      typeof event.payload?.state === "string" &&
+      states.includes(event.payload?.state),
+  );
+  const [sent, settled] = await Promise.all([
+    rpcReq(socket, "chat.send", { sessionKey: "main", message, idempotencyKey: runId }),
+    terminal,
+  ]);
+  expect(sent.ok).toBe(true);
+  return { sent, settled };
+}
+
+async function history(socket: WebSocket) {
+  const response = await rpcReq<{
+    sessionId?: string;
+    messages?: Array<{ role?: string; content?: unknown }>;
+  }>(socket, "chat.history", { sessionKey: "main" });
+  expect(response.ok).toBe(true);
+  return response.payload;
+}
+
+const waitForRun = (socket: WebSocket, runId: string, timeoutMs = 1_000) =>
+  rpcReq(socket, "agent.wait", { runId, timeoutMs });
+async function startAgent(runId: string, sessionKey = "main") {
+  expect(
+    await rpcReq(ws, "agent", { sessionKey, message: "hold this run open", idempotencyKey: runId }),
+  ).toMatchObject({ ok: true, payload: { status: "accepted" } });
+}
+
+test("fixture cleanup joins the exact retained chat.send root", async () => {
+  const admission = await import("../process/gateway-work-admission.js");
+  const lease = admission.tryBeginGatewayRootWorkAdmission("ws:chat.send");
+  if (!lease) {
+    throw new Error("Expected admitted request fixture");
+  }
+  const release = createDeferred();
+  let retained: Promise<unknown> | undefined;
+  let joined: Promise<void> | undefined;
+  let settled = false;
+  try {
+    await lease.run(async () => {
+      retained = admission.runWithRetainedGatewayRootWork(() => release.promise);
+    });
+    lease.release();
+    joined = waitForConnectWork();
+    void joined.then(() => {
+      settled = true;
+    });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    release.resolve();
+    await joined;
+    expect(getActiveGatewayRootWorkCount()).toBe(0);
+  } finally {
+    release.resolve();
+    lease.release();
+    await retained;
+    await joined;
+  }
+});
+
+test.for([
+  { field: "verboseLevel", message: "/verbose full", thinking: undefined, scoped: true },
+  { field: "thinkingLevel", message: "hello from phone", thinking: "low", scoped: false },
+] as const)(
+  "chat.send does not persist $field metadata",
+  async ({ field, message, thinking, scoped }) => {
     await withMainSessionStore(async () => {
-      let scopedWs: WebSocket | undefined;
-
-      try {
-        scopedWs = new WebSocket(`ws://127.0.0.1:${port}`);
-        trackConnectChallengeNonce(scopedWs);
-        await new Promise<void>((resolve) => {
-          scopedWs?.once("open", resolve);
-        });
-        await connectOk(scopedWs, {
-          scopes: ["operator.write"],
-        });
-
-        const sendRes = await rpcReq(scopedWs, "chat.send", {
+      const run = async (socket: WebSocket) => {
+        const idempotencyKey = `idem-chat-${field}-no-persist`;
+        const sent = await rpcReq(socket, "chat.send", {
           sessionKey: "main",
-          message: "/verbose full",
-          idempotencyKey: "idem-write-scope-verbose-no-persist",
+          message,
+          thinking,
+          idempotencyKey,
         });
-        expect(sendRes.ok).toBe(true);
-
-        await waitForAgentRunDrained("idem-write-scope-verbose-no-persist", scopedWs);
-
-        const sessionStorePath = testState.sessionStorePath;
-        if (!sessionStorePath) {
-          throw new Error("session store path was not initialized");
+        expect(sent.ok).toBe(true);
+        await waitForAgentRunDrained(idempotencyKey, socket);
+        expect(sessionEntry()?.[field]).toBeUndefined();
+        if (!scoped) {
+          expect(sessionEntry("main")?.[field]).toBeUndefined();
         }
-        expect(
-          loadSessionEntry({ sessionKey: "agent:main:main", storePath: sessionStorePath })
-            ?.verboseLevel,
-        ).toBeUndefined();
-      } finally {
-        scopedWs?.close();
+      };
+      if (scoped) {
+        await withOperator(["operator.write"], run);
+      } else {
+        await run(ws);
       }
     });
-  });
+  },
+);
 
-  test("chat.send does not persist one-turn thinking metadata", async () => {
+test("chat.send preserves sessions and denies operator.write reset triggers", async () => {
+  const message = "/reset soft Create a note";
+  await useRealReply();
+  const replyRun = await import("../auto-reply/reply/get-reply-run.js");
+  const runSpy = vi.spyOn(replyRun, "runPreparedReply").mockResolvedValue(undefined);
+  // Keep real command/session dispatch; only intercept the model-run boundary.
+  try {
     await withMainSessionStore(async () => {
-      const sendRes = await rpcReq(ws, "chat.send", {
-        sessionKey: "main",
-        message: "hello from phone",
-        thinking: "low",
-        idempotencyKey: "idem-chat-thinking-no-persist",
-      });
-      expect(sendRes.ok).toBe(true);
-
-      await waitForAgentRunDrained("idem-chat-thinking-no-persist");
-
       const sessionStorePath = testState.sessionStorePath;
       if (!sessionStorePath) {
         throw new Error("session store path was not initialized");
       }
+      const resetState = {
+        lifecycleRevision: "before-reset",
+        cliSessionIds: { "claude-cli": "existing-cli-binding" },
+      };
       expect(
-        loadSessionEntry({ sessionKey: "agent:main:main", storePath: sessionStorePath })
-          ?.thinkingLevel,
-      ).toBeUndefined();
-      expect(
-        loadSessionEntry({ sessionKey: "main", storePath: sessionStorePath })?.thinkingLevel,
-      ).toBeUndefined();
+        await updateSessionEntry(
+          { sessionKey: "agent:main:main", storePath: sessionStorePath },
+          () => resetState,
+        ),
+      ).not.toBeNull();
+      await withOperator(["operator.read", "operator.write"], async (scopedWs) => {
+        const runId = `idem-write-scope-reset-${message}`;
+        const { sent: sendRes, settled: final } = await sendUntilTerminal(
+          scopedWs,
+          runId,
+          message,
+          ["final"],
+        );
+        expect(sendRes).toMatchObject({ ok: true, payload: { status: "started" } });
+
+        expect(await waitForRun(scopedWs, runId)).toMatchObject({
+          ok: true,
+          payload: { status: "ok" },
+        });
+
+        expect(sessionEntry()).toMatchObject({ sessionId: "sess-main", ...resetState });
+        expect(runSpy).not.toHaveBeenCalled();
+        expect(extractFirstTextBlock(final.payload?.message)).toMatch(/not authorized/i);
+        expect(extractFirstTextBlock(final.payload?.message)).toContain("operator.admin");
+        const stored = await history(scopedWs);
+        expect(stored?.sessionId).toBe("sess-main");
+        expect(collectHistoryTextValues(stored?.messages ?? [])).toContain(
+          extractFirstTextBlock(final.payload?.message),
+        );
+      });
     });
-  });
+  } finally {
+    runSpy.mockRestore();
+  }
+});
 
-  test("chat.send preserves sessions and denies operator.write reset triggers", async () => {
-    const message = "/reset soft Create a note";
-    const { getReplyFromConfig } = await import("../auto-reply/reply/get-reply.js");
-    const { withFullRuntimeReplyConfig } =
-      await import("../auto-reply/reply/get-reply-fast-path.js");
-    const replyRun = await import("../auto-reply/reply/get-reply-run.js");
-    const runSpy = vi.spyOn(replyRun, "runPreparedReply").mockResolvedValue(undefined);
-    // Keep real command/session dispatch; only intercept the model-run boundary.
-    mockGetReplyFromConfigOnce((ctx, opts, cfg) =>
-      getReplyFromConfig(ctx, opts, cfg ? withFullRuntimeReplyConfig(cfg) : cfg),
-    );
-    try {
-      await withMainSessionStore(async () => {
-        const sessionStorePath = testState.sessionStorePath;
-        if (!sessionStorePath) {
-          throw new Error("session store path was not initialized");
-        }
-        const resetState = {
-          lifecycleRevision: "before-reset",
-          cliSessionIds: { "claude-cli": "existing-cli-binding" },
-        };
-        expect(
-          await updateSessionEntry(
-            { sessionKey: "agent:main:main", storePath: sessionStorePath },
-            () => resetState,
-          ),
-        ).not.toBeNull();
-        let scopedWs: WebSocket | undefined;
-
-        try {
-          scopedWs = new WebSocket(`ws://127.0.0.1:${port}`);
-          trackConnectChallengeNonce(scopedWs);
-          await new Promise<void>((resolve) => {
-            scopedWs?.once("open", resolve);
-          });
-          await connectOk(scopedWs, {
-            scopes: ["operator.read", "operator.write"],
-          });
-
-          const runId = `idem-write-scope-reset-${message}`;
-          const finalPromise = onceMessage(
-            scopedWs,
-            (event) =>
-              event.type === "event" &&
-              event.event === "chat" &&
-              event.payload?.state === "final" &&
-              event.payload?.runId === runId,
-          );
-          // Observe both promises immediately so an RPC failure cannot strand the final listener.
-          const [sendRes, final] = await Promise.all([
-            rpcReq(scopedWs, "chat.send", {
-              sessionKey: "main",
-              message,
-              idempotencyKey: runId,
-            }),
-            finalPromise,
-          ]);
-          expect(sendRes.ok).toBe(true);
-          expect(sendRes.payload?.status).toBe("started");
-
-          const waitRes = await rpcReq(scopedWs, "agent.wait", {
-            runId,
-            timeoutMs: 1_000,
-          });
-          expect(waitRes.ok).toBe(true);
-          expect(waitRes.payload?.status).toBe("ok");
-
-          expect(
-            loadSessionEntry({ sessionKey: "agent:main:main", storePath: sessionStorePath }),
-          ).toMatchObject({ sessionId: "sess-main", ...resetState });
-          expect(runSpy).not.toHaveBeenCalled();
-          expect(extractFirstTextBlock(final.payload?.message)).toMatch(/not authorized/i);
-          expect(extractFirstTextBlock(final.payload?.message)).toContain("operator.admin");
-          const history = await rpcReq<{ sessionId?: string; messages?: unknown[] }>(
-            scopedWs,
-            "chat.history",
-            {
-              sessionKey: "main",
-            },
-          );
-          expect(history.ok).toBe(true);
-          expect(history.payload?.sessionId).toBe("sess-main");
-          expect(collectHistoryTextValues(history.payload?.messages ?? [])).toContain(
-            extractFirstTextBlock(final.payload?.message),
-          );
-        } finally {
-          scopedWs?.close();
-        }
-      });
-    } finally {
-      runSpy.mockRestore();
-    }
-  });
-
-  test("chat.send /reset on an idle session finishes post-commit cleanup and records the turn", async () => {
-    const { getReplyFromConfig } = await import("../auto-reply/reply/get-reply.js");
-    const { withFullRuntimeReplyConfig } =
-      await import("../auto-reply/reply/get-reply-fast-path.js");
-    // Observe the harness reset that initSessionState runs after the reset commits.
-    const harnessReset = vi.spyOn(harnessRegistry, "resetRegisteredAgentHarnessSessions");
-    mockGetReplyFromConfigOnce((ctx, opts, cfg) =>
-      getReplyFromConfig(ctx, opts, cfg ? withFullRuntimeReplyConfig(cfg) : cfg),
-    );
-    try {
-      await withMainSessionStore(async () => {
-        const runId = "idem-admin-reset-idle";
-        const terminal = onceMessage(
-          ws,
-          (event) =>
-            event.type === "event" &&
-            event.event === "chat" &&
-            event.payload?.runId === runId &&
-            (event.payload?.state === "final" || event.payload?.state === "error"),
-        );
-        const [sendRes, settled] = await Promise.all([
-          rpcReq(ws, "chat.send", { sessionKey: "main", message: "/reset", idempotencyKey: runId }),
-          terminal,
-        ]);
-        expect(sendRes.ok).toBe(true);
-        await waitForAgentRunDrained(runId);
-
-        expect(settled.payload?.state).toBe("final");
-        expect(extractFirstTextBlock(settled.payload?.message) ?? "").toContain("Session reset");
-        expect(harnessReset).toHaveBeenCalledWith(
-          expect.objectContaining({ sessionId: "sess-main", sessionKey: "agent:main:main" }),
-        );
-        const history = await rpcReq<{ messages?: Array<{ role?: string; content?: unknown }> }>(
-          ws,
-          "chat.history",
-          { sessionKey: "main" },
-        );
-        expect(history.ok).toBe(true);
-        expect(
-          history.payload?.messages?.filter((message) => message.role === "user"),
-        ).toMatchObject([{ content: "/reset" }]);
-      });
-    } finally {
-      harnessReset.mockRestore();
-    }
-  });
-
-  test("agent.wait ignores stale chat dedupe when an agent run with the same runId is in flight", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
-    const { promise: blockedAgentRun, resolve: resolveAgentRun } = createDeferred();
-    const agentSpy = vi.mocked(agentCommandMock);
-    agentSpy.mockImplementationOnce(async () => {
-      await blockedAgentRun;
-      return undefined;
-    });
-
-    const runId = "idem-wait-chat-vs-agent";
-    try {
-      testState.sessionStorePath = path.join(dir, "sessions.json");
-      await writeSessionStore({
-        entries: {
-          main: {
-            sessionId: "sess-main",
-            updatedAt: Date.now(),
-          },
-        },
-      });
-
-      await sendChatAndExpectStarted(runId);
+test("chat.send /reset on an idle session finishes post-commit cleanup and records the turn", async () => {
+  await useRealReply();
+  // Observe the harness reset that initSessionState runs after the reset commits.
+  const harnessReset = vi.spyOn(harnessRegistry, "resetRegisteredAgentHarnessSessions");
+  try {
+    await withMainSessionStore(async () => {
+      const runId = "idem-admin-reset-idle";
+      const { settled } = await sendUntilTerminal(ws, runId, "/reset", ["final", "error"]);
       await waitForAgentRunDrained(runId);
 
-      const agentRes = await rpcReq(ws, "agent", {
-        sessionKey: "main",
-        message: "hold this run open",
-        idempotencyKey: runId,
-      });
-      expect(agentRes.ok).toBe(true);
-      expect(agentRes.payload?.status).toBe("accepted");
-
-      const waitWhileAgentInFlight = await rpcReq(ws, "agent.wait", {
-        runId,
-        timeoutMs: 40,
-      });
-      expectAgentWaitTimeout(waitWhileAgentInFlight);
-
-      resolveAgentRun?.();
-      await waitForAgentRunDrained(runId);
-    } finally {
-      resolveAgentRun?.();
-      await settleGatewayFixture();
-      await removeTempDir(dir);
-    }
-  });
-
-  test("retains the session fixture while admitted dispatch settles after callback failure", async () => {
-    const runId = "idem-fixture-dispatch-throw";
-    const dispatchStarted = createDeferred();
-    const releaseDispatch = createDeferred();
-    const callbackFinished = createDeferred();
-    const callbackError = new Error("fixture callback failed");
-    let fixtureDir = "";
-    let storePath = "";
-    dispatchInboundMessageMock.mockImplementationOnce(async () => {
-      dispatchStarted.resolve();
-      await releaseDispatch.promise;
-      return { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } };
+      expect(settled.payload?.state).toBe("final");
+      expect(extractFirstTextBlock(settled.payload?.message) ?? "").toContain("Session reset");
+      expect(harnessReset).toHaveBeenCalledWith(
+        expect.objectContaining({ sessionId: "sess-main", sessionKey: "agent:main:main" }),
+      );
+      const stored = await history(ws);
+      expect(stored?.messages?.filter((message) => message.role === "user")).toMatchObject([
+        { content: "/reset" },
+      ]);
     });
-    const fixture = withMainSessionStore(
-      async (dir) => {
-        fixtureDir = dir;
-        storePath = path.join(dir, "sessions.json");
+  } finally {
+    harnessReset.mockRestore();
+  }
+});
+
+test.for(["agent", "chat"] as const)(
+  "agent.wait ignores stale results while same-runId %s is active",
+  async (active) => {
+    const runId = `idem-wait-active-${active}`;
+    await withMainSessionStore(
+      async () => {
+        const blocked = createDeferred();
+        let release = blocked.resolve;
+        if (active === "agent") {
+          vi.mocked(agentCommandMock).mockImplementationOnce(async () => {
+            await blocked.promise;
+            return undefined;
+          });
+        }
         try {
-          await sendChatAndExpectStarted(runId, "hold fixture dispatch open");
-          await dispatchStarted.promise;
-          throw callbackError;
+          if (active === "agent") {
+            await sendChatAndExpectStarted(runId);
+            await waitForAgentRunDrained(runId);
+            await startAgent(runId);
+          } else {
+            await startAgent(runId, "agent:main:stale-wait-snapshot");
+            expect(await waitForRun(ws, runId)).toMatchObject({
+              ok: true,
+              payload: { status: "ok" },
+            });
+            await gatewaySuite.requestExecution.waitForCompletion(runId);
+            release = mockBlockedChatReply();
+            await sendChatAndExpectStarted(runId, "hold chat run open");
+          }
+          expectAgentWaitTimeout(await waitForRun(ws, runId, 40));
+          if (active === "agent") {
+            release();
+            await waitForAgentRunDrained(runId);
+          } else {
+            await abortChatRun(runId);
+          }
         } finally {
-          callbackFinished.resolve();
+          release();
         }
       },
-      { freshStore: true },
+      { freshStore: active === "agent" },
     );
-    const completion = Promise.allSettled([fixture]);
-    try {
-      await callbackFinished.promise;
-      // Let the fixture's finally run while the admitted dispatch is still held.
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
-      expect(getActiveGatewayRootWorkCount()).toBeGreaterThan(0);
-      expect(testState.sessionStorePath).toBe(storePath);
-      expect((await fs.stat(fixtureDir)).isDirectory()).toBe(true);
-    } finally {
-      releaseDispatch.resolve();
-      await completion;
-      await settleGatewayFixture();
-    }
-    expect(await completion).toEqual([{ status: "rejected", reason: callbackError }]);
-    expect(testState.sessionStorePath).toBeUndefined();
-    await expect(fs.stat(fixtureDir)).rejects.toMatchObject({ code: "ENOENT" });
+  },
+);
+
+test("retains the session fixture while admitted dispatch settles after callback failure", async () => {
+  const runId = "idem-fixture-dispatch-throw";
+  const dispatchStarted = createDeferred();
+  const releaseDispatch = createDeferred();
+  const callbackFinished = createDeferred();
+  const callbackError = new Error("fixture callback failed");
+  let fixtureDir = "";
+  let storePath = "";
+  dispatchInboundMessageMock.mockImplementationOnce(async () => {
+    dispatchStarted.resolve();
+    await releaseDispatch.promise;
+    return { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } };
   });
-
-  test("agent.wait ignores stale agent snapshots while same-runId chat.send is active", async () => {
-    await withMainSessionStore(async () => {
-      const runId = "idem-wait-chat-active-vs-stale-agent";
-      const seedAgentRes = await rpcReq(ws, "agent", {
-        sessionKey: "agent:main:stale-wait-snapshot",
-        message: "seed stale agent snapshot",
-        idempotencyKey: runId,
-      });
-      expect(seedAgentRes.ok).toBe(true);
-      expect(seedAgentRes.payload?.status).toBe("accepted");
-
-      const seedWaitRes = await rpcReq(ws, "agent.wait", {
-        runId,
-        timeoutMs: 1_000,
-      });
-      expect(seedWaitRes.ok).toBe(true);
-      expect(seedWaitRes.payload?.status).toBe("ok");
-      await gatewaySuite.requestExecution.waitForCompletion(runId);
-
-      const releaseBlockedReply = mockBlockedChatReply();
-
+  const fixture = withMainSessionStore(
+    async (dir) => {
+      fixtureDir = dir;
+      storePath = path.join(dir, "sessions.json");
       try {
-        await sendChatAndExpectStarted(runId, "hold chat run open");
-
-        const waitWhileChatActive = await rpcReq(ws, "agent.wait", {
-          runId,
-          timeoutMs: 40,
-        });
-        expectAgentWaitTimeout(waitWhileChatActive);
-
-        await abortChatRun(runId);
+        await sendChatAndExpectStarted(runId, "hold fixture dispatch open");
+        await dispatchStarted.promise;
+        throw callbackError;
       } finally {
-        releaseBlockedReply();
+        callbackFinished.resolve();
       }
+    },
+    { freshStore: true },
+  );
+  const completion = Promise.allSettled([fixture]);
+  try {
+    await callbackFinished.promise;
+    // Let the fixture's finally run while the admitted dispatch is still held.
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
     });
-  });
+    expect(getActiveGatewayRootWorkCount()).toBeGreaterThan(0);
+    expect(testState.sessionStorePath).toBe(storePath);
+    expect((await fs.stat(fixtureDir)).isDirectory()).toBe(true);
+  } finally {
+    releaseDispatch.resolve();
+    await completion;
+    await settleGatewayFixture();
+  }
+  expect(await completion).toEqual([{ status: "rejected", reason: callbackError }]);
+  expect(testState.sessionStorePath).toBeUndefined();
+  await expect(fs.stat(fixtureDir)).rejects.toMatchObject({ code: "ENOENT" });
 });

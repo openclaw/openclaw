@@ -67,6 +67,10 @@ export function createSessionMaintenanceFollowup(params: {
     | "chatType"
     | "conversationRoutePeerId"
     | "conversationToolPolicy"
+    | "requesterOrigin"
+    | "operatorProfileId"
+    | "conversationId"
+    | "messageThreadId"
     | "groupId"
     | "groupChannel"
     | "groupSpace"
@@ -105,6 +109,10 @@ export function createSessionMaintenanceFollowup(params: {
       chatType: run.chatType,
       conversationRoutePeerId: run.conversationRoutePeerId,
       conversationToolPolicy: run.conversationToolPolicy,
+      requesterOrigin: run.requesterOrigin,
+      operatorProfileId: run.operatorProfileId,
+      conversationId: run.conversationId,
+      messageThreadId: run.messageThreadId,
       groupId: run.groupId,
       groupChannel: run.groupChannel,
       groupSpace: run.groupSpace,
@@ -326,7 +334,6 @@ export function scheduleSessionMaintenance(
                             sessionKey,
                             runtimePolicySessionKey: prepared.runtimePolicySessionKey ?? sessionKey,
                             storePath: prepared.storePath,
-                            isHeartbeat: false,
                             replyOperation: operation,
                             abortSignal: operationSignal,
                           });
@@ -350,7 +357,6 @@ export function scheduleSessionMaintenance(
                             runtimePolicySessionKey: prepared.runtimePolicySessionKey ?? sessionKey,
                             storePath: prepared.storePath,
                             defaultModel: followupRun.run.model,
-                            isHeartbeat: false,
                             agentHarnessId: request.agentHarnessId,
                             abortSignal: operationSignal,
                             authorize: () => {

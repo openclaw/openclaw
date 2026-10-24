@@ -112,6 +112,10 @@ function fixtureCommit(origin: string, tree: string, parent: string | undefined,
   );
 }
 
+function importCommit(ref: string, mark: number, parent?: string, message = "x\n", body = "") {
+  return `commit ${ref}\nmark :${mark}\ncommitter fixture <fixture@example.invalid> ${mark} +0000\ndata ${Buffer.byteLength(message)}\n${message}${parent ? `from ${parent}\n` : ""}${body}\n`;
+}
+
 function checkoutFixture(root: string, files: string[]) {
   const origin = join(root, "origin");
   const workspace = join(root, "checkout");
@@ -160,13 +164,7 @@ function createAncestryFixture(
   const targetRef = "refs/heads/main";
   const commit = (ref: string, parent: number | undefined, label: string) => {
     const mark = commits.length + 1;
-    const message = `${label}\n`;
-    commits.push(`commit ${ref}
-mark :${mark}
-committer fixture <fixture@example.invalid> ${mark} +0000
-data ${Buffer.byteLength(message)}
-${message}${parent ? `from :${parent}\n` : ""}
-`);
+    commits.push(importCommit(ref, mark, parent ? `:${parent}` : undefined, `${label}\n`));
     return mark;
   };
   const sourceRoot = commit(sourceRef, undefined, "source root");
@@ -198,46 +196,15 @@ function createProvisionalMergeBaseFixture(
   const root = command.createTempDir("openclaw-release-ancestry-provisional-");
   const origin = join(root, "origin.git");
   fixtureGit(root, ["init", "--quiet", "--bare", origin]);
-  const commits = Array.from({ length: 341 }, (_, index) => {
-    const mark = index + 1;
-    const parent = mark > 1 ? `from :${String(mark - 1)}\n` : "";
-    return `commit refs/heads/main
-mark :${String(mark)}
-committer fixture <fixture@example.invalid> ${String(mark)} +0000
-data 1
-x
-${parent}
-`;
-  });
-  commits.push(`commit refs/heads/main
-mark :342
-committer fixture <fixture@example.invalid> 342 +0000
-data 1
-x
-from :341
-merge :1
-
-`);
+  const commits = Array.from({ length: 341 }, (_, index) =>
+    importCommit("refs/heads/main", index + 1, index ? `:${index}` : undefined),
+  );
+  commits.push(importCommit("refs/heads/main", 342, ":341", "x\n", "merge :1\n"));
   for (let mark = 343; mark <= 562; mark += 1) {
     const parent = mark === 343 ? 121 : mark - 1;
-    commits.push(`commit refs/heads/release-source
-mark :${String(mark)}
-committer fixture <fixture@example.invalid> ${String(mark)} +0000
-data 1
-x
-from :${String(parent)}
-
-`);
+    commits.push(importCommit("refs/heads/release-source", mark, `:${parent}`));
   }
-  commits.push(`commit refs/heads/release-source
-mark :563
-committer fixture <fixture@example.invalid> 563 +0000
-data 1
-x
-from :562
-merge :1
-
-`);
+  commits.push(importCommit("refs/heads/release-source", 563, ":562", "x\n", "merge :1\n"));
   fixtureGit(origin, ["fast-import", "--quiet"], commits.join(""));
   fixtureGit(origin, ["symbolic-ref", "HEAD", "refs/heads/main"]);
   return {
@@ -280,6 +247,10 @@ ${body}
   );
   chmodSync(join(binDir, "git"), 0o755);
   return { binDir, realGit };
+}
+
+function proxyEnvironment(proxy: ReturnType<typeof writeGitProxy>) {
+  return { PATH: `${proxy.binDir}:${process.env.PATH ?? ""}`, REAL_GIT: proxy.realGit };
 }
 
 function runReleaseAncestry(
@@ -366,8 +337,7 @@ exit "$status"`,
         MOVE_MARKER: marker,
         MOVED_TARGET: moved,
         ORIGIN: fixture.origin,
-        PATH: `${proxy.binDir}:${process.env.PATH ?? ""}`,
-        REAL_GIT: proxy.realGit,
+        ...proxyEnvironment(proxy),
       }),
       "merge-base",
     );
@@ -401,8 +371,7 @@ exec "$REAL_GIT" "$@"`,
     const checkout = cloneAncestrySource(fixture, "checkout");
     expectPolicySuccess(
       runReleaseAncestry(checkout, "merge-base", {
-        PATH: `${proxy.binDir}:${process.env.PATH ?? ""}`,
-        REAL_GIT: proxy.realGit,
+        ...proxyEnvironment(proxy),
         ...(blocked === "target"
           ? {}
           : { RELEASE_ANCESTRY_SOURCE_REF: "refs/heads/release-source" }),
@@ -436,8 +405,7 @@ exec "$REAL_GIT" "$@"`,
     expectPolicySuccess(
       runReleaseAncestry(checkout, "merge-base", {
         COUNT_MARKER: marker,
-        PATH: `${proxy.binDir}:${process.env.PATH ?? ""}`,
-        REAL_GIT: proxy.realGit,
+        ...proxyEnvironment(proxy),
       }),
       "merge-base",
     );
@@ -460,16 +428,7 @@ exec "$REAL_GIT" "$@"`,
         )
       : undefined;
     const checkout = cloneAncestrySource(fixture, "checkout");
-    const result = runReleaseAncestry(
-      checkout,
-      "merge-base",
-      proxy
-        ? {
-            PATH: `${proxy.binDir}:${process.env.PATH ?? ""}`,
-            REAL_GIT: proxy.realGit,
-          }
-        : {},
-    );
+    const result = runReleaseAncestry(checkout, "merge-base", proxy ? proxyEnvironment(proxy) : {});
     expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(stalled ? 125 : 1);
     expect(result.stdout).toContain(
       stalled ? "completed without ancestry progress" : "is invalid after complete history",
@@ -793,15 +752,13 @@ it.for([
     fixtureGit(origin, ["config", "uploadpack.allowFilter", "true"]);
     const commits = Array.from({ length: depth + 1 }, (_, index) => {
       const message = `fixture ${index}\n`;
-      const parent = index > 0 ? `from :${index}\n` : "";
-      return `commit refs/heads/main
-mark :${index + 1}
-committer fixture <fixture@example.invalid> ${1_700_000_000 + index} +0000
-data ${Buffer.byteLength(message)}
-${message}${parent}M 100644 inline fixture.txt
-data ${Buffer.byteLength(message)}
-${message}
-`;
+      return importCommit(
+        "refs/heads/main",
+        index + 1,
+        index ? `:${index}` : undefined,
+        message,
+        `M 100644 inline fixture.txt\ndata ${Buffer.byteLength(message)}\n${message}`,
+      );
     });
     fixtureGit(origin, ["fast-import", "--quiet"], commits.join(""));
     let baseSha = fixtureGit(origin, ["rev-parse", `main~${depth}`]);
@@ -818,16 +775,13 @@ ${message}
       fixtureGit(
         origin,
         ["fast-import", "--quiet"],
-        `commit refs/heads/main
-committer fixture <fixture@example.invalid> 1700000002 +0000
-data 14
-remote update
-from ${previous}
-M 100644 inline fixture.txt
-data 14
-remote update
-
-`,
+        importCommit(
+          "refs/heads/main",
+          depth + 2,
+          previous,
+          "remote update\n",
+          "M 100644 inline fixture.txt\ndata 14\nremote update\n",
+        ),
       );
       baseSha = fixtureGit(origin, ["rev-parse", "main"]);
     }
@@ -929,14 +883,19 @@ runpy.run_path(os.environ["BASE_REAL_POLICY_PATH"], run_name="__main__")
   },
 );
 
+function runBase(
+  signal: AbortSignal,
+  fetchResults: FetchResult[],
+  options: Partial<Parameters<typeof runCiGitStep>[0]> = {},
+) {
+  return runCiGitStep({ signal, action: "ensure-base-commit", fetchResults, ...options });
+}
+
 linuxIt(
   "drains a timed-out exact fetch before deepening for the base",
   async ({ signal }) => {
-    const report = await runCiGitStep({
-      signal,
-      action: "ensure-base-commit",
+    const report = await runBase(signal, ["hang", 0], {
       baseAvailableAfter: 2,
-      fetchResults: ["hang", 0],
     });
     expect(report.code, report.output).toBe(0);
     expect(report.fetches.map(({ args }) => args)).toEqual([
@@ -959,13 +918,10 @@ linuxIt.for([
 ])(
   "base policy preserves $label validation and skip behavior",
   async ({ sha, code, commands, invalidRef }, { signal }) => {
-    const report = await runCiGitStep({
-      signal,
-      action: "ensure-base-commit",
+    const report = await runBase(signal, [], {
       env: { BASE_SHA: sha },
       invalidRef,
       baseAvailableAfter: 0,
-      fetchResults: [],
     });
     expectReport(report, { code, fetches: [] }, { commands });
   },
@@ -975,11 +931,8 @@ linuxIt.for([1, 2, 6, undefined])(
   "base policy preserves exact/deepen/plain-ref order (available after %s)",
   { timeout: 55_000 },
   async (baseAvailableAfter, { signal }) => {
-    const report = await runCiGitStep({
-      signal,
-      action: "ensure-base-commit",
+    const report = await runBase(signal, [0, 23, 0, 23, 0, 0], {
       baseAvailableAfter,
-      fetchResults: [0, 23, 0, 23, 0, 0],
       commandResults: {
         "rev-parse --is-shallow-repository": { code: 0, output: "false\n" },
       },
@@ -1012,12 +965,7 @@ linuxIt.for([125, 143, "hang"] as const)(
   "base remains available after safely drained ordinary outcome %s",
   { timeout: 55_000 },
   async (failure, { signal }) => {
-    const report = await runCiGitStep({
-      signal,
-      action: "ensure-base-commit",
-      baseAvailableAfter: 1,
-      fetchResults: [failure],
-    });
+    const report = await runBase(signal, [failure], { baseAvailableAfter: 1 });
     expectReport(report, { code: 0 }, { fetches: 1 });
     expect(report.output).toContain("exact fetch failed");
     expect(report.output).toContain("Resolved base commit after exact fetch");
@@ -1037,11 +985,8 @@ linuxIt.for([
   "base policy stops before availability/retry on $label",
   { timeout: 55_000 },
   async ({ result, code, ...entry }, { signal }) => {
-    const report = await runCiGitStep({
-      signal,
-      action: "ensure-base-commit",
+    const report = await runBase(signal, [result], {
       baseAvailableAfter: 1,
-      fetchResults: [result],
       realDrain: true,
       scenario: "scenario" in entry ? entry.scenario : undefined,
       cancelDuringCleanup: "cancelDuringCleanup" in entry,
@@ -1056,11 +1001,8 @@ linuxIt.for([
 linuxIt(
   "keeps the base action's 30-second fetch deadline and drains before recovery",
   async ({ signal }) => {
-    const report = await runCiGitStep({
-      signal,
-      action: "ensure-base-commit",
+    const report = await runBase(signal, ["hang"], {
       baseAvailableAfter: 1,
-      fetchResults: ["hang"],
       realClock: true,
       readyFetchClockAdvanceSeconds: 30,
     });

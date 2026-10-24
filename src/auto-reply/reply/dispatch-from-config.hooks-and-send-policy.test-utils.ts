@@ -14,7 +14,7 @@ import { setReplyPayloadMetadata } from "../reply-payload.js";
 import type { MsgContext } from "../templating.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { registerFastAutoProgressCases } from "./dispatch-from-config.fast-progress.cases.js";
-import { QUEUE_CAP_REJECTION_TEXT } from "./dispatch-from-config.payloads.js";
+import { registerQueuedFollowupNoticeCases } from "./dispatch-from-config.queue-notices.test-support.js";
 import {
   createDispatcher,
   diagnosticMocks,
@@ -569,7 +569,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     },
   );
 
-  it.each(["heartbeat", "internal event"] as const)(
+  it.each(["internal event"] as const)(
     "does not add a missing-answer backstop after an empty %s",
     async (kind) => {
       setNoAbort();
@@ -588,7 +588,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
         }),
         cfg: emptyConfig,
         dispatcher,
-        replyOptions: { isHeartbeat: kind === "heartbeat" },
+        replyOptions: {},
         replyResolver: async (_ctx, opts) => {
           const runState = resolveReplyOperationRunState(opts);
           if (!runState) {
@@ -657,44 +657,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     expect(result.noVisibleReplyFallbackDelivered).toBe(true);
   });
 
-  it("reports queue-cap rejection instead of a temporary model failure", async () => {
-    setNoAbort();
-    diagnosticMocks.logMessageDispatchCompleted.mockClear();
-    const deliveredTexts: string[] = [];
-    const dispatcher = createReplyDispatcher({
-      deliver: vi.fn(async (payload) => {
-        deliveredTexts.push(payload.text ?? "");
-      }),
-    });
-    const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
-      const runState = resolveReplyOperationRunState(opts);
-      if (!runState) {
-        throw new Error("expected reply operation state");
-      }
-      runState.admission = { status: "skipped", reason: "queue-cap" };
-      return undefined;
-    });
-
-    const result = await dispatchReplyFromConfig({
-      ctx: buildTestCtx({ ChatType: "direct", SessionKey: "test:queue-cap" }),
-      cfg: { diagnostics: { enabled: true } } as OpenClawConfig,
-      dispatcher,
-      replyResolver,
-    });
-    dispatcher.markComplete();
-    await dispatcher.waitForIdle();
-
-    expect(deliveredTexts).toEqual([QUEUE_CAP_REJECTION_TEXT]);
-    expect(deliveredTexts).not.toContain(NO_VISIBLE_REPLY_FALLBACK_TEXT);
-    expect(result.noVisibleReplyFallbackDelivered).toBe(true);
-    expect(diagnosticMocks.logMessageDispatchCompleted).toHaveBeenCalledWith(
-      expect.objectContaining({
-        outcome: "skipped",
-        reason: "queue-cap",
-        sessionKey: "test:queue-cap",
-      }),
-    );
-  });
+  registerQueuedFollowupNoticeCases();
 
   it("does not report a pending continuation as an empty terminal reply", async () => {
     setNoAbort();
@@ -1137,7 +1100,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
       replyResolver,
     });
 
-    // A routed media-only block increments neither blockCount (text-only counter)
+    // A routed media-only block contributes no accumulated text
     // nor dispatcher counts; the delivered-routed-block fact must suppress the
     // fallback so users never see failure text after valid media.
     const fallbackCall = mocks.routeReply.mock.calls.find(

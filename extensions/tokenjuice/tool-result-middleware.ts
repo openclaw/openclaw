@@ -56,41 +56,40 @@ function normalizeDetails(
 }
 
 export function createTokenjuiceAgentToolResultMiddleware(): AgentToolResultMiddleware {
-  const handlers: TokenjuiceToolResultHandler[] = [];
+  let handler: TokenjuiceToolResultHandler | undefined;
   createTokenjuiceOpenClawEmbeddedExtension()({
-    on(event, handler) {
+    on(event, registeredHandler) {
       if (event === "tool_result") {
-        handlers.push(handler as TokenjuiceToolResultHandler);
+        handler = registeredHandler as TokenjuiceToolResultHandler;
       }
     },
   });
 
   return async (event) => {
-    let current = event.result;
+    const current = event.result;
     const workdir = event.args.workdir;
     const cwd = event.cwd?.trim()
       ? event.cwd
       : typeof workdir === "string" && workdir.trim()
         ? workdir
         : process.cwd();
-    for (const handler of handlers) {
-      const next = await handler(
-        {
-          toolName: event.toolName,
-          input: event.args,
-          content: current.content,
-          details: normalizeDetails(event, current),
-          isError: event.isError,
-        },
-        { cwd },
-      );
-      if (next) {
-        current = Object.assign({}, current, {
-          content: next.content ?? current.content,
-          details: next.details ?? current.details,
-        });
-      }
-    }
-    return current === event.result ? undefined : { result: current };
+    const next = await handler?.(
+      {
+        toolName: event.toolName,
+        input: event.args,
+        content: current.content,
+        details: normalizeDetails(event, current),
+        isError: event.isError,
+      },
+      { cwd },
+    );
+    return next
+      ? {
+          result: Object.assign({}, current, {
+            content: next.content ?? current.content,
+            details: next.details ?? current.details,
+          }),
+        }
+      : undefined;
   };
 }

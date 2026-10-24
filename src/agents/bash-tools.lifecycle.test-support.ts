@@ -43,6 +43,7 @@ export async function admitModelTurn(params: RunEmbeddedAgentParams) {
     "gateway",
     params.runId,
   );
+  await params.userTurnTranscriptRecorder?.persistApproved();
   params.onExecutionPhase?.({ phase: "model_call_started" });
   await params.onExecutionStarted?.();
   await params.onAgentEvent?.({ stream: "lifecycle", data: { phase: "start" } });

@@ -41,6 +41,14 @@ building nested completion findings, preventing stale prior-run child
 outputs from leaking into the current announce. Announce replies preserve
 thread/topic routing when available on channel adapters.
 
+When a completion or settle turn has only a source-bound `message` grant, it can
+send the completed work's photos and files using `media`, `attachments`, or media
+directives, with or without text. Normal outbound media validation still applies,
+including local-file roots. The grant cannot change the destination, channel,
+account, or thread, or perform actions other than `send`. Explicit `replyTo` stays
+limited to the current message or thread; inline reply and audio directives remain
+restricted. See [message tool access](/tools#configure-access-and-approvals).
+
 After `sessions_yield`, the frozen batch waits for its own children and their
 descendants to settle. A still-running child from an earlier requester turn does
 not delay that batch's result; the earlier batch retains its own completion wake.
@@ -85,7 +93,9 @@ the input owner marks optional may finish silently; it does not by itself satisf
 an outstanding user reply.
 OpenClaw does not automatically send the child result, parent final, or
 generated media to a channel. The parent can still choose to send a message
-through its permitted tools.
+through its permitted tools. When the requester has no current conversation or
+delivery target, the private completion guidance tells it to record its final
+reply in the session for the requester; no messaging send is needed.
 
 If the parent called `sessions_yield` while waiting for private children, the
 yield hands the conversation back to it. When those children settle, the parent

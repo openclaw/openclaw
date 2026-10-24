@@ -11,7 +11,6 @@ import type { WorkflowStep } from "./ci-workflow.test-support.js";
 const WORKFLOW_PATH = ".github/workflows/ios-periphery-comment.yml";
 const PRODUCER_WORKFLOW_PATH = ".github/workflows/ios-periphery.yml";
 const MACOS_PRODUCER_WORKFLOW_PATH = ".github/workflows/macos-periphery.yml";
-const SHARED_PRODUCER_WORKFLOW_PATH = ".github/workflows/shared-openclawkit-periphery.yml";
 const ARTIFACT_NAME = "ios-periphery-dead-code-12345-2";
 
 type Workflow = {
@@ -127,6 +126,10 @@ async function runCommenter(
     liveHeadSha?: string;
     liveHeadShaAfter?: string;
     scanJobConclusion?: string;
+    scanAttempt?: number;
+    producerAttempt?: number;
+    producerConclusion?: string;
+    previousAttempts?: number[];
     scopeJobConclusion?: string;
     workflowRuns?: Partial<WorkflowRun>[];
   } = {},
@@ -144,6 +147,14 @@ async function runCommenter(
     ...options.run,
   };
   const apiCalls: string[] = [];
+  const job = (name: string, run_attempt: number, conclusion = "success") => ({
+    name,
+    run_attempt,
+    conclusion,
+    status: "completed",
+  });
+  const producerJobs = (attempt: number, conclusion = "success") =>
+    platform === "macOS" ? [job("Build macOS Periphery reports", attempt, conclusion)] : [];
   const core = {
     infos: [] as string[],
     warnings: [] as string[],
@@ -171,16 +182,21 @@ async function runCommenter(
       actions: {
         listJobsForWorkflowRun(this: void, params: Record<string, unknown>) {
           apiCalls.push("listJobs");
-          expect(params).toMatchObject({ run_id: run.id, filter: "latest" });
+          expect(params).toMatchObject({ run_id: run.id, filter: "all" });
           return [
-            {
-              conclusion: options.scopeJobConclusion ?? "success",
-              name: `Detect ${platform} scan scope`,
-            },
-            {
-              conclusion: options.scanJobConclusion ?? "success",
-              name: `Scan ${platform} dead code`,
-            },
+            ...(options.previousAttempts ?? []).flatMap((run_attempt) =>
+              [
+                job(`Detect ${platform} scan scope`, run_attempt),
+                job(`Scan ${platform} dead code`, run_attempt, "skipped"),
+              ].concat(producerJobs(run_attempt)),
+            ),
+            job(`Detect ${platform} scan scope`, run.run_attempt, options.scopeJobConclusion),
+            job(
+              `Scan ${platform} dead code`,
+              options.scanAttempt ?? options.producerAttempt ?? run.run_attempt,
+              options.scanJobConclusion,
+            ),
+            ...producerJobs(options.producerAttempt ?? run.run_attempt, options.producerConclusion),
           ];
         },
         listWorkflowRunArtifacts(this: void, params: Record<string, unknown>) {
@@ -307,8 +323,7 @@ function expectUnavailableComment(bodies: string[]): void {
 }
 
 function expectNoWrite(result: Awaited<ReturnType<typeof runCommenter>>) {
-  expect(result.createdBodies).toEqual([]);
-  expect(result.updatedBodies).toEqual([]);
+  expect(result).toMatchObject({ createdBodies: [], updatedBodies: [] });
 }
 
 function makeZip(
@@ -374,12 +389,9 @@ describe("iOS Periphery comment workflow", () => {
   it("uses hosted macOS capacity for scans", () => {
     const iosWorkflow = readWorkflow(PRODUCER_WORKFLOW_PATH);
     const macosWorkflow = readWorkflow(MACOS_PRODUCER_WORKFLOW_PATH);
-    const sharedWorkflow = readWorkflow(SHARED_PRODUCER_WORKFLOW_PATH);
-
     expect(iosWorkflow.jobs?.scan?.["runs-on"]).toBe("xcode-27");
-    expect(macosWorkflow.jobs?.scan?.["runs-on"]).toBe("xcode-27");
-    expect(sharedWorkflow.jobs?.["scan-ios"]?.["runs-on"]).toBe("xcode-27");
-    expect(sharedWorkflow.jobs?.["scan-macos"]?.["runs-on"]).toBe("xcode-27");
+    expect(macosWorkflow.jobs?.["macos-index"]?.["runs-on"]).toBe("xcode-27");
+    expect(macosWorkflow.jobs?.["scan-ios"]?.["runs-on"]).toBe("xcode-27");
   });
 
   it.each([
@@ -451,10 +463,62 @@ describe("iOS Periphery comment workflow", () => {
     expectUnavailableComment(result.updatedBodies);
   });
 
-  it("reads deflated findings and escapes them before creating a PR comment", async () => {
+  it.each([
+    ["iOS", 2],
+    ["macOS", 2],
+    ["macOS", 3],
+  ] as const)("reads %s producer attempt %s after a rerun", async (platform, producerAttempt) => {
+    const result = await runReport(
+      findingArchive,
+      {
+        platform,
+        run: { run_attempt: 3 },
+        scanAttempt: platform === "macOS" ? 3 : 2,
+        producerAttempt,
+        previousAttempts: producerAttempt === 3 ? [1, 2] : undefined,
+      },
+      { name: `${platform.toLowerCase()}-periphery-dead-code-12345-${producerAttempt}` },
+    );
+    expect(result.downloadCount).toBe(1);
+    expect(result.createdBodies[0]).toContain("unusedSyntheticFunction");
+    expect(result.core.warnings).toEqual([]);
+  });
+
+  it.each(["failure", "cancelled"])(
+    "does not fall back to an old report after a %s macOS producer rerun",
+    async (producerConclusion) => {
+      const result = await runReport(
+        findingArchive,
+        {
+          platform: "macOS",
+          producerAttempt: 3,
+          producerConclusion,
+          previousAttempts: [1, 2],
+          scanJobConclusion: producerConclusion === "cancelled" ? "skipped" : "failure",
+          run: { run_attempt: 3 },
+        },
+        { name: "macos-periphery-dead-code-12345-2" },
+      );
+      expect(result.downloadCount).toBe(0);
+      expectUnavailableComment(result.createdBodies);
+      expect(result.core.warnings).toEqual([
+        "No macos-periphery-dead-code-12345-3 artifact found.",
+      ]);
+    },
+  );
+
+  it("renders bounded deflated findings and escapes them before creating a PR comment", async () => {
     const longName = `![click](https://example.invalid)\r\n@octocat|next${"a".repeat(260)}`;
+    const repeated = "{".repeat(500);
     const archive = reportZip(
-      [{ kind: "<script>*bold*</script>", location: "Sources/Test.swift:12", name: longName }],
+      [
+        { kind: "<script>*bold*</script>", location: "Sources/Test.swift:12", name: longName },
+        ...Array.from({ length: 49 }, (_, index) => ({
+          kind: repeated,
+          location: `${repeated}${index}:${index}`,
+          name: repeated,
+        })),
+      ],
       "1\n",
       "DEFLATE",
     );
@@ -468,22 +532,7 @@ describe("iOS Periphery comment workflow", () => {
     expect(parsed.text).toContain("<script>*bold*</script>");
     expect(parsed.text).toContain("![click](https://example.invalid) @octocat|next");
     expect(parsed.links).toEqual([]);
-  });
-
-  it("bounds the rendered comment after escaping", async () => {
-    const repeated = "{".repeat(500);
-    const archive = reportZip(
-      Array.from({ length: 50 }, (_, index) => ({
-        kind: repeated,
-        location: `${repeated}${index}:${index}`,
-        name: repeated,
-      })),
-      "1\n",
-    );
-    const result = await runReport(archive);
-
-    expect(result.createdBodies).toHaveLength(1);
-    expect(result.createdBodies[0]?.length).toBeLessThanOrEqual(60_000);
+    expect(body.length).toBeLessThanOrEqual(60_000);
   });
 
   it("warns without failing when workflow_run token cannot write comments", async () => {

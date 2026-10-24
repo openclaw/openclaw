@@ -34,58 +34,10 @@ import {
 } from "./attempt-result.js";
 import type { PreparedStreamRuntime } from "./attempt-stream-runtime.types.js";
 import { settleEmbeddedAttemptStream } from "./attempt-stream-settle.js";
-import type { EmbeddedAttemptDeferredLifecycleOwner } from "./deferred-lifecycle-owner.js";
 import { buildPromptImageFailureNotice } from "./images.js";
-import type { EmbeddedRunAttemptParams } from "./types.js";
 
 const FAILED_PROMPT_MEDIA_NOTE_TYPE = "openclaw.system-note";
 const FAILED_PROMPT_MEDIA_NOTE_SOURCE = "prompt-image-hydration";
-
-type StreamCleanupInput = {
-  attachment: PreparedStreamRuntime["stream"]["registration"];
-  attempt: EmbeddedRunAttemptParams;
-  clearAttemptTimeoutTimers: () => void;
-  queueHandle: PreparedStreamRuntime["stream"]["queueHandle"];
-  unsubscribe: () => void;
-  deferredLifecycleOwner?: EmbeddedAttemptDeferredLifecycleOwner;
-};
-
-function cleanupEmbeddedAttemptStreamExecution(input: StreamCleanupInput): Error | undefined {
-  const { attempt } = input;
-  input.clearAttemptTimeoutTimers();
-  // Every release belongs to this owner; one broken callback must not strand
-  // the active run or mask the prompt failure that caused teardown.
-  let firstCleanupError: Error | undefined;
-  const cleanups: Array<readonly [string, () => void]> = [
-    ["unsubscribe", input.unsubscribe],
-    ["backend detach", () => attempt.replyOperation?.detachBackend(input.queueHandle)],
-  ];
-  if (!input.deferredLifecycleOwner) {
-    cleanups.push([
-      "active run cleanup",
-      () =>
-        detachActiveEmbeddedRun(
-          attempt.sessionId,
-          input.queueHandle,
-          attempt.sessionKey,
-          attempt.sessionFile,
-          undefined,
-          input.attachment,
-        ),
-    ]);
-  }
-  for (const [name, cleanup] of cleanups) {
-    try {
-      cleanup();
-    } catch (error) {
-      firstCleanupError ??= error instanceof Error ? error : new Error(String(error));
-      log.error(
-        `CRITICAL: ${name} failed, possible resource leak: runId=${attempt.runId} ${String(error)}`,
-      );
-    }
-  }
-  return firstCleanupError;
-}
 
 export async function runEmbeddedAttemptSettledPhase(
   input: EmbeddedAttemptExecutionPhaseInput & {
@@ -365,14 +317,39 @@ export async function runEmbeddedAttemptSettledPhase(
       }
     }
   } finally {
-    cleanupError = cleanupEmbeddedAttemptStreamExecution({
-      attachment: preparedStreamRuntime.stream.registration,
-      attempt,
-      clearAttemptTimeoutTimers,
-      queueHandle,
-      unsubscribe,
-      deferredLifecycleOwner: preparedStreamRuntime.stream.deferredLifecycleOwner,
-    });
+    const attachment = preparedStreamRuntime.stream.registration;
+    const deferredLifecycleOwner = preparedStreamRuntime.stream.deferredLifecycleOwner;
+    clearAttemptTimeoutTimers();
+    // Every release belongs to this owner; one broken callback must not strand
+    // the active run or mask the prompt failure that caused teardown.
+    const cleanups: Array<readonly [string, () => void]> = [
+      ["unsubscribe", unsubscribe],
+      ["backend detach", () => attempt.replyOperation?.detachBackend(queueHandle)],
+    ];
+    if (!deferredLifecycleOwner) {
+      cleanups.push([
+        "active run cleanup",
+        () =>
+          detachActiveEmbeddedRun(
+            attempt.sessionId,
+            queueHandle,
+            attempt.sessionKey,
+            attempt.sessionFile,
+            undefined,
+            attachment,
+          ),
+      ]);
+    }
+    for (const [name, cleanup] of cleanups) {
+      try {
+        cleanup();
+      } catch (error) {
+        cleanupError ??= error instanceof Error ? error : new Error(String(error));
+        log.error(
+          `CRITICAL: ${name} failed, possible resource leak: runId=${attempt.runId} ${String(error)}`,
+        );
+      }
+    }
   }
 
   if (cleanupError !== undefined) {

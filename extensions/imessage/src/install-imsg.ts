@@ -7,13 +7,6 @@ import { resolveBrewExecutable } from "openclaw/plugin-sdk/setup-tools";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { IMESSAGE_INSTALL_COMMAND } from "./setup-core.js";
 
-type IMessageInstallResult = {
-  ok: boolean;
-  cliPath?: string;
-  version?: string;
-  error?: string;
-};
-
 const IMESSAGE_BREW_FORMULA = "steipete/tap/imsg";
 
 async function resolveBrewManagedIMessageCliPath(
@@ -84,7 +77,11 @@ async function resolveBrewIMessageCliPath(brewExe: string): Promise<string | nul
 export async function installIMessageCli(
   runtime: RuntimeEnv,
   opts?: { upgrade?: boolean; cliPath?: string },
-): Promise<IMessageInstallResult> {
+): Promise<{
+  ok: boolean;
+  cliPath?: string;
+  error?: string;
+}> {
   if (process.platform !== "darwin") {
     return {
       ok: false,
@@ -138,16 +135,5 @@ export async function installIMessageCli(
     };
   }
 
-  let version: string | undefined;
-  try {
-    const versionResult = await runPluginCommandWithTimeout({
-      argv: [cliPath, "--version"],
-      timeoutMs: 10_000,
-    });
-    version = versionResult.stdout.trim() || undefined;
-  } catch {
-    // Version output is helpful but not required for setup.
-  }
-
-  return { ok: true, cliPath, version };
+  return { ok: true, cliPath };
 }

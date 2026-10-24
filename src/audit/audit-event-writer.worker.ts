@@ -12,6 +12,7 @@ import { listAuditEventsInDatabase } from "./audit-event-read.kernel.js";
 import {
   pruneExpiredAuditEventsInDatabase,
   recordAuditEventInDatabase,
+  recordAuditRunInDatabase,
 } from "./audit-event-store.js";
 import type { AuditEventListQuery } from "./audit-event-types.js";
 import { isOutboundMessageProgressInput } from "./audit-event-types.js";
@@ -77,27 +78,39 @@ export const auditOperations = {
     }
     return results;
   },
-  "audit.writer.process": (request: AuditWriterRequest, context) =>
-    executeAuditAttempt(
-      context,
-      (database) => {
-        if (request.type === "record-event") {
-          if (isOutboundMessageProgressInput(request.input)) {
-            recordOutboundMessageProgressInDatabase(request.input, database);
+  "audit.writer.process": (requests: AuditWriterRequest[], context) => {
+    const results: AuditWriterResult[] = [];
+    // Keep independent commits and FIFO order; contention leaves the suffix unattempted.
+    for (const request of requests) {
+      const result = executeAuditAttempt(
+        context,
+        (database) => {
+          if (request.type === "record-event") {
+            if (isOutboundMessageProgressInput(request.input)) {
+              recordOutboundMessageProgressInDatabase(request.input, database);
+            } else {
+              recordAuditEventInDatabase(request.input, database, request.eventId);
+            }
+          } else if (request.type === "record-run") {
+            recordAuditRunInDatabase(request.start, request.finish, database, request.eventIds);
+          } else if (request.type === "record-execution-identity") {
+            processExecutionIdentityAdmissionWorkInDatabase(request.work, database);
+          } else if (request.type === "record-execution-decision-work") {
+            processExecutionDecisionWorkInDatabase(request.work, database);
           } else {
-            recordAuditEventInDatabase(request.input, database);
+            recordExecutionDecisionFactInDatabase(request.receipt, database);
           }
-        } else if (request.type === "record-execution-identity") {
-          processExecutionIdentityAdmissionWorkInDatabase(request.work, database);
-        } else if (request.type === "record-execution-decision-work") {
-          processExecutionDecisionWorkInDatabase(request.work, database);
-        } else {
-          recordExecutionDecisionFactInDatabase(request.receipt, database);
-        }
-        return { status: "settled" };
-      },
-      (error) => formatAuditWriterRequestError(request, error),
-    ),
+          return { status: "settled" };
+        },
+        (error) => formatAuditWriterRequestError(request, error),
+      );
+      results.push(result);
+      if (result.status === "retry") {
+        break;
+      }
+    }
+    return results;
+  },
 } satisfies WorkerOperationHandlers;
 
 export type AuditWorkerOperations = WorkerOperations<typeof auditOperations>;

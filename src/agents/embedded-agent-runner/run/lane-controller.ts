@@ -37,7 +37,10 @@ import {
   type SessionControllerWatchdogAttempt,
   type SessionWatchdogWait,
 } from "../../../sessions/session-controller.watchdog.js";
-import { getAdmittedRunDelegatedAuthority } from "../../admitted-run-context.js";
+import {
+  getAdmittedRunDelegatedAuthority,
+  isPreparedRunRestartRecovery,
+} from "../../admitted-run-context.js";
 import { createAgentRunDirectAbortError } from "../../run-termination.js";
 import { beginForegroundSessionMaintenance } from "../../session-maintenance/coordinator.js";
 import { withSessionPlacementTurnAdmission } from "../../session-placement-admission.js";
@@ -82,13 +85,11 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
   );
   const laneTaskTimeoutMs = resolveEmbeddedRunLaneTimeoutMs(initialParams.timeoutMs);
   const laneTaskAbortController = new AbortController();
-  const laneTaskReleaseController = new AbortController();
   // Queue cancellation remains authoritative before execution and during a
   // later isolated finalizer, after the original attempt's listeners close.
   const abortSignal = AbortSignal.any([
     ...(initialParams.abortSignal ? [initialParams.abortSignal] : []),
     laneTaskAbortController.signal,
-    laneTaskReleaseController.signal,
   ]);
   let laneTaskProgressAtMs = Date.now();
   let laneTaskStartedAtMs = laneTaskProgressAtMs;
@@ -399,7 +400,42 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
       }
       // Queue waits can outlive durable harness and placement bindings.
       // Recheck and claim only after lifecycle admission, before context or hooks execute.
-      const writerClaim = await claimAgentSessionWriter(params);
+      const preparedAdmission = params.preparedRunAdmission;
+      const restartRecovery = preparedAdmission
+        ? isPreparedRunRestartRecovery(preparedAdmission, params.runId)
+        : undefined;
+      const claimWriter = () => claimAgentSessionWriter(params);
+      const writerClaim = restartRecovery
+        ? await (async () => {
+            const target = params.sessionTarget;
+            if (!target?.agentId || !target.sessionKey || !target.storePath) {
+              throw new Error("Restart recovery presentation has no owned transcript target");
+            }
+            const { withRestartRecoveryPresentation } =
+              await import("../../main-session-recovery/main-session-recovery-presentation.js");
+            return withRestartRecoveryPresentation({
+              target: {
+                ...target,
+                agentId: target.agentId,
+                sessionKey: target.sessionKey,
+                sessionId: params.sessionId,
+                storePath: target.storePath,
+              },
+              runId: params.runId,
+              claimWriter,
+              assertCurrent: () => {
+                throwIfAborted();
+                assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
+                if (
+                  !preparedAdmission ||
+                  !isPreparedRunRestartRecovery(preparedAdmission, params.runId)
+                ) {
+                  throw new Error("Restart recovery presentation lost its prepared source");
+                }
+              },
+            });
+          })()
+        : await claimWriter();
       if (writerClaim) {
         params = {
           ...params,
@@ -581,18 +617,9 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
           watchdog.beginTerminal(Date.now() + EMBEDDED_RUN_LANE_TIMEOUT_GRACE_MS);
         }
       };
-      const releaseExecution = () => {
-        operation?.abort(laneTaskReleaseController.signal.reason);
-        watchdog.beginTerminal(Date.now());
-        void watchdog.tick();
-      };
       abortSignal.addEventListener("abort", abortExecution, { once: true });
-      laneTaskReleaseController.signal.addEventListener("abort", releaseExecution, { once: true });
       if (abortSignal.aborted) {
         abortExecution();
-      }
-      if (laneTaskReleaseController.signal.aborted) {
-        releaseExecution();
       }
       const unsubscribe = opts?.taskTimeoutSubscribe?.(setLaneTaskDeadline);
       try {
@@ -605,7 +632,6 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
         execution.close();
         unsubscribe?.();
         abortSignal.removeEventListener("abort", abortExecution);
-        laneTaskReleaseController.signal.removeEventListener("abort", releaseExecution);
         executionWatchdog = undefined;
         if (!operation) {
           watchdog.close();
@@ -681,7 +707,6 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
     enqueueSession,
     abortSignal,
     laneTaskAbortController,
-    laneTaskReleaseController,
     noteLaneTaskProgress,
     setLaneTaskDeadline,
     createAttemptControls,

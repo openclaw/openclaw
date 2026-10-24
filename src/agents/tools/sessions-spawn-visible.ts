@@ -9,6 +9,7 @@ import { getRuntimeConfig } from "../../config/config.js";
 import { resolveControlUiSessionUrl } from "../../config/control-ui-link-base.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
+import { attributeDelegatedSessionCreator } from "../../config/sessions/session-entry-provenance.js";
 import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import { buildDashboardSessionTitleSource } from "../../gateway/dashboard-session-title.js";
 import { ADMIN_SCOPE } from "../../gateway/method-scopes.js";
@@ -17,10 +18,7 @@ import { resolveGatewaySessionStoreTargetInWorker } from "../../gateway/session-
 import { resolveWorkerPlacementDestination } from "../../gateway/worker-environments/placement-destination.js";
 import { readExecRequestOwners, withExecRequestOwners } from "../../infra/exec-request-context.js";
 import { isPathInside } from "../../infra/path-guards.js";
-import {
-  getCanonicalGatewayContextResolver,
-  getPluginRuntimeGatewayRequestScope,
-} from "../../plugins/runtime/gateway-request-scope.js";
+import { getCanonicalGatewayContextResolver } from "../../plugins/runtime/gateway-request-scope.js";
 import { isValidAgentId, normalizeAgentId } from "../../routing/session-key.js";
 import { recordSessionParticipantBestEffort } from "../../sessions/session-participant-recording.js";
 import { resolveUserPath } from "../../utils.js";
@@ -29,6 +27,7 @@ import { listAgentIds, resolveSessionAgentId } from "../agent-scope.js";
 import { runWithAgentToolSourceExecutionScope } from "../agent-tool-source-execution-guard.js";
 import { reserveChildAdmissionSlot } from "../child-admission.js";
 import { prepareNativeDelegatedToolPolicy } from "../delegated-tool-policy.js";
+import { resolveRunEntryCliRuntime } from "../embedded-agent-runner/run-entry-runtime.js";
 import { resolveAgentIdentity } from "../identity.js";
 import {
   resolveSandboxRuntimeStatus,
@@ -42,6 +41,7 @@ import { getSubagentDepthFromSessionStoreInWorker } from "../subagents/spawn/sub
 import { terminateAcceptedCollectorRun } from "../subagents/spawn/subagent-spawn-cleanup.js";
 import {
   callNativeSubagentGateway,
+  captureSubagentSpawnGatewayContext,
   resolveSubagentAgentGatewayTimeoutMs,
 } from "../subagents/spawn/subagent-spawn-gateway.js";
 import { resolveSubagentSpawnOwnership } from "../subagents/spawn/subagent-spawn-ownership.js";
@@ -189,9 +189,11 @@ export async function maybeSpawnVisibleSession(params: {
     );
   }
 
-  const resolveGatewayContext =
-    getGatewayToolCallerIdentity()?.gatewayContextResolver ??
-    getPluginRuntimeGatewayRequestScope()?.resolveGatewayContext;
+  const {
+    gatewayContextResolver: resolveGatewayContext,
+    requester,
+    creatorProfileId,
+  } = captureSubagentSpawnGatewayContext();
   const cloudGateway = placement ? resolveGatewayContext?.() : undefined;
   if (placement && (!cloudGateway || cloudGateway.localEmbedded === true)) {
     return {
@@ -365,6 +367,27 @@ export async function maybeSpawnVisibleSession(params: {
   }
   const { resolvedModel, inheritedModel, initialSessionPatch } = modelPlan;
   const { authProfileOverride } = initialSessionPatch;
+  // A sandbox-classified visible child must not dispatch to a host-executed CLI
+  // backend: the CLI runs as the Gateway OS user outside the configured sandbox
+  // while the child session would still be reported sandboxed. The admission
+  // above only sees the config-derived classification; re-check once the child
+  // model is resolved, mirroring the cron seam guard. The run seam enforces the
+  // same invariant for fallback candidates and post-spawn runtime overrides.
+  if (childRuntimeSandboxed) {
+    const { useCliExecution, cliExecutionProvider } = resolveRunEntryCliRuntime({
+      config: cfg,
+      provider: modelPlan.modelRef.provider,
+      model: modelPlan.modelRef.model,
+      agentId: targetAgentId,
+      authProfileId: authProfileOverride,
+    });
+    if (useCliExecution) {
+      return {
+        status: "forbidden",
+        error: `This spawn targets a sandboxed child, but model "${resolvedModel}" runs on host-executed CLI backend "${cliExecutionProvider}" and cannot honor the sandbox. Choose a sandbox-compatible (embedded/API) model for the child, or change the agent's sandbox policy explicitly.`,
+      };
+    }
+  }
   const resolvedModelRef = authProfileOverride
     ? `${resolvedModel}@${authProfileOverride}`
     : resolvedModel;
@@ -406,10 +429,14 @@ export async function maybeSpawnVisibleSession(params: {
           requestParams,
           {
             via: "spawn",
-            actor: { type: "agent", id: requesterAgentId },
+            actor: attributeDelegatedSessionCreator(
+              { type: "agent", id: requesterAgentId },
+              creatorProfileId,
+            ),
             requesterSessionKey: requesterKey,
             ...(childSessionPublication ? { childSessionPublication } : {}),
             requesterSenderIsOwner: params.options?.senderIsOwner === true,
+            gitContributorProfileId: params.options?.gitContributorProfileId,
             completionOwnerSessionKey: ownership.completionRequesterSessionKey,
             ...(params.options?.sessionPermissionPolicy
               ? { inheritedPermissionMode: params.options.sessionPermissionPolicy.mode }
@@ -551,8 +578,7 @@ export async function maybeSpawnVisibleSession(params: {
                     assertDispatchCurrent,
                     timeoutMs: resolveSubagentAgentGatewayTimeoutMs(runTimeoutSeconds),
                   },
-                  undefined,
-                  resolveGatewayContext,
+                  { gatewayContextResolver: resolveGatewayContext, requester },
                 ),
               )
             ).response;

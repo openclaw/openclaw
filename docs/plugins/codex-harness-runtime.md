@@ -183,7 +183,7 @@ nine child pages below. The anchors from the single-page version still resolve h
 
 [Codex replies and final answers](/plugins/codex-harness-runtime/replies) — Visible reply delivery, heartbeat turns, and bounded final-answer recovery.
 
-- <a id="visible-replies-and-heartbeats"></a>[Visible replies and heartbeats](/plugins/codex-harness-runtime/replies#visible-replies-and-heartbeats)
+- <a id="visible-replies-and-heartbeats"></a>[Visible replies and scheduled turns](/plugins/codex-harness-runtime/replies#visible-replies-and-heartbeats)
 - <a id="final-answers-after-settled-tool-work"></a>[Final answers after settled tool work](/plugins/codex-harness-runtime/replies#final-answers-after-settled-tool-work)
 
 ### Codex hook boundaries

@@ -7,16 +7,18 @@ import type { AppSidebarElement } from "../components/app-sidebar.tsx";
 import {
   takeControlUiElementScreenshot,
   takeControlUiViewportScreenshot,
+  waitForControlUiProofSurface,
 } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
-  controlUiBundledSettingsStorageKey,
   controlUiSessionPath,
   installMockGateway,
   waitForControlUiRoute,
   waitForControlUiSettingsTakeover,
 } from "../test-helpers/control-ui-e2e.ts";
+import { navigationDrawerToggle } from "../test-helpers/control-ui-navigation.ts";
 import { workboardUi } from "../test-helpers/control-ui-workboard-fixture.ts";
 import { compactCronJobFixture } from "../test-helpers/cron.ts";
+import { seedChatSettings } from "./chat-layout-fixtures.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { openSidebarPages, openSidebarPinMenu } from "./sidebar-customization.test-support.ts";
 
@@ -36,10 +38,6 @@ async function trimmedTextContents(locator: Locator): Promise<string[]> {
 
 async function roundedWidth(locator: Locator): Promise<number> {
   return Math.round((await locator.boundingBox())?.width ?? 0);
-}
-
-function visibleDrawerButton(page: Page) {
-  return page.locator(".topbar-nav-toggle:visible, .chat-pane__nav-toggle:visible").first();
 }
 
 async function captureUiProof(page: Page, fileName: string, surface = page.locator(".shell")) {
@@ -112,23 +110,16 @@ suite.define(() => {
               "workboard.cards.list": { boards, cards: [], statuses: ["todo", "done"] },
             },
           });
-          await page.addInitScript(
-            ({ key, leadEntry }) =>
-              localStorage.setItem(
-                key,
-                JSON.stringify({
-                  sidebarAgentsMode: "roster",
-                  railShortcuts: ["route:agents-home", leadEntry, "route:cron"],
-                }),
-              ),
-            { key: controlUiBundledSettingsStorageKey(suite.server.baseUrl), leadEntry: entry },
-          );
+          await seedChatSettings(page, suite.server.baseUrl, {
+            sidebarAgentsMode: "roster",
+            railShortcuts: ["route:sessions", entry, "route:cron"],
+          });
           await page.goto(`${suite.server.baseUrl}${route}`);
           if (label === "Workboard") {
             await page.locator(".workboard-page-title", { hasText: "Operations" }).waitFor();
           }
           if (width < 900) {
-            await visibleDrawerButton(page).click();
+            await navigationDrawerToggle(page).click();
           }
           const sidebar = page.locator("openclaw-app-sidebar");
           const row = sidebar.locator('.sidebar-rail__pin[data-sidebar-entry="' + entry + '"]');
@@ -161,7 +152,6 @@ suite.define(() => {
           expect(
             Math.abs(iconBox!.x + iconBox!.width / 2 - (linkBox!.x + linkBox!.width / 2)),
           ).toBeLessThanOrEqual(1);
-          expect(await row.locator(".sidebar-reorder-trigger").count()).toBe(0);
           if (label === "Workboard") {
             const pages = await openSidebarPages(page);
             const operationsEntry = pages.locator(
@@ -657,6 +647,7 @@ suite.define(() => {
       const background = (locator: typeof railUsage) =>
         locator.evaluate((element) => getComputedStyle(element).backgroundColor);
       expect(await iconWidth(railUsage)).toBe(await iconWidth(pagesButton));
+      await waitForControlUiProofSurface(pagesButton, []);
       const pressedBackground = await background(pagesButton);
       await railUsage.hover();
       await expect.poll(() => background(railUsage)).toBe(pressedBackground);
@@ -720,7 +711,7 @@ suite.define(() => {
         .toContain("shell--nav-collapsed");
 
       await page.setViewportSize({ height: 900, width: 900 });
-      const drawerButton = visibleDrawerButton(page);
+      const drawerButton = navigationDrawerToggle(page);
       await expect.poll(() => drawerButton.isVisible()).toBe(true);
       await drawerButton.click();
       await expect
@@ -741,7 +732,7 @@ suite.define(() => {
         )
         .toBe(0);
       // Narrow Chat merges navigation controls into its title bar.
-      await expect.poll(() => page.locator(".chat-pane__header").first().isVisible()).toBe(true);
+      await expect.poll(() => page.locator(".agent-chat__header--mobile").isVisible()).toBe(true);
       await captureUiProof(page, "05-expanded-tablet-drawer.png");
 
       // Widening with the drawer open must not leave its stale state blocking
@@ -766,7 +757,7 @@ suite.define(() => {
         .poll(() => page.locator(".shell").getAttribute("class"))
         .not.toContain("shell--nav-drawer-open");
       await page.setViewportSize({ height: 852, width: 393 });
-      await expect.poll(() => page.locator(".chat-pane__header").first().isVisible()).toBe(true);
+      await expect.poll(() => page.locator(".agent-chat__header--mobile").isVisible()).toBe(true);
       await expect
         .poll(() =>
           page.locator(".shell-nav").evaluate((element) => element.getBoundingClientRect().right),
@@ -795,27 +786,9 @@ suite.define(() => {
       },
       async ({ page }) => {
         await installMockGateway(page, {
-          methodResponses: {
-            "sessions.list": {
-              count: 1,
-              defaults: {
-                contextTokens: null,
-                model: "gpt-5.5",
-                modelProvider: "openai",
-              },
-              path: "",
-              sessions: [
-                {
-                  hasActiveRun: true,
-                  key: "main",
-                  kind: "direct",
-                  status: "running",
-                  updatedAt: 100,
-                },
-              ],
-              ts: 100,
-            },
-          },
+          sessions: [
+            { hasActiveRun: true, key: "main", kind: "direct", status: "running", updatedAt: 100 },
+          ],
         });
 
         await page.goto(`${suite.server.baseUrl}chat`);
@@ -823,7 +796,7 @@ suite.define(() => {
         const pages = await openSidebarPages(page);
         await pages
           .locator(".sidebar-pages__entry")
-          .filter({ has: page.getByRole("link", { name: "Agents", exact: true }) })
+          .filter({ has: page.getByRole("link", { name: "Sessions", exact: true }) })
           .getByRole("button", { name: "Pin", exact: true })
           .click();
         await sidebar.getByRole("button", { name: "Sessions", exact: true }).click();
@@ -840,8 +813,8 @@ suite.define(() => {
 
         const activity = home.locator(".session-glyph");
         const shortcut = sidebar
-          .locator('.sidebar-rail__pin[data-sidebar-entry="route:agents-home"]')
-          .getByRole("link", { name: "Agents", exact: true });
+          .locator('.sidebar-rail__pin[data-sidebar-entry="route:sessions"]')
+          .getByRole("link", { name: "Sessions", exact: true });
         await expect
           .poll(() => home.locator(".session-glyph--running .session-glyph__ring").count())
           .toBe(1);
@@ -973,7 +946,7 @@ suite.define(() => {
           );
         await captureUiProof(page, "09-mobile-attention-closed.png");
 
-        await visibleDrawerButton(page).click();
+        await navigationDrawerToggle(page).click();
         await expect
           .poll(() => page.locator(".shell").getAttribute("class"))
           .toContain("shell--nav-drawer-open");

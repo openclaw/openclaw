@@ -11,7 +11,6 @@ import { normalizeChatModelProviderId } from "../../../lib/chat/model-ref.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
 import { canonicalModelAuthProviderId } from "../../../lib/model-auth.ts";
 import { projectChatFields } from "../chat-field-projection.ts";
-import type { ChatModelAccountSectionViewProps } from "./chat-model-types.ts";
 
 registerModelAccountsEnglish();
 
@@ -28,10 +27,7 @@ type AccountInventory = {
 
 const inventories = new WeakMap<object, AccountInventory>();
 
-export type ChatModelAccountSection = {
-  viewProps: (startIndex: number) => ChatModelAccountSectionViewProps;
-  onClose: () => void;
-};
+export type ChatModelAccountSection = NonNullable<ReturnType<typeof renderChatModelAccountControl>>;
 
 export function renderChatModelAccountControl(params: {
   modelAuthStatusResult?: ModelAuthStatusResult | null;
@@ -44,7 +40,7 @@ export function renderChatModelAccountControl(params: {
   onSelect: (account: UserModelAccount) => Promise<boolean>;
   onAutomatic?: () => void;
   onManage?: () => void;
-}): ChatModelAccountSection | undefined {
+}) {
   const { owner, selection, client } = params;
   if (!selection) {
     return undefined;
@@ -134,41 +130,45 @@ export function renderChatModelAccountControl(params: {
       ? account.authProfileId
       : undefined);
   const currentValue = "current";
-  const options: Array<{ value: string; label: string; description?: string; disabled?: boolean }> =
-    [
-      {
-        value: currentValue,
-        label: selectedLabel,
-        description:
-          email(currentId) ??
-          description(
-            currentInventory.accounts.find((account) => account.authProfileId === currentId),
-          ),
-      },
-      ...currentInventory.accounts
-        .filter((account) => account.provider === provider && account.authProfileId !== currentId)
-        .map((account) => ({
-          value: `account:${account.authProfileId}`,
-          label: account.label,
-          description: description(account),
-        })),
-      ...(params.onAutomatic
-        ? [{ value: "automatic", label: t("chat.modelAccounts.automatic") }]
-        : []),
-      ...(currentInventory.loading
-        ? [{ value: "loading", label: t("common.loading"), disabled: true }]
-        : []),
-      ...(currentInventory.nextCursor
-        ? [
-            {
-              value: "more",
-              label: t("profilePage.modelAccounts.loadMore"),
-              disabled: currentInventory.loading,
-            },
-          ]
-        : []),
-      ...(params.onManage ? [{ value: "manage", label: t("chat.modelAccounts.manage") }] : []),
-    ];
+  const options: ReadonlyArray<{
+    value: string;
+    label: string;
+    description?: string;
+    disabled?: boolean;
+  }> = [
+    {
+      value: currentValue,
+      label: selectedLabel,
+      description:
+        email(currentId) ??
+        description(
+          currentInventory.accounts.find((account) => account.authProfileId === currentId),
+        ),
+    },
+    ...currentInventory.accounts
+      .filter((account) => account.provider === provider && account.authProfileId !== currentId)
+      .map((account) => ({
+        value: `account:${account.authProfileId}`,
+        label: account.label,
+        description: description(account),
+      })),
+    ...(params.onAutomatic
+      ? [{ value: "automatic", label: t("chat.modelAccounts.automatic") }]
+      : []),
+    ...(currentInventory.loading
+      ? [{ value: "loading", label: t("common.loading"), disabled: true }]
+      : []),
+    ...(currentInventory.nextCursor
+      ? [
+          {
+            value: "more",
+            label: t("profilePage.modelAccounts.loadMore"),
+            disabled: currentInventory.loading,
+          },
+        ]
+      : []),
+    ...(params.onManage ? [{ value: "manage", label: t("chat.modelAccounts.manage") }] : []),
+  ];
   const selectAccount = (value: string, event: MouseEvent) => {
     event.stopPropagation();
     if (!ownsInventory() || params.disabled) {
@@ -205,7 +205,7 @@ export function renderChatModelAccountControl(params: {
   // The picker observes this section snapshot to resynchronize its search DOM.
   const open = currentInventory.open;
   const error = currentInventory.error;
-  const viewProps = (startIndex: number): ChatModelAccountSectionViewProps => ({
+  const viewProps = (startIndex: number) => ({
     selectionKind: selection.kind,
     disabled: params.disabled,
     selectedIdentity,

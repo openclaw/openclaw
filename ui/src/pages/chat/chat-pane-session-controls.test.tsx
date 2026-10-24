@@ -1,11 +1,12 @@
 /* @vitest-environment jsdom */
 
 import { createComponent, createMemo, Show } from "solid-js";
-import { describe, expect, it, onTestFinished, vi } from "vitest";
+import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type {
   ChatAccountSelection,
   UsersListModelAccountsResult,
 } from "../../../../packages/gateway-protocol/src/index.ts";
+import { GATEWAY_STARTUP_ADMISSION_WAIT_MS } from "../../../../packages/gateway-protocol/src/startup-unavailable.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import {
@@ -24,6 +25,7 @@ import {
   type GatewayRequestHandler,
 } from "../../test-helpers/gateway-client.ts";
 import { sessionMutationGatewayHello } from "../../test-helpers/gateway-methods.ts";
+import { installModelPickerLayout } from "../../test-helpers/model-picker-layout.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { projectChatFields } from "./chat-field-projection.ts";
@@ -38,10 +40,12 @@ import { handlePageGatewayEvent } from "./chat-state-events.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { renderChatModelAccountControl } from "./components/chat-model-account-control.ts";
 import { ChatModelAccountSectionView } from "./components/chat-model-account-control.tsx";
+import { expandModelProviders } from "./components/chat-model-picker.test-support.tsx";
 import { ChatPermissionPicker } from "./components/chat-permission-picker.tsx";
 import { adoptStartedChatRun, reconcileChatRunLifecycle } from "./run-lifecycle.ts";
 
 type ComposerControlsParams = Parameters<typeof renderChatPaneComposerControls>[0];
+beforeEach(installModelPickerLayout);
 
 function renderControls(
   state: ChatPageHost,
@@ -251,7 +255,7 @@ describe("chat account selection", () => {
 });
 
 describe("chat pane composer controls", () => {
-  it("renders the selected Gateway model while keeping its model picker locked", () => {
+  it("renders the selected Gateway model while keeping its model picker locked", async () => {
     const selectedSession: GatewaySessionRow = {
       key: "main",
       kind: "direct",
@@ -270,20 +274,24 @@ describe("chat pane composer controls", () => {
     const controls = renderControls(state as unknown as ChatPageHost, {
       agentDefaultModel: "openai/gpt-5.6-luna",
     });
-    const container = document.createElement("div");
-    mountSolid(() => createComponent(ChatPaneModelControl, controls.composerControls), {
-      container,
-    });
+    const { container } = mountSolid(() =>
+      createComponent(ChatPaneModelControl, controls.composerControls),
+    );
+    flush();
 
     const trigger = container.querySelector<HTMLElement>("[data-chat-model-select]");
     expect(trigger?.textContent).toContain("GPT-5.6 Sol");
     expect(trigger?.getAttribute("aria-label")).toBe("Chat model: GPT-5.6 Sol");
     expect(trigger?.dataset.chatModelLocked).toBe("true");
+    expect(state.request).not.toHaveBeenCalled();
+    trigger?.click();
+    await waitForSolid(() =>
+      expect(container.querySelector(".chat-controls__model-menu")).not.toBeNull(),
+    );
     expect(container.querySelector(".chat-controls__locked-model-value")?.textContent).toBe(
       "GPT-5.6 Sol",
     );
     expect(container.querySelectorAll("[data-chat-model-option]")).toHaveLength(0);
-    expect(state.request).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -309,12 +317,16 @@ describe("chat pane composer controls", () => {
     },
   ])(
     "renders separate footer inputs with a $label catalog",
-    ({ cached, connected = true, error, message }) => {
+    async ({ cached, connected = true, error, message }) => {
       const container = document.body.appendChild(document.createElement("div"));
       onTestFinished(() => container.remove());
       const state = makeChatHost({
         connected,
         requestHandlers: {},
+        sessionsResult: createSessionsListResult({
+          model: "cached-model",
+          modelProvider: "openai",
+        }),
         chatModelCatalog: cached
           ? [{ id: "cached-model", name: "Cached Model", provider: "openai", available: false }]
           : [],
@@ -332,7 +344,11 @@ describe("chat pane composer controls", () => {
       mountSolid(() => createComponent(ChatPaneModelControl, controls.composerControls), {
         container,
       });
-      flush();
+      await waitForSolid(() =>
+        expect(container.querySelector(".chat-controls__model-menu")).not.toBeNull(),
+      );
+
+      expandModelProviders(container);
 
       expect(container.querySelectorAll(".chat-composer-model-control")).toHaveLength(1);
       expect(container.querySelector('[data-chat-provider-usage="true"]')).toBeNull();
@@ -754,7 +770,11 @@ describe("chat pane model controls", () => {
           queueMode: "steer",
           idempotencyKey: steer.sendRunId,
         }),
-        { timeoutMs: 30_000 },
+        {
+          timeoutMs: GATEWAY_STARTUP_ADMISSION_WAIT_MS,
+          signal: expect.any(AbortSignal),
+          retainSentResultOnAbort: true,
+        },
       ),
     );
     expect(state.chatSending).toBe(true);

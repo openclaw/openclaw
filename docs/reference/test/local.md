@@ -98,7 +98,7 @@ Older Node bindings can truncate SQLite TEXT values at embedded NUL characters.
 ### OpenClaw Bun fork
 
 Local source development uses the [OpenClaw Bun fork](https://github.com/openclaw/bun)
-for tests and `pnpm dev`, with formatter and linter opt-ins described below.
+for tests, `pnpm dev`, and local formatting, with a linter opt-in described below.
 The exact release, revision, and checksums are pinned in
 `scripts/lib/openclaw-bun.json`. Use this fork for the Bun development path:
 its runtime and built-in formatter and linter are the versions validated against
@@ -120,11 +120,29 @@ they do not enable automatic staging in this development resolver.
 
 Local tests and `pnpm dev` default to the pinned fork. If it is unavailable, they
 fall back to Node with one notice explaining why. `pnpm format` and
-`pnpm format:check` default to oxfmt: the pinned fork did not beat its write and
-check timings in matched repository measurements. `pnpm lint` defaults to oxlint;
+`pnpm format:check` also default locally to the pinned fork, falling back to
+oxfmt with one notice if it is unavailable. `pnpm lint` defaults to oxlint;
 Bun lint is opt-in until the required upstream fix and exact diagnostic parity
-are verified. These defaults need no Bun download and print no fallback notice.
+are verified. The oxlint default needs no Bun download and prints no fallback notice.
 Explicit Bun formatting or linting fails if the fork is unavailable.
+
+The October 18, 2026 comparison used pinned Bun `1.4.4-canary.1+7bd4fdff3`
+and oxfmt 0.72.0 on the same clean tree. These are median wall times from three
+interleaved runs after a warm-up, with native default thread counts:
+
+| Host and command                       | Bun     | oxfmt   |
+| -------------------------------------- | ------- | ------- |
+| AWS `c7a.8xlarge`, `pnpm format`       | 0.62 s  | 1.41 s  |
+| AWS `c7a.8xlarge`, `pnpm format:check` | 0.62 s  | 1.38 s  |
+| Loaded Mac, `pnpm format`              | 15.65 s | 14.74 s |
+| Loaded Mac, `pnpm format:check`        | 14.31 s | 16.40 s |
+
+On AWS, native write/check medians were 0.52/0.52 s for Bun and 1.30/1.33 s
+for oxfmt. The wrappers add about 0.10 s to Bun, without thread caps, batching,
+or an extra local formatting pass. Every run preserved the tracked bytes.
+The Mac run held the shared build lock but had substantial background load
+(about 65); it does not establish a write-speed gain there. Use the oxfmt
+override below when it performs better on your machine.
 
 Formatting reads `.oxfmtrc.jsonc`, including the 100-column print width and ignore
 patterns. Selecting Bun lint retains the existing pipeline, configuration,

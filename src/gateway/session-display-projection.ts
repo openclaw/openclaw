@@ -1,6 +1,7 @@
 import { flattenMarkdownToPlainText } from "@openclaw/normalization-core/markdown-plain-text";
 import { asOptionalRecord as readRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { isHeartbeatOkResponse } from "../auto-reply/heartbeat-filter.js";
 import type { SessionPreviewItem } from "../config/sessions/session-history-read.types.js";
 import { projectAssistantDisplayContent } from "../shared/assistant-display-content.js";
 import { stripEnvelope } from "../shared/chat-envelope.js";
@@ -9,6 +10,8 @@ import {
   isSilentAssistantTranscriptMessage,
 } from "../shared/chat-message-content.js";
 import {
+  asRoleContentMessage,
+  isProjectedForwardedMessage,
   stripAssistantMediaDirectivesForDisplay,
   takeAssistantManagedMediaUrlsForDisplay,
 } from "./chat-display-projection.helpers.js";
@@ -71,6 +74,14 @@ export function projectSessionDisplayMessage(
     role === "assistant" ? extractAssistantPhaseText(projectedEntry) : extractUserText(entry);
   let text = extracted;
   if (text && role === "assistant" && options.view !== "model-context") {
+    const roleContent = asRoleContentMessage(projectedEntry);
+    if (
+      roleContent &&
+      !isProjectedForwardedMessage(roleContent) &&
+      isHeartbeatOkResponse(roleContent)
+    ) {
+      return null;
+    }
     text = stripAssistantMediaDirectivesForDisplay(
       text,
       takeAssistantManagedMediaUrlsForDisplay(projectedEntry, role).urls,

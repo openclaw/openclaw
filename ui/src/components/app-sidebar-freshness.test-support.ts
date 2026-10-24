@@ -50,13 +50,11 @@ export async function mountSelectedRoster(
   return { ...mounted, data: mounted.sidebar.sessionData, selection, sessions };
 }
 
-export function sessionRow<T extends Partial<GatewaySessionRow>>(
+export const sessionRow = <T extends Partial<GatewaySessionRow>>(
   key: string,
   sessionId: string,
   fields: T,
-) {
-  return { key, sessionId, kind: "direct" as const, ...fields };
-}
+) => ({ key, sessionId, kind: "direct" as const, ...fields });
 
 export const human = (id: string, label: string) => ({ type: "human" as const, id, label });
 
@@ -68,45 +66,40 @@ export function disposeRoster(roster: {
   roster.sessions.dispose();
 }
 
-export function rowElement(sidebar: SidebarLifecycleState, key: string) {
-  return sidebar.querySelector(`[data-session-key="${key}"]`);
-}
+export const rowElement = (sidebar: SidebarLifecycleState, key: string) =>
+  sidebar.querySelector(`[data-session-key="${key}"]`);
 
-export function childToggle(sidebar: SidebarLifecycleState, key?: string) {
-  return sidebar.querySelector<HTMLButtonElement>(
+export const childToggle = (sidebar: SidebarLifecycleState, key?: string) =>
+  sidebar.querySelector<HTMLButtonElement>(
     key ? `[data-child-session-toggle="${key}"]` : "[data-child-session-toggle]",
   );
-}
 
 export const findRow = (result: SessionsListResult | null | undefined, key: string) =>
   result?.sessions.find((row) => row.key === key);
 
-export function waitForRequest(
+export const waitForRequest = (
   request: GatewayRequestHandler,
   method: string,
   params: Record<string, unknown>,
   partial = false,
-) {
-  return waitForFast(() =>
+) =>
+  waitForFast(() =>
     expect(request).toHaveBeenCalledWith(
       method,
       partial ? expect.objectContaining(params) : params,
     ),
   );
-}
 
-export function placement(status: "available" | "offline") {
-  return {
-    state: "active" as const,
-    generation: 1,
-    createdAtMs: 1,
-    updatedAtMs: 1,
-    stateChangedAtMs: 1,
-    environmentId: "worker:device",
-    activeOwnerEpoch: 1,
-    workerBundleHash: "a".repeat(64),
-    workspaceBaseManifestRef: "manifest",
-    remoteWorkspaceDir: "/workspace",
-    runner: { kind: "device" as const, status },
-  };
-}
+export const placement = (status: "available" | "offline") => ({
+  state: "active" as const,
+  generation: 1,
+  createdAtMs: 1,
+  updatedAtMs: 1,
+  stateChangedAtMs: 1,
+  environmentId: "worker:device",
+  activeOwnerEpoch: 1,
+  workerBundleHash: "a".repeat(64),
+  workspaceBaseManifestRef: "manifest",
+  remoteWorkspaceDir: "/workspace",
+  runner: { kind: "device" as const, status },
+});

@@ -21,6 +21,7 @@ OpenClaw serializes inbound auto-reply runs (all channels) through a tiny in-pro
 - Priority has a bounded head start: foreground work can overtake normal work by up to 15 seconds and background work by up to 30 seconds. After that, newer foreground arrivals cannot keep passing the older work. Lanes and shared capacity groups use the same order, preserving FIFO within each priority. Occupied slots and earlier queued work can still delay admission; running turns are never preempted.
 - CLI, embedded, and Codex runs enter the same **session controller mailbox**. Its selector grants one turn for the physical session before global capacity or backend preparation, so changing runtimes cannot start a competing turn.
 - Inbound messages can be persisted before their turn enters the mailbox. A running turn reads a consistent transcript prefix, so a later queued message does not invalidate its context read. Rewrites, compaction, deletion, and branch changes still invalidate that read.
+- Queued replies and progress updates retain their submitting request's authority. Completing another turn does not invalidate that queued request.
 - Inbound session runs then enter the **global `main` lane**, whose parallelism is capped by `agents.defaults.maxConcurrent`. Ordinary sub-agent runs instead use their immediate spawning/controller session's budget, set by `agents.defaults.subagents.maxConcurrent`. Swarm collector children use their group's separate budget, set by `tools.swarm.maxConcurrent`.
 - Embedded attempt preparation yields to the event loop after 16 stage starts or at least 8 ms of synchronous dispatch work per slice, so concurrent starts leave room for Gateway requests. A running stage is not preempted. Asynchronous stage work can still overlap and does not count toward that time budget; this does not lower the run concurrency limit or change session serialization.
 - When verbose logging is enabled, queued runs emit a short notice if they waited more than ~2s before starting. `queueAhead` records the enqueue-time backlog, not a prediction of admission order after priority and aging.
@@ -31,11 +32,12 @@ OpenClaw serializes inbound auto-reply runs (all channels) through a tiny in-pro
 When unset, all inbound channel surfaces use:
 
 - `mode: "steer"`
+- `allowCollaborativeSteering: false`
 - a built-in 500ms debounce for steer, followup, and collect batching
 - `cap: 20`
 - `drop: "summarize"`
 
-Same-turn steering is the default. A prompt that arrives mid-run is injected into the active runtime when the run can accept steering, so no second session run is started. If the active run cannot accept steering, OpenClaw waits for the active run to finish before starting the prompt.
+Same-requester steering is the default. A compatible prompt from the active turn’s requester is injected into the runtime when it can accept steering, so no second session run is started. If the active run cannot accept steering, OpenClaw waits for the active run to finish before starting the prompt.
 
 ## Queue modes
 
@@ -55,15 +57,15 @@ an interrupted turn is still owed, its resend runs before an ordinary message th
 arrives on that session during startup; later messages queue behind it in arrival
 order. An `interrupt` message wins instead: it cancels a resend that has not
 started and runs, and it ends a running recovered turn like any active run.
-Steering a recovered turn follows the normal tool-permission check, so a steer it
-cannot accept waits and runs as its own turn. Stopping or interrupting a resend
+Steering a recovered turn follows the same requester and collaboration rules as
+other active turns. If its backend cannot accept steering, the input waits and
+runs as its own turn. Stopping or interrupting a resend
 before it starts ends that recovery without sending it again. See
 [Restart recovery](/gateway/restart-recovery#automatic-resume).
 
-Gateway input retains its authenticated operator and original scope ceiling while
-queued or delegated to a child. Collecting messages or steering an active run
-requires compatible operator sources and tool permissions; other input waits in
-FIFO order instead of borrowing the active or newest sender's permissions.
+Queued Gateway input retains its authenticated requester. Each new execution resolves current applicable policy. Collecting messages requires compatible operator sources and tool permissions.
+
+By default, another person’s steering attempt is refused without queueing it. The runtime explains how to resend it with `/followup <message>` for a new turn under that person’s identity and current policy. Set `messages.queue.allowCollaborativeSteering: true` to let admitted human input in the same conversation steer an active turn under that turn's unchanged identity and prepared permissions. This lets Bob influence actions using permissions Alice has that Bob does not. Same-requester steering still requires compatible permissions. The option does not change queue modes or explicit cross-session `sessions_send(mode="steer")` authorization. See [Steering scope](/concepts/queue-steering#scope).
 
 An accepted turn can continue after its request returns or its client disconnects.
 That does not extend revoked device authority or permissions removed by a current
@@ -77,6 +79,7 @@ Configure globally or per channel via `messages.queue`:
   messages: {
     queue: {
       mode: "steer",
+      allowCollaborativeSteering: false,
       cap: 20,
       drop: "summarize",
       byChannel: { discord: "collect", x: "followup" },
@@ -138,6 +141,21 @@ For mode selection, OpenClaw resolves:
 
 For options, inline or stored `/queue` options win over config. Then channel-specific debounce (`messages.queue.debounceMsByChannel`), plugin debounce defaults, and built-in defaults are applied, in that order. `cap` and `drop` are global/session options, not per-channel config keys.
 
+## One-message followup
+
+`/followup <message>` sends just that message as a new turn without changing the
+stored queue mode. It waits behind active and already-queued work, stays separate
+from collect batches, and bypasses pending-question answering. If the session has
+no active or queued work, it starts through normal admission. The turn retains
+its submitter and resolves current policy when admitted.
+
+The queued notice appears only after enqueue succeeds. If the message starts
+immediately, its start notice appears when execution starts, before the answer.
+Rejected outcomes are reported separately. Queue capacity, overflow, and cancellation
+rules still apply. Gateway-backed chat and the local embedded TUI support this
+command. See [Steer](/tools/steer#one-message-as-a-new-turn) for the contrast with
+steering the active run.
+
 ## Per-session overrides
 
 - Send `/queue <steer|followup|collect|interrupt>` as a standalone command to store the queue mode for the current session.
@@ -178,6 +196,11 @@ access cancels the collected turn and blocks further effects.
 - Removing a specific queued message in Control UI also hides that pending
   prompt and its attachments. The cancellation record prevents replay after
   reconnect. Stop and timeout cancellations keep their recovery messages.
+
+After a successful session reset, an unsent follow-up reply retained for retry
+still belongs to the original session generation. Recovery does not replay it
+into the reset session. Recovery without a reset and replies to new turns
+continue normally.
 
 Gateway-backed clients (including `openclaw tui`) forward mid-run prompts and
 let the Gateway apply the queue mode. Esc/`/stop` uses a session-scoped abort
@@ -263,7 +286,7 @@ The Control UI **System busyness** overlay and `diagnostics.lanes` report plugin
   - Active work with recent progress logs as `session.long_running`. Owned silent model calls also stay `session.long_running` until the built-in abort threshold so slow or non-streaming providers are not reported as stalled too early.
   - Active work with no recent progress logs as `session.stalled`; owned model calls, blocked tool calls, and stalled embedded runs switch to `session.stalled` at or after the abort threshold. Ownerless stale model/tool activity is not hidden as long-running.
   - `session.stuck` is reserved for recoverable stale session bookkeeping, including idle queued sessions with stale ownerless model/tool activity.
-  - Diagnostics project controller state; they do not reset lanes, clear run owners, or manufacture idle state. The controller watchdog owns recovery. A timeout requests cleanup but never proves that a writer has stopped.
+  - Incoming messages waiting for admission are `waiting`, not `processing`. Diagnostics ask the controller to reconcile stale bookkeeping when no run owns it: runnable mailbox work is woken, while queued input or retained cleanup stays visibly `waiting`. Reconciliation preserves queue counts and never releases writer custody. The controller watchdog owns active-run recovery. A timeout requests cleanup but never proves that a writer has stopped.
   - Repeated model requests without semantic progress share one stagnation clock, starting with the first retry. A long initial response that hits its output limit therefore leaves a full recovery window for the corrective request. Successfully completed embedded tools reset the clock under their current run owner, even if the enclosing response later hits its output limit. Failed, blocked, or retired-owner tools do not reset it. Fresh transport bytes or later retries cannot renew it indefinitely. Recovery rechecks that evidence before aborting, honors owned tool and provider retry deadlines, and lets the existing run owner settle before the queue drains.
   - Repeated warning lines back off while the session remains unchanged. Watchdog progress, recovery deduplication, and cleanup remain owned by the exact operation, independent of the diagnostic heartbeat.
   - When recovery aborts an interactive turn before it replied and its request is already saved in the transcript, OpenClaw attempts one continuation instead of immediately asking the user to retry. When the next queued follow-up is from the same sender and route (for example a `chat.send` with `queueMode: "followup"`), it takes over the outstanding request; otherwise a recovery turn starts on the stalled turn's route. The recovery reply is delivered the same way as any queued follow-up from that source; a Web UI (`chat.send`) recovery arrives as its own run in the chat. Group-thread participant turns get the notice instead, because queued participant replies have no delivery owner. Both use the existing transcript and are instructed not to repeat completed actions. Other senders' queued messages and channel messages that arrived during the stalled turn run afterwards as their own turns. The "stopped making progress" notice is the last resort if that continuation also stalls or cannot be scheduled, including when the original request was not yet saved. Heartbeat and cron turns are unaffected.

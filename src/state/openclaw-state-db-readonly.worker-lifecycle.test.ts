@@ -331,10 +331,12 @@ it("retries transport stop and settles the already-selected query", async () => 
   const observed = settle(preserveArtifacts(read));
   await started.promise;
   await expect(closePath(options.path)).rejects.toBe(failure);
+  expect(mock.closePreparation).not.toHaveBeenCalled();
   expect(mock.cleanup).not.toHaveBeenCalled();
   await expect(closePath(options.path)).resolves.toBe(false);
   expect(mock.close).toHaveBeenCalledTimes(2);
   expect(mock.cleanup).toHaveBeenCalledTimes(1);
+  expect(mock.closePreparation).toHaveBeenCalledOnce();
   expect(await observed).toEqual({
     value: { ok: true, type: "backup.runs", sourceAdmitted: true, runs: [] },
   });

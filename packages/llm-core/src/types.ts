@@ -99,6 +99,8 @@ export interface StreamOptions {
    * Default: "short".
    */
   cacheRetention?: CacheRetention;
+  /** Request-level cache lifetime for GPT-5.6+ Responses APIs; unset preserves provider defaults. */
+  promptCacheTtl?: "30m" | "12h";
   /**
    * Optional session identifier for providers that support session-based caching.
    * Providers can use this to enable prompt caching, request routing, or other
@@ -827,6 +829,8 @@ export interface Model<TApi extends Api = Api> {
   contextTokens?: number;
   /** Provider/catalog-declared total parameter count, including inactive experts. */
   parameterCount?: number;
+  /** Provider/catalog-declared canonical developer lineage, such as `anthropic`. */
+  family?: string;
   maxTokens: number;
   /** Provider-specific request/runtime parameters passed through to provider plugins. */
   params?: Record<string, unknown>;

@@ -63,6 +63,7 @@ The following defaults reuse the corresponding files in [`ui/public/provider-ico
 | `pixverse`              | `ProviderIcon-pixverse.svg`    |
 | `qianfan`               | `ProviderIcon-qianfan.svg`     |
 | `qwen`                  | `ProviderIcon-alibaba.svg`     |
+| `requesty`              | `ProviderIcon-requesty.svg`    |
 | `runway`                | `ProviderIcon-runway.svg`      |
 | `stepfun`               | `ProviderIcon-stepfun.svg`     |
 | `synthetic`             | `ProviderIcon-synthetic.svg`   |
@@ -119,7 +120,7 @@ TypeSafe AI preserves the single-path header mark from [typesafe.ai](https://typ
 
 ## OpenClaw action glyphs
 
-Browser, Canvas, Diffs, and the memory family preserve the approved shapes from [`icons-tools.ts`](../ui/src/components/icons-tools.ts). The optional overrides preserve Intent, memory store/forget, file fetch/write, and directory list/fetch geometry. Lobster preserves both progress-claw paths, with a solid fill and the jaw’s resting `rotate(-10 8.6 11)` transform from [`working-indicator.css`](../ui/src/styles/chat/working-indicator.css). Linux Node reuses the existing platform silhouette from [`brand-icons.ts`](../ui/src/pages/apps/brand-icons.ts).
+Browser, Canvas, Diffs, and the memory family preserve the approved shapes from [`icon-data-tools.ts`](../ui/src/components/icon-data-tools.ts). The optional overrides preserve Intent, memory store/forget, file fetch/write, and directory list/fetch geometry. Lobster preserves both progress-claw paths, with a solid fill and the jaw’s resting `rotate(-10 8.6 11)` transform from [`working-indicator.css`](../ui/src/styles/chat/working-indicator.css). Linux Node reuses the existing platform silhouette from [`brand-icons.ts`](../ui/src/pages/apps/brand-icons.ts).
 
 FaceTime reuses the existing [Voice Call phone glyph](voice-call/assets/activity.svg) byte-for-byte for its realtime voice carrier.
 

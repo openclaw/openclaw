@@ -220,11 +220,10 @@ export async function persistSessionTranscriptTurn(
     },
     () => appendTranscriptTurnMessages(target, options),
   );
-  const appendedCount = appendedMessages.filter((message) => message.appended).length;
   let sessionEntry = previousSessionEntry;
   if (
     options.touchSessionEntry === true &&
-    appendedCount > 0 &&
+    appendedMessages.some((message) => message.appended) &&
     target.storePath &&
     target.sessionKey &&
     target.sessionId
@@ -258,7 +257,6 @@ export async function persistSessionTranscriptTurn(
   });
 
   return {
-    appendedCount,
     messages: appendedMessages,
     sessionEntry,
   };
@@ -418,7 +416,6 @@ async function persistExpectedSessionTranscriptTurn(
 
   if (turn.rejectedReason === "session-rebound") {
     return {
-      appendedCount: 0,
       messages: [],
       rejectedReason: "session-rebound",
       sessionEntry: turn.sessionEntry,
@@ -445,7 +442,6 @@ async function persistExpectedSessionTranscriptTurn(
   return {
     sessionTurnMutationResult: turn.sessionTurnMutationResult,
     predicateSkipped: turn.predicateSkipped,
-    appendedCount: turn.appendedMessages.filter((message) => message.appended).length,
     messages: turn.appendedMessages,
     sessionEntry: turn.sessionEntry ?? scope.sessionEntry,
   };

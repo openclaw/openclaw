@@ -1,22 +1,14 @@
 import { getObserver } from "@solidjs/signals";
-import { insert, type JSX } from "@solidjs/web";
-import {
-  createEffect,
-  createMemo,
-  createRoot,
-  getOwner,
-  onCleanup,
-  onSettled,
-  runWithOwner,
-  Show,
-} from "solid-js";
+import type { JSX } from "@solidjs/web";
+import { createEffect, createMemo, onCleanup, onSettled } from "solid-js";
 import { rosterActivityStore } from "../lib/agents/roster-activity-store.ts";
 import { useApplication, useOptionalApplication } from "../lib/reactive/context.ts";
 import { listen } from "../lib/reactive/listener.ts";
 import { createParkedProjection } from "../lib/reactive/parked-projection.ts";
 import { projectOwner, projectSource } from "../lib/reactive/projection.ts";
+import { createTimeout } from "../lib/reactive/timers.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
-import { PluginView } from "../plugins/control-ui-view.solid.tsx";
+import { PluginSurface } from "../plugins/control-ui-view.solid.tsx";
 import { appSidebarProperties, type AppSidebarProps } from "./app-sidebar-base.ts";
 import { AppSidebarOwner } from "./app-sidebar-owner.tsx";
 import { createSessionPullRequestIndicators } from "./app-sidebar-session-pr-indicators.ts";
@@ -91,7 +83,6 @@ function AppSidebarContent(
   const projection = projectSource(owner, {
     read: (current) => current,
     subscribe: (current, notify) => {
-      current.catalogRendererImport.schedule();
       const stops = [
         current.subscribe(notify),
         context.chatSubmissions.subscribeCreate(notify),
@@ -119,10 +110,15 @@ function AppSidebarContent(
   const snapshotProjection = projectOwner(snapshot, (current) => current.read());
   const snapshotPending = createMemo(() => snapshotProjection.read().pending);
   const snapshotModel = createMemo(() => snapshotProjection.read().model);
-  const people = (owner.peopleView = createSidebarPeople(owner, owner.people, () => {
-    Object.values(props);
-    return projection.read();
-  }));
+  const people = (owner.peopleView = createSidebarPeople(
+    owner,
+    owner.people,
+    () => {
+      Object.values(props);
+      return projection.read();
+    },
+    context,
+  ));
   const prepared = createMemo(
     () => {
       projection.revision();
@@ -184,8 +180,15 @@ function AppSidebarContent(
       return projection.revision();
     },
     () => props.navigationVisible,
-    // Shell inputs finish preparing a hidden first mount; owner traffic stays parked.
-    () => Object.values(props),
+    // Connection and selection prepare a hidden view; cosmetic shell writes keep it parked.
+    () => [
+      props.connected,
+      props.router,
+      props.activeRouteId,
+      props.sessionKey,
+      props.navigationView,
+      props.sidebarAgentsMode,
+    ],
   );
   const observed = new WeakMap<object, object>();
   const observe = <T extends object>(target: T): T => {
@@ -214,34 +217,18 @@ function AppSidebarContent(
     getGateway: () => prepared().sessionDataContext?.gateway,
     getSessions: () => prepared().sessionDataContext?.sessions,
   });
-  const solidOwner = getOwner();
-  const mountDefaultView = (target: HTMLElement) =>
-    runWithOwner(solidOwner, () =>
-      createRoot((dispose) => {
-        insert(target, hostView.renderSessionsBody());
-        return () => {
-          dispose();
-          target.replaceChildren();
-        };
-      }),
-    );
   const SessionBody = () => hostView.renderSessionsBody();
   const Sessions = () => (
-    <Show
-      when={Boolean(hostView.sessionDataContext?.plugins.selectedReplacement("session-list"))}
-      fallback={<SessionBody />}
-    >
-      <PluginView
-        surface="session-list"
-        props={{
-          sessionKey: hostView.sessionKey,
-          agentId: hostView.getSessionNavigationState().selectedAgentId,
-          sessions: hostView.sessionDataContext?.sessions.state.result?.sessions ?? [],
-        }}
-        presented={hostView.navigationVisible}
-        mountDefaultView={mountDefaultView}
-      />
-    </Show>
+    <PluginSurface
+      surface="session-list"
+      props={{
+        sessionKey: hostView.sessionKey,
+        agentId: hostView.getSessionNavigationState().selectedAgentId,
+        sessions: hostView.sessionDataContext?.sessions.state.result?.sessions ?? [],
+      }}
+      presented={hostView.navigationVisible}
+      renderDefault={() => <SessionBody />}
+    />
   );
   const content = hostView.renderSidebar(Sessions, scroll, {
     pending: snapshotPending,
@@ -250,6 +237,10 @@ function AppSidebarContent(
       prepared();
       return snapshotProjection.read().saved;
     },
+  });
+  const subtitleRefresh = createTimeout(() => {
+    owner.sessionProjection.invalidate();
+    owner.invalidate();
   });
   createEffect(
     () => {
@@ -270,14 +261,8 @@ function AppSidebarContent(
       // The projection owns the display deadline; this mounted view owns its timer.
       const deadline = owner.sessionProjection.subtitleDeadline;
       if (owner.isConnected && Number.isFinite(deadline)) {
-        const timer = globalThis.setTimeout(
-          () => {
-            owner.sessionProjection.invalidate();
-            owner.invalidate();
-          },
-          Math.max(0, deadline - Date.now()),
-        );
-        return () => globalThis.clearTimeout(timer);
+        subtitleRefresh.schedule(Math.max(0, deadline - Date.now()));
+        return subtitleRefresh.cancel;
       }
       return undefined;
     },
@@ -289,18 +274,19 @@ function AppSidebarContent(
       owner.sessionData.connect();
     }
     let frame = requestAnimationFrame(() => {
-      frame = requestAnimationFrame(() => owner.classList.add("sidebar-r"));
+      frame = requestAnimationFrame(() => host.classList.add("sidebar-r"));
     });
     return () => {
       cancelAnimationFrame(frame);
       owner.sessionData.disconnect(owner.isConnected);
+      disconnectSidebarOwner(host);
     };
   });
-  onCleanup(() => disconnectSidebarOwner(host));
   return content;
 }
 
 export type AppSidebarMethods = {
+  activeNavigationViewElement(): HTMLElement | undefined;
   dismissTransientMenus(): boolean;
   expandedAgentId(): string;
   findSidebarHovercardRowByKey(
@@ -318,6 +304,7 @@ export const AppSidebar = defineSolidBridge<AppSidebarProps, AppSidebarMethods>(
     connected: (host) => sidebarOwners.get(host)?.attach(),
     disconnected: (host) => sidebarOwners.get(host)?.detach(),
     methods: {
+      activeNavigationViewElement: (host) => sidebarOwners.get(host)?.activeNavigationViewElement(),
       dismissTransientMenus: dismissSidebarTransientMenus,
       expandedAgentId: (host) => sidebarOwners.get(host)?.expandedAgentId() ?? "",
       findSidebarHovercardRowByKey: (host, key) =>

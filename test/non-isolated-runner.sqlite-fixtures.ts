@@ -14,7 +14,6 @@ vi.mock(${JSON.stringify(import.meta.resolve("../src/infra/runtime-worker-url.ts
 // Literal resolver calls keep generated imports visible to CI's dependency graph.
 export function sqliteLifecycleFixtureFiles(): Record<string, string> {
   const readPoolFixture = `
-import { startAwaitedReadMock } from ${JSON.stringify(import.meta.resolve("../src/state/openclaw-state-read-mock.test-support.ts"))};
 const readPool = vi.hoisted(() => ({ close: vi.fn(async () => {}) }));
 vi.mock(${JSON.stringify(import.meta.resolve("../src/infra/runtime-process-url.ts"))}, () => ({
   resolveRuntimeProcessEntrypointUrl: () => new URL("file:///synthetic/state-read.worker.js"),
@@ -22,9 +21,9 @@ vi.mock(${JSON.stringify(import.meta.resolve("../src/infra/runtime-process-url.t
 vi.mock(${JSON.stringify(import.meta.resolve("../src/infra/worker-task-pool.ts"))}, () => ({
   WorkerTaskError: class extends Error {},
   createOwnedWorkerTaskPool: () => ({
-    startTask: () => ({
-      ...startAwaitedReadMock(async () => ({ ok: true, type: "backup.runs", sourceAdmitted: true, runs: [] })),
-      release: () => startAwaitedReadMock(async () => {}),
+    runTask: () => ({
+      result: Promise.resolve({ ok: true, type: "backup.runs", sourceAdmitted: true, runs: [] }),
+      close: async () => {},
     }),
     close: readPool.close,
     closeResources: async () => {},
@@ -47,9 +46,9 @@ async function useReadPool() {
       },
       location: "/synthetic/state.sqlite",
       checkFreshAdmission: false,
-    }, authority).result).toMatchObject({ value: { ok: true, type: "backup.runs" } });
+    }, authority)).toMatchObject({ value: { ok: true, type: "backup.runs" } });
   } finally {
-    await transport.startClose().result;
+    await transport.startClose();
   }
 }
 `;
@@ -423,7 +422,6 @@ function stateReadPoolFixtureFiles(): Record<string, string> {
 import fs from "node:fs";
 import path from "node:path";
 import { afterAll, expect, it, vi } from "vitest";
-import { startAwaitedReadMock } from ${JSON.stringify(import.meta.resolve("../src/state/openclaw-state-read-mock.test-support.ts"))};
 import { executeExistingOpenClawStateRead } from ${JSON.stringify(import.meta.resolve("../src/state/openclaw-state-db-readonly.ts"))};
 import { readWorkspaceStateSnapshot } from ${JSON.stringify(import.meta.resolve("../src/agents/workspace-state-store.ts"))};
 import { createWorkspaceStateIdentity } from ${JSON.stringify(import.meta.resolve("../src/agents/workspace-state-identity.ts"))};
@@ -439,14 +437,14 @@ vi.mock(${JSON.stringify(import.meta.resolve("../src/infra/worker-task-pool.ts")
 }));
 edge.close.mockImplementation(async () => { probe.closes.push(generation); });
 edge.create.mockImplementation(() => ({
-  startTask: () => {
+  runTask: () => {
     probe.reads.push(generation);
     return {
-      ...startAwaitedReadMock(async () => generation === "c" ? {
+      result: Promise.resolve(generation === "c" ? {
         ok: true, type: "workspace.snapshot", sourceAdmitted: true,
         snapshot: { identity: createWorkspaceStateIdentity("/fixture/workspace"), setupExists: false, setup: { version: 1 } },
       } : { ok: true, type: "backup.runs", sourceAdmitted: true, runs: [] }),
-      release: () => startAwaitedReadMock(async () => {}),
+      close: async () => {},
     };
   },
   close: edge.close,

@@ -167,7 +167,7 @@ describe("persisted provider rename", () => {
       });
       try {
         await maintenance.run(async () => {
-          const result = await maybeRepairProviderRenameCronJobs({ ...args, shouldRepair: true });
+          const result = await maybeRepairProviderRenameCronJobs(args);
           expect(result.warnings).toEqual([]);
           expect(result.changes.join("\n")).toContain("2 persisted cron job(s)");
           for (const partition of ["cron", "inactive-cron"]) {
@@ -286,8 +286,8 @@ describe("persisted provider rename", () => {
       const before = readEntries();
       const args = { cfg, env: state.env, providerRenames: renames, providerRenameOnly: true };
       expect(
-        (await maybeRepairCodexSessionRoutes({ ...args, shouldRepair: true })).repairedSessions,
-      ).toBe(4);
+        (await maybeRepairCodexSessionRoutes({ ...args, shouldRepair: true })).changes[0],
+      ).toContain("in 4 sessions across ");
       const changes: Record<string, Partial<SessionEntry>> = {
         paired: selection("ollama-cloud", "model:cloud", "other:cloud"),
         full: selection("ollama-cloud", "ollama-cloud/model:cloud", "ollama-cloud/other:cloud"),

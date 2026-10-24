@@ -50,7 +50,7 @@ describe("repairRejectedThinkingReplayInSessionManager", () => {
 
     const result = await repairRejectedThinkingReplayInSessionManager({ sessionManager });
 
-    expect(result).toMatchObject({ repaired: true, repairedCount: 1 });
+    expect(result).toMatchObject({ repaired: true });
     expect(branchMessages(sessionManager).map((message) => message.role)).toEqual([
       "user",
       "assistant",
@@ -74,7 +74,7 @@ describe("repairRejectedThinkingReplayInSessionManager", () => {
 
     const result = await repairRejectedThinkingReplayInSessionManager({ sessionManager });
 
-    expect(result).toMatchObject({ repaired: true, repairedCount: 1 });
+    expect(result).toMatchObject({ repaired: true });
     expect(branchAssistantContents(sessionManager)).toEqual([
       [{ type: "text", text: "[assistant reasoning omitted]" }],
     ]);
@@ -100,7 +100,7 @@ describe("repairRejectedThinkingReplayInSessionManager", () => {
 
     const result = await repairRejectedThinkingReplayInSessionManager({ sessionManager });
 
-    expect(result).toMatchObject({ repaired: true, repairedCount: 1 });
+    expect(result).toMatchObject({ repaired: true });
     expect(branchMessages(sessionManager).map((message) => message.role)).toEqual([
       "user",
       "assistant",
@@ -123,7 +123,6 @@ describe("repairRejectedThinkingReplayInSessionManager", () => {
 
     expect(result).toMatchObject({
       repaired: false,
-      repairedCount: 0,
       reason: "no thinking blocks on active branch",
     });
     expect(sessionManager.getLeafId()).toBe(beforeLeafId);
@@ -165,7 +164,7 @@ describe("repairRejectedCompactionReplayInSessionManager", () => {
         sessionManager,
         checkpoint: { data: "rejected-ciphertext", id: "cmp_rejected" },
       }),
-    ).toMatchObject({ repaired: true, repairedCount: 1 });
+    ).toMatchObject({ repaired: true });
     expect(
       branchMessages(sessionManager)
         .filter((message) => message.role === "assistant")

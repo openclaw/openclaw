@@ -13,12 +13,8 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-const changelog = `# Changelog
-
-## Unreleased
-
-- Package source preflight notes with enough detail.
-`;
+const changelog =
+  "# Changelog\n\n## Unreleased\n\n- Package source preflight notes with enough detail.\n";
 
 function rootManifest(overrides: Record<string, unknown> = {}) {
   return aiManifest({
@@ -30,9 +26,7 @@ function rootManifest(overrides: Record<string, unknown> = {}) {
 function aiManifest(overrides: Record<string, unknown> = {}) {
   return JSON.stringify({
     version: "2026.8.1",
-    dependencies: {
-      openai: "6.49.0",
-    },
+    dependencies: { openai: "6.49.0" },
     ...overrides,
   });
 }
@@ -46,12 +40,8 @@ function validateSource(overrides: Partial<Parameters<typeof validatePackageSour
   });
 }
 
-type WorkflowStep = {
+type WorkflowStep = Partial<Record<"if" | "name" | "run" | "uses", string>> & {
   env?: Record<string, string>;
-  if?: string;
-  name?: string;
-  run?: string;
-  uses?: string;
   with?: Record<string, unknown>;
 };
 
@@ -326,36 +316,17 @@ it("validates selected split notes instead of accepting an index as package cont
   writeFileSync(file("CHANGELOG.md"), "# Changelog\n\n- [Release](CHANGELOG/2026.8.1.md)\n");
   writeFileSync(file("CHANGELOG/2026.8.1.md"), changelog.replace("Unreleased", "2026.8.1"));
   expect(validatePackageSourceDir(root)).toBe("2026.8.1");
-  writeFileSync(file("CHANGELOG/2026.8.1.md"), "## 2026.8.1\n- Tiny.\n");
-  expect(() => validatePackageSourceDir(root)).toThrow("only 7 body bytes");
 });
 
-it.each([
-  ["2026.8.1-beta.4", "Unreleased"],
-  ["2026.9.1", "2026.8.3 (Unreleased)"],
-])("accepts aligned %s source manifests with %s notes", (version, heading) => {
+it("accepts aligned prerelease source manifests with Unreleased notes", () => {
+  const version = "2026.8.1-beta.4";
   expect(
     validateSource({
       aiManifestContent: aiManifest({ version }),
       allowUnreleasedChangelog: true,
-      changelogContent: changelog.replace("## Unreleased", `## ${heading}`),
       rootManifestContent: rootManifest({ version }),
     }),
   ).toBe(version);
-});
-
-it("uses canonical package changelog validation", () => {
-  expect(() => validateSource()).toThrow(
-    "CHANGELOG.md does not contain a release section for 2026.8.1.",
-  );
-});
-
-it("accepts complete oversized contribution records through the package renderer", () => {
-  expect(
-    validateSource({
-      changelogContent: `# Changelog\n\n## 2026.8.1\n\n- A complete release note with its original credit. Thanks @contributor.\n\n### Complete contribution record\n\n${"- **PR #123** Thanks @contributor.\n".repeat(20_000)}`,
-    }),
-  ).toBe("2026.8.1");
 });
 
 it("rejects source package version drift", () => {

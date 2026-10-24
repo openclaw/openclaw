@@ -22,7 +22,6 @@ type CodexAppServerRuntimeOptionsParams = NonNullable<
 export type CodexBindingAppServerConnection = {
   appServer: CodexAppServerRuntimeOptions;
   usesSupervisionConnection: boolean;
-  requestAuthProfileId: string | undefined;
   clientAuthProfileId: string | null | undefined;
 };
 

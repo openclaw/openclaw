@@ -3,21 +3,22 @@ import type {
   SessionPlacement,
   SessionsDispatchResult,
 } from "../../../../packages/gateway-protocol/src/index.js";
+import { GATEWAY_STARTUP_ADMISSION_WAIT_MS } from "../../../../packages/gateway-protocol/src/startup-unavailable.js";
 import {
   GatewayPayloadLimitError,
   GatewayRequestError,
   type GatewayBrowserClient,
 } from "../../api/gateway.ts";
 import { t } from "../../i18n/index.ts";
-import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
+import { registerNewSessionRuntimeEnglish } from "../../i18n/locales/en-new-session-runtime.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { isAwaitingGatewayFailure } from "../../lib/gateway-availability.ts";
 import { generateUUID } from "../../lib/uuid.ts";
 import {
+  formatTerminalChatSendAckError,
   isTerminalFailureChatSendAck,
   normalizeChatSendAck,
 } from "../../pages/chat/chat-send-ack.ts";
-import { formatTerminalChatSendAckError } from "../../pages/chat/chat-send-support.ts";
 import type { HumanMention } from "../chat/chat-types.ts";
 import type { SessionCapability } from "./session-capability.ts";
 import { readSessionPlacementPolicy } from "./session-placement-policy.ts";
@@ -26,7 +27,7 @@ import type {
   SessionPlacementTarget,
 } from "./session-placement-recovery.ts";
 
-registerNewSessionSetupEnglish();
+registerNewSessionRuntimeEnglish();
 
 type SessionPlacementRequests = {
   client: Pick<GatewayBrowserClient, "request"> | null;
@@ -336,6 +337,7 @@ export async function startSessionPlacementInitialTurn(
     messageId?: string;
     mode: SessionPlacementStartMode;
     cleanupOnCancellation?: () => boolean;
+    signal?: AbortSignal;
   },
   isCurrent: () => boolean,
   beforeSend: () => boolean = () => true,
@@ -416,9 +418,11 @@ export async function startSessionPlacementInitialTurn(
   }
   if (resolution.status === "rejected") {
     const state = typeof resolution.placement?.state === "string" ? resolution.placement.state : "";
+    const placementError =
+      resolution.placement?.state === "failed" ? resolution.placement.recoveryError : undefined;
     return {
       status: "dispatch-rejected",
-      error: dispatchError || (state ? `session placement became ${state}` : ""),
+      error: placementError || dispatchError || (state ? `session placement became ${state}` : ""),
     };
   }
   if (!isCurrent()) {
@@ -440,14 +444,22 @@ export async function startSessionPlacementInitialTurn(
     return rejectBeforeDelivery("placement recovery storage is unavailable", "send-not-started");
   }
   try {
-    const sent = await client.request("sessions.send", {
-      key: params.key,
-      agentId: params.agentId,
-      message,
-      ...(mentions?.length ? { mentions } : {}),
-      attachments: params.attachments,
-      idempotencyKey: messageId,
-    });
+    const sent = await client.request(
+      "sessions.send",
+      {
+        key: params.key,
+        agentId: params.agentId,
+        message,
+        ...(mentions?.length ? { mentions } : {}),
+        attachments: params.attachments,
+        idempotencyKey: messageId,
+      },
+      {
+        timeoutMs: GATEWAY_STARTUP_ADMISSION_WAIT_MS,
+        signal: params.signal,
+        retainSentResultOnAbort: true,
+      },
+    );
     if (!isCurrent()) {
       return await cancelSessionPlacement(client, params, cleanupOnCancellation, messageId);
     }

@@ -49,32 +49,35 @@ afterEach(() => {
   readFreeBsdProcessStartTimeMock.mockReset();
 });
 
-function mockProcReads(entries: Record<string, string>) {
+function mockProcReads(entries: Record<string, string | (() => string)>) {
   const originalReadFileSync = fsSync.readFileSync;
   vi.spyOn(fsSync, "readFileSync").mockImplementation((filePath, encoding) => {
     const key = String(filePath);
     if (Object.hasOwn(entries, key)) {
-      return entries[key] as never;
+      const value = entries[key];
+      return (typeof value === "function" ? value() : value) as never;
     }
     return originalReadFileSync(filePath as never, encoding as never) as never;
   });
 }
 
+function mockKill(code = "success") {
+  return vi.spyOn(process, "kill").mockImplementation(() => {
+    if (code !== "success") {
+      throw Object.assign(new Error("process probe failed"), { code });
+    }
+    return true;
+  });
+}
+const invalidPids = [0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY];
+
 describe("isPidAlive", () => {
   it("returns false for invalid PIDs", () => {
-    expect(isPidAlive(0)).toBe(false);
-    expect(isPidAlive(-1)).toBe(false);
-    expect(isPidAlive(1.5)).toBe(false);
-    expect(isPidAlive(Number.NaN)).toBe(false);
-    expect(isPidAlive(Number.POSITIVE_INFINITY)).toBe(false);
+    expect(invalidPids.map(isPidAlive)).toEqual(invalidPids.map(() => false));
   });
 
   it("returns false when process probing reports ESRCH", () => {
-    const error = Object.assign(new Error("missing process"), { code: "ESRCH" });
-    vi.spyOn(process, "kill").mockImplementation(() => {
-      throw error;
-    });
-
+    mockKill("ESRCH");
     expect(isPidAlive(42)).toBe(false);
     expect(process["kill"]).toHaveBeenCalledWith(42, 0);
   });
@@ -94,19 +97,13 @@ describe("isPidAlive", () => {
   });
 });
 
-describe("isPidDefinitelyDead", () => {
-  it("returns true for invalid PIDs", () => {
-    expect(isPidDefinitelyDead(0)).toBe(true);
-    expect(isPidDefinitelyDead(-1)).toBe(true);
-    expect(isPidDefinitelyDead(1.5)).toBe(true);
-    expect(isPidDefinitelyDead(Number.NaN)).toBe(true);
-    expect(isPidDefinitelyDead(Number.POSITIVE_INFINITY)).toBe(true);
-  });
+it("isPidDefinitelyDead returns true for invalid PIDs", () => {
+  expect(invalidPids.map(isPidDefinitelyDead)).toEqual(invalidPids.map(() => true));
 });
 
 describe("Linux process liveness", () => {
   it("rejects a reused worker TID but protects its live process leader", () => {
-    vi.spyOn(process, "kill").mockImplementation(() => true);
+    mockKill();
     mockProcReads({
       "/proc/42/status": "Name:\tnode\nState:\tS\nTgid:\t42\nPid:\t42\nThreads:\t2\n",
       "/proc/43/status": "Name:\tworker\nState:\tS\nTgid:\t42\nPid:\t43\nThreads:\t2\n",
@@ -124,17 +121,12 @@ describe("Linux process liveness", () => {
     { probe: "EPERM", state: "X", threads: "2", dead: false },
   ])(
     "requires exited threads (probe=$probe, state=$state, threads=$threads)",
-    async ({ probe, state, threads, dead }) => {
-      vi.spyOn(process, "kill").mockImplementation(() => {
-        if (probe === "EPERM") {
-          throw Object.assign(new Error("permission denied"), { code: "EPERM" });
-        }
-        return true;
-      });
+    ({ probe, state, threads, dead }) => {
+      mockKill(probe);
       mockProcReads({
         "/proc/42/status": `Name:\tnode\nState:\t${state}\n${threads ? `Threads:\t${threads}\n` : ""}`,
       });
-      await withMockedPlatform("linux", async () => {
+      return withMockedPlatform("linux", () => {
         expect(isPidAlive(42)).toBe(!dead);
         expect(isPidDefinitelyDead(42)).toBe(dead && probe !== "EPERM");
       });
@@ -144,13 +136,11 @@ describe("Linux process liveness", () => {
 
 it("confirms exit when procfs disappears after the initial existence probe", () => {
   let statusRead = false;
-  const originalReadFileSync = fsSync.readFileSync;
-  vi.spyOn(fsSync, "readFileSync").mockImplementation((...args) => {
-    if (String(args[0]) !== "/proc/42/status") {
-      return originalReadFileSync(...args);
-    }
-    statusRead = true;
-    throw Object.assign(new Error("process status unavailable"), { code: "ENOENT" });
+  mockProcReads({
+    "/proc/42/status": () => {
+      statusRead = true;
+      throw Object.assign(new Error("process status unavailable"), { code: "ENOENT" });
+    },
   });
   vi.spyOn(process, "kill").mockImplementation(() => {
     if (!statusRead) {
@@ -167,14 +157,7 @@ it.each(["ESRCH", "EPERM", "success"])(
   "revalidates a zero-thread Linux snapshot (fresh probe=%s)",
   (result) => {
     mockProcReads({ "/proc/42/status": "Name:\tnode\nState:\tZ\nThreads:\t0\n" });
-    vi.spyOn(process, "kill")
-      .mockImplementationOnce(() => true)
-      .mockImplementation(() => {
-        if (result === "success") {
-          return true;
-        }
-        throw Object.assign(new Error("current PID probe failed"), { code: result });
-      });
+    mockKill(result).mockImplementationOnce(() => true);
     withMockedPlatform("linux", () => {
       expect(isPidDefinitelyDead(42)).toBe(result === "ESRCH");
     });
@@ -228,17 +211,16 @@ describe("process start times", () => {
         .mockReturnValueOnce(111)
         .mockReturnValueOnce(222);
       readFreeBsdProcessStartTimeMock.mockImplementation(probe);
-      const originalReadFileSync = fsSync.readFileSync;
-      vi.spyOn(fsSync, "readFileSync").mockImplementation((filePath, encoding) => {
-        const pid = /^\/proc\/(\d+)\/stat$/.exec(String(filePath))?.[1];
-        if (!pid) {
-          return originalReadFileSync(filePath as never, encoding as never) as never;
-        }
-        const value = probe(Number(pid));
+      const stat = (pid: number) => () => {
+        const value = probe(pid);
         if (value === null) {
           throw new Error("process start time unavailable");
         }
-        return `${pid} (node) S ${"0 ".repeat(18)}${value}` as never;
+        return `${pid} (node) S ${"0 ".repeat(18)}${value}`;
+      };
+      mockProcReads({
+        [`/proc/${process.pid}/stat`]: stat(process.pid),
+        [`/proc/${foreignPid}/stat`]: stat(foreignPid),
       });
 
       await withMockedPlatform(platform, async () => {
@@ -316,12 +298,7 @@ describe("native process identity policy", () => {
     ])("does not recover through ps (signal probe=$probe)", ({ probe, definitelyDead }) => {
       nativeIdentity.mockReturnValue(value);
       // The synthetic PID must not inherit the host's signal permissions.
-      vi.spyOn(process, "kill").mockImplementation(() => {
-        if (probe !== "success") {
-          throw Object.assign(new Error("process probe failed"), { code: probe });
-        }
-        return true;
-      });
+      mockKill(probe);
       const shell = vi.spyOn(childProcess, "execFileSync");
       expect(getFileLockProcessStartTime(42)).toBeNull();
       expect(getProcessInstanceStartTime(42)).toBeNull();
@@ -340,9 +317,7 @@ describe("native process identity policy", () => {
           details: { reason: "visibility-policy" },
         });
       });
-      const kill = vi.spyOn(process, "kill").mockImplementation(() => {
-        throw Object.assign(new Error("hidden"), { code: "ESRCH" });
-      });
+      const kill = mockKill("ESRCH");
       expect(isPidAlive(42)).toBe(true);
       expect(isPidDefinitelyDead(42)).toBe(false);
       expect(kill.mock.calls).toEqual([

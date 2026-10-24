@@ -47,7 +47,7 @@ export async function assertCrabboxSetupEgressSupport(params: {
     !/(?:^|\n)\s+-{1,2}allow-public-destinations(?:\s|$)/u.test(output) ||
     !/(?:^|\n)\s+-{1,2}upstream-proxy-env(?:\s|$)/u.test(output)
   ) {
-    throw new Error("Setup secrets require native egress; update Crabbox to 0.77.0 or newer");
+    throw new Error("Setup secrets require native egress; update Crabbox to 0.79.2 or newer");
   }
 }
 
@@ -62,7 +62,6 @@ export function createCrabboxSetupCommandRunner(params: {
     }
     assertCrabboxLeaseId(lease.leaseId);
     const binary = await params.resolveBinary(profile.binary, command.signal);
-    command.assertCurrent();
     const createScript = (env?: Record<string, string>) =>
       `set -eu\ncd -- ${quote(command.workspaceDir)}\nexport HOME=${quote(command.homeDir)}\nnode -e ${quote(command.createScript(env))}`;
     await assertCrabboxSetupEgressSupport({
@@ -71,7 +70,6 @@ export function createCrabboxSetupCommandRunner(params: {
       assertCurrent: command.assertCurrent,
       signal: command.signal,
     });
-    command.assertCurrent();
     return await runCrabboxSetupEgress({
       binary,
       provider: profile.provider,

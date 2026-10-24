@@ -212,6 +212,50 @@ function startConnectionFixture(
   return { connection, request, publications, writeStderrLine, start, prepared, runtime };
 }
 
+it("publishes retained process changes through the current connection only", async () => {
+  const { connection, request, start } = startConnectionFixture(true);
+  const changed = start.mock.calls[0]![0].onProcessesChanged!;
+  const binding = {
+    environmentId: "environment-1",
+    sessionId: "session-1",
+    ownerEpoch: 3,
+    placementGeneration: 2,
+  };
+  const replacementRequest = vi.fn().mockResolvedValue({});
+  const processEvents = (calls: unknown[][]) =>
+    calls.filter(
+      ([, params]) =>
+        typeof params === "object" &&
+        params !== null &&
+        "event" in params &&
+        params.event === "worker.processes.changed",
+    );
+  try {
+    changed(binding);
+    expect(processEvents(request.mock.calls)).toHaveLength(0);
+    connection.connect(gateway);
+    changed(binding);
+    expect(processEvents(request.mock.calls)).toEqual([
+      [
+        "node.event",
+        {
+          event: "worker.processes.changed",
+          payloadJSON: JSON.stringify(binding),
+        },
+      ],
+    ]);
+    connection.connect(gateway, { request: replacementRequest });
+    changed(binding);
+    expect(processEvents(request.mock.calls)).toHaveLength(1);
+    expect(processEvents(replacementRequest.mock.calls)).toHaveLength(1);
+    connection.disconnect();
+    changed(binding);
+    expect(processEvents(replacementRequest.mock.calls)).toHaveLength(1);
+  } finally {
+    await connection.close();
+  }
+});
+
 it("sends permission details only while the connected Gateway advertises support", async () => {
   const { connection, request, start } = startConnectionFixture();
   const runtimeClient = start.mock.calls[0]![0].client;
@@ -564,12 +608,15 @@ it("keeps refreshed publication on its replacement connection despite an old ack
 });
 
 it.each([false, true])(
-  "advertises prepared workspace registration only when enabled: %s",
+  "negotiates prefetch for persistent hosts and prepared workspaces for ephemeral hosts: %s",
   async (enabled) => {
     const { connection, request, start } = startConnectionFixture(true, enabled);
     try {
       start.mock.calls[0]?.[0].onRunnerCapacityChanged?.({ total: 1, available: 1 });
-      connection.connect(gateway);
+      connection.connect({
+        ...gateway,
+        capabilities: [GATEWAY_SERVER_CAPS.NODE_WORKER_BUNDLE_PREFETCH],
+      });
       const declaration = request.mock.calls.find(
         ([method]) => method === NODE_RUNNER_INVENTORY_UPDATE_METHOD,
       )?.[1];
@@ -580,6 +627,7 @@ it.each([false, true])(
         throw new Error("Expected an enabled worker declaration");
       }
       expect(parsed.workerHost.preparedWorkspace).toBe(enabled ? 1 : undefined);
+      expect(parsed.workerHost.bundlePrefetch).toBe(enabled ? undefined : 1);
       start.mock.calls[0]?.[0].onWorkerHostingDisabled?.("test revoked worker consent");
       await vi.advanceTimersByTimeAsync(0);
       expect(
@@ -623,6 +671,7 @@ it.each([
           : { total: 2, available: 2 };
     const capabilities = {
       optional: [
+        GATEWAY_SERVER_CAPS.NODE_WORKER_BUNDLE_PREFETCH,
         GATEWAY_SERVER_CAPS.NODE_WORKER_CAPTURED_EXEC_POLICY,
         GATEWAY_SERVER_CAPS.NODE_WORKER_LAUNCH_TOOL_NAMES,
         GATEWAY_SERVER_CAPS.NODE_WORKER_STATUS_WAIT,
@@ -662,6 +711,7 @@ it.each([
                   bundlePrewarm: 1,
                   ...(supported && kind === "idle" ? { idleRetention: true } : {}),
                   ...(supported && kind === "optional" ? { capturedExecPolicy: true } : {}),
+                  ...(supported && kind === "optional" ? { bundlePrefetch: 1 } : {}),
                   ...(supported && (kind === "optional" || kind === "workspace")
                     ? {
                         statusWait: 1,

@@ -28,7 +28,7 @@ import {
 } from "./server-chat-state.js";
 import { createGatewayConnectionState } from "./server-connection-state.js";
 import { createBoardHandlers } from "./server-methods/board.js";
-import { createProgressCardHandlers } from "./server-methods/progress-card.js";
+import { progressCardHandlers } from "./server-methods/progress-card.js";
 import { flushPendingSessionsChangedEvents } from "./server-methods/session-change-event.js";
 import type { GatewayRequestContext, RespondFn } from "./server-methods/types.js";
 import { createLifecycleEventBroadcastHandler } from "./server-session-lifecycle-events.js";
@@ -113,6 +113,7 @@ describe("board event scope guards", () => {
     const { broadcast } = createGatewayBroadcaster({ clients });
 
     broadcast("board.changed", { sessionKey: "agent:main:main", revision: 1 });
+    broadcast("sessions.processes.changed", { sessionKey: "agent:main:main", agentId: "main" });
     broadcast("board.command", {
       sessionKey: "agent:main:main",
       command: { kind: "focus_tab", tabId: "main" },
@@ -120,15 +121,17 @@ describe("board event scope guards", () => {
 
     expect(pairing.socket.events).toEqual([]);
     expect(node.socket.events).toEqual([]);
-    expect(read.socket.events).toEqual(["board.changed", "board.command"]);
-    expect(write.socket.events).toEqual(["board.changed", "board.command"]);
-    expect(admin.socket.events).toEqual(["board.changed", "board.command"]);
+    const events = ["board.changed", "sessions.processes.changed", "board.command"];
+    expect(read.socket.events).toEqual(events);
+    expect(write.socket.events).toEqual(events);
+    expect(admin.socket.events).toEqual(events);
   });
 });
 
 describe("board and progress event session ownership", () => {
   it.each([
     { scope: "global", feature: "progress" },
+    { scope: "global", feature: "process" },
     { scope: "per-sender", feature: "board" },
   ] as const)(
     "delivers $feature events only to the canonical draft owner in $scope mode",
@@ -171,7 +174,7 @@ describe("board and progress event session ownership", () => {
           connection.clients.add(client);
         }
         const { broadcast, broadcastToConnIds } = connection;
-        const handlers = { ...createProgressCardHandlers(), ...createBoardHandlers(boardStore) };
+        const handlers = { ...progressCardHandlers, ...createBoardHandlers(boardStore) };
         const context = {
           broadcast,
           broadcastToConnIds,
@@ -201,6 +204,19 @@ describe("board and progress event session ownership", () => {
           });
         };
         try {
+          if (feature === "process") {
+            const target = { sessionKey: "global", agentId: "work" };
+            broadcast("sessions.processes.changed", target, {
+              sessionKeys: [target.sessionKey],
+              agentId: target.agentId,
+            });
+            expect(peers.map(frames)).toEqual([
+              [expect.objectContaining({ event: "sessions.processes.changed", payload: target })],
+              [],
+              [],
+            ]);
+            return;
+          }
           if (feature === "progress") {
             const rawWrite = await invoke("progressCard.put", {
               sessionKey: "global",

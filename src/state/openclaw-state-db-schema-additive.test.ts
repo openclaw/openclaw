@@ -8,10 +8,13 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { ensureExecutionOwnerLifecycleBindingSchema } from "../audit/execution-owner-lifecycle-binding-store.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
+import { stageSqliteCommittedPublication } from "../infra/sqlite-post-commit.js";
 import { assertSqliteSchemaContains } from "../infra/sqlite-schema-contract.test-support.js";
+import { createSqliteSchemaEnsurer } from "../infra/sqlite-schema-ensure.js";
 import { runSqliteReadOperationSync } from "../infra/sqlite-schema-facts.js";
 import { useSqliteSchemaTestFixture } from "../infra/sqlite-schema-facts.test-support.js";
 import { classifySqliteMutation } from "../infra/sqlite-schema-mutation.js";
+import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { ensureMeetingTranscriptsSchema } from "../transcripts/sqlite-schema.js";
@@ -28,7 +31,9 @@ import {
 import {
   openExistingOpenClawStateDatabaseReadOnly as openReadOnly,
   openOpenClawStateDatabase as openState,
+  runOpenClawStateWriteTransaction,
 } from "./openclaw-state-db.js";
+import { createOpenClawStateSchemaEnsurer } from "./openclaw-state-feature-schema-ensure.js";
 import {
   getOpenClawStateRuntimeSchema,
   OPENCLAW_STATE_MAINTENANCE_SCHEMA_COMPATIBILITY,
@@ -54,6 +59,101 @@ function expectRepeatedSqlAbsent(pattern: (sql: string) => boolean, run: () => v
     observation.restore();
   }
 }
+
+it("does not open a transaction for an already admitted feature schema", () => {
+  const database = openState({
+    env: { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-feature-schema-") },
+  });
+  const createEnsurer = () =>
+    createOpenClawStateSchemaEnsurer({
+      table: "web_push_approval_deliveries",
+      indexes: ["idx_web_push_approval_deliveries_subscription"],
+      endMarker: "  ON web_push_approval_deliveries(subscription_id, approval_id);\n",
+      operationLabel: "test.feature-schema",
+    });
+  createEnsurer()({ database });
+  const observation = observeHostDataSql();
+  try {
+    createEnsurer()({ database });
+    expect(observation.queries.filter((sql) => /^(?:BEGIN|COMMIT|ROLLBACK)\b/i.test(sql))).toEqual(
+      [],
+    );
+  } finally {
+    observation.restore();
+  }
+});
+
+it("retries rolled-back feature DDL and publishes only its durable installation", () => {
+  const database = openState({
+    env: { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-feature-rollback-") },
+  });
+  const ensure = createOpenClawStateSchemaEnsurer({
+    table: "web_push_approval_deliveries",
+    operationLabel: "test.feature-schema",
+  });
+  using reader = openNodeSqliteDatabase(database.path);
+  const installed = () =>
+    readRow(
+      reader,
+      "SELECT name FROM sqlite_schema WHERE name = ?",
+      "web_push_approval_deliveries",
+    ) !== undefined;
+  const publications: boolean[] = [];
+  const install = () => {
+    ensure({ database });
+    stageSqliteCommittedPublication(database.db, {
+      installFacts: () => {},
+      invalidate: () => {},
+      notify: () => publications.push(installed()),
+    });
+    expect(publications).toEqual([]);
+    expect(installed()).toBe(false);
+  };
+  database.db.exec("BEGIN IMMEDIATE");
+  try {
+    expect(() => ensure({ database })).toThrow("Cannot join an unmanaged shared-state transaction");
+  } finally {
+    database.db.exec("ROLLBACK");
+  }
+  expect(() =>
+    runOpenClawStateWriteTransaction(
+      () => {
+        install();
+        throw new Error("installation refused");
+      },
+      { database },
+    ),
+  ).toThrow("installation refused");
+  expect(installed()).toBe(false);
+  expect(publications).toEqual([]);
+  runOpenClawStateWriteTransaction(install, { database });
+  expect(publications).toEqual([true]);
+});
+
+it("installs additive DDL on the write runner's connection and rolls it back there", () => {
+  const outer = openDatabase();
+  const writer = openDatabase();
+  const ensure = createSqliteSchemaEnsurer(() => "CREATE TABLE feature (id INTEGER)", {
+    tables: ["feature"],
+  });
+  const installed = (db: EngineConnection) =>
+    readRow(db, "SELECT name FROM sqlite_schema WHERE name = 'feature'") !== undefined;
+
+  expect(() =>
+    ensure(outer, (install) =>
+      runSqliteImmediateTransactionSync(writer, () => {
+        install(writer);
+        throw new Error("installation refused");
+      }),
+    ),
+  ).toThrow("installation refused");
+  expect(installed(outer)).toBe(false);
+  expect(installed(writer)).toBe(false);
+
+  ensure(outer, (install) => runSqliteImmediateTransactionSync(writer, () => install(writer)));
+  expect(installed(outer)).toBe(false);
+  expect(installed(writer)).toBe(true);
+});
 
 it.each([
   [

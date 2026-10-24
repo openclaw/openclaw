@@ -9,6 +9,7 @@ import * as configEnv from "../config/config-env-vars.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { SQLITE_WORKER_TRANSFER_FRAME_BYTES } from "../infra/sqlite-worker-transfer.js";
 import * as workerCpu from "../infra/worker-cpu.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.js";
 import { createAgentDatabaseInspectionRefusal } from "../state/agent-database-admission.js";
 import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db.js";
@@ -17,8 +18,9 @@ import { clearOpenClawDatabaseQuarantine } from "../state/openclaw-quarantine-st
 import { seedOpenClawDatabaseQuarantine } from "../state/openclaw-quarantine-store.test-support.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db-cache.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { withMockedWindowsPlatform } from "../test-utils/vitest-spies.js";
 import { loadPersistedPluginModelCatalogs } from "./plugin-model-catalog-execution.js";
-import { readPluginModelCatalogsInWorker } from "./plugin-model-catalog-read.js";
+import * as catalogReads from "./plugin-model-catalog-read.js";
 import {
   encodePluginModelCatalogRelativePath,
   PLUGIN_MODEL_CATALOG_GENERATED_BY,
@@ -38,12 +40,7 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
 function catalogContents(name: string): string {
   return JSON.stringify({
     generatedBy: PLUGIN_MODEL_CATALOG_GENERATED_BY,
-    providers: {
-      fixture: {
-        api: "openai-completions",
-        models: [{ id: "fixture-model", name }],
-      },
-    },
+    providers: { fixture: { api: "openai-completions", models: [{ id: "fixture-model", name }] } },
   });
 }
 
@@ -59,12 +56,21 @@ function createFixture(contents: string) {
   database
     .prepare("INSERT INTO cache_entries (scope, key, value_json, updated_at) VALUES (?, ?, ?, ?)")
     .run("plugin-model-catalog-v1", "fixture", contents, 1);
+  const read = () => loadPersistedPluginModelCatalogs(agentDir, ["fixture"], env);
   return {
     root,
     env,
     agentDir,
     databasePath,
-    read: () => loadPersistedPluginModelCatalogs(agentDir, ["fixture"], env),
+    read,
+    expectContents: (expected: string) =>
+      expect(read()).resolves.toEqual([{ pluginId: "fixture", contents: expected }]),
+    write: (next: string) =>
+      replacePersistedPluginModelCatalogs({
+        agentDir,
+        env,
+        pluginCatalogWrites: { [encodePluginModelCatalogRelativePath("fixture")]: next },
+      }),
   };
 }
 
@@ -104,51 +110,35 @@ it.each(["read", "write"] as const)(
     const first = catalogContents("first");
     const fixture = createFixture(first);
     const clone = configEnv.cloneEnvWithPlatformSemantics;
-    const windowsEnv = vi
-      .spyOn(configEnv, "cloneEnvWithPlatformSemantics")
-      .mockImplementation((env) => {
-        const source: NodeJS.ProcessEnv = { ...env, openclaw_state_dir: env.OPENCLAW_STATE_DIR };
-        delete source.OPENCLAW_STATE_DIR;
-        // Use Windows environment semantics without changing native paths or worker execution.
-        const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
-        Object.defineProperty(process, "platform", { value: "win32" });
-        try {
-          return clone(source);
-        } finally {
-          Object.defineProperty(process, "platform", platform);
-        }
-      });
-    try {
-      expect(() => structuredClone(configEnv.cloneEnvWithPlatformSemantics(fixture.env))).toThrow(
-        expect.objectContaining({ name: "DataCloneError" }),
-      );
-      const expected = operation === "read" ? first : catalogContents("replaced");
-      if (operation === "write") {
-        await expect(
-          replacePersistedPluginModelCatalogs({
-            agentDir: fixture.agentDir,
-            pluginCatalogWrites: { [encodePluginModelCatalogRelativePath("fixture")]: expected },
-            env: fixture.env,
-          }),
-        ).resolves.toMatchObject({ changed: true });
-      }
-      await expect(fixture.read()).resolves.toEqual([{ pluginId: "fixture", contents: expected }]);
-    } finally {
-      windowsEnv.mockRestore();
+    using _ = vi.spyOn(configEnv, "cloneEnvWithPlatformSemantics").mockImplementation((env) => {
+      const source: NodeJS.ProcessEnv = { ...env, openclaw_state_dir: env.OPENCLAW_STATE_DIR };
+      delete source.OPENCLAW_STATE_DIR;
+      // Use Windows environment semantics without changing native paths or worker execution.
+      return withMockedWindowsPlatform(() => clone(source));
+    });
+    expect(() => structuredClone(configEnv.cloneEnvWithPlatformSemantics(fixture.env))).toThrow(
+      expect.objectContaining({ name: "DataCloneError" }),
+    );
+    const expected = operation === "read" ? first : catalogContents("replaced");
+    if (operation === "write") {
+      await expect(fixture.write(expected)).resolves.toMatchObject({ changed: true });
     }
+    await fixture.expectContents(expected);
   },
 );
 
 it("identifies the rejected protocol field without exposing values or suggesting migration", async () => {
   const fixture = createFixture(catalogContents("diagnostic"));
-  const failure = await readPluginModelCatalogsInWorker(
-    {
-      agentId: "main",
-      path: fixture.databasePath,
-      env: new Proxy({ ...fixture.env, PRIVATE_VALUE: "synthetic-private" }, {}),
-    },
-    new AbortController().signal,
-  ).catch((error: unknown) => error);
+  const failure = await catalogReads
+    .readPluginModelCatalogsInWorker(
+      {
+        agentId: "main",
+        path: fixture.databasePath,
+        env: new Proxy({ ...fixture.env, PRIVATE_VALUE: "synthetic-private" }, {}),
+      },
+      new AbortController().signal,
+    )
+    .catch((error: unknown) => error);
   expect(failure).toMatchObject({
     name: "PluginModelCatalogInputError",
     code: "failed",
@@ -180,7 +170,7 @@ it("reads without creating shared state and observes canonical replacements on t
 
   const sql = observeHostDataSql();
   try {
-    await expect(fixture.read()).resolves.toEqual([{ pluginId: "fixture", contents: first }]);
+    await fixture.expectContents(first);
     expect(sql.queries).toEqual([]);
   } finally {
     sql.restore();
@@ -190,19 +180,31 @@ it("reads without creating shared state and observes canonical replacements on t
   const reader = observation.workers[0];
 
   const second = catalogContents("second");
-  await replacePersistedPluginModelCatalogs({
-    agentDir: fixture.agentDir,
-    env: fixture.env,
-    pluginCatalogWrites: { [encodePluginModelCatalogRelativePath("fixture")]: second },
-  });
-  await expect(fixture.read()).resolves.toEqual([{ pluginId: "fixture", contents: second }]);
+  await fixture.write(second);
+  await fixture.expectContents(second);
   expect(observation.workers).toEqual([reader]);
+});
+
+it("refuses a catalog result after its captured root admission closes", async () => {
+  const fixture = createFixture(catalogContents("retired root"));
+  const held = createDeferredCore<Awaited<ReturnType<typeof loadPersistedPluginModelCatalogs>>>();
+  const workerRead = vi
+    .spyOn(catalogReads, "readPluginModelCatalogsInWorker")
+    .mockReturnValueOnce(held.promise);
+
+  const reading = fixture.read();
+  const closing = closeOpenClawStateDatabaseAsync();
+  held.resolve([]);
+  const results = await Promise.allSettled([reading, closing]);
+
+  expect(workerRead).toHaveBeenCalledOnce();
+  expect(results).toMatchObject([{ status: "rejected" }, { status: "fulfilled" }]);
 });
 
 it("rejects quarantine and tracked schema damage after warm reads, then accepts cleared quarantine", async () => {
   const contents = catalogContents("quarantine fixture");
   const fixture = createFixture(contents);
-  await expect(fixture.read()).resolves.toEqual([{ pluginId: "fixture", contents }]);
+  await fixture.expectContents(contents);
   seedOpenClawDatabaseQuarantine({
     env: fixture.env,
     path: fixture.databasePath,
@@ -212,7 +214,7 @@ it("rejects quarantine and tracked schema damage after warm reads, then accepts 
   await expect(fixture.read()).rejects.toThrow(/quarantined.*synthetic verified damage/);
 
   expect(clearOpenClawDatabaseQuarantine(fixture.databasePath, { env: fixture.env })).toBe(true);
-  await expect(fixture.read()).resolves.toEqual([{ pluginId: "fixture", contents }]);
+  await fixture.expectContents(contents);
   {
     using database = openNodeSqliteDatabase(fixture.databasePath);
     database.exec(
@@ -236,7 +238,7 @@ it("bounds large catalog transfers and refuses a replaced source before exposing
       fs.renameSync(replacementPath, fixture.databasePath);
     }
   });
-  await expect(fixture.read()).resolves.toEqual([{ pluginId: "fixture", contents }]);
+  await fixture.expectContents(contents);
   expect(observation.frames.length).toBeGreaterThan(1);
   expect(
     observation.frames.every((bytes) => bytes > 0 && bytes <= SQLITE_WORKER_TRANSFER_FRAME_BYTES),

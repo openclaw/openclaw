@@ -1,10 +1,15 @@
 import { randomUUID } from "node:crypto";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../../test/helpers/promise.js";
 import { refreshSessionEntryFromStore } from "../../auto-reply/reply/agent-runner-core.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import type { ContextEngineRuntimeContext } from "../../context-engine/types.js";
+import { onAgentEvent, type AgentEventPayload } from "../../infra/agent-events.js";
 import { getReplyOperationSessionReader } from "../../sessions/session-controller.session-reader.js";
 import { resolveCompactionTimeoutMs } from "./compaction-safety-timeout.js";
 import {
@@ -113,6 +118,161 @@ describe("embedded compaction recovery authority", () => {
           }
         },
       );
+    },
+  );
+
+  it.each(["success", "failure", "abort", "hook notices"] as const)(
+    "publishes recovery compaction while held without requiring notice text (%s)",
+    async (outcome) => {
+      await withRecoveryFixture({ oversized: false }, async (fixture) => {
+        const entered = createDeferred();
+        const release = createDeferred();
+        const originalCompact = realCompactor(fixture);
+        const published: AgentEventPayload[] = [];
+        const unsubscribe = onAgentEvent((event) => {
+          if (event.runId === fixture.runId && event.stream === "compaction") {
+            published.push(event);
+          }
+        });
+        fixture.compact.mockImplementationOnce(async (params) => {
+          const notify = params.runtimeContext?.onCompactionHookMessages;
+          if (outcome === "hook notices" && typeof notify === "function") {
+            await notify({ phase: "before", messages: ["Preparing fixture context"] });
+          }
+          entered.resolve();
+          await release.promise;
+          params.abortSignal?.throwIfAborted();
+          if (outcome === "failure") {
+            throw new Error("Fixture compactor failed");
+          }
+          const result = await originalCompact(params);
+          if (outcome === "hook notices" && typeof notify === "function") {
+            await notify({ phase: "after", messages: ["Fixture context prepared"] });
+          }
+          return result;
+        });
+        const phases = () =>
+          fixture.onAgentEvent.mock.calls
+            .map(([event]) => event)
+            .filter(
+              (event) =>
+                event.stream === "compaction" &&
+                (event.data.phase === "start" || event.data.phase === "end"),
+            );
+        const pending = fixture.recover("overflow");
+        const settled = pending.then(
+          (value) => ({ value }),
+          (error: unknown) => ({ error }),
+        );
+        try {
+          await awaitGateBeforeSettlement(entered.promise, pending, "Compactor was not held");
+          expect(phases().map((event) => event.data.phase)).toEqual(["start"]);
+          expect(phases()[0]?.sessionKey).toBe(fixture.target.sessionKey);
+          expect(published.map((event) => event.data.phase)).toEqual(["start"]);
+          if (outcome === "abort") {
+            fixture.stop();
+          }
+          release.resolve();
+          const result = await settled;
+          if (outcome === "abort") {
+            expect(result).toEqual({ error: fixture.callerError });
+          } else if (outcome === "failure") {
+            expect(result).toMatchObject({ value: { action: "surface" } });
+          } else {
+            expect(result).toEqual({ value: { action: "retry" } });
+          }
+          const events = phases();
+          expect(events.map((event) => event.data.phase)).toEqual(["start", "end"]);
+          expect(published.map((event) => event.data.phase)).toEqual(["start", "end"]);
+          expect(published[0]?.sessionKey).toBe(fixture.target.sessionKey);
+          expect(events.every((event) => event.sessionKey === fixture.target.sessionKey)).toBe(
+            true,
+          );
+          expect(events[0]?.data.itemId).toEqual(expect.any(String));
+          expect(events[1]?.data.itemId).toBe(events[0]?.data.itemId);
+          expect(events[1]?.data.completed).toBe(
+            outcome === "success" || outcome === "hook notices",
+          );
+          if (outcome === "hook notices") {
+            const notices = fixture.onAgentEvent.mock.calls
+              .map(([event]) => event)
+              .filter((event) => event.stream === "compaction" && event.data.phase === "notice");
+            expect(notices.flatMap((event) => event.data.messages ?? [])).toEqual([
+              "Preparing fixture context",
+              "Fixture context prepared",
+            ]);
+          }
+        } finally {
+          release.resolve();
+          await settled;
+          unsubscribe();
+        }
+      });
+    },
+  );
+
+  it.for(["recovery", "abort", "hook notices"] as const)(
+    "does not wait for an optional progress callback during %s",
+    async (outcome, { signal }) => {
+      await withRecoveryFixture({ oversized: false }, async (fixture) => {
+        const callbackRelease = createDeferred();
+        const callbackEnd = createDeferred();
+        const compactEntered = createDeferred();
+        const originalCompact = fixture.compact.getMockImplementation();
+        if (!originalCompact) {
+          throw new Error("Recovery fixture requires its actual transcript compactor");
+        }
+        fixture.onAgentEvent.mockImplementation((event) => {
+          if (event.stream === "compaction" && event.data.phase === "end") {
+            callbackEnd.resolve();
+          }
+          return callbackRelease.promise;
+        });
+        fixture.compact.mockImplementationOnce(async (params) => {
+          compactEntered.resolve();
+          if (outcome === "abort") {
+            return await waitForCompactionAbort(params.abortSignal);
+          }
+          const notify = params.runtimeContext?.onCompactionHookMessages;
+          if (outcome === "hook notices" && typeof notify === "function") {
+            // The notice queues behind the held start callback.
+            await notify({ phase: "before", messages: ["Preparing fixture context"] });
+          }
+          return await originalCompact(params);
+        });
+        const pending = fixture.recover("overflow");
+        const settled = pending.then(
+          (value) => ({ value }),
+          (error: unknown) => ({ error }),
+        );
+        try {
+          await awaitGateBeforeSettlement(
+            compactEntered.promise,
+            pending,
+            "Progress blocked recovery",
+          );
+          if (outcome === "abort") {
+            fixture.stop();
+          }
+          expect(await withinTest(settled, signal)).toEqual(
+            outcome === "abort" ? { error: fixture.callerError } : { value: { action: "retry" } },
+          );
+          expect(fixture.onAgentEvent.mock.calls.map(([event]) => event.data.phase)).toEqual([
+            "start",
+          ]);
+          callbackRelease.resolve();
+          await callbackEnd.promise;
+          expect(fixture.onAgentEvent.mock.calls.map(([event]) => event.data.phase)).toEqual([
+            "start",
+            ...(outcome === "hook notices" ? ["notice"] : []),
+            "end",
+          ]);
+        } finally {
+          fixture.stop();
+          callbackRelease.resolve();
+          await settled;
+        }
+      });
     },
   );
 
@@ -286,7 +446,8 @@ describe("embedded compaction recovery authority", () => {
 
       expect(fixture.compact).toHaveBeenCalledOnce();
       await expect.soft(fixture.compact.mock.results[0]?.value).rejects.toBeInstanceOf(Error);
-      expect.soft(outcome).toMatchObject({ action: "surface", kind: "context_overflow" });
+      // A rejected recovery compaction is a genuine failure, not a benign skip.
+      expect.soft(outcome).toMatchObject({ action: "surface", kind: "compaction_failure" });
       expect.soft(await fixture.snapshot()).toEqual(before);
       expect.soft(fixture.loadEntry()).toEqual(entryBefore);
       expect.soft(fixture.recoveryState).toMatchObject({

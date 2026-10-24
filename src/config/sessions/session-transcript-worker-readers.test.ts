@@ -7,107 +7,27 @@ import { createSessionHistoryWorkerRequestStub } from "./session-transcript-work
 
 const storageStateDir = path.resolve("synthetic-worker-state");
 const storagePath = path.join(storageStateDir, "agents", "main", "agent.sqlite");
-const fileIdentity = { key: "file:synthetic" as const, canonicalPath: storagePath };
 const storageEnv = new Proxy(
   { OPENCLAW_STATE_DIR: storageStateDir, SYNTHETIC_VALUE: "worker-env-sentinel" },
   {},
 );
 type Readers = ReturnType<typeof createSessionHistoryWorkerReaders>;
+const storageInput = { env: storageEnv };
+const session = { ...storageInput, sessionId: "one" };
+// One direct reader covers the shared factory; keep both custom eviction preparers.
 const storageRequests: Array<[string, (readers: Readers) => Promise<unknown>]> = [
-  [
-    "archive reclamation",
-    (readers) =>
-      readers.readArchivePruning({
-        env: storageEnv,
-        expectedIdentity: { physicalIdentity: "synthetic", nativeLocation: storagePath },
-      }),
-  ],
-  ["pending archives", (readers) => readers.readPendingArchives({ env: storageEnv })],
-  ["cold metadata", (readers) => readers.readColdMetadata({ env: storageEnv, sessionId: "one" })],
-  ["cold inventory", (readers) => readers.readColdStorageInventory({ env: storageEnv })],
+  ["cold metadata", (readers) => readers.readColdMetadata(session)],
   [
     "historical eviction",
     (readers) =>
-      readers.readHistoricalEvictionCandidates({
-        env: storageEnv,
-        admissionIdentities: [],
-      }),
+      readers.readHistoricalEvictionCandidates({ ...storageInput, admissionIdentities: [] }),
   ],
   [
     "archived eviction",
     (readers) =>
       readers.readArchivedEvictionCandidates({
-        env: storageEnv,
+        ...storageInput,
         archived: { liveSessionKeys: [] },
-      }),
-  ],
-  [
-    "voice sessions",
-    (readers) =>
-      readers.readVoiceSessions({
-        env: storageEnv,
-        request: { kind: "legacy", agentId: "main", sessionKey: "one" },
-      }),
-  ],
-  ["prewarm", (readers) => readers.prewarm({ env: storageEnv, history: false })],
-  [
-    "retirement",
-    (readers) =>
-      readers.readRetirement({
-        env: storageEnv,
-        expectedIdentity: fileIdentity,
-        request: { operation: "keys" },
-      }),
-  ],
-  [
-    "stats batch",
-    (readers) => readers.readTranscriptStatsBatch({ env: storageEnv, sessionIds: [] }),
-  ],
-  [
-    "store projection",
-    (readers) =>
-      readers.readStoreProjection({
-        env: storageEnv,
-        expectedIdentity: fileIdentity,
-      }),
-  ],
-  [
-    "store summary",
-    (readers) =>
-      readers.readStoreSummary({
-        env: storageEnv,
-        agentIds: ["main"],
-        recentLimit: 1,
-      }),
-  ],
-  [
-    "identity evidence",
-    (readers) => readers.readIdentityEvidence({ env: storageEnv, identities: [] }),
-  ],
-  [
-    "projection status",
-    (readers) => readers.readProjectionStatus({ env: storageEnv, sessionId: "one" }),
-  ],
-  ["progress card", (readers) => readers.readProgressCard({ env: storageEnv, sessionKey: "one" })],
-  ["members", (readers) => readers.readMembers({ env: storageEnv, sessionKey: "one" })],
-  ["membership facts", (readers) => readers.readMembershipFacts({ env: storageEnv })],
-  [
-    "reactions",
-    (readers) =>
-      readers.readReactions({
-        env: storageEnv,
-        sessionKey: "one",
-        sessionId: "one",
-      }),
-  ],
-  [
-    "archive presence",
-    (readers) =>
-      readers.readArchivePresence({
-        env: storageEnv,
-        logicalAgentId: "main",
-        sessionKey: "one",
-        expectedIdentity: fileIdentity,
       }),
   ],
 ];
@@ -123,25 +43,16 @@ it.each(storageRequests)("serializes Proxy environments for %s requests", async 
   await expect(read(readers)).rejects.toBe(serialized);
 });
 
-it.each(["activity summary", "trajectory", "title fields"] as const)(
-  "serializes the nested Proxy environment for %s reads",
-  async (kind) => {
-    const serialized = new Error("Stopped after serializing the worker request");
-    const readers = createSessionHistoryWorkerReaders(async (prepare) => {
-      const request = structuredClone(prepare());
-      expect(request).toMatchObject({ scope: { env: { ...storageEnv } } });
-      throw serialized;
-    });
-    const scope = { agentId: "main", sessionId: "one", storePath: storagePath, env: storageEnv };
-    await expect(
-      kind === "trajectory"
-        ? readers.readTrajectoryEvents({ scope })
-        : kind === "title fields"
-          ? readers.readTitleFields({ scope })
-          : readers.readActivitySummarySource({ scope }),
-    ).rejects.toBe(serialized);
-  },
-);
+it("serializes the nested Proxy environment for activity summary reads", async () => {
+  const serialized = new Error("Stopped after serializing the worker request");
+  const readers = createSessionHistoryWorkerReaders(async (prepare) => {
+    const request = structuredClone(prepare());
+    expect(request).toMatchObject({ scope: { env: { ...storageEnv } } });
+    throw serialized;
+  });
+  const scope = { agentId: "main", sessionId: "one", storePath: storagePath, env: storageEnv };
+  await expect(readers.readActivitySummarySource({ scope })).rejects.toBe(serialized);
+});
 
 const transcriptInput = {
   target: { sessionId: "synthetic-session" },
@@ -227,35 +138,28 @@ it.each(["archives", "corpus", "targets", "exact entries", "row facts"] as const
           }
         }),
       );
-      const result =
-        inventory === "row facts"
-          ? readers.readRowFacts({ env, sessionKeys: ["agent:main:main"] })
-          : inventory === "exact entries"
-            ? readers.readExactEntries({ env, sessionKeys: ["agent:main:main"] })
-            : inventory === "archives"
-              ? readers.readArchiveInventory({
-                  agentId: "main",
-                  storePath,
-                  env,
-                  sessionIds: ["one"],
-                })
-              : inventory === "targets"
-                ? readers.readMemorySessionTargets({
-                    params: { agentId: "main", storePath, env, sessionIds: ["one"] },
-                  })
-                : readers.readCorpusInventory({
-                    scope: {
-                      cfg: {},
-                      normalizedAgentId: "main",
-                      storePath,
-                      env,
-                      artifactDirs: [],
-                      isSharedFixedStore: false,
-                    },
-                    options: {},
-                    artifacts: [],
-                  });
-      await expect(result).resolves.toEqual(
+      const archive = { agentId: "main", storePath, env, sessionIds: ["one"] };
+      const entries = { env, sessionKeys: ["agent:main:main"] };
+      const reads = {
+        "row facts": () => readers.readRowFacts(entries),
+        "exact entries": () => readers.readExactEntries(entries),
+        archives: () => readers.readArchiveInventory(archive),
+        targets: () => readers.readMemorySessionTargets({ params: archive }),
+        corpus: () =>
+          readers.readCorpusInventory({
+            scope: {
+              cfg: {},
+              normalizedAgentId: "main",
+              storePath,
+              env,
+              artifactDirs: [],
+              isSharedFixedStore: false,
+            },
+            options: {},
+            artifacts: [],
+          }),
+      };
+      await expect(reads[inventory]()).resolves.toEqual(
         inventory === "row facts"
           ? { kind: "session-row-facts", rows: [] }
           : inventory === "exact entries"

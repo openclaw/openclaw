@@ -25,7 +25,7 @@ import {
   createIMessageConversationBindingManager,
   createIMessageConversationBindingManagerV2,
 } from "./conversation-bindings.js";
-import { monitorIMessageProvider } from "./monitor.js";
+import { monitorIMessageProvider } from "./monitor/monitor-provider.js";
 import { setCachedIMessagePrivateApiStatus } from "./private-api-status.js";
 import { getIMessageRuntime } from "./runtime.js";
 import { installIMessageStateRuntimeForTest } from "./test-support/runtime.js";

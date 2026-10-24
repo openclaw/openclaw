@@ -1,23 +1,30 @@
-import { For, Show } from "solid-js";
+import { For, Show, onSettled } from "solid-js";
+import { Icon } from "../../../components/solid/icon.tsx";
 import { useScrollState } from "../../../components/solid/scroll-state.ts";
 import "../../../components/tooltip.ts";
+import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-composer.ts";
+import { registerChatMediaEnglish } from "../../../i18n/locales/en-chat-media.ts";
 import type { BrowserAnnotationAttachment, ChatAttachment } from "../../../lib/chat/chat-types.ts";
-import { t } from "../../../lib/reactive/i18n.ts";
+import { t, registerEnglishCatalog } from "../../../lib/reactive/i18n.ts";
 import { getChatAttachmentPreviewUrl } from "../attachment-payload-store.ts";
 import type { ChatAttachmentControlsProps } from "./chat-attachment-controls.types.ts";
 import { removeDraftAttachment } from "./chat-attachment-draft.ts";
-import { AttachmentFileIcon } from "./chat-attachment-file-icon-solid.tsx";
 import { AttachmentRemove, CompactAttachmentFile } from "./chat-attachment-file.tsx";
 import type { AttachmentPreviewEntry } from "./chat-attachments.tsx";
 import { ComposerPastedText } from "./chat-composer-pasted-text.tsx";
 import { isPastedTextAttachment } from "./chat-pasted-text.ts";
 import { ChatSelectionAnnotations } from "./chat-selection-annotations.tsx";
 
+registerEnglishCatalog(registerChatComposerEnglish);
+
+registerEnglishCatalog(registerChatMediaEnglish);
+
 function AttachmentImage(props: {
   attachment: ChatAttachment;
   alt: string;
   title: string;
   controls: ChatAttachmentControlsProps;
+  buttonRef?: (element: HTMLButtonElement) => void;
 }) {
   const src = () => getChatAttachmentPreviewUrl(props.attachment);
   return (
@@ -25,6 +32,7 @@ function AttachmentImage(props: {
       {(source) => (
         <Show when={props.controls.onOpenImage} fallback={<img src={source()} alt={props.alt} />}>
           <button
+            ref={[props.buttonRef]}
             type="button"
             class="chat-message-image-button chat-attachment-image-button"
             aria-label={t("chat.imageLightbox.open", { title: props.title })}
@@ -43,6 +51,14 @@ function BrowserAnnotationPreview(props: {
   annotation: BrowserAnnotationAttachment;
   controls: ChatAttachmentControlsProps;
 }) {
+  let previewButton: HTMLButtonElement | undefined;
+  let removeButton: HTMLButtonElement | undefined;
+  onSettled(() => {
+    const button = previewButton ?? removeButton;
+    return button
+      ? props.controls.registerBrowserAnnotationFocus?.(props.attachment.id, button)
+      : undefined;
+  });
   const identity = () =>
     props.annotation.title.trim() ||
     props.annotation.displayUrl.trim() ||
@@ -57,6 +73,9 @@ function BrowserAnnotationPreview(props: {
     >
       <div class="chat-browser-annotation-card__preview">
         <AttachmentImage
+          buttonRef={(element) => {
+            previewButton = element;
+          }}
           attachment={props.attachment}
           alt={t("chat.composer.browserAnnotationPreview")}
           title={identity()}
@@ -82,6 +101,9 @@ function BrowserAnnotationPreview(props: {
         </span>
       </div>
       <AttachmentRemove
+        buttonRef={(element) => {
+          removeButton = element;
+        }}
         label={t("chat.composer.removeBrowserAnnotation", { name: identity() })}
         disabled={props.controls.disabled}
         class="chat-attachment-remove chat-browser-annotation-card__remove"
@@ -129,6 +151,7 @@ function AttachmentTile(props: {
                 "chat-attachment-thumb",
                 {
                   "chat-attachment-thumb--preparation": preparing(),
+                  "chat-attachment-thumb--video": att().mimeType.startsWith("video/"),
                   "chat-attachment-thumb--file": !att().mimeType.startsWith("image/"),
                   "chat-attachment-thumb--error": failed(),
                 },
@@ -136,46 +159,50 @@ function AttachmentTile(props: {
               aria-busy={reading() && props.entry.preparation !== "offer" ? "true" : "false"}
             >
               {preparing() ? (
-                <div class="chat-attachment-preparation">
-                  <span class="chat-attachment-file__name" title={att().fileName ?? ""}>
-                    {att().fileName}
-                  </span>
-                  {props.entry.preparation === "offer" ? (
-                    <button
-                      type="button"
-                      class="chat-attachment-compress"
-                      title={t("chat.attachments.compressionHint")}
-                      disabled={props.controls.disabled}
-                      onClick={() => props.entry.read.compress?.()}
-                    >
-                      {t("chat.attachments.compressToFit")}
-                    </button>
-                  ) : (
-                    <span class="chat-attachment-file__meta" role="status">
-                      {failed()
-                        ? failureLabel()
-                        : t("chat.attachments.compressing", {
-                            progress: String(Math.floor((props.entry.progress ?? 0) * 100)),
-                          })}
-                    </span>
-                  )}
-                </div>
-              ) : failed() ? (
-                <openclaw-tooltip prop:content={failureLabel()}>
-                  <span
-                    class="chat-attachment-error"
-                    tabindex="0"
-                    role="img"
-                    aria-label={failureLabel()}
-                  >
-                    <AttachmentFileIcon
-                      filename={att().fileName ?? ""}
-                      mimeType={att().mimeType}
-                      mode="large-placeholder"
-                      unavailable
-                    />
-                  </span>
-                </openclaw-tooltip>
+                <CompactAttachmentFile
+                  attachment={att()}
+                  videoPreparation={{
+                    state: failed() ? "error" : (props.entry.preparation ?? "offer"),
+                    progress: props.entry.progress,
+                  }}
+                  metadata={
+                    props.entry.preparation === "compressing" ? (
+                      <span class="chat-attachment-file__type" role="status">
+                        {t("chat.attachments.compressing", {
+                          progress: String(Math.floor((props.entry.progress ?? 0) * 100)),
+                        })}
+                      </span>
+                    ) : (
+                      <span class="chat-attachment-file__type">
+                        {failed() && (
+                          <span class="sr-only" role="status">
+                            {failureLabel()}
+                          </span>
+                        )}
+                        <button
+                          type="button"
+                          class={[
+                            "chat-attachment-compress",
+                            { "chat-attachment-compress--retry": failed() },
+                          ]}
+                          title={failed() ? failureLabel() : t("chat.attachments.compressionHint")}
+                          disabled={props.controls.disabled}
+                          onClick={() => props.entry.read.compress?.()}
+                        >
+                          {failed() && <Icon name="refresh" />}
+                          <span>
+                            {t(
+                              failed()
+                                ? "chat.attachments.retryCompression"
+                                : "chat.attachments.compressToFit",
+                            )}
+                          </span>
+                          {!failed() && <Icon name="chevronRight" />}
+                        </button>
+                      </span>
+                    )
+                  }
+                />
               ) : reading() ? undefined : att().mimeType.startsWith("image/") &&
                 getChatAttachmentPreviewUrl(att()) ? (
                 <AttachmentImage
@@ -189,7 +216,7 @@ function AttachmentTile(props: {
               )}
               <span
                 class="chat-attachment-loading"
-                data-state={props.entry.preparation === "offer" ? "offer" : props.entry.state}
+                data-state={preparing() ? "preparation" : props.entry.state}
                 data-indeterminate={
                   reading() && props.entry.progress === undefined ? "true" : "false"
                 }

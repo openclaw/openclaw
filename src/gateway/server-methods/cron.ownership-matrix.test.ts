@@ -23,6 +23,8 @@ import {
   revokeCronCreatorAuthorityRunScope,
 } from "../cron-creator-authority-grant.js";
 import {
+  cronAccountPolicy as policy,
+  expectCronReply,
   createCronCallerClient,
   createCronJob,
   createCronTestContext,
@@ -58,12 +60,6 @@ const { makeStorePath } = createCronStoreHarness({ prefix: "cron-ownership-matri
 const S_A = "agent:ops:telegram:group:GROUP_A";
 const S_B = "agent:ops:telegram:group:GROUP_B";
 const S_C = "agent:ops:telegram:group:GROUP_C";
-const policy = (sessionKey: string, accountId: string) => ({
-  version: 1 as const,
-  mode: "account" as const,
-  ownerSessionKey: sessionKey,
-  ownerAccountId: accountId,
-});
 
 const SHAPES: Record<string, Partial<CronJob> & { dropOwner?: boolean }> = {
   none: { payload: { kind: "agentTurn", message: "m" } },
@@ -126,13 +122,14 @@ const definition = (job: CronJob | undefined) =>
     scheduledToolPolicy: job.scheduledToolPolicy,
   };
 
-function expectAllowed(caller: Caller, shape: Partial<CronJob>, opName: string): boolean {
+function expectAllowed(caller: Caller, shape: Partial<CronJob>): boolean {
   const ownSession = shape.owner?.sessionKey === S_A;
   if (caller === "scoped" || caller === "creator") {
     return ownSession && shape.owner?.accountId === "default";
   }
-  // Management keeps creator attribution: a manager's own-session cap still needs a fresh capture.
-  return caller === "manager" && !(opName === "cap" && ownSession);
+  // These jobs hold no app authority, so a manager's own-session cap needs no fresh capture
+  // (app-authority jobs: cron.scheduled-policy-adoption.integration.test.ts).
+  return caller === "manager";
 }
 
 async function updateAs(
@@ -183,6 +180,74 @@ describe("cron ownership access matrix", () => {
   });
   afterEach(() => resetPluginRuntimeStateForTest());
 
+  it("filters operator commands and foreign streams from caller-scoped cron.list", async () => {
+    getRuntimeConfig.mockReturnValue({});
+    const owner = { agentId: "ops", sessionKey: "agent:ops:main", accountId: "default" };
+    const streamPolicy = policy(owner.sessionKey, owner.accountId);
+    const streams = [
+      { id: "operator-stream" },
+      { id: "trusted-stream", scheduledToolPolicy: { version: 1, mode: "trusted" } },
+      { id: "own-stream", owner, scheduledToolPolicy: streamPolicy },
+      {
+        id: "foreign-session-stream",
+        owner: { ...owner, sessionKey: "agent:ops:other" },
+        scheduledToolPolicy: { ...streamPolicy, ownerSessionKey: "agent:ops:other" },
+      },
+      {
+        id: "foreign-account-stream",
+        owner: { ...owner, accountId: "other" },
+        scheduledToolPolicy: { ...streamPolicy, ownerAccountId: "other" },
+      },
+    ] satisfies Partial<CronJob>[];
+    const context = createCronTestContext(
+      [
+        createCronJob({
+          id: "command-job",
+          agentId: "ops",
+          payload: {
+            kind: "command",
+            argv: ["deploy"],
+            env: { MARKER_ENV: "fixture-marker" },
+          },
+        }),
+        createCronJob({ id: "agent-job", agentId: "ops", name: "agent job" }),
+        createCronJob({
+          id: "trusted-job",
+          owner,
+          scheduledToolPolicy: { version: 1, mode: "trusted" },
+        }),
+        ...streams.map((stream) =>
+          createCronJob({
+            agentId: "ops",
+            schedule: { kind: "stream", command: ["fixture-private-watcher"] },
+            ...stream,
+          }),
+        ),
+      ],
+      getRuntimeConfig,
+    );
+
+    const { respond } = await invokeCron(
+      "cron.list",
+      { includeDisabled: true, compact: true },
+      { context, client: createCronCallerClient("ops") },
+    );
+
+    expectCronReply(
+      respond,
+      expect.objectContaining({
+        total: 2,
+        jobs: [
+          expect.objectContaining({ id: "agent-job" }),
+          expect.objectContaining({ id: "own-stream" }),
+        ],
+      }),
+    );
+    expect(JSON.stringify(respond.mock.calls)).not.toContain("fixture-marker");
+    const operatorGet = await invokeCron("cron.get", { id: "trusted-job" }, { context });
+    expectCronReply(operatorGet.respond, expect.objectContaining({ id: "trusted-job" }));
+  });
+
   // Every ownership shape x caller x tool-runtime edit, through the Gateway handlers and the SQLite service.
   it("allows only the recorded owner or live management to change prompt or tools", async () => {
     const violations: string[] = [];
@@ -205,7 +270,6 @@ describe("cron ownership access matrix", () => {
             defaultAgentId: "ops",
             log: createNoopLogger(),
             enqueueSystemEvent: vi.fn(),
-            requestHeartbeat: vi.fn(),
             runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
           });
           const context = createCronTestContext(undefined, getRuntimeConfig);
@@ -236,7 +300,7 @@ describe("cron ownership access matrix", () => {
           if (after && !isDeepStrictEqual(after.owner, before?.owner)) {
             violations.push(`${cell}: owner changed`);
           }
-          if (ok !== expectAllowed(caller, shape, opName)) {
+          if (ok !== expectAllowed(caller, shape)) {
             violations.push(`${cell}: ${ok ? "allowed" : `refused (${message})`}`);
           }
           if (!ok && !isDeepStrictEqual(definition(after), definition(before))) {
@@ -250,6 +314,9 @@ describe("cron ownership access matrix", () => {
           }
           if (/scheduled account policy|persisted job owner/.test(message)) {
             violations.push(`${cell}: internal refusal text`);
+          }
+          if (chat && shapeName === "sessNoAcct") {
+            expect(message).toContain("belongs to another conversation or account");
           }
         }
       }

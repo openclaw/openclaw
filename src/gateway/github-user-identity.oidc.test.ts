@@ -389,3 +389,174 @@ describe("Cloudflare Access OIDC profile resolution", () => {
     });
   });
 });
+
+function requestIdentity(exp: unknown, signature = "signature", principal = "ada@example.test") {
+  const request = accessRequest(principal, githubCfg);
+  request.req.headers["cf-access-jwt-assertion"] =
+    `header.${Buffer.from(JSON.stringify({ iss: accessOrigin, exp })).toString("base64url")}.${signature}`;
+  request.req.destroy();
+  return {
+    authResult: request.authResult,
+    authConfig: request.cfg.gateway?.auth,
+    requestHeaders: request.req.headers,
+  };
+}
+
+function resolveCachedIdentity(params: ReturnType<typeof requestIdentity>) {
+  return createAuthenticatedGitHubIdentitySync(params)!();
+}
+
+it("rechecks current profile roles while reusing the same verified assertion", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const profile = ensureProfileForEmail("ada@example.test");
+    setUserProfileRole(profile.id, "maintainer");
+    const transport = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementation(async () =>
+        identityResponse({ email: "ada@example.test", idp: { type: "oidc" } }),
+      );
+    using request = disposableAccessRequest("ada@example.test", githubCfg);
+    request.req.headers = requestIdentity(Math.floor(Date.now() / 1_000) + 600).requestHeaders;
+    expect((await resolveAuthenticatedHttpUserProfile(request)).operatorRolePolicy?.scopes).toEqual(
+      ["operator.admin"],
+    );
+    setUserProfileRole(profile.id, null);
+    invalidateOperatorRolePolicy(profile.id);
+    expect((await resolveAuthenticatedHttpUserProfile(request)).operatorRolePolicy?.scopes).toEqual(
+      [],
+    );
+    expect(transport).toHaveBeenCalledOnce();
+  });
+});
+
+it("coalesces concurrent assertions and reuses their verified result without extra network calls", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const pending = Promise.withResolvers<Response>();
+    const transport = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementation(async (url) =>
+        url === `${accessOrigin}/cdn-cgi/access/get-identity`
+          ? pending.promise
+          : identityResponse({ id: 101, login: "ada" }),
+      );
+    const params = requestIdentity(Math.floor(Date.now() / 1_000) + 600);
+    const first = resolveCachedIdentity(params);
+    const second = resolveCachedIdentity(params);
+    pending.resolve(identityResponse(oidcIdentity()));
+    const [a, b] = await Promise.all([first, second]);
+    expect(a.profileId).toBe(b.profileId);
+    expect((await resolveCachedIdentity(params)).profileId).toBe(a.profileId);
+    expect(transport.mock.calls.map(([url]) => url)).toEqual([
+      `${accessOrigin}/cdn-cgi/access/get-identity`,
+      "https://api.github.com/user/101",
+    ]);
+  });
+});
+
+it("partitions signed assertions, principals, and OIDC configuration", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const transport = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementation(async (url) =>
+        identityResponse(
+          url === `${accessOrigin}/cdn-cgi/access/get-identity`
+            ? oidcIdentity()
+            : { id: 101, login: "ada" },
+        ),
+      );
+    const exp = Math.floor(Date.now() / 1_000) + 600;
+    const params = requestIdentity(exp);
+    await resolveCachedIdentity(params);
+    await resolveCachedIdentity(requestIdentity(exp, "different"));
+    await expect(
+      resolveCachedIdentity(requestIdentity(exp, "signature", "wrong@example.test")),
+    ).rejects.toThrow("principal did not match");
+    const changed = structuredClone(params);
+    changed.authConfig!.trustedProxy!.cloudflareAccessOidc!.providerId = "other";
+    await resolveCachedIdentity(changed);
+    expect(
+      transport.mock.calls.filter(([url]) => url === `${accessOrigin}/cdn-cgi/access/get-identity`),
+    ).toHaveLength(4);
+  });
+});
+
+it("keeps pending verification bound to the OIDC policy used by its cache key", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const entered = Promise.withResolvers<void>();
+    const response = Promise.withResolvers<Response>();
+    const transport = vi.spyOn(globalThis, "fetch").mockImplementation(async (url) => {
+      if (url === `${accessOrigin}/cdn-cgi/access/get-identity`) {
+        entered.resolve();
+        return response.promise;
+      }
+      return identityResponse({ id: 101, login: "ada" });
+    });
+    const params = structuredClone(requestIdentity(Math.floor(Date.now() / 1_000) + 600));
+    const policy = params.authConfig!.trustedProxy!.cloudflareAccessOidc!;
+    const originalProvider = policy.providerId;
+    const pending = resolveCachedIdentity(params);
+    await entered.promise;
+    policy.providerId = "other";
+    response.resolve(identityResponse({ ...oidcIdentity(), idp: { type: "oidc", id: "other" } }));
+    const result = await pending;
+    policy.providerId = originalProvider;
+    expect((await resolveCachedIdentity(params)).profileId).toBe(result.profileId);
+    expect(getUserProfileListItem(result.profileId).githubIdentity).toBeNull();
+    expect(transport).toHaveBeenCalledOnce();
+  });
+});
+
+it.each([30, 600])(
+  "expires at the earlier of assertion expiry and five minutes (%s seconds)",
+  async (ttl) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const now = Date.now();
+      const clock = vi.spyOn(Date, "now").mockReturnValue(now);
+      const transport = vi.spyOn(globalThis, "fetch").mockImplementation(async () =>
+        identityResponse({
+          email: "ada@example.test",
+          idp: { type: "oidc" },
+        }),
+      );
+      const params = requestIdentity(Math.floor(now / 1_000) + ttl);
+      await resolveCachedIdentity(params);
+      clock.mockReturnValue(now + Math.min(ttl, 300) * 1_000);
+      await resolveCachedIdentity(params);
+      expect(transport).toHaveBeenCalledTimes(2);
+    });
+  },
+);
+
+it.each([undefined, "invalid", 0])(
+  "does not cache assertions without a future numeric expiry (%s)",
+  async (exp) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const transport = vi
+        .spyOn(globalThis, "fetch")
+        .mockImplementation(async () =>
+          identityResponse({ email: "ada@example.test", idp: { type: "oidc" } }),
+        );
+      const params = requestIdentity(exp);
+      await resolveCachedIdentity(params);
+      await resolveCachedIdentity(params);
+      expect(transport).toHaveBeenCalledTimes(2);
+    });
+  },
+);
+
+it.each(["network", "principal"])("does not cache %s failures", async (failure) => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const transport = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(
+        identityResponse({ email: "wrong@example.test" }, failure === "network" ? 503 : 200),
+      )
+      .mockResolvedValueOnce(
+        identityResponse({ email: "ada@example.test", idp: { type: "oidc" } }),
+      );
+    const params = requestIdentity(Math.floor(Date.now() / 1_000) + 600);
+    await expect(resolveCachedIdentity(params)).rejects.toThrow();
+    await expect(resolveCachedIdentity(params)).resolves.toHaveProperty("profileId");
+    expect(transport).toHaveBeenCalledTimes(2);
+  });
+});

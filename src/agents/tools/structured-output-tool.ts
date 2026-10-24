@@ -1,5 +1,6 @@
 import { parseJsonPreservingUnsafeIntegers } from "@openclaw/ai/transports";
 import { Type } from "typebox";
+import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import { validateJsonSchemaValue } from "../../plugins/schema-validator.js";
 import type { JsonSchemaObject } from "../../shared/json-schema.types.js";
 import type { SwarmStructuredOutputState } from "../subagents/registry/subagent-registry.types.js";
@@ -7,7 +8,7 @@ import type { AnyAgentTool } from "./common.js";
 import { jsonResult, ToolInputError } from "./common.js";
 
 const states = new Map<string, SwarmStructuredOutputState>();
-const pendingExecutions = new Map<string, Promise<unknown>>();
+const pendingExecutions = new KeyedAsyncQueue();
 
 export function peekSwarmStructuredOutput(runId: string): SwarmStructuredOutputState | undefined {
   return states.get(runId);
@@ -61,75 +62,62 @@ export function createStructuredOutputTool(params: {
       { additionalProperties: false },
     ),
     execute: async (_toolCallId, args) => {
-      const previous = pendingExecutions.get(params.runId) ?? Promise.resolve();
-      const execution = previous
-        .catch(() => {
-          // A rejected call must not block the run's permitted corrected result.
-        })
-        .then(async () => {
-          const prior = states.get(params.runId);
-          if (prior?.structured !== undefined) {
-            throw new ToolInputError("structured_output already recorded for this run");
-          }
-          if (prior && prior.invalidAttempts >= 2) {
-            return jsonResult({
-              status: "rejected",
-              success: false,
-              schemaError: prior.schemaError,
-            });
-          }
-          let validation: ReturnType<typeof validateJsonSchemaValue>;
-          try {
-            const input = {
-              schema: params.schema as JsonSchemaObject,
-              cacheKey: `swarm-structured-output:${params.runId}`,
-              value: (args as { result: unknown }).result,
-            };
-            validation = validateJsonSchemaValue(input);
-            // Preserve valid string results; decode only a rejected nested JSON string.
-            if (!validation.ok && typeof input.value === "string") {
-              try {
-                const decoded = validateJsonSchemaValue({
-                  ...input,
-                  value: parseJsonPreservingUnsafeIntegers(input.value),
-                });
-                if (decoded.ok) {
-                  validation = decoded;
-                }
-              } catch {
-                // Keep the original validation error when the string is not JSON.
-              }
-            }
-          } catch (error) {
-            throw new ToolInputError(
-              `Invalid sessions_spawn outputSchema: ${error instanceof Error ? error.message : String(error)}`,
-            );
-          }
-          if (validation.ok) {
-            await commitState({ structured: validation.value, invalidAttempts: 0 });
-            return jsonResult({ status: "recorded" });
-          }
-          const invalidAttempts = (prior?.invalidAttempts ?? 0) + 1;
-          const schemaError = validation.errors
-            .slice(0, 3)
-            .map((error) => error.text)
-            .join("; ");
-          await commitState({ structured: undefined, invalidAttempts, schemaError });
-          if (invalidAttempts === 1) {
-            throw new ToolInputError(
-              `structured_output validation failed: ${schemaError}. Retry once with a corrected final result.`,
-            );
-          }
-          return jsonResult({ status: "rejected", success: false, schemaError });
-        });
-      pendingExecutions.set(params.runId, execution);
-      try {
-        return await execution;
-      } finally {
-        if (pendingExecutions.get(params.runId) === execution) {
-          pendingExecutions.delete(params.runId);
+      return await pendingExecutions.enqueue(params.runId, async () => {
+        const prior = states.get(params.runId);
+        if (prior?.structured !== undefined) {
+          throw new ToolInputError("structured_output already recorded for this run");
         }
-      }
+        if (prior && prior.invalidAttempts >= 2) {
+          return jsonResult({
+            status: "rejected",
+            success: false,
+            schemaError: prior.schemaError,
+          });
+        }
+        let validation: ReturnType<typeof validateJsonSchemaValue>;
+        try {
+          const input = {
+            schema: params.schema as JsonSchemaObject,
+            cacheKey: `swarm-structured-output:${params.runId}`,
+            value: (args as { result: unknown }).result,
+          };
+          validation = validateJsonSchemaValue(input);
+          // Preserve valid string results; decode only a rejected nested JSON string.
+          if (!validation.ok && typeof input.value === "string") {
+            try {
+              const decoded = validateJsonSchemaValue({
+                ...input,
+                value: parseJsonPreservingUnsafeIntegers(input.value),
+              });
+              if (decoded.ok) {
+                validation = decoded;
+              }
+            } catch {
+              // Keep the original validation error when the string is not JSON.
+            }
+          }
+        } catch (error) {
+          throw new ToolInputError(
+            `Invalid sessions_spawn outputSchema: ${error instanceof Error ? error.message : String(error)}`,
+          );
+        }
+        if (validation.ok) {
+          await commitState({ structured: validation.value, invalidAttempts: 0 });
+          return jsonResult({ status: "recorded" });
+        }
+        const invalidAttempts = (prior?.invalidAttempts ?? 0) + 1;
+        const schemaError = validation.errors
+          .slice(0, 3)
+          .map((error) => error.text)
+          .join("; ");
+        await commitState({ structured: undefined, invalidAttempts, schemaError });
+        if (invalidAttempts === 1) {
+          throw new ToolInputError(
+            `structured_output validation failed: ${schemaError}. Retry once with a corrected final result.`,
+          );
+        }
+        return jsonResult({ status: "rejected", success: false, schemaError });
+      });
     },
   };
 }

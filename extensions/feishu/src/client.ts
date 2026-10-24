@@ -190,13 +190,6 @@ async function getFeishuProxyAgent(): Promise<Agent | undefined> {
   }
 }
 
-/** @internal Resets process-scoped proxy state between tests. */
-export function resetFeishuProxyAgentForTest(): void {
-  pendingFeishuProxyAgent = undefined;
-  cachedFeishuProxyAgent?.destroy();
-  cachedFeishuProxyAgent = undefined;
-}
-
 type FeishuProxyAwareHttpRequestOptions<D> = Lark.HttpRequestOptions<D> &
   Pick<
     Parameters<typeof Lark.defaultHttpInstance.request>[0],

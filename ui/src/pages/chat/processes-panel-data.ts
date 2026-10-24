@@ -1,3 +1,5 @@
+import { GatewayProtocolRequestError } from "@openclaw/gateway-client/browser";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type {
   SessionProcessSummary,
   SessionsProcessesListResult,
@@ -9,15 +11,18 @@ import { registerProcessesEnglish } from "../../i18n/locales/en-processes.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { listen } from "../../lib/reactive/listener.ts";
 import type { SessionConnectionScope } from "../../lib/sessions/session-capability.ts";
-import { resolveUiConversationIdentity } from "../../lib/sessions/session-key.ts";
+import {
+  resolveUiConversationIdentity,
+  uiConversationMatches,
+} from "../../lib/sessions/session-key.ts";
 
 registerProcessesEnglish();
 
-const REFRESH_INTERVAL_MS = 5_000;
+const REFRESH_INTERVAL_MS = 60_000;
 type ProcessesPanelInput = { sessionKey: string; agentId: string; presented: boolean };
 type ProcessSnapshot = Pick<
   ProcessObservation,
-  "rows" | "loading" | "hasResult" | "truncated" | "error" | "stopping"
+  "rows" | "loading" | "hasResult" | "truncated" | "error" | "readError" | "errorKind" | "stopping"
 >;
 const EMPTY_PROCESSES: ProcessSnapshot = {
   rows: [],
@@ -25,6 +30,8 @@ const EMPTY_PROCESSES: ProcessSnapshot = {
   hasResult: false,
   truncated: false,
   error: null,
+  readError: null,
+  errorKind: null,
   stopping: new Set(),
 };
 type SharedObservation = { data: ProcessObservation; listeners: Set<() => void> };
@@ -35,6 +42,7 @@ export class ProcessesPanelData {
   private readonly entries: Map<string, SharedObservation>;
   private entry: SharedObservation | null = null;
   private key: string | null = null;
+  private lifetime = Promise.withResolvers<void>();
 
   constructor(
     private readonly context: ApplicationContext,
@@ -50,6 +58,18 @@ export class ProcessesPanelData {
 
   get snapshot(): ProcessSnapshot {
     return this.entry?.data ?? EMPTY_PROCESSES;
+  }
+
+  get pendingRead(): Promise<void> | null {
+    return this.entry?.data.pendingRead ?? null;
+  }
+
+  get retired(): Promise<void> {
+    return this.lifetime.promise;
+  }
+
+  get connectionRetired(): Promise<void> | undefined {
+    return this.entry?.data.retired;
   }
 
   sync(input: ProcessesPanelInput): void {
@@ -81,14 +101,21 @@ export class ProcessesPanelData {
   }
 
   refresh(): Promise<void> {
-    return this.entry?.data.refresh() ?? Promise.resolve();
+    return this.entry?.data.refresh(true) ?? Promise.resolve();
   }
 
   stop(row: SessionProcessSummary): Promise<void> {
     return this.entry?.data.stop(row) ?? Promise.resolve();
   }
 
+  reportStopError(row: SessionProcessSummary, error: unknown): void {
+    this.entry?.data.reportStopError(row, error);
+  }
+
   dispose(): void {
+    // A closed presentation retires independently of other shared consumers.
+    this.lifetime.resolve();
+    this.lifetime = Promise.withResolvers<void>();
     if (this.entry) {
       this.entry.listeners.delete(this.changed);
       if (this.entry.listeners.size === 0) {
@@ -107,27 +134,88 @@ class ProcessObservation {
   loading = false;
   hasResult = false;
   truncated = false;
-  error: string | null = null;
+  readError: string | null = null;
+  private readDenied = false;
+  private actionError: string | null = null;
+  private actionInstanceId: string | null = null;
+  get error(): string | null {
+    return this.readDenied ? this.readError : (this.actionError ?? this.readError);
+  }
+  get errorKind(): "read" | "access" | "action" | null {
+    return this.readDenied
+      ? "access"
+      : this.actionError
+        ? "action"
+        : this.readError
+          ? "read"
+          : null;
+  }
   readonly stopping = new Set<string>();
   private sessionId: string | null = null;
   private scope: SessionConnectionScope | null = null;
   private generation = 0;
   private disposed = false;
   private pending: Promise<void> | null = null;
+  private lifetime = Promise.withResolvers<void>();
+  private refreshAgain = false;
   private timer: ReturnType<typeof setTimeout> | null = null;
   private readonly visibilityDocument = globalThis.document;
   private readonly visibilityChanged = () => this.reconcile();
   private readonly unsubscribe: () => void;
+  private readonly unsubscribeEvents: () => void;
   private readonly stopVisibility: (() => void) | undefined;
+
+  get pendingRead(): Promise<void> | null {
+    return this.pending;
+  }
+
+  get retired(): Promise<void> | undefined {
+    return this.scope ? this.lifetime.promise : undefined;
+  }
 
   constructor(
     private readonly context: ApplicationContext,
     private readonly input: ProcessesPanelInput,
     private readonly changed: () => void,
   ) {
-    // Connection edges retire polling scopes synchronously, including while the pane is hidden.
+    // Connection edges retire observation scopes synchronously, including while hidden.
     this.unsubscribe = context.gateway.subscribe(() => this.reconcile());
-    // This synchronous polling owner binds document visibility until dispose().
+    this.unsubscribeEvents = context.gateway.subscribeEvents(({ event, payload }) => {
+      if (!isRecord(payload)) {
+        return;
+      }
+      const sessionChanged =
+        event === "sessions.changed" &&
+        ["delete", "reset", "sharing", "profile-identity", "placement"].includes(
+          String(payload.reason),
+        );
+      if (
+        (event !== "sessions.processes.changed" && !sessionChanged) ||
+        (typeof payload.sessionKey !== "string" &&
+          !(sessionChanged && payload.sessionKey === undefined)) ||
+        (payload.agentId !== undefined && typeof payload.agentId !== "string") ||
+        !this.current(this.generation) ||
+        (typeof payload.sessionKey === "string" &&
+          !uiConversationMatches(
+            {
+              assistantAgentId: this.input.agentId,
+              agentsList: context.agents.state.agentsList,
+              hello: context.gateway.snapshot.hello,
+            },
+            this.input.sessionKey,
+            payload.sessionKey,
+            payload.agentId,
+            this.input.agentId,
+          ))
+      ) {
+        return;
+      }
+      if (this.pending) {
+        this.refreshAgain = true;
+      } else {
+        void this.refresh();
+      }
+    });
     this.stopVisibility = this.visibilityDocument
       ? listen(this.visibilityDocument, "visibilitychange", this.visibilityChanged)
       : undefined;
@@ -167,7 +255,12 @@ class ProcessObservation {
     return { key: identity.sessionKey, agentId: identity.agentId };
   }
 
-  refresh(): Promise<void> {
+  refresh(explicit = false): Promise<void> {
+    if (explicit) {
+      this.actionError = null;
+      this.actionInstanceId = null;
+      this.changed();
+    }
     if (this.pending) {
       return this.pending;
     }
@@ -176,20 +269,27 @@ class ProcessObservation {
       return Promise.resolve();
     }
     const generation = this.generation;
+    let accessDenied = false;
+    this.refreshAgain = false;
     this.clearTimer();
     this.loading = true;
-    this.error = null;
-    this.changed();
     const pending = scope.client
       .request<SessionsProcessesListResult>("sessions.processes.list", this.target())
       .then((result) => {
         if (!this.current(generation)) {
           return;
         }
+        this.readError = null;
+        this.readDenied = false;
         this.sessionId = result.sessionId;
         this.rows = result.processes;
         this.truncated = result.truncated;
         this.hasResult = true;
+        const actionRow = this.rows.find((row) => row.instanceId === this.actionInstanceId);
+        if (this.actionError && (actionRow ? actionRow.status !== "running" : !result.truncated)) {
+          this.actionError = null;
+          this.actionInstanceId = null;
+        }
         for (const id of this.stopping) {
           if (!this.rows.some((row) => row.instanceId === id && row.status === "running")) {
             this.stopping.delete(id);
@@ -200,11 +300,19 @@ class ProcessObservation {
         if (!this.current(generation)) {
           return;
         }
-        // Access loss cannot leave the previous private output visible.
-        this.rows = [];
-        this.sessionId = null;
-        this.stopping.clear();
-        this.error = formatUiError(error);
+        accessDenied =
+          error instanceof GatewayProtocolRequestError && error.gatewayCode === "FORBIDDEN";
+        if (accessDenied) {
+          this.rows = [];
+          this.sessionId = null;
+          this.actionError = null;
+          this.actionInstanceId = null;
+          this.stopping.clear();
+          this.hasResult = false;
+          this.truncated = false;
+        }
+        this.readError = formatUiError(error);
+        this.readDenied = accessDenied;
       })
       .finally(() => {
         if (this.pending === pending) {
@@ -215,14 +323,25 @@ class ProcessObservation {
         }
         this.loading = false;
         this.changed();
-        // The process registry has no subscription feed. Refresh only this visible
-        // presentation; errors require explicit Retry rather than a request storm.
-        if (!this.error) {
-          this.timer = setTimeout(() => void this.refresh(), REFRESH_INTERVAL_MS);
+        // A change arriving during the read needs one trailing snapshot. Otherwise
+        // retain one slow recovery poll, including after transient read failures.
+        if (!accessDenied) {
+          if (this.refreshAgain) {
+            void this.refresh();
+          } else {
+            this.timer = setTimeout(() => void this.refresh(), REFRESH_INTERVAL_MS);
+          }
         }
       });
     this.pending = pending;
+    this.changed();
     return pending;
+  }
+
+  reportStopError(row: SessionProcessSummary, error: unknown): void {
+    this.actionError = formatUiError(error);
+    this.actionInstanceId = row.instanceId;
+    this.changed();
   }
 
   async stop(row: SessionProcessSummary): Promise<void> {
@@ -241,9 +360,9 @@ class ProcessObservation {
     ) {
       return;
     }
-    this.clearTimer();
     this.stopping.add(row.instanceId);
-    this.error = null;
+    this.actionError = null;
+    this.actionInstanceId = null;
     this.changed();
     try {
       const result = await scope.client.request<SessionsProcessesStopResult>(
@@ -260,7 +379,8 @@ class ProcessObservation {
       }
       if (!result.requested) {
         this.stopping.delete(row.instanceId);
-        this.error = t("chat.processesPanel.stopNotRequested");
+        this.actionError = t("chat.processesPanel.stopNotRequested");
+        this.actionInstanceId = row.instanceId;
         this.changed();
         return;
       }
@@ -275,8 +395,22 @@ class ProcessObservation {
         return;
       }
       this.stopping.delete(row.instanceId);
-      this.error = formatUiError(error);
+      this.actionError = formatUiError(error);
+      this.actionInstanceId = row.instanceId;
+      const denied =
+        error instanceof GatewayProtocolRequestError && error.gatewayCode === "FORBIDDEN";
+      if (denied) {
+        this.rows = this.rows.map((item) => ({ ...item, canStop: false }));
+      }
       this.changed();
+      if (denied) {
+        // A denied write does not prove read access was revoked. Reconcile the
+        // current output and Stop authority without repeating the mutation.
+        await this.pending;
+        if (this.current(generation)) {
+          await this.refresh();
+        }
+      }
     }
   }
 
@@ -296,23 +430,30 @@ class ProcessObservation {
   }
 
   private retire(): void {
+    this.lifetime.resolve();
+    this.lifetime = Promise.withResolvers<void>();
     this.generation += 1;
     this.clearTimer();
     this.scope = null;
     this.pending = null;
+    this.refreshAgain = false;
     this.rows = [];
     this.sessionId = null;
     this.stopping.clear();
     this.loading = false;
     this.hasResult = false;
     this.truncated = false;
-    this.error = null;
+    this.readError = null;
+    this.readDenied = false;
+    this.actionError = null;
+    this.actionInstanceId = null;
   }
 
   dispose(): void {
     this.disposed = true;
     this.retire();
     this.unsubscribe();
+    this.unsubscribeEvents();
     this.stopVisibility?.();
   }
 }

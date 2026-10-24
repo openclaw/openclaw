@@ -1,3 +1,4 @@
+import { safeParseJson } from "@openclaw/normalization-core/json-coercion";
 import { validateNodeEventParams } from "../../../packages/gateway-protocol/src/index.js";
 import {
   captureNodePairingGeneration,
@@ -6,6 +7,7 @@ import {
 import { recordPairedNodeHostStats } from "../../infra/device-pairing-node.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { ApnsRegistrationPairingChangedError } from "../../infra/push-apns-store.errors.js";
+import { NodeWorkerProcessesChangedSchema } from "../../worker/worker-process-observation.js";
 import type { NodeEventContext } from "../server-node-events-types.js";
 import { resolveDispatchableNodeSession, respondPairingChanged } from "./nodes.shared.js";
 import { respondUnavailableOnThrow } from "./response.js";
@@ -42,6 +44,48 @@ export const nodeEventHandlers: GatewayRequestHandlers = {
         }
         return sessionForGeneration(eventPairingGeneration)?.connId === eventConnId;
       };
+      if (p.event === "worker.processes.changed") {
+        const change = NodeWorkerProcessesChangedSchema.safeParse(safeParseJson(payloadJSON ?? ""));
+        let handled = false;
+        if (change.success && (await isEventConnectionCurrent())) {
+          const input = change.data;
+          const observation = await context.workerSessionPlacementService?.prepareRuntimeRefresh?.(
+            input.sessionId,
+          );
+          try {
+            if (observation && (await isEventConnectionCurrent())) {
+              observation.assertCurrent();
+              const placement = observation.placement;
+              const environment = context.workerEnvironmentService?.get(input.environmentId);
+              if (
+                !observation.move &&
+                !observation.pendingResult &&
+                placement?.state === "active" &&
+                placement.executionMode === "worker-turn" &&
+                placement.environmentId === input.environmentId &&
+                placement.activeOwnerEpoch === input.ownerEpoch &&
+                placement.generation === input.placementGeneration &&
+                environment?.nodeDeviceId === nodeId &&
+                environment.ownerEpoch === input.ownerEpoch &&
+                environment.destroyRequestedAtMs === null &&
+                ["ready", "idle", "attached"].includes(environment.state)
+              ) {
+                const { sessionKey, agentId } = placement;
+                context.broadcast(
+                  "sessions.processes.changed",
+                  { sessionKey, agentId },
+                  { sessionKeys: [sessionKey], agentId, dropIfSlow: true },
+                );
+                handled = true;
+              }
+            }
+          } finally {
+            observation?.release();
+          }
+        }
+        respond(true, { ok: true, event: p.event, handled }, undefined);
+        return;
+      }
       const { handleNodeEvent } = await import("../server-node-events.js");
       const apnsGeneration =
         p.event === "push.apns.register" ? await captureNodePairingGeneration(nodeId) : null;
@@ -133,6 +177,20 @@ export const nodeEventHandlers: GatewayRequestHandlers = {
             : undefined,
           presenceAllowed,
           isConnectionCurrent: isEventConnectionCurrent,
+          assertSessionEventCurrent: () => {
+            const current = eventPairingGeneration
+              ? sessionForGeneration(eventPairingGeneration)
+              : undefined;
+            if (
+              !eventConnId ||
+              !current ||
+              current !== nodeSession ||
+              current.connId !== eventConnId ||
+              current.client.invalidated === true
+            ) {
+              throw new Error("Node event connection changed during preparation");
+            }
+          },
           assertApnsRegistrationCurrent: () => {
             const current = apnsGeneration
               ? context.nodeRegistry.getForPairingGeneration(nodeId, apnsGeneration.key)

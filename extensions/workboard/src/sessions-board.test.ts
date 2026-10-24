@@ -538,7 +538,7 @@ it("shares projections and reuses 80 unchanged rows after one session changes", 
   const placements = vi.spyOn(board.store, "listSessionPlacements");
   const boards = vi.spyOn(board.store, "getSessionsBoard");
   const changes = vi.fn();
-  board.store.subscribeChanges(changes);
+  board.store.onChange = changes;
   const readers = await Promise.all(
     Array.from({ length: 25 }, () => board.read(undefined, { assertCurrent() {} })),
   );

@@ -1,10 +1,16 @@
+import { setImmediate } from "node:timers/promises";
+import type { StreamOptions, UserMessage } from "@openclaw/llm-core";
 import { Type } from "typebox";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { createStreamedSteeringConfig } from "./agent-loop-steering.js";
 import {
   config,
-  captureAgentLoop,
+  captureToolLoop,
+  captureAgent as makeAgent,
+  expectedToolResult,
+  finishMessageStream,
+  startToolCalls,
   createTurnSequenceStream,
   makeAssistantMessage,
   makeCall,
@@ -49,28 +55,6 @@ function gate() {
   };
 }
 
-function makeAgent(
-  tools: AgentTool[],
-  options: AgentOptions = {},
-  turns: AssistantMessage["content"][] = [tools.map(({ name }) => makeCall(name)), done],
-) {
-  const requests: Message[][] = [];
-  const streamFn = options.streamFn ?? createTurnSequenceStream(turns);
-  const agent = new Agent({
-    ...options,
-    initialState: { model, tools, ...options.initialState },
-    streamFn: (...args) => {
-      requests.push(args[1].messages.slice());
-      return streamFn(...args);
-    },
-  });
-  const events: AgentEvent[] = [];
-  agent.subscribe((event) => {
-    events.push(event);
-  });
-  return { agent, requests, events };
-}
-
 function runLoop(
   turns: AssistantMessage["content"][],
   loopConfig: Partial<AgentLoopConfig>,
@@ -78,16 +62,13 @@ function runLoop(
   prompt = "start",
 ) {
   const requests: Message[][] = [];
-  return {
-    ...captureAgentLoop(
-      [user(prompt)],
-      { systemPrompt: "", messages: [], tools },
-      { ...config, ...loopConfig },
-      undefined,
-      createTurnSequenceStream(turns, requests),
-    ),
-    requests,
-  };
+  const { run: result, events } = captureToolLoop({
+    tools,
+    config: loopConfig,
+    prompt: user(prompt),
+    streamFn: createTurnSequenceStream(turns, requests),
+  });
+  return { result, events, requests };
 }
 
 function expectInjectedOnce(events: AgentEvent[], message: AgentMessage) {
@@ -329,13 +310,10 @@ describe("agentLoop steering", () => {
     expect(releaseSkippedCalls).toHaveBeenCalledExactlyOnceWith(["delayed"]);
     expect(dispose).toHaveBeenCalledOnce();
     expect(requests[1]?.slice(-3)).toMatchObject([
-      { role: "toolResult", toolCallId: "first", isError: false },
-      {
-        role: "toolResult",
-        toolCallId: "delayed",
-        isError: true,
+      expectedToolResult("first", false),
+      expectedToolResult("delayed", true, {
         details: { status: "skipped", deniedReason: "steering" },
-      },
+      }),
       steer,
     ]);
     expectHook(afterToolOutcome, {
@@ -555,22 +533,14 @@ describe("agentLoop steering", () => {
       }
       expect(requests[1]?.slice(-5)).toMatchObject([
         { role: "assistant", stopReason: "toolUse" },
-        {
-          role: "toolResult",
-          toolCallId: "invalid",
-          isError: true,
-          details: { observed: "pre-execution" },
-        },
-        { role: "toolResult", toolCallId: "prepared", isError: false },
+        expectedToolResult("invalid", true, { details: { observed: "pre-execution" } }),
+        expectedToolResult("prepared", false),
         toolExecution === "parallel"
-          ? { role: "toolResult", toolCallId: "tail", isError: false }
-          : {
-              role: "toolResult",
-              toolCallId: "tail",
-              isError: true,
+          ? expectedToolResult("tail", false)
+          : expectedToolResult("tail", true, {
               content: [{ type: "text", text: "Skipped to process an incoming message." }],
               details: { status: "skipped", deniedReason: "steering" },
-            },
+            }),
         steer,
       ]);
       const ends = events.filter((event) => event.type === "tool_execution_end");
@@ -638,17 +608,8 @@ describe("agentLoop steering", () => {
           agent.steer(firstSteer);
           agent.steer(secondSteer);
           const stream = createAssistantMessageEventStream();
-          stream.push({ type: "start", partial: makeAssistantMessage([]) });
-          for (const [contentIndex, toolCall] of calls.slice(0, 2).entries()) {
-            stream.push({
-              type: "toolcall_end",
-              contentIndex,
-              toolCall,
-              partial: makeAssistantMessage(calls.slice(0, contentIndex + 1)),
-            });
-          }
-          stream.push({ type: "done", reason: "toolUse", message: makeAssistantMessage(calls) });
-          stream.end();
+          startToolCalls(stream, calls.slice(0, 2));
+          finishMessageStream(stream, makeAssistantMessage(calls), "toolUse");
           return stream;
         },
       });
@@ -694,4 +655,265 @@ describe("agentLoop steering", () => {
     await expect(streamed.config.getSteeringMessages?.()).resolves.toEqual([steer]);
     expect(streamed.getTerminalConfig()).toBe(streamed.config);
   });
+});
+
+const activeModel = { ...model, id: "steerable-model", name: "Steerable model", reasoning: true };
+
+function streamAssistant(value: string): AssistantMessage {
+  return { ...makeAssistantMessage(text(value)), model: activeModel.id, timestamp: 2 };
+}
+
+async function activeResponse(
+  options: Pick<AgentOptions, "steeringMode" | "convertToLlm" | "transformContext"> & {
+    steer?: (messages: readonly UserMessage[]) => Promise<boolean>;
+    tools?: AgentTool[];
+    needsContinuation?: () => boolean;
+  } = {},
+) {
+  const { needsContinuation } = options;
+  const started = createDeferred();
+  const submitted = createDeferred();
+  const steer = vi.fn(async (messages: readonly UserMessage[]) => {
+    submitted.resolve();
+    return options.steer ? options.steer(messages) : true;
+  });
+  const firstResponse = createAssistantMessageEventStream();
+  let disconnect: ReturnType<NonNullable<StreamOptions["onActiveResponse"]>>;
+  const streamFn: AgentOptions["streamFn"] = (_model, _context, streamOptions) => {
+    if (requests.length === 1) {
+      disconnect = streamOptions?.onActiveResponse?.({ steer, needsContinuation });
+      firstResponse.push({ type: "start", partial: streamAssistant("") });
+      started.resolve();
+      return firstResponse;
+    }
+    const response = createAssistantMessageEventStream();
+    finishMessageStream(response, streamAssistant("updated answer"));
+    return response;
+  };
+  const { agent, requests } = makeAgent(options.tools ?? [], {
+    initialState: { model: activeModel },
+    streamFn,
+    ...options,
+  });
+  const run = agent.prompt("original question");
+  await started.promise;
+  return {
+    steer,
+    submitted: submitted.promise,
+    agent,
+    requests,
+    firstResponse,
+    finish: (message = streamAssistant("original answer")) => {
+      disconnect?.();
+      finishMessageStream(firstResponse, message, "stop");
+      return run;
+    },
+    fail: () => {
+      disconnect?.();
+      finishMessageStream(firstResponse, {
+        ...streamAssistant(""),
+        stopReason: "error",
+        errorMessage: "provider failed",
+      });
+      return run;
+    },
+  };
+}
+
+it.each(["one-at-a-time", "all"] as const)(
+  "projects context and finishes an accepted batch before later %s updates",
+  async (steeringMode) => {
+    const { agent, steer, finish, requests } = await activeResponse({
+      steeringMode,
+      transformContext: async (messages) => {
+        let userTurn = 0;
+        return messages.map((message) =>
+          message.role === "user"
+            ? { ...message, content: `Turn ${++userTurn}: ${JSON.stringify(message.content)}` }
+            : message,
+        );
+      },
+    });
+
+    const firstUpdate = user("first update", 3);
+    agent.steer(firstUpdate);
+    await vi.waitFor(() => expect(steer).toHaveBeenCalledTimes(1));
+    agent.steer(user("second update", 4));
+    await setImmediate();
+    await finish();
+    expect(steer).toHaveBeenCalledExactlyOnceWith([requests[1]?.at(-1)]);
+    expect(requests[1]?.at(-1)).toMatchObject({ role: "user", content: 'Turn 2: "first update"' });
+    expect(requests[2]?.at(-1)).toMatchObject({ content: 'Turn 3: "second update"' });
+    expect(agent.state.messages).toContain(firstUpdate);
+  },
+);
+
+it.each([false, true])(
+  "queues incompatible context after accepted input=%s",
+  async (acceptedInput) => {
+    const update = user("change direction", 3);
+    const { agent, steer, finish, requests } = await activeResponse({
+      steeringMode: "all",
+      transformContext: async (messages) =>
+        messages.includes(update) ? messages.filter((message) => message === update) : messages,
+    });
+
+    const earlier = user("accepted update", 2);
+    if (acceptedInput) {
+      agent.steer(earlier);
+      await vi.waitFor(() => expect(steer).toHaveBeenCalledTimes(1));
+    }
+    agent.steer(update);
+    await setImmediate();
+    await finish();
+    expect(steer).toHaveBeenCalledTimes(acceptedInput ? 1 : 0);
+    expect(requests[1]?.at(-1)).toBe(acceptedInput ? earlier : update);
+    expect(requests[acceptedInput ? 2 : 1]).toEqual([update]);
+  },
+);
+
+it.each(["abort", "error"] as const)(
+  "releases admitted input for cancellation after the run ends with %s",
+  async (terminal) => {
+    const { agent, submitted, finish, fail } = await activeResponse();
+
+    const update = user("recoverable update", 3);
+    agent.steer(update);
+    await submitted;
+    expect(agent.cancelSteeringMessage((message) => message === update)).toBeUndefined();
+    if (terminal === "abort") {
+      agent.abort();
+      await finish();
+    } else {
+      await fail();
+    }
+    expect(agent.state.messages).not.toContain(update);
+    expect(agent.hasQueuedMessages()).toBe(true);
+    expect(agent.cancelSteeringMessage((message) => message === update)).toBe(update);
+    expect(agent.hasQueuedMessages()).toBe(false);
+  },
+);
+it("continues after an automatic response when transport still owns deferred tool input", async () => {
+  let deferredInput = false;
+  const needsContinuation = vi.fn(() => deferredInput);
+  const { finish, requests, agent } = await activeResponse({ needsContinuation });
+
+  deferredInput = true;
+  await finish();
+  expect(requests).toHaveLength(2);
+  expect(requests[1]?.at(-1)).toMatchObject({ role: "assistant" });
+  expect(needsContinuation).toHaveBeenCalledOnce();
+  expect(agent.state.messages.at(-1)).toMatchObject({
+    content: [{ type: "text", text: "updated answer" }],
+  });
+});
+it.each(["one-at-a-time", "all"] as const)(
+  "keeps a drained %s steering batch ahead of later input while an async call settles",
+  async (steeringMode) => {
+    const settled = createDeferred();
+
+    const execute = vi.fn(async () => ({ content: [], details: {} }));
+    const { agent, submitted, firstResponse, steer, finish, requests } = await activeResponse({
+      steeringMode,
+      tools: [{ ...makeTool("lookup"), parameters: Type.Object({}), execute }],
+    });
+    agent.subscribe((event) => {
+      if (event.type === "tool_execution_end") {
+        settled.resolve();
+      }
+    });
+
+    const first = user("first update", 3);
+    const second = user("second update", 4);
+    agent.steer(first);
+    await submitted;
+    const toolCall = { ...makeCall("lookup", "call_1"), async: true as const };
+    const partial = { ...streamAssistant(""), content: [toolCall] };
+    firstResponse.push({ type: "toolcall_end", contentIndex: 0, toolCall, partial });
+    await settled.promise;
+    agent.steer(second);
+    await setImmediate();
+    expect(steer).toHaveBeenCalledTimes(1);
+    expect(execute).toHaveBeenCalledOnce();
+    await finish({
+      ...streamAssistant("original answer"),
+      content: [toolCall, { type: "text", text: "original answer" }],
+    });
+    expect(requests[1]?.at(-1)).toBe(first);
+    expect(requests[2]?.at(-1)).toBe(second);
+  },
+);
+it("sends queued input before generation ends and commits it once at the normal boundary", async () => {
+  const { agent, submitted, steer, finish, requests } = await activeResponse();
+
+  const update = user("change direction", 3);
+  const later = user("later update", 4);
+  agent.steer(update);
+  await submitted;
+  expect(steer).toHaveBeenCalledWith([update]);
+  expect(agent.state.messages).not.toContain(update);
+
+  agent.steer(later);
+  await setImmediate();
+  expect(steer).toHaveBeenCalledTimes(1);
+  expect(agent.cancelSteeringMessage((message) => message === update)).toBeUndefined();
+  agent.clearSteeringQueue();
+  await finish();
+
+  expect(requests).toHaveLength(2);
+  expect(requests[1]?.at(-1)).toBe(update);
+  expect(agent.state.messages.filter((message) => message === update)).toHaveLength(1);
+  expect(agent.state.messages).not.toContain(later);
+  expect(agent.hasQueuedMessages()).toBe(false);
+  agent.steer(user("next run", 5));
+  expect(steer).toHaveBeenCalledTimes(1);
+});
+
+it("allows cancellation after definite rejection but fences cancellation during admission", async () => {
+  const decision = createDeferred<boolean>();
+
+  const { agent, submitted, steer, finish, requests } = await activeResponse({
+    steer: async () => decision.promise,
+    steeringMode: "all",
+  });
+
+  const update = user("optional update", 3);
+  agent.steer(update);
+  await submitted;
+  expect(agent.cancelSteeringMessage((message) => message === update)).toBeUndefined();
+  decision.resolve(false);
+  await setImmediate();
+  const later = user("later update", 4);
+  agent.steer(later);
+  await setImmediate();
+  expect(steer).toHaveBeenCalledTimes(1);
+  expect(agent.cancelSteeringMessage((message) => message === update)).toBe(update);
+  await finish();
+  expect(requests).toHaveLength(2);
+  expect(requests[1]?.at(-1)).toBe(later);
+  expect(agent.state.messages).not.toContain(update);
+});
+
+it("does not submit input after abort wins an awaited conversion", async () => {
+  const converting = createDeferred();
+  const converted = createDeferred<Message[]>();
+
+  const update = user("late update", 3);
+  const { agent, requests, finish, steer } = await activeResponse({
+    convertToLlm: (messages) => {
+      if (messages.includes(update)) {
+        converting.resolve();
+        return converted.promise;
+      }
+      return messages as Message[];
+    },
+  });
+
+  agent.steer(update);
+  await converting.promise;
+  agent.abort();
+  converted.resolve([...requests.flat(), update]);
+  await finish();
+  expect(steer).not.toHaveBeenCalled();
+  expect(agent.cancelSteeringMessage((message) => message === update)).toBe(update);
 });

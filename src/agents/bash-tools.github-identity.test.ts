@@ -6,6 +6,7 @@ import { promisify } from "node:util";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { GitHubToolIdentityConfig } from "../config/types.tools.js";
 import { gitNullConfigPath } from "../infra/git-exec.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 import { createOpenClawCodingTools } from "./agent-tools.js";
@@ -18,18 +19,39 @@ vi.mock("../secrets/store/secret-store.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../secrets/store/secret-store.js")>()),
   readSecretStoreExecEnvironment: storeMocks.readSecretStoreExecEnvironment,
 }));
+const authorEnv = [
+  "GIT_AUTHOR_NAME",
+  "GIT_AUTHOR_EMAIL",
+  "GIT_COMMITTER_NAME",
+  "GIT_COMMITTER_EMAIL",
+] as const;
 const snapshot = captureEnv([
   "GH_TOKEN",
   "GITHUB_TOKEN",
   "PREVIEW_SERVICE_TOKEN",
   "GIT_CONFIG_PARAMETERS",
-  "GIT_AUTHOR_NAME",
-  "GIT_AUTHOR_EMAIL",
-  "GIT_COMMITTER_NAME",
-  "GIT_COMMITTER_EMAIL",
+  ...authorEnv,
 ]);
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const execFileAsync = promisify(execFile);
+const execDefaults = { host: "gateway", security: "full", ask: "off" } as const;
+const profileId = (digit: number) => `ghp_${String(digit).repeat(32)}`;
+function appIdentity(digit: number, source: "env" | "store", id: string): GitHubToolIdentityConfig {
+  return {
+    kind: "app-installation",
+    profileId: profileId(digit),
+    app: {
+      appId: 101,
+      installationId: 202,
+      accountId: 303,
+      repositories: [{ id: 404, fullName: "example/project" }],
+      permissions: { contents: "read" },
+      keyVersion: "synthetic-v1",
+      privateKey: { source, provider: "default", id },
+    },
+  };
+}
+const githubConfig = (github: GitHubToolIdentityConfig): OpenClawConfig => ({ tools: { github } });
 afterEach(() => {
   snapshot.restore();
   vi.unstubAllEnvs();
@@ -54,15 +76,14 @@ function prepare(
   return resolvePreparedExecEnvironment({
     execParams: { command: "gh api user" },
     host,
-    ...(host === "sandbox"
-      ? {
-          sandbox: {
+    sandbox:
+      host === "sandbox"
+        ? {
             containerName: "sandbox",
             workspaceDir: "/workspace",
             containerWorkdir: "/workspace",
-          },
-        }
-      : {}),
+          }
+        : undefined,
     defaultPathPrepend: [],
     storeSecretEnv: includeStoreSecrets
       ? { GH_TOKEN: "store-sentinel", GITHUB_TOKEN: "store-sentinel" }
@@ -81,44 +102,18 @@ describe("exec GitHub identity", () => {
     vi.stubEnv("OPENCLAW_STATE_DIR", root);
     vi.stubEnv("FACTORY_APP_PEM", "synthetic-system-signing-key");
     vi.stubEnv("SIBLING_APP_PEM", "synthetic-sibling-signing-key");
-    const app = {
-      appId: 101,
-      installationId: 202,
-      accountId: 303,
-      repositories: [{ id: 404, fullName: "example/project" }],
-      permissions: { contents: "read" as const },
-      keyVersion: "synthetic-v1",
-    };
     const config: OpenClawConfig = {
       tools: {
         exec: { host: "gateway", mode: "full" },
-        github: {
-          kind: "app-installation",
-          profileId: "ghp_33333333333333333333333333333333",
-          app: {
-            ...app,
-            privateKey: { source: "env", provider: "default", id: "FACTORY_APP_PEM" },
-          },
-        },
+        github: appIdentity(3, "env", "FACTORY_APP_PEM"),
       },
       agents: {
         entries: {
           worker: {
-            tools: { github: { kind: "oauth", profileId: "ghp_11111111111111111111111111111111" } },
+            tools: { github: { kind: "oauth", profileId: profileId(1) } },
           },
-          policy: { tools: { github: { profileId: "ghp_22222222222222222222222222222222" } } },
-          signer: {
-            tools: {
-              github: {
-                kind: "app-installation",
-                profileId: "ghp_44444444444444444444444444444444",
-                app: {
-                  ...app,
-                  privateKey: { source: "store", provider: "default", id: "SIBLING_APP_PEM" },
-                },
-              },
-            },
-          },
+          policy: { tools: { github: { profileId: profileId(2) } } },
+          signer: { tools: { github: appIdentity(4, "store", "SIBLING_APP_PEM") } },
         },
       },
     };
@@ -172,12 +167,7 @@ describe("exec GitHub identity", () => {
 
   it("fetches missing partial-clone blobs without launching automatic maintenance", async () => {
     // This fixture tests repository author inheritance, not the invoking session's override.
-    for (const key of [
-      "GIT_AUTHOR_NAME",
-      "GIT_AUTHOR_EMAIL",
-      "GIT_COMMITTER_NAME",
-      "GIT_COMMITTER_EMAIL",
-    ]) {
+    for (const key of authorEnv) {
       deleteTestEnvValue(key);
     }
     const root = tempDirs.make("agent-git-maintenance-");
@@ -222,14 +212,10 @@ describe("exec GitHub identity", () => {
     for (const managed of [false, true]) {
       const prepared = prepareGitHubToolEnvironment({
         config: managed
-          ? {
-              tools: {
-                github: {
-                  profileId: "ghp_99999999999999999999999999999999",
-                  gitAuthor: { name: "Agent Author", email: "agent@example.invalid" },
-                },
-              },
-            }
+          ? githubConfig({
+              profileId: profileId(9),
+              gitAuthor: { name: "Agent Author", email: "agent@example.invalid" },
+            })
           : {},
         agentId: "main",
       });
@@ -275,9 +261,7 @@ describe("exec GitHub identity", () => {
       stdinMode: "pipe-closed" as const,
     }));
     const tool = createExecTool({
-      host: "gateway",
-      security: "full",
-      ask: "off",
+      ...execDefaults,
       allowBackground: false,
       sandboxRequired: true,
       sandbox: {
@@ -288,7 +272,7 @@ describe("exec GitHub identity", () => {
       },
       elevated: { enabled: true, allowed: true, defaultLevel: "full" },
       preparedRunEnvironment: prepareGitHubToolEnvironment({
-        config: { tools: { github: { profileId: "ghp_99999999999999999999999999999999" } } },
+        config: githubConfig({ profileId: profileId(9) }),
         agentId: "main",
       }),
     });
@@ -304,8 +288,7 @@ describe("exec GitHub identity", () => {
     expect(result.details.status).toBe("completed");
     expect(buildExecSpec).toHaveBeenCalledOnce();
     const sandboxEnv = buildExecSpec.mock.calls[0]![0].env;
-    expect(sandboxEnv.GH_TOKEN).toBe("");
-    expect(sandboxEnv.GITHUB_TOKEN).toBe("");
+    expect(sandboxEnv).toMatchObject({ GH_TOKEN: "", GITHUB_TOKEN: "" });
     expect(sandboxEnv).not.toHaveProperty("GH_CONFIG_DIR");
   });
 
@@ -313,8 +296,7 @@ describe("exec GitHub identity", () => {
     setTestEnvValue("GH_TOKEN", "ambient-token");
     setTestEnvValue("GITHUB_TOKEN", "ambient-fallback");
     const result = prepare("gateway", previewEnvironment("env", "GH_TOKEN"), false);
-    expect(result.env.GH_TOKEN).toBe("");
-    expect(result.env.GITHUB_TOKEN).toBe("ambient-fallback");
+    expect(result.env).toMatchObject({ GH_TOKEN: "", GITHUB_TOKEN: "ambient-fallback" });
   });
 
   it("blanks a custom preview env ref for native local and sandbox exec", () => {
@@ -323,10 +305,12 @@ describe("exec GitHub identity", () => {
     const prepared = previewEnvironment("env", "PREVIEW_SERVICE_TOKEN");
     for (const host of ["gateway", "sandbox"] as const) {
       const result = prepare(host, prepared);
-      expect(result.env.PREVIEW_SERVICE_TOKEN).toBe("");
+      expect(result.env).toMatchObject({
+        PREVIEW_SERVICE_TOKEN: "",
+        GH_TOKEN: "store-sentinel",
+        GITHUB_TOKEN: "store-sentinel",
+      });
       expect(result.requestedEnv?.PREVIEW_SERVICE_TOKEN).toBe("");
-      expect(result.env.GH_TOKEN).toBe("store-sentinel");
-      expect(result.env.GITHUB_TOKEN).toBe("store-sentinel");
     }
   });
 
@@ -335,9 +319,7 @@ describe("exec GitHub identity", () => {
     const preparedRunEnvironment = previewEnvironment("store", "PREVIEW_STORE_TOKEN");
     expect(preparedRunEnvironment.credentialScrubEnv.PREVIEW_STORE_TOKEN).toBe("");
     const tool = createExecTool({
-      host: "gateway",
-      security: "full",
-      ask: "off",
+      ...execDefaults,
       config: {},
       agentId: "main",
       preparedRunEnvironment,

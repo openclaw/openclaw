@@ -182,6 +182,52 @@ it.each(["connection", "plugin publication"])(
   },
 );
 
+it("recovers a catalog failure without replacing the Dreaming draft", async () => {
+  const recovery = deferred<{ plugins: readonly PluginCatalogItem[] }>();
+  const { element, publishPluginGeneration } = createPage({
+    listCatalog: (call) =>
+      call === 0 ? Promise.reject(new Error("catalog unavailable")) : recovery.promise,
+  });
+  const frequency = dreamingInput(element);
+  frequency.value = "0 4 * * *";
+  frequency.focus();
+  await waitForSolid(() => expect(addonStatus(element, "Active memory")).toBe("Unknown"));
+  expect(dreamingInput(element)).toBe(frequency);
+  expect(frequency.value).toBe("0 4 * * *");
+
+  publishPluginGeneration(1);
+  recovery.resolve({ plugins: [engine("memory-core", true), addon("active-memory", true)] });
+  await waitAddon(element, "Active memory", true);
+  expect(dreamingInput(element)).toBe(frequency);
+  expect(frequency.value).toBe("0 4 * * *");
+  expect(document.activeElement).toBe(frequency);
+});
+
+it("retains catalog controls during a plugin publication refresh", async () => {
+  const refresh = deferred<{ plugins: readonly PluginCatalogItem[] }>();
+  const { element, publishPluginGeneration } = createPage({
+    listCatalog: (call) =>
+      call === 0
+        ? Promise.resolve({ plugins: [engine("memory-core", true), addon("active-memory", true)] })
+        : refresh.promise,
+  });
+  await waitAddon(element, "Active memory", true);
+  const engineControl = element.querySelector<HTMLInputElement>('input[value="memory-core"]');
+  const addonControl = addonSwitch(element, "Active memory");
+  engineControl!.focus();
+
+  publishPluginGeneration(1);
+  flush();
+  expect(element.querySelector('input[value="memory-core"]')).toBe(engineControl);
+  expect(addonSwitch(element, "Active memory")).toBe(addonControl);
+  expect(document.activeElement).toBe(engineControl);
+
+  refresh.resolve({ plugins: [engine("memory-core", true), addon("active-memory", false)] });
+  await waitAddon(element, "Active memory", false);
+  expect(element.querySelector('input[value="memory-core"]')).toBe(engineControl);
+  expect(addonSwitch(element, "Active memory")).toBe(addonControl);
+});
+
 it("falls back to read-only add-on status rows without operator.admin", async () => {
   const { element } = createPage({
     catalog: [addon("active-memory", true), addon("memory-wiki", false)],
@@ -306,11 +352,13 @@ it("renders and clears mutation errors on only the affected add-on", async () =>
   toggleAddon(element, "Active memory", false);
   await waitText(element, "enablement rejected");
   expect(addonSwitch(element, "Active memory")?.checked).toBe(true);
+  expect(addonSwitch(element, "Active memory")?.hasAttribute("disabled")).toBe(false);
   expect(element.textContent).toContain("Could not update Active memory");
   expect(element.textContent).not.toContain("Could not update Memory wiki");
 
   toggleAddon(element, "Active memory", false);
   await waitText(element, "enablement rejected", false);
+  await waitText(element, "Could not update Active memory", false);
   retry.resolve(committed("active-memory", false));
 });
 
@@ -349,6 +397,36 @@ it("keeps Dreams empty when no configured agent is available", async () => {
   expect(element.querySelector("openclaw-agent-memory-panel")).toBeNull();
   expect(element.querySelector("openclaw-agent-select")).toBeNull();
   expect(element.textContent).not.toContain("Dreaming frequency");
+});
+
+it("loads each Dreams target once when the existing agent key changes", async () => {
+  const { element, request, settingsAgentSelection } = createPage({
+    agents: [{ id: "main" }, { id: "support" }],
+    selectedAgentId: "main",
+    routeData: memoryTabRoute("dreams"),
+    methods: ["doctor.memory.status", "doctor.memory.dreamDiary"],
+    settingsRequest: async (method) =>
+      method === "doctor.memory.status" ? { dreaming: null } : { found: false, path: "DREAMS.md" },
+  });
+  const memoryCalls = () =>
+    request.mock.calls.filter(
+      ([method]) => method === "doctor.memory.status" || method === "doctor.memory.dreamDiary",
+    );
+  await waitForSolid(() => expect(memoryCalls()).toHaveLength(2));
+  const originalPanel = element.querySelector("openclaw-agent-memory-panel");
+  expect(originalPanel).not.toBeNull();
+
+  settingsAgentSelection.set("support");
+  await waitForSolid(() => expect(memoryCalls()).toHaveLength(4));
+  expect(element.querySelector("openclaw-agent-memory-panel")).not.toBe(originalPanel);
+  for (const agentId of ["main", "support"]) {
+    expect(memoryCalls()).toEqual(
+      expect.arrayContaining([
+        ["doctor.memory.status", { agentId }],
+        ["doctor.memory.dreamDiary", { agentId }],
+      ]),
+    );
+  }
 });
 
 it("handles Space directly so the browser cannot synthesize a second navigation", async () => {
@@ -448,41 +526,46 @@ it("passes a replaced pinned engine to a new presentation", async () => {
   expect(first.context.signal.aborted).toBe(true);
 });
 
-it.each([["main"], ["research", "main"]])(
-  "keeps newer sidebar intent when a pending Memory link mounts (%j)",
-  async (...choices: string[]) => {
-    const { element, settingsAgentSelection, settingsViews } = createPage(
-      {
-        agents: [{ id: "main" }, { id: "research" }],
-        routeData: memoryRoute("/settings/memory?agent=research"),
-      },
-      false,
-    );
-    for (const agentId of choices) {
-      settingsAgentSelection.set(agentId);
-    }
-    mountMemoryPage(element);
-    await waitForSolid(() => expect(settingsViews.at(-1)?.snapshot.agentId).toBe("main"));
-    expect(settingsAgentSelection.state.selectedId).toBe("main");
-    expect(settingsViews.some((view) => view.snapshot.agentId === "research")).toBe(false);
-  },
-);
-
-it("honors a fresh explicit Memory navigation after the sidebar changed the same URL's agent", async () => {
-  const { element, settingsAgentSelection } = createPage({
-    agents: [{ id: "main" }, { id: "research" }],
-    routeData: memoryRoute("/settings/memory?agent=research"),
+it("publishes a completed catalog to the mounted Settings presentation", async () => {
+  const catalog = deferred<{ plugins: PluginCatalogItem[] }>();
+  const { settingsViews } = createPage({
+    configObject: { plugins: { slots: { memory: "synthetic-memory" } } },
+    routeData: memoryTabRoute("overview"),
+    listCatalog: () => catalog.promise,
   });
-  await waitForSolid(() => expect(settingsAgentSelection.state.selectedId).toBe("research"));
-  settingsAgentSelection.set("main");
-  element.routeData = {
-    ...memoryRoute("/settings/memory?agent=research"),
-    agentSelectionIntent: {
-      owner: settingsAgentSelection,
-      revision: settingsAgentSelection.intentRevision,
-    },
-  };
-  await waitForSolid(() => expect(settingsAgentSelection.state.selectedId).toBe("research"));
+  try {
+    await waitForSolid(() =>
+      expect(settingsViews.at(-1)?.snapshot.engine.availability).toBe("loading"),
+    );
+    const view = settingsViews.at(-1)!;
+    catalog.resolve({ plugins: [] });
+    await waitForSolid(() => expect(view.snapshot.engine.availability).toBe("missing"));
+    expect(settingsViews.at(-1)).toBe(view);
+  } finally {
+    catalog.resolve({ plugins: [] });
+  }
+});
+
+it("retires callbacks and pending RPCs when Config admits a same-agent Memory route", async () => {
+  const reply = deferred<unknown>();
+  const { element, settingsViews } = createPage({
+    routeData: memoryRoute("/settings/memory?agent=main&filter=first"),
+    settingsRequest: () => reply.promise,
+  });
+  await waitForSolid(() => expect(settingsViews.length).toBeGreaterThan(0));
+  const first = settingsViews.at(-1)!;
+  const pending = first.context.request("settings.test");
+  element.routeData = memoryRoute("/settings/memory?agent=main&filter=second");
+  // Raw route input is not admitted until Config's existing route effect applies it.
+  expect(first.context.signal.aborted).toBe(false);
+  flush();
+  expect(first.context.signal.aborted).toBe(true);
+  expect(() => first.context.navigate("settings")).toThrow();
+  reply.resolve("obsolete");
+  await expect(pending).rejects.toThrow();
+  await waitForSolid(() => expect(settingsViews.at(-1)?.context).not.toBe(first.context));
+  expect(settingsViews.at(-1)?.snapshot.agentId).toBe("main");
+  expect(settingsViews.at(-1)?.snapshot.routeIntent).toContain("filter=second");
 });
 
 it.each([
@@ -568,6 +651,29 @@ it("passes offline state when Overview is activated after disconnecting elsewher
   await waitForSolid(() => expect(settingsViews.at(-1)?.snapshot.connected).toBe(false));
 });
 
+it("makes a previously unsupported Dreaming schema unknown while a fresh probe is pending", async () => {
+  const refresh = deferred<unknown>();
+  const { element, lookupSchemaPath, publishPluginGeneration } = createPage({
+    lookupSchemaPath: (call) =>
+      call === 0
+        ? Promise.resolve({ schema: { additionalProperties: false }, children: [] })
+        : refresh.promise,
+  });
+  try {
+    await waitText(element, "Not available for this engine");
+    expect(element.querySelector('input[aria-label="Dreaming frequency"]')).toBeNull();
+
+    publishPluginGeneration(1);
+    await waitForSolid(() => {
+      expect(lookupSchemaPath).toHaveBeenCalledTimes(2);
+      expect(dreamingInput(element).isConnected).toBe(true);
+      expect(element.textContent).not.toContain("Not available for this engine");
+    });
+  } finally {
+    refresh.resolve({ schema: { type: "object" }, children: [{ key: "dreaming" }] });
+  }
+});
+
 it.each(["reconnect", "plugin publication"])(
   "re-probes after %s and drops the abandoned capability result",
   async (change) => {
@@ -587,7 +693,7 @@ it.each(["reconnect", "plugin publication"])(
       }
       await waitForSolid(() => expect(lookupSchemaPath).toHaveBeenCalledTimes(2));
 
-      first.resolve({ type: "object", additionalProperties: false, properties: {} });
+      first.resolve({ schema: { type: "object", additionalProperties: false }, children: [] });
       await first.promise;
       flush();
       expect(element.textContent).not.toContain("Not available for this engine");

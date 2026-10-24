@@ -47,7 +47,6 @@ export type LifecyclePhase = "start" | "end" | "error";
 
 export type LifecycleEventLike = { ts: number; sessionId?: string } & {
   controlUiVisible?: boolean;
-  isHeartbeat?: boolean;
   contextClaimId?: string;
   runId?: string;
   clientRunId?: string;
@@ -231,7 +230,6 @@ export function deriveSessionLifecycleSnapshot(params: {
     ...(terminal &&
     !interruptedForRestart &&
     params.event.controlUiVisible === true &&
-    params.event.isHeartbeat !== true &&
     endedAt !== undefined
       ? { lastActivityAt: Math.max(existing?.lastActivityAt ?? 0, endedAt) }
       : {}),

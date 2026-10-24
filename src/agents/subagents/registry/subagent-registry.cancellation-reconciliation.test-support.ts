@@ -4,6 +4,7 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import type { SessionEntry } from "../../../config/sessions/types.js";
 import {
   waitForFast,
   type SubagentRegistryHarness,
@@ -19,6 +20,18 @@ import type { createSubagentRegistryMockState } from "./subagent-registry.mock-s
 import { makeKilledRun } from "./subagent-registry.run-fixtures.test-support.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { resolveSubagentSessionStatus } from "./subagent-session-metrics.js";
+
+const childIdentity = (name: string) => ({
+  sessionId: `sess-${name}`,
+  lifecycleRevision: `revision-${name}`,
+});
+const makeChild = (name: string, createdAt: number, runId = `run-${name}`) => ({
+  runId,
+  childSessionKey: `agent:main:subagent:${name}`,
+  childSessionIdentity: childIdentity(name),
+  task: name,
+  createdAt,
+});
 
 export function registerCancellationReconciliationTests({
   getRegistry,
@@ -46,6 +59,21 @@ export function registerCancellationReconciliationTests({
   findRequesterRun: (runId: string) => SubagentRunRecord | undefined;
   mockEndedHooks: () => void;
 }): void {
+  const seedSession = (
+    child: ReturnType<typeof makeChild>,
+    endedAt: number,
+    status: SessionEntry["status"] = "done",
+  ) => {
+    mocks.entries = {
+      [child.childSessionKey]: {
+        ...child.childSessionIdentity,
+        updatedAt: endedAt,
+        status,
+        startedAt: child.createdAt,
+        endedAt,
+      },
+    };
+  };
   it.each(["late completion", "earlier deadline"] as const)(
     "reconciles stable operator cancellation against %s",
     async (source) => {
@@ -53,35 +81,19 @@ export function registerCancellationReconciliationTests({
       const now = Date.now();
       const startedAt = now - 10_000;
       const killedAt = now - 1_000;
-      const runId = "run-stable-cancellation";
-      const childSessionKey = "agent:main:subagent:stable-cancellation";
+      const child = makeChild("stable-cancellation", startedAt);
+      const { runId, childSessionKey } = child;
       const earlierDeadline = source === "earlier deadline";
-      mocks.entries = {
-        [childSessionKey]: {
-          lifecycleRevision: "revision-stable-cancellation",
-          sessionId: "sess-stable-cancellation",
-          updatedAt: now,
-          status: earlierDeadline ? "killed" : "done",
-          startedAt,
-          endedAt: now,
-        },
-      };
+      seedSession(child, now, earlierDeadline ? "killed" : "done");
       await mod.addSubagentRunForTests(
         makeKilledRun(killedAt, {
-          runId,
-          childSessionKey,
-          childSessionIdentity: {
-            sessionId: "sess-stable-cancellation",
-            lifecycleRevision: "revision-stable-cancellation",
-          },
-          task: "preserve authoritative cancellation outcome",
+          ...child,
           killReconciliation: {
             killedAt,
             taskCancellationAccepted: true,
             suppressTaskDelivery: true,
           },
           expectsCompletionMessage: !earlierDeadline,
-          createdAt: startedAt,
           startedAt,
           ...(earlierDeadline ? { runTimeoutSeconds: 8 } : { cleanup: "delete", archiveAtMs: now }),
         }),
@@ -131,8 +143,8 @@ export function registerCancellationReconciliationTests({
     const killedAt = now - 5 * 60_000;
     const startedAt = killedAt - 10_000;
     const completedAt = killedAt + 1_000;
-    const runId = "run-cancelled-during-sweep-capture";
-    const childSessionKey = "agent:main:subagent:cancelled-during-sweep-capture";
+    const child = makeChild("cancelled-during-sweep-capture", startedAt);
+    const { runId } = child;
     const retirementWrites: string[][] = [];
     const publishedRows: SubagentRunRecord[] = [];
     mocks.persistRegistryRows.mockImplementation((runs, ids) => {
@@ -143,16 +155,7 @@ export function registerCancellationReconciliationTests({
         retirementWrites.push([...ids]);
       }
     });
-    mocks.entries = {
-      [childSessionKey]: {
-        sessionId: "sess-cancelled-during-sweep-capture",
-        lifecycleRevision: "revision-cancelled-during-sweep-capture",
-        updatedAt: completedAt,
-        status: "done",
-        startedAt,
-        endedAt: completedAt,
-      },
-    };
+    seedSession(child, completedAt);
     const captureEntered = createDeferred();
     const finishCapture = createDeferred<string>();
     mocks.captureSubagentCompletionReply.mockImplementationOnce(() => {
@@ -162,15 +165,8 @@ export function registerCancellationReconciliationTests({
     // Leave producer metadata absent so reconciliation must await transcript capture.
     await mod.addSubagentRunForTests(
       makeKilledRun(killedAt, {
-        runId,
-        childSessionKey,
-        childSessionIdentity: {
-          sessionId: "sess-cancelled-during-sweep-capture",
-          lifecycleRevision: "revision-cancelled-during-sweep-capture",
-        },
-        task: "cancel during result capture",
+        ...child,
         expectsCompletionMessage: false,
-        createdAt: startedAt,
         startedAt,
       }),
     );
@@ -216,28 +212,12 @@ export function registerCancellationReconciliationTests({
     const yieldedAt = Date.parse("2026-03-24T11:59:00Z");
     const completedAt = Date.parse("2026-03-24T11:59:30Z");
     const killedAt = Date.parse("2026-03-24T12:00:00Z");
-    const runId = "run-yielded-before-kill";
-    const childSessionKey = "agent:main:subagent:yielded-before-kill";
-    mocks.entries = {
-      [childSessionKey]: {
-        sessionId: "sess-yielded-before-kill",
-        lifecycleRevision: "revision-yielded-before-kill",
-        updatedAt: completedAt,
-        status: "done",
-        startedAt,
-        endedAt: completedAt,
-      },
-    };
+    const child = makeChild("yielded-before-kill", startedAt);
+    const { runId } = child;
+    seedSession(child, completedAt);
     await mod.addSubagentRunForTests({
-      runId,
-      childSessionKey,
-      childSessionIdentity: {
-        sessionId: "sess-yielded-before-kill",
-        lifecycleRevision: "revision-yielded-before-kill",
-      },
-      task: "complete between yield and kill",
+      ...child,
       expectsCompletionMessage: false,
-      createdAt: startedAt,
       startedAt,
       endedAt: yieldedAt,
       pauseReason: "sessions_yield",
@@ -273,24 +253,16 @@ export function registerCancellationReconciliationTests({
     const mod = getRegistry();
     const killedAt = Date.now() - 5 * 60_000;
     const startedAt = killedAt - 60_000;
-    const runId = "run-retired-kill";
-    const childSessionKey = "agent:main:subagent:requester-stop-suppressed";
+    const child = makeChild("requester-stop-suppressed", startedAt, "run-retired-kill");
     await mod.addSubagentRunForTests(
       makeKilledRun(killedAt, {
-        runId,
-        childSessionKey,
-        childSessionIdentity: {
-          sessionId: "sess-requester-stop-suppressed",
-          lifecycleRevision: "revision-requester-stop-suppressed",
-        },
-        task: "do not replay cancellation",
+        ...child,
         expectsCompletionMessage: true,
-        createdAt: startedAt,
         killReconciliation: { killedAt, suppressTaskDelivery: true },
       }),
     );
     await mod.testing.sweepOnceForTests();
-    await waitForFast(() => expect(findRequesterRun(runId)).toBeUndefined());
+    await waitForFast(() => expect(findRequesterRun(child.runId)).toBeUndefined());
     expect(mocks.runSubagentAnnounceFlow).not.toHaveBeenCalled();
   });
 
@@ -304,14 +276,13 @@ export function registerCancellationReconciliationTests({
       const endedAt = Date.parse(
         source === "old completion" ? "2026-03-24T11:56:00Z" : "2026-03-24T11:59:00Z",
       );
-      const childSessionKey = "agent:main:subagent:reused";
-      const runId = "run-old-tombstone";
+      const child = makeChild("reused", oldStartedAt, "run-old-tombstone");
+      const { runId, childSessionKey } = child;
       const newRunId = "run-new-generation";
       const withoutStart = source === "new completion without start";
       mocks.entries = {
         [childSessionKey]: {
-          sessionId: "sess-reused",
-          lifecycleRevision: "revision-reused",
+          ...childIdentity("reused"),
           updatedAt: endedAt,
           status: "done",
           endedAt,
@@ -345,11 +316,7 @@ export function registerCancellationReconciliationTests({
       }
       await mod.addSubagentRunForTests(
         makeKilledRun(killedAt, {
-          runId,
-          childSessionKey,
-          childSessionIdentity: { sessionId: "sess-reused", lifecycleRevision: "revision-reused" },
-          task: "old generation",
-          createdAt: oldStartedAt,
+          ...child,
           startedAt: oldStartedAt,
           ...(withoutStart
             ? { runTimeoutSeconds: 60 }
@@ -371,10 +338,8 @@ export function registerCancellationReconciliationTests({
         }),
       );
       await mod.addSubagentRunForTests({
+        ...child,
         runId: newRunId,
-        childSessionKey,
-        childSessionIdentity: { sessionId: "sess-reused", lifecycleRevision: "revision-reused" },
-        task: "new generation",
         createdAt: newStartedAt,
         startedAt: newStartedAt,
         ...(withoutStart ? { generation: 2 } : { sessionStartedAt: newStartedAt }),

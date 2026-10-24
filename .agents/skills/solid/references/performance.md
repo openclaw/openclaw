@@ -2,7 +2,7 @@
 
 ## Startup bundle
 
-The startup budget is **342,000 B gzip and one startup CSS request** (post-Lit startup measured 340,081 B on 2026-10-16, with about 2 KB of headroom). `scripts/check-control-ui-performance.mts` and `config/control-ui-startup-budget-baseline.json` own measurement and enforcement. Budget changes need owner approval; preserve the lazy graph:
+`scripts/check-control-ui-performance.mts` and `config/control-ui-startup-budget-baseline.json` own startup measurement and enforcement: the committed gzip baseline plus growth and build-variance allowances, and one startup CSS request. The baseline itself may not exceed the script's `startupJsGzipBytes` cap. Preserve the lazy graph and compare every changed boot surface against its merge base. A surface already above its cap may not grow beyond the 64-byte build-variance allowance. Lower the startup baseline with the official `--update-baseline --reason` command after a verified reduction, using the measured head value rather than a lower target; raising budgets needs owner approval.
 
 - Keep code out of the startup graph until a startup surface actually needs it. Defer behind the route or interaction that uses it: automation readiness loads on the first read of its hook, and System busyness renders only when opened.
 - The Solid shell now owns startup rendering. Its imports must not eagerly register lazy page custom elements or load route-only libraries, even if every importer uses Solid. An eager Zod import previously added about 36 KB gzip.

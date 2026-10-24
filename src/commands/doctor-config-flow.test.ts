@@ -81,12 +81,17 @@ vi.mock("../channels/plugins/bootstrap-registry.js", () => ({
   getBootstrapChannelPlugin: vi.fn((_channelId: string) => undefined),
 }));
 
-vi.mock("./doctor/shared/channel-legacy-config-migrate.js", () => ({
-  applyChannelDoctorCompatibilityMigrations: (cfg: Record<string, unknown>) => ({
-    next: cfg,
-    changes: [],
-  }),
-}));
+vi.mock("./doctor/shared/channel-legacy-config-migrate.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("./doctor/shared/channel-legacy-config-migrate.js")>();
+  return {
+    ...actual,
+    applyChannelDoctorCompatibilityMigrations: (cfg: Record<string, unknown>) => ({
+      next: cfg,
+      changes: [],
+    }),
+  };
+});
 
 vi.mock("./doctor/shared/bundled-plugin-load-paths.js", () => ({
   maybeRepairBundledPluginLoadPaths: vi.fn((cfg: Record<string, unknown>) => ({
@@ -258,6 +263,25 @@ describe("doctor config flow", () => {
 
   afterEach(() => clearRuntimeConfigSnapshot());
 
+  it.each([false, true])(
+    "preserves explicit collaborative steering %s without a repair",
+    async (value) => {
+      const config: OpenClawConfig = {
+        agents: { entries: { main: {} } },
+        gateway: { mode: "local" },
+        messages: {
+          responsePrefix: "keep-prefix",
+          queue: { allowCollaborativeSteering: value, cap: 8 },
+        },
+      };
+
+      await using result = await runConfig({ config, repair: true });
+
+      expect(result.cfg).toEqual(config);
+      expect(result.shouldWriteConfig).toBe(false);
+    },
+  );
+
   it.each([
     {
       name: "valid config",
@@ -394,7 +418,10 @@ describe("doctor config flow", () => {
 
   it("preserves ownership of an explicitly empty included roster", async () => {
     await using result = await runConfig({
-      config: { agents: { entries: { main: {} } } },
+      config: {
+        agents: { entries: { main: {} } },
+        messages: { queue: { allowCollaborativeSteering: true } },
+      },
       parsedConfig: { $include: "./agents.json" },
       sourceConfigBeforeMigrations: { agents: { entries: {} } },
       agentRosterIncludeOwned: true,
@@ -581,16 +608,58 @@ describe("doctor config flow", () => {
       method: "secrets.reload",
       params: {},
       timeoutMs: 3000,
+      sharedStateMode: "read-only",
     });
     expect(callGatewayMock).toHaveBeenNthCalledWith(2, {
       method: "models.authStatus",
       params: { refresh: true },
       timeoutMs: 3000,
+      sharedStateMode: "read-only",
     });
   });
 
+  it.each([false, true])(
+    "preserves auth warning delivery with a findings reporter: %s",
+    async (withReporter) => {
+      const warning = "Could not verify imported auth profiles; originals retained.";
+      const reportFindings = vi.fn();
+      runDoctorRepairSequenceMock.mockImplementation(
+        async (params: { state: unknown; reportFindings?: typeof reportFindings }) => {
+          params.reportFindings?.([], [warning]);
+          return {
+            state: params.state,
+            changeNotes: [],
+            warningNotes: [warning],
+            displayWarningNotes: [],
+            authProfilesRepaired: false,
+          };
+        },
+      );
+      await using result = await runDoctorConfigWithInput({
+        config: {},
+        repair: true,
+        run: (args) =>
+          loadAndMaybeMigrateDoctorConfig({
+            ...args,
+            ...(withReporter ? { reportFindings } : {}),
+          }),
+      });
+      expect(result).toBeTruthy();
+      if (withReporter) {
+        expect(reportFindings).toHaveBeenCalledWith([], [warning]);
+        expect(terminalNoteMock).not.toHaveBeenCalledWith(warning, "Doctor warnings");
+      } else {
+        expect(terminalNoteMock).toHaveBeenCalledWith(warning, "Doctor warnings");
+      }
+    },
+  );
+
   it("emits warning-only stale channel cleanup without changing config", async () => {
-    const input = { agents: { entries: { ops: {} } }, channels: { matrix: { enabled: true } } };
+    const input = {
+      agents: { entries: { ops: {} } },
+      channels: { matrix: { enabled: true } },
+      messages: { queue: { allowCollaborativeSteering: true } },
+    };
     const channelDoctor = await import("./doctor/shared/channel-doctor.js");
     vi.mocked(channelDoctor.collectChannelDoctorStaleConfigMutations).mockResolvedValueOnce([
       {
@@ -643,7 +712,11 @@ describe("doctor config flow", () => {
       { type: "cli", command: "fixture-transcribe", args: ["{{AttachmentPath}}"] },
       { command: "fixture-transcribe", args: ["/synthetic/audio.wav"] },
     ] satisfies MediaUnderstandingModelConfig[];
-    const config: OpenClawConfig = { plugins: { enabled: false }, tools: { media: { models } } };
+    const config: OpenClawConfig = {
+      plugins: { enabled: false },
+      tools: { media: { models } },
+      messages: { queue: { allowCollaborativeSteering: true } },
+    };
     config.agents = { entries: { main: {} } };
     await using result = await runConfig({ config, repair: true });
     const warnings = noteText("Doctor warnings");

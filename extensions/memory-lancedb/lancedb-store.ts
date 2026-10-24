@@ -70,12 +70,6 @@ function createMemoryTableSchema(vectorDim: number): Arrow.Schema {
 }
 
 function formatQueryFilter(filter: MemoryQueryFilter): string {
-  if (filter.operator === "LIKE" && typeof filter.value !== "string") {
-    throw new Error("LIKE requires a string memory filter value");
-  }
-  if (typeof filter.value === "number" && !Number.isFinite(filter.value)) {
-    throw new Error("Memory filter number must be finite");
-  }
   const value =
     typeof filter.value === "string" ? quoteLanceSqlString(filter.value) : String(filter.value);
   return `${filter.column} ${filter.operator} ${value}`;

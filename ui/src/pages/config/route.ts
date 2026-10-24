@@ -78,7 +78,6 @@ function configPage(id: ConfigPageId) {
     loader: (context: ApplicationContext, { location }) => loadConfigRoute(context, location, id),
     component: () =>
       import("./config-page.tsx").then((module) => ({
-        header: true,
         // Keep the current owner while another Settings subpage loads its data.
         renderOwnerKey: () => "settings-config",
         renderSolid: module.ConfigRoute,
@@ -102,7 +101,7 @@ const removedGeneralRedirectPage = definePage({
     });
   },
   // Redirect routes still require a module by contract, but never render page content.
-  component: async () => ({ header: true, renderSolid: () => null }),
+  component: async () => ({ renderSolid: () => null }),
 });
 
 export const pages = [

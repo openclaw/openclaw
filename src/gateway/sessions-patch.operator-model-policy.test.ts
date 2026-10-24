@@ -1,5 +1,6 @@
-import { describe, expect, it, vi } from "vitest";
+import { assert, describe, expect, it, vi } from "vitest";
 import { createAdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
+import { configFor } from "../agents/model-auth.fixtures.test-support.js";
 import { prepareOperatorModelPolicy } from "../agents/operator-model-policy.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -11,6 +12,10 @@ vi.mock("../acp/runtime/session-meta-readonly.js", () => ({
 }));
 
 const key = "agent:main:model-policy";
+const denied = {
+  code: "FORBIDDEN",
+  message: expect.stringContaining("operator role cannot use this model"),
+};
 
 function fixture(defaultOnly = false) {
   const cfg: OpenClawConfig = {
@@ -22,16 +27,10 @@ function fixture(defaultOnly = false) {
         models: { "fixture/blocked": { alias: "blocked" }, "fixture/allowed": { alias: "chosen" } },
       },
     },
-    models: {
-      providers: {
-        fixture: {
-          api: "openai-completions",
-          baseUrl: "https://fixture.invalid/v1",
-          agentRuntime: { id: "openclaw" },
-          models: [],
-        },
-      },
-    },
+    ...configFor("fixture", "https://fixture.invalid/v1", {
+      api: "openai-completions",
+      agentRuntime: { id: "openclaw" },
+    }),
   };
   const entries = [
     { provider: "fixture", id: "blocked", name: "Blocked" },
@@ -49,28 +48,23 @@ function fixture(defaultOnly = false) {
     modelOverride: "blocked",
     contextWindow: "extended",
   };
-  let current = true;
+  const source = new AbortController();
   let modelPolicy = prepareOperatorModelPolicy({ cfg, policy: { deny: ["fixture/blocked"] } });
   const operatorAuthority = createAdmittedRunOperatorAuthority({
     profileId: "limited-operator",
     scopes: ["operator.write"],
-    assertCurrent: () => {
-      if (!current) {
-        throw new Error("operator source changed");
-      }
-    },
+    assertCurrent: () => source.signal.throwIfAborted(),
     get modelPolicy() {
       return modelPolicy;
     },
   });
-  const revoke = () => {
-    current = false;
-  };
+  const revoke = () => source.abort(new Error("operator source changed"));
   const tighten = () => {
     modelPolicy = prepareOperatorModelPolicy({ cfg, policy: { allow: [] } });
   };
-  const project = (model: string | null, duringPreparation?: () => void) =>
-    projectSessionsPatchEntry({
+  const project = async (model: string | null, duringPreparation?: () => void) => {
+    const before = structuredClone(initial);
+    const result = await projectSessionsPatchEntry({
       cfg,
       operatorAuthority,
       existingEntry: initial,
@@ -82,49 +76,44 @@ function fixture(defaultOnly = false) {
         return { entries, routeVariants: entries };
       },
     });
+    expect(initial).toEqual(before);
+    return result;
+  };
   return { initial, project, revoke, tighten };
 }
 
 describe("session model patches under operator policy", () => {
-  it.each([
-    { model: "fixture/blocked", allowed: false },
-    { model: "blocked", allowed: false },
-    { model: null, allowed: true },
-    { model: "fixture/allowed", allowed: false, change: "source" },
-    { model: "fixture/allowed", allowed: false, change: "model-policy" },
-  ])(
-    "validates model $model after preparation (change=$change)",
-    async ({ model, allowed, change }) => {
-      const value = fixture(model === null);
-      const before = structuredClone(value.initial);
-      const result = await value.project(
-        model,
-        change === "source" ? value.revoke : change === "model-policy" ? value.tighten : undefined,
-      );
+  it.each<[string | null, "source" | "model-policy" | undefined]>([
+    ["fixture/blocked", undefined],
+    ["blocked", undefined],
+    [null, undefined],
+    ["fixture/allowed", "source"],
+    ["fixture/allowed", "model-policy"],
+  ])("validates model %s after preparation (change=%s)", async (model, change) => {
+    const value = fixture(model === null);
+    const result = await value.project(
+      model,
+      change === "source" ? value.revoke : change === "model-policy" ? value.tighten : undefined,
+    );
 
-      if (allowed) {
-        expect(result).toMatchObject({ ok: true, entry: { contextWindow: "extended" } });
-        if (!result.ok) {
-          throw new Error(result.error.message);
-        }
-        expect(result.entry.providerOverride).toBeUndefined();
-        expect(result.entry.modelOverride).toBeUndefined();
-      } else {
-        expect(result).toMatchObject({
-          ok: false,
-          error: {
-            code: "FORBIDDEN",
-            message: expect.stringContaining(
-              change === "source"
-                ? "operator source changed"
-                : "operator role cannot use this model",
-            ),
-          },
-        });
-      }
-      expect(value.initial).toEqual(before);
-    },
-  );
+    if (model === null) {
+      assert(result.ok);
+      const { contextWindow, providerOverride, modelOverride } = result.entry;
+      expect([contextWindow, providerOverride, modelOverride]).toEqual([
+        "extended",
+        undefined,
+        undefined,
+      ]);
+    } else {
+      expect(result).toMatchObject({
+        ok: false,
+        error:
+          change === "source"
+            ? { ...denied, message: expect.stringContaining("operator source changed") }
+            : denied,
+      });
+    }
+  });
 
   it("retains the exact selected-model guard until the write commits", async () => {
     const value = fixture();
@@ -134,15 +123,10 @@ describe("session model patches under operator policy", () => {
       ok: true,
       entry: { providerOverride: "fixture", modelOverride: "allowed", contextWindow: "extended" },
     });
-    if (!result.ok) {
-      throw new Error(result.error.message);
-    }
+    assert(result.ok);
     expect(result.validateModelSelection?.()).toBeUndefined();
     value.tighten();
-    expect(result.validateModelSelection?.()).toMatchObject({
-      code: "FORBIDDEN",
-      message: expect.stringContaining("operator role cannot use this model"),
-    });
+    expect(result.validateModelSelection?.()).toMatchObject(denied);
     expect(value.initial).toEqual(before);
   });
 });

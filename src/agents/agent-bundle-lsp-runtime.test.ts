@@ -3,9 +3,9 @@ import { PassThrough, Writable } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as logger from "../logger.js";
 import * as bundleLspConfig from "../plugins/bundle-lsp.js";
+import * as ownedStdio from "../process/owned-stdio.js";
 import { OwnedStdioCleanupError, type OwnedStdioProcess } from "../process/owned-stdio.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import * as lspProcess from "./agent-bundle-lsp-process.js";
 import {
   createBundleLspToolRuntime as createLspRuntime,
   disposeAllBundleLspRuntimes,
@@ -280,7 +280,7 @@ describe("bundle LSP runtime", () => {
   beforeEach(() => {
     configureServers();
     vi.spyOn(bundleLspConfig, "loadEnabledBundleLspConfig").mockImplementation(loadLspConfigMock);
-    vi.spyOn(lspProcess, "spawnLspServerProcess").mockImplementation(spawnMock);
+    vi.spyOn(ownedStdio, "createOwnedStdioProcess").mockImplementation(spawnMock);
   });
 
   afterEach(async () => {

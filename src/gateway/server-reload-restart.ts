@@ -7,7 +7,6 @@ import {
   type RestartDeferralHandle,
   setGatewayRestartPolicy,
 } from "../infra/restart.js";
-import { createAppliedConfigHashPublisher } from "./applied-config-hash-publisher.js";
 import type { GatewayReloadPlan } from "./config-reload.js";
 import type { createGatewayActiveWorkTracker } from "./server-reload-active-work.js";
 import type {
@@ -41,13 +40,27 @@ class GatewayRestartTransaction {
   private stopped = false;
   private restartDeferral: RestartDeferralHandle | null = null;
   private operation: GatewayRestartOperation | undefined;
+  private deferredHash: string | null = null;
 
-  readonly appliedConfigHashPublisher = createAppliedConfigHashPublisher({
-    hasPendingRestart: () =>
-      !this.stopped &&
-      (this.operation?.kind === "request" || this.options.hasAcceptedRestart?.() === true),
-    publish: setRuntimeConfigAppliedHash,
-  });
+  readonly hasOutstandingGatewayRestart = () =>
+    !this.stopped &&
+    (this.operation?.kind === "request" || this.options.hasAcceptedRestart?.() === true);
+
+  readonly publishAppliedConfigHash = (hash: string) => {
+    // Keep the newest hot-only revision private until existing restart debt retires.
+    if (this.hasOutstandingGatewayRestart()) {
+      this.deferredHash = hash;
+      return;
+    }
+    this.deferredHash = null;
+    setRuntimeConfigAppliedHash(hash);
+  };
+
+  readonly publishDeferredAppliedConfigHash = () => {
+    if (this.deferredHash !== null) {
+      this.publishAppliedConfigHash(this.deferredHash);
+    }
+  };
 
   constructor(private readonly options: GatewayRestartCoordinatorOptions) {}
 
@@ -262,7 +275,9 @@ export function createGatewayRestartCoordinator(options: GatewayRestartCoordinat
   const transaction = new GatewayRestartTransaction(options);
   return {
     acceptRestartConfig: transaction.acceptConfig.bind(transaction),
-    ...transaction.appliedConfigHashPublisher,
+    hasOutstandingGatewayRestart: transaction.hasOutstandingGatewayRestart,
+    publishAppliedConfigHash: transaction.publishAppliedConfigHash,
+    publishDeferredAppliedConfigHash: transaction.publishDeferredAppliedConfigHash,
     beginGatewayRestartLifecycle: transaction.beginLifecycle.bind(transaction),
     pauseGatewayRestartForConfigCandidate: transaction.pauseForConfigCandidate.bind(transaction),
     requestGatewayRestart: transaction.request.bind(transaction),

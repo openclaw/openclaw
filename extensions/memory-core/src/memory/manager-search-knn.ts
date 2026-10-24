@@ -8,6 +8,7 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-engine-knn";
 import { MEMORY_INDEX_VECTOR_TABLE } from "openclaw/plugin-sdk/memory-core-host-engine-schema";
 import { buildMemoryModelFilter, type MemorySearchRow } from "./manager-search-shared.js";
+import { buildSqliteMemorySourceFilter, type MemorySourceFilter } from "./source-filter.js";
 
 type VectorKnnRow = MemorySearchRow & { dist: number };
 export type VectorKnnRequest = {
@@ -15,7 +16,7 @@ export type VectorKnnRequest = {
   queryVec: number[];
   limit: number;
   snippetMaxChars: number;
-  sourceFilter: { sql: string; params: string[] };
+  sourceFilter: MemorySourceFilter;
 };
 export type VectorKnnResponse = { rows: VectorKnnRow[]; fallbackScanRequired: boolean };
 
@@ -53,11 +54,12 @@ export async function searchMemoryVectorIndex(
   options: { signal?: AbortSignal; extensionPath?: string } = {},
 ): Promise<VectorKnnResponse> {
   const modelFilter = buildMemoryModelFilter("c.model", request.providerModels);
-  const fragments = `${modelFilter}${request.sourceFilter.sql}`.split("?");
+  const sourceFilter = buildSqliteMemorySourceFilter(request.sourceFilter, "c");
+  const fragments = `${modelFilter}${sourceFilter.sql}`.split("?");
   const predicates = sql(
     Object.assign(fragments, { raw: fragments }),
     ...request.providerModels,
-    ...request.sourceFilter.params,
+    ...sourceFilter.params,
   );
   const snippetByteLimit = request.snippetMaxChars * 4;
   return await capability.nearest({

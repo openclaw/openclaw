@@ -62,7 +62,7 @@ type SubagentRunsCacheState<T extends SubagentRunReadRecord> = (
 
 export type SubagentRunsCache<T extends SubagentRunReadRecord> = {
   state: SubagentRunsCacheState<T>;
-  copy: (entry: SubagentRunRecord) => T;
+  copy: (entry: SubagentRunRecord) => T | undefined;
   project: (entry: SubagentRunRecord) => T;
 };
 
@@ -178,7 +178,10 @@ export function rememberSubagentRunsSnapshot<T extends SubagentRunReadRecord>(
   }
   const snapshot = previous.snapshot;
   if (!changedRunIds) {
-    const replacement = new Map([...runs].map(([runId, entry]) => [runId, cache.copy(entry)]));
+    const replacement = new Map<string, T>();
+    for (const [runId, entry] of runs) {
+      setOrDeleteRun(replacement, runId, cache.copy(entry));
+    }
     if (previous.pending?.changes) {
       previous.pending.replacement = replacement;
       previous.pending.changes.clear();
@@ -256,7 +259,6 @@ export function getSubagentRunsSnapshot<T extends SubagentRunReadRecord>(
   scope?: {
     context?: OpenClawStateReadContext;
     load?: () => Iterable<T>;
-    selectCached?: (lookup: SubagentSessionReadLookup) => readonly string[];
     liveRunIds?: ReadonlySet<string>;
     matches: (entry: SubagentRunReadRecord) => boolean;
   },
@@ -264,11 +266,7 @@ export function getSubagentRunsSnapshot<T extends SubagentRunReadRecord>(
   const merged = new Map<string, T>();
   if (shouldReadPersistedSubagentRuns()) {
     const cached = loadPersistedSubagentRunsForRead(cache, scope?.context);
-    const persisted = scope?.load
-      ? scope.load()
-      : scope?.selectCached
-        ? indexedSnapshotRows(cached, scope.selectCached(getSessionListLookup(cache, cached)))
-        : cached.values();
+    const persisted = scope?.load ? scope.load() : cached.values();
     for (const entry of persisted) {
       if (!scope || scope.matches(entry)) {
         merged.set(entry.runId, entry);
@@ -302,9 +300,6 @@ export async function readCompactSubagentRuns(context: OpenClawStateWorkerContex
   );
   if (!reply) {
     return new Map<string, SubagentRunReadRecord>();
-  }
-  if (!reply.ok || reply.type !== "subagents.sessionList") {
-    throw new Error("Unexpected compact subagent registry read result");
   }
   if ("unavailable" in reply) {
     const failure = new Error(reply.unavailable.message);

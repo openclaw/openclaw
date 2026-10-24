@@ -6,6 +6,7 @@ import { createServer } from "node:net";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { createCorrectionFixture } from "./pr-correction-preparation.test-support.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterAll);
 const scripts = join(process.cwd(), "scripts");
@@ -20,21 +21,15 @@ let env: NodeJS.ProcessEnv;
 const authorityPath = ".local/correction-review.json";
 const oid = (bytes: Buffer) =>
   createHash("sha1").update(`blob ${bytes.length}\0`).update(bytes).digest("hex");
+const expectClean = () =>
+  expect(readdirSync(scratch).filter((name) => name.startsWith("openclaw-pr-hash-"))).toEqual([]);
 
 function invocation(bytes: Buffer) {
   writeFileSync(join(root, authorityPath), bytes);
   rmSync(join(root, ".local/probe.json"), { force: true });
+  const script = join(scripts, "pr-lib/baseline-refresh.mjs");
   return {
-    args: [
-      join(scripts, "pr-lib/baseline-refresh.mjs"),
-      "check-source",
-      "42",
-      head,
-      root,
-      root,
-      "invalid-lock",
-      head,
-    ],
+    args: [script, "check-source", "42", head, root, root, "invalid-lock", head],
     input: `${authorityPath} ${oid(bytes)}\n`,
   };
 }
@@ -43,52 +38,32 @@ function invocation(bytes: Buffer) {
 // No fixture pretends that hashing alone grants transition authority.
 function run(bytes: Buffer, overrides: NodeJS.ProcessEnv = {}, limitedWrite = false) {
   const { args, input } = invocation(bytes);
-  const result = spawnSync(
-    limitedWrite ? "python3" : node,
-    limitedWrite
-      ? [
-          "-c",
-          "import os,resource,signal,sys; signal.signal(signal.SIGXFSZ,signal.SIG_IGN); resource.setrlimit(resource.RLIMIT_FSIZE,(1024,1024)); os.execv(sys.argv[1],sys.argv[1:])",
-          node,
-          ...args,
-        ]
-      : args,
-    { cwd: root, env: { ...env, ...overrides }, input, encoding: "utf8" },
-  );
-  expect(readdirSync(scratch).filter((name) => name.startsWith("openclaw-pr-hash-"))).toEqual([]);
+  const limitedArgs = [
+    "-c",
+    "import os,resource,signal,sys; signal.signal(signal.SIGXFSZ,signal.SIG_IGN); resource.setrlimit(resource.RLIMIT_FSIZE,(1024,1024)); os.execv(sys.argv[1],sys.argv[1:])",
+    node,
+    ...args,
+  ];
+  const result = spawnSync(limitedWrite ? "python3" : node, limitedWrite ? limitedArgs : args, {
+    cwd: root,
+    env: { ...env, ...overrides },
+    input,
+    encoding: "utf8",
+  });
+  expectClean();
   return result;
 }
 
 describePosix("captured baseline hash stdin", () => {
   beforeAll(() => {
-    root = dirs.make("pr-hash-");
+    const fixture = createCorrectionFixture(dirs.make("pr-hash-"));
+    root = fixture.root;
+    head = fixture.incoming;
     scratch = join(root, ".local/tmp");
     mkdirSync(scratch, { recursive: true });
     git = spawnSync("which", ["git"], { encoding: "utf8" }).stdout.trim();
     node = spawnSync("which", ["node"], { encoding: "utf8" }).stdout.trim();
-    env = {
-      ...process.env,
-      GIT_CONFIG_GLOBAL: "/dev/null",
-      GIT_CONFIG_NOSYSTEM: "1",
-      TMPDIR: scratch,
-    };
-    for (const args of [
-      ["init", "-q"],
-      ["config", "user.name", "Fixture"],
-      ["config", "user.email", "fixture@example.invalid"],
-      ["config", "core.hooksPath", "/dev/null"],
-      ["config", "commit.gpgSign", "false"],
-    ]) {
-      expect(spawnSync(git, args, { cwd: root, env }).status).toBe(0);
-    }
-    writeFileSync(join(root, ".gitignore"), ".local/\n");
-    expect(spawnSync(git, ["add", ".gitignore"], { cwd: root, env }).status).toBe(0);
-    expect(spawnSync(git, ["commit", "-qm", "fixture"], { cwd: root, env }).status).toBe(0);
-    head = spawnSync(git, ["rev-parse", "HEAD"], {
-      cwd: root,
-      env,
-      encoding: "utf8",
-    }).stdout.trim();
+    env = { ...fixture.env, TMPDIR: scratch };
     probe = join(root, ".local/git-probe");
     writeFileSync(
       probe,
@@ -127,11 +102,8 @@ os.execv(${JSON.stringify(git)},[${JSON.stringify(git)},*args])
       const result = run(bytes);
       expect(result.status).toBe(1);
       expect(result.stderr).toContain("Missing baseline transition operation owner.");
-      expect(JSON.parse(readFileSync(join(root, ".local/probe.json"), "utf8"))).toEqual({
-        size: bytes.length,
-        links: 0,
-        offset: 0,
-      });
+      const captured = JSON.parse(readFileSync(join(root, ".local/probe.json"), "utf8"));
+      expect(captured).toEqual({ size: bytes.length, links: 0, offset: 0 });
     }
   });
 
@@ -142,15 +114,14 @@ os.execv(${JSON.stringify(git)},[${JSON.stringify(git)},*args])
   });
 
   it("fails closed and cleans its resources on write, spawn and Git failures", () => {
-    const write = run(Buffer.alloc(4096), {}, true);
-    expect(write.status).toBe(1);
-    expect(write.stderr).toContain("EFBIG");
-    const spawnFailure = run(Buffer.from("spawn"), { OPENCLAW_PR_GIT: join(root, "missing-git") });
-    expect(spawnFailure.status).toBe(1);
-    expect(spawnFailure.stderr).toContain("ENOENT");
-    const hash = run(Buffer.from("git"), { FAIL_HASH: "1" });
-    expect(hash.status).toBe(1);
-    expect(hash.stderr).toContain("fixture Git hash failure");
+    for (const [result, message] of [
+      [run(Buffer.alloc(4096), {}, true), "EFBIG"],
+      [run(Buffer.from("spawn"), { OPENCLAW_PR_GIT: join(root, "missing-git") }), "ENOENT"],
+      [run(Buffer.from("git"), { FAIL_HASH: "1" }), "fixture Git hash failure"],
+    ] as const) {
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain(message);
+    }
   });
 
   it("leaves no snapshot pathname when native supervision cancels a hashing child", async () => {
@@ -159,15 +130,12 @@ os.execv(${JSON.stringify(git)},[${JSON.stringify(git)},*args])
     const server = createServer();
     server.listen(socketPath);
     await once(server, "listening");
-    const child = spawn(
-      node,
-      [join(scripts, "pr-lib/process-group-runner.mjs"), root, node, ...args],
-      {
-        cwd: root,
-        env: { ...env, CANCEL_SOCKET: socketPath },
-        stdio: ["pipe", "pipe", "pipe"],
-      },
-    );
+    const runner = join(scripts, "pr-lib/process-group-runner.mjs");
+    const child = spawn(node, [runner, root, node, ...args], {
+      cwd: root,
+      env: { ...env, CANCEL_SOCKET: socketPath },
+      stdio: ["pipe", "pipe", "pipe"],
+    });
     const closed = once(child, "close");
     child.stdout.resume();
     let stderr = "";
@@ -183,16 +151,12 @@ os.execv(${JSON.stringify(git)},[${JSON.stringify(git)},*args])
         }),
       ]);
       await once(socket, "data");
-      expect(readdirSync(scratch).filter((name) => name.startsWith("openclaw-pr-hash-"))).toEqual(
-        [],
-      );
+      expectClean();
       child.kill("SIGTERM");
       socket.destroy();
       const [code] = await closed;
       expect(code).toBe(143);
-      expect(readdirSync(scratch).filter((name) => name.startsWith("openclaw-pr-hash-"))).toEqual(
-        [],
-      );
+      expectClean();
     } finally {
       if (child.exitCode === null && child.signalCode === null) {
         child.kill("SIGTERM");

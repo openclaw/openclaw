@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { NODE_WORKER_BUNDLE_INSTALL_COMMAND } from "../../infra/node-commands.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import type { NodeWorkerBundleInstallInput } from "../../worker/node-bundle-install-protocol.js";
@@ -55,10 +55,7 @@ function installerFixture(
   nodes: NodeWorkerSupervisorNodeProof[],
   listCurrentNodes: NodeWorkerSupervisorTransport["listCurrentNodes"] = async () => nodes,
 ) {
-  let tokenId = 65;
-  const transfer = createNodeWorkerBundleTransferService({
-    generateToken: () => String.fromCharCode(tokenId++).repeat(43),
-  });
+  const transfer = createNodeWorkerBundleTransferService();
   const transport: NodeWorkerSupervisorTransport = {
     hasCurrentRunner: () => false,
     async getCurrentNode(nodeId) {
@@ -79,6 +76,7 @@ function installerFixture(
 
 function observedInstaller() {
   let clock = 1_000;
+  vi.spyOn(Date, "now").mockImplementation(() => clock);
   const log = { info: vi.fn(), warn: vi.fn() };
   const changed = vi.fn();
   const transfer = createNodeWorkerBundleTransferService();
@@ -95,7 +93,6 @@ function observedInstaller() {
     getTransport: () => transport,
     transfer,
     log,
-    now: () => clock,
     onObservationChange: changed,
   });
   return {
@@ -148,6 +145,33 @@ function observedInstaller() {
 }
 
 describe("Gateway node worker bundle installer", () => {
+  afterEach(() => vi.restoreAllMocks());
+  it.each([false, true])(
+    "negotiates archive-only prefetch while preserving session install (supported=%s)",
+    async (supported) => {
+      const current = nodeProof("node-prefetch", 1);
+      if (supported) {
+        current.workerHost.bundlePrefetch = 1;
+      }
+      const invoke = vi.fn<NodeWorkerSupervisorTransport["invoke"]>(async () => ({
+        ok: true,
+        payload: receipt,
+      }));
+      const { ensure } = installerFixture(invoke, [current]);
+      const pending = ensure({ deviceId: current.nodeId, artifact, reason: "prefetch" });
+      if (supported) {
+        await expect(pending).resolves.toEqual(receipt);
+        expect(invoke.mock.calls[0]?.[0].params).toMatchObject({ prefetch: 1 });
+        expect(invoke.mock.calls[0]?.[0].params).not.toHaveProperty("bundlePrewarm");
+      } else {
+        await expect(pending).rejects.toThrow("does not support bundle prefetch");
+        expect(invoke).not.toHaveBeenCalled();
+      }
+      await expect(ensure(installRequest(current))).resolves.toEqual(receipt);
+      expect(invoke.mock.lastCall?.[0].params).not.toHaveProperty("prefetch");
+    },
+  );
+
   it("publishes install phases and throttles byte notices and logs with its clock", async () => {
     const h = observedInstaller();
     const call = await h.start();

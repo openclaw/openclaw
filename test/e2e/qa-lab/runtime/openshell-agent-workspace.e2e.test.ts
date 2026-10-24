@@ -86,7 +86,9 @@ it.skipIf(process.platform === "win32" || !sandboxRoot)(
     }
     await fs.writeFile(document, ORIGINAL, { mode: 0o600 });
     await fs.writeFile(localDocument, DECOY, { mode: 0o600 });
-    const identity = loadOrCreateDeviceIdentity({ path: path.join(root, "node-identity.sqlite") });
+    const identity = loadOrCreateDeviceIdentity({
+      env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+    });
     const executable = path.join(root, "openshell-fixture");
     await fs.writeFile(
       executable,
@@ -458,7 +460,6 @@ it.skipIf(process.platform === "win32" || !sandboxRoot)(
           nodeConfig: nodeConfig.config,
           pluginRuntime,
           capacity: 1,
-          capacityWaitMs: 0,
         });
         expect(node.identity.deviceId).toBe(identity.deviceId);
         const readConfig = async () =>

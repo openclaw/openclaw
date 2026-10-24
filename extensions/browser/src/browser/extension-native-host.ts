@@ -12,7 +12,6 @@ import {
   type BrowserNativeBootstrapResponse,
   type BrowserNativeRelayEnsureStatus,
   decodeBrowserNativeFrame,
-  encodeBrowserNativeResponse,
   readBrowserNativeFrame,
 } from "./extension-native-protocol.js";
 const EXTENSION_ORIGIN_PATTERN = /^chrome-extension:\/\/[a-p]{32}\/$/;
@@ -100,31 +99,26 @@ async function validateNativeManifest(params: {
   }
 }
 
-/** Run one request/response native host process. */
 export async function runBrowserNativeHost(params: {
   manifestPath: string;
   launcherPath: string;
   callerOrigin: string;
   expectedOrigins: string[];
   input: AsyncIterable<Buffer>;
-  write: (frame: Buffer) => void;
   buildPairing: (boundProfile?: string) => Promise<{ pairingString: string; topology: string }>;
   /** Ensure the standalone extension relay daemon is running (ensure_relay op). */
   ensureRelay: (port: number) => Promise<BrowserNativeRelayEnsureStatus>;
   stateDir?: string;
-  platform?: NodeJS.Platform;
 }): Promise<BrowserNativeBootstrapResponse> {
   let response: BrowserNativeBootstrapResponse;
   try {
     const decoded = decodeBrowserNativeFrame(await readBrowserNativeFrame(params.input));
     if (!decoded.ok) {
       response = { v: 1, ok: false, code: decoded.code };
-    } else if ((params.platform ?? process.platform) === "win32" && process.platform !== "win32") {
-      response = { v: 1, ok: false, code: "manual_required" };
     } else {
       let boundProfile: string | undefined;
       try {
-        if ((params.platform ?? process.platform) === "win32") {
+        if (process.platform === "win32") {
           const { validateWindowsNativeContext } = await import("./extension-windows-host.js");
           boundProfile = await validateWindowsNativeContext(params);
           // Windows was admitted against its fixed Known Folder generation, not the POSIX state root.
@@ -143,7 +137,6 @@ export async function runBrowserNativeHost(params: {
               ? "origin_forbidden"
               : "manifest_invalid",
         };
-        params.write(encodeBrowserNativeResponse(response));
         return response;
       }
       try {
@@ -178,6 +171,5 @@ export async function runBrowserNativeHost(params: {
   } catch {
     response = { v: 1, ok: false, code: "invalid_frame" };
   }
-  params.write(encodeBrowserNativeResponse(response));
   return response;
 }

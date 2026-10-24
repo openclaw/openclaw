@@ -3,6 +3,7 @@ import { GatewayProtocolRequestTimeoutError } from "@openclaw/gateway-client/bro
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { GatewayRequestError } from "../../api/gateway.ts";
 import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
+import { listStoredChatOutboxes } from "../../lib/chat/outbox-store-projection.ts";
 import { createTestGatewayClient as clientWithRequest } from "../../test-helpers/gateway-client.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import {
@@ -16,7 +17,6 @@ import { admitHostQueueItems, idleChatHistory, row } from "./chat-outbox-recover
 import { updateQueuedMessage } from "./chat-queue.ts";
 import { resumeStoredChatOutboxes } from "./chat-send-actions.ts";
 import { handleSendChat } from "./chat-send-submit.ts";
-import { listStoredChatOutboxes } from "./composer-persistence.ts";
 import { useChatSendBrowserFixture } from "./outbox-browser.test-support.ts";
 useChatSendBrowserFixture();
 

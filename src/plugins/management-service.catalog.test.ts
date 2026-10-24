@@ -370,15 +370,11 @@ describe("managed plugin catalog", () => {
       skipAuth: true,
       packages: [{ name: "community/memory", version: "4.5.6" }],
     });
-    expect(catalog.plugins[0]).toMatchObject({
-      clawhubPackage: "community/memory",
-      categories: ["memory", "tools"],
-    });
-    expect(cached.plugins[0]).toMatchObject({
-      categories: ["memory", "tools"],
-    });
-    expect(catalog.plugins[0]).not.toHaveProperty("category");
-    expect(cached.plugins[0]).not.toHaveProperty("category");
+    expect(catalog.plugins[0]).toMatchObject({ clawhubPackage: "community/memory" });
+    for (const result of [catalog, cached]) {
+      expect(result.plugins[0]).toMatchObject({ categories: ["memory", "tools"] });
+      expect(result.plugins[0]).not.toHaveProperty("category");
+    }
   });
 
   it("keeps category enrichment scoped to the installed ClawHub registry", async () => {
@@ -666,8 +662,7 @@ describe("managed plugin catalog", () => {
     mocks.metadata.mockReturnValue(emptyMetadataSnapshot());
     mocks.providerAuthChoices.mockReturnValue([{ choiceId: "provider", icon: providerIcon }]);
     mocks.recommendedInstalls.mockReturnValue([{ id: "tool", icon: recommendedIcon }]);
-    const resolve = (iconUrl: string) =>
-      resolveManagedSetupCatalogIconUrl({ config: {}, env: {}, iconUrl });
+    const resolve = (iconUrl: string) => resolveManagedSetupCatalogIconUrl({ config: {}, iconUrl });
     expect(resolve(providerIcon)).toBe(providerIcon);
     expect(resolve(`${" ".repeat(2048)}${providerIcon} `)).toBe(providerIcon);
     expect(resolve(recommendedIcon)).toBe(recommendedIcon);
@@ -675,7 +670,6 @@ describe("managed plugin catalog", () => {
     expect(resolve("http://127.0.0.1/private.png")).toBeUndefined();
     expect(mocks.providerAuthChoices).toHaveBeenCalledWith({
       config: {},
-      env: {},
       includeUntrustedWorkspacePlugins: false,
       includeWorkspacePlugins: false,
     });

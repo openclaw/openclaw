@@ -606,12 +606,8 @@ export function resolveSystemRunMutableFileOperandTarget(params: {
     };
   }
   const unwrapped = unwrapArgvForMutableOperand(params.argv);
-  if (
-    hasPosixShellCodeLoadingOption(
-      unwrapped.argv,
-      normalizeExecutableToken(unwrapped.argv[0] ?? ""),
-    )
-  ) {
+  const executable = normalizeExecutableToken(unwrapped.argv[0] ?? "");
+  if (hasPosixShellCodeLoadingOption(unwrapped.argv, executable)) {
     return {
       ok: false,
       message: "SYSTEM_RUN_DENIED: approval cannot safely bind shell startup files",
@@ -620,7 +616,7 @@ export function resolveSystemRunMutableFileOperandTarget(params: {
   if (
     hasPosixShellStartupEnvironment({
       argv: params.argv,
-      executable: normalizeExecutableToken(unwrapped.argv[0] ?? ""),
+      executable,
       env: process.env,
     })
   ) {
@@ -632,7 +628,7 @@ export function resolveSystemRunMutableFileOperandTarget(params: {
   if (
     hasUnbindableRuntimeApprovalOption({
       argv: unwrapped.argv,
-      executable: normalizeExecutableToken(unwrapped.argv[0] ?? ""),
+      executable,
     })
   ) {
     return {

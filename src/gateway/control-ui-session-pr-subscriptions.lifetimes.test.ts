@@ -6,7 +6,10 @@ import {
 } from "../test-utils/gateway-scheduler-clock.js";
 import type { ControlUiSessionPullRequests } from "./control-ui-contract.js";
 import type { ControlUiSessionPrTarget } from "./control-ui-session-pr-read.js";
-import { createTestControlUiSessionPrSubscriptions } from "./control-ui-session-pr-subscriptions.test-support.js";
+import {
+  createTestControlUiSessionPrSubscriptions,
+  createTestSessionPrReadSource,
+} from "./control-ui-session-pr-subscriptions.test-support.js";
 
 const CHANGED_EVENT = "controlUi.sessionPullRequests.changed";
 const READY: ControlUiSessionPullRequests = { pullRequests: [], rateLimited: false };
@@ -52,7 +55,7 @@ function targetFor(sessionKey: string, identity = sessionKey): ControlUiSessionP
   return {
     params: { sessionKey, agentId: "main" },
     identity,
-    readSource: { agentId: "main", path: "unused" },
+    readSource,
     source: null,
   };
 }
@@ -60,6 +63,7 @@ function targetFor(sessionKey: string, identity = sessionKey): ControlUiSessionP
 let running: ReturnType<typeof createTestControlUiSessionPrSubscriptions> | undefined;
 let broadcastToConnIds: ReturnType<typeof vi.fn<Options["broadcastToConnIds"]>>;
 let scheduler: ReturnType<typeof createTestGatewayScheduler>;
+let readSource: ReturnType<typeof createTestSessionPrReadSource>;
 type Options = Parameters<typeof createTestControlUiSessionPrSubscriptions>[0];
 
 function start(options: Omit<Options, "scheduler" | "broadcastToConnIds">) {
@@ -71,7 +75,8 @@ function start(options: Omit<Options, "scheduler" | "broadcastToConnIds">) {
   return running;
 }
 
-beforeEach(() => {
+beforeEach(({ onTestFinished }) => {
+  readSource = createTestSessionPrReadSource(onTestFinished);
   broadcastToConnIds = vi.fn<Options["broadcastToConnIds"]>();
 });
 afterEach(async () => {
@@ -90,14 +95,15 @@ afterEach(async () => {
 
 describe("recipient publication lifetimes", () => {
   let clock: ReturnType<typeof createGatewaySchedulerClock>;
+  let target: ControlUiSessionPrTarget;
 
   beforeEach(() => {
+    target = targetFor("shared");
     clock = createGatewaySchedulerClock(Date.now());
     scheduler = createTestGatewayScheduler(clock.clock);
     vi.useFakeTimers();
   });
 
-  const target = targetFor("shared");
   const changed: ControlUiSessionPullRequests = { ...READY, rateLimited: true };
   function publication(connId: string, key = "shared", rateLimited = true) {
     return [
@@ -441,6 +447,53 @@ describe("recipient publication lifetimes", () => {
     expectPublications(["first", "joining"]);
   });
 
+  it("keeps queued facts paired with their original read guard after a prepared update", async () => {
+    target = { ...target, ownGitHubProfileId: "own-profile" };
+    const original = new AbortController();
+    let guard = () => original.signal.throwIfAborted();
+    let snapshot = READY;
+    let holdRecipient = false;
+    const recipient = hold(target);
+    const active = start({
+      load: async (_params, _signal, read) => {
+        read.retainReadAuthority?.(guard);
+        return snapshot;
+      },
+      prepareRead: async (connId) => async () => {
+        if (connId === "recipient" && holdRecipient) {
+          holdRecipient = false;
+          return recipient.wait();
+        }
+        return target;
+      },
+    });
+    await watch(active, "first", "recipient");
+    active.readPrepared(target, () => false);
+    broadcastToConnIds.mockImplementationOnce(() => {
+      holdRecipient = true;
+    });
+    snapshot = changed;
+    const poll = active.pollNow();
+    drain([poll], true);
+    await recipient.entered;
+    original.abort(new Error("Selected read identity retired"));
+    const replacement = new AbortController();
+    guard = () => replacement.signal.throwIfAborted();
+    snapshot = {
+      ...READY,
+      branch: { owner: "example", repo: "repository", branch: "replacement" },
+    };
+    await active.read(target, () => {});
+    recipient.release();
+    await poll;
+
+    expect(broadcastToConnIds.mock.calls).toEqual([
+      publication("first"),
+      ["sessions.changed", { reason: "profile-identity" }, new Set(["recipient"])],
+    ]);
+    expect(active.readPrepared(target, () => false)?.branch).toEqual(snapshot.branch);
+  });
+
   it.each(["pending", "prepared"] as const)(
     "does not revive a removed watcher whose delivery read is %s",
     async (boundary) => {
@@ -489,11 +542,11 @@ describe("recipient publication lifetimes", () => {
 });
 
 describe("one-shot session PR reads", () => {
+  let target: ControlUiSessionPrTarget;
   beforeEach(() => {
+    target = targetFor("agent:main:change", "original-session");
     scheduler = createTestGatewayScheduler();
   });
-
-  const target = targetFor("agent:main:change", "original-session");
 
   it("keeps a forced watcher snapshot when an older prepared read settles later", async ({
     signal,

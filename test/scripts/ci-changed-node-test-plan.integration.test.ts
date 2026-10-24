@@ -1,7 +1,9 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
+import { buildChildEnv } from "../../scripts/ci-run-node-test-shard.mts";
 import {
   createChangedNodeTestShards,
+  createNodeWorkerE2eTestShards,
   hasControlUiPerformanceAffectingChange,
   resolveChangedNodeTestTargets,
 } from "../../scripts/lib/ci-changed-node-test-plan.mts";
@@ -17,7 +19,11 @@ import {
   PR_PROTECTED_RUNTIME_TEST_FILES,
 } from "../../scripts/lib/ci-proof-test-inventory.mts";
 import * as testTimings from "../../scripts/lib/ci-test-timings.mts";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { fallbackGroups, selectedFiles } from "./ci-changed-node-test-plan.test-support.js";
+
+afterEach(() => vi.unstubAllEnvs());
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 // Real-checkout compositions share the planner's process-scoped import-graph cache.
 // Small synthetic graphs and canonical process selection remain in the unit file.
@@ -66,16 +72,21 @@ it("keeps the aggressive fixed smoke within two Node rows", () => {
 });
 
 it("keeps the hybrid hourly plan within the main-tier cap", () => {
-  const hourly = createNodeTestShardBundles({
-    runnerBackend: "hybrid",
-    compactMode: "pull-request",
-    compactNodeJobCap: 77,
-    includeProofTests: true,
-    includeReleaseOnlyToolingShards: true,
-    includePrExemptRuntimeTests: true,
-    includeReleaseOnlyRuntimeTests: false,
-    includeReleaseOnlyPluginShards: false,
-  });
+  const workerRows = createNodeWorkerE2eTestShards();
+  const hourly = [
+    ...createNodeTestShardBundles({
+      runnerBackend: "hybrid",
+      compactMode: "pull-request",
+      compactNodeJobCap: 77 - workerRows.length,
+      mainValidation: true,
+      includeProofTests: true,
+      includeReleaseOnlyToolingShards: true,
+      includePrExemptRuntimeTests: true,
+      includeReleaseOnlyRuntimeTests: false,
+      includeReleaseOnlyPluginShards: false,
+    }),
+    ...workerRows,
+  ];
   expect(hourly.filter((job) => !job.requiresDist).length).toBeLessThanOrEqual(77);
   expect(hourly.length).toBeLessThanOrEqual(79);
 });
@@ -185,7 +196,8 @@ it.each([
   }
 });
 
-it("keeps UI and core changes with exact owners and direct consumers", () => {
+it.each(["node", "bun-all"])("keeps exact UI and core owners with %s timings", (runtimePolicy) => {
+  vi.stubEnv("OPENCLAW_CI_TEST_RUNTIME_POLICY", runtimePolicy);
   const paths = [
     "ui/src/components/markdown-file-links.ts",
     "src/agents/live-provider-owner.ts",
@@ -279,6 +291,7 @@ it("keeps UI and core changes with exact owners and direct consumers", () => {
     }),
     "canonical selected tooling owners",
   );
+  const envScratch = tempDirs.make("changed-node-plan-env-");
   for (const job of shards ?? []) {
     for (const group of job.groups ?? []) {
       const owners = group.configs.includes("test/vitest/vitest.tooling.config.ts")
@@ -307,16 +320,43 @@ it("keeps UI and core changes with exact owners and direct consumers", () => {
       ] as const) {
         expect(group[key], `${group.shard_name} group ${key}`).toEqual(selectedGroup[key]);
       }
-      for (const key of [
-        "env",
-        "runner",
-        "planConcurrency",
-        "pretestBuildMode",
-        "requiresDist",
-        "timeoutMinutes",
-      ] as const) {
+      for (const key of ["runner", "pretestBuildMode", "requiresDist", "timeoutMinutes"] as const) {
         expect(job[key], `${group.shard_name} job ${key}`).toEqual(selectedJob[key]);
       }
+      expect(
+        Object.fromEntries(
+          Object.entries(job.env ?? {}).filter(([key]) => key !== "OPENCLAW_VITEST_MAX_WORKERS"),
+        ),
+        `${group.shard_name} job environment`,
+      ).toEqual(
+        Object.fromEntries(
+          Object.entries(selectedJob.env ?? {}).filter(
+            ([key]) => key !== "OPENCLAW_VITEST_MAX_WORKERS",
+          ),
+        ),
+      );
+      // Bounding can coalesce compatible settled serial rows after canonical selection.
+      // Compare the child budget the executor receives instead of projecting raw job concurrency
+      // backward across that phase boundary.
+      const childWorkers = buildChildEnv(
+        { kind: "group", name: group.shard_name, plan: group },
+        {
+          OPENCLAW_VITEST_MAX_WORKERS: job.planConcurrency === 1 ? "8" : "2",
+          ...job.env,
+        },
+        envScratch,
+        0,
+      ).OPENCLAW_VITEST_MAX_WORKERS;
+      const selectedChildWorkers = buildChildEnv(
+        { kind: "group", name: selectedGroup.shard_name, plan: selectedGroup },
+        {
+          OPENCLAW_VITEST_MAX_WORKERS: selectedJob.planConcurrency === 1 ? "8" : "2",
+          ...selectedJob.env,
+        },
+        envScratch,
+        0,
+      ).OPENCLAW_VITEST_MAX_WORKERS;
+      expect(childWorkers, `${group.shard_name} child worker ceiling`).toBe(selectedChildWorkers);
     }
   }
   expect(createChangedNodeTestShards([paths[1]!, "ui/src/AGENTS.md"], options)).toEqual(

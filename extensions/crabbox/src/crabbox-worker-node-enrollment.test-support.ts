@@ -12,37 +12,30 @@ import type {
   CrabboxWorkerNodeRuntimePreparation,
 } from "./crabbox-worker-node-enrollment.js";
 
-export type DesktopFixture = {
-  enabled: boolean;
-  setup?: string;
-  display?: string;
-  dbus?: string;
-  runtimeDir?: string;
-};
+export type DesktopFixture = { enabled: boolean } & Partial<
+  Record<"setup" | "display" | "dbus" | "runtimeDir", string>
+>;
 
-export function createWorkerArchiveFixture(): CrabboxWorkerNodeRuntimePreparation["workerBundle"] {
-  return {
+export const createWorkerArchiveFixture =
+  (): CrabboxWorkerNodeRuntimePreparation["workerBundle"] => ({
     url: "https://gateway.example.test/__openclaw__/worker-bootstrap/artifacts/worker",
     token: "synthetic-worker-archive-token",
     sha256: "b".repeat(64),
     bytes: 100,
     packageRelativePath: `worker-artifacts/${"b".repeat(64)}.tgz`,
-  };
-}
+  });
 
-export function createNodeBootstrapFixture(
+export const createNodeBootstrapFixture = (
   overrides: Partial<CrabboxWorkerNodeEnrollment["nodeBootstrap"]> = {},
-): CrabboxWorkerNodeEnrollment["nodeBootstrap"] {
-  return {
-    url: "https://gateway.example.test/__openclaw__/node-bootstrap/v1/artifact",
-    token: "synthetic-bootstrap-token",
-    sha256: "a".repeat(64),
-    bytes: 100,
-    openclawVersion: "2026.8.1",
-    enabledPluginIds: ["demo"],
-    ...overrides,
-  };
-}
+): CrabboxWorkerNodeEnrollment["nodeBootstrap"] => ({
+  url: "https://gateway.example.test/__openclaw__/node-bootstrap/v1/artifact",
+  token: "synthetic-bootstrap-token",
+  sha256: "a".repeat(64),
+  bytes: 100,
+  openclawVersion: "2026.8.1",
+  enabledPluginIds: ["demo"],
+  ...overrides,
+});
 
 export async function readLaunch(
   stateDir: string,
@@ -73,21 +66,14 @@ export async function createNodePackageFixture(
   const root = makeTempDir("crabbox-bootstrap-package-");
   const packageRoot = path.join(root, "package");
   fs.mkdirSync(packageRoot);
-  fs.writeFileSync(
-    path.join(packageRoot, "package.json"),
-    JSON.stringify({
+  const files = {
+    "package.json": JSON.stringify({
       name: "openclaw",
       version: "2026.8.1",
       scripts: { postinstall: "node install.cjs" },
     }),
-  );
-  fs.writeFileSync(
-    path.join(packageRoot, "install.cjs"),
-    `require("node:fs").writeFileSync("installed.json", JSON.stringify({ token: process.env.CRABBOX_WORKER_BOOTSTRAP_TOKEN, setupCode: process.env.CRABBOX_WORKER_SETUP_CODE, scriptsRan: true }));${postinstall}`,
-  );
-  fs.writeFileSync(
-    path.join(packageRoot, "openclaw.mjs"),
-    `import fs from "node:fs";
+    "install.cjs": `require("node:fs").writeFileSync("installed.json", JSON.stringify({ token: process.env.CRABBOX_WORKER_BOOTSTRAP_TOKEN, setupCode: process.env.CRABBOX_WORKER_SETUP_CODE, scriptsRan: true }));${postinstall}`,
+    "openclaw.mjs": `import fs from "node:fs";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
 ${fixtureReceiptClientSource(receipts.endpoint)}
@@ -115,7 +101,10 @@ if (args[0] === "--version") {
   setInterval(() => {}, 60000);
 }
 `,
-  );
+  };
+  for (const [name, contents] of Object.entries(files)) {
+    fs.writeFileSync(path.join(packageRoot, name), contents);
+  }
   const tools = path.join(packageRoot, "dist", "worker-tools", "bin");
   fs.mkdirSync(tools, { recursive: true });
   fs.writeFileSync(path.join(tools, "bootstrap-tool-fixture"), "#!/bin/sh\necho verified-tool\n", {

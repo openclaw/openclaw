@@ -88,7 +88,12 @@ const lockfileRoutes = {
   },
 };
 
-function evaluate(routes: Record<string, unknown> = {}, mode = "enforce", deadline?: number) {
+function evaluate(
+  routes: Record<string, unknown> = {},
+  mode = "enforce",
+  deadline?: number,
+  completedCi?: { id: number; attempt: number },
+) {
   const root = tempDirs.make("security-review-");
   const logPath = path.join(root, "requests.jsonl");
   const fixturePath = path.join(root, "fixture.json");
@@ -139,6 +144,12 @@ function evaluate(routes: Record<string, unknown> = {}, mode = "enforce", deadli
           ? {}
           : { OPENCLAW_SECURITY_REVIEW_DEADLINE_MS: String(deadline) }),
         GITHUB_EVENT_PATH: eventPath,
+        ...(completedCi
+          ? {
+              OPENCLAW_SECURITY_REVIEW_CI_RUN_ID: String(completedCi.id),
+              OPENCLAW_SECURITY_REVIEW_CI_RUN_ATTEMPT: String(completedCi.attempt),
+            }
+          : {}),
         GITHUB_ENV: environmentPath,
         GITHUB_OUTPUT: outputPath,
         GITHUB_REPOSITORY: "openclaw/openclaw",
@@ -1372,6 +1383,80 @@ describe("combined security review entry point", () => {
   };
   const listedRuns = (workflow_runs: object[]) => ({
     [runsPath]: { total_count: workflow_runs.length, workflow_runs },
+  });
+
+  describe("completion reconciliation", () => {
+    const completedCi = { id: 10, attempt: 1 };
+    it("retries a missing completed run before reporting success", () => {
+      const result = evaluate(
+        {
+          [runsPath]: {
+            responses: [
+              { total_count: 0, workflow_runs: [] },
+              { total_count: 1, workflow_runs: [run] },
+            ],
+          },
+        },
+        "enforce",
+        undefined,
+        completedCi,
+      );
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.waits.reduce((sum, delay) => sum + delay, 0)).toBe(60_000);
+      expect(result.combined.at(-1)).toBe("success");
+    });
+
+    it("fails the pass when the completed run remains missing", () => {
+      const result = evaluate(listedRuns([]), "enforce", undefined, completedCi);
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("completed CI run is missing");
+      expect(result.combined.at(-1)).toBe("failure");
+    });
+
+    it("retries a stale pending listing before publishing the completed gate", () => {
+      const result = evaluate(
+        {
+          [runsPath]: {
+            responses: [
+              { total_count: 1, workflow_runs: [{ ...run, status: "in_progress" }] },
+              { total_count: 1, workflow_runs: [run] },
+            ],
+          },
+        },
+        "enforce",
+        undefined,
+        completedCi,
+      );
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.waits.reduce((sum, delay) => sum + delay, 0)).toBe(60_000);
+      expect(result.combined.at(-1)).toBe("success");
+    });
+
+    it.each([
+      { name: "run", newer: { ...run, id: 11, status: "in_progress" } },
+      { name: "attempt", newer: { ...run, run_attempt: 2, status: "in_progress" } },
+    ])("keeps a newer active $name pending", ({ newer }) => {
+      const result = evaluate(listedRuns([newer]), "enforce", undefined, completedCi);
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.waits).toEqual([]);
+      expect(result.combined.at(-1)).toBe("pending");
+    });
+
+    it("retries a stale live observation of the completed attempt", () => {
+      const result = evaluate(
+        {
+          [`GET ${actions}/runs/10`]: {
+            responses: [{ ...run, status: "in_progress" }, run],
+          },
+        },
+        "enforce",
+        undefined,
+        completedCi,
+      );
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.waits.reduce((sum, delay) => sum + delay, 0)).toBe(60_000);
+      expect(result.combined.at(-1)).toBe("success");
+    });
   });
 
   it.each<{

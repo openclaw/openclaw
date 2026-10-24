@@ -133,7 +133,9 @@ it.each([
   ["gateway", "--port", "18789"],
   ["gateway", "run", "--bind", "loopback", "--port", "18789"],
   ["--profile", "work", "gateway", "run"],
-])("prints the redacted Gateway startup reason without debug: %j", (...args) => {
+  ["node", "run", "--host", "127.0.0.1", "--port", "18789", "--no-tls"],
+  ["--profile", "work", "node", "run", "--pair-if-needed", "setup-code"],
+])("prints the redacted service startup reason without debug: %j", (...args) => {
   const token = "sk-abcdefghijklmnopqrstuv";
   const lines = failure(
     new Error(`Gateway startup failed. Authorization: Bearer ${token}`, {
@@ -151,6 +153,7 @@ it.each([
 
 it.each([
   ["gateway", "status"],
+  ["node", "status"],
   ["sessions", "list"],
 ])("keeps ordinary command failures terse: %j", (...args) => {
   expect(failure(new Error("internal detail"), [...args])).toEqual([

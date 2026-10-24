@@ -1,4 +1,5 @@
 import "../../test-utils/prepare-compiled-subprocesses.js";
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core/expect";
@@ -20,6 +21,7 @@ import {
   loadSessionEntry,
   updateSessionEntry,
 } from "../../config/sessions/session-accessor.js";
+import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import * as sessionLifecycleProjection from "../../config/sessions/session-lifecycle-projection.js";
 import { SessionEntryLifecycleUpsertConflictError } from "../../config/sessions/session-mutation-conflict-error.js";
 import type { InternalSessionEntry, SessionEntry } from "../../config/sessions/types.js";
@@ -39,6 +41,7 @@ import {
 } from "../../sessions/session-state-events.js";
 import { readCursor } from "../../sessions/session-state-events.test-support.js";
 import { drainGlobalSingletonLifecycleState } from "../../shared/global-singleton.js";
+import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import {
   withOpenClawTestState,
@@ -156,7 +159,7 @@ async function enqueueGuardedCliWatchdog(params: {
   const { testing: cliBackends } = await import("../../agents/cli-backends.test-support.js");
   const { prepareCliRunContext } = await import("../../agents/cli-runner/prepare.js");
   const { runPreparedCliAgent } = await import("../../agents/cli-runner.js");
-  const { executeDeps } = await import("../../agents/cli-runner/execute-deps.js");
+  const processSupervisor = await import("../../process/supervisor/index.js");
   const { resolveSessionFilePathCore, resolveSessionFilePathOptions, resolveSessionStorePathCore } =
     await import("../../config/sessions/paths.js");
   const sessionTarget = {
@@ -187,12 +190,14 @@ async function enqueueGuardedCliWatchdog(params: {
     ],
   });
   let receipt: ReturnType<typeof enqueueSessionEventForHost> | undefined;
-  const enqueue = executeDeps.enqueueSessionEvent;
-  const observer = vi.spyOn(executeDeps, "enqueueSessionEvent").mockImplementation((...args) => {
-    receipt = enqueue(...args);
-    return receipt;
-  });
-  const supervisor = vi.spyOn(executeDeps, "getProcessSupervisor").mockReturnValue({
+  const enqueue = sessionEventHandoff.enqueueSessionEventForHost;
+  const observer = vi
+    .spyOn(sessionEventHandoff, "enqueueSessionEventForHost")
+    .mockImplementation((...args) => {
+      receipt = enqueue(...args);
+      return receipt;
+    });
+  const supervisor = vi.spyOn(processSupervisor, "getProcessSupervisor").mockReturnValue({
     acquireScopeCleanup: () => async () => {},
     spawn: async () => ({
       runId,
@@ -300,6 +305,8 @@ it.for([
   "downgrade",
   "upgrade",
   "retained-tool-downgrade",
+  "retained-overrides-downgrade",
+  "retained-database-replacement",
   "retained-config-downgrade",
   "remapped-workspace",
   "remapped-guarded",
@@ -309,7 +316,10 @@ it.for([
   "cli-watchdog-guarded",
 ] as const)(
   "bounds a production background completion by current and retained permissions: %s",
-  async (change, { signal, onTestFinished }) => {
+  async (change, { signal, onTestFinished, skip }) => {
+    if (change === "retained-database-replacement" && process.platform === "win32") {
+      skip("Windows cannot replace an open database file");
+    }
     await runEventFixture("session-event-permissions", onTestFinished, async (state) => {
       const config = await configureEventState(state, {
         tools: { profile: "coding", codeMode: false, toolSearch: false },
@@ -400,6 +410,7 @@ it.for([
             },
             pluginId: "openclaw",
           });
+          let restoreDatabase: (() => void) | undefined;
           try {
             observedMode = params.permissionMode;
             const toolRunContext = buildEmbeddedAttemptToolRunContext({
@@ -446,6 +457,36 @@ it.for([
               expect(write).toBeDefined();
               if (change === "retained-tool-downgrade") {
                 await setMode("read-only");
+              } else if (change === "retained-overrides-downgrade") {
+                await updateSessionEntry(scope, () => ({ toolOverrides: { webSearch: false } }));
+              } else if (change === "retained-database-replacement") {
+                const database = openOpenClawAgentDatabase({ agentId: scope.agentId });
+                const foreignPath = `${database.path}.foreign.sqlite`;
+                const originalPath = `${database.path}.original`;
+                const foreign = openOpenClawAgentDatabase({
+                  agentId: scope.agentId,
+                  path: foreignPath,
+                });
+                replaceSessionEntrySync(
+                  { ...scope, storePath: foreignPath },
+                  {
+                    ...expectDefined(loadSessionEntry(scope), "retained session"),
+                    label: "foreign owner",
+                  },
+                );
+                expect(
+                  String(
+                    foreign.db
+                      .prepare("SELECT entry_json FROM session_nodes WHERE session_key = ?")
+                      .get(scope.sessionKey)?.entry_json,
+                  ),
+                ).toContain("foreign owner");
+                fsSync.renameSync(database.path, originalPath);
+                fsSync.renameSync(foreignPath, database.path);
+                restoreDatabase = () => {
+                  fsSync.renameSync(database.path, foreignPath);
+                  fsSync.renameSync(originalPath, database.path);
+                };
               } else {
                 config.tools = { ...config.tools, deny: ["write"] };
                 setRuntimeConfigSnapshot(config);
@@ -476,6 +517,7 @@ it.for([
             }
             return { payloads: [{ text: "Completion observed" }], meta: { durationMs: 1 } };
           } finally {
+            restoreDatabase?.();
             host.close();
           }
         });
@@ -506,7 +548,9 @@ it.for([
       let outcome: Awaited<ReturnType<typeof enqueueSessionEventForHost>["settled"]>;
       let accepted: Awaited<ReturnType<typeof enqueueSessionEventForHost>["accepted"]>;
       const route = toolOnly
-        ? vi.spyOn(routedReplies, "routeReply").mockResolvedValue({ ok: true, delivered: true })
+        ? vi
+            .spyOn(routedReplies, "routePreparedReply")
+            .mockResolvedValue({ ok: true, delivered: true })
         : undefined;
       try {
         const text = "Process the event; record the result.";

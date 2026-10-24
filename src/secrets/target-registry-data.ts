@@ -17,6 +17,12 @@ type PluginConfigTargetScope = {
 const SECRET_INPUT_SHAPE = "secret_input"; // pragma: allowlist secret
 const SIBLING_REF_SHAPE = "sibling_ref"; // pragma: allowlist secret
 
+/** Static credential fields shared by auth-profile scanning and target discovery. */
+export const AUTH_PROFILE_SECRET_FIELDS = {
+  api_key: { authProfileType: "api_key", valueField: "key", refField: "keyRef" },
+  token: { authProfileType: "token", valueField: "token", refField: "tokenRef" },
+} as const;
+
 const WEB_PROVIDER_SECRET_CONFIGS = [
   { contract: "webSearchProviders", configPath: "webSearch.apiKey" },
   { contract: "webFetchProviders", configPath: "webFetch.apiKey" },
@@ -118,24 +124,21 @@ function listChannelSecretTargetRegistryEntries(
 }
 
 const CORE_SECRET_TARGET_REGISTRY: SecretTargetRegistryEntry[] = [
-  ...(
-    [
-      ["api_key", "key"],
-      ["token", "token"],
-    ] as const
-  ).map(([authProfileType, field]): SecretTargetRegistryEntry => ({
-    id: `auth-profiles.${authProfileType}.${field}`,
-    targetType: `auth-profiles.${authProfileType}.${field}`,
-    configFile: "auth-profile-store",
-    pathPattern: `profiles.*.${field}`,
-    refPathPattern: `profiles.*.${field}Ref`,
-    secretShape: SIBLING_REF_SHAPE,
-    expectedResolvedValue: "string",
-    includeInPlan: true,
-    includeInConfigure: true,
-    includeInAudit: true,
-    authProfileType,
-  })),
+  ...Object.values(AUTH_PROFILE_SECRET_FIELDS).map(
+    ({ authProfileType, valueField, refField }): SecretTargetRegistryEntry => ({
+      id: `auth-profiles.${authProfileType}.${valueField}`,
+      targetType: `auth-profiles.${authProfileType}.${valueField}`,
+      configFile: "auth-profile-store",
+      pathPattern: `profiles.*.${valueField}`,
+      refPathPattern: `profiles.*.${refField}`,
+      secretShape: SIBLING_REF_SHAPE,
+      expectedResolvedValue: "string",
+      includeInPlan: true,
+      includeInConfigure: true,
+      includeInAudit: true,
+      authProfileType,
+    }),
+  ),
   ...[
     "tools.github.app.privateKey",
     "agents.entries.*.tools.github.app.privateKey",
@@ -203,8 +206,6 @@ let cachedSecretTargetRegistry: SecretTargetRegistryEntry[] | null = null;
 function loadSecretTargetRegistryFromPluginMetadata(params: {
   config?: OpenClawConfig;
   env: NodeJS.ProcessEnv;
-  preferPersisted?: boolean;
-  throwOnLoadError?: boolean;
   pluginConfig?: PluginConfigTargetScope;
   configuredOnly?: boolean;
 }): SecretTargetRegistryEntry[] {
@@ -213,10 +214,8 @@ function loadSecretTargetRegistryFromPluginMetadata(params: {
     env: params.env,
     allowWorkspaceScopedCurrent: true,
     ...(params.pluginConfig?.pluginIds ? { pluginIds: params.pluginConfig.pluginIds } : {}),
-    ...(params.preferPersisted !== undefined ? { preferPersisted: params.preferPersisted } : {}),
   }).plugins;
   return buildSecretTargetRegistryFromPlugins(plugins, {
-    throwOnLoadError: params.throwOnLoadError,
     pluginConfig: params.pluginConfig,
     ...(params.configuredOnly ? { config: params.config ?? {} } : {}),
   });
@@ -302,21 +301,9 @@ export function getCoreSecretTargetRegistry(): SecretTargetRegistryEntry[] {
 export function getSecretTargetRegistry(params?: {
   config?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
-  sourceTree?: boolean;
   pluginConfig?: PluginConfigTargetScope;
   configuredOnly?: boolean;
 }): SecretTargetRegistryEntry[] {
-  if (params?.sourceTree) {
-    // Docs generation needs the source plugin tree, never a process-cached or persisted snapshot.
-    return loadSecretTargetRegistryFromPluginMetadata({
-      env: {
-        ...process.env,
-        OPENCLAW_BUNDLED_PLUGINS_DIR: process.env.OPENCLAW_BUNDLED_PLUGINS_DIR ?? "extensions",
-      },
-      preferPersisted: false,
-      throwOnLoadError: true,
-    });
-  }
   if (params?.config || params?.pluginConfig) {
     // Config-scoped plugin roots and policy are not process-stable. Compile these registries per
     // request so one config cannot poison discovery for a later config in the same process.

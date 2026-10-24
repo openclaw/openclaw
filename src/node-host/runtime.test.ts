@@ -5,6 +5,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { SkillBinTrustEntry } from "../infra/exec-approvals.js";
+import { NODE_AGENT_CLI_CLAUDE_RUN_COMMAND } from "../infra/node-commands.js";
 import { NODE_DESKTOP_STREAM_COMMAND } from "../shared/node-desktop-stream.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import type { SkillBinsProvider } from "./runtime-skill-bins.js";
@@ -367,6 +368,48 @@ async function withFramedInvoke(
 describe("node-host invoke input dispatch", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+  it.each([
+    ["true", '{"skillRuntime":true}', true],
+    ["absent", "{}", false],
+    ["false", '{"skillRuntime":false}', false],
+    ["string", '{"skillRuntime":"true"}', false],
+    ["malformed", '{"skillRuntime":true', false],
+    ["nonobject", '[{"skillRuntime":true}]', false],
+    ["JSON whitespace", ' \t\r\n{"skillRuntime":true}', true],
+    ["escaped key", '{"skill\\u0052untime":true}', true],
+    ["oversize", `${" ".repeat(2 * 1024 * 1024)}{"skillRuntime":true}`, false],
+  ] as const)("selects Claude skill frames for %s", async (_name, paramsJSON, framed) => {
+    const held = holdInvoke();
+    const runtime = await startRuntime();
+    const invoking = runtime.invoke({
+      ...frame,
+      command: NODE_AGENT_CLI_CLAUDE_RUN_COMMAND,
+      paramsJSON,
+    });
+    try {
+      await vi.waitFor(() => expect(held.signal).toBeDefined());
+      const received: Uint8Array[] = [];
+      held.io?.frames?.onMessage((message) => {
+        received.push(message);
+      });
+      if (framed) {
+        await vi.waitFor(() =>
+          expect(mocks.progressWrite).toHaveBeenCalledWith('{"v":1,"kind":"ready"}'),
+        );
+      }
+      runtime.handleInput(
+        frame.id,
+        0,
+        '{"v":1,"kind":"data","message":0,"index":0,"last":true,"data":"AP8R"}',
+      );
+      expect(received).toEqual(framed ? [Uint8Array.of(0, 255, 17)] : []);
+    } finally {
+      held.release();
+      await invoking;
+      await runtime.close();
+    }
   });
 
   it("registers framed readiness before exchanging binary messages", async () => {

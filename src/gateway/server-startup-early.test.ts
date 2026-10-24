@@ -100,6 +100,7 @@ function earlyRuntimeInput(
     maintenance: maintenanceState,
     broadcast: maintenanceState.broadcast,
     scheduler,
+    getCronStorePath: () => "/synthetic/cron/jobs.json",
     getRuntimeConfig: () => ({}) as never,
     ...overrides,
   };
@@ -121,15 +122,13 @@ describe("startGatewayEarlyRuntime", () => {
     mocks.setSkillsRemoteRegistry.mockReset();
     mocks.primeRemoteSkillsCache.mockReset();
     mocks.refreshRemoteBinsForConnectedNodes.mockReset();
-    mocks.refreshSkillsDiscovery.mockReset().mockResolvedValue(undefined);
-    mocks.registerSkillsChangeListener.mockReset();
     mocks.closeSkillsWatchers.mockReset();
     mocks.detachSkillsWatchers.mockReset();
     mocks.startCronMaintenance.mockReset();
-    mocks.registerSkillsChangeListener.mockReturnValue(mocks.skillsChangeUnsub);
     mocks.skillsChangeUnsub.mockReset();
-    mocks.ensureContextWindowCacheLoaded.mockReset();
-    mocks.ensureContextWindowCacheLoaded.mockResolvedValue(undefined);
+    mocks.refreshSkillsDiscovery.mockReset().mockResolvedValue(undefined);
+    mocks.registerSkillsChangeListener.mockReset().mockReturnValue(mocks.skillsChangeUnsub);
+    mocks.ensureContextWindowCacheLoaded.mockReset().mockResolvedValue(undefined);
     mocks.startGatewayMaintenanceTimers.mockClear();
   });
 
@@ -199,7 +198,10 @@ describe("startGatewayEarlyRuntime", () => {
     await Promise.resolve();
     expect(mocks.ensureContextWindowCacheLoaded).not.toHaveBeenCalled();
     expect(mocks.primeRemoteSkillsCache).toHaveBeenCalledTimes(1);
-    expect(mocks.startCronMaintenance).toHaveBeenCalledExactlyOnceWith(input.scheduler);
+    expect(mocks.startCronMaintenance).toHaveBeenCalledExactlyOnceWith(
+      input.scheduler,
+      input.getCronStorePath,
+    );
     expect(mocks.startGatewayDiscovery).toHaveBeenCalledOnce();
     expect(mocks.startGatewayDiscovery.mock.invocationCallOrder[0] ?? Infinity).toBeLessThan(
       mocks.setSkillsRemoteRegistry.mock.invocationCallOrder[0] ?? -Infinity,
@@ -414,10 +416,7 @@ describe("startGatewayEarlyRuntime", () => {
       gatewayTls: { enabled: true, fingerprintSha256: "abc123" },
       gatewayDirectReachable: true,
       tailscaleMode: "serve" as never,
-      logDiscovery: {
-        info: () => {},
-        warn: () => {},
-      },
+      logDiscovery: log,
       pluginRegistry: {
         gatewayDiscoveryServices: [service],
       } as never,
@@ -425,16 +424,16 @@ describe("startGatewayEarlyRuntime", () => {
     await startGatewayEarlyRuntime(input);
     expect(swapDiscovery).toHaveBeenCalledWith(discovery);
 
-    const [discoveryParams] = mocks.startGatewayDiscovery.mock.calls.at(-1) ?? [];
-    if (discoveryParams === undefined) {
-      throw new Error("Expected gateway discovery to start");
-    }
-    expect(discoveryParams.machineDisplayName).toBe("Test Machine");
-    expect(discoveryParams.port).toBe(19_001);
-    expect(discoveryParams.gatewayTls).toEqual({ enabled: true, fingerprintSha256: "abc123" });
-    expect(discoveryParams.gatewayDirectReachable).toBe(true);
-    expect(discoveryParams.tailscaleMode).toBe("serve");
-    expect(discoveryParams.discovery?.mdns?.mode).toBe("full");
-    expect(discoveryParams.gatewayDiscoveryServices).toEqual([service]);
+    expect(mocks.startGatewayDiscovery).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        machineDisplayName: "Test Machine",
+        port: 19_001,
+        gatewayTls: { enabled: true, fingerprintSha256: "abc123" },
+        gatewayDirectReachable: true,
+        tailscaleMode: "serve",
+        discovery: { mdns: { mode: "full" } },
+        gatewayDiscoveryServices: [service],
+      }),
+    );
   });
 });

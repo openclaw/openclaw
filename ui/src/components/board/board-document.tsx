@@ -2,6 +2,7 @@ import type { BoardGetParams, BoardSnapshot } from "@openclaw/gateway-protocol";
 import { createMemo, onSettled, Show } from "solid-js";
 import { GATEWAY_SERVER_CAPS } from "../../../../packages/gateway-protocol/src/server-capabilities.js";
 import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
+import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";
 import {
   hasOperatorApprovalsAccess,
   hasOperatorReadAccess,
@@ -19,8 +20,9 @@ import {
   isGatewayCapabilityAdvertised,
   isGatewayMethodAdvertised,
 } from "../../lib/gateway-methods.ts";
+import { projectCallbackOwner } from "../../lib/reactive/callback-owner.ts";
+import { useOptionalApplication } from "../../lib/reactive/context.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import { projectOwner } from "../../lib/reactive/projection.ts";
 import type { SessionCapability } from "../../lib/sessions/session-capability.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../lib/solid-bridge.ts";
 import { Icon } from "../solid/icon.tsx";
@@ -40,7 +42,7 @@ type ProviderBinding = {
   client: NonNullable<ApplicationGatewaySnapshot["client"]>;
   sessions?: Pick<SessionCapability, "describe">;
   sessionKey: string;
-  capabilityKey: string;
+  presentationScope?: object;
 };
 
 export type BoardDocumentProps = {
@@ -53,9 +55,11 @@ export type BoardDocumentProps = {
 };
 
 // The provider binding remains synchronous; Solid observes its presentation facts.
-function createBoardDocument(props: BoardDocumentProps) {
-  const listeners = new Set<() => void>();
-  const notify = () => listeners.forEach((listener) => listener());
+function createBoardDocument(
+  props: BoardDocumentProps,
+  readPresentationScope: () => object | undefined,
+  notify: () => void,
+) {
   let documentState: DashboardDocumentState = "loading";
   let ownedSnapshot: BoardSnapshot | undefined;
   let activeTabId = "";
@@ -72,10 +76,11 @@ function createBoardDocument(props: BoardDocumentProps) {
   }
 
   function providerCapabilities(snapshot: ApplicationGatewaySnapshot) {
-    const canMutate = hasOperatorWriteAccess(snapshot.hello?.auth ?? null);
+    const connected = snapshot.phase === "connected";
+    const canMutate = connected && hasOperatorWriteAccess(snapshot.hello?.auth ?? null);
     return {
       canMutate,
-      canGrant: hasOperatorApprovalsAccess(snapshot.hello?.auth ?? null),
+      canGrant: connected && hasOperatorApprovalsAccess(snapshot.hello?.auth ?? null),
       canPinWidgets:
         canMutate &&
         isGatewayCapabilityAdvertised(snapshot, GATEWAY_SERVER_CAPS.BOARD_WIDGET_PUT_CANVAS_DOC) ===
@@ -88,6 +93,7 @@ function createBoardDocument(props: BoardDocumentProps) {
   }
 
   function synchronizeProvider(): void {
+    const presentationScope = readPresentationScope();
     const sessionKey = (props.preparedSession?.sessionKey ?? props.sessionKey)?.trim() ?? "";
     if (!sessionKey) {
       releaseProvider();
@@ -102,30 +108,33 @@ function createBoardDocument(props: BoardDocumentProps) {
       return;
     }
     if (
-      !hasOperatorReadAccess(snapshot.hello?.auth ?? null) ||
-      isGatewayMethodAdvertised(snapshot, "board.get") === false
+      snapshot.phase === "connected" &&
+      (!hasOperatorReadAccess(snapshot.hello?.auth ?? null) ||
+        isGatewayMethodAdvertised(snapshot, "board.get") === false)
     ) {
       releaseProvider();
       documentState = "unavailable";
       return;
     }
     const capabilities = providerCapabilities(snapshot);
-    const capabilityKey = JSON.stringify(capabilities);
     if (
       ownedBinding?.client === client &&
+      ownedBinding.presentationScope === presentationScope &&
       ownedBinding.sessions === props.sessions &&
       ownedBinding.sessionKey === sessionKey &&
-      (!props.preparedSession || ownedBinding.session.agentId === props.preparedSession.agentId) &&
-      ownedBinding.capabilityKey === capabilityKey
+      (!props.preparedSession || ownedBinding.session.agentId === props.preparedSession.agentId)
     ) {
       providerLease?.update(client, snapshot.phase === "connected", capabilities);
       return;
     }
     releaseProvider();
     documentState = "loading";
+    if (snapshot.phase !== "connected") {
+      return;
+    }
     const generation = bindingGeneration;
     void bindProvider(
-      { client, sessions: props.sessions, sessionKey, capabilityKey },
+      { client, sessions: props.sessions, sessionKey, presentationScope },
       capabilities,
       generation,
       props.preparedSession ?? null,
@@ -158,7 +167,11 @@ function createBoardDocument(props: BoardDocumentProps) {
         return;
       }
       const current = props.gatewaySnapshot;
-      if (!current || current.client !== binding.client) {
+      if (
+        !current ||
+        current.client !== binding.client ||
+        readPresentationScope() !== binding.presentationScope
+      ) {
         return;
       }
       const session = preparedSession ?? {
@@ -173,11 +186,13 @@ function createBoardDocument(props: BoardDocumentProps) {
         capabilities.canPinMcpApps,
         capabilities.canMutate,
         capabilities.canGrant,
+        binding.presentationScope,
       );
       const provider = lease.provider;
       ownedProvider = provider;
       providerLease = lease;
       ownedBinding = { ...binding, session };
+      // Reconcile tab intent from provider receipts and preserve ordered focus commands.
       providerSubscriptions.push(
         provider.snapshot$.subscribe(() => reconcileProvider(provider)),
         provider.loadError$.subscribe(() => reconcileProvider(provider)),
@@ -201,24 +216,16 @@ function createBoardDocument(props: BoardDocumentProps) {
     }
   }
 
-  function selectAvailableTab(): void {
-    const snapshot = ownedSnapshot;
-    if (!snapshot) {
-      return;
-    }
-    if (snapshot.tabs.some((tab) => tab.tabId === activeTabId)) {
-      return;
-    }
-    activeTabId = snapshot.tabs[0]?.tabId ?? snapshot.widgets[0]?.tabId ?? "";
-  }
-
   function reconcileProvider(provider: BoardProvider): void {
     if (ownedProvider !== provider) {
       return;
     }
     if (provider.hasLoadedSnapshot) {
-      ownedSnapshot = provider.snapshot$.value;
-      selectAvailableTab();
+      const snapshot = provider.snapshot$.value;
+      ownedSnapshot = snapshot;
+      if (!snapshot.tabs.some((tab) => tab.tabId === activeTabId)) {
+        activeTabId = snapshot.tabs[0]?.tabId ?? snapshot.widgets[0]?.tabId ?? "";
+      }
       documentState = "ready";
       notify();
       return;
@@ -298,12 +305,6 @@ function createBoardDocument(props: BoardDocumentProps) {
       error: errorText,
       board: presentation(passive),
     }),
-    subscribe(listener: () => void) {
-      listeners.add(listener);
-      return () => {
-        listeners.delete(listener);
-      };
-    },
   };
 }
 
@@ -313,12 +314,17 @@ function BoardDocumentContent(
   props: BoardDocumentProps,
   host: SolidBridgeElement<BoardDocumentProps>,
 ) {
-  const document = createBoardDocument(host);
-  const projection = projectOwner(document, (current) => current);
+  const context = useOptionalApplication();
+  const readPresentationScope = () =>
+    context ? gatewayPresentationScope(context.gateway) : undefined;
+  const { owner: document, view: projection } = projectCallbackOwner(
+    (notify) => createBoardDocument(host, readPresentationScope, notify),
+    (current) => current,
+  );
   onSettled(() => {
     let active = true;
     let pending = false;
-    inputUpdates.set(host, () => {
+    const scheduleUpdate = () => {
       if (pending) {
         return;
       }
@@ -329,11 +335,15 @@ function BoardDocumentContent(
           document.update();
         }
       });
-    });
+    };
+    inputUpdates.set(host, scheduleUpdate);
+    // Gateway receipts rebind the provider lease and its admitted capabilities after settlement.
+    const unsubscribeGateway = context?.gateway.subscribe(scheduleUpdate);
     document.update();
     return () => {
       active = false;
       inputUpdates.delete(host);
+      unsubscribeGateway?.();
       document.dispose();
     };
   });

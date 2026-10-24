@@ -1,4 +1,3 @@
-import { getSubagentRunsForChildSession } from "../../agents/subagents/registry/subagent-registry-memory.js";
 import {
   getLatestLiveSubagentRunByChildSessionKey,
   isSubagentRunLive,
@@ -457,7 +456,10 @@ export function createVisibleActiveSessionRunProjector(
       !candidateKeys.has(params.requestedKey) &&
       !candidateIds.has(sessionId) &&
       (!sessionId || resolveReplyRunForCurrentSessionId(sessionId).kind === "none") &&
-      getSubagentRunsForChildSession(params.canonicalKey.trim())[Symbol.iterator]().next().done
+      !getLatestLiveSubagentRunByChildSessionKey(
+        params.canonicalKey,
+        (run) => isSubagentRunLive(run) || isSubagentRunQueued(run),
+      )
     ) {
       return { active: false, runIds: [] };
     }

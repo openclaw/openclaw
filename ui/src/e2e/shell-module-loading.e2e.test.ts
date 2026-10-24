@@ -1,3 +1,4 @@
+import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { ConnectErrorDetailCodes } from "../../../packages/gateway-protocol/src/connect-error-details.js";
 import {
@@ -17,6 +18,16 @@ const suite = createControlUiE2eSuite({
   startServerBeforeBrowser: true,
 });
 const shellModule = /\/src\/app\/app-host\.tsx(?:\?.*)?$/u;
+
+function trackDocuments(page: Page) {
+  let count = 0;
+  page.on("request", (request) => {
+    if (request.isNavigationRequest() && request.frame() === page.mainFrame()) {
+      count += 1;
+    }
+  });
+  return () => count;
+}
 
 suite.define(() => {
   it("hands the boot skeleton to the pending route without a blank shell", async () => {
@@ -71,12 +82,7 @@ suite.define(() => {
   it("reloads into the real shell after its failed import becomes reachable", async () => {
     await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
       let failedImports = 0;
-      let documents = 0;
-      page.on("request", (request) => {
-        if (request.isNavigationRequest() && request.frame() === page.mainFrame()) {
-          documents += 1;
-        }
-      });
+      const documents = trackDocuments(page);
       await page.route(shellModule, async (route) => {
         failedImports += 1;
         await route.abort("failed");
@@ -98,9 +104,101 @@ suite.define(() => {
       await waitForControlUiRoute(page, { routeId: "new-session" });
       expect(await page.locator("openclaw-app-shell").count()).toBe(1);
       expect(await failure.count()).toBe(0);
-      expect(documents).toBe(2);
+      expect(documents()).toBe(2);
     });
   });
+
+  it.each([false, true])(
+    "dismisses a failed sidebar import without losing chat or bypassing unsaved work (dirty config: %s)",
+    async (dirtyConfig) => {
+      await suite.withPage(
+        { ...createControlUiE2eContextOptions(), viewport: { width: 1440, height: 900 } },
+        async ({ page }) => {
+          const sidebarModule = "**/src/pages/chat/components/chat-sidebar-region.runtime.tsx*";
+          let failedImports = 0;
+          const documents = trackDocuments(page);
+          await page.route(sidebarModule, async (route) => {
+            failedImports += 1;
+            await route.fulfill({
+              contentType: "application/javascript",
+              body: 'throw new SyntaxError("Synthetic sidebar module export failure");',
+            });
+          });
+          const gateway = await installMockGateway(page, {
+            historyMessages: [
+              { role: "assistant", content: "The conversation remains available." },
+              { role: "assistant", content: "[Recovery file](notes.txt)" },
+            ],
+            methodResponses: {
+              "sessions.files.get": {
+                sessionKey: "agent:main:main",
+                root: "/workspace",
+                file: {
+                  path: "notes.txt",
+                  name: "notes.txt",
+                  kind: "read",
+                  previewKind: "text",
+                  contentEncoding: "utf8",
+                  content: "The file remains available after recovery.",
+                  missing: false,
+                },
+              },
+            },
+          });
+          if (dirtyConfig) {
+            await page.goto(suite.server.baseUrl + "settings/advanced");
+            await page.getByRole("button", { name: "Raw", exact: true }).click();
+            await page
+              .locator(".config-raw-field textarea")
+              .fill('{ logging: { level: "debug" } }');
+            await page.evaluate(() =>
+              window.openclawControlUi?.navigate("chat", { pathname: "/chat/main" }),
+            );
+          } else {
+            await page.goto(suite.server.baseUrl + "chat/main");
+          }
+          const composer = page.locator(".agent-chat__composer-combobox textarea");
+          const draft = "Keep this draft while the panel is unavailable.";
+          const conversation = page.getByText("The conversation remains available.", {
+            exact: true,
+          });
+          await composer.fill(draft);
+          await page.locator('a.markdown-file-link[data-file-path="notes.txt"]').click();
+          const failure = page.locator(".sidebar-region__right-runtime .lazy-view-error");
+          await failure.getByText("Panel failed to load", { exact: true }).waitFor();
+          expect(failedImports).toBe(1);
+          const close = page.getByRole("button", { name: "Close Files", exact: true });
+          expect(await close.count()).toBe(1);
+          if (dirtyConfig) {
+            await failure.getByRole("button", { name: "Retry", exact: true }).click();
+            await page
+              .getByText("Finish saving or discard pending config changes before reloading.", {
+                exact: true,
+              })
+              .waitFor();
+            expect(documents()).toBe(1);
+          }
+          await close.click();
+          await expect.poll(() => failure.count()).toBe(0);
+          expect(await composer.inputValue()).toBe(draft);
+          expect(await conversation.isVisible()).toBe(true);
+          expect(documents()).toBe(1);
+          expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+          if (!dirtyConfig) {
+            await page.locator('a.markdown-file-link[data-file-path="notes.txt"]').click();
+            await failure.waitFor();
+            await page.unroute(sidebarModule);
+            await failure.getByRole("button", { name: "Retry", exact: true }).click();
+            await page.locator('.sidebar-region [data-panel-slot="workspace"]').waitFor();
+            expect(documents()).toBe(2);
+            expect(await composer.inputValue()).toBe(draft);
+            await page.getByRole("button", { name: "Close Files", exact: true }).click();
+            expect(await page.locator(".sidebar-region--open").count()).toBe(0);
+          }
+        },
+      );
+    },
+  );
 
   it.each(["login", "focus"] as const)("does not acquire the shell for %s", async (mode) => {
     await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {

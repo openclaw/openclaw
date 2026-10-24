@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { withTempWorkspace } from "@openclaw/fs-safe/temp";
 import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
+import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 import { resolveStateDir } from "../config/paths.js";
 import { LruCache } from "../infra/lru-cache.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
@@ -172,17 +173,13 @@ function buildStartupSignature(shell: string): Array<[string, number, number] | 
   });
 }
 
-function readNonBlankPathEnv(value: string | undefined): string | undefined {
-  return value?.trim() ? value : undefined;
-}
-
 function getTrustedShellHome(): string {
   const configuredHome =
-    readNonBlankPathEnv(process.env.HOME) ?? readNonBlankPathEnv(process.env.USERPROFILE);
+    readNonBlankString(process.env.HOME) ?? readNonBlankString(process.env.USERPROFILE);
   if (configuredHome) {
     return configuredHome;
   }
-  const accountHome = readNonBlankPathEnv(os.userInfo().homedir);
+  const accountHome = readNonBlankString(os.userInfo().homedir);
   if (!accountHome) {
     throw new Error("Unable to resolve the current user's home directory");
   }

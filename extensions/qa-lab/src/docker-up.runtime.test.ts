@@ -2,10 +2,12 @@
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { QaDockerRunCommand as RunCommand } from "openclaw/plugin-sdk/qa-runtime";
+import type {
+  QaDockerFetchLike as FetchLike,
+  QaDockerRunCommand as RunCommand,
+} from "openclaw/plugin-sdk/qa-runtime";
 import { shellEscape as shellQuote } from "openclaw/plugin-sdk/string-normalization-runtime";
 import { afterAll, describe, expect, it, vi } from "vitest";
-import type { FetchLike } from "./docker-runtime.js";
 import { runQaDockerUp as runQaDockerUpDefault } from "./docker-up.runtime.js";
 
 const io = vi.hoisted(() => ({
@@ -385,7 +387,6 @@ describe("runQaDockerUp", () => {
     const calls: string[] = [];
     const fetchCalls: string[] = [];
     const fetchSignals: AbortSignal[] = [];
-    const hostGatewayCancel = vi.fn(async () => {});
     const outputDir = await mkdtemp(path.join(os.tmpdir(), "qa-docker-up-"));
     const repoRoot = path.resolve("/repo/openclaw");
     const composeFile = path.join(outputDir, "docker-compose.qa.yml");
@@ -421,7 +422,7 @@ describe("runQaDockerUp", () => {
               fetchSignals.push(init.signal);
             }
             if (input === "http://127.0.0.1:18889/healthz") {
-              return { ok: false, body: { cancel: hostGatewayCancel } };
+              return { ok: false };
             }
             return {
               ok:
@@ -447,7 +448,6 @@ describe("runQaDockerUp", () => {
       ]);
       expect(fetchSignals).toHaveLength(3);
       expect(result.gatewayUrl).toBe("http://192.168.165.4:18789/");
-      expect(hostGatewayCancel).toHaveBeenCalledTimes(1);
     } finally {
       await rm(outputDir, { recursive: true, force: true });
     }

@@ -1,0 +1,14 @@
+.agent-chat__header--mobile .mobile-header__actions .chat-header-session-menu__trigger {
+  width: 44px;
+  height: 44px;
+  min-height: 44px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+}
+
+.agent-chat__header--mobile .mobile-header__actions .chat-header-session-menu__trigger svg {
+  width: 20px;
+  height: 20px;
+}

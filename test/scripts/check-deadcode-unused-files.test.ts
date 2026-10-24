@@ -9,7 +9,6 @@ import { expect, it, vi } from "vitest";
 import {
   checkKnipUnusedFileScanResult,
   checkUnusedFiles,
-  parseKnipCompactUnusedFiles,
 } from "../../scripts/check-deadcode-unused-files.mts";
 import { KNIP_MAX_BUFFER_BYTES, runKnip } from "../../scripts/deadcode-knip-runner.mts";
 import { killPidIfAlive } from "../../src/test-utils/process-tree.js";
@@ -110,9 +109,9 @@ async function waitForDescendantExit(pid: number, signal: AbortSignal): Promise<
   }
 }
 
-it("parses the compact Knip unused-file section", () => {
+it("rejects every compact Knip unused-file finding without an allowlist", () => {
   expect(
-    parseKnipCompactUnusedFiles(`
+    checkUnusedFiles(`
 > openclaw@2026.4.27 deadcode:knip /repo
 > pnpm dlx knip --reporter compact --files
 
@@ -126,7 +125,14 @@ C:outside.ts: C:outside.ts
 Unused dependencies (1)
 left-pad: package.json
 `),
-  ).toEqual(["src/a.ts", "src/b.ts"]);
+  ).toStrictEqual({
+    files: ["src/a.ts", "src/b.ts"],
+    ok: false,
+    message: `Unused files are not allowed:
+  src/a.ts
+  src/b.ts
+Delete the files or model their real entrypoints in Knip.`,
+  });
 });
 
 it("accepts an empty compact report with zero unused files", () => {
@@ -138,19 +144,6 @@ it("rejects a nonzero Knip exit even when no unused files were printed", () => {
     failureReason: "exit status 2",
     message: "",
     ok: false,
-  });
-});
-
-it("rejects every unused file without an allowlist", () => {
-  expect(
-    checkUnusedFiles("Unused files (2)\nsrc/z.ts: src/z.ts\nsrc/a.ts: src/a.ts\n"),
-  ).toStrictEqual({
-    files: ["src/a.ts", "src/z.ts"],
-    ok: false,
-    message: `Unused files are not allowed:
-  src/a.ts
-  src/z.ts
-Delete the files or model their real entrypoints in Knip.`,
   });
 });
 

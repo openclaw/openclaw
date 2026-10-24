@@ -6,6 +6,7 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import * as boundaryFileRead from "../../infra/boundary-file-read.js";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
+import { WorkerTaskPool } from "../../infra/worker-task-pool.js";
 import { setGatewayPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-snapshot.js";
 import { clearCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-state.js";
 import { writePersistedInstalledPluginIndex } from "../../plugins/installed-plugin-index-store-write.js";
@@ -16,6 +17,7 @@ import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metada
 import { writeRegistryPackagePlugin } from "../../plugins/test-helpers/plugin-registry-snapshot.js";
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
 import { pinConfigDir } from "../../utils.js";
+import * as pluginSkills from "../loading/plugin-skills.js";
 import { mergeSkillRecords } from "../loading/skill-precedence.js";
 import { resolveSkillDiscoveryLimits } from "../loading/skill-root-discovery.js";
 import type { WorkspaceSkillSource } from "../loading/workspace-skill-sources.types.js";
@@ -27,6 +29,7 @@ import {
   type SkillsDiscoveryOutput,
 } from "./discovery-worker-contract.js";
 import { captureSkillsSourcePlanInput } from "./discovery-worker-input.js";
+import { closeSkillsWatchers, refreshSkillsDiscovery } from "./refresh.js";
 
 const worker = vi.hoisted(() =>
   vi.fn<(input: unknown) => SkillsDiscoveryOutput | Promise<SkillsDiscoveryOutput>>(),
@@ -74,7 +77,9 @@ async function workspaces(root: string) {
 
 const temporary = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
+    await closeSkillsWatchers(true);
     vi.restoreAllMocks();
+    vi.useRealTimers();
     clearCurrentPluginMetadataSnapshot();
     clearPluginMetadataLifecycleCaches();
     await closeOpenClawStateDatabaseAsync();
@@ -83,6 +88,69 @@ const temporary = useAutoCleanupTempDirTracker((cleanup) =>
     cleanup();
   }),
 );
+
+it("refreshes every agent from admitted metadata without inventory fallback in a private scope", async () => {
+  vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+  const root = temporary.make("skills-refresh-metadata-");
+  vi.stubEnv("OPENCLAW_STATE_DIR", path.join(root, "state"));
+  vi.stubEnv("OPENCLAW_DISABLE_BUNDLED_PLUGINS", "1");
+  vi.stubEnv("OPENCLAW_BUNDLED_SKILLS_DIR", path.join(root, "bundled"));
+  pinConfigDir();
+  const pluginRoot = path.join(root, "plugin");
+  const workspaceDirs = [path.join(root, "first"), path.join(root, "second")];
+  const pluginMetadataSnapshot = createPluginMetadataSnapshotFixture({
+    plugins: [
+      { id: "fixture", origin: "config", rootDir: pluginRoot, skills: ["guide"] },
+      { id: "acpx", origin: "config", rootDir: pluginRoot, skills: ["acp"] },
+    ],
+  });
+  for (const name of ["guide", "acp"]) {
+    await writeSkill({ dir: path.join(pluginRoot, name), name, description: name });
+  }
+  for (const [index, workspaceDir] of workspaceDirs.entries()) {
+    await writeSkill({
+      dir: path.join(workspaceDir, "skills", `local-${index}`),
+      name: `local-${index}`,
+      description: `Workspace ${index}`,
+    });
+  }
+  // Only replace the thread transport; refresh and the worker execute their real owners.
+  vi.spyOn(WorkerTaskPool.prototype, "run").mockImplementation(async (input) =>
+    worker(structuredClone(input)),
+  );
+  const fallback = vi.spyOn(pluginSkills, "resolvePluginSkillRoots");
+  for (const enabled of [true, false]) {
+    const config: OpenClawConfig = {
+      agents: {
+        entries: {
+          main: { workspace: workspaceDirs[0] },
+          second: { workspace: workspaceDirs[1] },
+        },
+      },
+      plugins: { entries: { fixture: { enabled }, acpx: { enabled: true } } },
+      acp: { enabled: false },
+    };
+    const params = { config, reason: "config-change" as const, pluginMetadataSnapshot };
+    worker.mockClear();
+    await withPluginCache(createPluginCache(), () => refreshSkillsDiscovery(params));
+    expect(fallback.mock.calls.length).toBe(0);
+    expect(worker.mock.calls.length).toBe(1);
+    const result: SkillsDiscoveryOutput = await worker.mock.results[0]!.value;
+    expect(result.kind).toBe("scan");
+    if (result.kind !== "scan") {
+      throw new Error("Expected scan results");
+    }
+    expect(
+      result.results.map(({ key, sources }) =>
+        mergeSkillRecords(sources.entries, key)
+          .map(({ skill }) => skill.name)
+          .toSorted(),
+      ),
+    ).toEqual(
+      workspaceDirs.map((_, index) => [...(enabled ? ["guide"] : []), `local-${index}`].toSorted()),
+    );
+  }
+});
 
 it.each(["standalone", "gateway"])(
   "%s discovery shares plugin inventory across workspaces and follows owner publication",

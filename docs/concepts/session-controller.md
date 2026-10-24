@@ -160,13 +160,13 @@ attempt, and generation. Live permission checks run again at the final effect.
 Queue settings retain the existing debounce, cap, drop, and route-isolation
 contracts in [Command queue](/concepts/queue#queue-options).
 
-| Policy      | Contract                                                                                                                                                   |
-| ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `steer`     | Attempt injection into the captured active owner. A definite capability rejection leaves the input queued. An uncertain commitment does not permit replay. |
-| `followup`  | Keep FIFO order among waiting inputs and start a later turn after admission barriers permit it.                                                            |
-| `collect`   | Combine compatible waiting inputs after the quiet window; preserve individual custody and routing.                                                         |
-| `interrupt` | Cancel the captured active turn, prioritize the interrupting input next, and preserve older waiting inputs in relative order after it.                     |
-| heartbeat   | Drop a heartbeat while competing session work owns admission; do not create a duplicate turn.                                                              |
+| Policy      | Contract                                                                                                                                                                                                                          |
+| ----------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `steer`     | Attempt injection into the captured active owner. A definite capability rejection leaves the input queued. Disabled cross-human collaboration refuses the input without queueing. An uncertain commitment does not permit replay. |
+| `followup`  | Keep FIFO order among waiting inputs and start a later turn after admission barriers permit it.                                                                                                                                   |
+| `collect`   | Combine compatible waiting inputs after the quiet window; preserve individual custody and routing.                                                                                                                                |
+| `interrupt` | Cancel the captured active turn, prioritize the interrupting input next, and preserve older waiting inputs in relative order after it.                                                                                            |
+| heartbeat   | Drop a heartbeat while competing session work owns admission; do not create a duplicate turn.                                                                                                                                     |
 
 An interrupt reserves its priority synchronously before cancellation or any
 settlement wait can wake an older drain. Priority belongs to that exact input;
@@ -190,9 +190,19 @@ transcript commit, which can depend on later input such as a question's answer.
 A refusal retires the reservation and leaves the caller's own fallback in charge.
 A detached attempt has no turn, so nothing can steer it.
 
-Collecting or steering requires compatible sender authority, tool permissions,
-visibility, and delivery contracts. Mismatch must not let an input borrow the
-active turn's or newest sender's permissions.
+Collecting requires compatible sender authority, tool permissions, visibility,
+and delivery contracts. Same-requester steering retains its compatibility checks.
+With `messages.queue.allowCollaborativeSteering: true`, human input from the same
+conversation may steer another person's turn under that turn's unchanged identity
+and prepared permissions. The message retains its author's identity; it does not
+change the execution's requester or imply that the requester approved its content.
+This opt-in tradeoff does not broaden cross-session `sessions_send(mode="steer")`.
+
+With collaboration disabled, a cross-human steering attempt receives a runtime
+refusal and cannot later execute through queue draining, retry, or recovery.
+`/followup <message>` explicitly requests a separate execution under its submitter's
+identity and policy resolved at admission. Neither option bypasses conversation
+access, backend compatibility, cancellation, or current-owner checks.
 
 ## Stop semantics
 
@@ -264,8 +274,11 @@ Reset, delete, and manual compaction preempt through Stop with source `mutation`
 | Manual compact (`/compact`, `sessions.compact`)      | Abort only if abortable | Keep           | Keep                 |
 
 Delete retains its later lifecycle cleanup, which stops controlled subagents after
-preemption. Sharing and access mutations can allow live execution, while background
-result commits wait.
+preemption. Sharing, access, and append-only background result mutations allow
+live execution. Background results retain mutation ordering and wait for active
+write preparation, but do not wait for the running turn to settle. The transcript
+writer orders appends and checks generation and idempotency at commit; result
+custody ends after persistence and publication.
 
 A mutation closes competing admission, targets exact current owners, waits for
 real settlement, and then acquires its mutation boundary. In-band commands must
@@ -341,7 +354,7 @@ The controller and its adapters must preserve:
 5. Mutations exclude competing turns and retain write-capable work until actual settlement.
 6. All scheduling queries read the same owner; presentation and capabilities remain explicit projections.
 7. Recoverable stale state has a bounded recovery path under the stated scheduler assumptions.
-8. Queueing, batching, retries, and deferred effects never expand the original authority.
+8. Queueing, batching, retries, and deferred effects preserve the governing requester and current execution authority. New executions resolve current applicable policy at admission; collaborative input does not replace the incumbent execution's prepared permissions.
 
 Use a small independent model and run the same event traces through a real
 implementation adapter. A model tested against itself is not migration proof.

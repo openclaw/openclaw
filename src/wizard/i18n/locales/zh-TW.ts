@@ -212,6 +212,8 @@ export const zh_TW = {
       returningToSelection: "返回選擇。",
       arrayPromptSuffix: "（逗號分隔，留空則清除）",
       arrayPlaceholder: "value1, value2",
+      invalidInteger: "請輸入 JSON 整數。",
+      invalidNumber: "請輸入有效的 JSON 數字。",
       sensitiveField:
         '"{label}" 是敏感欄位。請透過以下方式設定：\n  openclaw config set plugins.entries.{plugin}.config.{field} <value>\n或使用 Web UI 設定頁。',
       sensitiveTitle: "敏感欄位",

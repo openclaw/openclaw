@@ -1,14 +1,19 @@
 import { getEventListeners } from "node:events";
+import { setImmediate as nextEventLoopTurn } from "node:timers/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { createRetainedCache } from "../infra/retained-cache.js";
+import { sessionChanges } from "../sessions/session-row-changes.js";
 import {
   createGatewaySchedulerClock,
   createTestGatewayScheduler,
 } from "../test-utils/gateway-scheduler-clock.js";
 import type { ControlUiSessionPullRequests as Snapshot } from "./control-ui-contract.js";
 import { parseControlUiSessionPullRequestsSubscribeParams as parse } from "./control-ui-session-pr-subscriptions.js";
-import { createTestControlUiSessionPrSubscriptions } from "./control-ui-session-pr-subscriptions.test-support.js";
+import {
+  createTestControlUiSessionPrSubscriptions,
+  createTestSessionPrReadSource,
+} from "./control-ui-session-pr-subscriptions.test-support.js";
 import type { ControlUiSessionPullRequestsParams as LoadParams } from "./control-ui-session-prs.js";
 
 const CHANGED_EVENT = "controlUi.sessionPullRequests.changed";
@@ -78,6 +83,41 @@ function expectSessions(
 }
 
 describe("control UI session PR subscriptions", () => {
+  it.each([
+    { facts: "category", invalidated: undefined, refresh: false },
+    { facts: undefined, invalidated: "category", refresh: false },
+    { facts: "category", invalidated: true, refresh: true },
+    { facts: "unchanged", invalidated: true, refresh: true },
+  ] as const)(
+    "refreshes=$refresh for facts=$facts, invalidated=$invalidated",
+    async ({ facts, invalidated, refresh }) => {
+      const readSource = createTestSessionPrReadSource();
+      const readCurrent = vi.fn(async () => ({
+        sessionId: "session-id",
+        params: { sessionKey: "session", agentId: "main" },
+        identity: "session",
+        readSource,
+        source: null,
+        taskReceipts: { sessions: [] },
+      }));
+      const active = start({ prepareRead: async () => readCurrent, load: async () => READY });
+      await active.replace("reader", ["session"]);
+      readCurrent.mockClear();
+      broadcastToConnIds.mockClear();
+      sessionChanges.emit({
+        sessionKey: "session",
+        facts:
+          facts === "category"
+            ? { kind: facts, sessionId: "session-id", category: "work" }
+            : facts && { kind: facts },
+        factsInvalidated: invalidated,
+      });
+      await nextEventLoopTurn();
+      expect(readCurrent.mock.calls.length > 0).toBe(refresh);
+      expect(broadcastToConnIds).not.toHaveBeenCalled();
+    },
+  );
+
   it.each([
     { cleanup: "stop", failing: true },
     { cleanup: "disconnect", failing: false },
@@ -181,6 +221,60 @@ describe("control UI session PR subscriptions", () => {
           .toSorted((left, right) => left.localeCompare(right)),
       ).toEqual(["only-a", "only-b", "shared"]);
     }
+  });
+
+  it("retains caller aliases independently within each audience", async () => {
+    const canonicalKey = "agent:main:shared";
+    const readSource = createTestSessionPrReadSource();
+    const signals = new Map<string, AbortSignal | undefined>();
+    const load = vi.fn<NonNullable<Options["load"]>>(async (_params, signal, read) => {
+      read.assertCurrent();
+      signals.set(read.target.identity, signal);
+      return { ...READY, rateLimited: read.target.identity === "private" };
+    });
+    const active = start({
+      load,
+      prepareRead: async (connId) => async () => ({
+        params: { sessionKey: canonicalKey, agentId: "main" },
+        identity: connId === "private" ? "private" : "shared",
+        readSource,
+        source: null,
+      }),
+    });
+    const aliasPublication = (connId: string, key: string, rateLimited = false) => {
+      const [event, payload, connIds] = publication(connId, key, rateLimited);
+      return [event, payload, connIds, { sessionKeys: [canonicalKey], agentId: "main" }];
+    };
+
+    await active.replace("first", ["short", canonicalKey]);
+    await active.replace("second", ["other-short"]);
+    await active.replace("private", ["short"]);
+    expect(load).toHaveBeenCalledTimes(2);
+    expect(broadcastToConnIds.mock.calls).toEqual([
+      aliasPublication("first", "short"),
+      aliasPublication("first", canonicalKey),
+      aliasPublication("second", "other-short"),
+      aliasPublication("private", "short", true),
+    ]);
+
+    const sharedLifetime = signals.get("shared");
+    const privateLifetime = signals.get("private");
+    await active.replace("private", ["renamed-short"]);
+    expect(load).toHaveBeenCalledTimes(2);
+    expect(privateLifetime?.aborted).toBe(false);
+    expect(broadcastToConnIds).toHaveBeenLastCalledWith(
+      ...aliasPublication("private", "renamed-short", true),
+    );
+    await active.replace("first", [canonicalKey]);
+    active.unsubscribe("second");
+    expect(sharedLifetime?.aborted).toBe(false);
+    broadcastToConnIds.mockClear();
+    await active.replace("first", [canonicalKey], new Set([canonicalKey]));
+    expect(broadcastToConnIds.mock.calls).toEqual([aliasPublication("first", canonicalKey)]);
+    expect(signals.get("shared")).toBe(sharedLifetime);
+    active.unsubscribe("first");
+    expect(sharedLifetime?.aborted).toBe(true);
+    expect(signals.get("private")?.aborted).toBe(false);
   });
 
   it("skips a watcher disconnected by an earlier synchronous send", async () => {

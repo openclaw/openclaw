@@ -350,10 +350,10 @@ syncBuiltinESMExports();
   );
 
   it.for([
-    ["success", ["runtime", "ai"], 4, "1", ""],
+    ["success", ["runtime", "ai", "ui"], 4, "1", ""],
     ["runtime-failure", ["runtime"], 0, "", ""],
     ["ai-failure", ["runtime", "ai"], 0, "", ""],
-    ["prebuilt", [], 4, "1", ""],
+    ["prebuilt", ["ui"], 4, "1", ""],
     ["skip", [], 4, "", "1"],
     ["custom", [], 1, "", ""],
     ["cancel", ["runtime"], 0, "", ""],
@@ -366,6 +366,16 @@ syncBuiltinESMExports();
       const receiptsPath = path.join(root, "events.jsonl");
       const pidPath = path.join(root, "builder.pid");
       const aiDeclarations = path.join(root, "ai-declarations");
+      const uiRoot = path.join(root, "control-ui");
+      const uiAssetsUrl = new URL("../../src/infra/control-ui-assets.ts", import.meta.url).href;
+      files.write(
+        "ui-assets.mjs",
+        `export * from ${JSON.stringify(`${uiAssetsUrl}?fixture-original`)};
+import { inspectControlUiRootAssets as inspect } from ${JSON.stringify(`${uiAssetsUrl}?fixture-original`)};
+export function inspectControlUiRootAssets(_root, buildId) {
+  return inspect(${JSON.stringify(uiRoot)}, buildId);
+}`,
+      );
       if (outcome === "prebuilt") {
         fs.writeFileSync(aiDeclarations, "");
       }
@@ -389,17 +399,29 @@ if (kind === "runtime" && ${JSON.stringify(outcome)} === "cancel") {
   if (kind === "ai" && !failed) {
     fs.writeFileSync(${JSON.stringify(aiDeclarations)}, "");
   }
+  if (kind === "ui" && !failed) {
+    fs.mkdirSync(${JSON.stringify(uiRoot)});
+    const buildId = process.env.OPENCLAW_CONTROL_UI_BUILD_ID ?? "fixture";
+    fs.writeFileSync(${JSON.stringify(path.join(uiRoot, "index.html"))},
+      '<html data-openclaw-control-ui-build-id="' + buildId + '-' + '0'.repeat(64) + '"></html>');
+  }
   record("end");
   process.exit(failed ? 7 : 0);
 }
 `,
       );
-      // Stub executables publish real declaration receipts; admission and joins stay real.
+      // Stub executables publish fixture artifacts; real admission and joins cannot build the checkout UI.
       files.write(
         "preload.mjs",
         `import cp from "node:child_process";
 import fs from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
+import { fixtureSourceFileFilter, registerFixtureSourceTransform } from ${JSON.stringify(new URL("./fixtures/ci-fixture-runtime.cjs", import.meta.url).href)};
+registerFixtureSourceTransform({
+  name: "direct-e2e-ui-assets",
+  filter: fixtureSourceFileFilter([${JSON.stringify(uiAssetsUrl)}]),
+  transform: () => fs.readFileSync(${JSON.stringify(files.path("ui-assets.mjs"))}, "utf8"),
+});
 const aiDist = ${JSON.stringify(path.join(repoRoot, "packages/ai/dist") + path.sep)};
 const existsSync = fs.existsSync;
 fs.existsSync = (entry) =>
@@ -410,6 +432,7 @@ const spawn = cp.spawn;
 cp.spawn = (bin, args, options) => {
   const kind = args.includes("scripts/prepare-vitest-runtime.mjs") ? "runtime"
     : args.includes("scripts/tsdown-build.mts") ? "ai"
+    : args.includes("scripts/ui.js") ? "ui"
     : args.some(arg => arg === "vitest" || arg.endsWith("/vitest.mjs")) ? "reader" : null;
   return kind ? spawn(process.execPath, [${JSON.stringify(files.path("command.mjs"))}, kind,
     args.find(arg => arg.startsWith("--shard=")) ?? "direct"], options) : spawn(bin, args, options);
@@ -481,11 +504,13 @@ syncBuiltinESMExports();
           Array.from({ length: readerCount }, () => [expectedPrebuilt, expectedSkip]),
         );
         if (outcome === "success") {
-          expect(events.slice(0, 4).map(({ kind, event }) => `${kind}:${event}`)).toEqual([
+          expect(events.slice(0, 6).map(({ kind, event }) => `${kind}:${event}`)).toEqual([
             "runtime:start",
             "runtime:end",
             "ai:start",
             "ai:end",
+            "ui:start",
+            "ui:end",
           ]);
         }
         for (const workerPid of new Set(events.map(({ pid }) => pid))) {

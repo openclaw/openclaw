@@ -8,7 +8,11 @@ import { promoteConfigSnapshotToLastKnownGood, readConfigFileSnapshot } from "..
 import { writeOpenClawConfig } from "../config/test-helpers.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { makeCronJob } from "../cron/delivery.test-helpers.js";
-import { saveCronJobsStore } from "../cron/store.js";
+import {
+  loadCronJobsStore,
+  resolveCronJobsStorePathFromConfig,
+  saveCronJobsStore,
+} from "../cron/store.js";
 import { cronStoreKey } from "../cron/store/key.js";
 import { loadCronRows } from "../cron/store/row-codec.js";
 import {
@@ -24,7 +28,10 @@ import {
   prepareDoctorContext,
   withDoctorConfigMaintenance,
 } from "./doctor-config-flow.test-support.js";
-import { withDoctorConfigPreflightHome } from "./doctor-config-preflight.test-support.js";
+import {
+  useDoctorConfigPreflightHome,
+  withDoctorConfigPreflightHome,
+} from "./doctor-config-preflight.test-support.js";
 
 function writeConfig(home: string, config: Record<string, unknown>) {
   return writeOpenClawConfig(home, {
@@ -62,7 +69,89 @@ function withHome(
     );
 }
 
+const withQueueDefaultHome = useDoctorConfigPreflightHome();
+
 afterEach(closeOpenClawStateDatabaseForTest);
+
+it.each([
+  { included: true, otherRepair: false, value: undefined },
+  { included: false, otherRepair: true, value: undefined },
+  { included: true, otherRepair: false, value: false },
+  { included: true, otherRepair: false, value: true },
+])(
+  "persists collaborative steering without overriding authored config (included=$included, other repair=$otherRepair, value=$value)",
+  async ({ included, otherRepair, value }) => {
+    await withQueueDefaultHome(async (home) => {
+      await withEnvAsync({ OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }, async () => {
+        const messages = {
+          responsePrefix: "keep-prefix",
+          ...(value === undefined ? {} : { queue: { allowCollaborativeSteering: value } }),
+        };
+        const configPath = await writeOpenClawConfig(home, {
+          agents: {
+            entries: { main: otherRepair ? { $include: "./agent.json" } : {} },
+          },
+          gateway: { mode: "local" },
+          plugins: { enabled: false },
+          ...(included ? { messages: { $include: "./messages.json" } } : {}),
+        });
+        const includePath = path.join(path.dirname(configPath), "messages.json");
+        const includeRaw = JSON.stringify(messages);
+        if (included) {
+          await fs.writeFile(includePath, includeRaw);
+        }
+        const agentPath = path.join(path.dirname(configPath), "agent.json");
+        const agentRaw = '{"sandbox":{"browser":{"enableNoVnc":true}}}';
+        if (otherRepair) {
+          await fs.writeFile(agentPath, agentRaw);
+        }
+        const before = await fs.readFile(configPath, "utf8");
+        expect(
+          (await readConfigFileSnapshot()).sourceConfig.messages?.queue?.allowCollaborativeSteering,
+        ).toBe(value);
+        await using ctx = await prepareDoctorContext(configPath);
+        expect(await fs.readFile(configPath, "utf8")).toBe(before);
+        if (included) {
+          expect(await fs.readFile(includePath, "utf8")).toBe(includeRaw);
+        }
+        // A later root-owned health repair must coexist with an included queue default.
+        if (!otherRepair) {
+          ctx.cfg = { ...ctx.cfg, gateway: { ...ctx.cfg.gateway, port: 18880 } };
+        }
+        expect(await runWriteConfigHealth(ctx, { runPostWriteRepairs: false })).toBe(true);
+        expect(ctx.configWriteRefusal).toBeUndefined();
+        const saved = await readConfigFileSnapshot();
+        expect(saved.valid).toBe(true);
+        expect(saved.sourceConfig.messages?.queue?.allowCollaborativeSteering).toBe(value ?? false);
+        expect(saved.sourceConfig.gateway?.port).toBe(otherRepair ? undefined : 18880);
+        expect(await fs.readFile(`${configPath}.bak`, "utf8")).toBe(before);
+        if (included) {
+          expect(saved.parsed).toHaveProperty("messages", { $include: "./messages.json" });
+          expect(saved.sourceConfig.messages?.responsePrefix).toBe("keep-prefix");
+          if (value === undefined) {
+            expect(await fs.readFile(`${includePath}.bak`, "utf8")).toBe(includeRaw);
+          } else {
+            expect(await fs.readFile(includePath, "utf8")).toBe(includeRaw);
+          }
+        }
+        if (otherRepair) {
+          expect(saved.parsed).toHaveProperty("agents.entries.main", {
+            $include: "./agent.json",
+          });
+          expect(saved.sourceConfig.agents?.entries?.main?.sandbox?.browser?.noVncEnabled).toBe(
+            true,
+          );
+          expect(await fs.readFile(`${agentPath}.bak`, "utf8")).toBe(agentRaw);
+        }
+        const bytes = await fs.readFile(configPath, "utf8");
+        await using repeated = await prepareDoctorContext(configPath);
+        expect(repeated.configResult.shouldWriteConfig).toBe(false);
+        await runInitialConfigWriteHealth(repeated);
+        expect(await fs.readFile(configPath, "utf8")).toBe(bytes);
+      });
+    });
+  },
+);
 
 it(
   "refuses retired config until the bridge release migrates it",
@@ -189,6 +278,7 @@ it(
       expect(await readText(`${configPath}.bak`)).toBe(original);
 
       const saved = await readJson(configPath);
+      expect(saved.messages?.queue?.allowCollaborativeSteering).toBe(false);
       expect(saved.agents).toMatchObject({ ownership: "explicit", defaults });
       expect(saved.agents.entries.ops).toEqual({
         memory: { search: entries.ops.memorySearch },
@@ -235,7 +325,7 @@ it(
       expect(saved.config.agents?.ownership).toBe("explicit");
       expect(saved.config.agents?.entries?.main?.workspace).toBe(workspace);
       expect(saved.config.agents?.defaults?.systemAgent).toEqual({ agentId: "main" });
-      expect(saved.config.agents?.defaults?.heartbeat).toEqual({ agentId: "main" });
+      expect(saved.config.agents?.defaults).not.toHaveProperty("heartbeat");
       expect(saved.config.bindings).toBeUndefined();
       expect(resolveAgentWorkspaceDir(saved.config, "main")).toBe(workspace);
       for (const name of originals) {
@@ -248,7 +338,7 @@ it(
 );
 
 it(
-  "repairs noncanonical workspace and heartbeat values through persistence",
+  "repairs workspace and migrates heartbeat cadence through persistence",
   withHome(async (home) => {
     const configPath = await writeConfig(home, {
       agents: {
@@ -264,14 +354,26 @@ it(
     expect((await readConfigFileSnapshot()).valid).toBe(false);
     await using ctx = await prepareDoctorContext(configPath);
     expect(ctx.configResult.shouldWriteConfig).toBe(true);
-    expect(ctx.cfg.agents?.entries?.ops).toEqual({ heartbeat: { every: "30m" } });
+    expect(ctx.cfg.agents?.entries?.ops).toEqual({});
     await runInitialConfigWriteHealth(ctx);
 
     const saved = await readJson(configPath);
-    expect(saved.agents.entries.ops).toEqual({ heartbeat: { every: "30m" } });
+    expect(saved.agents.entries.ops).toEqual({});
     expect(saved.agents).not.toHaveProperty("list");
     expect((await readConfigFileSnapshot()).valid).toBe(true);
+    const storePath = resolveCronJobsStorePathFromConfig(saved);
+    const migrated = await loadCronJobsStore(storePath);
+    expect(migrated.jobs).toHaveLength(1);
+    expect(migrated.jobs[0]).toMatchObject({
+      agentId: "ops",
+      enabled: true,
+      schedule: { kind: "every", everyMs: 30 * 60 * 1000 },
+      payload: { kind: "agentTurn", skipIfScratchEmpty: true },
+      idleOnly: true,
+    });
+    expect(migrated.jobs[0]?.activeHours).toBeUndefined();
     await expectSettled(configPath);
+    expect(await loadCronJobsStore(storePath)).toEqual(migrated);
   }),
 );
 

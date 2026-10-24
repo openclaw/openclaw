@@ -74,10 +74,6 @@ export type OpenClawPluginHttpRouteParams = {
   replaceExisting?: boolean;
 };
 
-export type OpenClawPluginHostedMediaResolver = (
-  mediaUrl: string,
-) => string | null | undefined | Promise<string | null | undefined>;
-
 export type WidgetPresenterContext = Readonly<{
   messageChannel?: string;
   accountId?: string;

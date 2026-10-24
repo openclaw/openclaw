@@ -8,7 +8,7 @@ import type { GatewaySessionRow } from "./session-utils.types.js";
 // Selection and presentation have separate keys: 512 slots cover 256 complete queries.
 const MAX_VIEWS = 512;
 const MAX_ESTIMATED_BYTES = 32 * 1024 * 1024;
-const SIDEBAR_ROW_HISTORY_LIMIT = 32;
+const ROW_HISTORY_LIMIT = 32;
 let retainedViews = 0;
 let retainedRefs = 0;
 let retainedBytes = 0;
@@ -63,21 +63,24 @@ export type SessionListView = {
   encodedBytes?: number;
   rows?: GatewaySessionRow[];
   rowHistory?: SessionRowGeneration[];
-  sidebar?: boolean;
+  conditional?: boolean;
   selection?: SessionEntrySelection;
   selectedAt?: number;
   activityExpiresAt?: number;
   partitions?: SelectionPartitions;
 };
 
-function hasSidebarBaseline(view: SessionListView): boolean {
-  return view.sidebar === true && (view.rows !== undefined || Boolean(view.rowHistory?.length));
+function hasRowBaseline(view: SessionListView): boolean {
+  return view.conditional === true && (view.rows !== undefined || Boolean(view.rowHistory?.length));
 }
 
 /** The publication owns admission, recency, accounting and retirement of every list view. */
 export class SessionListViewCache {
   private readonly lists = new Map<string, SessionListView>();
-  private rowEncodings = new WeakMap<GatewaySessionRow, { refs: number; bytes: number }>();
+  private rowEncodings = new WeakMap<
+    GatewaySessionRow,
+    { refs: number; bytes: number; extraBytes: number }
+  >();
   private bytes = 0;
   private refs = 0;
 
@@ -85,9 +88,9 @@ export class SessionListViewCache {
     return this.lists.values();
   }
 
-  hasSidebarBaselines() {
+  hasRowBaselines() {
     for (const view of this.lists.values()) {
-      if (hasSidebarBaseline(view)) {
+      if (hasRowBaseline(view)) {
         return true;
       }
     }
@@ -116,7 +119,7 @@ export class SessionListViewCache {
     if (view.rows && this.lists.get(view.key) === view) {
       this.releaseRowEncodings(view.rows);
     }
-    if (view.sidebar && view.rows) {
+    if (view.conditional && view.rows) {
       this.retainRows(view, view.rows);
     }
     view.rows = undefined;
@@ -127,7 +130,7 @@ export class SessionListViewCache {
   setRows(
     view: SessionListView,
     rows: GatewaySessionRow[],
-    sidebar: boolean,
+    conditional: boolean,
     sharedBytes = 0,
     extraRowEncodingBytes?: (row: GatewaySessionRow) => number,
   ) {
@@ -135,11 +138,11 @@ export class SessionListViewCache {
     if (retained && view.rows) {
       this.releaseRowEncodings(view.rows);
     }
-    if (sidebar && view.rows) {
+    view.conditional ||= conditional;
+    if (view.conditional && view.rows && view.rows !== rows) {
       this.retainRows(view, view.rows);
     }
     view.rows = rows;
-    view.sidebar = sidebar;
     view.encodedBytes =
       (retained ? this.retainRowEncodings(rows, extraRowEncodingBytes) : 0) +
       serializedJsonArrayBytes(rows) +
@@ -160,9 +163,16 @@ export class SessionListViewCache {
         this.bytes -= encoding.bytes;
         retainedBytes -= encoding.bytes;
       } else {
-        encoding = { refs: 1, bytes: sessionRowEncodingBytes(row) + (extraBytes?.(row) ?? 0) };
+        encoding = { refs: 1, bytes: sessionRowEncodingBytes(row), extraBytes: 0 };
         this.rowEncodings.set(row, encoding);
       }
+      // Fact encodings can appear when a legacy view opts in while another view
+      // retains the row. Charge their growth once for that row's shared lifetime.
+      const extra = extraBytes?.(row) ?? encoding.extraBytes;
+      const added = extra - encoding.extraBytes;
+      this.bytes += added;
+      retainedBytes += added;
+      encoding.extraBytes = extra;
       bytes += encoding.bytes;
     }
     return bytes;
@@ -173,6 +183,8 @@ export class SessionListViewCache {
       const encoding = this.rowEncodings.get(row)!;
       if (--encoding.refs === 0) {
         this.rowEncodings.delete(row);
+        this.bytes -= encoding.extraBytes;
+        retainedBytes -= encoding.extraBytes;
       } else {
         this.bytes += encoding.bytes;
         retainedBytes += encoding.bytes;
@@ -184,7 +196,7 @@ export class SessionListViewCache {
     const history = (view.rowHistory ??= []);
     history.push(captureSessionRowGeneration(rows));
     view.historyRefs += rows.length;
-    if (history.length > SIDEBAR_ROW_HISTORY_LIMIT) {
+    if (history.length > ROW_HISTORY_LIMIT) {
       view.historyRefs -= history.shift()!.ids.length;
       emitTrustedDiagnosticEvent({
         type: "sessions.list.baseline.retired",
@@ -234,7 +246,7 @@ export class SessionListViewCache {
     if (view.rows) {
       this.releaseRowEncodings(view.rows);
     }
-    if (hasSidebarBaseline(view)) {
+    if (hasRowBaseline(view)) {
       emitTrustedDiagnosticEvent({
         type: "sessions.list.baseline.retired",
         cause: "view-evicted",

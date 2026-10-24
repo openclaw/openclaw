@@ -1,10 +1,8 @@
 import type { AddressInfo } from "node:net";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { createRealtimeTranscriptionWebSocketSession } from "openclaw/plugin-sdk/realtime-transcription-session";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type WebSocket from "ws";
-import type { RawData } from "ws";
+import type { RawData, WebSocket } from "ws";
 import { WebSocketServer } from "ws";
 import { buildDeepgramRealtimeTranscriptionProvider } from "./realtime-transcription-provider-factory.js";
 
@@ -26,16 +24,12 @@ async function createDeepgramRealtimeServer(params: {
   await new Promise<void>((resolve) => {
     wss.once("listening", resolve);
   });
-  const port = (wss.address() as AddressInfo).port;
-  cleanup = async () => {
-    for (const ws of wss.clients) {
-      ws.terminate();
-    }
-    await new Promise<void>((resolve) => {
+  cleanup = () =>
+    new Promise<void>((resolve) => {
+      wss.clients.forEach((ws) => ws.terminate());
       wss.close(() => resolve());
     });
-  };
-  return { baseUrl: `http://127.0.0.1:${port}/deepgram/v1` };
+  return { baseUrl: `http://127.0.0.1:${(wss.address() as AddressInfo).port}/deepgram/v1` };
 }
 
 function sendResult(
@@ -59,12 +53,66 @@ function sendResult(
 }
 
 function parseClientMessage(data: RawData): Record<string, unknown> {
-  const bytes = Buffer.isBuffer(data)
-    ? data
-    : Array.isArray(data)
-      ? Buffer.concat(data)
+  const bytes = Array.isArray(data)
+    ? Buffer.concat(data)
+    : Buffer.isBuffer(data)
+      ? data
       : Buffer.from(data);
   return JSON.parse(bytes.toString("utf8")) as Record<string, unknown>;
+}
+
+async function createScenario(onConnection: (ws: WebSocket) => void, endpointingMs = 1000) {
+  const { baseUrl } = await createDeepgramRealtimeServer({ onConnection });
+  const callbacks = {
+    onPartial: vi.fn(),
+    onTranscript: vi.fn(),
+    onSpeechStart: vi.fn(),
+    onError: vi.fn<(error: Error) => void>(),
+  };
+  const session = provider.createSession({
+    providerConfig: { apiKey: "dummy", baseUrl, endpointingMs },
+    ...callbacks,
+  });
+  try {
+    await session.connect();
+  } catch (error) {
+    session.close();
+    throw error;
+  }
+  return {
+    ...callbacks,
+    session,
+    [Symbol.dispose]: () => session.close(),
+    waitForDelivery: () =>
+      vi.waitFor(() => {
+        expect(callbacks.onError).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({ message: "frames delivered" }),
+        );
+      }),
+  };
+}
+
+function sendDeliveryMarker(ws: WebSocket) {
+  // Observe delivery without creating another speech turn.
+  ws.send(JSON.stringify({ type: "Error", message: "frames delivered" }));
+}
+
+async function createFinalizationScenario(reply: boolean) {
+  const onFinalize = vi.fn();
+  const scenario = await createScenario((ws) => {
+    sendResult(ws, { text: "good", isFinal: true });
+    sendResult(ws, { text: "bye" });
+    ws.on("message", (data) => {
+      if (parseClientMessage(data).type !== "Finalize") {
+        return;
+      }
+      onFinalize();
+      if (reply) {
+        sendResult(ws, { text: "bye", isFinal: true, fromFinalize: true });
+      }
+    });
+  }, 10_000);
+  return { ...scenario, onFinalize };
 }
 
 describe("buildDeepgramRealtimeTranscriptionProvider", () => {
@@ -141,12 +189,8 @@ describe("buildDeepgramRealtimeTranscriptionProvider", () => {
       onRequest: (url, headers) => requests.push({ url, headers }),
     });
     const session = provider.createSession({
-      providerConfig: {
-        apiKey: "dummy",
-        baseUrl: server.baseUrl,
-      },
+      providerConfig: { apiKey: "dummy", baseUrl: server.baseUrl },
     });
-
     await session.connect();
     session.close();
 
@@ -159,156 +203,52 @@ describe("buildDeepgramRealtimeTranscriptionProvider", () => {
   });
 
   it("does not promote a rejected provisional tail on an empty speech-final result", async () => {
-    const deliveryMarker = "rejected-tail frames delivered";
-    const server = await createDeepgramRealtimeServer({
-      onConnection: (ws) => {
-        sendResult(ws, { text: "delete everything" });
-        sendResult(ws, { text: "", isFinal: true, speechFinal: true });
-        ws.send(JSON.stringify({ type: "SpeechStarted" }));
-        // An error marker observes delivery without creating another speech turn.
-        ws.send(JSON.stringify({ type: "Error", message: deliveryMarker }));
-      },
+    using scenario = await createScenario((ws) => {
+      sendResult(ws, { text: "delete everything" });
+      sendResult(ws, { text: "", isFinal: true, speechFinal: true });
+      ws.send(JSON.stringify({ type: "SpeechStarted" }));
+      sendDeliveryMarker(ws);
     });
-    const onPartial = vi.fn();
-    const onSpeechStart = vi.fn();
-    const framesDelivered = createDeferred<void>();
-    const onError = vi.fn((error: Error) => {
-      if (error.message === deliveryMarker) {
-        framesDelivered.resolve();
-      }
-    });
-    const onTranscript = vi.fn();
-    const session = provider.createSession({
-      providerConfig: { apiKey: "dummy", baseUrl: server.baseUrl, endpointingMs: 1000 },
-      onPartial,
-      onError,
-      onSpeechStart,
-      onTranscript,
-    });
-
-    try {
-      await session.connect();
-      await vi.waitFor(() => framesDelivered.promise);
-      expect(onError).toHaveBeenCalledExactlyOnceWith(
-        expect.objectContaining({ message: deliveryMarker }),
-      );
-      expect(onSpeechStart).toHaveBeenCalledTimes(2);
-    } finally {
-      session.close();
-    }
+    const { session, onPartial, onSpeechStart, onTranscript } = scenario;
+    await scenario.waitForDelivery();
+    expect(onSpeechStart).toHaveBeenCalledTimes(2);
+    session.close();
 
     expect(onPartial).toHaveBeenCalledWith("delete everything");
     expect(onTranscript).not.toHaveBeenCalled();
   });
 
   it("preserves identical transcripts from consecutive utterances", async () => {
-    const deliveryMarker = "consecutive-utterance frames delivered";
-    const server = await createDeepgramRealtimeServer({
-      onConnection: (ws) => {
-        sendResult(ws, { text: "yes", isFinal: true, speechFinal: true });
-        sendResult(ws, { text: "yes", isFinal: true, speechFinal: true });
-        ws.send(JSON.stringify({ type: "Error", message: deliveryMarker }));
-      },
+    using scenario = await createScenario((ws) => {
+      sendResult(ws, { text: "yes", isFinal: true, speechFinal: true });
+      sendResult(ws, { text: "yes", isFinal: true, speechFinal: true });
+      sendDeliveryMarker(ws);
     });
-    const onTranscript = vi.fn();
-    const framesDelivered = createDeferred<void>();
-    const onError = vi.fn((error: Error) => {
-      if (error.message === deliveryMarker) {
-        framesDelivered.resolve();
-      }
-    });
-    const session = provider.createSession({
-      providerConfig: { apiKey: "dummy", baseUrl: server.baseUrl, endpointingMs: 1000 },
-      onTranscript,
-      onError,
-    });
-
-    try {
-      await session.connect();
-      await vi.waitFor(() => framesDelivered.promise);
-      expect(onError).toHaveBeenCalledExactlyOnceWith(
-        expect.objectContaining({ message: deliveryMarker }),
-      );
-      expect(onTranscript).toHaveBeenCalledTimes(2);
-    } finally {
-      session.close();
-    }
-
-    expect(onTranscript.mock.calls).toEqual([["yes"], ["yes"]]);
+    await scenario.waitForDelivery();
+    scenario.session.close();
+    expect(scenario.onTranscript.mock.calls).toEqual([["yes"], ["yes"]]);
   });
 
   it("flushes finalized text returned after a client finalize request", async () => {
-    const server = await createDeepgramRealtimeServer({
-      onConnection: (ws) => {
-        sendResult(ws, { text: "good", isFinal: true });
-        sendResult(ws, { text: "bye" });
-        ws.on("message", (data) => {
-          if (parseClientMessage(data).type === "Finalize") {
-            sendResult(ws, {
-              text: "bye",
-              isFinal: true,
-              fromFinalize: true,
-            });
-          }
-        });
-      },
-    });
-    const transcriptReceived = createDeferred<string>();
-    const onTranscript = vi.fn(transcriptReceived.resolve);
-    const session = provider.createSession({
-      providerConfig: { apiKey: "dummy", baseUrl: server.baseUrl, endpointingMs: 10_000 },
-      onTranscript,
-    });
-
-    try {
-      await session.connect();
-      session.close();
-      await vi.waitFor(() => transcriptReceived.promise);
-      expect(onTranscript).toHaveBeenCalledWith("good bye");
-      expect(onTranscript).toHaveBeenCalledTimes(1);
-    } finally {
-      session.close();
-    }
+    using scenario = await createFinalizationScenario(true);
+    const { session, onTranscript } = scenario;
+    session.close();
+    await vi.waitFor(() => expect(onTranscript).toHaveBeenCalledExactlyOnceWith("good bye"));
   });
 
   it("flushes finalized text once when finalize produces no result", async () => {
-    let finalizeRequests = 0;
-    const server = await createDeepgramRealtimeServer({
-      onConnection: (ws) => {
-        sendResult(ws, { text: "good", isFinal: true });
-        sendResult(ws, { text: "bye" });
-        ws.on("message", (data) => {
-          if (parseClientMessage(data).type === "Finalize") {
-            finalizeRequests += 1;
-          }
-        });
-      },
-    });
-    const partialReceived = createDeferred<void>();
-    const onPartial = vi.fn((text: string) => {
-      if (text === "good bye") {
-        partialReceived.resolve();
-      }
-    });
-    const onTranscript = vi.fn();
-    const session = provider.createSession({
-      providerConfig: { apiKey: "dummy", baseUrl: server.baseUrl, endpointingMs: 10_000 },
-      onPartial,
-      onTranscript,
-    });
+    using scenario = await createFinalizationScenario(false);
+    const { session, onPartial, onTranscript } = scenario;
 
     try {
-      await session.connect();
-      await vi.waitFor(() => partialReceived.promise);
-      expect(onPartial).toHaveBeenCalledWith("good bye");
+      await vi.waitFor(() => expect(onPartial).toHaveBeenCalledWith("good bye"));
       vi.useFakeTimers();
       session.close();
       session.close();
       await vi.advanceTimersByTimeAsync(5_000);
 
-      expect(finalizeRequests).toBe(1);
-      expect(onTranscript).toHaveBeenCalledTimes(1);
-      expect(onTranscript).toHaveBeenCalledWith("good");
+      expect(scenario.onFinalize).toHaveBeenCalledTimes(1);
+      expect(onTranscript).toHaveBeenCalledExactlyOnceWith("good");
     } finally {
       if (vi.isFakeTimers()) {
         session.close();
@@ -322,30 +262,14 @@ describe("buildDeepgramRealtimeTranscriptionProvider", () => {
   });
 
   it("does not commit a turn on an utterance-end gap before speech-final", async () => {
-    const server = await createDeepgramRealtimeServer({
-      onConnection: (ws) => {
-        sendResult(ws, { text: "still", isFinal: true });
-        ws.send(JSON.stringify({ type: "UtteranceEnd" }));
-        sendResult(ws, { text: "speaking", isFinal: true, speechFinal: true });
-      },
-    });
-    const onPartial = vi.fn();
-    const transcriptReceived = createDeferred<string>();
-    const onTranscript = vi.fn(transcriptReceived.resolve);
-    const session = provider.createSession({
-      providerConfig: { apiKey: "dummy", baseUrl: server.baseUrl, endpointingMs: 25 },
-      onPartial,
-      onTranscript,
-    });
-
-    try {
-      await session.connect();
-      await vi.waitFor(() => transcriptReceived.promise);
-      expect(onTranscript).toHaveBeenCalledWith("still speaking");
-    } finally {
-      session.close();
-    }
-
+    using scenario = await createScenario((ws) => {
+      sendResult(ws, { text: "still", isFinal: true });
+      ws.send(JSON.stringify({ type: "UtteranceEnd" }));
+      sendResult(ws, { text: "speaking", isFinal: true, speechFinal: true });
+    }, 25);
+    const { session, onPartial, onTranscript } = scenario;
+    await vi.waitFor(() => expect(onTranscript).toHaveBeenCalledWith("still speaking"));
+    session.close();
     expect(onPartial).toHaveBeenCalledWith("still");
     expect(onTranscript).toHaveBeenCalledTimes(1);
   });
@@ -353,25 +277,14 @@ describe("buildDeepgramRealtimeTranscriptionProvider", () => {
   it("does not infer silence from a gap between provisional results", async () => {
     vi.useFakeTimers();
     let socket: WebSocket | undefined;
-    const server = await createDeepgramRealtimeServer({
-      onConnection: (ws) => {
-        socket = ws;
-        sendResult(ws, { text: "still speaking" });
-      },
-    });
-    const onPartial = vi.fn();
-    const onTranscript = vi.fn();
-    const session = provider.createSession({
-      providerConfig: { apiKey: "dummy", baseUrl: server.baseUrl, endpointingMs: 25 },
-      onPartial,
-      onTranscript,
-    });
-
-    await session.connect();
+    using scenario = await createScenario((ws) => {
+      socket = ws;
+      sendResult(ws, { text: "still speaking" });
+    }, 25);
+    const { session, onPartial, onTranscript } = scenario;
     await vi.waitFor(() => expect(onPartial).toHaveBeenCalledWith("still speaking"));
     await vi.advanceTimersByTimeAsync(350);
     expect(onTranscript).not.toHaveBeenCalled();
-
     sendResult(socket!, { text: "continuous speech", isFinal: true, speechFinal: true });
     await vi.waitFor(() => expect(onTranscript).toHaveBeenCalledWith("continuous speech"));
     session.close();
@@ -388,24 +301,16 @@ describe("buildDeepgramRealtimeTranscriptionProvider", () => {
   ])("$name when the provider reconnects", async ({ isFinal, expected }) => {
     vi.useFakeTimers();
     let connectionCount = 0;
-    const server = await createDeepgramRealtimeServer({
-      onConnection: (ws) => {
-        connectionCount += 1;
-        if (connectionCount === 1) {
-          sendResult(ws, { text: "old", isFinal });
-          ws.close();
-          return;
-        }
-        sendResult(ws, { text: "new", isFinal: true, speechFinal: true });
-      },
-    });
-    const onTranscript = vi.fn();
-    const session = provider.createSession({
-      providerConfig: { apiKey: "dummy", baseUrl: server.baseUrl, endpointingMs: 10_000 },
-      onTranscript,
-    });
-
-    await session.connect();
+    using scenario = await createScenario((ws) => {
+      connectionCount += 1;
+      if (connectionCount === 1) {
+        sendResult(ws, { text: "old", isFinal });
+        ws.close();
+        return;
+      }
+      sendResult(ws, { text: "new", isFinal: true, speechFinal: true });
+    }, 10_000);
+    const { session, onTranscript } = scenario;
     // Observe the real socket close before advancing the provider's retry delay.
     await vi.waitFor(() => expect(session.isConnected()).toBe(false));
     await vi.advanceTimersByTimeAsync(1000);
@@ -413,35 +318,22 @@ describe("buildDeepgramRealtimeTranscriptionProvider", () => {
       timeout: 3000,
     });
     session.close();
-
     expect(onTranscript.mock.calls).toEqual(expected);
   });
 
   it("terminates instead of retaining an oversized utterance", async () => {
-    const server = await createDeepgramRealtimeServer({
-      onConnection: (ws) => {
-        sendResult(ws, { text: "x".repeat(256 * 1024), isFinal: true });
-        sendResult(ws, { text: "y" });
-      },
+    using scenario = await createScenario((ws) => {
+      sendResult(ws, { text: "x".repeat(256 * 1024), isFinal: true });
+      sendResult(ws, { text: "y" });
     });
-    const errorReceived = createDeferred<Error>();
-    const onError = vi.fn(errorReceived.resolve);
-    const session = provider.createSession({
-      providerConfig: { apiKey: "dummy", baseUrl: server.baseUrl, endpointingMs: 1000 },
-      onError,
-    });
-
-    try {
-      await session.connect();
-      await vi.waitFor(() => errorReceived.promise);
+    const { session, onError } = scenario;
+    await vi.waitFor(() =>
       expect(onError).toHaveBeenCalledWith(
         expect.objectContaining({
           message: expect.stringContaining("retained transcript exceeded"),
         }),
-      );
-      expect(session.isConnected()).toBe(false);
-    } finally {
-      session.close();
-    }
+      ),
+    );
+    expect(session.isConnected()).toBe(false);
   });
 });

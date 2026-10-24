@@ -222,7 +222,7 @@ export async function prepareCodexAttemptTurnRequest(
       }
       resourceState.releaseInferenceContext?.();
       const inferenceThread = resourceState.thread;
-      const registration = inferenceRoute.context.register({
+      const registration = await inferenceRoute.context.register({
         threadId: resourceState.thread.threadId,
         text: joinPresentSections(
           usesSupervisionConnection
@@ -302,7 +302,8 @@ export async function prepareCodexAttemptTurnRequest(
         await turnClient.request("turn/start", turnStartParams, {
           timeoutMs: params.timeoutMs,
           signal: runAbortController.signal,
-          withCurrent: connection.withCurrent,
+          withCurrent: (write) =>
+            runtime.nativeExecutionPolicy.admit(write, connection.withCurrent),
           assertCurrent: () => {
             assertTurnCurrent();
             runtime.nativeExecutionPolicy.source?.();

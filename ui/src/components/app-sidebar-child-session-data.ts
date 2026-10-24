@@ -396,14 +396,15 @@ export function applySidebarChildSessionSnapshot(
 
 export function finishSidebarChildSessionLoad(
   owner: Parameters<typeof retireStaleChildSessionRows>[0],
-  retireQuery: (parentKey: string) => void,
+  queries: Map<string, SidebarChildSessionQuery>,
   parentKey: string,
 ): void {
   if (owner.childSessionErrorsByParent.has(parentKey)) {
     const loaded = new Set(owner.loadedChildSessionKeys);
     loaded.delete(parentKey);
     owner.loadedChildSessionKeys = loaded;
-    retireQuery(parentKey);
+    queries.get(parentKey)?.observation?.dispose();
+    queries.delete(parentKey);
   }
   const next = new Set(owner.loadingChildSessionKeys);
   next.delete(parentKey);
@@ -440,7 +441,16 @@ export function retireStaleChildSessionRows(
   },
   sessionKey: string | null,
   revalidating: ReadonlySet<string>,
+  queries: Map<string, SidebarChildSessionQuery>,
+  finishLoad: (parentKey: string) => void,
 ): void {
+  for (const [key, query] of queries) {
+    if (!revalidating.has(key) && !query.refresh && !query.hydration) {
+      query.observation?.dispose();
+      queries.delete(key);
+      finishLoad(key);
+    }
+  }
   const lineage = preserveActiveSessionLineageRows(sessionKey, owner.childSessionRowsByParent);
   const next = { ...owner.childSessionRowsByParent };
   let changed = false;
@@ -468,6 +478,23 @@ export function retireStaleChildSessionRows(
     owner.childSessionRowsByParent = next;
     owner.requestSessionDataUpdate();
   }
+}
+
+export function retrySidebarChildSessions(
+  owner: Parameters<typeof retireStaleChildSessionRows>[0] & {
+    loadChildSessions(parentKey: string, retry: boolean): Promise<void>;
+  },
+  finishLoad: (parentKey: string) => void,
+  sessionKey: string,
+): void {
+  const retry = owner.childSessionErrorsByParent.has(sessionKey);
+  if (retry) {
+    finishLoad(sessionKey);
+    const errors = new Map(owner.childSessionErrorsByParent);
+    errors.delete(sessionKey);
+    owner.childSessionErrorsByParent = errors;
+  }
+  void owner.loadChildSessions(sessionKey, retry);
 }
 
 type SessionLineageOwner = {

@@ -14,7 +14,7 @@ import { registerAgentWorkspaceAccess } from "../agents/workspace-access.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getMemoryEmbeddingProvider } from "../plugins/memory-embedding-provider-runtime.js";
 import { PluginInstanceUnavailableError } from "../plugins/plugin-instance-error.js";
-import { getPluginInstance, getPluginOriginalValue } from "../plugins/plugin-instance-scope.js";
+import { getPluginInstance } from "../plugins/plugin-instance-scope.js";
 import type {
   MemoryPluginRuntime,
   RegisteredMemorySearchManager,
@@ -413,23 +413,6 @@ export async function verifyGatewayMemoryWatcherRestart(
       providerState === "pending" ? [] : [providerState === "separate-registry" ? 0 : 1],
     );
     embeddings.length = 0;
-    const instance = getPluginInstance(fixture.previousRegistry.plugins[1]!);
-    assert(instance);
-    const original = getPluginOriginalValue(first, instance) ?? first;
-    const prototype = Object.getPrototypeOf(original) as RegisteredMemorySearchManager;
-    const sync = prototype.sync;
-    assert(sync);
-    const indexed = createDeferredCore<number | undefined>();
-    const observer = vi.spyOn(prototype, "sync").mockImplementation(function (
-      this: RegisteredMemorySearchManager,
-      params,
-    ) {
-      const work = sync.call(this, params);
-      if (params?.reason === "watch") {
-        indexed.resolve(work.then(() => this.status().chunks));
-      }
-      return work;
-    });
     reloading = fixture
       .reload(config, [recovery?.owner === "replaced" ? "sibling" : "first"])
       .catch((error: unknown) => error);
@@ -501,9 +484,20 @@ export async function verifyGatewayMemoryWatcherRestart(
     for (const subscription of subscriptions.slice(0, -1)) {
       subscription.notify();
     }
-    expect(observer).not.toHaveBeenCalled();
+    const currentInstance = getPluginInstance(fixture.registryOwner.registry.plugins[1]!);
+    assert(currentInstance);
+    await currentInstance.waitForRetainedWork(signal, {
+      includeConsumers: false,
+      includeCalls: true,
+    });
+    expect(managers.at(-1)!.status().chunks).toBe(0);
+    expect(embeddings).toEqual([]);
     subscriptions.at(-1)!.notify();
-    expect(await withinTest(indexed.promise, signal)).toBeGreaterThan(0);
+    await currentInstance.waitForRetainedWork(signal, {
+      includeConsumers: false,
+      includeCalls: true,
+    });
+    expect(managers.at(-1)!.status().chunks).toBeGreaterThan(0);
     expect(embeddings).toEqual([generation]);
   } finally {
     releaseStartup.resolve();

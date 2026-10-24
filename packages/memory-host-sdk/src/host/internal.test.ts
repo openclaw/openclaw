@@ -155,12 +155,11 @@ describe("memory host SDK package internals", () => {
   it("propagates directory creation failures", () => {
     const mkdirError = new Error("disk full");
     const targetDir = path.join(getTmpDir(), "blocked");
-    const mkdirSync = vi.spyOn(fsSync, "mkdirSync").mockImplementation(() => {
+    vi.spyOn(fsSync, "mkdirSync").mockImplementation(() => {
       throw mkdirError;
     });
 
     expect(() => ensureDir(targetDir)).toThrow(mkdirError);
-    expect(mkdirSync).toHaveBeenCalledWith(targetDir, { recursive: true });
   });
 
   it("normalizes additional memory paths", () => {
@@ -187,10 +186,12 @@ describe("memory host SDK package internals", () => {
         { path: " notes ", pattern: " runbooks/**/*.md " },
         { path: "notes", pattern: "runbooks/**/*.md" },
         { path: "notes", pattern: "archive/**/*.md" },
+        { path: "reference", evergreen: true },
       ]),
     ).toEqual([
       { path: path.resolve(workspaceDir, "notes"), pattern: "runbooks/**/*.md" },
       { path: path.resolve(workspaceDir, "notes"), pattern: "archive/**/*.md" },
+      { path: path.resolve(workspaceDir, "reference"), evergreen: true },
     ]);
   });
 

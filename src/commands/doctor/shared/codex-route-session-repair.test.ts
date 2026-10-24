@@ -1,5 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { contextBudgetStatusFixture } from "../../../config/sessions/context-budget.test-support.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import { legacyCodexProviderIdentityKey } from "./codex-route-model-ref.js";
@@ -67,6 +67,7 @@ describe("repairCodexSessionStoreRoutes", () => {
       ] as const,
     },
   ])("repairs $name while preserving selected auth accounts", ({ entry, expected, removed }) => {
+    using _ = vi.spyOn(Date, "now").mockReturnValue(123);
     const store: Record<string, SessionEntry> = {
       main: entry,
       other: { sessionId: "s2", updatedAt: 2, agentHarnessId: "codex" },
@@ -74,7 +75,6 @@ describe("repairCodexSessionStoreRoutes", () => {
     expect(
       repairCodexSessionStoreRoutes({
         store,
-        now: 123,
         authProfileIdMap: new Map([["openai-codex:default", "openai:chatgpt-default"]]),
       }),
     ).toEqual(["main"]);
@@ -113,7 +113,6 @@ describe("repairCodexSessionStoreRoutes", () => {
 
     const result = repairCodexSessionStoreRoutes({
       store,
-      now: 123,
       blockedModelIdentities: new Set([blockedNamespace]),
     });
 
@@ -151,7 +150,6 @@ describe("repairCodexSessionStoreRoutes", () => {
 
     const result = repairCodexSessionStoreRoutes({
       store,
-      now: 123,
       blockedModelIdentities: new Set([blockedIdentity]),
     });
 
@@ -160,6 +158,7 @@ describe("repairCodexSessionStoreRoutes", () => {
   });
 
   it("skips valid locked agent-harness rows while repairing ordinary legacy routes", () => {
+    using _ = vi.spyOn(Date, "now").mockReturnValue(123);
     const supervisedKey = "agent:main:harness:codex:supervision:abc123";
     const ordinaryLockedKey = "agent:main:ordinary-locked";
     const lockedEntry = session({
@@ -191,7 +190,7 @@ describe("repairCodexSessionStoreRoutes", () => {
     const supervised = structuredClone(store[supervisedKey]);
     const ordinaryLocked = structuredClone(store[ordinaryLockedKey]);
 
-    const result = repairCodexSessionStoreRoutes({ store, now: 123 });
+    const result = repairCodexSessionStoreRoutes({ store });
 
     expect(result).toEqual(["ordinary"]);
     expect(store[supervisedKey]).toEqual(supervised);

@@ -6,7 +6,16 @@ export function compareFormatResults(
   oxfmt: { status: number | null; stdout: string },
   bun: { status: number | null; stdout: string },
 ) {
-  const files = (output: string) => output.trim().split(/\r?\n/u).filter(Boolean).toSorted();
+  const files = (output: string) =>
+    output
+      .trim()
+      .split(/\r?\n/u)
+      // An empty selection emits timing metadata even with --list-different.
+      .filter(
+        (line) =>
+          line && !/^Finished in \d+(?:\.\d+)?(?:ms|s) on 0 files using \d+ threads\.$/u.test(line),
+      )
+      .toSorted();
   return (
     oxfmt.status === bun.status &&
     JSON.stringify(files(oxfmt.stdout)) === JSON.stringify(files(bun.stdout))

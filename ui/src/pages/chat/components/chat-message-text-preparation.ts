@@ -4,6 +4,7 @@ import {
   toSanitizedMarkdownHtml,
   toStreamingMarkdownParts,
 } from "../../../components/markdown.ts";
+import type { LinkFaviconFetcher } from "../link-favicon-cache.ts";
 
 export type DuplicateSuffix = {
   count: number;
@@ -14,6 +15,7 @@ export type MessageTextOptions = {
   role: string;
   isStreaming: boolean;
   isForwarded?: boolean;
+  fetchLinkFavicon?: LinkFaviconFetcher;
   isUserMessageExpanded?: (messageId: string) => boolean;
   onToggleUserMessageExpanded?: (messageId: string) => void;
   assistantMessageDisclosure?: AssistantMessageDisclosure;
@@ -48,23 +50,19 @@ export function prepareMessageMarkdown(
     : partitionMarkdownHtml(toSanitizedMarkdownHtml(source, options), messageKey);
   if (duplicateSuffix) {
     const terminalPart = parts[1].trim() ? 1 : 0;
-    parts[terminalPart] = appendDuplicateSuffix(parts[terminalPart], duplicateSuffix);
+    const template = document.createElement("template");
+    template.innerHTML = parts[terminalPart];
+    const terminalBlock = template.content.lastElementChild;
+    const target = terminalBlock ? duplicateSuffixTextOwner(terminalBlock) : null;
+
+    const badge = document.createElement("span");
+    badge.className = "chat-duplicate-count";
+    badge.setAttribute("aria-label", duplicateSuffix.label);
+    badge.textContent = `×${duplicateSuffix.count}`;
+    (target ?? template.content).append(document.createTextNode("\u00a0"), badge);
+    parts[terminalPart] = template.innerHTML;
   }
   return { messageKey, source, parts, recoverFullMessage };
-}
-
-function appendDuplicateSuffix(rendered: string, suffix: DuplicateSuffix): string {
-  const template = document.createElement("template");
-  template.innerHTML = rendered;
-  const terminalBlock = template.content.lastElementChild;
-  const target = terminalBlock ? duplicateSuffixTextOwner(terminalBlock) : null;
-
-  const badge = document.createElement("span");
-  badge.className = "chat-duplicate-count";
-  badge.setAttribute("aria-label", suffix.label);
-  badge.textContent = `×${suffix.count}`;
-  (target ?? template.content).append(document.createTextNode("\u00a0"), badge);
-  return template.innerHTML;
 }
 
 function duplicateSuffixTextOwner(block: Element): Element | null {

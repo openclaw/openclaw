@@ -224,6 +224,35 @@ it("waits for uninstall confirmation and sends nothing when cancelled", async ()
   expect(calls).toContainEqual(["plugins.list", {}]);
 });
 
+it.each([false, true])(
+  "presents the requested enabled state and restores it after rejection (enabled=%s)",
+  async (enabled) => {
+    const pending = deferred<PluginMutationResult>();
+    const plugin = createPlugin({ enabled, state: enabled ? "enabled" : "disabled" });
+    const { client, request } = scriptedClient({
+      "plugins.setEnabled": () => pending.promise,
+      "plugins.list": () => createResult(plugin),
+    });
+    const { page } = await mountInventory(client, createResult(plugin));
+    const label = `${enabled ? "Disable" : "Enable"} Workboard`;
+    await clickPluginAction(page, label);
+    const action = () => page.querySelector<HTMLButtonElement>(`[aria-label="${label}"]`)!;
+    await waitForSolid(() => {
+      expect(action().disabled).toBe(true);
+      expect(action().getAttribute("aria-busy")).toBe("true");
+      expect(action().classList.contains("primary")).toBe(enabled);
+    });
+    action().click();
+    expect(methodCalls(request, "plugins.setEnabled")).toHaveLength(1);
+    pending.reject(new GatewayRequestError({ code: "UNAVAILABLE", message: "Change refused." }));
+    await waitForSolid(() => {
+      expect(page.textContent).toContain("Change refused.");
+      expect(action().disabled).toBe(false);
+      expect(action().classList.contains("primary")).toBe(!enabled);
+    });
+  },
+);
+
 it("keeps newer notices when an older uninstall completes", async () => {
   const uninstallResult = deferred<unknown>();
   const enabledPlugin = createPlugin({ enabled: true, state: "enabled" });
@@ -323,6 +352,44 @@ it("reports rejected artifacts without another confirmation", async () => {
   );
   expect(methodCalls(request, "plugins.install")).toHaveLength(1);
   expect(request.mock.calls.some(([method]) => method === "plugins.inspect")).toBe(false);
+});
+
+it("shows inspection failures and can close a held consent retry without approving", async () => {
+  const first = deferred<ReturnType<typeof createInspectResult>>();
+  const retry = deferred<ReturnType<typeof createInspectResult>>();
+  let pending = first.promise;
+  let inspections = 0;
+  const { client, request } = scriptedClient({
+    "plugins.inspect": () => (++inspections === 1 ? createInspectResult() : pending),
+    "plugins.setEnabled": () => {
+      throw consentError("review-required");
+    },
+  });
+  const { page } = await mountInventory(client);
+  await clickPluginAction(page, "Enable Workboard");
+  const dialog = () => page.querySelector('[data-plugin-consent="enable"]');
+  await waitForSolid(() => {
+    expect(dialog()?.querySelector('[role="status"]')).not.toBeNull();
+    expect(consentAction(page)?.disabled).toBe(true);
+  });
+  first.reject(new Error("Synthetic inspection unavailable"));
+  await waitForSolid(() =>
+    expect(dialog()?.querySelector('[role="alert"]')?.textContent).toContain(
+      "Synthetic inspection unavailable",
+    ),
+  );
+  pending = retry.promise;
+  dialog()?.querySelector<HTMLButtonElement>('[role="alert"] button')?.click();
+  await waitForSolid(() => {
+    expect(inspections).toBe(3);
+    expect(dialog()?.querySelector('[role="status"]')).not.toBeNull();
+  });
+  dialog()?.querySelector<HTMLButtonElement>("openclaw-modal-actions button")?.click();
+  await waitForSolid(() => expect(dialog()).toBeNull());
+  retry.resolve(createInspectResult());
+  await settlePlugins();
+  expect(dialog()).toBeNull();
+  expect(methodCalls(request, "plugins.setEnabled")).toHaveLength(1);
 });
 
 it("requires fresh inspection and acknowledgement when a reviewed capability surface changes", async () => {
@@ -575,6 +642,10 @@ it("retains a failed uninstall, resumes inspection, and allows retry", async () 
   await clickPluginAction(page, "Uninstall Calendar");
   await waitForSolid(() =>
     expect(request).toHaveBeenCalledWith("plugins.uninstall", { pluginId: plugin.id }),
+  );
+  expect(page.textContent).toContain("Existing plugin");
+  expect(page.querySelector<HTMLButtonElement>('[aria-label="Uninstall Calendar"]')?.disabled).toBe(
+    true,
   );
   expect(inspectionReads).toBe(1);
   removing.reject(
@@ -835,7 +906,97 @@ it("requires a fresh install-policy review after reconnect", async () => {
   expect(installCalls).toBe(1);
   await clickPluginAction(page, "Install");
   await waitForSolid(() => expect(installCalls).toBe(2));
+  await waitForSolid(() => {
+    const continueButton = [...page.querySelectorAll<HTMLButtonElement>("button")].find(
+      (button) => button.textContent?.trim() === "Continue installation",
+    );
+    expect(continueButton?.disabled).toBe(false);
+  });
   await clickPluginAction(page, "Continue installation");
   await waitForSolid(() => expect(installCalls).toBe(3));
   expect(showConfirmDialog).not.toHaveBeenCalled();
 });
+
+it.each(["settled", "navigated"] as const)(
+  "restores removed-plugin focus for a %s catalog read",
+  async (outcome) => {
+    const plugin = createPlugin({
+      id: "calendar",
+      name: "Calendar",
+      origin: "official",
+      removable: true,
+      catalogId: "catalog-calendar",
+    });
+    const available = {
+      ...plugin,
+      installed: false,
+      enabled: false,
+      state: "not-installed" as const,
+    };
+    const catalog = createDiscoveryDetail(plugin);
+    catalog.plugin.id = "catalog-calendar";
+    const refreshed = createDiscoveryDetail(available);
+    refreshed.plugin.id = catalog.plugin.id;
+    const other = createPlugin({ id: "other", name: "Other", installed: false });
+    const otherCatalog = createDiscoveryDetail(other);
+    otherCatalog.plugin.id = "catalog-other";
+    const pending = deferred<unknown>();
+    let removed = false;
+    const { client, request } = scriptedClient({
+      // SAFETY: the catalog loader passes its validated request shape to this test client.
+      "plugins.catalog.get": (params) =>
+        (params as { id: string }).id === otherCatalog.plugin.id
+          ? otherCatalog
+          : removed
+            ? pending.promise
+            : catalog,
+      "plugins.inspect": () => createInspectResult({ plugin }),
+      "plugins.uninstall": () => {
+        removed = true;
+        return { ok: true, pluginId: plugin.id, removed: ["install record"] };
+      },
+      "plugins.list": () => createResult(removed ? available : plugin),
+    });
+    const harness = createGateway(client);
+    const { page } = await mountPage(
+      createContext(harness.gateway),
+      createPluginsRouteData(
+        harness.gateway,
+        createResult(plugin),
+        createPluginsRouteLocation(pathForPluginCatalogEntry(catalog.plugin.id)),
+      ),
+    );
+    await waitForSolid(() =>
+      expect(page.querySelector('[aria-label="Uninstall Calendar"]')).not.toBeNull(),
+    );
+    // SAFETY: waitForSolid above established the control exists before focus is exercised.
+    const trigger = page.querySelector<HTMLButtonElement>('[aria-label="Uninstall Calendar"]')!;
+    const readsBefore = methodCalls(request, "plugins.catalog.get").length;
+    trigger.focus();
+    await clickPluginAction(page, "Uninstall Calendar");
+    await waitForSolid(() =>
+      expect(methodCalls(request, "plugins.catalog.get")).toHaveLength(readsBefore + 1),
+    );
+    if (outcome === "navigated") {
+      page.routeData = createPluginsRouteData(
+        harness.gateway,
+        createResult(other),
+        createPluginsRouteLocation(pathForPluginCatalogEntry(otherCatalog.plugin.id)),
+      );
+      await waitForSolid(() => expect(page.querySelector("h1")?.textContent).toBe("Other"));
+      pending.reject(new Error("Retired detail"));
+      await settlePlugins();
+      expect(document.activeElement).toBe(document.body);
+      expect(page.textContent).not.toContain("Retired detail");
+    } else {
+      pending.resolve(refreshed);
+      await waitForSolid(() => {
+        const title = page.querySelector("h1");
+        expect(title?.textContent).toBe("Calendar");
+        expect(document.activeElement).toBe(title);
+      });
+      expect(methodCalls(request, "plugins.catalog.get")).toHaveLength(readsBefore + 1);
+    }
+    expect(page.querySelector('[aria-label="Uninstall Calendar"]')).toBeNull();
+  },
+);

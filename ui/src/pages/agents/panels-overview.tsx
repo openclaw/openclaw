@@ -1,34 +1,23 @@
-import {
-  createEffect,
-  createMemo,
-  createSignal,
-  createUniqueId,
-  For,
-  onCleanup,
-  onSettled,
-  Show,
-} from "solid-js";
+import { createMemo, createUniqueId, Errored, For, Loading, onSettled, Show } from "solid-js";
 import { normalizeAgentModelRefForConfig } from "../../../../src/config/model-input.js";
 import type {
   AgentIdentityResult,
   AgentsFilesListResult,
   AgentsListResult,
-  ModelCatalogEntry,
-  ModelCatalogResult,
 } from "../../api/types.ts";
-import type { ApplicationConfigCapability } from "../../app/config.ts";
 import { AgentEmojiPicker } from "../../components/agent-emoji-picker.tsx";
-import type { DecisionModelEntry } from "../../components/model-picker-options.ts";
 import { MultiSelect } from "../../components/multi-select.tsx";
 import { createOverlayAnchor } from "../../components/overlay-anchor.ts";
-import "../../components/tooltip.ts";
 import { createOverlay, findOverlayParent } from "../../components/overlay-lifecycle.ts";
-import type { PanelRefreshStatus } from "../../components/panel-refresh-status-state.ts";
+import { failPanelRefresh } from "../../components/panel-refresh-status-state.ts";
+import "../../components/tooltip.ts";
 import { DecisionModelPicker } from "../../components/solid/decision-model-picker.tsx";
 import { AgentIdentityAvatar } from "../../components/solid/identity-avatar.tsx";
 import { ModelPicker } from "../../components/solid/model-picker.tsx";
 import { PanelRefreshStatus as PanelRefreshNotice } from "../../components/solid/panel-refresh-status.tsx";
 import { SettingsRow, SettingsSection } from "../../components/solid/settings-ui.tsx";
+import { StrokeIcon } from "../../components/solid/stroke-icon.tsx";
+import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import "../../components/solid/overlay.css";
 import {
   type AgentContext,
@@ -43,59 +32,47 @@ import {
 } from "../../lib/agents/display.ts";
 import type { AgentsPanel } from "../../lib/agents/index.ts";
 import { resolveAgentAvatarUrl } from "../../lib/avatar.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import { createIdentityAvatars } from "../../lib/identity-avatar-loader.ts";
-import { t } from "../../lib/reactive/i18n.ts";
+import { projectApplicationConfig } from "../../lib/reactive/application.ts";
+import { useOptionalApplication } from "../../lib/reactive/context.ts";
+import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { projectOwner } from "../../lib/reactive/projection.ts";
-import { uploadsEnabled } from "../../lib/uploads.ts";
-import { AvatarPicker, type GeneratedAvatar } from "./avatar-picker.tsx";
+import type { AgentsPageView } from "./agents-page-state.ts";
+import { AvatarPicker } from "./avatar-picker.tsx";
 import { AgentConfigButtons, type AgentConfigActions } from "./config-actions.tsx";
+import type { AgentIdentityOutcome } from "./identity-actions.ts";
 import { renderAgentPanelFacts } from "./panel-ui.tsx";
 
-export type AgentIdentityDraft = {
-  name: string | null;
-  emoji: string | null;
-  avatar: string | null;
-};
+registerEnglishCatalog(registerSettingsEnglish);
 
 export function AgentOverview(
-  params: AgentConfigActions & {
-    applicationConfig?: ApplicationConfigCapability;
-    agent: AgentsListResult["agents"][number];
-    defaultId: string | null;
-    configForm: Record<string, unknown> | null;
-    agentFilesList: AgentsFilesListResult | null;
-    agentIdentity: AgentIdentityResult | null;
-    identityDraft: AgentIdentityDraft;
-    identityScope: number;
-    identitySaving: boolean;
-    identityError: string | null;
-    canUpdateIdentity: boolean;
-    modelCatalog: ModelCatalogEntry[];
-    modelSelectionPolicy?: ModelCatalogResult["modelSelectionPolicy"];
-    modelCatalogRetired?: boolean;
-    decisionModels: DecisionModelEntry[];
-    modelCatalogStatus: PanelRefreshStatus;
-    onIdentityFieldChange: (field: "name" | "emoji", value: string) => void;
-    onIdentityAvatarSelect: (file: File) => void;
-    onIdentityAvatarSet: (dataUrl: string) => void;
-    onIdentityAvatarGenerate: (prompt: string) => Promise<GeneratedAvatar>;
-    onIdentitySave: () => void;
-    onModelChange: (agentId: string, modelId: string | null) => void;
-    onDecisionModelChange: (agentId: string, modelId: string | null) => void;
-    onModelFallbacksChange: (agentId: string, fallbacks: string[]) => void;
-    onModelCatalogOpen: () => void;
-    onSelectPanel: (panel: AgentsPanel) => void;
-  },
+  params: AgentConfigActions &
+    Omit<AgentsPageView["overview"], "modelSelectionPolicy" | "modelCatalogRetired"> &
+    Partial<Pick<AgentsPageView["overview"], "modelSelectionPolicy" | "modelCatalogRetired">> &
+    Pick<AgentsPageView, "readData"> & {
+      agent: AgentsListResult["agents"][number];
+      defaultId: string | null;
+      configForm: Record<string, unknown> | null;
+      agentFilesList: AgentsFilesListResult | null;
+      agentIdentity: AgentIdentityResult | null;
+      canUpdateIdentity: boolean;
+      identitySavePending: boolean;
+      onSelectPanel: (panel: AgentsPanel) => void;
+    },
 ) {
+  const applicationConfig = useOptionalApplication()?.config;
+  const configProjection = applicationConfig
+    ? projectApplicationConfig(applicationConfig)
+    : undefined;
+  const uploadsEnabled = () => configProjection?.read().uploadsEnabled !== false;
   const avatarLoader = createIdentityAvatars();
-  onCleanup(avatarLoader.connect());
+  onSettled(() => avatarLoader.connect());
   const avatarProjection = projectOwner(avatarLoader, (owner) => owner);
   const catalogOwnsChoices = createMemo(
     () => params.modelCatalogRetired || params.modelSelectionPolicy?.restricted,
   );
-  const configForm = createMemo(() => (catalogOwnsChoices() ? null : params.configForm), {
-    equals: false,
-  });
+  const configForm = () => (catalogOwnsChoices() ? null : params.configForm);
   const visibleAgent = createMemo(
     () =>
       catalogOwnsChoices()
@@ -118,11 +95,9 @@ export function AgentOverview(
     ),
   );
   const isDefault = createMemo(() => context().isDefault);
-  const primaryModelLabel = createMemo(() =>
-    t(`agents.overview.primaryModel${isDefault() ? "Default" : ""}`),
-  );
+  const primaryModelLabel = () => t(`agents.overview.primaryModel${isDefault() ? "Default" : ""}`);
   const config = createMemo(() => resolveAgentConfig(configForm(), params.agent.id));
-  const agentModel = createMemo(() => visibleAgent().model, { equals: false });
+  const agentModel = () => visibleAgent().model;
   const entryPrimary = createMemo(() => resolveModelPrimary(config().entry?.model));
   const inheritedPrimary = createMemo(() =>
     resolveModelPrimary(config().defaults?.model ?? agentModel()),
@@ -171,9 +146,7 @@ export function AgentOverview(
   const disabled = createMemo(
     () => !params.canUpdateConfig || !configForm() || params.configLoading || params.configSaving,
   );
-  const thinkingDefault = createMemo(() => params.agent.thinkingDefault ?? "-");
-
-  const identityDraft = createMemo(() => params.identityDraft, { equals: false });
+  const identityDraft = () => params.readData().identityDraft;
   const identityName = createMemo(
     () =>
       identityDraft().name ??
@@ -220,22 +193,12 @@ export function AgentOverview(
     return result;
   };
 
-  const [avatarPickerOpen, setAvatarPickerOpen] = createSignal(false);
   const avatarPickerId = `agent-avatar-picker-${createUniqueId()}`;
-  const pickerContentVisible = createMemo(
-    () => avatarPickerOpen() && uploadsEnabled(params.applicationConfig),
-  );
   const avatarOverlay = createOverlay(avatarPickerId, undefined, {
     exclusiveGroup: "menu",
   });
-  createEffect(
-    () => uploadsEnabled(params.applicationConfig),
-    (enabled) => {
-      if (!enabled) {
-        avatarOverlay.request(false);
-      }
-    },
-  );
+  const avatarPickerOpen = projectOwner(avatarOverlay, (overlay) => overlay.open).read;
+  const pickerContentVisible = createMemo(() => avatarPickerOpen() && uploadsEnabled());
   let avatarTrigger: HTMLButtonElement | undefined;
   let avatarSurface: HTMLDivElement | undefined;
   onSettled(() => {
@@ -247,9 +210,14 @@ export function AgentOverview(
     avatarOverlay.setParent(findOverlayParent(avatarTrigger));
     const anchor = createOverlayAnchor(avatarSurface, { sameRoot: true });
     anchor.update(avatarTrigger, "right-start");
-    const unsubscribe = avatarOverlay.subscribe(setAvatarPickerOpen);
+    // Retire the native overlay synchronously when upload authority is revoked.
+    const unsubscribeConfig = applicationConfig?.subscribe((nextConfig) => {
+      if (!nextConfig.uploadsEnabled) {
+        avatarOverlay.request(false);
+      }
+    });
     return () => {
-      unsubscribe();
+      unsubscribeConfig?.();
       anchor.dispose();
       avatarOverlay.dispose();
     };
@@ -290,21 +258,14 @@ export function AgentOverview(
               aria-label={t("agents.identity.chooseAvatar")}
               aria-expanded={avatarPickerOpen() ? "true" : "false"}
               aria-controls={avatarPickerId}
-              disabled={identityBusy() || !uploadsEnabled(params.applicationConfig)}
+              disabled={identityBusy() || !uploadsEnabled()}
               onClick={() => avatarOverlay.request(!avatarOverlay.open)}
             >
               {renderIdentityAvatar()}
               <span class="agent-identity-editor__avatar-edit" aria-hidden="true">
-                <svg
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  stroke-width="2"
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                >
+                <StrokeIcon>
                   <path d="m16 5 3 3M4 20l4.5-1 10-10a2.1 2.1 0 0 0-3-3l-10 10L4 20Z" />
-                </svg>
+                </StrokeIcon>
               </span>
             </button>
             <div class="agent-identity-editor__content">
@@ -351,11 +312,32 @@ export function AgentOverview(
                   </div>
                 </div>
               </div>
-              {params.identityError ? (
-                <div class="settings-row__desc" role="alert" style={{ color: "var(--danger)" }}>
-                  {params.identityError}
-                </div>
-              ) : undefined}
+              <Show when={params.identitySavePending}>
+                <span class="settings-row__desc" role="status">
+                  {t("common.saving")}
+                </span>
+              </Show>
+              <For
+                each={params.readData().identityOutcome ? [params.readData().identityOutcome] : []}
+              >
+                {(request) => (
+                  <Errored
+                    fallback={(error) => (
+                      <div
+                        class="settings-row__desc"
+                        role="alert"
+                        style={{ color: "var(--danger)" }}
+                      >
+                        {formatUiError(error())}
+                      </div>
+                    )}
+                  >
+                    <Loading>
+                      <IdentityCompletion request={request} />
+                    </Loading>
+                  </Errored>
+                )}
+              </For>
             </div>
             <div
               ref={(element) => (avatarSurface = element)}
@@ -366,7 +348,7 @@ export function AgentOverview(
               aria-label={t("agents.identity.avatarPicker")}
             >
               <Show when={pickerContentVisible()}>
-                <For each={[`${params.agent.id}:${params.identityScope}`]}>
+                <For each={[`${params.agent.id}:${params.readData().requestGeneration}`]}>
                   {() => (
                     <AvatarPicker
                       agentId={params.agent.id}
@@ -409,7 +391,7 @@ export function AgentOverview(
           ],
           ["agents.context.primaryModel", <code>{context().model}</code>],
           ["agents.context.runtime", <code>{context().runtime}</code>],
-          ["agents.context.thinkingDefault", <code>{thinkingDefault()}</code>],
+          ["agents.context.thinkingDefault", <code>{params.agent.thinkingDefault ?? "-"}</code>],
           ["agents.context.skillsFilter", context().skillsLabel],
         ])}
       </SettingsSection>
@@ -418,7 +400,38 @@ export function AgentOverview(
       ) : undefined}
       <SettingsSection
         title={t("agents.overview.modelSelection")}
-        notice={<PanelRefreshNotice status={params.modelCatalogStatus} />}
+        notice={
+          <For
+            each={
+              params.readData().chatModelCatalogRead
+                ? [params.readData().chatModelCatalogRead!]
+                : []
+            }
+          >
+            {(read) => (
+              <Errored
+                fallback={(error) => (
+                  <PanelRefreshNotice
+                    status={failPanelRefresh(
+                      {
+                        error: null,
+                        hasLoaded: params.modelCatalogHasSnapshot,
+                        stale: false,
+                        awaitingGateway: false,
+                      },
+                      error(),
+                      params.modelCatalogGateway,
+                    )}
+                  />
+                )}
+              >
+                <Loading>
+                  <ModelCatalogCompletion read={read} />
+                </Loading>
+              </Errored>
+            )}
+          </For>
+        }
         actions={<AgentConfigButtons {...params} buttonType="button" />}
       >
         <SettingsRow
@@ -496,4 +509,20 @@ export function renderAgentContextSection(
       ])}
     </SettingsSection>
   );
+}
+
+function ModelCatalogCompletion(props: { read: Promise<void> }) {
+  const completion = createMemo(() => props.read.then(() => null));
+  return <>{completion()}</>;
+}
+
+function IdentityCompletion(props: { request: Promise<AgentIdentityOutcome> | null }) {
+  const completion = createMemo(async () => {
+    const outcome = await props.request;
+    if (outcome?.error) {
+      throw new Error(outcome.error);
+    }
+    return null;
+  });
+  return <>{completion()}</>;
 }

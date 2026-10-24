@@ -5,6 +5,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { readGatewayLockProcessNamespace } from "../../infra/gateway-lock-payload.js";
 import { acquireGatewayStateOwner } from "../../infra/gateway-state-owner.js";
 import * as admissionTurn from "../../infra/sqlite-database-admission-turn.js";
 import * as admission from "../../infra/sqlite-worker-operation-admission.js";
@@ -255,6 +256,7 @@ it("reconciles a dirty projection while the parent retains serving Gateway owner
       databasePath: openOpenClawStateDatabase({ env }).path,
       payload: {
         pid: process.pid,
+        processNamespace: readGatewayLockProcessNamespace(),
         createdAt: new Date().toISOString(),
         configPath: path.join(stateDir, "openclaw.json"),
         stateDir,

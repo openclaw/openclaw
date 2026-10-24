@@ -115,10 +115,7 @@ export async function finalizeWorkspaceResultConflicts(params: {
   retainPriorConflict?: boolean;
   report: (report: WorkerWorkspaceConflictReport) => Promise<void>;
   workspace: WorkerSessionWorkspace;
-}): Promise<{
-  conflict: Required<WorkerWorkspaceResultConflict> | undefined;
-  conflictRetained: boolean;
-}> {
+}): Promise<boolean> {
   params.assertCurrent();
   const retainedPriorConflict =
     params.retainPriorConflict && params.conflictPaths.length === 0
@@ -162,7 +159,7 @@ export async function finalizeWorkspaceResultConflicts(params: {
     await params.report({ cleared: true });
   }
 
-  return { conflict, conflictRetained: conflict !== undefined };
+  return conflict !== undefined;
 }
 
 type StagedWorkspaceResultSettlement = {

@@ -50,6 +50,7 @@ import {
   buildCodexThreadRequestConfig,
   prepareCodexThreadFinalConfigPatch,
   resolveCodexThreadAgentDir,
+  withCodexThreadWriteCurrent,
   type CodexThreadRequestContext,
 } from "./thread-lifecycle-preflight.js";
 import type {
@@ -227,7 +228,7 @@ export async function resumeExistingCodexThread(
     };
     const requestOptions = {
       signal: params.signal,
-      withCurrent: params.authority?.withCurrent,
+      withCurrent: (write: () => void) => withCodexThreadWriteCurrent(params, write),
       assertCurrent: assertResumeCurrent,
     };
     const response = await lifecycleTiming.measure("thread-resume-request", () =>
@@ -389,6 +390,7 @@ export async function resumeExistingCodexThread(
           modelProvider: resumePatch.modelProvider ?? null,
           preserveNativeModel: resumeBinding.preserveNativeModel,
         },
+        params,
       ),
       lifecycle: {
         action: "resumed",
@@ -549,7 +551,7 @@ export async function startFreshCodexThread(
       return await params.client.request("thread/start", startParams, {
         signal: params.signal,
         assertCurrent: assertInferenceCurrent,
-        withCurrent: params.authority?.withCurrent,
+        withCurrent: (write) => withCodexThreadWriteCurrent(params, write),
       });
     } catch (error) {
       if (error instanceof CodexAppServerRpcError) {
@@ -725,6 +727,7 @@ export async function startFreshCodexThread(
             params.params.authProfileId,
             dynamicToolsFingerprint,
             { model: response.model, modelProvider: bindingModelProvider ?? null },
+            params,
           ),
         }
       : {}),

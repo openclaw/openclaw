@@ -1,17 +1,15 @@
 import type { Server } from "node:http";
-import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
-import { afterAll, beforeAll, describe } from "vitest";
+import type { Browser, Page } from "playwright";
 import { createSandboxHostHttpServer } from "../../../src/gateway/mcp-app-sandbox-http.js";
 import { acquireGatewayE2ePortBlock } from "../../../src/gateway/test-helpers.listener.js";
 import type { TestPortClaim } from "../../../src/test-utils/port-claims.js";
 import {
-  canRunPlaywrightChromium,
   controlUiBundledSettingsStorageKey,
   controlUiSessionUrl,
-  resolvePlaywrightChromiumExecutablePath,
   startControlUiE2eServer,
   type ControlUiE2eServer,
 } from "../test-helpers/control-ui-e2e.ts";
+import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 export async function closeBoardTestServer(server: Server | undefined) {
   if (server) {
@@ -25,25 +23,44 @@ export function createBoardE2eSuite(
   name: string,
   options: {
     sandbox?: boolean;
-    browserLaunchOptions?: Omit<
-      NonNullable<Parameters<typeof chromium.launch>[0]>,
-      "executablePath"
-    >;
+    browserLaunchOptions?: Parameters<typeof createControlUiE2eSuite>[0]["browserLaunchOptions"];
     beforeStart?: () => Promise<void>;
     afterSandboxClose?: () => Promise<void>;
   } = {},
 ) {
-  const executablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
-  const available = canRunPlaywrightChromium(executablePath);
-  const define =
-    available || process.env.OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM !== "1"
-      ? describe
-      : describe.skip;
-  let browser: Browser;
   let controlUi: ControlUiE2eServer;
   let sandbox: Server;
   let portClaim: TestPortClaim | undefined;
-  const contexts = new Set<BrowserContext>();
+  const close = async () => {
+    await closeBoardTestServer(sandbox);
+    await portClaim?.release();
+    await options.afterSandboxClose?.();
+    await controlUi?.close();
+  };
+  const suite = createControlUiE2eSuite({
+    name,
+    setupTimeoutMs: 120_000,
+    startServerBeforeBrowser: true,
+    browserLaunchOptions: options.browserLaunchOptions,
+    async startServer() {
+      try {
+        await options.beforeStart?.();
+        controlUi = await startControlUiE2eServer();
+        if (options.sandbox !== false) {
+          portClaim = await acquireGatewayE2ePortBlock();
+          sandbox = createSandboxHostHttpServer();
+          const { port } = portClaim;
+          await new Promise<void>((resolve) => {
+            sandbox.listen(port, "127.0.0.1", resolve);
+          });
+        }
+        return { baseUrl: controlUi.baseUrl, close };
+      } catch (error) {
+        await close();
+        throw error;
+      }
+    },
+  });
   return {
     get baseUrl() {
       return controlUi.baseUrl;
@@ -55,9 +72,7 @@ export function createBoardE2eSuite(
       return portClaim.port;
     },
     async newPage(contextOptions: Parameters<Browser["newContext"]>[0] = {}) {
-      const context = await browser.newContext(contextOptions);
-      contexts.add(context);
-      return context.newPage();
+      return (await suite.newBrowserContext(contextOptions)).newPage();
     },
     async openDashboard(page: Page, sessionKey: string, waitForSurface = true) {
       const storageKey = controlUiBundledSettingsStorageKey(controlUi.baseUrl);
@@ -78,33 +93,6 @@ export function createBoardE2eSuite(
         await page.locator(".board-session-surface").waitFor();
       }
     },
-    define(tests: () => void) {
-      define(name, () => {
-        beforeAll(async () => {
-          await options.beforeStart?.();
-          controlUi = await startControlUiE2eServer();
-          if (options.sandbox !== false) {
-            portClaim = await acquireGatewayE2ePortBlock();
-            sandbox = createSandboxHostHttpServer();
-            const port = portClaim.port;
-            await new Promise<void>((resolve) => {
-              sandbox.listen(port, "127.0.0.1", resolve);
-            });
-          }
-          browser = await chromium.launch({ executablePath, ...options.browserLaunchOptions });
-        }, 120_000);
-        afterAll(async () => {
-          for (const context of contexts) {
-            await context.close();
-          }
-          await browser?.close();
-          await closeBoardTestServer(sandbox);
-          await portClaim?.release();
-          await options.afterSandboxClose?.();
-          await controlUi?.close();
-        });
-        tests();
-      });
-    },
+    define: suite.define,
   };
 }

@@ -13,6 +13,7 @@ import { resolveStateDir } from "../state-dir.js";
 import { isInternalSessionEffectsKey } from "./internal-session-key.js";
 import { resolveSessionLifecycleTimestampsWithHeader } from "./lifecycle-timestamps.js";
 import { matchesPluginHostCleanupSession } from "./plugin-host-cleanup.js";
+import { hasOrphanedMainSessionWork } from "./restart-recovery-state.js";
 import {
   assertMemoryExactReadSource,
   captureMemoryExactSessionReader,
@@ -47,10 +48,10 @@ import type {
   SessionStoreWorkerReadScope,
   SessionEntryReadSourcePreparation,
   SessionEntryCohortReader,
+  SessionEntrySummaryWorkerRead,
 } from "./session-entry-read-runtime.types.js";
 import { assertCapturedSessionEntryReadSource } from "./session-entry-read-source.js";
 import type {
-  SessionEntryListWorkerInput,
   SessionEntryListWorkerResult,
   SessionEntryReadWorkerResult,
   SessionExactEntriesWorkerResult,
@@ -283,19 +284,15 @@ export function createSessionEntryListReader(
 }
 
 /** Read descriptive summaries through the original store selection and reader lifetime. */
-export async function readSessionEntrySummariesInWorker(
-  input: Omit<SessionStoreWorkerReadScope, "agentId"> &
-    Pick<
-      SessionEntryListWorkerInput["scope"],
-      "agentId" | "cleanupSession" | "mainSessionRecovery" | "readConsistency"
-    >,
-) {
+export async function readSessionEntrySummariesInWorker(input: SessionEntrySummaryWorkerRead) {
   const memory = captureMemoryExactSessionReader(input);
   if (memory) {
     // Incognito sessions have no durable restart work.
-    const entries = input.mainSessionRecovery ? [] : memory.entries("list");
-    return entries.filter(({ sessionKey, entry }) =>
-      matchesPluginHostCleanupSession(sessionKey, entry, input.cleanupSession),
+    const entries = input.mainSessionRecovery === "claims" ? [] : memory.entries("list");
+    return entries.filter(
+      ({ sessionKey, entry }) =>
+        matchesPluginHostCleanupSession(sessionKey, entry, input.cleanupSession) &&
+        (input.mainSessionRecovery !== "orphans" || hasOrphanedMainSessionWork(entry, sessionKey)),
     );
   }
   const { scope } = captureSessionEntryReadScope({ ...input, sessionKey: "" });

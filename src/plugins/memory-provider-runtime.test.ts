@@ -1,4 +1,5 @@
 import { beforeEach, expect, it, vi } from "vitest";
+import type { MemoryProviderStatus } from "../memory-host-sdk/host/types.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { delegateMemoryAudience, resolveMemoryAudienceFromEntry } from "./memory-audience.js";
 import { fakeSessionOwner } from "./memory-audience.test-support.js";
@@ -406,6 +407,114 @@ it("reports legacy health without host filesystem paths", async () => {
       details: {
         legacy: { backend: "builtin", provider: "test", files: 2, vector: { enabled: true } },
       },
+    });
+  });
+});
+
+it.each<{
+  name: string;
+  facts: Partial<MemoryProviderStatus>;
+  complete: boolean;
+}>([
+  {
+    name: "pending embeddings after manager reacquisition",
+    facts: { custom: { providerState: { mode: "pending" }, indexIdentity: { status: "valid" } } },
+    complete: false,
+  },
+  {
+    name: "incomplete vectors",
+    facts: { vector: { enabled: true, index: { state: "incomplete" } } },
+    complete: false,
+  },
+  {
+    name: "unverified vectors",
+    facts: { vector: { enabled: true, index: { state: "unverified" } } },
+    complete: false,
+  },
+  {
+    name: "degraded embedding provider",
+    facts: {
+      custom: { providerState: { mode: "degraded", providerId: "test", reason: "unavailable" } },
+    },
+    complete: false,
+  },
+  {
+    name: "unavailable semantic provider with keyword fallback",
+    facts: {
+      provider: "none",
+      requestedProvider: "openai",
+      custom: {
+        providerState: { mode: "fts-only", attemptedProviderId: "openai", reason: "unavailable" },
+      },
+    },
+    complete: false,
+  },
+  {
+    name: "intentional keyword-only index before lazy provider initialization",
+    facts: {
+      provider: "none",
+      requestedProvider: "none",
+      custom: { providerState: { mode: "pending", requestedProvider: "none" } },
+    },
+    complete: true,
+  },
+  { name: "dirty sources", facts: { dirty: true }, complete: false },
+  { name: "failed sync", facts: { lastSyncError: "worker ran out of memory" }, complete: false },
+  {
+    name: "complete semantic index",
+    facts: { vector: { enabled: true, index: { state: "complete" } } },
+    complete: true,
+  },
+  {
+    name: "empty semantic index",
+    facts: { vector: { enabled: true, index: { state: "empty" } } },
+    complete: true,
+  },
+  {
+    name: "intentional keyword-only index",
+    facts: {
+      provider: "none",
+      vector: { enabled: true, index: { state: "incomplete" } },
+      custom: { searchMode: "fts-only", providerState: { mode: "fts-only" } },
+    },
+    complete: true,
+  },
+])("reports health and search coverage for $name", async ({ facts, complete }) => {
+  const oldManager = manager();
+  vi.spyOn(oldManager, "status").mockReturnValue({
+    backend: "builtin",
+    provider: "test",
+    ...facts,
+  });
+  await withLegacy(legacy(oldManager), async (bound) => {
+    const page = await bound.search({ query: "remember" });
+    expect(page.hits).toHaveLength(1);
+    expect(page.coverage).toBe(complete ? "complete" : "partial");
+    const health = await bound.health();
+    expect(health.status).toBe(complete ? "ready" : "degraded");
+    if (!complete) {
+      expect(page.warning).toEqual(expect.any(String));
+      expect(health.message).toBe(page.warning);
+    }
+  });
+});
+
+it("returns authorized hits with partial coverage when optional status diagnostics fail", async () => {
+  const oldManager = manager();
+  oldManager.statusAsync = vi.fn(async () => {
+    throw new Error("diagnostic worker unavailable");
+  });
+  await withLegacy(legacy(oldManager), async (bound) => {
+    const page = await bound.search({ query: "remember" });
+    expect(page.hits).toHaveLength(1);
+    expect(page).toMatchObject({
+      coverage: "partial",
+      warning: expect.stringContaining("could not be verified"),
+    });
+    expect(oldManager.statusAsync).toHaveBeenCalledWith({ includeCounts: false });
+    await expect(bound.health()).resolves.toMatchObject({
+      status: "degraded",
+      message: page.warning,
     });
   });
 });

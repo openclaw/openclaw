@@ -8,6 +8,8 @@ import {
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { GitCheckoutContext } from "../infra/git-read-operations.js";
+import { runGitWorkerOperation } from "../infra/git-worker.js";
 import { getSessionRepositoryWorkspaceStore } from "../state/session-repository-workspaces.js";
 import {
   createOpenClawTestState,
@@ -22,7 +24,10 @@ import { resolveSessionStoreKey } from "./session-store-key.js";
 import { loadGatewaySessionEntryReadOnlyAsync as loadEntry } from "./session-utils-store.js";
 
 type PrRequest = Parameters<typeof loadPrs>[0];
-type PrDeps = Omit<Parameters<typeof loadPrs>[1], "read">;
+type PrDeps = Omit<Parameters<typeof loadPrs>[1], "read"> & {
+  resolveGitRoot?: (params: PrRequest) => Promise<string | null>;
+  resolveGitContext?: (params: PrRequest) => Promise<GitCheckoutContext | null>;
+};
 
 function requestAgent(params: PrRequest, cfg = getRuntimeConfig()) {
   const requested = resolveRequestedSessionAgentId(cfg, params.sessionKey, params.agentId);
@@ -76,6 +81,54 @@ export const testGitContext = {
   branch: "claude/browser-tabs-tighter-header",
 };
 
+export function localPrGitReads(type?: string) {
+  return vi
+    .mocked(runGitWorkerOperation)
+    .mock.calls.filter(
+      ([operation]) =>
+        (!type || operation.type === type) &&
+        operation.type !== "checkout.revision" &&
+        operation.type !== "pull-request.branch-comparison",
+    );
+}
+
+export function mockPrCheckout(options: {
+  revision: () => string | null;
+  resolve?: (root: string) => GitCheckoutContext | null;
+  additions?: (root: string) => number;
+  emptyFacts?: boolean;
+}) {
+  vi.mocked(runGitWorkerOperation).mockImplementation(async (operation) => {
+    switch (operation.type) {
+      case "pull-request.branch-comparison":
+        return { statsBase: null, creatable: false, equalPushedTips: false, complete: true };
+      case "checkout.revision":
+        return options.revision();
+      case "checkout.context":
+        if (options.resolve) {
+          return options.resolve(operation.input.root);
+        }
+        break;
+      case "pull-request.branch-facts":
+        return options.emptyFacts && !options.additions
+          ? undefined
+          : {
+              creatable: true,
+              stats: options.additions
+                ? {
+                    additions: options.additions(operation.input.root),
+                    deletions: 0,
+                    changedFiles: 1,
+                  }
+                : null,
+            };
+      default:
+        break;
+    }
+    throw new Error("Unexpected local Git operation");
+  });
+}
+
 /** Direct loader tests supply real target facts; registered callers use the row projection. */
 export async function loadTestSessionPullRequests(
   params: PrRequest,
@@ -95,24 +148,31 @@ export async function loadTestSessionPullRequests(
     const original = facts.readCurrent(getRuntimeConfig()).target.entry;
     return await withControlUiSessionPrSource(
       target.readSource,
-      (assertSourceCurrent, sourceIdentity) =>
-        loadPrs(params, {
-          ...deps,
-          read: {
-            target,
-            sourceIdentity,
-            assertCurrent: () => {
-              assertSourceCurrent();
-              const current = facts.readCurrent(getRuntimeConfig()).target.entry;
-              if (
-                current.sessionId !== original.sessionId ||
-                current.lifecycleRevision !== original.lifecycleRevision
-              ) {
-                throw new Error("Session pull-request target changed");
-              }
-            },
-          },
-        }),
+      async (assertSourceCurrent, sourceIdentity) => {
+        const assertCurrent = () => {
+          assertSourceCurrent();
+          const current = facts.readCurrent(getRuntimeConfig()).target.entry;
+          if (
+            current.sessionId !== original.sessionId ||
+            current.lifecycleRevision !== original.lifecycleRevision
+          ) {
+            throw new Error("Session pull-request target changed");
+          }
+        };
+        const { resolveGitRoot, resolveGitContext, ...ownerDeps } = deps;
+        const request = { ...params, ...target.params };
+        assertCurrent();
+        const source = resolveGitContext
+          ? await resolveGitContext(request)
+          : resolveGitRoot
+            ? await resolveGitRoot(request)
+            : target.source;
+        assertCurrent();
+        return loadPrs(params, {
+          ...ownerDeps,
+          read: { target: { ...target, source }, sourceIdentity, assertCurrent },
+        });
+      },
     );
   } finally {
     facts.release();
@@ -134,6 +194,7 @@ async function prepareTestSessionPrTarget(params: { sessionKey: string; agentId?
       repository.sessionKey === selected.canonicalKey
       ? repository
       : null,
+    { includeBoundPullRequest: true },
   );
 }
 

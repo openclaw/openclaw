@@ -63,7 +63,7 @@ async function expectWorkspaceEnv(
         .join("\n"),
     );
     clearEnv(Object.keys(entries));
-    loadWorkspaceDotEnvFile(path.join(cwdDir, ".env"), { quiet: true });
+    loadWorkspaceDotEnvFile(path.join(cwdDir, ".env"));
     for (const key of Object.keys(blocked)) {
       expect(process.env[key], `${key} should be blocked by workspace .env`).toBeUndefined();
     }
@@ -140,9 +140,9 @@ describe("workspace .env blocklist completeness", () => {
           vi.spyOn(process, "cwd").mockReturnValue(cwdDir);
 
           if (mode === "async") {
-            await loadDotEnvAsync({ env, cwd: cwdDir, quiet: true });
+            await loadDotEnvAsync({ env, cwd: cwdDir });
           } else {
-            loadDotEnv({ env, quiet: true });
+            loadDotEnv({ env });
           }
 
           expect(env.OCM_SELF).toBe("global-executable");
@@ -184,7 +184,7 @@ describe("workspace .env blocklist completeness", () => {
       });
 
       try {
-        loadDotEnv({ quiet: true });
+        loadDotEnv();
 
         expect(process.env.RUNTIME_CLOUD_API_KEY).toBe("global-plugin-key");
       } finally {
@@ -208,7 +208,7 @@ describe("workspace .env blocklist completeness", () => {
       clearEnv(providerAuthKeys);
       vi.spyOn(process, "cwd").mockReturnValue(cwdDir);
 
-      loadDotEnv({ quiet: true });
+      loadDotEnv();
 
       for (const key of providerAuthKeys) {
         expect(process.env[key], `${key} should come from trusted global .env`).toBe(

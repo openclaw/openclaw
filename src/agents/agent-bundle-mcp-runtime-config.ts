@@ -1,4 +1,4 @@
-import crypto from "node:crypto";
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { normalizeMcpToolDenials } from "../config/sessions/session-tool-overrides.js";
 import type { SessionToolOverrides } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -115,17 +115,14 @@ export function loadSessionMcpConfig(params: {
       prepareDataDirsByServer,
     },
     // This hash only invalidates in-memory catalogs; requester URLs/headers are already redacted.
-    fingerprint: crypto
-      .createHash("sha256")
-      .update(
-        JSON.stringify({
-          servers: fingerprintServers,
-          mcpAppsEnabled,
-          ...(safeServerNames ? { safeServerNames } : {}),
-          mcpToolsDeny,
-        }),
-      )
-      .digest("hex"),
+    fingerprint: sha256Hex(
+      JSON.stringify({
+        servers: fingerprintServers,
+        mcpAppsEnabled,
+        ...(safeServerNames ? { safeServerNames } : {}),
+        mcpToolsDeny,
+      }),
+    ),
   };
 }
 

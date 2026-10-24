@@ -35,7 +35,6 @@ function resolvedBundledPaths(config: OpenClawConfig, id: string) {
     config,
     workspaceDir: resolveAgentWorkspaceDir(config, resolveDefaultAgentId(config)),
     env: isolatedEnv,
-    fallbackToBundledMetadata: true,
     fallbackToBundledMetadataForResolvedBundled: true,
     pluginIds: [id],
     fallbackBundledPluginIds: [id],
@@ -170,14 +169,28 @@ describe("collectPluginConfigAssignments bundled plugin manifests", () => {
   });
 
   it("collects voice-call SecretRef assignments from bundled manifest contracts", () => {
+    const numberRouteRefs = [
+      envRef("VOICE_CALL_ROUTE_ENV_KEY"),
+      { source: "file" as const, provider: "route-file", id: "/voice-call/apiKey" },
+      { source: "exec" as const, provider: "route-exec", id: "voice-call/apiKey" },
+      { source: "store" as const, provider: "default", id: "VOICE_CALL_ROUTE_STORE_KEY" },
+    ];
+    const numberRoutes = Object.fromEntries(
+      numberRouteRefs.map((ref, index) => [
+        `+1555000100${index}`,
+        { tts: { providers: { openai: { apiKey: ref } } } },
+      ]),
+    );
     const paths = [
       { path: "twilio.authToken", expected: "string" },
       { path: "realtime.providers.*.apiKey", expected: "string" },
       { path: "streaming.providers.*.apiKey", expected: "string" },
       { path: "tts.providers.*.apiKey", expected: "string" },
+      { path: "numbers.*.tts.providers.*.apiKey", expected: "string" },
     ];
     expect(bundledPaths("voice-call")).toEqual(paths);
     const config = pluginConfig("voice-call", {
+      numbers: numberRoutes,
       twilio: { authToken: envRef("TWILIO_AUTH_TOKEN") },
       realtime: { providers: { google: { apiKey: envRef("GEMINI_API_KEY") } } },
       streaming: { providers: { openai: { apiKey: envRef("OPENAI_API_KEY") } } },
@@ -189,13 +202,29 @@ describe("collectPluginConfigAssignments bundled plugin manifests", () => {
       },
     });
     expect(resolvedBundledPaths(config, "voice-call")).toEqual(paths);
-    expectCollected(collect(config, "voice-call"), [
+    const context = collect(config, "voice-call");
+    expectCollected(context, [
+      ...numberRouteRefs.map(
+        (_, index) =>
+          `plugins.entries.voice-call.config.numbers["+1555000100${index}"].tts.providers.openai.apiKey`,
+      ),
       "plugins.entries.voice-call.config.realtime.providers.google.apiKey",
       "plugins.entries.voice-call.config.streaming.providers.openai.apiKey",
       "plugins.entries.voice-call.config.tts.providers.elevenlabs.apiKey",
       "plugins.entries.voice-call.config.tts.providers.openai.apiKey",
       "plugins.entries.voice-call.config.twilio.authToken",
     ]);
+    for (const [index, ref] of numberRouteRefs.entries()) {
+      const number = `+1555000100${index}`;
+      context.assignments
+        .find(
+          (assignment) =>
+            assignment.path ===
+            `plugins.entries.voice-call.config.numbers["${number}"].tts.providers.openai.apiKey`,
+        )
+        ?.apply(`resolved-${ref.source}`);
+      expect(numberRoutes[number]?.tts.providers.openai.apiKey).toBe(`resolved-${ref.source}`);
+    }
   });
 
   it("collects google-meet realtime provider SecretRefs from its installed manifest", () => {

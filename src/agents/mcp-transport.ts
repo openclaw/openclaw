@@ -36,9 +36,6 @@ type ResolvedMcpTransport = {
 
 function attachStderrLogging(serverName: string, transport: OpenClawStdioClientTransport) {
   const stderr = transport.stderr;
-  if (!stderr) {
-    return undefined;
-  }
   let reported = false;
   const onData = () => {
     if (!reported) {
@@ -113,7 +110,6 @@ export function resolveMcpTransport(
       env: resolved.env,
       cwd: resolved.cwd,
       prepareDataDir: options?.prepareDataDir,
-      stderr: "pipe",
     });
     return {
       transport,
@@ -130,7 +126,7 @@ export function resolveMcpTransport(
     }
     oauthIdentity = requesterMcpOAuthIdentity(serverName, resolved.url, requesterScope);
   } else {
-    oauthIdentity = operatorMcpOAuthIdentity(serverName, resolved.url);
+    oauthIdentity = operatorMcpOAuthIdentity(serverName, resolved.url, options?.cfg);
   }
   // The SDK reuses one fetch for OAuth and long-lived SSE/streamable bodies.
   // Per-RPC deadlines belong to client calls, not this transport fetch.

@@ -159,15 +159,14 @@ function readVoiceSessionFacts(
 ): VoiceSessionFacts | undefined {
   const record = readVoiceSessionRecord(agentId, voiceSessionId, options);
   return (
-    record &&
-    Object.freeze({
+    record && {
       agentId: record.agentId,
       sessionKey: record.sessionKey,
       origin: record.origin,
       status: record.status,
       transcriptCapable: record.transcriptCapable,
       hasUserTranscript: record.hasUserTranscript,
-    })
+    }
   );
 }
 

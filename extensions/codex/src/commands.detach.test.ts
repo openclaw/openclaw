@@ -509,7 +509,7 @@ describe("codex detach command", () => {
           senderIsOwner: true,
         },
         { channelId: "test", pluginBinding: f.conversation },
-        { bindingStore, timeoutMs: 500 },
+        { bindingStore },
       ),
     ).resolves.toEqual({ handled: true, reply: { text: "Original context kept" } });
     expect(f.request.mock.calls.map(([method]) => method)).toEqual([
@@ -960,6 +960,7 @@ describe("Codex diagnostics confirmation", () => {
           config: {},
           agentDir: path.join(diagnosticsStateDir, "agents", target.agentId, "agent"),
           assertCurrent: expect.any(Function),
+          assertDispatchCurrentAsync: expect.any(Function),
           authProfileId: `openai:${target.agentId}`,
           sessionId: target.sessionId,
           sessionKey: target.sessionKey,

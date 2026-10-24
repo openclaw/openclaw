@@ -222,16 +222,17 @@ operations and never run as an automatic response to a test outcome.
 
 Published artifacts may contain empty `knownFlakyJobs` and `automaticRetries`
 fields. Readers retain their original plan digest and reject nonempty allowances
-or retry records. Current qualification requires successful selected results. A
+or retry records. Current FRV must conclude success under the pinned
+[release-tooling policy](/reference/full-release-validation/evidence#release-tooling-waivers). A
 campaign already dispatched with an
 older pinned Tooling SHA remains owned by that immutable tooling and must not be
 retargeted mid-run. Current strict tooling rejects retained `windows-node-ci`
 advisory evidence; start a fresh campaign that satisfies the restored blocking
 gate. Candidate-owned qualification still uses Q=C: if the frozen harness needs
 the policy repair, deliberately backport it and freeze a new candidate instead
-of substituting newer main tooling. Retired waivers and pre-declared advisory failure
-allowances remain rejected and must be replaced with a fresh qualifying run; they
-cannot authorize publication.
+of substituting newer main tooling. Retired candidate-side omission waivers and
+pre-declared advisory failure allowances remain rejected and must be replaced
+with a fresh qualifying run; they cannot authorize publication.
 
 ### Read publication observations
 

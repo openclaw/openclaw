@@ -1,4 +1,3 @@
-import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -13,9 +12,11 @@ import {
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
 import * as embeddedStateLock from "../infra/embedded-state-lock.js";
+import { captureNativeSignalBridge } from "../infra/embedded-state-lock.test-support.js";
+import * as gatewayLockProcessModule from "../infra/gateway-lock-process.js";
 import { acquireGatewayLock } from "../infra/gateway-lock.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
-import { registerSqliteAuditRecordAsync } from "../infra/sqlite-audit-record-store.async.js";
+import { createSqliteAuditRecordWriter } from "../infra/sqlite-audit-record-store.async.js";
 import { createSqliteAuditRecordStore } from "../infra/sqlite-audit-record-store.js";
 import type { RuntimeEnv } from "../runtime.js";
 import {
@@ -32,11 +33,24 @@ import { createTestRuntime } from "./test-runtime-config-helpers.js";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const acquireStateLock = embeddedStateLock.acquireEmbeddedStateLock;
 const createSignalBridge = embeddedStateLock.createEmbeddedStateSignalBridge;
-afterEach(() => vi.restoreAllMocks());
+const signalCaptures: ReturnType<typeof captureNativeSignalBridge>[] = [];
+afterEach(() => {
+  try {
+    for (const signals of signalCaptures) {
+      signals.dispose();
+    }
+    signalCaptures.length = 0;
+  } finally {
+    vi.restoreAllMocks();
+  }
+});
 const success = () => ({ payloads: [{ text: "done" }], meta: { durationMs: 1 } });
 function stateFixture() {
   const stateDir = tempDirs.make("openclaw-agent-exec-lock-");
   const lockDir = path.join(stateDir, "gateway-locks");
+  vi.spyOn(gatewayLockProcessModule, "readGatewayLockProcessStartTime").mockImplementation(
+    () => 123_456,
+  );
   const lockOptions = {
     allowInTests: true,
     env: {
@@ -46,7 +60,6 @@ function stateFixture() {
     },
     lockDir,
     timeoutMs: 100,
-    readProcessStartTime: () => 123_456,
   };
   vi.spyOn(embeddedStateLock, "acquireEmbeddedStateLock").mockImplementation((params) =>
     acquireStateLock({ ...params, options: lockOptions }),
@@ -151,12 +164,13 @@ describe("agent exec retained-state ownership", () => {
     { retained: true, signal: "SIGTERM", exitCode: 143 },
   ] as const)("settles state after $signal (retained: $retained)", async (testCase) => {
     const fixture = testCase.retained ? stateFixture() : undefined;
-    const signals = new EventEmitter();
+    const signals = captureNativeSignalBridge(createSignalBridge);
+    signalCaptures.push(signals);
     const entered = createDeferred();
     const runtime = createTestRuntime();
     let stateDir = "";
-    vi.spyOn(embeddedStateLock, "createEmbeddedStateSignalBridge").mockImplementation(() =>
-      createSignalBridge(signals),
+    vi.spyOn(embeddedStateLock, "createEmbeddedStateSignalBridge").mockImplementationOnce(
+      signals.create,
     );
     const run = runAgentExecWithMock(
       "inspect",
@@ -246,10 +260,10 @@ it("closes temporary databases before removal and preserves independent handles"
           deleteTranscriptWithoutArchive: true,
         });
         expect(deletion.deleted).toBe(true);
-        await registerSqliteAuditRecordAsync(
-          { scope: "agent-exec-cleanup", maxEntries: 1 },
-          { key: "completed", value: "synthetic", createdAt: 1 },
-        );
+        await createSqliteAuditRecordWriter({
+          scope: "agent-exec-cleanup",
+          maxEntries: 1,
+        }).register("completed", "synthetic", 1);
         expect(
           createSqliteAuditRecordStore({ scope: "agent-exec-cleanup", maxEntries: 1 }).entries(),
         ).toEqual([{ key: "completed", value: "synthetic", createdAt: 1 }]);

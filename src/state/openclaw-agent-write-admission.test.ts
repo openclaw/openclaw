@@ -295,6 +295,65 @@ it("releases earlier reservations when a later database path is invalid", async 
   expect(await follower).toBe("released");
 });
 
+it.each(["worker", "multiple stores"] as const)(
+  "identifies the inherited %s admission when refusing a nested session read",
+  async (kind) => {
+    const { options } = makeFixture(
+      "openclaw-reentry-diagnostic-",
+      "usage",
+      path.join(...Array.from({ length: 12 }, () => "long-directory"), "agent.sqlite"),
+    );
+    const second = { ...options, path: path.join(path.dirname(options.path), "second.sqlite") };
+    let now = 100;
+    vi.spyOn(performance, "now").mockImplementation(() => now);
+    const consume = vi.fn();
+    const run = async () => {
+      const request = trackWorkerRequest("sqlite_writer", "session.entry.patch.commit");
+      request.started();
+      const privateRequest = trackWorkerRequest("sqlite_writer", "private-command-payload");
+      privateRequest.started();
+      await Promise.resolve();
+      now = 350;
+      const error = await writeMany(
+        kind === "worker" ? [options] : [options, second],
+        consume,
+      ).then(
+        () => undefined,
+        (cause: unknown) => cause,
+      );
+      expect(error).toBeInstanceOf(Error);
+      expect(String(error)).toContain(
+        "Session read batch cannot reenter an active SQLite writer admission",
+      );
+      expect(String(error)).toContain(`"operation":"${kind === "worker" ? "worker" : "direct"}"`);
+      expect(String(error)).toContain('"ageMs":250');
+      expect(String(error)).toContain(`"threadId":${threadId}`);
+      expect(String(error)).toContain(`"isMainThread":${isMainThread}`);
+      expect(String(error)).toContain('"database":');
+      expect(String(error)).toContain("agent.sqlite");
+      expect(String(error)).not.toContain(path.dirname(options.path));
+      expect(String(error).length).toBeLessThan(600);
+      if (kind === "worker") {
+        expect(String(error)).toContain(
+          '"workerOperations":["session.entry.patch.commit","other"]',
+        );
+      } else {
+        expect(String(error)).toContain('"caller":"session-manager.write"');
+      }
+      expect(String(error)).not.toContain("private-command-payload");
+      expect(consume).not.toHaveBeenCalled();
+      request.completed();
+      privateRequest.completed();
+    };
+    if (kind === "worker") {
+      await workerWrite(options, run);
+    } else {
+      await write(options, run, false, undefined, undefined, "session-manager.write");
+    }
+    await expect(writeMany([options], () => "released")).resolves.toBe("released");
+  },
+);
+
 function fixture() {
   const base = makeFixture(
     "openclaw-reservation-diagnostic-",

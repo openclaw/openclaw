@@ -19,6 +19,7 @@ import {
   runQueuedStoreWrite,
   type StoreWriterTiming,
 } from "../shared/store-writer-queue.js";
+import { shortenHomePath } from "../utils.js";
 import type { OpenClawAgentDatabaseOptions } from "./openclaw-agent-db-contract.js";
 import { resolveOpenClawAgentSqlitePath } from "./openclaw-agent-db.paths.js";
 import { agentDatabaseWriteAdmissionState as admission } from "./openclaw-agent-write-admission-state.js";
@@ -269,7 +270,6 @@ export function runOpenClawAgentBoardReadAdmission<T>(
 export async function runOpenClawAgentWriteAdmissions<T>(
   options: readonly OpenClawAgentDatabaseOptions[],
   run: () => Promise<T> | T,
-  reentrant = false,
   signal?: AbortSignal,
 ): Promise<T> {
   signal?.throwIfAborted();
@@ -281,14 +281,29 @@ export async function runOpenClawAgentWriteAdmissions<T>(
     isActiveStoreWriter(admission.queues, pathname),
   );
   // A nested reader may share one foreground FIFO, never a reserved worker transaction.
-  if (
-    paths.some(
-      (pathname) =>
-        inherited.includes(pathname) &&
-        (!reentrant || paths.length !== 1 || admission.queues.get(pathname)?.holder?.worker),
-    )
-  ) {
-    throw new Error("Session read batch cannot reenter an active SQLite writer admission");
+  const conflicting = paths.find(
+    (pathname) =>
+      inherited.includes(pathname) &&
+      (paths.length !== 1 || admission.queues.get(pathname)?.holder?.worker),
+  );
+  if (conflicting !== undefined) {
+    const holder = admission.queues.get(conflicting)?.holder;
+    const database = shortenHomePath(conflicting);
+    // Keep the refusing admission self-identifying even when the RPC drops its stack.
+    const facts = {
+      database: database.length > 160 ? `...${database.slice(-157)}` : database,
+      operation: holder?.operation ?? "unknown",
+      ...(holder?.caller ? { caller: holder.caller } : {}),
+      ...(holder?.worker ? { workerOperations: [...holder.worker.operations] } : {}),
+      threadId,
+      isMainThread,
+      ...(holder?.startedAt !== undefined
+        ? { ageMs: Math.max(0, Math.round(performance.now() - holder.startedAt)) }
+        : {}),
+    };
+    throw new Error(
+      `Session read batch cannot reenter an active SQLite writer admission: ${JSON.stringify(facts)}`,
+    );
   }
   if (paths.some((pathname) => inherited.some((held) => held > pathname))) {
     throw new Error("Session read batch would invert inherited SQLite writer admission order");

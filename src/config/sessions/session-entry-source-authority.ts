@@ -66,9 +66,7 @@ export function captureSessionEntrySourceAssertion(params: {
   preparedEntry?: ReturnType<typeof retainPreparedSessionEntryPredicate>;
   assertCurrent: () => void;
   assertHostCurrent?: () => void;
-  prepareConversations?: (
-    read: (conversationRefs: readonly string[]) => Promise<ReadonlyMap<string, string | null>>,
-  ) => Promise<{
+  prepareConversations?: () => Promise<{
     alternatives: readonly (readonly SessionSourceConversationPredicate[])[];
     assertCurrent: () => void;
     acceptMatches: (alternatives: readonly number[]) => number[];
@@ -209,22 +207,7 @@ export function captureSessionEntrySourceAssertion(params: {
           }
         }
         assertCurrent();
-        conversations = await params.prepareConversations?.(async (conversationRefs) => {
-          if (conversationRefs.length === 0) {
-            return new Map();
-          }
-          const rows = await retained.owner.readConversations({
-            query: { conversationRefs, currentBindingOnly: true },
-            env,
-          });
-          assertCurrent();
-          return new Map(
-            rows.map((row) => [
-              row.conversationRef,
-              row.sessionKey && row.sessionId ? row.sessionKey : null,
-            ]),
-          );
-        });
+        conversations = await params.prepareConversations?.();
         assertCurrent();
         return {
           assertCurrent,

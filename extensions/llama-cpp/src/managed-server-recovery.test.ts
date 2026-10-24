@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import http from "node:http";
 import path from "node:path";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, expect, it, vi } from "vitest";
@@ -160,6 +161,51 @@ it("restores the managed executable before creating the embedding transport", as
   await embed();
   expect(mocks.install).toHaveBeenCalledWith(expect.objectContaining({ asset }));
   expect(mocks.genericCreate).toHaveBeenCalledTimes(1);
+});
+
+it("reports the missing OpenSSL runtime through embedding errors and status facts", async () => {
+  const { embed, provider } = await createFixture();
+  const server = http.createServer((_request, response) => {
+    response.writeHead(503).end();
+  });
+  await new Promise<void>((resolve) => {
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  try {
+    const address = server.address();
+    if (!address || typeof address === "string") {
+      throw new Error("missing fixture server address");
+    }
+    provider.baseUrl = `http://127.0.0.1:${address.port}/v1`;
+    const detail =
+      "llama-server: error while loading shared libraries: libssl.so.3: cannot open shared object file: No such file or directory";
+    mocks.genericCreate.mockResolvedValue({
+      provider: {
+        id: "llama-cpp",
+        model: "fixture",
+        embed: async () => {
+          throw new Error(detail);
+        },
+      },
+    });
+    const result = await embed();
+    await expect(result.provider?.embed("test")).rejects.toThrow("Install the OpenSSL 3");
+    const facts = Reflect.get(
+      result.provider!,
+      Symbol.for("openclaw.localEmbeddingRuntimeFacts"),
+    )();
+    expect(facts).toMatchObject({
+      state: "failed",
+      loadError: expect.stringContaining("libssl.so.3"),
+    });
+    expect(facts.loadError).toContain("libssl3t64");
+    expect(facts.loadError).toContain(detail);
+    expect(facts.loadError).not.toContain("OpenMP");
+  } finally {
+    await new Promise<void>((resolve, reject) => {
+      server.close((error) => (error ? reject(error) : resolve()));
+    });
+  }
 });
 
 it.each(["custom", "older release", "another state directory"])("ignores %s", async (kind) => {

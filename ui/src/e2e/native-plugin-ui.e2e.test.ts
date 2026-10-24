@@ -330,7 +330,9 @@ suite.define(() => {
         message: "Widget reload failed",
       });
       const failed = await gateway.waitForRequest("plugins.controlUi.report", { after: reports });
-      expect(failed.params).toMatchObject({ pluginId, revision: "pending", status: "failed" });
+      expect(failed.params).toMatchObject({
+        reports: [{ pluginId, revision: "pending", status: "failed" }],
+      });
       await expectHealthy("one");
 
       await reload("two");
@@ -383,6 +385,7 @@ suite.define(() => {
       const pluginPage = page.locator("openclaw-plugin-page");
 
       try {
+        await page.clock.install();
         await page.goto(pluginUrl(), {
           waitUntil: "domcontentloaded",
         });
@@ -433,8 +436,15 @@ suite.define(() => {
         await button(page, "Call current activation").click();
         await gateway.waitForRequest("fixture.current");
         await outcome(page).toBe("completed");
+        await page.clock.fastForward(15_000);
         const activation = await gateway.waitForRequest("plugins.controlUi.report");
-        expect(activation.params).toMatchObject({ pluginId, status: "activated" });
+        expect(activation.params).toMatchObject({
+          reports: expect.arrayContaining([
+            expect.objectContaining({ pluginId, status: "activated" }),
+            expect.objectContaining({ pluginId: "hung-ui", status: "failed" }),
+          ]),
+        });
+        expect(await gateway.getRequests("plugins.controlUi.report")).toHaveLength(1);
         await capture(page, "startup-ready.png");
       } finally {
         bootstrapGate.resolve();
@@ -499,7 +509,8 @@ suite.define(() => {
         await expectOneAccessory();
       }
       await focusChatSidePanel(page);
-      await expectOneAccessory();
+      expect(await accessory.count()).toBe(1);
+      await expect.poll(() => accessory.isVisible()).toBe(false);
       await sidebar(page, "Sessions").click();
       await selectChatLayoutAction(page, "Restore split");
       await expect.poll(() => page.locator(".sidebar-region--expanded").count()).toBe(0);
@@ -618,7 +629,9 @@ suite.define(() => {
       await routePlugin(page);
       await page.goto(pluginUrl());
       const activation = await gateway.waitForRequest("plugins.controlUi.report");
-      expect(activation.params).toMatchObject({ pluginId, revision: "one", status: "activated" });
+      expect(activation.params).toMatchObject({
+        reports: [{ pluginId, revision: "one", status: "activated" }],
+      });
       await heading(page, "one").waitFor();
       await gateway.waitForRequest("plugins.controlUi.report");
       const listed = (await gateway.getRequests("plugins.controlUi.list")).length;
@@ -657,8 +670,10 @@ suite.define(() => {
       await reload("broken");
       await expect
         .poll(async () =>
-          (await gateway.getRequests("plugins.controlUi.report")).some(
-            (request) => (request.params as { status: string }).status === "failed",
+          (await gateway.getRequests("plugins.controlUi.report")).some((request) =>
+            (request.params as { reports: Array<{ status: string }> }).reports.some(
+              (report) => report.status === "failed",
+            ),
           ),
         )
         .toBe(true);
@@ -677,7 +692,7 @@ suite.define(() => {
         const receipt = await gateway.waitForRequest("plugins.controlUi.report", {
           after: reported,
         });
-        expect(receipt.params).toMatchObject({ pluginId, revision, status });
+        expect(receipt.params).toMatchObject({ reports: [{ pluginId, revision, status }] });
         await heading(page, "withdrawn").waitFor();
         const calls = (await gateway.getRequests("fixture.current")).length;
         await button(page, "Call current activation").click();
@@ -690,7 +705,7 @@ suite.define(() => {
           ).toBe("");
         }
         if (status === "failed") {
-          const { error } = receipt.params as { error: string };
+          const { error } = (receipt.params as { reports: Array<{ error: string }> }).reports[0]!;
           expect(error).toEqual(expect.stringMatching(/\S/));
           await page
             .getByRole("alert")
@@ -755,9 +770,7 @@ suite.define(() => {
         after: reported,
       });
       expect(reconnected.params).toMatchObject({
-        pluginId,
-        revision: "three",
-        status: "activated",
+        reports: [{ pluginId, revision: "three", status: "activated" }],
       });
       await heading(page, "three").waitFor();
       retiredSelections.connection = await readComposerSelection();
@@ -765,7 +778,7 @@ suite.define(() => {
     });
   });
 
-  it("activates healthy peers while a hung initializer times out and releases the reload control", async () => {
+  it("times out a hung initializer and releases the reload control", async () => {
     await withPluginPage(async ({ page }) => {
       const gateway = await mockPlugin(page, "one", {
         featureMethods: ["plugins.controlUi.reload"],
@@ -773,7 +786,9 @@ suite.define(() => {
       await routePlugin(page, undefined, true);
       await page.goto(pluginUrl());
       const activation = await gateway.waitForRequest("plugins.controlUi.report");
-      expect(activation.params).toMatchObject({ pluginId, revision: "one", status: "activated" });
+      expect(activation.params).toMatchObject({
+        reports: [{ pluginId, revision: "one", status: "activated" }],
+      });
       await heading(page, "one").waitFor();
       await page.clock.install();
       const next = withHungPeer("two");
@@ -783,13 +798,7 @@ suite.define(() => {
       const reload = button(page, "Reload plugin UI");
       await reload.click();
       await gateway.waitForRequest("fixture.peerStarted");
-      await expect
-        .poll(async () =>
-          (await gateway.getRequests("plugins.controlUi.report")).map((request) => request.params),
-        )
-        .toContainEqual(
-          expect.objectContaining({ pluginId, revision: "two", status: "activated" }),
-        );
+      // Keep the manager mounted: it owns the reload button's pending state.
       expect(await reload.isDisabled()).toBe(true);
       await waitForPendingPluginInitializer(page);
       await page.clock.fastForward(15_000);
@@ -806,8 +815,15 @@ suite.define(() => {
       await outcome(page).toBe("released");
       expect(await gateway.getRequests("fixture.latePeer")).toHaveLength(0);
       expect(
-        (await gateway.getRequests("plugins.controlUi.report")).map((request) => request.params),
-      ).toContainEqual(expect.objectContaining({ pluginId: "hung-ui", status: "failed" }));
+        (await gateway.getRequests("plugins.controlUi.report")).flatMap(
+          (request) => requireRecord(request.params).reports,
+        ),
+      ).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ pluginId, revision: "two", status: "activated" }),
+          expect.objectContaining({ pluginId: "hung-ui", status: "failed" }),
+        ]),
+      );
     });
   });
 });

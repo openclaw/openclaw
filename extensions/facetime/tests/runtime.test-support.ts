@@ -114,8 +114,8 @@ export const carrierPeer = {
   processStartedAtMs: Date.parse("Tue Nov 14 22:13:20 2023"),
   connectionGeneration: 7,
 };
-export const commandResult = (stdout = "", code = 0) => ({ code, stdout, stderr: "" });
-export const mutedResult = (outcome: string, muted: boolean) => ({
+const commandResult = (stdout = "", code = 0) => ({ code, stdout, stderr: "" });
+const mutedResult = (outcome: string, muted: boolean) => ({
   outcome,
   muted,
   is_uplink_muted: muted,
@@ -193,12 +193,6 @@ export const pendingDialCancellationResult = (callUUID?: string) => ({
     { helperBundleIdentifier: "com.apple.mobilephone", cancelled: false, found: false },
   ],
 });
-
-export const outgoingCall = (
-  callUUID: string,
-  status = 1,
-  identity: { dial_id?: string; is_sending_audio?: boolean } = {},
-) => incomingCall(status, { call_uuid: callUUID, is_outgoing: true, ...identity });
 
 export const endedCall = (callUUID: string, identity: { dial_id?: string } = {}) => ({
   event: "ft-call-status-changed",

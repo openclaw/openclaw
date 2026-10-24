@@ -7,6 +7,7 @@ import { claimPendingAgentQuestionAnswerFromCaller } from "../../agents/harness/
 import { readQuestionRejection } from "../../agents/tools/gateway-question-lifecycle.js";
 import { logVerbose } from "../../globals.js";
 import { beginSessionControllerSourceInjection } from "../../sessions/session-controller.mailbox.js";
+import { isExplicitFollowupCommandTurn } from "../command-turn-context.js";
 import { markReplyPayloadForSourceSuppressionDelivery } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
 import type { RunReplyAgentParams } from "./agent-runner-core.js";
@@ -17,6 +18,7 @@ import { resolveInboundReplyToolAuthorityOverlay } from "./reply-tool-authority.
 
 type ReplyQuestionInputParams = Pick<
   RunReplyAgentParams,
+  | "steeringIntent"
   | "commandBody"
   | "transcriptCommandBody"
   | "followupRun"
@@ -28,7 +30,7 @@ type ReplyQuestionInputParams = Pick<
 >;
 
 type ReplyQuestionInputResult =
-  | { handled: false }
+  | { handled: false; requesterMismatch?: true }
   | { handled: true; payload: ReplyPayload | undefined };
 
 /** Question-only runtimes accept answers without exposing ordinary steering. */
@@ -46,8 +48,9 @@ export async function runReplyQuestionInput(
   ).trim();
   if (
     !sessionKey ||
-    opts?.isHeartbeat ||
+    params.steeringIntent?.kind === "new-execution" ||
     params.resetTriggered ||
+    isExplicitFollowupCommandTurn(params.sessionCtx) ||
     opts?.messageInjectionDisposition === "accepted" ||
     !external ||
     !text ||
@@ -109,6 +112,9 @@ export async function runReplyQuestionInput(
           }
         },
       });
+      if (claimed === "requester-mismatch") {
+        return { handled: false, requesterMismatch: true };
+      }
       if (!claimed) {
         return { handled: false };
       }

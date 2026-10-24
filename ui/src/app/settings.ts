@@ -30,6 +30,7 @@ import {
   normalizeAccentColor,
   normalizeCatalogOpenTarget,
   normalizeChatFollowUpModeOverride,
+  normalizeChatMessageMaxWidth,
   normalizeChatSendShortcut,
   normalizeChatWorkspaceDock,
   normalizeTextScale,
@@ -37,13 +38,6 @@ import {
   type UiPreferences,
   type UiSettings,
 } from "./settings-contract.ts";
-import type {
-  ScopedSessionSelection,
-  PersistedUiSettings,
-  PersistedSettingsSource,
-  ProfileNavigation,
-  SettingsStorageFallback,
-} from "./settings-storage-types.ts";
 import { normalizeTerminalFontFamily } from "./terminal-font.ts";
 import { parseThemeSelection } from "./theme.ts";
 import { normalizeTypefaceOverride } from "./typography.ts";
@@ -51,7 +45,6 @@ import { normalizeLocalUserIdentity, type LocalUserIdentity } from "./user-ident
 
 export {
   normalizeCatalogOpenTarget,
-  normalizeChatFollowUpMode,
   normalizeChatFollowUpModeOverride,
   normalizeChatSendShortcut,
   normalizeTextScale,
@@ -66,6 +59,45 @@ export type {
   UiPreferences,
   UiSettings,
 } from "./settings-contract.ts";
+
+// The existing gateway-scoped browser record; profile snapshots contain references only.
+type ScopedSessionSelection = {
+  sessionKey: string;
+  lastActiveSessionKey: string;
+  selectedAgentId?: string;
+};
+
+type ProfileNavigation = { railShortcuts: string[] };
+type PersistedUiSettings = Omit<
+  UiSettings,
+  | "token"
+  | "sessionKey"
+  | "lastActiveSessionKey"
+  | "selectedAgentId"
+  | "navCollapsed"
+  | "sidebarEntries"
+  | "background"
+> &
+  Partial<ProfileNavigation> & {
+    token?: never;
+    sessionsByGateway?: Record<string, ScopedSessionSelection>;
+    navigationByProfile?: Record<string, Partial<ProfileNavigation> & Record<string, unknown>>;
+    // Retired sidebar order is preserved as opaque data, never used as rail shortcuts.
+    sidebarEntries?: unknown;
+    sidebarPinnedRoutes?: unknown;
+  };
+
+type PersistedSettingsSource = {
+  gatewayUrl: string;
+  parsed: PersistedUiSettings;
+  available: boolean;
+};
+
+type SettingsStorageFallback = {
+  key: string;
+  record: PersistedUiSettings;
+  pendingNavigation: Record<string, ProfileNavigation> | null;
+};
 
 const SETTINGS_KEY_PREFIX = "openclaw.control.settings.v1:";
 const LEGACY_SETTINGS_KEY = "openclaw.control.settings.v1";
@@ -85,49 +117,6 @@ function currentGatewaySelectionKeyForPage(pageUrl: string): string {
   return `${CURRENT_GATEWAY_SELECTION_KEY_PREFIX}${gatewayOriginScope(pageUrl)}`;
 }
 
-const CSS_WIDTH_KEYWORDS = new Set(["none", "min-content", "max-content"]);
-const CSS_WIDTH_FUNCTIONS = new Set(["calc", "clamp", "fit-content", "max", "min"]);
-const CSS_WIDTH_UNITS = new Set(["ch", "em", "rem", "vh", "vmax", "vmin", "vw", "px"]);
-const CSS_WIDTH_ALLOWED_CHARS = /^[0-9A-Za-z.%+\-*/(),\s]+$/;
-const CSS_WIDTH_IDENTIFIER_RE = /[A-Za-z][A-Za-z0-9-]*/g;
-const CSS_WIDTH_SIMPLE_RE = /^(?:\d+(?:\.\d+)?|\.\d+)(?:px|rem|em|ch|vw|vh|vmin|vmax|%)$/i;
-const CSS_WIDTH_MAX_LENGTH = 96;
-
-function hasAllowedWidthIdentifiers(value: string): boolean {
-  for (const match of value.matchAll(CSS_WIDTH_IDENTIFIER_RE)) {
-    const identifier = match[0].toLowerCase();
-    if (
-      !CSS_WIDTH_FUNCTIONS.has(identifier) &&
-      !CSS_WIDTH_KEYWORDS.has(identifier) &&
-      !CSS_WIDTH_UNITS.has(identifier)
-    ) {
-      return false;
-    }
-  }
-  return true;
-}
-
-export function normalizeChatMessageMaxWidth(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const normalized = value.trim().replace(/\s+/g, " ");
-  if (normalized.length === 0 || normalized.length > CSS_WIDTH_MAX_LENGTH) {
-    return undefined;
-  }
-  if (CSS_WIDTH_KEYWORDS.has(normalized.toLowerCase()) || CSS_WIDTH_SIMPLE_RE.test(normalized)) {
-    return normalized;
-  }
-  if (
-    !CSS_WIDTH_ALLOWED_CHARS.test(normalized) ||
-    !CSS.supports("max-width", normalized) ||
-    !hasAllowedWidthIdentifiers(normalized)
-  ) {
-    return undefined;
-  }
-  return /^(?:calc|clamp|fit-content|max|min)\(.+\)$/i.test(normalized) ? normalized : undefined;
-}
-
 function normalizeSidebarPreTeamScope(value: unknown): string | null | undefined {
   const agentId = normalizeOptionalString(value);
   return value === null ? null : agentId ? normalizeAgentId(agentId) : undefined;
@@ -137,6 +126,18 @@ type BooleanSettingKey = {
   [K in keyof UiPreferences]-?: UiPreferences[K] extends boolean | undefined ? K : never;
 }[keyof UiPreferences] &
   keyof PersistedUiSettings;
+
+function normalizeDetailsDismissedProcesses(value: unknown): Record<string, string[]> | undefined {
+  const record = asOptionalRecord(value);
+  if (!record) {
+    return undefined;
+  }
+  const entries = Object.entries(record).flatMap(([scope, storedIds]) => {
+    const ids = normalizeUniqueTrimmedStringList(storedIds);
+    return ids?.length ? [[scope, ids] as const] : [];
+  });
+  return entries.length ? Object.fromEntries(entries) : undefined;
+}
 
 function deriveDefaultGatewayUrl(): { pageUrl: string; effectiveUrl: string } {
   const proto = location.protocol === "https:" ? "wss" : "ws";
@@ -433,6 +434,9 @@ export function loadUiPreferences(
       chatPersistCommentary: booleanSetting("chatPersistCommentary"),
       chatShowTaskProgress: booleanSetting("chatShowTaskProgress"),
       chatCollapseTaskProgress: booleanSetting("chatCollapseTaskProgress"),
+      detailsDismissedProcesses: normalizeDetailsDismissedProcesses(
+        parsed.detailsDismissedProcesses,
+      ),
       chatBubbleSessionKeys: normalizeChatBubbleSessionKeys(parsed.chatBubbleSessionKeys),
       chatBubbleDisabledSessionKeys: normalizeChatBubbleSessionKeys(
         parsed.chatBubbleDisabledSessionKeys,
@@ -462,6 +466,7 @@ export function loadUiPreferences(
       sidebarAgentsMode: parsed.sidebarAgentsMode === "roster" ? "roster" : "chip",
       sidebarPreTeamScope: normalizeSidebarPreTeamScope(parsed.sidebarPreTeamScope),
       sidebarCollapsedAgentIds: normalizeUniqueTrimmedStringList(parsed.sidebarCollapsedAgentIds),
+      sidebarRecentlyCreatedAgentId: normalizeOptionalString(parsed.sidebarRecentlyCreatedAgentId),
       sidebarEntries: profileId
         ? (personalNavigation?.railShortcuts ?? defaults.sidebarEntries)
         : (normalizeSidebarEntries(parsedRecord.railShortcuts) ?? defaults.sidebarEntries),
@@ -583,6 +588,7 @@ export function saveSettings(
     chatPersistCommentary: next.chatPersistCommentary ?? true,
     chatShowTaskProgress: next.chatShowTaskProgress === false ? false : undefined,
     chatCollapseTaskProgress: next.chatCollapseTaskProgress === true ? true : undefined,
+    detailsDismissedProcesses: normalizeDetailsDismissedProcesses(next.detailsDismissedProcesses),
     chatBubbleSessionKeys: normalizeChatBubbleSessionKeys(next.chatBubbleSessionKeys),
     chatBubbleDisabledSessionKeys: normalizeChatBubbleSessionKeys(
       next.chatBubbleDisabledSessionKeys,
@@ -633,6 +639,7 @@ export function saveSettings(
     showAdvancedSettings: next.showAdvancedSettings === true ? true : undefined,
     // Empty pin list is the default; only real pins persist.
     pinnedAgentIds: next.pinnedAgentIds?.length ? next.pinnedAgentIds : undefined,
+    sidebarRecentlyCreatedAgentId: normalizeOptionalString(next.sidebarRecentlyCreatedAgentId),
     textScale: next.textScale !== undefined ? normalizeTextScale(next.textScale) : undefined,
     customTheme: next.customTheme || undefined,
     sessionsByGateway,

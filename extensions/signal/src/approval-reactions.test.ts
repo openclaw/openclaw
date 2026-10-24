@@ -6,13 +6,31 @@ import {
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   addSignalApprovalReactionHintToStructuredPayload,
-  clearSignalApprovalReactionTargetsForTest,
   maybeResolveSignalApprovalReaction,
   registerSignalApprovalReactionTargetForDeliveredPayload,
   registerSignalApprovalReactionTarget,
   resolveSignalApprovalReactionTargetWithPersistence,
 } from "./approval-reactions.js";
 import * as signalRuntime from "./runtime.js";
+
+const reactionStores = vi.hoisted(() => new Set<{ clearForTest(): void }>());
+
+vi.mock("openclaw/plugin-sdk/approval-reaction-runtime", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("openclaw/plugin-sdk/approval-reaction-runtime")>();
+  return {
+    ...actual,
+    createApprovalReactionTargetStore: <TTarget>(
+      params: Parameters<typeof actual.createApprovalReactionTargetStore<TTarget>>[0],
+    ) => {
+      const store = actual.createApprovalReactionTargetStore<TTarget>(params);
+      if (params.namespace === "signal.approval-reactions.v2") {
+        reactionStores.add(store);
+      }
+      return store;
+    },
+  };
+});
 
 const resolverMocks = vi.hoisted(() => ({
   resolveSignalApproval: vi.fn(),
@@ -139,7 +157,7 @@ function execPayload(approvalId: string) {
 
 describe("Signal approval reactions", () => {
   beforeEach(() => {
-    clearSignalApprovalReactionTargetsForTest();
+    reactionStores.forEach((store) => store.clearForTest());
     resolverMocks.resolveSignalApproval.mockReset().mockResolvedValue({
       applied: true,
       approval: { status: "allowed", decision: "allow-once" },
@@ -172,10 +190,10 @@ describe("Signal approval reactions", () => {
       },
     } as never);
     try {
-      clearSignalApprovalReactionTargetsForTest();
+      reactionStores.forEach((store) => store.clearForTest());
       await expect(lookup("corrupt-message")).resolves.toBeNull();
     } finally {
-      clearSignalApprovalReactionTargetsForTest();
+      reactionStores.forEach((store) => store.clearForTest());
       runtime.mockRestore();
     }
   });

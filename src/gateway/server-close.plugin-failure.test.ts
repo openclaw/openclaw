@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
 import { expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
 import { runGatewayLoop } from "../cli/gateway-cli/run-loop.js";
 import {
   requestGatewayRestartWithSignalAdmission,
@@ -33,12 +34,7 @@ it.each(["restart", "memory-and-plugin", "session-store"] as const)(
   "reports plugin cleanup through registered Gateway close (%s)",
   async (mode) => {
     const fixture = await createGatewayMetadataCloseFixture(`plugin-close-${mode}`);
-    fixture.config.agents = {
-      defaults: {
-        workspace: fixture.state.workspaceDir,
-        model: { primary: `${fixture.pluginId}/model` },
-      },
-    };
+    fixture.config.agents!.defaults!.model = { primary: `${fixture.pluginId}/model` };
     const pluginFailure = new Error("registered plugin cleanup failed");
     const memoryFailure = new Error("registered memory cleanup failed");
     const stateFailure = mode === "session-store";
@@ -189,12 +185,11 @@ it.each(["restart", "memory-and-plugin", "session-store"] as const)(
         .finally(() => {
           closeSettled = true;
         });
-      await Promise.race([
+      await awaitGateBeforeSettlement(
         sharedEntered.promise,
-        outcome.then(() => {
-          throw new Error("Close settled before shared cleanup");
-        }),
-      ]);
+        outcome,
+        "Close settled before shared cleanup",
+      );
       await nextTurn();
       expect(closeSettled).toBe(false);
       expect(sharedSettled).toBe(false);
@@ -219,19 +214,17 @@ it.each(["restart", "memory-and-plugin", "session-store"] as const)(
       }
       await flushLogger();
       const logs = await fs.readFile(logFile, "utf8");
+      const cleanupFailure = (hook: string) =>
+        `Plugin ${fixture.pluginId} cleanup failed (${hook}): ${pluginFailure.message}`;
       if (stateFailure) {
-        expect(logs).toContain(
-          `Plugin ${fixture.pluginId} cleanup failed (session-store): ${pluginFailure.message}`,
-        );
+        expect(logs).toContain(cleanupFailure("session-store"));
         expect(logs).toMatch(/shutdown failed/);
       }
       if (hasPluginFailure) {
         expect(logs).toMatch(
           new RegExp(`shutdown completed .*with warnings:.*plugin/${fixture.pluginId}`),
         );
-        expect(logs).toContain(
-          `Plugin ${fixture.pluginId} cleanup failed (instance): ${pluginFailure.message}`,
-        );
+        expect(logs).toContain(cleanupFailure("instance"));
         expect(logs).not.toContain("shutdown completed cleanly");
       }
       if (hasMemoryFailure) {

@@ -9,6 +9,9 @@ on:
       mode:
         type: string
         default: stock
+      resource_diagnostics:
+        type: boolean
+        default: true
   workflow_dispatch:
     inputs:
       mode:
@@ -16,6 +19,10 @@ on:
         type: choice
         options: [stock, compare]
         default: stock
+      resource_diagnostics:
+        description: Collect the temporary resource timeline
+        type: boolean
+        default: true
 
 permissions:
   actions: read
@@ -117,7 +124,7 @@ jobs:
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
-          node-version: "24.21.0"
+          node-version: "24.22.1"
           install-bun: "false"
           cache-mode: "off"
 
@@ -181,8 +188,10 @@ jobs:
       - name: Qualify native pairing and chat
         env:
           OPENCLAW_CI_SIMSLIM_BINARY: ${{ steps.simslim.outputs.binary }}
+          OPENCLAW_IOS_RESOURCE_DIAGNOSTICS: ${{ inputs.resource_diagnostics && '1' || '0' }}
         run: |
-          node --import ./scripts/tsx.mjs scripts/ios-release-e2e.ts \
+          node scripts/ios-resource-timeline.mjs --output "$RUNNER_TEMP/ios-resource-timeline.jsonl" -- \
+            node --import ./scripts/tsx.mjs scripts/ios-release-e2e.ts \
             --mode "$E2E_MODE" --target-sha "$TARGET_SHA" --output "$PROOF_PATH" \
             --gateway-selection "$GATEWAY_SELECTION_DIR"
 
@@ -212,6 +221,8 @@ jobs:
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ios-release-e2e-${{ inputs.mode }}-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/ios-release-e2e-proof.json
+          path: |
+            ${{ runner.temp }}/ios-release-e2e-proof.json
+            ${{ runner.temp }}/ios-resource-timeline.jsonl
           if-no-files-found: error
           retention-days: 14

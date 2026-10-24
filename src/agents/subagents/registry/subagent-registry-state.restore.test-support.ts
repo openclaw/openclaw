@@ -4,7 +4,7 @@ import { sessionChanges } from "../../../sessions/session-row-changes.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import * as stateReads from "../../../state/openclaw-state-db-readonly.js";
 import { bindSubagentRunGatewayOwners } from "./subagent-registry-gateway-owner.js";
-import { subagentRuns } from "./subagent-registry-memory.js";
+import { getSubagentActivationRuns, subagentRuns } from "./subagent-registry-memory.js";
 import { restoreSubagentRunsFromDisk } from "./subagent-registry-persistence.js";
 import { persistRegistryFixture } from "./subagent-registry-state.fixture.test-support.js";
 import {
@@ -19,7 +19,7 @@ export function registerSubagentRestoreCacheCases(params: {
   refuseNextWrite(): void;
 }) {
   const { createRun } = params;
-  it("binds restored history without publishing unchanged session facts", async () => {
+  it("keeps restored history cold without publishing unchanged session facts", async () => {
     vi.useRealTimers();
     const restored = new Map(
       Array.from({ length: 257 }, (_, index) => {
@@ -43,6 +43,7 @@ export function registerSubagentRestoreCacheCases(params: {
       expect(
         await bindSubagentRunGatewayOwners({
           runs: subagentRuns,
+          entries: [...getSubagentActivationRuns(subagentRuns)],
           resumedRuns: new Set(),
           getGatewayContextResolver: () => gateway.resolveGatewayContext,
           onRecovered: () => {},
@@ -51,7 +52,7 @@ export function registerSubagentRestoreCacheCases(params: {
       expect(observe).not.toHaveBeenCalled();
       expect(subagentRuns.size).toBe(restored.size);
       for (const entry of subagentRuns.values()) {
-        expect(getGatewayContextResolver(entry)?.()).toBe(gateway);
+        expect(getGatewayContextResolver(entry)).toBeUndefined();
         expect(entry.execution.outcome).toEqual({ status: "ok" });
       }
       expect(() => registration.assertCurrent()).not.toThrow();

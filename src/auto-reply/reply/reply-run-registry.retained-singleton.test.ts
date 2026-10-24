@@ -1,8 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { resetSessionControllerStorageForTest } from "../../sessions/session-controller-storage-reset.test-support.js";
 
 const REPLY_RUN_STATE_KEY = Symbol.for("openclaw.sessionControllers");
 
 afterEach(() => {
+  resetSessionControllerStorageForTest();
   const store = globalThis as Record<PropertyKey, unknown>;
   delete store[REPLY_RUN_STATE_KEY];
   vi.resetModules();

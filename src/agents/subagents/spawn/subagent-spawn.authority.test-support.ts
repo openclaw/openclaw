@@ -39,7 +39,7 @@ import {
 import { resetSubagentRegistryForTests } from "../registry/subagent-registry.test-helpers.js";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
 import { isSameSubagentRun } from "../registry/subagent-run-generation.js";
-import { testing as schedulerTesting } from "../swarm/swarm-scheduler.test-support.js";
+import { observeSwarmSchedulerWork } from "../swarm/swarm-scheduler.lifecycle.test-support.js";
 import { testing as spawnTesting } from "./subagent-spawn.test-support.js";
 
 vi.mock("../../runtime-plugins.js", () => ({
@@ -210,6 +210,7 @@ export function installSpawnAuthorityFixture() {
   const env = captureEnv(["OPENCLAW_STATE_DIR", "OPENCLAW_CONFIG_PATH"]);
   let stateDir = "";
   let pluginSnapshot: ReturnType<typeof plugins.captureActivePluginRegistrySnapshot>;
+  let schedulerWork: ReturnType<typeof observeSwarmSchedulerWork>;
   const settle = () => settleSubagentRegistryPersistenceWork();
   const writeSession = (key: string, id: string, agentId = "main", revision?: string) =>
     writeSubagentSessionEntry({
@@ -231,6 +232,7 @@ export function installSpawnAuthorityFixture() {
     if (stateDir) {
       throw new Error("Previous spawn authority fixture cleanup is incomplete");
     }
+    schedulerWork = observeSwarmSchedulerWork();
     pluginSnapshot = plugins.captureActivePluginRegistrySnapshot();
     stateDir = await realpath(await mkdtemp(path.join(os.tmpdir(), "openclaw-spawn-authority-")));
     setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
@@ -263,12 +265,18 @@ export function installSpawnAuthorityFixture() {
     const recordFailure = (error: unknown) => {
       failures.push(error);
     };
+    let schedulerClosed = false;
+    try {
+      await schedulerWork.close();
+      schedulerClosed = true;
+    } catch (error) {
+      recordFailure(error);
+    }
     await settle().catch(recordFailure);
     // Settled delivery failures still permit cleanup; live roots retain their stores.
-    if (getActiveGatewayRootWorkCount() === 0) {
+    if (schedulerClosed && getActiveGatewayRootWorkCount() === 0) {
       try {
         await resetSubagentRegistryForTests({ persist: false });
-        schedulerTesting.reset();
         await cleanupSessionStateForTest({ stateDir });
         vi.mocked(loadAgentRuntimePluginRegistryHandle).mockReset();
         vi.mocked(callGateway).mockReset();
@@ -310,6 +318,7 @@ export function installSpawnAuthorityFixture() {
         dispatchAgent: unexpectedRecovery,
         dispatchSessionMethod: unexpectedRecovery,
         sendRecoveryNotice: unexpectedRecovery,
+        resumeChatInput: unexpectedRecovery,
       } satisfies GatewayRecoveryRuntime,
     });
     const admission = runContext.prepareSystemAgentRunAdmission(

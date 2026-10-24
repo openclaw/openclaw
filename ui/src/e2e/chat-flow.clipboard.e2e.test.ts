@@ -382,7 +382,7 @@ suite.define(() => {
         });
 
         await page.goto(`${suite.server.baseUrl}chat`);
-        await page.locator(".chat-pane__workspace-chip").click();
+        await page.locator(".chat-pane__workspace-chip").filter({ visible: true }).click();
         await gateway.waitForRequest("worktrees.branches");
         await page
           .locator(".chat-pane__workspace-menu")

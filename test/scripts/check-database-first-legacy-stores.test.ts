@@ -106,15 +106,6 @@ const writeFileOptionsCase = importedSourceCase(writeFileImport, [
   "}",
 ]);
 
-function namedCases(cases: Record<string, UnnamedViolationCase>) {
-  return Object.entries(cases).map(([name, { source, filename, expected }]) => ({
-    name,
-    source,
-    filename,
-    expected,
-  }));
-}
-
 function branchDefaultCase(unknown: boolean) {
   return createSourceCase(`
         import { promises as fs } from "node:fs";
@@ -251,9 +242,20 @@ describe("check-database-first-legacy-stores", () => {
     ]);
   });
 
+  it("keeps transcript bridge markers out of runtime while permitting migration owners", () => {
+    const source = 'const transcriptLocator = "sqlite-transcript://legacy";';
+    expect(violations(source, "src/runtime/fixture.ts")).toEqual([
+      { kind: "legacy transcript bridge marker", line: 1 },
+    ]);
+    expect(violations(source, "src/commands/doctor/fixture.ts")).toEqual([]);
+    expect(
+      violations('type Locator = "sqlite-transcript://legacy";', "src/runtime/fixture.ts"),
+    ).toEqual([]);
+  });
+
   // Legacy paths and literal propagation.
   it.each(
-    namedCases({
+    Object.entries({
       "allows the CLI preflight to detect exact legacy restart sentinel inputs": sourceCase`
         import fs from "node:fs";
         [
@@ -760,7 +762,7 @@ describe("check-database-first-legacy-stores", () => {
         { kind: "legacy transcript bridge marker", line: 3 },
       ]),
     }),
-  )("$name", ({ source, filename, expected }) => {
+  )("%s", (_name, { source, filename, expected }) => {
     expect(violations(source, filename)).toEqual(expected);
   });
 

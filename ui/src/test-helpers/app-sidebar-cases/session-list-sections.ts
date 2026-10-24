@@ -134,8 +134,9 @@ describe("AppSidebar session section visibility", () => {
     harness.publish({ groups: ["Empty", "Alpha"] });
     const gateway = createGateway({} as GatewayBrowserClient);
     const { sidebar } = await mountSidebar(gateway, harness.sessions);
+    await activateSessionMenuValue(sidebar, "empty-groups:never");
 
-    // Empty user-created groups stay visible (creation and drag targets);
+    // Never keeps empty user-created groups as creation and drag targets;
     // only the bare Other header disappears while nothing lives in it.
     const emptyCategory = sidebar.querySelector('[data-session-section="category:Empty"]');
     const emptyCategoryHeader = emptyCategory?.querySelector(
@@ -168,6 +169,7 @@ describe("AppSidebar session section visibility", () => {
     const gateway = createGateway({} as GatewayBrowserClient);
     const mounted = await mountSidebar(gateway, harness.sessions);
     let sidebar = mounted.sidebar;
+    await activateSessionMenuValue(sidebar, "empty-groups:never");
     sidebar.sessionOrganizer.saveCollapsedSessionSections(new Set(["category:Alpha"]));
     await sidebar.updateComplete;
 
@@ -189,8 +191,17 @@ describe("AppSidebar session section visibility", () => {
     expect(sidebar.querySelector('[data-session-key="agent:main:alpha"]')).toBeNull();
 
     // Membership changes reveal and hide groups without changing the preference.
-    alpha.category = "Empty";
-    harness.publish({ groups: ["Empty", "Alpha"] });
+    const result = harness.sessions.state.result!;
+    harness.publishList({
+      result: {
+        ...result,
+        sessions: result.sessions.with(result.sessions.indexOf(alpha), {
+          ...alpha,
+          category: "Empty",
+        }),
+      },
+      groups: ["Empty", "Alpha"],
+    });
     await settleLitElement(sidebar);
     expect(groupNames()).toEqual(["category:Empty"]);
     await chooseEmptyGroups("never");

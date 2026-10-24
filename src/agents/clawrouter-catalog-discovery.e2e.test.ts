@@ -17,6 +17,8 @@ import {
   createApiKeyCredential,
   createAuthProfileStoreFixture,
 } from "./auth-profiles/credential-fixtures.test-support.js";
+import { isCodeModeEngagedForModel, resolveCodeModeConfig } from "./code-mode-runtime.js";
+import { resolveBundledStaticCatalogModel } from "./embedded-agent-runner/model.static-catalog.js";
 import { createModelCatalogDecisions } from "./model-catalog-decisions.js";
 import { createPreparedModelCatalogWorkerInput } from "./prepared-model-catalog-worker.js";
 import type {
@@ -42,23 +44,13 @@ describe("ClawRouter cold prepared catalog", () => {
     await state.cleanup();
   });
 
-  it.each([
-    {
-      label: "publishes metadata with a sibling catalog=false",
-      sibling: false,
-      refreshedAuth: false,
-    },
-    {
-      label: "publishes metadata with a sibling catalog=true",
-      sibling: true,
-      refreshedAuth: false,
-    },
-    {
-      label: "discovers a provider introduced by refreshed auth",
-      sibling: true,
-      refreshedAuth: true,
-    },
-  ])("$label", async ({ sibling, refreshedAuth }) => {
+  // Publishes the real ClawRouter catalog through the prepared catalog worker.
+  async function publishCatalog(params: {
+    sibling: boolean;
+    refreshedAuth: boolean;
+    catalogProviders: unknown[];
+  }) {
+    const { sibling, refreshedAuth } = params;
     state = await createOpenClawTestState({
       label: "clawrouter-catalog",
       env: {
@@ -76,27 +68,7 @@ describe("ClawRouter cold prepared catalog", () => {
         createServer((request, response) => {
           requests.push({ url: request.url, authorization: request.headers.authorization });
           response.setHeader("content-type", "application/json");
-          response.end(
-            JSON.stringify({
-              providers: [
-                {
-                  id: "private",
-                  displayName: "Synthetic provider",
-                  openaiCompatible: true,
-                  nativeBaseUrl: "/v1/native/private",
-                  models: [
-                    {
-                      id: "codex-latest",
-                      displayName: "Codex (Latest)",
-                      upstream: "codex-latest",
-                      capabilities: ["llm.responses"],
-                      supportedReasoningEfforts: ["low", "high"],
-                    },
-                  ],
-                },
-              ],
-            }),
-          );
+          response.end(JSON.stringify({ providers: params.catalogProviders }));
         }),
     });
     const baseUrl = `http://127.0.0.1:${server.claim.port}/private`;
@@ -159,9 +131,44 @@ describe("ClawRouter cold prepared catalog", () => {
     const prepared = await prepareWorkspaceBuildGroup([input], "static", {
       preferBuiltPluginArtifacts: true,
     });
+    const metadata = prepared.pluginGeneration.pluginMetadataSnapshot;
+    // The local catalog server stands in for the provider-owned endpoint. Match the
+    // fixture's manifest route to that endpoint without relaxing production policy.
+    const withLocalEndpoint = (plugin: (typeof metadata.plugins)[number]) => {
+      const catalog = plugin.modelCatalog;
+      const provider = catalog?.providers?.clawrouter;
+      if (plugin.id !== "clawrouter" || !catalog || !provider) {
+        return plugin;
+      }
+      return {
+        ...plugin,
+        modelCatalog: {
+          ...catalog,
+          providers: {
+            ...catalog.providers,
+            clawrouter: { ...provider, baseUrl },
+          },
+        },
+      };
+    };
+    const pluginMetadataSnapshot = {
+      ...metadata,
+      plugins: metadata.plugins.map(withLocalEndpoint),
+      manifestRegistry: {
+        ...metadata.manifestRegistry,
+        plugins: metadata.manifestRegistry.plugins.map(withLocalEndpoint),
+      },
+      byPluginId: new Map(
+        [...metadata.byPluginId].map(([id, plugin]) => [id, withLocalEndpoint(plugin)]),
+      ),
+    };
+    expect(pluginMetadataSnapshot.byPluginId.get("clawrouter")).toMatchObject({
+      modelCatalog: { discovery: { clawrouter: "runtime" }, runtimeAugment: true },
+    });
     const value = createPreparedModelCatalogWorkerInput({
       agentFacts: prepared.agentFacts[0]!,
-      pluginMetadataSnapshot: prepared.pluginGeneration.pluginMetadataSnapshot,
+      pluginMetadataSnapshot,
+      preferBuiltPluginArtifacts: true,
     });
     if (refreshedAuth) {
       // The new credential must enter through the worker's durable auth refresh,
@@ -198,6 +205,50 @@ describe("ClawRouter cold prepared catalog", () => {
     if (result.status !== "ok" || result.kind !== "catalog") {
       throw new Error("catalog worker did not publish a catalog");
     }
+    expect(requests).toEqual([
+      { url: "/private/v1/catalog", authorization: "Bearer catalog-test-key" },
+    ]);
+    return { agentId, baseUrl, config, pluginMetadataSnapshot, result };
+  }
+
+  it.each([
+    {
+      label: "publishes metadata with a sibling catalog=false",
+      sibling: false,
+      refreshedAuth: false,
+    },
+    {
+      label: "publishes metadata with a sibling catalog=true",
+      sibling: true,
+      refreshedAuth: false,
+    },
+    {
+      label: "discovers a provider introduced by refreshed auth",
+      sibling: true,
+      refreshedAuth: true,
+    },
+  ])("$label", async ({ sibling, refreshedAuth }) => {
+    const { agentId, baseUrl, config, pluginMetadataSnapshot, result } = await publishCatalog({
+      sibling,
+      refreshedAuth,
+      catalogProviders: [
+        {
+          id: "private",
+          displayName: "Synthetic provider",
+          openaiCompatible: true,
+          nativeBaseUrl: "/v1/native/private",
+          models: [
+            {
+              id: "codex-latest",
+              displayName: "Codex (Latest)",
+              upstream: "codex-latest",
+              capabilities: ["llm.responses"],
+              supportedReasoningEfforts: ["low", "high"],
+            },
+          ],
+        },
+      ],
+    });
     expect(result.runtimeModels.get("clawrouter")).toContainEqual(
       expect.objectContaining({
         provider: "clawrouter",
@@ -210,7 +261,7 @@ describe("ClawRouter cold prepared catalog", () => {
       cfg: config,
       agentId,
       snapshot: result.snapshot,
-      metadataSnapshot: prepared.pluginGeneration.pluginMetadataSnapshot,
+      metadataSnapshot: pluginMetadataSnapshot,
       preparedAuthStore: result.authStore,
       preparedRuntimeAuthModes: result.authModes,
     });
@@ -234,8 +285,77 @@ describe("ClawRouter cold prepared catalog", () => {
         available: true,
       }),
     );
-    expect(requests).toEqual([
-      { url: "/private/v1/catalog", authorization: "Bearer catalog-test-key" },
-    ]);
+  });
+
+  it("publishes native Code Mode and sampling facts on routed rows without enabling those plugins", async () => {
+    const routedProvider = (id: string, upstreams: string[], capabilities: string[]) => ({
+      id,
+      displayName: id,
+      openaiCompatible: id === "openai",
+      nativeBaseUrl: `/v1/native/${id}`,
+      routes:
+        id === "anthropic"
+          ? [{ path: "/v1/messages", requestFormat: "anthropic.messages", methods: ["POST"] }]
+          : [],
+      models: upstreams.map((upstream) => ({ id: `${id}/${upstream}`, upstream, capabilities })),
+    });
+    const { agentId, config, pluginMetadataSnapshot, result } = await publishCatalog({
+      sibling: false,
+      refreshedAuth: false,
+      catalogProviders: [
+        routedProvider("openai", ["gpt-6.1-sol", "gpt-6-unknown"], ["llm.responses"]),
+        routedProvider("anthropic", ["claude-opus-5-5", "claude-haiku-4-5"], ["llm.messages"]),
+      ],
+    });
+    // Only ClawRouter is enabled: the native rows are manifest facts, not activated plugins.
+    expect(config.plugins?.allow).toEqual(["clawrouter"]);
+    // Registry models drive Code Mode and request shaping. Image limits are resolved per
+    // turn; clawrouter-native-model-facts.test.ts covers that runtime path.
+    const routed = (id: string) => {
+      const model = result.runtimeModels.get("clawrouter")?.find((entry) => entry.id === id);
+      if (!model) {
+        throw new Error(`catalog worker did not publish clawrouter/${id}`);
+      }
+      return model;
+    };
+    const decisions = (provider: string, model: { id: string; compat?: unknown }) => ({
+      codeModeEngaged: isCodeModeEngagedForModel(
+        resolveCodeModeConfig(config, agentId, { provider, modelId: model.id }),
+        model,
+      ),
+      supportsTemperature: (model.compat as { supportsTemperature?: boolean } | undefined)
+        ?.supportsTemperature,
+    });
+
+    for (const [nativeProvider, upstream] of [
+      ["openai", "gpt-6.1-sol"],
+      ["anthropic", "claude-opus-5-5"],
+      ["anthropic", "claude-haiku-4-5"],
+    ] as const) {
+      const native = resolveBundledStaticCatalogModel({
+        provider: nativeProvider,
+        modelId: upstream,
+        includeRuntimeDiscovery: true,
+        metadataSnapshot: pluginMetadataSnapshot,
+      });
+      if (!native) {
+        throw new Error(`missing native ${nativeProvider}/${upstream}`);
+      }
+      const id = `${nativeProvider}/${upstream}`;
+      expect(decisions("clawrouter", routed(id))).toEqual(decisions(nativeProvider, native));
+    }
+    // Default tools.codeMode "auto" engages for preferred models and not for capable Haiku 4.5.
+    expect(decisions("clawrouter", routed("openai/gpt-6.1-sol"))).toEqual({
+      codeModeEngaged: true,
+      supportsTemperature: false,
+    });
+    expect(decisions("clawrouter", routed("anthropic/claude-opus-5-5")).codeModeEngaged).toBe(true);
+    expect(decisions("clawrouter", routed("anthropic/claude-haiku-4-5")).codeModeEngaged).toBe(
+      false,
+    );
+    expect(decisions("clawrouter", routed("openai/gpt-6-unknown"))).toEqual({
+      codeModeEngaged: false,
+      supportsTemperature: undefined,
+    });
   });
 });

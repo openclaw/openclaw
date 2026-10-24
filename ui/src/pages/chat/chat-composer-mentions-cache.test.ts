@@ -6,6 +6,7 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import { GatewayBrowserClient, GatewayRequestError } from "../../api/gateway.ts";
 import {
   composerFixture,
+  mention,
   people,
   resetMentionComposerFixture,
 } from "./chat-composer-mentions.test-support.ts";
@@ -13,81 +14,99 @@ import { createHumanMentionMenu } from "./components/chat-composer-mention-menu.
 
 afterEach(resetMentionComposerFixture);
 
-const freshMs = 5 * 60_000;
+const fixture = () => composerFixture("chat");
+
+async function staleFixture() {
+  const view = fixture();
+  await view.search("@Al");
+  view.key("Escape");
+  await vi.advanceTimersByTimeAsync(5 * 60_000);
+  return view;
+}
 
 describe("mention query cache", () => {
-  const kind = "chat";
   it.each(["before", "after"])(
     "keeps an in-flight result when reopened %s it settles",
     async (reopen) => {
-      const view = composerFixture(kind);
-      const response = createDeferred<UsersMentionableResult>();
-      view.request.mockReturnValueOnce(response.promise);
-      view.edit("@Al");
-      await vi.advanceTimersByTimeAsync(150);
+      const view = fixture();
+      const response = view.defer();
+      await view.search("@Al");
       view.key("Escape");
       if (reopen === "before") {
-        view.edit("Review @Al");
-        await vi.advanceTimersByTimeAsync(150);
+        await view.search("Review @Al");
       }
-      response.resolve(people);
-      await vi.advanceTimersByTimeAsync(0);
+      await response(people);
       if (reopen === "after") {
-        expect(view.container.querySelector('[role="listbox"]')).toBeNull();
+        expect(view.query('[role="listbox"]')).toBeNull();
         view.edit("Review @Al");
       }
-      expect(view.container.querySelectorAll('[role="option"]')).toHaveLength(2);
+      expect(view.options()).toHaveLength(2);
       expect(view.request).toHaveBeenCalledTimes(1);
     },
   );
 
   it("refreshes stale results in the background without losing keyboard selection", async () => {
-    const view = composerFixture(kind);
-    view.edit("@Al");
-    await vi.advanceTimersByTimeAsync(150);
-    view.key("Escape");
-    await vi.advanceTimersByTimeAsync(freshMs);
-    const response = createDeferred<UsersMentionableResult>();
-    view.request.mockReturnValueOnce(response.promise);
+    const view = await staleFixture();
+    const response = view.defer();
     view.edit("Review @Al");
-    expect(view.container.querySelectorAll('[role="option"]')).toHaveLength(2);
-    expect(view.container.querySelector(".mention-menu__loading")).toBeNull();
+    expect(view.options()).toHaveLength(2);
+    expect(view.query(".mention-menu__loading")).toBeNull();
     view.key("ArrowDown");
     await vi.advanceTimersByTimeAsync(150);
     expect(view.request).toHaveBeenCalledTimes(2);
-    response.resolve({ users: people.users.toReversed(), truncated: false });
-    await vi.advanceTimersByTimeAsync(0);
+    await response({ users: people.users.toReversed(), truncated: false });
     view.key("Enter");
-    expect(view.value().mentions).toEqual([
-      { profileId: "profile-alex-offline", start: 7, end: 12 },
-    ]);
+    expect(view.value().mentions).toEqual([mention("profile-alex-offline", 7, 12)]);
     expect(view.send).not.toHaveBeenCalled();
   });
 
-  it.each(["outage", "revoked"])("handles a background refresh failure: %s", async (failure) => {
-    const view = composerFixture(kind);
-    view.edit("@Al");
-    await vi.advanceTimersByTimeAsync(150);
-    view.key("Escape");
-    await vi.advanceTimersByTimeAsync(freshMs);
-    view.request.mockRejectedValueOnce(
-      failure === "outage"
-        ? new Error("Connection interrupted")
-        : new GatewayRequestError({ code: "FORBIDDEN", message: "Access revoked" }),
-    );
-    view.edit("Review @Al");
-    await vi.advanceTimersByTimeAsync(150);
-    expect(view.container.querySelectorAll('[role="option"]')).toHaveLength(
-      failure === "outage" ? 2 : 0,
-    );
-    if (failure === "outage") {
+  it.each([
+    { failure: "network outage", error: new Error("Connection interrupted"), message: null },
+    {
+      failure: "directory unavailable",
+      error: new GatewayRequestError({ code: "UNAVAILABLE", message: "Directory unavailable" }),
+      message: null,
+    },
+    {
+      failure: "access revoked",
+      error: new GatewayRequestError({ code: "FORBIDDEN", message: "Access revoked" }),
+      message: "Mention access denied.",
+    },
+    {
+      failure: "profile unavailable",
+      error: new GatewayRequestError({
+        code: "UNAVAILABLE",
+        message: "Profile unavailable",
+        details: { code: "AUTHENTICATED_PROFILE_UNAVAILABLE" },
+      }),
+      message: "Profile unverified.",
+    },
+    {
+      failure: "invalid destination",
+      error: new GatewayRequestError({
+        code: "INVALID_REQUEST",
+        message: "Session was not found.",
+      }),
+      message: "Mention search rejected.",
+    },
+  ])("handles a background refresh failure: $failure", async ({ error, message }) => {
+    const view = await staleFixture();
+    view.request.mockRejectedValueOnce(error);
+    await view.search("Review @Al");
+    expect(view.options()).toHaveLength(message ? 0 : 2);
+    expect(view.query(".mention-menu__retry")).toBeNull();
+    if (!message) {
       view.key("Enter");
       expect(view.value().mentions).toHaveLength(1);
     } else {
-      expect(view.container.textContent).toContain("Retry");
+      expect(view.container.textContent).toContain(message);
+      expect(view.container.textContent).not.toContain(error.message);
+      view.key("Enter");
+      expect(view.value().mentions).toHaveLength(0);
+      expect(view.send).not.toHaveBeenCalled();
       view.key("Escape");
       view.edit("Again @Al");
-      expect(view.container.querySelectorAll('[role="option"]')).toHaveLength(0);
+      expect(view.options()).toHaveLength(0);
       await vi.advanceTimersByTimeAsync(150);
       expect(view.request).toHaveBeenCalledTimes(3);
     }
@@ -96,80 +115,64 @@ describe("mention query cache", () => {
   it.each(["switch query", "close", "replace owner"])(
     "does not publish an old refresh after %s",
     async (action) => {
-      const view = composerFixture(kind);
-      view.edit("@Al");
-      await vi.advanceTimersByTimeAsync(150);
-      view.key("Escape");
-      await vi.advanceTimersByTimeAsync(freshMs);
-      const response = createDeferred<UsersMentionableResult>();
-      view.request.mockReturnValueOnce(response.promise);
-      view.edit("Review @Al");
-      await vi.advanceTimersByTimeAsync(150);
+      const view = await staleFixture();
+      const response = view.defer();
+      await view.search("Review @Al");
       if (action === "switch query") {
         view.request.mockResolvedValueOnce({ users: [], truncated: false });
-        view.edit("Review @Nobody");
-        await vi.advanceTimersByTimeAsync(150);
+        await view.search("Review @Nobody");
       } else if (action === "close") {
         view.key("Escape");
       } else {
         view.replaceOwner();
       }
-      response.resolve(people);
-      await vi.advanceTimersByTimeAsync(0);
-      expect(view.container.querySelectorAll('[role="option"]')).toHaveLength(0);
+      await response(people);
+      expect(view.options()).toHaveLength(0);
       if (action === "replace owner") {
         view.edit("Again @Al");
-        expect(view.container.querySelectorAll('[role="option"]')).toHaveLength(0);
+        expect(view.options()).toHaveLength(0);
         await vi.advanceTimersByTimeAsync(150);
         expect(view.request).toHaveBeenCalledTimes(3);
       }
     },
   );
   it("backs off failed refreshes without extending the snapshot's maximum age", async () => {
-    const view = composerFixture(kind);
-    view.edit("@Al");
-    await vi.advanceTimersByTimeAsync(150);
-    view.key("Escape");
-    await vi.advanceTimersByTimeAsync(freshMs);
+    const view = await staleFixture();
     view.request.mockRejectedValue(new Error("Connection interrupted"));
-    view.edit("Review @Al");
-    await vi.advanceTimersByTimeAsync(150);
+    await view.search("Review @Al");
     view.key("Escape");
-    view.edit("Again @Al");
-    await vi.advanceTimersByTimeAsync(150);
+    await view.search("Again @Al");
     expect(view.request).toHaveBeenCalledTimes(2);
-    expect(view.container.querySelectorAll('[role="option"]')).toHaveLength(2);
+    expect(view.options()).toHaveLength(2);
     view.key("Escape");
     await vi.advanceTimersByTimeAsync(30_000);
-    view.edit("Retry @Al");
-    await vi.advanceTimersByTimeAsync(150);
+    await view.search("Retry @Al");
     expect(view.request).toHaveBeenCalledTimes(3);
     view.key("Escape");
     await vi.advanceTimersByTimeAsync(30 * 60_000);
     view.edit("Expired @Al");
-    expect(view.container.querySelectorAll('[role="option"]')).toHaveLength(0);
+    expect(view.options()).toHaveLength(0);
     await vi.advanceTimersByTimeAsync(150);
     expect(view.container.textContent).toContain("Retry");
   });
 
   it("keeps only sixteen successful exact-query snapshots across picker openings", async () => {
-    const view = composerFixture(kind);
+    const view = fixture();
     for (let index = 0; index < 17; index += 1) {
-      view.edit(`@Person ${index}`);
-      await vi.advanceTimersByTimeAsync(150);
+      await view.search(`@Person ${index}`);
       view.key("Escape");
     }
     view.edit("@Person 16");
-    expect(view.container.querySelectorAll('[role="option"]')).toHaveLength(2);
+    expect(view.options()).toHaveLength(2);
     view.key("Escape");
     view.edit("@Person 0");
-    expect(view.container.querySelectorAll('[role="option"]')).toHaveLength(0);
+    expect(view.options()).toHaveLength(0);
     await vi.advanceTimersByTimeAsync(150);
     expect(view.request).toHaveBeenCalledTimes(18);
   });
 
   it("fences other pending successes when identity verification is lost", async () => {
-    const view = composerFixture(kind);
+    const view = fixture();
     const old = createDeferred<UsersMentionableResult>();
     view.request.mockReturnValueOnce(old.promise).mockRejectedValueOnce(
       new GatewayRequestError({
@@ -178,19 +181,17 @@ describe("mention query cache", () => {
         details: { code: "AUTHENTICATED_PROFILE_UNAVAILABLE" },
       }),
     );
-    view.edit("@Al");
-    await vi.advanceTimersByTimeAsync(150);
-    view.edit("@Other");
-    await vi.advanceTimersByTimeAsync(150);
+    await view.search("@Al");
+    await view.search("@Other");
     old.resolve(people);
     await vi.advanceTimersByTimeAsync(0);
     view.edit("@Al");
-    expect(view.container.querySelectorAll('[role="option"]')).toHaveLength(0);
+    expect(view.options()).toHaveLength(0);
     await vi.advanceTimersByTimeAsync(150);
     expect(view.request).toHaveBeenCalledTimes(3);
   });
   it("releases a stalled lookup at its deadline and accepts a fresh retry", async () => {
-    const view = composerFixture(kind);
+    const view = fixture();
     const protocol = new GatewayPendingRequests({
       createRequestId: () => "mentions",
       nowMs: Date.now,
@@ -199,17 +200,14 @@ describe("mention query cache", () => {
     view.request.mockImplementation((method, params, options) =>
       protocol.request({ send: (frame) => sent.push(JSON.parse(frame)) }, method, params, options),
     );
-    view.edit("@Al");
-    await vi.advanceTimersByTimeAsync(150);
+    await view.search("@Al");
     view.key("Escape");
-    view.edit("Review @Al");
-    await vi.advanceTimersByTimeAsync(150);
+    await view.search("Review @Al");
     expect(sent).toHaveLength(1);
     await vi.advanceTimersByTimeAsync(15_000);
     expect(view.container.textContent).toContain("Retry");
     view.key("Escape");
-    view.edit("Again @Al");
-    await vi.advanceTimersByTimeAsync(150);
+    await view.search("Again @Al");
     expect(sent).toHaveLength(2);
     protocol.handleResponse({
       type: "res",
@@ -219,7 +217,7 @@ describe("mention query cache", () => {
     });
     protocol.handleResponse({ type: "res", id: sent[1]!.id, ok: true, payload: people });
     await vi.advanceTimersByTimeAsync(0);
-    expect(view.container.querySelectorAll('[role="option"]')).toHaveLength(2);
+    expect(view.options()).toHaveLength(2);
     view.key("Enter");
     expect(view.value().mentions).toHaveLength(1);
   });
@@ -271,3 +269,33 @@ it.each(["pending", "denied"])(
     expect(menu.activeLabel()).toBe("Fresh");
   },
 );
+
+it("shares native mention lookup with external insertion and retires captured access on owner change", async () => {
+  const view = composerFixture("chat", "Before after");
+  const access = view.mentionAccess()!;
+  const pending = createDeferred<UsersMentionableResult>();
+  view.request.mockReturnValueOnce(pending.promise);
+  const first = access.request("Al");
+  const second = access.request("Al");
+  expect(view.request).toHaveBeenCalledTimes(1);
+  pending.resolve(people);
+  const [read, shared] = await Promise.all([first, second]);
+  expect(read?.result).toEqual(people);
+  expect(shared?.result).toBe(read?.result);
+  expect(access.read("Al")?.result).toBe(read?.result);
+  const textarea = view.container.querySelector<HTMLTextAreaElement>("textarea")!;
+  textarea.setSelectionRange(7, 12);
+  expect(read?.insert("profile-alex-online")).toBe(true);
+  view.refresh();
+  await vi.advanceTimersByTimeAsync(0);
+  expect(view.value()).toEqual({
+    draft: "Before @Alex ",
+    mentions: [{ profileId: "profile-alex-online", start: 7, end: 12 }],
+  });
+  expect([textarea.selectionStart, textarea.selectionEnd]).toEqual([13, 13]);
+  expect(view.send).not.toHaveBeenCalled();
+  view.replaceOwner();
+  expect(read?.insert("profile-alex-offline")).toBe(false);
+  expect(access.read("Al")).toBeNull();
+  expect(view.value().draft).toBe("Before @Alex ");
+});

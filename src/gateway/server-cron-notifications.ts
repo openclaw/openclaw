@@ -8,7 +8,7 @@ import { resolveAgentTimeoutMs } from "../agents/timeout.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import { resolveControlUiAutomationRunUrl } from "../config/control-ui-link-base.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { CRON_AGENT_SELECTION_REQUIRED_MESSAGE } from "../cron/agent-id.js";
+import { CronAgentSelectionRequiredError } from "../cron/agent-id.js";
 import { redactCronCommandSummaryForExternalDelivery } from "../cron/command-output-summary.js";
 import { resolveCronDeliveryPlan, sendCronAnnouncePayloadStrict } from "../cron/delivery.js";
 import { retryTransientDirectCronDelivery } from "../cron/isolated-agent/delivery-dispatch-policy.js";
@@ -90,7 +90,6 @@ async function runGatewayCronFailureRepair(
   // The cron run may retire its async scope before this independent repair settles.
   await runWithGatewayDetachedWorkContinuation(async () => {
     await dispatchGatewayLifecycleMethod(
-      "agent",
       {
         ...(request.agentId ? { agentId: request.agentId } : {}),
         sessionKey: request.sessionKey,
@@ -106,6 +105,8 @@ async function runGatewayCronFailureRepair(
         idempotencyKey: runId,
       },
       {
+        // The scheduler's repair brief permits silence; public provenance does not grant it.
+        replyExpectation: "optional",
         internalDeliverySuppressErrors: true,
         timeoutMs: request.timeoutMs,
         ...(resolveGatewayContext ? { resolveGatewayContext } : {}),
@@ -442,7 +443,7 @@ async function sendGatewayCronFailureAlertUnderAdmission(
       normalizeOptionalString(params.job.agentId) ??
       normalizeOptionalString(params.routing.defaultAgentId);
     if (!requestedAgentId) {
-      throw new Error(CRON_AGENT_SELECTION_REQUIRED_MESSAGE);
+      throw new CronAgentSelectionRequiredError();
     }
     const { agentId, cfg: runtimeConfig } = params.resolveCronAgent(requestedAgentId);
     if (params.mode === "webhook") {

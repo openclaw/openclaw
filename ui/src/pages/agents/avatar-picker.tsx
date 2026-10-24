@@ -1,4 +1,14 @@
-import { createSignal, For, onCleanup, Show } from "solid-js";
+import {
+  action,
+  createMemo,
+  createOptimistic,
+  createSignal,
+  Errored,
+  For,
+  Loading,
+  onSettled,
+  Show,
+} from "solid-js";
 import type { AgentsAvatarGenerateResult } from "../../../../packages/gateway-protocol/src/index.js";
 import { LobsterSvg } from "../../components/lobster-pet-artwork.tsx";
 import { canonicalLobsterLook, lobsterLookStyle } from "../../components/lobster-pet-identity.ts";
@@ -8,8 +18,9 @@ import {
   LOBSTER_PET_PALETTES,
 } from "../../components/lobster-pet-palettes.ts";
 import { AgentIdentityAvatar } from "../../components/solid/identity-avatar.tsx";
+import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { formatUiError } from "../../lib/format-error.ts";
-import { t } from "../../lib/reactive/i18n.ts";
+import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import {
   imageToAvatarDataUrl,
   svgToAvatarDataUrl,
@@ -17,10 +28,27 @@ import {
 } from "./avatar-image.ts";
 import "./avatar-picker.css";
 
+registerEnglishCatalog(registerSettingsEnglish);
+
 export type GeneratedAvatar = AgentsAvatarGenerateResult;
 
 type Candidate = { name: string; description: string; dataUrl: string };
 type Mode = "bot" | "generate" | "upload";
+type Preparation = { paletteId: string } | { prompt: string };
+type PreparedAvatar = Candidate | { paletteId: string; dataUrl: string };
+
+export type AvatarPickerFooterState = {
+  mode: Mode;
+  canGenerate: boolean;
+  generated: boolean;
+  busy: boolean;
+};
+
+export type AvatarPickerActions = {
+  generate: () => Promise<void>;
+  reset: () => void;
+  footerState: () => AvatarPickerFooterState;
+};
 
 export type AvatarPickerProps = {
   agentId: string;
@@ -29,94 +57,130 @@ export type AvatarPickerProps = {
   onSelect: (dataUrl: string) => void;
   onUpload: (file: File) => void;
   onGenerate: (prompt: string) => Promise<GeneratedAvatar>;
+  footerGeneration?: boolean;
+  onActionsReady?: (actions: AvatarPickerActions | null) => void;
+  onReset?: () => void;
 };
+
+export function requireAvatarImage(result: AvatarDataUrlResult) {
+  if (!result.ok) {
+    throw new Error(
+      t(
+        result.reason === "too-detailed"
+          ? "agents.identity.imageTooDetailed"
+          : "agents.identity.imageUnusable",
+      ),
+    );
+  }
+  return result.dataUrl;
+}
 
 /** Draft-only chooser. The identity editor owns persistence and agent scope. */
 export function AvatarPicker(props: AvatarPickerProps) {
-  const [mode, setMode] = createSignal<Mode>("bot");
+  const [mode, setMode] = createSignal<Mode>("bot", { equals: false });
   const [prompt, setPrompt] = createSignal("");
   const [selected, setSelected] = createSignal<string | null>(null);
   const [candidate, setCandidate] = createSignal<Candidate | null>(null);
-  const [busy, setBusy] = createSignal(false);
-  const [error, setError] = createSignal<string | null>(null);
   let operation = 0;
   let fileInput: HTMLInputElement | undefined;
-  onCleanup(() => {
+  onSettled(() => () => {
     operation += 1;
   });
-
-  const requireImage = (result: AvatarDataUrlResult) => {
-    if (!result.ok) {
-      throw new Error(
-        t(
-          result.reason === "too-detailed"
-            ? "agents.identity.imageTooDetailed"
-            : "agents.identity.imageUnusable",
-        ),
-      );
-    }
-    return result.dataUrl;
-  };
-  const changeMode = (next: Mode) => {
-    operation += 1;
-    setBusy(false);
-    setError(null);
-    setCandidate(null);
-    setMode(next);
-  };
-  const selectPreset = async (paletteId: string) => {
-    const current = ++operation;
-    setBusy(true);
-    setError(null);
-    setCandidate(null);
-    try {
+  const footerState = (): AvatarPickerFooterState => ({
+    mode: mode(),
+    canGenerate: Boolean(prompt().trim()),
+    generated: Boolean(candidate()),
+    busy: busy(),
+  });
+  const prepare = async (request: Preparation): Promise<PreparedAvatar> => {
+    if ("paletteId" in request) {
       const { loadLobsterImage } = await import("../../components/lobster-image.ts");
-      const image = await loadLobsterImage(paletteId);
+      const image = await loadLobsterImage(request.paletteId);
       if (!image) {
         throw new Error(t("agents.identity.imageUnusable"));
       }
-      const dataUrl = requireImage(
-        imageToAvatarDataUrl(image, image.naturalWidth, image.naturalHeight),
-      );
-      if (operation === current && !props.disabled) {
-        props.onSelect(dataUrl);
-        setSelected(paletteId);
-      }
-    } catch (cause) {
-      if (operation === current) {
-        setError(formatUiError(cause));
-      }
-    } finally {
-      if (operation === current) {
-        setBusy(false);
-      }
+      return {
+        paletteId: request.paletteId,
+        dataUrl: requireAvatarImage(
+          imageToAvatarDataUrl(image, image.naturalWidth, image.naturalHeight),
+        ),
+      };
     }
+    const generated = await props.onGenerate(request.prompt);
+    return {
+      name: generated.name,
+      description: generated.description,
+      dataUrl: requireAvatarImage(await svgToAvatarDataUrl(generated.svg)),
+    };
   };
+
+  // Each mode selection retires its action state, even when an old transport is still pending.
+  const command = createMemo(() => {
+    mode();
+    const [busy, setBusy] = createOptimistic(false);
+    const [completion, setCompletion] = createSignal<Promise<void>>();
+    const result = createMemo(() => completion()?.then(() => null));
+    const perform = action(function* (preparation: Promise<PreparedAvatar>, current: number) {
+      setBusy(true);
+      const prepared: PreparedAvatar = yield preparation;
+      if (operation !== current || props.disabled) {
+        return;
+      }
+      if ("paletteId" in prepared) {
+        props.onSelect(prepared.dataUrl);
+        setSelected(prepared.paletteId);
+      } else {
+        if (props.footerGeneration) {
+          props.onSelect(prepared.dataUrl);
+          setSelected(null);
+        }
+        setCandidate(prepared);
+      }
+    });
+    return {
+      busy,
+      result,
+      run(request: Preparation) {
+        const current = ++operation;
+        setCandidate(null);
+        const preparation = prepare(request);
+        const pending = perform(preparation, current);
+        // The result reader mounts after the action settles; handle rejection until then.
+        void pending.catch(() => undefined);
+        void setCompletion(pending);
+        return pending;
+      },
+    };
+  });
+  const busy = () => command().busy();
+
+  const changeMode = (next: Mode) => {
+    operation += 1;
+    setCandidate(null);
+    setMode(next);
+  };
+  const selectPreset = (paletteId: string) => command().run({ paletteId });
   const generate = async () => {
     const submitted = prompt().trim();
     if (!submitted || props.disabled) {
       return;
     }
-    const current = ++operation;
-    setBusy(true);
-    setError(null);
-    setCandidate(null);
-    try {
-      const result = await props.onGenerate(submitted);
-      const dataUrl = requireImage(await svgToAvatarDataUrl(result.svg));
-      if (operation === current && !props.disabled) {
-        setCandidate({ name: result.name, description: result.description, dataUrl });
-      }
-    } catch (cause) {
-      if (operation === current) {
-        setError(formatUiError(cause));
-      }
-    } finally {
-      if (operation === current) {
-        setBusy(false);
-      }
-    }
+    await command()
+      .run({ prompt: submitted })
+      .catch(() => undefined);
   };
+  const reset = () => {
+    operation += 1;
+    setMode(mode());
+    setPrompt("");
+    setSelected(null);
+    setCandidate(null);
+    props.onReset?.();
+  };
+  onSettled(() => {
+    props.onActionsReady?.({ generate, reset, footerState });
+    return () => props.onActionsReady?.(null);
+  });
 
   return (
     <div class="avatar-picker" aria-label={t("agents.identity.avatarPicker")}>
@@ -142,7 +206,7 @@ export function AvatarPicker(props: AvatarPickerProps) {
             )}
           </For>
         </div>
-        <Show when={mode() === "generate"}>
+        <Show when={mode() === "generate" && !props.footerGeneration}>
           <div class="avatar-picker__preview">
             <Show
               when={busy() && mode() === "generate"}
@@ -196,7 +260,11 @@ export function AvatarPicker(props: AvatarPickerProps) {
                   onClick={() => void selectPreset(palette.id)}
                 >
                   <div
-                    class={`avatar-picker__sprite lobster-pet lobster-pet--palette-${palette.id}`}
+                    class={[
+                      "avatar-picker__sprite",
+                      "lobster-pet",
+                      `lobster-pet--palette-${palette.id}`,
+                    ]}
                     style={lobsterLookStyle(canonicalLobsterLook(palette))}
                   >
                     <LobsterSvg look={canonicalLobsterLook(palette)} standalone />
@@ -216,10 +284,16 @@ export function AvatarPicker(props: AvatarPickerProps) {
                 value={prompt()}
                 disabled={props.disabled || busy()}
                 placeholder={t("agents.identity.avatarPrompt")}
-                onInput={(event) => setPrompt(event.currentTarget.value)}
+                onInput={(event) => {
+                  if (candidate() && props.footerGeneration) {
+                    setCandidate(null);
+                    props.onReset?.();
+                  }
+                  setPrompt(event.currentTarget.value);
+                }}
               />
             </label>
-            <Show when={candidate()}>
+            <Show when={props.footerGeneration ? null : candidate()}>
               {(preview) => (
                 <div class="avatar-picker__candidate">
                   <strong>{preview().name}</strong>
@@ -244,7 +318,7 @@ export function AvatarPicker(props: AvatarPickerProps) {
                 </div>
               )}
             </Show>
-            <Show when={!candidate()}>
+            <Show when={!candidate() && !props.footerGeneration}>
               <button
                 type="button"
                 class="btn avatar-picker__generate"
@@ -283,6 +357,7 @@ export function AvatarPicker(props: AvatarPickerProps) {
                 if (file && !props.disabled) {
                   operation += 1;
                   setSelected(null);
+                  setCandidate(null);
                   props.onUpload(file);
                 }
               }}
@@ -290,14 +365,22 @@ export function AvatarPicker(props: AvatarPickerProps) {
           </div>
         </Show>
         <Show when={busy() && mode() === "bot"}>
-          <p class="avatar-picker__status" role="status">
+          <p class="avatar-picker__status sr-only" role="status">
             {t("agents.identity.avatarPreparing")}
           </p>
         </Show>
-        <Show when={error()}>
-          <p class="avatar-picker__error" role="alert">
-            {error()}
-          </p>
+        <Show when={!busy()}>
+          <Loading>
+            <Errored
+              fallback={(error) => (
+                <p class="avatar-picker__error" role="alert">
+                  {formatUiError(error())}
+                </p>
+              )}
+            >
+              {command().result()}
+            </Errored>
+          </Loading>
         </Show>
       </div>
     </div>

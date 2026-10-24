@@ -60,7 +60,7 @@ describe("resolveLocalNodeId", () => {
     // Once discovered, the same-install identity stays stable until process restart.
     await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
-    await fs.rm(state.statePath("state"), { recursive: true });
+    await fs.rm(state.stateDir, { recursive: true });
     expect(loadDeviceIdentityIfPresent({ env: state.env })).toBeNull();
     await expect(resolveLocalNodeId(state.env)).resolves.toBe(identity.deviceId);
   });

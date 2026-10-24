@@ -1,14 +1,14 @@
-/**
- * Session binding contract registry fixtures.
- *
- * Builds bundled channel binding contract entries and hermetic plugin-state stores.
- */
 import fs from "node:fs";
 import path from "node:path";
-import { expect } from "vitest";
-import type { OpenClawConfig } from "../../../../config/config.js";
+import { aroundEach, beforeAll, describe, expect, it } from "vitest";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+  type OpenClawConfig,
+} from "../../../../config/config.js";
 import {
   getSessionBindingService,
+  testing as sessionBindingTesting,
   type SessionBindingRecord,
 } from "../../../../infra/outbound/session-binding-service.js";
 import type { SessionBindingCapabilities } from "../../../../infra/outbound/session-binding.types.js";
@@ -22,42 +22,24 @@ import {
   resetPluginStateStoreForTests,
 } from "../../../../plugin-sdk/plugin-state-test-runtime.js";
 import { createPluginRuntimeMock } from "../../../../plugin-sdk/test-helpers/plugin-runtime-mock.js";
-import { setActivePluginRegistry } from "../../../../plugins/runtime.js";
+import {
+  resetPluginRuntimeStateForTest,
+  setActivePluginRegistry,
+} from "../../../../plugins/runtime.js";
 import type { PluginRuntime } from "../../../../plugins/runtime/types.js";
 import { closeOpenClawStateDatabaseForTest } from "../../../../state/openclaw-state-db.js";
 import { loadBundledPluginFacade } from "../../../../test-utils/bundled-plugin-public-surface.js";
 import { createTestRegistry } from "../../../../test-utils/channel-plugins.js";
+import { createOpenClawTestState } from "../../../../test-utils/openclaw-test-state.js";
 import { getChannelPlugin } from "../../registry.js";
 import type { ChannelPlugin } from "../../types.public.js";
 import {
   sessionBindingContractChannelIds,
-  type SessionBindingContractChannelId,
+  type SessionBindingContractChannelId as BindingChannelId,
 } from "./manifest.js";
 import { importBundledChannelContractArtifact } from "./runtime-artifacts.js";
 
-type SessionBindingContractEntry = {
-  id: string;
-  expectedCapabilities: SessionBindingCapabilities;
-  getCapabilities: () => SessionBindingCapabilities | Promise<SessionBindingCapabilities>;
-  bindAndResolve: () => Promise<SessionBindingRecord>;
-  unbindAndVerify: (binding: SessionBindingRecord) => Promise<void>;
-  cleanup: () => Promise<void> | void;
-  preload?: () => Promise<void> | void;
-  beforeEach?: () => Promise<void> | void;
-};
-const contractApiPromises = new Map<string, Promise<Record<string, unknown>>>();
-
-async function createContractChannelConversationBindingManager(params: {
-  channelId: Parameters<typeof getChannelPlugin>[0];
-  cfg: OpenClawConfig;
-  accountId?: string | null;
-}): Promise<{ stop: () => void | Promise<void> } | null> {
-  const createManager = getChannelPlugin(params.channelId)?.conversationBindings?.createManager;
-  return createManager
-    ? await createManager({ cfg: params.cfg, accountId: params.accountId })
-    : null;
-}
-
+const contractApiPromises: Record<string, Promise<Record<string, unknown>>> = {};
 const matrixSessionBindingStateDir = fs.mkdtempSync(
   path.join(resolvePreferredOpenClawTmpDir(), "openclaw-matrix-session-binding-contract-"),
 );
@@ -67,453 +49,271 @@ const matrixSessionBindingAuth = {
   userId: "@bot:example.org",
   accessToken: "token",
 } as const;
+const matrixManagerOptions = {
+  accountId: matrixSessionBindingAuth.accountId,
+  auth: matrixSessionBindingAuth,
+  client: {} as never,
+  idleTimeoutMs: 24 * 60 * 60 * 1000,
+  maxAgeMs: 0,
+  enableSweeper: false,
+};
 
 async function getContractApi<T extends Record<string, unknown>>(
   pluginId: string,
   artifact = "session-binding-contract-api",
 ): Promise<T> {
-  const cacheKey = `${pluginId}:${artifact}`;
-  const existing = contractApiPromises.get(cacheKey);
-  if (existing) {
-    return (await existing) as T;
-  }
-  const next = importBundledChannelContractArtifact<T>(pluginId, artifact);
-  contractApiPromises.set(cacheKey, next);
-  return await next;
+  const key = `${pluginId}:${artifact}`;
+  return (await (contractApiPromises[key] ??= importBundledChannelContractArtifact<T>(
+    pluginId,
+    artifact,
+  ))) as T;
 }
 
-function expectResolvedSessionBinding(params: {
-  channel: string;
-  accountId: string;
-  conversationId: string;
-  parentConversationId?: string;
-  targetSessionKey: string;
-  metadata?: Record<string, unknown>;
-}) {
-  expect(
-    getSessionBindingService().resolveByConversation({
-      channel: params.channel,
-      accountId: params.accountId,
-      conversationId: params.conversationId,
-      parentConversationId: params.parentConversationId,
-    }),
-  )?.toMatchObject({
-    targetSessionKey: params.targetSessionKey,
-    ...(params.metadata ? { metadata: params.metadata } : {}),
-  });
-}
-
-async function unbindAndExpectClearedSessionBinding(binding: SessionBindingRecord) {
-  const service = getSessionBindingService();
-  const removed = await service.unbind({
-    bindingId: binding.bindingId,
-    reason: "contract-test",
-  });
-  expect(removed.map((entry) => entry.bindingId)).toContain(binding.bindingId);
-  expect(service.resolveByConversation(binding.conversation)).toBeNull();
-}
-
-function expectClearedSessionBinding(params: {
-  channel: string;
-  accountId: string;
-  conversationId: string;
-}) {
-  expect(
-    getSessionBindingService().resolveByConversation({
-      channel: params.channel,
-      accountId: params.accountId,
-      conversationId: params.conversationId,
-    }),
-  ).toBeNull();
-}
-
-function resetMatrixSessionBindingStateDir() {
-  resetPluginStateStoreForTests();
-  fs.rmSync(matrixSessionBindingStateDir, { recursive: true, force: true });
-  fs.mkdirSync(matrixSessionBindingStateDir, { recursive: true });
-}
-
-async function createContractMatrixThreadBindingManager() {
-  if (matrixSessionBindingManager) {
-    return matrixSessionBindingManager;
-  }
-  const { setMatrixRuntime, createMatrixThreadBindingManager } =
-    await getContractApi<MatrixContractApi>("matrix");
-  setMatrixRuntime({
-    state: {
-      openKeyedStoreV2: (
-        options: OpenAsyncKeyedStoreOptions,
-        authority: PluginStateActionAuthority = { assertCurrent() {} },
-      ) => createPluginStateKeyedStoreV2ForTests("matrix", options, authority),
-      resolveStateDir: () => matrixSessionBindingStateDir,
-    },
-  });
-  const manager = await createMatrixThreadBindingManager({
-    accountId: matrixSessionBindingAuth.accountId,
-    auth: matrixSessionBindingAuth,
-    client: {} as never,
-    idleTimeoutMs: 24 * 60 * 60 * 1000,
-    maxAgeMs: 0,
-    enableSweeper: false,
-  });
-  matrixSessionBindingManager = manager;
-  return manager;
+function keyedState(pluginId: string) {
+  return {
+    openKeyedStoreV2: <T>(
+      options: OpenAsyncKeyedStoreOptions,
+      authority: PluginStateActionAuthority = { assertCurrent() {} },
+    ) => createPluginStateKeyedStoreV2ForTests<T>(pluginId, options, authority),
+  };
 }
 
 const baseSessionBindingCfg = {
   session: { mainKey: "main", scope: "per-sender" },
 } satisfies OpenClawConfig;
+const managerConfig = { accountId: "default", cfg: baseSessionBindingCfg };
 
-type ChannelConversationBindingManagerFactory = NonNullable<
-  NonNullable<ChannelPlugin["conversationBindings"]>["createManager"]
->;
-type ChannelConversationBindingManager = Awaited<
-  ReturnType<ChannelConversationBindingManagerFactory>
->;
-let discordSessionBindingManager: ChannelConversationBindingManager | null = null;
-let feishuSessionBindingManager: ChannelConversationBindingManager | null = null;
-let imessageSessionBindingManager: ChannelConversationBindingManager | null = null;
-let matrixSessionBindingManager: ChannelConversationBindingManager | null = null;
-let telegramSessionBindingManager: ChannelConversationBindingManager | null = null;
-
-type DiscordContractApi = {
-  discordPlugin: ChannelPlugin;
-};
+type BindingManager = { stop: () => void | Promise<void> };
+const managers: Partial<Record<BindingChannelId, BindingManager>> = {};
 
 type FeishuContractApi = {
-  createFeishuThreadBindingManager: (params: {
-    accountId?: string;
-    cfg: OpenClawConfig;
-  }) => ChannelConversationBindingManager;
-};
-
-type IMessageContractApi = {
-  imessagePlugin: ChannelPlugin;
+  createFeishuThreadBindingManager: (params: typeof managerConfig) => BindingManager;
 };
 
 type MatrixContractApi = {
-  createMatrixThreadBindingManager: (params: {
-    accountId: string;
-    auth: typeof matrixSessionBindingAuth;
-    client: unknown;
-    idleTimeoutMs: number;
-    maxAgeMs: number;
-    enableSweeper: boolean;
-  }) => Promise<ChannelConversationBindingManager>;
+  createMatrixThreadBindingManager: (
+    params: typeof matrixManagerOptions,
+  ) => Promise<BindingManager>;
   setMatrixRuntime: (runtime: unknown) => void;
 };
 
-type TelegramContractApi = {
-  telegramPlugin: ChannelPlugin;
-};
-
-async function getDiscordContractApi() {
-  return await getContractApi<DiscordContractApi>("discord", "channel-plugin-api");
+async function getBindingPlugin<Id extends "discord" | "imessage" | "telegram">(id: Id) {
+  type Api = Record<`${Id}Plugin`, ChannelPlugin>;
+  const api =
+    id === "telegram"
+      ? await loadBundledPluginFacade<Api>({
+          pluginId: id,
+          artifactBasename: "channel-plugin-api.js",
+        })
+      : await getContractApi<Api>(id, "channel-plugin-api");
+  const key: `${Id}Plugin` = `${id}Plugin`;
+  return api[key];
 }
 
-async function getIMessageContractApi() {
-  return await getContractApi<IMessageContractApi>("imessage", "channel-plugin-api");
+async function stopManager(id: BindingChannelId) {
+  await managers[id]?.stop();
+  delete managers[id];
 }
 
-async function getTelegramContractApi() {
-  return await loadBundledPluginFacade<TelegramContractApi>({
-    pluginId: "telegram",
-    artifactBasename: "channel-plugin-api.js",
-  });
-}
-
-async function stopDiscordSessionBindingManager() {
-  await discordSessionBindingManager?.stop();
-  discordSessionBindingManager = null;
-}
-
-async function stopFeishuSessionBindingManager() {
-  await feishuSessionBindingManager?.stop();
-  feishuSessionBindingManager = null;
-}
-
-async function stopIMessageSessionBindingManager() {
-  await imessageSessionBindingManager?.stop();
-  imessageSessionBindingManager = null;
-}
-
-async function stopMatrixSessionBindingManager() {
-  await matrixSessionBindingManager?.stop();
-  matrixSessionBindingManager = null;
-}
-
-async function stopTelegramSessionBindingManager() {
-  await telegramSessionBindingManager?.stop();
-  telegramSessionBindingManager = null;
-}
-
-async function prepareDiscordSessionBindingContract() {
-  await stopDiscordSessionBindingManager();
-  const { discordPlugin } = await getDiscordContractApi();
-  setActivePluginRegistry(
-    createTestRegistry([
-      {
-        pluginId: "discord",
-        plugin: discordPlugin,
-        source: "test",
-      },
-    ]),
-  );
-}
-
-async function prepareFeishuSessionBindingContract() {
-  await stopFeishuSessionBindingManager();
-}
-
-async function prepareIMessageSessionBindingContract() {
-  await stopIMessageSessionBindingManager();
-  const { imessagePlugin } = await getIMessageContractApi();
-  setActivePluginRegistry(
-    createTestRegistry([
-      {
-        pluginId: "imessage",
-        plugin: imessagePlugin,
-        source: "test",
-      },
-    ]),
-  );
-}
-
-async function ensureIMessageSessionBindingManager() {
-  imessageSessionBindingManager ??= await createContractChannelConversationBindingManager({
-    channelId: "imessage",
-    cfg: baseSessionBindingCfg,
-    accountId: "default",
-  });
-  if (!imessageSessionBindingManager) {
-    throw new Error("iMessage session binding manager is unavailable");
-  }
-}
-
-async function prepareMatrixSessionBindingContract() {
-  await stopMatrixSessionBindingManager();
-  resetMatrixSessionBindingStateDir();
+function registerPlugin(pluginId: string, plugin: ChannelPlugin) {
+  setActivePluginRegistry(createTestRegistry([{ pluginId, plugin, source: "test" }]));
 }
 
 async function prepareTelegramSessionBindingContract() {
-  await stopTelegramSessionBindingManager();
-  const { telegramPlugin } = await getTelegramContractApi();
+  const telegramPlugin = await getBindingPlugin("telegram");
   const { setTelegramRuntime } = await loadBundledPluginFacade<{
     setTelegramRuntime: (runtime: PluginRuntime) => void;
   }>({ pluginId: "telegram", artifactBasename: "runtime-setter-api.js" });
-  setActivePluginRegistry(
-    createTestRegistry([
-      {
-        pluginId: "telegram",
-        plugin: telegramPlugin,
-        source: "test",
-      },
-    ]),
-  );
-  setTelegramRuntime(
-    createPluginRuntimeMock({
-      state: {
-        openKeyedStoreV2: <T>(
-          options: OpenAsyncKeyedStoreOptions,
-          authority: PluginStateActionAuthority = { assertCurrent() {} },
-        ) => createPluginStateKeyedStoreV2ForTests<T>("telegram", options, authority),
-      },
-    }),
-  );
+  registerPlugin("telegram", telegramPlugin);
+  setTelegramRuntime(createPluginRuntimeMock({ state: keyedState("telegram") }));
 }
 
 type SessionBindingContractFixture = {
-  id: SessionBindingContractChannelId;
-  accountId: string;
+  id: BindingChannelId;
+  accountId?: string;
   conversationId: string;
   parentConversationId?: string;
-  targetSessionKey: string;
   expectedBindingId?: string;
-  targetKind: SessionBindingRecord["targetKind"];
-  label: string;
+  targetKind?: SessionBindingRecord["targetKind"];
   metadata?: Record<string, unknown>;
   placements: SessionBindingCapabilities["placements"];
-  preload: () => Promise<unknown>;
-  beforeEach: () => Promise<void>;
-  ensureManager: () => Promise<void>;
-  stopManager?: () => Promise<void>;
-  restartBindingManager?: () => Promise<void>;
 };
 
-function createSessionBindingContractEntry(
-  fixture: SessionBindingContractFixture,
-): Omit<SessionBindingContractEntry, "id"> {
-  const conversation = {
-    channel: fixture.id,
-    accountId: fixture.accountId,
-    conversationId: fixture.conversationId,
-    ...(fixture.parentConversationId ? { parentConversationId: fixture.parentConversationId } : {}),
-  };
-
-  return {
-    preload: async () => {
-      await fixture.preload();
-    },
-    beforeEach: fixture.beforeEach,
-    expectedCapabilities: {
-      adapterAvailable: true,
-      bindSupported: true,
-      unbindSupported: true,
-      placements: fixture.placements,
-    },
-    getCapabilities: async () => {
-      await fixture.ensureManager();
-      return getSessionBindingService().getCapabilities({
-        channel: fixture.id,
-        accountId: fixture.accountId,
-      });
-    },
-    bindAndResolve: async () => {
-      await fixture.ensureManager();
-      const binding = await getSessionBindingService().bind({
-        targetSessionKey: fixture.targetSessionKey,
-        targetKind: fixture.targetKind,
-        conversation,
-        placement: "current",
-        metadata: { agentId: fixture.id, label: fixture.label, ...fixture.metadata },
-      });
-      if (fixture.expectedBindingId) {
-        expect(binding.bindingId).toBe(fixture.expectedBindingId);
-      }
-      if (fixture.metadata) {
-        expect(binding.metadata).toMatchObject(fixture.metadata);
-      }
-      expectResolvedSessionBinding({
-        ...conversation,
-        targetSessionKey: fixture.targetSessionKey,
-      });
-      if (fixture.restartBindingManager) {
-        await fixture.restartBindingManager();
-        expectResolvedSessionBinding({
-          ...conversation,
-          targetSessionKey: fixture.targetSessionKey,
-          metadata: fixture.metadata,
-        });
-      }
-      return binding;
-    },
-    unbindAndVerify: unbindAndExpectClearedSessionBinding,
-    cleanup: async () => {
-      await fixture.stopManager?.();
-      expectClearedSessionBinding(conversation);
-    },
-  };
+async function prepareBindingContract(id: BindingChannelId) {
+  await stopManager(id);
+  if (id === "matrix") {
+    resetPluginStateStoreForTests();
+    fs.rmSync(matrixSessionBindingStateDir, { recursive: true, force: true });
+    fs.mkdirSync(matrixSessionBindingStateDir, { recursive: true });
+  } else if (id === "telegram") {
+    await prepareTelegramSessionBindingContract();
+  } else if (id !== "feishu") {
+    registerPlugin(id, await getBindingPlugin(id));
+  }
 }
 
-const sessionBindingContractEntries = {
-  discord: createSessionBindingContractEntry({
-    id: "discord",
-    accountId: "default",
+async function ensureBindingContractManager(id: BindingChannelId) {
+  if (managers[id]) {
+    return;
+  }
+  if (id === "matrix") {
+    const { setMatrixRuntime, createMatrixThreadBindingManager } =
+      await getContractApi<MatrixContractApi>("matrix");
+    setMatrixRuntime({
+      state: {
+        ...keyedState("matrix"),
+        resolveStateDir: () => matrixSessionBindingStateDir,
+      },
+    });
+    managers.matrix = await createMatrixThreadBindingManager(matrixManagerOptions);
+  } else if (id === "feishu") {
+    const { createFeishuThreadBindingManager } = await getContractApi<FeishuContractApi>(id);
+    managers.feishu = createFeishuThreadBindingManager(managerConfig);
+  } else {
+    const manager =
+      await getChannelPlugin(id)?.conversationBindings?.createManager?.(managerConfig);
+    if (!manager) {
+      throw new Error(`${id} session binding manager is unavailable`);
+    }
+    managers[id] = manager;
+  }
+}
+
+const fixtures = {
+  discord: {
     conversationId: "channel:123456789012345678",
-    targetSessionKey: "agent:discord:child:thread-1",
-    targetKind: "subagent",
-    label: "discord-child",
     placements: ["current", "child"],
-    preload: getDiscordContractApi,
-    beforeEach: prepareDiscordSessionBindingContract,
-    ensureManager: async () => {
-      discordSessionBindingManager ??= await createContractChannelConversationBindingManager({
-        channelId: "discord",
-        cfg: baseSessionBindingCfg,
-        accountId: "default",
-      });
-      if (!discordSessionBindingManager) {
-        throw new Error("Discord session binding manager is unavailable");
-      }
-    },
-    stopManager: stopDiscordSessionBindingManager,
-  }),
-  feishu: createSessionBindingContractEntry({
-    id: "feishu",
-    accountId: "default",
+  },
+  feishu: {
     conversationId: "oc_group_chat:topic:om_topic_root",
     parentConversationId: "oc_group_chat",
-    targetSessionKey: "agent:feishu:child:thread-1",
-    targetKind: "subagent",
-    label: "feishu-child",
     placements: ["current"],
-    preload: () => getContractApi<FeishuContractApi>("feishu"),
-    beforeEach: prepareFeishuSessionBindingContract,
-    ensureManager: async () => {
-      const { createFeishuThreadBindingManager } =
-        await getContractApi<FeishuContractApi>("feishu");
-      feishuSessionBindingManager ??= createFeishuThreadBindingManager({
-        accountId: "default",
-        cfg: baseSessionBindingCfg,
-      });
-    },
-    stopManager: stopFeishuSessionBindingManager,
-  }),
-  imessage: createSessionBindingContractEntry({
-    id: "imessage",
-    accountId: "default",
+  },
+  imessage: {
     conversationId: "+15555550124",
-    targetSessionKey: "agent:imessage:current",
     expectedBindingId: "default:+15555550124",
     targetKind: "session",
-    label: "imessage-main",
     metadata: { opaque: { ownerEpoch: 7, capabilities: ["approve", "resume"] } },
     placements: ["current"],
-    preload: getIMessageContractApi,
-    beforeEach: prepareIMessageSessionBindingContract,
-    ensureManager: ensureIMessageSessionBindingManager,
-    stopManager: stopIMessageSessionBindingManager,
-    restartBindingManager: async () => {
-      await stopIMessageSessionBindingManager();
-      closeOpenClawStateDatabaseForTest();
-      await ensureIMessageSessionBindingManager();
-    },
-  }),
-  matrix: createSessionBindingContractEntry({
-    id: "matrix",
+  },
+  matrix: {
     accountId: matrixSessionBindingAuth.accountId,
     conversationId: "$thread",
     parentConversationId: "!room:example.org",
-    targetSessionKey: "agent:matrix:thread",
-    targetKind: "subagent",
-    label: "matrix-thread",
     placements: ["current", "child"],
-    preload: () => getContractApi<MatrixContractApi>("matrix"),
-    beforeEach: prepareMatrixSessionBindingContract,
-    ensureManager: async () => {
-      await createContractMatrixThreadBindingManager();
-    },
-    stopManager: stopMatrixSessionBindingManager,
-  }),
-  telegram: createSessionBindingContractEntry({
-    id: "telegram",
-    accountId: "default",
+  },
+  telegram: {
     conversationId: "-100200300:topic:77",
-    targetSessionKey: "agent:telegram:child:thread-1",
-    targetKind: "subagent",
-    label: "telegram-topic",
     placements: ["current", "child"],
-    preload: getTelegramContractApi,
-    beforeEach: prepareTelegramSessionBindingContract,
-    ensureManager: async () => {
-      telegramSessionBindingManager ??= await createContractChannelConversationBindingManager({
-        channelId: "telegram",
-        cfg: baseSessionBindingCfg,
-        accountId: "default",
+  },
+} satisfies Record<BindingChannelId, Omit<SessionBindingContractFixture, "id">>;
+
+export function getSessionBindingContractRegistry(): SessionBindingContractFixture[] {
+  return sessionBindingContractChannelIds.map((id) => Object.assign({ id }, fixtures[id]));
+}
+
+export function describeSessionBindingRegistryBackedContract(id: string) {
+  const fixture = getSessionBindingContractRegistry().find((entry) => entry.id === id);
+  if (!fixture) {
+    throw new Error(`missing session binding contract entry for ${id}`);
+  }
+  const targetSessionKey = "agent:contract:binding";
+  const conversation = {
+    channel: fixture.id,
+    accountId: fixture.accountId ?? "default",
+    conversationId: fixture.conversationId,
+    ...(fixture.parentConversationId ? { parentConversationId: fixture.parentConversationId } : {}),
+  };
+  const service = getSessionBindingService();
+  const expectResolved = (metadata?: Record<string, unknown>) =>
+    expect(service.resolveByConversation(conversation)).toMatchObject({
+      targetSessionKey,
+      ...(metadata ? { metadata } : {}),
+    });
+
+  describe(`${fixture.id} session binding contract`, () => {
+    beforeAll(() =>
+      fixture.id === "matrix" || fixture.id === "feishu"
+        ? getContractApi(fixture.id)
+        : getBindingPlugin(fixture.id),
+    );
+    aroundEach(async (run) => {
+      const testState = await createOpenClawTestState({
+        label: `${id}-session-binding-contract`,
+        layout: "state-only",
       });
-      if (!telegramSessionBindingManager) {
-        throw new Error("Telegram session binding manager is unavailable");
+      resetPluginRuntimeStateForTest();
+      clearRuntimeConfigSnapshot();
+      // Enable config-aware facades without inheriting the host configuration.
+      setRuntimeConfigSnapshot(
+        id === "discord" || id === "matrix"
+          ? { plugins: { entries: { [id]: { enabled: true } } } }
+          : {},
+      );
+      sessionBindingTesting.resetSessionBindingAdaptersForTests();
+      try {
+        await prepareBindingContract(fixture.id);
+        await run();
+      } finally {
+        clearRuntimeConfigSnapshot();
+        await testState.cleanup();
       }
-    },
-    stopManager: stopTelegramSessionBindingManager,
-  }),
-} satisfies Record<SessionBindingContractChannelId, Omit<SessionBindingContractEntry, "id">>;
-
-let sessionBindingContractRegistryCache: SessionBindingContractEntry[] | undefined;
-
-export function getSessionBindingContractRegistry(): SessionBindingContractEntry[] {
-  sessionBindingContractRegistryCache ??= sessionBindingContractChannelIds.map((id) =>
-    Object.assign({ id }, sessionBindingContractEntries[id]),
-  );
-  return sessionBindingContractRegistryCache;
+    });
+    it("registers, binds, unbinds, and cleans up session bindings", async () => {
+      await ensureBindingContractManager(fixture.id);
+      expect(
+        service.getCapabilities({ channel: fixture.id, accountId: conversation.accountId }),
+      ).toEqual({
+        adapterAvailable: true,
+        bindSupported: true,
+        unbindSupported: true,
+        placements: fixture.placements,
+      });
+      try {
+        const binding = await service.bind({
+          targetSessionKey,
+          targetKind: fixture.targetKind ?? "subagent",
+          conversation,
+          placement: "current",
+          metadata: { agentId: fixture.id, label: "contract-binding", ...fixture.metadata },
+        });
+        if (fixture.expectedBindingId) {
+          expect(binding.bindingId).toBe(fixture.expectedBindingId);
+        }
+        if (fixture.metadata) {
+          expect(binding.metadata).toMatchObject(fixture.metadata);
+        }
+        expectResolved();
+        if (fixture.id === "imessage") {
+          await stopManager(fixture.id);
+          closeOpenClawStateDatabaseForTest();
+          await ensureBindingContractManager(fixture.id);
+          expectResolved(fixture.metadata);
+        }
+        expect(binding.targetSessionKey).toBe(targetSessionKey);
+        expect(typeof binding.bindingId).toBe("string");
+        expect(binding.bindingId.trim()).not.toBe("");
+        for (const value of [
+          binding.conversation.channel,
+          binding.conversation.accountId,
+          binding.conversation.conversationId,
+        ]) {
+          expect(typeof value).toBe("string");
+        }
+        expect(typeof binding.boundAt).toBe("number");
+        expect(["session", "subagent"]).toContain(binding.targetKind);
+        expect(["active", "ending", "ended"]).toContain(binding.status);
+        const removed = await service.unbind({
+          bindingId: binding.bindingId,
+          reason: "contract-test",
+        });
+        expect(removed.map((entry) => entry.bindingId)).toContain(binding.bindingId);
+        expect(service.resolveByConversation(binding.conversation)).toBeNull();
+      } finally {
+        await stopManager(fixture.id);
+        const { channel, accountId, conversationId } = conversation;
+        expect(service.resolveByConversation({ channel, accountId, conversationId })).toBeNull();
+      }
+    });
+  });
 }

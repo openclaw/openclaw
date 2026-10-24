@@ -8,6 +8,7 @@ import { getSelfAndAncestorPidsSync } from "../infra/restart-stale-pids.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { getFreePort } from "../test-utils/ports.js";
+import { doctorMaintenanceTestEnv } from "./doctor-maintenance.admission.test-support.js";
 import { beginDoctorMaintenance } from "./doctor-maintenance.js";
 import { mockDoctorServicePlatform } from "./doctor-maintenance.state-owner.test-support.js";
 
@@ -66,11 +67,6 @@ const refusalCases = [
 ] as const;
 type Scenario = (typeof refusalCases)[number][0] | "capture-unavailable" | "inspection-failed";
 type Property = { type: string; data: unknown };
-const cleanEnv = Object.fromEntries(
-  "HOME CONFIG_PATH PROFILE SUPERVISOR_MODE SERVICE_REPAIR_POLICY SERVICE_MARKER SERVICE_KIND SYSTEMD_UNIT UPDATE_RUN_ID UPDATE_IN_PROGRESS UPDATE_PARENT_ALLOWS_GATEWAY_ACTIVATION"
-    .split(" ")
-    .map((key) => [`OPENCLAW_${key}`, undefined]),
-);
 function properties(groups: Record<string, Record<string, unknown>>): Record<string, Property> {
   return Object.fromEntries(
     Object.entries(groups).flatMap(([type, values]) =>
@@ -245,7 +241,7 @@ async function repair(scenario: Scenario) {
   });
   return await withEnvAsync(
     {
-      ...cleanEnv,
+      ...doctorMaintenanceTestEnv,
       HOME: home,
       USERPROFILE: home,
       OPENCLAW_STATE_DIR: path.join(home, ".openclaw"),

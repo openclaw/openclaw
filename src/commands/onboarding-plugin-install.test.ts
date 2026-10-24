@@ -115,7 +115,8 @@ vi.mock("../plugins/plugin-lifecycle-lease.js", () => ({
 }));
 
 const withTimeout = vi.hoisted(() => vi.fn(async <T>(promise: Promise<T>) => await promise));
-vi.mock("../utils/with-timeout.js", () => ({
+vi.mock("../infra/fs-safe.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/fs-safe.js")>()),
   withTimeout,
 }));
 
@@ -134,12 +135,11 @@ import { ensureOnboardingPluginInstalled } from "./onboarding-plugin-install.js"
 import {
   clawHubRecord,
   installEntry,
+  installedPlugin,
   installPolicyConfig,
+  notInstalled,
 } from "./onboarding-plugin-install.test-fixtures.js";
-import type {
-  OnboardingPluginInstallOptions,
-  OnboardingPluginInstallResult,
-} from "./onboarding-plugin-install.types.js";
+import type { OnboardingPluginInstallOptions } from "./onboarding-plugin-install.types.js";
 
 function runInstall(
   entry: OnboardingPluginInstallOptions["entry"],
@@ -215,16 +215,6 @@ function installRecord() {
   return firstCall(recordPluginInstall)[1];
 }
 
-function installedPlugin<T extends object>(fields: T) {
-  return {
-    ok: true,
-    pluginId: "demo-plugin",
-    targetDir: "/tmp/demo-plugin",
-    version: "1.2.3",
-    ...fields,
-  };
-}
-
 type ConsentScenario = {
   source: "npm-pack" | "local" | "npm" | "clawhub";
   accepted?: boolean;
@@ -239,13 +229,6 @@ async function useArtifactConsent() {
   prepareManagedPluginArtifactConsentHandler.mockImplementationOnce(
     actual.prepareManagedPluginArtifactConsentHandler,
   );
-}
-
-function notInstalled(
-  status: "failed" | "skipped" | "timed_out",
-  fields: Partial<OnboardingPluginInstallResult> = {},
-) {
-  return { cfg: {}, installed: false, pluginId: "demo-plugin", status, ...fields };
 }
 
 const skipOption = { value: "skip", label: "Skip for now" };

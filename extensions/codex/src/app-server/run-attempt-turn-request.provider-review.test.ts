@@ -178,6 +178,9 @@ async function prepare(native = createNativeThread(), usesSupervisionConnection 
               effectiveExecHost: "gateway",
             },
             async assertCurrent() {},
+            async admit(write, withCurrent) {
+              await withCurrent(write);
+            },
             retain: () => () => {},
             release() {},
           } satisfies PreparedCodexNativeExecutionPolicy,

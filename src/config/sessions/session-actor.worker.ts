@@ -23,6 +23,7 @@ import { captureSqliteWorkerCommitReceipt } from "../../infra/sqlite-worker-oper
 import { createSqliteWorkerTransferOwner } from "../../infra/sqlite-worker-transfer.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db-contract.js";
 import type { AgentWorkerOperationContext } from "../../state/openclaw-agent-operation-context.js";
+import { readStagedConversationPublications } from "./session-accessor.sqlite-conversation-publication.js";
 import type { SessionEntryReplacementPublication } from "./session-accessor.sqlite-entry-cache.types.js";
 import { captureSessionEntrySnapshot } from "./session-accessor.sqlite-entry-snapshot.js";
 import { projectSessionActorAuthority } from "./session-actor-command.js";
@@ -86,7 +87,9 @@ function transcriptPayloadBytes(command: Command): number | undefined {
         typeof append.input.event === "string"
           ? append.input.event
           : JSON.stringify(append.input.event),
-      ) + Buffer.byteLength(append.input.message?.messageJson ?? "")
+      ) +
+      Buffer.byteLength(append.input.message?.messageJson ?? "") +
+      (append.input.initialModel ? Buffer.byteLength(JSON.stringify(append.input.initialModel)) : 0)
     );
   }
   if ("eventJson" in input) {
@@ -270,7 +273,10 @@ export function createSessionActorWorker(
       }
       working.hot.writeToken = pendingToken;
       if (stageResidentState(database, working)) {
-        publication.actorPostimages = new Map([[sessionKey, structuredClone(working.hot)]]);
+        // The synchronous transfer shares the publication's canonical entry, including snapshots.
+        publication.actorPostimages = new Map([
+          [sessionKey, { ...working.hot, entry: postimage.entry }],
+        ]);
       }
     };
     return {
@@ -456,8 +462,14 @@ export function createSessionActorWorker(
           registerSessionActorEntryPatchOwner(opened, prepareEntryPatch);
           registerParticipantOwner(opened);
           registerTranscriptRewriteOwner(opened);
-          const admit = (stage: "transaction" | "commit", publication: unknown) => {
-            withoutSqliteDatabaseWriteScope(opened.db, () => context.admit(stage, publication));
+          const admit: AgentWorkerOperationContext["admit"] = (
+            stage,
+            publication,
+            transferList,
+          ) => {
+            withoutSqliteDatabaseWriteScope(opened.db, () =>
+              context.admit(stage, publication, transferList),
+            );
           };
           // The writer owns both hydration and version validation. A replica miss
           // never requires a separate read command before this transaction.
@@ -502,7 +514,7 @@ export function createSessionActorWorker(
               }
               return operation(opened);
             },
-            admit(stage, publication) {
+            admit(stage, publication, transferList) {
               if (stage === "commit") {
                 commitPublication = publication;
                 // An append shares this transaction and message owner. Its final
@@ -511,11 +523,15 @@ export function createSessionActorWorker(
                   return;
                 }
               }
-              admit(stage, {
-                kind: "session-actor-admission",
-                snapshot: projectSessionActorAuthority(working.hot),
-                publication,
-              });
+              admit(
+                stage,
+                {
+                  kind: "session-actor-admission",
+                  snapshot: projectSessionActorAuthority(working.hot),
+                  publication,
+                },
+                transferList,
+              );
             },
           };
           return withSessionActorTransactionState(opened, working, () => {
@@ -546,6 +562,7 @@ export function createSessionActorWorker(
               after: working.hot,
               payloads: working.transcript.payloads,
               transcriptAuthority: readStagedSessionTranscriptAuthority(opened),
+              conversationPublication: readStagedConversationPublications(opened),
               applied,
             });
             if (
@@ -609,6 +626,7 @@ export function createSessionActorWorker(
                     transfer: { handle, frames: finalFrames },
                     publication: turn ?? commitPublication,
                   },
+                  conversationPublication: accepted.receipt.conversationPublication,
                   final: true,
                 });
                 return { kind: "committed" as const };
@@ -622,6 +640,7 @@ export function createSessionActorWorker(
               kind: "session-actor-admission",
               snapshot: projectSessionActorAuthority(working.hot),
               publication: turn ?? commitPublication,
+              conversationPublication: accepted.receipt.conversationPublication,
               final: true,
             });
             return { kind: "committed" as const };

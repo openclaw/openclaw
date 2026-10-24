@@ -1,8 +1,12 @@
 import { isGatewayProtocolResponseError } from "@openclaw/gateway-client/browser";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { onCleanup } from "solid-js";
+import { Check } from "typebox/value";
 import type { CapabilityConsentErrorDetails } from "../../../../packages/gateway-protocol/src/capability-consent-error-details.js";
-import type { PluginsSetEnabledParams } from "../../../../packages/gateway-protocol/src/schema/plugins.js";
+import {
+  PluginsInstallProgressEventSchema,
+  type PluginsSetEnabledParams,
+} from "../../../../packages/gateway-protocol/src/schema/plugins.js";
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";
@@ -21,8 +25,11 @@ import {
   type PluginMutationResult,
   type PluginsInspectResult,
 } from "../../lib/plugins/index.ts";
-import { installPlugin } from "../../lib/plugins/install.ts";
-import type { PluginConsentIntent, PluginConsentState } from "./consent-dialog.tsx";
+import type {
+  PluginConsentInspectionRead,
+  PluginConsentIntent,
+  PluginConsentState,
+} from "./consent-dialog.tsx";
 import { readPluginInstallPolicyWarning } from "./install-policy-warning.ts";
 import type { PluginInstallProgress } from "./install-progress.ts";
 import { pluginRowKey, type PluginRowMessage } from "./plugin-row-message.tsx";
@@ -41,6 +48,13 @@ type PluginMutationOptions = {
   preserveMessageWhilePending?: boolean;
 };
 
+export type PluginMutationPresentation = {
+  scope: GatewayConnectionScope;
+  rowKey: string;
+  action: Exclude<PluginMutationAction, "install">;
+  result: Promise<void>;
+};
+
 type PluginsConsentOptions = {
   gateway: GatewayPageBinding;
   getContext: () => ApplicationContext;
@@ -54,6 +68,7 @@ type PluginsConsentOptions = {
   closeDetails: () => void;
   applyMutationResult: (result: PluginMutationResult) => void;
   refreshCatalogAfterMutation: (client: GatewayBrowserClient) => Promise<void>;
+  presentMutation: (mutation: PluginMutationPresentation) => Promise<void>;
   onChange: () => void;
 };
 
@@ -84,21 +99,25 @@ export function createPluginsConsent(host: PluginsConsentOptions) {
     inspection: PluginsInspectResult | null;
     inspectionLoading: boolean;
     inspectionError: string | null;
+    inspectionRead: PluginConsentInspectionRead | null;
     installProgress: Map<string, PluginInstallProgress>;
   } = {
     consent: null,
     inspection: null,
     inspectionLoading: false,
     inspectionError: null,
+    inspectionRead: null,
     installProgress: new Map<string, PluginInstallProgress>(),
   };
   onCleanup(() => {
+    retireInspection();
     state.consent = null;
     mutationTokens.clear();
     state.installProgress.clear();
     installPolicyScopes.clear();
   });
   let nextMutationToken = 0;
+  let inspectionCompletion: PromiseWithResolvers<string | null> | null = null;
   const mutationTokens = new Map<string, number>();
   // Warning acknowledgement belongs to the connection that admitted the install.
   const installPolicyScopes = new Map<string, GatewayConnectionScope>();
@@ -190,25 +209,32 @@ export function createPluginsConsent(host: PluginsConsentOptions) {
     if (!options.preserveMessageWhilePending) {
       host.setMessage(rowKey, null);
     }
-    try {
-      const mutation = await runPluginConfigMutation(
-        host.getContext().runtimeConfig,
-        scope.client,
-        mutate,
-        { canDispatch: () => isCurrent() && canDispatch() },
-      );
-      if (isCurrent()) {
-        await onSuccess(mutation.value, mutation.refreshError, scope.client, isLatest);
+    const result = (async () => {
+      try {
+        const mutation = await runPluginConfigMutation(
+          host.getContext().runtimeConfig,
+          scope.client,
+          mutate,
+          { canDispatch: () => isCurrent() && canDispatch() },
+        );
+        if (isCurrent()) {
+          await onSuccess(mutation.value, mutation.refreshError, scope.client, isLatest);
+        }
+      } catch (error) {
+        if (isCurrent()) {
+          await onError(error, scope, isCurrent);
+        }
+      } finally {
+        if (mutationTokens.get(rowKey) === mutationToken) {
+          mutationTokens.delete(rowKey);
+          host.setBusy(rowKey, null);
+        }
       }
-    } catch (error) {
-      if (isCurrent()) {
-        await onError(error, scope, isCurrent);
-      }
-    } finally {
-      if (mutationTokens.get(rowKey) === mutationToken) {
-        mutationTokens.delete(rowKey);
-        host.setBusy(rowKey, null);
-      }
+    })();
+    if (options.action === "install") {
+      await result;
+    } else {
+      await host.presentMutation({ scope, rowKey, action: options.action, result });
     }
   }
 
@@ -222,6 +248,7 @@ export function createPluginsConsent(host: PluginsConsentOptions) {
     }
     const plugin = host.getResult()?.plugins.find((entry) => entry.id === pluginId);
     host.closeDetails();
+    retireInspection();
     state.inspection = null;
     state.inspectionError = null;
     state.inspectionLoading = true;
@@ -240,11 +267,19 @@ export function createPluginsConsent(host: PluginsConsentOptions) {
   }
 
   function close(): void {
+    retireInspection();
     state.consent = null;
     state.inspection = null;
     state.inspectionLoading = false;
     state.inspectionError = null;
     host.onChange();
+  }
+
+  function retireInspection(): void {
+    // Closing or replacing the modal releases presentation before its RPC settles.
+    inspectionCompletion?.resolve(null);
+    inspectionCompletion = null;
+    state.inspectionRead = null;
   }
 
   async function inspect(): Promise<void> {
@@ -253,23 +288,29 @@ export function createPluginsConsent(host: PluginsConsentOptions) {
     if (!consent?.pluginId || !scope) {
       return;
     }
+    retireInspection();
+    const completion = Promise.withResolvers<string | null>();
+    inspectionCompletion = completion;
+    state.inspectionRead = { result: completion.promise };
     state.inspectionLoading = true;
     state.inspectionError = null;
     host.onChange();
+    let error: string | null = null;
     try {
       const inspection = await inspectPlugin(scope.client, consent.pluginId);
       if (host.gateway.isCurrent(scope) && state.consent === consent) {
         state.inspection = inspection;
       }
-    } catch (error) {
+    } catch (cause) {
       if (host.gateway.isCurrent(scope) && state.consent === consent) {
-        state.inspectionError = formatUiError(error);
+        error = state.inspectionError = formatUiError(cause);
       }
     } finally {
       if (host.gateway.isCurrent(scope) && state.consent === consent) {
         state.inspectionLoading = false;
         host.onChange();
       }
+      completion.resolve(error);
     }
   }
 
@@ -327,10 +368,17 @@ export function createPluginsConsent(host: PluginsConsentOptions) {
           scope &&
           host.gateway.isCurrent(scope) &&
           state.installProgress.get(installIdentity) === progress;
-        const result = await installPlugin(client, request, (activity) => {
-          if (!current()) {
+        let requestId: string | undefined;
+        const unsubscribe = client.addEventListener((event) => {
+          if (
+            event.event !== "plugins.install.progress" ||
+            !Check(PluginsInstallProgressEventSchema, event.payload) ||
+            event.payload.requestId !== requestId ||
+            !current()
+          ) {
             return;
           }
+          const activity = event.payload;
           const index = progress.activities.findIndex(
             (row) => row.activityId === activity.activityId,
           );
@@ -344,6 +392,16 @@ export function createPluginsConsent(host: PluginsConsentOptions) {
           state.installProgress.set(installIdentity, progress);
           host.onChange();
         });
+        let result: PluginMutationResult;
+        try {
+          result = await client.request<PluginMutationResult>("plugins.install", request, {
+            onSent: (id) => {
+              requestId = id;
+            },
+          });
+        } finally {
+          unsubscribe();
+        }
         if (current()) {
           // The final RPC result settles installation before optional config/catalog refreshes.
           state.installProgress.delete(installIdentity);

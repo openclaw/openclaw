@@ -3,7 +3,6 @@ import {
   collectErrorGraphCandidates,
   toErrorObject,
 } from "@openclaw/normalization-core/error-coercion";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveAgentDir } from "../agents/agent-scope-config.js";
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import {
@@ -45,7 +44,6 @@ import { withSessionCostUsageWorkerDatabases } from "./session-cost-usage-worker
 import {
   UsageCostWorkerReplyError,
   type UsageCostWorkerHostEffects,
-  type UsageCostWorkerHostReply,
   type UsageCostWorkerHostRequest,
   type UsageCostWorkerInput,
   type UsageCostWorkerLocation,
@@ -192,8 +190,7 @@ export function resolveUsageCostWorkerDayBucket(dayBucket?: UsageDailyBucket): U
     : { mode: "time-zone", timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone };
 }
 
-function restoreWorkerFailure(error: unknown, hostErrors: Map<number, unknown>): unknown {
-  const restoredOrigins = new Set<number>();
+function restoreWorkerFailure(error: unknown, hostErrors: Set<Error>): unknown {
   let result = error;
   for (const current of collectErrorGraphCandidates(error, (entry) =>
     entry instanceof Error
@@ -206,17 +203,7 @@ function restoreWorkerFailure(error: unknown, hostErrors: Map<number, unknown>):
       if (failure.error) {
         retainOpenClawStateWorkerErrorPayload(remote, failure.error);
       }
-      let restored: unknown = hydrateOpenClawStateWorkerError(remote, { includeOrdinary: true });
-      if (failure.hostOrigin !== undefined && hostErrors.has(failure.hostOrigin)) {
-        restoredOrigins.add(failure.hostOrigin);
-        const original = hostErrors.get(failure.hostOrigin);
-        restored = failure.hostFailureOnly
-          ? original
-          : withSqliteWorkerCleanupFailure(
-              toErrorObject(original, "Usage cache host effect failed"),
-              restored,
-            );
-      }
+      const restored = hydrateOpenClawStateWorkerError(remote, { includeOrdinary: true });
       result =
         current === error
           ? restored
@@ -226,13 +213,17 @@ function restoreWorkerFailure(error: unknown, hostErrors: Map<number, unknown>):
             );
     }
   }
+  const restoredErrors = new Set(
+    collectErrorGraphCandidates(result, (entry) =>
+      entry instanceof Error
+        ? [entry.cause, ...(entry instanceof AggregateError ? entry.errors : [])]
+        : [],
+    ),
+  );
   // Cancellation can retire the worker before an accepted write returns its failure.
-  for (const [origin, failure] of hostErrors) {
-    if (!restoredOrigins.has(origin)) {
-      result = withSqliteWorkerCleanupFailure(
-        toErrorObject(failure, "Usage cache host effect failed"),
-        result,
-      );
+  for (const failure of hostErrors) {
+    if (!restoredErrors.has(failure)) {
+      result = withSqliteWorkerCleanupFailure(failure, result);
     }
   }
   return result;
@@ -268,9 +259,7 @@ async function runPreparedUsageCostWorker(
   prepared: PreparedUsageCostWorker,
   operation: UsageCostWorkerRequest,
 ): Promise<UsageCostWorkerResult | { kind: "busy" }> {
-  const location = structuredClone(prepared.location);
-  const archiveStorePaths = [...prepared.archiveStorePaths];
-  const stores = structuredClone(prepared.stores);
+  const { location, archiveStorePaths, stores } = prepared;
   const capturedOperation = structuredClone(operation);
   const signal = getAsyncWorkSignal();
   return withSessionCostUsageWorkerDatabases(prepared.databases, async (scope) => {
@@ -324,8 +313,7 @@ async function runPreparedUsageCostWorker(
     const failureKey = (sessionFile: string) =>
       JSON.stringify([location.databasePath, sessionFile]);
     const uncommittedSessionFiles = new Set<string>();
-    const hostErrors = new Map<number, unknown>();
-    let errorSequence = 0;
+    const hostErrors = new Set<Error>();
     try {
       const failureEntries = lock
         ? await failures.entries().catch((error: unknown) => {
@@ -352,16 +340,12 @@ async function runPreparedUsageCostWorker(
               .length,
           timeoutMs: USAGE_COST_WORKER_TIMEOUT_MS,
           onRequest: async (value, context) => {
-            let reply: UsageCostWorkerHostReply;
             try {
               const assertRequestCurrent = () => {
                 assertCurrent();
                 context.signal.throwIfAborted();
               };
               assertRequestCurrent();
-              if (!isRecord(value) || typeof value.kind !== "string") {
-                throw new Error("Invalid usage worker host request");
-              }
               // SAFETY: The paired worker constructs this union; host effects still check current authority.
               const request = value as UsageCostWorkerHostRequest;
               let output: UsageCostWorkerHostEffects[keyof UsageCostWorkerHostEffects]["output"] =
@@ -433,17 +417,12 @@ async function runPreparedUsageCostWorker(
                   throw new Error("Unknown usage worker host request");
               }
               assertRequestCurrent();
-              reply = { ok: true, value: output };
+              return { input: output, timeoutMs: USAGE_COST_WORKER_TIMEOUT_MS };
             } catch (error) {
-              const origin = ++errorSequence;
-              hostErrors.set(origin, error);
-              reply = {
-                ok: false,
-                origin,
-                message: toErrorObject(error, "Usage host effect failed").message,
-              };
+              const failure = toErrorObject(error, "Usage host effect failed");
+              hostErrors.add(failure);
+              throw failure;
             }
-            return { input: reply, timeoutMs: USAGE_COST_WORKER_TIMEOUT_MS };
           },
         },
       );

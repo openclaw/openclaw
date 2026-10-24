@@ -1,17 +1,18 @@
-import { getRuntimeConfig } from "../config/config.js";
+import { setImmediate as yieldToGateway } from "node:timers/promises";
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { getRuntimeConfigSnapshot } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { computeBackoff, type BackoffPolicy } from "../infra/backoff.js";
 import {
-  applyConfiguredContextWindows,
-  prepareContextWindowCaches,
-  prepareDiscoveredContextTokenCache,
-} from "./context-cache-projection.js";
-import {
+  type ContextWindowCacheState,
+  providerContextTokenCacheKey,
   getContextWindowCaches,
   replaceContextWindowCaches,
   replaceDiscoveredContextTokenCache,
 } from "./context-cache.js";
 import {
+  type ModelsConfig,
+  resolveAnthropicFixedContextWindow,
   type ContextTokenResolutionParams,
   type ModelContextTokenProjection,
   resolveModelContextTokenProjectionFromCache,
@@ -21,24 +22,147 @@ import {
   CONTEXT_WINDOW_RUNTIME_STATE,
 } from "./context-runtime-state.js";
 
-const CONFIG_LOAD_RETRY_POLICY: BackoffPolicy = {
-  initialMs: 1_000,
-  maxMs: 60_000,
-  factor: 2,
-  jitter: 0,
+const CONTEXT_PROJECTION_BATCH_SIZE = 512;
+
+type ContextWindowModelEntry = {
+  id: string;
+  provider?: string;
+  contextWindow?: number;
+  contextTokens?: number;
 };
+
+type ContextWindowCatalog = {
+  entries: ContextWindowModelEntry[];
+  staticEntries?: ContextWindowModelEntry[];
+};
+
+type ConfiguredProvider = NonNullable<ModelsConfig["providers"]>[string];
+type ConfiguredModel = NonNullable<NonNullable<ConfiguredProvider>["models"]>[number];
+
+function cacheMinimum(cache: Map<string, number>, key: string, contextTokens: number): void {
+  const existing = cache.get(key);
+  if (existing === undefined || contextTokens < existing) {
+    cache.set(key, contextTokens);
+  }
+}
+
+function contextModelKeys(modelId: string, provider?: string): string[] {
+  const keys = [modelId];
+  if (provider === undefined) {
+    return keys;
+  }
+  keys.push(providerContextTokenCacheKey(provider, modelId));
+  const slash = modelId.indexOf("/");
+  const prefixedProvider = slash > 0 ? normalizeProviderId(modelId.slice(0, slash)) : "";
+  const bareModelId = slash > 0 ? modelId.slice(slash + 1).trim() : "";
+  if (provider && prefixedProvider === provider && bareModelId) {
+    keys.push(providerContextTokenCacheKey(provider, bareModelId));
+  }
+  return keys;
+}
+
+function applyDiscoveredContextWindow(
+  cache: Map<string, number>,
+  model: ContextWindowModelEntry,
+): void {
+  if (!model.id) {
+    return;
+  }
+  const discoveredContextTokens =
+    typeof model.contextTokens === "number"
+      ? Math.trunc(model.contextTokens)
+      : typeof model.contextWindow === "number"
+        ? Math.trunc(model.contextWindow)
+        : undefined;
+  const contextTokens =
+    resolveDiscoveredAnthropicFixedContextWindow(model) ?? discoveredContextTokens;
+  if (!contextTokens || contextTokens <= 0) {
+    return;
+  }
+
+  const provider = model.provider ? normalizeProviderId(model.provider) : "";
+  for (const key of contextModelKeys(model.id, provider || undefined)) {
+    cacheMinimum(cache, key, contextTokens);
+  }
+}
+
+function* configuredModels(modelsConfig: ModelsConfig | undefined) {
+  for (const [providerId, provider] of Object.entries(modelsConfig?.providers ?? {})) {
+    for (const model of provider?.models ?? []) {
+      yield { providerId, model };
+    }
+  }
+}
+
+function applyConfiguredContextWindow(params: {
+  cache: Map<string, number>;
+  windowCache: Map<string, number>;
+  providerId: string;
+  model: ConfiguredModel;
+}): void {
+  const { id: modelId, contextTokens, contextWindow } = params.model;
+  const configuredValue =
+    contextTokens && contextTokens > 0
+      ? { cache: params.cache, value: contextTokens }
+      : contextWindow && contextWindow > 0
+        ? { cache: params.windowCache, value: contextWindow }
+        : undefined;
+  if (!modelId || !configuredValue) {
+    return;
+  }
+  for (const key of contextModelKeys(modelId, normalizeProviderId(params.providerId))) {
+    configuredValue.cache.set(key, configuredValue.value);
+  }
+}
+
+function resolveDiscoveredAnthropicFixedContextWindow(
+  model: ContextWindowModelEntry,
+): number | undefined {
+  const provider = model.provider ? normalizeProviderId(model.provider) : undefined;
+  if (provider) {
+    return resolveAnthropicFixedContextWindow(provider, model.id);
+  }
+  const normalized = normalizeLowercaseStringOrEmpty(model.id);
+  const slash = normalized.indexOf("/");
+  if (slash < 0) {
+    return undefined;
+  }
+  const inferredProvider = normalizeProviderId(normalized.slice(0, slash));
+  const inferredModel = normalized.slice(slash + 1);
+  return inferredProvider === "claude-cli"
+    ? resolveAnthropicFixedContextWindow(inferredProvider, inferredModel)
+    : undefined;
+}
+
+async function projectModels(
+  cache: Map<string, number>,
+  modelCatalog: ContextWindowCatalog,
+  alreadyProcessed = 0,
+): Promise<void> {
+  let processed = alreadyProcessed;
+  for (const models of [modelCatalog.entries, modelCatalog.staticEntries ?? []]) {
+    for (const model of models) {
+      applyDiscoveredContextWindow(cache, model);
+      processed += 1;
+      if (processed % CONTEXT_PROJECTION_BATCH_SIZE === 0) {
+        await yieldToGateway();
+      }
+    }
+  }
+}
+
 const loadPreparedModelCatalogRuntime = () => import("./prepared-model-catalog.js");
 
 function primeConfiguredContextWindowsFromConfig(cfg: OpenClawConfig): OpenClawConfig {
   const caches = getContextWindowCaches();
-  applyConfiguredContextWindows({
-    cache: caches.configuredTokenCache,
-    windowCache: caches.contextWindowCache,
-    modelsConfig: cfg.models,
-  });
+  for (const model of configuredModels(cfg.models)) {
+    applyConfiguredContextWindow({
+      cache: caches.configuredTokenCache,
+      windowCache: caches.contextWindowCache,
+      ...model,
+    });
+  }
   CONTEXT_WINDOW_RUNTIME_STATE.configuredConfig = cfg;
-  CONTEXT_WINDOW_RUNTIME_STATE.configLoadFailures = 0;
-  CONTEXT_WINDOW_RUNTIME_STATE.nextConfigLoadAttemptAtMs = 0;
   return cfg;
 }
 
@@ -46,31 +170,16 @@ function primeConfiguredContextWindows(): OpenClawConfig | undefined {
   if (CONTEXT_WINDOW_RUNTIME_STATE.configuredConfig) {
     return CONTEXT_WINDOW_RUNTIME_STATE.configuredConfig;
   }
-  if (Date.now() < CONTEXT_WINDOW_RUNTIME_STATE.nextConfigLoadAttemptAtMs) {
-    return undefined;
-  }
-  try {
-    return primeConfiguredContextWindowsFromConfig(getRuntimeConfig());
-  } catch {
-    CONTEXT_WINDOW_RUNTIME_STATE.configLoadFailures += 1;
-    const backoffMs = computeBackoff(
-      CONFIG_LOAD_RETRY_POLICY,
-      CONTEXT_WINDOW_RUNTIME_STATE.configLoadFailures,
-    );
-    CONTEXT_WINDOW_RUNTIME_STATE.nextConfigLoadAttemptAtMs = Date.now() + backoffMs;
-    // If config can't be loaded, leave cache empty and retry after backoff.
-    return undefined;
-  }
+  const cfg = getRuntimeConfigSnapshot();
+  return cfg ? primeConfiguredContextWindowsFromConfig(cfg) : undefined;
 }
 
-export function ensureContextWindowCacheLoaded(cfgOverride?: OpenClawConfig): Promise<void> {
+export function ensureContextWindowCacheLoaded(): Promise<void> {
   if (CONTEXT_WINDOW_RUNTIME_STATE.loadPromise) {
     return CONTEXT_WINDOW_RUNTIME_STATE.loadPromise;
   }
 
-  const cfg = cfgOverride
-    ? primeConfiguredContextWindowsFromConfig(cfgOverride)
-    : primeConfiguredContextWindows();
+  const cfg = primeConfiguredContextWindows();
   if (!cfg) {
     return Promise.resolve();
   }
@@ -83,9 +192,9 @@ export function ensureContextWindowCacheLoaded(cfgOverride?: OpenClawConfig): Pr
           config: cfg,
           readOnly: true,
         });
-        stagedTokenCache = await prepareDiscoveredContextTokenCache({
-          modelCatalog: owner.modelCatalog,
-        });
+        const discoveredTokenCache = new Map<string, number>();
+        await projectModels(discoveredTokenCache, owner.modelCatalog);
+        stagedTokenCache = discoveredTokenCache;
       } catch {
         // Static and discovered rows belong to one atomic generation. If its owner fails, keep
         // config overrides only instead of mixing in independently rediscovered static metadata.
@@ -130,17 +239,29 @@ export async function prewarmContextWindowCacheAfterReady(params: {
       }
       // Gateway publication intentionally exposes configured/static turn facts. Full catalog
       // inventory is a separate control-plane load and must not run in post-ready warmup.
-      const caches = await prepareContextWindowCaches({
-        config: owner.config,
-        modelCatalog: owner.modelCatalog,
-      });
+      const caches: ContextWindowCacheState = {
+        configuredTokenCache: new Map(),
+        discoveredTokenCache: new Map(),
+        contextWindowCache: new Map(),
+      };
+      let processed = 0;
+      for (const model of configuredModels(owner.config.models)) {
+        applyConfiguredContextWindow({
+          cache: caches.configuredTokenCache,
+          windowCache: caches.contextWindowCache,
+          ...model,
+        });
+        processed += 1;
+        if (processed % CONTEXT_PROJECTION_BATCH_SIZE === 0) {
+          await yieldToGateway();
+        }
+      }
+      await projectModels(caches.discoveredTokenCache, owner.modelCatalog, processed);
       if (params.isCancelled?.()) {
         return;
       }
       replaceContextWindowCaches(caches);
       CONTEXT_WINDOW_RUNTIME_STATE.configuredConfig = owner.config;
-      CONTEXT_WINDOW_RUNTIME_STATE.configLoadFailures = 0;
-      CONTEXT_WINDOW_RUNTIME_STATE.nextConfigLoadAttemptAtMs = 0;
       published = true;
     })
     .catch(() => {

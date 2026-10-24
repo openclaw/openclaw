@@ -87,42 +87,37 @@ describe("projectMemoryWikiImportInsight", () => {
 });
 
 describe("compiled import insights", () => {
-  it("clusters ChatGPT import pages by topic and extracts digest fields", async () => {
-    const { rootDir, config } = await createInsightVault();
-    await fs.writeFile(
-      path.join(rootDir, "sources", "chatgpt-travel.md"),
-      renderWikiMarkdown({
-        frontmatter: {
-          pageType: "source",
-          id: "source.chatgpt.travel",
-          title: "ChatGPT Export: BA flight receipts process",
-          sourceType: "chatgpt-export",
-          riskLevel: "low",
-          riskReasons: [],
-          labels: ["domain/personal", "area/travel", "topic/travel"],
-          createdAt: "2026-01-11T14:07:58.552Z",
-          updatedAt: "2026-01-11T14:08:45.377Z",
-        },
-        body: "# ChatGPT Export: BA flight receipts process\n\n## Auto Digest\n- User messages: 2\n- Assistant messages: 2\n- First user line: how do i get receipts?\n- Last user line: that option does not exist\n- Preference signals:\n  - prefers direct airline receipts\n\n## Active Branch Transcript\n### User\n\nhow do i get receipts?\n\n### Assistant\n\nTry the BA receipt request flow first.\n",
-      }),
-      "utf8",
+  it("clusters import digests with privacy filtering and Unicode-safe summaries", async () => {
+    const { rootDir, config, page } = await createInsightVault();
+    const assistantOpener = `${"a".repeat(178)}😀${"b".repeat(20)}`;
+    await page(
+      "sources/chatgpt-travel.md",
+      {
+        pageType: "source",
+        id: "source.chatgpt.travel",
+        title: "ChatGPT Export: BA flight receipts process",
+        sourceType: "chatgpt-export",
+        riskLevel: "low",
+        riskReasons: [],
+        labels: ["domain/personal", "area/travel", "topic/travel"],
+        createdAt: "2026-01-11T14:07:58.552Z",
+        updatedAt: "2026-01-11T14:08:45.377Z",
+      },
+      `# ChatGPT Export: BA flight receipts process\n\n## Auto Digest\n- User messages: 2\n- Assistant messages: 2\n- First user line: how do i get receipts?\n- Last user line: that option does not exist\n- Preference signals:\n  - prefers direct airline receipts\n\n## Active Branch Transcript\n### User\n\nhow do i get receipts?\n\n### Assistant\n\n${assistantOpener}\n`,
     );
-    await fs.writeFile(
-      path.join(rootDir, "sources", "chatgpt-health.md"),
-      renderWikiMarkdown({
-        frontmatter: {
-          pageType: "source",
-          id: "source.chatgpt.health",
-          title: "ChatGPT Export: Migraine Medication Advice",
-          sourceType: "chatgpt-export",
-          riskLevel: "high",
-          riskReasons: ["health"],
-          labels: ["domain/personal", "area/health", "topic/health"],
-          updatedAt: "2026-01-31T20:18:00.000Z",
-        },
-        body: "# ChatGPT Export: Migraine Medication Advice\n\n## Auto Digest\n- Auto digest withheld from durable-candidate generation until reviewed.\n- Risk reasons: health content\n- First user line: i have a migraine, pink or yellow?\n- Last user line: should i take this now?\n- Preference signals:\n  - prefers color-coded medication guidance\n\n## Active Branch Transcript\n### User\n\ni have a migraine, pink or yellow?\n\n### Assistant\n\nYou're right, let's reset and stick to safe dosing guidance.\n",
-      }),
-      "utf8",
+    await page(
+      "sources/chatgpt-health.md",
+      {
+        pageType: "source",
+        id: "source.chatgpt.health",
+        title: "ChatGPT Export: Migraine Medication Advice",
+        sourceType: "chatgpt-export",
+        riskLevel: "high",
+        riskReasons: ["health"],
+        labels: ["domain/personal", "area/health", "topic/health"],
+        updatedAt: "2026-01-31T20:18:00.000Z",
+      },
+      "# ChatGPT Export: Migraine Medication Advice\n\n## Auto Digest\n- Auto digest withheld from durable-candidate generation until reviewed.\n- Risk reasons: health content\n- First user line: i have a migraine, pink or yellow?\n- Last user line: should i take this now?\n- Preference signals:\n  - prefers color-coded medication guidance\n\n## Active Branch Transcript\n### User\n\ni have a migraine, pink or yellow?\n\n### Assistant\n\nYou're right, let's reset and stick to safe dosing guidance.\n",
     );
 
     await compileMemoryWikiVault(config);
@@ -164,8 +159,8 @@ describe("compiled import insights", () => {
       assistantMessageCount: 2,
       firstUserLine: "how do i get receipts?",
       lastUserLine: "that option does not exist",
-      assistantOpener: "Try the BA receipt request flow first.",
-      summary: "Try the BA receipt request flow first.",
+      assistantOpener,
+      summary: `${"a".repeat(178)}…`,
       candidateSignals: ["prefers direct airline receipts"],
       correctionSignals: [],
       preferenceSignals: ["prefers direct airline receipts"],
@@ -188,34 +183,5 @@ describe("compiled import insights", () => {
     expect(healthItem?.firstUserLine).toBeUndefined();
     expect(healthItem?.lastUserLine).toBeUndefined();
     expect(healthItem?.assistantOpener).toBeUndefined();
-  });
-
-  it("truncates import insight summaries without leaving lone surrogates", async () => {
-    const { rootDir, config } = await createInsightVault();
-    const assistantOpener = `${"a".repeat(178)}😀${"b".repeat(20)}`;
-    await fs.writeFile(
-      path.join(rootDir, "sources", "chatgpt-emoji.md"),
-      renderWikiMarkdown({
-        frontmatter: {
-          pageType: "source",
-          id: "source.chatgpt.emoji",
-          title: "ChatGPT Export: Emoji truncation",
-          sourceType: "chatgpt-export",
-          riskLevel: "low",
-          riskReasons: [],
-          labels: ["domain/work", "area/memory", "topic/memory"],
-          updatedAt: "2026-02-01T12:00:00.000Z",
-        },
-        body: `# ChatGPT Export: Emoji truncation\n\n## Auto Digest\n- User messages: 1\n- Assistant messages: 1\n- First user line: summarize this\n- Last user line: summarize this\n- Preference signals:\n  - prefers emoji-safe summaries\n\n## Active Branch Transcript\n### User\n\nsummarize this\n\n### Assistant\n\n${assistantOpener}\n`,
-      }),
-      "utf8",
-    );
-
-    await compileMemoryWikiVault(config);
-
-    const { importInsights: result } = await loadMemoryWikiCompiledDashboards(config);
-
-    const item = result.clusters[0]?.items[0];
-    expect(item?.summary).toBe(`${"a".repeat(178)}…`);
   });
 });

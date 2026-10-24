@@ -1,5 +1,5 @@
 import fs from "node:fs";
-import { constants, DatabaseSync, type SQLInputValue } from "node:sqlite";
+import { constants, DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
 import { deriveSessionPredicateColumns } from "../config/sessions/session-predicate-columns.js";
 import {
@@ -30,24 +30,19 @@ import {
 import { OPENCLAW_AGENT_SCHEMA_V24_SQL } from "./openclaw-agent-schema-v24.test-support.js";
 import { OPENCLAW_AGENT_SCHEMA_V25_SQL } from "./openclaw-agent-schema-v25.test-support.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
+import { assertOpenClawMigrationWitnessPreserved } from "./openclaw-migration-witness.js";
 import {
-  assertOpenClawMigrationWitnessPreserved,
-  captureOpenClawMigrationWitness,
-} from "./openclaw-migration-witness.js";
+  agentWitness as witness,
+  expectVersion as expectSchemaVersion,
+  refuseVersion,
+  row as readRow,
+  rows as readRows,
+  seedVersion,
+} from "./schema-migration.test-support.js";
 import { assertSqliteMigrationScopePreserved } from "./sqlite-migration-scope.test-support.js";
 
-function readRow(database: DatabaseSync, sql: string, ...params: SQLInputValue[]) {
-  return database.prepare(sql).get(...params);
-}
-function readRows(database: DatabaseSync, sql: string) {
-  return database.prepare(sql).all();
-}
-function witness(database: DatabaseSync) {
-  return captureOpenClawMigrationWitness(database, { role: "agent", agentId: "main" });
-}
 function expectVersion(database: DatabaseSync, version = OPENCLAW_AGENT_SCHEMA_VERSION) {
-  expect(readRow(database, "PRAGMA user_version")?.user_version).toBe(version);
-  expect(readRow(database, "SELECT schema_version FROM schema_meta")?.schema_version).toBe(version);
+  expectSchemaVersion(database, version);
 }
 function admit(database: DatabaseSync, path: string, env: NodeJS.ProcessEnv, register?: boolean) {
   return ensureOpenClawAgentDatabaseSchema(database, { agentId: "main", path, env, register });
@@ -56,11 +51,6 @@ function migrateLegacyStore(database: DatabaseSync, pathname: string, env: NodeJ
   return withAgentDatabaseMaintenanceLease({ env }, async () =>
     admit(database, pathname, env, false),
   );
-}
-function seedVersion(database: DatabaseSync, version: number) {
-  database.exec(`PRAGMA user_version = ${version};
-    INSERT INTO schema_meta (meta_key, role, schema_version, agent_id, created_at, updated_at)
-    VALUES ('primary', 'agent', ${version}, 'main', 1, 1);`);
 }
 function seedSchema(database: DatabaseSync, version: 24 | 25 = 25) {
   database.exec(version === 24 ? OPENCLAW_AGENT_SCHEMA_V24_SQL : OPENCLAW_AGENT_SCHEMA_V25_SQL);
@@ -272,13 +262,7 @@ describe("agent JSON predicate migration", () => {
           .run(event);
         const original = witness(database);
         if (rollback) {
-          database.setAuthorizer((action, name, value) =>
-            action === constants.SQLITE_PRAGMA &&
-            name === "user_version" &&
-            value === String(OPENCLAW_AGENT_SCHEMA_VERSION)
-              ? constants.SQLITE_DENY
-              : constants.SQLITE_OK,
-          );
+          refuseVersion(database, OPENCLAW_AGENT_SCHEMA_VERSION);
         }
         await withAgentDatabaseMaintenanceLease({ env: state.env }, async () => {
           const migrate = () => admit(database, pathname, state.env);
@@ -327,13 +311,7 @@ describe("agent JSON predicate migration", () => {
         database.exec("ANALYZE");
         const original = witness(database);
         if (outcome === "rollback") {
-          database.setAuthorizer((action, name, value) =>
-            action === constants.SQLITE_PRAGMA &&
-            name === "user_version" &&
-            value === String(AGENT_JSON_PREDICATE_SCHEMA_VERSION)
-              ? constants.SQLITE_DENY
-              : constants.SQLITE_OK,
-          );
+          refuseVersion(database, AGENT_JSON_PREDICATE_SCHEMA_VERSION);
         }
         await withAgentDatabaseMaintenanceLease({ env: state.env }, async () => {
           const migrate = () =>

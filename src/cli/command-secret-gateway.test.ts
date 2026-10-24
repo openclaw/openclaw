@@ -66,6 +66,7 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
+  resetCommandSecretMocks();
   for (const root of tempRoots) {
     await fs.rm(root, { recursive: true, force: true });
   }
@@ -73,6 +74,26 @@ afterEach(async () => {
 });
 
 describe("resolveCommandSecretRefsViaGateway", () => {
+  const secretRef = (id: string) => ({ source: "env" as const, provider: "default", id });
+  function webConfig(
+    plugin: string,
+    credential: "webSearch" | "webFetch",
+    id: string,
+    web: NonNullable<NonNullable<OpenClawConfig["tools"]>["web"]>,
+    enabled?: boolean,
+  ): OpenClawConfig {
+    return {
+      tools: { web },
+      plugins: {
+        entries: { [plugin]: { enabled, config: { [credential]: { apiKey: secretRef(id) } } } },
+      },
+    };
+  }
+
+  function expectDiagnostic(result: { diagnostics: string[] }, text: string) {
+    expect(result.diagnostics).toEqual(expect.arrayContaining([expect.stringContaining(text)]));
+  }
+
   function makeTalkProviderApiKeySecretRefConfig(envKey: string): OpenClawConfig {
     return buildTalkTestProviderConfig({ source: "env", provider: "default", id: envKey });
   }
@@ -112,12 +133,8 @@ describe("resolveCommandSecretRefsViaGateway", () => {
   function expectGatewayUnavailableLocalFallbackDiagnostics(
     result: Awaited<ReturnType<typeof resolveCommandSecretRefsViaGateway>>,
   ) {
-    expect(
-      result.diagnostics.some((entry) => entry.includes("gateway secrets.resolve unavailable")),
-    ).toBe(true);
-    expect(
-      result.diagnostics.some((entry) => entry.includes("resolved command secrets locally")),
-    ).toBe(true);
+    expectDiagnostic(result, "gateway secrets.resolve unavailable");
+    expectDiagnostic(result, "resolved command secrets locally");
   }
 
   async function createExecProviderConfig(refId: string): Promise<{
@@ -186,40 +203,18 @@ describe("resolveCommandSecretRefsViaGateway", () => {
     pathSegments: readonly string[];
     collectConfigAssignments?: typeof collectRuntimeConfigAssignments;
     resolveManifestContractOwnerPluginId?: typeof resolveManifestContractOwnerPluginId;
-  }): () => void {
+  }): void {
     vi.mocked(analyzeCommandSecretAssignmentsFromSnapshot).mockImplementation(
       ({ inactiveRefPaths, resolvedConfig }) => {
         const value = readPath(resolvedConfig, params.pathSegments);
         const resolved = typeof value === "string" && value.length > 0;
         const inactive = Boolean(inactiveRefPaths?.has(params.path));
+        const target = { path: params.path, pathSegments: [...params.pathSegments] };
         return {
-          assignments: resolved
-            ? [
-                {
-                  path: params.path,
-                  pathSegments: [...params.pathSegments],
-                  value,
-                },
-              ]
-            : [],
+          assignments: resolved ? [{ ...target, value }] : [],
           diagnostics: [],
-          inactive: inactive
-            ? [
-                {
-                  path: params.path,
-                  pathSegments: [...params.pathSegments],
-                },
-              ]
-            : [],
-          unresolved:
-            resolved || inactive
-              ? []
-              : [
-                  {
-                    path: params.path,
-                    pathSegments: [...params.pathSegments],
-                  },
-                ],
+          inactive: inactive ? [target] : [],
+          unresolved: resolved || inactive ? [] : [target],
         } as never;
       },
     );
@@ -245,10 +240,9 @@ describe("resolveCommandSecretRefsViaGateway", () => {
         params.resolveManifestContractOwnerPluginId,
       );
     }
-    return resetCommandSecretMocks;
   }
 
-  function setDiscordAccountTargetDeps(): () => void {
+  function setDiscordAccountTargetDeps(): void {
     vi.mocked(analyzeCommandSecretAssignmentsFromSnapshot).mockImplementation(
       () =>
         ({
@@ -287,18 +281,17 @@ describe("resolveCommandSecretRefsViaGateway", () => {
           },
         ] as never,
     );
-    return resetCommandSecretMocks;
   }
 
-  function setFirecrawlWebSearchTargetDeps(): () => void {
-    return setSingleSecretTargetDeps({
+  function setFirecrawlWebSearchTargetDeps(): void {
+    setSingleSecretTargetDeps({
       path: "plugins.entries.firecrawl.config.webSearch.apiKey",
       pathSegments: ["plugins", "entries", "firecrawl", "config", "webSearch", "apiKey"],
     });
   }
 
-  function setFirecrawlWebFetchTargetDeps(): () => void {
-    return setSingleSecretTargetDeps({
+  function setFirecrawlWebFetchTargetDeps(): void {
+    setSingleSecretTargetDeps({
       path: "plugins.entries.firecrawl.config.webFetch.apiKey",
       pathSegments: ["plugins", "entries", "firecrawl", "config", "webFetch", "apiKey"],
       resolveManifestContractOwnerPluginId: (params) =>
@@ -308,8 +301,8 @@ describe("resolveCommandSecretRefsViaGateway", () => {
     });
   }
 
-  function setGoogleWebSearchTargetDeps(): () => void {
-    return setSingleSecretTargetDeps({
+  function setGoogleWebSearchTargetDeps(): void {
+    setSingleSecretTargetDeps({
       path: "plugins.entries.google.config.webSearch.apiKey",
       pathSegments: ["plugins", "entries", "google", "config", "webSearch", "apiKey"],
       resolveManifestContractOwnerPluginId: (params) =>
@@ -350,63 +343,45 @@ describe("resolveCommandSecretRefsViaGateway", () => {
     ]);
   });
 
-  describe.each([
-    {
-      name: "numeric object key",
-      config: { talk: { providers: { "0": { apiKey: "${SOURCE_KEY}" } } } },
-      targetPath: 'talk.providers["0"].apiKey',
-      pathSegments: ["talk", "providers", "0", "apiKey"],
-      targetId: "talk.providers.*.apiKey",
-      fixtureTarget: false,
-    },
-  ])(
-    "gateway assignment for $name",
-    ({ config: input, targetPath, pathSegments, targetId, fixtureTarget }) => {
-      it("applies and clears the actual target instead of the display path", async () => {
-        const read = resolveConfigForRead(input, {});
-        const config = coerceConfig(read.resolvedConfigRaw);
-        setConfigResolutionFacts(config, read.resolutionFacts);
-        const restoreDeps = fixtureTarget
-          ? setSingleSecretTargetDeps({ path: targetPath, pathSegments })
-          : undefined;
-        const resolvedLiteral = "${MATERIALIZED_LITERAL}";
-        callGateway.mockResolvedValueOnce({
-          assignments: [
-            {
-              path: "display-only",
-              pathSegments,
-              value: resolvedLiteral,
-            },
-          ],
-        });
-        const request = {
-          commandName: "memory status",
-          targetIds: new Set([targetId]),
-          allowedPaths: new Set([targetPath]),
-        };
+  it("applies and clears a numeric object key instead of the display path", async () => {
+    const input = { talk: { providers: { "0": { apiKey: "${SOURCE_KEY}" } } } };
+    const targetPath = 'talk.providers["0"].apiKey';
+    const pathSegments = ["talk", "providers", "0", "apiKey"];
+    const read = resolveConfigForRead(input, {});
+    const config = coerceConfig(read.resolvedConfigRaw);
+    setConfigResolutionFacts(config, read.resolutionFacts);
+    const resolvedLiteral = "${MATERIALIZED_LITERAL}";
+    callGateway.mockResolvedValueOnce({
+      assignments: [
+        {
+          path: "display-only",
+          pathSegments,
+          value: resolvedLiteral,
+        },
+      ],
+    });
+    const request = {
+      commandName: "memory status",
+      targetIds: new Set(["talk.providers.*.apiKey"]),
+      allowedPaths: new Set([targetPath]),
+    };
 
-        try {
-          const result = await resolveCommandSecretRefsViaGateway({ ...request, config });
+    const result = await resolveCommandSecretRefsViaGateway({ ...request, config });
 
-          expect(readPath(result.resolvedConfig, pathSegments)).toBe(resolvedLiteral);
-          expect(getAuthoredConfigSecretRef(config, targetPath)?.id).toBe("SOURCE_KEY");
-          expect(getAuthoredConfigSecretRef(result.resolvedConfig, targetPath)).toBeNull();
-          expect(result.hadUnresolvedTargets).toBe(false);
-          expect(result.targetStatesByPath).toEqual({ [targetPath]: "resolved_gateway" });
+    expect(readPath(result.resolvedConfig, pathSegments)).toBe(resolvedLiteral);
+    expect(getAuthoredConfigSecretRef(config, targetPath)?.id).toBe("SOURCE_KEY");
+    expect(getAuthoredConfigSecretRef(result.resolvedConfig, targetPath)).toBeNull();
+    expect(result.hadUnresolvedTargets).toBe(false);
+    expect(result.targetStatesByPath).toEqual({ [targetPath]: "resolved_gateway" });
 
-          const next = await resolveCommandSecretRefsViaGateway({
-            ...request,
-            config: result.resolvedConfig,
-          });
-          expect(readPath(next.resolvedConfig, pathSegments)).toBe(resolvedLiteral);
-          expect(next.hadUnresolvedTargets).toBe(false);
-          expect(callGateway).toHaveBeenCalledOnce();
-        } finally {
-          restoreDeps?.();
-        }
-      });
-    },
-  );
+    const next = await resolveCommandSecretRefsViaGateway({
+      ...request,
+      config: result.resolvedConfig,
+    });
+    expect(readPath(next.resolvedConfig, pathSegments)).toBe(resolvedLiteral);
+    expect(next.hadUnresolvedTargets).toBe(false);
+    expect(callGateway).toHaveBeenCalledOnce();
+  });
 
   it("uses the explicit agent owner during channels resolve secret preflight", async () => {
     const channelPath = "channels.telegram.botToken";
@@ -439,7 +414,7 @@ describe("resolveCommandSecretRefsViaGateway", () => {
     const { collectConfigAssignments } = await vi.importActual<
       typeof import("../secrets/runtime-config-collectors.js")
     >("../secrets/runtime-config-collectors.js");
-    const restoreDeps = setSingleSecretTargetDeps({
+    setSingleSecretTargetDeps({
       path: channelPath,
       pathSegments: channelPathSegments,
       collectConfigAssignments,
@@ -455,24 +430,20 @@ describe("resolveCommandSecretRefsViaGateway", () => {
       diagnostics: [],
     });
 
-    try {
-      const result = await resolveCommandSecretRefsViaGateway({
-        config,
-        commandName: "channels resolve",
-        targetIds: new Set([channelPath]),
-        agentId: "ops",
-        mode: "read_only_operational",
-      });
+    const result = await resolveCommandSecretRefsViaGateway({
+      config,
+      commandName: "channels resolve",
+      targetIds: new Set([channelPath]),
+      agentId: "ops",
+      mode: "read_only_operational",
+    });
 
-      expect(result.resolvedConfig.channels?.telegram?.botToken).toBe("resolved-telegram-token");
-      expect(callGateway.mock.calls[0]?.[0].params).not.toHaveProperty("agentId");
-    } finally {
-      restoreDeps();
-    }
+    expect(result.resolvedConfig.channels?.telegram?.botToken).toBe("resolved-telegram-token");
+    expect(callGateway.mock.calls[0]?.[0].params).not.toHaveProperty("agentId");
   });
 
   it("retries old gateways without allowed paths and still filters scoped results", async () => {
-    const restoreDeps = setDiscordAccountTargetDeps();
+    setDiscordAccountTargetDeps();
     callGateway
       .mockRejectedValueOnce(
         new Error("secrets.resolve invalid request: invalid secrets.resolve params"),
@@ -496,95 +467,68 @@ describe("resolveCommandSecretRefsViaGateway", () => {
         ],
       });
 
-    try {
-      const result = await resolveCommandSecretRefsViaGateway({
-        config: {
-          channels: {
-            discord: {
-              accounts: {
-                ops: {
-                  token: { source: "env", provider: "default", id: "DISCORD_OPS_TOKEN" },
-                },
-                chat: {
-                  token: { source: "env", provider: "default", id: "DISCORD_CHAT_TOKEN" },
-                },
+    const result = await resolveCommandSecretRefsViaGateway({
+      config: {
+        channels: {
+          discord: {
+            accounts: {
+              ops: {
+                token: { source: "env", provider: "default", id: "DISCORD_OPS_TOKEN" },
+              },
+              chat: {
+                token: { source: "env", provider: "default", id: "DISCORD_CHAT_TOKEN" },
               },
             },
           },
-        } as OpenClawConfig,
-        commandName: "message",
-        targetIds: new Set(["channels.discord.accounts.*.token"]),
-        allowedPaths: new Set(["channels.discord.accounts.ops.token"]),
-      });
+        },
+      } as OpenClawConfig,
+      commandName: "message",
+      targetIds: new Set(["channels.discord.accounts.*.token"]),
+      allowedPaths: new Set(["channels.discord.accounts.ops.token"]),
+    });
 
-      expect(callGateway).toHaveBeenCalledTimes(2);
-      expect(callGateway.mock.calls[0]?.[0].params).toEqual({
-        commandName: "message",
-        targetIds: ["channels.discord.accounts.*.token"],
-        allowedPaths: ["channels.discord.accounts.ops.token"],
-      });
-      expect(callGateway.mock.calls[1]?.[0].params).toEqual({
-        commandName: "message",
-        targetIds: ["channels.discord.accounts.*.token"],
-      });
-      expect(result.resolvedConfig.channels?.discord?.accounts?.ops?.token).toBe("ops-token");
-      expect(result.resolvedConfig.channels?.discord?.accounts?.chat?.token).toEqual({
-        source: "env",
-        provider: "default",
-        id: "DISCORD_CHAT_TOKEN",
-      });
-      expect(result.targetStatesByPath).toEqual({
-        "channels.discord.accounts.ops.token": "resolved_gateway",
-      });
-      expect(result.diagnostics).toEqual(["channels.discord.accounts.ops.token: gateway note"]);
-      expect(result.hadUnresolvedTargets).toBe(false);
-    } finally {
-      restoreDeps();
-    }
+    expect(callGateway).toHaveBeenCalledTimes(2);
+    expect(callGateway.mock.calls[0]?.[0].params).toEqual({
+      commandName: "message",
+      targetIds: ["channels.discord.accounts.*.token"],
+      allowedPaths: ["channels.discord.accounts.ops.token"],
+    });
+    expect(callGateway.mock.calls[1]?.[0].params).toEqual({
+      commandName: "message",
+      targetIds: ["channels.discord.accounts.*.token"],
+    });
+    expect(result.resolvedConfig.channels?.discord?.accounts?.ops?.token).toBe("ops-token");
+    expect(result.resolvedConfig.channels?.discord?.accounts?.chat?.token).toEqual({
+      source: "env",
+      provider: "default",
+      id: "DISCORD_CHAT_TOKEN",
+    });
+    expect(result.targetStatesByPath).toEqual({
+      "channels.discord.accounts.ops.token": "resolved_gateway",
+    });
+    expect(result.diagnostics).toEqual(["channels.discord.accounts.ops.token: gateway note"]);
+    expect(result.hadUnresolvedTargets).toBe(false);
   });
 
   it("does not retry old gateways without forced active path support", async () => {
-    const restoreDeps = setFirecrawlWebSearchTargetDeps();
+    setFirecrawlWebSearchTargetDeps();
     const envKey = "WEB_SEARCH_FIRECRAWL_OLD_GATEWAY_ONLY";
-    try {
-      await withEnvValue(envKey, undefined, async () => {
-        callGateway.mockRejectedValueOnce(
-          new Error("secrets.resolve invalid request: invalid secrets.resolve params"),
-        );
+    await withEnvValue(envKey, undefined, async () => {
+      callGateway.mockRejectedValueOnce(
+        new Error("secrets.resolve invalid request: invalid secrets.resolve params"),
+      );
 
-        await expect(
-          resolveCommandSecretRefsViaGateway({
-            config: {
-              tools: {
-                web: {
-                  search: {
-                    provider: "exa",
-                  },
-                },
-              },
-              plugins: {
-                entries: {
-                  firecrawl: {
-                    config: {
-                      webSearch: {
-                        apiKey: { source: "env", provider: "default", id: envKey },
-                      },
-                    },
-                  },
-                },
-              },
-            } as unknown as OpenClawConfig,
-            commandName: "infer web search",
-            targetIds: new Set(["plugins.entries.firecrawl.config.webSearch.apiKey"]),
-            allowedPaths: new Set(["plugins.entries.firecrawl.config.webSearch.apiKey"]),
-            forcedActivePaths: new Set(["plugins.entries.firecrawl.config.webSearch.apiKey"]),
-          }),
-        ).rejects.toThrow(/does not support command-scoped secret resolution/i);
-        expect(callGateway).toHaveBeenCalledTimes(1);
-      });
-    } finally {
-      restoreDeps();
-    }
+      await expect(
+        resolveCommandSecretRefsViaGateway({
+          config: webConfig("firecrawl", "webSearch", envKey, { search: { provider: "exa" } }),
+          commandName: "infer web search",
+          targetIds: new Set(["plugins.entries.firecrawl.config.webSearch.apiKey"]),
+          allowedPaths: new Set(["plugins.entries.firecrawl.config.webSearch.apiKey"]),
+          forcedActivePaths: new Set(["plugins.entries.firecrawl.config.webSearch.apiKey"]),
+        }),
+      ).rejects.toThrow(/does not support command-scoped secret resolution/i);
+      expect(callGateway).toHaveBeenCalledTimes(1);
+    });
   });
 
   it("fails fast when gateway-backed resolution is unavailable", async () => {
@@ -647,18 +591,11 @@ describe("resolveCommandSecretRefsViaGateway", () => {
       expect(result.diagnostics).toContain(
         `doctor preview: ${TALK_TEST_PROVIDER_API_KEY_PATH} is unavailable in this command path; continuing with degraded read-only config.`,
       );
-      expect(
-        result.diagnostics.some((entry) =>
-          entry.includes(
-            "doctor preview: skipped local exec SecretRef resolution for talk.providers.acme-speech.apiKey",
-          ),
-        ),
-      ).toBe(true);
-      expect(
-        result.diagnostics.some((entry) =>
-          entry.includes("attempted local command-secret resolution"),
-        ),
-      ).toBe(true);
+      expectDiagnostic(
+        result,
+        "doctor preview: skipped local exec SecretRef resolution for talk.providers.acme-speech.apiKey",
+      );
+      expectDiagnostic(result, "attempted local command-secret resolution");
     });
   });
 
@@ -706,126 +643,78 @@ describe("resolveCommandSecretRefsViaGateway", () => {
         expect(callGateway).not.toHaveBeenCalled();
         expect(readTalkProviderApiKey(result.resolvedConfig)).toBe("local-fallback-key");
         expect(result.targetStatesByPath[TALK_TEST_PROVIDER_API_KEY_PATH]).toBe("resolved_local");
-        expect(
-          result.diagnostics.some((entry) =>
-            entry.includes(
-              "doctor preview: skipped gateway secrets.resolve because gateway credentials use exec SecretRefs at gateway.auth.token",
-            ),
-          ),
-        ).toBe(true);
+        expectDiagnostic(
+          result,
+          "doctor preview: skipped gateway secrets.resolve because gateway credentials use exec SecretRefs at gateway.auth.token",
+        );
       },
     );
   });
 
   it("falls back to local resolution for web search SecretRefs when gateway is unavailable", async () => {
-    const restoreDeps = setGoogleWebSearchTargetDeps();
+    setGoogleWebSearchTargetDeps();
     const envKey = "WEB_SEARCH_GEMINI_API_KEY_LOCAL_FALLBACK";
     await withEnvValue(envKey, "gemini-local-fallback-key", async () => {
-      try {
-        callGateway.mockRejectedValueOnce(new Error("gateway closed"));
-        const result = await resolveCommandSecretRefsViaGateway({
-          config: {
-            plugins: {
-              entries: {
-                google: {
-                  config: {
-                    webSearch: {
-                      apiKey: { source: "env", provider: "default", id: envKey },
-                    },
-                  },
-                },
-              },
-            },
-            tools: {
-              web: {
-                search: {
-                  provider: "gemini",
-                },
-              },
-            },
-          } as unknown as OpenClawConfig,
-          commandName: "agent",
-          targetIds: new Set(["plugins.entries.google.config.webSearch.apiKey"]),
-        });
+      callGateway.mockRejectedValueOnce(new Error("gateway closed"));
+      const result = await resolveCommandSecretRefsViaGateway({
+        config: webConfig("google", "webSearch", envKey, { search: { provider: "gemini" } }),
+        commandName: "agent",
+        targetIds: new Set(["plugins.entries.google.config.webSearch.apiKey"]),
+      });
 
-        const googleWebSearchConfig = result.resolvedConfig.plugins?.entries?.google?.config as
-          | { webSearch?: { apiKey?: unknown } }
-          | undefined;
-        expect(googleWebSearchConfig?.webSearch?.apiKey).toBe("gemini-local-fallback-key");
-        expect(result.targetStatesByPath["plugins.entries.google.config.webSearch.apiKey"]).toBe(
-          "resolved_local",
-        );
-        expectGatewayUnavailableLocalFallbackDiagnostics(result);
-      } finally {
-        restoreDeps();
-      }
+      const googleWebSearchConfig = result.resolvedConfig.plugins?.entries?.google?.config as
+        | { webSearch?: { apiKey?: unknown } }
+        | undefined;
+      expect(googleWebSearchConfig?.webSearch?.apiKey).toBe("gemini-local-fallback-key");
+      expect(result.targetStatesByPath["plugins.entries.google.config.webSearch.apiKey"]).toBe(
+        "resolved_local",
+      );
+      expectGatewayUnavailableLocalFallbackDiagnostics(result);
     });
   }, 300_000);
 
   it("drops gateway inactive diagnostics for forced active fallback paths", async () => {
-    const restoreDeps = setFirecrawlWebSearchTargetDeps();
+    setFirecrawlWebSearchTargetDeps();
     const envKey = "WEB_FETCH_FIRECRAWL_FORCED_FALLBACK_KEY";
-    try {
-      await withEnvValue(envKey, "firecrawl-search-fallback-key", async () => {
-        callGateway.mockResolvedValueOnce({
-          assignments: [],
-          diagnostics: [
-            "plugins.entries.firecrawl.config.webSearch.apiKey: secret ref is configured on an inactive surface; tools.web.search is disabled.",
-          ],
-          inactiveRefPaths: ["plugins.entries.firecrawl.config.webSearch.apiKey"],
-        });
-        const result = await resolveCommandSecretRefsViaGateway({
-          config: {
-            tools: {
-              web: {
-                search: {
-                  enabled: false,
-                  provider: "brave",
-                },
-                fetch: {
-                  provider: "firecrawl",
-                },
-              },
-            },
-            plugins: {
-              entries: {
-                firecrawl: {
-                  enabled: true,
-                  config: {
-                    webSearch: {
-                      apiKey: { source: "env", provider: "default", id: envKey },
-                    },
-                  },
-                },
-              },
-            },
-          } as unknown as OpenClawConfig,
-          commandName: "infer web fetch",
-          targetIds: new Set(["plugins.entries.firecrawl.config.webSearch.apiKey"]),
-          allowedPaths: new Set(["plugins.entries.firecrawl.config.webSearch.apiKey"]),
-          forcedActivePaths: new Set(["plugins.entries.firecrawl.config.webSearch.apiKey"]),
-        });
-
-        const firecrawlConfig = result.resolvedConfig.plugins?.entries?.firecrawl?.config as
-          | { webSearch?: { apiKey?: unknown } }
-          | undefined;
-        expect(firecrawlConfig?.webSearch?.apiKey).toBe("firecrawl-search-fallback-key");
-        expect(result.targetStatesByPath["plugins.entries.firecrawl.config.webSearch.apiKey"]).toBe(
-          "resolved_local",
-        );
-        expect(callGateway.mock.calls[0]?.[0].params).toEqual({
-          commandName: "infer web fetch",
-          targetIds: ["plugins.entries.firecrawl.config.webSearch.apiKey"],
-          allowedPaths: ["plugins.entries.firecrawl.config.webSearch.apiKey"],
-          forcedActivePaths: ["plugins.entries.firecrawl.config.webSearch.apiKey"],
-        });
-        expect(result.diagnostics).not.toContain(
+    await withEnvValue(envKey, "firecrawl-search-fallback-key", async () => {
+      callGateway.mockResolvedValueOnce({
+        assignments: [],
+        diagnostics: [
           "plugins.entries.firecrawl.config.webSearch.apiKey: secret ref is configured on an inactive surface; tools.web.search is disabled.",
-        );
+        ],
+        inactiveRefPaths: ["plugins.entries.firecrawl.config.webSearch.apiKey"],
       });
-    } finally {
-      restoreDeps();
-    }
+      const result = await resolveCommandSecretRefsViaGateway({
+        config: webConfig(
+          "firecrawl",
+          "webSearch",
+          envKey,
+          { search: { enabled: false, provider: "brave" }, fetch: { provider: "firecrawl" } },
+          true,
+        ),
+        commandName: "infer web fetch",
+        targetIds: new Set(["plugins.entries.firecrawl.config.webSearch.apiKey"]),
+        allowedPaths: new Set(["plugins.entries.firecrawl.config.webSearch.apiKey"]),
+        forcedActivePaths: new Set(["plugins.entries.firecrawl.config.webSearch.apiKey"]),
+      });
+
+      const firecrawlConfig = result.resolvedConfig.plugins?.entries?.firecrawl?.config as
+        | { webSearch?: { apiKey?: unknown } }
+        | undefined;
+      expect(firecrawlConfig?.webSearch?.apiKey).toBe("firecrawl-search-fallback-key");
+      expect(result.targetStatesByPath["plugins.entries.firecrawl.config.webSearch.apiKey"]).toBe(
+        "resolved_local",
+      );
+      expect(callGateway.mock.calls[0]?.[0].params).toEqual({
+        commandName: "infer web fetch",
+        targetIds: ["plugins.entries.firecrawl.config.webSearch.apiKey"],
+        allowedPaths: ["plugins.entries.firecrawl.config.webSearch.apiKey"],
+        forcedActivePaths: ["plugins.entries.firecrawl.config.webSearch.apiKey"],
+      });
+      expect(result.diagnostics).not.toContain(
+        "plugins.entries.firecrawl.config.webSearch.apiKey: secret ref is configured on an inactive surface; tools.web.search is disabled.",
+      );
+    });
   });
 
   it("honors forced active paths for non-web local fallback targets", async () => {
@@ -857,48 +746,28 @@ describe("resolveCommandSecretRefsViaGateway", () => {
     });
   });
 
-  it.each([
-    { kind: "search", credentialKind: "webSearch", pluginId: "google", disabled: false },
-  ] as const)(
-    "marks web $kind refs inactive for disabled=$disabled or another selected provider",
-    async ({ kind, credentialKind, pluginId, disabled }) => {
-      const targetPath = `plugins.entries.${pluginId}.config.${credentialKind}.apiKey`;
-      const restoreDeps = setSingleSecretTargetDeps({
-        path: targetPath,
-        pathSegments: ["plugins", "entries", pluginId, "config", credentialKind, "apiKey"],
-        resolveManifestContractOwnerPluginId: () => "other-plugin",
-      });
-      try {
-        callGateway.mockRejectedValueOnce(new Error("gateway closed"));
-        const result = await resolveCommandSecretRefsViaGateway({
-          config: {
-            tools: { web: { [kind]: { enabled: !disabled, provider: "other-provider" } } },
-            plugins: {
-              entries: {
-                [pluginId]: {
-                  config: {
-                    [credentialKind]: {
-                      apiKey: { source: "env", provider: "default", id: "WEB_INACTIVE_KEY" },
-                    },
-                  },
-                },
-              },
-            },
-          },
-          commandName: "agent",
-          targetIds: new Set([targetPath]),
-        });
+  it("marks web search refs inactive for another selected provider", async () => {
+    const targetPath = "plugins.entries.google.config.webSearch.apiKey";
+    setSingleSecretTargetDeps({
+      path: targetPath,
+      pathSegments: targetPath.split("."),
+      resolveManifestContractOwnerPluginId: () => "other-plugin",
+    });
+    callGateway.mockRejectedValueOnce(new Error("gateway closed"));
+    const result = await resolveCommandSecretRefsViaGateway({
+      config: webConfig("google", "webSearch", "WEB_INACTIVE_KEY", {
+        search: { enabled: true, provider: "other-provider" },
+      }),
+      commandName: "agent",
+      targetIds: new Set([targetPath]),
+    });
 
-        expect(result.hadUnresolvedTargets).toBe(false);
-        expect(result.targetStatesByPath[targetPath]).toBe("inactive_surface");
-        expect(result.diagnostics).toContain(
-          `${targetPath}: tools.web.${kind}${disabled ? " is disabled." : '.provider is "other-provider".'}`,
-        );
-      } finally {
-        restoreDeps();
-      }
-    },
-  );
+    expect(result.hadUnresolvedTargets).toBe(false);
+    expect(result.targetStatesByPath[targetPath]).toBe("inactive_surface");
+    expect(result.diagnostics).toContain(
+      `${targetPath}: tools.web.search.provider is "other-provider".`,
+    );
+  });
 
   it("returns a version-skew hint when gateway does not support secrets.resolve", async () => {
     const envKey = "TALK_API_KEY_UNSUPPORTED";
@@ -998,145 +867,70 @@ describe("resolveCommandSecretRefsViaGateway", () => {
       expect(readTalkProviderApiKey(result.resolvedConfig)).toBeUndefined();
       expect(result.hadUnresolvedTargets).toBe(true);
       expect(result.targetStatesByPath[TALK_TEST_PROVIDER_API_KEY_PATH]).toBe("unresolved");
-      expect(
-        result.diagnostics.some((entry) =>
-          entry.includes(`${TALK_TEST_PROVIDER_API_KEY_PATH} is unavailable in this command path`),
-        ),
-      ).toBe(true);
+      expectDiagnostic(
+        result,
+        `${TALK_TEST_PROVIDER_API_KEY_PATH} is unavailable in this command path`,
+      );
     });
   });
 
   it("accepts an inactive web ref after an incomplete gateway snapshot", async () => {
-    const restoreDeps = setGoogleWebSearchTargetDeps();
+    setGoogleWebSearchTargetDeps();
     const webPath = "plugins.entries.google.config.webSearch.apiKey";
-    try {
-      callGateway.mockResolvedValueOnce({
-        assignments: [],
-        diagnostics: [],
-      });
-      const result = await resolveCommandSecretRefsViaGateway({
-        config: {
-          tools: {
-            web: {
-              search: {
-                enabled: false,
-                provider: "gemini",
-              },
-            },
-          },
-          plugins: {
-            entries: {
-              google: {
-                config: {
-                  webSearch: {
-                    apiKey: {
-                      source: "env",
-                      provider: "default",
-                      id: "missing-disabled-web-ref",
-                    },
-                  },
-                },
-              },
-            },
-          },
-        } as OpenClawConfig,
-        commandName: "agent",
-        targetIds: new Set([webPath]),
-      });
+    callGateway.mockResolvedValueOnce({
+      assignments: [],
+      diagnostics: [],
+    });
+    const result = await resolveCommandSecretRefsViaGateway({
+      config: webConfig("google", "webSearch", "missing-disabled-web-ref", {
+        search: { enabled: false, provider: "gemini" },
+      }),
+      commandName: "agent",
+      targetIds: new Set([webPath]),
+    });
 
-      expect(result.hadUnresolvedTargets).toBe(false);
-      expect(result.targetStatesByPath[webPath]).toBe("inactive_surface");
-      expect(
-        result.diagnostics.some((entry) =>
-          entry.includes(`${webPath}: tools.web.search is disabled.`),
-        ),
-      ).toBe(true);
-    } finally {
-      restoreDeps();
-    }
+    expect(result.hadUnresolvedTargets).toBe(false);
+    expect(result.targetStatesByPath[webPath]).toBe("inactive_surface");
+    expectDiagnostic(result, `${webPath}: tools.web.search is disabled.`);
   });
 
   it("keeps generic agent turns running when an active web tool credential is unavailable", async () => {
-    const restoreDeps = setFirecrawlWebFetchTargetDeps();
+    setFirecrawlWebFetchTargetDeps();
     const webPath = "plugins.entries.firecrawl.config.webFetch.apiKey";
-    try {
-      callGateway.mockResolvedValueOnce({
-        assignments: [],
-        diagnostics: [],
-        inactiveRefPaths: [webPath],
-      });
-      const result = await resolveCommandSecretRefsViaGateway({
-        config: {
-          tools: { web: { fetch: { provider: "firecrawl" } } },
-          plugins: {
-            entries: {
-              firecrawl: {
-                config: {
-                  webFetch: {
-                    apiKey: {
-                      source: "env",
-                      provider: "default",
-                      id: "missing-optional-firecrawl-ref",
-                    },
-                  },
-                },
-              },
-            },
-          },
-        } as OpenClawConfig,
-        commandName: "reply",
-        targetIds: new Set([webPath]),
-        optionalActivePaths: new Set([webPath]),
-      });
+    callGateway.mockResolvedValueOnce({
+      assignments: [],
+      diagnostics: [],
+      inactiveRefPaths: [webPath],
+    });
+    const result = await resolveCommandSecretRefsViaGateway({
+      config: webConfig("firecrawl", "webFetch", "missing-optional-firecrawl-ref", {
+        fetch: { provider: "firecrawl" },
+      }),
+      commandName: "reply",
+      targetIds: new Set([webPath]),
+      optionalActivePaths: new Set([webPath]),
+    });
 
-      expect(result.hadUnresolvedTargets).toBe(false);
-      expect(result.targetStatesByPath[webPath]).toBe("inactive_surface");
-    } finally {
-      restoreDeps();
-    }
+    expect(result.hadUnresolvedTargets).toBe(false);
+    expect(result.targetStatesByPath[webPath]).toBe("inactive_surface");
   });
 
-  it.each([
-    {
-      label: "fetch",
-      path: "plugins.entries.firecrawl.config.webFetch.apiKey",
-      setupDeps: setFirecrawlWebFetchTargetDeps,
-      config: {
-        tools: { web: { fetch: { provider: "unregistered-provider" } } },
-        plugins: {
-          entries: {
-            firecrawl: {
-              config: {
-                webFetch: {
-                  apiKey: {
-                    source: "env",
-                    provider: "default",
-                    id: "missing-active-web-fetch-ref",
-                  },
-                },
-              },
-            },
-          },
-        },
-      } as OpenClawConfig,
-    },
-  ])("fails closed when a configured web $label provider owner cannot be proven", async (test) => {
-    const restoreDeps = test.setupDeps();
-    try {
-      callGateway.mockResolvedValueOnce({
-        assignments: [],
-        diagnostics: [],
-      });
-      await expect(
-        resolveCommandSecretRefsViaGateway({
-          config: test.config,
-          commandName: "agent",
-          targetIds: new Set([test.path]),
+  it("fails closed when a configured web fetch provider owner cannot be proven", async () => {
+    setFirecrawlWebFetchTargetDeps();
+    const targetPath = "plugins.entries.firecrawl.config.webFetch.apiKey";
+    callGateway.mockResolvedValueOnce({
+      assignments: [],
+      diagnostics: [],
+    });
+    await expect(
+      resolveCommandSecretRefsViaGateway({
+        config: webConfig("firecrawl", "webFetch", "missing-active-web-fetch-ref", {
+          fetch: { provider: "unregistered-provider" },
         }),
-      ).rejects.toThrow(`${test.path} is unresolved in the active runtime snapshot`);
-    } finally {
-      restoreDeps();
-    }
+        commandName: "agent",
+        targetIds: new Set([targetPath]),
+      }),
+    ).rejects.toThrow(`${targetPath} is unresolved in the active runtime snapshot`);
   });
 
   it("limits local fallback to targeted refs in read-only modes", async () => {
@@ -1168,4 +962,3 @@ describe("resolveCommandSecretRefsViaGateway", () => {
     });
   });
 });
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

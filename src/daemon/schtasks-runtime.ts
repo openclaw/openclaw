@@ -10,7 +10,10 @@ import {
 } from "../infra/windows-install-roots.js";
 import { readWindowsPortUsageSync } from "../infra/windows-port-pids.js";
 import { WINDOWS_POWERSHELL_COLD_SPAWN_TIMEOUT_MS } from "../infra/windows-powershell-spawn.js";
-import { hasCommandProcessCleanupError } from "../process/exec-result.js";
+import {
+  hasCommandProcessCleanupError,
+  ignoreNonCleanupCommandError,
+} from "../process/exec-result.js";
 import { spawnAndWait } from "../process/spawn-utils.js";
 import {
   buildWindowsCmdExeCommandLine,
@@ -356,12 +359,7 @@ export async function resolveFallbackRuntime(
   }
   const command =
     installedCommand === undefined
-      ? await readScheduledTaskCommand(env).catch((error: unknown) => {
-          if (hasCommandProcessCleanupError(error)) {
-            throw error;
-          }
-          return null;
-        })
+      ? await readScheduledTaskCommand(env).catch(ignoreNonCleanupCommandError)
       : installedCommand;
   const port = resolveScheduledTaskCommandPort(env, command);
   if (!port) {
@@ -409,12 +407,9 @@ export async function resolveFallbackRuntime(
     }
   }
   const probeHosts = await resolveGatewayServiceProbeHosts({ env, command });
-  const diagnostics = await inspectPortUsage(port, { probeHosts }).catch((error: unknown) => {
-    if (hasCommandProcessCleanupError(error)) {
-      throw error;
-    }
-    return null;
-  });
+  const diagnostics = await inspectPortUsage(port, { probeHosts }).catch(
+    ignoreNonCleanupCommandError,
+  );
   if (!diagnostics) {
     return unknownRuntime(`could not inspect port ${port}.`);
   }
@@ -544,7 +539,6 @@ export async function terminateInstalledStartupRuntime(
   if (runtime.pid) {
     if (beforeMutation) {
       await beforeMutation();
-      assertCurrent?.();
     }
     await terminateGatewayProcessTree(runtime.pid, assertCurrent);
   }

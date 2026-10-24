@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { createSignal } from "solid-js";
-import { assert, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { buildSkillLibraryMock } from "../../test-helpers/skill-library-fixtures.ts";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
@@ -54,8 +55,6 @@ it("loads capability dialogs only when opened and retains their live native cont
   expect(view.container.querySelector("form")).toBeNull();
 
   const [read] = buildSkillLibraryMock();
-  const [firstFile] = read.files;
-  assert(firstFile, "The library fixture includes a retained file.");
   const library = { read, file: "SKILL.md", onFile: vi.fn(), onClose: vi.fn() };
   setState({ ...initial, library });
   await waitForSolid(() =>
@@ -66,10 +65,11 @@ it("loads capability dialogs only when opened and retains their live native cont
   const select = view.container.querySelector("select");
   const details = view.container.querySelector("details")!;
   details.open = true;
-  setState({ ...initial, library: { ...library, file: firstFile.path } });
+  const file = expectDefined(read.files[0], "library fixture file");
+  setState({ ...initial, library: { ...library, file: file.path } });
   await waitForSolid(() =>
     expect(view.container.querySelector("textarea")?.value).toBe(
-      firstFile.content.replaceAll("\r\n", "\n"),
+      file.content.replaceAll("\r\n", "\n"),
     ),
   );
   expect(view.container.querySelector("openclaw-modal-dialog")).toBe(modal);

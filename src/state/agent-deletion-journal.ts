@@ -43,7 +43,6 @@ import {
   assertAgentDeletionJournalAvailable,
   ensureAgentDeletionJournalPhaseSchema,
 } from "./openclaw-state-db-schema-additive.js";
-import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 import type { DB as OpenClawStateKyselyDatabase } from "./openclaw-state-db.generated.js";
 import { resolveOpenClawRegisteredAgentDatabasePath } from "./openclaw-state-db.paths.js";
 import { captureOpenClawStateWorkerContext } from "./openclaw-state-worker-context.js";
@@ -72,6 +71,13 @@ function publishDeletingAgent(
     databasePaths: [path.join(entry.agentDir, "openclaw-agent.sqlite"), ...entry.databasePaths],
     cleanupCompleted: false,
   }));
+  agentDeletionJournalPublication.stagePostimages(database.db, [
+    {
+      agentId: entry.agentId,
+      operationId: entry.operationId,
+      cleanupCompleted: entry.cleanupCompleted,
+    },
+  ]);
 }
 
 type AgentDeletionDatabase = Pick<
@@ -111,9 +117,6 @@ function readAgentDeletionPathFenceRows(
     assertAgentDeletionJournalAvailable(database);
   }
   try {
-    if (!tableExists(database, "agent_deletion_journal")) {
-      return { known: false, rows: [] };
-    }
     const db = getNodeSqliteKysely<AgentDeletionDatabase>(database);
     let known = true;
     let query = db.selectFrom("agent_deletion_journal").selectAll();
@@ -411,13 +414,6 @@ export function beginAgentDeletionJournalInDatabase(
       },
     };
     publishDeletingAgent(database, discovery, result.entry);
-    agentDeletionJournalPublication.stagePostimages(database.db, [
-      {
-        agentId: result.entry.agentId,
-        operationId: result.entry.operationId,
-        cleanupCompleted: result.entry.cleanupCompleted,
-      },
-    ]);
     return result;
   }
   const createdAt = Date.now();
@@ -442,13 +438,6 @@ export function beginAgentDeletionJournalInDatabase(
     entry: { ...normalized, databasePaths, cleanupPaths, createdAt, cleanupCompleted: false },
   };
   publishDeletingAgent(database, discovery, result.entry);
-  agentDeletionJournalPublication.stagePostimages(database.db, [
-    {
-      agentId: result.entry.agentId,
-      operationId: result.entry.operationId,
-      cleanupCompleted: result.entry.cleanupCompleted,
-    },
-  ]);
   return result;
 }
 

@@ -80,10 +80,8 @@ const nodeRequiredProcessFiles = new Set([
   "src/process/spawn-broker/handoff-crash.test.ts",
   "src/process/spawn-broker/handoff.test.ts",
   "src/process/spawn-broker/host.test.ts",
-  "src/process/spawn-broker/relay.test.ts",
   "src/process/spawn-broker/spawn-failure.test.ts",
   "src/process/spawn-broker/stdin-handoff.test.ts",
-  "src/process/spawn-broker/transports.test.ts",
   "src/process/spawn-utils.test.ts",
   // Keep the Node broker/subreaper cases and two-process relay retirement proof.
   "src/process/supervisor/adapters/child.service-lifecycle.test.ts",
@@ -94,6 +92,8 @@ const nodeRequiredFiles = new Set([
   ...nodeRequiredProcessFiles,
   // Bun reports peer ECONNRESET when destroying a socket with a pending reply; fork compat review pending.
   "src/infra/exec-host.socket.test.ts",
+  // The macOS directory watch helper serves Node's libuv watchers only.
+  "src/infra/directory-watch-host.test.ts",
   // Node's trace-exit, diagnostic reports, and native process/SQLite lifecycle.
   "src/cli/cli-process-diagnostics.test.ts",
   "test/scripts/bench-session-history.test.ts",

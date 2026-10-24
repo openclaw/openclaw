@@ -1,11 +1,11 @@
 import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/types.js";
 import type {
+  FollowupRun,
   ReplyOperation,
   ReplyOperationRunState,
   ReplyPreRunRejectionCode,
 } from "../../sessions/session-controller.contracts.js";
 import { resolveAgentTurnExecutionStatus } from "./agent-runner-execution-status.js";
-import { isReplyOperationSuperseded } from "./reply-operation-abort.js";
 import type { SessionEventExecution } from "./session-event-contract.js";
 export type {
   ReplyOperationRunState,
@@ -13,7 +13,7 @@ export type {
 } from "../../sessions/session-controller.contracts.js";
 
 // Carries this invocation's admission decision through reply option spreads so
-// heartbeat cleanup never infers it from whichever operation is active later.
+// cleanup never infers it from whichever operation is active later.
 export const REPLY_OPERATION_RUN_STATE = Symbol("openclaw.replyOperationRunState");
 
 export type ReplyOptionsWithOperationRunState = {
@@ -68,6 +68,34 @@ export function recordReplyOperationAgentTurn(
   }
 }
 
+export function recordReplyFollowupAdmission(
+  state: ReplyOperationRunState | undefined,
+  params: {
+    explicitFollowup: boolean;
+    requesterMismatch: boolean;
+    unavailableSteer: boolean;
+    followupRun: FollowupRun;
+  },
+): void {
+  if (!state) {
+    return;
+  }
+  state.admission = {
+    status: "accepted",
+    mode: "followup",
+    ...(params.explicitFollowup
+      ? { reason: "explicit-followup" as const }
+      : params.requesterMismatch
+        ? { reason: "requester-mismatch" as const }
+        : params.unavailableSteer &&
+            params.followupRun.currentInboundEventKind !== "room_event" &&
+            (!params.followupRun.run.inputProvenance ||
+              params.followupRun.run.inputProvenance.kind === "external_user")
+          ? { reason: "steering-unavailable" as const }
+          : {}),
+  };
+}
+
 export function recordReplyPreRunRejection(
   state: ReplyOperationRunState | undefined,
   rejection: ReplyPreRunRejectionCode | undefined,
@@ -75,8 +103,4 @@ export function recordReplyPreRunRejection(
   if (state && rejection) {
     state.preRunRejection ??= rejection;
   }
-}
-
-export function resolveReplyOperationAgentTurn(state: ReplyOperationRunState | undefined) {
-  return isReplyOperationSuperseded(state?.agentTurnOwner) ? "superseded" : state?.agentTurn;
 }

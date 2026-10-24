@@ -35,7 +35,7 @@ export async function resolveSlackDmHistoryContext(params: {
     typeof import("openclaw/plugin-sdk/channel-inbound").resolveEnvelopeFormatOptions
   >;
 }): Promise<{ body: string | undefined; inboundHistory: SlackDmHistoryEntry[] | undefined }> {
-  const maxMessages = Math.max(0, Math.floor(params.limit));
+  const maxMessages = params.limit;
   if (maxMessages <= 0) {
     return { body: undefined, inboundHistory: undefined };
   }

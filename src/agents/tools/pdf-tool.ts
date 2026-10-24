@@ -40,7 +40,7 @@ import { optionalFiniteNumberSchema } from "../schema/typebox.js";
 import { completeWithPreparedSimpleCompletionModel } from "../simple-completion-execution.js";
 import { prepareSimpleCompletionModel } from "../simple-completion-runtime.js";
 import type { ToolFsPolicy } from "../tool-fs-policy.js";
-import { readFiniteNumberParam, textResult, ToolInputError, type AnyAgentTool } from "./common.js";
+import { textResult, ToolInputError, type AnyAgentTool } from "./common.js";
 import { coerceImageModelConfig } from "./image-tool.helpers.js";
 import {
   buildMediaReferenceDetails,
@@ -48,14 +48,13 @@ import {
   REMOTE_MEDIA_READ_IDLE_TIMEOUT_MS,
   resolveMediaToolSandboxConfig,
   resolveMediaToolReferenceAccess,
-  resolvePromptAndModelOverride,
+  resolveMediaAnalysisParams,
   type MediaToolSandbox,
 } from "./media-tool-shared.js";
 import {
   applyAgentDefaultModelConfig,
   hasToolModelConfig,
   prepareToolAuthProfileStore,
-  loadLegacyToolAuthProfileStore,
 } from "./model-config.helpers.js";
 import { anthropicAnalyzePdf, geminiAnalyzePdf } from "./pdf-native-providers.js";
 import {
@@ -113,11 +112,6 @@ export function createPdfTool(options?: {
   sandbox?: MediaToolSandbox;
   fsPolicy?: ToolFsPolicy;
   activeModel?: PdfToolActiveModel;
-  /**
-   * Avoid resolving auto PDF-provider/model candidates while registering the
-   * tool. The concrete PDF model is still resolved before execution.
-   */
-  deferAutoModelResolution?: boolean;
 }): AnyAgentTool | null {
   const agentDir = options?.agentDir?.trim();
   const hasExplicitModelConfig = hasExplicitPdfToolModelConfig(options?.config);
@@ -128,8 +122,6 @@ export function createPdfTool(options?: {
     return null;
   }
 
-  const shouldDeferAutoModelResolution =
-    options?.deferAutoModelResolution === true && !hasExplicitModelConfig;
   const resolveInitialModelConfig = (authStore: AuthProfileStore | undefined) =>
     resolvePdfModelConfigForTool({
       cfg: options?.config,
@@ -138,13 +130,10 @@ export function createPdfTool(options?: {
       authStore,
       activeModel: options?.activeModel,
     });
-  const registrationPdfModelConfig = shouldDeferAutoModelResolution
-    ? null
-    : resolveInitialModelConfig(
-        options?.authProfileStore ??
-          (hasExplicitModelConfig ? undefined : loadLegacyToolAuthProfileStore(agentDir)),
-      );
-  if (!registrationPdfModelConfig && !shouldDeferAutoModelResolution) {
+  const registrationPdfModelConfig = hasExplicitModelConfig
+    ? resolveInitialModelConfig(options?.authProfileStore)
+    : null;
+  if (!registrationPdfModelConfig && hasExplicitModelConfig) {
     return null;
   }
 
@@ -173,17 +162,12 @@ export function createPdfTool(options?: {
       );
     }
 
-    const { prompt: promptRaw, modelOverride } = resolvePromptAndModelOverride(
-      record,
-      DEFAULT_PROMPT,
-    );
-    const maxBytesMb =
-      readFiniteNumberParam(record, "maxBytesMb", {
-        min: 0,
-        minExclusive: true,
-        message: "maxBytesMb must be greater than 0",
-      }) ?? configuredMaxBytesMb;
-    const maxBytes = Math.floor(maxBytesMb * 1024 * 1024);
+    const {
+      prompt: promptRaw,
+      modelOverride,
+      maxBytesMb,
+    } = resolveMediaAnalysisParams(record, DEFAULT_PROMPT);
+    const maxBytes = Math.floor((maxBytesMb ?? configuredMaxBytesMb) * 1024 * 1024);
 
     const pagesRaw = normalizeOptionalString(record.pages);
     const pageSelection = pagesRaw ? parsePageRange(pagesRaw, configuredMaxPages) : undefined;

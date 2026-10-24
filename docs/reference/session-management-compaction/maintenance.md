@@ -78,6 +78,14 @@ not cancel the plan. Conflicting inputs receive at most three immediate planning
 attempts before maintenance pauses until a later write; settled refusals retain the
 worker connection. Retention policies and stored data formats are unchanged.
 
+Automatic age retention scans at most 64 candidates per pass and releases the
+writer queue between settled passes. It finishes the age scan before applying
+the session-count cap, including when protected entries fill a page. Large
+backlogs therefore converge through several bounded passes while foreground
+writes can proceed between them. Each scan keeps its original age cutoff;
+newly due entries retain their deadline for the next scan. Explicit cleanup
+remains exhaustive.
+
 OpenClaw no longer creates automatic `sessions.json.bak.*` rotation backups during Gateway writes. The current schema rejects the legacy `session.maintenance.rotateBytes` key, and `openclaw doctor --fix` removes it from older configs.
 
 Migration recovery originals and exact pre-Doctor recovery files are separate

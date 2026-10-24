@@ -300,7 +300,9 @@ describe("ManagedWorktreeService", () => {
         ownerKind: "session",
         ownerId: "agent:main:dashboard:two",
       }),
-    ).rejects.toThrow(/already in use by session/);
+    ).rejects.toThrow(
+      /already in use by session agent:main:dashboard:one: shared-name; choose an unused name, or omit it to generate one\./,
+    );
     await expect(
       service.create({ repoRoot: repo, name: "shared-name", baseRef: "HEAD" }),
     ).rejects.toThrow(/already in use by session/);
@@ -319,7 +321,7 @@ describe("ManagedWorktreeService", () => {
     await git(repo, "remote", "set-url", "origin", path.join(root, "missing.git"));
     await git(repo, "symbolic-ref", "--delete", "refs/remotes/origin/HEAD").catch(() => undefined);
     await expect(service.create({ repoRoot: repo, name: "offline" })).rejects.toThrow(
-      "Remote default branch is unavailable",
+      "Remote default branch is unavailable. Repair origin or choose an explicit worktree base ref.",
     );
     expect(await git(repo, "branch", "--list", "openclaw/offline")).toBe("");
   });

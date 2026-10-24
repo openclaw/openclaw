@@ -152,12 +152,16 @@ session visibility, or waive manual approval for X replies.
 
 ## Reply outcomes and failures
 
-Automatic replies to mentions are posted only when the agent declares success.
+Model replies to mentions are posted only when the agent declares success.
 The channel's delivery rules ask the agent to start each reply with
-`[[x_success]]` or `[[x_failure]]`; the tag is removed before posting. Replies
-tagged `[[x_failure]]`, untagged replies, and host error replies are withheld
+`[[x_success]]` or `[[x_failure]]`; the tag is removed before posting. Model replies
+tagged `[[x_failure]]`, untagged model replies, and host error replies are withheld
 from X. `NO_REPLY` and empty replies are dropped. If a model omits the tag on a
 successful answer, that answer is withheld rather than posted.
+
+Runtime queue acknowledgments and steering refusal notices are posted without a
+model success tag. These notices report the actual admission decision; they do
+not declare that the agent's work succeeded.
 
 Without a failure route, withheld replies are discarded and logged as
 `reply withheld post=<id> reason=<failure|error|unclassified> route=none`. With
@@ -188,14 +192,14 @@ media URL. Native attachments are preferable to sign-in-only proof links when th
 image or video helps explain the result. Work-session approval and origin restrictions
 still apply; guest replies remain text-only.
 
-The connector accepts up to four JPEG, PNG, or WebP images (5 MiB each), or one GIF
+The X plugin accepts up to four JPEG, PNG, or WebP images (5 MiB each), or one GIF
 (15 MiB) or MP4 video (100 MiB). It does not mix videos/GIFs with other attachments.
 The video cap bounds Gateway buffering; it is not X's account upload ceiling.
 Use H.264 video and AAC-LC audio; X validates the remaining encoding and account
 limits. See [X media requirements](https://docs.x.com/x-api/media/quickstart/best-practices).
 
 Local files use the host's approved media roots and file-reader policy; remote
-URLs use the shared guarded downloader. The connector uploads in chunks and waits
+URLs use the shared guarded downloader. The plugin uploads in chunks and waits
 for X processing before creating the reply. Attachments go on the first post if a
 long caption is split into a thread. A failed upload never falls back to a text-only
 post or a local-file link. A 403 on upload may require reconnecting the bot's OAuth

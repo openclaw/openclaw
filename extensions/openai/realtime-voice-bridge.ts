@@ -4,6 +4,7 @@ import type {
   RealtimeVoiceToolResultOptions,
 } from "openclaw/plugin-sdk/realtime-voice";
 import {
+  canonicalizeBase64,
   normalizeRealtimeVoiceResponseOutcome,
   RealtimeVoiceSessionLifecycle,
   RealtimeVoiceWebSocketTransport,
@@ -20,7 +21,6 @@ import {
   resolveOpenAIRealtimeRequestHeaders,
 } from "./realtime-provider-shared.js";
 import { buildOpenAIRealtimeSidebandUrl } from "./realtime-quicksilver-wire.js";
-import { base64ToBuffer, OpenAIRealtimeMalformedAudioError } from "./realtime-voice-audio.js";
 import { OpenAIRealtimeProtocol } from "./realtime-voice-protocol.js";
 import {
   OPENAI_REALTIME_ACTIVE_RESPONSE_ERROR_PREFIX,
@@ -45,6 +45,8 @@ import {
 
 const OPENAI_REALTIME_MAX_BUFFERED_AUDIO_BYTES = 1024 * 1024;
 const OPENAI_REALTIME_AUDIO_DROP_WARN_INTERVAL_MS = 5_000;
+
+class OpenAIRealtimeMalformedAudioError extends Error {}
 
 export class OpenAIRealtimeBridge extends OpenAIRealtimeProtocol implements RealtimeVoiceBridge {
   private readonly transport: RealtimeVoiceWebSocketTransport<RealtimeEvent>;
@@ -435,7 +437,13 @@ export class OpenAIRealtimeBridge extends OpenAIRealtimeProtocol implements Real
         ) {
           return;
         }
-        const audio = base64ToBuffer(audioDelta);
+        const canonicalAudio = canonicalizeBase64(audioDelta);
+        if (!canonicalAudio) {
+          throw new OpenAIRealtimeMalformedAudioError(
+            "OpenAI realtime stream returned malformed base64 audio data",
+          );
+        }
+        const audio = Buffer.from(canonicalAudio, "base64");
         if (event.item_id && event.item_id !== this.assistantAudioItem?.itemId) {
           this.assistantAudioItem = {
             itemId: event.item_id,
@@ -671,33 +679,18 @@ export class OpenAIRealtimeBridge extends OpenAIRealtimeProtocol implements Real
       response: event.response,
       responseId: event.response_id,
     });
-    let callbackError: unknown;
     let providerTerminated = false;
-    const invoke = (callback: () => void) => {
-      try {
-        callback();
-      } catch (error) {
-        callbackError ??= error;
-      }
-    };
     try {
       // Terminal output still belongs to this response until observers retire its owner.
-      invoke(() => {
-        providerTerminated = this.handleCompletedResponse(event, connection);
-      });
-      invoke(() => this.config.onResponseDone?.(outcome));
-      invoke(emitServerEvent);
+      providerTerminated = this.handleCompletedResponse(event, connection);
+      this.config.onResponseDone?.(outcome);
+      emitServerEvent();
     } finally {
       // response.done owns response state regardless of observer success. A fatal tool
       // boundary still clears state, but must not start queued work on a closing socket.
       const canDrain =
         !providerTerminated && this.acceptsEvent(connection) && this.isTransportOpen();
       this.releaseResponseState({ drain: canDrain });
-    }
-    if (callbackError) {
-      throw callbackError instanceof Error
-        ? callbackError
-        : new Error("OpenAI realtime response callback failed", { cause: callbackError });
     }
   }
 

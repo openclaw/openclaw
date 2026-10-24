@@ -1,7 +1,11 @@
-import fs from "node:fs/promises";
 import { Readable } from "node:stream";
+import { isChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import type { runFfmpeg, runFfprobe } from "openclaw/plugin-sdk/media-runtime";
+import {
+  MEDIA_FFMPEG_MAX_AUDIO_DURATION_SECS,
+  type runFfprobe,
+  type transcodeAudioBufferToOpus,
+} from "openclaw/plugin-sdk/media-runtime";
 import { withEnvAsync, withTempDir } from "openclaw/plugin-sdk/test-env";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ClawdbotConfig } from "../runtime-api.js";
@@ -27,7 +31,7 @@ const resolveReceiveIdTypeMock = vi.hoisted(() => vi.fn());
 const loadWebMediaMock = vi.hoisted(() =>
   vi.fn<(url: string, options: { localRoots?: readonly string[] }) => Promise<unknown>>(),
 );
-const runFfmpegMock = vi.hoisted(() => vi.fn<typeof runFfmpeg>());
+const transcodeAudioMock = vi.hoisted(() => vi.fn<typeof transcodeAudioBufferToOpus>());
 const runFfprobeMock = vi.hoisted(() => vi.fn<typeof runFfprobe>());
 
 const fileCreateMock = vi.hoisted(() =>
@@ -55,6 +59,14 @@ const validPngImage = Buffer.from(
   "89504e470d0a1a0a0000000d4948445200000001000000010802000000907753de",
   "hex",
 );
+const account = {
+  configured: true,
+  accountId: "main",
+  config: {},
+  appId: "app_id",
+  appSecret: "app_secret",
+  domain: "feishu",
+};
 
 vi.mock("./client.js", () => ({ createFeishuClient: createFeishuClientMock }));
 
@@ -74,7 +86,7 @@ vi.mock("./runtime.js", () => ({
 
 vi.mock("openclaw/plugin-sdk/media-runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/media-runtime")>();
-  return { ...actual, runFfmpeg: runFfmpegMock, runFfprobe: runFfprobeMock };
+  return { ...actual, transcodeAudioBufferToOpus: transcodeAudioMock, runFfprobe: runFfprobeMock };
 });
 
 function sendMedia(options: Omit<Parameters<typeof sendMediaFeishu>[0], "cfg" | "to">) {
@@ -135,24 +147,21 @@ function downloadResource(
 }
 
 afterAll(() => {
-  vi.doUnmock("./client.js");
-  vi.doUnmock("./accounts.js");
-  vi.doUnmock("./targets.js");
-  vi.doUnmock("./runtime.js");
-  vi.doUnmock("openclaw/plugin-sdk/media-runtime");
+  for (const id of [
+    "./client.js",
+    "./accounts.js",
+    "./targets.js",
+    "./runtime.js",
+    "openclaw/plugin-sdk/media-runtime",
+  ]) {
+    vi.doUnmock(id);
+  }
   vi.resetModules();
 });
 
 beforeEach(() => {
   vi.clearAllMocks();
-  resolveFeishuAccountMock.mockReturnValue({
-    configured: true,
-    accountId: "main",
-    config: {},
-    appId: "app_id",
-    appSecret: "app_secret",
-    domain: "feishu",
-  });
+  resolveFeishuAccountMock.mockReturnValue(account);
   createFeishuClientMock.mockReturnValue({
     im: { messageResource: { get: messageResourceGetMock } },
   });
@@ -181,11 +190,77 @@ describe("sendMediaFeishu msg_type routing", () => {
     loadWebMediaMock.mockResolvedValue(webMedia("remote.opus", "audio/ogg", "remote-audio"));
 
     messageResourceGetMock.mockImplementation(async () => resourceResponse("resource-bytes"));
-    runFfmpegMock.mockImplementation(async (args: string[]) => {
-      await fs.writeFile(args.at(-1) ?? "", Buffer.from("opus-output"));
-      return "";
-    });
+    transcodeAudioMock.mockResolvedValue(Buffer.from("opus-output"));
     runFfprobeMock.mockResolvedValue("1.234\n");
+  });
+
+  it.each([
+    ["report.pdf", "application/pdf", Buffer.from("%PDF-1.7 document"), true],
+    [
+      "diagram.png",
+      "image/png",
+      Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"></svg>'),
+      false,
+    ],
+  ] as const)(
+    "sends %s as a file despite voice intent or image metadata",
+    async (fileName, contentType, buffer, audioAsVoice) => {
+      loadWebMediaMock.mockResolvedValueOnce({ buffer, fileName, contentType });
+      const result = await sendMedia({ mediaUrl: `https://example.com/${fileName}`, audioAsVoice });
+      expect(imageCreateMock).not.toHaveBeenCalled();
+      expect(uploadData().file_type).toBe(audioAsVoice ? "pdf" : "stream");
+      expect(messageData()).toMatchObject({ msg_type: "file" });
+      expect(result.voiceIntentDegradedToFile).toBe(audioAsVoice ? true : undefined);
+    },
+  );
+
+  it("rejects images exceeding the platform image-upload limit before contacting Feishu", async () => {
+    const oversizedImage = Buffer.alloc(10 * 1024 * 1024 + 1);
+    validPngImage.copy(oversizedImage);
+    await expect(
+      sendMedia({ mediaBuffer: oversizedImage, fileName: "oversized.png" }),
+    ).rejects.toThrow("Feishu image exceeds its 10485760-byte upload limit");
+    expect(imageCreateMock).not.toHaveBeenCalled();
+    expect(messageCreateMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects oversized voice inputs before starting transcoding", async () => {
+    resolveFeishuAccountMock.mockReturnValue({
+      ...account,
+      config: { mediaMaxMb: 1 / (1024 * 1024) },
+    });
+    await expect(
+      sendMedia({
+        mediaBuffer: Buffer.from("oversized audio"),
+        fileName: "voice.mp3",
+        audioAsVoice: true,
+      }),
+    ).rejects.toThrow("Feishu file exceeds its 1-byte upload limit");
+    expect(transcodeAudioMock).not.toHaveBeenCalled();
+    expect(fileCreateMock).not.toHaveBeenCalled();
+  });
+
+  it("retains accepted image visibility when its platform identifier is missing", async () => {
+    messageCreateMock.mockResolvedValueOnce({ code: 0, data: {} });
+    const caught = await sendMedia({
+      mediaBuffer: Buffer.from("49492a000800000000000000", "hex"),
+      fileName: "scan.tif",
+    }).catch((error: unknown) => error);
+    expect(isChannelPartialDeliveryError(caught)).toBe(true);
+    expect(caught).toBeInstanceOf(Error);
+    expect(caught).toHaveProperty("message", "Feishu image send failed: no message_id returned");
+    expect(caught).toHaveProperty("deliveryResult", { messageIds: [], visibleReplySent: true });
+    expect(messageCreateMock).toHaveBeenCalledOnce();
+  });
+
+  it("rejects empty image and file attachments before contacting Feishu", async () => {
+    for (const fileName of ["empty.png", "empty.pdf"]) {
+      await expect(sendMedia({ mediaBuffer: Buffer.alloc(0), fileName })).rejects.toThrow(
+        "Feishu attachments cannot be empty",
+      );
+    }
+    expect(imageCreateMock).not.toHaveBeenCalled();
+    expect(fileCreateMock).not.toHaveBeenCalled();
   });
   it("respects ttsSupplement.visibleTextAlreadyDelivered over audioAsVoice", () => {
     for (const visibleTextAlreadyDelivered of [undefined, true]) {
@@ -204,6 +279,7 @@ describe("sendMediaFeishu msg_type routing", () => {
 
     await sendMedia({ mediaBuffer: Buffer.from("opus"), fileName: "reply.ogg" });
 
+    expect(transcodeAudioMock).not.toHaveBeenCalled();
     expect(uploadData()).not.toHaveProperty("duration");
     expect(JSON.parse(messageData().content ?? "{}")).toEqual({ file_key: "file_key_1" });
   });
@@ -227,7 +303,7 @@ describe("sendMediaFeishu msg_type routing", () => {
     loadWebMediaMock.mockResolvedValueOnce(mp3Media);
     try {
       if (degraded) {
-        runFfmpegMock.mockRejectedValueOnce(new Error("ffmpeg missing"));
+        transcodeAudioMock.mockRejectedValueOnce(new Error("ffmpeg missing"));
       }
       const result = await sendMedia({
         mediaUrl: "https://example.com/reply.mp3",
@@ -244,11 +320,16 @@ describe("sendMediaFeishu msg_type routing", () => {
         expect(mockCallArgs(warnSpy)[0]).toContain("audioAsVoice transcode failed");
         expect(mockCallArgs(warnSpy)[1]).toBeInstanceOf(Error);
       } else {
-        const [args] = mockCallArgs(runFfmpegMock);
-        for (const arg of ["-c:a", "libopus", "-ar", "48000", "-b:a", "64k", "-f", "ogg"]) {
-          expect(args).toContain(arg);
-        }
-        expect(args.slice(-3, -1)).toEqual(["-f", "ogg"]);
+        expect(transcodeAudioMock).toHaveBeenCalledExactlyOnceWith({
+          audioBuffer: Buffer.from("remote-mp3"),
+          inputFileName: "reply.mp3",
+          tempPrefix: "feishu-voice-",
+          outputFileName: "voice.ogg",
+          sampleRateHz: 48_000,
+          bitrate: "64k",
+          channels: 1,
+          maxDurationSeconds: MEDIA_FFMPEG_MAX_AUDIO_DURATION_SECS,
+        });
       }
     } finally {
       warnSpy?.mockRestore();
@@ -408,9 +489,9 @@ describe("saveMessageResourceFeishu", () => {
       });
     }
     expect(result).toMatchObject({
-      saved: { size: "fake-ios-video-data".length },
+      size: "fake-ios-video-data".length,
       contentType: "video/mp4",
-      fileName: "ios-video.mp4",
+      id: expect.stringMatching(/^ios-video---[a-f0-9-]{36}\.mp4$/),
     });
   });
 
@@ -442,11 +523,7 @@ describe("saveMessageResourceFeishu", () => {
       const result = await downloadResource(
         source === "payload" ? { originalFilename: latin1 } : {},
       );
-      if (source === "header") {
-        expect(result.fileName).toBe(fileName);
-      } else {
-        expect(result.saved.id).toMatch(/^武汉15座山登山信息汇总---[a-f0-9-]{36}\.csv$/);
-      }
+      expect(result.id).toMatch(/^武汉15座山登山信息汇总---[a-f0-9-]{36}\.csv$/);
     },
   );
 
@@ -485,7 +562,7 @@ describe("saveMessageResourceFeishu", () => {
           await vi.advanceTimersByTimeAsync(1);
           await expect(download).rejects.toMatchObject({
             name: "FeishuInboundMediaTimeoutError",
-            chunkTimeoutMs: FEISHU_MEDIA_HTTP_TIMEOUT_MS,
+            message: `Feishu media download stalled: no data received for ${FEISHU_MEDIA_HTTP_TIMEOUT_MS}ms`,
           });
           expect(stalled.destroyed).toBe(true);
         } finally {

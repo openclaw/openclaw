@@ -113,6 +113,10 @@ describe("AppSidebar project session activity", () => {
     const menu = sidebar.querySelector<HTMLButtonElement>(
       '[data-session-key*="thread-a"] [data-catalog-session-menu]',
     );
+    expect(menu?.getAttribute("aria-label")).toBe("Open session menu: Project A");
+    expect(
+      sidebar.querySelector('button[aria-label="Open session menu: Project B"]'),
+    ).not.toBeNull();
     menu?.focus();
     expect(document.activeElement).toBe(menu);
 

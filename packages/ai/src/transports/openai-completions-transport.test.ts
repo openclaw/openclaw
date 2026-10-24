@@ -56,6 +56,61 @@ async function captureTransportRequest(
 
 describe("openai completions transport", () => {
   it.each([
+    { field: "reasoning", answer: "OK", reasoning: false, finish: "stop", terminal: "done" },
+    { field: "reasoning_content", answer: "", reasoning: false, finish: "stop", terminal: "error" },
+    { field: "reasoning_text", answer: "", reasoning: false, finish: "length", terminal: "error" },
+    { field: "reasoning", answer: "OK", reasoning: true, finish: "stop", terminal: "done" },
+  ])(
+    "diagnoses suppressed $field with reasoning=$reasoning and finish=$finish",
+    async (testCase) => {
+      const hidden = "synthetic private thought";
+      const previousHost = getAiTransportHost();
+      configureAiTransportHost({
+        ...previousHost,
+        buildModelFetch: () => async () =>
+          new Response(
+            [
+              makeCompletionsChunk({ [testCase.field]: hidden }),
+              makeCompletionsChunk({ content: testCase.answer }, testCase.finish),
+            ]
+              .map((chunk) => `data: ${JSON.stringify(chunk)}\n\n`)
+              .join("") + "data: [DONE]\n\n",
+            { headers: { "content-type": "text/event-stream" } },
+          ),
+      });
+      try {
+        const model = makeCompletionsModel({
+          provider: "local",
+          id: "qwen3:4b",
+          baseUrl: "http://127.0.0.1:11434/v1",
+          reasoning: testCase.reasoning,
+        });
+        const { events, text, terminal, result } = await collectStream(
+          createOpenAICompletionsTransportStreamFn()(model, replyContext(), { apiKey: "test-key" }),
+        );
+        expect(terminal?.type).toBe(testCase.terminal);
+        expect(text).toBe(testCase.answer);
+        if (testCase.reasoning) {
+          expect(result.diagnostics).toBeUndefined();
+          expect(events.some((event) => event.type === "thinking_delta")).toBe(true);
+        } else {
+          expect(JSON.stringify(result)).not.toContain(hidden);
+          expect(events.some((event) => event.type === "thinking_delta")).toBe(false);
+          expect(result.diagnostics).toEqual([
+            { type: "reasoning_suppressed", timestamp: expect.any(Number) },
+          ]);
+          if (testCase.terminal === "error") {
+            expect(result.errorMessage).toContain("reasoning: true");
+            expect(result.errorMessage).toContain("local/qwen3:4b");
+          }
+        }
+      } finally {
+        configureAiTransportHost(previousHost);
+      }
+    },
+  );
+
+  it.each([
     ["official OpenAI", "https://api.openai.com/v1", true],
     ["OpenAI-compatible proxy", "https://proxy.example.com/v1", false],
   ] as const)("routes %s reasoning tool turns", async (_endpoint, baseUrl, native) => {

@@ -8,7 +8,6 @@ import hubStyles from "../../styles/hub-tabs.css?inline";
 export type HubTabsProps<T extends string> = {
   id: string;
   active: T | null;
-  requestedActive?: T;
   tabs: readonly {
     value: T;
     label: JSX.Element;
@@ -72,7 +71,7 @@ export function HubTabs<T extends string>(props: HubTabsProps<T>) {
       ]}
       onActivate={(value, element, event) => {
         const tab = props.tabs.find((entry) => entry.value === value);
-        if (!tab || tab.value === (props.requestedActive ?? props.active)) {
+        if (!tab || tab.value === props.active) {
           return false;
         }
         if (event instanceof KeyboardEvent) {

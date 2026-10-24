@@ -139,7 +139,7 @@ suite.define(() => {
       await waitForChatScrollIdle(page);
 
       await openChatDetails(page);
-      const progress = page.locator('.chat-details[role="dialog"]');
+      const progress = page.locator(".chat-details-desktop-body");
       await expect
         .poll(() => page.locator('[data-progress-card-placement="details"]').getAttribute("open"))
         .toBe("");

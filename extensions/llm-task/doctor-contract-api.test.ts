@@ -3,6 +3,10 @@ import { legacyConfigRules, normalizeCompatibilityConfig } from "./doctor-contra
 
 type Config = Parameters<typeof normalizeCompatibilityConfig>[0]["cfg"];
 type PluginEntry = NonNullable<NonNullable<Config["plugins"]>["entries"]>[string];
+const policy = (allow = true) => ({ allowModelOverride: allow, allowAuthProfileOverride: allow });
+const allowed = ["openai/gpt-5.6-sol"];
+const otherAllowed = ["anthropic/claude-haiku-4-5"];
+const path = "plugins.entries.llm-task";
 
 function migrate(entry: PluginEntry) {
   const result = normalizeCompatibilityConfig({
@@ -13,34 +17,21 @@ function migrate(entry: PluginEntry) {
 
 describe("llm-task doctor contract", () => {
   it("surfaces pre-policy entries and converges after migration", () => {
-    const rule = legacyConfigRules.find(
-      (candidate) => candidate.path.join(".") === "plugins.entries.llm-task",
-    );
+    const rule = legacyConfigRules.find((candidate) => candidate.path.join(".") === path);
     expect(rule?.match?.({ enabled: true })).toBe(true);
-    expect(
-      rule?.match?.({ llm: { allowModelOverride: true, allowAuthProfileOverride: true } }),
-    ).toBe(false);
-    expect(
-      rule?.match?.({ llm: { allowModelOverride: false, allowAuthProfileOverride: false } }),
-    ).toBe(false);
+    expect(rule?.match?.({ llm: policy() })).toBe(false);
+    expect(rule?.match?.({ llm: policy(false) })).toBe(false);
   });
 
   it("moves shipped model policy and grants the shipped override capabilities", () => {
     const result = migrate({
       enabled: true,
-      config: {
-        defaultModel: "gpt-5.6-sol",
-        allowedModels: ["openai/gpt-5.6-sol"],
-      },
+      config: { defaultModel: "gpt-5.6-sol", allowedModels: allowed },
     });
 
     expect(result.entry).toEqual({
       enabled: true,
-      llm: {
-        allowModelOverride: true,
-        allowAuthProfileOverride: true,
-        allowedCompletionModels: ["openai/gpt-5.6-sol"],
-      },
+      llm: { ...policy(), allowedCompletionModels: allowed },
       config: { defaultModel: "gpt-5.6-sol" },
     });
     expect(result.changes).toHaveLength(2);
@@ -48,63 +39,45 @@ describe("llm-task doctor contract", () => {
 
   it("keeps shipped override policy and migrates legacy completion policy separately", () => {
     const result = migrate({
-      llm: {
-        allowModelOverride: false,
-        allowAuthProfileOverride: false,
-        allowedModels: ["anthropic/claude-haiku-4-5"],
-      },
-      config: { allowedModels: ["openai/gpt-5.6-sol"] },
+      llm: { ...policy(false), allowedModels: otherAllowed },
+      config: { allowedModels: allowed },
     });
-
     expect(result.entry).toEqual({
       llm: {
-        allowModelOverride: false,
-        allowAuthProfileOverride: false,
-        allowedModels: ["anthropic/claude-haiku-4-5"],
-        allowedCompletionModels: ["openai/gpt-5.6-sol"],
+        ...policy(false),
+        allowedModels: otherAllowed,
+        allowedCompletionModels: allowed,
       },
       config: {},
     });
     expect(result.changes).toEqual([
-      "Moved plugins.entries.llm-task.config.allowedModels to plugins.entries.llm-task.llm.allowedCompletionModels.",
+      `Moved ${path}.config.allowedModels to ${path}.llm.allowedCompletionModels.`,
     ]);
   });
 
   it("keeps an explicit completion policy authoritative over the legacy key", () => {
     const result = migrate({
-      llm: {
-        allowModelOverride: true,
-        allowAuthProfileOverride: true,
-        allowedCompletionModels: ["anthropic/claude-haiku-4-5"],
-      },
-      config: { allowedModels: ["openai/gpt-5.6-sol"] },
+      llm: { ...policy(), allowedCompletionModels: otherAllowed },
+      config: { allowedModels: allowed },
     });
-
-    expect(result.entry?.llm?.allowedCompletionModels).toEqual(["anthropic/claude-haiku-4-5"]);
+    expect(result.entry?.llm?.allowedCompletionModels).toEqual(otherAllowed);
     expect(result.changes).toEqual([
-      "Removed plugins.entries.llm-task.config.allowedModels; existing plugins.entries.llm-task.llm.allowedCompletionModels remains authoritative.",
+      `Removed ${path}.config.allowedModels; existing ${path}.llm.allowedCompletionModels remains authoritative.`,
     ]);
   });
 
   it("preserves the unrestricted meaning of an empty legacy allowlist", () => {
     const result = migrate({ enabled: true, config: { allowedModels: [] } });
-
-    expect(result.entry?.llm).toEqual({
-      allowModelOverride: true,
-      allowAuthProfileOverride: true,
-    });
+    expect(result.entry?.llm).toEqual(policy());
     expect(result.changes).toContain(
-      "Removed empty plugins.entries.llm-task.config.allowedModels; unrestricted model selection remains unchanged.",
+      `Removed empty ${path}.config.allowedModels; unrestricted model selection remains unchanged.`,
     );
   });
 
   it("does not give legacy literal wildcards or noncanonical refs new meaning", () => {
     const result = migrate({
-      config: {
-        allowedModels: ["*", " openai/gpt-5.4 ", "OpenAI/gpt-5.5", "openai/gpt-5.6"],
-      },
+      config: { allowedModels: ["*", " openai/gpt-5.4 ", "OpenAI/gpt-5.5", "openai/gpt-5.6"] },
     });
-
     expect(result.entry?.llm?.allowedCompletionModels).toEqual(["openai/gpt-5.6"]);
   });
 
@@ -112,21 +85,13 @@ describe("llm-task doctor contract", () => {
     "keeps malformed legacy allowlist $allowedModels fail closed",
     ({ allowedModels }) => {
       const result = migrate({ config: { allowedModels } });
-
       expect(result.entry?.llm?.allowedCompletionModels).toEqual([]);
     },
   );
 
   it("is idempotent after migration", () => {
     const cfg = {
-      plugins: {
-        entries: {
-          "llm-task": {
-            llm: { allowModelOverride: true, allowAuthProfileOverride: true },
-            config: {},
-          },
-        },
-      },
+      plugins: { entries: { "llm-task": { llm: policy(), config: {} } } },
     } as const;
     const result = normalizeCompatibilityConfig({ cfg });
     expect(result.config).toBe(cfg);

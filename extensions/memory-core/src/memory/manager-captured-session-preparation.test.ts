@@ -62,7 +62,7 @@ describe("captured session preparation", () => {
         const afterForget = db
           .prepare("SELECT path, text FROM memory_index_chunks ORDER BY path")
           .all();
-        await expect(sync).rejects.toThrow("forgotten");
+        await expect(sync).rejects.toThrow("retry the full reindex");
         expect(
           db.prepare("SELECT path, text FROM memory_index_chunks ORDER BY path").all(),
         ).toEqual(afterForget);

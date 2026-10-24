@@ -274,6 +274,7 @@ export function SkillMenu(props: { menu: SkillMenu; host: SkillMenuHost }) {
   return (
     <Show when={isSkillMenuVisible(state())}>
       <ComposerMenu
+        getTextarea={() => props.host.getTextarea()}
         id={paneDomId(props.host.paneId, "skill-menu-listbox")}
         class="skill-menu"
         label={t("chat.skills.menu")}

@@ -1,61 +1,44 @@
 import fs from "node:fs";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, it, vi } from "vitest";
 import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { writeJsonFile } from "../../test/helpers/temp-repo.js";
-import {
-  clearRuntimeConfigSnapshot,
-  setRuntimeConfigSnapshot,
-} from "../config/runtime-snapshot.js";
+import * as configSnapshot from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createWarnLogCapture } from "../logging/test-helpers/warn-log-capture.js";
-import {
-  initializeGlobalHookRunner,
-  resetGlobalHookRunner,
-} from "../plugins/hook-runner-global.js";
+import * as hooks from "../plugins/hook-runner-global.js";
 import { loadPluginRegistryHandle } from "../plugins/loader.js";
 import { createPluginCache, withPluginCache } from "../plugins/plugin-cache.js";
 import { getPluginInstance, type PluginInstanceHandle } from "../plugins/plugin-instance-scope.js";
 import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
+import * as mcp from "./mcp-http-request.test-support.js";
 import { closeMcpLoopbackServer, ensureMcpLoopbackServer } from "./mcp-http.js";
-import {
-  beginMcpLoopbackToolCallCapture,
-  clearMcpLoopbackToolCallCapture,
-  getActiveMcpLoopbackRuntime,
-} from "./mcp-http.loopback-runtime.js";
+import * as captures from "./mcp-http.loopback-runtime.js";
 
 const fixtureLifetime = createFixtureLifetime();
-const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
-  afterEach(async () => {
-    await fixtureLifetime.cleanup();
-    cleanup();
-  }),
-);
+afterEach(() => fixtureLifetime.cleanup());
 
 it.for(["plain", "shared"] as const)(
   "observes %s results by reference across registry replacement despite observer errors",
   async (variant, { signal }) =>
     fixtureLifetime.run(async () => {
-      const root = tempDirs.make("mcp-plugin-generation-");
+      const root = fixtureLifetime.createTempDir("mcp-plugin-generation-");
       const bundledDir = path.join(root, "bundled");
       const pluginDir = path.join(bundledDir, "generation-probe");
       const workspaceDir = path.join(root, "workspace");
       const observationsPath = path.join(root, "tool-completions.jsonl");
       const observationsEvent = `tool-completions:${root}`;
-      const observations = [createDeferred(), createDeferred()];
-      const onObservation = (sessionKey: string) => {
-        if (sessionKey === "agent:main:generation-before") {
-          observations[0]!.resolve();
-        } else if (sessionKey === "agent:main:generation-after") {
-          observations[1]!.resolve();
-        }
-      };
+      const observations = new Map(
+        ["before", "after"].map((phase) => [`agent:main:generation-${phase}`, createDeferred()]),
+      );
+      const onObservation = (sessionKey: string) => observations.get(sessionKey)?.resolve();
+      const content = [{ type: "text", text: "generation tool available" }];
       const captureKey = `observer-${path.basename(root)}`;
       const captured: unknown[] = [];
       const warnings = createWarnLogCapture("mcp-observer-result-isolation");
@@ -68,8 +51,8 @@ it.for(["plain", "shared"] as const)(
         tools: { allow: ["generation_probe"] },
       };
       const instances: PluginInstanceHandle[] = [];
-      const loadGeneration = () =>
-        withPluginCache(createPluginCache(), () => {
+      const loadGeneration = () => {
+        const generation = withPluginCache(createPluginCache(), () => {
           const metadataSnapshot = resolvePluginMetadataSnapshot({ config, workspaceDir });
           const pluginRegistry = loadPluginRegistryHandle({
             config,
@@ -78,51 +61,27 @@ it.for(["plain", "shared"] as const)(
             onlyPluginIds: ["generation-probe"],
           });
           const record = pluginRegistry.plugins.find((plugin) => plugin.id === "generation-probe");
-          const instance = record && getPluginInstance(record);
-          if (!instance) {
-            throw new Error(
-              `Generation fixture failed to load: ${JSON.stringify(pluginRegistry.diagnostics)}`,
-            );
-          }
+          const instance = expectDefined(record && getPluginInstance(record), "plugin instance");
           instances.push(instance);
           return { pluginRegistry, metadataSnapshot, instance };
         });
+        setActivePluginRegistry(generation.pluginRegistry);
+        hooks.initializeGlobalHookRunner(generation.pluginRegistry);
+        return generation;
+      };
       const callTool = async (phase: string) => {
-        const runtime = getActiveMcpLoopbackRuntime();
-        if (!runtime) {
-          throw new Error("MCP listener did not start");
-        }
-        const response = await fetch(`http://127.0.0.1:${runtime.port}/mcp`, {
-          method: "POST",
+        const runtime = mcp.runtime();
+        const response = await mcp.request(runtime, mcp.toolCall("generation_probe", {}, phase), {
           signal,
-          headers: {
-            authorization: `Bearer ${runtime.ownerToken}`,
-            "content-type": "application/json",
-            "x-session-key": `agent:main:generation-${phase}`,
-            "x-openclaw-cli-capture-key": captureKey,
-            connection: "close",
-          },
-          body: JSON.stringify({
-            jsonrpc: "2.0",
-            id: phase,
-            method: "tools/call",
-            params: { name: "generation_probe", arguments: {} },
-          }),
+          sessionKey: `agent:main:generation-${phase}`,
+          captureKey,
+          connection: "close",
         });
-        const payload: unknown = await response.json();
-        expect(response.status, JSON.stringify(payload)).toBe(200);
+        const payload = await mcp.json(response);
         const details = variant === "shared" ? { bytes: new Uint8Array(1) } : {};
         expect({ payload, callback: captured.at(-1) }).toMatchObject({
-          payload: {
-            result: {
-              content: [{ type: "text", text: "generation tool available" }],
-              isError: false,
-            },
-          },
-          callback: {
-            outcome: "completed",
-            result: { content: [{ type: "text", text: "generation tool available" }], details },
-          },
+          payload: { result: { content, isError: false } },
+          callback: { outcome: "completed", result: { content, details } },
         });
         const callback = captured.at(-1);
         if (!isRecord(callback) || !isRecord(callback.result)) {
@@ -184,51 +143,43 @@ it.for(["plain", "shared"] as const)(
       });
     } };`,
           );
-          setRuntimeConfigSnapshot(config);
-          beginMcpLoopbackToolCallCapture({
+          configSnapshot.setRuntimeConfigSnapshot(config);
+          captures.beginMcpLoopbackToolCallCapture({
             captureKey,
-            onToolCallResult: (call) => {
-              captured.push(call);
-            },
+            onToolCallResult: (call) => captured.push(call),
           });
           const original = loadGeneration();
-          setActivePluginRegistry(original.pluginRegistry);
-          initializeGlobalHookRunner(original.pluginRegistry);
-          await withPluginRuntimeGenerationScope(original, () => ensureMcpLoopbackServer());
+          await withPluginRuntimeGenerationScope(original, ensureMcpLoopbackServer);
           await callTool("before");
 
-          const replacement = loadGeneration();
-          setActivePluginRegistry(replacement.pluginRegistry);
-          initializeGlobalHookRunner(replacement.pluginRegistry);
+          loadGeneration();
           await original.instance.dispose();
           await callTool("after");
-          await withinTest(Promise.all(observations.map((entry) => entry.promise)), signal);
+          await withinTest(
+            Promise.all([...observations.values()].map((entry) => entry.promise)),
+            signal,
+          );
           expect(await warnings.findText("after_tool_call")).toBeDefined();
-          expect(
-            fs
-              .readFileSync(observationsPath, "utf8")
-              .trim()
-              .split("\n")
-              .map((line) => JSON.parse(line)),
-          ).toEqual(
+          const logged = fs.readFileSync(observationsPath, "utf8").trim().split("\n");
+          expect(logged.map((line) => JSON.parse(line))).toEqual(
             ["before", "after"].map((phase) => ({
               toolName: "generation_probe",
               sessionKey: `agent:main:generation-${phase}`,
               sameResult: true,
               result: {
-                content: [{ type: "text", text: "generation tool available" }],
+                content,
                 details: variant === "shared" ? { bytes: { 0: 0 } } : {},
               },
             })),
           );
         },
         ...[
-          () => closeMcpLoopbackServer(),
-          () => clearMcpLoopbackToolCallCapture(captureKey),
+          closeMcpLoopbackServer,
+          () => captures.clearMcpLoopbackToolCallCapture(captureKey),
           () => Promise.all(instances.map((instance) => instance.dispose())),
           () => resetPluginRuntimeStateForTest(),
-          () => resetGlobalHookRunner(),
-          () => clearRuntimeConfigSnapshot(),
+          () => hooks.resetGlobalHookRunner(),
+          () => configSnapshot.clearRuntimeConfigSnapshot(),
           () => vi.unstubAllEnvs(),
           () => warnings.cleanup(),
           () => process.removeListener(observationsEvent, onObservation),

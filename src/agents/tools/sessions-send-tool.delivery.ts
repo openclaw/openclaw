@@ -30,11 +30,14 @@ import {
 } from "../../sessions/user-turn-transcript.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
+import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import { listAgentIds } from "../agent-scope.js";
+import { resolveNestedAgentLaneForSession } from "../lanes.js";
 import { resolveSenderRestrictedSpawnError } from "../spawn-requester-policy.js";
 import { jsonResult } from "./common.js";
 import {
   captureGatewayToolCallerAssertion,
+  getGatewayToolCallerIdentity,
   resolveGatewayToolOperatorSelection,
 } from "./gateway-caller-context.js";
 import {
@@ -43,19 +46,44 @@ import {
   hasInProcessGatewayToolContext,
   type AgentToolGatewayRequestCaller,
 } from "./in-process-gateway.js";
+import type { SessionSendReplyAdmission } from "./sessions-send-communication.js";
 import { queueSessionsSendSteeringWithCustody } from "./sessions-send-tool.steering.js";
+import type { AgentStepSession } from "./sessions-send-tool.types.js";
 
 // Bind at dispatch: child followup custody installs its context after tool construction.
 export const callSessionsSendGateway: AgentToolGatewayRequestCaller = async <T>(
   request: Parameters<AgentToolGatewayRequestCaller>[0],
 ): Promise<T> => await bindAgentToolGatewayRequest({ revalidateOnCompletion: false })<T>(request);
 
+export function buildSessionsSendAgentParams(params: {
+  message: string;
+  agentId: string;
+  sessionKey: string;
+  idempotencyKey: string;
+  nativeChild: boolean;
+  inputProvenance: InputProvenance;
+}) {
+  return {
+    message: params.message,
+    agentId: params.agentId,
+    sessionKey: params.sessionKey,
+    idempotencyKey: params.idempotencyKey,
+    deliver: false,
+    // Native children return through their completion owner, without a message tool.
+    sourceReplyDeliveryMode: params.nativeChild
+      ? ("automatic" as const)
+      : ("message_tool_only" as const),
+    channel: INTERNAL_MESSAGE_CHANNEL,
+    lane: resolveNestedAgentLaneForSession(params.sessionKey),
+    inputProvenance: params.inputProvenance,
+  };
+}
+
 export async function notifySessionsSendSession(params: {
   message: string;
   inputProvenance: InputProvenance;
   sessionKey: string;
   targetAgentId: string;
-  idempotencyKey: string;
   runId: string;
   displayKey: string;
   assertCurrent?: () => void;
@@ -69,7 +97,7 @@ export async function notifySessionsSendSession(params: {
       withSystemEventOwner(
         {
           sessionKey: params.sessionKey,
-          contextKey: `session-notify:${params.idempotencyKey}`,
+          contextKey: `session-notify:${params.runId}`,
         },
         params.targetAgentId,
       ),
@@ -77,7 +105,6 @@ export async function notifySessionsSendSession(params: {
   };
   const event = selection.operatorAuthority
     ? await runWithInProcessGatewaySessionMutation(
-        "sessions.send",
         { sessionKey: params.sessionKey, agentId: params.targetAgentId },
         (assertCurrent) => {
           assertCurrent();
@@ -118,28 +145,32 @@ function resolveCronRunScopedFallbackSessionKey(sessionKey: string): string | un
 
 type SessionsSendDeliveryParams = {
   cfg: OpenClawConfig;
+  admissionConfig: OpenClawConfig;
   callGateway: AgentToolGatewayRequestCaller;
+  callDurableGateway?: AgentToolGatewayRequestCaller;
   runId: string;
   sendParams: Record<string, unknown> & {
     message: string;
     agentId: string;
     inputProvenance: InputProvenance;
-    sourceReplyDeliveryMode: "message_tool_only";
+    sourceReplyDeliveryMode: "automatic" | "message_tool_only";
   };
   sessionKey: string;
   sessionStoreTarget: Pick<GatewaySessionStoreTarget, "agentId" | "canonicalKey" | "storePath">;
-  deliveryTimeoutMs?: number;
   allowActiveRunQueueDelivery?: boolean;
   expectedSessionId?: string;
   /** Communication binds an incarnation without claiming result ownership or forbidding Cron fallback. */
   preparedTargetSessionId?: string;
   retainAcceptance?: boolean;
+  captureReplyAdmission?: (runId: string) => SessionSendReplyAdmission;
   assertDispatchCurrent?: () => void;
   // Destination policy fences input commit, not an already accepted acknowledgment.
   assertSendCurrent?: () => void;
   sourceOrigin?: DeliveryContext;
   /** A Cron fallback is another exact recipient and needs its own admission. */
   prepareFallback?: (sessionKey: string) => Promise<{
+    targetSession?: AgentStepSession;
+    captureReplyAdmission?: (runId: string) => SessionSendReplyAdmission;
     callGateway: AgentToolGatewayRequestCaller;
     assertCurrent: () => void;
     close: () => void;
@@ -154,6 +185,8 @@ export type SessionsSendStart =
       targetDisposition: "queued" | "steered";
       steeredRunId?: string;
       a2aSessionKey?: string;
+      a2aSession?: AgentStepSession;
+      replyAdmission?: SessionSendReplyAdmission;
     }
   | { ok: false; result: ReturnType<typeof jsonResult<Record<string, unknown>>> };
 
@@ -166,10 +199,12 @@ const FALLBACK_STEER_REJECTIONS = new Set<
 export async function trySessionsSendActiveRunDelivery(
   params: SessionsSendDeliveryParams,
   ownChild: boolean,
-): Promise<SessionsSendStart | { fallbackSessionKey?: string }> {
+): Promise<
+  SessionsSendStart | { fallbackSessionKey?: string; callGateway?: AgentToolGatewayRequestCaller }
+> {
   const assertCaller = captureGatewayToolCallerAssertion();
   try {
-    const selection = resolveGatewayToolOperatorSelection();
+    const selection = resolveGatewayToolOperatorSelection({ requireRequesterOrigin: true });
     selection.assertCurrent();
     let fallbackSessionKey: string | undefined;
     const activeOperation =
@@ -200,8 +235,15 @@ export async function trySessionsSendActiveRunDelivery(
     ) {
       throw new Error("active run session incarnation changed");
     }
-    const { inputProvenance, message: messageText, sourceReplyDeliveryMode } = params.sendParams;
+    const { inputProvenance, message: messageText } = params.sendParams;
     if (activeOperation && activeRunSessionId && messageText) {
+      const requesterOrigin = selection.requesterOrigin;
+      if (!requesterOrigin) {
+        if (params.mode === "steer") {
+          throw new Error('Cannot verify requester identity for steering; use mode: "followup".');
+        }
+        return {};
+      }
       const queue = async (
         assertCurrent: () => void,
         lifecycle: Pick<ReplyMessageInjectionOptions, "onQueueAccepted" | "onQueueSettled"> = {},
@@ -218,9 +260,14 @@ export async function trySessionsSendActiveRunDelivery(
         );
         assertInputCurrent();
         const queueOptions: ReplyMessageInjectionOptions = {
+          requesterToolAuthority: {
+            requesterOrigin,
+            config: params.admissionConfig,
+          },
           steeringMode: "all",
           debounceMs: 0,
-          deliveryTimeoutMs: params.deliveryTimeoutMs,
+          // Reply waiting and durable admission have separate deadlines.
+          deliveryTimeoutMs: undefined,
           ...lifecycle,
           onQueueAccepted: (value) => {
             // Accepted guidance belongs to the receiver, not the sender's later policy.
@@ -233,21 +280,19 @@ export async function trySessionsSendActiveRunDelivery(
                 assertCurrent: () => {
                   assertInputCurrent();
                   if (!selection.operatorAuthority) {
-                    assertCaller?.("agent");
+                    assertCaller?.("sessions.send");
                   }
                 },
               }
             : {}),
-          // Waiting for a busy run's transcript would withdraw accepted guidance at the deadline.
-          ...(params.mode === "steer" || ownChild
-            ? { waitForTranscriptCommit: false }
-            : { waitForTranscriptCommit: true, sourceReplyDeliveryMode }),
+          waitForTranscriptCommit: true,
           // The receiving runtime owns transcript writes to this exact incarnation.
           userTurnTranscriptRecorder: createUserTurnTranscriptRecorder({
             assertOriginalInputCommit: assertInputCurrent,
             input: {
               text: messageText,
               provenance: inputProvenance,
+              requesterOrigin,
               ...(inputProvenance.sourceRole === "subagent" ? { display: false as const } : {}),
               idempotencyKey: buildRunUserTurnIdempotencyKey(params.runId),
             },
@@ -262,24 +307,13 @@ export async function trySessionsSendActiveRunDelivery(
             },
           }),
         };
-        const dispatchQueue = (options: ReplyMessageInjectionOptions) =>
-          steerSessionControllerOperation({
-            operation: activeOperation,
-            text: messageText,
-            // A status-only inter-session input cannot abort the receiving turn.
-            abortOnUnconfirmedTranscript: false,
-            options,
-          });
-        let result = await dispatchQueue(queueOptions);
-        if (
-          result.status === "rejected" &&
-          result.reason === "transcript_commit_wait_unsupported"
-        ) {
-          const bestEffortOptions = { ...queueOptions };
-          delete bestEffortOptions.waitForTranscriptCommit;
-          result = await dispatchQueue(bestEffortOptions);
-        }
-        return result;
+        return await steerSessionControllerOperation({
+          operation: activeOperation,
+          text: messageText,
+          // A status-only inter-session input cannot abort the receiving turn.
+          abortOnUnconfirmedTranscript: false,
+          options: queueOptions,
+        });
       };
       const steer = selection.operatorAuthority
         ? await queueSessionsSendSteeringWithCustody(
@@ -304,6 +338,36 @@ export async function trySessionsSendActiveRunDelivery(
       if (steer.status === "indeterminate") {
         // Consumed without a confirmed commit: never replay it as a new turn.
         throw new Error(steer.errorMessage);
+      }
+      if (
+        steer.reason === "requester_origin_mismatch" ||
+        steer.reason === "tool_authority_mismatch"
+      ) {
+        if (params.mode === "steer") {
+          throw new Error(
+            steer.reason === "requester_origin_mismatch"
+              ? 'Active run has a different requester; use mode: "followup".'
+              : 'Requester policy does not match the active run; use mode: "followup".',
+          );
+        }
+        return {};
+      }
+      if (steer.reason === "transcript_commit_wait_unsupported") {
+        if (!params.callDurableGateway) {
+          throw new Error("The target cannot accept restart-durable steering from this caller.");
+        }
+        // Capability rejection precedes injection, so the same input can safely queue once.
+        return { callGateway: params.callDurableGateway };
+      }
+      // A definite capability refusal leaves ordinary input on its captured
+      // conversation. Revocation and uncertain native commitment never retry.
+      if (
+        params.mode !== "steer" &&
+        params.allowActiveRunQueueDelivery &&
+        !isCronRunSessionKey(params.sessionKey) &&
+        FALLBACK_STEER_REJECTIONS.has(steer.reason)
+      ) {
+        return {};
       }
       fallbackSessionKey = ownChild
         ? undefined
@@ -347,10 +411,12 @@ export async function startSessionsSendAgentRun(
   params: SessionsSendDeliveryParams & { fallbackSessionKey?: string },
 ): Promise<SessionsSendStart> {
   const { fallbackSessionKey } = params;
+  const caller = getGatewayToolCallerIdentity();
   let fallback:
     | Awaited<ReturnType<NonNullable<SessionsSendDeliveryParams["prepareFallback"]>>>
     | undefined;
   try {
+    const selection = resolveGatewayToolOperatorSelection({ requireRequesterOrigin: true });
     if (fallbackSessionKey) {
       fallback = await params.prepareFallback?.(fallbackSessionKey);
     }
@@ -375,6 +441,15 @@ export async function startSessionsSendAgentRun(
       admissionPending?: boolean;
     }>({
       method: "agent",
+      ...(caller && selection.requesterOrigin
+        ? {
+            agentToolCaller: {
+              agentId: caller.agentId,
+              sessionKey: caller.sessionKey,
+              requesterOrigin: selection.requesterOrigin,
+            },
+          }
+        : {}),
       params: fallbackSessionKey
         ? {
             ...sendParams,
@@ -422,7 +497,12 @@ export async function startSessionsSendAgentRun(
       ok: true,
       runId: responseRunId,
       targetDisposition: "queued",
-      ...(fallbackSessionKey ? { a2aSessionKey: fallbackSessionKey } : {}),
+      replyAdmission: params.retainAcceptance
+        ? undefined
+        : (fallback?.captureReplyAdmission ?? params.captureReplyAdmission)?.(responseRunId),
+      ...(fallbackSessionKey
+        ? { a2aSessionKey: fallbackSessionKey, a2aSession: fallback?.targetSession }
+        : {}),
     };
   } catch (err) {
     return deliveryFailure(params, err);
@@ -486,18 +566,15 @@ export async function createConfiguredAgentMainSession(params: {
   requesterSessionKey?: string;
   useTrustedInProcessCreation: boolean;
   assertCurrent?: () => void;
-}): Promise<{ ok: true } | { ok: false; status: "error" | "forbidden"; error: string }> {
+}): Promise<void> {
   const requesterPolicyError = resolveSenderRestrictedSpawnError({ ...params, visible: true });
   if (requesterPolicyError) {
-    return { ok: false, status: "forbidden", error: requesterPolicyError };
+    throw new Error(requesterPolicyError);
   }
   if (params.mode === "steer" || params.mode === "notify" || params.mode === "resume") {
-    return {
-      ok: false,
-      status: "error",
-      error:
-        "Cannot notify, steer, or resume a missing session. Use mode=followup to start a new turn.",
-    };
+    throw new Error(
+      "Cannot notify, steer, or resume a missing session. Use mode=followup to start a new turn.",
+    );
   }
   try {
     params.assertCurrent?.();
@@ -529,8 +606,7 @@ export async function createConfiguredAgentMainSession(params: {
         timeoutMs: 10_000,
       });
     }
-    return { ok: true };
   } catch (err) {
-    return { ok: false, status: "error", error: formatErrorMessage(err) };
+    throw new Error(formatErrorMessage(err), { cause: err });
   }
 }

@@ -1,23 +1,29 @@
-// Separate Gateway processes prove that an operator can adopt a tombstoned task.
+// Separate Gateway processes prove automatic owner-authorized recovery and terminal cancellation.
 import { once } from "node:events";
 import { readFile } from "node:fs/promises";
-import { createServer, type ServerResponse } from "node:http";
+import type { ServerResponse } from "node:http";
 import path from "node:path";
 import { asRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
-import type { SessionsRecoverResult } from "../packages/gateway-protocol/src/index.js";
+import { readPendingInputSource } from "../src/config/sessions/session-pending-input-source.js";
+import { parseSessionPendingInputMessage } from "../src/config/sessions/session-pending-input-value.js";
 import type { GatewayClient } from "../src/gateway/client.js";
+import { readSessionSendDelivery } from "../src/gateway/session-send-delivery.js";
 import type { SessionsListResult } from "../src/gateway/session-utils.types.js";
 import { buildMockOpenAiResponsesProvider } from "../src/gateway/test-openai-responses-model.js";
-import { loadOrCreateDeviceIdentity } from "../src/infra/device-identity.js";
 import { writeGatewayRestartIntentSync } from "../src/infra/restart-intent.js";
 import { reserveTestPortListener } from "../src/test-utils/port-claims.js";
-import { acquireGatewayTestClient } from "./helpers/gateway-client.js";
-import { GATEWAY_RESTART_TEST_KILL_MS } from "./helpers/gateway-restart-budget.js";
 import {
-  writeOpenAiResponsesSse,
-  writeOpenAiResponsesText,
-} from "./helpers/openai-responses-sse.js";
+  restartEnv,
+  connectRestartClient,
+  restartProviderServer,
+  restartToolNames,
+  writeRestartJsonText,
+  restartModelConfig,
+  writeRestartToolCall,
+} from "./gateway-restart.test-support.js";
+import { GATEWAY_RESTART_TEST_KILL_MS } from "./helpers/gateway-restart-budget.js";
+import { writeOpenAiResponsesText } from "./helpers/openai-responses-sse.js";
 import { createOpenClawTestInstance } from "./helpers/openclaw-test-instance.js";
 import { createDeferred, withinTest } from "./helpers/promise.js";
 import { runQaGatewayFixture } from "./helpers/qa-gateway-cleanup.js";
@@ -35,36 +41,14 @@ const ORDINARY_KEY = "agent:main:ordinary-permission-control";
 const ORDINARY_REQUEST = "ORDINARY_PERMISSION_CONTROL: wait for the operator.";
 const ORDINARY_FINAL = "ORDINARY_PERMISSION_CHANGE_FINISHED";
 
-function writeTool(response: ServerResponse, name: string, args: object, ordinal: number) {
-  const item = {
-    type: "function_call",
-    id: `fc_resume_${ordinal}`,
-    call_id: `call_resume_${ordinal}`,
-    name,
-    arguments: JSON.stringify(args),
-  };
-  writeOpenAiResponsesSse(response, [
-    { type: "response.output_item.added", output_index: 0, item: { ...item, arguments: "" } },
-    {
-      type: "response.function_call_arguments.delta",
-      output_index: 0,
-      item_id: item.id,
-      delta: item.arguments,
-    },
-    { type: "response.output_item.done", output_index: 0, item },
-    {
-      type: "response.completed",
-      response: {
-        id: `resp_resume_${ordinal}`,
-        status: "completed",
-        output: [item],
-        usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
-      },
-    },
-  ]);
-}
+const writeTool = (response: ServerResponse, name: string, args: object, ordinal: number) =>
+  writeRestartToolCall(response, "resume", name, args, ordinal);
 
-async function startProvider(signal: AbortSignal, holdFirstResume: boolean) {
+async function startProvider(
+  signal: AbortSignal,
+  holdFirstResume: boolean,
+  automaticReply = false,
+) {
   const suspended = new Map(CASES.map((name) => [name, createDeferred()]));
   const resumed = createDeferred();
   const releaseResume = createDeferred();
@@ -86,39 +70,16 @@ async function startProvider(signal: AbortSignal, holdFirstResume: boolean) {
     offsets: [0],
     signal,
     createListener: () =>
-      createServer((request, response) => {
-        void (async () => {
-          const chunks: Buffer[] = [];
-          for await (const chunk of request) {
-            chunks.push(Buffer.from(chunk));
-          }
+      restartProviderServer(
+        failed,
+        async (request, response, body) => {
           expect(request.url).toBe("/v1/responses");
-          const body = asRecord(JSON.parse(Buffer.concat(chunks).toString("utf8")));
-          const tools = Array.isArray(body.tools)
-            ? body.tools.flatMap((tool) =>
-                isRecord(tool) && typeof tool.name === "string" ? [tool.name] : [],
-              )
-            : [];
+          const tools = restartToolNames(body);
           const input = JSON.stringify(body.input);
           const callOrdinal = ++ordinal;
           const text = (value: string) => {
             if (body.stream === false) {
-              response.writeHead(200, { "content-type": "application/json" });
-              response.end(
-                JSON.stringify({
-                  id: `resp_resume_${callOrdinal}`,
-                  status: "completed",
-                  output: [
-                    {
-                      type: "message",
-                      id: `msg_resume_${callOrdinal}`,
-                      role: "assistant",
-                      content: [{ type: "output_text", text: value, annotations: [] }],
-                    },
-                  ],
-                  usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
-                }),
-              );
+              writeRestartJsonText(response, value, `resume_${callOrdinal}`);
             } else {
               writeOpenAiResponsesText(response, {
                 text: value,
@@ -165,7 +126,15 @@ async function startProvider(signal: AbortSignal, holdFirstResume: boolean) {
           if (source) {
             if (delegated.has(source)) {
               expect(input).toContain("accepted");
-              text(`DELEGATED_${source}`);
+              if (automaticReply && !adopted.has(source)) {
+                suspended.get(source)!.resolve();
+                return;
+              }
+              text(
+                automaticReply && input.includes(final(source))
+                  ? "AUTOMATIC_REPLY_CONSUMED"
+                  : `DELEGATED_${source}`,
+              );
             } else {
               delegated.add(source);
               tool("sessions_send", {
@@ -189,14 +158,17 @@ async function startProvider(signal: AbortSignal, holdFirstResume: boolean) {
             return;
           }
           expect(input).toContain(`CHECKPOINT_${name}`);
+          if (automaticReply) {
+            text(final(name));
+            return;
+          }
           if (!adopted.has(name)) {
             suspended.get(name)!.resolve();
             // Keep the real model request open until the process is stopped or cancelled.
             return;
           }
           expect(name).not.toBe("cancel");
-          expect(input).toContain("unknown outcome");
-          expect(input).toContain("Verify what happened before repeating an action");
+          expect(input).toContain("interrupted by a gateway restart");
           resumeInputs.push({ name, input });
           if (name === "revoked" || name === "restricted") {
             if (!revokeAttempted.has(name)) {
@@ -231,7 +203,8 @@ async function startProvider(signal: AbortSignal, holdFirstResume: boolean) {
                     ? "Permission change"
                     : !tools.includes("exec") && !tools.includes("dispatch_action")
                       ? "Tool exec not found"
-                      : expect.stringContaining("exec denied"),
+                      : // The session tool pin keeps exec offered and refuses it at call time.
+                        expect.stringMatching(/exec denied|exec is not available in this turn/),
               });
               text(final(name));
             }
@@ -257,13 +230,9 @@ async function startProvider(signal: AbortSignal, holdFirstResume: boolean) {
           }
           expect(input).toContain("OPERATOR_EFFECT_CONFIRMED");
           text(final(name));
-        })().catch((error: unknown) => {
-          if (!request.aborted) {
-            failed.reject(error);
-          }
-          response.destroy(error instanceof Error ? error : undefined);
-        });
-      }),
+        },
+        { ignoreAborted: true },
+      ),
   });
   return {
     baseUrl: `http://127.0.0.1:${reservation.claim.port}/v1`,
@@ -296,6 +265,9 @@ async function createInstance(
   signal: AbortSignal,
 ) {
   const model = buildMockOpenAiResponsesProvider(provider.baseUrl);
+  const noProxy = [process.env.no_proxy ?? process.env.NO_PROXY, "127.0.0.1", "localhost", "::1"]
+    .filter(Boolean)
+    .join(",");
   const instance = await createOpenClawTestInstance({
     name: "gateway-session-resume-restart",
     signal,
@@ -303,11 +275,10 @@ async function createInstance(
     stopTimeoutMs: 10_000,
     gracefulShutdownTimeoutMs: GATEWAY_RESTART_TEST_KILL_MS,
     env: {
-      OPENAI_API_KEY: undefined,
-      OPENAI_BASE_URL: undefined,
-      OPENAI_API_BASE: undefined,
-      OPENCLAW_SKIP_PROVIDERS: undefined,
-      OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
+      // Keep only the owned loopback fixtures direct; preserve external proxy routing.
+      NO_PROXY: noProxy,
+      no_proxy: noProxy,
+      ...restartEnv,
       OPENCLAW_NO_RESPAWN: "1",
     },
   });
@@ -316,30 +287,12 @@ async function createInstance(
     browser: { enabled: false },
     discovery: { mdns: { mode: "off" } },
     plugins: { enabled: false },
-    models: {
-      mode: "replace",
-      providers: {
-        [model.providerId]: { ...model.config, request: { allowPrivateNetwork: true } },
-      },
-    },
-    agents: {
-      defaults: {
-        workspace: instance.state.workspaceDir,
-        model: { primary: model.modelRef },
-        modelPolicy: { allow: [model.modelRef] },
-        models: {
-          [model.modelRef]: {
-            agentRuntime: { id: "openclaw" },
-            params: { transport: "sse", openaiWsWarmup: false },
-          },
-        },
-        heartbeat: { every: "0m" },
-        skipBootstrap: true,
-        skills: [],
-        timeoutSeconds: 120,
-      },
-      entries: { main: {} },
-    },
+    ...restartModelConfig(
+      model,
+      instance.state.workspaceDir,
+      {},
+      { catalogRefresh: { enabled: false } },
+    ),
     tools: {
       allow: ["exec", "sessions_send"],
       codeMode: { enabled: false },
@@ -360,25 +313,9 @@ async function createInstance(
 function connectInstance(
   instance: Awaited<ReturnType<typeof createInstance>>,
   signal: AbortSignal,
+  profiled = false,
 ) {
-  return acquireGatewayTestClient(
-    {
-      url: instance.url,
-      token: instance.gatewayToken,
-      clientName: "gateway-client",
-      mode: "backend",
-      scopes: ["operator.admin", "operator.read", "operator.write"],
-      deviceIdentity: loadOrCreateDeviceIdentity({
-        path: instance.state.path("device.sqlite"),
-      }),
-    },
-    {
-      timeoutMs: 30_000,
-      timeoutMessage: "resume client did not connect",
-      closeMessage: "resume client closed",
-      signal,
-    },
-  );
+  return connectRestartClient(instance, { mode: profiled ? "test" : "backend" }, signal);
 }
 
 async function applyReadOnly(
@@ -455,13 +392,13 @@ it.skipIf(process.platform === "win32")(
 );
 
 it.skipIf(process.platform === "win32").for(["managed", "SIGTERM", "SIGKILL"] as const)(
-  "resumes a tombstoned delegated task in place after %s with fresh operator authority",
+  "automatically continues delegated owner work in place after %s",
   { timeout: 180_000 },
   async (mode, { signal }) => {
     const provider = await startProvider(signal, mode === "SIGKILL");
     const instance = await createInstance(provider, signal);
     let client: GatewayClient | undefined;
-    const connect = () => connectInstance(instance, signal);
+    const connect = () => connectInstance(instance, signal, mode === "SIGKILL");
     const race = <T>(promise: Promise<T>) =>
       withinTest(Promise.race([promise, provider.failed]), signal);
     const rows = async () =>
@@ -477,7 +414,7 @@ it.skipIf(process.platform === "win32").for(["managed", "SIGTERM", "SIGKILL"] as
                 await client!.request("chat.history", { sessionKey: targetKey(name) }),
               ),
             ).toContain(final(name));
-            expect(await row(name)).toMatchObject({ hasActiveRun: false });
+            expect(await row(name)).toMatchObject({ status: "done", hasActiveRun: false });
           },
           { timeout: 30_000 },
         ),
@@ -558,26 +495,12 @@ it.skipIf(process.platform === "win32").for(["managed", "SIGTERM", "SIGKILL"] as
             { timeout: 30_000 },
           ),
         );
+        // Change the retained task before recovery prepares its next tool surface.
+        await applyReadOnly(client!, instance, targetKey("restricted"));
+        for (const name of ["revoked", "restricted", "continue"] as const) {
+          provider.adopted(name);
+        }
         await restart(mode);
-        await race(
-          vi.waitFor(
-            async () => {
-              for (const name of ["continue", "revoked", "restricted"] as const) {
-                expect(await row(name)).toMatchObject({
-                  sessionId: identities.get(name),
-                  restartRecoveryStatus: "tombstoned",
-                  hasActiveRun: false,
-                });
-                expect(
-                  JSON.stringify(
-                    await client!.request("chat.history", { sessionKey: targetKey(name) }),
-                  ),
-                ).toContain("delegated recovery sender authority is unavailable");
-              }
-            },
-            { timeout: 30_000 },
-          ),
-        );
         expect(await row("cancel")).toMatchObject({ status: "killed", hasActiveRun: false });
         expect((await row("cancel"))?.restartRecoveryStatus).toBeUndefined();
         await expect(
@@ -588,52 +511,14 @@ it.skipIf(process.platform === "win32").for(["managed", "SIGTERM", "SIGKILL"] as
             recoveryCycleId: "cancelled-has-no-recovery-cycle",
           }),
         ).rejects.toThrow(/restart-tombstoned|not recoverable|changed/);
-        const resumeRequests = new Map<
-          ResumeCase,
-          {
-            key: string;
-            mode: "in-place";
-            sessionId: string;
-            recoveryCycleId: string;
-          }
-        >();
-        await client!.request("sessions.patch", {
-          key: targetKey("restricted"),
-          permissionMode: "read-only",
-        });
-        for (const name of ["revoked", "restricted", "continue"] as const) {
-          const current = await row(name);
-          expect(current?.restartRecoveryCycleId).toEqual(expect.any(String));
-          const request = {
-            key: targetKey(name),
-            mode: "in-place" as const,
-            sessionId: identities.get(name)!,
-            recoveryCycleId: current!.restartRecoveryCycleId!,
-          };
-          resumeRequests.set(name, request);
-          provider.adopted(name);
-          const resumed = await client!.request<SessionsRecoverResult>("sessions.recover", request);
-          expect(resumed).toMatchObject({
-            key: targetKey(name),
-            sessionId: identities.get(name),
-            continuation: { status: "started" },
-          });
-          if (name === "revoked") {
-            await race(provider.revocationReady);
-            await applyReadOnly(client!, instance, targetKey("revoked"));
-            expect(await row("revoked")).toMatchObject({ permissionMode: "read-only" });
-            provider.releaseRevoked();
-            await waitFinal(name);
-          }
-          if (name === "restricted") {
-            await waitFinal(name);
-          }
-        }
+        // Revoke after the recovered model request starts, before its tool can act.
+        await race(provider.revocationReady);
+        await applyReadOnly(client!, instance, targetKey("revoked"));
+        expect(await row("revoked")).toMatchObject({ permissionMode: "read-only" });
+        provider.releaseRevoked();
+        await Promise.all([waitFinal("revoked"), waitFinal("restricted")]);
         await race(provider.resumed);
         if (mode === "SIGKILL") {
-          await expect(
-            client!.request("sessions.recover", resumeRequests.get("continue")!),
-          ).rejects.toThrow(/restart-tombstoned|changed/);
           await restart("SIGKILL");
           provider.release();
         }
@@ -659,6 +544,191 @@ it.skipIf(process.platform === "win32").for(["managed", "SIGTERM", "SIGKILL"] as
         expect(
           (await rows()).filter((entry) => entry.key.startsWith("agent:main:operator-resume-")),
         ).toHaveLength(8);
+      },
+      async () => client?.stopAndWait(),
+      () => instance.cleanup(),
+      provider.close,
+    );
+  },
+);
+
+it.skipIf(process.platform === "win32").for(["restart", "stop"] as const)(
+  "preserves automatic peer result custody across %s and process death",
+  { timeout: 180_000 },
+  async (mode, context) => {
+    const { signal } = context;
+    const provider = await startProvider(signal, false, true);
+    const instance = await createInstance(provider, signal);
+    let client: GatewayClient | undefined;
+    const race = <T>(promise: Promise<T>) =>
+      withinTest(Promise.race([promise, provider.failed]), signal);
+    let lastHistory: unknown;
+    const history = async () => {
+      const result = await client!.request<{
+        messages: unknown[];
+        pendingInputs?: {
+          items: Array<{ id: string; runId: string; state: string; message: unknown }>;
+        };
+      }>("chat.history", { sessionKey: sourceKey("continue"), limit: 100 });
+      lastHistory = result;
+      return result;
+    };
+    await runQaGatewayFixture(
+      async () => {
+        await instance.startGateway();
+        client = await connectInstance(instance, signal, true);
+        for (const key of [sourceKey("continue"), targetKey("continue")]) {
+          await client.request("sessions.create", { key, agentId: "main", permissionMode: "full" });
+        }
+        // The original request is allowed, but neither endpoint permits a new
+        // reverse-direction send. Its requested result must still be admitted.
+        await client.request("sessions.patch", {
+          key: sourceKey("continue"),
+          communication: { receive: "never" },
+        });
+        await client.request("sessions.patch", {
+          key: targetKey("continue"),
+          communication: { send: "never" },
+        });
+        await client.request(
+          "chat.send",
+          {
+            sessionKey: sourceKey("continue"),
+            message: sourceRequest("continue"),
+            idempotencyKey: "automatic-return-source",
+          },
+          { expectFinal: false },
+        );
+        await race(provider.suspended("continue"));
+        let pendingId: string | undefined;
+        let pendingRunId: string | undefined;
+        await race(
+          vi.waitFor(
+            async () => {
+              const input = (await history()).pendingInputs?.items.find((item) =>
+                JSON.stringify(item.message).includes(final("continue")),
+              );
+              expect(input).toMatchObject({ state: "queued" });
+              pendingId = input!.id;
+              pendingRunId = input!.runId;
+            },
+            { timeout: 30_000 },
+          ),
+        );
+        const rowsBefore = await client.request<SessionsListResult>("sessions.list", {
+          agentId: "main",
+        });
+        const sourceSessionId = rowsBefore.sessions.find(
+          (row) => row.key === sourceKey("continue"),
+        )!.sessionId;
+        if (!sourceSessionId) {
+          throw new Error("Expected the source session before reading retained input");
+        }
+        const pendingScope = {
+          agentId: "main",
+          sessionKey: sourceKey("continue"),
+          sessionId: sourceSessionId,
+          env: instance.env,
+        };
+        const savedInput = await readPendingInputSource(
+          pendingScope,
+          `${pendingRunId}:user`,
+          false,
+        );
+        expect(savedInput?.snapshot.pending).toBeDefined();
+        const savedMessage = parseSessionPendingInputMessage(
+          savedInput!.snapshot.pending!.message_json,
+        );
+        expect(readSessionSendDelivery(savedMessage)?.returnedResult).toEqual({
+          extraSystemPrompt: expect.any(String),
+        });
+        context.onTestFailed(() => {
+          console.error(
+            "[automatic-peer-result:" +
+              mode +
+              "]\n" +
+              instance.logs().replaceAll(instance.gatewayToken, "[fixture token]"),
+          );
+          console.error(JSON.stringify(lastHistory));
+        });
+        provider.adopted("continue");
+        if (mode === "stop") {
+          expect(
+            await client.request("chat.abort", { sessionKey: sourceKey("continue") }),
+          ).toMatchObject({ aborted: true });
+          await race(
+            vi.waitFor(
+              async () => {
+                const rows = await client!.request<SessionsListResult>("sessions.list", {
+                  agentId: "main",
+                });
+                expect(
+                  rows.sessions.find((row) => row.key === sourceKey("continue")),
+                ).toMatchObject({ status: "killed", hasActiveRun: false });
+              },
+              { timeout: 30_000 },
+            ),
+          );
+        }
+        await client.stopAndWait();
+        client = undefined;
+        const child = instance.child!;
+        const closed = once(child, "close");
+        expect(child.kill("SIGKILL")).toBe(true);
+        await race(closed);
+        await instance.startGateway();
+        expect(instance.child?.pid).not.toBe(child.pid);
+        client = await connectInstance(instance, signal, true);
+        if (mode === "stop") {
+          const current = await history();
+          const saved = await readPendingInputSource(pendingScope, `${pendingRunId}:user`, false);
+          // Terminal cancellation retires the queued row through its completion receipt.
+          expect(saved?.snapshot).toMatchObject({ current: true });
+          expect(saved?.snapshot.pending).toBeUndefined();
+          expect(saved?.snapshot.committed).toBeUndefined();
+          expect(
+            current.pendingInputs?.items.find((item) => item.id === pendingId),
+          ).toBeUndefined();
+          expect(JSON.stringify(current.messages)).not.toContain("AUTOMATIC_REPLY_CONSUMED");
+          const rows = await client.request<SessionsListResult>("sessions.list", {
+            agentId: "main",
+          });
+          expect(rows.sessions.find((row) => row.key === sourceKey("continue"))).toMatchObject({
+            status: "killed",
+            hasActiveRun: false,
+          });
+          return;
+        }
+        await race(
+          vi.waitFor(
+            async () => {
+              const current = await history();
+              expect(JSON.stringify(current.messages)).toContain("AUTOMATIC_REPLY_CONSUMED");
+              expect(
+                current.pendingInputs?.items.find((item) => item.id === pendingId),
+              ).toBeUndefined();
+              const returned = current.messages.filter((message) => {
+                const record = asRecord(message);
+                return (
+                  asRecord(record.provenance).sourceSessionKey === targetKey("continue") &&
+                  JSON.stringify(record.content).includes(final("continue"))
+                );
+              });
+              expect(returned).toHaveLength(1);
+              const rows = await client!.request<SessionsListResult>("sessions.list", {
+                agentId: "main",
+              });
+              expect(rows.sessions.find((row) => row.key === sourceKey("continue"))).toMatchObject({
+                status: "done",
+                hasActiveRun: false,
+              });
+            },
+            { timeout: 30_000 },
+          ),
+        );
+        expect(
+          await readFile(path.join(instance.state.workspaceDir, "effect-continue"), "utf8"),
+        ).toBe("completed\n");
       },
       async () => client?.stopAndWait(),
       () => instance.cleanup(),

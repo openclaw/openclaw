@@ -255,9 +255,9 @@ export const sessionAbortHandlers: GatewayRequestHandlers = {
             agentId: activeRunAgentId,
             sessionKey: activeRunSessionKey,
             defaultAgentId: stableTargetOwner,
-          }) === normalizeAgentId(targetAgentId)) ||
+          }) === targetAgentId) ||
         (embeddedRun !== undefined &&
-          resolveSessionKeyAgentId(embeddedRunSessionKey, cfg) === normalizeAgentId(targetAgentId))
+          resolveSessionKeyAgentId(embeddedRunSessionKey, cfg) === targetAgentId)
       : scopedSources().some(([, entry]) => {
           const identity = getRpcSourceIdentity(entry);
           return (
@@ -267,7 +267,7 @@ export const sessionAbortHandlers: GatewayRequestHandlers = {
               agentId: identity.agentId,
               sessionKey: identity.sessionKey,
               defaultAgentId: stableTargetOwner,
-            }) === normalizeAgentId(targetAgentId)
+            }) === targetAgentId
           );
         });
     if (!configuredTarget && existingTargets.length === 0 && !hasExactActiveRun) {
@@ -283,7 +283,7 @@ export const sessionAbortHandlers: GatewayRequestHandlers = {
       narrow &&
       (!admittedTarget?.sessionId.trim() ||
         admittedTarget.sessionKey !== canonicalKey ||
-        admittedTarget.agentId !== normalizeAgentId(targetAgentId) ||
+        admittedTarget.agentId !== targetAgentId ||
         sessionEntry?.sessionId !== admittedTarget.sessionId)
     ) {
       respond(
@@ -296,7 +296,7 @@ export const sessionAbortHandlers: GatewayRequestHandlers = {
     const requiredSessionId = narrow ? admittedTarget?.sessionId : undefined;
     const embeddedRunMatchesSession = Boolean(
       embeddedRun &&
-      resolveSessionKeyAgentId(embeddedRun.sessionKey, cfg) === normalizeAgentId(targetAgentId) &&
+      resolveSessionKeyAgentId(embeddedRun.sessionKey, cfg) === targetAgentId &&
       (narrow
         ? embeddedRun.sessionId === requiredSessionId &&
           (embeddedRun.sessionKey === key || embeddedRun.sessionKey === canonicalKey)
@@ -459,6 +459,7 @@ export const sessionAbortHandlers: GatewayRequestHandlers = {
       captureYieldedMainSessionContinuation({
         entry: sessionEntry,
         requester: { agentId: targetAgentId, sessionKey: canonicalKey },
+        purpose: "stop",
       })
         ? {
             runId: yieldedRunId,

@@ -6,7 +6,7 @@ import { t } from "../../i18n/index.ts";
 import { formatUiExternalText } from "../../lib/format-error.ts";
 import { formatDurationCompact } from "../../lib/format.ts";
 import { selectCardAlert, type CardAlert } from "../../lib/workboard/card-alerts.ts";
-import type { WorkboardCard, WorkboardLifecycle } from "../../lib/workboard/index.ts";
+import type { WorkboardCard, WorkboardLifecycle } from "../../lib/workboard/types.ts";
 import { cardAgentLabel } from "./agent-filter.ts";
 import { RelativeTime } from "./view-card-time.tsx";
 import {

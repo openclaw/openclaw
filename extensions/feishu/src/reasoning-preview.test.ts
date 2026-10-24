@@ -24,7 +24,7 @@ afterAll(() => {
 
 describe("resolveFeishuReasoningPreviewEnabled", () => {
   function resolvePreview(
-    sessionKey?: string,
+    sessionKey: string,
     overrides: Partial<Parameters<typeof resolveFeishuReasoningPreviewEnabled>[0]> = {},
   ) {
     return resolveFeishuReasoningPreviewEnabled({
@@ -64,7 +64,7 @@ describe("resolveFeishuReasoningPreviewEnabled", () => {
     });
 
     expect(await resolvePreview("agent:main:feishu:dm:ou_sender_1")).toBe(false);
-    expect(await resolvePreview()).toBe(false);
+    expect(await resolvePreview("agent:main:feishu:dm:missing")).toBe(false);
   });
 
   it("falls back to configured stream defaults", async () => {
@@ -84,7 +84,9 @@ describe("resolveFeishuReasoningPreviewEnabled", () => {
     };
 
     expect(await resolvePreview("agent:main:feishu:dm:ou_sender_1", { cfg })).toBe(true);
-    expect(await resolvePreview(undefined, { cfg, agentId: "ops" })).toBe(false);
+    expect(await resolvePreview("agent:ops:feishu:dm:missing", { cfg, agentId: "ops" })).toBe(
+      false,
+    );
     expect(await resolvePreview("agent:main:feishu:dm:ou_sender_2", { cfg })).toBe(false);
   });
 });

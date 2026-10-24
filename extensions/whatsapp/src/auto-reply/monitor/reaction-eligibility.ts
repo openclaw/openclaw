@@ -1,9 +1,9 @@
+import { resolveAgentIdentity } from "openclaw/plugin-sdk/agent-runtime";
 import { shouldAckReaction } from "openclaw/plugin-sdk/channel-feedback";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { AdmittedWebInboundMessage } from "../../inbound/types.js";
 import { resolveWhatsAppReactionLevel } from "../../reaction-level.js";
 import type { sendReactionWhatsApp } from "../../send.js";
-import { resolveWhatsAppAckEmoji } from "./ack-emoji.js";
 import { resolveGroupActivationFor } from "./group-activation.js";
 import { resolveReactionParticipant } from "./reaction-participant.js";
 
@@ -32,11 +32,10 @@ export async function resolveWhatsAppReactionEligibility(params: {
   if (scope === "off" || scope === "none") {
     return DISABLED_REACTION;
   }
-  const emoji = resolveWhatsAppAckEmoji({
-    cfg: params.cfg,
-    agentId: params.agentId,
-    ackConfig: params.cfg.messages?.ackReaction,
-  });
+  const ackReaction = params.cfg.messages?.ackReaction;
+  const emoji = ackReaction
+    ? ackReaction.trim() || resolveAgentIdentity(params.cfg, params.agentId)?.emoji?.trim() || "👀"
+    : "";
   const isGroup = admission.conversation.kind === "group";
   const activation = isGroup
     ? await resolveGroupActivationFor({

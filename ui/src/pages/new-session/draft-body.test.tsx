@@ -29,6 +29,7 @@ it.each([
       onOpenImage={() => {}}
     />
   ));
+  await vi.dynamicImportSettled();
   await waitForSolid(() => {
     const group = container.querySelector(".chat-group.user");
     const avatar = group?.querySelector(
@@ -38,7 +39,30 @@ it.each([
     );
     expect(avatar?.getAttribute("src")).toBe(avatarUrl);
     expect(group?.classList.contains("chat-group--with-footer")).toBe(true);
+    // Chat reserves the footer row on every user turn, so the preview must too.
+    expect(group?.querySelector(":scope > .chat-group-footer")).not.toBeNull();
     expect(group?.closest(".chat-thread--direct") !== null).toBe(placement === "footer");
+  });
+});
+
+it("keeps an unattributed local message in the footer layout for a signed-in viewer", async () => {
+  const { container } = mountSolid(() => (
+    <NewSessionBody
+      error={null}
+      pendingMessage={buildLocalUserMessage({ createdAt: 1, text: "Hello" })}
+      userId="profile-alex"
+      submitting={true}
+      renderDraft={() => null}
+      onOpenImage={() => {}}
+    />
+  ));
+  await vi.dynamicImportSettled();
+  await waitForSolid(() => {
+    const group = container.querySelector(".chat-group.user");
+    expect(group).not.toBeNull();
+    expect(group?.closest(".chat-thread--direct")).not.toBeNull();
+    expect(group?.querySelector(":scope > .chat-group-footer")).not.toBeNull();
+    expect(group?.querySelector(":scope > .chat-avatar-slot")).toBeNull();
   });
 });
 
@@ -82,6 +106,7 @@ it("replaces startup progress with an actionable completion while retaining the 
       onOpenImage={() => {}}
     />
   ));
+  await vi.dynamicImportSettled();
   await waitForSolid(() =>
     expect(container.querySelector(".chat-working-indicator")).not.toBeNull(),
   );

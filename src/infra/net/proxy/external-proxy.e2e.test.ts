@@ -1,5 +1,3 @@
-// End-to-end proxy smoke tests run child OpenClaw modules through a local
-// HTTP/HTTPS forward proxy, including Discord-style HTTP, TLS, and WebSocket paths.
 import { execFileSync, spawn } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 import { createServer, request as httpRequest, type Server } from "node:http";
@@ -7,6 +5,7 @@ import { createServer as createHttpsServer } from "node:https";
 import * as net from "node:net";
 import { join } from "node:path";
 import type { Duplex } from "node:stream";
+import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
 import { WebSocketServer } from "../../../../packages/gateway-client/src/websocket.test-support.js";
 import { withTestDir } from "../../../test-helpers/temp-dir.js";
@@ -32,70 +31,26 @@ function createDiscordTlsFixture(dir: string): DiscordTlsFixture {
   if (!openssl) {
     throw new Error("openssl is required to generate proxy TLS test certificates");
   }
-  const caKeyPath = join(dir, "ca-key.pem");
   const caCertPath = join(dir, "ca-cert.pem");
   const serverKeyPath = join(dir, "server-key.pem");
-  const serverCsrPath = join(dir, "server.csr");
   const serverCertPath = join(dir, "server-cert.pem");
-  const extPath = join(dir, "server-ext.cnf");
-
-  execFileSync(
-    openssl,
-    [
-      "req",
-      "-x509",
-      "-newkey",
-      "rsa:2048",
-      "-nodes",
-      "-keyout",
-      caKeyPath,
-      "-out",
-      caCertPath,
-      "-days",
-      "1",
-      "-subj",
-      "/CN=OpenClaw Proxy Test CA",
-    ],
-    { stdio: "ignore" },
+  // Only fixed fixture filenames are split; the directory and subject stay separate arguments.
+  const runOpenSsl = (args: string, subject?: string) =>
+    execFileSync(openssl, [...args.split(" "), ...(subject ? ["-subj", subject] : [])], {
+      cwd: dir,
+      stdio: "ignore",
+    });
+  runOpenSsl(
+    "req -x509 -newkey rsa:2048 -nodes -keyout ca-key.pem -out ca-cert.pem -days 1",
+    "/CN=OpenClaw Proxy Test CA",
   );
-  execFileSync(
-    openssl,
-    [
-      "req",
-      "-newkey",
-      "rsa:2048",
-      "-nodes",
-      "-keyout",
-      serverKeyPath,
-      "-out",
-      serverCsrPath,
-      "-subj",
-      "/CN=discord.com",
-    ],
-    { stdio: "ignore" },
+  runOpenSsl(
+    "req -newkey rsa:2048 -nodes -keyout server-key.pem -out server.csr",
+    "/CN=discord.com",
   );
-  writeFileSync(extPath, "subjectAltName=DNS:discord.com\n");
-  execFileSync(
-    openssl,
-    [
-      "x509",
-      "-req",
-      "-in",
-      serverCsrPath,
-      "-CA",
-      caCertPath,
-      "-CAkey",
-      caKeyPath,
-      "-CAcreateserial",
-      "-out",
-      serverCertPath,
-      "-days",
-      "1",
-      "-sha256",
-      "-extfile",
-      extPath,
-    ],
-    { stdio: "ignore" },
+  writeFileSync(join(dir, "server-ext.cnf"), "subjectAltName=DNS:discord.com\n");
+  runOpenSsl(
+    "x509 -req -in server.csr -CA ca-cert.pem -CAkey ca-key.pem -CAcreateserial -out server-cert.pem -days 1 -sha256 -extfile server-ext.cnf",
   );
 
   return {
@@ -113,9 +68,7 @@ async function withDiscordTlsFixture<T>(
       prefix: "openclaw-discord-tls-",
       parentDir: resolvePreferredOpenClawTmpDir(),
     },
-    async (dir) => {
-      return await run(createDiscordTlsFixture(dir));
-    },
+    async (dir) => run(createDiscordTlsFixture(dir)),
   );
 }
 
@@ -134,23 +87,15 @@ async function listenOnLoopback(server: Server, host = "127.0.0.1"): Promise<num
   });
 }
 
-async function closeServer(server: Server | null): Promise<void> {
-  if (server === null || !server.listening) {
+async function closeServer(server: Server): Promise<void> {
+  if (!server.listening) {
     return;
   }
   for (const socket of PROXY_TUNNEL_SOCKETS.get(server) ?? []) {
     socket.destroy();
   }
   server.closeAllConnections?.();
-  await new Promise<void>((resolve, reject) => {
-    server.close((err) => {
-      if (err) {
-        reject(err);
-        return;
-      }
-      resolve();
-    });
-  });
+  await promisify(server.close.bind(server))();
 }
 
 type ConnectTargetOverride = {
@@ -163,6 +108,10 @@ function createTunnelProxy(
   connectTargetOverrides: Record<string, ConnectTargetOverride> = {},
 ): Server {
   const tunnelSockets = new Set<Duplex>();
+  function trackSocket(socket: Duplex) {
+    tunnelSockets.add(socket);
+    socket.once("close", () => tunnelSockets.delete(socket));
+  }
   const proxy = createServer((req, res) => {
     const target = req.url ?? "";
     seenConnectTargets.push(target);
@@ -211,10 +160,7 @@ function createTunnelProxy(
     }
 
     const override = connectTargetOverrides[target];
-    tunnelSockets.add(clientSocket);
-    clientSocket.once("close", () => {
-      tunnelSockets.delete(clientSocket);
-    });
+    trackSocket(clientSocket);
     const upstream = net.connect(
       override?.port ?? Number(targetUrl.port),
       override?.hostname ?? targetUrl.hostname,
@@ -227,10 +173,7 @@ function createTunnelProxy(
         clientSocket.pipe(upstream);
       },
     );
-    tunnelSockets.add(upstream);
-    upstream.once("close", () => {
-      tunnelSockets.delete(upstream);
-    });
+    trackSocket(upstream);
 
     upstream.on("error", () => {
       if (!clientSocket.destroyed && !clientSocket.writableEnded) {
@@ -250,14 +193,43 @@ function createTunnelProxy(
 async function runNodeModule(
   source: string,
   env: NodeJS.ProcessEnv,
-): Promise<{
-  code: number | null;
-  stdout: string;
-  stderr: string;
-}> {
+  imports = "",
+): Promise<{ code: number | null; stdout: string; stderr: string }> {
+  const script = `
+        ${imports}
+        import http from "node:http";
+        import https from "node:https";
+        import { startProxy, stopProxy } from ${JSON.stringify(lifecycleUrl.href)};
+
+        async function nodeGet(url, options = {}) {
+          return new Promise((resolve, reject) => {
+            const client = url.startsWith("https:") ? https : http;
+            const req = client.get(url, options, (response) => {
+              let body = "";
+              response.setEncoding("utf8");
+              response.on("data", (chunk) => { body += chunk; });
+              response.on("end", () => resolve({ status: response.statusCode, body }));
+            });
+            req.setTimeout(${PROBE_TIMEOUT_MS}, () => {
+              req.destroy(new Error("node request timed out"));
+            });
+            req.on("error", reject);
+          });
+        }
+
+        const handle = await startProxy({ enabled: true });
+        if (handle === null) {
+          throw new Error("expected external proxy routing to start");
+        }
+        try {
+          ${source}
+        } finally {
+          await stopProxy(handle);
+        }
+  `;
   const child = spawn(
     process.execPath,
-    [...resolveRuntimeWorkerArgv(lifecycleUrl).slice(0, -1), ...createNodeEvalArgs(source)],
+    [...resolveRuntimeWorkerArgv(lifecycleUrl).slice(0, -1), ...createNodeEvalArgs(script)],
     {
       cwd: process.cwd(),
       env,
@@ -294,111 +266,53 @@ async function runNodeModule(
 }
 
 describe("SSRF external proxy routing", () => {
-  let target: Server | null = null;
-  let globalFetchTarget: Server | null = null;
-  let wsTarget: Server | null = null;
-  let gatewayBypassWsTarget: Server | null = null;
-  let httpsLikeTarget: Server | null = null;
-  let tlsTarget: Server | null = null;
-  let proxy: Server | null = null;
-  let wss: WebSocketServer | null = null;
-  let gatewayBypassWss: WebSocketServer | null = null;
+  const servers: Server[] = [];
+  const webSockets: WebSocketServer[] = [];
+  function track(server: Server): Server {
+    servers.push(server);
+    return server;
+  }
+  function httpTarget(status: number, body: string): Server {
+    return track(
+      createServer((_req, res) => {
+        res.writeHead(status, { "content-type": "text/plain" });
+        res.end(body);
+      }),
+    );
+  }
+  function wsTarget(): Server {
+    const server = track(createServer());
+    const wss = new WebSocketServer({ server });
+    webSockets.push(wss);
+    wss.on("connection", (ws) => ws.close(1000, "done"));
+    return server;
+  }
 
   afterEach(async () => {
-    await new Promise<void>((resolve) => {
-      if (!wss) {
-        resolve();
-        return;
-      }
-      wss.close(() => resolve());
-    });
-    await new Promise<void>((resolve) => {
-      if (!gatewayBypassWss) {
-        resolve();
-        return;
-      }
-      gatewayBypassWss.close(() => resolve());
-    });
-    await closeServer(proxy);
-    await closeServer(tlsTarget);
-    await closeServer(httpsLikeTarget);
-    await closeServer(gatewayBypassWsTarget);
-    await closeServer(wsTarget);
-    await closeServer(globalFetchTarget);
-    await closeServer(target);
-    gatewayBypassWss = null;
-    wss = null;
-    proxy = null;
-    tlsTarget = null;
-    httpsLikeTarget = null;
-    gatewayBypassWsTarget = null;
-    wsTarget = null;
-    globalFetchTarget = null;
-    target = null;
+    for (const wss of webSockets.splice(0)) {
+      await new Promise<void>((resolve) => {
+        wss.close(() => resolve());
+      });
+    }
+    for (const server of servers.splice(0).toReversed()) {
+      await closeServer(server);
+    }
   });
 
   it("keeps runtime loopback HTTP and WebSocket requests direct with managed proxy enabled", async () => {
-    target = createServer((_req, res) => {
-      res.writeHead(218, { "content-type": "text/plain" });
-      res.end("from loopback target");
-    });
-    globalFetchTarget = createServer((_req, res) => {
-      res.writeHead(219, { "content-type": "text/plain" });
-      res.end("from global fetch target");
-    });
-    wsTarget = createServer();
-    wss = new WebSocketServer({ server: wsTarget });
-    wss.on("connection", (ws) => {
-      ws.close(1000, "done");
-    });
-    gatewayBypassWsTarget = createServer();
-    gatewayBypassWss = new WebSocketServer({ server: gatewayBypassWsTarget });
-    gatewayBypassWss.on("connection", (ws) => {
-      ws.close(1000, "done");
-    });
+    const target = httpTarget(218, "from loopback target");
+    const globalFetchTarget = httpTarget(219, "from global fetch target");
     const targetPort = await listenOnLoopback(target);
     const globalFetchTargetPort = await listenOnLoopback(globalFetchTarget, "::1");
-    const wsTargetPort = await listenOnLoopback(wsTarget);
-    const gatewayBypassWsTargetPort = await listenOnLoopback(gatewayBypassWsTarget);
-
-    httpsLikeTarget = createServer((_req, res) => {
-      res.writeHead(200, { "content-type": "text/plain" });
-      res.end("plain target for https CONNECT proof");
-    });
+    const wsTargetPort = await listenOnLoopback(wsTarget());
+    const gatewayBypassWsTargetPort = await listenOnLoopback(wsTarget());
+    const httpsLikeTarget = httpTarget(200, "plain target for https CONNECT proof");
     const httpsLikeTargetPort = await listenOnLoopback(httpsLikeTarget);
-
     const seenConnectTargets: string[] = [];
-    proxy = createTunnelProxy(seenConnectTargets);
+    const proxy = track(createTunnelProxy(seenConnectTargets));
     const proxyPort = await listenOnLoopback(proxy);
-
     const child = await runNodeModule(
       `
-        import http from "node:http";
-        import https from "node:https";
-        import { fetch as undiciFetch } from "undici";
-        import { WebSocket } from ${JSON.stringify(websocketUrl.href)};
-        import { startProxy, stopProxy } from ${JSON.stringify(lifecycleUrl.href)};
-        import { registerManagedProxyGatewayLoopbackBypass } from ${JSON.stringify(lifecycleUrl.href)};
-
-        async function nodeHttpGet(url, options = {}) {
-          return new Promise((resolve, reject) => {
-            const req = http.get(url, options, (response) => {
-              let body = "";
-              response.setEncoding("utf8");
-              response.on("data", (chunk) => {
-                body += chunk;
-              });
-              response.on("end", () => {
-                resolve({ status: response.statusCode, body });
-              });
-            });
-            req.setTimeout(${PROBE_TIMEOUT_MS}, () => {
-              req.destroy(new Error("node:http request timed out"));
-            });
-            req.on("error", reject);
-          });
-        }
-
         async function expectFailure(label, run) {
           try {
             await run();
@@ -408,52 +322,21 @@ describe("SSRF external proxy routing", () => {
           throw new Error(label + " unexpectedly succeeded");
         }
 
-        async function nodeHttpsProbe(url) {
+        async function websocketProbe(url, bypass = false) {
           return new Promise((resolve, reject) => {
-            const req = https.get(url, { rejectUnauthorized: false }, (response) => {
-              response.resume();
-              response.on("end", resolve);
-            });
-            req.setTimeout(${PROBE_TIMEOUT_MS}, () => {
-              req.destroy(new Error("node:https request timed out"));
-            });
-            req.on("error", reject);
-          });
-        }
-
-        async function websocketProbe(url) {
-          return new Promise((resolve, reject) => {
+            const unregister = bypass ? registerManagedProxyGatewayLoopbackBypass(url) : undefined;
             const ws = new WebSocket(url, { handshakeTimeout: ${PROBE_TIMEOUT_MS} });
             ws.once("open", () => {
               ws.close();
-              resolve();
-            });
-            ws.once("error", reject);
-          });
-        }
-
-        async function gatewayLoopbackBypassProbe(url) {
-          return new Promise((resolve, reject) => {
-            const unregister = registerManagedProxyGatewayLoopbackBypass(url);
-            const ws = new WebSocket(url, { handshakeTimeout: ${PROBE_TIMEOUT_MS} });
-            const cleanup = () => unregister?.();
-            ws.once("open", () => {
-              ws.close();
-              cleanup();
+              unregister?.();
               resolve();
             });
             ws.once("error", (err) => {
-              cleanup();
+              unregister?.();
               reject(err);
             });
           });
         }
-
-        const handle = await startProxy({ enabled: true });
-        if (handle === null) {
-          throw new Error("expected external proxy routing to start");
-        }
-        try {
           const response = await undiciFetch(process.env.OPENCLAW_TEST_TARGET_URL, {
             signal: AbortSignal.timeout(${PROBE_TIMEOUT_MS}),
           });
@@ -462,17 +345,17 @@ describe("SSRF external proxy routing", () => {
             signal: AbortSignal.timeout(${PROBE_TIMEOUT_MS}),
           });
           const globalFetchBody = await globalFetchResponse.text();
-          const nodeHttp = await nodeHttpGet(process.env.OPENCLAW_TEST_NODE_HTTP_TARGET_URL);
-          const explicitAgent = await nodeHttpGet(process.env.OPENCLAW_TEST_EXPLICIT_AGENT_TARGET_URL, {
+          const nodeHttp = await nodeGet(process.env.OPENCLAW_TEST_NODE_HTTP_TARGET_URL);
+          const explicitAgent = await nodeGet(process.env.OPENCLAW_TEST_EXPLICIT_AGENT_TARGET_URL, {
             agent: new http.Agent(),
           });
           await expectFailure("node:https", () =>
-            nodeHttpsProbe(process.env.OPENCLAW_TEST_NODE_HTTPS_TARGET_URL),
+            nodeGet(process.env.OPENCLAW_TEST_NODE_HTTPS_TARGET_URL, { rejectUnauthorized: false }),
           );
           await websocketProbe(process.env.OPENCLAW_TEST_WS_TARGET_URL);
-          await gatewayLoopbackBypassProbe(process.env.OPENCLAW_TEST_GATEWAY_BYPASS_WS_URL);
+          await websocketProbe(process.env.OPENCLAW_TEST_GATEWAY_BYPASS_WS_URL, true);
           await expectFailure("non-loopback bypass", () =>
-            gatewayLoopbackBypassProbe("wss://gateway.example.com/socket"),
+            websocketProbe("wss://gateway.example.com/socket", true),
           );
           console.log(JSON.stringify({
             fetch: { status: response.status, body },
@@ -480,9 +363,6 @@ describe("SSRF external proxy routing", () => {
             nodeHttp,
             explicitAgent,
           }));
-        } finally {
-          await stopProxy(handle);
-        }
       `,
       {
         ...process.env,
@@ -497,6 +377,9 @@ describe("SSRF external proxy routing", () => {
         NO_PROXY: "127.0.0.1,localhost",
         no_proxy: "localhost",
       },
+      `import { fetch as undiciFetch } from "undici";
+        import { WebSocket } from ${JSON.stringify(websocketUrl.href)};
+        import { registerManagedProxyGatewayLoopbackBypass } from ${JSON.stringify(lifecycleUrl.href)};`,
     );
 
     expect(child.stderr).toBe("");
@@ -511,52 +394,24 @@ describe("SSRF external proxy routing", () => {
 
   it("preserves the target TLS hostname for Node HTTPS requests through the managed proxy", async () => {
     await withDiscordTlsFixture(async (tlsFixture) => {
-      tlsTarget = createHttpsServer({ key: tlsFixture.key, cert: tlsFixture.cert }, (_req, res) => {
-        res.writeHead(209, { "content-type": "text/plain" });
-        res.end("discord target tls ok");
-      });
+      const tlsTarget = track(
+        createHttpsServer({ key: tlsFixture.key, cert: tlsFixture.cert }, (_req, res) => {
+          res.writeHead(209, { "content-type": "text/plain" });
+          res.end("discord target tls ok");
+        }),
+      );
       const tlsTargetPort = await listenOnLoopback(tlsTarget);
-
       const seenConnectTargets: string[] = [];
-      proxy = createTunnelProxy(seenConnectTargets, {
-        [`discord.com:${tlsTargetPort}`]: { hostname: "127.0.0.1", port: tlsTargetPort },
-      });
+      const proxy = track(
+        createTunnelProxy(seenConnectTargets, {
+          [`discord.com:${tlsTargetPort}`]: { hostname: "127.0.0.1", port: tlsTargetPort },
+        }),
+      );
       const proxyPort = await listenOnLoopback(proxy);
-
       const child = await runNodeModule(
         `
-        import https from "node:https";
-        import { startProxy, stopProxy } from ${JSON.stringify(lifecycleUrl.href)};
-
-        async function nodeHttpsGet(url) {
-          return new Promise((resolve, reject) => {
-            const req = https.get(url, (response) => {
-              let body = "";
-              response.setEncoding("utf8");
-              response.on("data", (chunk) => {
-                body += chunk;
-              });
-              response.on("end", () => {
-                resolve({ status: response.statusCode, body });
-              });
-            });
-            req.setTimeout(${PROBE_TIMEOUT_MS}, () => {
-              req.destroy(new Error("node:https request timed out"));
-            });
-            req.on("error", reject);
-          });
-        }
-
-        const handle = await startProxy({ enabled: true });
-        if (handle === null) {
-          throw new Error("expected external proxy routing to start");
-        }
-        try {
-          const response = await nodeHttpsGet(process.env.OPENCLAW_TEST_DISCORD_TLS_URL);
+          const response = await nodeGet(process.env.OPENCLAW_TEST_DISCORD_TLS_URL);
           console.log(JSON.stringify(response));
-        } finally {
-          await stopProxy(handle);
-        }
       `,
         {
           ...process.env,

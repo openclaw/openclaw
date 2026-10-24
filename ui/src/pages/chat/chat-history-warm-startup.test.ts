@@ -1,5 +1,6 @@
 /* @vitest-environment jsdom */
 import { createEffect, createRoot, flush } from "@solidjs/signals";
+import { createComponent, merge } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { loadSettings } from "../../app/settings.ts";
@@ -11,6 +12,7 @@ import {
   createTestSessionCapability,
 } from "../../lib/sessions/session-capability.test-support.ts";
 import { createGatewayRequestMock } from "../../test-helpers/gateway-client.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
 import {
   chatHistoryRequests,
@@ -21,6 +23,7 @@ import { loadChatHistory } from "./chat-history.ts";
 import { ChatPaneRuntime } from "./chat-pane-render.ts";
 import {
   createGatewayBrowserClientFixture,
+  createPaneHeaderWorkspaceFixture,
   createInitializationContext,
   createPaneTestHost,
   getPaneTestRuntime,
@@ -29,6 +32,7 @@ import {
 } from "./chat-pane.test-support.ts";
 import { chatRunPresentation } from "./chat-run-presentation.ts";
 import { refreshChatCommands, refreshPageChat } from "./chat-state-refresh.ts";
+import { PaneHeaderView } from "./components/chat-pane-header.tsx";
 import { resetTranscriptTestDom } from "./components/chat-transcript.test-support.ts";
 import {
   observeChatCache,
@@ -160,6 +164,50 @@ afterEach(() => {
 });
 
 describe("first chat startup snapshot ordering", () => {
+  it.each(["hit", "miss", "error"] as const)(
+    "waits for the cached title before painting a fallback (%s)",
+    async (outcome) => {
+      const h = mountPane(true, "agent:main:dashboard:cached-title");
+      const view = mountSolid(() =>
+        createComponent(
+          PaneHeaderView,
+          merge(() =>
+            h.pane.renderPaneHeader(
+              createPaneHeaderWorkspaceFixture(h.state),
+              undefined,
+              false,
+              undefined,
+              false,
+              null,
+            ),
+          ),
+        ),
+      );
+      onTestFinished(view.unmount);
+      const title = () =>
+        view.container.querySelector(".chat-pane__session-title-text")?.textContent?.trim();
+      flush();
+      expect(title()).toBe("");
+      if (outcome === "hit") {
+        h.read.resolve({
+          ...stored,
+          transcriptMetadata: {
+            key: h.state.sessionKey,
+            kind: "direct",
+            label: "Cached conversation",
+          },
+        });
+      } else if (outcome === "miss") {
+        h.read.resolve(null);
+      } else {
+        h.read.reject(new Error("Cache unavailable"));
+      }
+      await vi.advanceTimersByTimeAsync(0);
+      flush();
+      expect(title()).toBe(outcome === "hit" ? "Cached conversation" : "New session");
+    },
+  );
+
   it("rejects transcript and progress hydration when the Gateway account changes ahead of pane state", async () => {
     const h = mountPane();
     const progressCard = { sessionKey, revision: 2, updatedAt: 100, markdown: "Old account" };

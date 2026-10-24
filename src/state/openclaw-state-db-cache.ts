@@ -158,6 +158,21 @@ export function registerOpenClawStateDatabaseLifecycleListener(
   return () => databaseLifecycleListeners.delete(listener);
 }
 
+/** Invalidate path-scoped projections on non-open database lifecycle events. */
+export function registerOpenClawStatePathCacheInvalidation<Key, Value extends { path: string }>(
+  cache: Map<Key, Value>,
+): () => void {
+  return registerOpenClawStateDatabaseLifecycleListener((event) => {
+    if (event.kind !== "opened") {
+      for (const [key, value] of cache) {
+        if (value.path === (event.identity?.canonicalPath ?? event.path)) {
+          cache.delete(key);
+        }
+      }
+    }
+  });
+}
+
 function retainStateDatabaseClose(database: StateDatabaseHandle): void {
   retainedDatabaseHandles.set(database.db, database);
   stateDatabaseLifecycle.unregisterRetainedExitClose ??= registerSqliteCacheExitClose(
@@ -532,6 +547,25 @@ export function closeOpenClawStateDatabase(options?: OpenClawStateDatabaseCloseO
 
 /** Register a resource owner before it can admit any shared-state worker opens. */
 export const registerOpenClawStateDatabaseAsyncResource = asyncResources.register;
+
+/** Close the admitted file or its canonical path, retaining first-creation identity getters. */
+export function registerOpenClawStatePathAsyncResource(
+  admission: Pick<OpenClawStateDatabaseReadAdmission, "identity">,
+  close: () => Promise<void>,
+): () => void {
+  return registerOpenClawStateDatabaseAsyncResource({
+    close(identity) {
+      if (
+        !identity ||
+        identity.key === admission.identity.key ||
+        identity.canonicalPath === admission.identity.canonicalPath
+      ) {
+        return close();
+      }
+      return Promise.resolve();
+    },
+  });
+}
 
 /** Capture the canonical read generation before any asynchronous worker admission. */
 export const captureOpenClawStateDatabaseReadAdmission = asyncResources.capture;

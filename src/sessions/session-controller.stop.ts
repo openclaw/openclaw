@@ -6,6 +6,7 @@ import {
 import type { SessionEntry } from "../config/sessions/types.js";
 import { createInternalHookEvent, triggerInternalHook } from "../hooks/internal-hooks.js";
 import { getAgentRunContext } from "../infra/agent-run-registry.js";
+import { throwCollectedErrors } from "../infra/error-graph-internal.js";
 import {
   type ReplyOperation,
   type CapturedSessionControllerEffect,
@@ -413,7 +414,6 @@ function applySessionControllerStop(
   }
   for (const captured of capture.effects) {
     effect(captured, () => {
-      assertCurrent();
       const wasInterrupted = Boolean(captured.effect.interrupted);
       let matchedRun: SessionWorkRun | undefined;
       const cancel = once(
@@ -626,12 +626,7 @@ export function stopSession(request: SessionStopRequest): SessionStopExecution {
       }
       await postParent();
       // Committed failures never strand later owners but still fail default callers afterward.
-      if (unhandledFailures.length === 1) {
-        throw unhandledFailures[0];
-      }
-      if (unhandledFailures.length > 1) {
-        throw new AggregateError(unhandledFailures, "Session cancellation failed");
-      }
+      throwCollectedErrors(unhandledFailures, "Session cancellation failed");
       return resolveStopOutcome(currentParentResult, externalStatus, childResult);
     },
     async (error: unknown) => {

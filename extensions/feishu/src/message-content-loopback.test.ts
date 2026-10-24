@@ -8,6 +8,7 @@ import { expect, it, vi } from "vitest";
 import type { ClawdbotConfig } from "../runtime-api.js";
 import { resolveFeishuMediaList } from "./bot-content.js";
 import { feishuPlugin } from "./channel.js";
+import { FeishuConfigSchema } from "./config-schema.js";
 import { sendStickerFeishu } from "./media.js";
 import { getMessageFeishu } from "./send.js";
 
@@ -183,7 +184,7 @@ it("authenticates Feishu reads and sticker sends over the real SDK without expos
           actions: { sticker: true },
           stickerSets: { [appId]: { file_sticker_received: ["赞👍"] } },
         };
-        const cfg: ClawdbotConfig = { channels: { feishu } };
+        const cfg: ClawdbotConfig = { channels: { feishu: FeishuConfigSchema.parse(feishu) } };
         const action = (kind: "sticker" | "sticker-search", params: Record<string, unknown>) =>
           feishuPlugin.actions!.handleAction!({
             channel: "feishu",
@@ -230,7 +231,10 @@ it("authenticates Feishu reads and sticker sends over the real SDK without expos
               contentType: "merge_forward",
               content: mergedContent(resolveSenderNames === false ? senderId : "Alice"),
             },
-            { ...cfg, channels: { feishu: { ...feishu, resolveSenderNames } } },
+            {
+              ...cfg,
+              channels: { feishu: FeishuConfigSchema.parse({ ...feishu, resolveSenderNames }) },
+            },
           );
         }
 

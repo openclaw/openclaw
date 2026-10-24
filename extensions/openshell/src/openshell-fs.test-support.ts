@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import path from "node:path";
 import {
   resolvePreferredOpenClawTmpDir,
   tempWorkspace,
@@ -18,24 +19,41 @@ export function createOpenShellTestWorkspace(label: string): Promise<TempWorkspa
 }
 
 export async function expectPathMissing(targetPath: string): Promise<void> {
-  let error: unknown;
-  try {
-    await fs.stat(targetPath);
-  } catch (caught) {
-    error = caught;
-  }
-  expect(error).toBeInstanceOf(Error);
-  expect((error as NodeJS.ErrnoException).code).toBe("ENOENT");
+  const result = fs.stat(targetPath);
+  await expect(result).rejects.toBeInstanceOf(Error);
+  await expect(result).rejects.toMatchObject({ code: "ENOENT" });
 }
 
-export function createMirrorBackendMock(): OpenShellMirrorBackend {
+export async function writeFiles(root: string, files: Record<string, string>) {
+  for (const [name, contents] of Object.entries(files)) {
+    const file = path.join(root, name);
+    await fs.mkdir(path.dirname(file), { recursive: true });
+    await fs.writeFile(file, contents);
+  }
+}
+
+export async function expectFiles(root: string, files: Record<string, string>) {
+  for (const [name, contents] of Object.entries(files)) {
+    await expect(fs.readFile(path.join(root, name), "utf8")).resolves.toBe(contents);
+  }
+}
+
+export function createMirrorBackendMock() {
   return {
     remoteAgentWorkspaceDir: "/agent",
-    mkdirpRemotePath: vi.fn().mockResolvedValue(undefined),
-    renameRemotePath: vi.fn().mockResolvedValue(undefined),
-    removeRemotePath: vi.fn().mockResolvedValue(undefined),
-    syncLocalPathToRemote: vi.fn().mockResolvedValue(undefined),
-  };
+    mkdirpRemotePath: vi
+      .fn<OpenShellMirrorBackend["mkdirpRemotePath"]>()
+      .mockResolvedValue(undefined),
+    renameRemotePath: vi
+      .fn<OpenShellMirrorBackend["renameRemotePath"]>()
+      .mockResolvedValue(undefined),
+    removeRemotePath: vi
+      .fn<OpenShellMirrorBackend["removeRemotePath"]>()
+      .mockResolvedValue(undefined),
+    syncLocalPathToRemote: vi
+      .fn<OpenShellMirrorBackend["syncLocalPathToRemote"]>()
+      .mockResolvedValue(undefined),
+  } satisfies OpenShellMirrorBackend;
 }
 
 export async function createMirrorFsBridgeFixture(workspaceDir: string) {

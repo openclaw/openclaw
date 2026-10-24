@@ -7,6 +7,7 @@ import {
   readChatOutboxRecovery as readRecovery,
   restoreChatOutboxRecovery as restoreRecovery,
 } from "../../lib/chat/outbox-recovery.ts";
+import { listStoredChatOutboxes as listOutboxes } from "../../lib/chat/outbox-store-projection.ts";
 import {
   captureChatOutboxAdmission as captureAdmission,
   storageTargetForComposer,
@@ -21,13 +22,13 @@ import {
   updateQueuedMessage as updateQueued,
 } from "./chat-queue.ts";
 import {
-  admitStoredChatComposerQueueItem as admitQueueItem,
-  listStoredChatOutboxes as listOutboxes,
   loadChatComposerState as loadComposer,
   persistChatComposerState as persistComposer,
+} from "./composer-draft-storage.ts";
+import {
+  admitStoredChatComposerQueueItemResult as admitQueueItem,
   updateStoredChatComposerQueueItems as updateQueueItems,
-  removeStoredChatComposerQueueItem as removeQueueItem,
-} from "./composer-persistence.ts";
+} from "./composer-queue-persistence.ts";
 
 const gatewayUrl = "ws://outbox.test";
 const globalScope = "global\u0000agent:selected";
@@ -64,7 +65,7 @@ function queueItem(overrides: Partial<ChatQueueItem> = {}): ChatQueueItem {
 }
 
 function admit(host: typeof state, item: ChatQueueItem) {
-  expect(admitQueueItem(host, captureAdmission(host, host.sessionKey), item)).toBe(true);
+  expect(admitQueueItem(host, captureAdmission(host, host.sessionKey), item)).toBe("admitted");
 }
 
 function expectedOutbox(item: ChatQueueItem, sessionKey = state.sessionKey, agentId = "default") {
@@ -384,7 +385,7 @@ it("pins admission despite notification-driven default changes", () => {
   });
   try {
     const item = queueItem({ id: "captured-admission" });
-    const admitted = admitQueueItem(host, captureAdmission(host, "main"), item);
+    const admitted = admitQueueItem(host, captureAdmission(host, "main"), item) === "admitted";
     expect(listOutboxes(host)).toEqual([expectedOutbox(item)]);
     expect(admitted).toBe(true);
   } finally {
@@ -410,14 +411,16 @@ it("mutates captured scopes after mainKey changes", () => {
   };
   const changes = [{ expected: item, next }];
   expect(updateQueueItems(changed, sessionKey, changes, "other")).toBe(false);
-  removeQueueItem(changed, sessionKey, item.id, item, "other");
+  updateQueueItems(changed, sessionKey, [{ expected: item, next: null }], "other");
   expect(listOutboxes(changed)).toEqual([original]);
   expect(updateQueueItems(changed, sessionKey, changes, agentId)).toBe(true);
   expect(listOutboxes(changed)[0]).toMatchObject({
     sessionKey: initial.sessionKey,
     queue: [next],
   });
-  expect(removeQueueItem(changed, sessionKey, item.id, next, agentId)).toBe(true);
+  expect(updateQueueItems(changed, sessionKey, [{ expected: next, next: null }], agentId)).toBe(
+    true,
+  );
   expect(listOutboxes(changed)).toEqual([]);
 });
 it.each(["bucket", "item"])("quarantines conflicting %s agents", (conflict) => {

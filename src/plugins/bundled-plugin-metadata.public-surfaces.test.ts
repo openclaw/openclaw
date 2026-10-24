@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { listBundledPluginMetadata } from "./bundled-plugin-metadata.js";
 import {
   createGeneratedPluginTempRoot,
@@ -9,30 +9,46 @@ import {
 } from "./generated-plugin-test-helpers.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 
+const schemaWarn = vi.hoisted(() => vi.fn());
+
+vi.mock("../logging/subsystem.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../logging/subsystem.js")>();
+  return {
+    ...actual,
+    createSubsystemLogger: (subsystem: string) => {
+      const logger = actual.createSubsystemLogger(subsystem);
+      return subsystem === "plugins" ? { ...logger, warn: schemaWarn } : logger;
+    },
+  };
+});
+
 installGeneratedPluginTempRootCleanup();
 
-beforeEach(clearPluginMetadataLifecycleCaches);
+beforeEach(() => {
+  clearPluginMetadataLifecycleCaches();
+  schemaWarn.mockClear();
+});
 
-function writePlugin(
-  rootDir: string,
-  params: {
-    manifest?: Record<string, unknown>;
-    packageOpenClaw?: Record<string, unknown>;
-    entrypoint?: "index.ts" | "index.js";
-  } = {},
-) {
-  const pluginDir = path.join(rootDir, "extensions", "alpha");
+function fixture(config?: object, built = false, preferOver?: readonly string[]) {
+  const tempRoot = createGeneratedPluginTempRoot("openclaw-bundled-plugin-");
+  const root = built ? path.join(tempRoot, "dist") : tempRoot;
+  const pluginDir = path.join(root, "extensions", "alpha");
   writeJson(path.join(pluginDir, "package.json"), {
     name: "@openclaw/alpha",
-    openclaw: { extensions: ["./index.ts"], ...params.packageOpenClaw },
+    openclaw: {
+      extensions: ["./index.ts"],
+      ...(config
+        ? { channel: { ...channel, ...(preferOver && { preferOver }) } }
+        : { setupEntry: "./setup-entry.ts" }),
+    },
   });
   writeJson(path.join(pluginDir, "openclaw.plugin.json"), {
     id: "alpha",
-    configSchema: { type: "object" },
-    ...params.manifest,
+    configSchema: built ? { type: "object", properties: {} } : { type: "object" },
+    ...(config && { channels: ["alpha"], channelConfigs: { alpha: config } }),
   });
-  fs.writeFileSync(path.join(pluginDir, params.entrypoint ?? "index.ts"), "export {};\n", "utf8");
-  return pluginDir;
+  writeModule(pluginDir, built ? "index.js" : "index.ts", "export {};\n");
+  return { root, pluginDir, tempRoot };
 }
 
 const channel = { id: "alpha", label: "Alpha Root Label", blurb: "Alpha Root Description" };
@@ -50,128 +66,116 @@ function channelConfig(rootDir: string) {
   )?.alpha;
 }
 
-function writeDistChannel(rootDir: string, field: string, uiHints?: object) {
-  return writePlugin(rootDir, {
-    entrypoint: "index.js",
-    packageOpenClaw: { channel },
-    manifest: {
-      configSchema: { type: "object", properties: {} },
-      channels: ["alpha"],
-      channelConfigs: { alpha: { schema: schema(field, "boolean"), ...(uiHints && { uiHints }) } },
-    },
-  });
+const expectedConfig = (field: string, extra: object = {}, type = "string") => ({
+  schema: schema(field, type),
+  label: channel.label,
+  description: channel.blurb,
+  ...extra,
+});
+
+function writeModule(pluginDir: string, file: string, source: string) {
+  const target = path.join(pluginDir, file);
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  fs.writeFileSync(target, source, "utf8");
+  return target;
 }
 
 function writeChannelSchema(pluginDir: string, file: string, field: string, hint: string) {
-  fs.mkdirSync(path.dirname(path.join(pluginDir, file)), { recursive: true });
-  fs.writeFileSync(
-    path.join(pluginDir, file),
-    `export const AlphaChannelConfigSchema = {
-  schema: {
-    type: 'object',
-    properties: { ${field}: { type: 'string' } },
-  },
-  uiHints: {
-    'channels.alpha.generatedOnly': { help: '${hint}' },
-  },
-};
-`,
-    "utf8",
-  );
+  const value = {
+    schema: schema(field),
+    uiHints: { "channels.alpha.generatedOnly": { help: hint } },
+  };
+  writeModule(pluginDir, file, `export const AlphaChannelConfigSchema = ${JSON.stringify(value)};`);
 }
 
 describe("bundled plugin public surfaces", () => {
-  it("merges runtime channel schema metadata with manifest-owned channel config fields", () => {
-    const tempRoot = createGeneratedPluginTempRoot("openclaw-bundled-plugin-channel-configs-");
-
-    const pluginDir = writePlugin(tempRoot, {
-      packageOpenClaw: {
-        channel: { ...channel, preferOver: ["alpha-legacy"] },
-      },
-      manifest: {
-        channels: ["alpha"],
-        channelConfigs: {
-          alpha: {
-            schema: schema("stale", "boolean"),
-            label: "Manifest Label",
-            uiHints: explicitHints,
-          },
+  it.each([
+    [
+      "source",
+      false,
+      "src/config-schema.js",
+      "generated",
+      { label: "Manifest Label", preferOver: ["alpha-legacy"] },
+    ],
+    ["built", true, "channel-config-api.js", "built", {}],
+  ] as const)(
+    "merges %s channel schema metadata with manifest-owned fields",
+    (_name, built, file, field, overrides) => {
+      const { preferOver, ...manifestFields } =
+        "preferOver" in overrides ? overrides : { preferOver: undefined };
+      const { root, pluginDir } = fixture(
+        {
+          schema: schema("stale", "boolean"),
+          uiHints: explicitHints,
+          ...manifestFields,
         },
-      },
+        built,
+        preferOver,
+      );
+      writeChannelSchema(pluginDir, file, field, `${field} hint`);
+      expect(channelConfig(root)).toEqual(
+        expectedConfig(field, {
+          ...overrides,
+          uiHints: {
+            "channels.alpha.generatedOnly": { help: `${field} hint` },
+            ...explicitHints,
+          },
+        }),
+      );
+      expect(schemaWarn).not.toHaveBeenCalled();
+    },
+  );
+
+  it("warns when selected channel schema evaluation fails and retains manifest metadata", () => {
+    const { root, pluginDir } = fixture({
+      schema: schema("manifest", "boolean"),
+      uiHints: explicitHints,
     });
-    writeChannelSchema(pluginDir, "src/config-schema.js", "generated", "generated hint");
-    expect(channelConfig(tempRoot)).toEqual({
-      schema: schema("generated"),
-      label: "Manifest Label",
-      description: "Alpha Root Description",
-      preferOver: ["alpha-legacy"],
-      uiHints: {
-        "channels.alpha.generatedOnly": { help: "generated hint" },
-        ...explicitHints,
-      },
-    });
+    const modulePath = writeModule(
+      pluginDir,
+      "src/config-schema.js",
+      'throw new Error("schema fixture initialization failed");\n',
+    );
+
+    expect(channelConfig(root)).toEqual(
+      expectedConfig("manifest", { uiHints: explicitHints }, "boolean"),
+    );
+    expect(schemaWarn).toHaveBeenCalledExactlyOnceWith(
+      expect.stringContaining(`from ${modulePath}; using manifest metadata`),
+      { error: expect.objectContaining({ message: "schema fixture initialization failed" }) },
+    );
   });
 
   it("captures top-level public surface artifacts without duplicating the primary entrypoints", () => {
-    const tempRoot = createGeneratedPluginTempRoot("openclaw-bundled-plugin-public-artifacts-");
-
-    const pluginDir = writePlugin(tempRoot, {
-      packageOpenClaw: { setupEntry: "./setup-entry.ts" },
-    });
+    const { root, pluginDir } = fixture();
     for (const filename of ["setup-entry.ts", "api.ts", "runtime-api.ts"]) {
-      fs.writeFileSync(path.join(pluginDir, filename), "export {};\n", "utf8");
+      writeModule(pluginDir, filename, "export {};\n");
     }
-    expect(listBundledPluginMetadata({ rootDir: tempRoot })[0]).toMatchObject({
+    expect(listBundledPluginMetadata({ rootDir: root })[0]).toMatchObject({
       publicSurfaceArtifacts: ["api.js", "runtime-api.js"],
       runtimeSidecarArtifacts: ["runtime-api.js"],
     });
   });
 
-  it("loads channel config metadata from built public surfaces in dist-only roots", () => {
-    const tempRoot = createGeneratedPluginTempRoot("openclaw-bundled-plugin-dist-config-");
-    const distRoot = path.join(tempRoot, "dist");
-
-    const pluginDir = writeDistChannel(distRoot, "stale", explicitHints);
-    writeChannelSchema(pluginDir, "channel-config-api.js", "built", "built hint");
-    expect(channelConfig(distRoot)).toEqual({
-      schema: schema("built"),
-      label: "Alpha Root Label",
-      description: "Alpha Root Description",
-      uiHints: {
-        "channels.alpha.generatedOnly": { help: "built hint" },
-        ...explicitHints,
-      },
-    });
-  });
-
   it("does not probe broad runtime public surfaces for channel config metadata", () => {
-    const tempRoot = createGeneratedPluginTempRoot("openclaw-bundled-plugin-dist-config-runtime-");
-    const distRoot = path.join(tempRoot, "dist");
+    const { root, pluginDir, tempRoot } = fixture({ schema: schema("manifest", "boolean") }, true);
     const markerPath = path.join(tempRoot, "runtime-api-loaded");
 
-    const pluginDir = writeDistChannel(distRoot, "manifest");
     for (const [file, field] of [
       ["runtime-api.js", "runtimeApi"],
       ["api.js", "api"],
     ] as const) {
-      fs.writeFileSync(
-        path.join(pluginDir, file),
-        [
-          "import fs from 'node:fs';",
-          `fs.writeFileSync(${JSON.stringify(markerPath)}, "loaded", "utf8");`,
-          "export const AlphaChannelConfigSchema = {",
-          `  schema: { type: 'object', properties: { ${field}: { type: 'string' } } },`,
-          "};",
-          "",
-        ].join("\n"),
-        "utf8",
+      writeModule(
+        pluginDir,
+        file,
+        `import fs from 'node:fs';
+fs.writeFileSync(${JSON.stringify(markerPath)}, "loaded", "utf8");
+export const AlphaChannelConfigSchema = ${JSON.stringify({ schema: schema(field) })};
+`,
       );
     }
-    expect(channelConfig(distRoot)).toEqual({
-      schema: schema("manifest", "boolean"),
-      label: "Alpha Root Label",
-      description: "Alpha Root Description",
-    });
+    expect(channelConfig(root)).toEqual(expectedConfig("manifest", {}, "boolean"));
     expect(fs.existsSync(markerPath)).toBe(false);
+    expect(schemaWarn).not.toHaveBeenCalled();
   });
 });

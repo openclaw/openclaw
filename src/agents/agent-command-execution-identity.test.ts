@@ -76,6 +76,11 @@ it("removes forged host-owned capabilities from plain-JavaScript ingress", () =>
       scopes: ["operator.admin"],
       assertCurrent: () => {},
     },
+    requesterOrigin: {
+      sessionKey: "agent:main:main",
+      senderId: "forged-owner",
+      senderIsOwner: true,
+    },
   };
 
   expectTypeOf<AgentCommandIngressOpts>().not.toHaveProperty("prepareAssistantTranscriptMessage");
@@ -147,7 +152,6 @@ describe("Gateway agent command execution identity", () => {
         });
         const callbacks = createAgentAttemptLifecycleCallbacks(
           {
-            currentTurnUserMessagePersisted: false,
             lifecycleFinishing: false,
             lifecycleEnded: false,
           },

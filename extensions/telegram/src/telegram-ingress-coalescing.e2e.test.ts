@@ -106,18 +106,9 @@ vi.mock("openclaw/plugin-sdk/media-runtime", async (importOriginal) => {
   };
 });
 
-vi.mock("./bot-handlers.agent.runtime.js", () => ({
+vi.mock("openclaw/plugin-sdk/agent-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/agent-runtime")>()),
   resolveAgentDir: vi.fn(() => "/tmp/agent"),
-  resolveAgentWorkspaceDir: vi.fn(() => "/tmp/workspace"),
-  resolveDefaultModelForAgent: vi.fn(() => ({ provider: "openai", model: "gpt-test" })),
-}));
-
-vi.mock("./bot-message-dispatch.agent.runtime.js", () => ({
-  findModelInCatalog: vi.fn(() => undefined),
-  loadPreparedModelCatalog: vi.fn(async () => []),
-  modelSupportsVision: vi.fn(() => false),
-  resolveAgentDir: vi.fn(() => "/tmp/agent"),
-  resolveAgentWorkspaceDir: vi.fn(() => "/tmp/workspace"),
   resolveDefaultModelForAgent: vi.fn(() => ({ provider: "openai", model: "gpt-test" })),
   resolveHumanDelayConfig: vi.fn(() => undefined),
 }));
@@ -143,6 +134,8 @@ const {
   resetTelegramIngressRuntime,
   runtimeErrors,
   releaseIngressCase,
+  spoolBehindPausedPump,
+  expectOnlyPending,
   useIngressTimers,
 } = await import("./telegram-ingress-coalescing-fixture.test-support.js");
 const {
@@ -424,9 +417,7 @@ describe("Telegram durable ingress coalescing", () => {
       expect(downstreamTurns).toHaveBeenCalledOnce();
       expect(downstreamTurns.mock.calls[0]?.[0].RawBody).toBe("Album B");
       const queue = openTelegramIngressQueue({ stateDir });
-      expect(await queue.listClaims()).toEqual([]);
-      expect(await queue.listFailed?.({ limit: "all" })).toEqual([]);
-      expect(await queue.listPending({ limit: "all" })).toMatchObject([
+      await expectOnlyPending(queue, [
         {
           id: telegramQueueEventId(1_101),
           attempts: 1,
@@ -548,16 +539,8 @@ describe("Telegram durable ingress coalescing", () => {
     const dispatched = captureNextDownstreamTurn();
     const queue = openTelegramIngressQueue({ stateDir });
     try {
-      monitor.start();
-      await monitor.admit(testCase.first);
-      await monitor.waitForIdle();
-      await monitor.pause();
-
       // Pause the pump, not durable admission: the next member has not reached the buffer.
-      await writeTelegramSpooledUpdate({ stateDir, update: testCase.second });
-      expect(await queue.listPending({ limit: "all" })).toMatchObject([
-        { id: telegramQueueEventId(testCase.second.update_id) },
-      ]);
+      await spoolBehindPausedPump({ monitor, queue, stateDir, ...testCase });
       const held = createDeferred<void>();
       const scheduleHeldTimer = quietTimers.getMockImplementation();
       if (!scheduleHeldTimer) {
@@ -607,19 +590,13 @@ describe("Telegram durable ingress coalescing", () => {
     const releaseRead = createDeferred<void>();
     const dispatched = captureNextDownstreamTurn();
     try {
-      monitor.start();
-      await monitor.admit(
-        photoUpdate({ updateId: 1_401, messageId: 1, caption: "Deadline photo album" }),
-      );
-      await monitor.waitForIdle();
-      await monitor.pause();
-      await writeTelegramSpooledUpdate({
+      await spoolBehindPausedPump({
+        monitor,
+        queue,
         stateDir,
-        update: photoUpdate({ updateId: 1_402, messageId: 2 }),
+        first: photoUpdate({ updateId: 1_401, messageId: 1, caption: "Deadline photo album" }),
+        second: photoUpdate({ updateId: 1_402, messageId: 2 }),
       });
-      expect(await queue.listPending({ limit: "all" })).toMatchObject([
-        { id: telegramQueueEventId(1_402) },
-      ]);
       const listUnsettled = queue.listUnsettled?.bind(queue);
       if (!listUnsettled) {
         throw new Error("Expected the ingress queue's coherent backlog reader");
@@ -675,19 +652,13 @@ describe("Telegram durable ingress coalescing", () => {
     const dispatched = captureNextDownstreamTurn();
     const queue = openTelegramIngressQueue({ stateDir });
     try {
-      monitor.start();
-      await monitor.admit(
-        photoUpdate({ updateId: 1_301, messageId: 1, caption: "Single photo album" }),
-      );
-      await monitor.waitForIdle();
-      await monitor.pause();
-      await writeTelegramSpooledUpdate({
+      await spoolBehindPausedPump({
+        monitor,
+        queue,
         stateDir,
-        update: textUpdate({ updateId: 1_302, messageId: 2, text: "Unrelated plain text" }),
+        first: photoUpdate({ updateId: 1_301, messageId: 1, caption: "Single photo album" }),
+        second: textUpdate({ updateId: 1_302, messageId: 2, text: "Unrelated plain text" }),
       });
-      expect(await queue.listPending({ limit: "all" })).toMatchObject([
-        { id: telegramQueueEventId(1_302) },
-      ]);
 
       flushHeldQuietWindow(albumTimers, 40);
       const turn = await dispatched;
@@ -805,11 +776,7 @@ describe("Telegram durable ingress coalescing", () => {
       await monitor.stop();
       expect(downstreamTurns).not.toHaveBeenCalled();
       const queue = openTelegramIngressQueue({ stateDir });
-      expect(await queue.listClaims()).toEqual([]);
-      expect(await queue.listFailed?.({ limit: "all" })).toEqual([]);
-      expect(await queue.listPending({ limit: "all" })).toMatchObject([
-        { id: telegramQueueEventId(903), attempts: 0 },
-      ]);
+      await expectOnlyPending(queue, [{ id: telegramQueueEventId(903), attempts: 0 }]);
     } finally {
       participantSpy.mockRestore();
     }
@@ -921,9 +888,7 @@ describe("Telegram durable ingress coalescing", () => {
     expect(saveRemoteMedia).toHaveBeenCalledOnce();
     expect(downstreamTurns).not.toHaveBeenCalled();
     const queue = openTelegramIngressQueue({ stateDir });
-    expect(await queue.listClaims()).toEqual([]);
-    expect(await queue.listFailed?.({ limit: "all" })).toEqual([]);
-    expect(await queue.listPending({ limit: "all" })).toMatchObject([
+    await expectOnlyPending(queue, [
       { id: telegramQueueEventId(601), attempts: 1, lastError: downloadError.message },
       { id: telegramQueueEventId(602), attempts: 1, lastError: downloadError.message },
     ]);

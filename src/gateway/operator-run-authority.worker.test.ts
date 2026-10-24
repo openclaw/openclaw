@@ -1,6 +1,11 @@
 import { DatabaseSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { expect, it, vi } from "vitest";
+import {
+  GATEWAY_CLIENT_IDS,
+  GATEWAY_CLIENT_MODES,
+} from "../../packages/gateway-protocol/src/client-info.js";
+import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/users.js";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import type { GatewayOperatorRoleDefinition } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -23,8 +28,12 @@ import { createGatewayMethodRegistry } from "./methods/registry.js";
 import {
   invalidateOperatorRolePolicy,
   publishOperatorRoleConfigChange,
+  resolveOperatorRolePolicy,
 } from "./operator-role-policy.js";
-import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
+import {
+  captureChannelOperatorRunAuthority,
+  captureGatewayOperatorRunAuthority,
+} from "./operator-run-authority.js";
 import type { GatewayRequestHandlerOptions } from "./server-methods/types.js";
 import {
   dispatchGatewayMethodInProcess,
@@ -122,6 +131,33 @@ function toolAuthority() {
   );
 }
 
+it.each(["unprofiled backend", "synthetic owner"] as const)(
+  "does not mint durable operator authority for an authenticated %s",
+  async (source) => {
+    const client = createOperatorClient({
+      profileId: GATEWAY_OWNER_PROFILE_ID,
+      scopes: ["operator.admin"],
+    });
+    client.authenticatedUserId = undefined;
+    client.internal = {
+      authenticatedOperator: true,
+      operatorRoleActor: { kind: "system" },
+      ...(source === "synthetic owner" ? { syntheticClient: true } : {}),
+    };
+    if (source === "unprofiled backend") {
+      client.authenticatedUserProfile = undefined;
+      client.connect.client.id = GATEWAY_CLIENT_IDS.GATEWAY_CLIENT;
+      client.connect.client.mode = GATEWAY_CLIENT_MODES.BACKEND;
+    }
+    await expect(
+      captureGatewayOperatorRunAuthority({
+        client,
+        context: { getRuntimeConfig: () => ({}) },
+      }),
+    ).resolves.toBeUndefined();
+  },
+);
+
 it("prepares a warm skill library without DDL after the tool caller's initiating request closes", () =>
   withOperator(
     async ({ profile, client, context }) => {
@@ -157,7 +193,7 @@ it("prepares a warm skill library without DDL after the tool caller's initiating
   ));
 
 it("preserves the live operator source through principal capture without trusting copied labels", () =>
-  withOperator(async ({ client, context }) => {
+  withOperator(async ({ profile, client, context }) => {
     const principal = expectDefined(captureAgentTurnPrincipal(client), "captured principal");
     const source = new AbortController();
     const sourceAuthority = abortAuthority(source);
@@ -173,10 +209,31 @@ it("preserves the live operator source through principal capture without trustin
       expect(originalSource).toBeDefined();
       expect(principalSource).toBe(originalSource);
       expect(copiedSource).not.toBe(originalSource);
+      const channel = captureChannelOperatorRunAuthority({
+        profileId: profile.id,
+        assignedRole: null,
+        scopes: ["operator.read"],
+        gatewayAccessGrant: null,
+        getRuntimeConfig: context.getRuntimeConfig,
+        ...sourceAuthority,
+      });
+      const readers = [...captures.map(({ authority }) => authority), channel].map((authority) =>
+        expectDefined(authority.readCurrentRoleFacts, "role reader"),
+      );
+      for (const read of readers) {
+        const facts = read();
+        expect(facts.assignedRole).toBeNull();
+        expect(facts.githubLogin ?? null).toBeNull();
+        Object.assign(facts, { assignedRole: "owner", githubLogin: "changed" });
+        expect(read()).toMatchObject({ assignedRole: null, githubLogin: null });
+      }
       for (const retained of captures) {
         expect(retained.authority.assertCurrent).not.toThrow();
       }
       source.abort(new Error("source revoked"));
+      for (const read of readers) {
+        expect(read).toThrow();
+      }
       for (const retained of captures) {
         expect(retained.authority.assertCurrent).toThrow();
       }
@@ -185,6 +242,35 @@ it("preserves the live operator source through principal capture without trustin
         retained.release();
       }
     }
+  }));
+
+it("checks a live access source once for each role-policy evaluation", () =>
+  withOperator(async ({ profile, client, context }) => {
+    setUserProfileRole(profile.id, "reader");
+    const config = readerConfig(["operator.read"]);
+    context.getRuntimeConfig = () => config;
+    let permitted = true;
+    const assertAccess = vi.fn(() => {
+      if (!permitted) {
+        throw new Error("access grant ended");
+      }
+    });
+    const captured = await capture({
+      client,
+      context,
+      sourceAuthority: { assertCurrent: assertAccess },
+    });
+    using _ = { [Symbol.dispose]: captured.release };
+    client.internal = { ...client.internal, operatorRunAuthority: captured.authority };
+    assertAccess.mockClear();
+
+    expect(resolveOperatorRolePolicy(client, config)).toBe(config.gateway.roles.definitions.reader);
+    expect(assertAccess).toHaveBeenCalledOnce();
+    permitted = false;
+    expect(() => resolveOperatorRolePolicy(client, config)).toThrow("access grant ended");
+    expect(assertAccess).toHaveBeenCalledTimes(2);
+    permitted = true;
+    expect(() => resolveOperatorRolePolicy(client, config)).toThrow("access grant ended");
   }));
 
 it.each(["capture", "operator tool"])(

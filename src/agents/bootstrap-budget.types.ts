@@ -20,7 +20,6 @@ type BootstrapAnalyzedFile = BootstrapInjectionStat & {
 };
 
 export type BootstrapBudgetAnalysis = {
-  files: BootstrapAnalyzedFile[];
   truncatedFiles: BootstrapAnalyzedFile[];
   nearLimitFiles: BootstrapAnalyzedFile[];
   totalNearLimit: boolean;
@@ -28,10 +27,8 @@ export type BootstrapBudgetAnalysis = {
   totals: {
     rawChars: number;
     injectedChars: number;
-    truncatedChars: number;
     bootstrapMaxChars: number;
     bootstrapTotalMaxChars: number;
-    nearLimitRatio: number;
   };
 };
 

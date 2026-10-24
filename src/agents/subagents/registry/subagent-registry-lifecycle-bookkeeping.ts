@@ -192,7 +192,6 @@ export async function completeCleanupBookkeeping(
   scheduleCleanupTails({ allowRetiredRow: retireAfterSettle, isDeleteCleanup });
   assertPublishedOwner();
   if (!entry.collect && !cleanupParams.skipRequesterSettleWake) {
-    assertPublishedOwner();
     scheduleRequesterSettleWake(context, entry.runId, entry, stateContext);
   }
   context.resumeAncestorCleanup(entry);

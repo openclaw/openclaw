@@ -42,6 +42,10 @@ const announce = announceDeliveryMocks.deliverSubagentAnnouncement;
 vi.mock("../subagents/announce/subagent-announce-delivery.js", () => announceDeliveryMocks);
 // mock-isolation: Keep the session database outside this routing fixture.
 vi.mock("../../config/sessions/session-entry-read-runtime.js", () => ({
+  readSessionEntryReadOnlyInWorker: async (_scope: unknown, assertCurrent: () => void) => {
+    assertCurrent();
+    return sessionMocks.entry;
+  },
   withSessionEntryReadOnlyInWorker: async (
     _scope: unknown,
     assertCurrent: () => void,
@@ -290,7 +294,6 @@ it("keeps the detached video tool run context registered until terminal status",
   expect(getAgentRunContext(handle.runId)?.lastActiveAt).toBeGreaterThanOrEqual(beforeProgress);
   videoGenerationTaskLifecycle.failTaskRun({
     handle,
-    error: new Error("provider failed"),
   });
   expect(getAgentRunContext(handle.runId)).toBeUndefined();
 });

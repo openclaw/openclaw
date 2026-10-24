@@ -617,33 +617,6 @@ describe("loadOpenClawPlugins", () => {
     ).toBe("loaded");
   });
 
-  it("registers standalone text transforms", () => {
-    useNoBundledPlugins();
-    const plugin = writePlugin({
-      id: "text-shim",
-      filename: "text-shim.cjs",
-      registration: `api.registerTextTransforms({
-        input: [{ from: /red basket/g, to: "blue basket" }],
-        output: [{ from: /blue basket/g, to: "red basket" }],
-      });`,
-    });
-
-    const registry = loadRegistryFromSinglePlugin({
-      plugin,
-      pluginConfig: { allow: ["text-shim"] },
-    });
-
-    expect(registry.textTransforms).toHaveLength(1);
-    const transformRegistration = registry.textTransforms[0];
-    expect(transformRegistration?.pluginId).toBe("text-shim");
-    expect(transformRegistration?.transforms.input).toEqual([
-      { from: /red basket/g, to: "blue basket" },
-    ]);
-    expect(transformRegistration?.transforms.output).toEqual([
-      { from: /blue basket/g, to: "red basket" },
-    ]);
-  });
-
   it("loads multiple manifestless standalone files from one configured directory", () => {
     useNoBundledPlugins();
     const pluginDir = makePluginLoaderTempDir();

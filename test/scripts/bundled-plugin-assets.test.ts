@@ -70,7 +70,6 @@ it("reuses both Canvas dialects across candidates and invalidates changed inputs
       "solid-js/index.js",
       "signal-utils/map.js",
       "@a2ui/web_core/v0_9.js",
-      "@a2ui/lit/ui.js",
     ]) {
       write(`node_modules/${module}`, "");
     }

@@ -314,6 +314,8 @@ it("binds bulk cursors to terms and continues through changed matches", async ()
 });
 
 it.each([
+  ["browse", { kind: "plugin", query: "calendar", cursor: "browse-cursor" }],
+  ["browse", { kind: "plugin", query: "calendar", feed: "trending" }],
   ["browse", { kind: "plugin", pageSize: 101 }],
   ["browse", { kind: "plugin", pageSize: 0 }],
   ["browse", { kind: "claw" }],

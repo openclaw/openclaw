@@ -3,15 +3,14 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { constants } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
-import { describe, expect, it } from "vitest";
+import { expect, it } from "vitest";
 import { SKILL_LIBRARY_MAX_FILE_BYTES } from "../../../packages/gateway-protocol/src/schema/skill-library.js";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
-import { declareAgentWorkspaceAccess } from "../../agents/workspace-access.js";
 import { tableHasColumn } from "../../state/openclaw-state-db-schema-helpers.js";
 import {
-  closeOpenClawStateDatabaseAsync,
-  closeOpenClawStateDatabaseForTest,
-  openOpenClawStateDatabase,
+  closeOpenClawStateDatabaseAsync as closeDatabase,
+  closeOpenClawStateDatabaseForTest as closeTestDatabase,
+  openOpenClawStateDatabase as openDatabase,
 } from "../../state/openclaw-state-db.js";
 import {
   linkEmail,
@@ -23,971 +22,694 @@ import { getProfileAvatar } from "../../state/user-profiles-avatar.test-support.
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
-import { materializeSkillResources, prepareSkillResourceDelivery } from "../runtime/resources.js";
+import {
+  listSkillCommandsForWorkspace as workspaceCommands,
+  listSkillCommandsForAgents as agentCommands,
+  prepareSkillCommandsForAgents as prepareAgentCommands,
+} from "../discovery/chat-commands.js";
+import { buildWorkspaceSkillCommandSpecs as buildCommandSpecs } from "../discovery/command-specs.js";
+import { buildSkillSnapshot as buildSnapshot } from "../loading/workspace-skill-prompt.js";
+import { prepareSkillResourceDelivery as deliver } from "../runtime/resources.js";
 import { SkillLibraryError } from "../skill-library-error.js";
-import { prepareSkillLibraryBundle, skillLibraryRevisionDir } from "./bundle.js";
-import { uploadSkillLibrary } from "./import.js";
+import { skillLibraryRevisionDir as revisionDir } from "./bundle.js";
+import { loadSkillLibrarySelection as loadSelection } from "./selection.js";
+import { readSkillLibrary } from "./service.js";
 import {
-  changeSkillLibrarySelection,
-  loadSkillLibrarySelection,
-  seedSkillLibrarySelection,
-} from "./selection.js";
-import {
-  listSkillLibrary,
-  mutateSkillLibrary,
-  readSkillLibrary,
-  saveSkillLibrary,
-} from "./service.js";
-import { beginZipUpload, content, draft, useSkillLibraryFixture } from "./service.test-support.js";
+  content,
+  draft,
+  expectCode,
+  expectSingleWinner,
+  useSkillLibraryFixture,
+  zipBytes,
+} from "./service.test-support.js";
 
 const { fixture, tempDirs } = useSkillLibraryFixture();
+const contentHash = createHash("sha256").update(content).digest("hex");
+const revisionDirectory = (pin: { skillId: string; revision: string }, env: NodeJS.ProcessEnv) =>
+  revisionDir(pin.skillId, pin.revision, env);
 
-describe("profile-owned skill publication and selection", () => {
-  it.each([
-    ["heading", "# Friendly Title", "Friendly Title"],
-    ["metadata fallback", "Plain introduction", "Guide"],
-  ])(
-    "keeps the %s separate from the selected command identity",
-    async (_label, heading, displayName) => {
-      const { options, alice, stateDir } = fixture();
-      await saveSkillLibrary(
-        alice,
-        { ...draft("long---skill---name"), content: content.replace("# Guide", heading) },
-        options,
-      );
-      const pins = await seedSkillLibrarySelection(alice, options);
-      const entries = loadSkillLibrarySelection(pins, options);
-      const { buildSkillSnapshot } = await import("../loading/workspace-skill-prompt.js");
-      const { buildWorkspaceSkillCommandSpecs } = await import("../discovery/command-specs.js");
-      const snapshot = await buildSkillSnapshot(stateDir, { entries });
-      const commands = buildWorkspaceSkillCommandSpecs(stateDir, { entries });
-      expect(pins[0]!.name).toMatch(/^s_long_skil_[a-f0-9]{20}$/);
-      expect(commands[0]).toMatchObject({
-        name: pins[0]!.name,
-        skillName: pins[0]!.name,
-        displayName,
-      });
-      expect(snapshot.prompt).toContain(`<name>${pins[0]!.name}</name>`);
-      const copied = {
-        ...entries[0]!,
-        skill: { ...entries[0]!.skill, source: "openclaw-workspace" },
-      };
-      await expect(buildSkillSnapshot(stateDir, { entries: [copied, ...entries] })).rejects.toThrow(
-        "ambiguous",
-      );
-      expect(() =>
-        buildWorkspaceSkillCommandSpecs(stateDir, { entries: [copied, ...entries] }),
-      ).toThrow("ambiguous");
-    },
-  );
-  it("discovers pinned commands through the loader without leaking them into workspace state", async () => {
-    const { alice, options, stateDir } = fixture();
-    const saved = await saveSkillLibrary(alice, draft(), options);
-    const pins = await seedSkillLibrarySelection(alice, options);
-    const updated = await saveSkillLibrary(
-      alice,
-      {
-        ...draft(),
-        skillId: saved.entry.skillId,
-        expectedRevision: saved.entry.revision,
-        content: `${content}\nUpdated`,
-      },
-      options,
-    );
-    const originalPin = expectDefined(pins[0], "original selected revision");
-    const mixedRevisions = [
-      { ...originalPin, revision: updated.entry.revision },
-      originalPin,
-      originalPin,
-    ];
-    expect(
-      loadSkillLibrarySelection(mixedRevisions, options).map((entry) => entry.skill.filePath),
-    ).toEqual(
-      mixedRevisions.map((pin) =>
-        path.join(skillLibraryRevisionDir(pin.skillId, pin.revision, options.env), "SKILL.md"),
-      ),
-    );
-    expect(() =>
-      loadSkillLibrarySelection(
-        [originalPin, { ...originalPin, revision: "0".repeat(64) }],
-        options,
-      ),
-    ).toThrow(expect.objectContaining({ code: "NOT_FOUND" }));
-    const {
-      listSkillCommandsForWorkspace,
-      listSkillCommandsForAgents,
-      prepareSkillCommandsForAgents,
-    } = await import("../discovery/chat-commands.js");
-    await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
-      const cfg = { agents: { defaults: { skills: [] } } };
-      const discover = (
-        overrides: Partial<Parameters<typeof listSkillCommandsForWorkspace>[0]> = {},
-      ) =>
-        listSkillCommandsForWorkspace({
-          workspaceDir: stateDir,
-          cfg,
-          agentId: "main",
-          sessionEntry: { skillLibrarySelections: pins },
-          ...overrides,
-        });
-      const commands = discover({ skillFilter: [saved.entry.name] });
-      expect(commands).toHaveLength(1);
-      expect(commands[0]).toMatchObject({
-        name: saved.entry.name,
-        skillFile: expect.stringContaining(saved.entry.revision),
-      });
-      expect(discover()).toEqual([]);
-      expect(discover({ includeAllowlistHidden: true })).toContainEqual(commands[0]);
-      expect(
-        discover({
-          includeAllowlistHidden: true,
-          cfg: { ...cfg, skills: { entries: { [saved.entry.name]: { enabled: false } } } },
-        }).map((entry) => entry.name),
-      ).not.toContain(saved.entry.name);
-      expect(discover({ sessionEntry: undefined, skillFilter: [saved.entry.name] })).toEqual([]);
-      const agentParams = {
-        cfg: {
-          agents: {
-            defaults: { skills: [saved.entry.name] },
-            entries: { main: { workspace: stateDir } },
-          },
-        },
-        agentIds: ["main"],
-        sessionEntry: { skillLibrarySelections: pins },
-      };
-      expect(listSkillCommandsForAgents(agentParams)).toEqual(commands);
-      expect(await prepareSkillCommandsForAgents(agentParams)).toEqual(commands);
-      expect(
-        await prepareSkillCommandsForAgents({ ...agentParams, sessionEntry: undefined }),
-      ).toEqual([]);
+async function selectedFixture() {
+  const context = fixture();
+  const saved = await context.lib.save();
+  return { ...context, saved, pins: await context.lib.seed() };
+}
+
+it.each([
+  ["heading", "# Friendly Title", "Friendly Title"],
+  ["metadata fallback", "Plain introduction", "Guide"],
+])(
+  "keeps the %s separate from the selected command identity",
+  async (_label, heading, displayName) => {
+    const { options, stateDir, lib } = fixture();
+    await lib.save({
+      ...draft("long---skill---name"),
+      content: content.replace("# Guide", heading),
     });
-  });
-
-  it.each(["oversized", "hardlinked"] as const)(
-    "rejects %s instructions before caching a selected revision",
-    async (replacement) => {
-      const { alice, options } = fixture();
-      const saved = await saveSkillLibrary(alice, draft(), options);
-      const pins = await seedSkillLibrarySelection(alice, options);
-      const directory = skillLibraryRevisionDir(
-        saved.entry.skillId,
-        saved.entry.revision,
-        options.env,
-      );
-      const filePath = path.join(directory, "SKILL.md");
-      if (replacement === "oversized") {
-        await fs.chmod(filePath, 0o600);
-        await fs.appendFile(filePath, "a".repeat(SKILL_LIBRARY_MAX_FILE_BYTES));
-      } else {
-        await fs.link(filePath, path.join(directory, "linked.md"));
-      }
-      expect(() => loadSkillLibrarySelection(pins, options)).toThrow(
-        "Pinned skill instructions could not be read",
-      );
-      await fs.unlink(filePath);
-      await fs.writeFile(filePath, content);
-      expect(loadSkillLibrarySelection(pins, options)[0]?.skill.contentHash).toBe(
-        createHash("sha256").update(content).digest("hex"),
-      );
-    },
+    const pins = await lib.seed();
+    const entries = loadSelection(pins, options);
+    const snapshot = await buildSnapshot(stateDir, { entries });
+    const commands = buildCommandSpecs(stateDir, { entries });
+    expect(pins[0]!.name).toMatch(/^s_long_skil_[a-f0-9]{20}$/);
+    expect(commands[0]).toMatchObject({
+      name: pins[0]!.name,
+      skillName: pins[0]!.name,
+      displayName,
+    });
+    expect(snapshot.prompt).toContain(`<name>${pins[0]!.name}</name>`);
+    const copied = {
+      ...entries[0]!,
+      skill: { ...entries[0]!.skill, source: "openclaw-workspace" },
+    };
+    await expect(buildSnapshot(stateDir, { entries: [copied, ...entries] })).rejects.toThrow(
+      "ambiguous",
+    );
+    expect(() => buildCommandSpecs(stateDir, { entries: [copied, ...entries] })).toThrow(
+      "ambiguous",
+    );
+  },
+);
+it("discovers pinned commands through the loader without leaking them into workspace state", async () => {
+  const { options, stateDir, lib, saved, pins } = await selectedFixture();
+  const updated = await lib.revise(saved.entry, `${content}\nUpdated`);
+  const originalPin = expectDefined(pins[0], "original selected revision");
+  const mixedRevisions = [
+    { ...originalPin, revision: updated.entry.revision },
+    originalPin,
+    originalPin,
+  ];
+  expect(loadSelection(mixedRevisions, options).map((entry) => entry.skill.filePath)).toEqual(
+    mixedRevisions.map((pin) => path.join(revisionDirectory(pin, options.env), "SKILL.md")),
   );
+  expect(() =>
+    loadSelection([originalPin, { ...originalPin, revision: "0".repeat(64) }], options),
+  ).toThrow(expect.objectContaining({ code: "NOT_FOUND" }));
+  await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+    const cfg = { agents: { defaults: { skills: [] } } };
+    const discover = (overrides: Partial<Parameters<typeof workspaceCommands>[0]> = {}) =>
+      workspaceCommands({
+        workspaceDir: stateDir,
+        cfg,
+        agentId: "main",
+        sessionEntry: { skillLibrarySelections: pins },
+        ...overrides,
+      });
+    const commands = discover({ skillFilter: [saved.entry.name] });
+    expect(commands).toHaveLength(1);
+    expect(commands[0]).toMatchObject({
+      name: saved.entry.name,
+      skillFile: expect.stringContaining(saved.entry.revision),
+    });
+    expect(discover()).toEqual([]);
+    expect(discover({ includeAllowlistHidden: true })).toContainEqual(commands[0]);
+    expect(
+      discover({
+        includeAllowlistHidden: true,
+        cfg: { ...cfg, skills: { entries: { [saved.entry.name]: { enabled: false } } } },
+      }).map((entry) => entry.name),
+    ).not.toContain(saved.entry.name);
+    expect(discover({ sessionEntry: undefined, skillFilter: [saved.entry.name] })).toEqual([]);
+    const agentParams = {
+      cfg: {
+        agents: {
+          defaults: { skills: [saved.entry.name] },
+          entries: { main: { workspace: stateDir } },
+        },
+      },
+      agentIds: ["main"],
+      sessionEntry: { skillLibrarySelections: pins },
+    };
+    expect(agentCommands(agentParams)).toEqual(commands);
+    expect(await prepareAgentCommands(agentParams)).toEqual(commands);
+    expect(await prepareAgentCommands({ ...agentParams, sessionEntry: undefined })).toEqual([]);
+  });
+});
 
-  it.runIf(process.platform !== "win32")(
-    "loads selected revisions through a state directory alias while rejecting nested symlinks",
-    async () => {
-      const { alice, options, stateDir } = fixture();
-      const saved = await saveSkillLibrary(alice, draft(), options);
-      const pins = await seedSkillLibrarySelection(alice, options);
-      const alias = path.join(tempDirs.make("skill-library-alias-"), "state");
+it.each(["oversized", "hardlinked", ...(process.platform === "win32" ? [] : ["symlink"])])(
+  "rejects %s instructions before caching a selected revision",
+  async (replacement) => {
+    const { options, stateDir, saved, pins } = await selectedFixture();
+    const alias = path.join(tempDirs.make("skill-library-alias-"), "state");
+    if (replacement === "symlink") {
       await fs.symlink(stateDir, alias, "dir");
-      const aliasedOptions = {
-        ...options,
-        env: { ...options.env, OPENCLAW_STATE_DIR: alias },
-      };
-      const directory = skillLibraryRevisionDir(
-        saved.entry.skillId,
-        saved.entry.revision,
-        aliasedOptions.env,
-      );
-      const filePath = path.join(directory, "SKILL.md");
-      const target = path.join(directory, "instructions.md");
+    }
+    const readOptions =
+      replacement === "symlink"
+        ? { ...options, env: { ...options.env, OPENCLAW_STATE_DIR: alias } }
+        : options;
+    const directory = revisionDirectory(saved.entry, readOptions.env);
+    const filePath = path.join(directory, "SKILL.md");
+    const target = path.join(directory, "instructions.md");
+    if (replacement === "oversized") {
+      await fs.chmod(filePath, 0o600);
+      await fs.appendFile(filePath, "a".repeat(SKILL_LIBRARY_MAX_FILE_BYTES));
+    } else if (replacement === "hardlinked") {
+      await fs.link(filePath, path.join(directory, "linked.md"));
+    } else {
       await fs.rename(filePath, target);
       await fs.symlink("instructions.md", filePath);
-      expect(() => loadSkillLibrarySelection(pins, aliasedOptions)).toThrow(
-        "Pinned skill instructions could not be read",
-      );
-      await fs.unlink(filePath);
+    }
+    expect(() => loadSelection(pins, readOptions)).toThrow(
+      "Pinned skill instructions could not be read",
+    );
+    await fs.unlink(filePath);
+    if (replacement === "symlink") {
       await fs.rename(target, filePath);
-      expect(loadSkillLibrarySelection(pins, aliasedOptions)[0]?.skill).toMatchObject({
-        filePath,
-        contentHash: createHash("sha256").update(content).digest("hex"),
-      });
-    },
+    } else {
+      await fs.writeFile(filePath, content);
+    }
+    expect(loadSelection(pins, readOptions)[0]?.skill).toMatchObject({
+      filePath,
+      contentHash,
+    });
+  },
+);
+
+it("retains selected content hashes after disk changes without loading revision manifests", async () => {
+  const { options, lib } = fixture();
+  await lib.save();
+  const pins = await lib.seed();
+  const db = requireNativeSqliteDatabase(openDatabase(options).db);
+  db.setAuthorizer((action, table, column) =>
+    action === constants.SQLITE_READ &&
+    table === "skill_library_revisions" &&
+    column === "files_json"
+      ? constants.SQLITE_DENY
+      : constants.SQLITE_OK,
   );
+  try {
+    const [selected] = loadSelection(pins, options);
+    expect(selected?.skill.contentHash).toBe(contentHash);
+    const filePath = expectDefined(selected, "selected revision").skill.filePath;
+    await fs.chmod(filePath, 0o600);
+    await fs.writeFile(filePath, `${content}\nChanged after selection`);
+    expect(loadSelection(pins, options)[0]?.skill.contentHash).toBe(contentHash);
+  } finally {
+    db.setAuthorizer(null);
+  }
+});
 
-  it("retains selected content hashes after disk changes without loading revision manifests", async () => {
-    const { alice, options } = fixture();
-    await saveSkillLibrary(alice, draft(), options);
-    const pins = await seedSkillLibrarySelection(alice, options);
-    const db = requireNativeSqliteDatabase(openOpenClawStateDatabase(options).db);
-    db.setAuthorizer((action, table, column) =>
-      action === constants.SQLITE_READ &&
-      table === "skill_library_revisions" &&
-      column === "files_json"
-        ? constants.SQLITE_DENY
-        : constants.SQLITE_OK,
-    );
-    try {
-      const [selected] = loadSkillLibrarySelection(pins, options);
-      expect(selected?.skill.contentHash).toBe(createHash("sha256").update(content).digest("hex"));
-      const filePath = expectDefined(selected, "selected revision").skill.filePath;
-      await fs.chmod(filePath, 0o600);
-      await fs.writeFile(filePath, `${content}\nChanged after selection`);
-      expect(loadSkillLibrarySelection(pins, options)[0]?.skill.contentHash).toBe(
-        createHash("sha256").update(content).digest("hex"),
-      );
-    } finally {
-      db.setAuthorizer(null);
-    }
-  });
-
-  it("enforces independent read/write/transfer checks and preserves a removed session pin", async () => {
-    const { options, alice, admin, actor } = fixture();
-    const bob = actor(ensureProfileForEmail("bob@example.test", options).id);
-    const created = await saveSkillLibrary(alice, draft(), options);
-    const { skillId, revision } = created.entry;
-    const selection = await seedSkillLibrarySelection(alice, options);
-    const anonymousAdmin = actor(undefined, true);
-    const expectAnonymousReadOnly = async () => {
-      const read = await readSkillLibrary(anonymousAdmin, skillId, undefined, options);
-      expect(read.content).toBe(content);
-      expect(read.entry.canEdit).toBe(false);
-      expect(await listSkillLibrary(anonymousAdmin, {}, options)).toMatchObject({
-        defaultTarget: "workspace",
-        canManageWorkspace: true,
-        entries: [expect.objectContaining({ skillId, canEdit: false })],
-      });
-      await expect(
-        saveSkillLibrary(
-          anonymousAdmin,
-          { ...draft(), skillId, expectedRevision: revision },
-          options,
-        ),
-      ).rejects.toMatchObject({ code: "IDENTITY_REQUIRED" });
-      await expect(
-        mutateSkillLibrary(
-          anonymousAdmin,
-          { skillId, expectedRevision: revision, action: "remove" },
-          options,
-        ),
-      ).rejects.toMatchObject({ code: "IDENTITY_REQUIRED" });
-    };
-    await expectAnonymousReadOnly();
-    const privateRead = readSkillLibrary(bob, skillId, undefined, options);
-    await expect(privateRead).rejects.toBeInstanceOf(SkillLibraryError);
-    await expect(privateRead).rejects.toMatchObject({ code: "NOT_FOUND" });
-    await expect(saveSkillLibrary(actor(), draft(), options)).rejects.toMatchObject({
-      code: "IDENTITY_REQUIRED",
+it("enforces independent read/write/transfer checks and preserves a removed session pin", async () => {
+  const { options, alice, admin, actor, lib } = fixture();
+  const bob = actor(ensureProfileForEmail("bob@example.test", options).id);
+  const created = await lib.save();
+  const { skillId, revision } = created.entry;
+  const selection = await lib.seed();
+  const anonymousAdmin = actor(undefined, true);
+  const expectAnonymousReadOnly = async () => {
+    const read = await lib.read(skillId, anonymousAdmin);
+    expect(read).toMatchObject({ content, entry: { canEdit: false } });
+    expect(await lib.list(anonymousAdmin)).toMatchObject({
+      defaultTarget: "workspace",
+      canManageWorkspace: true,
+      entries: [expect.objectContaining({ skillId, canEdit: false })],
     });
-    await mutateSkillLibrary(
-      alice,
-      { skillId, expectedRevision: revision, action: "share" },
-      options,
+    await expectCode(
+      lib.save({ ...draft(), skillId, expectedRevision: revision }, anonymousAdmin),
+      "IDENTITY_REQUIRED",
     );
-    expect((await readSkillLibrary(bob, skillId, undefined, options)).content).toBe(content);
-    await expect(
-      mutateSkillLibrary(bob, { skillId, expectedRevision: revision, action: "remove" }, options),
-    ).rejects.toThrow("Only the skill's owner");
-    await expect(
-      mutateSkillLibrary(
-        alice,
-        { skillId, expectedRevision: revision, action: "transfer" },
-        options,
-      ),
-    ).rejects.toThrow("administrator");
-    const transferred = await mutateSkillLibrary(
-      admin,
-      { skillId, expectedRevision: revision, action: "transfer" },
-      options,
-    );
-    expect(transferred.entry).toMatchObject({
-      skillId,
-      revision,
-      ownerProfileId: null,
-      ownerLabel: "Team",
-      authorProfileId: alice.profileId,
-      shared: true,
-      canEdit: true,
-    });
-    await expectAnonymousReadOnly();
-    expect(
-      (await listSkillLibrary(actor(undefined, true), { scope: "mine" }, options)).entries,
-    ).toEqual([]);
-    const removed = await mutateSkillLibrary(
-      admin,
-      { skillId, expectedRevision: revision, action: "remove" },
-      options,
-    );
-    expect(removed).toMatchObject({ state: "removed", entry: { removed: true } });
-    expect((await readSkillLibrary(admin, skillId, undefined, options)).entry).toEqual(
-      removed.entry,
-    );
-    expect((await listSkillLibrary(bob, {}, options)).entries).toEqual([]);
-    expect(loadSkillLibrarySelection(selection, options)[0]?.skill.filePath).toContain(revision);
-    await expect(
-      changeSkillLibrarySelection(
-        bob,
-        [],
-        { action: "attach", sessionKey: "session", skillId },
-        options,
-      ),
-    ).rejects.toThrow("Removed skill");
-    const bytes = await fs.readFile(
-      path.join(skillLibraryRevisionDir(skillId, revision, options.env), "references/data.bin"),
-    );
-    expect(bytes).toEqual(Buffer.from([0, 255, 128]));
+    await expectCode(lib.change(created.entry, "remove", anonymousAdmin), "IDENTITY_REQUIRED");
+  };
+  await expectAnonymousReadOnly();
+  const privateRead = lib.read(skillId, bob);
+  await expect(privateRead).rejects.toBeInstanceOf(SkillLibraryError);
+  await expectCode(privateRead, "NOT_FOUND");
+  await expectCode(lib.save(draft(), actor()), "IDENTITY_REQUIRED");
+  await lib.change({ skillId, revision }, "share");
+  expect((await lib.read(skillId, bob)).content).toBe(content);
+  await expect(lib.change({ skillId, revision }, "remove", bob)).rejects.toThrow(
+    "Only the skill's owner",
+  );
+  await expect(lib.change({ skillId, revision }, "transfer")).rejects.toThrow("administrator");
+  const transferred = await lib.change({ skillId, revision }, "transfer", admin);
+  expect(transferred.entry).toMatchObject({
+    skillId,
+    revision,
+    ownerProfileId: null,
+    ownerLabel: "Team",
+    authorProfileId: alice.profileId,
+    shared: true,
+    canEdit: true,
   });
+  await expectAnonymousReadOnly();
+  expect((await lib.list(actor(undefined, true), { scope: "mine" })).entries).toEqual([]);
+  const removed = await lib.change({ skillId, revision }, "remove", admin);
+  expect(removed).toMatchObject({ state: "removed", entry: { removed: true } });
+  expect((await lib.read(skillId, admin)).entry).toEqual(removed.entry);
+  expect((await lib.list(bob)).entries).toEqual([]);
+  expect(loadSelection(selection, options)[0]?.skill.filePath).toContain(revision);
+  await expect(
+    lib.select([], { action: "attach", sessionKey: "session", skillId }, bob),
+  ).rejects.toThrow("Removed skill");
+  const bytes = await fs.readFile(
+    path.join(revisionDir(skillId, revision, options.env), "references/data.bin"),
+  );
+  expect(bytes).toEqual(Buffer.from([0, 255, 128]));
+});
 
-  it("returns committed flags and relinquishes personal edit access on transfer", async () => {
-    const { options, alice, admin } = fixture();
-    const created = await saveSkillLibrary(alice, draft(), options);
-    const { skillId, revision } = created.entry;
-    for (const [action, shared, enabled] of [
-      ["disable", false, false],
-      ["share", true, false],
-      ["enable", true, true],
-      ["unshare", false, true],
-    ] as const) {
-      const receipt = await mutateSkillLibrary(
-        alice,
-        { skillId, expectedRevision: revision, action },
-        options,
-      );
-      expect(receipt.entry).toEqual({
-        ...created.entry,
-        shared,
-        enabled,
-        updatedAt: expect.any(Number),
-      });
-      expect((await readSkillLibrary(alice, skillId, undefined, options)).entry).toEqual(
-        receipt.entry,
-      );
-    }
-    const personalAdmin = { ...admin, namespace: "personal" as const };
-    const transferred = await mutateSkillLibrary(
-      personalAdmin,
-      { skillId, expectedRevision: revision, action: "transfer" },
-      options,
-    );
-    expect(transferred.entry).toEqual({
+it("returns committed flags and relinquishes personal edit access on transfer", async () => {
+  const { admin, lib } = fixture();
+  const created = await lib.save();
+  const { skillId, revision } = created.entry;
+  for (const [action, shared, enabled] of [
+    ["disable", false, false],
+    ["share", true, false],
+    ["enable", true, true],
+    ["unshare", false, true],
+  ] as const) {
+    const receipt = await lib.change({ skillId, revision }, action);
+    expect(receipt.entry).toEqual({
       ...created.entry,
-      ownerProfileId: null,
-      ownerLabel: "Team",
-      shared: true,
-      canEdit: false,
+      shared,
+      enabled,
       updatedAt: expect.any(Number),
     });
-    expect((await readSkillLibrary(personalAdmin, skillId, undefined, options)).entry).toEqual(
-      transferred.entry,
-    );
+    expect((await lib.read(skillId)).entry).toEqual(receipt.entry);
+  }
+  const personalAdmin = { ...admin, namespace: "personal" as const };
+  const transferred = await lib.change({ skillId, revision }, "transfer", personalAdmin);
+  expect(transferred.entry).toEqual({
+    ...created.entry,
+    ownerProfileId: null,
+    ownerLabel: "Team",
+    shared: true,
+    canEdit: false,
+    updatedAt: expect.any(Number),
   });
+  expect((await lib.read(skillId, personalAdmin)).entry).toEqual(transferred.entry);
+});
 
-  it("makes identical saves a no-op, rejects racing writers, and leaves existing pins on the old bytes", async () => {
-    const { options, alice } = fixture();
-    const created = await saveSkillLibrary(alice, draft(), options);
-    const { skillId, revision } = created.entry;
-    const pins = await seedSkillLibrarySelection(alice, options);
+it("makes identical saves a no-op, rejects racing writers, and leaves existing pins on the old bytes", async () => {
+  const { alice, lib } = fixture();
+  const created = await lib.save();
+  const { skillId, revision } = created.entry;
+  const pins = await lib.seed();
+  expect((await lib.revise(created.entry, content)).state).toBe("unchanged");
+  const edits = await Promise.allSettled(
+    ["first", "second"].map((body) =>
+      lib.revise(created.entry, content.replace("A reusable test procedure", `${body} revision`)),
+    ),
+  );
+  expectSingleWinner(edits, "CONFLICT");
+  expect(edits.find((result) => result.status === "rejected")).toMatchObject({
+    reason: expect.any(SkillLibraryError),
+  });
+  expect((await lib.read(skillId, alice, pins[0]!.revision)).content).toBe(content);
+  const current = (await lib.read(skillId)).entry;
+  expect(current.revision).not.toBe(revision);
+  expect(current.description).not.toBe(created.entry.description);
+  const staleMutation = lib.change({ skillId, revision }, "disable");
+  await expect(staleMutation).rejects.toBeInstanceOf(SkillLibraryError);
+  await expect(staleMutation).rejects.toMatchObject({
+    code: "CONFLICT",
+    currentRevision: current.revision,
+  });
+  const refreshed = await lib.select(pins, { action: "refresh", sessionKey: "session" });
+  expect(refreshed[0]?.revision).toBe(current.revision);
+  const rolledBack = await lib.mutate({
+    skillId,
+    expectedRevision: current.revision,
+    action: "rollback",
+    revision,
+  });
+  expect(rolledBack.entry).toMatchObject({ revision, description: created.entry.description });
+  expect(await lib.read(skillId)).toMatchObject({ content, entry: rolledBack.entry });
+});
+
+it("rejects lost authority after asynchronous publication work without publishing a pointer", async () => {
+  const { alice, lib } = fixture();
+  let live = true;
+  const authority = {
+    ...alice,
+    assertCurrent: () => {
+      if (!live) {
+        throw new Error("retired run");
+      }
+    },
+  };
+  const saving = lib.save(draft(), authority);
+  live = false;
+  await expect(saving).rejects.toThrow("retired run");
+  expect((await lib.list()).entries).toEqual([]);
+});
+
+it.each(["canonical", "merged"] as const)(
+  "retains same-name skills and permissions for a %s actor after profile merge",
+  async (actorKind) => {
+    const { options, alice, actor, lib } = fixture();
+    const bob = actor(ensureProfileForEmail("bob@example.test", options).id);
+    const a = await lib.save();
+    const b = await lib.save(draft(), bob);
+    const avatar = Buffer.alloc(128 * 1024, 97);
+    for (const profileId of [alice.profileId!, bob.profileId!]) {
+      expect(setAvatar(profileId, avatar, "image/png", options).ok).toBe(true);
+    }
+    setDisplayName(alice.profileId!, "Alice 雪 · 🦞", options);
+    await expectCode(lib.save(), "NAME_CONFLICT");
+    linkEmail("bob@example.test", alice.profileId!, options);
+    const authority = actorKind === "canonical" ? alice : bob;
+    const entries = (await lib.list(authority, { scope: "mine" })).entries;
+    expect(entries.map((entry) => entry.skillId).toSorted()).toEqual(
+      [a.entry.skillId, b.entry.skillId].toSorted(),
+    );
+    expect(new Set(entries.map((entry) => entry.name)).size).toBe(2);
+    expect(entries.every((entry) => entry.ownerLabel === "Alice 雪 · 🦞")).toBe(true);
+    expect(entries.every((entry) => entry.canEdit)).toBe(true);
+    expect((await lib.read(b.entry.skillId)).entry.ownerProfileId).toBe(alice.profileId);
     expect(
-      (await saveSkillLibrary(alice, { ...draft(), skillId, expectedRevision: revision }, options))
-        .state,
-    ).toBe("unchanged");
-    const edits = await Promise.allSettled(
-      ["first", "second"].map((body) =>
-        saveSkillLibrary(
-          alice,
-          {
-            ...draft(),
-            skillId,
-            expectedRevision: revision,
-            content: content.replace("A reusable test procedure", `${body} revision`),
-          },
-          options,
-        ),
+      Buffer.from(
+        expectDefined(getProfileAvatar(alice.profileId!, options), "stored avatar").bytes,
       ),
-    );
-    expect(edits.filter((result) => result.status === "fulfilled")).toHaveLength(1);
-    expect(edits.find((result) => result.status === "rejected")).toMatchObject({
-      reason: expect.any(SkillLibraryError),
-    });
-    expect((await readSkillLibrary(alice, skillId, pins[0]!.revision, options)).content).toBe(
-      content,
-    );
-    const current = (await readSkillLibrary(alice, skillId, undefined, options)).entry;
-    expect(edits.find((result) => result.status === "rejected")).toMatchObject({
-      reason: { code: "CONFLICT" },
-    });
-    expect(current.revision).not.toBe(revision);
-    expect(current.description).not.toBe(created.entry.description);
-    const staleMutation = mutateSkillLibrary(
-      alice,
-      { action: "disable", skillId, expectedRevision: revision },
-      options,
-    );
-    await expect(staleMutation).rejects.toBeInstanceOf(SkillLibraryError);
-    await expect(staleMutation).rejects.toMatchObject({
-      code: "CONFLICT",
-      currentRevision: current.revision,
-    });
-    const refreshed = await changeSkillLibrarySelection(
-      alice,
-      pins,
-      { action: "refresh", sessionKey: "session" },
-      options,
-    );
-    expect(refreshed[0]?.revision).toBe(current.revision);
-    const rolledBack = await mutateSkillLibrary(
-      alice,
-      { skillId, expectedRevision: current.revision, action: "rollback", revision },
-      options,
-    );
-    expect(rolledBack.entry).toMatchObject({ revision, description: created.entry.description });
-    expect(await readSkillLibrary(alice, skillId, undefined, options)).toMatchObject({
-      content,
-      entry: rolledBack.entry,
-    });
-  });
-
-  it("rejects lost authority after asynchronous publication work without publishing a pointer", async () => {
-    const { options, alice } = fixture();
-    let live = true;
-    const authority = {
-      ...alice,
-      assertCurrent: () => {
-        if (!live) {
-          throw new Error("retired run");
-        }
-      },
-    };
-    const saving = saveSkillLibrary(authority, draft(), options);
-    live = false;
-    await expect(saving).rejects.toThrow("retired run");
-    expect((await listSkillLibrary(alice, {}, options)).entries).toEqual([]);
-  });
-
-  it.each(["canonical", "merged"] as const)(
-    "retains same-name skills and permissions for a %s actor after profile merge",
-    async (actorKind) => {
-      const { options, alice, actor } = fixture();
-      const bob = actor(ensureProfileForEmail("bob@example.test", options).id);
-      const a = await saveSkillLibrary(alice, draft(), options);
-      const b = await saveSkillLibrary(bob, draft(), options);
-      const avatar = Buffer.alloc(128 * 1024, 97);
-      for (const profileId of [alice.profileId!, bob.profileId!]) {
-        expect(setAvatar(profileId, avatar, "image/png", options).ok).toBe(true);
-      }
-      setDisplayName(alice.profileId!, "Alice 雪 · 🦞", options);
-      await expect(saveSkillLibrary(alice, draft(), options)).rejects.toMatchObject({
-        code: "NAME_CONFLICT",
-      });
-      linkEmail("bob@example.test", alice.profileId!, options);
-      const authority = actorKind === "canonical" ? alice : bob;
-      const entries = (await listSkillLibrary(authority, { scope: "mine" }, options)).entries;
-      expect(entries.map((entry) => entry.skillId).toSorted()).toEqual(
-        [a.entry.skillId, b.entry.skillId].toSorted(),
-      );
-      expect(new Set(entries.map((entry) => entry.name)).size).toBe(2);
-      expect(entries.every((entry) => entry.ownerLabel === "Alice 雪 · 🦞")).toBe(true);
-      expect(entries.every((entry) => entry.canEdit)).toBe(true);
-      expect(
-        (await readSkillLibrary(alice, b.entry.skillId, undefined, options)).entry.ownerProfileId,
-      ).toBe(alice.profileId);
-      expect(
-        Buffer.from(
-          expectDefined(getProfileAvatar(alice.profileId!, options), "stored avatar").bytes,
-        ),
-      ).toEqual(avatar);
-      setUserProfileRole(alice.profileId!, "viewer", options);
-      const viewerEntries = (
-        await listSkillLibrary(
-          {
-            ...authority,
-            getConfig: () => ({
-              gateway: {
-                roles: {
-                  definitions: {
-                    viewer: {
-                      sessions: { others: "none" },
-                      agents: "*",
-                      scopes: ["operator.read"],
-                    },
-                  },
-                },
+    ).toEqual(avatar);
+    setUserProfileRole(alice.profileId!, "viewer", options);
+    const viewerEntries = (
+      await lib.list({
+        ...authority,
+        getConfig: () => ({
+          gateway: {
+            roles: {
+              definitions: {
+                viewer: { sessions: { others: "none" }, agents: "*", scopes: ["operator.read"] },
               },
-            }),
+            },
           },
-          {},
-          options,
-        )
-      ).entries;
-      expect(viewerEntries.map((entry) => entry.skillId)).toEqual(
-        entries.map((entry) => entry.skillId),
-      );
-      expect(viewerEntries.every((entry) => !entry.canEdit)).toBe(true);
-    },
-  );
+        }),
+      })
+    ).entries;
+    expect(viewerEntries.map((entry) => entry.skillId)).toEqual(
+      entries.map((entry) => entry.skillId),
+    );
+    expect(viewerEntries.every((entry) => !entry.canEdit)).toBe(true);
+  },
+);
 
-  it.each(["current", "legacy"] as const)(
-    "reads a skill through a cold %s profile handle",
-    async (schema) => {
-      const { options, alice } = fixture();
-      const saved = await saveSkillLibrary(alice, draft(), options);
-      if (schema === "legacy") {
-        openOpenClawStateDatabase(options).db.exec("ALTER TABLE user_profiles DROP COLUMN role");
-      }
-      await closeOpenClawStateDatabaseAsync();
-      closeOpenClawStateDatabaseForTest();
-      const database = openOpenClawStateDatabase(options);
-      const read = await readSkillLibrary(alice, saved.entry.skillId, undefined, {
-        ...options,
-        database,
-      });
-      expect(read.content).toBe(content);
-      expect(read.entry).toEqual(saved.entry);
-      expect(tableHasColumn(database.db, "user_profiles", "role")).toBe(schema === "current");
-    },
-  );
+it.each(["current", "legacy"] as const)(
+  "reads a skill through a cold %s profile handle",
+  async (schema) => {
+    const { options, alice, lib } = fixture();
+    const saved = await lib.save();
+    if (schema === "legacy") {
+      openDatabase(options).db.exec("ALTER TABLE user_profiles DROP COLUMN role");
+    }
+    await closeDatabase();
+    closeTestDatabase();
+    const database = openDatabase(options);
+    const read = await readSkillLibrary(alice, saved.entry.skillId, undefined, {
+      ...options,
+      database,
+    });
+    expect(read).toMatchObject({ content, entry: saved.entry });
+    expect(tableHasColumn(database.db, "user_profiles", "role")).toBe(schema === "current");
+  },
+);
 
-  it.each(["created_at", "updated_at", "avatar"] as const)(
-    "preserves native %s errors on either actor merge row",
-    async (column) => {
-      const { options, alice, actor } = fixture();
-      const source = actor(ensureProfileForEmail("source@example.test", options).id);
-      await saveSkillLibrary(alice, draft(), options);
-      linkEmail("source@example.test", alice.profileId!, options);
-      const { db } = openOpenClawStateDatabase(options);
-      if (column === "avatar") {
-        // A non-STRICT fixture can hold a damaged avatar value that native row conversion rejects.
-        db.exec(`
+it.each(["created_at", "updated_at", "avatar"] as const)(
+  "preserves native %s errors on either actor merge row",
+  async (column) => {
+    const { options, alice, actor, lib } = fixture();
+    const source = actor(ensureProfileForEmail("source@example.test", options).id);
+    await lib.save();
+    linkEmail("source@example.test", alice.profileId!, options);
+    const { db } = openDatabase(options);
+    if (column === "avatar") {
+      // A non-STRICT fixture can hold a damaged avatar value that native row conversion rejects.
+      db.exec(`
         CREATE TABLE untyped_profiles AS SELECT * FROM user_profiles;
         DROP TABLE user_profiles;
         ALTER TABLE untyped_profiles RENAME TO user_profiles;
       `);
-      }
-      for (const profileId of [source.profileId!, alice.profileId!]) {
-        db.prepare(`UPDATE user_profiles SET ${column} = ? WHERE id = ?`).run(
-          9223372036854775807n,
-          profileId,
-        );
-        let nativeError: unknown;
-        try {
-          db.prepare("SELECT * FROM user_profiles WHERE id = ?").get(profileId);
-        } catch (error) {
-          nativeError = error;
-        }
-        if (!(nativeError instanceof Error)) {
-          throw new Error("Expected native SQLite INTEGER conversion failure");
-        }
-        await expect(listSkillLibrary(source, {}, options)).rejects.toThrow(
-          expect.objectContaining({
-            name: nativeError.name,
-            message: nativeError.message,
-            ...("code" in nativeError ? { code: nativeError.code } : {}),
-          }),
-        );
-        db.prepare(`UPDATE user_profiles SET ${column} = 1 WHERE id = ?`).run(profileId);
-      }
-    },
-  );
-
-  it("delivers complete immutable supporting files into a worker-owned directory", async () => {
-    const { options, alice, stateDir } = fixture();
-    await saveSkillLibrary(alice, draft(), options);
-    const selections = await seedSkillLibrarySelection(alice, options);
-    const skills = loadSkillLibrarySelection(selections, options).map((entry) => entry.skill);
-    const snapshot = {
-      prompt: "",
-      skills: skills.map((skill) => ({ name: skill.name })),
-      resolvedSkills: skills,
-      librarySelections: selections,
-      version: 1,
-    };
-    const delivery = await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, () =>
-      prepareSkillResourceDelivery(snapshot, () => {}),
-    );
-    // Library bytes belong to Gateway even when the workspace host is offline.
-    const remoteWorkspace = path.join(stateDir, "remote-workspace");
-    declareAgentWorkspaceAccess(remoteWorkspace);
-    await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
-      await expect(
-        prepareSkillResourceDelivery(snapshot, () => {}, [], remoteWorkspace),
-      ).resolves.toEqual(delivery);
-    });
-    expect(delivery).toBeDefined();
-    const materialized = await materializeSkillResources(delivery!, () => {});
-    try {
-      const skill = materialized.snapshot.resolvedSkills![0]!;
-      expect(await fs.readFile(skill.filePath, "utf8")).toBe(content);
-      expect(await fs.readFile(path.join(skill.baseDir, "references/data.bin"))).toEqual(
-        Buffer.from([0, 255, 128]),
-      );
-      expect(materialized.snapshot.prompt).toContain(skill.filePath);
-      expect(materialized.snapshot.prompt).not.toContain(
-        skillLibraryRevisionDir(selections[0]!.skillId, selections[0]!.revision, options.env),
-      );
-    } finally {
-      await materialized.cleanup();
     }
-    expect(prepareSkillLibraryBundle(delivery!.skills[0]!.files).revision).toBe(
-      delivery!.skills[0]!.revision,
-    );
-  });
+    for (const profileId of [source.profileId!, alice.profileId!]) {
+      db.prepare(`UPDATE user_profiles SET ${column} = ? WHERE id = ?`).run(
+        9223372036854775807n,
+        profileId,
+      );
+      let nativeError: unknown;
+      try {
+        db.prepare("SELECT * FROM user_profiles WHERE id = ?").get(profileId);
+      } catch (error) {
+        nativeError = error;
+      }
+      if (!(nativeError instanceof Error)) {
+        throw new Error("Expected native SQLite INTEGER conversion failure");
+      }
+      await expect(lib.list(source)).rejects.toThrow(
+        expect.objectContaining({
+          name: nativeError.name,
+          message: nativeError.message,
+          ...("code" in nativeError ? { code: nativeError.code } : {}),
+        }),
+      );
+      db.prepare(`UPDATE user_profiles SET ${column} = 1 WHERE id = ?`).run(profileId);
+    }
+  },
+);
 
-  it("reads published executable metadata from the manifest and detects changed resource bytes", async () => {
-    const { options, alice } = fixture();
-    const saved = await saveSkillLibrary(alice, draft(), options);
-    const directory = skillLibraryRevisionDir(
-      saved.entry.skillId,
-      saved.entry.revision,
-      options.env,
+it("reads published executable metadata from the manifest and detects changed resource bytes", async () => {
+  const { options, lib } = fixture();
+  const saved = await lib.save();
+  const directory = revisionDirectory(saved.entry, options.env);
+  const script = path.join(directory, "scripts/task.sh");
+  await fs.chmod(script, 0o400);
+  const read = await lib.read(saved.entry.skillId);
+  expect(read.files.find((file) => file.path === "scripts/task.sh")?.executable).toBe(true);
+  expect(read.entry.revision).toBe(saved.entry.revision);
+  await fs.chmod(script, 0o600);
+  await fs.writeFile(script, "changed");
+  await expect(lib.read(saved.entry.skillId)).rejects.toThrow("integrity verification");
+});
+it("delivers the pinned hidden revision on explicit selection after the library default changes", async () => {
+  const { options, stateDir, lib } = fixture();
+  await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+    const hiddenContent = content.replace(
+      "---\n# Guide",
+      "disable-model-invocation: true\n---\n# Guide",
     );
-    const script = path.join(directory, "scripts/task.sh");
-    await fs.chmod(script, 0o400);
-    const read = await readSkillLibrary(alice, saved.entry.skillId, undefined, options);
-    expect(read.files.find((file) => file.path === "scripts/task.sh")?.executable).toBe(true);
-    expect(read.entry.revision).toBe(saved.entry.revision);
-    await fs.chmod(script, 0o600);
-    await fs.writeFile(script, "changed");
-    await expect(readSkillLibrary(alice, saved.entry.skillId, undefined, options)).rejects.toThrow(
-      "integrity verification",
-    );
-  });
-  it("delivers the pinned hidden revision on explicit selection after the library default changes", async () => {
-    const { alice, options, stateDir } = fixture();
-    await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
-      const hiddenContent = content.replace(
-        "---\n# Guide",
-        "disable-model-invocation: true\n---\n# Guide",
-      );
-      const saved = await saveSkillLibrary(alice, { ...draft(), content: hiddenContent }, options);
-      const pins = await seedSkillLibrarySelection(alice, options);
-      const entries = loadSkillLibrarySelection(pins, options);
-      const { buildSkillSnapshot } = await import("../loading/workspace-skill-prompt.js");
-      const snapshot = {
-        ...(await buildSkillSnapshot(stateDir, { entries })),
-        librarySelections: pins,
-      };
-      expect(snapshot.resolvedSkills).toEqual([]);
-      await saveSkillLibrary(
-        alice,
-        {
-          ...draft(),
-          skillId: saved.entry.skillId,
-          expectedRevision: saved.entry.revision,
-          content: `${hiddenContent}\nChanged default`,
-        },
-        options,
-      );
-      const ordinary = await prepareSkillResourceDelivery(snapshot, () => {});
-      const explicit = await prepareSkillResourceDelivery(snapshot, () => {}, [
-        { name: pins[0]!.name, path: entries[0]!.skill.filePath },
-      ]);
-      expect(ordinary?.skills[0]).toMatchObject({
-        revision: saved.entry.revision,
-        modelVisible: false,
-      });
-      expect(explicit?.skills[0]).toMatchObject({
-        name: pins[0]!.name,
-        revision: saved.entry.revision,
-        modelVisible: true,
-      });
-      expect(explicit?.skills[0]?.files).toEqual(ordinary?.skills[0]?.files);
-      const markdown = explicit!.skills[0]!.files.find((file) => file.path === "SKILL.md")!;
-      expect(Buffer.from(markdown.content, "base64").toString("utf8")).toBe(hiddenContent);
-      expect(snapshot.librarySelections).toEqual(pins);
+    const saved = await lib.save({ ...draft(), content: hiddenContent });
+    const pins = await lib.seed();
+    const entries = loadSelection(pins, options);
+    const snapshot = {
+      ...(await buildSnapshot(stateDir, { entries })),
+      librarySelections: pins,
+    };
+    expect(snapshot.resolvedSkills).toEqual([]);
+    await lib.revise(saved.entry, `${hiddenContent}\nChanged default`);
+    const ordinary = await deliver(snapshot, () => {});
+    const explicit = await deliver(snapshot, () => {}, [
+      { name: pins[0]!.name, path: entries[0]!.skill.filePath },
+    ]);
+    expect(ordinary?.skills[0]).toMatchObject({
+      revision: saved.entry.revision,
+      modelVisible: false,
     });
+    expect(explicit?.skills[0]).toMatchObject({
+      name: pins[0]!.name,
+      revision: saved.entry.revision,
+      modelVisible: true,
+    });
+    expect(explicit?.skills[0]?.files).toEqual(ordinary?.skills[0]?.files);
+    const markdown = explicit!.skills[0]!.files.find((file) => file.path === "SKILL.md")!;
+    expect(Buffer.from(markdown.content, "base64").toString("utf8")).toBe(hiddenContent);
+    expect(snapshot.librarySelections).toEqual(pins);
   });
 });
 
-describe("library admission and imports", () => {
-  it("checks prerequisites without borrowing another skill's config key", async () => {
-    const { alice, options, stateDir } = fixture();
-    const saved = await saveSkillLibrary(
-      alice,
-      {
-        slug: "prerequisite",
-        expectedRevision: null,
-        content:
-          '---\nname: prerequisite\ndescription: Requires explicitly configured inputs\nmetadata: {"openclaw":{"skillKey":"someone-elses-key","requires":{"env":["OPENCLAW_SKILL_LIBRARY_FIXTURE_REQUIRED"],"config":["channels.fixture.enabled"]}}}\n---\n# Prerequisite\n',
-      },
-      options,
-    );
-    const selected = loadSkillLibrarySelection(
-      await seedSkillLibrarySelection(alice, options),
-      options,
-    );
-    expect(selected[0]?.metadata?.skillKey).toBe(saved.entry.name);
-    expect(selected[0]?.metadata?.requires).toMatchObject({
-      env: ["OPENCLAW_SKILL_LIBRARY_FIXTURE_REQUIRED"],
-      config: ["channels.fixture.enabled"],
-    });
-    const { buildSkillSnapshot } = await import("../loading/workspace-skill-prompt.js");
-    const snapshot = await buildSkillSnapshot(stateDir, {
-      entries: selected,
-      config: {
-        skills: {
-          entries: {
-            "someone-elses-key": {
-              env: { OPENCLAW_SKILL_LIBRARY_FIXTURE_REQUIRED: "fixture-value" },
-            },
+it("checks prerequisites without borrowing another skill's config key", async () => {
+  const { options, stateDir, lib } = fixture();
+  const saved = await lib.save({
+    slug: "prerequisite",
+    expectedRevision: null,
+    content:
+      '---\nname: prerequisite\ndescription: Requires explicitly configured inputs\nmetadata: {"openclaw":{"skillKey":"someone-elses-key","requires":{"env":["OPENCLAW_SKILL_LIBRARY_FIXTURE_REQUIRED"],"config":["channels.fixture.enabled"]}}}\n---\n# Prerequisite\n',
+  });
+  const selected = loadSelection(await lib.seed(), options);
+  expect(selected[0]?.metadata?.skillKey).toBe(saved.entry.name);
+  expect(selected[0]?.metadata?.requires).toMatchObject({
+    env: ["OPENCLAW_SKILL_LIBRARY_FIXTURE_REQUIRED"],
+    config: ["channels.fixture.enabled"],
+  });
+  const snapshot = await buildSnapshot(stateDir, {
+    entries: selected,
+    config: {
+      skills: {
+        entries: {
+          "someone-elses-key": {
+            env: { OPENCLAW_SKILL_LIBRARY_FIXTURE_REQUIRED: "fixture-value" },
           },
         },
       },
-    });
-    expect(snapshot.skills).toEqual([]);
+    },
   });
-  it("binds ZIP uploads to the owner and ignores archive order and timestamps for revision identity", async () => {
-    const { alice, actor, options } = fixture();
-    const bob = actor(ensureProfileForEmail("bob@example.test", options).id);
-    const { default: JSZip } = await import("jszip");
-    const revisions: string[] = [];
-    const script = "#!/bin/sh\nprintf ready";
-    const resourcePath = `${"nested/".repeat(15)}data.bin`;
-    for (const index of [0, 1]) {
-      const zip = new JSZip();
-      const files: Array<[string, string | Buffer]> = [
-        ["SKILL.md", content],
-        [resourcePath, Buffer.from([0, 255, 128])],
-        ["scripts/task.sh", script],
-      ];
-      for (const [file, bytes] of index ? files.toReversed() : files) {
-        zip.file(`wrapped/${file}`, bytes, {
-          date: new Date(2020 + index, 0, 1),
-          unixPermissions: file.endsWith(".sh") ? 0o100755 : 0o100644,
-        });
-      }
-      const bytes = await zip.generateAsync({ type: "nodebuffer", platform: "UNIX" });
-      const begun = await beginZipUpload(alice, bytes, `zip-${index}`, options);
-      await expect(
-        uploadSkillLibrary(
-          bob,
-          { action: "chunk", uploadId: begun.uploadId, offset: 0, data: bytes.toString("base64") },
-          options,
-        ),
-      ).rejects.toMatchObject({ code: "NOT_FOUND" });
-      await expect(
-        uploadSkillLibrary(
-          alice,
-          { action: "chunk", uploadId: begun.uploadId, offset: 0, data: bytes.toString("base64") },
-          options,
-        ),
-      ).resolves.toEqual({ ...begun, offset: bytes.length });
-      await expect(
-        uploadSkillLibrary(bob, { action: "commit", uploadId: begun.uploadId }, options),
-      ).rejects.toMatchObject({ code: "NOT_FOUND" });
-      const saved = await uploadSkillLibrary(
-        alice,
-        { action: "commit", uploadId: begun.uploadId },
-        options,
-      );
-      if (!("entry" in saved)) {
-        throw new Error("Expected publication receipt");
-      }
-      revisions.push(saved.entry.revision);
-      const read = await readSkillLibrary(alice, saved.entry.skillId, undefined, options);
-      expect(read.content).toBe(content);
-      expect(read.files).toEqual([
-        { path: resourcePath, content: "AP+A", encoding: "base64", executable: false },
-        {
-          path: "scripts/task.sh",
-          content: Buffer.from(script).toString("base64"),
-          encoding: "base64",
-          executable: true,
-        },
-      ]);
-      expect(
-        await uploadSkillLibrary(alice, { action: "commit", uploadId: begun.uploadId }, options),
-      ).toMatchObject({ state: "unchanged", entry: { skillId: saved.entry.skillId } });
-    }
-    expect(revisions[0]).toBe(revisions[1]);
-  });
-  it("reserves pending import capacity for other profiles without counting completed receipts", async () => {
-    const { alice, actor, options } = fixture();
-    const bob = actor(ensureProfileForEmail("bob@example.test", options).id);
-    const charlie = actor(ensureProfileForEmail("charlie@example.test", options).id);
-    const { default: JSZip } = await import("jszip");
+  expect(snapshot.skills).toEqual([]);
+});
+it("binds ZIP uploads to the owner and ignores archive order and timestamps for revision identity", async () => {
+  const { actor, options, lib } = fixture();
+  const bob = actor(ensureProfileForEmail("bob@example.test", options).id);
+  const { default: JSZip } = await import("jszip");
+  const revisions: string[] = [];
+  const script = "#!/bin/sh\nprintf ready";
+  const resourcePath = `${"nested/".repeat(15)}data.bin`;
+  for (const index of [0, 1]) {
     const zip = new JSZip();
-    zip.file("SKILL.md", content);
-    const bytes = await zip.generateAsync({ type: "nodebuffer" });
-    const completed = await beginZipUpload(alice, bytes, "completed", options);
-    await uploadSkillLibrary(
-      alice,
-      { action: "chunk", uploadId: completed.uploadId, offset: 0, data: bytes.toString("base64") },
-      options,
-    );
-    const receipt = await uploadSkillLibrary(
-      alice,
-      { action: "commit", uploadId: completed.uploadId },
-      options,
-    );
-    if (!("entry" in receipt)) {
-      throw new Error("Expected completed import receipt");
-    }
-    for (let index = 0; index < 15; index++) {
-      await beginZipUpload(alice, bytes, `alice-pending-${index}`, options);
-    }
-    const profileRace = await Promise.allSettled(
-      ["first", "second"].map((slug) => beginZipUpload(alice, bytes, slug, options)),
-    );
-    expect(profileRace.filter((result) => result.status === "fulfilled")).toHaveLength(1);
-    expect(profileRace.find((result) => result.status === "rejected")).toMatchObject({
-      reason: { code: "LIMIT" },
-    });
-    await expect(beginZipUpload(alice, bytes, "over-profile-limit", options)).rejects.toMatchObject(
-      {
-        code: "LIMIT",
-      },
-    );
-    for (let index = 0; index < 15; index++) {
-      await beginZipUpload(bob, bytes, `bob-pending-${index}`, options);
-    }
-    const globalRace = await Promise.allSettled(
-      [bob, charlie].map((authority) => beginZipUpload(authority, bytes, "last-slot", options)),
-    );
-    expect(globalRace.filter((result) => result.status === "fulfilled")).toHaveLength(1);
-    expect(globalRace.find((result) => result.status === "rejected")).toMatchObject({
-      reason: { code: "LIMIT" },
-    });
-    await expect(
-      beginZipUpload(charlie, bytes, "over-global-limit", options),
-    ).rejects.toMatchObject({
-      code: "LIMIT",
-    });
-    await expect(
-      uploadSkillLibrary(alice, { action: "commit", uploadId: completed.uploadId }, options),
-    ).resolves.toMatchObject({ state: "unchanged", entry: { skillId: receipt.entry.skillId } });
-    expect(
-      (await listSkillLibrary(alice, {}, options)).entries.map((entry) => entry.skillId),
-    ).toEqual([receipt.entry.skillId]);
-  });
-
-  it("counts merged upload owners together while preserving completion and expiry", async () => {
-    const { alice, actor, options } = fixture();
-    const bob = actor(ensureProfileForEmail("bob@example.test", options).id);
-    const { default: JSZip } = await import("jszip");
-    const bytes = await new JSZip().file("SKILL.md", content).generateAsync({ type: "nodebuffer" });
-    const begun = await beginZipUpload(bob, bytes, "before-merge", options);
-    for (let index = 0; index < 8; index++) {
-      await beginZipUpload(alice, bytes, `alice-${index}`, options);
-      await beginZipUpload(bob, bytes, `bob-${index}`, options);
-    }
-    linkEmail("bob@example.test", alice.profileId!, options);
-    // Durable upload owners and retained connections may still carry Bob's pre-merge ID.
-    for (const authority of [alice, bob]) {
-      await expect(beginZipUpload(authority, bytes, "after-merge", options)).rejects.toMatchObject({
-        code: "LIMIT",
+    const files: Array<[string, string | Buffer]> = [
+      ["SKILL.md", content],
+      [resourcePath, Buffer.from([0, 255, 128])],
+      ["scripts/task.sh", script],
+    ];
+    for (const [file, bytes] of index ? files.toReversed() : files) {
+      zip.file(`wrapped/${file}`, bytes, {
+        date: new Date(2020 + index, 0, 1),
+        unixPermissions: file.endsWith(".sh") ? 0o100755 : 0o100644,
       });
     }
-    await uploadSkillLibrary(
-      alice,
-      { action: "chunk", uploadId: begun.uploadId, offset: 0, data: bytes.toString("base64") },
-      options,
-    );
-    await expect(
-      uploadSkillLibrary(bob, { action: "commit", uploadId: begun.uploadId }, options),
-    ).resolves.toMatchObject({ state: "published", entry: { ownerProfileId: alice.profileId } });
-    await expect(beginZipUpload(alice, bytes, "still-full", options)).rejects.toMatchObject({
-      code: "LIMIT",
+    const bytes = await zip.generateAsync({ type: "nodebuffer", platform: "UNIX" });
+    const begun = await lib.begin(bytes, `zip-${index}`);
+    await expectCode(lib.chunk(begun.uploadId, bytes, bob), "NOT_FOUND");
+    await expect(lib.chunk(begun.uploadId, bytes)).resolves.toEqual({
+      ...begun,
+      offset: bytes.length,
     });
-    openOpenClawStateDatabase(options)
-      .db.prepare("UPDATE skill_library_uploads SET expires_at = 1")
-      .run();
-    await expect(beginZipUpload(bob, bytes, "after-expiry", options)).resolves.toMatchObject({
-      offset: 0,
+    await expectCode(lib.commit(begun.uploadId, bob), "NOT_FOUND");
+    const saved = await lib.commit(begun.uploadId);
+    if (!("entry" in saved)) {
+      throw new Error("Expected publication receipt");
+    }
+    revisions.push(saved.entry.revision);
+    const read = await lib.read(saved.entry.skillId);
+    expect(read.content).toBe(content);
+    expect(read.files).toEqual([
+      { path: resourcePath, content: "AP+A", encoding: "base64", executable: false },
+      {
+        path: "scripts/task.sh",
+        content: Buffer.from(script).toString("base64"),
+        encoding: "base64",
+        executable: true,
+      },
+    ]);
+    expect(await lib.commit(begun.uploadId)).toMatchObject({
+      state: "unchanged",
+      entry: { skillId: saved.entry.skillId },
     });
-    await expect(
-      uploadSkillLibrary(alice, { action: "commit", uploadId: begun.uploadId }, options),
-    ).rejects.toMatchObject({ code: "NOT_FOUND" });
+  }
+  expect(revisions[0]).toBe(revisions[1]);
+});
+it("reserves pending import capacity for other profiles without counting completed receipts", async () => {
+  const { actor, options, lib } = fixture();
+  const bob = actor(ensureProfileForEmail("bob@example.test", options).id);
+  const charlie = actor(ensureProfileForEmail("charlie@example.test", options).id);
+  const bytes = await zipBytes();
+  const completed = await lib.begin(bytes, "completed");
+  await lib.chunk(completed.uploadId, bytes);
+  const receipt = await lib.commit(completed.uploadId);
+  if (!("entry" in receipt)) {
+    throw new Error("Expected completed import receipt");
+  }
+  for (let index = 0; index < 15; index++) {
+    await lib.begin(bytes, `alice-pending-${index}`);
+  }
+  const profileRace = await Promise.allSettled(
+    ["first", "second"].map((slug) => lib.begin(bytes, slug)),
+  );
+  expectSingleWinner(profileRace, "LIMIT");
+  await expectCode(lib.begin(bytes, "over-profile-limit"), "LIMIT");
+  for (let index = 0; index < 15; index++) {
+    await lib.begin(bytes, `bob-pending-${index}`, bob);
+  }
+  const globalRace = await Promise.allSettled(
+    [bob, charlie].map((authority) => lib.begin(bytes, "last-slot", authority)),
+  );
+  expectSingleWinner(globalRace, "LIMIT");
+  await expectCode(lib.begin(bytes, "over-global-limit", charlie), "LIMIT");
+  await expect(lib.commit(completed.uploadId)).resolves.toMatchObject({
+    state: "unchanged",
+    entry: { skillId: receipt.entry.skillId },
   });
+  expect((await lib.list()).entries.map((entry) => entry.skillId)).toEqual([receipt.entry.skillId]);
+});
 
-  it("rejects a compressed oversized ZIP member at extraction before publishing a skill", async () => {
-    const { alice, options } = fixture();
-    const { default: JSZip } = await import("jszip");
-    const zip = new JSZip();
-    zip.file("wrapped/SKILL.md", content);
-    zip.file("wrapped/oversized.bin", Buffer.alloc(SKILL_LIBRARY_MAX_FILE_BYTES + 1, 97));
-    const bytes = await zip.generateAsync({ type: "nodebuffer", compression: "DEFLATE" });
-    expect(bytes.length).toBeLessThan(4096);
-    const begun = await beginZipUpload(alice, bytes, "oversized", options);
-    await expect(
-      uploadSkillLibrary(
-        alice,
-        { action: "chunk", uploadId: begun.uploadId, offset: 0, data: bytes.toString("base64") },
-        options,
-      ),
-    ).resolves.toEqual({ ...begun, offset: bytes.length });
-    await expect(
-      uploadSkillLibrary(alice, { action: "commit", uploadId: begun.uploadId }, options),
-    ).rejects.toMatchObject({
-      code: "INVALID_BUNDLE",
-      message:
-        "failed to extract archive: ArchiveLimitError: archive entry extracted size exceeds limit",
-    });
-    expect((await listSkillLibrary(alice, {}, options)).entries).toEqual([]);
-    expect(await seedSkillLibrarySelection(alice, options)).toEqual([]);
+it("counts merged upload owners together while preserving completion and expiry", async () => {
+  const { alice, actor, options, lib } = fixture();
+  const bob = actor(ensureProfileForEmail("bob@example.test", options).id);
+  const bytes = await zipBytes();
+  const begun = await lib.begin(bytes, "before-merge", bob);
+  for (let index = 0; index < 8; index++) {
+    await lib.begin(bytes, `alice-${index}`);
+    await lib.begin(bytes, `bob-${index}`, bob);
+  }
+  linkEmail("bob@example.test", alice.profileId!, options);
+  // Durable upload owners and retained connections may still carry Bob's pre-merge ID.
+  for (const authority of [alice, bob]) {
+    await expectCode(lib.begin(bytes, "after-merge", authority), "LIMIT");
+  }
+  await lib.chunk(begun.uploadId, bytes);
+  await expect(lib.commit(begun.uploadId, bob)).resolves.toMatchObject({
+    state: "published",
+    entry: { ownerProfileId: alice.profileId },
   });
-  it("bounds growing team defaults without stopping session creation", async () => {
-    const { alice, actor, options } = fixture();
-    const bob = actor(ensureProfileForEmail("bob@example.test", options).id);
-    for (let index = 0; index < 65; index += 1) {
-      const saved = await saveSkillLibrary(
-        alice,
-        { slug: `team-${index}`, content, expectedRevision: null },
-        options,
-      );
-      await mutateSkillLibrary(
-        alice,
-        { action: "share", skillId: saved.entry.skillId, expectedRevision: saved.entry.revision },
-        options,
-      );
-    }
-    const library = await listSkillLibrary(bob, {}, options);
-    const selected = await seedSkillLibrarySelection(bob, options);
-    expect(library.defaultSelectionNotice).toContain("detach");
-    expect(selected).toHaveLength(64);
-    const revisionReads = trackSqliteStatementExecutions(
-      requireNativeSqliteDatabase(openOpenClawStateDatabase(options).db),
-      ["revisions"],
-      (sql) =>
-        sql.startsWith("select ") && sql.includes('from "skill_library_revisions"')
-          ? "revisions"
-          : null,
+  await expectCode(lib.begin(bytes, "still-full"), "LIMIT");
+  openDatabase(options).db.prepare("UPDATE skill_library_uploads SET expires_at = 1").run();
+  await expect(lib.begin(bytes, "after-expiry", bob)).resolves.toMatchObject({ offset: 0 });
+  await expectCode(lib.commit(begun.uploadId), "NOT_FOUND");
+});
+
+it("rejects a compressed oversized ZIP member at extraction before publishing a skill", async () => {
+  const { lib } = fixture();
+  const bytes = await zipBytes(true);
+  expect(bytes.length).toBeLessThan(4096);
+  const begun = await lib.begin(bytes, "oversized");
+  await expect(lib.chunk(begun.uploadId, bytes)).resolves.toEqual({
+    ...begun,
+    offset: bytes.length,
+  });
+  await expect(lib.commit(begun.uploadId)).rejects.toMatchObject({
+    code: "INVALID_BUNDLE",
+    message:
+      "failed to extract archive: ArchiveLimitError: archive entry extracted size exceeds limit",
+  });
+  expect((await lib.list()).entries).toEqual([]);
+  expect(await lib.seed()).toEqual([]);
+});
+it("bounds growing team defaults without stopping session creation", async () => {
+  const { actor, options, lib } = fixture();
+  const bob = actor(ensureProfileForEmail("bob@example.test", options).id);
+  for (let index = 0; index < 65; index += 1) {
+    const saved = await lib.save({ slug: `team-${index}`, content, expectedRevision: null });
+    await lib.change(saved.entry, "share");
+  }
+  const library = await lib.list(bob);
+  const selected = await lib.seed(bob);
+  expect(library.defaultSelectionNotice).toContain("detach");
+  expect(selected).toHaveLength(64);
+  const revisionReads = trackSqliteStatementExecutions(
+    requireNativeSqliteDatabase(openDatabase(options).db),
+    ["revisions"],
+    (sql) =>
+      sql.startsWith("select ") && sql.includes('from "skill_library_revisions"')
+        ? "revisions"
+        : null,
+  );
+  try {
+    const ordered = selected.toReversed();
+    expect(loadSelection(ordered, options).map((entry) => entry.skill.name)).toEqual(
+      ordered.map((pin) => pin.name),
     );
-    try {
-      const ordered = selected.toReversed();
-      expect(loadSkillLibrarySelection(ordered, options).map((entry) => entry.skill.name)).toEqual(
-        ordered.map((pin) => pin.name),
-      );
-      expect(revisionReads.counts.revisions).toBe(1);
-      expect(revisionReads.rowCounts.revisions).toBe(64);
-    } finally {
-      revisionReads.restore();
-    }
-    const omitted = library.entries.find(
-      (entry) => !selected.some((pin) => pin.skillId === entry.skillId),
-    )!;
-    const fewer = await changeSkillLibrarySelection(
+    expect(revisionReads.counts.revisions).toBe(1);
+    expect(revisionReads.rowCounts.revisions).toBe(64);
+  } finally {
+    revisionReads.restore();
+  }
+  const omitted = library.entries.find(
+    (entry) => !selected.some((pin) => pin.skillId === entry.skillId),
+  )!;
+  const fewer = await lib.select(
+    selected,
+    { sessionKey: "test", action: "detach", skillId: selected[0]!.skillId },
+    bob,
+  );
+  expect(
+    await lib.select(
+      fewer,
+      { sessionKey: "test", action: "attach", skillId: omitted.skillId },
       bob,
-      selected,
-      { sessionKey: "test", action: "detach", skillId: selected[0]!.skillId },
-      options,
-    );
-    expect(
-      await changeSkillLibrarySelection(
-        bob,
-        fewer,
-        { sessionKey: "test", action: "attach", skillId: omitted.skillId },
-        options,
-      ),
-    ).toHaveLength(64);
-  });
+    ),
+  ).toHaveLength(64);
 });

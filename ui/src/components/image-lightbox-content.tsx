@@ -1,6 +1,8 @@
 import Panzoom, { type PanzoomObject } from "@panzoom/panzoom";
-import { createEffect, createMemo, createSignal, onCleanup, Show, useContext } from "solid-js";
-import { t } from "../lib/reactive/i18n.ts";
+import { createEffect, createMemo, createSignal, onSettled, Show, useContext } from "solid-js";
+import { registerChatMediaEnglish } from "../i18n/locales/en-chat-media.ts";
+import { elementRef } from "../lib/reactive/element-ref.ts";
+import { t, registerEnglishCatalog } from "../lib/reactive/i18n.ts";
 import { listen } from "../lib/reactive/listener.ts";
 import { nativeListener } from "../lib/solid-native-listener.ts";
 import { ImageLightboxHost } from "./image-lightbox-context.ts";
@@ -19,13 +21,15 @@ import { panImageWithKeyboard } from "./image-lightbox-keyboard.ts";
 import {
   LightboxAction,
   LightboxChrome,
-  LightboxImageQualityStatus,
+  LightboxImage,
   lightboxImageStyle,
 } from "./image-lightbox-view.tsx";
 import type { ImageLightboxProps } from "./image-lightbox.types.ts";
+import "./modal-dialog.tsx";
 import { Icon } from "./solid/icon.tsx";
 import imageLightboxStyles from "./image-lightbox.css?inline";
-import "./modal-dialog.ts";
+
+registerEnglishCatalog(registerChatMediaEnglish);
 
 const MAX_SCALE = 4;
 const DOUBLE_TAP_SCALE = 2.5;
@@ -39,16 +43,18 @@ export function ImageLightboxContent(props: ImageLightboxProps) {
   const galleryState = gallery.state;
   const hasGallery = () => galleryState().count > 1;
   const currentImage = () => galleryState().current;
-  const [openOriginalUrl, setOpenOriginalUrl] = createSignal("", { ownedWrite: true });
-  const [resolvingOriginal, setResolvingOriginal] = createSignal(false, { ownedWrite: true });
+  const [originalRead, setOriginalRead] = createSignal(
+    { result: Promise.resolve("") },
+    { ownedWrite: true },
+  );
   const [scale, setScale] = createSignal(1, { ownedWrite: true });
   const [canZoom, setCanZoom] = createSignal(false, { ownedWrite: true });
   const focusables = new Set<HTMLElement>();
-  const focusableRef = () => {
-    let element: HTMLElement;
-    onCleanup(() => focusables.delete(element));
-    return (node: HTMLElement) => focusables.add((element = node));
-  };
+  const focusableRef = () =>
+    elementRef((element: HTMLElement) => {
+      focusables.add(element);
+      return () => focusables.delete(element);
+    });
   let imageElement: HTMLImageElement | undefined;
   let stageElement: HTMLDivElement | undefined;
   let slideElement: HTMLDivElement | undefined;
@@ -67,8 +73,6 @@ export function ImageLightboxContent(props: ImageLightboxProps) {
   let stopPanzoomChange: (() => void) | undefined;
   let originalBlobUrl = "";
   let originalUrlRequest = 0;
-  let resetVersion = 0;
-  let displayedResetVersion = -1;
   let displayedIndex = 0;
   let displayedSource = "";
   let slideAnimation: Animation | undefined;
@@ -344,10 +348,8 @@ export function ImageLightboxContent(props: ImageLightboxProps) {
   async function resolveOriginalUrl(fallbackSrc: string, fallbackOriginalSrc: string) {
     const request = ++originalUrlRequest;
     revokeOriginalBlobUrl();
-    setResolvingOriginal(false);
     if (gallery.peek().current?.kind !== "video" || gallery.peek().current?.loadDisplayImage) {
-      setOpenOriginalUrl("");
-      return;
+      return "";
     }
     const current = gallery.peek().current;
     const source = (
@@ -355,24 +357,15 @@ export function ImageLightboxContent(props: ImageLightboxProps) {
         ? (video()?.getAttribute("src") ?? "")
         : current?.originalSrc || current?.src || fallbackOriginalSrc || fallbackSrc
     ).trim();
-    setOpenOriginalUrl("");
-    setResolvingOriginal(true);
-    try {
-      const prepared = await resolveLightboxOriginalUrl(
-        source,
-        () => host.isConnected && !disposed && request === originalUrlRequest,
-      );
-      if (prepared && request === originalUrlRequest && !disposed) {
-        originalBlobUrl = prepared.blobUrl ?? "";
-        setOpenOriginalUrl(prepared.url);
-      }
-    } catch {
-      // The selected media remains viewable; omit an unusable external link.
-    } finally {
-      if (request === originalUrlRequest && !disposed) {
-        setResolvingOriginal(false);
-      }
+    const prepared = await resolveLightboxOriginalUrl(
+      source,
+      () => host.isConnected && !disposed && request === originalUrlRequest,
+    );
+    if (prepared && request === originalUrlRequest && !disposed) {
+      originalBlobUrl = prepared.blobUrl ?? "";
+      return prepared.url;
     }
+    return "";
   }
 
   const handleKeydown = (event: KeyboardEvent) => {
@@ -405,7 +398,7 @@ export function ImageLightboxContent(props: ImageLightboxProps) {
           : event.key === "0"
             ? resetZoom
             : undefined;
-    if (panzoom && zoom) {
+    if (panzoom && zoom && !event.ctrlKey && !event.metaKey && !event.altKey) {
       event.preventDefault();
       zoom();
       return;
@@ -452,55 +445,53 @@ export function ImageLightboxContent(props: ImageLightboxProps) {
   );
   // Source identity owns decoded-image leases and the native player, not just display state.
   createEffect(
-    galleryInputs,
-    ([
-      src,
-      originalSrc,
-      items,
-      loadDisplayImage,
-      readOriginalBlob,
-      connectVideo,
-      imageWidth,
-      imageHeight,
-      mediaKind,
-    ]) => {
-      cancelSwipe();
-      destroyPanzoom();
-      setScale(1);
-      gallery.reset(items, {
-        kind: mediaKind,
-        connectVideo,
+    () => ({ inputs: galleryInputs(), selected: galleryState(), title: props.imageTitle }),
+    ({ inputs, title }, previous) => {
+      const [
         src,
         originalSrc,
-        // Renaming the image updates the header without restarting its resource owner.
-        title: props.imageTitle,
-        width: imageWidth,
-        height: imageHeight,
+        items,
         loadDisplayImage,
         readOriginalBlob,
-      });
-      resetVersion += 1;
-    },
-  );
-  createEffect(
-    () => ({ selected: galleryState(), src: props.src, originalSrc: props.originalSrc }),
-    ({ src, originalSrc }) => {
+        connectVideo,
+        imageWidth,
+        imageHeight,
+        mediaKind,
+      ] = inputs;
+      const sourceChanged = previous?.inputs !== inputs;
+      if (sourceChanged) {
+        cancelSwipe();
+        destroyPanzoom();
+        setScale(1);
+        gallery.reset(items, {
+          kind: mediaKind,
+          connectVideo,
+          src,
+          originalSrc,
+          // Renaming the image updates the header without restarting its resource owner.
+          title,
+          width: imageWidth,
+          height: imageHeight,
+          loadDisplayImage,
+          readOriginalBlob,
+        });
+      }
       if (disposed || !host.isConnected) {
         return;
       }
-      const selectionChanged =
-        displayedResetVersion !== resetVersion || displayedIndex !== gallery.peek().index;
+      const selectionChanged = sourceChanged || displayedIndex !== gallery.peek().index;
       if (selectionChanged) {
-        displayedResetVersion = resetVersion;
         displayedIndex = gallery.peek().index;
-        destroyPanzoom();
-        setScale(1);
+        if (!sourceChanged) {
+          destroyPanzoom();
+          setScale(1);
+        }
       }
       gallery.connectPlayer(video());
       const source = video()?.getAttribute("src") ?? gallery.peek().current?.src ?? src;
       if (selectionChanged || displayedSource !== source) {
         displayedSource = source;
-        void resolveOriginalUrl(src, originalSrc);
+        setOriginalRead({ result: resolveOriginalUrl(src, originalSrc) });
         const current = image();
         if (current?.complete && current.naturalWidth > 0) {
           initializePanzoom(current);
@@ -508,20 +499,23 @@ export function ImageLightboxContent(props: ImageLightboxProps) {
       }
     },
   );
-  const stopMotionChange = motionQuery
-    ? listen(motionQuery, "change", handleMotionPreferenceChange)
-    : undefined;
-  onCleanup(() => {
-    disposed = true;
-    cancelSwipe();
-    touchPointers.clear();
-    slideAnimation?.cancel();
-    stopMotionChange?.();
-    destroyPanzoom();
-    originalUrlRequest += 1;
-    revokeOriginalBlobUrl();
+  onSettled(() => {
+    const stopMotionChange = motionQuery
+      ? listen(motionQuery, "change", handleMotionPreferenceChange)
+      : undefined;
+    return () => {
+      disposed = true;
+      cancelSwipe();
+      touchPointers.clear();
+      slideAnimation?.cancel();
+      stopMotionChange?.();
+      destroyPanzoom();
+      originalUrlRequest += 1;
+      revokeOriginalBlobUrl();
+    };
   });
 
+  const description = () => (props.gallery ? undefined : props.imageDescription);
   const title = () =>
     (hasGallery() ? (currentImage()?.title ?? props.imageTitle) : props.imageTitle).trim() ||
     t("chat.imageLightbox.untitled");
@@ -529,6 +523,9 @@ export function ImageLightboxContent(props: ImageLightboxProps) {
     <>
       <style>{imageLightboxStyles}</style>
       <openclaw-modal-dialog
+        prop:initialFocus={() =>
+          [...focusables].find((element) => element.isConnected && element.autofocus) ?? null
+        }
         class="mobile-edge-to-edge viewport-edge-to-edge"
         label={
           props.mediaKind === "video"
@@ -541,19 +538,32 @@ export function ImageLightboxContent(props: ImageLightboxProps) {
         <LightboxChrome
           focusableRef={focusableRef}
           title={title()}
-          originalUrl={openOriginalUrl()}
+          originalUrl={originalRead().result}
           externalImageUrl={externalLightboxImageUrl(currentImage() ?? props)}
-          resolvingOriginal={hasGallery() && resolvingOriginal()}
+          hasGallery={hasGallery()}
           isVideo={props.mediaKind === "video"}
           onDownloadImage={downloadCurrentImage}
           onClose={emitClose}
         >
-          <LightboxImageQualityStatus
-            focusableRef={focusableRef}
-            upgrading={galleryState().upgrading}
-            failed={galleryState().upgradeFailed}
-            onRetry={() => gallery.retryDisplayImage()}
-          />
+          <Show when={galleryState().upgrading || galleryState().upgradeFailed}>
+            <div class="image-quality-status" role="status" aria-live="polite">
+              <span>
+                {galleryState().upgrading
+                  ? t("chat.imageLightbox.loadingDetail")
+                  : t("chat.imageLightbox.detailFailed")}
+              </span>
+              <Show when={galleryState().upgradeFailed}>
+                <button
+                  ref={focusableRef()}
+                  type="button"
+                  class="action"
+                  onClick={() => gallery.retryDisplayImage()}
+                >
+                  {t("common.retry")}
+                </button>
+              </Show>
+            </div>
+          </Show>
           <div
             class={[
               "stage",
@@ -583,7 +593,7 @@ export function ImageLightboxContent(props: ImageLightboxProps) {
                     slideElement = element;
                   }}
                 >
-                  <img
+                  <LightboxImage
                     class={["image", { zoomed: scale() > 1 }]}
                     ref={(element) => {
                       imageElement = element;
@@ -591,6 +601,7 @@ export function ImageLightboxContent(props: ImageLightboxProps) {
                     style={lightboxImageStyle(currentImage())}
                     src={currentImage()?.src ?? props.src}
                     alt={title()}
+                    description={description()}
                     referrerpolicy="no-referrer"
                     decoding="async"
                     onLoad={handleImageLoad}

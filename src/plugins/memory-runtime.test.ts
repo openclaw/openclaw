@@ -5,7 +5,6 @@ import { withCliCommandCleanup, withCliProcessScope } from "../cli/runtime-clean
 import { closeCliResources } from "../cli/runtime-cleanup.js";
 import type {
   LegacyMemoryReadResult,
-  MemoryProviderStatus,
   MemoryReadResult,
   MemorySearchResult,
 } from "../memory-host-sdk/host/types.js";
@@ -45,6 +44,11 @@ vi.mock("../agents/agent-scope.js", () => ({
 
 vi.mock("./loader.js", () => ({
   loadPluginRegistryHandle: mocks.loadPluginRegistryHandle,
+}));
+
+vi.mock("./manifest-registry.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./manifest-registry.js")>()),
+  loadPluginManifestRegistryCore: () => ({ plugins: [], diagnostics: [] }),
 }));
 
 vi.mock("./memory-state.js", async (importOriginal) => {
@@ -251,6 +255,8 @@ describe("memory runtime handles", () => {
       expect(mocks.loadPluginRegistryHandle).toHaveBeenCalledWith({
         activate: false,
         config: memoryConfig,
+        registrationConfigOrigin: memoryConfig,
+        manifestRegistry: { plugins: [], diagnostics: [] },
         onlyPluginIds: ["memory-core"],
         workspaceDir: "/workspace/main",
       });
@@ -438,9 +444,7 @@ describe("memory runtime handles", () => {
       #closed = false;
       #readCalls = 0;
 
-      async search(): Promise<MemorySearchResult[]> {
-        return [];
-      }
+      search = async (): Promise<MemorySearchResult[]> => [];
 
       async readFile({
         relPath,
@@ -455,17 +459,9 @@ describe("memory runtime handles", () => {
         return result;
       }
 
-      status(): MemoryProviderStatus {
-        return { backend: "builtin", provider: "builtin" };
-      }
-
-      async probeEmbeddingAvailability() {
-        return { ok: true };
-      }
-
-      async probeVectorAvailability() {
-        return true;
-      }
+      status = () => ({ backend: "builtin" as const, provider: "builtin" });
+      probeEmbeddingAvailability = async () => ({ ok: true });
+      probeVectorAvailability = async () => true;
 
       async close() {
         this.#closed = true;
@@ -480,13 +476,10 @@ describe("memory runtime handles", () => {
       }
     }
     const manager = new RegisteredReadManager();
-    const runtime = {
+    mocks.getMemoryRuntime.mockReturnValue({
       ...createRuntime(),
-      getMemorySearchManager: vi.fn(async () => ({
-        manager,
-      })),
-    } satisfies MemoryPluginRuntime;
-    mocks.getMemoryRuntime.mockReturnValue(runtime);
+      getMemorySearchManager: vi.fn(async () => ({ manager })),
+    } satisfies MemoryPluginRuntime);
 
     const first = await acquire();
     const second = await acquire();
@@ -528,11 +521,10 @@ describe("memory runtime handles", () => {
         closed = true;
       },
     }) satisfies RegisteredMemorySearchManager;
-    const runtime = {
+    mocks.getMemoryRuntime.mockReturnValue({
       ...createRuntime(),
       getMemorySearchManager: vi.fn(async () => ({ manager })),
-    } satisfies MemoryPluginRuntime;
-    mocks.getMemoryRuntime.mockReturnValue(runtime);
+    } satisfies MemoryPluginRuntime);
 
     const acquired = await acquire();
 

@@ -6,7 +6,10 @@ import { sleepWithAbort } from "../infra/backoff.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { isSqliteLockError } from "../infra/sqlite-error-diagnostics.js";
 import { resolveAgentDatabaseIdleHandleTtlMs } from "../infra/sqlite-handle-lifecycle.js";
-import { retainSqliteWorkerErrorCode } from "../infra/sqlite-worker-contract.js";
+import {
+  isSqliteWorkerError,
+  retainSqliteWorkerErrorCode,
+} from "../infra/sqlite-worker-contract.js";
 import {
   assertExistingDatabaseIdentity,
   type DatabasePathIdentity,
@@ -44,6 +47,7 @@ import {
   assertBorrowedAgentDatabaseFileIdentity,
   captureNativeAgentDatabaseExecutionIdentity,
   supportsAgentDatabaseExecutionScope,
+  toAgentExecutionConstraints,
 } from "./openclaw-agent-execution-scope.js";
 import { createAgentDatabaseAcceptedWork } from "./openclaw-agent-execution-work.js";
 import {
@@ -116,7 +120,7 @@ export function createAgentDatabaseExecution(
   const reportCleanupFailure = (error: unknown) => {
     // Diagnostic failures cannot turn a committed command into a replayable failure.
     try {
-      log.warn(`Agent database idle cleanup failed: ${formatErrorMessage(error)}`);
+      log.warn(`Agent database cleanup failed: ${formatErrorMessage(error)}`);
     } catch {
       // The resource owner still retains the cleanup failure.
     }
@@ -245,16 +249,7 @@ export function createAgentDatabaseExecution(
             throw new Error("Agent cleanup no longer owns its original execution reference");
           }
         },
-        expectedIdentity ??
-          fileIdentity ??
-          (identity.key.startsWith("file:")
-            ? {
-                kind: "file",
-                physicalIdentity: identity.key.slice("file:".length),
-                birthtime: identity.birthtime,
-                nativeLocation: identity.canonicalPath,
-              }
-            : undefined),
+        expectedIdentity ?? fileIdentity ?? toAgentExecutionConstraints(identity).expectedIdentity,
         acceptFileIdentity,
         reportTerminal,
         fileIdentity ? undefined : (creationIdentity ?? creatingTarget),
@@ -294,12 +289,24 @@ export function createAgentDatabaseExecution(
             await closeNative(current);
           }
         } catch (cleanupError) {
-          throw retainSqliteWorkerErrorCode(
-            new AggregateError([error, cleanupError], "Agent operation and cleanup failed", {
-              cause: error,
+          reportCleanupFailure(cleanupError);
+          const primary = error instanceof Error ? error : new Error(String(error));
+          const failure = Object.assign(
+            new Error(primary.message, {
+              cause: new AggregateError(
+                [error, cleanupError],
+                "Agent operation and cleanup failed",
+                {
+                  cause: error,
+                },
+              ),
             }),
-            error,
+            { name: primary.name },
           );
+          // Cleanup failures preserve the primary presentation without granting a retry.
+          throw isSqliteWorkerError(error, "outcome-unknown")
+            ? retainSqliteWorkerErrorCode(failure, error)
+            : failure;
         }
       }
       if (contended) {
@@ -689,13 +696,12 @@ export function createAgentDatabaseExecution(
     // Config changes do not drain captured executors; unused stores expire normally.
     // Callers resolve new routing, while accepted work keeps its original physical store.
     unregisterShared = registerOpenClawStateDatabaseAsyncResource({
-      close: async (sharedIdentity) => {
-        if (!sharedIdentity || sharedIdentity.key === context.admission.identity.key) {
-          reportTerminal(
-            new AgentDatabaseExecutionAdmissionClosedError("Agent database state admission closed"),
-          );
-          await acceptedWork.closeAccepted(() => owner.close());
-        }
+      admission: context.admission,
+      close: async () => {
+        reportTerminal(
+          new AgentDatabaseExecutionAdmissionClosedError("Agent database state admission closed"),
+        );
+        await acceptedWork.closeAccepted(() => owner.close());
       },
     });
     return owner.borrow(

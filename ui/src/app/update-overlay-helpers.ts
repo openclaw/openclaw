@@ -3,8 +3,7 @@ import {
   isAcknowledgedAbandonedUpdateRun,
   type UpdateRunRecord,
 } from "../../../src/infra/update-run-record.js";
-import { renderUpdateRunReport } from "../../../src/infra/update-run-report.js";
-import { classifyUpdateOutcome } from "../../../src/shared/update-outcome.js";
+import { classifyUpdateOutcome } from "../../../src/shared/update-outcome-classification.js";
 import type { GatewayBrowserClient, GatewayHelloOk } from "../api/gateway.ts";
 import type { UpdateAvailable, UpdateScheduleState } from "../api/types.ts";
 import type { CustodianTurnAdmission } from "../components/custodian-alert-contract.ts";
@@ -106,11 +105,6 @@ export type UpdateRestartStatusResponse = {
 
 type UpdateFailureCause = { step: string; detail: string };
 
-function readUpdateAttemptId(sentinel: UpdateRestartStatusResponse["sentinel"]): string | null {
-  const id = sentinel?.stats?.runId?.trim() || sentinel?.stats?.handoffId?.trim();
-  return id && id.length <= 256 ? id : null;
-}
-
 export function projectUpdateSentinel(sentinel: UpdateRestartStatusResponse["sentinel"]): {
   attempt: RecordedUpdateAttempt | null;
   banner: ApplicationStatusBanner | null;
@@ -125,7 +119,17 @@ export function projectUpdateSentinel(sentinel: UpdateRestartStatusResponse["sen
     reason: stats?.reason ?? undefined,
   });
   const showResult = outcome !== "succeeded" && outcome !== "pending";
-  const cause = showResult ? readUpdateFailureCause(sentinel) : null;
+  let cause: UpdateFailureCause | null = null;
+  if (showResult) {
+    const steps = sentinel?.stats?.steps;
+    // The run stops at its first failure, so the last non-zero exit is the cause.
+    const failed = Array.isArray(steps)
+      ? steps.findLast((step) => typeof step?.log?.exitCode === "number" && step.log.exitCode !== 0)
+      : undefined;
+    const detail = lastLogLine(failed?.log?.stderrTail) ?? lastLogLine(failed?.log?.stdoutTail);
+    const step = failed?.name?.trim();
+    cause = step && detail ? { step, detail } : null;
+  }
   const attempt =
     showResult && typeof sentinel.ts === "number"
       ? {
@@ -150,9 +154,10 @@ export function projectUpdateSentinel(sentinel: UpdateRestartStatusResponse["sen
   if (banner && outcome === "failed") {
     banner.text += ` ${t("updates.triage.hostHint")}`;
   }
+  const attemptId = sentinel?.stats?.runId?.trim() || sentinel?.stats?.handoffId?.trim();
   const record = {
     id:
-      readUpdateAttemptId(sentinel) ??
+      (attemptId && attemptId.length <= 256 ? attemptId : null) ??
       (typeof sentinel.ts === "number" ? `recorded:${sentinel.ts}` : null),
     timestampMs: sentinel.ts ?? null,
   };
@@ -171,19 +176,6 @@ function lastLogLine(tail: string | null | undefined): string | null {
     .filter(Boolean);
   const last = lines.at(-1);
   return last ? last.slice(0, MAX_UPDATE_FAILURE_CAUSE_CHARS) : null;
-}
-
-function readUpdateFailureCause(
-  sentinel: UpdateRestartStatusResponse["sentinel"],
-): UpdateFailureCause | null {
-  const steps = sentinel?.stats?.steps;
-  // The run stops at its first failure, so the last non-zero exit is the cause.
-  const failed = Array.isArray(steps)
-    ? steps.findLast((step) => typeof step?.log?.exitCode === "number" && step.log.exitCode !== 0)
-    : undefined;
-  const detail = lastLogLine(failed?.log?.stderrTail) ?? lastLogLine(failed?.log?.stdoutTail);
-  const step = failed?.name?.trim();
-  return step && detail ? { step, detail } : null;
 }
 
 export type UpdateRunResponse = {
@@ -207,7 +199,10 @@ export function createUpdateStatusRefresher(params: {
   canRefresh: () => boolean;
   isCurrent: (client: GatewayBrowserClient, epoch: number) => boolean;
   onRefreshing: (refreshing: boolean) => void;
-  onStatus: (response: UpdateRestartStatusResponse) => void;
+  onStatus: (
+    response: UpdateRestartStatusResponse,
+    isCurrent: () => boolean,
+  ) => void | Promise<void>;
   onError: (error: unknown, mode: "manual" | "completion") => void;
 }) {
   const refresh = async (
@@ -229,34 +224,32 @@ export function createUpdateStatusRefresher(params: {
       params.onRefreshing(true);
     }
     try {
-      const pending = client
-        .request<UpdateRestartStatusResponse>(
-          "update.status",
-          refreshCheckout ? { refreshCheckout: true } : {},
-          // Checkout discovery uses the Gateway's Git command budgets.
-          { timeoutMs: refreshCheckout ? null : 5_000 },
-        )
-        .catch((error: unknown) => {
-          if (mode !== "background" && isCurrent()) {
-            params.onError(error, mode);
-          }
-          return null;
-        });
+      const pending = client.request<UpdateRestartStatusResponse>(
+        "update.status",
+        refreshCheckout ? { refreshCheckout: true } : {},
+        // Checkout discovery uses the Gateway's Git command budgets.
+        { timeoutMs: refreshCheckout ? null : 5_000 },
+      );
       // Start discovery first, but do not make progress wait for network Git.
       const progress = refreshCheckout ? refresh("background") : null;
       const response = await pending;
       if (response && isCurrent()) {
         if (refreshCheckout) {
           params.onError(null, "manual");
-          params.onStatus(response);
+          await params.onStatus(response, isCurrent);
           // The fast read may predate the fetch. Reconcile the target before
           // the caller opens confirmation.
           await progress;
           return isCurrent() && (await refresh("completion"));
         }
         params.onError(null, "completion");
-        params.onStatus(response);
-        return true;
+        await params.onStatus(response, isCurrent);
+        return isCurrent();
+      }
+      return false;
+    } catch (error) {
+      if (mode !== "background" && isCurrent()) {
+        params.onError(error, mode);
       }
       return false;
     } finally {
@@ -279,22 +272,16 @@ export function projectUpdateStatusResponse(
   },
 ) {
   const result = projectUpdateSentinel(response.sentinel);
-  return {
-    failure: result?.failure ?? null,
-    updateStatusBanner: result ? result.banner : current.updateStatusBanner,
-    recordedUpdateAttempt: result ? result.attempt : current.recordedUpdateAttempt,
-    ...projectUpdateCheckoutResponse(response, current),
-  };
-}
-
-function projectUpdateCheckoutResponse(
-  response: UpdateRestartStatusResponse,
-  current: { heldUpdateCampaignId: string | null; updateSchedule?: UpdateScheduleState | null },
-) {
+  const failure = result?.failure ?? null;
+  const updateStatusBanner = result ? result.banner : current.updateStatusBanner;
+  const recordedUpdateAttempt = result ? result.attempt : current.recordedUpdateAttempt;
   const updateSchedule = Object.hasOwn(response, "schedule")
     ? (response.schedule ?? null)
     : undefined;
   return {
+    failure,
+    updateStatusBanner,
+    recordedUpdateAttempt,
     ...(Object.hasOwn(response, "updateAvailable")
       ? { updateAvailable: response.updateAvailable ?? null }
       : {}),
@@ -310,13 +297,16 @@ function projectUpdateCheckoutResponse(
   };
 }
 
-export function projectUpdateRunFailure(run: UpdateRunRecord): UpdateFailureTriage | null {
+export async function projectUpdateRunFailure(
+  run: UpdateRunRecord,
+): Promise<UpdateFailureTriage | null> {
   if (
     isAcknowledgedAbandonedUpdateRun(run) ||
     (run.status !== "failed" && run.status !== "rolled-back")
   ) {
     return null;
   }
+  const { renderUpdateRunReport } = await import("../../../src/infra/update-run-report.js");
   const step = run.steps.findLast((entry) => entry.status === "failed");
   return {
     id: run.runId,

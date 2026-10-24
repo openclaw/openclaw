@@ -20,6 +20,7 @@ import {
 } from "../../test-utils/openclaw-test-state.js";
 import { createSessionEntryWithTranscript } from "./session-accessor.entry-mutation.js";
 import { loadSessionEntryForAdmission } from "./session-accessor.sqlite-entry-admission.js";
+import { writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
 import {
   readCurrentProjectionSnapshot,
   type CurrentTranscriptProjection,
@@ -390,6 +391,111 @@ it.each([
       hostSql.restore();
     }
     expect(version.get()).toEqual(before);
+  });
+});
+
+it("validates a through-anchor in one statement and observes later source writes", async () => {
+  await withTranscript("transcript-through-anchor-validation", async (scope) => {
+    const entry = {
+      sessionId: scope.sessionId,
+      updatedAt: 1,
+      lifecycleRevision: "original",
+      permissionMode: "full" as const,
+    };
+    await replaceTranscriptEvents(scope, events);
+    const database = openDatabase(scope);
+    runSqliteImmediateTransactionSync(database.db, () =>
+      writeSessionEntry(database, scope.sessionKey, entry),
+    );
+    const resolved = { ...scope, path: database.path };
+    const through = readFacts(database, resolved, { entryIds: ["answer"] }).anchors[0]!;
+    const selection = {
+      entryIds: [],
+      contextValidation: { through, expectedAuthority: entry },
+    };
+    const read = () => readFacts(database, resolved, selection);
+    const native = requireNativeSqliteDatabase(database.db);
+    const statements = trackSqliteStatementExecutions(native, ["reads"], (sql) =>
+      /^(select|with)\b/i.test(sql) ? "reads" : null,
+    );
+    const envelopes = vi.spyOn(native, "exec");
+    try {
+      expect(read()).toEqual({ anchors: [], contextValidated: true });
+      expect(statements.counts).toEqual({ reads: 1 });
+      expect(envelopes).not.toHaveBeenCalled();
+
+      expect(readFacts(database, resolved, { ...selection, includeWatermark: true })).toMatchObject(
+        { contextValidated: true, watermark: { maxSeq: 4 } },
+      );
+      expect(envelopes.mock.calls.map(([sql]) => sql)).toEqual(["BEGIN", "COMMIT"]);
+    } finally {
+      envelopes.mockRestore();
+      statements.restore();
+    }
+
+    for (const changedEntry of [
+      { ...entry, permissionMode: "workspace" as const },
+      { ...entry, lifecycleRevision: "replacement" },
+    ]) {
+      runSqliteImmediateTransactionSync(database.db, () =>
+        writeSessionEntry(database, scope.sessionKey, changedEntry),
+      );
+      expect(read).toThrow("changed lifecycle or permissions");
+    }
+    runSqliteImmediateTransactionSync(database.db, () =>
+      writeSessionEntry(database, scope.sessionKey, entry),
+    );
+    expect(read().contextValidated).toBe(true);
+
+    await replaceTranscriptEvents(scope, events);
+    expect(read).toThrow("Completed-turn transcript anchor changed");
+  });
+});
+
+it("reads a standalone watermark in one statement and observes committed appends and rewrites", async () => {
+  await withTranscript("transcript-standalone-watermark", async (scope) => {
+    await replaceTranscriptEvents(scope, events);
+    const database = openDatabase(scope);
+    const resolved = { ...scope, path: database.path };
+    const selection = { entryIds: [], includeWatermark: true };
+    const read = () => readFacts(database, resolved, selection);
+    const native = requireNativeSqliteDatabase(database.db);
+    const envelopes = vi.spyOn(native, "exec");
+    using statements = trackProjection(database);
+    try {
+      const initial = read();
+      expect(initial).toEqual({
+        anchors: [],
+        watermark: { generation: expect.any(String), maxSeq: 4 },
+      });
+      expect(statements.counts).toEqual({ projection: 0, watermark: 1 });
+      expect(envelopes).not.toHaveBeenCalled();
+
+      for (const extra of [
+        { entryIds: ["answer"] },
+        { includeHeader: true },
+        { afterSeq: undefined },
+      ]) {
+        envelopes.mockClear();
+        expect(readFacts(database, resolved, { ...selection, ...extra }).watermark).toEqual(
+          initial.watermark,
+        );
+        expect(envelopes.mock.calls.map(([sql]) => sql)).toEqual(["BEGIN", "COMMIT"]);
+      }
+
+      runSqliteImmediateTransactionSync(database.db, () =>
+        appendTranscriptEventsInTransaction(database, resolved, [
+          message("later", "answer", "later"),
+        ]),
+      );
+      expect(read().watermark).toEqual({ ...initial.watermark, maxSeq: 5 });
+      await replaceTranscriptEvents(scope, events);
+      const rewritten = read().watermark;
+      expect(rewritten).toEqual({ generation: expect.any(String), maxSeq: 4 });
+      expect(rewritten?.generation).not.toBe(initial.watermark?.generation);
+    } finally {
+      envelopes.mockRestore();
+    }
   });
 });
 

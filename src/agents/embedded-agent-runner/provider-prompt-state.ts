@@ -1,6 +1,6 @@
 import { isProxy } from "node:util/types";
+import { modelRequestBodyState } from "@openclaw/ai/internal/model-request-body";
 import {
-  modelRequestBodyState,
   responsesPromptObserver,
   type ResponsesPromptObservation,
 } from "@openclaw/ai/internal/openai";

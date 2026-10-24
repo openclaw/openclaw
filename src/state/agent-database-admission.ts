@@ -13,6 +13,7 @@ import {
   formatAgentDatabaseOwnershipRepairHint,
 } from "../infra/state-migrations.agent-owner-guidance.js";
 import { resolveUpdateRehearsalRoot } from "../infra/update-rehearsal-paths.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { isReservedSystemAgentId } from "../system-agent/agent-id.js";
@@ -57,6 +58,30 @@ const refusalsByState = new Map<
     refusals: ReadonlyMap<string, AgentDatabaseAdmissionRefusal>;
   }
 >();
+
+// Attempts outlive native worker generations; failures use the existing admission refusal.
+const startupFtsRepairs = new Map<string, { statePath: string; message?: string }>();
+
+export function recordAgentDatabaseStartupFtsRepair(
+  key: string,
+  statePath: string,
+  message?: string,
+): void {
+  if (message === undefined && startupFtsRepairs.has(key)) {
+    throw new Error("Startup FTS repair was already attempted. Run openclaw doctor --fix.");
+  }
+  startupFtsRepairs.set(key, { statePath, message });
+  if (message) {
+    createSubsystemLogger("state/agent-db").warn(message);
+  }
+}
+
+export function listAgentDatabaseStartupFtsRepairs(): string[] {
+  const key = stateKey({});
+  return [...startupFtsRepairs.values()].flatMap((entry) =>
+    entry.statePath === key && entry.message ? [entry.message] : [],
+  );
+}
 
 const preparation = new AsyncLocalStorage<{
   refusal: AgentDatabaseAdmissionRefusal;

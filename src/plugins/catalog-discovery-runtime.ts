@@ -155,11 +155,6 @@ export async function browseClawHubCatalog(
 ): Promise<CatalogBrowseResult> {
   const { request } = params;
   const mode = request.query?.trim() ? "search" : (request.feed ?? "catalog");
-  if (mode === "search" && (request.cursor || request.feed === "trending")) {
-    throw new CatalogDiscoveryRequestError(
-      "Search accepts neither a browse cursor nor the trending feed.",
-    );
-  }
   const local = await prepareCatalogLocalState(params, [request.kind]);
   const searchFacts = mode === "search" ? { searchLimit: request.pageSize ?? 20 } : {};
   try {

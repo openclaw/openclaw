@@ -105,19 +105,7 @@ export type UsageCostWorkerResult =
 export type UsageCostWorkerFailure = {
   message: string;
   error?: OpenClawStateWorkerErrorPayload;
-  hostOrigin?: number;
-  hostFailureOnly?: boolean;
 };
-
-export class UsageCostHostEffectError extends Error {
-  constructor(
-    readonly origin: number,
-    message: string,
-  ) {
-    super(message);
-    this.name = "UsageCostHostEffectError";
-  }
-}
 
 /** Retain the domain failure while the pool proves native retirement. */
 export class UsageCostWorkerReplyError extends Error {
@@ -165,7 +153,3 @@ export type UsageCostWorkerHostRequest = {
     input: UsageCostWorkerHostEffects[Kind]["input"];
   };
 }[keyof UsageCostWorkerHostEffects];
-
-export type UsageCostWorkerHostReply =
-  | { ok: true; value: UsageCostWorkerHostEffects[keyof UsageCostWorkerHostEffects]["output"] }
-  | { ok: false; origin: number; message: string };

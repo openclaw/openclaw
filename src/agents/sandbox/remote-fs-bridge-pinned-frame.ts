@@ -15,11 +15,7 @@ import type {
 import type { PinnedSandboxEntry } from "./fs-bridge-path-safety.js";
 import { relativePathEscapesContainerRoot } from "./path-utils.js";
 import type { RemoteCanonicalPath } from "./remote-fs-bridge-canonical-path.js";
-import {
-  normalizeContainerPath,
-  resolveRemoteMountByContainerPath,
-  type RemoteMountInfo,
-} from "./remote-fs-bridge-paths.js";
+import { normalizeContainerPath } from "./remote-fs-bridge-paths.js";
 
 /**
  * Builds the canonical frame for an already-authorized pinned destination.
@@ -27,7 +23,7 @@ import {
  * and re-attached by the caller); directory operations pin the directory
  * itself, which an existing alias may have renamed.
  */
-async function resolveRemotePinnedCanonicalFrame(params: {
+export async function resolveRemotePinnedCanonicalFrame(params: {
   pinnedPath: string;
   directory: boolean;
   mountRootPath: string;
@@ -87,101 +83,4 @@ export function authorizedRemotePinnedPath(
   return canonical;
 }
 
-export type RemotePinnedTargetParams = {
-  containerPath: string;
-  mountRootPath: string;
-  action: string;
-  requireWritable?: boolean;
-  directory?: boolean;
-  includeDescendants?: boolean;
-  /** Pre-authorized canonical pin path; skips destination re-canonicalization. */
-  pinnedCanonicalPath?: string;
-  signal?: AbortSignal;
-};
-
 export type RemotePinnedTarget = PinnedSandboxEntry;
-
-/**
- * Resolves the pinned mutation entry for a remote destination. Mount policy
- * is resolved in the logical namespace, but the mutation is pinned to the
- * canonical root so a legitimate symlinked workspace root is not reopened.
- */
-export async function resolveRemotePinnedTarget(
-  params: RemotePinnedTargetParams,
-  deps: {
-    mounts: RemoteMountInfo[];
-    resolveCanonicalPath(params: {
-      containerPath: string;
-      mountRootPath: string;
-      action: string;
-      signal?: AbortSignal;
-    }): Promise<RemoteCanonicalPath>;
-    assertRemoteProtectedPathWritable(params: {
-      containerPath: string;
-      action: string;
-      displayPath?: string;
-      signal?: AbortSignal;
-      includeDescendants?: boolean;
-    }): Promise<void>;
-    runRemoteShellScript(
-      command: SandboxBackendCommandParams,
-    ): Promise<SandboxBackendCommandResult>;
-  },
-): Promise<RemotePinnedTarget> {
-  const basename = params.directory ? "" : path.posix.basename(params.containerPath);
-  if (!params.directory && (!basename || basename === "." || basename === "/")) {
-    throw new Error(`Invalid sandbox entry target: ${params.containerPath}`);
-  }
-  const { canonicalPath, canonicalMountRoot, logicalPath } =
-    params.pinnedCanonicalPath !== undefined
-      ? await resolveRemotePinnedCanonicalFrame({
-          // mkdirp pins the directory itself; file operations pin their parent.
-          pinnedPath: params.pinnedCanonicalPath,
-          directory: params.directory === true,
-          mountRootPath: params.mountRootPath,
-          action: params.action,
-          signal: params.signal,
-          runRemoteShellScript: (command) => deps.runRemoteShellScript(command),
-        })
-      : await deps.resolveCanonicalPath({
-          // Resolve the full parent; the guest mutation owns the final entry's
-          // no-follow unlink/rename semantics after the basename is separated.
-          containerPath: normalizeContainerPath(
-            params.directory ? params.containerPath : path.posix.dirname(params.containerPath),
-          ),
-          mountRootPath: params.mountRootPath,
-          action: params.action,
-          signal: params.signal,
-        });
-  const mount = resolveRemoteMountByContainerPath(deps.mounts, logicalPath);
-  if (!mount) {
-    throw new Error(
-      `Sandbox path escapes allowed mounts; cannot ${params.action}: ${params.containerPath}`,
-    );
-  }
-  if (params.requireWritable && !mount.writable) {
-    throw new Error(`Sandbox path is read-only; cannot ${params.action}: ${params.containerPath}`);
-  }
-  if (params.requireWritable) {
-    await deps.assertRemoteProtectedPathWritable({
-      containerPath: path.posix.join(logicalPath, basename),
-      action: params.action,
-      displayPath: params.containerPath,
-      signal: params.signal,
-      includeDescendants: params.includeDescendants,
-    });
-  }
-  // Resolve mount policy in the logical namespace, but pin mutations to the
-  // canonical root so a legitimate symlinked workspace root is not reopened.
-  const relativeParentPath = path.posix.relative(canonicalMountRoot, canonicalPath);
-  if (relativePathEscapesContainerRoot(relativeParentPath)) {
-    throw new Error(
-      `Sandbox path escapes allowed mounts; cannot ${params.action}: ${params.containerPath}`,
-    );
-  }
-  return {
-    mountRootPath: canonicalMountRoot,
-    relativeParentPath: relativeParentPath === "." ? "" : relativeParentPath,
-    basename,
-  };
-}

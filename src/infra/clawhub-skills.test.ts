@@ -1,6 +1,11 @@
-// Verifies ClawHub skill icons, telemetry, metadata, verification, and cards.
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { reportClawHubPluginInstallTelemetry } from "./clawhub-packages.js";
+import {
+  reportClawHubPluginInstallTelemetry,
+  fetchClawHubPackageArtifact,
+  fetchClawHubPackageSecurity,
+  resolveLatestVersionFromPackage,
+  searchClawHubPackages,
+} from "./clawhub-packages.js";
 import {
   fetchClawHubSkillCard,
   fetchClawHubSkillCatalog,
@@ -11,6 +16,10 @@ import {
   reportClawHubSkillInstallTelemetry,
   searchClawHubSkills,
 } from "./clawhub-skills.js";
+import {
+  captureClawHubJson as jsonRequest,
+  captureClawHubResponse as captureResponse,
+} from "./clawhub.test-support.js";
 
 function searchRow(slug: string, ownerHandle = "acme", overrides = {}) {
   return {
@@ -24,45 +33,14 @@ function searchRow(slug: string, ownerHandle = "acme", overrides = {}) {
   };
 }
 function searchRows(query: string, results: unknown[]) {
-  return searchClawHubSkills({
-    query,
-    baseUrl: "https://registry.example",
-    fetchImpl: async () => Response.json({ results }),
-  });
+  jsonRequest({ results });
+  return searchClawHubSkills({ query, baseUrl: "https://registry.example" });
 }
-function captureResponse(response: Response) {
-  let url: URL;
-  let init: RequestInit | undefined;
-  const fetchImpl: typeof fetch = async (input, options) => {
-    url = new URL(input instanceof Request ? input.url : String(input));
-    init = options;
-    return response;
-  };
-  return {
-    fetchImpl,
-    url: () => url,
-    init: () => init,
-  };
-}
-const jsonRequest = (body: unknown) => captureResponse(Response.json(body));
 function expectRoute(url: URL, pathname: string, params: Record<string, string>) {
   expect(url.pathname).toBe(pathname);
   expect(Object.fromEntries(url.searchParams)).toEqual(params);
 }
-function telemetryRequest() {
-  const request = captureResponse(new Response(null, { status: 200 }));
-  return {
-    fetchImpl: request.fetchImpl,
-    body: () => {
-      const body = request.init()?.body;
-      expect(typeof body).toBe("string");
-      if (typeof body !== "string") {
-        throw new Error("Expected JSON request body");
-      }
-      return JSON.parse(body) as unknown;
-    },
-  };
-}
+const telemetryRequest = () => captureResponse(new Response(null, { status: 200 }));
 const trendingWeather = {
   slug: "weather",
   displayName: "Weather",
@@ -72,9 +50,21 @@ const trendingWeather = {
   install: { kind: "clawhub", reference: "alice/weather" },
   metrics: { updatedAt: 123 },
 };
+const listing = {
+  family: "skill",
+  name: "weather",
+  displayName: "Weather",
+  ownerHandle: "alice",
+  isOfficial: false,
+  latestVersion: "1.0.0",
+  updatedAt: 123,
+};
+const catalog = (options: Parameters<typeof fetchClawHubSkillCatalog>[0] = {}) =>
+  fetchClawHubSkillCatalog({ baseUrl: "https://registry.example", ...options });
 
 describe("clawhub skills", () => {
   afterEach(() => {
+    vi.restoreAllMocks();
     delete process.env.CLAWHUB_TOKEN;
     delete process.env.CLAWHUB_DISABLE_TELEMETRY;
     delete process.env.CLAWDHUB_DISABLE_TELEMETRY;
@@ -91,7 +81,6 @@ describe("clawhub skills", () => {
   });
 
   it("keeps each search result on its own source and marks which ones are install-only", async () => {
-    // The wire format carries origin under `install`, not `installRef`.
     const results = await searchRows("email", [
       searchRow("email", "alice", { score: 2 }),
       searchRow("email", "bob"),
@@ -112,7 +101,6 @@ describe("clawhub skills", () => {
     ).toEqual([
       { installRef: "@alice/email", installOnly: undefined, trustState: undefined },
       { installRef: "@bob/email", installOnly: undefined, trustState: undefined },
-      // Rewriting this as @openclaw/weather would install a different publisher's skill.
       {
         installRef: "skills-sh:openclaw/skills/weather",
         installOnly: true,
@@ -124,7 +112,6 @@ describe("clawhub skills", () => {
 
   it("drops rows whose source or reference cannot be identified", async () => {
     const results = await searchRows("weather", [
-      // Never invent an external identity or accept a native row without a publisher.
       searchRow("weather", "acme", {
         source: "skills-sh",
         install: { kind: "skills-sh", reference: null },
@@ -146,30 +133,25 @@ describe("clawhub skills", () => {
   });
 
   it("browses the full skill catalog with listing flags and publisher-qualified identity", async () => {
-    let requestedUrl: URL | undefined;
-    const result = await fetchClawHubSkillCatalog({
-      baseUrl: "https://registry.example",
+    const request = jsonRequest({
+      items: [true, false, undefined].map((isOfficial, index) => ({
+        family: "skill",
+        name: "email",
+        displayName: "Email",
+        ownerHandle: ["alice", "bob", "charlie"][index],
+        isOfficial,
+        latestVersion: index === 0 ? "1.2.3" : null,
+        updatedAt: 123,
+      })),
+      nextCursor: "skillcat:following",
+    });
+    const result = await catalog({
       cursor: "skillcat:next",
       officialOnly: true,
       limit: 25,
-      fetchImpl: async (input) => {
-        requestedUrl = new URL(input instanceof Request ? input.url : String(input));
-        return Response.json({
-          items: [true, false, undefined].map((isOfficial, index) => ({
-            family: "skill",
-            name: "email",
-            displayName: "Email",
-            ownerHandle: ["alice", "bob", "charlie"][index],
-            isOfficial,
-            latestVersion: index === 0 ? "1.2.3" : null,
-            updatedAt: 123,
-          })),
-          nextCursor: "skillcat:following",
-        });
-      },
     });
 
-    expectRoute(requestedUrl!, "/api/v1/packages", {
+    expectRoute(request.url(), "/api/v1/packages", {
       family: "skill",
       sort: "downloads",
       isOfficial: "true",
@@ -185,30 +167,25 @@ describe("clawhub skills", () => {
   });
 
   it("pages canonical trending while preserving external installation identity", async () => {
-    let requestedUrl: URL | undefined;
-    const result = await fetchClawHubSkillCatalog({
-      baseUrl: "https://registry.example",
+    const request = jsonRequest({
+      items: [
+        {
+          source: "skills-sh",
+          slug: "email",
+          displayName: "Email",
+          publisher: null,
+          official: false,
+          install: { kind: "skills-sh", reference: "skills-sh:alice/skills/email" },
+          metrics: { updatedAt: 456 },
+        },
+      ],
+      nextCursor: null,
+    });
+    const result = await catalog({
       feed: "trending",
       cursor: "snapshot:next",
-      fetchImpl: async (input) => {
-        requestedUrl = new URL(input instanceof Request ? input.url : String(input));
-        return Response.json({
-          items: [
-            {
-              source: "skills-sh",
-              slug: "email",
-              displayName: "Email",
-              publisher: null,
-              official: false,
-              install: { kind: "skills-sh", reference: "skills-sh:alice/skills/email" },
-              metrics: { updatedAt: 456 },
-            },
-          ],
-          nextCursor: null,
-        });
-      },
     });
-    expectRoute(requestedUrl!, "/api/v1/trending", {
+    expectRoute(request.url(), "/api/v1/trending", {
       kind: "skills",
       limit: "100",
       cursor: "snapshot:next",
@@ -231,15 +208,6 @@ describe("clawhub skills", () => {
     const fetchImpl: typeof fetch = async (input) => {
       const url = new URL(input instanceof Request ? input.url : String(input));
       requestedUrls.push(url);
-      const listing = {
-        family: "skill",
-        name: "weather",
-        displayName: "Weather",
-        ownerHandle: "alice",
-        isOfficial: false,
-        latestVersion: "1.0.0",
-        updatedAt: 123,
-      };
       if (url.pathname === "/api/v1/packages/search") {
         return Response.json({ results: [{ score: 9, package: listing }] });
       }
@@ -251,8 +219,9 @@ describe("clawhub skills", () => {
         nextCursor: "snapshot:next",
       });
     };
+    vi.spyOn(globalThis, "fetch").mockImplementation(fetchImpl);
     await expect(
-      fetchClawHubSkillCatalog({ query: "weather", officialOnly: true, fetchImpl }),
+      fetchClawHubSkillCatalog({ query: "weather", officialOnly: true }),
     ).resolves.toMatchObject({
       items: [{ installRef: "@alice/weather", score: 9, official: false }],
     });
@@ -262,7 +231,7 @@ describe("clawhub skills", () => {
       isOfficial: "true",
       limit: "100",
     });
-    await expect(fetchClawHubSkillCatalog({ feed: "trending", fetchImpl })).resolves.toMatchObject({
+    await expect(fetchClawHubSkillCatalog({ feed: "trending" })).resolves.toMatchObject({
       items: [{ installRef: "@alice/weather", official: false }],
       nextCursor: "snapshot:next",
     });
@@ -270,58 +239,51 @@ describe("clawhub skills", () => {
       family: "skill",
       ownerHandle: "alice",
     });
-    await expect(
-      fetchClawHubSkillCatalog({
-        feed: "trending",
-        fetchImpl: async (input) =>
-          (input instanceof Request ? input.url : String(input)).includes(
-            "/api/v1/packages/weather",
-          )
-            ? Response.json({ package: null })
-            : fetchImpl(input),
-      }),
-    ).rejects.toThrow("Malformed ClawHub skill listing");
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input) =>
+      (input instanceof Request ? input.url : String(input)).includes("/api/v1/packages/weather")
+        ? Response.json({ package: null })
+        : fetchImpl(input),
+    );
+    await expect(fetchClawHubSkillCatalog({ feed: "trending" })).rejects.toThrow(
+      "Malformed ClawHub skill listing",
+    );
   });
 
   it.each([{ family: "code-plugin" }, { ownerHandle: "bob" }])(
     "does not borrow official status from mismatched trending metadata: %j",
     async (mismatch) => {
-      const result = await fetchClawHubSkillCatalog({
-        feed: "trending",
-        fetchImpl: async (input) => {
-          const url = new URL(input instanceof Request ? input.url : String(input));
-          if (url.pathname === "/api/v1/packages/weather") {
-            return Response.json({
-              package: {
-                family: "skill",
-                name: "weather",
-                ownerHandle: "alice",
-                isOfficial: true,
-                ...mismatch,
-              },
-            });
-          }
+      vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+        const url = new URL(input instanceof Request ? input.url : String(input));
+        if (url.pathname === "/api/v1/packages/weather") {
           return Response.json({
-            items: [trendingWeather],
+            package: {
+              family: "skill",
+              name: "weather",
+              ownerHandle: "alice",
+              isOfficial: true,
+              ...mismatch,
+            },
           });
-        },
+        }
+        return Response.json({
+          items: [trendingWeather],
+        });
       });
+      const result = await fetchClawHubSkillCatalog({ feed: "trending" });
       expect(result.items).toMatchObject([{ installRef: "@alice/weather", official: undefined }]);
     },
   );
 
   it("rejects malformed catalog envelopes and unsupported search pagination", async () => {
     for (const response of [{}, { items: null }, { items: [null] }, { items: [], nextCursor: 1 }]) {
-      await expect(
-        fetchClawHubSkillCatalog({ fetchImpl: async () => Response.json(response) }),
-      ).rejects.toThrow("Malformed ClawHub");
+      jsonRequest(response);
+      await expect(fetchClawHubSkillCatalog({})).rejects.toThrow("Malformed ClawHub");
     }
     await expect(fetchClawHubSkillCatalog({ query: "email", cursor: "next" })).rejects.toThrow(
       "does not support a cursor",
     );
-    await expect(
-      fetchClawHubSkillCatalog({ query: "email", fetchImpl: async () => Response.json({}) }),
-    ).rejects.toThrow("Malformed ClawHub");
+    jsonRequest({});
+    await expect(fetchClawHubSkillCatalog({ query: "email" })).rejects.toThrow("Malformed ClawHub");
   });
 
   it.each([
@@ -333,11 +295,11 @@ describe("clawhub skills", () => {
       process.env.CLAWHUB_DISABLE_TELEMETRY = primary;
       process.env.CLAWDHUB_DISABLE_TELEMETRY = "true";
       const fetchImpl = vi.fn(async () => new Response(null, { status: 200 }));
+      vi.spyOn(globalThis, "fetch").mockImplementation(fetchImpl);
 
       await reportClawHubSkillInstallTelemetry({
         token: "test-token",
         slug: "calendar",
-        fetchImpl,
       });
 
       expect(fetchImpl).toHaveBeenCalledTimes(calls);
@@ -351,7 +313,6 @@ describe("clawhub skills", () => {
       token: "test-token",
       packageName: "@openclaw/voice-call",
       version: "2026.7.23",
-      fetchImpl: request.fetchImpl,
     });
 
     expect(request.body()).toEqual({
@@ -370,7 +331,6 @@ describe("clawhub skills", () => {
       version: "a".repeat(40),
       requestedReference: "skills-sh:openclaw/skills/weather",
       trustState: "not-scanned-by-clawhub",
-      fetchImpl: request.fetchImpl,
     });
 
     expect(request.body()).toMatchObject({
@@ -394,7 +354,6 @@ describe("clawhub skills", () => {
       fetchClawHubSkillDetail({
         slug: "weather",
         ownerHandle: "demo-owner",
-        fetchImpl: request.fetchImpl,
       }),
     ).resolves.toMatchObject({
       skill: {
@@ -413,7 +372,6 @@ describe("clawhub skills", () => {
     await fetchClawHubSkillInstallResolution({
       slug: "weather",
       requestedReference: reference,
-      fetchImpl: request.fetchImpl,
     });
 
     expectRoute(request.url(), "/api/v1/skills/weather/install", { reference });
@@ -429,7 +387,6 @@ describe("clawhub skills", () => {
         ownerHandle: "demo-owner",
         version: "1.0.0",
         skipAuth: true,
-        fetchImpl: request.fetchImpl,
       }),
     ).resolves.toMatchObject({ schema: "clawhub.skill.verify.v1" });
 
@@ -462,7 +419,6 @@ describe("clawhub skills", () => {
     await expect(
       fetchClawHubSkillSecurityVerdicts({
         items,
-        fetchImpl: request.fetchImpl,
       }),
     ).resolves.toEqual(envelope);
 
@@ -489,9 +445,7 @@ describe("clawhub skills", () => {
     },
   ])("fetches generated Skill Card markdown at $url", async ({ options, content, url }) => {
     const request = captureResponse(new Response(content));
-    await expect(fetchClawHubSkillCard({ ...options, fetchImpl: request.fetchImpl })).resolves.toBe(
-      content,
-    );
+    await expect(fetchClawHubSkillCard(options)).resolves.toBe(content);
     expect(request.url().href).toBe(url);
   });
 
@@ -507,11 +461,114 @@ describe("clawhub skills", () => {
       error: "ClawHub skill card for agentreceipt exceeded 262144 bytes (262145 bytes received)",
     },
   ])("rejects invalid generated Skill Card: $error", async ({ content, status, error }) => {
+    captureResponse(new Response(content, { status }));
     await expect(
       fetchClawHubSkillCard({
         slug: "agentreceipt",
-        fetchImpl: async () => new Response(content, { status }),
       }),
     ).rejects.toThrow(error);
+  });
+});
+
+describe("clawhub packages", () => {
+  const packageSelector = { name: "@openclaw/diagnostics-otel", version: "2026.3.22" };
+  const versionPath = "/api/v1/packages/%40openclaw%2Fdiagnostics-otel/versions/2026.3.22";
+  const securityReport = {
+    package: { name: packageSelector.name, displayName: "Diagnostics", family: "code-plugin" },
+    release: {
+      releaseId: "rel_demo",
+      version: packageSelector.version,
+      artifactKind: "npm-pack",
+      artifactSha256: "a".repeat(64),
+      npmIntegrity: "sha512-proof",
+      npmShasum: "abc",
+    },
+    overview: "The plugin uses privileged local APIs.\n\nReview those capabilities.",
+    securityAuditUrl:
+      "https://clawhub.ai/plugins/@openclaw/diagnostics-otel/security-audit?version=2026.3.22",
+    trust: {
+      scanStatus: "clean",
+      moderationState: null,
+      blockedFromDownload: false,
+      reasons: [],
+      pending: false,
+      stale: true,
+    },
+  };
+
+  afterEach(() => vi.restoreAllMocks());
+
+  it("requests official search results before ClawHub applies the result cap", async () => {
+    const { url } = jsonRequest({ results: [] });
+    const query = { query: " research ", family: "claw", isOfficial: true, limit: 1 } as const;
+    await expect(searchClawHubPackages(query)).resolves.toEqual([]);
+    expect(url().pathname).toBe("/api/v1/packages/search");
+    expect(Object.fromEntries(url().searchParams)).toEqual({
+      q: "research",
+      family: "claw",
+      isOfficial: "true",
+      limit: "1",
+    });
+  });
+
+  it("resolves latest versions from latestVersion before tags", () => {
+    const pkg = {
+      name: "demo",
+      displayName: "Demo",
+      family: "code-plugin" as const,
+      channel: "official" as const,
+      isOfficial: true,
+      createdAt: 0,
+      updatedAt: 0,
+      tags: { latest: "1.2.2" },
+    };
+    expect(resolveLatestVersionFromPackage({ package: { ...pkg, latestVersion: "1.2.3" } })).toBe(
+      "1.2.3",
+    );
+    expect(resolveLatestVersionFromPackage({ package: pkg })).toBe("1.2.2");
+  });
+
+  it("fetches typed package artifact resolver reports", async () => {
+    const report = {
+      artifact: {
+        source: "clawhub",
+        artifactKind: "npm-pack",
+        packageName: packageSelector.name,
+        version: packageSelector.version,
+        downloadUrl: "https://clawhub.ai/api/v1/clawpacks/abc",
+        npmIntegrity: "sha512-demo",
+        npmShasum: "abc",
+      },
+    };
+    const { url } = jsonRequest(report);
+    await expect(fetchClawHubPackageArtifact(packageSelector)).resolves.toEqual(report);
+    expect(url().pathname).toBe(`${versionPath}/artifact`);
+  });
+
+  it("fetches typed package security reports", async () => {
+    const { url } = jsonRequest(securityReport);
+    const { releaseId, ...release } = securityReport.release;
+    await expect(fetchClawHubPackageSecurity(packageSelector)).resolves.toEqual({
+      ...securityReport,
+      release: { ...release, id: releaseId },
+    });
+    expect(url().pathname).toBe(`${versionPath}/security`);
+  });
+
+  it.each([
+    [
+      { trust: { ...securityReport.trust, reasons: "clean", stale: false } },
+      "reasons to be a string array",
+    ],
+    [
+      {
+        securityAuditUrl: securityReport.securityAuditUrl,
+        trust: { blockedFromDownload: false, reasons: [], pending: false, stale: false },
+      },
+      "overview to be a non-empty string",
+    ],
+  ])("rejects malformed security report %j", async (report, error) => {
+    jsonRequest(report);
+    await expect(fetchClawHubPackageSecurity(packageSelector)).rejects.toThrow(`expected ${error}`);
   });
 });

@@ -42,13 +42,11 @@ import {
   loadSessionEntryByKey,
   withSubagentRequesterDelivery,
 } from "./subagent-announce-delivery.runtime.js";
-import {
-  sendSubagentAnnounceDirectly,
-  type SubagentAnnounceDirectParams,
-} from "./subagent-announce-direct-delivery.js";
+import { sendSubagentAnnounceDirectly } from "./subagent-announce-direct-delivery.js";
 import {
   sourceOwnerChangedResult,
   type SubagentAnnounceDeliveryResult,
+  type SubagentAnnounceDirectParams,
 } from "./subagent-announce-dispatch.js";
 import {
   resolveCompletionDeliveryOrigins,
@@ -76,50 +74,6 @@ function collectExpectedMediaFromInternalEvents(events: AgentInternalEvent[] | u
     expectedMediaUrls,
     ...(expectedMediaUrls.length > 0 ? { expectedMediaAttachments } : {}),
   };
-}
-
-function createCompletionUserTurnTranscriptRecorderFactory(params: {
-  directIdempotencyKey: string;
-  requesterAgentId?: string;
-  sourceSessionKey?: string;
-  sourceTool?: string;
-  targetRequesterSessionKey: string;
-  transcriptMessage: string;
-}): (sessionId: string) => UserTurnTranscriptRecorder {
-  const provenance: InputProvenance = {
-    kind: "inter_session",
-    ...(params.sourceSessionKey ? { sourceSessionKey: params.sourceSessionKey } : {}),
-    sourceChannel: INTERNAL_PROVENANCE_SOURCE_CHANNEL,
-    sourceTool: params.sourceTool ?? "subagent_announce",
-  };
-  // The recorder guards the exact requester session the completion steers into.
-  return (sessionId) =>
-    createUserTurnTranscriptRecorder({
-      input: {
-        text: params.transcriptMessage,
-        idempotencyKey: `${params.directIdempotencyKey}:active-wake`,
-        provenance,
-      },
-      target: async () => {
-        const loaded = await loadRequesterSessionEntry(
-          params.targetRequesterSessionKey,
-          params.requesterAgentId,
-        );
-        if (!loaded.entry || loaded.entry.sessionId?.trim() !== sessionId || !loaded.agentId) {
-          return undefined;
-        }
-        return {
-          sessionId,
-          expectedSessionId: sessionId,
-          sessionKey: loaded.canonicalKey,
-          sessionEntry: loaded.entry,
-          ...(loaded.storePath ? { storePath: loaded.storePath } : {}),
-          agentId: loaded.agentId,
-          config: loaded.cfg,
-        };
-      },
-      errorContext: "active requester completion transcript",
-    });
 }
 
 export async function deliverSubagentAnnouncement(
@@ -276,18 +230,53 @@ async function deliverSubagentAnnouncementBound(
   }
 
   const runtimeContextFragments = buildAgentInternalEventContext(params.internalEvents);
-  const createCompletionUserTurnTranscriptRecorder = params.expectsCompletionMessage
-    ? createCompletionUserTurnTranscriptRecorderFactory({
-        directIdempotencyKey: params.directIdempotencyKey,
-        requesterAgentId: params.requesterAgentId,
-        sourceSessionKey: params.sourceSessionKey,
-        sourceTool: params.sourceTool,
-        targetRequesterSessionKey: params.targetRequesterSessionKey,
-        transcriptMessage: runtimeContextFragments.length
-          ? RUNTIME_EVENT_USER_PROMPT
-          : params.triggerMessage,
-      })
-    : undefined;
+  let createCompletionUserTurnTranscriptRecorder:
+    | ((sessionId: string) => UserTurnTranscriptRecorder)
+    | undefined;
+  if (params.expectsCompletionMessage) {
+    const directIdempotencyKey = params.directIdempotencyKey;
+    const requesterAgentId = params.requesterAgentId;
+    const sourceSessionKey = params.sourceSessionKey;
+    const sourceTool = params.sourceTool;
+    const targetRequesterSessionKey = params.targetRequesterSessionKey;
+    const transcriptMessage = runtimeContextFragments.length
+      ? RUNTIME_EVENT_USER_PROMPT
+      : params.triggerMessage;
+    const provenance: InputProvenance = {
+      kind: "inter_session",
+      ...(sourceSessionKey ? { sourceSessionKey } : {}),
+      sourceChannel: INTERNAL_PROVENANCE_SOURCE_CHANNEL,
+      sourceTool: sourceTool ?? "subagent_announce",
+    };
+    // The recorder guards the exact requester session the completion steers into.
+    createCompletionUserTurnTranscriptRecorder = (sessionId) =>
+      createUserTurnTranscriptRecorder({
+        input: {
+          text: transcriptMessage,
+          idempotencyKey: `${directIdempotencyKey}:active-wake`,
+          provenance,
+        },
+        target: async () => {
+          const loaded = await loadRequesterSessionEntry(
+            targetRequesterSessionKey,
+            requesterAgentId,
+          );
+          if (!loaded.entry || loaded.entry.sessionId?.trim() !== sessionId || !loaded.agentId) {
+            return undefined;
+          }
+          return {
+            sessionId,
+            expectedSessionId: sessionId,
+            sessionKey: loaded.canonicalKey,
+            sessionEntry: loaded.entry,
+            ...(loaded.storePath ? { storePath: loaded.storePath } : {}),
+            agentId: loaded.agentId,
+            config: loaded.cfg,
+          };
+        },
+        errorContext: "active requester completion transcript",
+      });
+  }
   if (sourceOwnerChanged()) {
     return sourceOwnerChangedResult();
   }

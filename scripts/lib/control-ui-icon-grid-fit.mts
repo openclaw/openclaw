@@ -88,16 +88,23 @@ function geometryRules(root: Root): GeometryRule[] {
         if (parent.type === "rule") {
           contextSelectors = parent.selectors.flatMap((prefix) =>
             contextSelectors.map((child) => {
-              let nested = false;
-              const parsed = selectorParser((tree) =>
-                tree.walkNesting((node) => {
-                  nested = true;
-                  // The result is only printed and reparsed: print the parent
-                  // selector in place of `&`.
-                  node.value = prefix;
-                }),
-              ).processSync(child);
-              return nested ? parsed : prefix + " " + child;
+              const positions: number[] = [];
+              selectorParser()
+                .astSync(child)
+                .walkNesting((node) => {
+                  positions.push(node.sourceIndex);
+                });
+              // Replace only parsed nesting tokens, from the end so source offsets stay valid.
+              // Ampersands inside strings, escapes, or comments are not nesting tokens.
+              return positions.length
+                ? positions
+                    .toReversed()
+                    .reduce(
+                      (selector, index) =>
+                        selector.slice(0, index) + prefix + selector.slice(index + 1),
+                      child,
+                    )
+                : prefix + " " + child;
             }),
           );
         }

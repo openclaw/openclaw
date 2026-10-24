@@ -25,13 +25,12 @@ import {
 } from "./suite-test-helpers.js";
 import type { QaSuiteRunParams, QaSuiteScenarioResult } from "./suite.js";
 import { createTempDirHarness } from "./temp-dir.test-helper.js";
-import {
-  isQaTestFileScenario,
-  type QaScenarioCommandExecution,
-} from "./test-file-scenario-runner.js";
+import type { QaScenarioCommandExecution } from "./test-file-scenario-command-lifecycle.js";
+import { isQaTestFileScenario } from "./test-file-scenario-runner.js";
 import {
   makeTestFileScenario,
   resolveScriptAttemptOutputDir,
+  withQaScenarioCommand,
   writeDockerCandidateManifest,
   writeNativeVitestReport,
 } from "./test-file-scenario-runner.test-support.js";
@@ -171,7 +170,7 @@ async function runNative(params: NativeParams, runCommand = passNativeCommand) {
   const native = await vi.importActual<typeof import("./test-file-scenario-runner.js")>(
     "./test-file-scenario-runner.js",
   );
-  return native.runQaTestFileScenarios({ ...params, runCommand });
+  return withQaScenarioCommand(runCommand, () => native.runQaTestFileScenarios(params));
 }
 
 function expectFlowCall(params: Partial<QaSuiteRunParams>, index?: number) {
@@ -1162,9 +1161,8 @@ it("carries the actual prepared Docker receipt through aggregate native delegati
     "./test-file-scenario-docker-batch.js",
   );
   prepareDockerE2eEnvironment.mockImplementationOnce((params) =>
-    docker.prepareDockerE2eEnvironment({
-      ...params,
-      runCommand: (command) =>
+    withQaScenarioCommand(
+      (command) =>
         writeDockerCandidateManifest(command, {
           schema: "openclaw.qa-docker-candidate/v1",
           schemaVersion: 1,
@@ -1179,7 +1177,8 @@ it("carries the actual prepared Docker receipt through aggregate native delegati
             registry: null,
           },
         }),
-    }),
+      () => docker.prepareDockerE2eEnvironment(params),
+    ),
   );
   const command = vi.fn(async (params: QaScenarioCommandExecution) => {
     const lane = "npm-onboard-channel-agent";

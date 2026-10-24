@@ -141,6 +141,20 @@ describe("matrix client storage paths", () => {
     });
   }
 
+  it("retains malformed UTF-8 legacy sync cache without aborting client initialization", async () => {
+    const storagePaths = await resolveDefaultStoragePaths();
+    fs.mkdirSync(storagePaths.rootDir, { recursive: true });
+    const bytes = Buffer.from(legacySyncCacheBody("utf8-marker"));
+    bytes[bytes.indexOf("utf8-marker")] = 0xff;
+    fs.writeFileSync(storagePaths.storagePath, bytes);
+    await expect(maybeMigrateLegacyStorage({ storagePaths })).resolves.toBeUndefined();
+    expect(fs.readFileSync(storagePaths.storagePath)).toEqual(bytes);
+    expect(fs.existsSync(`${storagePaths.storagePath}.migrated`)).toBe(false);
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining("must be valid UTF-8"));
+    const store = await SqliteBackedMatrixSyncStore.create(storagePaths.rootDir);
+    expect(await store.getSavedSyncToken()).toBeNull();
+  });
+
   function metadataStore(rootDir: string) {
     return createPluginStateSyncKeyedStoreForTests<Record<string, unknown>>(
       "matrix",
@@ -480,7 +494,7 @@ describe("matrix client storage paths", () => {
 
   it("does not scan token-history roots when the canonical current-token state is claimed", async () => {
     const oldStoragePaths = await seedOldStorageRoot();
-    fs.mkdirSync(oldStoragePaths.cryptoPath, { recursive: true });
+    fs.mkdirSync(path.join(oldStoragePaths.rootDir, "crypto"), { recursive: true });
 
     const canonicalPaths = seedCanonicalStorageRoot("secret-token-new", {
       currentTokenStateClaimed: true,
@@ -619,7 +633,7 @@ describe("matrix client storage paths", () => {
     }
 
     const oldStoragePaths = await seedOldStorageRoot();
-    fs.mkdirSync(oldStoragePaths.cryptoPath, { recursive: true });
+    fs.mkdirSync(path.join(oldStoragePaths.rootDir, "crypto"), { recursive: true });
     if (!claimed) {
       seedThreadBinding(oldStoragePaths.rootDir, "old");
     } else {

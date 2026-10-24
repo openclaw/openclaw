@@ -16,7 +16,6 @@ import type {
 } from "./session-binding.js";
 import type { CodexThreadConfigurationOptions } from "./thread-configuration-options.js";
 import type { CodexContextEngineThreadBootstrapProjection } from "./thread-context-engine.js";
-import type { CodexThreadLifecycleTimingOptions } from "./thread-lifecycle-timing.js";
 
 type CodexAppServerThreadLifecycle = {
   action: "started" | "resumed" | "forked";
@@ -73,6 +72,8 @@ export type CodexStartOrResumeThreadParams = Omit<
   authority?: CodexBindingAuthority;
   /** Caller liveness; durable lineage is owned by authority. */
   assertCurrent?: () => void;
+  /** Refresh requester lookups immediately before native thread writes. */
+  assertCurrentAsync?: () => Promise<void>;
   /** Private execution identity resolved by this harness's catalog generation. */
   runtimeModelId?: string;
   agentId?: string;
@@ -107,7 +108,6 @@ export type CodexStartOrResumeThreadParams = Omit<
    * before `client` wrote thread state, so the caller may keep `client`.
    */
   onPrewriteHandoffCancelled?: () => void;
-  timing?: CodexThreadLifecycleTimingOptions;
 };
 
 export type CodexThreadResumePreparation = {

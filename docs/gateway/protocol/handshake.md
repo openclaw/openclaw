@@ -118,6 +118,18 @@ required snapshot fields and version counters remain present; health RPCs and
 health events are unchanged. Clients without this capability retain the full
 cached health snapshot, and older Gateways ignore the capability.
 
+Clients can independently advertise `health-summary` to omit `agents` and
+`sessions` from health events and cached hello health. Channel status, errors,
+and other health fields remain present. The `health` RPC always retains the
+full diagnostic snapshot, including heartbeat configuration and recent sessions.
+
+The Control UI also advertises `hello-presence-self`: hello contains only the
+connecting client's presence row, preserving its profile bootstrap. The existing
+presence event stream supplies the full roster after hello, including the initial
+reset for `presence-deltas` clients. Clients without this capability keep the full
+hello roster. This avoids sending that roster twice during reconnects without
+caching presence across connections or authorization changes.
+
 `controlUiUrl` optionally advertises the Gateway's configured public Control UI
 origin and base path for shareable links, independent of the client's tunnel or
 development-server address. It is omitted when `gateway.publicOrigin` is unset

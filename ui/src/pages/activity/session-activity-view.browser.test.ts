@@ -3,16 +3,20 @@ import { page } from "vitest/browser";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import { createSolidApplicationContextProvider } from "../../test-helpers/solid-application-context.tsx";
 import { createSessionActivity } from "./session-activity-owner.ts";
 import "../../styles/base.css";
 import "../../styles/components.css";
 import "../../styles/settings.css";
 import "../../styles/settings-controls.css";
 import "../../styles/activity.css";
-import { mountSolid } from "./session-activity-view.test-harness.ts";
+import { mountSolid, type SessionActivityTestProps } from "./session-activity-view.test-harness.ts";
 import { renderSessionActivityView } from "./session-activity-view.tsx";
 
-const renderSessionActivityViewSolid = mountSolid(renderSessionActivityView);
+const renderSessionActivityViewSolid = mountSolid<SessionActivityTestProps>(
+  renderSessionActivityView,
+  (input) => createSolidApplicationContextProvider(input.context).wrapper,
+);
 
 let container: HTMLDivElement;
 
@@ -35,7 +39,7 @@ it.each([
   "keeps content stable through passive refresh and explicit Retry ($personId, $width px)",
   async ({ personId, width }) => {
     await page.viewport(width, 700);
-    const props: Parameters<typeof renderSessionActivityView>[0] = {
+    const props: SessionActivityTestProps = {
       context: {
         basePath: "",
         navigate: vi.fn(),

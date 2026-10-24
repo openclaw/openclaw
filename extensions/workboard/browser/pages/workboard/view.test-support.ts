@@ -7,7 +7,7 @@ import type {
 } from "openclaw/plugin-sdk/control-ui";
 import { createSignal, flush } from "solid-js";
 import { afterEach, vi } from "vitest";
-import { getWorkboardState } from "../../lib/workboard/index.ts";
+import { getWorkboardState } from "../../lib/workboard/runtime.ts";
 import { workboardTestHost } from "../../test/host.setup.ts";
 import { waitForFast } from "../../test/wait-for.ts";
 import { WorkboardView } from "./view.tsx";

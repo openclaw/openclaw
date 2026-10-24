@@ -1,6 +1,7 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import type { GatewayEventFrame } from "../../api/gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import {
   createGatewayRequestMock,
@@ -15,6 +16,34 @@ import {
 
 const listed = (key: string, fields: Partial<GatewaySessionRow>, ts: number) =>
   sessionsResult([{ key, kind: "direct", ...fields }], ts);
+const worktree = { id: "wt-1", branch: "openclaw/task", repoRoot: "/repo" };
+const placement = (key: string, fields: Partial<GatewaySessionRow>) =>
+  listed(key, { updatedAt: 2, worktree, ...fields }, 2);
+const background = { reconciliation: "background" } as const;
+const model = "openai/gpt-5.6-sol";
+
+async function createPrepared(
+  sessions: ReturnType<typeof createTestSessionCapability>,
+  key: string,
+) {
+  const created = vi.fn();
+  sessions.subscribeCreated(created);
+  await expect(
+    sessions.createResult({ agentId: "main", model, worktree: true }, background),
+  ).resolves.toMatchObject({ key });
+  expect(created).toHaveBeenCalledExactlyOnceWith(key);
+  expect(sessions.isPreparedWorkSession(key)).toBe(true);
+  expect(sessions.state.modelOverrides[key]).toBe(model);
+  return created;
+}
+
+function changed(key: string, fields: Partial<GatewaySessionRow>): GatewayEventFrame {
+  return {
+    type: "event",
+    event: "sessions.changed",
+    payload: { sessionKey: key, key, kind: "direct", ...fields },
+  };
+}
 
 function harness(routes: Record<string, (params?: unknown) => unknown>) {
   const request = createGatewayRequestMock(async (method, params) => {
@@ -28,6 +57,37 @@ function harness(routes: Record<string, (params?: unknown) => unknown>) {
   return { ...gateway, request, sessions: createTestSessionCapability(gateway.gateway) };
 }
 
+it.each(["current", "key-only", "cancelled", "replaced"])(
+  "keeps creation failure attached to its request (%s)",
+  async (outcome) => {
+    const creation = createDeferred<unknown>();
+    const error = new Error("synthetic creation refused");
+    const controller = new AbortController();
+    const { sessions, publish, request } = harness({
+      "sessions.create": () => creation.promise,
+    });
+    const operation =
+      outcome === "key-only"
+        ? sessions.create({ agentId: "main" }, { signal: controller.signal })
+        : sessions.createResult({ agentId: "main" }, { signal: controller.signal });
+    if (outcome === "cancelled") {
+      controller.abort();
+    } else if (outcome === "replaced") {
+      publish(false);
+    }
+    creation.reject(error);
+    if (outcome === "current") {
+      await expect(operation).rejects.toBe(error);
+    } else {
+      await expect(operation).resolves.toBeNull();
+    }
+    expect(sessions.state.error).toBe(
+      outcome === "current" || outcome === "key-only" ? error.message : null,
+    );
+    expect(request).not.toHaveBeenCalledWith("sessions.list", expect.anything());
+  },
+);
+
 it.each(["newer", "failed-before-list", "failed-after-list"])(
   "reconciles created placement without retiring a newer model claim (%s)",
   async (claim) => {
@@ -39,19 +99,7 @@ it.each(["newer", "failed-before-list", "failed-after-list"])(
       "sessions.list": () => pendingList.promise,
       "sessions.patch": () => pendingPatch.promise,
     });
-    const created = vi.fn();
-    sessions.subscribeCreated(created);
-
-    await expect(
-      sessions.createResult(
-        { agentId: "main", model: "openai/gpt-5.6-sol", worktree: true },
-        { reconciliation: "background" },
-      ),
-    ).resolves.toMatchObject({ key });
-    expect(created).toHaveBeenCalledOnce();
-    expect(created).toHaveBeenCalledWith(key);
-    expect(sessions.isPreparedWorkSession(key)).toBe(true);
-    expect(sessions.state.modelOverrides[key]).toBe("openai/gpt-5.6-sol");
+    const created = await createPrepared(sessions, key);
     const patch = sessions
       .patch(key, { model: claim === "newer" ? "openai/gpt-5.6-sol" : "openai/gpt-5-mini" })
       .catch((error: unknown) => error);
@@ -62,17 +110,11 @@ it.each(["newer", "failed-before-list", "failed-after-list"])(
     }
 
     pendingList.resolve(
-      listed(
-        key,
-        {
-          updatedAt: 2,
-          model: "gpt-5.6-sol",
-          modelProvider: "openai",
-          modelOverrideSource: null,
-          worktree: { id: "wt-1", branch: "openclaw/task", repoRoot: "/repo" },
-        },
-        2,
-      ),
+      placement(key, {
+        model: "gpt-5.6-sol",
+        modelProvider: "openai",
+        modelOverrideSource: null,
+      }),
     );
     await waitForFast(() => expect(sessions.isPreparedWorkSession(key)).toBe(false));
     if (claim === "failed-after-list") {
@@ -90,132 +132,76 @@ it.each(["newer", "failed-before-list", "failed-after-list"])(
       await patch;
       expect(sessions.state.modelOverrides[key]).toBeUndefined();
     }
-    sessions.dispose();
   },
 );
-it.each([
-  {
-    label: "versioned event",
-    event: { thinkingLevel: "medium", updatedAt: 2 },
-    settleWithEvent: true,
-  },
-  {
-    label: "unversioned event",
-    event: { sessionId: "created-session", thinkingLevel: "medium" },
-    settleWithEvent: false,
-  },
-])("claims created placement through background reconciliation ($label)", async (testCase) => {
-  const pendingList = createDeferred<SessionsListResult>();
-  const pendingAppendList = createDeferred<SessionsListResult>();
-  const pendingCanonicalList = createDeferred<SessionsListResult>();
-  let listCalls = 0;
-  const key = "agent:main:created-in-background";
-  const { sessions, emitEvent } = harness({
-    "sessions.create": () => ({
-      key,
-      entry: {
-        sessionId: "created-session",
-        modelProvider: "openai",
-        model: "gpt-5.6-sol",
-        thinkingLevel: "xhigh",
-        updatedAt: 1,
-      },
-    }),
-    "sessions.list": () => {
-      listCalls += 1;
-      if (listCalls === 1) {
-        return sessionsResult([{ key: "agent:main:main", kind: "direct", updatedAt: 1 }], 1);
-      }
-      if (listCalls === 2) {
-        return pendingList.promise;
-      }
-      if (listCalls === 3 && !testCase.settleWithEvent) {
-        return pendingAppendList.promise;
-      }
-      return pendingCanonicalList.promise;
-    },
-    "sessions.patch": () => {
-      throw new Error("thinking rejected");
-    },
-  });
-  const created = vi.fn();
-  sessions.subscribeCreated(created);
-  await sessions.refresh({ force: true });
-
-  await expect(
-    sessions.createResult(
-      { agentId: "main", model: "openai/gpt-5.6-sol", worktree: true },
-      { reconciliation: "background" },
-    ),
-  ).resolves.toMatchObject({ key });
-  expect(created).toHaveBeenCalledOnce();
-  expect(created).toHaveBeenCalledWith(key);
-  expect(sessions.isPreparedWorkSession(key)).toBe(true);
-  expect(sessions.state.modelOverrides[key]).toBe("openai/gpt-5.6-sol");
-  expect(sessions.think(key)).toBe("xhigh");
-  const stateChanged = vi.fn();
-  sessions.subscribe(stateChanged);
-  emitEvent({
-    type: "event",
-    event: "sessions.changed",
-    payload: {
-      sessionKey: key,
-      key,
-      kind: "direct",
-      ...testCase.event,
-    },
-  });
-  expect(sessions.think(key)).toBe("medium");
-  expect(stateChanged).toHaveBeenCalledOnce();
-
-  pendingList.resolve(
-    listed(
-      key,
-      {
-        thinkingLevel: "xhigh",
-        updatedAt: 2,
-        worktree: { id: "wt-1", branch: "openclaw/task", repoRoot: "/repo" },
-      },
-      2,
-    ),
-  );
-  await waitForFast(() => expect(sessions.isPreparedWorkSession(key)).toBe(false));
-  expect(sessions.think(key)).toBe("medium");
-  await expect(sessions.patch(key, { thinkingLevel: "medium" })).rejects.toThrow(
-    "thinking rejected",
-  );
-  expect(sessions.think(key)).toBe("medium");
-  if (testCase.settleWithEvent) {
-    emitEvent({
-      type: "event",
-      event: "sessions.changed",
-      payload: {
-        sessionKey: key,
+it.each([{ updatedAt: 2 }, { sessionId: "created-session" }])(
+  "reconciles created placement (%j)",
+  async (event) => {
+    const settleWithEvent = "updatedAt" in event;
+    const pendingList = createDeferred<SessionsListResult>();
+    const pendingAppendList = createDeferred<SessionsListResult>();
+    const pendingCanonicalList = createDeferred<SessionsListResult>();
+    const key = "agent:main:created-in-background";
+    const { sessions, emitEvent } = harness({
+      "sessions.create": () => ({
         key,
-        kind: "direct",
-        thinkingLevel: "medium",
-        updatedAt: 3,
+        entry: {
+          sessionId: "created-session",
+          modelProvider: "openai",
+          model: "gpt-5.6-sol",
+          thinkingLevel: "xhigh",
+          updatedAt: 1,
+        },
+      }),
+      "sessions.list": vi
+        .fn()
+        .mockReturnValueOnce(listed("agent:main:main", { updatedAt: 1 }, 1))
+        .mockReturnValueOnce(pendingList.promise)
+        .mockReturnValueOnce(
+          settleWithEvent ? pendingCanonicalList.promise : pendingAppendList.promise,
+        )
+        .mockReturnValue(pendingCanonicalList.promise),
+      "sessions.patch": () => {
+        throw new Error("thinking rejected");
       },
     });
-    expect(sessions.think(key)).toBeUndefined();
-  } else {
-    const appendRefresh = sessions.refresh({ append: true, offset: 1, force: true });
-    pendingAppendList.resolve(sessionsResult([], 3));
-    await appendRefresh;
+    await sessions.refresh({ force: true });
+    const created = await createPrepared(sessions, key);
+    expect(sessions.think(key)).toBe("xhigh");
+    const stateChanged = vi.fn();
+    sessions.subscribe(stateChanged);
+    emitEvent(changed(key, { thinkingLevel: "medium", ...event }));
     expect(sessions.think(key)).toBe("medium");
-  }
-  const canonicalRefresh = sessions.refresh({ force: true });
-  const canonicalThinkingLevel = testCase.settleWithEvent ? "medium" : "high";
-  pendingCanonicalList.resolve(
-    listed(key, { thinkingLevel: canonicalThinkingLevel, updatedAt: 3 }, 3),
-  );
-  await canonicalRefresh;
-  expect(sessions.think(key)).toBeUndefined();
-  expect(sessions.state.result?.sessions[0]?.thinkingLevel).toBe(canonicalThinkingLevel);
-  expect(created).toHaveBeenCalledOnce();
-  expect(sessions.isPreparedWorkSession(key)).toBe(false);
-  sessions.dispose();
-});
+    expect(stateChanged).toHaveBeenCalledOnce();
+
+    pendingList.resolve(placement(key, { thinkingLevel: "xhigh" }));
+    await waitForFast(() => expect(sessions.isPreparedWorkSession(key)).toBe(false));
+    expect(sessions.think(key)).toBe("medium");
+    await expect(sessions.patch(key, { thinkingLevel: "medium" })).rejects.toThrow(
+      "thinking rejected",
+    );
+    expect(sessions.think(key)).toBe("medium");
+    if (settleWithEvent) {
+      emitEvent(changed(key, { thinkingLevel: "medium", updatedAt: 3 }));
+      expect(sessions.think(key)).toBeUndefined();
+    } else {
+      const appendRefresh = sessions.refresh({ append: true, offset: 1, force: true });
+      pendingAppendList.resolve(sessionsResult([], 3));
+      await appendRefresh;
+      expect(sessions.think(key)).toBe("medium");
+    }
+    const canonicalRefresh = sessions.refresh({ force: true });
+    const canonicalThinkingLevel = settleWithEvent ? "medium" : "high";
+    pendingCanonicalList.resolve(
+      listed(key, { thinkingLevel: canonicalThinkingLevel, updatedAt: 3 }, 3),
+    );
+    await canonicalRefresh;
+    expect(sessions.think(key)).toBeUndefined();
+    expect(sessions.state.result?.sessions[0]?.thinkingLevel).toBe(canonicalThinkingLevel);
+    expect(created).toHaveBeenCalledOnce();
+    expect(sessions.isPreparedWorkSession(key)).toBe(false);
+  },
+);
 
 it("clears a created thinking claim for an unversioned removal", async () => {
   const key = "agent:main:created-then-archived";
@@ -225,20 +211,9 @@ it("clears a created thinking claim for an unversioned removal", async () => {
   });
   await sessions.createResult({ agentId: "main" });
   expect(sessions.think(key)).toBe("xhigh");
-  emitEvent({
-    type: "event",
-    event: "sessions.changed",
-    payload: {
-      sessionKey: key,
-      key,
-      kind: "direct",
-      archived: true,
-      thinkingLevel: "medium",
-    },
-  });
+  emitEvent(changed(key, { archived: true, thinkingLevel: "medium" }));
   expect(sessions.state.result?.sessions).toHaveLength(0);
   expect(sessions.think(key)).toBeUndefined();
-  sessions.dispose();
 });
 
 it("isolates delayed raw-global thinking claims by agent", async () => {
@@ -261,12 +236,12 @@ it("isolates delayed raw-global thinking claims by agent", async () => {
   expect(sessions.think("global", "alpha")).toBe("xhigh");
   expect(sessions.think("global", "beta")).toBe("medium");
   expect(sessions.think("global", "main")).toBeUndefined();
-  sessions.dispose();
 });
 
 it.each(["success", "in-place", "failure", "replaced"])(
   "keeps recovery notifications, errors and refresh scoped to the connection (%s)",
   async (outcome) => {
+    const succeeded = outcome === "success" || outcome === "in-place";
     const recovery = createDeferred<unknown>();
     const list = createDeferred<unknown>();
     const { sessions, publish, request } = harness({
@@ -294,7 +269,7 @@ it.each(["success", "in-place", "failure", "replaced"])(
     } else {
       recovery.resolve(successor);
     }
-    if (outcome === "success" || outcome === "in-place") {
+    if (succeeded) {
       await waitForFast(() =>
         expect(request).toHaveBeenCalledWith(
           "sessions.list",
@@ -306,18 +281,15 @@ it.each(["success", "in-place", "failure", "replaced"])(
       } else {
         expect(created).not.toHaveBeenCalled();
       }
-      list.resolve(sessionsResult([{ key: successor.key, kind: "direct", updatedAt: 1 }], 1));
+      list.resolve(listed(successor.key, { updatedAt: 1 }, 1));
     }
 
-    await expect(operation).resolves.toEqual(
-      outcome === "success" || outcome === "in-place" ? successor : null,
-    );
+    await expect(operation).resolves.toEqual(succeeded ? successor : null);
     expect(sessions.state.error).toBe(outcome === "failure" ? "recovery rejected" : null);
-    if (outcome === "failure" || outcome === "replaced") {
+    if (!succeeded) {
       expect(created).not.toHaveBeenCalled();
       expect(request).not.toHaveBeenCalledWith("sessions.list", expect.anything());
     }
-    sessions.dispose();
   },
 );
 
@@ -334,7 +306,6 @@ it("retires prepared work placement when the session is deleted", async () => {
   expect(sessions.isPreparedWorkSession(key)).toBe(true);
   await expect(sessions.delete(key)).resolves.toMatchObject({ deleted: true });
   expect(sessions.isPreparedWorkSession(key)).toBe(false);
-  sessions.dispose();
 });
 
 it("retires a created thinking claim before replacement state is published", async () => {
@@ -350,5 +321,4 @@ it("retires a created thinking claim before replacement state is published", asy
   sessions.subscribe(() => published.push(sessions.think(key)));
   publish(true, createTestGatewayClient(request));
   expect(published[0]).toBeUndefined();
-  sessions.dispose();
 });

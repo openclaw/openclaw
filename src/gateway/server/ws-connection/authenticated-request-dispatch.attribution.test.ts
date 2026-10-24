@@ -12,10 +12,28 @@ import { shareSidebarSessionRows } from "../../session-row-presentation.js";
 import {
   createDispatchTestHarness,
   createOperatorWsClient,
+  dispatchProfile,
+  requestFrame,
 } from "./authenticated-request-dispatch.test-support.js";
 
 beforeEach(() => resetDiagnosticEventsForTest());
 afterEach(() => resetDiagnosticEventsForTest());
+
+const revision = "private-revision";
+const unchanged = { rowsUnchanged: true };
+const delta = { rowsDelta: { baseRevision: revision } };
+const full = { sessions: [] };
+function expectWireResponse(
+  events: unknown[],
+  field: "sessionsList" | "chatHistory",
+  details: Record<string, unknown>,
+  copies = 1,
+) {
+  const attribution = { clientKind: "openclaw-control-ui", source: "wire", ...details };
+  const expected = { responseBytes: 1234, [field]: attribution };
+  expect(events).toMatchObject(Array.from({ length: copies }, () => expected));
+  expect(JSON.stringify(events)).not.toContain("private-");
+}
 
 async function dispatch(
   method: string,
@@ -23,21 +41,15 @@ async function dispatch(
   payload: unknown,
   delivery: "wire" | "shared" | "internal" | "error" | "unavailable" | "serialization" = "wire",
 ) {
-  const events: Extract<DiagnosticEventPayload, { type: "gateway.rpc"; phase: "response" }>[] = [];
+  const events: DiagnosticEventPayload[] = [];
   onTestFinished(
-    onInternalDiagnosticEvent(
-      (event) => {
-        if (event.type === "gateway.rpc" && event.phase === "response") {
-          events.push(event);
-        }
-      },
-      { include: ["gateway.rpc"] },
-    ),
+    onInternalDiagnosticEvent((event) => events.push(event), { include: ["gateway.rpc"] }),
   );
   const handler = vi.fn<GatewayRequestHandler>(({ respond }) =>
     respond(delivery !== "error", payload),
   );
   const harness = createDispatchTestHarness({ extraHandlers: { [method]: handler } });
+  const { dispatch: dispatchRequest } = harness.dispatcher;
   harness.send.mockReturnValue(
     delivery === "unavailable" ? { kind: "unavailable" } : { kind: "sent", bytes: 1234 },
   );
@@ -48,21 +60,15 @@ async function dispatch(
     clientInfo: { id: "openclaw-control-ui", mode: "webchat" },
   });
   if (delivery === "shared") {
-    client.authenticatedUserProfile = {
-      profileId: "private-profile",
+    client.authenticatedUserProfile = dispatchProfile("private-profile", {
       displayName: "Test operator",
-      hasAvatar: false,
       avatarRevision: "0",
       updatedAt: 0,
-    };
+    });
   }
-  const request = { type: "req", id: "private-request", method, params };
-  await harness.dispatcher.dispatch(
-    request,
-    client,
-    undefined,
-    delivery === "internal" ? (frame) => harness.send(frame) : undefined,
-  );
+  const request = requestFrame("private-request", method, params);
+  const internalSend = delivery === "internal" ? harness.send : undefined;
+  await dispatchRequest(request, client, undefined, internalSend);
   if (delivery === "shared") {
     await harness.dispatcher.dispatch({ ...request, id: "private-follower" }, client);
     expect(handler).toHaveBeenCalledOnce();
@@ -71,7 +77,7 @@ async function dispatch(
     }
   }
   await waitForDiagnosticEventsDrained();
-  return events;
+  return events.filter((event) => event.type === "gateway.rpc" && event.phase === "response");
 }
 
 it.each(["wire", "shared", "internal"] as const)(
@@ -95,13 +101,10 @@ it.each(["wire", "shared", "internal"] as const)(
         payload,
         delivery,
       );
-      expect(events).toHaveLength(delivery === "shared" ? 2 : 1);
-      for (const event of events) {
-        expect(event.sessionsList).toMatchObject({
-          rowsOutcome: "full-with-base",
-          baseMissReason: reason,
-        });
-      }
+      const expected = { rowsOutcome: "full-with-base", baseMissReason: reason };
+      expect(events.map((event) => event.sessionsList)).toMatchObject(
+        delivery === "shared" ? [expected, expected] : [expected],
+      );
     }
     const noBase = shareSidebarSessionRows(changed);
     const events = await dispatch("sessions.list", { rowMode: "sidebar" }, noBase, delivery);
@@ -110,104 +113,53 @@ it.each(["wire", "shared", "internal"] as const)(
 );
 
 it.each([
-  {
-    params: { rowMode: "sidebar", ifRowsRevision: "private-revision" },
-    payload: { rowsUnchanged: true },
-    rowsOutcome: "unchanged",
-  },
-  {
-    params: { rowMode: "sidebar", ifRowsRevision: "delta:private-revision" },
-    payload: { rowsDelta: { baseRevision: "private-revision" } },
-    rowsOutcome: "delta",
-  },
-  { params: { rowMode: "sidebar" }, payload: { sessions: [] }, rowsOutcome: "full-no-base" },
-  {
-    params: { rowMode: "sidebar", ifRowsRevision: "delta:private-revision" },
-    payload: { sessions: [] },
-    rowsOutcome: "full-with-base",
-  },
-  {
-    params: { rowMode: "sidebar", ifRowsRevision: "private-revision" },
-    payload: { sessions: [] },
-    rowsOutcome: "full-with-base",
-  },
-  { params: { rowMode: "compact" }, payload: { sessions: [] }, rowsOutcome: "not-sidebar" },
-])(
-  "attributes session response bytes as $rowsOutcome",
-  async ({ params, payload, rowsOutcome }) => {
+  ["sidebar", revision, unchanged, "unchanged"],
+  ["sidebar", `delta:${revision}`, delta, "delta"],
+  ["sidebar", undefined, full, "full-no-base"],
+  ["sidebar", `delta:${revision}`, full, "full-with-base"],
+  ["sidebar", revision, full, "full-with-base"],
+  ["compact", undefined, full, "not-sidebar"],
+  ["compact", "", full, "full-no-base"],
+  ["compact", revision, unchanged, "unchanged"],
+  ["compact", `delta:${revision}`, delta, "delta"],
+] as const)(
+  "attributes session response bytes (%s, %s, %j, %s)",
+  async (rowMode, ifRowsRevision, payload, rowsOutcome) => {
     for (const delivery of ["wire", "shared"] as const) {
       const events = await dispatch(
         "sessions.list",
-        { ...params, source: "sidebar" },
+        { rowMode, ...(ifRowsRevision !== undefined ? { ifRowsRevision } : {}), source: "sidebar" },
         payload,
         delivery,
       );
-      const expected = {
-        responseBytes: 1234,
-        sessionsList: {
-          clientKind: "openclaw-control-ui",
-          source: "wire",
-          callerSource: "sidebar",
-          rowMode: params.rowMode,
-          filter: "general",
-          rowsOutcome,
-        },
-      };
-      expect(events).toMatchObject(delivery === "shared" ? [expected, expected] : [expected]);
-      expect(JSON.stringify(events)).not.toContain("private-");
+      expectWireResponse(
+        events,
+        "sessionsList",
+        { callerSource: "sidebar", rowMode, filter: "general", rowsOutcome },
+        delivery === "shared" ? 2 : 1,
+      );
     }
   },
 );
 
+const receiptQuery = { inputRunIds: ["private-"], cursor: "private-", pendingBefore: 2, limit: 81 };
 it.each([
-  {
-    params: { cursor: "private-cursor", limit: 20 },
-    kind: "delta",
-    shape: "cursor",
-    limitBucket: "<=20",
-  },
-  { params: { offset: 1, limit: 21 }, kind: undefined, shape: "older", limitBucket: "<=80" },
-  {
-    params: { pendingBefore: 2, offset: 1, limit: 80 },
-    kind: undefined,
-    shape: "pending",
-    limitBucket: "<=80",
-  },
-  {
-    params: { inputRunIds: ["private-run"], cursor: "private-cursor", pendingBefore: 2, limit: 81 },
-    kind: "reset",
-    shape: "receipt",
-    limitBucket: "<=200",
-  },
-  { params: { offset: 0 }, kind: undefined, shape: "tail", limitBucket: "<=200" },
-  {
-    params: { messageId: "private-anchor", sessionId: "private-archive" },
-    kind: undefined,
-    shape: "anchor",
-    limitBucket: "<=200",
-  },
-  { params: { limit: 201 }, kind: undefined, shape: "tail", limitBucket: ">200" },
-])(
-  "attributes validated history response shape $shape/$limitBucket",
-  async ({ params, kind, shape, limitBucket }) => {
+  [{ cursor: "private-c", limit: 20 }, "delta", "cursor", "<=20"],
+  [{ offset: 1, limit: 21 }, undefined, "older", "<=80"],
+  [{ pendingBefore: 2, offset: 1, limit: 80 }, undefined, "pending", "<=80"],
+  [receiptQuery, "reset", "receipt", "<=200"],
+  [{ offset: 0 }, undefined, "tail", "<=200"],
+  [{ messageId: "private-m", sessionId: "private-s" }, undefined, "anchor", "<=200"],
+  [{ limit: 201 }, undefined, "tail", ">200"],
+] as const)(
+  "attributes validated history response shape (%j, %s, %s, %s)",
+  async (params, kind, shape, limitBucket) => {
     const events = await dispatch(
       "chat.history",
       { sessionKey: "private-session", ...params },
       { kind },
     );
-    expect(events).toMatchObject([
-      {
-        responseBytes: 1234,
-        chatHistory: {
-          clientKind: "openclaw-control-ui",
-          source: "wire",
-          shape,
-          limitBucket,
-          outcome: kind ?? "page",
-        },
-      },
-    ]);
-    expect(JSON.stringify(events)).not.toContain("private-");
+    expectWireResponse(events, "chatHistory", { shape, limitBucket, outcome: kind ?? "page" });
   },
 );
 

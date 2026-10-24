@@ -1,9 +1,7 @@
 import { PassThrough } from "node:stream";
 import { setImmediate } from "node:timers/promises";
-import { afterEach, expect, it, vi } from "vitest";
-import { GATEWAY_CLIENT_IDS } from "../../../packages/gateway-protocol/src/client-info.js";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE } from "../../infra/node-runner-inventory.js";
 import type { NodeDesktopStreamBroker } from "../desktop/node-stream-broker.js";
 import * as observeBridge from "../desktop/observe-bridge.js";
 import { createDesktopSessionRegistry } from "../desktop/session-registry.js";
@@ -12,15 +10,17 @@ import type {
   NodeWorkerSupervisorTransport,
 } from "../node-registry-private.js";
 import { createWorkerNodeDesktopCarrier } from "./node-desktop-carrier.js";
+import { createNodeWorkerBundleTestNode } from "./node-worker-bundle.test-support.js";
 import * as support from "./service.test-support.js";
 import type { WorkerEnvironmentRecord } from "./store.js";
 
 const cleanups: Array<() => Promise<void>> = [];
+let record: Awaited<ReturnType<typeof support.seedReadyNodeDesktop>>;
 
 type LeasedEnvironmentRecord = Extract<WorkerEnvironmentRecord, { leaseId: string }>;
 const changedRecord =
-  (patch: Partial<LeasedEnvironmentRecord>) => (record: LeasedEnvironmentRecord) => ({
-    ...record,
+  (patch: Partial<LeasedEnvironmentRecord>) => (current: LeasedEnvironmentRecord) => ({
+    ...current,
     ...patch,
   });
 
@@ -36,20 +36,6 @@ function deferred<T>() {
   const result = createDeferred<T>();
   void result.promise.catch(() => undefined);
   return result;
-}
-
-function nodeProof(nodeId: string): NodeWorkerSupervisorNodeProof {
-  return {
-    nodeId,
-    connId: "conn-1",
-    pairingIdentity: "identity-1",
-    pairingGeneration: "generation-1",
-    clientId: GATEWAY_CLIENT_IDS.NODE_HOST,
-    clientMode: "node",
-    protocolFeature: NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
-    workerHost: { enabled: true, capacity: { total: 1, available: 0 } },
-    commands: [],
-  };
 }
 
 function fakeBroker() {
@@ -91,8 +77,14 @@ function fakeBroker() {
   };
 }
 
-function desktopHarness(record: WorkerEnvironmentRecord, mutableRecord = false) {
-  const proof = nodeProof(record.nodeDeviceId!);
+function desktopHarness(mutableRecord = false) {
+  const proof = {
+    ...createNodeWorkerBundleTestNode(),
+    nodeId: record.nodeDeviceId!,
+    pairingIdentity: "identity-1",
+    pairingGeneration: "generation-1",
+    workerHost: { enabled: true as const, capacity: { total: 1, available: 0 } },
+  };
   const authority: { record: WorkerEnvironmentRecord | undefined; proofCurrent: boolean } = {
     record,
     proofCurrent: true,
@@ -143,15 +135,16 @@ function desktopHarness(record: WorkerEnvironmentRecord, mutableRecord = false) 
 }
 
 support.setupWorkerEnvironmentServiceSuite();
+beforeEach(async () => {
+  record = await support.seedReadyNodeDesktop("worker-desktop");
+});
 afterEach(async () => {
   await Promise.all(cleanups.splice(0).map((cleanup) => cleanup()));
   vi.restoreAllMocks();
 });
 
 it("reloads desktop policy without replacing workers or closing other desktop sources", async () => {
-  const record = await support.seedReadyNodeDesktop("worker-desktop-policy");
-  const { carrier, registry, proof, invoke, transport, streamed, waitInvoked } =
-    desktopHarness(record);
+  const { carrier, registry, proof, invoke, transport, streamed, waitInvoked } = desktopHarness();
   support.testState.config.cloudWorkers!.desktop = false;
   const workerService = support.createService(support.createProvider(), {
     nodeDesktopCarrier: carrier,
@@ -233,8 +226,7 @@ it("reloads desktop policy without replacing workers or closing other desktop so
 it.each(["connection close", "token release"] as const)(
   "releases abandoned observer slots on %s without disturbing another viewer",
   async (release) => {
-    const record = await support.seedReadyNodeDesktop("worker-desktop-abandon");
-    const { carrier, registry, streamed, waitInvoked } = desktopHarness(record, true);
+    const { carrier, registry, streamed, waitInvoked } = desktopHarness(true);
     const controller = new AbortController();
     const requester = desktopRequester(controller);
     const closeKeeper = vi.fn();
@@ -301,11 +293,7 @@ it.each(["connection close", "token release"] as const)(
 it.each(["observation release", "epoch replacement"] as const)(
   "joins retiring invocation settlement when stop overlaps %s",
   async (retirement) => {
-    const record = await support.seedReadyNodeDesktop("worker-desktop-release-stop");
-    const { authority, carrier, registry, invoke, streamed, waitInvoked } = desktopHarness(
-      record,
-      true,
-    );
+    const { authority, carrier, registry, invoke, streamed, waitInvoked } = desktopHarness(true);
     const invocation = deferred<Awaited<ReturnType<NodeWorkerSupervisorTransport["invoke"]>>>();
     const completionOrder: string[] = [];
     invoke.mockImplementation(async () => {
@@ -374,13 +362,12 @@ it.each([undefined, "worker"])(
       signal: new AbortController().signal,
       isCurrent: () => !client.invalidated,
     };
-    const record = await support.seedReadyNodeDesktop("worker-node-desktop-observe");
     if (username) {
       record.desktop = { ...record.desktop!, username };
     }
     let nowMs = 1_000;
     vi.spyOn(Date, "now").mockImplementation(() => nowMs);
-    const { authority, carrier, invoke, streamed, waitInvoked } = desktopHarness(record, true);
+    const { authority, carrier, invoke, streamed, waitInvoked } = desktopHarness(true);
 
     const observing = carrier.observe({ record, control: false, requester });
     await waitInvoked();
@@ -436,9 +423,8 @@ it.each([
   { auth: "ard-account" as const },
   { auth: "vnc-password" as const, vncPassword: "secret" },
 ])("rejects cloud ARD metadata without managed account authentication: %j", async (metadata) => {
-  const record = await support.seedReadyNodeDesktop("worker-desktop-ard-mismatch");
   record.desktop = { ...record.desktop!, username: "worker" };
-  const { carrier, streamed, waitInvoked } = desktopHarness(record, true);
+  const { carrier, streamed, waitInvoked } = desktopHarness(true);
   const observing = carrier.observe({ record, control: false });
   await waitInvoked();
   const stream = streamed.attachNext(metadata);
@@ -447,8 +433,7 @@ it.each([
 });
 
 it("cancels and joins an admitted app launch before its first microtask", async () => {
-  const record = await support.seedReadyNodeDesktop("worker-desktop-queued-launch-stop");
-  const { carrier, invoke } = desktopHarness(record);
+  const { carrier, invoke } = desktopHarness();
   invoke.mockResolvedValue({ ok: true, payloadJSON: '{"status":"ready"}' });
   const completionOrder: string[] = [];
   const launched = carrier.launchApp({ record, app: support.DESKTOP.apps![0]! }).then(
@@ -476,26 +461,22 @@ it.each([
   ["node", changedRecord({ nodeDeviceId: "node:replacement" })],
   [
     "epoch",
-    (record: LeasedEnvironmentRecord) => ({ ...record, ownerEpoch: record.ownerEpoch + 1 }),
+    (current: LeasedEnvironmentRecord) => ({ ...current, ownerEpoch: current.ownerEpoch + 1 }),
   ],
   ["state", changedRecord({ state: "draining" })],
   ["destroy intent", changedRecord({ destroyRequestedAtMs: 2_000 })],
   [
     "desktop descriptor",
-    (record: LeasedEnvironmentRecord) => ({
-      ...record,
-      desktop: record.desktop ? { ...record.desktop, port: record.desktop.port + 1 } : null,
+    (current: LeasedEnvironmentRecord) => ({
+      ...current,
+      desktop: current.desktop ? { ...current.desktop, port: current.desktop.port + 1 } : null,
     }),
   ],
 ] as const)("rejects an attach after the %s changes", async (_name, mutate) => {
-  const record = await support.seedReadyNodeDesktop(`worker-node-desktop-stale-${_name}`);
   if (record.leaseId === null) {
     throw new Error("Expected a leased desktop fixture");
   }
-  const { authority, carrier, streamed, waitInvoked } = desktopHarness(
-    record,
-    _name !== "pairing proof",
-  );
+  const { authority, carrier, streamed, waitInvoked } = desktopHarness(_name !== "pairing proof");
 
   const observing = carrier.observe({ record, control: true });
   await waitInvoked();
@@ -512,9 +493,9 @@ it.each([
 });
 
 it("deduplicates one exact launch and aborts it on owner teardown", async () => {
-  const record = await support.seedReadyNodeDesktop("worker-node-desktop-launch");
-  const { carrier, invoke, waitInvoked } = desktopHarness(record);
-  const app = support.DESKTOP.apps![0]!;
+  const { carrier, invoke, waitInvoked } = desktopHarness();
+  const app = structuredClone(support.DESKTOP.apps![0]!);
+  const expectedApp = structuredClone(app);
 
   await expect(
     carrier.launchApp({
@@ -527,8 +508,12 @@ it("deduplicates one exact launch and aborts it on owner teardown", async () => 
   const first = carrier.launchApp({ record, app });
   const second = carrier.launchApp({ record, app });
   expect(second).toBe(first);
+  app.executablePath = "/changed-request-app";
+  record.desktop!.apps![0]!.executablePath = "/changed-record-app";
   await waitInvoked();
-  expect(invoke).toHaveBeenCalledWith(expect.objectContaining({ params: app, timeoutMs: 30_000 }));
+  expect(invoke).toHaveBeenCalledWith(
+    expect.objectContaining({ params: expectedApp, timeoutMs: 30_000 }),
+  );
 
   await carrier.stop(record.environmentId, record.ownerEpoch);
   await expect(first).rejects.toThrow("invoke aborted");
@@ -543,10 +528,7 @@ it.each([
   ["stale durable owner", '{"status":"ready"}', "durable owner", "launch owner changed"],
   ["stale pairing proof", '{"status":"ready"}', "pairing proof", "launch owner changed"],
 ] as const)("validates the node launcher %s result", async (name, payloadJSON, stale, error) => {
-  const record = await support.seedReadyNodeDesktop(
-    `worker-node-desktop-${name.replaceAll(" ", "-")}`,
-  );
-  const { authority, carrier, invoke, waitInvoked } = desktopHarness(record, Boolean(stale));
+  const { authority, carrier, invoke, waitInvoked } = desktopHarness(Boolean(stale));
   const invocation = deferred<{ ok: boolean; payloadJSON: string | null }>();
   invoke.mockImplementation(async () =>
     stale ? await invocation.promise : { ok: true, payloadJSON },

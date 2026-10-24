@@ -313,6 +313,7 @@ export async function dispatchCronDelivery(
           sessionKey: params.resolvedDelivery.sessionRoute?.sessionKey,
         },
         payload: deliveryPayloads,
+        admittedReasoning: true,
         sessionGeneration: resolveDirectCronDeliveryGeneration(params),
         tts: { auto: params.ttsAuto },
         inspectionUrl: resolveControlUiSessionUrl(params.cfgWithAgentDefaults, {

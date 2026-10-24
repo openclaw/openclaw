@@ -51,6 +51,7 @@ import {
   manifestChildEntries,
   readManifestArtifactArchive,
   requiredChildKeysForRerunGroup,
+  restoreOriginalPublicationAdmission,
   resolveManifestChildOriginAttempt,
   runReleaseCiGh,
   selectExactChildRun,
@@ -303,6 +304,89 @@ function publicationRestoreFixture(fullCoverage = false, route: "normal" | "prep
 }
 
 describe("original publication admission reader", () => {
+  it.each(["cached", "artifact", "wrong-producer", "wrong-attempt"] as const)(
+    "authenticates a %s plan against its later pre-seal recovery attempt",
+    async (planSource) => {
+      const fixture = publicationRestoreFixture();
+      fixture.plan.sealParentRunAttempt = planSource === "wrong-attempt" ? 3 : 2;
+      fixture.plan.sha256 = releaseExecutionPlanSha256(fixture.plan);
+      const parent = {
+        ...fixture.parentRun,
+        name: "Full Release Validation",
+        display_title: "Full Release Validation",
+        repository: { full_name: "openclaw/openclaw" },
+        head_repository: { full_name: "openclaw/openclaw" },
+      };
+      const resolveJob = {
+        id: 901,
+        name: "Resolve target ref",
+        run_attempt: 1,
+        status: "completed",
+        conclusion: "success",
+        steps: [{ name: "Finalize publication admission", conclusion: "success" }],
+      };
+      const sealer = {
+        id: 902,
+        name: "Seal release execution plan",
+        run_attempt: 2,
+        status: "completed",
+        conclusion: "success",
+        steps: [...publicationPlanSteps(), planDigestStep()],
+      };
+      const client = {
+        getRunAttempt: vi.fn(async () => parent),
+        getWorkflowSource: vi.fn(
+          () =>
+            'env:\n  FULL_RELEASE_SOURCE_ADMISSION_CONTRACT: "1"\n  FULL_RELEASE_PUBLICATION_ADMISSION_CONTRACT: "1"\n  FULL_RELEASE_EXECUTION_PLAN_RESTORE_CONTRACT: "1"\n',
+        ),
+        getRunAttemptJobs: vi.fn(async (_runId: string, attempt: number) =>
+          attempt === 1 ? [resolveJob] : [sealer],
+        ),
+        getJobLog: vi.fn(
+          async () => `2026-08-28T12:01:03.750Z FRV_EXECUTION_PLAN_SHA256=${fixture.plan.sha256}\n`,
+        ),
+        loadExecutionPlanEvidence: vi.fn(() => {
+          if (planSource === "cached") {
+            throw new Error("authenticated cache must avoid artifact download");
+          }
+          return {
+            plan: fixture.plan,
+            artifact: {
+              workflow_run: {
+                head_sha: planSource === "wrong-producer" ? "d".repeat(40) : parent.head_sha,
+                head_branch: parent.head_branch,
+              },
+            },
+          };
+        }),
+      };
+      const operation = restoreOriginalPublicationAdmission({
+        request: fixture.request,
+        client,
+        cachedPlan: planSource === "cached" ? fixture.plan : undefined,
+      });
+      if (planSource === "wrong-producer") {
+        await expect(operation).rejects.toThrow("artifact producer mismatch");
+        return;
+      }
+      if (planSource === "wrong-attempt") {
+        await expect(operation).rejects.toThrow("sealer/upload did not succeed");
+        return;
+      }
+      const restored = await operation;
+      expect(restored.plan).toEqual(fixture.plan);
+      expect(client.getRunAttemptJobs).toHaveBeenNthCalledWith(1, fixture.runId, 1, {
+        requireComplete: true,
+      });
+      expect(client.getRunAttemptJobs).toHaveBeenNthCalledWith(2, fixture.runId, 2, {
+        requireComplete: true,
+      });
+      expect(client.loadExecutionPlanEvidence).toHaveBeenCalledTimes(
+        planSource === "cached" ? 0 : 1,
+      );
+    },
+  );
+
   it.each([
     "changed-admission",
     "skipped-original-upload",
@@ -494,7 +578,9 @@ describe("original publication admission reader", () => {
           "continuation differs from the authenticated original publication plan",
         );
       }
-      expect(client.loadExecutionPlanEvidence).toHaveBeenCalledTimes(unsupported ? 0 : 1);
+      expect(client.loadExecutionPlanEvidence).toHaveBeenCalledTimes(
+        fault.endsWith("unsupported") ? 0 : 1,
+      );
       return;
     }
     const result = consumerCase
@@ -778,7 +864,11 @@ try {
           {
             always: () => true,
             github: { run_attempt: 1 },
-            steps: { plan: { outputs } },
+            steps: {
+              plan: { outputs },
+              plan_inputs_upload: { outcome: "success" },
+              plan_inputs_restore: { outcome: "skipped" },
+            },
           },
         ),
       ).toBe(true);
@@ -1079,7 +1169,11 @@ process.stdout.write(JSON.stringify(restored));
       const uploadSelected = runInNewContext(condition, {
         always: () => true,
         github: { run_attempt: fault === "workflow-plan-prewrite" ? 1 : 2 },
-        steps: { plan: { outputs: { sha256: "", source_parent_attempt: "", ...outputs } } },
+        steps: {
+          plan: { outputs: { sha256: "", source_parent_attempt: "", ...outputs } },
+          plan_inputs_upload: { outcome: "skipped" },
+          plan_inputs_restore: { outcome: "skipped" },
+        },
       });
       if (uploadSelected && upload.with.overwrite === true) {
         const replacement = makeStoredZip({ [entry]: readFileSync(cachedPlanPath, "utf8") });
@@ -1995,7 +2089,7 @@ describe("release CI summary child correlation", () => {
         return `RERUN_GROUP: all\nFAIL_FAST: false\nTARGET_SHA: ${fixture.targetSha}`;
       }
       if (id === npmId) {
-        return `TARGET_SHA: ${fixture.targetSha}\nDispatched full-release-artifacts.yml: https://github.com/${repository}/actions/runs/81 (attempt 1)`;
+        return `Artifact dispatch npm target ${fixture.targetSha}: https://github.com/${repository}/actions/runs/81 (attempt 1)`;
       }
       return sourceLog(id);
     };
@@ -2061,7 +2155,8 @@ describe("release CI summary child correlation", () => {
         getJobLog,
         getReleaseEvidenceClient: () => ({
           ...createReleaseEvidenceClient(repository),
-          getWorkflowSource: () => "node scripts/full-release-artifacts.mjs resolve",
+          getWorkflowSource: () =>
+            'env:\n  FULL_RELEASE_ARTIFACT_RECOVERY_CONTRACT: "1"\njobs:\n  npm_artifacts:\n    name: Prepare release npm artifacts\n    env:\n      CHILD_WORKFLOW_KIND: artifact-npm\n    steps: []\n',
         }),
         rerunFailed,
         rerunParent,
@@ -2450,7 +2545,7 @@ describe("release CI summary child correlation", () => {
     },
   );
 
-  it("recomputes mixed-attempt evidence with an authenticated Telegram waiver", async () => {
+  it.each([true, false])("recomputes attempts (recorded version=%s)", async (recordVersion) => {
     const version = "2026.9.1";
 
     const fixture = trustedMainPackageFixture({
@@ -2484,10 +2579,8 @@ describe("release CI summary child correlation", () => {
       getRunAttemptJobs: (runId: string, runAttempt: number) => Array<Record<string, unknown>>;
       loadExecutionPlan: () => Record<string, unknown>;
     };
-    const waiver = version
-      ? { telegramWaiver: `${version}-owner-approved`, targetVersion: version }
-      : {};
-    Object.assign(manifest.validationInputs, waiver);
+    const releaseVersion = { targetVersion: version };
+    Object.assign(manifest.validationInputs, releaseVersion);
     const plannedChild = {
       dispatchName: "Dispatch release checks",
       displayTitle: fixture.childRun.display_title,
@@ -2504,7 +2597,7 @@ describe("release CI summary child correlation", () => {
       workflowSha: fixture.childRun.head_sha,
     };
     const executionPlan = buildReleaseExecutionPlanArtifact({
-      ...waiver,
+      ...releaseVersion,
       attemptEvidenceVersion: 2,
       candidate: null,
       children: [plannedChild],
@@ -2540,6 +2633,10 @@ describe("release CI summary child correlation", () => {
         sha: fixture.workflowSha,
       },
     });
+    if (!recordVersion) {
+      delete executionPlan.targetVersion;
+      executionPlan.sha256 = releaseExecutionPlanSha256(executionPlan);
+    }
     expect(executionPlan.candidate).toBeNull();
     fixture.childRun.run_attempt = 2;
     fixture.childRun.triggering_actor = { login: "release-operator" };
@@ -2634,13 +2731,10 @@ describe("release CI summary child correlation", () => {
         runAttempt: 2,
       }),
     ]);
-    if (version) {
-      delete manifest.validationInputs.telegramWaiver;
-      await expect(validate()).rejects.toThrow(/Telegram waiver/u);
-      Object.assign(manifest.validationInputs, waiver);
-      client.loadExecutionPlan = () => undefined as never;
-      await expect(validate()).rejects.toThrow(/Telegram waiver/u);
-      client.loadExecutionPlan = () => executionPlan;
+    if (recordVersion) {
+      manifest.validationInputs.targetVersion = "2026.9.2";
+      await expect(validate()).rejects.toThrow("target version differs");
+      manifest.validationInputs.targetVersion = version;
     }
 
     for (const [expectedRunAttempts, message] of [
@@ -2791,6 +2885,65 @@ describe("release CI summary child correlation", () => {
         : originalClient.getParentJobs(requestedRunId);
 
     await expect(verifyFixture(fixture)).rejects.toThrow("does not pass release policy");
+  });
+
+  it("admits only Windows-node preview failures at the live release-evidence boundary", async () => {
+    const fixture = trustedMainNpmFixture();
+    const selected = expectDefined(
+      fixture.executionPlan.children.find((entry) => entry.key === "releaseChecksCandidate"),
+      "candidate release checks",
+    );
+    const run = expectDefined(
+      fixture.runs.find((entry) => String(entry.id) === selected.runId),
+      "candidate run",
+    );
+    run.conclusion = "failure";
+    const jobs = [
+      {
+        name: "Run Windows-node main E2E / Setup, connect, and invoke candidate gateway",
+        conclusion: "failure",
+      },
+      {
+        name: "Run Windows-node stable E2E / Setup, connect, and invoke candidate gateway",
+        conclusion: "success",
+      },
+      { name: "Verify release checks", conclusion: "success" },
+    ].map((entry, index) => Object.assign({}, fixture.parentJob, entry, { id: 1501 + index }));
+    const composite = composeReleaseAttemptJobs([{ jobs, runAttempt: 1 }], {
+      effectiveRunAttempt: 1,
+      plannedRunAttempt: 1,
+    });
+    Object.assign(
+      expectDefined(fixture.manifest.childEvidence.releaseChecksCandidate, "candidate evidence"),
+      {
+        jobs: composite.jobs,
+        compositeJobsSha256: composite.sha256,
+      },
+    );
+    const advisory = {
+      class: "windows-node-preview",
+      child: "releaseChecksCandidate",
+      job: "Run Windows-node main E2E / Setup, connect, and invoke candidate gateway",
+      conclusion: "failure",
+      runId: selected.runId,
+      url: "",
+    };
+    Object.assign(fixture.manifest, { advisoryJobs: [advisory] });
+    const originalJobs = expectDefined(
+      fixture.client.getRunAttemptJobs.getMockImplementation(),
+      "job reader",
+    );
+    fixture.client.getRunAttemptJobs.mockImplementation((runId) =>
+      runId === selected.runId ? jobs : originalJobs(runId),
+    );
+    const evidence = await verifyFixture(fixture);
+    expect(evidence.valid).toBe(true);
+    expect(
+      evidence.children.find((entry: { role: string }) => entry.role === "releaseChecksCandidate"),
+    ).toMatchObject({
+      conclusion: "failure",
+      advisoryJobs: [advisory],
+    });
   });
 
   it("rejects a failed Windows Node shard at the live release-evidence boundary", async () => {
@@ -3557,38 +3710,6 @@ describe("release CI summary child correlation", () => {
         selected,
       ),
     ).toThrow("selected child is missing from manifest: NPM Telegram Beta E2E");
-  });
-
-  it("validates the Telegram waiver before changing package child coverage", () => {
-    const version = "2026.9.5";
-
-    const raw = rawManifest({});
-    raw.releaseProfile = "stable";
-    Object.assign(raw.validationInputs, {
-      telegramWaiver: `${version}-owner-approved`,
-      targetVersion: version,
-      releasePackageSpec: `openclaw@${version}`,
-    });
-    const expected = { runAttempt: 2, runId: "29090000000" };
-    const manifest = validateParentManifest(raw, expected);
-    expect(
-      requiredChildKeysForRerunGroup(manifest.rerunGroup, manifest.validationInputs),
-    ).not.toContain("npmTelegram");
-    raw.validationInputs.targetVersion = "2026.8.2";
-    expect(() => validateParentManifest(raw, expected)).toThrow(/Telegram waiver/u);
-  });
-
-  it("rejects an unreviewed self-declared Telegram waiver", () => {
-    const raw = rawManifest({});
-    raw.releaseProfile = "stable";
-    Object.assign(raw.validationInputs, {
-      telegramWaiver: "2026.10.1-owner-approved",
-      targetVersion: "2026.10.1",
-      releasePackageSpec: "openclaw@2026.10.1",
-    });
-    expect(() => validateParentManifest(raw, { runAttempt: 2, runId: "29090000000" })).toThrow(
-      /Telegram waiver/u,
-    );
   });
 
   it("keeps historical non-reuse v2 manifests readable without validation inputs", () => {

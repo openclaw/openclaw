@@ -323,6 +323,12 @@ the input never started, so the host replays it as an ordinary queued turn rathe
 than losing it; the host records a started input in the session transcript, so a
 runtime must not also write it there. The registration lives as long as the run.
 
+A runtime that can end its current turn without closing the session can offer
+`ctx.registerTurnInterrupt({ interrupt })`; `interrupt("yield")` requests a graceful
+turn end, after which the stream must finish normally and the session remain
+reusable. OpenClaw calls it after observing the completed `sessions_yield` tool
+result, suppresses subsequent reply text, and drops the registration when the run closes.
+
 For a bundled or official plugin's bidirectional process, use the shared
 [`createOwnedStdioProcess` owner](/plugins/sdk-overview/infrastructure#owned-stdio-processes)
 with the prepared command, arguments, `argv0`, and `exactEnv: true`. On POSIX,

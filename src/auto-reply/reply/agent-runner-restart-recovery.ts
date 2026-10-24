@@ -7,6 +7,7 @@ import {
 import {
   acquireReplyOperationSessionActor,
   getReplyOperationSessionTarget,
+  lifecycleAdmissionByOperation,
 } from "../../sessions/session-controller.state.js";
 import {
   resolveReplyRunDeliveryContext,
@@ -55,6 +56,7 @@ export function createReplyAgentRestartRecoveryController(
   const admissionRunId = resolveReplyAdmissionRunId(sessionCtx);
   const recovery = createReplyRestartRecoveryClaimController({
     agentId: followupRun.run.agentId,
+    operationAdmission: lifecycleAdmissionByOperation.get(replyOperation),
     acquireSessionActor: async () => {
       const actor = await acquireReplyOperationSessionActor(replyOperation);
       if (!actor) {
@@ -67,6 +69,7 @@ export function createReplyAgentRestartRecoveryController(
       return { actor, target };
     },
     operatorAuthority: followupRun.operatorAuthority,
+    requesterOrigin: followupRun.run.requesterOrigin,
     inputProvenance: followupRun.run.inputProvenance,
     lifecycleGeneration: replyOperation.lifecycleGeneration,
     admissionRunId,
@@ -98,16 +101,25 @@ export function createReplyAgentRestartRecoveryController(
       sessionId,
       sessionKey: targetSessionKey,
       storePath: targetStorePath,
-    }) => ({
-      sessionId,
-      sessionKey: targetSessionKey,
-      sessionEntry: entry,
-      ...(activeSessionStore ? { sessionStore: activeSessionStore } : {}),
-      storePath: targetStorePath,
-      agentId: followupRun.run.agentId,
-      cwd: followupRun.run.workspaceDir,
-      config: cfg,
-    }),
+    }) => {
+      const target = getReplyOperationSessionTarget(replyOperation);
+      // Persistence shares the actor's physical spelling; scheduling keeps its logical store scope.
+      const persistenceStorePath =
+        target?.agentId === followupRun.run.agentId &&
+        target.target.canonicalKey === targetSessionKey
+          ? (target.readSource?.path ?? target.storePath)
+          : targetStorePath;
+      return {
+        sessionId,
+        sessionKey: targetSessionKey,
+        sessionEntry: entry,
+        ...(activeSessionStore ? { sessionStore: activeSessionStore } : {}),
+        storePath: persistenceStorePath,
+        agentId: followupRun.run.agentId,
+        cwd: followupRun.run.workspaceDir,
+        config: cfg,
+      };
+    },
     ...(sessionKey ? { sessionKey } : {}),
     setEntry: (entry) => {
       setActiveSessionEntry(entry);

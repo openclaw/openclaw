@@ -3,6 +3,7 @@ import {
   GatewayProtocolClient,
   type GatewayProtocolSocketHandlers,
 } from "@openclaw/gateway-client/browser";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, it, vi } from "vitest";
 // @vitest-environment node
 import { SIDEBAR_SESSION_ROSTER_LIMIT } from "../../../../src/shared/session-list-limits.ts";
@@ -13,7 +14,11 @@ import {
   type GatewayEventFrame,
 } from "../../api/gateway.ts";
 import type { SessionsListResult } from "../../api/types.ts";
+import { createApplicationGateway } from "../../test-helpers/application-context-fixtures.ts";
+import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
+import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
+import { sessionRequest } from "./hydration-family.test-support.ts";
 import type { SessionCapability } from "./index.ts";
 import {
   createSubscriptionHydrationHarness,
@@ -30,15 +35,7 @@ afterEach(() => {
   vi.useRealTimers();
 });
 function requestFor(subscribe: () => unknown, list: (params?: Record<string, unknown>) => unknown) {
-  return vi.fn(async (method: string, params?: Record<string, unknown>) => {
-    if (method === "sessions.subscribe") {
-      return subscribe();
-    }
-    if (method === "sessions.list") {
-      return list(params);
-    }
-    throw new Error(`Unexpected request: ${method}`);
-  });
+  return sessionRequest({ "sessions.subscribe": subscribe, "sessions.list": list });
 }
 const retryError = (message: string) =>
   new GatewayRequestError({
@@ -127,6 +124,8 @@ function connection(
 }
 const listCallsOf = (request: { mock: { calls: readonly (readonly unknown[])[] } }) =>
   request.mock.calls.filter(([method]) => method === "sessions.list");
+const expectList = (request: ReturnType<typeof requestFor>, fields: Record<string, unknown>) =>
+  expect(request).toHaveBeenCalledWith("sessions.list", expect.objectContaining(fields));
 
 const targetedSessionReconciliationCases = [
   {
@@ -165,7 +164,86 @@ const targetedSessionReconciliationCases = [
   },
 ] as const;
 
-it("lets a queued foreground refresh supersede an owner-first bootstrap roster", async () => {
+it.each(["account", "recovery scope"])(
+  "retires observed membership before the same client's %s replacement loads",
+  async (change) => {
+    const retained = sessionsResult([{ key: "agent:main:private", kind: "direct" }], 1);
+    const stale = createDeferred<SessionsListResult>();
+    const fresh = createDeferred<SessionsListResult>();
+    let reads = 0;
+    const request = vi.fn(async (method: string, params?: unknown) => {
+      if (method === "sessions.list") {
+        if (isRecord(params) && params.archived === "all") {
+          reads += 1;
+          return reads === 1 ? retained : reads === 2 ? stale.promise : fresh.promise;
+        }
+        return sessionsResult([], 2);
+      }
+      return method === "sessions.subscribe"
+        ? { subscribed: true }
+        : { groups: [], sectionOrder: [] };
+    });
+    const source = createApplicationGateway();
+    const hello = gatewayHelloForMethods(
+      ["sessions.list", "sessions.subscribe", "sessions.groups.list"],
+      ["operator.read"],
+    );
+    hello.auth!.recoveryScope = "test-recovery-scope";
+    source.publish({
+      ...source.gateway.snapshot,
+      phase: "connected",
+      client: createTestGatewayClient(request),
+      hello,
+      selfUser: { id: "alice", name: "Alice" },
+    });
+    const sessions = createTestSessionCapability(source.gateway);
+    const query = { source: "agent-roster" as const, archivedFilter: "all" as const, limit: 50 };
+    const observed = sessions.observeList(query, () => {});
+    await sessions.refreshList(query);
+    expect(sessions.listSnapshot(query).result?.sessions).toEqual(retained.sessions);
+    source.publish({
+      ...source.gateway.snapshot,
+      phase: "reconnecting",
+      hello: null,
+      selfUser: undefined,
+    });
+    expect(sessions.listSnapshot(query).result?.sessions).toEqual(retained.sessions);
+    source.publish({
+      ...source.gateway.snapshot,
+      phase: "connected",
+      hello,
+      selfUser: undefined,
+    });
+    expect(sessions.listSnapshot(query).result?.sessions).toEqual(retained.sessions);
+    source.publish({ ...source.gateway.snapshot, selfUser: { id: "alice", name: "Alice" } });
+    expect(sessions.listSnapshot(query).result?.sessions).toEqual(retained.sessions);
+    const old = observed.refresh().catch((error: unknown) => error);
+    source.publish({
+      ...source.gateway.snapshot,
+      ...(change === "account"
+        ? { selfUser: { id: "bob", name: "Bob" } }
+        : {
+            selfUser: undefined,
+            hello: { ...hello, auth: { ...hello.auth!, recoveryScope: "bob-scope" } },
+          }),
+    });
+    expect(sessions.listSnapshot(query).result).toBeNull();
+    let replayed: SessionsListResult | null = retained;
+    const replacement = sessions.observeList(query, (snapshot) => {
+      replayed = snapshot.result;
+    });
+    expect(replayed).toBeNull();
+    stale.resolve(retained);
+    await old;
+    expect(sessions.listSnapshot(query).result).toBeNull();
+    fresh.resolve(sessionsResult([], 2));
+    await sessions.refreshList(query);
+    observed.dispose();
+    replacement.dispose();
+  },
+);
+
+it("lets a queued foreground refresh supersede bootstrap during profile hydration", async () => {
   const owned = (key: string, updatedAt: number, id: string) => ({
     key: `agent:main:${key}`,
     kind: "direct" as const,
@@ -192,21 +270,16 @@ it("lets a queued foreground refresh supersede an owner-first bootstrap roster",
   );
   const h = connection(request as unknown as GatewayBrowserClient["request"], "main", {
     sessionKey: "agent:main:mine-new",
-    selfUser: { id: "operator", name: "Operator" },
   });
   const { sessions, client } = h;
   h.update({ client, phase: "connected" });
 
   await waitForFast(() =>
-    expect(request).toHaveBeenCalledWith(
-      "sessions.list",
-      expect.objectContaining({
-        agentId: "main",
-        ownerFirst: true,
-        limit: SIDEBAR_SESSION_ROSTER_LIMIT,
-      }),
-    ),
+    expectList(request, { agentId: "main", limit: SIDEBAR_SESSION_ROSTER_LIMIT }),
   );
+  expect(
+    request.mock.calls.find(([method]) => method === "sessions.list")?.[1]?.ownerFirst,
+  ).toBeUndefined();
   expect(request).toHaveBeenCalledWith(
     "sessions.subscribe",
     {},
@@ -215,7 +288,7 @@ it("lets a queued foreground refresh supersede an owner-first bootstrap roster",
   expect(listCallsOf(request)).toHaveLength(1);
   expect(sessions.state.result).toBeNull();
   const queuedRefresh = sessions.refresh({ agentId: "other", search: "queued", force: true });
-  h.update({ selfUser: { id: "collaborator", name: "Collaborator" } });
+  h.update({ selfUser: { id: "operator", name: "Operator" } });
 
   bootstrap.resolve(roster);
   await waitForFast(() => expect(listCallsOf(request)).toHaveLength(2));
@@ -245,12 +318,7 @@ it("uses the selected agent before a session key is available", async () => {
   const { sessions, client } = h;
   h.update({ client, phase: "connected" });
 
-  await waitForFast(() =>
-    expect(request).toHaveBeenCalledWith(
-      "sessions.list",
-      expect.objectContaining({ agentId: "roboclaw", includeDerivedTitles: true }),
-    ),
-  );
+  await waitForFast(() => expectList(request, { agentId: "roboclaw", includeDerivedTitles: true }));
   await waitForFast(() => expect(sessions.state.agentId).toBe("roboclaw"));
   expect(sessions.state.result).toStrictEqual(result);
 });
@@ -307,68 +375,82 @@ it.each(["main", "work"])(
   },
 );
 
-it("recovers primary and managed lists after retrying the current session observer", async () => {
-  vi.useFakeTimers();
-  const result = sessionsResult([], 1);
-  const recoveredResult = sessionsResult(
-    [{ key: "agent:main:recovered", kind: "direct", updatedAt: 2 }],
-    1,
-  );
-  let listCalls = 0;
-  const h = observer(retryOnce("session observer temporarily unavailable"), (params) => {
-    if (params?.agentId === "writer") {
-      const done = h.subscriptionCalls > 1;
-      return {
-        ...result,
-        count: 1,
-        sessions: [
-          {
-            key: "agent:writer:linked",
-            kind: "direct",
-            updatedAt: done ? 2 : 1,
-            hasActiveRun: !done,
-            status: done ? "done" : "running",
-          },
-        ],
-      } satisfies SessionsListResult;
-    }
-    listCalls += 1;
-    return listCalls === 1 ? result : recoveredResult;
-  });
+it.each([
+  { refusal: "rejected", delay: 100, error: "session observer temporarily unavailable" },
+  {
+    refusal: "unacknowledged",
+    delay: 500,
+    error: expect.stringContaining("did not activate the session event subscription"),
+  },
+])(
+  "recovers primary and managed lists after an observer is $refusal",
+  async ({ refusal, delay, error }) => {
+    vi.useFakeTimers();
+    const result = sessionsResult([], 1);
+    const recoveredResult = sessionsResult(
+      [{ key: "agent:main:recovered", kind: "direct", updatedAt: 2 }],
+      1,
+    );
+    let listCalls = 0;
+    const subscribe =
+      refusal === "rejected"
+        ? retryOnce("session observer temporarily unavailable")
+        : (attempt: number) => (attempt === 1 ? {} : { subscribed: true });
+    const h = observer(subscribe, (params) => {
+      if (params?.agentId === "writer") {
+        const done = h.subscriptionCalls > 1;
+        return {
+          ...result,
+          count: 1,
+          sessions: [
+            {
+              key: "agent:writer:linked",
+              kind: "direct",
+              updatedAt: done ? 2 : 1,
+              hasActiveRun: !done,
+              status: done ? "done" : "running",
+            },
+          ],
+        } satisfies SessionsListResult;
+      }
+      listCalls += 1;
+      return listCalls === 1 ? result : recoveredResult;
+    });
 
-  const { sessions, connect } = h;
-  const writerQuery = { agentId: "writer", archivedFilter: "all" as const, limit: 2 };
-  const stopWriter = sessions.subscribeList(writerQuery, () => undefined);
+    const { sessions, connect } = h;
+    const writerQuery = { agentId: "writer", archivedFilter: "all" as const, limit: 2 };
+    const stopWriter = sessions.subscribeList(writerQuery, () => undefined);
 
-  connect();
-  await vi.advanceTimersByTimeAsync(0);
+    connect();
+    await vi.advanceTimersByTimeAsync(0);
 
-  expect(sessions.state.result).toStrictEqual(result);
-  expect(sessions.state.error).toBe("session observer temporarily unavailable");
-  expect(h.subscriptionCalls).toBe(1);
-  expect(sessions.listSnapshot(writerQuery).result?.sessions[0]).toMatchObject({
-    key: "agent:writer:linked",
-    hasActiveRun: true,
-    status: "running",
-  });
+    expect(sessions.state.result).toStrictEqual(result);
+    expect(sessions.state.error).toEqual(error);
+    expect(h.subscriptionCalls).toBe(1);
+    expect(sessions.listSnapshot(writerQuery).result?.sessions[0]).toMatchObject({
+      key: "agent:writer:linked",
+      hasActiveRun: true,
+      status: "running",
+    });
 
-  await vi.advanceTimersByTimeAsync(99);
-  expect(h.subscriptionCalls).toBe(1);
-  await vi.advanceTimersByTimeAsync(1);
+    await vi.advanceTimersByTimeAsync(delay - 1);
+    expect(h.subscriptionCalls).toBe(1);
+    await vi.advanceTimersByTimeAsync(1);
 
-  expect(h.subscriptionCalls).toBe(2);
-  expect(sessions.state.error).toBeNull();
-  expect(sessions.state.result).toStrictEqual(recoveredResult);
-  expect(listCalls).toBe(2);
-  await vi.advanceTimersByTimeAsync(5_000);
-  expect(sessions.listSnapshot(writerQuery).result?.sessions[0]).toMatchObject({
-    key: "agent:writer:linked",
-    hasActiveRun: false,
-    status: "done",
-  });
-  expect(vi.getTimerCount()).toBe(0);
-  stopWriter();
-});
+    expect(h.subscriptionCalls).toBe(2);
+    expect(sessions.state.error).toBeNull();
+    expect(sessions.state.result).toStrictEqual(recoveredResult);
+    expect(listCalls).toBe(2);
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(sessions.listSnapshot(writerQuery).result?.sessions[0]).toMatchObject({
+      key: "agent:writer:linked",
+      hasActiveRun: false,
+      status: "done",
+    });
+    expect(vi.getTimerCount()).toBe(0);
+    stopWriter();
+  },
+);
 
 it("recovers the roster after a subscription deadline without admitting late replies", async () => {
   vi.useFakeTimers();
@@ -457,50 +539,46 @@ it("recovers the roster after a subscription deadline without admitting late rep
   }
 });
 
-it("rejects an unacknowledged session observer and retries until acknowledged", async () => {
-  vi.useFakeTimers();
-  const h = observer((attempt) => (attempt === 1 ? {} : { subscribed: true }));
-  const { sessions, connect, request } = h;
+it.each(["retry", "pending"])(
+  "retires an observer %s across a same-client reconnect",
+  async (state) => {
+    vi.useFakeTimers();
+    const retired = createDeferred<{ subscribed: boolean }>();
+    const h = observer(
+      state === "retry"
+        ? retryOnce("session observer temporarily unavailable")
+        : (attempt) => (attempt === 1 ? retired.promise : { subscribed: true }),
+    );
+    cleanup.push(() => retired.resolve({ subscribed: false }));
+    const { sessions, connect, disconnect, request } = h;
 
-  connect();
-  await vi.advanceTimersByTimeAsync(0);
+    connect();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(h.subscriptionCalls).toBe(1);
+    if (state === "retry") {
+      expect(vi.getTimerCount()).toBe(1);
+    }
 
-  expect(h.subscriptionCalls).toBe(1);
-  expect(sessions.state.result).not.toBeNull();
-  expect(sessions.state.error).toContain("did not activate the session event subscription");
+    disconnect();
+    expect(sessions.state.error).toBeNull();
+    expect(vi.getTimerCount()).toBe(0);
+    if (state === "retry") {
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(h.subscriptionCalls).toBe(1);
+    }
 
-  await vi.advanceTimersByTimeAsync(500);
-
-  expect(h.subscriptionCalls).toBe(2);
-  expect(sessions.state.error).toBeNull();
-  expect(listCallsOf(request)).toHaveLength(2);
-  expect(vi.getTimerCount()).toBe(0);
-});
-
-it("retires observer retries on disconnect before the same client reconnects", async () => {
-  vi.useFakeTimers();
-  const h = observer(retryOnce("session observer temporarily unavailable"));
-  const { sessions, connect, disconnect, request } = h;
-
-  connect();
-  await vi.advanceTimersByTimeAsync(0);
-  expect(h.subscriptionCalls).toBe(1);
-  expect(vi.getTimerCount()).toBe(1);
-
-  disconnect();
-  expect(sessions.state.error).toBeNull();
-  expect(vi.getTimerCount()).toBe(0);
-  await vi.advanceTimersByTimeAsync(1_000);
-  expect(h.subscriptionCalls).toBe(1);
-
-  connect();
-  await vi.advanceTimersByTimeAsync(0);
-
-  expect(h.subscriptionCalls).toBe(2);
-  expect(sessions.state.error).toBeNull();
-  expect(listCallsOf(request)).toHaveLength(2);
-  expect(vi.getTimerCount()).toBe(0);
-});
+    connect();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(h.subscriptionCalls).toBe(2);
+    expect(sessions.state.result).not.toBeNull();
+    retired.resolve({ subscribed: false });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(h.subscriptionCalls).toBe(2);
+    expect(sessions.state.error).toBeNull();
+    expect(listCallsOf(request)).toHaveLength(2);
+    expect(vi.getTimerCount()).toBe(0);
+  },
+);
 
 it("does not recreate a retry timer when an observer-error listener disposes its owner", async () => {
   vi.useFakeTimers();
@@ -621,31 +699,4 @@ it("does not clear an unrelated list error with the same observer error message"
   pendingCatchUpList.resolve(sessionsResult([], 1));
   await vi.advanceTimersByTimeAsync(0);
   expect(sessions.state.error).toBeNull();
-});
-
-it("ignores an outdated observer refusal after the same client reconnects", async () => {
-  vi.useFakeTimers();
-  const retiredSubscription = createDeferred<{ subscribed: boolean }>();
-  const h = observer((attempt) =>
-    attempt === 1 ? retiredSubscription.promise : { subscribed: true },
-  );
-  const { sessions, connect, disconnect, request } = h;
-  cleanup.push(() => retiredSubscription.resolve({ subscribed: false }));
-  connect();
-  await vi.advanceTimersByTimeAsync(0);
-  expect(h.subscriptionCalls).toBe(1);
-
-  disconnect();
-  connect();
-  await vi.advanceTimersByTimeAsync(0);
-  expect(h.subscriptionCalls).toBe(2);
-  expect(sessions.state.result).not.toBeNull();
-
-  retiredSubscription.resolve({ subscribed: false });
-  await vi.advanceTimersByTimeAsync(0);
-
-  expect(sessions.state.error).toBeNull();
-  expect(h.subscriptionCalls).toBe(2);
-  expect(listCallsOf(request)).toHaveLength(2);
-  expect(vi.getTimerCount()).toBe(0);
 });

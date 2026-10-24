@@ -32,7 +32,9 @@ import {
   onDiagnosticEvent,
   resetDiagnosticEventsForTest,
   setDiagnosticsEnabledForProcess,
+  waitForDiagnosticEventsDrained,
 } from "../../infra/diagnostic-events.js";
+import { requestStuckSessionRecovery } from "../../logging/diagnostic-session-recovery-coordinator.js";
 import { recoverStuckDiagnosticSession } from "../../logging/diagnostic-stuck-session-recovery.runtime.js";
 import { startGatewayDiagnosticHeartbeat } from "../../logging/diagnostic.js";
 import { resetDiagnosticStateForTest } from "../../logging/diagnostic.test-support.js";
@@ -133,10 +135,12 @@ beforeEach(async () => {
       watchdogAttempt,
       embeddedRunToolAuthorityBinding: (registration) => ({
         source: "reply",
+        acceptsRequesterOrigin: () => false,
         operation,
         watchdogAttempt,
         project: () => undefined,
         projectAsync: async () => undefined,
+        assertRegistrationActive: () => assertSessionControllerOperation(operation),
         assertActive: () => {
           assertSessionControllerOperation(operation);
           if (registration.handle !== handle) {
@@ -234,8 +238,9 @@ it("keeps an accepted one-hour question alive through default diagnostic recover
     await vi.advanceTimersByTimeAsync(10_000);
     const id = await request();
     await vi.advanceTimersByTimeAsync(920_000);
-    expect(recovery).toHaveBeenCalledWith(
-      expect.objectContaining({ allowActiveAbort: true, queueDepth: 0 }),
+    expect(recovery).not.toHaveBeenCalled();
+    expect(operation.watchdog.snapshot().waits).toContainEqual(
+      expect.objectContaining({ kind: "human_question" }),
     );
     expect(abort).not.toHaveBeenCalled();
     expect(manager.get(id)?.status).toBe("pending");
@@ -352,15 +357,11 @@ it("keeps resumed question work alive when attention reporting settles the quest
     try {
       await vi.advanceTimersByTimeAsync(900_000);
       expect(manager.observe(id)?.record.status).toBe("cancelled");
-      const outcomes = await Promise.all(recovery.mock.results.map((result) => result.value));
+      await Promise.all(recovery.mock.results.map((result) => result.value));
 
       await expect(answer).resolves.toEqual({ status: "cancelled" });
-      expect(recovery).toHaveBeenCalledWith(
-        expect.objectContaining({ allowActiveAbort: true, ageMs: 900_000 }),
-      );
-      expect(outcomes).toContainEqual(
-        expect.objectContaining({ status: "skipped", reason: "active_reply_work" }),
-      );
+      expect(recovery).not.toHaveBeenCalled();
+      expect(operation.watchdog.snapshot().semanticProgressAtMs).toBe(Date.now());
       expect(abort).not.toHaveBeenCalled();
     } finally {
       unsubscribe();
@@ -552,15 +553,23 @@ it.each(["pending", "requester-inactive"] as const)(
       await gate;
       return recoverStuckDiagnosticSession(params);
     });
-    startGatewayDiagnosticHeartbeat(
-      createTestGatewayScheduler("fake-timers"),
-      {},
-      { recoverStuckSession: recovery },
-    );
     startQuestionTool("queued-call");
-    await vi.advanceTimersByTimeAsync(360_000);
-    expect(recovery).toHaveBeenCalledTimes(1);
+    await waitForDiagnosticEventsDrained();
+    // Queue an actually eligible captured stop before the question arrives. Do not
+    // ask diagnostics to override the runtime wait merely to exercise this race.
+    vi.setSystemTime(Date.now() + 930_000);
     preRecoveryWait.close();
+    expect(operation.watchdog.decide().action).toBe("stop");
+    requestStuckSessionRecovery({
+      recover: recovery,
+      classification: {
+        eventType: "session.stalled",
+        classification: "stalled_agent_run",
+        reason: "active_work_without_progress",
+      },
+      request: { ...ref, operation, ageMs: 930_000, queueDepth: 0 },
+    });
+    expect(recovery).toHaveBeenCalledOnce();
     await request();
     expect(operation.watchdog.snapshot().waits).toContainEqual(
       expect.objectContaining({ kind: "human_question" }),

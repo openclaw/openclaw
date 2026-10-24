@@ -5,6 +5,7 @@ import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-ke
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.js";
 import type { AgentDatabaseRequestExecutionSource } from "../../state/openclaw-agent-execution-admission-contract.js";
 import type { OpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution-contract.js";
+import { toAgentExecutionConstraints } from "../../state/openclaw-agent-execution-scope.js";
 import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
 import { runOpenClawAgentWorkerWrite } from "../../state/openclaw-agent-write-admission.js";
 import { cloneEnvWithPlatformSemantics } from "../config-env-vars.js";
@@ -128,25 +129,16 @@ export async function loadSessionEntryForAdmission(
     const result = await withSessionStoreTarget(
       { agentId, defaultAgentId: scope.defaultAgentId, storePath, env, candidates },
       async (target, owner) => {
-        const options = { ...target.database, path: target.sourcePath, env };
+        const options = { ...target.database, env };
         const observed = readDatabasePathIdentitySync(options.path);
         return await runOpenClawAgentWorkerWrite(
           options,
           async () => {
             // Discovery retains the file while queued; an earlier cancelled open may retire its executor.
-            const execution = captureOpenClawAgentDatabaseExecution(
-              options,
-              observed.key.startsWith("file:")
-                ? {
-                    expectedIdentity: {
-                      kind: "file",
-                      physicalIdentity: observed.key.slice("file:".length),
-                      nativeLocation: observed.canonicalPath,
-                      birthtime: observed.birthtime,
-                    },
-                  }
-                : { expectedCreationIdentity: observed },
-            );
+            const execution = captureOpenClawAgentDatabaseExecution(options, {
+              ...toAgentExecutionConstraints(observed),
+              requestedPath: target.sourcePath,
+            });
             const assertSourceCurrent = () => {
               assertCurrent();
               execution.assertCurrent();

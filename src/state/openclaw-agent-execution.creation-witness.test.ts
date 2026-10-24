@@ -88,18 +88,15 @@ async function readAliasAndClose(
   assertRegistry?: () => void,
 ) {
   const execution = capture(options);
-  try {
-    await expect(initialize(execution, sessionKey, "alias-session")).resolves.toEqual({
-      kind: "session-transcript-initialized",
-      sessionKey,
-      transcriptPublication: undefined,
-    });
-    assertRegistry?.();
-    await closeOpenClawAgentDatabaseByPathAsync(options.path, options.agentId);
-    expect(() => execution.assertCurrent()).toThrow(/closed/);
-  } finally {
-    await execution.release();
-  }
+  await using _ = onExit(() => execution.release());
+  await expect(initialize(execution, sessionKey, "alias-session")).resolves.toEqual({
+    kind: "session-transcript-initialized",
+    sessionKey,
+    transcriptPublication: undefined,
+  });
+  assertRegistry?.();
+  await closeOpenClawAgentDatabaseByPathAsync(options.path, options.agentId);
+  expect(() => execution.assertCurrent()).toThrow(/closed/);
 }
 function initialize(execution: Execution, sessionKey: string, sessionId: string) {
   return execution.runExisting(source(), (scope) =>
@@ -347,9 +344,7 @@ it.each(["missing", "schema-missing"] as const)(
       await execution.prepare(source());
       return execution.captureGenerationClaim();
     };
-    await using _ = onExit(() =>
-      Promise.allSettled(executions.map((execution) => execution.release())),
-    );
+    await using _ = onExit(() => releaseAll(...executions));
     const results = await Promise.allSettled(observations.map(create));
     expect(results.filter((result) => result.status === "rejected")).toEqual([]);
     const claims = executions.map((execution) => execution.captureGenerationClaim());
@@ -402,20 +397,12 @@ it.skipIf(process.platform === "win32")(
 
 it("keeps the owner's absent target when a later creator observes an unexpected file", async () => {
   const options = fixture();
-  const creator = capture(options, {
-    expectedCreationIdentity: readDatabasePathIdentitySync(options.path),
-  });
-  fs.mkdirSync(path.dirname(options.path), { recursive: true });
-  fs.writeFileSync(options.path, "");
-  const later = capture(options, {
-    expectedCreationIdentity: readDatabasePathIdentitySync(options.path),
-  });
-  try {
-    await expect(later.prepare(source())).rejects.toThrow(/changed before creating open/);
-    expect(fs.readFileSync(options.path)).toHaveLength(0);
-  } finally {
-    await Promise.allSettled([creator.release(), later.release()]);
-  }
+  const creator = creatorFor(options);
+  emptyStore(options);
+  const later = creatorFor(options);
+  await using _ = onExit(() => releaseAll(creator, later));
+  await expect(later.prepare(source())).rejects.toThrow(/changed before creating open/);
+  expect(fs.readFileSync(options.path)).toHaveLength(0);
 });
 
 it("retains the first creator's file witness on a preexisting execution owner", async () => {
@@ -696,9 +683,7 @@ it("retains a creator that joins while a refused generation closes", async () =>
   revoked.assertCurrent = () => {
     throw refusal;
   };
-  await using _ = onExit(() =>
-    Promise.allSettled(executions.map((execution) => execution.release())),
-  );
+  await using _ = onExit(() => releaseAll(...executions));
   await expect(creator.prepare(revoked)).rejects.toBe(refusal);
   const releasing = creator.release();
   // Release enters native cleanup at its first continuation; borrow before close settles.

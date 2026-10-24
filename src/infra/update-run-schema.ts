@@ -291,6 +291,7 @@ export const UpdateRunRecordSchema = z.object({
     pluginErrors: z.array(text).max(32).optional(),
     channelsReady: z.boolean().optional(),
     readyz: z.boolean().optional(),
+    coreReady: z.boolean().optional(),
     settled: z.boolean().optional(),
     noticeDelivered: z.boolean().optional(),
     doctorHint: text.optional(),

@@ -1,26 +1,16 @@
-// Watch Node tests cover watch node script behavior.
 import { EventEmitter } from "node:events";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { runWatch, watchReady } from "./watch-node.test-support.js";
 
 class FakeProcess extends EventEmitter {
   execPath = process.execPath;
   pid = 12345;
-  stdin = {
-    isTTY: false,
-  };
-  stderr = {
-    write: () => true,
-  };
 }
 
 class FakeChild extends EventEmitter {
   signals: string[] = [];
-  pid?: number;
-
-  constructor(pid?: number) {
+  constructor(public pid?: number) {
     super();
-    this.pid = pid;
   }
 
   kill(signal: string): boolean {
@@ -32,97 +22,71 @@ class FakeChild extends EventEmitter {
   }
 }
 
-describe("watch-node shutdown cleanup", () => {
-  afterEach(() => {
-    vi.useRealTimers();
+afterEach(() => vi.useRealTimers());
+
+function start(
+  children: FakeChild[],
+  signalProcess?: (pid: number, signal: NodeJS.Signals | 0) => void,
+  env?: NodeJS.ProcessEnv,
+) {
+  vi.useFakeTimers();
+  const fakeProcess = new FakeProcess();
+  const run = runWatch({
+    args: ["gateway"],
+    createWatcher: () => ({ close: async () => {} }),
+    env,
+    process: fakeProcess as unknown as NodeJS.Process,
+    signalProcess,
+    spawn: () => children.shift() as never,
   });
+  return { run, fakeProcess };
+}
 
-  it("waits for the child and escalates when interrupted children ignore SIGTERM", async () => {
-    vi.useFakeTimers();
-    const fakeProcess = new FakeProcess();
-    const child = new FakeChild();
-    let resolvedCode: Awaited<ReturnType<typeof runWatch>> | undefined;
+async function expectEscalation({ run, fakeProcess }: ReturnType<typeof start>, child: FakeChild) {
+  let resolvedCode: Awaited<typeof run> | undefined;
+  const settled = run.then((code) => (resolvedCode = code));
+  fakeProcess.emit("SIGTERM");
+  await vi.advanceTimersByTimeAsync(4_999);
+  expect(resolvedCode).toBeUndefined();
+  expect(child.signals).toEqual(["SIGTERM"]);
 
-    const run = runWatch({
-      args: ["gateway"],
-      createWatcher: () => ({ close: async () => {} }),
-      process: fakeProcess as unknown as NodeJS.Process,
-      spawn: () => child as never,
-    }).then((code) => {
-      resolvedCode = code;
-      return code;
-    });
+  await vi.advanceTimersByTimeAsync(1);
+  await expect(settled).resolves.toBe(process.platform === "win32" ? 143 : "SIGKILL");
+  expect(child.signals).toEqual(["SIGTERM", "SIGKILL"]);
+}
 
-    await watchReady();
-    fakeProcess.emit("SIGTERM");
-    await vi.advanceTimersByTimeAsync(4_999);
-    expect(resolvedCode).toBeUndefined();
-    expect(child.signals).toEqual(["SIGTERM"]);
-
-    await vi.advanceTimersByTimeAsync(1);
-    await expect(run).resolves.toBe(process.platform === "win32" ? 143 : "SIGKILL");
-    expect(child.signals).toEqual(["SIGTERM", "SIGKILL"]);
-  });
-
-  it("force-cleans the child process group when the leader exits after shutdown", async () => {
-    vi.useFakeTimers();
-    const fakeProcess = new FakeProcess();
-    const child = new FakeChild(4_242);
-    const groupSignals: Array<[number, string | number]> = [];
-
-    const run = runWatch({
-      args: ["gateway"],
-      createWatcher: () => ({ close: async () => {} }),
-      process: fakeProcess as unknown as NodeJS.Process,
-      signalProcess: (pid, signal) => {
-        groupSignals.push([pid, signal]);
-      },
-      spawn: () => child as never,
-    });
-
-    await watchReady();
-    fakeProcess.emit("SIGTERM");
-    expect(groupSignals).toEqual([[-4_242, "SIGTERM"]]);
-    child.emit("exit", 0, null);
-
-    await expect(run).resolves.toBe(143);
-    expect(groupSignals).toEqual([
-      [-4_242, "SIGTERM"],
-      [-4_242, "SIGKILL"],
-    ]);
-  });
-
-  it("waits for the auto-doctor child when interrupted during repair", async () => {
-    vi.useFakeTimers();
-    const fakeProcess = new FakeProcess();
+it.each([false, true])(
+  "waits and escalates when the child ignores SIGTERM (repair=%s)",
+  async (repair) => {
     const runner = new FakeChild();
-    const doctor = new FakeChild();
-    const children = [runner, doctor];
-    let resolvedCode: Awaited<ReturnType<typeof runWatch>> | undefined;
-
-    const run = runWatch({
-      args: ["gateway"],
-      createWatcher: () => ({ close: async () => {} }),
-      env: {},
-      process: fakeProcess as unknown as NodeJS.Process,
-      spawn: () => children.shift() as never,
-    }).then((code) => {
-      resolvedCode = code;
-      return code;
-    });
-
+    const child = repair ? new FakeChild() : runner;
+    const children = repair ? [runner, child] : [child];
+    const watch = start(children, undefined, repair ? {} : undefined);
     await watchReady();
-    runner.emit("exit", 1, null);
-    expect(children).toHaveLength(0);
+    if (repair) {
+      runner.emit("exit", 1, null);
+      expect(children).toHaveLength(0);
+      await watchReady();
+    }
+    await expectEscalation(watch, child);
+  },
+);
 
-    await watchReady();
-    fakeProcess.emit("SIGTERM");
-    await vi.advanceTimersByTimeAsync(4_999);
-    expect(resolvedCode).toBeUndefined();
-    expect(doctor.signals).toEqual(["SIGTERM"]);
-
-    await vi.advanceTimersByTimeAsync(1);
-    await expect(run).resolves.toBe(process.platform === "win32" ? 143 : "SIGKILL");
-    expect(doctor.signals).toEqual(["SIGTERM", "SIGKILL"]);
+it("force-cleans the child process group when the leader exits after shutdown", async () => {
+  const child = new FakeChild(4_242);
+  const groupSignals: Array<[number, string | number]> = [];
+  const { run, fakeProcess } = start([child], (pid, signal) => {
+    groupSignals.push([pid, signal]);
   });
+
+  await watchReady();
+  fakeProcess.emit("SIGTERM");
+  expect(groupSignals).toEqual([[-4_242, "SIGTERM"]]);
+  child.emit("exit", 0, null);
+
+  await expect(run).resolves.toBe(143);
+  expect(groupSignals).toEqual([
+    [-4_242, "SIGTERM"],
+    [-4_242, "SIGKILL"],
+  ]);
 });

@@ -1,9 +1,8 @@
-import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { getMinimalServicePathPartsFromEnv } from "../daemon/service-env.js";
 import { runCommandWithTimeout } from "../process/exec.js";
-import { hasErrnoCode } from "./errno.js";
+import { statIfExists } from "./path-existence.js";
 import type { ImmutableInstallDescriptor } from "./update-immutable-install-schema.js";
 import { readImmutableService } from "./update-immutable-service.js";
 
@@ -59,12 +58,7 @@ export async function resolveImmutableOperatorBuildAccount(
     if (!owner || owner.uid === 0) {
       owner = undefined;
       for (const directory of [descriptor.root, descriptor.service.stateDir]) {
-        const stat = await fs.stat(directory).catch((error: unknown) => {
-          if (hasErrnoCode(error, "ENOENT")) {
-            return undefined;
-          }
-          throw error;
-        });
+        const stat = await statIfExists(directory);
         if (stat?.isDirectory() && stat.uid > 0) {
           const candidate = await lookup(String(stat.uid));
           if (candidate?.uid === stat.uid) {

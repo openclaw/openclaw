@@ -1,7 +1,7 @@
 import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { withActivatedPluginIds } from "../../plugins/activation-context.js";
-import { resolveManifestActivationPlan } from "../../plugins/activation-planner.js";
+import { resolveManifestActivationPluginIds } from "../../plugins/activation-planner.js";
 import { normalizePluginsConfigWithResolverCore } from "../../plugins/config-normalization-shared.js";
 import {
   isTestDefaultMemorySlotDisabled,
@@ -73,6 +73,7 @@ function resolveSelectedMemoryPluginIds(params: {
   }
   return resolveEffectivePluginActivationState({
     id: plugin.pluginId,
+    channelIds: params.metadataSnapshot.byPluginId.get(plugin.pluginId)?.channels,
     origin: plugin.origin,
     config: plugins,
     rootConfig: params.config,
@@ -149,6 +150,7 @@ function resolveAgentRuntimeMetadataPluginIds(params: {
   }
   lookup.addAgentHarnessOwners(pluginIds, runtimeIds);
   addConfiguredSlotPluginIds(pluginIds, {
+    index: params.index,
     activationSourceConfig: params.config ?? {},
     activationSourcePlugins: pluginsConfig,
     lookup,
@@ -237,13 +239,13 @@ export function resolveAgentHarnessOwnerPluginIds(params: {
   providerOwnerPluginIds?: readonly string[];
   metadataSnapshot?: PluginMetadataSnapshot;
 }): string[] {
-  const harnessPluginIds = resolveManifestActivationPlan({
+  const harnessPluginIds = resolveManifestActivationPluginIds({
     trigger: { kind: "agentHarness", runtime: params.runtime },
     config: params.config,
     workspaceDir: params.workspaceDir,
     requireExplicitManifestOwnerTrust: true,
     manifestRecords: params.metadataSnapshot?.plugins,
-  }).entries.map((entry) => entry.pluginId);
+  });
   if (
     harnessPluginIds.length === 0 ||
     params.runtime !== "codex" ||
@@ -382,7 +384,13 @@ export function resolveAgentRuntimePluginLoadPlan(params: {
       })
     : [];
   const contextEnginePluginId = includeAgentOwners
-    ? resolveSelectedContextEnginePluginId(params.config)
+    ? resolveSelectedContextEnginePluginId(
+        params.config,
+        params.metadataSnapshot.registryIndex.plugins.map((plugin) => ({
+          id: plugin.pluginId,
+          contextEngineIds: plugin.contextEngineIds,
+        })),
+      )
     : undefined;
   const contextEnginePluginIds = contextEnginePluginId ? [contextEnginePluginId] : [];
   const basePluginIds = (params.basePluginIds ?? []).filter(

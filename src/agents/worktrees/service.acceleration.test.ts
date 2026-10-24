@@ -126,13 +126,14 @@ describe("ManagedWorktreeService filesystem acceleration", () => {
             db,
             k
               .updateTable("state_leases")
-              .set({
+              .set((eb) => ({
                 expires_at: row.expires_at === null ? null : 0,
-                payload_json: JSON.stringify({
-                  ...JSON.parse(row.payload_json ?? "{}"),
-                  owner: { pid: 2147483647, host: hostname(), startedAt: null },
-                }),
-              })
+                payload_json: eb.fn<string>("json_set", [
+                  eb.ref("payload_json"),
+                  eb.val("$.owner.pid"),
+                  eb.val(2_147_483_647),
+                ]),
+              }))
               .where("scope", "=", row.scope)
               .where("lease_key", "=", row.lease_key),
           );

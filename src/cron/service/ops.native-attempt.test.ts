@@ -1,4 +1,4 @@
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDueIsolatedJob } from "../../../test/helpers/cron/service-regression-fixtures.js";
 import { wrapToolWithAbortSignal } from "../../agents/agent-tools.abort.js";
 import type { OpenClawCodingToolsOptions } from "../../agents/agent-tools.options.js";
@@ -15,6 +15,7 @@ import {
 } from "../../agents/embedded-agent-runner/run/attempt-spawn-workspace.test-support.js";
 import { createCronTool } from "../../agents/tools/cron-tool.js";
 import { wrapToolWithGatewayCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
+import * as gatewayModule from "../../agents/tools/gateway.js";
 import { callAgentToolGatewayRequest } from "../../agents/tools/in-process-gateway.js";
 import { getTotalQueueSize } from "../../process/command-queue.js";
 import {
@@ -49,6 +50,12 @@ describe("native attempt queued automation admission", () => {
     async (outcome) => {
       await withCronGatewayState(async (fixture) => {
         const { cfg, context, cron, finished } = fixture;
+        const gatewaySpy = vi
+          .spyOn(gatewayModule, "callGatewayTool")
+          .mockImplementation((method, _options, params) =>
+            callAgentToolGatewayRequest({ method, params }),
+          );
+        onTestFinished(() => gatewaySpy.mockRestore());
         const now = Date.now();
         const job = createDueIsolatedJob({ id: "native-queued-run", nowMs: now, nextRunAtMs: now });
         const payloadStarted = createDeferredCore();
@@ -80,23 +87,14 @@ describe("native attempt queued automation admission", () => {
           options.registerRunCleanup?.(generationCleanup);
           toolSignal ??= options.abortSignal;
           tool = wrapToolWithAbortSignal(
-            wrapToolWithGatewayCallerIdentity(
-              createCronTool(
-                { config: cfg },
-                {
-                  callGatewayTool: (method, _options, params) =>
-                    callAgentToolGatewayRequest({ method, params }),
-                },
-              ),
-              {
-                agentId: "main",
-                sessionKey: "agent:main:native-cron-admission",
-                operationalRunInstance: options.operationalRunInstance,
-                receiptAuthority: () => current,
-                approvalSignals: options.abortSignal ? [options.abortSignal] : [],
-                gatewayContextResolver: () => context,
-              },
-            ),
+            wrapToolWithGatewayCallerIdentity(createCronTool({ config: cfg }), {
+              agentId: "main",
+              sessionKey: "agent:main:native-cron-admission",
+              operationalRunInstance: options.operationalRunInstance,
+              receiptAuthority: () => current,
+              approvalSignals: options.abortSignal ? [options.abortSignal] : [],
+              gatewayContextResolver: () => context,
+            }),
             options.abortSignal,
           );
           return [tool];

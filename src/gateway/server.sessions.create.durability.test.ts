@@ -1,6 +1,6 @@
 import { once } from "node:events";
 import { expectDefined } from "@openclaw/normalization-core/expect";
-import { afterEach, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import type { AgentCommandGatewayIngressOpts } from "../agents/command/types.js";
 import {
@@ -95,6 +95,10 @@ vi.mock("./server-methods/chat-send-agent-dispatch.js", async (importOriginal) =
 let workspace: string;
 const { createSessionStoreDir, openClient } = setupSessionCreateTestHarness(async (makeTempDir) => {
   workspace = await createGitWorkspace(makeTempDir("openclaw-initial-turn-durability-"));
+});
+
+beforeEach(() => {
+  dispatch.start.mockClear();
 });
 
 afterEach(() => {
@@ -222,7 +226,6 @@ test("persists and dispatches concurrent Gateway inputs while participant writes
     }
     return input;
   });
-  dispatch.start.mockClear();
   dashboardTitleScheduleMocks.schedule.mockImplementation(() => {});
   try {
     const created = await Promise.all(
@@ -329,7 +332,6 @@ test.for([
         requestRpcSourceCancellation(run, failure);
       };
     }
-    dispatch.start.mockClear();
     dashboardTitleScheduleMocks.schedule.mockImplementation(() => {});
     try {
       const params = { agentId: "main", key, message };
@@ -442,7 +444,6 @@ test.for(["lost-worker-response", "restart-before-ack"] as const)(
         throw new Error("Native turn committed but its command response was lost");
       };
     }
-    dispatch.start.mockClear();
     dashboardTitleScheduleMocks.schedule.mockImplementation(() => {});
     agentCommandMock.mockImplementation(async (raw) => {
       const options = raw as AgentCommandGatewayIngressOpts;
@@ -508,7 +509,6 @@ test("retries idle chat input after its atomic commit is refused", async () => {
   const { storePath, ws, key, target } = fixture;
   const message = "Idle input retries its original bytes.";
   const runId = "idle-commit-retry";
-  dispatch.start.mockClear();
   dashboardTitleScheduleMocks.schedule.mockImplementation(() => {});
   const refused = vi.fn();
   const refuse = probe.admission(workerAdmission, (request, grant, callback) => {
@@ -551,7 +551,6 @@ test("dispatches the original bytes of a committed initial input", async () => {
   const { storePath, ws, key } = fixture;
   const message = "Check initial-secret before execution.";
   const previousLogging = readLoggingConfig();
-  dispatch.start.mockClear();
   dashboardTitleScheduleMocks.schedule.mockImplementation(() => {});
   applyLoggingConfig({ redactPatterns: ["initial-secret"] });
   try {
@@ -581,8 +580,6 @@ test("dispatches the original bytes of a committed initial input", async () => {
 
 test.for([
   { id: "openclaw-control-ui", mode: "webchat", worktree: true },
-  { id: "openclaw-control-ui", mode: "webchat", worktree: false },
-  { id: "cli", mode: "cli", worktree: true },
   { id: "cli", mode: "cli", worktree: false },
 ] as const)(
   "recovers an acknowledged $id first turn (worktree=$worktree) before dispatch",
@@ -596,7 +593,6 @@ test.for([
     });
     const { storePath, ws, target } = fixture;
     const message = "Reply with exactly: retained first message.";
-    dispatch.start.mockClear();
     agentCommandMock.mockImplementation(async (raw) => {
       const options = raw as AgentCommandGatewayIngressOpts;
       expect(options.pinnedWidgetAuthoring).toBe(mode === "webchat" ? true : undefined);

@@ -13,10 +13,9 @@ const pinnedConnectionMocks = vi.hoisted(() => ({
   request: vi.fn() as Mock,
 }));
 const transcriptMirrorMocks = vi.hoisted(() => ({
-  importCodexThreadHistoryToTranscript: vi.fn(async () => ({
-    importedMessages: 0,
-    omittedMessages: 0,
-  })),
+  importCodexThreadHistoryToTranscript: vi.fn<
+    typeof import("./app-server/transcript-mirror.js").importCodexThreadHistoryToTranscript
+  >(async () => undefined),
 }));
 const nodeHostMocks = vi.hoisted(() => ({
   runNodePtyCommand: vi.fn(async () => ({ exitCode: 0 })),

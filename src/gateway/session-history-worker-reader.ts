@@ -16,8 +16,8 @@ import {
   projectForwardedMessages,
   readForwardedCronJobIds,
 } from "./chat-display-projection.history.js";
+import { projectChatHistoryWithReplies } from "./chat-history-reply-messages.js";
 import { resolveCurrentUserProfileDisplay } from "./current-user-profile-display.js";
-import { projectChatHistoryWithReplies } from "./server-methods/chat-history-reply-messages.js";
 import type { PreparedSessionHistoryReadTarget } from "./session-history-read.types.js";
 import { createReadonlySessionHistoryReader } from "./session-history-readonly-reader.js";
 import { resolveGatewaySessionStoreReadSources } from "./session-utils-store-candidates.js";
@@ -213,10 +213,8 @@ export async function readSessionHistoryRequest(
     };
   }
   if (request.kind === "rpc") {
-    const { readChatHistoryPageKernel } =
-      await import("./server-methods/chat-history-page-kernel.js");
-    const { encodeChatHistoryResponsePage } =
-      await import("./server-methods/chat-history-response-page.js");
+    const { readChatHistoryPageKernel } = await import("./chat-history-page-kernel.js");
+    const { encodeChatHistoryResponsePage } = await import("./chat-history-response-page.js");
     const cli = getCliSessionBinding(request.params.entry, "claude-cli")?.sessionId
       ? await (
           await import("./cli-session-history.js")

@@ -9,7 +9,14 @@ export const MemorySearchSchema = z
     sources: z.array(z.union([z.literal("memory"), z.literal("sessions")])).optional(),
     extraPaths: z
       .array(
-        z.union([z.string(), z.strictObject({ path: z.string(), pattern: z.string().optional() })]),
+        z.union([
+          z.string(),
+          z.strictObject({
+            path: z.string(),
+            pattern: z.string().optional(),
+            evergreen: z.boolean().optional(),
+          }),
+        ]),
       )
       .optional(),
     multimodal: z

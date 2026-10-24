@@ -1,10 +1,7 @@
 import { Value } from "typebox/value";
 import { afterEach, expect, it, vi } from "vitest";
 import type { PortalSummary } from "../../../packages/gateway-protocol/src/index.js";
-import {
-  DEFAULT_GATEWAY_HTTP_TOOL_DENY,
-  GATEWAY_OWNER_ONLY_CORE_TOOLS,
-} from "../../security/dangerous-tools.js";
+import * as security from "../../security/dangerous-tools.js";
 import * as gateway from "./in-process-gateway.js";
 import type { AgentToolGatewayRequestCaller } from "./in-process-gateway.js";
 import { createAvailablePortalTools } from "./portal-tool.js";
@@ -95,8 +92,8 @@ it("uses a flat closed action schema and owner-only security gate", () => {
   expect(Value.Check(tool.parameters, { action: "open", port: 0 })).toBe(false);
   expect(Value.Check(tool.parameters, { action: "open", port: 3000, path: "app" })).toBe(false);
   expect(Value.Check(tool.parameters, { action: "unknown" })).toBe(false);
-  expect(GATEWAY_OWNER_ONLY_CORE_TOOLS).toContain("portal");
-  expect(DEFAULT_GATEWAY_HTTP_TOOL_DENY).toContain("portal");
+  expect(security.GATEWAY_OWNER_ONLY_CORE_TOOLS).toContain("portal");
+  expect(security.DEFAULT_GATEWAY_HTTP_TOOL_DENY).toContain("portal");
 });
 
 const localPortal: PortalSummary = {
@@ -143,11 +140,12 @@ it.each([
 
 it("rejects action-specific missing and malformed fields before RPC", async () => {
   const recorded = recorder();
-
-  await expect(tool.execute("open", { action: "open" })).rejects.toThrow("port required");
-  await expect(tool.execute("open", { action: "open", port: 3000, path: "app" })).rejects.toThrow(
-    "path must start with /",
-  );
-  await expect(tool.execute("close", { action: "close" })).rejects.toThrow("id required");
+  for (const [params, error] of [
+    [{ action: "open" }, "port required"],
+    [{ action: "open", port: 3000, path: "app" }, "path must start with /"],
+    [{ action: "close" }, "id required"],
+  ] as const) {
+    await expect(tool.execute(params.action, params)).rejects.toThrow(error);
+  }
   expect(recorded.calls).toEqual([]);
 });

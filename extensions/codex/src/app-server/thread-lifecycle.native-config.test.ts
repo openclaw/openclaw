@@ -67,6 +67,99 @@ describe("Codex native configuration lifecycle", () => {
     throw new Error(`unexpected method: ${method}`);
   }
 
+  it("resumes the bound thread after replacing the inference proxy client", async () => {
+    const createClient = (persistedThreads: string[] = []) =>
+      createLeasedCodexLifecycleHarness({
+        agentDir: path.join(tempDir, "agent"),
+        persistedThreads,
+        respond: async (method) => {
+          if (method === "account/read") {
+            return { account: { type: "apiKey" } };
+          }
+          if (method === "thread/start" || method === "thread/resume") {
+            return threadStartResult("proxy-thread");
+          }
+          return readNativeConfig(method);
+        },
+      });
+    const first = await createClient();
+    ownCodexInferenceClient(first.client);
+    let firstUrl: string | undefined;
+    try {
+      const binding = await startOrResumeThread({
+        ...lifecycleParams(first.client),
+        nativeCodeModeEnabled: false,
+      });
+      firstUrl = getCodexInferenceThread(first.client, binding.threadId)?.baseUrl;
+      expect(binding.threadId).toBe("proxy-thread");
+      expect(binding.restrictedThreadConfigFingerprint).toBeDefined();
+    } finally {
+      first.client.close();
+    }
+    const second = await createClient(["proxy-thread"]);
+    ownCodexInferenceClient(second.client);
+    try {
+      const binding = await startOrResumeThread({
+        ...lifecycleParams(second.client),
+        nativeCodeModeEnabled: false,
+      });
+      expect(binding.threadId).toBe("proxy-thread");
+      expect(binding.lifecycle.action).toBe("resumed");
+      expect(getCodexInferenceThread(second.client, binding.threadId)?.baseUrl).not.toBe(firstUrl);
+      expect(second.request.mock.calls.some(([method]) => method === "thread/start")).toBe(false);
+    } finally {
+      second.client.close();
+    }
+  });
+
+  it.each([false, true])(
+    "suppresses plugin suggestions on start and resume without disabling plugins (authored: %s)",
+    async (authored) => {
+      registerCodexTestSessionIdentity(sessionFile, "session-1", "agent:main:session-1");
+      const native = threadStartResult("plugin-thread", { cwd: workspaceDir });
+      const config: JsonObject = {
+        "features.apps": true,
+        "features.plugins": true,
+        plugins: { "calendar@fixture": { enabled: true } },
+        apps: { calendar: { enabled: true } },
+        ...(authored
+          ? { "features.tool_suggest": true, "features.recommended_plugins": true }
+          : {}),
+      };
+      const fixture = await createLeasedCodexLifecycleHarness({
+        agentDir: path.join(tempDir, "agent"),
+        respond: async (method) => {
+          if (method === "thread/start" || method === "thread/resume") {
+            return native;
+          }
+          return readNativeConfig(method);
+        },
+      });
+      const common = { ...lifecycleParams(fixture.client), config };
+      await startOrResumeThread(common);
+      fixture.seed(native, { loaded: false, subscribed: false });
+      await startOrResumeThread(common);
+
+      const requests = fixture.writes
+        .map((line): unknown => JSON.parse(line))
+        .filter(isJsonObject)
+        .filter((frame) => frame.method === "thread/start" || frame.method === "thread/resume");
+      expect(requests.map((frame) => frame.method)).toEqual(["thread/start", "thread/resume"]);
+      for (const request of requests) {
+        expect(request.params).toMatchObject({
+          config: {
+            "features.tool_suggest": false,
+            "features.recommended_plugins": false,
+            "features.apps": true,
+            "features.plugins": true,
+            plugins: { "calendar@fixture": { enabled: true } },
+            apps: { calendar: { enabled: true } },
+          },
+        });
+      }
+    },
+  );
+
   it.each([false, true])(
     "validates every operator parent provider in final native config (overridden: %s)",
     async (overridden) => {

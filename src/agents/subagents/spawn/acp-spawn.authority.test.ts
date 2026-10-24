@@ -145,6 +145,9 @@ it.each([
     const readChild = (sessionKey: string) =>
       sessionAccessor.loadSessionEntry({ sessionKey, agentId: "fixture" });
     if (live) {
+      await sessionAccessor.upsertSessionEntryCore(parentScope, {
+        inheritedGitContributorProfileIds: ["unrelated-a", "unrelated-b"],
+      });
       await sessionAccessor.recordSessionParticipant(parentScope, {
         identity: { type: "profile", id: "human-contributor" },
         promptedAt: 1,
@@ -330,6 +333,7 @@ it.each([
       agentSessionKey: parentSessionKey,
       // Trusted tool construction facts the ACP child records in its lineage receipt.
       senderIsOwner: true,
+      gitContributorProfileId: "human-contributor",
       expectedParentSessionId: "parent-session",
       requesterRunId: parentRunId,
       requesterTurnRunId: parentRunId,
@@ -360,6 +364,11 @@ it.each([
         gatewayCaller.createAdmittedGatewayToolCallerIdentity({
           ...parentScope,
           admittedRunContext: admitted,
+          requesterOrigin: {
+            sessionKey: parentSessionKey,
+            operatorProfileId: "selected-user",
+            delegatedCreatorProfileId: "causal-human",
+          },
         }),
         () =>
           tool!.execute!("pending-acp", {
@@ -380,7 +389,11 @@ it.each([
         "ACP spawn settled before runtime initialization",
       );
       expect(subagentRuns.size).toBe(0);
-      expect(readChild(childSessionKey)).toBeDefined();
+      expect(readChild(childSessionKey)?.createdActor).toMatchObject({
+        type: "agent",
+        id: "main",
+        delegatedBy: { type: "human", source: "profile", id: "causal-human" },
+      });
       if (closure === "abort") {
         const reply = vi.fn();
         const request = { sessionKey: parentSessionKey, runId: parentRunId };

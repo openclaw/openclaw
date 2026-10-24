@@ -10,8 +10,11 @@ on:
       - ui/src/i18n/.i18n/*
       - ui/src/i18n/lib/types.ts
       - ui/src/i18n/lib/registry.ts
+      - src/shared/control-ui-locale.ts
+      - src/shared/public-session-copy.ts
       - ui/config/control-ui-locales.ts
       - scripts/control-ui-i18n.ts
+      - scripts/control-ui-locale-artifacts.ts
       - scripts/control-ui-i18n-verify.ts
       - scripts/lib/control-ui-i18n-catalog.ts
       - scripts/lib/control-ui-i18n-catalog-values.ts
@@ -204,24 +207,14 @@ jobs:
       - name: Prepare locale artifact
         env:
           LOCALE: ${{ matrix.locale }}
-        run: |
-          set -euo pipefail
-          artifact_dir="${RUNNER_TEMP}/control-ui-locale-${LOCALE}"
-          mkdir -p "${artifact_dir}"
-          locale_memory="ui/src/i18n/.i18n/${LOCALE}.tm.jsonl"
-          locale_metadata="ui/src/i18n/.i18n/${LOCALE}.meta.json"
-          paths=("${locale_memory}" "${locale_metadata}"
-            ":(glob)extensions/*/**/i18n/.i18n/${LOCALE}.tm.jsonl"
-            ":(glob)extensions/*/**/i18n/.i18n/${LOCALE}.meta.json")
-          # Workers must not patch shared translated.json or immutable build manifests.
-          git ls-files --cached --others --exclude-standard -z -- "${paths[@]}" | xargs -0 -r git add -A --
-          git diff --cached --binary --full-index -- "${paths[@]}" > "${artifact_dir}/${LOCALE}.patch"
+          LOCALE_SOURCE_COMMIT: ${{ needs.resolve-base.outputs.sha }}
+        run: node --import tsx scripts/control-ui-locale-artifacts.ts pack "${RUNNER_TEMP}/control-ui-locale-${LOCALE}" "${LOCALE}"
 
       - name: Upload locale artifact
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: control-ui-locale-${{ matrix.locale }}
-          path: ${{ runner.temp }}/control-ui-locale-${{ matrix.locale }}/${{ matrix.locale }}.patch
+          path: ${{ runner.temp }}/control-ui-locale-${{ matrix.locale }}/${{ matrix.locale }}.json
           if-no-files-found: error
           retention-days: 1
 
@@ -238,7 +231,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ needs.resolve-base.outputs.sha }}
+          ref: ${{ github.event.repository.default_branch }}
           fetch-depth: 0
           persist-credentials: false
           submodules: false
@@ -250,14 +243,15 @@ jobs:
           path: ${{ runner.temp }}/control-ui-locale-artifacts
           merge-multiple: true
 
-      - name: Apply locale artifacts
-        run: |
-          set -euo pipefail
-          while IFS= read -r patch; do
-            if [ -s "${patch}" ]; then
-              git apply "${patch}"
-            fi
-          done < <(find "${RUNNER_TEMP}/control-ui-locale-artifacts" -type f -name '*.patch' | sort)
+      # Full-history transfer can take minutes after Git advertises the branch tip.
+      # Reuse that history to refresh main before dependencies or worker admission.
+      - name: Refresh canonical main after history download
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          fetch-depth: 0
+          persist-credentials: false
+          submodules: false
 
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
@@ -265,8 +259,39 @@ jobs:
           cache-mode: restore
           install-bun: "false"
 
+      # Reconcile once against the fresh canonical checkout. A second source
+      # movement still defers through the unchanged publisher freshness checks.
+      - name: Restore same-run locale memory
+        id: locale_memory
+        env:
+          LOCALE_SOURCE_COMMIT: ${{ needs.resolve-base.outputs.sha }}
+          LOCALE_SOURCE_LOCALES: ${{ needs.resolve-base.outputs.locales }}
+        run: node --import tsx scripts/control-ui-locale-artifacts.ts restore "${RUNNER_TEMP}/control-ui-locale-artifacts"
+
       - name: Finalize control UI generated artifacts
-        run: node --import tsx scripts/control-ui-i18n.ts sync --write
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENCLAW_DOCS_I18N_OPENAI_API_KEY || secrets.OPENAI_API_KEY }}
+          OPENCLAW_CONTROL_UI_I18N_PROVIDER: openai
+          OPENCLAW_CONTROL_UI_I18N_MODEL: ${{ secrets.OPENCLAW_I18N_MODEL }}
+          OPENCLAW_I18N_FALLBACK_MODEL: ${{ secrets.OPENCLAW_I18N_FALLBACK_MODEL }}
+          OPENCLAW_CONTROL_UI_I18N_THINKING: low
+          OPENCLAW_CONTROL_UI_I18N_AUTH_OPTIONAL: "0"
+          FULL_REFRESH: ${{ inputs.full_refresh || false }}
+          INVALIDATED_LOCALES: ${{ steps.locale_memory.outputs.invalidated }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${OPENAI_API_KEY}" || -z "${OPENCLAW_CONTROL_UI_I18N_MODEL}" || -z "${OPENCLAW_I18N_FALLBACK_MODEL}" ]]; then
+            echo "Translation API key and private primary/fallback model secrets are required." >&2
+            exit 1
+          fi
+          # Compatible workers already honored --force. Only discarded workers
+          # need another forced pass; ordinary source deltas stay incremental.
+          if [[ "${FULL_REFRESH}" == "true" ]]; then
+            while IFS= read -r locale; do
+              node --import tsx scripts/control-ui-i18n.ts sync --locale "${locale}" --write --force
+            done < <(jq -r '.[]' <<< "${INVALIDATED_LOCALES}")
+          fi
+          node --import tsx scripts/control-ui-i18n.ts sync --write
 
       - name: Validate control UI locale refresh
         run: node --import tsx scripts/control-ui-i18n.ts check
@@ -298,8 +323,11 @@ jobs:
             ui/src/i18n/.i18n/raw-copy-baseline.json
             ui/src/i18n/lib/types.ts
             ui/src/i18n/lib/registry.ts
+            src/shared/control-ui-locale.ts
+            src/shared/public-session-copy.ts
             ui/config/control-ui-locales.ts
             scripts/control-ui-i18n.ts
+            scripts/control-ui-locale-artifacts.ts
             scripts/control-ui-i18n-verify.ts
             scripts/lib/control-ui-i18n-catalog.ts
             scripts/lib/control-ui-i18n-catalog-values.ts
@@ -342,7 +370,7 @@ jobs:
 
             ## Why This Change Was Made
 
-            The Control UI Locale Refresh workflow generated this update from `${{ needs.resolve-base.outputs.sha }}` and published it through a reviewable automation branch.
+            The Control UI Locale Refresh workflow generated worker memory from `${{ needs.resolve-base.outputs.sha }}`, reconciled it once against `${{ steps.locale_memory.outputs.sha }}`, and published the current output through a reviewable automation branch.
 
             ## User Impact
 

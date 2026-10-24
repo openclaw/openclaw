@@ -1,12 +1,20 @@
+import { randomBytes } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import type { Worker } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { createSessionActorFactory } from "../config/sessions/session-actor-durable.js";
 import * as backoff from "../infra/backoff.js";
 import { formatErrorMessageWithCode } from "../infra/errors.js";
-import type { SqliteWorkerExecutionAuthority } from "../infra/sqlite-worker-contract.js";
+import { classifyGatewayStorageFailure } from "../infra/sqlite-error-diagnostics.js";
+import {
+  hasSqliteWorkerOutcomeUnknown,
+  isSqliteWorkerError,
+  SqliteWorkerError,
+  type SqliteWorkerExecutionAuthority,
+} from "../infra/sqlite-worker-contract.js";
 import {
   createSqliteWorkerOperationAdmission,
   readSqliteWorkerExecutionAuthority,
@@ -24,12 +32,17 @@ import { readAgentDatabaseExecutionAuthority } from "./openclaw-agent-execution-
 import type { AgentDatabaseExecutionScope } from "./openclaw-agent-execution-contract.js";
 import { captureOpenClawAgentDatabaseExecution } from "./openclaw-agent-execution.js";
 import { closeOpenClawStateDatabaseAsync } from "./openclaw-state-db.js";
+import { captureOpenClawStateWorkerContext } from "./openclaw-state-worker-context.js";
+import {
+  createOpenClawStateWorkerLease,
+  executeOpenClawStateWorker,
+} from "./openclaw-state-worker-store.js";
 
 // Kill the real worker mid-operation, then refuse its lease release. Recovery must
 // retain cleanup custody without permanently refusing later requests (#159438).
 const fault = vi.hoisted(() => ({
   marker: "close-wedge-kill-marker",
-  enabled: new SharedArrayBuffer(3 * Int32Array.BYTES_PER_ELEMENT),
+  enabled: new SharedArrayBuffer(4 * Int32Array.BYTES_PER_ELEMENT),
   workers: new Set<Worker>(),
 }));
 
@@ -41,7 +54,29 @@ vi.mock("../infra/worker-cpu.js", async (importOriginal) => {
     // Fault 2: transient lease insertion/cleanup failures.
     const prepare = DatabaseSync.prototype.prepare;
     DatabaseSync.prototype.prepare = function (sql) {
+      if ([5, 6].includes(Atomics.load(new Int32Array(workerData.closeWedgeEnabled), 0)) &&
+          (Atomics.load(new Int32Array(workerData.closeWedgeEnabled), 0) === 6 ||
+          this.location()?.endsWith("openclaw-agent.sqlite")) && /insert into/i.test(sql)) {
+        const pages = prepare.call(this, "PRAGMA page_count").get().page_count;
+        this.exec("PRAGMA max_page_count=" + pages);
+      }
       const statement = prepare.call(this, sql);
+      if (/insert into/i.test(sql)) {
+        const run = statement.run.bind(statement);
+        statement.run = (...args) => {
+          try {
+            return run(...args);
+          } catch (error) {
+            const fault = new Int32Array(workerData.closeWedgeEnabled);
+            if ([5, 6].includes(Atomics.load(fault, 0)) && error.errcode === 13) {
+              // Lose the reply after a real SQLITE_FULL, leaving its outcome unknown to the host.
+              Atomics.add(fault, 3, 1);
+              process.exit(3);
+            }
+            throw error;
+          }
+        };
+      }
       const faults = [
         [/insert into "?agent_database_leases"?/i, (fault) => {
           if (Atomics.compareExchange(fault, 0, 3, 0) === 3 || Atomics.load(fault, 0) === 4) {
@@ -128,6 +163,53 @@ const capture = (env: ReturnType<typeof makeEnv>, agentId = "first") =>
   captureOpenClawAgentDatabaseExecution({ agentId, env });
 const faultState = new Int32Array(fault.enabled);
 
+it("recovers after a full agent database write settles", async () => {
+  const env = makeEnv();
+  const execution = capture(env);
+  await execution.prepare(source);
+  const context = captureOpenClawStateWorkerContext({ env });
+  const idleLease = createOpenClawStateWorkerLease(context);
+  try {
+    await idleLease.ready;
+    Atomics.store(faultState, 0, 6);
+    const sharedFailure: unknown = await executeOpenClawStateWorker(context, {
+      type: "capture.persistPayload",
+      input: { data: randomBytes(1_000_000), contentType: "application/octet-stream" },
+    }).catch((error: unknown) => error);
+    expect(sharedFailure).toMatchObject({ code: "outcome-unknown" });
+    Atomics.store(faultState, 0, 5);
+    const failure: unknown = await execution
+      .runExisting(source, (scope) =>
+        scope.execute({
+          type: "session.transcript.initialize",
+          input: { sessionKey: "agent:first:full", sessionId: "full".repeat(100_000) },
+        }),
+      )
+      .catch((error: unknown) => error);
+    Atomics.store(faultState, 0, 0);
+    expect(failure).toBeInstanceOf(Error);
+    expect(failure).toMatchObject({ code: "outcome-unknown" });
+    const recovered = capture(env);
+    try {
+      await expect(
+        recovered.runExisting(source, (scope) =>
+          scope.execute({
+            type: "session.transcript.initialize",
+            input: { sessionKey: "agent:first:recovered", sessionId: "recovered" },
+          }),
+        ),
+      ).resolves.toMatchObject({ kind: "session-transcript-initialized" });
+      expect(Atomics.load(faultState, 3)).toBe(2);
+    } finally {
+      await recovered.release();
+    }
+  } finally {
+    Atomics.store(faultState, 0, 0);
+    await idleLease.release();
+    await execution.release();
+  }
+});
+
 it.each(["retry", "deadline", "shutdown"] as const)(
   "keeps contention recoverable while preserving the %s boundary",
   async (ending) => {
@@ -197,6 +279,84 @@ function executionSource(
   };
 }
 const source = executionSource();
+
+it("does not fence an actor when its worker stops before command admission", async () => {
+  const env = makeEnv();
+  const execution = capture(env);
+  await execution.prepare(source);
+  const identity = execution.fileIdentity;
+  if (!identity) {
+    throw new Error("Actor recovery fixture requires its prepared database identity");
+  }
+  const sessionKey = "agent:first:pre-admission-recovery";
+  const scope = {
+    agentId: "first",
+    storePath: execution.path,
+    sessionKey,
+    sessionId: "actor-recovery",
+  };
+  const actor = await createSessionActorFactory({
+    agentId: "first",
+    env,
+    path: execution.path,
+  }).acquire({ database: identity, sessionKey }, { assertCurrent() {}, assertReadable() {} });
+  const authorize = vi.fn();
+  const authority = { assertCurrent() {}, authorize };
+  try {
+    await expect(
+      actor.appendTranscriptEvent(
+        {
+          commandId: "initial-message",
+          phaseId: "setup",
+          append: {
+            kind: "message",
+            input: {
+              scope,
+              cwd: "/synthetic",
+              messageJson: JSON.stringify({ role: "user", content: "hello" }),
+            },
+            initialization: { scope, entry: { sessionId: scope.sessionId, updatedAt: 1 } },
+          },
+        },
+        authority,
+      ),
+    ).resolves.toMatchObject({ kind: "committed" });
+    authorize.mockClear();
+    Atomics.store(faultState, 0, 2);
+    const failed = await actor.patch(
+      {
+        commandId: fault.marker,
+        phaseId: "before-admission",
+        reducers: [{ kind: "activity", updatedAt: 2 }],
+      },
+      authority,
+    );
+    Atomics.store(faultState, 0, 0);
+    expect(authorize).not.toHaveBeenCalled();
+    expect(failed).toMatchObject({ kind: "rolled-back" });
+    expect(await readEntries(execution, sessionKey)).toMatchObject({
+      entries: [{ sessionKey, entry: { updatedAt: 1 } }],
+    });
+    await expect(
+      actor.patch(
+        {
+          commandId: "after-worker-restart",
+          phaseId: "recovery",
+          reducers: [{ kind: "activity", updatedAt: 3 }],
+        },
+        authority,
+      ),
+    ).resolves.toMatchObject({ kind: "committed" });
+    expect(await readEntries(execution, sessionKey)).toMatchObject({
+      entries: [{ sessionKey, entry: { updatedAt: 3 } }],
+    });
+  } finally {
+    Atomics.store(faultState, 0, 0);
+    await actor.release();
+    await execution.release();
+  }
+});
+
 function readEntries(
   execution: ReturnType<typeof captureOpenClawAgentDatabaseExecution>,
   key: string | string[],
@@ -250,7 +410,15 @@ it("reopens a native generation lost between operations before dispatch", async 
   const agentWorker = [...fault.workers].at(-1);
   expect(agentWorker).toBeDefined();
   await agentWorker!.terminate();
-  expect(() => claim.assertCurrent()).toThrow("Agent database execution lost its native owner");
+  const claimFailure = () => {
+    try {
+      claim.assertCurrent();
+    } catch (error) {
+      return error;
+    }
+    return undefined;
+  };
+  expect(isSqliteWorkerError(claimFailure(), "unavailable")).toBe(true);
 
   let dispatched = 0;
   expect(
@@ -263,7 +431,7 @@ it("reopens a native generation lost between operations before dispatch", async 
   const replacement = execution.capturePreparedGenerationClaim();
   expect(replacement?.identity).toBe(claim.identity);
   expect(replacement?.incarnation).not.toBe(claim.incarnation);
-  expect(() => claim.assertCurrent()).toThrow("Agent database execution lost its native owner");
+  expect(isSqliteWorkerError(claimFailure(), "unavailable")).toBe(true);
   expect(await readEntries(execution, "still-healthy")).toMatchObject({ entries: [] });
   await execution.release();
 });
@@ -282,7 +450,9 @@ it("surfaces the native cleanup cause while the close still fails, then recovers
   Atomics.store(faultState, 0, 1);
   const failure: unknown = await readEntries(first, fault.marker).catch((error: unknown) => error);
   expect(failure).toBeInstanceOf(Error);
-  expect(formatErrorMessageWithCode(failure)).toContain("Agent operation and cleanup failed");
+  expect(hasSqliteWorkerOutcomeUnknown(failure)).toBe(true);
+  expect(failure).not.toBeInstanceOf(AggregateError);
+  expect(failure).toMatchObject({ cause: expect.any(AggregateError) });
   expect(readAgentDatabaseExecutionAuthority(original)).toBe(false);
   await first.release().catch(() => undefined);
 
@@ -321,6 +491,37 @@ it("surfaces the native cleanup cause while the close still fails, then recovers
   expect(readAgentDatabaseExecutionAuthority(authority!)).toBe(true);
   expect(readAgentDatabaseExecutionAuthority(original)).toBe(false);
   await recovered.release();
+});
+
+it("keeps unavailable cleanup failures outside retry handling while preserving their primary outcome", async () => {
+  const execution = capture(makeEnv());
+  await execution.prepare(source);
+  const primary = new SqliteWorkerError("synthetic unavailable operation", "unavailable");
+  const operation = vi.fn(async (scope: AgentDatabaseExecutionScope) => {
+    await scope
+      .execute({ type: "session.entry.read", input: { sessionKeys: [fault.marker] } })
+      .catch(() => {
+        throw primary;
+      });
+  });
+  Atomics.store(faultState, 0, 1);
+  try {
+    const failure: unknown = await execution
+      .runExisting(source, operation)
+      .catch((error: unknown) => error);
+    expect(operation).toHaveBeenCalledOnce();
+    expect(failure).toBeInstanceOf(Error);
+    expect(failure).toMatchObject({
+      cause: expect.objectContaining({ cause: primary, errors: [primary, expect.any(Error)] }),
+    });
+    expect(classifyGatewayStorageFailure(failure)).toBe("unavailable");
+    expect(hasSqliteWorkerOutcomeUnknown(failure)).toBe(false);
+    expect(isSqliteWorkerError(failure, "unavailable")).toBe(false);
+    expect(isSqliteWorkerError(primary, "unavailable")).toBe(true);
+  } finally {
+    Atomics.store(faultState, 0, 0);
+    await execution.release();
+  }
 });
 
 it("keeps another agent's admitted database usable after a deleted agent refuses preparation", async () => {

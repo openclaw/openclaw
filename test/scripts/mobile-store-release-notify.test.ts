@@ -10,11 +10,17 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const webhook = "https://discord.com/api/webhooks/123/synthetic-webhook-token";
 const jobsPath = "/repos/openclaw/openclaw/actions/runs/123/attempts/1/jobs?per_page=100&page=1";
 const releaseName = "Prepare and upload iOS release";
-const successfulJob = {
-  name: releaseName,
-  conclusion: "success",
-  steps: [{ name: releaseName, conclusion: "success" }],
-};
+type Step = { name: string; conclusion: string };
+const makeStep = (conclusion = "success", name = releaseName): Step => ({ name, conclusion });
+const job = (conclusion = "success", steps = [makeStep()], name = releaseName) => ({
+  name,
+  conclusion,
+  steps,
+});
+const successfulJob = job();
+const failedJob = job("failure", [makeStep("failure")]);
+type Outcome = [conclusion: string | null, detail: string, jobs?: ReturnType<typeof job>[]];
+const webhookPath = "/api/webhooks/123/synthetic-webhook-token?wait=true";
 type Reply = {
   body?: unknown;
   status?: number;
@@ -45,12 +51,10 @@ function evaluate(options: Options = {}) {
   const preload = join(root, "fetch.mjs");
   const platform = options.platform ?? "iOS";
   const uploadName = `Prepare and upload ${platform} release`;
-  const jobs = options.jobs ?? [
-    { ...successfulJob, name: uploadName, steps: [{ name: uploadName, conclusion: "success" }] },
-  ];
+  const jobs = options.jobs ?? [job("success", [makeStep("success", uploadName)], uploadName)];
   const responses = {
     [jobsPath]: { body: { total_count: jobs.length, jobs } },
-    "/api/webhooks/123/synthetic-webhook-token?wait=true": { body: { id: "456" } },
+    [webhookPath]: { body: { id: "456" } },
     ...options.responses,
   };
   writeFileSync(
@@ -127,6 +131,10 @@ globalThis.fetch = async (url, options = {}) => {
   };
 }
 
+function expression(value: string, github: Record<string, unknown>) {
+  return runInNewContext(value.replace(/^\$\{\{\s*|\s*\}\}$/gu, ""), { github });
+}
+
 describe("scheduled mobile store release notifications", () => {
   it("keeps webhook credentials behind the scheduled-run guard and trusted default-branch checkout", () => {
     const workflow = parse(
@@ -148,9 +156,10 @@ describe("scheduled mobile store release notifications", () => {
         };
       };
     };
+    const { notify } = workflow.jobs;
     expect(workflow.on.workflow_run).toMatchObject({ types: ["completed"], branches: ["main"] });
     expect(workflow.permissions).toEqual({});
-    expect(workflow.jobs.notify.permissions).toEqual({ contents: "read", actions: "read" });
+    expect(notify.permissions).toEqual({ contents: "read", actions: "read" });
     const github = {
       sha: "a".repeat(40),
       repository: "openclaw/openclaw",
@@ -170,35 +179,23 @@ describe("scheduled mobile store release notifications", () => {
       ["schedule", "Android Internal testing distribution", false],
       ["workflow_dispatch", "iOS Store release (weekly)", false],
     ] as const) {
-      expect(
-        runInNewContext(workflow.jobs.notify.if, {
-          github: {
-            ...github,
-            event: { workflow_run: { ...github.event.workflow_run, event, display_title } },
-          },
-        }),
-      ).toBe(expected);
+      Object.assign(github.event.workflow_run, { event, display_title });
+      expect(expression(notify.if, github)).toBe(expected);
       if (expected) {
-        expect(
-          runInNewContext(workflow.jobs.notify.environment.replace(/^\$\{\{\s*|\s*\}\}$/gu, ""), {
-            github: { event: { workflow_run: { display_title } } },
-          }),
-        ).toBe(display_title.startsWith("iOS") ? "ios-store-release" : "android-store-release");
+        expect(expression(notify.environment, { event: { workflow_run: { display_title } } })).toBe(
+          display_title.startsWith("iOS") ? "ios-store-release" : "android-store-release",
+        );
       }
     }
-    const checkout = workflow.jobs.notify.steps.find((step) =>
-      step.uses?.startsWith("actions/checkout@"),
-    );
+    const checkout = notify.steps.find((step) => step.uses?.startsWith("actions/checkout@"));
     expect(checkout?.with?.["persist-credentials"]).toBe(false);
     const ref = checkout?.with?.ref;
     expect(typeof ref).toBe("string");
-    expect(runInNewContext(String(ref).replace(/^\$\{\{\s*|\s*\}\}$/gu, ""), { github })).toBe(
-      github.sha,
-    );
-    const notify = workflow.jobs.notify.steps.find(
+    expect(expression(String(ref), github)).toBe(github.sha);
+    const send = notify.steps.find(
       (step) => step.run === "node scripts/github/mobile-store-release-notify.mjs",
     );
-    expect(notify?.env?.DISCORD_MOBILE_RELEASE_WEBHOOK_URL).toBe(
+    expect(send?.env?.DISCORD_MOBILE_RELEASE_WEBHOOK_URL).toBe(
       "${{ secrets.DISCORD_MOBILE_RELEASE_WEBHOOK_URL }}",
     );
   });
@@ -206,25 +203,22 @@ describe("scheduled mobile store release notifications", () => {
   it.each([
     ["iOS", "Build uploaded and prepared in App Store Connect."],
     ["Android", "Google Play upload completed."],
-  ] as const)(
-    "reports a proven %s store release without mentions or embeds",
-    (platform, detail) => {
-      const result = evaluate({ platform });
-      expect(result.status, result.output).toBe(0);
-      expect(result.posts).toHaveLength(1);
-      expect(result.posts[0]).toMatchObject({
-        url: `${webhook}?wait=true`,
-        redirect: "error",
-        abortable: true,
-        body: {
-          content: `✅ **${platform} release uploaded successfully**\n${detail}\n[**View run ↗**](https://github.com/openclaw/openclaw/actions/runs/123/attempts/1)`,
-          flags: 4,
-          allowed_mentions: { parse: [] },
-        },
-      });
-      expect(result.requests.every((request) => request.abortable)).toBe(true);
-    },
-  );
+  ] as const)("reports a proven %s upload", (platform, detail) => {
+    const result = evaluate({ platform });
+    expect(result.status, result.output).toBe(0);
+    expect(result.posts).toHaveLength(1);
+    expect(result.posts[0]).toMatchObject({
+      url: `${webhook}?wait=true`,
+      redirect: "error",
+      abortable: true,
+      body: {
+        content: `✅ **${platform} release uploaded successfully**\n${detail}\n[**View run ↗**](https://github.com/openclaw/openclaw/actions/runs/123/attempts/1)`,
+        flags: 4,
+        allowed_mentions: { parse: [] },
+      },
+    });
+    expect(result.requests.every((request) => request.abortable)).toBe(true);
+  });
 
   it.each([
     { event: "workflow_dispatch" },
@@ -269,7 +263,7 @@ describe("scheduled mobile store release notifications", () => {
     expect(result.posts[0]?.body?.content).toContain("/attempts/2)");
   });
 
-  it.each([
+  it.each<Outcome>([
     ["failure", "The workflow failed during Prepare and upload iOS release."],
     ["timed_out", "The run exceeded its time limit during Prepare and upload iOS release."],
     ["cancelled", "The run was cancelled during Prepare and upload iOS release."],
@@ -280,97 +274,41 @@ describe("scheduled mobile store release notifications", () => {
     ["stale", "GitHub marked the run stale."],
     [null, "The release outcome could not be confirmed. Check the run."],
     ["unrecognized", "The release outcome could not be confirmed. Check the run."],
-  ])(
-    "reports %s conservatively when the aggregate upload step did not succeed",
-    (conclusion, reason) => {
-      const result = evaluate({
-        run: { conclusion },
-        jobs: [
-          {
-            ...successfulJob,
-            conclusion: "failure",
-            steps: [{ name: releaseName, conclusion: "failure" }],
-          },
-        ],
-      });
-      expect(result.status, result.output).toBe(0);
-      expect(result.posts[0]?.body?.content).toContain(
-        `⚠️ **iOS release needs attention**\n${reason} Store acceptance is unconfirmed.`,
-      );
-      expect(result.posts[0]?.body?.flags).toBe(4);
-    },
-  );
-
-  it.each([
-    {
-      jobs: [{ ...successfulJob, conclusion: "skipped", steps: [] }],
-      detail: "The store release job was skipped. Upload was not started.",
-    },
-    {
-      jobs: [],
-      detail:
-        "The release outcome could not be confirmed. Check the run. Store acceptance is unconfirmed.",
-    },
-    {
-      jobs: [{ ...successfulJob, steps: [] }],
-      detail:
-        "The release outcome could not be confirmed. Check the run. Store acceptance is unconfirmed.",
-    },
-  ])(
-    "does not mistake a successful workflow conclusion for a completed upload: $detail",
-    ({ jobs, detail }) => {
-      const result = evaluate({ jobs });
-      expect(result.posts[0]?.body?.content).toContain(
-        `⚠️ **iOS release needs attention**\n${detail}`,
-      );
-    },
-  );
-
-  it("distinguishes a qualification failure from an attempted upload", () => {
-    const result = evaluate({
-      run: { conclusion: "failure" },
-      jobs: [
-        {
-          name: "qualify / iPad",
-          conclusion: "failure",
-          steps: [{ name: "Run qualification", conclusion: "failure" }],
-        },
-        { ...successfulJob, conclusion: "skipped", steps: [] },
-      ],
-    });
-    expect(result.posts[0]?.body?.content).toContain(
+    ["success", "The store release job was skipped. Upload was not started.", [job("skipped", [])]],
+    ...[[], [job("success", [])]].map((jobs): Outcome => [
+      "success",
+      "The release outcome could not be confirmed. Check the run. Store acceptance is unconfirmed.",
+      jobs,
+    ]),
+    [
+      "failure",
       "The workflow failed during Run qualification. The store release job was skipped; upload was not started.",
-    );
+      [
+        job("failure", [makeStep("failure", "Run qualification")], "qualify / iPad"),
+        job("skipped", []),
+      ],
+    ],
+    [
+      "failure",
+      "The workflow failed during Setup Ruby. Upload was not started.",
+      [job("failure", [makeStep("failure", "Setup Ruby"), makeStep("skipped")])],
+    ],
+    [
+      "failure",
+      "Build uploaded. The workflow failed during Retain release plan and notes.",
+      [job("failure", [makeStep("failure", "Retain release plan and notes"), makeStep()])],
+    ],
+  ])("reports %s release evidence: %s", (conclusion, reason, jobs) => {
+    const detail = jobs ? reason : `${reason} Store acceptance is unconfirmed.`;
+    const result = evaluate({ run: { conclusion }, jobs: jobs ?? [failedJob] });
+    expect(result.status, result.output).toBe(0);
+    expect(result.posts[0]?.body).toMatchObject({
+      content: expect.stringContaining(`⚠️ **iOS release needs attention**\n${detail}`),
+      flags: 4,
+    });
   });
 
-  it.each(["skipped", "success"])(
-    "preserves evidence of a %s upload when another step fails",
-    (upload) => {
-      const result = evaluate({
-        run: { conclusion: "failure" },
-        jobs: [
-          {
-            ...successfulJob,
-            conclusion: "failure",
-            steps: [
-              {
-                name: upload === "skipped" ? "Setup Ruby" : "Retain release plan and notes",
-                conclusion: "failure",
-              },
-              { name: releaseName, conclusion: upload },
-            ],
-          },
-        ],
-      });
-      expect(result.posts[0]?.body?.content).toContain(
-        upload === "skipped"
-          ? "The workflow failed during Setup Ruby. Upload was not started."
-          : "Build uploaded. The workflow failed during Retain release plan and notes.",
-      );
-    },
-  );
-
-  it("still reports an unconfirmed result when metadata lookup exhausts retries", () => {
+  it("reports an unconfirmed result after exhausted metadata retries", () => {
     const result = evaluate({
       responses: { [jobsPath]: { status: 503, body: { secret: webhook } } },
     });
@@ -382,10 +320,10 @@ describe("scheduled mobile store release notifications", () => {
     expect(result.output).not.toContain(webhook);
   });
 
-  it("retries network errors and honors Discord rate limiting without rerunning a release", () => {
+  it("retries transport errors and rate limits without rerunning releases", () => {
     const result = evaluate({
       responses: {
-        "/api/webhooks/123/synthetic-webhook-token?wait=true": [
+        [webhookPath]: [
           { error: `Failed to fetch ${webhook}` },
           { status: 429, body: { retry_after: 2.5 } },
           { body: { id: "456" } },
@@ -407,7 +345,7 @@ describe("scheduled mobile store release notifications", () => {
     { error: `Network failure at ${webhook}` },
   ])("fails notification delivery without exposing webhook credentials: %j", (reply) => {
     const result = evaluate({
-      responses: { "/api/webhooks/123/synthetic-webhook-token?wait=true": reply },
+      responses: { [webhookPath]: reply },
     });
     expect(result.status).toBe(1);
     expect(result.posts.length).toBeLessThanOrEqual(3);
@@ -417,7 +355,7 @@ describe("scheduled mobile store release notifications", () => {
   });
 
   it.each(["", "https://example.com/api/webhooks/123/private-token"])(
-    "requires a configured Discord webhook before making requests",
+    "rejects bad webhooks",
     (value) => {
       const result = evaluate({ webhook: value });
       expect(result).toMatchObject({ status: 1, requests: [] });

@@ -1,8 +1,8 @@
-/** Prompt fixture for interactive Doctor service repair. */
 import { expect, it, vi, type Mock } from "vitest";
 import * as runtimePaths from "../daemon/runtime-paths.js";
 import type { GatewayService } from "../daemon/service-types.js";
 import { buildGatewayInstallPlan } from "./daemon-install-helpers.js";
+import { makePrompter } from "./doctor-auth-flat-profiles.test-support.js";
 import { createDoctorPrompter } from "./doctor-prompter.js";
 import { resolveGatewayInstallToken } from "./gateway-install-token.js";
 
@@ -21,31 +21,28 @@ export function mockDoctorRuntimeFacts(runExec: Mock<typeof import("../process/e
 
 export function createPrompter(confirmImpl: (message: string) => boolean) {
   return {
-    confirm: vi.fn(),
-    confirmAutoFix: vi.fn(),
-    confirmAggressiveAutoFix: vi.fn(),
+    ...makePrompter(false),
     confirmRuntimeRepair: vi.fn(async ({ message }: { message: string }) => confirmImpl(message)),
     select: vi.fn(),
-    shouldRepair: false,
-    shouldForce: false,
-    repairMode: {
-      shouldRepair: false,
-      shouldForce: false,
-      nonInteractive: false,
-      canPrompt: true,
-      updateInProgress: false,
-    },
   };
 }
 
 export function setPlatform(platform: NodeJS.Platform) {
-  const originalPlatformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
-  if (!originalPlatformDescriptor) {
-    return;
-  }
-  Object.defineProperty(process, "platform", {
-    ...originalPlatformDescriptor,
-    value: platform,
+  Object.defineProperty(process, "platform", { value: platform });
+}
+
+export function mockGatewayInstall(
+  service: Pick<GatewayService, "isLoaded" | "readRuntime">,
+  programArguments: string[] = [],
+  environment: Record<string, string> = {},
+) {
+  vi.mocked(service.isLoaded).mockResolvedValue(false);
+  vi.mocked(service.readRuntime).mockResolvedValue({ status: "stopped" });
+  vi.mocked(resolveGatewayInstallToken).mockResolvedValueOnce({ warnings: [] });
+  vi.mocked(buildGatewayInstallPlan).mockResolvedValueOnce({
+    runtime: "bun",
+    programArguments,
+    environment,
   });
 }
 
@@ -70,14 +67,7 @@ export function registerRunningBunFallbackTest({
       nodeSharedSqlite: false,
     });
     setPlatform("linux");
-    vi.mocked(service.isLoaded).mockResolvedValue(false);
-    vi.mocked(service.readRuntime).mockResolvedValue({ status: "stopped" });
-    vi.mocked(resolveGatewayInstallToken).mockResolvedValueOnce({ warnings: [] });
-    vi.mocked(buildGatewayInstallPlan).mockResolvedValueOnce({
-      runtime: "bun",
-      programArguments: [],
-      environment: {},
-    });
+    mockGatewayInstall(service);
     // Service-install consent is separate from Doctor's --fix --non-interactive runtime selection.
     const prompter = createPrompter(() => true);
     prompter.select.mockImplementation(
@@ -89,10 +79,12 @@ export function registerRunningBunFallbackTest({
     try {
       await runDoctor({ prompter });
       const selection = vi.mocked(buildGatewayInstallPlan).mock.calls[0]?.[0];
-      expect(selection?.runtime).toBe("bun");
-      expect(selection?.runtimeExplicit).toBe(true);
-      expect(selection?.runtimePath).toBe(process.execPath);
-      expect(selection?.pinnedRuntimePath).toBeUndefined();
+      expect(selection).toMatchObject({
+        runtime: "bun",
+        runtimeExplicit: true,
+        runtimePath: process.execPath,
+        pinnedRuntimePath: undefined,
+      });
       expect(prompter.select).toHaveBeenCalledExactlyOnceWith(
         expect.objectContaining({ initialValue: "bun" }),
         "bun",

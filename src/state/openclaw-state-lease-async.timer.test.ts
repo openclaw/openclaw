@@ -136,6 +136,46 @@ function fixture() {
 }
 
 describe("async state lease timer", () => {
+  it.each([
+    { availableAfterMs: 2_400, remainsOwned: true },
+    { availableAfterMs: 3_100, remainsOwned: false },
+  ])(
+    "retains ownership only when contention clears before expiry ($availableAfterMs ms)",
+    async ({ availableAfterMs, remainsOwned }) => {
+      const f = fixture();
+      const availableAt = Date.now() + availableAfterMs;
+      f.onRenew.mockImplementation(async (command) => {
+        if (Date.now() < availableAt) {
+          throw Object.assign(new Error("database is locked"), {
+            code: "ERR_SQLITE_ERROR",
+            errcode: 5,
+          });
+        }
+        return command.publish(Date.now() + 3_000);
+      });
+      const result = f.run();
+      try {
+        const { lease, within } = await f.enter(result);
+        await within(() => vi.advanceTimersByTimeAsync(3_300));
+        expect(lease.signal.aborted).toBe(!remainsOwned);
+        if (remainsOwned) {
+          await within(() => lease.assertOwned());
+        } else {
+          await expect(within(() => lease.assertOwned())).rejects.toMatchObject(lostLease.error);
+        }
+        f.finishCallback.resolve();
+        expect(await result.outcome).toMatchObject(
+          remainsOwned ? { ok: true, value: "completed" } : lostLease,
+        );
+        expect(f.release).toHaveBeenCalledOnce();
+      } finally {
+        f.finishCallback.resolve();
+        await result.outcome;
+        await f.maintenance.close();
+      }
+    },
+  );
+
   it.each([false, true])(
     "joins renewal before sealing public methods (committed before reply: %s)",
     async (committedEarly) => {

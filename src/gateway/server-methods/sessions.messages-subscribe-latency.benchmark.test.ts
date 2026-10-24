@@ -1,37 +1,30 @@
 import { performance } from "node:perf_hooks";
 import { afterEach, expect, it, vi } from "vitest";
-import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
   persistSessionTranscriptTurn,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { createOperatorApprovalSessionEventRuntime } from "../operator-approval-session-events.js";
 import * as approvals from "../operator-approval-store.js";
-import { createSessionMessageSubscriberRegistry } from "../server-chat-state.js";
 import { handleGatewayRequest } from "../server-methods.js";
 import { getSessionRowProjection } from "../session-row-projection-access.js";
-import { roleClient, rolePolicyConfig } from "../session-sharing.test-utils.js";
 import * as lifetime from "../session-utils-read-lifetime.js";
 import { createHistoryReadContext } from "./chat-history.test-helpers.js";
 import { disposeSessionReadContexts } from "./sessions-read-cache.test-support.js";
 import { sessionSubscriptionHandlers } from "./sessions-subscriptions.js";
-import { proveSubscriptionDoesNotWaitForDisplayRows } from "./sessions.messages-subscribe-wait.test-support.js";
+import {
+  prepareSubscriptionFixture,
+  proveSubscriptionDoesNotWaitForDisplayRows,
+} from "./sessions.messages-subscribe-wait.test-support.js";
 
 afterEach(() => vi.restoreAllMocks());
 
-it("subscribes during an active turn among 8,000 sessions without waiting for display facts", async ({
-  signal,
-}) => {
-  await proveSubscriptionDoesNotWaitForDisplayRows(8_000, signal);
-});
+it("subscribes during an active turn among 8,000 sessions", ({ signal }) =>
+  proveSubscriptionDoesNotWaitForDisplayRows(8_000, signal));
 
 it("measures subscription dispatch with a 160k-token transcript", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const cfg = rolePolicyConfig();
-    cfg.gateway!.roles!.definitions.view!.scopes.push("operator.approvals");
-    await state.writeConfig(cfg);
-    setRuntimeConfigSnapshot(cfg);
+    const { cfg, client, subscribers, runtime } = await prepareSubscriptionFixture(state, "perf");
     const scope = {
       agentId: "main",
       sessionKey: "agent:main:subscribe-perf",
@@ -41,21 +34,6 @@ it("measures subscription dispatch with a 160k-token transcript", async () => {
       sessionId: scope.sessionId,
       updatedAt: 1,
       visibility: "shared",
-    });
-    const subscribers = createSessionMessageSubscriberRegistry();
-    const client = { ...roleClient("view", "perf-reader"), connId: "perf-reader" };
-    client.connect.scopes = ["operator.sessions.read", "operator.approvals"];
-    client.connect.device = {
-      id: "perf-device",
-      publicKey: "key",
-      signature: "signature",
-      signedAt: 1,
-      nonce: "nonce",
-    };
-    const runtime = createOperatorApprovalSessionEventRuntime({
-      clients: [client],
-      sessionMessageSubscribers: subscribers,
-      broadcastToConnIds: () => {},
     });
     const context = await createHistoryReadContext({
       getRuntimeConfig: () => cfg,

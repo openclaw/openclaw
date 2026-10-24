@@ -43,7 +43,6 @@ export function createWebChannelStatusController(statusSink?: (status: WebChanne
 
   return {
     emit,
-    snapshot: () => status,
     noteConnected(at = Date.now()) {
       Object.assign(status, channelReadyPatch({ lastConnectedAt: at, lastEventAt: at }));
       Object.assign(status, createTransportActivityStatusPatch(at));

@@ -1,9 +1,11 @@
+import { setImmediate as nextTurn } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DiagnosticsHeapProfileParams } from "../../packages/gateway-protocol/src/schema/diagnostics.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { runNodeScript } from "../../test/helpers/run-node-script.js";
 import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
+import recordedProfile from "./diagnostic-heap-profile.fixture.json" with { type: "json" };
 import { diagnosticProfileEntrypoints } from "./diagnostic-profile-runtime.test-support.js";
 
 const native = vi.hoisted(() => ({
@@ -17,7 +19,10 @@ vi.mock("node:v8", async (original) => ({
   ...(await original<typeof import("node:v8")>()),
   getHeapSpaceStatistics: native.heapSpaces,
 }));
-vi.mock("node:timers/promises", () => ({ setTimeout: native.wait }));
+vi.mock("node:timers/promises", async (original) => ({
+  ...(await original<typeof import("node:timers/promises")>()),
+  setTimeout: native.wait,
+}));
 vi.mock("node:trace_events", () => ({ getEnabledCategories: () => undefined }));
 vi.mock("../infra/openclaw-root.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/openclaw-root.js")>()),
@@ -89,6 +94,18 @@ afterEach(() => {
 });
 
 describe("diagnostic heap profile owner", () => {
+  it("preserves the sanitized bytes of a recorded synthetic native profile", async () => {
+    const { sanitizeDiagnosticHeapProfile } = await import("./diagnostic-heap-profile.js");
+    // Recorded on Node 26; only the fixture installation path was normalized.
+    // Expected bytes came from the synchronous sanitizer before this change.
+    const result = await sanitizeDiagnosticHeapProfile(
+      recordedProfile.raw,
+      recordedProfile.packageRoot,
+      { ...recordedProfile.metadata, durationLimitReason: "collected-samples" },
+    );
+    expect(JSON.stringify(result)).toBe(JSON.stringify(recordedProfile.sanitized));
+  });
+
   it.each([true])(
     "preserves samples and memory readings with unattributed V8 samples=%s",
     async (unattributed) => {
@@ -247,8 +264,10 @@ describe("diagnostic heap profile owner", () => {
     });
   });
 
-  it.each<[DiagnosticsHeapProfileParams, number, number]>([
-    [{ durationMs: 900_000, samplingIntervalBytes: 1 }, 900_000, 4096],
+  it.each<
+    [DiagnosticsHeapProfileParams, number, number, "collected-samples" | "maximum-duration" | null]
+  >([
+    [{ durationMs: 900_000, samplingIntervalBytes: 1 }, 900_000, 4096, null],
     [
       {
         durationMs: 1_000_000,
@@ -257,24 +276,51 @@ describe("diagnostic heap profile owner", () => {
       },
       900_000,
       32768,
+      "maximum-duration",
     ],
-    [{ durationMs: 900_000, includeObjectsCollectedByMajorGC: true }, 30_000, 32768],
-    [{ durationMs: 900_000, includeObjectsCollectedByMinorGC: true }, 30_000, 32768],
-    [{ durationMs: 1, samplingIntervalBytes: 65536 }, 1, 65536],
-  ])("applies sampling options and bounds for %j", async (params, duration, interval) => {
-    const collectionOptions = {
-      includeObjectsCollectedByMajorGC: params.includeObjectsCollectedByMajorGC ?? false,
-      includeObjectsCollectedByMinorGC: params.includeObjectsCollectedByMinorGC ?? false,
-    };
-    expect(await capture(params)).toMatchObject({ status: "complete", result: collectionOptions });
-    expect(native.wait).toHaveBeenCalledWith(duration, undefined, {
-      signal: expect.any(AbortSignal),
-    });
-    expect(native.post).toHaveBeenCalledWith("HeapProfiler.startSampling", {
-      samplingInterval: interval,
-      ...collectionOptions,
-    });
-  });
+    [
+      { durationMs: 900_000, includeObjectsCollectedByMajorGC: true },
+      30_000,
+      32768,
+      "collected-samples",
+    ],
+    [
+      { durationMs: 900_000, includeObjectsCollectedByMinorGC: true },
+      30_000,
+      32768,
+      "collected-samples",
+    ],
+    [{ durationMs: 1, samplingIntervalBytes: 65536 }, 1, 65536, null],
+  ])(
+    "applies sampling options and bounds for %j",
+    async (params, duration, interval, limitReason) => {
+      const collectionOptions = {
+        includeObjectsCollectedByMajorGC: params.includeObjectsCollectedByMajorGC ?? false,
+        includeObjectsCollectedByMinorGC: params.includeObjectsCollectedByMinorGC ?? false,
+      };
+      const outcome = await capture(params);
+      expect(outcome).toMatchObject({
+        status: "complete",
+        result: {
+          ...collectionOptions,
+          requestedDurationMs: params.durationMs,
+          effectiveDurationMs: duration,
+          actualDurationMs: expect.any(Number),
+          durationLimitReason: limitReason,
+        },
+      });
+      if (outcome.status === "complete") {
+        expect(outcome.result.actualDurationMs).toBe(outcome.result.durationMs);
+      }
+      expect(native.wait).toHaveBeenCalledWith(duration, undefined, {
+        signal: expect.any(AbortSignal),
+      });
+      expect(native.post).toHaveBeenCalledWith("HeapProfiler.startSampling", {
+        samplingInterval: interval,
+        ...collectionOptions,
+      });
+    },
+  );
 
   it.each([
     [{ includeCollected: true }, true, true, 30_000],
@@ -365,6 +411,42 @@ describe("diagnostic heap profile owner", () => {
       throw new Error("capture failed");
     }
     expect(Buffer.byteLength(JSON.stringify(outcome.result))).toBeLessThanOrEqual(1024 * 1024);
+  });
+
+  it("yields during sanitization while retaining capture ownership and checking revocation", async () => {
+    const value = profile();
+    value.head.children = Array.from({ length: 9000 }, (_, index) => ({
+      id: index + 2,
+      selfSize: 8192,
+      callFrame: frame(),
+      children: [],
+    }));
+    const stopped = createDeferred();
+    native.post.mockImplementation(async (method) => {
+      if (method === "HeapProfiler.stopSampling") {
+        stopped.resolve();
+        return { profile: value };
+      }
+      return {};
+    });
+    let authorized = true;
+    let completed = false;
+    const { captureDiagnosticHeapProfile } = await import("./diagnostic-heap-profile.js");
+    const active = captureDiagnosticHeapProfile({
+      signal: new AbortController().signal,
+      hasAuthority: () => authorized,
+    }).then((outcome) => {
+      completed = true;
+      return outcome;
+    });
+    await stopped.promise;
+    await nextTurn();
+    expect(completed).toBe(false);
+    expect(await capture()).toMatchObject({ status: "unavailable", reason: "busy" });
+    authorized = false;
+    expect(await active).toMatchObject({ status: "unavailable", reason: "cancelled" });
+    expect(native.disconnect).toHaveBeenCalledOnce();
+    expect((await capture()).status).toBe("complete");
   });
 
   it("caps distinct stacks at 1 MiB, retaining the largest allocations", async () => {

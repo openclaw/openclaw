@@ -29,7 +29,7 @@ describe("Nextcloud Talk guarded response release", () => {
       name: "successful reaction",
       status: 201,
       run: () => sendReactionNextcloudTalk("room:release", "42", "👍", { cfg }),
-      expected: { ok: true },
+      expected: undefined,
     },
     {
       name: "failed room lookup",

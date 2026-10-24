@@ -1,11 +1,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import type { ChannelOutboundContext } from "../../channels/plugins/outbound.types.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { runMessageAction } from "../../infra/outbound/message-action-runner.js";
+import * as messageActionRunner from "../../infra/outbound/message-action-runner.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import {
   createChannelTestPluginBase,
@@ -22,6 +22,13 @@ import { createMessageTool } from "./message-tool-execution.js";
 
 const channel = "sandboxchat" as ChannelPlugin["id"];
 const cfg = { channels: { sandboxchat: { enabled: true } } } as OpenClawConfig;
+const runMessageAction = messageActionRunner.runMessageAction;
+
+beforeEach(() => {
+  vi.spyOn(messageActionRunner, "runMessageAction").mockImplementation((input) =>
+    runMessageAction({ ...input, skipQueue: true }),
+  );
+});
 
 function createSandboxContext(workspaceDir: string) {
   return createSandboxTestContext({
@@ -78,6 +85,7 @@ function registerAttachmentPlugin(
 }
 
 afterEach(() => {
+  vi.restoreAllMocks();
   resetPluginRuntimeStateForTest();
   vi.unstubAllEnvs();
 });
@@ -130,13 +138,11 @@ it.each([
       : { ...cfg, tools: { allow: ["message"], deny: ["read"] } };
     const tool = createMessageTool({
       config,
-      getRuntimeConfig: () => config,
       conversationReadOrigin: "direct-operator",
       sandboxRoot: hostMirrorDir,
       sandboxContainerWorkdir: "/sandbox",
       sandboxFsBridge: bridge,
       sandboxWorkspaceMediaReadAllowed: allowed,
-      runMessageAction: (input) => runMessageAction({ ...input, skipQueue: true }),
     });
     const pending = tool.execute("sandbox-media-send", {
       action: "send",
@@ -205,12 +211,10 @@ it.each([
       async () =>
         createMessageTool({
           config,
-          getRuntimeConfig: () => config,
           agentSessionKey: mediaKey === "asset" ? "agent:main:source-policy" : sessionKey,
           runSessionKey: mediaKey === "asset" ? sessionKey : undefined,
           workspaceDir,
           conversationReadOrigin: "direct-operator",
-          runMessageAction: (input) => runMessageAction({ ...input, skipQueue: true }),
         }),
     );
     const execute = (id: string, params: Record<string, unknown>) =>

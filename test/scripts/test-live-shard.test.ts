@@ -51,21 +51,6 @@ const allFiles = live.collectAllLiveTestFiles();
 const preparation = (shard: string) =>
   live.resolveLiveShardPreparation(live.selectLiveShardFiles(shard, allFiles));
 
-it("drops release-waived single-case live files only for the waived candidate version", () => {
-  const files = [
-    "src/gateway/gateway-progress-refresh.live.test.ts",
-    "src/gateway/gateway-codex-harness.live.test.ts",
-    "test/gateway-subagent-restart.live.test.ts",
-  ];
-  for (const version of ["2026.9.8", "2026.9.9", "2026.9.33"]) {
-    expect(live.withoutReleaseWaivedLiveFiles(files, version)).toEqual([
-      "src/gateway/gateway-codex-harness.live.test.ts",
-    ]);
-  }
-  expect(live.withoutReleaseWaivedLiveFiles(files, "2026.9.10")).toEqual(files);
-  expect(live.withoutReleaseWaivedLiveFiles(files, undefined)).toEqual(files);
-});
-
 it("discovers live tests without scanning source roots in-process", () => {
   expectNoReaddirSyncDuring(() => {
     const files = live.collectAllLiveTestFiles();

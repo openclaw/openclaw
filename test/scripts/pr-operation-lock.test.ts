@@ -117,6 +117,10 @@ function fixtureEventBeforeSettlement(record: string, operation: PromiseLike<unk
   return Promise.race([receipts.waitFor(record, "ready"), settled]);
 }
 
+function waitForFixtureEvent(record: string, child: ChildProcess, signal: AbortSignal) {
+  return withinTest(fixtureEventBeforeSettlement(record, childCompletion(child)), signal);
+}
+
 // Foreign groups have no ChildProcess owner after the launcher exits. Keep this
 // one observation loop under the test signal, never a competing wall-clock budget.
 async function waitForProcessGroupExit(pgid: number, signal: AbortSignal) {
@@ -327,9 +331,22 @@ function installPrCliFixture(repoDir: string, env?: NodeJS.ProcessEnv) {
 function installRequiredPrCommandStubs(binDir: string) {
   for (const command of ["gh", "jq", "pnpm", "rg"]) {
     const stub = join(binDir, command);
-    writeFileSync(stub, "#!/bin/sh\nexit 0\n");
+    writeFileSync(
+      stub,
+      command === "gh"
+        ? '#!/bin/sh\ncase "$*" in "api user --include") printf \'HTTP/2.0 200 OK\\n\\n{"login":"fixture"}\\n\' ;; esac\nexit 0\n'
+        : "#!/bin/sh\nexit 0\n",
+    );
     chmodSync(stub, 0o755);
   }
+}
+
+function commitPrCliFixture(repoDir: string, sources: string[]) {
+  execFileSync("git", ["add", "--", ...sources], { cwd: repoDir });
+  execFileSync("git", ["commit", "-qm", "test: admit fixture wrapper"], { cwd: repoDir });
+  execFileSync("git", ["remote", "add", "origin", repoDir], { cwd: repoDir });
+  execFileSync("git", ["update-ref", "refs/remotes/origin/main", "HEAD"], { cwd: repoDir });
+  linkPrWrapperDependencies(repoDir);
 }
 
 interface SupervisedFixtureOptions {
@@ -337,6 +354,7 @@ interface SupervisedFixtureOptions {
   accelerateTimeouts?: boolean;
   env?: NodeJS.ProcessEnv;
   materializedAnchor?: boolean;
+  terminateWhenReady?: string;
 }
 
 async function runSupervisedFixture(
@@ -401,6 +419,10 @@ async function runSupervisedFixture(
   controller.stdout!.on("data", (chunk) => (stdout += chunk));
   controller.stderr!.on("data", (chunk) => (stderr += chunk));
   try {
+    if (options.terminateWhenReady) {
+      await waitForFixtureEvent(options.terminateWhenReady, controller, options.signal);
+      controller.kill("SIGTERM");
+    }
     await withinTest(childCompletion(controller, "close"), options.signal);
   } catch (error) {
     const failures: unknown[] = [error];
@@ -947,10 +969,11 @@ describePosix("scripts/pr per-PR operation lock", () => {
   });
   it("does not trust an ambient dedicated-process-group marker", () => {
     const repoDir = createRepo();
-    const { binDir, cli } = installPrCliFixture(repoDir);
+    const { binDir, cli, wrapperSources } = installPrCliFixture(repoDir);
     const reviewScript = join(repoDir, "scripts/pr-lib/review.sh");
     writeFileSync(reviewScript, `${readFileSync(reviewScript, "utf8")}\nreview_init() { :; }\n`);
     installRequiredPrCommandStubs(binDir);
+    commitPrCliFixture(repoDir, wrapperSources);
     const env: NodeJS.ProcessEnv = {
       ...createIndependentPrFixtureEnv(),
       OPENCLAW_PR_DEDICATED_PROCESS_GROUP: "1",
@@ -984,15 +1007,20 @@ describePosix("scripts/pr per-PR operation lock", () => {
     "releases a validation-phase lock when $name",
     ({ overrides, error, unexpectedOutput, unavailableStorage }) => {
       const repoDir = createRepo();
-      const { binDir, cli } = installPrCliFixture(repoDir);
+      const { binDir, cli, wrapperSources } = installPrCliFixture(repoDir);
       const reviewScript = join(repoDir, "scripts/pr-lib/review.sh");
       writeFileSync(reviewScript, `${readFileSync(reviewScript, "utf8")}\n${overrides}\n`);
       installRequiredPrCommandStubs(binDir);
+      commitPrCliFixture(repoDir, wrapperSources);
       if (unavailableStorage) {
         const mktempStub = join(binDir, "mktemp");
+        const mktemp = execFileSync("which", ["mktemp"], { encoding: "utf8" }).trim();
         writeFileSync(
           mktempStub,
-          "#!/bin/sh\necho 'mktemp: No space left on device' >&2\nexit 1\n",
+          `#!/bin/sh
+case "$*" in *'/openclaw-pr.XXXXXX') echo 'mktemp: No space left on device' >&2; exit 1 ;; esac
+exec ${shellQuote(mktemp)} "$@"
+`,
         );
         chmodSync(mktempStub, 0o755);
       }
@@ -1501,7 +1529,7 @@ describePosix("scripts/pr per-PR operation lock", () => {
         "mark_pr_operation_side_effects_started",
         "exit 1",
       ],
-      { signal },
+      { signal, materializedAnchor: true },
     );
     expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(1);
     expect(result.stderr).toContain(
@@ -1509,6 +1537,30 @@ describePosix("scripts/pr per-PR operation lock", () => {
     );
     expect(result.stderr).not.toContain("lock-recover");
     expect(refExists(repoDir)).toBe(false);
+    expect(existsSync(result.anchorDir!)).toBe(false);
+  });
+  it("retires a materialized anchor after forwarded SIGTERM while retaining the lock", async ({
+    signal,
+  }) => {
+    const repoDir = createRepo();
+    const ready = join(repoDir, "anchor-interrupt-ready");
+    const result = await runSupervisedOperation(
+      repoDir,
+      "anchor-interrupt-operation.sh",
+      [
+        "trap 'exit 143' TERM",
+        "acquire_pr_operation_lock 42",
+        `: > '${ready}'`,
+        fixtureReceiptCommand(repoDir, ready),
+        "sleep 30",
+      ],
+      { signal, materializedAnchor: true, terminateWhenReady: ready },
+    );
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(143);
+    expect(existsSync(ready)).toBe(true);
+    expect(existsSync(result.anchorDir!)).toBe(false);
+    expect(refExists(repoDir)).toBe(true);
+    recoverOperationLock(repoDir, refOid(repoDir));
   });
   it("waits while a live supervisor finishes draining a dead operation group", async ({
     signal,
@@ -1550,10 +1602,7 @@ describePosix("scripts/pr per-PR operation lock", () => {
     let waiter: ChildProcess | undefined;
     let holderPgid: number | undefined;
     try {
-      await withinTest(
-        fixtureEventBeforeSettlement(holderReady, childCompletion(controller)),
-        signal,
-      );
+      await waitForFixtureEvent(holderReady, controller, signal);
       const operationPgid = requireProcessId(operationPgidFile);
       await waitForProcessGroupExit(operationPgid, signal);
       holderPgid = requireProcessId(holderPidFile);
@@ -1690,10 +1739,7 @@ describePosix("scripts/pr per-PR operation lock", () => {
       }),
     );
     try {
-      await withinTest(
-        fixtureEventBeforeSettlement(ghStarted, childCompletion(controller)),
-        signal,
-      );
+      await waitForFixtureEvent(ghStarted, controller, signal);
       expect(existsSync(ghStarted) && refExists(repoDir)).toBe(true);
       const probe = probeOperationLock(repoDir);
       expect(probe.status, `${probe.stdout}\n${probe.stderr}`).toBe(0);
@@ -1728,7 +1774,7 @@ describePosix("scripts/pr per-PR operation lock", () => {
     );
     let pgid: number | undefined;
     try {
-      await withinTest(fixtureEventBeforeSettlement(held, childCompletion(controller)), signal);
+      await waitForFixtureEvent(held, controller, signal);
       expect(existsSync(pidFile) && existsSync(held)).toBe(true);
       pgid = requireProcessId(pidFile);
       const ownerOid = refOid(repoDir);
@@ -1806,10 +1852,7 @@ describePosix("scripts/pr per-PR operation lock", () => {
     });
     let pgid: number | undefined;
     try {
-      await withinTest(
-        fixtureEventBeforeSettlement(childReady, childCompletion(controller)),
-        signal,
-      );
+      await waitForFixtureEvent(childReady, controller, signal);
       expect(existsSync(pidFile) && existsSync(childReady)).toBe(true);
       pgid = requireProcessId(pidFile);
       const ownerOid = refOid(repoDir);
@@ -1873,19 +1916,13 @@ describePosix("scripts/pr per-PR operation lock", () => {
       );
       let nestedPgid: number | undefined;
       try {
-        await withinTest(
-          fixtureEventBeforeSettlement(nestedPidFile, childCompletion(controller)),
-          signal,
-        );
+        await waitForFixtureEvent(nestedPidFile, controller, signal);
         expect(existsSync(nestedPidFile) && refExists(repoDir)).toBe(true);
         nestedPgid = requireProcessId(nestedPidFile);
         const ownerOid = refOid(repoDir);
         expect(processGroupExists(nestedPgid!)).toBe(true);
         controller.kill("SIGTERM");
-        await withinTest(
-          fixtureEventBeforeSettlement(signalRelayedFile, childCompletion(controller)),
-          signal,
-        );
+        await waitForFixtureEvent(signalRelayedFile, controller, signal);
         expect(existsSync(signalRelayedFile)).toBe(true);
         controller.kill("SIGTERM");
         await withinTest(childCompletion(controller), signal);

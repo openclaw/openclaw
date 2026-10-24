@@ -91,7 +91,6 @@ export function reserveDiscussionBindingGeneration(params: {
   accountId: string;
   credentialFingerprint: string;
   destinationIdentity: string;
-  createGeneration?: () => string;
 }): Promise<string> {
   let generation: string | undefined;
   return mutateGeneration(params.runtime, params.sessionKey, (existing) => {
@@ -115,7 +114,7 @@ export function reserveDiscussionBindingGeneration(params: {
         result: existing.generation,
       };
     }
-    generation ??= (params.createGeneration ?? randomUUID)();
+    generation ??= randomUUID();
     return {
       value: {
         accountId: params.accountId,

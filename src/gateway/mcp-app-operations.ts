@@ -90,6 +90,15 @@ export async function requireMcpAppInteraction(view: McpAppViewLease): Promise<v
   }
 }
 
+export async function supportsMcpAppInteraction(view: McpAppViewLease): Promise<boolean> {
+  try {
+    await requireMcpAppInteraction(view);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export async function resolveMcpAppAllowedToolNames(active: McpAppActiveView): Promise<string[]> {
   if (active.view.readOnly === true || active.view.allowedAppToolNames === undefined) {
     return [];
@@ -441,7 +450,6 @@ export async function executeMcpAppOperation(
         if (!runtime.sessionKey) {
           throw new Error("MCP App session is unavailable");
         }
-        assertCurrent();
         return await callMcpAppToolWithElicitation({
           options: request.options,
           origin: {

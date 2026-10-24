@@ -27,7 +27,7 @@ export function makeSettledChild(overrides: SettledChildOverrides): SubagentRunR
     createdAt: 1_000,
     execution: execution ?? { status: "terminal", startedAt, endedAt, outcome },
     expectsCompletionMessage: true,
-    delivery: { status: "delivered" },
+    delivery: { status: "pending" },
     requesterSettleWake: { status: "pending", attemptCount: 0 },
     ...recordOverrides,
   };
@@ -35,12 +35,12 @@ export function makeSettledChild(overrides: SettledChildOverrides): SubagentRunR
 
 export const completeBatchSpy = vi.fn();
 
-export function completeBatch(
+export async function completeBatch(
   batch: readonly SubagentRunRecord[],
   rearmGeneration?: number,
   outcome?: Result,
-  onCommitted?: () => void,
-): void {
+  onCommitted?: () => void | Promise<void>,
+): Promise<void> {
   const runIds = batch.map((entry) => entry.runId).toSorted();
   if (outcome) {
     completeBatchSpy(runIds, rearmGeneration, outcome);
@@ -54,7 +54,7 @@ export function completeBatch(
       entry.requesterSettleWake = undefined;
     }
   }
-  onCommitted?.();
+  await onCommitted?.();
 }
 
 export const deliverSpy = vi.fn(async (_params: Record<string, unknown>): Promise<Result> => ({

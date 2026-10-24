@@ -1,4 +1,4 @@
-import { execFileSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import { chmodSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -11,10 +11,8 @@ const BASH_ARGS = process.platform === "win32" ? [SCRIPT] : ["--noprofile", "--n
 const BASE_PATH = process.env.PATH ?? "/usr/bin:/bin";
 const BASE_LANG = process.env.LANG ?? "C";
 const CANONICAL_TEAM_ID = "FWJYW4S8P8";
-let fixtureRoot = "";
 let sharedBinDir = "";
 let sharedHomeDir = "";
-let sharedHomeBinDir = "";
 let sharedFakePythonPath = "";
 const tempDirs: string[] = [];
 async function writeExecutable(filePath: string, body: string): Promise<void> {
@@ -26,94 +24,42 @@ function runScript(
   homeDir: string,
   extraEnv: Record<string, string> = {},
   scriptArgs: string[] = [],
-): {
-  ok: boolean;
-  stdout: string;
-  stderr: string;
-} {
-  const binDir = path.join(homeDir, "bin");
-  const env = {
-    HOME: homeDir,
-    PATH: `${binDir}${path.delimiter}${sharedBinDir}${path.delimiter}${BASE_PATH}`,
-    LANG: BASE_LANG,
-    ...extraEnv,
-  };
-  try {
-    const stdout = execFileSync(BASH_BIN, [...BASH_ARGS, ...scriptArgs], {
-      env,
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    return { ok: true, stdout: stdout.trim(), stderr: "" };
-  } catch (error) {
-    const e = error as { stdout?: unknown; stderr?: unknown };
-    const stdout =
-      typeof e.stdout === "string"
-        ? e.stdout
-        : Buffer.isBuffer(e.stdout)
-          ? e.stdout.toString("utf8")
-          : "";
-    const stderr =
-      typeof e.stderr === "string"
-        ? e.stderr
-        : Buffer.isBuffer(e.stderr)
-          ? e.stderr.toString("utf8")
-          : "";
-    return { ok: false, stdout: stdout.trim(), stderr: stderr.trim() };
-  }
+) {
+  const { status, stdout, stderr } = spawnSync(BASH_BIN, [...BASH_ARGS, ...scriptArgs], {
+    env: {
+      HOME: homeDir,
+      LANG: BASE_LANG,
+      PATH: [path.join(homeDir, "bin"), sharedBinDir, BASE_PATH].join(path.delimiter),
+      ...extraEnv,
+    },
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  return { ok: status === 0, stdout: stdout?.trim() ?? "", stderr: stderr?.trim() ?? "" };
+}
+
+async function makeHome() {
+  const homeDir = makeTempDir(tempDirs, "openclaw-ios-team-id-");
+  await mkdir(path.join(homeDir, "bin"), { recursive: true });
+  const preferences = path.join(homeDir, "Library", "Preferences");
+  await mkdir(preferences, { recursive: true });
+  await writeFile(path.join(preferences, "com.apple.dt.Xcode.plist"), "");
+  return homeDir;
 }
 
 describe("scripts/ios-team-id.sh", () => {
   beforeAll(async () => {
-    fixtureRoot = makeTempDir(tempDirs, "openclaw-ios-team-id-");
+    const fixtureRoot = makeTempDir(tempDirs, "openclaw-ios-team-id-");
     sharedBinDir = path.join(fixtureRoot, "shared-bin");
     await mkdir(sharedBinDir, { recursive: true });
-    sharedHomeDir = path.join(fixtureRoot, "home");
-    sharedHomeBinDir = path.join(sharedHomeDir, "bin");
-    await mkdir(sharedHomeBinDir, { recursive: true });
-    await mkdir(path.join(sharedHomeDir, "Library", "Preferences"), { recursive: true });
-    await writeFile(
-      path.join(sharedHomeDir, "Library", "Preferences", "com.apple.dt.Xcode.plist"),
-      "",
-    );
+    sharedHomeDir = await makeHome();
     await writeExecutable(
       path.join(sharedBinDir, "plutil"),
       `#!/usr/bin/env bash
 echo '{}'`,
     );
-    await writeExecutable(
-      path.join(sharedBinDir, "defaults"),
-      `#!/usr/bin/env bash
-if [[ "$3" == "DVTDeveloperAccountManagerAppleIDLists" ]]; then
-  echo '(identifier = "dev@example.com";)'
-  exit 0
-fi
-exit 0`,
-    );
-    await writeExecutable(
-      path.join(sharedBinDir, "security"),
-      `#!/usr/bin/env bash
-if [[ "$1" == "cms" && "$2" == "-D" ]]; then
-  if [[ "$4" == *"one.mobileprovision" ]]; then
-    cat <<'PLIST'
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0"><dict><key>TeamIdentifier</key><array><string>AAAAA11111</string></array></dict></plist>
-PLIST
-    exit 0
-  fi
-  if [[ "$4" == *"two.mobileprovision" ]]; then
-    cat <<'PLIST'
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0"><dict><key>TeamIdentifier</key><array><string>BBBBB22222</string></array></dict></plist>
-PLIST
-    exit 0
-  fi
-fi
-exit 1`,
-    );
-    sharedFakePythonPath = path.join(sharedHomeBinDir, "fake-python");
+    await writeExecutable(path.join(sharedBinDir, "defaults"), "#!/usr/bin/env bash\nexit 0\n");
+    sharedFakePythonPath = path.join(sharedHomeDir, "bin", "fake-python");
     await writeExecutable(
       sharedFakePythonPath,
       `#!/usr/bin/env bash
@@ -122,21 +68,11 @@ printf 'BBBBB22222\\t0\\tBeta Team\\r\\n'`,
     );
   });
 
-  afterAll(() => {
-    cleanupTempDirs(tempDirs);
-  });
+  afterAll(() => cleanupTempDirs(tempDirs));
 
   it("prefers the canonical OpenClaw iOS team when it is present", async () => {
-    const homeDir = makeTempDir(tempDirs, "openclaw-ios-team-id-canonical-");
-    const binDir = path.join(homeDir, "bin");
-    await mkdir(path.join(homeDir, "Library", "Preferences"), { recursive: true });
-    await mkdir(binDir, { recursive: true });
-    await writeFile(
-      path.join(homeDir, "Library", "Preferences", "com.apple.dt.Xcode.plist"),
-      "",
-      "utf8",
-    );
-    const fakePythonPath = path.join(binDir, "fake-python");
+    const homeDir = await makeHome();
+    const fakePythonPath = path.join(homeDir, "bin", "fake-python");
     await writeExecutable(
       fakePythonPath,
       `#!/usr/bin/env bash
@@ -145,22 +81,13 @@ printf '${CANONICAL_TEAM_ID}\\t0\\tOpenClaw\\r\\n'`,
     );
 
     const result = runScript(homeDir, { IOS_PYTHON_BIN: fakePythonPath });
-    expect(result.ok).toBe(true);
-    expect(result.stdout).toBe(CANONICAL_TEAM_ID);
+    expect(result).toMatchObject({ ok: true, stdout: CANONICAL_TEAM_ID });
   });
 
   it("loads teams from Xcode account identifier team metadata", async () => {
-    const homeDir = makeTempDir(tempDirs, "openclaw-ios-team-id-by-identifier-");
-    const binDir = path.join(homeDir, "bin");
-    await mkdir(path.join(homeDir, "Library", "Preferences"), { recursive: true });
-    await mkdir(binDir, { recursive: true });
-    await writeFile(
-      path.join(homeDir, "Library", "Preferences", "com.apple.dt.Xcode.plist"),
-      "",
-      "utf8",
-    );
+    const homeDir = await makeHome();
     await writeExecutable(
-      path.join(binDir, "plutil"),
+      path.join(homeDir, "bin", "plutil"),
       `#!/usr/bin/env bash
 if [[ "$1" == "-extract" && "$2" == "IDEProvisioningTeamByIdentifier" ]]; then
   cat <<'JSON'
@@ -172,25 +99,28 @@ echo '{}'`,
     );
 
     const result = runScript(homeDir, { IOS_PYTHON_BIN: "python3" }, ["--require-canonical"]);
-    expect(result.ok).toBe(true);
-    expect(result.stdout).toBe(CANONICAL_TEAM_ID);
+    expect(result).toMatchObject({ ok: true, stdout: CANONICAL_TEAM_ID });
   });
 
   it("fails canonical-only resolution when only fallback teams are available", () => {
     const result = runScript(sharedHomeDir, { IOS_PYTHON_BIN: sharedFakePythonPath }, [
       "--require-canonical",
     ]);
-    expect(result.ok).toBe(false);
-    expect(result.stderr).toContain(
-      `Official OpenClaw iOS Team ID '${CANONICAL_TEAM_ID}' is not available`,
-    );
+    expect(result).toMatchObject({
+      ok: false,
+      stderr: expect.stringContaining(
+        `Official OpenClaw iOS Team ID '${CANONICAL_TEAM_ID}' is not available`,
+      ),
+    });
   });
 
   it("rejects explicit non-canonical teams in canonical-only mode", () => {
     const result = runScript(sharedHomeDir, { IOS_DEVELOPMENT_TEAM: "BBBBB22222" }, [
       "--require-canonical",
     ]);
-    expect(result.ok).toBe(false);
-    expect(result.stderr).toContain("is not the official OpenClaw iOS team");
+    expect(result).toMatchObject({
+      ok: false,
+      stderr: expect.stringContaining("is not the official OpenClaw iOS team"),
+    });
   });
 });

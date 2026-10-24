@@ -21,6 +21,7 @@ import {
   readSessionEntrySummariesInWorker,
 } from "../../../config/sessions/session-entry-read-runtime.js";
 import {
+  runWithSessionSourceScope,
   sessionEntryCommitGuardOptions,
   type SessionSourceAssertion,
 } from "../../../config/sessions/session-source-authority.js";
@@ -42,6 +43,7 @@ import { parseAgentSessionKey } from "../../../routing/session-key.js";
 import { isCurrentSessionControllerOperation } from "../../../sessions/session-controller.identity.js";
 import { beginSessionEffect } from "../../../sessions/session-controller.lifecycle.js";
 import { getReplyOperationSessionReader } from "../../../sessions/session-controller.session-reader.js";
+import { lifecycleAdmissionByOperation } from "../../../sessions/session-controller.state.js";
 import { supersedeReplyRunByRunId } from "../../../sessions/session-controller.stop-runtime.js";
 import { resolvePreferredSessionKeyForSessionIdMatches } from "../../../sessions/session-id-resolution.js";
 import { AsyncWorkScope } from "../../../shared/async-work-scope.js";
@@ -236,13 +238,16 @@ export async function resetNoRealConversationTokenSnapshot(params: {
 
 /** Best-effort identity lookup retains the agent that owns an unqualified stored key. */
 async function backfillSessionIdentity(
-  params: Pick<RunEmbeddedAgentParams, "config" | "sessionId" | "sessionKey" | "agentId">,
+  params: Pick<
+    RunEmbeddedAgentParams,
+    "config" | "sessionId" | "sessionKey" | "agentId" | "sessionPersistence"
+  >,
 ): Promise<Pick<RunEmbeddedAgentInternalParams, "agentId" | "sessionKey">> {
   const trimmed = normalizeOptionalString(params.sessionKey);
   if (trimmed) {
     return { sessionKey: trimmed };
   }
-  if (!params.config || !params.sessionId) {
+  if (params.sessionPersistence === "detached" || !params.config || !params.sessionId) {
     return {};
   }
   try {
@@ -559,32 +564,42 @@ async function claimPersistedAgentSessionWriter(
   }
 
   const previousWriterRunId = normalizeOptionalString(snapshot.entry.activeWriterRunId);
-  const claimed: InternalSessionEntry | null = await applySessionEntryOperation(
-    {
-      ...(snapshot.agentId ? { agentId: snapshot.agentId } : {}),
-      sessionKey: snapshot.sessionKey,
-      storePath: snapshot.storePath,
-    },
-    {
-      kind: "fields",
-      expected: { sessionId: expectedSessionId, lifecycleRevision: expectedLifecycleRevision },
-      patch: { activeWriterRunId: params.runId },
-    },
-    {
-      skipMaintenance: true,
-      preserveActivity: true,
-      ...sessionEntryCommitGuardOptions(snapshot.assertActive),
-    },
-  );
-  if (
-    claimed &&
-    (claimed.sessionId !== expectedSessionId ||
-      claimed.lifecycleRevision !== expectedLifecycleRevision)
-  ) {
-    throw new Error(`Session changed before writer claim commit: ${snapshot.sessionKey}`);
-  }
-  if (!claimed || claimed.activeWriterRunId !== params.runId) {
-    throw new Error(`Session writer claim was not persisted: ${snapshot.sessionKey}`);
+  const adoptInput = operation && lifecycleAdmissionByOperation.get(operation)?.adoptInput;
+  let claimed: InternalSessionEntry | null;
+  if (adoptInput) {
+    claimed = await runWithSessionSourceScope(
+      snapshot.assertActive,
+      () => adoptInput({ runId: params.runId, assertCurrent: snapshot.assertActive }),
+      { checkAfter: false },
+    );
+  } else {
+    claimed = await applySessionEntryOperation(
+      {
+        ...(snapshot.agentId ? { agentId: snapshot.agentId } : {}),
+        sessionKey: snapshot.sessionKey,
+        storePath: snapshot.storePath,
+      },
+      {
+        kind: "fields",
+        expected: { sessionId: expectedSessionId, lifecycleRevision: expectedLifecycleRevision },
+        patch: { activeWriterRunId: params.runId },
+      },
+      {
+        skipMaintenance: true,
+        preserveActivity: true,
+        ...sessionEntryCommitGuardOptions(snapshot.assertActive),
+      },
+    );
+    if (
+      claimed &&
+      (claimed.sessionId !== expectedSessionId ||
+        claimed.lifecycleRevision !== expectedLifecycleRevision)
+    ) {
+      throw new Error(`Session changed before writer claim commit: ${snapshot.sessionKey}`);
+    }
+    if (!claimed || claimed.activeWriterRunId !== params.runId) {
+      throw new Error(`Session writer claim was not persisted: ${snapshot.sessionKey}`);
+    }
   }
   if (previousWriterRunId && previousWriterRunId !== params.runId) {
     // The replacement must own the durable row before the incumbent is made

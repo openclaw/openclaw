@@ -33,6 +33,7 @@ export type RunEntryTerminalBehavior =
 export type EmbeddedAgentRunEntryTerminal = {
   outcome: ReturnType<typeof buildAgentRunTerminalOutcomeFromLifecycleEvent>;
   metadata: Record<string, unknown> & {
+    suppressErrorNotice?: boolean;
     terminalReply?: AgentRunTerminalReplySnapshot;
     terminalReceipt?: AgentRunTerminalReceipt;
     terminalDelivery?: AgentRunTerminalDeliverySnapshot;
@@ -194,6 +195,9 @@ export function buildRunEntryTerminal(params: {
     terminalReply = { ...terminalReply, modelRouteChange };
   }
   const metadata: EmbeddedAgentRunEntryTerminal["metadata"] = { terminalReply };
+  if (typeof meta.suppressErrorNotice === "boolean") {
+    metadata.suppressErrorNotice = meta.suppressErrorNotice;
+  }
   if (terminalReceipt) {
     metadata.terminalReceipt = terminalReceipt;
     metadata.assistantTranscriptIdempotencyKey = terminalReceipt.assistantTranscriptIdempotencyKey;

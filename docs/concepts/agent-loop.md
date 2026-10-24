@@ -51,6 +51,16 @@ precedes the rejected response in the current turn. Failures that may have cause
 side effects, unfinished tools, and asynchronous work still block it; the
 continuation does not replay the original task or increase the retry budget.
 
+Recovery history stays available across attempts within the same run. The run
+releases message payloads from replaced recovery envelopes and when it ends,
+including envelopes retained by copied attempt parameters. Each accepted
+transcript write keeps its original attempt's persistence callbacks until it
+finishes, even after a reused manager binds a newer attempt or the bounded
+teardown wait expires.
+Completed attempt results stay outside the scope captured by retained harness
+callbacks, so those callbacks cannot keep completed message snapshots alive.
+Finalization and retry owners retain access to the results while processing them.
+
 ## Queueing and concurrency
 
 The session controller serializes turns by physical session identity before global capacity admission. Messaging channels choose a queue mode (steer/followup/collect/interrupt) over the same ordered inputs; direct native producers use that selector too. Nested compaction borrows the exact admitted turn rather than queuing behind itself. See [Command Queue](/concepts/queue).
@@ -151,7 +161,7 @@ Admission sets the default reply expectation. External direct, group, and channe
 
 An empty final is not silence. When bounded recovery exhausts with only reasoning or empty output, OpenClaw records a failed outcome. An admitted user request receives one short system notice that no answer was returned, rather than a fabricated assistant answer in history. Background and internal turns record the failure without posting that notice to chat; existing classified failure and alert paths stay unchanged. This also applies when compaction occurs between retries. Whitespace and zero-width characters alone do not count as a visible answer.
 
-If a required-reply turn ends after a fully settled tool batch without a composed answer, OpenClaw can make a tool-free finalization pass. This includes reasoning-only stops and output-limit stops with no visible text; a lone unfinished `<tool_call>` marker is not an answer. Earlier tool errors, pre-tool progress, and superseded, undelivered confirmations do not count as a final answer. For embedded external turns, a current-source `final: false` text send can count as the answer at settlement only when it belongs to the last tool batch and the turn then ends empty or silent. Result-required internal turns still need an actual completed final result. Any later tool work, including work after an asynchronous progress send, still gets a finalization pass. This pass uses the settled results and does not repeat completed tools. Fatal automation failures, including denied execution, remain failures even when finalization produces an answer.
+If a required-reply turn ends after a fully settled tool batch without a composed answer, OpenClaw can make a tool-free finalization pass. This includes reasoning-only stops and output-limit stops with no visible text; a lone unfinished `<tool_call>` marker is not an answer. Earlier tool errors, pre-tool progress, and superseded, undelivered confirmations do not count as a final answer. For embedded external turns, a current-source `final: false` text send can count as the answer at settlement only when it belongs to the last tool batch and the turn then ends empty or silent. Result-required internal turns still need an actual completed final result. Any later tool work, including work after an asynchronous progress send, still gets a finalization pass. This pass uses the settled results and does not repeat completed tools. When a tool failed anywhere in the turn and was never retried successfully, the pass is told to report the failure rather than claim completion, even when the last tool batch succeeded. Fatal automation failures, including denied execution, remain failures even when finalization produces an answer.
 
 An external turn that explicitly finishes with `NO_REPLY` does not need a finalization pass, even after a settled tool failure. The failure remains recorded. `NO_REPLY` discards anything written this turn that was not sent, so send confirmations before ending silently.
 

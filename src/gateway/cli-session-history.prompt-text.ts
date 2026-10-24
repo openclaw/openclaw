@@ -1,5 +1,5 @@
 // Text views for matching imported CLI prompts and reading their provenance.
-import { stripCliSessionDriftNote } from "../agents/cli-session.js";
+import { stripCliSessionDriftNote } from "../agents/cli-session-drift.js";
 import {
   LEGACY_REQUESTER_PROFILE_HINT,
   readLeadingInboundMetadataEnd,

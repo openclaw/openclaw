@@ -1,7 +1,7 @@
 import { resolveGlobalMap } from "../../shared/global-singleton.js";
 import {
   registerOpenClawStateDatabaseAsyncResource,
-  registerOpenClawStateDatabaseLifecycleListener,
+  registerOpenClawStatePathCacheInvalidation,
 } from "../../state/openclaw-state-db-cache.js";
 import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.types.js";
 import type {
@@ -26,16 +26,7 @@ registerOpenClawStateDatabaseAsyncResource({
   },
 });
 
-registerOpenClawStateDatabaseLifecycleListener((event) => {
-  if (event.kind === "opened") {
-    return;
-  }
-  for (const [key, cache] of caches) {
-    if (cache.path === (event.identity?.canonicalPath ?? event.path)) {
-      caches.delete(key);
-    }
-  }
-});
+registerOpenClawStatePathCacheInvalidation(caches);
 
 export function channelIngressHealthCache(context: OpenClawStateWorkerContext): HealthCache {
   const { coordinationKey, identity } = context.admission;

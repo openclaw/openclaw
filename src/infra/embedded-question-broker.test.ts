@@ -38,8 +38,8 @@ beforeEach(() => {
   broker = createBroker();
 });
 
-function createBroker() {
-  const created = new EmbeddedQuestionBroker(scheduler);
+function createBroker(onEvent?: ConstructorParameters<typeof EmbeddedQuestionBroker>[1]) {
+  const created = new EmbeddedQuestionBroker(scheduler, onEvent);
   brokers.push(created);
   return created;
 }
@@ -84,7 +84,7 @@ describe("EmbeddedQuestionBroker", () => {
     async (ending) => {
       vi.useFakeTimers();
       const events: Array<{ event: string; payload: unknown }> = [];
-      broker.subscribe((event) => events.push(event));
+      broker = createBroker((event) => events.push(event));
       const run = new AbortController();
       const { id, answer } = ask(requestParams, run.signal);
       if (ending === "expiry") {
@@ -157,7 +157,7 @@ describe("EmbeddedQuestionBroker", () => {
 
   it("supports plain secret protocol questions but refuses store-bound input before publication", async () => {
     const events: string[] = [];
-    broker.subscribe((event) => events.push(event.event));
+    broker = createBroker((event) => events.push(event.event));
     const question = {
       questionId: "secret_value",
       header: "Secret",

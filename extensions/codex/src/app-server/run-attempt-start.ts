@@ -84,6 +84,7 @@ export async function startCodexAttemptRuntime(resources: CodexAttemptResources)
         connection.assertCurrent();
         runtime.nativeExecutionPolicy.source?.();
       },
+      assertCurrentAsync: runtime.nativeExecutionPolicy.assertCurrent,
       authority: connection.authority,
       attemptClientFactory,
       bindingStore,

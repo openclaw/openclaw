@@ -24,7 +24,6 @@ import {
   formatParentContextEvent,
   markParentContextInjected,
   shouldInjectParentContext,
-  summarizeParentMessage,
 } from "../thread-parent-context.js";
 import { resolveMSTeamsRouteSessionKey } from "./thread-session.js";
 
@@ -194,38 +193,30 @@ export async function resolveMSTeamsThreadContext(params: {
               allowNameMatching: params.allowNameMatching,
             }).allowed,
         });
-      const parentSummary = summarizeParentMessage(parentMsg);
-      const visibleParentMessages = parentMsg
-        ? filterSupplementalContextItems({
-            items: [parentMsg],
-            mode: params.contextVisibilityMode,
-            kind: "thread",
-            isSenderAllowed: isThreadSenderAllowed,
-          }).items
-        : [];
+      const parentContextEvent = formatParentContextEvent(parentMsg);
+      const { items: threadMessages } = filterSupplementalContextItems({
+        items: parentMsg ? [parentMsg, ...replies] : replies,
+        mode: params.contextVisibilityMode,
+        kind: "thread",
+        isSenderAllowed: isThreadSenderAllowed,
+      });
       if (
-        parentSummary &&
-        visibleParentMessages.length > 0 &&
+        parentContextEvent &&
+        parentMsg &&
+        threadMessages.includes(parentMsg) &&
         shouldInjectParentContext(route.sessionKey, threadParentId)
       ) {
-        core.system.enqueueSystemEvent(formatParentContextEvent(parentSummary), {
+        core.system.enqueueSystemEvent(parentContextEvent, {
           sessionKey: route.sessionKey,
           contextKey: `msteams:thread-parent:${params.conversationId}:${threadParentId}`,
         });
         markParentContextInjected(route.sessionKey, threadParentId);
       }
-      const allMessages = parentMsg ? [parentMsg, ...replies] : replies;
       quoteSenderId = parentMsg?.from?.user?.id ?? parentMsg?.from?.application?.id;
       quoteSenderName =
         parentMsg?.from?.user?.displayName ??
         parentMsg?.from?.application?.displayName ??
         params.quoteInfo?.sender;
-      const { items: threadMessages } = filterSupplementalContextItems({
-        items: allMessages,
-        mode: params.contextVisibilityMode,
-        kind: "thread",
-        isSenderAllowed: isThreadSenderAllowed,
-      });
       threadContext = buildThreadContext(threadMessages, activity.id);
     } catch (err) {
       params.log.debug?.("failed to fetch thread history", {

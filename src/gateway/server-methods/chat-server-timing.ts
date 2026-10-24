@@ -1,4 +1,5 @@
 import { performance } from "node:perf_hooks";
+import { isNativeAppUiClient } from "../../../packages/gateway-protocol/src/client-info.js";
 import type { GatewayClientInfo } from "../../../packages/gateway-protocol/src/client-info.js";
 import type { emitDiagnosticsTimelineEvent } from "../../infra/diagnostics-timeline.js";
 import { isOperatorUiClient } from "../../utils/message-channel.js";
@@ -10,14 +11,6 @@ type ChatSendTimingContext = {
   request: { chatSendReceivedAtMs: number; clientInfo?: GatewayClientInfo };
   session: { clientRunId: string; sessionKey: string; agentId: string; sessionLoadMs: number };
 };
-
-type ChatSendServerTimingPhase =
-  | "dispatch-started"
-  | "model-selected"
-  | "agent-run-started"
-  | "first-assistant-event"
-  | "dispatch-completed"
-  | "post-dispatch-completed";
 
 export function roundedChatSendTimingMs(value: number): number {
   return Math.max(0, Math.round(value * 1000) / 1000);
@@ -85,7 +78,8 @@ export function resolveControlUiReconnectResumeParams(
   }
   const record = params as Record<string, unknown>;
   const resumeRequested =
-    record[CONTROL_UI_RECONNECT_RESUME_PARAM] === true && isOperatorUiClient(clientInfo);
+    record[CONTROL_UI_RECONNECT_RESUME_PARAM] === true &&
+    (isOperatorUiClient(clientInfo) || isNativeAppUiClient(clientInfo));
   if (!resumeRequested) {
     return { params, resumeRequested: false };
   }
@@ -113,7 +107,13 @@ export function createOperatorChatSendServerTiming({
     connId && isOperatorUiClient(client?.connect?.client) ? new Set([connId]) : undefined;
   const assistantTiming = chatSendTiming ?? { firstAssistantEventSent: false };
   const emit = (
-    phase: ChatSendServerTimingPhase,
+    phase:
+      | "dispatch-started"
+      | "model-selected"
+      | "agent-run-started"
+      | "first-assistant-event"
+      | "dispatch-completed"
+      | "post-dispatch-completed",
     extra?: Record<string, string | number>,
     dispatchStartedAtMs?: number,
   ) => {

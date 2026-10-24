@@ -1,6 +1,6 @@
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   redactPublicSupportDiagnosticLine,
   redactSupportDiagnosticLine,
@@ -46,6 +46,24 @@ describe("diagnostic support redaction", () => {
   const tempDir = path.join(os.tmpdir(), "openclaw-support-redaction-test");
   const npmLayoutRefusal =
     "The npm global install layout cannot stage a candidate. Reinstall with npm into its default global layout, then retry the update.";
+
+  it.each([
+    "schema migration required",
+    "database schema newer than candidate",
+    "plugin load failed",
+    "port in use",
+    "readiness timeout",
+    "startup crash with signal SIGTERM",
+    "native module missing",
+    "native module ABI mismatch",
+    "startup ran out of memory",
+  ])("admits only the exact startup template %s", (message) => {
+    const context = { env: {}, stateDir: tempDir };
+    expect(redactPublicSupportDiagnosticLine(message, context)).toBe(message);
+    expect(redactPublicSupportDiagnosticLine(`${message} private-tenant`, context)).toBe(
+      "[redacted-diagnostic]",
+    );
+  });
 
   it.each([
     `'/synthetic/private owner/state.sqlite' private suffix`,
@@ -150,6 +168,10 @@ describe("diagnostic support redaction", () => {
   });
 
   it.each([
+    ["attempt state write refused", " for private-tenant at /private/example/state.sqlite"],
+    ["sentinel transaction refused", " on private-host.example"],
+    ["sentinel transaction unavailable", " for token=synthetic-private-token"],
+    ["pipe closed", " for private-host.example token=synthetic-private-token"],
     ["SQLite file generation changed while reading", ": /private/example/openclaw.sqlite"],
     ["SQLite file generation did not stabilize", " during confirmation: /private/example/a.sqlite"],
     [
@@ -158,11 +180,12 @@ describe("diagnostic support redaction", () => {
     ],
     ["SQLite WAL commit header is unavailable or changing", ": /private/example/a.sqlite"],
     ["SQLite WAL commit publication could not be verified", ": /private/example/a.sqlite"],
+    ["SQLite snapshot size mismatch", " for /private/example/a.sqlite: expected 4096, got 4112"],
     [
       "SQLite snapshot hash mismatch",
       ` for /private/example/a.sqlite-wal: expected ${"a".repeat(64)}, got ${"b".repeat(64)}`,
     ],
-  ])("keeps the fixed concurrent-write cause %s without its path", (cause, suffix) => {
+  ])("keeps the fixed failure cause %s without private context", (cause, suffix) => {
     expect(
       redactPublicSupportDiagnosticLine(`Warning: private-host.example\n${cause}${suffix}`, {
         env: {},
@@ -412,6 +435,25 @@ describe("diagnostic support redaction", () => {
     ).toBe(`${redactedPathPrefix}abcd${truncationSuffix}`);
   });
 
+  it("redacts absolute path prefixes after the working directory disappears", () => {
+    const home = path.join(os.tmpdir(), "support-redaction-home");
+    const stateDir = path.join(home, ".openclaw");
+    const redaction = { env: { HOME: home }, stateDir };
+    // Post-update failure diagnostics run after the old install root may be removed.
+    const cwd = vi.spyOn(process, "cwd").mockImplementation(() => {
+      throw Object.assign(new Error("uv_cwd"), { code: "ENOENT" });
+    });
+    try {
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        expect(redactSupportString(`failed at ${stateDir}/logs/gateway.log`, redaction)).toBe(
+          "failed at $OPENCLAW_STATE_DIR/logs/gateway.log",
+        );
+      }
+    } finally {
+      cwd.mockRestore();
+    }
+  });
+
   it("redacts Windows USERPROFILE paths when HOME is unset", () => {
     const userProfile = "C:\\Users\\support-user";
     const stateDir = `${userProfile}\\AppData\\Roaming\\openclaw`;
@@ -469,7 +511,7 @@ describe("diagnostic support redaction", () => {
 it("preserves exact typed lease guidance without widening maintenance prose", () => {
   const context = { env: {}, stateDir: "/synthetic/state" };
   const guidance =
-    "Doctor could not enter maintenance. An agent database is in use. Stop other OpenClaw processes using this state, then retry the update.";
+    "Doctor could not enter maintenance. An agent database is in use. Stop the Gateway and other OpenClaw processes or reboot, then rerun openclaw doctor --fix.";
   expect(redactPublicSupportDiagnosticLine(guidance, context)).toBe(guidance);
   for (const input of [
     guidance + " /private/state.db token=fixture-only-token alice@example.invalid",

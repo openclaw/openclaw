@@ -1,6 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { For, Show, createMemo, createSignal, onCleanup } from "solid-js";
+import { For, Show, createMemo, onSettled } from "solid-js";
 import { formatApprovalDisplayPath } from "../../../src/infra/approval-display-paths.ts";
 import { normalizeCommandSpans } from "../../../src/shared/exec-approval-command-spans.ts";
 import type { GatewaySessionRow } from "../api/types.ts";
@@ -13,13 +13,23 @@ import type {
   ExecApprovalRequest,
   ExecApprovalRequestPayload,
 } from "../app/exec-approval.ts";
+import { registerApprovalsEnglish } from "../i18n/locales/en-approvals.ts";
 import { formatCountdown } from "../lib/format.ts";
-import { t } from "../lib/reactive/i18n.ts";
+import { registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
 import { resolveSessionDisplayName } from "../lib/session-display.ts";
 import { defineSolidBridge } from "../lib/solid-bridge.ts";
 import type { JSX as SolidJSX } from "../types/solid-elements.d.ts";
+import {
+  ApprovalCountdown,
+  approvalRemainingLabel,
+  useApprovalClock,
+} from "./approval-countdown.tsx";
+import { createApprovalDecisionPresentation } from "./approval-decision-presentation.ts";
 import { sidebarAttentionFocusRef } from "./sidebar-attention-focus.ts";
 import { Icon } from "./solid/icon.tsx";
+import { useScrollState } from "./solid/scroll-state.ts";
+
+registerEnglishCatalog(registerApprovalsEnglish);
 
 declare module "@solidjs/web" {
   namespace JSX {
@@ -35,22 +45,37 @@ const DEFAULT_EXEC_APPROVAL_DECISIONS = [
   "allow-always",
   "deny",
 ] as const satisfies readonly ExecApprovalDecision[];
+const MOBILE_DECISION_ORDER = [
+  "allow-always",
+  "deny",
+  "allow-once",
+] as const satisfies readonly ExecApprovalDecision[];
+const MODAL_DECISION_ORDER = [
+  "deny",
+  "allow-always",
+  "allow-once",
+] as const satisfies readonly ExecApprovalDecision[];
 
 export type ExecApprovalCardProps = {
   approval: ExecApprovalRequest;
   sourceSession?: GatewaySessionRow;
   busy: boolean;
+  connected: boolean;
   canGrant: boolean;
   error: string | null;
   variant: "inline" | "modal";
+  /** The mobile composer opts in using native mobile presentation facts, not pane width. */
+  presentation?: "mobile";
   queueCount?: number;
   renderPendingQueue?: () => SolidJSX.Element;
   onDecision: (approvalId: string, decision: ExecApprovalDecision) => void | Promise<void>;
+  onDecisionReady?: (decide: ExecApprovalCardProps["onDecision"], deciding: () => boolean) => void;
 };
 
 export type SidebarApprovalRowProps = {
   approval: ExecApprovalRequest;
   busy: boolean;
+  connected: boolean;
   canGrant: boolean;
   error: string | null;
   openSessionHref?: string;
@@ -58,56 +83,6 @@ export type SidebarApprovalRowProps = {
   onDecision: (event: Event, approvalId: string, decision: ExecApprovalDecision) => void;
   onOpenSession?: (event: MouseEvent) => void;
 };
-
-export function approvalRemainingLabel(expiresAtMs: number, nowMs: number): string {
-  return expiresAtMs > nowMs
-    ? t("execApproval.expiresIn", { time: formatCountdown(expiresAtMs, nowMs, true) })
-    : t("execApproval.expired");
-}
-
-function useApprovalClock(onTick?: (nowMs: number) => void) {
-  const [now, setNow] = createSignal(Date.now());
-  const timer = setInterval(() => {
-    const time = Date.now();
-    setNow(time);
-    onTick?.(time);
-  }, 1_000);
-  onCleanup(() => clearInterval(timer));
-  return now;
-}
-
-export function ApprovalCountdown(
-  props: Pick<
-    SolidJSX.HTMLAttributes<HTMLElement>,
-    "class" | "role" | "aria-label" | "aria-hidden" | "title"
-  > & { expiresAtMs: number; compact?: boolean },
-) {
-  let host: HTMLElement | undefined;
-  const now = useApprovalClock((time) => {
-    if (!props.compact) {
-      host
-        ?.closest("openclaw-modal-dialog")
-        ?.setAttribute("description", approvalRemainingLabel(props.expiresAtMs, time));
-    }
-  });
-  return (
-    <openclaw-approval-countdown
-      ref={(element) => {
-        host = element;
-      }}
-      style={{ display: "contents" }}
-      class={props.class}
-      role={props.role}
-      aria-label={props["aria-label"]}
-      aria-hidden={props["aria-hidden"]}
-      title={props.title}
-    >
-      {props.compact
-        ? formatCountdown(props.expiresAtMs, now(), true)
-        : approvalRemainingLabel(props.expiresAtMs, now())}
-    </openclaw-approval-countdown>
-  );
-}
 
 function renderMetaRow(label: string, value?: string | null, opts?: { path?: boolean }) {
   if (!value) {
@@ -121,26 +96,37 @@ function renderMetaRow(label: string, value?: string | null, opts?: { path?: boo
   );
 }
 
-function renderCommandWithSpans(request: ExecApprovalRequestPayload) {
-  const spans =
-    normalizeCommandSpans([...(request.commandSpans ?? [])], request.command.length) ?? [];
-  const parts = [];
-  let cursor = 0;
-  for (const span of spans) {
-    if (span.startIndex > cursor) {
-      parts.push(request.command.slice(cursor, span.startIndex));
+function ExecApprovalCommand(props: {
+  request: ExecApprovalRequestPayload;
+  scrollState?: (element: HTMLDivElement) => void;
+}) {
+  const parts = createMemo(() => {
+    const request = props.request;
+    const spans =
+      normalizeCommandSpans([...(request.commandSpans ?? [])], request.command.length) ?? [];
+    const result = [];
+    let cursor = 0;
+    for (const span of spans) {
+      if (span.startIndex > cursor) {
+        result.push(request.command.slice(cursor, span.startIndex));
+      }
+      result.push(
+        <mark class="exec-approval-command-span">
+          {request.command.slice(span.startIndex, span.endIndex)}
+        </mark>,
+      );
+      cursor = span.endIndex;
     }
-    parts.push(
-      <mark class="exec-approval-command-span">
-        {request.command.slice(span.startIndex, span.endIndex)}
-      </mark>,
-    );
-    cursor = span.endIndex;
-  }
-  if (cursor < request.command.length) {
-    parts.push(request.command.slice(cursor));
-  }
-  return <div class="exec-approval-command mono">{parts}</div>;
+    if (cursor < request.command.length) {
+      result.push(request.command.slice(cursor));
+    }
+    return result;
+  });
+  return (
+    <div class="exec-approval-command mono" ref={props.scrollState}>
+      {parts()}
+    </div>
+  );
 }
 
 function renderDetails(content: SolidJSX.Element) {
@@ -167,7 +153,7 @@ function renderExecBody(
   return (
     <>
       {" "}
-      {renderCommandWithSpans(request)}
+      <ExecApprovalCommand request={request} />
       {request.scope ? (
         <div class="exec-approval-scope">{summarizeApprovalScopeLabel(request.scope)}</div>
       ) : undefined}
@@ -185,6 +171,85 @@ function renderExecBody(
             : undefined}
         </>,
       )}
+    </>
+  );
+}
+
+function MobileExecApprovalBody(props: { request: ExecApprovalRequestPayload }) {
+  const commandScrollState = useScrollState(true, false);
+  let disclosure: HTMLDetailsElement;
+  let metadata: HTMLDivElement;
+  let animation: Animation | undefined;
+  let opening: boolean | undefined;
+
+  function toggle(event: MouseEvent) {
+    event.preventDefault();
+    const open = !(opening ?? disclosure.open);
+    const start = disclosure.getBoundingClientRect().height;
+    animation?.cancel();
+    animation = undefined;
+    opening = undefined;
+    disclosure.open = open;
+    metadata.inert = !open;
+    if (
+      event.detail === 0 ||
+      disclosure.ownerDocument.defaultView?.matchMedia("(prefers-reduced-motion: reduce)").matches
+    ) {
+      return;
+    }
+    const end = disclosure.getBoundingClientRect().height;
+    // Keep the expanded content painted during exit; the native disclosure owns
+    // the settled state. Reversing starts at its current rendered height.
+    disclosure.open = true;
+    opening = open;
+    animation = disclosure.animate([{ height: `${start}px` }, { height: `${end}px` }], {
+      duration: 300,
+      easing: "cubic-bezier(0.4, 0, 0.2, 1)",
+    });
+    animation.onfinish = () => {
+      disclosure.open = open;
+      opening = undefined;
+      animation = undefined;
+    };
+  }
+
+  onSettled(() => () => animation?.cancel());
+
+  return (
+    <>
+      <details class="exec-approval-mobile-disclosure" ref={(element) => (disclosure = element)}>
+        <summary class="exec-approval-mobile-summary" onClick={toggle}>
+          <Icon name="terminal" class="exec-approval-mobile-terminal" />
+          <ExecApprovalCommand request={props.request} scrollState={commandScrollState} />
+          <Icon name="chevronDown" class="exec-approval-mobile-chevron" />
+        </summary>
+        <div class="exec-approval-mobile-metadata" ref={(element) => (metadata = element)}>
+          <Show
+            when={
+              props.request.host ||
+              props.request.cwd ||
+              props.request.resolvedPath ||
+              props.request.security ||
+              props.request.ask
+            }
+          >
+            <div class="exec-approval-meta">
+              <div class="exec-approval-mobile-host">
+                {renderMetaRow(t("execApproval.labels.host"), props.request.host)}
+              </div>
+              {renderMetaRow(t("execApproval.labels.directory"), props.request.cwd, { path: true })}
+              {renderMetaRow(t("execApproval.labels.resolved"), props.request.resolvedPath, {
+                path: true,
+              })}
+              {renderMetaRow(t("execApproval.labels.security"), props.request.security)}
+              {renderMetaRow(t("execApproval.labels.ask"), props.request.ask)}
+            </div>
+          </Show>
+        </div>
+      </details>
+      {props.request.scope ? (
+        <div class="exec-approval-scope">{summarizeApprovalScopeLabel(props.request.scope)}</div>
+      ) : undefined}
     </>
   );
 }
@@ -209,6 +274,16 @@ function renderPluginBody(active: ExecApprovalRequest, variant: ExecApprovalCard
 }
 
 function approvalDecisionLabel(decision: ExecApprovalDecision, approval: ExecApprovalRequest) {
+  const proposal = approval.kind === "exec" ? approval.request.streamProposal : undefined;
+  if (proposal && decision !== "allow-always") {
+    return t(
+      decision === "deny"
+        ? "execApproval.cancelWatcher"
+        : proposal.operation === "add"
+          ? "execApproval.startWatcher"
+          : "execApproval.saveWatcher",
+    );
+  }
   if (approval.kind === "plugin" && Array.isArray(approval.pluginActions)) {
     for (const action of approval.pluginActions) {
       if (isRecord(action) && action.kind === "decision" && action.decision === decision) {
@@ -254,6 +329,9 @@ export function resolveApprovalDecisions(
 }
 
 export function approvalTitle(active: ExecApprovalRequest): string {
+  if (active.kind === "exec" && active.request.streamProposal) {
+    return active.request.streamProposal.name;
+  }
   return active.kind !== "exec"
     ? (active.pluginTitle ?? t("execApproval.pluginApprovalNeeded"))
     : t("execApproval.execApprovalNeeded");
@@ -262,7 +340,7 @@ export function approvalTitle(active: ExecApprovalRequest): string {
 export function SidebarApprovalRow(props: SidebarApprovalRowProps) {
   const approval = createMemo(() => props.approval);
   const nowMs = useApprovalClock();
-  const expired = createMemo(() => approval().expiresAtMs <= nowMs());
+  const expired = () => approval().expiresAtMs <= nowMs();
   const command = createMemo(() => compactApprovalCommand(approval().request.command));
   const sessionTitle = createMemo(() => {
     const sessionKey = approval().request.sessionKey?.trim();
@@ -271,10 +349,10 @@ export function SidebarApprovalRow(props: SidebarApprovalRowProps) {
       (sessionKey ? resolveSessionDisplayName(sessionKey) : approvalTitle(approval()))
     );
   });
-  const expiryUrgent = createMemo(() => expired() || approval().expiresAtMs - nowMs() < 2 * 60_000);
-  const expiryLabel = createMemo(() => approvalRemainingLabel(approval().expiresAtMs, nowMs()));
-  const reviewOnlyMessage = createMemo(() => t("execApproval.reviewOnly"));
-  const grantError = createMemo(() => !props.canGrant && props.error === reviewOnlyMessage());
+  const expiryUrgent = () => expired() || approval().expiresAtMs - nowMs() < 2 * 60_000;
+  const expiryLabel = () => approvalRemainingLabel(approval().expiresAtMs, nowMs());
+  const reviewOnlyMessage = () => t("execApproval.reviewOnly");
+  const grantError = () => !props.canGrant && props.error === reviewOnlyMessage();
   return (
     <openclaw-sidebar-approval-row style={{ display: "contents" }}>
       <article
@@ -295,7 +373,8 @@ export function SidebarApprovalRow(props: SidebarApprovalRowProps) {
             <span class="sidebar-issues-panel__entity" title={sessionTitle()}>
               {sessionTitle()}
             </span>
-            <ApprovalCountdown
+            <openclaw-approval-countdown
+              style={{ display: "contents" }}
               class={[
                 "sidebar-approval-row__timer",
                 { "sidebar-approval-row__timer--urgent": expiryUrgent() },
@@ -303,9 +382,9 @@ export function SidebarApprovalRow(props: SidebarApprovalRowProps) {
               role="timer"
               aria-label={expiryLabel()}
               title={expiryLabel()}
-              expiresAtMs={approval().expiresAtMs}
-              compact={true}
-            />
+            >
+              {formatCountdown(approval().expiresAtMs, nowMs(), true)}
+            </openclaw-approval-countdown>
           </div>
           <div class="sidebar-approval-row__command mono" title={approval().request.command}>
             <span aria-hidden="true">$ </span>
@@ -314,6 +393,13 @@ export function SidebarApprovalRow(props: SidebarApprovalRowProps) {
           <Show when={approval().request.scope}>
             {(scope) => (
               <div class="exec-approval-scope">{summarizeApprovalScopeLabel(scope())}</div>
+            )}
+          </Show>
+          <Show when={approval().request.warningText}>
+            {(warning) => (
+              <div class="sidebar-approval-row__message" role="note">
+                {warning()}
+              </div>
             )}
           </Show>
           <div
@@ -337,7 +423,7 @@ export function SidebarApprovalRow(props: SidebarApprovalRowProps) {
                       decision: label(),
                       command: command(),
                     })}
-                    disabled={props.busy || !props.canGrant || expired()}
+                    disabled={!props.connected || props.busy || !props.canGrant || expired()}
                     onClick={(event: Event) => props.onDecision(event, approval().id, decision)}
                   >
                     {label()}
@@ -352,13 +438,13 @@ export function SidebarApprovalRow(props: SidebarApprovalRowProps) {
                 href={props.openSessionHref}
                 aria-label={t("sessionsView.openSession")}
                 title={t("sessionsView.openSession")}
-                onClick={props.onOpenSession}
+                onClick={(event) => props.onOpenSession?.(event)}
               >
                 <Icon name="arrowUpRight" />
               </a>
             ) : undefined}
           </div>
-          {!props.canGrant ? (
+          {props.connected && !props.canGrant ? (
             <div class="sidebar-approval-row__message" role={grantError() ? "alert" : "note"}>
               {reviewOnlyMessage()}
             </div>
@@ -377,30 +463,46 @@ export function SidebarApprovalRow(props: SidebarApprovalRowProps) {
   );
 }
 
-function ExecApprovalCardContent(props: ExecApprovalCardProps) {
+function ExecApprovalCardContent(
+  props: ExecApprovalCardProps & {
+    deciding: () => boolean;
+    decide: ExecApprovalCardProps["onDecision"];
+  },
+) {
   const active = createMemo(() => props.approval);
-  const decisions = createMemo(() => resolveApprovalDecisions(active()));
-  const reviewOnlyMessage = createMemo(() => t("execApproval.reviewOnly"));
-  const grantError = createMemo(() => !props.canGrant && props.error === reviewOnlyMessage());
-  const rawSeverity = createMemo(() => active().pluginSeverity?.trim().toLowerCase());
-  const severity = createMemo(() =>
+  const mobile = createMemo(
+    () => props.presentation === "mobile" && props.variant === "inline" && active().kind === "exec",
+  );
+  const decisions = createMemo(() => {
+    const eligible = resolveApprovalDecisions(active());
+    // Right-aligned footers keep the primary decision at the trailing edge.
+    const order = mobile()
+      ? MOBILE_DECISION_ORDER
+      : props.variant === "modal"
+        ? MODAL_DECISION_ORDER
+        : undefined;
+    return order ? order.filter((item) => eligible.includes(item)) : eligible;
+  });
+  const reviewOnlyMessage = () => t("execApproval.reviewOnly");
+  const grantError = () => !props.canGrant && props.error === reviewOnlyMessage();
+  const rawSeverity = () => active().pluginSeverity?.trim().toLowerCase();
+  const severity = () =>
     active().kind === "exec" || rawSeverity() === "warning" || rawSeverity() === "warn"
       ? "warning"
       : rawSeverity() === "danger" || rawSeverity() === "critical" || rawSeverity() === "error"
         ? "danger"
-        : "info",
-  );
-  const pluginId = createMemo(() =>
-    active().kind === "plugin" ? active().pluginId?.trim() : null,
-  );
-  const agentId = createMemo(() =>
-    props.variant === "modal" ? active().request.agentId?.trim() : null,
-  );
+        : "info";
+  const pluginId = () => (active().kind === "plugin" ? active().pluginId?.trim() : null);
+  const agentId = () => (props.variant === "modal" ? active().request.agentId?.trim() : null);
   const content = () => (
     <>
       <div class="exec-approval-header">
         <div>
-          <div class="exec-approval-title">{approvalTitle(active())}</div>
+          <div class="exec-approval-title">
+            {mobile() && !active().request.streamProposal
+              ? t("execApproval.runCommand")
+              : approvalTitle(active())}
+          </div>
           {pluginId() || agentId() ? (
             <div class="exec-approval-chips">
               {renderChip("plugin", pluginId())} {renderChip("agent", agentId())}
@@ -427,13 +529,45 @@ function ExecApprovalCardContent(props: ExecApprovalCardProps) {
           </div>
         )}
       </Show>
-      {active().kind === "exec"
-        ? renderExecBody(active().request, props.variant)
-        : renderPluginBody(active(), props.variant)}
-      {active().kind === "exec" && !decisions().includes("allow-always") ? (
-        <div class="exec-approval-warning">{t("execApproval.allowAlwaysUnavailable")}</div>
+      {active().kind === "exec" && active().request.streamProposal ? (
+        <p class="exec-approval-summary">
+          {t(
+            active().request.host === "sandbox"
+              ? "execApproval.watcherSandboxSummary"
+              : active().request.host === "gateway"
+                ? "execApproval.watcherGatewaySummary"
+                : "execApproval.watcherSummary",
+          )}
+        </p>
+      ) : null}
+      {active().kind === "exec" && active().request.warningText ? (
+        <div class="exec-approval-warning" role="note">
+          {active().request.warningText}
+        </div>
+      ) : null}
+      <Show
+        when={mobile() && active().id}
+        keyed
+        fallback={
+          active().kind === "exec"
+            ? renderExecBody(active().request, props.variant)
+            : renderPluginBody(active(), props.variant)
+        }
+      >
+        {(_requestId) => <MobileExecApprovalBody request={active().request} />}
+      </Show>
+      {active().kind === "exec" &&
+      (!mobile() || active().request.streamProposal) &&
+      !decisions().includes("allow-always") ? (
+        <div class="exec-approval-warning">
+          {t(
+            active().request.streamProposal
+              ? "execApproval.watcherApprovalScope"
+              : "execApproval.allowAlwaysUnavailable",
+          )}
+        </div>
       ) : undefined}
-      {!props.canGrant ? (
+      {props.connected && !props.canGrant ? (
         <div
           class={grantError() ? "exec-approval-error" : "exec-approval-warning"}
           role={grantError() ? "alert" : "note"}
@@ -452,19 +586,26 @@ function ExecApprovalCardContent(props: ExecApprovalCardProps) {
   const actions = () => (
     <For each={decisions()}>
       {(decision) => {
-        const label = createMemo(() => approvalDecisionLabel(decision, active()));
+        const label = createMemo(() =>
+          mobile() && decision === "allow-always"
+            ? t("execApproval.alwaysAllow")
+            : approvalDecisionLabel(decision, active()),
+        );
         return (
           <button
-            class={decisionClass(decision)}
+            class={[
+              mobile() && decision === "deny" ? "btn" : decisionClass(decision),
+              { [`exec-approval-mobile-action--${decision}`]: mobile() },
+            ]}
             type="button"
             aria-label={label()}
-            disabled={props.busy || !props.canGrant}
+            disabled={!props.connected || props.deciding() || props.busy || !props.canGrant}
             title={
-              props.variant === "modal" && props.canGrant
+              props.variant === "modal" && props.connected && props.canGrant
                 ? `${label()} (${decisionShortcut(decision)})`
                 : label()
             }
-            onClick={() => void props.onDecision(active().id, decision)}
+            onClick={() => void props.decide(active().id, decision)}
           >
             <span>{label()}</span>
           </button>
@@ -480,6 +621,7 @@ function ExecApprovalCardContent(props: ExecApprovalCardProps) {
           "exec-approval-card",
           `exec-approval-card--${props.variant}`,
           `exec-approval-card--severity-${severity()}`,
+          { "exec-approval-card--mobile": mobile() },
         ]}
         data-approval-id={active().id}
       >
@@ -497,11 +639,50 @@ function ExecApprovalCardContent(props: ExecApprovalCardProps) {
   );
 }
 
+const decisionLifetimes = new WeakMap<
+  HTMLElement,
+  { retire: () => void; update: (props: ExecApprovalCardProps | undefined) => void }
+>();
+
 export const ExecApprovalCard = defineSolidBridge<{ props?: ExecApprovalCardProps }>(
   "openclaw-exec-approval-card",
   (props, host) => {
     host.style.display = "contents";
-    return <>{props.props && <ExecApprovalCardContent {...props.props} />}</>;
+    const presentation = createApprovalDecisionPresentation();
+    let approvalId = props.props?.approval.id;
+    decisionLifetimes.set(host, {
+      retire: presentation.retire,
+      update(next) {
+        if (next?.approval.id !== approvalId || !next?.busy || !next.connected || !next.canGrant) {
+          presentation.retire();
+        }
+        approvalId = next?.approval.id;
+      },
+    });
+    const decide: ExecApprovalCardProps["onDecision"] = (id, decision) =>
+      presentation.run(props.props?.onDecision(id, decision));
+    onSettled(() => {
+      props.props?.onDecisionReady?.(decide, presentation.deciding);
+      return () => {
+        presentation.retire();
+        decisionLifetimes.delete(host);
+      };
+    });
+    return (
+      <>
+        {props.props && (
+          <ExecApprovalCardContent
+            {...props.props}
+            deciding={presentation.deciding}
+            decide={decide}
+          />
+        )}
+      </>
+    );
   },
-  { properties: { props: { default: undefined, attribute: false } } },
+  {
+    properties: { props: { default: undefined, attribute: false } },
+    propertyChanged: (host) => decisionLifetimes.get(host)?.update(host.props),
+    disconnected: (host) => decisionLifetimes.get(host)?.retire(),
+  },
 );

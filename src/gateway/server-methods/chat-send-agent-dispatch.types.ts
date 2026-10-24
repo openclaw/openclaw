@@ -31,8 +31,6 @@ export type StartChatDispatchParams = {
   externalAuthorityAdmission: ChatSendExternalAuthorityAdmission | undefined;
   injection: {
     beginCapturedMessageInjection: () => Promise<ReplyMessageInjectionAttempt | undefined>;
-    messageInjectionAttempt: ReplyMessageInjectionAttempt | undefined;
-    preAckReplyContextPromise: Promise<ChatSendReplyContextFields> | undefined;
     replyContextFieldsPromise: Promise<ChatSendReplyContextFields> | undefined;
   };
   request: NormalizedChatSendRequest;

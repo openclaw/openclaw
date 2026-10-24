@@ -20,6 +20,8 @@ Built-in compaction summarizes the older history in one model request, whatever 
 
 The full conversation history stays on disk. Compaction only changes what the model sees on the next turn.
 
+Compaction loads the complete current context: the latest reset or compaction boundary, its retained messages and previous summary, and the following history. Obsolete history before that window stays on disk without being loaded again, even when daily resets or `/new` keep the same session ID. The history hydration byte limit for ordinary turns does not clip compaction input; the summarizer's existing input budget still applies.
+
 OpenAI Responses native compaction and checkpoint replay follow
 [context-engine compaction ownership](/concepts/context-engine#provider-compaction-ownership),
 including legacy defaults, explicit opt-in, and handling of preexisting checkpoints
@@ -31,6 +33,15 @@ OpenClaw preserves that entire window, including retained assistant messages,
 for the next request and after a restart. The provider chooses which messages
 remain; it does not have to retain every original user message. See
 [OpenAI server-side compaction](/providers/openai/advanced).
+
+Built-in summarization rejects responses cut short by the model's output token limit,
+even when they contain summary text. In `mode: "default"`, automatic compaction
+retries invalid summary output once; manual compaction reports the failure without
+retrying. If no valid summary is produced, the original history remains in context
+and no compaction entry is written. Branch navigation also rejects truncated
+summaries and leaves the current branch unchanged.
+
+If the summary output budget is exhausted without visible text, a reasoning model may have spent the allowance on thinking. Set `agents.defaults.compaction.thinkingLevel` to `"off"` if the model supports it, or use `agents.defaults.compaction.model` to select a model that can summarize within the available output budget. The error identifies the selected model, the summary allowance, and the model's configured `maxTokens`. The summary allowance is also limited by compaction's reserved budget, so increasing `maxTokens` alone may not raise it.
 
 Built-in summarization receives text, not image pixels. Omitted images and other non-text input receive markers such as `[image data omitted from summary input]`, without claiming that a model processed the data. The first eight affected messages receive at most two fixed markers each; further omissions receive one aggregate statement. These additions, including newly retained role labels and separators, total at most 847 UTF-8 bytes per summarizer request and count toward token estimates. Existing text is not capped by this omission budget. Custom compaction providers still receive the original message content.
 
@@ -84,7 +95,7 @@ Before automatically reducing the output budget for an OpenAI-compatible tool re
 
 Overflow recovery trims tool results within the current model-context window. Older messages and reset boundaries remain in retained history without being copied into new transcript entries.
 
-If overflow recovery cannot make the prompt fit, the failed reply suggests `/reset`, `/new`, or a larger-context model. The Control UI shows this guidance in Details and keeps it in saved chat history. For a single oversized prompt, shorten the prompt before resending it in a new session.
+If overflow recovery cannot make the prompt fit, the failed reply suggests `/reset`, `/new`, or a larger-context model. If the recovery compaction itself fails, for example because the summary model errors or times out, the reply says so and suggests trying again or running `/compact`. The Control UI shows this guidance in Details and keeps it in saved chat history. For a single oversized prompt, shorten the prompt before resending it in a new session.
 
 Stopping or timing out a run also stops its overflow or timeout recovery. The built-in OpenClaw runtime does not start further recovery hooks, maintenance, transcript truncation, or retries after cancellation. Cancellation is not rollback: a compaction that already completed remains in the transcript and is still counted, without sending a late reply. The context estimate follows the latest model or compaction observation; billing totals remain separate.
 
@@ -224,6 +235,8 @@ In safeguard mode, provider timeouts and rate limits from built-in summarization
 ### Identifier preservation
 
 Compaction summarization requests exact opaque identifier retention by default (`agents.defaults.compaction.identifierPolicy: "strict"`). Degraded summaries may omit identifiers that cannot fit. Set `agents.defaults.compaction.identifierPolicy: "off"` to disable the retention guidance. Custom guidance belongs in a compaction provider's `summarize()` implementation.
+
+When a quality audit finds missing identifiers, corrective feedback names only complete values that fit its bounded request and reports how many were omitted. It does not send a cut-off identifier as if it were an exact value.
 
 ### Active transcript byte guard
 

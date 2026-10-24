@@ -1,5 +1,5 @@
 import os from "node:os";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { installAcceptedSubagentGatewayMock } from "../../test-helpers/subagent-gateway.js";
 import {
@@ -25,133 +25,83 @@ type SpawnSubagentTestContext = Parameters<
 >[1] & {
   requesterThinkingExplicit?: boolean;
 };
-type ThinkingProvenanceCase = {
-  name: string;
-  requesterState: Readonly<Record<string, unknown>>;
-  context: SpawnSubagentTestContext;
-  requesterThinkingDefault?: string;
-  spawnThinking?: string;
-  expected?: string;
-};
+type ThinkingProvenanceCase = [
+  name: string,
+  context: SpawnSubagentTestContext,
+  saved: string | undefined,
+  expected: string | undefined,
+  spawnThinking?: string,
+  requesterThinkingDefault?: string,
+];
 
 let configOverride: Record<string, unknown>;
 let resetSubagentRegistryForTests: typeof import("../registry/subagent-registry.test-helpers.js").resetSubagentRegistryForTests;
 let spawnSubagentDirect: typeof import("./subagent-spawn.js").spawnSubagentDirect;
+const automatic: SpawnSubagentTestContext = {
+  requesterThinkingLevel: "high",
+  requesterThinkingExplicit: false,
+};
 
-function spawn(
-  params: Parameters<typeof spawnSubagentDirect>[0],
-  ctx: SpawnSubagentTestContext = {},
-) {
-  return spawnSubagentDirect(params, { agentSessionKey: "agent:main:main", ...ctx });
-}
+const thinkingCases: readonly ThinkingProvenanceCase[] = [
+  [
+    "inherits explicit active effort",
+    { requesterThinkingLevel: "ultra", requesterThinkingExplicit: true },
+    "medium",
+    "ultra",
+  ],
+  ["inherits legacy active effort", { requesterThinkingLevel: "ultra" }, "medium", "ultra"],
+  ["ignores automatic effort and stale preference", automatic, "medium", undefined],
+  ["ignores automatic effort without a preference", automatic, undefined, undefined],
+  ["does not persist an unselected model default", {}, undefined, undefined],
+  ["prefers explicit spawn effort", automatic, undefined, "low", "low"],
+  ["inherits persisted effort", {}, "off", "off"],
+  ["inherits configured effort", {}, undefined, "high", undefined, "high"],
+];
 
-function captureStore() {
+beforeAll(async () => {
+  ({ resetSubagentRegistryForTests, spawnSubagentDirect } = await loadSubagentSpawnModuleForTest({
+    ...hoisted,
+    getRuntimeConfig: () => configOverride,
+    resolveAgentConfig: (cfg: OpenClawConfig, agentId: string) => cfg.agents?.entries?.[agentId],
+    sessionStorePath: "/tmp/subagent-thinking-provenance-session-store.json",
+  }));
+});
+
+beforeEach(async () => {
+  await resetSubagentRegistryForTests();
+  for (const mock of Object.values(hoisted)) {
+    mock.mockReset();
+  }
+  hoisted.prepareModelChoiceMock.mockImplementation(supportedSpawnModelChoice);
+  hoisted.startQueuedSubagentRunMock.mockResolvedValue(true);
+  hoisted.settleFailedQueuedSubagentLaunchMock.mockResolvedValue(true);
+  installAcceptedSubagentGatewayMock(hoisted.callGatewayMock);
+});
+
+it.each(thinkingCases)("%s", async (name, context, saved, expected, thinking, thinkingDefault) => {
+  configOverride = createConfigOverride({
+    agents: {
+      defaults: {
+        workspace: os.tmpdir(),
+        ...(thinkingDefault ? { thinkingDefault } : {}),
+      },
+      entries: { main: { workspace: "/tmp/workspace-main" } },
+    },
+  });
+  hoisted.loadSessionStoreMock.mockReturnValue({
+    "agent:main:main": saved === undefined ? {} : { thinkingLevel: saved },
+  });
   let captured: Record<string, Record<string, unknown>> = {};
   installSessionStoreCaptureMock(hoisted.updateSessionStoreMock, {
     onStore: (store) => {
       captured = store;
     },
   });
-  return () => captured;
-}
+  const result = await spawnSubagentDirect(
+    { task: `provenance: ${name}`, thinking },
+    { agentSessionKey: "agent:main:main", ...context },
+  );
 
-const thinkingCases: readonly ThinkingProvenanceCase[] = [
-  {
-    name: "inherits an explicitly selected active-turn level",
-    requesterState: { thinkingLevel: "medium" },
-    context: { requesterThinkingLevel: "ultra", requesterThinkingExplicit: true },
-    expected: "ultra",
-  },
-  {
-    name: "keeps legacy inheritance for unknown active-turn provenance",
-    requesterState: { thinkingLevel: "medium" },
-    context: { requesterThinkingLevel: "ultra" },
-    expected: "ultra",
-  },
-  {
-    name: "does not save an automatic active level or a stale saved preference",
-    requesterState: { thinkingLevel: "medium" },
-    context: { requesterThinkingLevel: "high", requesterThinkingExplicit: false },
-    expected: undefined,
-  },
-  {
-    name: "does not save an automatic parent tier for a child that can later switch models",
-    requesterState: {},
-    context: { requesterThinkingLevel: "high", requesterThinkingExplicit: false },
-    expected: undefined,
-  },
-  {
-    name: "does not save a requester model default when no active level was selected",
-    requesterState: {},
-    context: {},
-    expected: undefined,
-  },
-  {
-    name: "preserves an explicit spawn override over an automatic parent tier",
-    requesterState: {},
-    context: { requesterThinkingLevel: "high", requesterThinkingExplicit: false },
-    spawnThinking: "low",
-    expected: "low",
-  },
-  {
-    name: "inherits a persisted requester choice when active provenance is unknown",
-    requesterState: { thinkingLevel: "off" },
-    context: {},
-    expected: "off",
-  },
-  {
-    name: "inherits a configured requester choice when active provenance is unknown",
-    requesterState: {},
-    context: {},
-    requesterThinkingDefault: "high",
-    expected: "high",
-  },
-];
-
-describe("subagent thinking provenance", () => {
-  beforeAll(async () => {
-    ({ resetSubagentRegistryForTests, spawnSubagentDirect } = await loadSubagentSpawnModuleForTest({
-      ...hoisted,
-      getRuntimeConfig: () => configOverride,
-      resolveAgentConfig: (cfg: OpenClawConfig, agentId: string) => cfg.agents?.entries?.[agentId],
-      sessionStorePath: "/tmp/subagent-thinking-provenance-session-store.json",
-    }));
-  });
-
-  beforeEach(async () => {
-    await resetSubagentRegistryForTests();
-    for (const mock of Object.values(hoisted)) {
-      mock.mockReset();
-    }
-    hoisted.prepareModelChoiceMock.mockImplementation(supportedSpawnModelChoice);
-    hoisted.startQueuedSubagentRunMock.mockResolvedValue(true);
-    hoisted.settleFailedQueuedSubagentLaunchMock.mockResolvedValue(true);
-    configOverride = createConfigOverride();
-    installAcceptedSubagentGatewayMock(hoisted.callGatewayMock);
-    hoisted.loadSessionStoreMock.mockReturnValue({});
-  });
-
-  it.each(thinkingCases)("$name", async (testCase) => {
-    configOverride = createConfigOverride({
-      agents: {
-        defaults: {
-          workspace: os.tmpdir(),
-          ...(testCase.requesterThinkingDefault
-            ? { thinkingDefault: testCase.requesterThinkingDefault }
-            : {}),
-        },
-        entries: { main: { workspace: "/tmp/workspace-main" } },
-      },
-    });
-    hoisted.loadSessionStoreMock.mockReturnValue({ "agent:main:main": testCase.requesterState });
-    const readStore = captureStore();
-
-    const result = await spawn(
-      { task: `provenance: ${testCase.name}`, thinking: testCase.spawnThinking },
-      testCase.context,
-    );
-
-    expect(result.status).toBe("accepted");
-    expect(readStore()[result.childSessionKey!]?.thinkingLevel).toBe(testCase.expected);
-  });
+  expect(result.status).toBe("accepted");
+  expect(captured[result.childSessionKey!]?.thinkingLevel).toBe(expected);
 });

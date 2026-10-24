@@ -47,12 +47,11 @@ function receivedHint(value: unknown, pathValue = "some.path", message = "invali
 }
 
 describe("formatConfigIssuePath", () => {
-  it("handles consecutive numeric indices", () => {
-    expect(renderIssue(["a", 0, "b", 1])).toBe("a[0].b[1]: Invalid input");
-  });
-
-  it("normalizes an empty path to the root marker", () => {
-    expect(renderIssue([])).toBe("<root>: Invalid input");
+  it.each<[PathSegment[], string]>([
+    [["a", 0, "b", 1], "a[0].b[1]"],
+    [[], "<root>"],
+  ])("formats %j", (segments, expected) => {
+    expect(renderIssue(segments)).toBe(`${expected}: Invalid input`);
   });
 });
 
@@ -70,25 +69,16 @@ describe("resolveConfigIssueLineInRaw", () => {
     expect(resolveConfigIssueLineInRaw(raw, ["agents", "list", 1, "tools", "profile"])).toBe(4);
   });
 
-  it("handles unicode escape sequences in strings", () => {
-    expect(resolveConfigIssueLineInRaw('{\n  "a": "hello \\u0041",\n  "b": 1\n}', ["b"])).toBe(3);
-  });
-
-  it("handles deeply nested arrays", () => {
-    const raw = ["{", '  "a": { "b": { "c": [1, [2, [3]]] } } }', "}"].join("\n");
-    expect(resolveConfigIssueLineInRaw(raw, ["a", "b", "c", 1, 0])).toBe(2);
-  });
-
-  it("gracefully degrades for unresolvable paths", () => {
-    const raw = ["{", '  "a": 1', "}"].join("\n");
-    expect(resolveConfigIssueLineInRaw(raw, ["nonexistent"])).toBeUndefined();
-    expect(resolveConfigIssueLineInRaw(raw, ["a", "b"])).toBeUndefined();
-    expect(resolveConfigIssueLineInRaw(raw, ["a", 0])).toBeUndefined();
-  });
-
-  it("handles empty raw text", () => {
-    expect(resolveConfigIssueLineInRaw("", ["a"])).toBeUndefined();
-    expect(resolveConfigIssueLineInRaw("  ", ["a"])).toBeUndefined();
+  it.each<[string, PathSegment[], number | undefined]>([
+    ['{\n  "a": "hello \\u0041",\n  "b": 1\n}', ["b"], 3],
+    ['{\n  "a": { "b": { "c": [1, [2, [3]]] } } }\n}', ["a", "b", "c", 1, 0], 2],
+    ['{\n  "a": 1\n}', ["nonexistent"], undefined],
+    ['{\n  "a": 1\n}', ["a", "b"], undefined],
+    ['{\n  "a": 1\n}', ["a", 0], undefined],
+    ["", ["a"], undefined],
+    ["  ", ["a"], undefined],
+  ])("locates %j at %j", (raw, segments, expected) => {
+    expect(resolveConfigIssueLineInRaw(raw, segments)).toBe(expected);
   });
 });
 

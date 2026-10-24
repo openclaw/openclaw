@@ -423,7 +423,7 @@ it("keeps an admitted run on its stored main row when the public alias becomes g
     registerAgentRunContext(runId, {
       agentId: admitted.canonicalSessionAgentId,
       sessionKey: admitted.canonicalKey,
-      sessionId: admitted.sessionId,
+      sessionId: expectDefined(admitted.entry, "admitted stored entry").sessionId,
     });
     try {
       const globalSource: OpenClawConfig = { ...source, session: { scope: "global" } };

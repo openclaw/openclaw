@@ -192,7 +192,7 @@ class ContextAdmission {
   #value: Readonly<ContextAdmissionValue>;
   constructor(context: object, value: ContextAdmissionValue) {
     this.#context = context;
-    this.#value = Object.freeze(value);
+    this.#value = value;
     Object.setPrototypeOf(this, null);
     Object.freeze(this);
   }
@@ -252,19 +252,19 @@ function mintChannelAdmissionEvidence(
   if (!audit?.enabled) {
     return undefined;
   }
-  return new AdmissionEvidence(Object.freeze({ ...payload, createdAt: Date.now() }), audit);
+  return new AdmissionEvidence({ ...payload, createdAt: Date.now() }, audit);
 }
 function unsupportedChannelAdmissionEvidence(
   audit: ChannelAdmissionAudit | undefined,
 ): ChannelAdmissionEvidence | undefined {
   const payload = {
     kind: "leaf" as const,
-    contribution: Object.freeze({ participant: { state: "unsupported" as const } }),
+    contribution: { participant: { state: "unsupported" as const } },
   };
   // A capability-absence marker carries no participant facts and needs no ambient collector.
   return audit
     ? mintChannelAdmissionEvidence(audit, payload)
-    : new AdmissionEvidence(Object.freeze({ ...payload, createdAt: Date.now() }), undefined);
+    : new AdmissionEvidence({ ...payload, createdAt: Date.now() }, undefined);
 }
 
 function participantContribution(params: {
@@ -273,11 +273,9 @@ function participantContribution(params: {
   rawPrincipalRef: string | number | null | undefined;
 }): ChannelAdmissionContribution {
   const rawPrincipalRef = scopedParticipantRef(params);
-  return Object.freeze(
-    rawPrincipalRef
-      ? { participant: Object.freeze({ state: "present" as const, rawPrincipalRef }) }
-      : { participant: Object.freeze({ state: "unknown" as const }) },
-  );
+  return rawPrincipalRef
+    ? { participant: { state: "present", rawPrincipalRef } }
+    : { participant: { state: "unknown" } };
 }
 
 export function recordChannelIngressResolution(params: {
@@ -295,7 +293,7 @@ export function recordChannelIngressResolution(params: {
   if (!owner || owner.channelId !== params.channelId || !owner.isLive()) {
     return params.result;
   }
-  const binding = Object.freeze({
+  const binding: ChannelIngressResolutionBinding = {
     channelId: params.channelId,
     accountId: params.accountId,
     rawPrincipalRef: params.rawPrincipalRef,
@@ -303,11 +301,11 @@ export function recordChannelIngressResolution(params: {
     identifierAuthentication: params.identifierAuthentication,
     owner,
     gatewayContext: owner.resolveGatewayContext?.(),
-    scope: Object.freeze({ conversation: Object.freeze({ ...params.scope.conversation }) }),
+    scope: { conversation: { ...params.scope.conversation } },
     contextBinding: snapshotContextBinding(params.scope.contextBinding),
     publicScopeKey: publicResultScopeKey(params.result),
     handoff: { consumed: false },
-  });
+  };
   return Object.assign(new HostIngressResolution(binding, params.participantInput), params.result);
 }
 
@@ -316,7 +314,7 @@ function unknownChannelAdmissionEvidence(
 ): ChannelAdmissionEvidence | undefined {
   return mintChannelAdmissionEvidence(audit, {
     kind: "leaf",
-    contribution: Object.freeze({ participant: { state: "unknown" as const } }),
+    contribution: { participant: { state: "unknown" } },
   });
 }
 
@@ -402,14 +400,14 @@ export function prepareHostChannelContextAdmissionEvidence(params: {
         const contribution = participantContribution(binding);
         return mintChannelAdmissionEvidence(audit, {
           kind: "leaf",
-          contribution: Object.freeze({
+          contribution: {
             ...contribution,
-            decision: Object.freeze({
+            decision: {
               participantAware: contribution.participant.state === "present",
               outcomeAffecting: binding.participantOutcomeAffecting,
               identifierAuthentication: binding.identifierAuthentication,
-            }),
-          }),
+            },
+          },
         });
       })
     : [];
@@ -502,7 +500,7 @@ export function combineChannelAdmissionEvidence(
   }
   return mintChannelAdmissionEvidence(audit, {
     kind: "aggregate",
-    sources: Object.freeze([...evidence]),
+    sources: [...evidence],
   });
 }
 

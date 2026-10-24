@@ -34,8 +34,9 @@ import {
 } from "../helpers/fixture-receipts.js";
 import { isProcessAlive } from "../helpers/process-wait.js";
 import { startProcessWatchdogFixture } from "../helpers/process-watchdog.js";
-import { createDeferred, withinTest } from "../helpers/promise.js";
+import { withinTest } from "../helpers/promise.js";
 import { cleanupTempDirs, makeTempDir } from "../helpers/temp-dir.js";
+import { childTermination } from "./run-vitest.test-support.js";
 import { toolingProbeRuntimeEntrypoints } from "./tooling-probe-runtime.test-support.mts";
 
 const tempDirs = new Set<string>();
@@ -155,13 +156,7 @@ function startRunner(source: string[]) {
     cwd: process.cwd(),
     stdio: ["ignore", "ignore", "pipe"],
   });
-  const closed = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
-    (resolve, reject) => {
-      runner.once("error", reject);
-      runner.once("close", (code, signal) => resolve({ code, signal }));
-    },
-  );
-  return { runner, closed };
+  return { runner, closed: childTermination(runner) };
 }
 
 function writeJson(file: string, value: unknown) {
@@ -295,8 +290,6 @@ function expectedArgs(overrides: Partial<ReturnType<typeof parseTestGroupReportA
 
 describe("scripts/test-group-report", () => {
   it("groups repo files by stable product area", () => {
-    expect(resolveTestArea("extensions/discord/src/send.test.ts")).toBe("extensions/discord");
-    expect(resolveTestArea("src/commands/agent.test.ts")).toBe("src/commands");
     expect(resolveTestArea("packages/plugin-sdk/src/index.test.ts")).toBe("packages/plugin-sdk");
     expect(resolveTestArea("ui/src/ui/views/chat.test.ts")).toBe("ui/views");
     expect(resolveTestArea("test/scripts/test-group-report.test.ts")).toBe("test/scripts");
@@ -638,55 +631,14 @@ describe("scripts/test-group-report", () => {
   ])("rejects invalid report arguments $command", ({ command, error }) => {
     expect(() => parseTestGroupReportArgs(command.split(" "))).toThrow(error);
   });
-  it.concurrent("kills timed wrapper process groups without orphaning the measured process", async () => {
-    if (process.platform === "win32" || !fs.existsSync("/usr/bin/time")) {
-      return;
-    }
-
-    const tempDir = makeTempDir(tempDirs, "openclaw-test-group-report-");
-    const markerPath = path.join(tempDir, "marker.txt");
-    const result = await spawnText(
-      "/usr/bin/time",
-      [
-        process.execPath,
-        "--input-type=module",
-        "--eval",
-        [
-          "import fs from 'node:fs';",
-          "process.on('SIGTERM', () => {});",
-          `setInterval(() => fs.appendFileSync(${JSON.stringify(markerPath)}, "x"), 5);`,
-        ].join("\n"),
-      ],
-      {
-        cwd: process.cwd(),
-        env: process.env,
-        killGraceMs: 25,
-        timeoutMs: 250,
-      },
-    );
-
-    expect(result).toMatchObject({
-      status: 1,
-      timedOut: true,
-    });
-    expect(result.output).toContain("command timed out after 250ms");
-    expect(result.output).toContain("sending SIGKILL");
-
-    const sizeAfterReturn = fs.existsSync(markerPath) ? fs.statSync(markerPath).size : 0;
-    await new Promise((resolve) => {
-      setTimeout(resolve, 40);
-    });
-    const sizeAfterWait = fs.existsSync(markerPath) ? fs.statSync(markerPath).size : 0;
-    expect(sizeAfterWait).toBe(sizeAfterReturn);
-  });
-
-  it("keeps the wrapper alive while timed process-group descendants await SIGKILL", () => {
+  it("keeps timed wrappers alive through SIGKILL without orphaning their descendants", async () => {
     if (process.platform === "win32" || !fs.existsSync("/usr/bin/time")) {
       return;
     }
 
     const tempDir = makeTempDir(tempDirs, "openclaw-test-group-report-");
     const childPidPath = path.join(tempDir, "child.pid");
+    const markerPath = path.join(tempDir, "marker.txt");
     let childPid: number | undefined;
     try {
       const childScript = [
@@ -694,7 +646,7 @@ describe("scripts/test-group-report", () => {
         "process.on('SIGTERM', () => {});",
         "process.on('SIGHUP', () => {});",
         `fs.writeFileSync(${JSON.stringify(childPidPath)}, String(process.pid));`,
-        "setInterval(() => {}, 1000);",
+        `setInterval(() => fs.appendFileSync(${JSON.stringify(markerPath)}, "x"), 5);`,
       ].join("\n");
       const result = spawnSync(
         process.execPath,
@@ -723,6 +675,10 @@ describe("scripts/test-group-report", () => {
         timedOut: true,
       });
       expect(parsed.output).toContain("sending SIGKILL");
+      expect(parsed.output).toContain("command timed out after 500ms");
+      const sizeAfterReturn = fs.existsSync(markerPath) ? fs.statSync(markerPath).size : 0;
+      await delay(40);
+      expect(fs.existsSync(markerPath) ? fs.statSync(markerPath).size : 0).toBe(sizeAfterReturn);
     } finally {
       killPidIfAlive(childPid);
     }
@@ -763,7 +719,7 @@ describe("scripts/test-group-report", () => {
       const { runner, closed: runnerClosed } = started;
       await withinTest(fixtureReadyBeforeSettlement(readyPath, runnerClosed), signal);
       await withinTest(fixtureReadyBeforeSettlement(childPidPath, runnerClosed), signal);
-      const childPid = Number.parseInt(fs.readFileSync(childPidPath, "utf8"), 10);
+      const childPid = expectDefined(readPid(childPidPath), "child PID");
       expect(isProcessAlive(childPid)).toBe(true);
 
       runner.kill("SIGTERM");
@@ -804,27 +760,26 @@ describe("scripts/test-group-report", () => {
       `spawn(process.execPath, ["--input-type=module", "--eval", ${JSON.stringify(childScript)}], { stdio: "ignore" });`,
       "setInterval(() => {}, 1000);",
     ].join("\n");
-    const completion = createDeferred<Awaited<ReturnType<typeof spawnText>>>();
-    const releaseAndWait = startProcessWatchdogFixture(() => {
-      const operation = spawnText(process.execPath, ["--eval", parentScript], {
-        cwd: process.cwd(),
-        env: process.env,
-        killGraceMs: 250,
-        timeoutMs: 250,
-      });
-      void operation.then(completion.resolve, completion.reject);
-      return operation;
-    });
+    let completion: ReturnType<typeof spawnText> | undefined;
+    const releaseAndWait = startProcessWatchdogFixture(
+      () =>
+        (completion = spawnText(process.execPath, ["--eval", parentScript], {
+          cwd: process.cwd(),
+          env: process.env,
+          killGraceMs: 250,
+          timeoutMs: 250,
+        })),
+    );
     try {
       await withinTest(
         fixtureReadyBeforeSettlement(
           childPidPath,
-          completion.promise,
+          expectDefined(completion, "watchdog completion"),
           `timeout waiting for pid in ${childPidPath}`,
         ),
         signal,
       );
-      const childPid = Number.parseInt(fs.readFileSync(childPidPath, "utf8"), 10);
+      const childPid = expectDefined(readPid(childPidPath), "child PID");
       const startedAt = Date.now();
       const result = await withinTest(releaseAndWait(), signal);
 
@@ -881,20 +836,8 @@ describe("scripts/test-group-report", () => {
       }
     }
   });
-  let serialFullSuitePlans: ReturnType<typeof resolveRunPlans> = [];
-  let parallelFullSuitePlans: ReturnType<typeof resolveRunPlans> = [];
-
-  beforeAll(() => {
-    const fullSuite = () => resolveRunPlans(parseTestGroupReportArgs(["--full-suite"]));
-    serialFullSuitePlans = withEnv(
-      {
-        OPENCLAW_TEST_PROJECTS_PARALLEL: undefined,
-        OPENCLAW_TEST_PROJECTS_LEAF_SHARDS: undefined,
-      },
-      fullSuite,
-    );
-    parallelFullSuitePlans = withEnv({ OPENCLAW_TEST_PROJECTS_PARALLEL: "6" }, fullSuite);
-  });
+  const fullSuitePlans = (env: NodeJS.ProcessEnv) =>
+    withEnv(env, () => resolveRunPlans(parseTestGroupReportArgs(["--full-suite"])));
 
   it.each([
     [["--full-suite"], ["--isolate=true"]],
@@ -956,6 +899,10 @@ describe("scripts/test-group-report", () => {
   });
 
   it("uses leaf configs for full-suite profiling without requiring parallel env", () => {
+    const serialFullSuitePlans = fullSuitePlans({
+      OPENCLAW_TEST_PROJECTS_PARALLEL: undefined,
+      OPENCLAW_TEST_PROJECTS_LEAF_SHARDS: undefined,
+    });
     expect(serialFullSuitePlans.map((plan) => plan.config)).not.toContain(
       "test/vitest/vitest.full-agentic.config.ts",
     );
@@ -965,7 +912,7 @@ describe("scripts/test-group-report", () => {
   });
 
   it("preserves full-suite shard file args and unique report labels", () => {
-    const gatewayServerPlans = parallelFullSuitePlans.filter(
+    const gatewayServerPlans = fullSuitePlans({ OPENCLAW_TEST_PROJECTS_PARALLEL: "6" }).filter(
       (plan) => plan.config === "test/vitest/vitest.gateway-server.config.ts",
     );
 

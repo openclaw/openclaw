@@ -4,6 +4,7 @@ import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import type { AgentDatabaseRegistryChange } from "../../state/openclaw-agent-db-contract.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
+import { toAgentExecutionConstraints } from "../../state/openclaw-agent-execution-scope.js";
 import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
 import { runOpenClawAgentWorkerWrite } from "../../state/openclaw-agent-write-admission.js";
 import { captureMemoryExactSessionReader } from "./session-accessor.memory-exact-read.js";
@@ -66,16 +67,7 @@ export async function readSessionEntryInWorker(
       const targetIdentity = readDatabasePathIdentitySync(options.path);
       const execution = captureOpenClawAgentDatabaseExecution(
         options,
-        targetIdentity.key.startsWith("file:")
-          ? {
-              expectedIdentity: {
-                kind: "file",
-                physicalIdentity: targetIdentity.key.slice("file:".length),
-                nativeLocation: targetIdentity.canonicalPath,
-                birthtime: targetIdentity.birthtime,
-              },
-            }
-          : { expectedCreationIdentity: targetIdentity },
+        toAgentExecutionConstraints(targetIdentity),
       );
       const assertCurrent = () => {
         execution.assertCurrent();

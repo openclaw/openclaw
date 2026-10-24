@@ -12,7 +12,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { landingSnapshotQuery } from "./pr-merge-snapshot.test-support.js";
 import { validReview, writeReviewArtifacts } from "./pr-review-artifact-fixture.js";
-import { copyPrWrapperSources } from "./pr-wrapper.test-support.js";
+import { copyPrWrapperSources, linkPrWrapperDependencies } from "./pr-wrapper.test-support.js";
 
 const temps = useAutoCleanupTempDirTracker(afterEach);
 const outcomeRef = "refs/openclaw/pr-merge-outcomes/123";
@@ -59,14 +59,19 @@ function fixture() {
     git(repo, ["config", "commit.gpgsign", "false"]);
     git(repo, ["commit", "--allow-empty", "-qm", "Base"]);
   }
-  copyPrWrapperSources(owner);
+  const components = copyPrWrapperSources(owner);
+  linkPrWrapperDependencies(owner);
+  git(owner, ["add", "--", ...components]);
+  git(owner, ["commit", "-qm", "Wrapper"]);
   const base = git(owner, ["rev-parse", "HEAD"]);
-  const blob = git(owner, ["hash-object", "-w", "--stdin"], "reviewed change\n");
-  const tree = git(owner, ["mktree"], `100644 blob ${blob}\towner.txt\n`);
+  writeFileSync(join(owner, "owner.txt"), "reviewed change\n");
+  git(owner, ["add", "owner.txt"]);
+  const tree = git(owner, ["write-tree"]);
   const head = git(owner, ["commit-tree", tree, "-p", base], "Source\n");
   const landed = git(owner, ["commit-tree", tree, "-p", base], "Landed\n");
   git(owner, ["update-ref", "refs/heads/main", landed]);
   git(owner, ["remote", "add", "origin", owner]);
+  git(owner, ["update-ref", "refs/remotes/origin/main", landed]);
   const worktree = join(owner, ".worktrees/pr-123");
   git(owner, ["worktree", "add", "-q", "--detach", worktree, head]);
   mkdirSync(join(worktree, ".local"));
@@ -139,6 +144,7 @@ function fixture() {
 printf '%s\\t%s\\n' "$(git rev-parse --show-toplevel)" "$*" >> '${calls}'
 case "$1 $2" in
   "browse ") printf '%s\\n' '${repo.url}' ;;
+  "api user") printf 'HTTP/2.0 200 OK\\n\\n{"login":"fixture"}\\n' ;;
   "api --hostname")
     case "$4" in
       repos/fixture/repo/pulls/123)
@@ -173,6 +179,7 @@ esac
     `${owner}\tapi --hostname github.com repos/fixture/repo/pulls/123 -H Cache-Control: max-age=0`,
     ...extra,
   ];
+  const authenticationCall = `${owner}\tapi user --include`;
   const refs = (repoPath: string, prefix: string) =>
     git(repoPath, ["for-each-ref", "--format=%(refname)", prefix]);
   return {
@@ -190,6 +197,7 @@ esac
     run,
     readCalls,
     expectedCalls,
+    authenticationCall,
     refs,
   };
 }
@@ -223,7 +231,10 @@ describePosix("native PR wrapper repository ownership", () => {
       expect(readFileSync(f.capture, "utf8")).toBe("retained capture\n");
       expect(f.git(f.caller, ["show-ref"])).toBe(callerRefs);
       expect(f.refs(f.owner, lockRef)).toBe("");
-      expect(f.readCalls()).toEqual(f.expectedCalls(f.snapshotCall, f.snapshotCall));
+      expect(f.readCalls()).toEqual([
+        f.authenticationCall,
+        ...f.expectedCalls(f.snapshotCall, f.snapshotCall),
+      ]);
     },
   );
 
@@ -247,7 +258,7 @@ describePosix("native PR wrapper repository ownership", () => {
     expect(f.git(f.owner, ["rev-parse", outcomeRef])).toBe(f.head);
     expect(f.git(f.caller, ["rev-parse", outcomeRef])).toBe(f.intent);
     expect(readFileSync(f.capture, "utf8")).toBe("retained capture\n");
-    expect(f.readCalls()).toEqual(f.expectedCalls());
+    expect(f.readCalls()).toEqual([f.authenticationCall, ...f.expectedCalls()]);
   });
 
   it.each(["prepare-run", "merge-recover", "ci-dispatch", "review-init"])(
@@ -276,6 +287,7 @@ describePosix("native PR wrapper repository ownership", () => {
       );
       const calls = f.expectedCalls();
       if (command === "review-init") {
+        calls.unshift(f.authenticationCall);
         calls.push(
           `${f.owner}\tapi --hostname github.com repos/fixture/repo/pulls/123/files?per_page=100 --paginate --slurp -H Cache-Control: max-age=0`,
         );

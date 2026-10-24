@@ -41,7 +41,7 @@ function createTool(
     senderIsOwner: true,
     env: {},
     resolveAuthProfileId: auth.resolveCodexAppServerAuthProfileIdForAgent,
-    resolveAuthProfileIdAtEffect: auth.resolveCodexAppServerAuthProfileIdAtEffect,
+    withAuthProfileIdAtEffect: auth.withCodexAppServerAuthProfileIdAtEffect,
     resolveRuntimeOptions: resolveCodexSupervisionAppServerRuntimeOptions,
     ...options,
   }).find((candidate) => candidate.name === name)!;
@@ -69,18 +69,24 @@ describe("Codex supervision request lifetime", () => {
   });
   afterEach(() => clients.splice(0).forEach((client) => client.close()));
 
-  it("uses the injected account selection at the final request guard", async () => {
-    const harness = respondingClient(() => threadResponse());
+  it("refuses a transcript when the selected account is revoked after the server response", async () => {
+    let selected: string | undefined = "synthetic:account";
+    const harness = respondingClient(() => {
+      selected = undefined;
+      return threadResponse("idle", { turns: [{ text: "private transcript" }] });
+    });
     sharedClientMocks.getLeasedSharedCodexAppServerClient.mockResolvedValue(harness.client);
-    const resolveAuthProfileIdAtEffect = vi.fn(() => "synthetic:account");
     const tool = createTool("codex_session_read", readConfig, {
       resolveAuthProfileId: async () => "synthetic:account",
-      resolveAuthProfileIdAtEffect,
+      withAuthProfileIdAtEffect: async (_params, consume) =>
+        consume({
+          read: async () => selected,
+          assertCurrent() {},
+        }),
     });
-    await expect(tool.execute("read", sessionParams)).resolves.toMatchObject({
-      details: { response: { thread: { id: "thread-1" } } },
-    });
-    expect(resolveAuthProfileIdAtEffect).toHaveBeenCalled();
+    await expect(tool.execute("read", sessionParams)).rejects.toThrow(
+      "endpoint local was removed or changed",
+    );
   });
 
   it.each(
@@ -114,13 +120,17 @@ describe("Codex supervision request lifetime", () => {
     });
     sharedClientMocks.getLeasedSharedCodexAppServerClient.mockResolvedValue(harness.client);
     const tool = createTool(toolName, () => pluginConfig, {
-      resolveAuthProfileId: async () => {
-        if (responseReturned && timing === "final-auth") {
-          revoke();
-        }
-        return "synthetic:account";
-      },
-      resolveAuthProfileIdAtEffect: () => "synthetic:account",
+      resolveAuthProfileId: async () => "synthetic:account",
+      withAuthProfileIdAtEffect: async (_params, consume) =>
+        consume({
+          read: async () => {
+            if (responseReturned && timing === "final-auth") {
+              revoke();
+            }
+            return "synthetic:account";
+          },
+          assertCurrent() {},
+        }),
     });
     const result = await Promise.resolve(tool.execute("read", sessionParams)).catch(
       (error: unknown) => {

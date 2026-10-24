@@ -213,6 +213,12 @@ export type CliBackendMessageInjection = {
   queueMessage(text: string, withCurrent: (submit: () => void) => Promise<void>): Promise<void>;
 };
 
+/** Graceful end of the admitted turn without retiring its reusable native session. */
+export type CliBackendTurnInterrupt = {
+  /** Request the turn end; its execution stream must then finish normally. */
+  interrupt(reason: "yield"): Promise<void>;
+};
+
 /** Turn-only context that must not become an operator-authored native transcript row. */
 export type CliBackendPromptContext = {
   prependContext?: string;
@@ -243,6 +249,8 @@ export type CliBackendExecuteContext = {
   liveSession?: CliBackendLiveSessionCapability;
   /** Offers same-turn input for this run; the host drops it when the run closes. */
   registerMessageInjection?: (injection: CliBackendMessageInjection) => void;
+  /** Offers graceful turn interruption; the host drops the registration when this run closes. */
+  registerTurnInterrupt?: (interrupt: CliBackendTurnInterrupt) => void;
   /** Closure-bound approval capability; retained copies fail after the run closes. */
   requestToolPermission: (
     request: CliBackendToolPermissionRequest,
@@ -260,11 +268,15 @@ export type CliBackendResolveExecutionArgsContext = Omit<
   CliBackendPrepareExecutionContext,
   "agentDir" | "contextWindow" | "contextTokenBudget" | "env"
 > & {
+  /** Agent identity used to resolve per-agent execution policy. */
+  agentId?: string;
   /** Effective fast mode at spawn, after queue admission and backend preparation. */
   fastMode?: boolean;
   /** Canonical tools routed through OpenClaw; disable equivalent native tools. */
   hostOwnedTools?: readonly string[];
   useResume: boolean;
+  /** The backend process is executing a native control operation. */
+  controlOperation?: "compact";
   baseArgs: readonly string[];
 };
 

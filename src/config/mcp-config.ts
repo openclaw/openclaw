@@ -1,14 +1,7 @@
 import { expectDefined, stableStringify } from "@openclaw/normalization-core";
 import { isRecord } from "../utils.js";
-import {
-  readSourceConfigSnapshot,
-  readSourceConfigSnapshotForWrite,
-  type ConfigWriteOptions,
-} from "./io.js";
-import {
-  canonicalizeConfiguredMcpServer,
-  normalizeConfiguredMcpServers,
-} from "./mcp-config-normalize.js";
+import { readSourceConfigSnapshot, readSourceConfigSnapshotForWrite } from "./io.js";
+import { canonicalizeConfiguredMcpServer } from "./mcp-config-normalize.js";
 import { replaceConfigFile } from "./mutate.js";
 import { redactSensitiveArgv } from "./redact-argv.js";
 import { REDACTED_SENTINEL, restoreRedactedValues } from "./redact-snapshot.js";
@@ -17,7 +10,7 @@ import type { McpServerToolFilterConfig } from "./types.mcp.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
 import { validateConfigObjectWithPlugins } from "./validation.js";
 
-type ConfigMcpServers = ReturnType<typeof normalizeConfiguredMcpServers>;
+type ConfigMcpServers = Record<string, Record<string, unknown>>;
 
 type McpArgvRestoreResult =
   | { ok: true; server: Record<string, unknown> }
@@ -41,7 +34,6 @@ type ConfigMcpWriteResult =
   | (ConfigMcpSuccess & { ok: true; removed?: boolean; updated?: boolean })
   | ConfigMcpFailure;
 
-type LoadedConfigMcpServers = Extract<ConfigMcpReadResult, { ok: true }>;
 type McpConfigMutation = {
   name: string;
   previous?: Record<string, unknown>;
@@ -117,7 +109,7 @@ function resolveConfiguredMcpServers(
     ok: true,
     path: snapshot.path,
     config: structuredClone(sourceConfig),
-    mcpServers: normalizeConfiguredMcpServers(sourceConfig.mcp?.servers),
+    mcpServers: sourceConfig.mcp?.servers ?? {},
     authoredConfig: snapshot.authoredConfig,
     runtimeConfig: snapshot.runtimeConfig,
     sourceConfigBeforeMigrations: snapshot.sourceConfigBeforeMigrations,
@@ -127,69 +119,6 @@ function resolveConfiguredMcpServers(
 
 export async function listConfiguredMcpServers(): Promise<ConfigMcpReadResult> {
   return resolveConfiguredMcpServers(await readSourceConfigSnapshot());
-}
-
-async function commitConfiguredMcpServers(params: {
-  loaded: LoadedConfigMcpServers;
-  writeOptions: ConfigWriteOptions;
-  servers: ConfigMcpServers;
-  errorLabel: string;
-  success?: { removed?: boolean; updated?: boolean };
-  assertCurrent?: () => void;
-  assertCurrentAsync?: () => Promise<void>;
-  mutation?: { name: string; onCommitted?: McpConfigMutationHook };
-}): Promise<ConfigMcpWriteResult> {
-  const next = structuredClone(params.loaded.config);
-  if (Object.keys(params.servers).length > 0) {
-    next.mcp = { ...next.mcp, servers: params.servers };
-  } else if (next.mcp) {
-    delete next.mcp.servers;
-    if (Object.keys(next.mcp).length === 0) {
-      delete next.mcp;
-    }
-  }
-
-  const validated = validateConfigObjectWithPlugins(next);
-  if (!validated.ok) {
-    const issue = expectDefined(validated.issues[0], "issues entry at 0");
-    return {
-      ok: false,
-      path: params.loaded.path,
-      error: `Config invalid after MCP ${params.errorLabel} (${issue.path}: ${issue.message}).`,
-    };
-  }
-  // Validation materializes runtime defaults; persist only the source candidate.
-  const committed = await replaceConfigFile({
-    sourceConfig: next,
-    baseHash: params.loaded.baseHash,
-    writeOptions: {
-      ...params.writeOptions,
-      assertCurrent: () => {
-        params.writeOptions.assertCurrent?.();
-        params.assertCurrent?.();
-      },
-      beforeCommit: async () => {
-        await params.writeOptions.beforeCommit?.();
-        await params.assertCurrentAsync?.();
-      },
-    },
-  });
-  if (params.mutation?.onCommitted) {
-    const previous = params.loaded.mcpServers[params.mutation.name];
-    const nextServer = params.servers[params.mutation.name];
-    await params.mutation.onCommitted({
-      name: params.mutation.name,
-      ...(previous ? { previous } : {}),
-      ...(nextServer ? { next: nextServer } : {}),
-    });
-  }
-  return {
-    ok: true,
-    path: params.loaded.path,
-    config: committed.nextConfig,
-    mcpServers: params.servers,
-    ...params.success,
-  };
 }
 
 type McpServerMutationRequest =
@@ -277,16 +206,61 @@ async function mutateConfiguredMcpServer(
   } else {
     servers[name] = params.update({ ...servers[name] });
   }
-  return commitConfiguredMcpServers({
-    loaded,
-    writeOptions,
-    servers,
-    errorLabel: params.kind === "update" ? params.errorLabel : params.kind,
-    success: params.kind === "set" ? undefined : { [successKey]: true },
-    assertCurrent: params.kind === "update" ? undefined : params.assertCurrent,
-    assertCurrentAsync: params.kind === "unset" ? params.assertCurrentAsync : undefined,
-    mutation: { name, onCommitted },
+  const errorLabel = params.kind === "update" ? params.errorLabel : params.kind;
+  const success = params.kind === "set" ? undefined : { [successKey]: true };
+  const assertCurrent = params.kind === "update" ? undefined : params.assertCurrent;
+  const assertCurrentAsync = params.kind === "unset" ? params.assertCurrentAsync : undefined;
+  const next = structuredClone(loaded.config);
+  if (Object.keys(servers).length > 0) {
+    next.mcp = { ...next.mcp, servers };
+  } else if (next.mcp) {
+    delete next.mcp.servers;
+    if (Object.keys(next.mcp).length === 0) {
+      delete next.mcp;
+    }
+  }
+
+  const validated = validateConfigObjectWithPlugins(next);
+  if (!validated.ok) {
+    const issue = expectDefined(validated.issues[0], "issues entry at 0");
+    return {
+      ok: false,
+      path: loaded.path,
+      error: `Config invalid after MCP ${errorLabel} (${issue.path}: ${issue.message}).`,
+    };
+  }
+  // Validation materializes runtime defaults; persist only the source candidate.
+  const committed = await replaceConfigFile({
+    sourceConfig: next,
+    baseHash: loaded.baseHash,
+    writeOptions: {
+      ...writeOptions,
+      assertCurrent: () => {
+        writeOptions.assertCurrent?.();
+        assertCurrent?.();
+      },
+      beforeCommit: async () => {
+        await writeOptions.beforeCommit?.();
+        await assertCurrentAsync?.();
+      },
+    },
   });
+  if (onCommitted) {
+    const previous = loaded.mcpServers[name];
+    const nextServer = servers[name];
+    await onCommitted({
+      name,
+      ...(previous ? { previous } : {}),
+      ...(nextServer ? { next: nextServer } : {}),
+    });
+  }
+  return {
+    ok: true,
+    path: loaded.path,
+    config: committed.nextConfig,
+    mcpServers: servers,
+    ...success,
+  };
 }
 
 async function updateConfiguredMcpServerTools(

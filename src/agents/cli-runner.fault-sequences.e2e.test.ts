@@ -87,17 +87,15 @@ type OuterRunOptions = {
 
 const PRIMARY_MODEL = "sonnet-4.6";
 const FALLBACK_MODEL = "sonnet-4.5";
-const RESEED_PROMPT = [
-  "Continue this conversation using the OpenClaw transcript below as prior session history.",
-  "",
-  "<conversation_history>",
-  "User: earlier context",
-  "</conversation_history>",
-  "",
-  "<next_user_message>",
-  "latest ask",
-  "</next_user_message>",
-].join("\n");
+const RESEED_PROMPT = `Continue this conversation using the OpenClaw transcript below as prior session history.
+
+<conversation_history>
+User: earlier context
+</conversation_history>
+
+<next_user_message>
+latest ask
+</next_user_message>`;
 
 let runEmbeddedAgent: typeof import("./embedded-agent-runner/run.js").runEmbeddedAgent;
 let scenarioRoot = "";
@@ -268,18 +266,34 @@ async function runOuter(options: OuterRunOptions = {}) {
   );
 }
 
-function currentCounts(): ScenarioCounts {
-  return {
+function expectCounts(overrides: Partial<ScenarioCounts> = {}): void {
+  expect({
     childProcesses: harness.managedChildren,
     nativeRunBudgetAttempts: testMocks.nativeRunBudgetAttempt.mock.calls.length,
     outerCandidates: harness.outerCandidates.length,
     runCliAgentCalls: testMocks.runCliAgent.mock.calls.length,
     wholeTurnRetries: Math.max(0, harness.wholeTurnRuns - 1),
+  }).toEqual({
+    childProcesses: 1,
+    nativeRunBudgetAttempts: 0,
+    outerCandidates: 1,
+    runCliAgentCalls: 1,
+    wholeTurnRetries: 0,
+    ...overrides,
+  });
+}
+
+function toolUse(id: string) {
+  return {
+    type: "mcp_tool_use",
+    id,
+    name: "mcp__openclaw__memory_search",
+    input: { query: "wings" },
   };
 }
 
-function expectCounts(expected: ScenarioCounts): void {
-  expect(currentCounts()).toEqual(expected);
+function toolMessage(content: unknown[]) {
+  return { type: "assistant", message: { role: "assistant", content } };
 }
 
 describe("CLI runner fault sequences", () => {
@@ -308,13 +322,7 @@ describe("CLI runner fault sequences", () => {
 
     expect(outcome.result.payloads).toEqual([{ text: "bridge ok" }]);
     expect(supervisorSpawnMock).toHaveBeenCalledTimes(1);
-    expectCounts({
-      childProcesses: 1,
-      nativeRunBudgetAttempts: 0,
-      outerCandidates: 1,
-      runCliAgentCalls: 1,
-      wholeTurnRetries: 0,
-    });
+    expectCounts();
   });
 
   it.each([
@@ -358,10 +366,8 @@ describe("CLI runner fault sequences", () => {
       expect(supervisorSpawnMock).toHaveBeenCalledTimes(2);
       expectCounts({
         childProcesses: testCase.expectedChildren,
-        nativeRunBudgetAttempts: 0,
         outerCandidates: 2,
         runCliAgentCalls: 2,
-        wholeTurnRetries: 0,
       });
     },
   );
@@ -374,25 +380,14 @@ describe("CLI runner fault sequences", () => {
       }
     });
     const stdout = claudeJsonl([
-      {
-        type: "assistant",
-        message: {
-          role: "assistant",
-          content: [
-            {
-              type: "mcp_tool_use",
-              id: "effect-1",
-              name: "mcp__openclaw__memory_search",
-              input: { query: "wings" },
-            },
-            {
-              type: "mcp_tool_result",
-              tool_use_id: "effect-1",
-              content: [{ type: "text", text: "found" }],
-            },
-          ],
+      toolMessage([
+        toolUse("effect-1"),
+        {
+          type: "mcp_tool_result",
+          tool_use_id: "effect-1",
+          content: [{ type: "text", text: "found" }],
         },
-      },
+      ]),
       {
         type: "result",
         subtype: "error_max_turns",
@@ -418,13 +413,7 @@ describe("CLI runner fault sequences", () => {
       expect.objectContaining({ name: "mcp__openclaw__memory_search" }),
     ]);
     expect(supervisorSpawnMock).toHaveBeenCalledTimes(1);
-    expectCounts({
-      childProcesses: 1,
-      nativeRunBudgetAttempts: 0,
-      outerCandidates: 1,
-      runCliAgentCalls: 1,
-      wholeTurnRetries: 0,
-    });
+    expectCounts();
   });
 
   it.each([
@@ -456,22 +445,7 @@ describe("CLI runner fault sequences", () => {
       context.params.onExecutionPhase = (event) => phases.push(event.phase);
       return context;
     };
-    const stdout = claudeJsonl([
-      {
-        type: "assistant",
-        message: {
-          role: "assistant",
-          content: [
-            {
-              type: "mcp_tool_use",
-              id: "active-effect",
-              name: "mcp__openclaw__memory_search",
-              input: { query: "wings" },
-            },
-          ],
-        },
-      },
-    ]);
+    const stdout = claudeJsonl([toolMessage([toolUse("active-effect")])]);
     supervisorSpawnMock.mockResolvedValueOnce(managedRun({ ...testCase.exit, stdout }));
 
     let error: unknown;
@@ -492,13 +466,7 @@ describe("CLI runner fault sequences", () => {
     });
     expect(phases.filter((phase) => phase === "tool_execution_started")).toHaveLength(1);
     expect(supervisorSpawnMock).toHaveBeenCalledTimes(1);
-    expectCounts({
-      childProcesses: 1,
-      nativeRunBudgetAttempts: 0,
-      outerCandidates: 1,
-      runCliAgentCalls: 1,
-      wholeTurnRetries: 0,
-    });
+    expectCounts();
   });
 
   it("fresh-retries reused-session context overflow once before advancing the outer model", async () => {
@@ -539,10 +507,8 @@ describe("CLI runner fault sequences", () => {
     ]);
     expectCounts({
       childProcesses: 3,
-      nativeRunBudgetAttempts: 0,
       outerCandidates: 2,
       runCliAgentCalls: 2,
-      wholeTurnRetries: 0,
     });
   });
 });

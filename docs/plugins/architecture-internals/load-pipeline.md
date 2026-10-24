@@ -90,23 +90,9 @@ loading before broader registry materialization:
   imports; plugins without startup metadata load only through narrower
   activation triggers
 
-The activation planner exposes both an ids-only API for existing callers and a
-plan API for diagnostics. Plan entries report why a plugin was selected,
-separating explicit `activation.*` hints from manifest-ownership fallback:
-
-| Reason (from `activation.*` hints)   | Reason (from manifest ownership)                                                             |
-| ------------------------------------ | -------------------------------------------------------------------------------------------- |
-| `activation-agent-harness-hint`      | —                                                                                            |
-| `activation-capability-hint`         | —                                                                                            |
-| `activation-channel-hint`            | `manifest-channel-owner` (`channels`)                                                        |
-| `activation-command-hint`            | `manifest-cli-command-owner` (`cliCommands`), `manifest-command-alias` (`commandAliases`)    |
-| `activation-provider-hint`           | `manifest-provider-owner` (`providers`), `manifest-setup-provider-owner` (`setup.providers`) |
-| `activation-route-hint`              | —                                                                                            |
-| — (hook trigger has no hint variant) | `manifest-hook-owner` (`hooks`), `manifest-tool-contract` (`contracts.tools`)                |
-
-That reason split is the compatibility boundary: existing plugin metadata
-keeps working, while new code can detect broad hints or fallback behavior
-without changing runtime loading semantics.
+The activation planner returns unique, sorted plugin ids selected by explicit
+`activation.*` hints or existing manifest ownership metadata. Both paths respect
+plugin policy and the caller's requested scope without importing runtime modules.
 
 Request-time runtime preloads that ask for the broad `all` scope still derive
 an explicit effective plugin id set from config, startup planning, configured

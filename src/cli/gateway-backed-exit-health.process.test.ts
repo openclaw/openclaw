@@ -5,7 +5,6 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
 import { WebSocketServer } from "ws";
-import { gatewayOriginScope } from "../../packages/gateway-client/src/gateway-origin-scope.js";
 import type { ChannelsStatusResult } from "../../packages/gateway-protocol/src/schema/channels.js";
 import {
   buildMinimalGatewayHelloOkPayload,
@@ -14,17 +13,14 @@ import {
   sendMinimalGatewayConnectChallenge,
   sendMinimalGatewayResponse,
 } from "../gateway/minimal-gateway.test-helpers.js";
-import { seedOriginDeviceToken } from "../infra/device-auth-store.test-support.js";
-import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import { acquireGatewayStateOwner } from "../infra/gateway-state-owner.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { getFreePort } from "../test-utils/ports.js";
 import {
   prepareGatewayCliFixture,
-  prepareSharedStateReadArtifacts,
   prepareUnreachableGatewayCliFixture,
   runIsolatedGatewayCli,
+  seedDeviceAuth,
   snapshotDirectoryContents,
   snapshotSharedStateArtifacts,
   tempDirs,
@@ -88,18 +84,7 @@ it.each<[string, string[]]>([
       auth: { mode: "none" },
       remote: { url },
     });
-    const env = { ...process.env, HOME: root, OPENCLAW_HOME: root, OPENCLAW_STATE_DIR: stateDir };
-    const identity = loadOrCreateDeviceIdentity({ env });
-    seedOriginDeviceToken({
-      gatewayScope: gatewayOriginScope(url),
-      deviceId: identity.deviceId,
-      role: "operator",
-      token: "synthetic-stored-device-token",
-      scopes: ["operator.admin"],
-      env,
-    });
-    closeOpenClawStateDatabaseForTest();
-    prepareSharedStateReadArtifacts(stateDir);
+    const { identity, env } = seedDeviceAuth(root, stateDir, url, "synthetic-stored-device-token");
     const expectedAfter = await snapshotDirectoryContents(stateDir);
     const canonicalStateDir = await fs.realpath(stateDir);
     const channelStatus = {

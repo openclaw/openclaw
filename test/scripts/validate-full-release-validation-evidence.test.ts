@@ -141,7 +141,7 @@ function strictEvidenceReuse(version = 3) {
   return {
     schema: `openclaw.release-validation-evidence/v${version}`,
     valid: true,
-    current: { runId: "123", targetSha },
+    current: { runId: "123", targetSha, conclusion: "success" },
     root: { runId: "122", targetSha },
     evidenceReuse: {
       changedPaths: [],
@@ -150,7 +150,6 @@ function strictEvidenceReuse(version = 3) {
       rootRunId: "122",
       selectedRunId: "122",
     },
-    conclusions: { allRequiredSucceeded: true },
   };
 }
 
@@ -505,7 +504,10 @@ describe("full release validation evidence", () => {
   it.each([
     [undefined, "requires strict chain validation"],
     [
-      () => ({ ...strictEvidenceReuse(), conclusions: { allRequiredSucceeded: false } }),
+      () => ({
+        ...strictEvidenceReuse(),
+        current: { ...strictEvidenceReuse().current, conclusion: "failure" },
+      }),
       "failed strict chain validation",
     ],
   ] as const)(

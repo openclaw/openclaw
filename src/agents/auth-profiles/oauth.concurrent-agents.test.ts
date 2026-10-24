@@ -2,10 +2,18 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { completeAgentDeletionJournalInDatabase } from "../../state/agent-deletion-journal.js";
 import {
+  closeOpenClawAgentDatabaseByPathAsync,
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
 } from "../../state/openclaw-agent-db.js";
+import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
+import {
+  beginAgentDeletionJournal,
+  readAgentDeletionJournal,
+} from "../../test-utils/agent-deletion-journal.js";
+import { loadCandidateAuthProfileStoreAsync } from "./candidate-stores.js";
 import { AUTH_STORE_VERSION, MINIMAX_CLI_PROFILE_ID } from "./constants.js";
 import {
   candidate,
@@ -18,6 +26,7 @@ import {
   useOAuthCoordinationFixture,
 } from "./oauth-coordination.test-support.js";
 import { createOAuthManager } from "./oauth-manager.js";
+import { mockOAuthProviderOperations } from "./oauth-native-provider.test-support.js";
 import { withOAuthProfileLock } from "./oauth-profile-lock.js";
 import {
   createOAuthRefreshFence,
@@ -55,21 +64,8 @@ function cliCredential(authFlow = "external-cli"): OAuthCredential {
   };
 }
 
-function resolveManaged(
-  refreshCredential: () => Promise<OAuthCredential>,
-  agentDir: string,
-  credential: OAuthCredential,
-  onBootstrap?: () => void,
-) {
-  return createOAuthManager({
-    buildApiKey: async (_provider, value) => value.access,
-    refreshCredential,
-    canRefreshCredential: async () => true,
-    readBootstrapCredential: () => {
-      onBootstrap?.();
-      return null;
-    },
-  }).resolveOAuthAccess({
+function resolveManaged(agentDir: string, credential: OAuthCredential) {
+  return createOAuthManager().resolveOAuthAccess({
     store: ensureAuthProfileStore(agentDir),
     profileId,
     credential,
@@ -78,6 +74,61 @@ function resolveManaged(
 }
 
 describe("resolveApiKeyForProfile cross-agent refresh coordination (#26322)", () => {
+  it.each(["empty", "matching"] as const)(
+    "preserves refresh safety with a retained completed-deletion store (%s)",
+    async (peerGeneration) => {
+      const agentId = "deleted-peer";
+      const agentDir = await fx.agentDirectory(agentId);
+      const original = expired();
+      const historical =
+        peerGeneration === "matching" ? original : { version: AUTH_STORE_VERSION, profiles: {} };
+      // Seed history before shared inheritance can suppress the local copy.
+      saveAuthProfileStore(historical, agentDir);
+      saveAuthProfileStore(original, fx.mainDir);
+      expect(loadPersistedAuthProfileStore(agentDir)).toEqual(historical);
+      await closeOpenClawAgentDatabaseByPathAsync(
+        resolveAuthProfileDatabasePath(agentDir),
+        agentId,
+      );
+      const deletion = beginAgentDeletionJournal({
+        agentId,
+        agentDir,
+        operationId: "retained-deletion",
+        deleteFiles: false,
+        workspaceDir: path.join(fx.root, "workspace-deleted-peer"),
+        sessionsDir: path.join(fx.root, "agents", agentId, "sessions"),
+      });
+      expect(
+        runOpenClawStateWriteTransaction((database) =>
+          completeAgentDeletionJournalInDatabase(database, agentId, deletion.operationId),
+        ),
+      ).toBe(true);
+      const completed = readAgentDeletionJournal(agentId);
+      expect(completed?.cleanupCompleted).toBe(true);
+      fx.refresh.mockResolvedValue(oauth("surviving"));
+
+      const resolving = fx.resolve(fx.mainDir);
+      if (peerGeneration === "matching") {
+        await expect(resolving).rejects.toThrow(
+          "Failed to fence every historical OAuth refresh peer",
+        );
+        expect(fx.refresh).not.toHaveBeenCalled();
+        expect(read(fx.mainDir)).toEqual(original.profiles[profileId]);
+      } else {
+        await expect(resolving).resolves.toMatchObject({ apiKey: "surviving-access" });
+        expect(fx.refresh).toHaveBeenCalledOnce();
+        expect(read(fx.mainDir)).toMatchObject({
+          access: "surviving-access",
+          refresh: "surviving-refresh",
+        });
+      }
+      expect(await loadCandidateAuthProfileStoreAsync(candidate(agentId, agentDir))).toEqual(
+        historical,
+      );
+      expect(readAgentDeletionJournal(agentId)).toEqual(completed);
+    },
+  );
+
   it("gives one copied refresh generation one durable main-store owner", async () => {
     const { createSqliteReadOnlyWorkerScope } =
       await import("../../infra/sqlite-readonly-worker.js");
@@ -227,20 +278,29 @@ describe("resolveApiKeyForProfile cross-agent refresh coordination (#26322)", ()
 
     const { promise: refreshStarted, resolve: markRefreshStarted } = createDeferredCore();
     const { promise: finishRefreshGate, resolve: finishRefresh } = createDeferredCore();
-    fx.settle(finishRefresh);
+    fx.settle(async () => {
+      finishRefresh();
+      await fx.work.drain();
+      vi.restoreAllMocks();
+    });
     const refreshCredential = vi.fn(async () => {
       markRefreshStarted();
       await finishRefreshGate;
       return oauth("rotated-a", { accountId: "acct-a" });
     });
-    const owner = fx.work.track(() => resolveManaged(refreshCredential, fx.mainDir, original));
+    mockOAuthProviderOperations({ refreshCredential });
+    const owner = fx.work.track(() => resolveManaged(fx.mainDir, original));
     await refreshStarted;
     writePersistedAuthProfileStoreRaw(originalStore, latePeerAgentDir);
 
     const { promise: observerEntered, resolve: markObserverEntered } = createDeferredCore();
-    const observer = fx.work.track(() =>
-      resolveManaged(refreshCredential, fx.mainDir, original, markObserverEntered),
-    );
+    // The coordination fixture resets modules; observe its current native namespace.
+    const externalCliSync = await import("./external-cli-sync.js");
+    vi.spyOn(externalCliSync, "readExternalCliBootstrapCredential").mockImplementation(() => {
+      markObserverEntered();
+      return null;
+    });
+    const observer = fx.work.track(() => resolveManaged(fx.mainDir, original));
     await observerEntered;
     await withOAuthProfileLock({ provider, profileId }, async () => {});
 
@@ -267,7 +327,11 @@ describe("resolveApiKeyForProfile cross-agent refresh coordination (#26322)", ()
 
     const { promise: firstRefreshStarted, resolve: markFirstRefreshStarted } = createDeferredCore();
     const { promise: finishFirstRefreshGate, resolve: finishFirstRefresh } = createDeferredCore();
-    fx.settle(finishFirstRefresh);
+    fx.settle(async () => {
+      finishFirstRefresh();
+      await fx.work.drain();
+      vi.restoreAllMocks();
+    });
     const refreshCredential = vi.fn(async () => {
       if (refreshCredential.mock.calls.length === 1) {
         markFirstRefreshStarted();
@@ -275,15 +339,16 @@ describe("resolveApiKeyForProfile cross-agent refresh coordination (#26322)", ()
       }
       return oauth("rotated-a", { accountId: "acct-a" });
     });
-    const first = fx.work.track(() => resolveManaged(refreshCredential, firstAgentDir, original));
+    mockOAuthProviderOperations({ refreshCredential });
+    const first = fx.work.track(() => resolveManaged(firstAgentDir, original));
     await firstRefreshStarted;
     const firstFence = read(firstAgentDir);
     expect(firstFence?.type === "oauth" && isPendingOAuthRefreshFence(firstFence)).toBe(true);
 
     writePersistedAuthProfileStoreRaw(originalStore, secondAgentDir);
-    await expect(
-      fx.work.track(() => resolveManaged(refreshCredential, secondAgentDir, original)),
-    ).rejects.toThrow("historical OAuth refresh peer");
+    await expect(fx.work.track(() => resolveManaged(secondAgentDir, original))).rejects.toThrow(
+      "historical OAuth refresh peer",
+    );
 
     expect(refreshCredential).toHaveBeenCalledOnce();
     expect(read(firstAgentDir)).toEqual(firstFence);

@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { access, readFile, writeFile } from "node:fs/promises";
+import { access, readFile } from "node:fs/promises";
 import path from "node:path";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
@@ -14,6 +14,8 @@ import {
 } from "../../../src/config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../../../src/config/sessions/session-accessor.ts";
 import type { SessionToolOverrides } from "../../../src/config/sessions/session-tool-overrides.ts";
+import type { GatewayClient } from "../../../src/gateway/client.ts";
+import { acquireGatewayTestClient } from "../../../test/helpers/gateway-client.ts";
 import {
   createOpenClawTestInstance,
   type OpenClawTestInstance,
@@ -28,7 +30,6 @@ import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e.ts";
 import { enterControlUiSession } from "../test-helpers/control-ui-session-entry.ts";
 import { createControlUiE2eSuite, tooltipTitleText } from "./control-ui-e2e-suite.test-support.ts";
 
-const capture = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 const viewport = { width: 1280, height: 900 };
 const siblings: SessionToolOverrides = {
   skills: { "synthetic-notes": false },
@@ -47,79 +48,38 @@ type Request = {
   params?: { key?: string; agentId?: string; toolOverrides?: SessionToolOverrides | null };
 };
 
-async function rpc<T>(
-  owner: OpenClawTestInstance,
-  method: string,
-  params: object,
-  evidence: object[],
-  stage: string,
-): Promise<T> {
-  const result = await owner.cli([
-    "--no-color",
-    "gateway",
-    "call",
-    method,
-    "--params",
-    JSON.stringify(params),
-    "--json",
-  ]);
-  evidence.push({ kind: "session-readback", stage, method, params, ...result });
-  expect(result.code, `${method}: ${result.stderr}`).toBe(0);
-  expect(result.signal).toBeNull();
-  return JSON.parse(result.stdout);
+async function readOverrides(client: GatewayClient, key: string) {
+  const response = await client.request<{ session: { toolOverrides?: SessionToolOverrides } }>(
+    "sessions.describe",
+    { key, agentId: "main" },
+  );
+  return response.session.toolOverrides;
 }
 
 function observeRequests(page: Page) {
   const requests: Request[] = [];
   const replies = new Map<string, boolean>();
-  const frames: object[] = [];
-  let connectionCount = 0;
   page.on("websocket", (socket) => {
-    const connection = ++connectionCount;
-    const methods = new Map<string, string>();
     socket.on("framesent", ({ payload }) => {
       const frame: Request = JSON.parse(payload.toString());
       if (frame.type !== "req") {
         return;
       }
-      methods.set(frame.id, frame.method);
       if (frame.method === "connect") {
         return;
       }
       requests.push(frame);
-      frames.push({
-        connection,
-        direction: "sent",
-        requestId: frame.id,
-        method: frame.method,
-        frame,
-        raw: payload.toString(),
-      });
     });
     socket.on("framereceived", ({ payload }) => {
-      const frame: { type: string; id: string; ok: boolean; payload?: unknown; error?: unknown } =
-        JSON.parse(payload.toString());
+      const frame: { type: string; id: string; ok: boolean } = JSON.parse(payload.toString());
       if (frame.type !== "res") {
         return;
       }
-      const method = methods.get(frame.id);
-      if (!method || method === "connect") {
-        return;
-      }
       replies.set(frame.id, frame.ok);
-      frames.push({
-        connection,
-        direction: "received",
-        requestId: frame.id,
-        method,
-        frame,
-        raw: payload.toString(),
-      });
     });
   });
   return {
     requests,
-    frames,
     succeeded: (request: Request) => replies.get(request.id) === true,
     patches: () =>
       requests.filter(
@@ -156,14 +116,6 @@ function checked(item: Locator) {
   return item.evaluate((node) => node.getAttribute("aria-checked") === "true");
 }
 
-async function presentation(item: Locator) {
-  return {
-    checked: await checked(item),
-    disabled: await item.isDisabled(),
-    explanation: await tooltipTitleText(item),
-  };
-}
-
 async function forceSelection(item: Locator) {
   await item.evaluate((element) => {
     element.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
@@ -175,7 +127,6 @@ async function verifyServedBundle(page: Page, baseUrl: string) {
     .locator('script[type="module"][src]')
     .evaluateAll((nodes) => nodes.map((node) => node.getAttribute("src")!));
   expect(scripts.length).toBeGreaterThan(0);
-  const hashes: Array<{ asset: string; sha256: string }> = [];
   for (const source of scripts) {
     const url = new URL(source, baseUrl);
     expect(url.origin).toBe(new URL(baseUrl).origin);
@@ -187,13 +138,12 @@ async function verifyServedBundle(page: Page, baseUrl: string) {
     );
     const digest = (bytes: Buffer) => createHash("sha256").update(bytes).digest("hex");
     expect(digest(await served.body())).toBe(digest(built));
-    hashes.push({ asset: url.pathname, sha256: digest(built) });
   }
-  return hashes;
 }
 
 for (const globallyEnabled of [false, true]) {
   let instance: OpenClawTestInstance;
+  let readback: GatewayClient;
   const suite = createControlUiE2eSuite({
     name: `Web search global ${globallyEnabled} with matching built Gateway and UI`,
     startServerBeforeBrowser: true,
@@ -219,6 +169,11 @@ for (const globallyEnabled of [false, true]) {
         },
       });
       instance = owner;
+      const close = () =>
+        runQaGatewayFixture(
+          () => readback?.stopAndWait(),
+          () => owner.cleanup(),
+        );
       try {
         expect((await owner.entrypoint())[0]).toMatch(/^dist\/index\.m?js$/u);
         const config = await createConfigIO({
@@ -248,278 +203,184 @@ for (const globallyEnabled of [false, true]) {
           clearRuntimeConfigSnapshot();
         }
         await owner.startGateway();
-        return { baseUrl: `http://127.0.0.1:${owner.port}/`, close: () => owner.cleanup() };
-      } catch (error) {
-        return await runQaGatewayFixture(
-          async (): Promise<never> => {
-            throw error;
+        readback = await acquireGatewayTestClient(
+          {
+            url: owner.url,
+            token: owner.gatewayToken,
+            env: owner.env,
+            clientName: "cli",
+            mode: "cli",
+            scopes: ["operator.read"],
+            deviceIdentity: null,
+            deviceAuthScope: owner.url,
+            sharedStateMode: "read-only",
+            requestTimeoutMs: 10_000,
           },
-          () => owner.cleanup(),
+          {
+            timeoutMs: 10_000,
+            timeoutMessage: "Web search readback client did not connect",
+            closeMessage: "Web search readback client closed during connect",
+          },
         );
+        return { baseUrl: `http://127.0.0.1:${owner.port}/`, close };
+      } catch (error) {
+        return await runQaGatewayFixture(async (): Promise<never> => {
+          throw error;
+        }, close);
       }
     },
   });
 
   suite.define(() => {
     it("honors global policy in Chat and New Session without changing sibling overrides", async () => {
-      const evidence: object[] = [];
       const visit = async (
         pathname: string,
-        stage: string,
         run: (page: Page, traffic: ReturnType<typeof observeRequests>) => Promise<void>,
       ) => {
         const dashboard = await instance.cli(["dashboard", "--json"]);
         expect(dashboard.code, dashboard.stderr).toBe(0);
         const handoff: { browserUrl: string } = JSON.parse(dashboard.stdout);
         const fragment = new URL(handoff.browserUrl).hash;
-        await suite.withPage(
-          {
-            ...viewportOptions(),
-            ...(capture ? { recordVideo: { dir: suite.artifactDir, size: viewport } } : {}),
-          },
-          async ({ page }) => {
-            const traffic = observeRequests(page);
-            const observed = {
-              stage,
-              frames: traffic.frames,
-              assets: [] as Array<{ asset: string; sha256: string }>,
-            };
-            evidence.push(observed);
-            const url = new URL(pathname, suite.server.baseUrl);
-            url.hash = fragment;
-            await runQaGatewayFixture(
-              async () => {
-                const sessionDocument = url.pathname.startsWith("/chat/");
-                expect((await page.goto(url.toString()))?.status()).toBe(
-                  sessionDocument ? 404 : 200,
-                );
-                if (sessionDocument) {
-                  await enterControlUiSession(page);
-                }
-                await waitForControlUiGatewayReady(page);
-                observed.assets = await verifyServedBundle(page, suite.server.baseUrl);
-                await run(page, traffic);
-                expect(
-                  traffic.requests.filter(
-                    (row) => row.method === "chat.send" || row.method === "sessions.dispatch",
-                  ),
-                ).toEqual([]);
-              },
-              async () => {
-                if (capture) {
-                  for (const [index, capturedPage] of page.context().pages().entries()) {
-                    await capturedPage.screenshot({
-                      path: path.join(suite.artifactDir, `${stage}-final-${index + 1}.png`),
-                    });
-                  }
-                }
-              },
-            );
-          },
-        );
+        await suite.withPage(viewportOptions(), async ({ page }) => {
+          const traffic = observeRequests(page);
+          const url = new URL(pathname, suite.server.baseUrl);
+          url.hash = fragment;
+          const sessionDocument = url.pathname.startsWith("/chat/");
+          expect((await page.goto(url.toString()))?.status()).toBe(sessionDocument ? 404 : 200);
+          if (sessionDocument) {
+            await enterControlUiSession(page);
+          }
+          await waitForControlUiGatewayReady(page);
+          await verifyServedBundle(page, suite.server.baseUrl);
+          await run(page, traffic);
+          expect(
+            traffic.requests.filter(
+              (row) => row.method === "chat.send" || row.method === "sessions.dispatch",
+            ),
+          ).toEqual([]);
+        });
       };
 
-      try {
-        for (const scenario of scenarios) {
-          const key = `agent:main:websearch-${scenario.name}`;
-          const before = await rpc<{ session: { toolOverrides?: SessionToolOverrides } }>(
-            instance,
-            "sessions.describe",
-            { key, agentId: "main" },
-            evidence,
-            `chat-${scenario.name}-before`,
-          );
-          expect(before.session.toolOverrides).toEqual(scenario.overrides);
-          await visit(
-            controlUiSessionUrl(suite.server.baseUrl, key, "chat"),
-            `chat-${scenario.name}`,
-            async (page, traffic) => {
-              const { webSearch } = await openMenu(page);
-              await settleSelection(page);
-              evidence.push({
-                stage: `chat-${scenario.name}-initial`,
-                ...(await presentation(webSearch)),
-              });
-              const patchStart = traffic.patches().length;
-              if (!globallyEnabled) {
-                const stale = scenario.name === "stale-true";
-                expect.soft(await checked(webSearch)).toBe(false);
-                expect.soft(await webSearch.isDisabled()).toBe(!stale);
-                expect
-                  .soft(await tooltipTitleText(webSearch))
-                  .toContain(stale ? "clear" : "tools.web.search.enabled");
-                if (capture) {
-                  await page.screenshot({
-                    path: path.join(suite.artifactDir, `chat-${scenario.name}.png`),
-                  });
-                }
-                if (stale) {
-                  await webSearch.click();
-                } else {
-                  await forceSelection(webSearch);
-                }
-                await settleSelection(page);
-                if (stale) {
-                  await expect.poll(() => traffic.patches().length).toBe(patchStart + 1);
-                }
-                const patches = traffic.patches().slice(patchStart);
-                expect.soft(patches).toEqual(
-                  stale
-                    ? [
-                        expect.objectContaining({
-                          params: { key, toolOverrides: siblings },
-                        }),
-                      ]
-                    : [],
-                );
-                expect
-                  .soft(patches.some((row) => row.params?.toolOverrides?.webSearch === true))
-                  .toBe(false);
-                for (const patch of patches) {
-                  await expect.poll(() => traffic.succeeded(patch)).toBe(true);
-                }
-                const after = await rpc<{ session: { toolOverrides?: SessionToolOverrides } }>(
-                  instance,
-                  "sessions.describe",
-                  { key, agentId: "main" },
-                  evidence,
-                  `chat-${scenario.name}-after`,
-                );
-                expect
-                  .soft(after.session.toolOverrides)
-                  .toEqual(stale ? siblings : scenario.overrides);
-                await settleSelection(page);
-                evidence.push({
-                  stage: `chat-${scenario.name}-after`,
-                  ...(await presentation(webSearch)),
-                });
-                if (stale) {
-                  expect.soft(await checked(webSearch)).toBe(false);
-                  expect.soft(await webSearch.isDisabled()).toBe(true);
-                }
+      for (const scenario of scenarios) {
+        const key = `agent:main:websearch-${scenario.name}`;
+        const before = await readOverrides(readback, key);
+        expect(before).toEqual(scenario.overrides);
+        await visit(
+          controlUiSessionUrl(suite.server.baseUrl, key, "chat"),
+          async (page, traffic) => {
+            const { webSearch } = await openMenu(page);
+            await settleSelection(page);
+            const patchStart = traffic.patches().length;
+            if (!globallyEnabled) {
+              const stale = scenario.name === "stale-true";
+              expect.soft(await checked(webSearch)).toBe(false);
+              expect.soft(await webSearch.isDisabled()).toBe(!stale);
+              expect
+                .soft(await tooltipTitleText(webSearch))
+                .toContain(stale ? "clear" : "tools.web.search.enabled");
+              if (stale) {
+                await webSearch.click();
               } else {
-                const initiallyEnabled = scenario.name !== "false";
-                await expect.poll(() => checked(webSearch)).toBe(initiallyEnabled);
-                expect(await webSearch.isDisabled()).toBe(false);
-                await webSearch.click();
-                await expect.poll(() => traffic.patches().length).toBe(patchStart + 1);
-                await expect
-                  .poll(() => traffic.succeeded(traffic.patches()[patchStart]!))
-                  .toBe(true);
-                const firstOverrides = initiallyEnabled
-                  ? { ...siblings, webSearch: false }
-                  : siblings;
-                expect(traffic.patches().at(-1)?.params).toEqual({
-                  key,
-                  toolOverrides: firstOverrides,
-                });
-                await expect.poll(() => checked(webSearch)).toBe(!initiallyEnabled);
-                await expect.poll(() => webSearch.isDisabled()).toBe(false);
-                const toggled = await rpc<{ session: { toolOverrides?: SessionToolOverrides } }>(
-                  instance,
-                  "sessions.describe",
-                  { key, agentId: "main" },
-                  evidence,
-                  `chat-${scenario.name}-first-toggle`,
-                );
-                expect(toggled.session.toolOverrides).toEqual(firstOverrides);
-                await webSearch.click();
-                await expect.poll(() => traffic.patches().length).toBe(patchStart + 2);
-                await expect
-                  .poll(() => traffic.succeeded(traffic.patches()[patchStart + 1]!))
-                  .toBe(true);
-                expect(traffic.patches().at(-1)?.params).toEqual({
-                  key,
-                  toolOverrides: initiallyEnabled ? siblings : { ...siblings, webSearch: false },
-                });
-                await expect.poll(() => checked(webSearch)).toBe(initiallyEnabled);
-                const restored = await rpc<{ session: { toolOverrides?: SessionToolOverrides } }>(
-                  instance,
-                  "sessions.describe",
-                  { key, agentId: "main" },
-                  evidence,
-                  `chat-${scenario.name}-second-toggle`,
-                );
-                expect(restored.session.toolOverrides).toEqual(
-                  initiallyEnabled ? siblings : { ...siblings, webSearch: false },
-                );
-                evidence.push({
-                  stage: `chat-${scenario.name}-after`,
-                  ...(await presentation(webSearch)),
-                });
+                await forceSelection(webSearch);
               }
-            },
-          );
-        }
-
-        await visit("new", "new-session", async (page, traffic) => {
-          const { webSearch } = await openMenu(page, ".new-session-page__composer");
-          await settleSelection(page);
-          evidence.push({ stage: "new-session-initial", ...(await presentation(webSearch)) });
-          expect.soft(await checked(webSearch)).toBe(globallyEnabled);
-          expect.soft(await webSearch.isDisabled()).toBe(!globallyEnabled);
-          if (!globallyEnabled) {
-            expect.soft(await tooltipTitleText(webSearch)).toContain("tools.web.search.enabled");
-          }
-          if (capture) {
-            await page.screenshot({ path: path.join(suite.artifactDir, "new-session.png") });
-          }
-          await forceSelection(webSearch);
-          await settleSelection(page);
-          evidence.push({ stage: "new-session-after-select", ...(await presentation(webSearch)) });
-          expect.soft(await checked(webSearch)).toBe(false);
-          expect.soft(traffic.patches()).toEqual([]);
-          expect
-            .soft(traffic.requests.filter((row) => row.method === "sessions.create"))
-            .toEqual([]);
-          if (globallyEnabled) {
-            await webSearch.click();
-            await expect.poll(() => checked(webSearch)).toBe(true);
-            const chat = await page.context().newPage();
-            const chatTraffic = observeRequests(chat);
-            evidence.push({ stage: "offline-chat", frames: chatTraffic.frames });
-            await chat.goto(
-              controlUiSessionUrl(suite.server.baseUrl, "agent:main:websearch-omitted", "chat"),
-            );
-            await waitForControlUiGatewayReady(chat);
-            const chatMenu = await openMenu(chat);
-            await expect.poll(() => checked(chatMenu.webSearch)).toBe(true);
-            await instance.stopGateway();
-            await Promise.all([
-              waitForControlUiGatewayReconnecting(page),
-              waitForControlUiGatewayReconnecting(chat),
-            ]);
-            await expect.poll(() => webSearch.isDisabled()).toBe(true);
-            await expect.poll(() => chatMenu.webSearch.isDisabled()).toBe(true);
-            expect(await tooltipTitleText(webSearch)).toContain("Connect to the gateway");
-            expect(await tooltipTitleText(chatMenu.webSearch)).toContain("Connect to the gateway");
-            await forceSelection(webSearch);
-            await forceSelection(chatMenu.webSearch);
-            await page.evaluate(
-              () =>
-                new Promise<void>((resolve) => {
-                  requestAnimationFrame(() => resolve());
-                }),
-            );
-            expect(await checked(webSearch)).toBe(true);
-            expect(await checked(chatMenu.webSearch)).toBe(true);
-            expect(traffic.patches()).toEqual([]);
-            expect(chatTraffic.patches()).toEqual([]);
-            evidence.push(
-              { stage: "offline-new-session", ...(await presentation(webSearch)) },
-              { stage: "offline-chat", ...(await presentation(chatMenu.webSearch)) },
-            );
-          }
-        });
-      } finally {
-        if (capture) {
-          await writeFile(
-            path.join(suite.artifactDir, "websearch-policy-evidence.json"),
-            JSON.stringify({ globallyEnabled, evidence }, null, 2),
-            { flag: "wx" },
-          );
-        }
+              await settleSelection(page);
+              if (stale) {
+                await expect.poll(() => traffic.patches().length).toBe(patchStart + 1);
+              }
+              const patches = traffic.patches().slice(patchStart);
+              expect.soft(patches).toEqual(
+                stale
+                  ? [
+                      expect.objectContaining({
+                        params: { key, toolOverrides: siblings },
+                      }),
+                    ]
+                  : [],
+              );
+              expect
+                .soft(patches.some((row) => row.params?.toolOverrides?.webSearch === true))
+                .toBe(false);
+              for (const patch of patches) {
+                await expect.poll(() => traffic.succeeded(patch)).toBe(true);
+              }
+              const after = await readOverrides(readback, key);
+              expect.soft(after).toEqual(stale ? siblings : scenario.overrides);
+              await settleSelection(page);
+              if (stale) {
+                expect.soft(await checked(webSearch)).toBe(false);
+                expect.soft(await webSearch.isDisabled()).toBe(true);
+              }
+            } else {
+              const initiallyEnabled = scenario.name !== "false";
+              await expect.poll(() => checked(webSearch)).toBe(initiallyEnabled);
+              expect(await webSearch.isDisabled()).toBe(false);
+              for (const [index, enabled] of [!initiallyEnabled, initiallyEnabled].entries()) {
+                await webSearch.click();
+                await expect.poll(() => traffic.patches().length).toBe(patchStart + index + 1);
+                await expect
+                  .poll(() => traffic.succeeded(traffic.patches()[patchStart + index]!))
+                  .toBe(true);
+                const toolOverrides = enabled ? siblings : { ...siblings, webSearch: false };
+                expect(traffic.patches().at(-1)?.params).toEqual({ key, toolOverrides });
+                await expect.poll(() => checked(webSearch)).toBe(enabled);
+                if (index === 0) {
+                  await expect.poll(() => webSearch.isDisabled()).toBe(false);
+                }
+                expect(await readOverrides(readback, key)).toEqual(toolOverrides);
+              }
+            }
+          },
+        );
       }
+
+      await visit("new", async (page, traffic) => {
+        const { webSearch } = await openMenu(page, ".new-session-page__composer");
+        await settleSelection(page);
+        expect.soft(await checked(webSearch)).toBe(globallyEnabled);
+        expect.soft(await webSearch.isDisabled()).toBe(!globallyEnabled);
+        if (!globallyEnabled) {
+          expect.soft(await tooltipTitleText(webSearch)).toContain("tools.web.search.enabled");
+        }
+        await forceSelection(webSearch);
+        await settleSelection(page);
+        expect.soft(await checked(webSearch)).toBe(false);
+        expect.soft(traffic.patches()).toEqual([]);
+        expect.soft(traffic.requests.filter((row) => row.method === "sessions.create")).toEqual([]);
+        if (globallyEnabled) {
+          await webSearch.click();
+          await expect.poll(() => checked(webSearch)).toBe(true);
+          const chat = await page.context().newPage();
+          const chatTraffic = observeRequests(chat);
+          await chat.goto(
+            controlUiSessionUrl(suite.server.baseUrl, "agent:main:websearch-omitted", "chat"),
+          );
+          await waitForControlUiGatewayReady(chat);
+          const chatMenu = await openMenu(chat);
+          await expect.poll(() => checked(chatMenu.webSearch)).toBe(true);
+          await readback.stopAndWait();
+          await instance.stopGateway();
+          await Promise.all([
+            waitForControlUiGatewayReconnecting(page),
+            waitForControlUiGatewayReconnecting(chat),
+          ]);
+          await expect.poll(() => webSearch.isDisabled()).toBe(true);
+          await expect.poll(() => chatMenu.webSearch.isDisabled()).toBe(true);
+          expect(await tooltipTitleText(webSearch)).toContain("Connect to the gateway");
+          expect(await tooltipTitleText(chatMenu.webSearch)).toContain("Connect to the gateway");
+          await forceSelection(webSearch);
+          await forceSelection(chatMenu.webSearch);
+          await page.evaluate(
+            () =>
+              new Promise<void>((resolve) => {
+                requestAnimationFrame(() => resolve());
+              }),
+          );
+          expect(await checked(webSearch)).toBe(true);
+          expect(await checked(chatMenu.webSearch)).toBe(true);
+          expect(traffic.patches()).toEqual([]);
+          expect(chatTraffic.patches()).toEqual([]);
+        }
+      });
     }, 180_000);
   });
 }

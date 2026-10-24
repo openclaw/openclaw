@@ -6,6 +6,7 @@ import type {
 import type { ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
 import type { ClawdbotConfig } from "../runtime-api.js";
 import type { FeishuMessageEvent } from "./bot.js";
+import { FeishuConfigSchema } from "./config-schema.js";
 
 type FeishuConfig = NonNullable<NonNullable<ClawdbotConfig["channels"]>["feishu"]>;
 type FeishuMessage = FeishuMessageEvent["message"];
@@ -57,6 +58,43 @@ export function createFeishuTestConfig(
   base: TestConfigBase = {},
 ): ClawdbotConfig {
   return { ...base, channels: { ...base.channels, feishu } } as ClawdbotConfig;
+}
+
+export function sentMessage(
+  messageId: string,
+  chatId: string,
+): Awaited<ReturnType<typeof import("./send.js").sendMessageFeishu>> {
+  return {
+    messageId,
+    chatId,
+    receipt: {
+      primaryPlatformMessageId: messageId,
+      platformMessageIds: [messageId],
+      parts: [{ platformMessageId: messageId, kind: "text", index: 0 }],
+      sentAt: 1,
+    },
+  };
+}
+
+export function withFeishuRuntimeDefaults(cfg: ClawdbotConfig): ClawdbotConfig {
+  const defaults = FeishuConfigSchema.parse({});
+  return {
+    ...cfg,
+    channels: {
+      ...cfg.channels,
+      feishu: {
+        // Only these defaults survive the generated JSON schema used by the loader.
+        domain: defaults.domain,
+        connectionMode: defaults.connectionMode,
+        webhookPath: defaults.webhookPath,
+        dmPolicy: defaults.dmPolicy,
+        reactionNotifications: defaults.reactionNotifications,
+        typingIndicator: defaults.typingIndicator,
+        resolveSenderNames: defaults.resolveSenderNames,
+        ...cfg.channels?.feishu,
+      },
+    },
+  };
 }
 
 export function createFeishuSecretRefPolicyConfig({

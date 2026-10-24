@@ -7,7 +7,7 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
-import { writeCliPluginFixture, writeFixtureJson } from "./cli-fixtures.test-support.js";
+import { writeCliPluginFixture } from "./cli-fixtures.test-support.js";
 import {
   prepareGatewayCliFixture,
   runIsolatedGatewayCli,
@@ -65,28 +65,34 @@ it.each([
   const token = message ? "synthetic-message-gateway-token" : undefined;
   const gateway = await startCliReadGateway(token);
   const port = Number(new URL(gateway.url).port);
-  const { stateDir, configPath } = await prepareGatewayCliFixture(root, {
-    mode: "local",
-    port,
-    auth: token ? { mode: "token", token } : { mode: "none" },
-  });
-  const config = JSON.parse(await fs.readFile(configPath, "utf8"));
-  await writeFixtureJson(configPath, {
-    ...config,
-    ...(message
-      ? {
-          agents: { entries: { main: {} } },
-          channels: { discord: { enabled: true, token: "synthetic-discord-token" } },
-        }
-      : {}),
-    diagnostics: { flags: ["timeline"] },
-  });
+  const fixture = await prepareGatewayCliFixture(
+    root,
+    { mode: "local", port, auth: token ? { mode: "token", token } : { mode: "none" } },
+    {
+      ...(message
+        ? {
+            agents: { entries: { main: {} } },
+            channels: { discord: { enabled: true, token: "synthetic-discord-token" } },
+          }
+        : {}),
+      diagnostics: { flags: ["timeline"] },
+    },
+  );
+  const { stateDir, configPath } = fixture;
   const databasePath = path.join(stateDir, "state", "openclaw.sqlite");
-  openOpenClawStateDatabase({ path: databasePath });
+  const env = {
+    ...process.env,
+    HOME: root,
+    USERPROFILE: root,
+    OPENCLAW_HOME: root,
+    OPENCLAW_STATE_DIR: stateDir,
+    OPENCLAW_CONFIG_PATH: configPath,
+  };
+  openOpenClawStateDatabase({ path: databasePath, env });
   closeOpenClawStateDatabaseForTest();
   const lock = await acquireGatewayLock({
     allowInTests: true,
-    env: { ...process.env, OPENCLAW_STATE_DIR: stateDir, OPENCLAW_CONFIG_PATH: configPath },
+    env,
     port,
   });
   expect(lock).not.toBeNull();
@@ -148,9 +154,7 @@ record({ kind: "preload" });
             "--json",
             ...(!online && args[0] !== "message" ? ["--timeout", "250"] : []),
           ],
-          root,
-          stateDir,
-          configPath,
+          ...fixture,
           env: {
             ...sqliteWorkerPreloadEnv(preloadPath),
             OPENCLAW_DIAGNOSTICS_TIMELINE_PATH: timelinePath,

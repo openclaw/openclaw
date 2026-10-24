@@ -1,5 +1,5 @@
 import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline.js";
-import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
+import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
 import {
   readDatabasePathIdentitySync,
   type DatabasePathIdentity,
@@ -9,10 +9,7 @@ import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db
 import { supportsOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
 import type { ConversationRouteContext } from "./conversation-route-context.js";
 import type { SessionLifecycleTimestamps } from "./lifecycle.types.js";
-import {
-  cloneSessionEntries,
-  createReplySessionInitializationRevision,
-} from "./session-accessor.entry-mutation.js";
+import { createReplySessionInitializationRevision } from "./session-accessor.entry-mutation.js";
 import { resolveSessionEntryFromStore } from "./session-accessor.entry.js";
 import type {
   SessionEntryLifecycleUpsert,
@@ -91,10 +88,9 @@ type ReplySessionInitializationSelection = {
 function loadReplySessionInitializationEntriesForMaintenance(
   params: ReplySessionInitializationSelection,
 ): Record<string, SessionEntry> {
-  assertSessionInitializationAgentScope(params.agentId, params.sessionKey);
   const result = withOpenClawAgentDatabaseReadOnly(
     (database) =>
-      runSqliteDeferredTransactionSync(database.db, () => {
+      runSqliteReadSnapshotSync(database.db, () => {
         assertCanonicalSqliteSessionKeysCurrent(database);
         const entries: Record<string, SessionEntry> = {};
         const currentKey = normalizeStoreSessionKey(params.sessionKey);
@@ -604,6 +600,8 @@ export async function commitReplySessionInitialization(params: {
   return {
     ok: true,
     sessionEntry: { ...committedSessionEntry },
-    sessionStoreView: cloneSessionEntries(store),
+    sessionStoreView: Object.fromEntries(
+      Object.entries(store).map(([key, entry]) => [key, { ...entry }]),
+    ),
   };
 }

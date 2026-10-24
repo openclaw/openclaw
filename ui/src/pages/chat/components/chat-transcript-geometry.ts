@@ -137,6 +137,7 @@ export function isTranscriptRangeCommitted(
 export function readConnectedTranscriptRows(
   scrollElement: HTMLDivElement | null,
   virtualizer: Virtualizer<HTMLDivElement, HTMLElement>,
+  rowElements: Iterable<HTMLElement>,
 ): (() => boolean) | null {
   const rect = scrollElement?.getBoundingClientRect();
   if (
@@ -150,7 +151,13 @@ export function readConnectedTranscriptRows(
   // Width changes and retired smooth commands can have undelivered sizes.
   // Ordinary row refs stay on TanStack's observer path; never clear its cache.
   const measurements: Array<{ index: number; height: number }> = [];
-  for (const row of scrollElement.querySelectorAll<HTMLElement>(".chat-virtual-row")) {
+  // Refs can arrive out of order during prepends; preserve DOM-order corrections.
+  const rows = [...rowElements]
+    .filter((row) => scrollElement.contains(row))
+    .toSorted(
+      (left, right) => virtualizer.indexFromElement(left) - virtualizer.indexFromElement(right),
+    );
+  for (const row of rows) {
     const index = virtualizer.indexFromElement(row);
     // Rows are border-boxes; read their fractional layout height, not a scaled
     // client rect when a containing board or sidebar is transitioning.
@@ -192,14 +199,17 @@ export function measureTranscriptRow(
 }
 
 export function maxTranscriptScrollOffset(element: HTMLElement | null): number | null {
-  return element && element.clientHeight > 0
-    ? Math.max(0, element.scrollHeight - element.clientHeight)
-    : null;
+  if (!element) {
+    return null;
+  }
+  const clientHeight = element.clientHeight;
+  return clientHeight > 0 ? Math.max(0, element.scrollHeight - clientHeight) : null;
 }
 
 export function createPositionRailGutter(
   scrollElement: () => HTMLDivElement | null,
   innerElement: () => HTMLDivElement | null,
+  columnElement: () => HTMLDivElement | undefined,
 ) {
   let resizeObserver: ResizeObserver | null = null;
   let observedViewport: HTMLDivElement | null = null;
@@ -222,13 +232,13 @@ export function createPositionRailGutter(
       return;
     }
     disconnect();
-    if (!viewport?.isConnected || inner?.parentElement !== viewport || !region) {
+    const column = columnElement();
+    if (!viewport?.isConnected || inner?.parentElement !== viewport || !region || !column) {
       return;
     }
     observedViewport = viewport;
     observedInner = inner;
     observedRegion = region;
-    const column = inner.querySelector<HTMLElement>(":scope > .chat-virtual-sizer") ?? inner;
     let innerWidth: number | undefined;
     let regionHeight: number | undefined;
     resizeObserver = new ResizeObserver((entries) => {

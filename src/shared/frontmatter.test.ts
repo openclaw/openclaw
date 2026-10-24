@@ -1,4 +1,3 @@
-// Frontmatter tests cover shared Markdown frontmatter parsing helpers.
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, test } from "vitest";
 import {
@@ -55,28 +54,11 @@ describe("shared/frontmatter", () => {
   });
 
   it("parses and applies install common fields", () => {
-    const parsed = parseOpenClawManifestInstallBase(
-      {
-        type: " Brew ",
-        id: "brew.git",
-        label: "Git",
-        bins: [" git ", "git"],
-      },
-      ["brew", "npm"],
-    );
-
-    expect(parsed).toEqual({
-      raw: {
-        type: " Brew ",
-        id: "brew.git",
-        label: "Git",
-        bins: [" git ", "git"],
-      },
-      kind: "brew",
-      id: "brew.git",
-      label: "Git",
-      bins: ["git", "git"],
-    });
+    const raw = { type: " Brew ", id: "brew.git", label: "Git", bins: [" git ", "git"] };
+    const expectedRaw = structuredClone(raw);
+    const parsed = parseOpenClawManifestInstallBase(raw, ["brew", "npm"]);
+    const common = { id: "brew.git", label: "Git", bins: ["git", "git"] };
+    expect(parsed).toEqual({ raw: expectedRaw, kind: "brew", ...common });
     expect(parseOpenClawManifestInstallBase({ kind: "bad" }, ["brew"])).toBeUndefined();
     expect(
       applyOpenClawManifestInstallCommonFields<{
@@ -85,64 +67,27 @@ describe("shared/frontmatter", () => {
         label?: string;
         bins?: string[];
       }>({ extra: true }, expectDefined(parsed, "manifest install base")),
-    ).toEqual({
-      extra: true,
-      id: "brew.git",
-      label: "Git",
-      bins: ["git", "git"],
-    });
+    ).toEqual({ extra: true, ...common });
   });
 
   it("prefers explicit kind, ignores invalid common fields, and leaves missing ones untouched", () => {
-    const parsed = parseOpenClawManifestInstallBase(
-      {
-        kind: " npm ",
-        type: "brew",
-        id: 42,
-        label: null,
-        bins: [" ", ""],
-      },
-      ["brew", "npm"],
-    );
-
-    expect(parsed).toEqual({
-      raw: {
-        kind: " npm ",
-        type: "brew",
-        id: 42,
-        label: null,
-        bins: [" ", ""],
-      },
-      kind: "npm",
-    });
+    const raw = { kind: " npm ", type: "brew", id: 42, label: null, bins: [" ", ""] };
+    const expectedRaw = structuredClone(raw);
+    const parsed = parseOpenClawManifestInstallBase(raw, ["brew", "npm"]);
+    expect(parsed).toEqual({ raw: expectedRaw, kind: "npm" });
     expect(
       applyOpenClawManifestInstallCommonFields(
         { id: "keep", label: "Keep", bins: ["bun"] },
         parsed!,
       ),
-    ).toEqual({
-      id: "keep",
-      label: "Keep",
-      bins: ["bun"],
-    });
+    ).toEqual({ id: "keep", label: "Keep", bins: ["bun"] });
   });
 
   it("maps install entries through the parser and filters rejected specs", () => {
+    const keep = { id: "keep" };
     expect(
-      resolveOpenClawManifestInstall(
-        {
-          install: [{ id: "keep" }, { id: "drop" }, "bad"],
-        },
-        (entry) => {
-          if (
-            typeof entry === "object" &&
-            entry !== null &&
-            (entry as { id?: string }).id === "keep"
-          ) {
-            return { id: "keep" };
-          }
-          return undefined;
-        },
+      resolveOpenClawManifestInstall({ install: [keep, { id: "drop" }, "bad"] }, (entry) =>
+        entry === keep ? { id: "keep" } : undefined,
       ),
     ).toEqual([{ id: "keep" }]);
   });

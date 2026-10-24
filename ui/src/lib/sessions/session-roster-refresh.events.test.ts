@@ -16,6 +16,7 @@ import {
   listParams,
   ownRoster,
   ownerCountsFixture,
+  rosterPage,
 } from "./session-roster-refresh.test-support.ts";
 
 function changed(payload: Record<string, unknown>) {
@@ -84,13 +85,7 @@ describe("session roster event traffic", () => {
       const ownerRows = queryParams.ownerFirst
         ? eligible.filter((row) => row.owner?.actor.id === viewer.id && !page.includes(row))
         : [];
-      const response = {
-        ...sessionsResult([...page, ...ownerRows], Date.now()),
-        totalCount: eligible.length,
-        hasMore: true,
-        nextOffset: 200,
-        limitApplied: 200,
-      } satisfies SessionsListResult;
+      const response = rosterPage([...page, ...ownerRows], eligible.length, 200, Date.now());
       reads[scope]++;
       bytes[scope] += new TextEncoder().encode(JSON.stringify(response)).byteLength;
       await delay(200);
@@ -129,6 +124,8 @@ describe("session roster event traffic", () => {
         updatedAt: 100_001 + index,
         snapshotAt: Date.now() + 1,
         totalTokens: index + 1,
+        hasActiveRun: index % 20 < 10,
+        status: index % 20 < 10 ? "running" : "done",
         unread: hot % 2 === 0,
         lastReadAt: hot % 2 === 0 ? 98_000 : 100_001 + index,
       };
@@ -139,10 +136,8 @@ describe("session roster event traffic", () => {
         expect(bytes).toEqual(bootBytes);
       }
     }
-    expect(reads).toEqual({ shared: bootReads.shared + 1, personal: bootReads.personal + 1 });
-    for (const scope of ["shared", "personal"] as const) {
-      expect(bytes[scope] - bootBytes[scope]).toBeLessThan(2 * bootBytes[scope]);
-    }
+    expect(reads).toEqual(bootReads);
+    expect(bytes).toEqual(bootBytes);
     for (const query of [shared, personal]) {
       const held = listRows(query) ?? [];
       expect(held.slice(0, 10).map((row) => row.key)).toEqual(
@@ -159,7 +154,7 @@ describe("session roster event traffic", () => {
         lastReadAt: 101_200,
       });
     }
-    // Explicit reads absorb the minute fallback before exercising membership changes.
+    // Explicit reads still reconcile both windows before exercising membership changes.
     const fresh = [
       sessions.refresh({ ...shared, force: true }),
       sessions.refreshList({ ...personal, force: true }),
@@ -233,28 +228,20 @@ describe("session roster event traffic", () => {
     async (personal) => {
       const viewer = { type: "profile", id: "profile-ada" } as const;
       const held = Array.from({ length: 200 }, (_, index) =>
-        session("main", 10_000 - index, {
-          key: `agent:main:held-${index}`,
-          sessionId: `held-${index}`,
+        makeRow(`held-${index}`, 10_000 - index, {
           isMain: false,
           participants: [{ identity: viewer }],
           hiddenFromInvolvingMe: false,
         }),
       );
-      const incoming = session("main", 15_000, {
+      const incoming = {
         ...held[0]!,
         key: "agent:main:incoming",
         sessionId: "incoming",
         updatedAt: 15_000,
-      });
+      };
       const promoted = { ...held[199]!, updatedAt: 20_000, unread: true, snapshotAt: 30_000 };
-      const page = (rows: GatewaySessionRow[]) => ({
-        ...sessionsResult(rows, 1),
-        totalCount: 201,
-        hasMore: true,
-        nextOffset: 200,
-        limitApplied: 200,
-      });
+      const page = (rows: GatewaySessionRow[]) => rosterPage(rows, 201, 200);
       const pending = createDeferred<SessionsListResult>();
       const request = vi.fn().mockResolvedValue(page([promoted, incoming, ...held.slice(0, 198)]));
       request.mockResolvedValueOnce(page(held));
@@ -770,7 +757,7 @@ describe("session roster event traffic", () => {
       }
       await advance(1_000);
     }
-    await advance(54_999);
+    await advance(125_000);
     expect(summaryRequest).toHaveBeenCalledOnce();
     counts.running = 1;
     emitEvent(

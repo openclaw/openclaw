@@ -10,7 +10,10 @@ import {
   validateExecApprovalsNodeSnapshot,
   validateExecApprovalsNodeSetParams,
   validateExecApprovalsSetParams,
+  validateExecApprovalsNativeCommitParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { commitNativeExecAuthorization } from "../../infra/exec-approvals-native.js";
+import { readExecApprovalsSocket } from "../../infra/exec-approvals-socket.js";
 import {
   ensureExecApprovalsSnapshot,
   normalizeExecApprovals,
@@ -201,6 +204,33 @@ function execApprovalsNodeHandler<TParams extends { nodeId: string }>(definition
 }
 
 export const execApprovalsHandlers: GatewayRequestHandlers = {
+  "exec.approvals.native.commit": async (options) => {
+    const { params, respond } = options;
+    if (
+      !assertValidParams(
+        params,
+        validateExecApprovalsNativeCommitParams,
+        "exec.approvals.native.commit",
+        respond,
+      )
+    ) {
+      return;
+    }
+    const guard = captureExecApprovalsOwnerGuard(params.expectedOwnerId, options);
+    if (guard === null) {
+      return;
+    }
+    await respondUnavailableOnThrow(respond, async () => {
+      guard.assertPreparationCurrent();
+      const result = await commitNativeExecAuthorization(
+        params,
+        guard.assertCurrent,
+        captureOpenClawStateWorkerContext(),
+      );
+      guard.assertCurrent();
+      respond(true, result, undefined);
+    });
+  },
   "exec.approvals.get": async (options) => {
     const { params, respond } = options;
     if (!assertValidParams(params, validateExecApprovalsGetParams, "exec.approvals.get", respond)) {
@@ -212,9 +242,32 @@ export const execApprovalsHandlers: GatewayRequestHandlers = {
     }
     await respondUnavailableOnThrow(respond, async () => {
       guard.assertPreparationCurrent();
-      const snapshot = params.expectedOwnerId
-        ? await readExecApprovalsSnapshotAsync()
-        : await ensureExecApprovalsSnapshot(guard.assertCurrent, guard.assertPreparationCurrent);
+      let snapshot: ExecApprovalsSnapshot;
+      if (params.expectedOwnerId) {
+        const context = captureOpenClawStateWorkerContext();
+        const assertCurrent = () => {
+          context.admission.assertCurrent();
+          guard.assertCurrent();
+        };
+        snapshot = await readExecApprovalsSnapshotAsync(context);
+        assertCurrent();
+        const socket = await readExecApprovalsSocket(
+          context.initializationEnvironment ?? context.environment,
+          { assertCurrent },
+        );
+        assertCurrent();
+        if (socket?.socket_path) {
+          snapshot = {
+            ...snapshot,
+            file: { ...snapshot.file, socket: { path: socket.socket_path } },
+          };
+        }
+      } else {
+        snapshot = await ensureExecApprovalsSnapshot(
+          guard.assertCurrent,
+          guard.assertPreparationCurrent,
+        );
+      }
       guard.assertCurrent();
       respond(true, toExecApprovalsPayload(snapshot), undefined);
     });

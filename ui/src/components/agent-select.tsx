@@ -1,4 +1,4 @@
-import { createMemo, onCleanup, Show } from "solid-js";
+import { createMemo, onSettled, Show } from "solid-js";
 import type { AgentIdentityResult } from "../api/types.ts";
 import { resolveAgentTextAvatar } from "../lib/agents/display.ts";
 import { resolveAgentAvatarUrl } from "../lib/avatar.ts";
@@ -10,7 +10,7 @@ import { generateUUID } from "../lib/uuid.ts";
 import type { AgentSelectOption } from "./agent-select-types.ts";
 import { revealInScrollRegion } from "./scroll-state.ts";
 import { Icon } from "./solid/icon.tsx";
-import { AgentIdentityAvatar } from "./solid/identity-avatar.tsx";
+import { AgentOptionAvatar } from "./solid/identity-avatar.tsx";
 import { Menu, type MenuItem, type MenuHandle } from "./solid/menu.tsx";
 
 type AgentSelectProps = {
@@ -23,7 +23,7 @@ type AgentSelectProps = {
   disabled: boolean;
   variant: "default" | "compact";
   onSelect: (value: string) => void;
-  onCreateAgent: (() => void) | null;
+  focusTargetsRef?: (readTargets: () => readonly HTMLElement[]) => void;
 };
 export type AgentSelectElement = SolidBridgeElement<AgentSelectProps>;
 defineSolidBridge<AgentSelectProps>(
@@ -40,7 +40,7 @@ defineSolidBridge<AgentSelectProps>(
     const label = () => triggerOption()?.label ?? (props.placeholder || t("agents.noAgents"));
     const accessibleLabel = () => [label(), selected()?.badge].filter(Boolean).join(", ");
     const loader = createIdentityAvatars();
-    onCleanup(loader.connect());
+    onSettled(() => loader.connect());
     const avatarSource = projectOwner(loader, (owner) => owner);
     const avatars = createMemo(() => {
       const current = triggerOption();
@@ -55,7 +55,7 @@ defineSolidBridge<AgentSelectProps>(
               return [
                 option.value,
                 {
-                  identity,
+                  textAvatar: option.agent ? resolveAgentTextAvatar(option.agent, identity) : null,
                   image: url ? loader.resolve(url) : null,
                   onError: url ? loader.imageErrorHandler(url) : undefined,
                 },
@@ -66,33 +66,10 @@ defineSolidBridge<AgentSelectProps>(
     });
     function Avatar(avatarProps: { option: AgentSelectOption }) {
       const resolved = () => avatars().get(avatarProps.option.value);
-      return (
-        <Show
-          when={resolved()?.image ? undefined : avatarProps.option.icon}
-          fallback={
-            <AgentIdentityAvatar
-              class="agent-select__avatar"
-              agent={{
-                id: avatarProps.option.agent?.id ?? avatarProps.option.value,
-                avatar: resolved()?.image ?? null,
-                textAvatar: avatarProps.option.agent
-                  ? resolveAgentTextAvatar(avatarProps.option.agent, resolved()?.identity ?? null)
-                  : null,
-              }}
-              onImageError={resolved()?.onError}
-            />
-          }
-        >
-          {(icon) => (
-            <span class="agent-select__avatar agent-select__avatar--icon" aria-hidden="true">
-              <Icon name={icon()} />
-            </span>
-          )}
-        </Show>
-      );
+      return <AgentOptionAvatar option={avatarProps.option} avatar={resolved()} />;
     }
-    const items = createMemo<readonly MenuItem[]>(() => [
-      ...props.options.map((option) => ({
+    const items = createMemo<readonly MenuItem[]>(() =>
+      props.options.map((option) => ({
         id: `option:${option.value}`,
         label: [option.label, option.description, option.badge].filter(Boolean).join(", "),
         class: "agent-select__option",
@@ -130,36 +107,17 @@ defineSolidBridge<AgentSelectProps>(
             option.value === props.value && !props.disabled && !option.disabled ? "" : undefined,
         },
       })),
-      ...(props.onCreateAgent
-        ? [
-            {
-              id: "create-agent",
-              label: t("custodian.newAgent"),
-              class: "agent-select__option",
-              disabled: props.disabled,
-              icon: (
-                <span class="agent-select__footer-icon" aria-hidden="true">
-                  <Icon name="users" />
-                </span>
-              ),
-              content: (
-                <>
-                  <Show when={props.options.length > 0}>
-                    <span class="agent-select__separator" role="separator" />
-                  </Show>
-                  <span class="agent-select__option-label">{t("custodian.newAgent")}</span>
-                </>
-              ),
-              attributes: { "data-create-agent": "" },
-            },
-          ]
-        : []),
-    ]);
+    );
     return (
       <Menu
         id={id}
         ref={(handle) => {
           menu = handle;
+          props.focusTargetsRef?.(() => {
+            const elements = handle.itemElements();
+            const trigger = handle.overlay.trigger;
+            return trigger ? [trigger, ...elements] : elements;
+          });
         }}
         class={props.variant === "compact" ? "agent-select agent-select--compact" : "agent-select"}
         panelClass="agent-select__menu"
@@ -169,7 +127,7 @@ defineSolidBridge<AgentSelectProps>(
             ? `${props.accessibleLabel}: ${accessibleLabel()}`
             : accessibleLabel()
         }
-        disabled={props.disabled || (props.options.length === 0 && !props.onCreateAgent)}
+        disabled={props.disabled || props.options.length === 0}
         items={items()}
         placement="bottom-start"
         onAfterShow={() => {
@@ -197,15 +155,9 @@ defineSolidBridge<AgentSelectProps>(
           if (props.disabled) {
             return;
           }
-          if (item.id === "create-agent") {
-            props.onCreateAgent?.();
-          } else {
-            const picked = props.options.find(
-              (candidate) => `option:${candidate.value}` === item.id,
-            );
-            if (picked && picked.value !== props.value) {
-              props.onSelect(picked.value);
-            }
+          const picked = props.options.find((candidate) => `option:${candidate.value}` === item.id);
+          if (picked && picked.value !== props.value) {
+            props.onSelect(picked.value);
           }
         }}
       >
@@ -226,7 +178,7 @@ defineSolidBridge<AgentSelectProps>(
       disabled: { default: false, attribute: false },
       variant: { default: "default", attribute: false },
       onSelect: { default: () => {}, attribute: false },
-      onCreateAgent: { default: null, attribute: false },
+      focusTargetsRef: { default: undefined, attribute: false },
     },
   },
 );

@@ -13,6 +13,7 @@ import {
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { removeLegacyMantisWorktrees, removeMantisWorktree } from "./run-cleanup.runtime.js";
 import { defaultMantisCommandRunner, type MantisCommandRunner } from "./run-command.runtime.js";
+import { captureMantisDirectoryOwnership } from "./run-directory.runtime.js";
 import { runMantisBeforeAfter, type MantisBeforeAfterOptions } from "./run.runtime.js";
 import { successfulCommandResult, type StubCommandResult } from "./run.test-support.js";
 
@@ -336,6 +337,10 @@ process.exit(result.status ?? 1);
       await initializeGitRepo(repoRoot);
       const worktreeDir = path.join(repoRoot, ".artifacts", "missing-worktree", "baseline");
       await addWorktree(repoRoot, worktreeDir);
+      const ownership = await captureMantisDirectoryOwnership({
+        directoryPath: worktreeDir,
+        repoRoot,
+      });
       await fs.rm(worktreeDir, { force: true, recursive: true });
 
       await expect(
@@ -345,6 +350,7 @@ process.exit(result.status ?? 1);
           repoRoot,
           runner: defaultMantisCommandRunner,
           worktreeDir,
+          ownership,
         }),
       ).rejects.toThrow("baseline worktree cleanup left registered path");
 

@@ -1,4 +1,3 @@
-import { Command } from "commander";
 import { defaultRuntime } from "openclaw/plugin-sdk/runtime-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -18,11 +17,11 @@ vi.spyOn(defaultRuntime, "exit").mockImplementation(browserCliRuntime.exit);
 
 const { registerBrowserActionObserveCommands } = await import("./browser-cli-actions-observe.js");
 
-function createActionObserveProgram(): Command {
+function run(...args: string[]) {
   const { program, browser, parentOpts } = createBrowserProgram();
   browser.option("--timeout <ms>", "Timeout in ms", "30000");
   registerBrowserActionObserveCommands(browser, parentOpts);
-  return program;
+  return program.parseAsync(["browser", ...args], { from: "user" });
 }
 
 describe("browser action observe commands", () => {
@@ -37,10 +36,8 @@ describe("browser action observe commands", () => {
     { command: "pdf", path: "/pdf", timeout: "30000" },
     { command: "pdf", path: "/pdf", timeout: "60000" },
   ])("inherits parent $timeout ms timeout for $command", async ({ command, path, timeout }) => {
-    const program = createActionObserveProgram();
     const parentArgs = timeout === "30000" ? ["--json"] : ["--json", "--timeout", timeout];
-
-    await program.parseAsync(["browser", ...parentArgs, command], { from: "user" });
+    await run(...parentArgs, command);
 
     expect(gatewayMock).toHaveBeenLastCalledWith(
       "browser.request",
@@ -51,103 +48,55 @@ describe("browser action observe commands", () => {
   });
 
   it("rejects non-decimal responsebody numeric flags before dispatch", async () => {
-    const program = createActionObserveProgram();
-
-    await expect(
-      program.parseAsync(["browser", "responsebody", "**/api", "--timeout-ms", "1e3"], {
-        from: "user",
-      }),
-    ).rejects.toThrow("--timeout-ms must be a positive integer.");
-    await expect(
-      program.parseAsync(["browser", "responsebody", "**/api", "--max-chars", "-1"], {
-        from: "user",
-      }),
-    ).rejects.toThrow("--max-chars must be a positive integer.");
+    await expect(run("responsebody", "**/api", "--timeout-ms", "1e3")).rejects.toThrow(
+      "--timeout-ms must be a positive integer.",
+    );
+    await expect(run("responsebody", "**/api", "--max-chars", "-1")).rejects.toThrow(
+      "--max-chars must be a positive integer.",
+    );
     expect(gatewayMock).not.toHaveBeenCalled();
   });
 
   it("rejects unknown console levels before dispatch", async () => {
-    const program = createActionObserveProgram();
-
-    await expect(
-      program.parseAsync(["browser", "console", "--level", "bogus"], { from: "user" }),
-    ).rejects.toThrow(/error.*warn.*info/u);
+    await expect(run("console", "--level", "bogus")).rejects.toThrow(/error.*warn.*info/u);
     expect(gatewayMock).not.toHaveBeenCalled();
   });
 
   it.each([
-    { label: "truncated prefix", body: "ABC", truncated: true, json: false },
-    { label: "empty truncated prefix", body: "", truncated: true, json: false },
-    { label: "complete at the limit", body: "ABC", truncated: undefined, json: false },
-    { label: "explicitly complete", body: "ABC", truncated: false, json: false },
-    { label: "empty complete body", body: "", truncated: undefined, json: false },
-    { label: "JSON truncated prefix", body: "ABC", truncated: true, json: true },
-  ])("reports completeness for $label without changing body output", async (testCase) => {
-    const program = createActionObserveProgram();
-    const result = {
-      ok: true,
-      response: {
-        url: "https://example.com/api",
-        status: 200,
-        body: testCase.body,
-        ...(testCase.truncated === undefined ? {} : { truncated: testCase.truncated }),
-      },
-    };
+    ["ABC", true, false],
+    ["", true, false],
+    ["ABC", undefined, false],
+    ["ABC", false, false],
+    ["", undefined, false],
+    ["ABC", true, true],
+  ] as const)("prints body=%j truncated=%s json=%s", async (body, truncated, json) => {
+    const result = { response: { body, ...(truncated === undefined ? {} : { truncated }) } };
     gatewayMock.mockResolvedValueOnce(result);
-
-    await program.parseAsync(
-      [
-        "browser",
-        ...(testCase.json ? ["--json"] : []),
-        "responsebody",
-        "**/api",
-        "--max-chars",
-        "3",
-      ],
-      { from: "user" },
-    );
-
+    await run(...(json ? ["--json"] : []), "responsebody", "**/api", "--max-chars", "3");
     const { runtimeLogs, runtimeErrors } = getBrowserCliRuntimeCapture();
-    expect(runtimeLogs).toHaveLength(1);
-    if (testCase.json) {
+    if (json) {
+      expect(runtimeLogs).toHaveLength(1);
       expect(JSON.parse(runtimeLogs[0]!)).toEqual(result);
     } else {
-      expect(runtimeLogs).toEqual([testCase.body]);
+      expect(runtimeLogs).toEqual([body]);
     }
-    expect(runtimeErrors).toEqual(
-      testCase.truncated && !testCase.json ? [expect.stringMatching(/truncat/i)] : [],
-    );
+    expect(runtimeErrors).toEqual(truncated && !json ? [expect.stringMatching(/truncat/i)] : []);
   });
 
   it.each([
-    {
-      label: "default",
-      timeout: undefined,
-      operationTimeoutMs: undefined,
-      requestTimeoutMs: 25000,
-    },
-    { label: "minimum explicit", timeout: "1", operationTimeoutMs: 1, requestTimeoutMs: 5001 },
-    {
-      label: "signed explicit",
-      timeout: "+030000",
-      operationTimeoutMs: 30000,
-      requestTimeoutMs: 35000,
-    },
-  ])(
-    "keeps the $label responsebody request open past its operation deadline",
-    async ({ timeout, operationTimeoutMs, requestTimeoutMs }) => {
-      const program = createActionObserveProgram();
-      const args = ["browser", "responsebody", "**/api", "--max-chars", "0100"];
-      if (timeout !== undefined) {
-        args.push("--timeout-ms", timeout);
-      }
-
-      await program.parseAsync(args, { from: "user" });
-
+    ["default", undefined, undefined, 25000],
+    ["minimum explicit", "1", 1, 5001],
+    ["signed explicit", "+030000", 30000, 35000],
+  ] as const)(
+    "keeps the %s responsebody request open past its operation deadline",
+    async (_label, timeout, operationTimeoutMs, requestTimeoutMs) => {
+      const timeoutArgs = timeout === undefined ? [] : ["--timeout-ms", timeout];
+      await run("responsebody", "**/api", "--max-chars", "0100", ...timeoutArgs);
       const request = gatewayMock.mock.calls.at(-1)?.[2];
-      expect(request?.body?.timeoutMs).toBe(operationTimeoutMs);
-      expect(request?.body?.maxChars).toBe(100);
-      expect(request?.timeoutMs).toBe(requestTimeoutMs);
+      expect(request).toMatchObject({
+        body: { timeoutMs: operationTimeoutMs, maxChars: 100 },
+        timeoutMs: requestTimeoutMs,
+      });
     },
   );
 });

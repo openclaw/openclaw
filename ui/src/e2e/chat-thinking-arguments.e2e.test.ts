@@ -154,6 +154,7 @@ suite.define(() => {
         });
 
         const composer = await openComposer(page, gateway);
+        await composer.click();
 
         const thinking = page.locator('[data-chat-thinking-select="true"]');
         await thinking.waitFor({ state: "visible" });

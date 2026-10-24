@@ -37,6 +37,39 @@ function attach(
   operation.attachBackend({ kind: "embedded", runId: "watchdog-run", cancel });
   return cancel;
 }
+function running() {
+  const operation = begin();
+  return { operation, cancel: attach(operation) };
+}
+function tickAt(watchdog: ReturnType<typeof createSessionControllerWatchdog>, at: number) {
+  vi.setSystemTime(at);
+  return watchdog.tick();
+}
+
+function recoverableRun(recovered: boolean) {
+  const operation = begin();
+  const cancel = vi.fn(() => operation.complete());
+  const recoverStalledModelCall = vi.fn(() => recovered);
+  operation.attachBackend({ kind: "embedded", cancel, recoverStalledModelCall });
+  return { operation, cancel, recoverStalledModelCall };
+}
+
+function expectStalled(operation: ReturnType<typeof begin>, cancel: () => void) {
+  expect(cancel).toHaveBeenCalledOnce();
+  expect(operation.result).toMatchObject({ kind: "failed", code: "run_stalled" });
+}
+function watchdogFixture(
+  overrides: Partial<Parameters<typeof createSessionControllerWatchdog>[0]>,
+) {
+  return createSessionControllerWatchdog({
+    startedAtMs: 0,
+    isCurrent: () => true,
+    readPhase: () => "active",
+    requestStop: () => "blocked",
+    expireCleanup: () => "blocked",
+    ...overrides,
+  });
+}
 beforeEach(() => {
   vi.useFakeTimers();
   vi.setSystemTime(0);
@@ -57,20 +90,15 @@ describe("execution deadline recovery", () => {
       return true;
     });
     const laterRecovery = vi.fn(async () => true);
-    const watchdog = createSessionControllerWatchdog({
-      startedAtMs: 0,
-      isCurrent: () => true,
-      readPhase: () => "active",
+    const watchdog = watchdogFixture({
       requestStop: async (effect) =>
         (await effect.recoverExecutionDeadline?.()) ? "resumed" : "blocked",
-      expireCleanup: () => "blocked",
     });
     const attempt = watchdog.attachAttempt({ assertCurrent() {} });
     attempt.setExecutionDeadline(10);
     watchdog.beginExecution(() => 10, recover);
     watchdog.beginExecution(() => 20, laterRecovery);
-    vi.setSystemTime(20);
-    expect(await watchdog.tick()).toEqual({ action: "observe", reason: "owner_recovery" });
+    expect(await tickAt(watchdog, 20)).toEqual({ action: "observe", reason: "owner_recovery" });
     expect(recover).toHaveBeenCalledOnce();
     expect(laterRecovery).not.toHaveBeenCalled();
     expect(watchdog.snapshot().recovery).toBeUndefined();
@@ -82,19 +110,14 @@ describe("execution deadline recovery", () => {
     async (cause) => {
       const recover = vi.fn(async () => true);
       const stop = vi.fn((_effect: SessionWatchdogEffect) => "settled" as const);
-      const watchdog = createSessionControllerWatchdog({
-        startedAtMs: 0,
-        isCurrent: () => true,
-        readPhase: () => "active",
+      const watchdog = watchdogFixture({
         requestStop: stop,
-        expireCleanup: () => "blocked",
       });
       watchdog.beginExecution(() => abortMs * 2, recover);
       if (cause === "ordinary_deadline") {
         watchdog.beginExecution(() => 1);
       }
-      vi.setSystemTime(cause === "ordinary_deadline" ? 1 : abortMs);
-      await watchdog.tick();
+      await tickAt(watchdog, cause === "ordinary_deadline" ? 1 : abortMs);
       expect(stop).toHaveBeenCalledOnce();
       const [effect] = expectDefined(stop.mock.calls[0], "captured watchdog Stop");
       expect(effect.recoverExecutionDeadline).toBeUndefined();
@@ -112,10 +135,8 @@ describe("execution deadline recovery", () => {
       let current = true;
       let effectCurrent: boolean | undefined;
       let accepted: boolean | undefined;
-      const watchdog = createSessionControllerWatchdog({
-        startedAtMs: 0,
+      const watchdog = watchdogFixture({
         isCurrent: () => current,
-        readPhase: () => "active",
         requestStop: async (effect): Promise<SessionWatchdogEffectResult> => {
           started.resolve();
           await resume.promise;
@@ -123,12 +144,10 @@ describe("execution deadline recovery", () => {
           accepted = await effect.recoverExecutionDeadline?.();
           return "blocked";
         },
-        expireCleanup: () => "blocked",
       });
       const execution = watchdog.beginExecution(undefined, recover);
       execution.setDeadline(1);
-      vi.setSystemTime(1);
-      const pending = watchdog.tick();
+      const pending = tickAt(watchdog, 1);
       await started.promise;
       if (change === "closed") {
         execution.close();
@@ -152,25 +171,20 @@ describe("execution deadline recovery", () => {
       const started = createDeferredCore();
       const resume = createDeferredCore();
       let effectCurrent: boolean | undefined;
-      const watchdog = createSessionControllerWatchdog({
-        startedAtMs: 0,
-        isCurrent: () => true,
-        readPhase: () => "active",
+      const watchdog = watchdogFixture({
         requestStop: async (effect): Promise<SessionWatchdogEffectResult> => {
           started.resolve();
           await resume.promise;
           effectCurrent = effect.isCurrent();
           return "resumed";
         },
-        expireCleanup: () => "blocked",
       });
       const attempt = watchdog.attachAttempt({ assertCurrent() {} });
       const execution = kind === "owned" ? watchdog.beginExecution() : undefined;
       const setDeadline = (deadline: number) =>
         execution ? execution.setDeadline(deadline) : attempt.setExecutionDeadline(deadline);
       setDeadline(1);
-      vi.setSystemTime(1);
-      const pending = watchdog.tick();
+      const pending = tickAt(watchdog, 1);
       await started.promise;
       setDeadline(2);
       resume.resolve();
@@ -188,8 +202,7 @@ describe("operation-owned watchdog through controller admission", () => {
     const recoverStalledModelCall = vi.fn(() => true);
     operation.attachBackend({ kind: "embedded", cancel, recoverStalledModelCall });
     const first = operation.watchdog.attachAttempt({ assertCurrent() {} });
-    vi.setSystemTime(abortMs);
-    expect(await operation.watchdog.tick()).toEqual({
+    expect(await tickAt(operation.watchdog, abortMs)).toEqual({
       action: "observe",
       reason: "model_recovery",
     });
@@ -208,29 +221,23 @@ describe("operation-owned watchdog through controller admission", () => {
   });
 
   it("stops the owner when its native backend cannot recover the stalled model call", async () => {
-    const operation = begin();
-    const cancel = vi.fn(() => operation.complete());
-    const recoverStalledModelCall = vi.fn(() => false);
-    operation.attachBackend({ kind: "embedded", cancel, recoverStalledModelCall });
-    vi.setSystemTime(abortMs);
-    await operation.watchdog.tick();
+    const { operation, cancel, recoverStalledModelCall } = recoverableRun(false);
+    await tickAt(operation.watchdog, abortMs);
+    expect(operation.abortSignal.reason).toMatchObject({
+      name: "AbortError",
+      code: "OPENCLAW_SESSION_WATCHDOG",
+    });
     expect(recoverStalledModelCall).toHaveBeenCalledOnce();
-    expect(cancel).toHaveBeenCalledOnce();
-    expect(operation.result).toMatchObject({ kind: "failed", code: "run_stalled" });
+    expectStalled(operation, cancel);
   });
 
   it("does not treat an execution deadline as model-only recovery", async () => {
-    const operation = begin();
-    const cancel = vi.fn(() => operation.complete());
-    const recoverStalledModelCall = vi.fn(() => true);
-    operation.attachBackend({ kind: "embedded", cancel, recoverStalledModelCall });
+    const { operation, cancel, recoverStalledModelCall } = recoverableRun(true);
     const attempt = operation.watchdog.attachAttempt({ assertCurrent() {} });
     attempt.setExecutionDeadline(1);
-    vi.setSystemTime(1);
-    await operation.watchdog.tick();
+    await tickAt(operation.watchdog, 1);
     expect(recoverStalledModelCall).not.toHaveBeenCalled();
-    expect(cancel).toHaveBeenCalledOnce();
-    expect(operation.result).toMatchObject({ kind: "failed", code: "run_stalled" });
+    expectStalled(operation, cancel);
   });
 
   it.each(["backend", "attempt", "owner"] as const)(
@@ -249,11 +256,9 @@ describe("operation-owned watchdog through controller admission", () => {
           return undefined;
         },
       });
-      const operation = begin();
-      const cancel = attach(operation);
+      const { operation, cancel } = running();
       const attempt = operation.watchdog.attachAttempt({ assertCurrent() {} });
-      vi.setSystemTime(abortMs);
-      const pending = operation.watchdog.tick();
+      const pending = tickAt(operation.watchdog, abortMs);
       await entered.promise;
       let successor = operation;
       if (replacement === "owner") {
@@ -277,58 +282,44 @@ describe("operation-owned watchdog through controller admission", () => {
   it("gives resumed terminal recovery cleanup time without manufacturing semantic progress", async () => {
     let phase: "active" | "terminal" = "active";
     const expireCleanup = vi.fn(() => "resumed" as const);
-    const watchdog = createSessionControllerWatchdog({
-      startedAtMs: 0,
-      isCurrent: () => true,
+    const watchdog = watchdogFixture({
       readPhase: () => phase,
       requestStop: () => "resumed",
       expireCleanup,
     });
     phase = "terminal";
     watchdog.beginTerminal();
-    vi.setSystemTime(SESSION_WATCHDOG_CLEANUP_MS);
-    expect(await watchdog.tick()).toEqual({ action: "observe", reason: "owner_recovery" });
+    expect(await tickAt(watchdog, SESSION_WATCHDOG_CLEANUP_MS)).toEqual({
+      action: "observe",
+      reason: "owner_recovery",
+    });
     expect(watchdog.snapshot()).toMatchObject({
       semanticProgressAtMs: 0,
       cleanupDeadlineAtMs: SESSION_WATCHDOG_CLEANUP_MS * 2,
     });
     expect(watchdog.snapshot().recovery).toBeUndefined();
-    vi.setSystemTime(SESSION_WATCHDOG_CLEANUP_MS * 2 - 1);
-    await watchdog.tick();
+    await tickAt(watchdog, SESSION_WATCHDOG_CLEANUP_MS * 2 - 1);
     expect(expireCleanup).toHaveBeenCalledOnce();
     watchdog.close();
   });
 
-  it("stops a silent run without diagnostics, inbound traffic or a backlog", async () => {
-    const operation = begin();
-    const cancel = attach(operation);
-    vi.setSystemTime(abortMs - 1);
+  it("runs its timer without diagnostics and ignores non-semantic inbound activity", async () => {
+    const { operation, cancel } = running();
+    await vi.advanceTimersByTimeAsync(abortMs - 1);
     operation.recordActivity(); // A source arrival is not semantic progress.
     expect(operation.watchdog.decide().action).toBe("warn");
-    vi.setSystemTime(abortMs);
-    await operation.watchdog.tick();
-    expect(cancel).toHaveBeenCalledOnce();
-    expect(operation.result).toMatchObject({ kind: "failed", code: "run_stalled" });
+    await vi.advanceTimersByTimeAsync(1_001);
+    expectStalled(operation, cancel);
     expect(getSessionControllerOperation(key)).toBeUndefined();
-  });
-
-  it("runs its timer with diagnostic logging disabled", async () => {
-    const operation = begin();
-    const cancel = attach(operation);
-    await vi.advanceTimersByTimeAsync(abortMs + 1_000);
-    expect(cancel).toHaveBeenCalledOnce();
-    expect(operation.result).toMatchObject({ kind: "failed", code: "run_stalled" });
   });
 
   it.each(["global_capacity", "deferred_maintenance", "human_question", "runtime_owned"] as const)(
     "protects explicit live %s waits, not detached flags",
     async (kind) => {
-      const operation = begin();
-      const cancel = attach(operation);
+      const { operation, cancel } = running();
       let live = true;
       operation.watchdog.beginWait({ kind, isCurrent: () => live });
-      vi.setSystemTime(abortMs * 4);
-      await operation.watchdog.tick();
+      await tickAt(operation.watchdog, abortMs * 4);
       expect(cancel).not.toHaveBeenCalled();
       live = false;
       await operation.watchdog.tick();
@@ -337,23 +328,19 @@ describe("operation-owned watchdog through controller admission", () => {
   );
 
   it("uses actual approval expiry and revocation, without a second timeout", async () => {
-    const operation = begin();
-    const cancel = attach(operation);
+    const { operation, cancel } = running();
     const expiry = abortMs * 3;
     operation.watchdog.beginWait({ kind: "approval", deadlineAtMs: expiry, isCurrent: () => true });
-    vi.setSystemTime(expiry - 1);
-    await operation.watchdog.tick();
+    await tickAt(operation.watchdog, expiry - 1);
     expect(cancel).not.toHaveBeenCalled();
-    vi.setSystemTime(expiry);
-    await operation.watchdog.tick();
+    await tickAt(operation.watchdog, expiry);
     expect(cancel).toHaveBeenCalledOnce();
   });
 
   it.each(["expires", "ends", "retires"] as const)(
     "honors the current fallback request until it %s without renewing semantic progress",
     async (terminal) => {
-      const operation = begin();
-      const cancel = attach(operation);
+      const { operation, cancel } = running();
       const first = operation.watchdog.attachAttempt({ assertCurrent() {} });
       first.observeStagnation({ active: true });
       first.beginRequest({ deadlineAtMs: abortMs * 10 });
@@ -364,8 +351,7 @@ describe("operation-owned watchdog through controller admission", () => {
       second.progress("transport", "retry:bytes");
       operation.watchdog.progress("source_arrival");
       expect(first.progress("semantic")).toBe(false);
-      vi.setSystemTime(abortMs);
-      await operation.watchdog.tick();
+      await tickAt(operation.watchdog, abortMs);
       expect(cancel).not.toHaveBeenCalled();
       expect(operation.watchdog.snapshot()).toMatchObject({
         semanticProgressAtMs: 0,
@@ -401,8 +387,7 @@ describe("operation-owned watchdog through controller admission", () => {
   });
 
   it("honors owned tool and execution deadlines on the exact attempt", async () => {
-    const operation = begin();
-    const cancel = attach(operation);
+    const { operation, cancel } = running();
     const attempt = operation.watchdog.attachAttempt({ assertCurrent() {} });
     let enforcedDeadline = 120_000;
     attempt.beginTool({
@@ -422,8 +407,7 @@ describe("operation-owned watchdog through controller admission", () => {
         deadlineAtMs: 1_200_000,
       },
     ]);
-    vi.setSystemTime(SESSION_WATCHDOG_QUIET_TOOL_MS + enforcedDeadline - 1);
-    await operation.watchdog.tick();
+    await tickAt(operation.watchdog, SESSION_WATCHDOG_QUIET_TOOL_MS + enforcedDeadline - 1);
     expect(cancel).not.toHaveBeenCalled();
     attempt.setExecutionDeadline(Date.now());
     await operation.watchdog.tick();
@@ -431,8 +415,7 @@ describe("operation-owned watchdog through controller admission", () => {
   });
 
   it("counts async tool completion only while its exact attempt is current", async () => {
-    const operation = begin();
-    const cancel = attach(operation);
+    const { operation, cancel } = running();
     const old = operation.watchdog.attachAttempt({ assertCurrent() {} });
     const endOldTool = old.beginTool({ toolName: "process", toolCallId: "old-command" });
     const current = operation.watchdog.attachAttempt({ assertCurrent() {} });
@@ -476,8 +459,7 @@ describe("operation-owned watchdog through controller admission", () => {
     void successorStarted.promise.then(() => {
       ranSuccessor = true;
     });
-    vi.setSystemTime(SESSION_WATCHDOG_CLEANUP_MS + 1);
-    await operation.watchdog.tick();
+    await tickAt(operation.watchdog, SESSION_WATCHDOG_CLEANUP_MS + 1);
     expect(cancel).not.toHaveBeenCalled();
     releaseWork();
     await operation.watchdog.tick();
@@ -511,8 +493,7 @@ describe("operation-owned watchdog through controller admission", () => {
         resetTriggered: false,
         turnKind: "queued_followup",
       });
-    vi.setSystemTime(SESSION_WATCHDOG_CLEANUP_MS + 1);
-    await operation.watchdog.tick();
+    await tickAt(operation.watchdog, SESSION_WATCHDOG_CLEANUP_MS + 1);
     expect(operation.result).toEqual({ kind: "completed" });
     expect(rawSettled).toBe(false);
     // Moving wall time does not expire the delivery barrier timer.
@@ -521,19 +502,37 @@ describe("operation-owned watchdog through controller admission", () => {
     await operation.ownerSettlement;
     createSuccessor().complete();
   });
-  it("publishes running maintenance wait and resumes the same semantic owner", async () => {
-    const operation = begin();
-    const cancel = attach(operation);
-    operation.markWaitingForDeferredMaintenance();
-    vi.setSystemTime(abortMs * 2);
-    await operation.watchdog.tick();
-    expect(cancel).not.toHaveBeenCalled();
-    expect(operation.phase).toBe("waiting_for_deferred_maintenance");
-    operation.markDeferredMaintenanceWaitEnded();
-    expect(operation.phase).toBe("running");
-    expect(operation.watchdog.snapshot().semanticProgressAtMs).toBe(Date.now());
-    operation.complete();
-  });
+  it.each([
+    [
+      "queued",
+      "markWaitingForDeferredMaintenance",
+      "markDeferredMaintenanceWaitEnded",
+      "waiting_for_deferred_maintenance",
+    ],
+    [
+      "running",
+      "markWaitingForDeferredMaintenance",
+      "markDeferredMaintenanceWaitEnded",
+      "waiting_for_deferred_maintenance",
+    ],
+    ["queued", "markWaitingForGlobalLane", "markGlobalLaneWaitEnded", "waiting_for_global_lane"],
+    ["running", "markWaitingForGlobalLane", "markGlobalLaneWaitEnded", "waiting_for_global_lane"],
+  ] as const)(
+    "publishes %s %s and resumes the same semantic owner",
+    async (phase, wait, ready, waiting) => {
+      const operation = begin();
+      operation.setPhase(phase);
+      const cancel = attach(operation);
+      operation[wait]();
+      await tickAt(operation.watchdog, abortMs * 2);
+      expect(cancel).not.toHaveBeenCalled();
+      expect(operation.phase).toBe(waiting);
+      operation[ready]();
+      expect(operation.phase).toBe(phase);
+      expect(operation.watchdog.snapshot().semanticProgressAtMs).toBe(Date.now());
+      operation.complete();
+    },
+  );
 
   it.each(["backend-throw", "cleanup-throw", "attempt-close"] as const)(
     "keeps an unfenced terminal writer after requesting every captured cleanup for %s",
@@ -556,22 +555,19 @@ describe("operation-owned watchdog through controller admission", () => {
       const secondCleanup = vi.fn(async () => {});
       operation.registerExecutionCleanup(firstCleanup);
       operation.registerExecutionCleanup(secondCleanup);
-      vi.setSystemTime(abortMs);
-      await operation.watchdog.tick();
+      await tickAt(operation.watchdog, abortMs);
       expect(firstCleanup).toHaveBeenCalledOnce();
       expect(secondCleanup).toHaveBeenCalledOnce();
       expect(operation.watchdog.snapshot().recovery?.status).toBe("blocked");
       expect(operation.result).toMatchObject({ kind: "failed", code: "run_stalled" });
       expect(getSessionControllerOperation(key)).toBe(operation);
-      vi.setSystemTime(abortMs + SESSION_WATCHDOG_CLEANUP_MS);
-      await operation.watchdog.tick();
+      await tickAt(operation.watchdog, abortMs + SESSION_WATCHDOG_CLEANUP_MS);
       expect(operation.watchdog.snapshot().recovery?.status).toBe("blocked");
       expect(getSessionControllerOperation(key)).toBe(operation);
       operation.complete();
       await operation.ownerSettlement;
     },
   );
-
   it("keeps the rekeyed after-clear watchdog live until its actual completion barrier", async () => {
     const operation = createReplyOperation({ sessionKey: key, sessionId, resetTriggered: false });
     operation.updateSessionKey(key + ":adopted");

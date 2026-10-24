@@ -278,7 +278,7 @@ export function createConfigFileWriteGuard(
       assertOwner();
       publication?.targetPathProof?.assertCurrent();
     };
-    assertRollbackOwner();
+    assertOwner();
     assertPublishedIdentity();
     if (publishedIdentity === undefined) {
       throw new ConfigMutationConflictError("config write has no publication to roll back", {
@@ -575,7 +575,6 @@ export function formatConfigArtifactTimestamp(ts: string): string {
 
 export function resolveConfigSizeBaselineBytes(params: {
   raw: string | null;
-  json5: { parse: (value: string) => unknown };
   lastTouchedVersionOverride?: string;
   env?: NodeJS.ProcessEnv;
 }): number | null {
@@ -583,7 +582,7 @@ export function resolveConfigSizeBaselineBytes(params: {
     return null;
   }
   const rawBytes = Buffer.byteLength(params.raw, "utf-8");
-  const parsed = parseConfigJson5(params.raw, params.json5);
+  const parsed = parseConfigJson5(params.raw);
   if (!parsed.ok || !isRecord(parsed.parsed)) {
     return rawBytes;
   }

@@ -266,6 +266,7 @@ Use the grouped namespaces for new plugin code:
 
 - `api.session.state.registerSessionExtension(...)`
 - `api.session.workflow.enqueueNextTurnInjection(...)`
+- `api.session.workflow.steerActiveRun(...)`
 - `api.session.workflow.registerSessionSchedulerJob(...)`
 - `api.session.workflow.sendSessionAttachment(...)`
 - `api.session.workflow.scheduleSessionTurn(...)`
@@ -277,18 +278,16 @@ Use the grouped namespaces for new plugin code:
 - `api.runContext.setRunContext(...)` / `getRunContext(...)` / `clearRunContext(...)`
 - `api.lifecycle.registerRuntimeLifecycle(...)`
 
-The equivalent flat methods remain available as deprecated compatibility
-aliases for existing plugins. The compatibility registry deprecated them on
+The flat aliases `api.emitAgentEvent`, `api.setRunContext`, `api.getRunContext`,
+`api.clearRunContext`, `api.registerSessionAction`, `api.sendSessionAttachment`,
+`api.scheduleSessionTurn`, and `api.unscheduleSessionTurnsByTag` have been removed.
+Use their grouped replacements above. These aliases were deprecated on
 2026-07-25 with a `removeAfter` date of 2026-10-01; see the
-[removal timeline](/plugins/sdk-migration/removal-timeline). Do not add new
-plugin code that calls
-`api.registerSessionExtension`, `api.enqueueNextTurnInjection`,
-`api.registerControlUiDescriptor`, `api.registerRuntimeLifecycle`,
-`api.registerAgentEventSubscription`, `api.emitAgentEvent`,
-`api.setRunContext`, `api.getRunContext`, `api.clearRunContext`,
-`api.registerSessionSchedulerJob`, `api.registerSessionAction`,
-`api.sendSessionAttachment`, `api.scheduleSessionTurn`, or
-`api.unscheduleSessionTurnsByTag` directly.
+[removal timeline](/plugins/sdk-migration/removal-timeline).
+
+The other equivalent flat methods remain deprecated compatibility aliases for
+existing plugins. New plugin code should use the grouped namespaces. Steering
+is exposed only through `api.session.workflow.steerActiveRun(...)`.
 
 `api.agent.events.registerAgentEventSubscription(...)` accepts optional `streams`
 and `phases` filters:

@@ -75,7 +75,7 @@ it(
       },
     });
     const identity = loadOrCreateDeviceIdentity({
-      path: path.join(gateway.tempRoot, "node-exec-approvals.sqlite"),
+      path: path.join(gateway.tempRoot, "node-exec-approvals", "client", "credentials.sqlite"),
     });
     const firstInbox = createInvokeInbox();
     const replacementInbox = createInvokeInbox();

@@ -36,12 +36,9 @@ export type MemoryWikiStatus = Awaited<ReturnType<typeof resolveMemoryWikiStatus
 
 export type MemoryWikiDoctorReport = ReturnType<typeof buildMemoryWikiDoctorReport>;
 
-type ResolveMemoryWikiStatusDeps = {
+type MemoryWikiStatusOptions = {
   appConfig?: OpenClawConfig;
   callerAgentId?: string;
-  pathExists?: (inputPath: string) => Promise<boolean>;
-  listPublicArtifacts?: typeof listActiveMemoryPublicArtifacts;
-  resolveCommand?: (command: string) => Promise<string | null>;
 };
 
 function createEmptyVaultCounts() {
@@ -105,17 +102,34 @@ async function collectVaultCounts(vaultPath: string) {
   return { pageCounts, sourceCounts };
 }
 
-function buildWarnings(params: {
-  config: ResolvedMemoryWikiConfig;
-  bridgePublicArtifactCount: number | null;
-  vaultExists: boolean;
-  obsidianCommand: string | null;
-}): MemoryWikiStatusWarning[] {
-  const { config, bridgePublicArtifactCount, vaultExists, obsidianCommand } = params;
+export async function resolveMemoryWikiStatus(
+  config: ResolvedMemoryWikiConfig,
+  options?: MemoryWikiStatusOptions,
+) {
+  const agentId = resolveMemoryWikiVaultAgentId(config);
+  const vaultExists = await pathExists(config.vault.path);
+  const bridgePublicArtifactCount =
+    options?.appConfig &&
+    config.vaultMode === "bridge" &&
+    config.bridge.enabled &&
+    config.bridge.readMemoryArtifacts
+      ? filterMemoryWikiBridgeArtifacts({
+          config,
+          callerAgentId: options.callerAgentId,
+          artifacts: await listActiveMemoryPublicArtifacts({
+            cfg: options.appConfig,
+          }),
+        }).length
+      : null;
+  const obsidianProbe = await probeObsidianCli();
+  const counts = vaultExists
+    ? await collectVaultCounts(config.vault.path)
+    : createEmptyVaultCounts();
+
   const rules: Array<[boolean, MemoryWikiStatusWarning["code"], string]> = [
     [!vaultExists, "vault-missing", "Wiki vault has not been initialized yet."],
     [
-      config.obsidian.enabled && config.obsidian.useOfficialCli && !obsidianCommand,
+      config.obsidian.enabled && config.obsidian.useOfficialCli && !obsidianProbe.command,
       "obsidian-cli-missing",
       "Obsidian CLI is enabled in config but `obsidian` is not available on PATH.",
     ],
@@ -150,33 +164,6 @@ function buildWarnings(params: {
       "Private memory-core access is enabled outside unsafe-local mode.",
     ],
   ];
-  return rules.flatMap(([matches, code, message]) => (matches ? [{ code, message }] : []));
-}
-
-export async function resolveMemoryWikiStatus(
-  config: ResolvedMemoryWikiConfig,
-  deps?: ResolveMemoryWikiStatusDeps,
-) {
-  const agentId = resolveMemoryWikiVaultAgentId(config);
-  const exists = deps?.pathExists ?? pathExists;
-  const vaultExists = await exists(config.vault.path);
-  const bridgePublicArtifactCount =
-    deps?.appConfig &&
-    config.vaultMode === "bridge" &&
-    config.bridge.enabled &&
-    config.bridge.readMemoryArtifacts
-      ? filterMemoryWikiBridgeArtifacts({
-          config,
-          callerAgentId: deps.callerAgentId,
-          artifacts: await (deps.listPublicArtifacts ?? listActiveMemoryPublicArtifacts)({
-            cfg: deps.appConfig,
-          }),
-        }).length
-      : null;
-  const obsidianProbe = await probeObsidianCli({ resolveCommand: deps?.resolveCommand });
-  const counts = vaultExists
-    ? await collectVaultCounts(config.vault.path)
-    : createEmptyVaultCounts();
 
   return {
     vaultScope: config.vault.scope,
@@ -199,21 +186,14 @@ export async function resolveMemoryWikiStatus(
     },
     pageCounts: counts.pageCounts,
     sourceCounts: counts.sourceCounts,
-    warnings: buildWarnings({
-      config,
-      bridgePublicArtifactCount,
-      vaultExists,
-      obsidianCommand: obsidianProbe.command,
-    }),
+    warnings: rules.flatMap(([matches, code, message]) => (matches ? [{ code, message }] : [])),
   };
 }
 
 export function buildMemoryWikiDoctorReport(status: MemoryWikiStatus) {
   const fixes = status.warnings.map((warning) => ({
     code: warning.code,
-    message: Object.hasOwn(STATUS_WARNING_FIXES, warning.code)
-      ? STATUS_WARNING_FIXES[warning.code]
-      : STATUS_WARNING_FIXES["unsafe-local-without-mode"],
+    message: STATUS_WARNING_FIXES[warning.code],
   }));
   return {
     healthy: status.warnings.length === 0,

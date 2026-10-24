@@ -24,6 +24,7 @@ import type {
   TrustedAgentToolCaller,
 } from "../../gateway/server-methods/types.js";
 import {
+  captureOperatorToolGatewayContinuationContext,
   dispatchGatewayMethodInProcess,
   getInProcessGatewayRequestContext,
   runWithOperatorToolGatewayCleanupContext,
@@ -71,6 +72,7 @@ type AgentToolGatewayRequest = Pick<
   | "onAccepted"
   | "onSignalAbort"
   | "params"
+  | "sharedStateMode"
   | "signal"
   | "scopes"
   | "timeoutMs"
@@ -128,8 +130,24 @@ export function runWithGatewayToolCleanupContext<T>(
 }
 
 /** Transfers accepted reply work to a bounded source-authority hold, not the tool lifetime. */
-export function runWithGatewayToolContinuationContext<T>(run: () => Promise<T>): Promise<T> {
+export async function runWithGatewayToolContinuationContext<T>(
+  run: () => Promise<T>,
+  options?: { retainRequester?: true },
+): Promise<T> {
   const resolveGatewayContext = callerGatewayContextResolver();
+  if (options?.retainRequester) {
+    const preparation = captureOperatorToolGatewayContinuationContext(undefined, {
+      retainRequester: true,
+    });
+    if (preparation) {
+      const captured = await preparation;
+      try {
+        return await captured.runWithRequester(run);
+      } finally {
+        captured.release();
+      }
+    }
+  }
   return runWithOperatorToolGatewayContinuationContext(() =>
     withoutGatewayToolCallerIdentity(() =>
       resolveGatewayContext
@@ -251,6 +269,9 @@ async function callAgentToolGatewayRequestBound<T>(
   const scopes =
     request.scopes ?? resolveLeastPrivilegeOperatorScopesForMethod(method, request.params);
   if (forceTransport || !getInProcessGatewayRequestContext(boundGateway?.resolve)) {
+    if (request.agentToolCaller?.requesterOrigin) {
+      throw new Error("Requester provenance requires trusted in-process Gateway dispatch.");
+    }
     if (boundGateway && !forceTransport) {
       throw new Error(`Gateway instance unavailable for ${method}`);
     }
@@ -441,6 +462,9 @@ async function callInProcessGatewayToolBound<T>(
       ? {
           agentId: caller.agentId,
           sessionKey: caller.sessionKey,
+          executionIdentityToken: caller.executionIdentityToken,
+          requesterOrigin: resolveGatewayToolOperatorSelection({ requireRequesterOrigin: true })
+            .requesterOrigin,
           assertCurrent: assertCallerCurrent,
         }
       : undefined;
@@ -481,6 +505,9 @@ async function callInProcessGatewayToolBound<T>(
           {
             ...(creation.requesterProfileId
               ? { requesterProfileId: creation.requesterProfileId }
+              : {}),
+            ...(creation.gitContributorProfileId
+              ? { gitContributorProfileId: creation.gitContributorProfileId }
               : {}),
             ...(creation.completionOwnerSessionKey
               ? { completionOwnerSessionKey: creation.completionOwnerSessionKey }

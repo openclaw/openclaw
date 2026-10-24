@@ -1,4 +1,4 @@
-# Opt-in incident evidence. Only fixed resource fields and crash metadata leave the host.
+# Opt-in phase and incident evidence. Resource sampling belongs to ios-resource-timeline.mjs.
 class ScreenshotDiagnostics
   attr_reader :events
 
@@ -7,16 +7,12 @@ class ScreenshotDiagnostics
   def initialize(&persist)
     @events = []
     @persist = persist
-    @hardware = {
-      "logicalCpuCount" => command("/usr/sbin/sysctl", "-n", "hw.logicalcpu").to_i,
-      "memoryBytes" => command("/usr/sbin/sysctl", "-n", "hw.memsize").to_i
-    }
   end
 
   def measure(phase, device: nil, udid: nil, log_path: nil)
     started_at = Time.now
     started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
-    event = { "phase" => phase, "deviceName" => device, "startedAt" => started_at.utc.iso8601, "before" => resources }
+    event = { "phase" => phase, "deviceName" => device, "startedAt" => started_at.utc.iso8601 }
     @events << event
     persist
     result = yield
@@ -29,7 +25,6 @@ class ScreenshotDiagnostics
   ensure
     if event
       event["durationSeconds"] = (Process.clock_gettime(Process::CLOCK_MONOTONIC) - started).round(2)
-      event["after"] = resources
       event["startup"] = startup_facts(log_path) if log_path
       persist
     end
@@ -41,44 +36,6 @@ class ScreenshotDiagnostics
     @persist.call
   rescue SystemCallError
     UI.important("Could not save the optional screenshot diagnostic sample.")
-  end
-
-  def command(*arguments)
-    Open3.popen2(*arguments, err: File::NULL, pgroup: true) do |input, output, process|
-      input.close
-      reader = Thread.new { output.read(256 * 1024) }
-      unless process.join(3)
-        Process.kill("KILL", -process.pid)
-        process.join
-      end
-      result = reader.value
-      process.value.success? ? result : ""
-    end
-  rescue SystemCallError
-    ""
-  end
-
-  def resources
-    statistics = command("/usr/bin/vm_stat")
-    processes = command("/bin/ps", "-axo", "pcpu=,rss=,comm=").lines.filter_map do |line|
-      match = line.match(/\A\s*([\d.]+)\s+(\d+)\s+(.+?)\s*\z/)
-      next unless match
-      name = File.basename(match[3])
-      next unless PROCESSES.include?(name)
-      { "name" => name, "cpuPercent" => match[1].to_f, "rssKiB" => match[2].to_i }
-    end
-    {
-      "hardware" => @hardware,
-      "loadAverage" => command("/usr/sbin/sysctl", "-n", "vm.loadavg").scan(/\d+(?:\.\d+)?/).map(&:to_f),
-      "memoryPageBytes" => statistics[/page size of (\d+) bytes/, 1].to_i,
-      "memoryPages" => statistics.lines.filter_map do |line|
-        match = line.match(/\A(Pages (?:free|active|inactive|wired down|occupied by compressor)|Swapins|Swapouts):\s+(\d+)\./)
-        [match[1], match[2].to_i] if match
-      end.to_h,
-      "processes" => processes
-    }
-  rescue StandardError
-    { "unavailable" => true }
   end
 
   def startup_facts(path)

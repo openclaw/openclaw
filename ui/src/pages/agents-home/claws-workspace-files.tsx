@@ -1,11 +1,11 @@
 import { createMemo, For, Show } from "solid-js";
 import { Icon, type IconName } from "../../components/solid/icon.tsx";
 import { Tooltip } from "../../components/solid/tooltip.tsx";
-import { registerAgentsHomeEnglish } from "../../i18n/locales/en-agents-home.ts";
+import { registerClawsEnglish } from "../../i18n/locales/en-claws.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import type { ClawCatalogDetail } from "./claws-catalog-client.ts";
 
-registerEnglishCatalog(registerAgentsHomeEnglish);
+registerEnglishCatalog(registerClawsEnglish);
 
 // Workspace roles use exact root-relative names; nested lookalikes are ordinary files.
 const fileRoles = new Map<string, readonly [IconName, string]>([

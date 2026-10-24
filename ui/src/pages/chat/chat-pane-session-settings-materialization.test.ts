@@ -143,7 +143,6 @@ it.each([
           sessionId: materialized.sessionId,
           thinkingLevel: "low",
         });
-        expect(pane.state.chatThinkingLevel).toBe("low");
       } else {
         expect(rows[0]).toEqual(unrelated);
         expect(selectedChatSessionRow(pane.state)).toMatchObject(unrelated);
@@ -327,7 +326,6 @@ it.each(["unbound", "materialized"] as const)(
         sessionId: materialized.sessionId,
         thinkingLevel: "medium",
       });
-      expect(pane.state.chatThinkingLevel).toBe("medium");
       expect(getPendingChatPickerPatch(pane.state, key, "main")).toBeUndefined();
     } finally {
       stopManaged?.();

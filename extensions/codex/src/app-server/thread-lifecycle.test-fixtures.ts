@@ -47,6 +47,21 @@ export function createLifecycleRequest(
   });
 }
 
+export const DEFAULT_CODEX_RUNTIME_THREAD_CONFIG = {
+  project_doc_max_bytes: 131_072,
+  "features.tool_suggest": false,
+  "features.recommended_plugins": false,
+  "features.goals": false,
+  "tools.update_plan.enabled": false,
+  "features.code_mode": true,
+  "features.code_mode_only": false,
+  "features.shell_tool": true,
+  "features.apply_patch_streaming_events": true,
+  suppress_unstable_features_warning: true,
+  "features.standalone_web_search": false,
+  web_search: "cached",
+} as const;
+
 type NativeFixtureThread = {
   response: Record<string, unknown>;
   thread: Record<string, unknown>;
@@ -57,6 +72,7 @@ type NativeFixtureThread = {
 /** A synthetic native server, not a client mock: requests still cross the real wire and guards. */
 export function createCodexLifecycleHarness(options: {
   respond: (method: string, params?: unknown) => unknown;
+  codexHome?: string;
   persistedThreads?: Array<string | ReturnType<typeof nativeThreadStartResult>>;
   unsubscribe?: (threadId: string) => unknown;
 }) {
@@ -90,7 +106,10 @@ export function createCodexLifecycleHarness(options: {
     const threadId = typeof params.threadId === "string" ? params.threadId : "";
     const current = threads.get(threadId);
     if (request.method === "initialize") {
-      return { userAgent: "codex-cli/0.151.0" };
+      return {
+        userAgent: "codex-cli/0.151.0",
+        ...(options.codexHome ? { codexHome: options.codexHome } : {}),
+      };
     }
     if (request.method === "thread/start") {
       const response = await options.respond(request.method, request.params);

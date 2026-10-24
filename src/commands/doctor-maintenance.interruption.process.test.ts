@@ -1,4 +1,4 @@
-import { spawn, spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import { once } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
@@ -6,7 +6,11 @@ import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { doctorOutputEntrypoints } from "../cli/cli-entrypoint.test-support.js";
 import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
-import { createNodeEvalArgs, resolveTestNodeExecPath } from "../test-utils/node-process.js";
+import {
+  createNodeEvalArgs,
+  resolveTestNodeExecPath,
+  spawnNodeEvalSync,
+} from "../test-utils/node-process.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 const registrar = resolveRuntimeWorkerUrl(doctorOutputEntrypoints.maintenance);
@@ -77,13 +81,13 @@ function interruptionScript(
     } });
     const { enableConsoleCapture } = await import(${JSON.stringify(new URL("../../logging/console.js", registrar).href)});
     const { beginDoctorMaintenance } = await import(${JSON.stringify(new URL("../../commands/doctor-maintenance.js", registrar).href)});
-    const { createNonExitingRuntime } = await import(${JSON.stringify(new URL("../../runtime.js", registrar).href)});
+    const { createNonExitingRuntime, ExitError } = await import(${JSON.stringify(new URL("../../runtime.js", registrar).href)});
     enableConsoleCapture();
     fixture.runDoctor = async () => {
+    const { PassThrough } = await import("node:stream");
     let progressSpinner;
     if (${progress}) {
       const { spinner } = await import("@clack/prompts");
-      const { PassThrough } = await import("node:stream");
       const output = new PassThrough();
       output.resume();
       progressSpinner = spinner({ output });
@@ -93,7 +97,6 @@ function interruptionScript(
     const maintenance = await beginDoctorMaintenance({ root, options: { repair: true, nonInteractive: true },
       runtime });
     fixture.approve = async () => {
-      const { PassThrough } = await import("node:stream");
       const { createDoctorPrompter } = await import(${JSON.stringify(new URL("../../commands/doctor-prompter.js", registrar).href)});
       Object.defineProperty(process.stdin, "isTTY", { value: true });
       const input = new PassThrough();
@@ -176,7 +179,6 @@ function interruptionScript(
     const { withCliProcessScope } = await import(${JSON.stringify(new URL("../runtime-cleanup-scope.js", registrar).href)});
     const { registerMaintenanceCommands } = await import(${JSON.stringify(registrar.href)});
     const { Command } = await import("commander");
-    const { ExitError } = await import(${JSON.stringify(new URL("../../runtime.js", registrar).href)});
     installCliSignalExitHandlers();
     const program = new Command();
     registerMaintenanceCommands(program);
@@ -191,14 +193,13 @@ function interruptionScript(
 it.skipIf(process.platform === "win32")(
   "preserves the embedding process's ignored SIGPIPE after maintenance releases",
   () => {
-    const result = spawnSync(
-      resolveTestNodeExecPath(),
-      createNodeEvalArgs(`
+    const result = spawnNodeEvalSync(
+      `
         const { holdDoctorMaintenanceExit } = await import(${JSON.stringify(new URL("../../commands/doctor-maintenance-exit.js", registrar).href)});
         holdDoctorMaintenanceExit().release();
         process.kill(process.pid, "SIGPIPE");
         setImmediate(() => process.stdout.write("still running"));
-      `),
+      `,
       { encoding: "utf8", timeout: 30_000 },
     );
     expect(result.error, result.stderr).toBeUndefined();
@@ -261,22 +262,19 @@ it.skipIf(process.platform === "win32").each([
     });
     child.stdout!.resume();
     const closed = once(child, "close");
-    try {
-      const ready = await Promise.race([
+    const message = () =>
+      Promise.race([
         once(child, "message"),
         closed.then(() => {
-          throw new Error("Doctor exited before stopping its service: " + stderr);
+          throw new Error("Doctor exited before its next IPC message: " + stderr);
         }),
       ]);
+    try {
+      const ready = await message();
       expect(ready[0]).toBe("stopped");
       const terminationSignal = interruption === "SIGINT during archives" ? "SIGINT" : "SIGTERM";
       if (pendingApproval || restoringApproval) {
-        const approval = Promise.race([
-          once(child, "message"),
-          closed.then(() => {
-            throw new Error("Doctor exited before requesting approval: " + stderr);
-          }),
-        ]);
+        const approval = message();
         child.send("continue", () => {});
         expect((await approval)[0]).toBe("approval");
         child.kill("SIGTERM");

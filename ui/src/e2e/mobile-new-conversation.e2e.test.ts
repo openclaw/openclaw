@@ -10,6 +10,7 @@ import {
   installMockGateway,
   waitForControlUiRoute,
 } from "../test-helpers/control-ui-e2e.ts";
+import { navigationDrawerToggle } from "../test-helpers/control-ui-navigation.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { waitForMobileSidebarDrawerOpen } from "./session-management.test-support.ts";
 
@@ -99,7 +100,7 @@ suite.define(() => {
       await page.locator(".agent-chat__composer-combobox textarea").waitFor();
       expect(await page.locator(".header-new-session").count()).toBe(0);
       await capture("chat");
-      await page.locator(".chat-pane__nav-toggle").tap();
+      await navigationDrawerToggle(page).tap();
       await waitForMobileSidebarDrawerOpen(page);
       const create = page.getByRole("link", { name: "New conversation", exact: true });
       await create.waitFor();
@@ -115,8 +116,8 @@ suite.define(() => {
       await page.locator(".new-session-page__message").waitFor();
       expect(await page.locator(".topbar .header-new-session").count()).toBe(1);
       await capture("topbar");
-      await page.goto(suite.server.baseUrl + "agents");
-      await waitForControlUiRoute(page, { routeId: "agents-home" });
+      await page.goto(suite.server.baseUrl + "sessions");
+      await waitForControlUiRoute(page, { routeId: "sessions" });
       expect(await page.locator(".topbar .header-new-session").isVisible()).toBe(true);
       expect(await create.count()).toBe(1);
       expect(await create.getAttribute("href")).toBe("/new?agent=research");
@@ -275,10 +276,7 @@ suite.define(() => {
       const action = page.getByRole("link", { name: "New conversation", exact: true });
       expect(await action.count()).toBe(route === "chat" ? 0 : 1);
       // Mouse hover can reveal the sliding drawer's tooltip, which owns the first Escape.
-      await page
-        .locator(".topbar-nav-toggle:visible, .chat-pane__nav-toggle:visible")
-        .first()
-        .tap();
+      await navigationDrawerToggle(page).tap();
       await waitForMobileSidebarDrawerOpen(page);
       expect(await page.locator(".header-new-session:visible").count()).toBe(0);
       expect(await action.count()).toBe(1);
@@ -328,7 +326,7 @@ suite.define(() => {
             : suite.server.baseUrl + "new?agent=research",
         );
         if (state === "denied") {
-          await page.locator(".chat-pane__nav-toggle").tap();
+          await navigationDrawerToggle(page).tap();
           await waitForMobileSidebarDrawerOpen(page);
         }
         const create = page.locator(

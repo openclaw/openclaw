@@ -52,11 +52,12 @@ import {
 import { createBoardWidgetApprovalResolver } from "../board-widget-approval.js";
 import { withAuthorizedBoardWidgetView } from "../board-widget-view.js";
 import {
-  requireMcpAppInteraction,
+  supportsMcpAppInteraction,
   resolveMcpAppActiveView,
   resolveMcpAppAllowedToolNames,
 } from "../mcp-app-operations.js";
 import { mintMcpAppViewFromTranscript } from "../mcp-app-reconstruction.js";
+import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";
 import { sessionObserverScopeKey } from "../session-observer-model.js";
 import { resolveRequestedSessionStoreTarget } from "../session-store-key.js";
 import {
@@ -69,25 +70,8 @@ import { emitSessionsChanged } from "./session-change-event.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
-type CanvasDocumentReader = typeof readCanvasDocumentHtmlSource;
-type McpAppDependencies = {
-  resolveActiveView: typeof resolveMcpAppActiveView;
-  resolveAllowedToolNames: typeof resolveMcpAppAllowedToolNames;
-  mintFromTranscript: typeof mintMcpAppViewFromTranscript;
-};
-type BoardHandlerDependencies = Partial<McpAppDependencies>;
-
-export function createBoardHandlers(
-  store: BoardStore,
-  readCanvasDocument: CanvasDocumentReader = readCanvasDocumentHtmlSource,
-  dependencies: BoardHandlerDependencies = {},
-): GatewayRequestHandlers {
+export function createBoardHandlers(store: BoardStore): GatewayRequestHandlers {
   const resolveBoardWidgetApproval = createBoardWidgetApprovalResolver();
-  const mcpApp: McpAppDependencies = {
-    resolveActiveView: dependencies.resolveActiveView ?? resolveMcpAppActiveView,
-    resolveAllowedToolNames: dependencies.resolveAllowedToolNames ?? resolveMcpAppAllowedToolNames,
-    mintFromTranscript: dependencies.mintFromTranscript ?? mintMcpAppViewFromTranscript,
-  };
   return {
     "board.get": defineBoardMethod("board.get", validateBoardGetParams, async (invocation) => {
       const { params: boardParams, respond, context, client } = invocation;
@@ -128,7 +112,6 @@ export function createBoardHandlers(
           : undefined;
         if (sandboxPort === undefined && context.ensureSandboxHostPort) {
           sandboxPort = await context.ensureSandboxHostPort();
-          authority.assertActive();
         }
         authority.assertActive();
         const { ticket } = createBoardViewTicket({
@@ -220,7 +203,18 @@ export function createBoardHandlers(
       validateBoardWidgetPutParams,
       async (invocation) => {
         const { params: requestParams, respond, context } = invocation;
-        const authority = captureBoardRequestAuthority(invocation);
+        const boardAuthority = captureBoardRequestAuthority(invocation);
+        let requester: Awaited<ReturnType<typeof captureGatewayOperatorRunAuthority>>;
+        const authority = {
+          ...boardAuthority,
+          assertActive: composeSessionSourceAssertion(
+            [boardAuthority.assertActive],
+            (assertSources) => {
+              assertSources();
+              requester?.authority.assertCurrent();
+            },
+          ),
+        };
         const boardSession = resolveBoardSession(requestParams, context, respond);
         if (!boardSession) {
           return;
@@ -245,7 +239,7 @@ export function createBoardHandlers(
           let declared = requestDeclared;
           let resolveMcpAppInteraction: (() => Promise<boolean>) | undefined;
           if (requestParams.content.kind === "canvas-doc") {
-            const document = await readCanvasDocument(requestParams.content.docId);
+            const document = await readCanvasDocumentHtmlSource(requestParams.content.docId);
             authority.assertActive();
             if (document.cspSandbox !== "scripts") {
               throw new BoardValidationError(
@@ -255,10 +249,21 @@ export function createBoardHandlers(
             }
             content = { kind: "html", html: document.html };
           } else if (requestParams.content.kind === "mcp-app") {
-            const active = await mcpApp.resolveActiveView({
+            requester = await captureGatewayOperatorRunAuthority({
+              client: invocation.client,
+              context,
+              hasCurrentClientAuthority: invocation.hasCurrentClientAuthority,
+              invocationAuthority: {
+                assertCurrent: boardAuthority.assertActive,
+                signal: invocation.signal,
+              },
+            });
+            authority.assertActive();
+            const active = await resolveMcpAppActiveView({
               ...boardSession,
               viewId: requestParams.content.viewId,
               cfg: context.getRuntimeConfig(),
+              requesterId: requester?.authority.profileId,
             });
             authority.assertActive();
             const { view } = active;
@@ -268,18 +273,11 @@ export function createBoardHandlers(
                 "MCP App view is missing its originating tool call",
               );
             }
-            resolveMcpAppInteraction = async () => {
-              try {
-                await requireMcpAppInteraction(view);
-                return true;
-              } catch {
-                // Reconstructed or revoked sources can still be pinned read-only.
-                return false;
-              }
-            };
+            // Reconstructed or revoked sources can still be pinned read-only.
+            resolveMcpAppInteraction = () => supportsMcpAppInteraction(view);
             let interactive = await resolveMcpAppInteraction();
             authority.assertActive();
-            const allowedTools = interactive ? await mcpApp.resolveAllowedToolNames(active) : [];
+            const allowedTools = interactive ? await resolveMcpAppAllowedToolNames(active) : [];
             authority.assertActive();
             if (interactive) {
               interactive = await resolveMcpAppInteraction();
@@ -490,7 +488,11 @@ export function createBoardHandlers(
           };
           await (memory ? runWithSessionActorStorage(memory, putAndApprove) : putAndApprove());
         } finally {
-          await memory?.actor.release();
+          try {
+            await memory?.actor.release();
+          } finally {
+            requester?.release();
+          }
         }
       },
     ),
@@ -561,7 +563,7 @@ export function createBoardHandlers(
               );
             }
           : undefined;
-        const minted = await mcpApp.mintFromTranscript({
+        const minted = await mintMcpAppViewFromTranscript({
           cfg: context.getRuntimeConfig(),
           ...boardSession,
           descriptor: document.descriptor,

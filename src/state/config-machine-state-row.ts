@@ -17,6 +17,16 @@ export type ConfigMachineStateDatabase = Pick<OpenClawStateKyselyDatabase, "conf
 
 type ConfigMachineStateRow = { value_json: string; updated_at_ms: number };
 type ConfigMachineStateRowAdmission = { row: ConfigMachineStateRow | undefined };
+// Exchange only the committed receipt, not the potentially large catalog payload.
+const catalogReceipt: SqliteDatabaseAdmissionKey<object> = {
+  name: "model-catalog.remote",
+  read: (value) => (isRecord(value) ? value : undefined),
+};
+
+export function readRemoteModelCatalogReceipt(databasePath: string): object {
+  return getOrLoadSqliteDatabaseAdmissionForPath(databasePath, catalogReceipt, () => ({})) ?? {};
+}
+
 const ttsPathAdmission: SqliteDatabaseAdmissionKey<ConfigMachineStateRowAdmission> = {
   name: "state.tts-prefs-path",
   read(value) {
@@ -48,6 +58,12 @@ export function publishConfigMachineStateRow(
     publishSqliteDatabaseAdmission(database, ttsPathAdmission, { row });
   } else if (key === "authProfiles.store" || key === "authProfiles.state") {
     publishAuthProfileRowsChanged(database);
+  } else if (
+    key === "modelCatalog.remote.v3" ||
+    key === "modelCatalog.remote.v2" ||
+    key === "modelCatalog.remote"
+  ) {
+    publishSqliteDatabaseAdmission(database, catalogReceipt, {});
   }
 }
 

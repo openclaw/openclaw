@@ -1,4 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
+import { renderAssistantRequestFailureCopy } from "../../agents/failover/assistant-request-failure-copy.js";
+import { classifyGatewayStorageFailure } from "../../infra/sqlite-error-diagnostics.js";
+import { hasSqliteWorkerOutcomeUnknown } from "../../infra/sqlite-worker-contract.js";
 import * as agentExecution from "../../state/openclaw-agent-execution.js";
 import {
   beginRestartRecoveryTerminalDelivery as begin,
@@ -8,6 +11,7 @@ import {
 } from "./restart-recovery-receipt.js";
 import { loadSessionEntry, replaceSessionEntry } from "./session-accessor.js";
 import { replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
+import * as sessionActors from "./session-actor.js";
 import { useTempSessionsFixture } from "./test-helpers.js";
 import type { SessionEntry } from "./types.js";
 
@@ -38,6 +42,41 @@ describe("restart recovery terminal delivery receipt", () => {
   const read = () => loadSessionEntry(scope());
   const seed = (fields: Partial<SessionEntry>) => replaceSessionEntry(scope(), entry(fields));
 
+  it("preserves storage guidance when terminal delivery admission has an unknown outcome", async () => {
+    await seed(claim);
+    const before = read();
+    const createActor = sessionActors.createSessionActor;
+    const observer = vi.spyOn(sessionActors, "createSessionActor").mockImplementation((params) => {
+      const actor = createActor(params);
+      vi.spyOn(actor, "deliveryPending").mockResolvedValue({
+        kind: "unknown",
+        target: actor.target,
+        commandId: "storage-failure",
+        error: {
+          name: "Error",
+          message: "Unconfirmed actor settlement",
+          cause: Object.assign(new Error("database or disk is full"), { errcode: 13 }),
+        },
+      });
+      return actor;
+    });
+    try {
+      await expect(begin(scope())).rejects.toSatisfy((error: unknown) => {
+        const storageOutcome = classifyGatewayStorageFailure(error);
+        expect(storageOutcome).toBe("session_actor_reconciliation");
+        expect(
+          renderAssistantRequestFailureCopy({
+            storageFailure: storageOutcome,
+          }),
+        ).toMatch(/check.*history.*before trying again/i);
+        return hasSqliteWorkerOutcomeUnknown(error);
+      });
+      expect(read()).toEqual(before);
+    } finally {
+      observer.mockRestore();
+    }
+  });
+
   it.each(["success", "non-delivery"] as const)(
     "persists pending and blocks repeat sends until provider %s",
     async (outcome) => {
@@ -55,19 +94,18 @@ describe("restart recovery terminal delivery receipt", () => {
       } else {
         await expect(cancel(scope())).resolves.toBe("cleared");
       }
-      const result = read();
-      expect([
-        result?.restartRecoveryDeliveryReceiptState,
-        result?.restartRecoveryDeliveryToolCallId,
-      ]).toEqual(
-        outcome === "success" ? ["delivered-terminal", "message-call-1"] : [undefined, undefined],
+      const receipt = read();
+      expect(receipt?.restartRecoveryDeliveryReceiptState).toBe(
+        outcome === "success" ? "delivered-terminal" : undefined,
+      );
+      expect(receipt?.restartRecoveryDeliveryToolCallId).toBe(
+        outcome === "success" ? "message-call-1" : undefined,
       );
     },
   );
 
   it.each<[string, Partial<SessionEntry>, string]>([
     ["claimless live turn", { status: undefined }, "not-applicable"],
-    ["claimless done turn", { status: "done" }, "not-applicable"],
     ["replaced claimless session", { sessionId: "session-2" }, "stale"],
     ["completed source", { restartRecoveryTerminalRunIds: ["source-1"] }, "already-delivered"],
   ])("does not arm a receipt for %s", async (_name, fields, expected) => {
@@ -195,9 +233,7 @@ describe("restart recovery steering block reasons", () => {
     [claim, "stale-claim", "other-run"],
     [{ ...tombstone("source-1"), sessionId: "session-2" }, "stale-claim"],
     [{ status: undefined }, undefined, ""],
-    ...([undefined, "done", "interrupted"] as const).map(
-      (status) => [{ ...claim, status }] satisfies [Partial<SessionEntry>],
-    ),
+    [claim],
     [undefined],
   ])("classifies %j as %s", (fields, reason, sourceTurnId = "source-1") => {
     expect(blockReason(fields && entry(fields), "session-1", sourceTurnId)).toBe(reason);

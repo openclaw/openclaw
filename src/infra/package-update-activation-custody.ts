@@ -3,7 +3,8 @@ import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { requireDirectorySync, syncDirectory } from "./directory-durability.js";
-import { formatErrorMessage, hasErrnoCode } from "./errors.js";
+import { ignoreMissingPath } from "./errno.js";
+import { formatErrorMessage } from "./errors.js";
 import {
   packageActivationIdentity,
   resolvePackageActivationHelper,
@@ -17,10 +18,7 @@ export function packageActivationIdentityOrAbsent(file: string, directory: boole
   try {
     return packageActivationIdentity(file, directory);
   } catch (error) {
-    if (hasErrnoCode(error, "ENOENT")) {
-      return null;
-    }
-    throw error;
+    return ignoreMissingPath(error) ?? null;
   }
 }
 

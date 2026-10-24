@@ -8,12 +8,15 @@ import {
   sessionPlacementActionReason,
 } from "../../components/session-placement-action.ts";
 import { t } from "../../i18n/index.ts";
-import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
+import { registerNewSessionRuntimeEnglish } from "../../i18n/locales/en-new-session-runtime.ts";
+import { registerSessionOrganizationEnglish } from "../../i18n/locales/en-session-organization.ts";
 import { registerSessionPlacementEnglish } from "../../i18n/locales/en-session-placement.ts";
 import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
 import type { ChatComposerDisabledBanner } from "./components/chat-composer-types.ts";
 
-registerNewSessionSetupEnglish();
+registerSessionOrganizationEnglish();
+
+registerNewSessionRuntimeEnglish();
 
 registerSessionPlacementEnglish();
 
@@ -23,21 +26,6 @@ type ChatPanePlacementComposerState =
   | { kind: "busy"; message: string }
   | { kind: "dispatch-required" }
   | { kind: "failed"; recoveryAction?: "restart" | "stop-first" };
-
-export type PlacementComposerPresentation = {
-  state: ChatPanePlacementComposerState;
-  blocksSend: boolean;
-  busyMessage: string | null;
-  startup: ApplicationPlacementStartupStatus | null;
-  diskSpace: Extract<NonNullable<GatewaySessionRow["placement"]>, { state: "active" }>["diskSpace"];
-  workerRuntimeInstall: Extract<
-    NonNullable<GatewaySessionRow["placement"]>,
-    { state: "active" | "provisioning" }
-  >["workerRuntimeInstall"];
-  runError: { summary: string } | null;
-  failedUnavailableMessage: string;
-  disabledBanner: ChatComposerDisabledBanner | undefined;
-};
 
 function resolvePlacementComposerState(params: {
   reclaimingKey: string | null;
@@ -110,7 +98,7 @@ export function resolvePlacementComposer(params: {
   workspaceResultReconciling: boolean;
   onRecover: () => void;
   onReclaim: () => void;
-}): PlacementComposerPresentation {
+}) {
   const controls = resolveChatPanePlacement(params);
   // Sync status does not reopen admission closed by Stop, Restart, or a local/durable Move.
   const canSendDuringWorkspaceSync =
@@ -200,7 +188,7 @@ export function resolvePlacementComposer(params: {
       actionStyle: "primary",
       disabledReason: recover ? controls.recoveryDisabledReason : controls.reclaimDisabledReason,
       onAction: recover ? params.onRecover : params.onReclaim,
-    },
+    } satisfies ChatComposerDisabledBanner,
   };
 }
 
@@ -272,13 +260,7 @@ export function resolveChatPanePlacement(params: {
   reclaimingKey: string | null;
   restartingKey?: string | null;
   row: GatewaySessionRow | undefined;
-}): {
-  moving: boolean;
-  restarting: boolean;
-  moveDisabledReason: string | undefined;
-  reclaimDisabledReason: string | undefined;
-  recoveryDisabledReason: string | undefined;
-} {
+}) {
   const moving =
     params.movingKey === params.row?.key ||
     (params.row?.placementMove !== undefined && params.row.placementMove.error === undefined);

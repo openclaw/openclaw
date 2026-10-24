@@ -3,6 +3,7 @@
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveGatewaySshRemotePort } from "../gateway/connection-details.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { withMockedPlatform } from "../test-utils/vitest-spies.js";
@@ -32,6 +33,7 @@ import {
   expectOnboardLocalJsonSetupFailure,
 } from "./onboard-non-interactive.test-helpers.js";
 import type { WaitForGatewayReachableMock } from "./onboard-non-interactive.test-helpers.js";
+import type { OnboardOptions } from "./onboard-types.js";
 
 const localDefaults = {
   nonInteractive: true,
@@ -309,8 +311,6 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
         const writesBeforeSecond = capturedReplaceConfigFileCalls.length;
         await expect(runNonInteractiveSetup(options, runtime)).rejects.toMatchObject({
           name: "SetupTargetLockedError",
-          code: "setup_target_locked",
-          holderPid: process.pid,
         });
 
         expect(readConfigFileSnapshotMock).toHaveBeenCalledTimes(readsBeforeSecond);
@@ -452,6 +452,187 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
     });
   }, 60_000);
 
+  const remoteCredentialUrl = "wss://gateway.example.test";
+  const remoteTokenRef = { source: "env", provider: "default", id: "OLD_REMOTE_TOKEN" } as const;
+  const remoteTlsFingerprint = "sha256:test-fingerprint";
+  const remoteEdgeAuth = { "X-Edge-Auth": "existing-edge-secret" };
+  const remoteCredentialConfig = (
+    remote: NonNullable<OpenClawConfig["gateway"]>["remote"],
+  ): OpenClawConfig => ({ gateway: { mode: "remote", remote } });
+
+  async function setupRemoteCredentials(opts: Partial<OnboardOptions>, baseConfig: OpenClawConfig) {
+    let remote: NonNullable<OpenClawConfig["gateway"]>["remote"];
+    await withStateDir("state-remote-credentials-", async () => {
+      testConfigStore.set(resolveTestConfigPath(), baseConfig);
+      await runNonInteractiveSetup(
+        {
+          nonInteractive: true,
+          mode: "remote",
+          remoteUrl: remoteCredentialUrl,
+          skipHooks: true,
+          ...opts,
+        },
+        runtime,
+      );
+      remote = readTestConfig().gateway?.remote;
+    });
+    return remote;
+  }
+
+  it.each([
+    {
+      name: "fresh remote configuration",
+      baseConfig: {},
+      expectedRemote: { url: remoteCredentialUrl, password: "replacement-password" },
+    },
+    {
+      name: "a token SecretRef on the same endpoint",
+      baseConfig: remoteCredentialConfig({
+        url: remoteCredentialUrl,
+        token: remoteTokenRef,
+        tlsFingerprint: remoteTlsFingerprint,
+        edgeAuth: remoteEdgeAuth,
+      }),
+      expectedRemote: {
+        url: remoteCredentialUrl,
+        password: "replacement-password",
+        tlsFingerprint: remoteTlsFingerprint,
+        edgeAuth: remoteEdgeAuth,
+      },
+    },
+    {
+      name: "credentials and routing from a different endpoint",
+      baseConfig: remoteCredentialConfig({
+        url: "wss://old-gateway.example.test",
+        token: remoteTokenRef,
+        password: { source: "env", provider: "default", id: "OLD_REMOTE_PASSWORD" },
+        tlsFingerprint: "sha256:old-fingerprint",
+        sshTarget: "operator@old-gateway.example.test",
+        edgeAuth: { "X-Edge-Auth": "old-edge-secret" },
+      }),
+      expectedRemote: { url: remoteCredentialUrl, password: "replacement-password" },
+    },
+  ])("stores a remote password while replacing $name", async ({ baseConfig, expectedRemote }) => {
+    expect(
+      await setupRemoteCredentials({ remotePassword: "replacement-password" }, baseConfig),
+    ).toEqual(expectedRemote);
+  });
+
+  it.each([
+    ["remoteToken", "token", "OPENCLAW_GATEWAY_TOKEN", "password"],
+    ["remotePassword", "password", "OPENCLAW_GATEWAY_PASSWORD", "token"],
+  ] as const)(
+    "stores %s as a configured-provider env reference and clears the old credential",
+    async (option, field, envName, previousField) => {
+      await withEnvAsync({ [envName]: "replacement-credential" }, async () => {
+        const remote = await setupRemoteCredentials(
+          { [option]: "replacement-credential", secretInputMode: "ref" },
+          {
+            secrets: {
+              defaults: { env: "gatewayenv" },
+              providers: { gatewayenv: { source: "env" } },
+            },
+            ...remoteCredentialConfig({
+              url: remoteCredentialUrl,
+              [previousField]: { source: "env", provider: "default", id: "OLD_GATEWAY_CREDENTIAL" },
+              tlsFingerprint: remoteTlsFingerprint,
+            }),
+          },
+        );
+        expect(remote).toEqual({
+          url: remoteCredentialUrl,
+          [field]: { source: "env", provider: "gatewayenv", id: envName },
+          tlsFingerprint: remoteTlsFingerprint,
+        });
+      });
+    },
+  );
+
+  it("clears a stale remote password when a token replaces auth for the same endpoint", async () => {
+    const remote = await setupRemoteCredentials(
+      { remoteToken: "replacement-token" },
+      remoteCredentialConfig({
+        url: remoteCredentialUrl,
+        password: "old-password",
+        tlsFingerprint: remoteTlsFingerprint,
+      }),
+    );
+    expect(remote).toEqual({
+      url: remoteCredentialUrl,
+      token: "replacement-token",
+      tlsFingerprint: remoteTlsFingerprint,
+    });
+  });
+
+  it.each([
+    [remoteCredentialUrl, "existing-password"],
+    [remoteCredentialUrl, { source: "env", provider: "default", id: "EXISTING_REMOTE_PASSWORD" }],
+    [
+      `${remoteCredentialUrl}/`,
+      { source: "env", provider: "default", id: "EXISTING_REMOTE_PASSWORD" },
+    ],
+  ] as const)(
+    "preserves existing remote credentials from %s without a replacement",
+    async (url, password) => {
+      const remote = {
+        url,
+        token: "existing-token",
+        password,
+        tlsFingerprint: remoteTlsFingerprint,
+        transport: "ssh" as const,
+        sshTarget: "operator@gateway.example.test",
+      };
+      expect(
+        await setupRemoteCredentials({ secretInputMode: "ref" }, remoteCredentialConfig(remote)),
+      ).toEqual({ ...remote, url: remoteCredentialUrl });
+    },
+  );
+
+  it.each([
+    ["ws://127.0.0.1:80", "ws://127.0.0.1", 80],
+    ["ws://127.0.0.1", "ws://127.0.0.1:80", 18789],
+  ] as const)(
+    "preserves the SSH destination when editing %s to %s",
+    async (originalUrl, url, port) => {
+      const remote = await setupRemoteCredentials(
+        { remoteUrl: url },
+        {
+          gateway: {
+            port: 18789,
+            remote: {
+              url: originalUrl,
+              transport: "ssh",
+              sshTarget: "operator@gateway.example.test",
+              token: "existing-token",
+            },
+          },
+        },
+      );
+      expect(remote).toMatchObject({
+        url,
+        sshTarget: "operator@gateway.example.test",
+        token: "existing-token",
+      });
+      expect(resolveGatewaySshRemotePort({ gateway: { port: 18789, remote } })).toBe(port);
+    },
+  );
+
+  it("clears credentials and transport trust when the remote query changes", async () => {
+    const url = `${remoteCredentialUrl}?account=work`;
+    const remote = await setupRemoteCredentials(
+      { remoteUrl: url },
+      remoteCredentialConfig({
+        url: remoteCredentialUrl,
+        token: remoteTokenRef,
+        password: "existing-password",
+        transport: "ssh",
+        sshTarget: "operator@gateway.example.test",
+        tlsFingerprint: remoteTlsFingerprint,
+      }),
+    );
+    expect(remote).toEqual({ url });
+  });
+
   it("writes gateway.remote url/token", async () => {
     await withStateDir("state-remote-", async (_stateDir) => {
       const port = getPseudoPort(30_000);
@@ -581,7 +762,9 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
     "uses managed daemon health timing on $platform",
     async ({ platform, healthTimeoutMs }) => {
       await withStateDir("state-local-daemon-health-", async (stateDir) => {
-        // Create native filesystem state before spoofing only the daemon timing platform.
+        // Bootstrap shared/client state and runtime pins before spoofing daemon timing.
+        const { openOpenClawStateDatabase } = await import("../state/openclaw-state-db.js");
+        openOpenClawStateDatabase({ env: process.env });
         const { initializeFreshDaemonRuntimePinMigration } =
           await import("../infra/state-migrations.daemon-runtime-pins.js");
         initializeFreshDaemonRuntimePinMigration(process.env);

@@ -1,3 +1,35 @@
+import type { SQLInputValue } from "node:sqlite";
+import { expect } from "vitest";
+import { withEngineStoreAdmission as admit } from "../infra/database-engine/admission-scope.js";
+import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+
+export function createDatabaseOpener(owners: Awaited<ReturnType<typeof loadOwners>>) {
+  return (options: { agentId: string; path?: string }) => {
+    const database = admit(() => owners.openOpenClawAgentDatabase(options));
+    const statement = (sql: string) => database.db.prepare(sql);
+    return {
+      ...database,
+      get: (sql: string, ...values: SQLInputValue[]) => admit(() => statement(sql).get(...values)),
+      run: (sql: string, ...values: SQLInputValue[]) => admit(() => statement(sql).run(...values)),
+      write: (sql: string, ...values: SQLInputValue[]) =>
+        admit(() =>
+          owners.runOpenClawAgentWriteTransaction(
+            ({ db }) => db.prepare(sql).run(...values),
+            options,
+          ),
+        ),
+      [Symbol.dispose]: () => admit(() => owners.closeOpenClawAgentDatabaseByPath(database.path)),
+    };
+  };
+}
+
+export function expectAnchorOnly(databasePath: string) {
+  using db = openNodeSqliteDatabase(databasePath, { readOnly: true });
+  expect(db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all()).toEqual([
+    { name: "openclaw_engine_anchor" },
+  ]);
+}
+
 export async function loadOwners() {
   const [
     database,

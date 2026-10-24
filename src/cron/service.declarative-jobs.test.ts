@@ -1,8 +1,8 @@
 import { afterEach, expect, it, vi } from "vitest";
-import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { resolveCronJobConfigRevision } from "./config-revision.js";
 import { resolveCronSession } from "./isolated-agent/session.js";
 import { toPublicCronJob } from "./public-job.js";
+import { cronTestDeps, cronTestInput } from "./service.fixture-builders.test-support.js";
 import { CronService } from "./service.js";
 import { setupCronServiceSuite, writeCronStoreSnapshot } from "./service.test-harness.js";
 import type { CronAddOptions } from "./service/state.js";
@@ -17,16 +17,7 @@ afterEach(() => {
 });
 
 function createCronService(storePath: string, cronEnabled = true) {
-  const service = new CronService({
-    scheduler: createTestGatewayScheduler(),
-    nowMs: () => Date.now(),
-    storePath,
-    cronEnabled,
-    log: logger,
-    enqueueSystemEvent: vi.fn(),
-    requestHeartbeat: vi.fn(),
-    runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
-  });
+  const service = new CronService(cronTestDeps({ storePath, cronEnabled, log: logger }));
   services.add(service);
   return service;
 }
@@ -42,19 +33,16 @@ async function storedJob(storePath: string, id?: string) {
   return (await loadCronStore(storePath)).jobs.find((job) => !id || job.id === id)!;
 }
 
-const declaration = (overrides: Partial<CronJobCreate> = {}): CronJobCreate => ({
-  name: "daily report",
-  declarationKey: "agent:ops:daily-report",
-  displayName: "Daily report",
-  owner: { agentId: "ops", sessionKey: "agent:ops:main" },
-  enabled: true,
-  schedule: { kind: "every", everyMs: 60_000 },
-  sessionTarget: "isolated",
-  wakeMode: "next-heartbeat",
-  payload: { kind: "agentTurn", message: "report" },
-  delivery: { mode: "announce", channel: "last" },
-  ...overrides,
-});
+const declaration = (overrides: Partial<CronJobCreate> = {}) =>
+  cronTestInput({
+    name: "daily report",
+    declarationKey: "agent:ops:daily-report",
+    displayName: "Daily report",
+    owner: { agentId: "ops", sessionKey: "agent:ops:main" },
+    payload: { kind: "agentTurn", message: "report" },
+    delivery: { mode: "announce", channel: "last" },
+    ...overrides,
+  });
 
 async function add(cron: CronService, input = declaration(), options?: CronAddOptions) {
   const result = await cron.add(input, options);
@@ -339,21 +327,13 @@ it.each(["ordinary update", "declarative convergence"] as const)(
       ["explicit timestamps", "condition", "script", { state: timestamps }],
     ];
     const expectedJobs: Array<{ id: string; state: CronJob["state"]; name: string }> = [];
-    const expectState = (
-      actual: CronJob["state"] | undefined,
-      expected: CronJob["state"],
-      name: string,
-    ) => {
-      for (const field of [
-        "triggerState",
-        "triggerEvalCount",
-        "lastTriggerEvalAtMs",
-        "lastTriggerFireAtMs",
-        "lastRunAtMs",
-      ] as const) {
-        expect(actual?.[field], `${name}: ${field}`).toEqual(expected[field]);
-      }
-    };
+    const stateFields = (state?: CronJob["state"]) => ({
+      triggerState: state?.triggerState,
+      triggerEvalCount: state?.triggerEvalCount,
+      lastTriggerEvalAtMs: state?.lastTriggerEvalAtMs,
+      lastTriggerFireAtMs: state?.lastTriggerFireAtMs,
+      lastRunAtMs: state?.lastRunAtMs,
+    });
     for (const [index, [name, previous, next, changes]] of cases.entries()) {
       const declarationKey = `trigger-owner:${index}`;
       const input = ownedDeclaration(previous, { declarationKey, state: retiredTriggerState });
@@ -379,17 +359,18 @@ it.each(["ordinary update", "declarative convergence"] as const)(
         ? retiredTriggerState
         : { lastRunAtMs: 333, ...changes.state };
       const persisted = await storedJob(storePath, created.id);
-      expectState(persisted?.state, expected, `${name}: durable state`);
+      expect(stateFields(persisted?.state), `${name}: durable state`).toEqual(
+        stateFields(expected),
+      );
       expectedJobs.push({ id: created.id, state: expected, name });
     }
     cron.stop();
     const restarted = createCronService(storePath, false);
     for (const expected of expectedJobs) {
-      expectState(
-        (await restarted.readJob(expected.id))?.state,
-        expected.state,
+      expect(
+        stateFields((await restarted.readJob(expected.id))?.state),
         `${expected.name}: restart`,
-      );
+      ).toEqual(stateFields(expected.state));
     }
   },
 );

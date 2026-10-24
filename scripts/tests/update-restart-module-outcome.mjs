@@ -223,6 +223,11 @@ async function fixture({
     },
     resolveUpdateResultNextAction: () => "Retain recovery material until health is verified.",
     completeUpdateCommandRun: (value) => value,
+    // This VM has no durable recovery ledger. Recovery-artifact deletion has
+    // real owner/filesystem coverage in update-automatic-cleanup.test.ts; these
+    // cases prove the separate package transaction's retirement authorization.
+    automaticallyCleanUpdateRecovery: async () => undefined,
+    prepareResult: async (value) => () => printed.push(value),
     printResult: (value) => printed.push(value),
     writeControlPlaneUpdateRestartSentinel: async () => {},
     markControlPlaneUpdateRestartSentinelFailure: async () => {},
@@ -291,6 +296,7 @@ async function fixture({
     "../../infra/update-run-step",
     "update-command-verification",
     "update-command-terminal",
+    "update-command-admission-report",
     "update-command-terminal-publication",
     "../daemon-cli/restart-health-deadline",
     "../../../packages/retry/src/index",
@@ -298,7 +304,6 @@ async function fixture({
     "../../utils/absolute-deadline",
     "update-command-post-update-maintenance",
     "../../infra/update-candidate-predecessor-stop",
-    "update-command-legacy-service-stop",
     // Recovery and reporting stay real; only their I/O uses finite fixture facts.
     "update-command-failure-recovery",
     "update-command-service-recovery",
@@ -321,6 +326,7 @@ async function fixture({
     "../../shared/regexp",
     "../../infra/acquire-with-wait",
     "../../infra/update-doctor-result",
+    "../../infra/update-doctor-scan-receipts",
     "../../infra/update-doctor-config-schema",
     "../../infra/update-doctor-lint-schema",
     "../../infra/update-run-schema",

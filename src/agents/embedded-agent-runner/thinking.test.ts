@@ -530,15 +530,6 @@ describe("wrapAnthropicStreamWithRecovery", () => {
     await expect(response.result()).resolves.toEqual(finalMessage);
     expect(callCount).toBe(2);
     expect(recovered).toHaveBeenCalledTimes(1);
-    expect(recovered).toHaveBeenCalledWith({
-      originalMessages,
-      cleanedMessages: [
-        {
-          ...originalMessages[0],
-          content: [{ type: "text", text: "visible answer" }],
-        },
-      ],
-    });
   });
 
   it("does not notify recovery when the stripped-thinking retry also fails", async () => {

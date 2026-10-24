@@ -9,7 +9,7 @@ import {
 } from "../../../../test/helpers/gateway-integration-fixtures.js";
 import { createDeferred, withinTest } from "../../../../test/helpers/promise.js";
 import { GatewayBrowserClient } from "../../api/gateway.ts";
-import { subscribeBrowserHttpFailures } from "../../app/browser-http.ts";
+import { bindBrowserHttpFailures } from "../../app/browser-http.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
 import { GatewayPageBinding } from "../../lib/gateway-page-binding.ts";
@@ -250,7 +250,7 @@ it.for(["admin", "client", "presentation"] as const)(
   "rejects credential retry and retained HTTP dispatch after %s retirement",
   async (cause, { signal }) => {
     const f = await transportFixture(["operator.admin"], 401, signal);
-    const stop = subscribeBrowserHttpFailures(() => f.retire(cause));
+    const stop = bindBrowserHttpFailures(() => f.retire(cause));
     try {
       await expect(f.request()).rejects.toThrow();
       await expect(f.request()).rejects.toThrow();

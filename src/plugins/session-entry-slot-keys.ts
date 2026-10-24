@@ -83,6 +83,7 @@ const SESSION_ENTRY_RESERVED_SLOT_KEY_LIST = [
   "mainRestartRecovery",
   "pendingExecNotifications",
   "restartRecoveryOperatorSource",
+  "restartRecoveryRequesterSource",
   "subagentRecovery",
   "pluginOwnerId",
   "systemSent",
@@ -159,6 +160,7 @@ const SESSION_ENTRY_RESERVED_SLOT_KEY_LIST = [
   "restartRecoveryRequesterSenderId",
   "restartRecoverySameChannelThreadRequired",
   "restartRecoverySourceIngress",
+  "restartRecoverySourceMessageChannel",
   "restartRecoverySourceReplyDeliveryMode",
   "restartRecoveryTerminalDeliveryEvidence",
   "restartRecoveryHarnessCompletion",
@@ -211,6 +213,7 @@ const SESSION_ENTRY_RESERVED_SLOT_KEY_LIST = [
   "communication",
   "publicShare",
   "profileInvolvement",
+  "priorWorkspace",
 ] as const satisfies ReadonlyArray<
   keyof SessionEntry | "__proto__" | "constructor" | "prototype" | "sessionFile" | "transcriptPath"
 >;

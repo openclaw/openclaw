@@ -1,6 +1,6 @@
 import { roleScopesAllow } from "../../../src/shared/operator-scope-compat.js";
 import type { GatewaySessionRow } from "../api/types.ts";
-import { canCallGatewayMethod } from "../lib/gateway-methods.ts";
+import { canCallGatewayMethod, canPresentGatewayMethod } from "../lib/gateway-methods.ts";
 import type { ApplicationGatewaySnapshot } from "./gateway.ts";
 
 type OperatorAuth = {
@@ -81,13 +81,18 @@ export function canReactToSession(
   const auth = snapshot.hello?.auth;
   const cap = auth?.sessionCap;
   const role = session?.sharingRole;
+  const canDefer =
+    snapshot.phase !== "stopped" && snapshot.client && !snapshot.client.offlineRecoveryRetired;
+  const actionAvailable = canDefer
+    ? canPresentGatewayMethod(snapshot, "session.reactions.set", "operator.write")
+    : canCallGatewayMethod(snapshot, "session.reactions.set", "operator.write");
   if (
     !session ||
     !role ||
     options.archived ||
     options.catalog ||
     cap === "none" ||
-    !canCallGatewayMethod(snapshot, "session.reactions.set", "operator.write")
+    !actionAvailable
   ) {
     return false;
   }

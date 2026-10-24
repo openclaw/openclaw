@@ -14,7 +14,6 @@ import { sessionChanges } from "../sessions/session-row-changes.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { closeOpenClawAgentDatabaseByPathAsync } from "../state/openclaw-agent-db.js";
-import { startAwaitedReadMock } from "../state/openclaw-state-read-mock.test-support.js";
 import * as stateReadWorker from "../state/openclaw-state-read-worker.js";
 import { getSessionRepositoryWorkspaceStore } from "../state/session-repository-workspaces.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
@@ -35,15 +34,20 @@ import {
   snapshot,
   type Load,
 } from "./control-ui-session-pr-access.test-support.js";
+import * as checkDetails from "./control-ui-session-pr-check-details.js";
 import {
   createControlUiSessionPrRead,
   prepareControlUiSessionPrServiceTarget,
 } from "./control-ui-session-pr-read.js";
 import { createControlUiSessionPullRequestSubscriptions } from "./control-ui-session-pr-subscriptions.js";
+import {
+  createTestSessionPrReadSource,
+  spyOnSessionPrLoader,
+} from "./control-ui-session-pr-subscriptions.test-support.js";
 import { githubJson, pullListItem, requestUrl } from "./control-ui-session-prs.test-support.js";
 import type { OperatorScope } from "./operator-scopes.js";
 import { handleGatewayRequest } from "./server-methods.js";
-import { createControlUiHandlers } from "./server-methods/control-ui.js";
+import { controlUiHandlers } from "./server-methods/control-ui.js";
 import { createGatewayWsTestSocket } from "./server/ws-connection.test-helpers.js";
 import { getSessionRowProjection } from "./session-row-projection-access.js";
 import { loadGatewaySessionEntryReadOnlyAsync } from "./session-utils-store.js";
@@ -349,13 +353,11 @@ it.each(["unchanged", "revoked"] as const)(
               held = true;
               return {
                 ...owned,
-                startRead(...args) {
-                  return startAwaitedReadMock(async () => {
-                    const result = await owned.startRead(...args).result;
-                    entered.resolve();
-                    await release.promise;
-                    return result;
-                  });
+                async startRead(...args) {
+                  const result = await owned.startRead(...args);
+                  entered.resolve();
+                  await release.promise;
+                  return result;
                 },
               };
             },
@@ -399,11 +401,12 @@ it.each(["replace", "unsubscribe"] as const)(
     const release = createDeferredCore();
     let ready = false;
     const load = vi.fn<Load>(async () => snapshot);
+    spyOnSessionPrLoader(load);
+    const readSource = createTestSessionPrReadSource();
     const broadcast = vi.fn();
     const subscriptions = createControlUiSessionPullRequestSubscriptions({
       scheduler: createTestGatewayScheduler(),
       broadcastToConnIds: broadcast,
-      load,
       prepareRead: async (_connId, session) => async () => {
         if (session.sessionKey === first && !ready) {
           entered.resolve();
@@ -413,7 +416,7 @@ it.each(["replace", "unsubscribe"] as const)(
         return {
           params: { sessionKey: session.sessionKey, agentId: "main" },
           identity: session.sessionKey,
-          readSource: { agentId: "main", path: "/synthetic/unused.sqlite" },
+          readSource,
           source: null,
         };
       },
@@ -582,6 +585,8 @@ it("retires cached branch data after canonical replacement and hydrates the new 
 it.each([
   "archived",
   "unchanged",
+  "row refresh",
+  "source",
   "grant",
   "selection",
   "literal-global",
@@ -638,6 +643,9 @@ it.each([
       };
       const held = holdLoad<ControlUiSessionPullRequestCheckDetails>();
       const load = held.load;
+      const loadChecks = vi
+        .spyOn(checkDetails, "loadControlUiSessionPullRequestChecks")
+        .mockImplementation(load);
       const respond = vi.fn();
       const request = handleGatewayRequest({
         req: {
@@ -648,7 +656,7 @@ it.each([
         },
         client: f.client,
         context: f.context,
-        extraHandlers: createControlUiHandlers(undefined, load),
+        extraHandlers: controlUiHandlers,
         isWebchatConnect: () => false,
         respond,
       });
@@ -660,6 +668,12 @@ it.each([
         );
         if (mutation === "store closure") {
           await closeOpenClawAgentDatabaseByPathAsync((await sessionSource(key)).path);
+        } else if (mutation === "row refresh") {
+          sessionChanges.emit({ agentId: "main", sessionKey: key, scope: "session-entry" });
+          await projection?.ensureMaterialized();
+        } else if (mutation === "source") {
+          await f.seed(key, f.other.id, { spawnedCwd: "/synthetic/replacement" });
+          await projection?.ensureMaterialized();
         } else if (mutation === "selection") {
           if (!projection) {
             throw new Error("Missing session projection for selection replacement");
@@ -676,10 +690,11 @@ it.each([
         held.resolve(result);
         await request;
         expect(load).toHaveBeenCalledOnce();
+        const allowed = mutation === "unchanged" || mutation === "row refresh";
         expect(respond).toHaveBeenCalledExactlyOnceWith(
-          mutation === "unchanged",
-          mutation === "unchanged" ? result : undefined,
-          mutation === "unchanged"
+          allowed,
+          allowed ? result : undefined,
+          allowed
             ? undefined
             : expect.objectContaining({
                 code: "UNAVAILABLE",
@@ -691,6 +706,7 @@ it.each([
       } finally {
         held.resolve(result);
         await request;
+        loadChecks.mockRestore();
       }
     },
     change === "store closure",
@@ -732,7 +748,31 @@ it.each(["local", "repository"] as const)(
       }
       if (repository) {
         const previousCache = f.load.mock.calls[0]?.[1];
-        await repositories.delete({ workspaceId: repository.workspaceId, assertCurrent: () => {} });
+        const read = createControlUiSessionPrRead({
+          client: f.client,
+          sessionKey,
+          getRuntimeConfig: f.context.getRuntimeConfig,
+          getSessionRowProjection: () => getSessionRowProjection(f.context),
+          isCurrentClient: () => !f.client.invalidated,
+        })!;
+        expect((await read())?.source).toMatchObject({ repo: "publication" });
+        // Read before background preparation can replace the invalidated repository facts.
+        const notifiedRead = vi.fn(read);
+        const stop = sessionChanges.subscribe((change) => {
+          if ("sessionKey" in change && change.sessionKey === sessionKey) {
+            void notifiedRead();
+          }
+        });
+        try {
+          await repositories.delete({
+            workspaceId: repository.workspaceId,
+            assertCurrent: () => {},
+          });
+          expect(notifiedRead).toHaveBeenCalledOnce();
+          expect((await notifiedRead.mock.results[0]!.value)?.source).toBeNull();
+        } finally {
+          stop();
+        }
         const unavailable = { pullRequests: [], rateLimited: false };
         f.load.mockResolvedValue(unavailable);
         await f.subscriptions.pollNow();
@@ -771,7 +811,7 @@ it("keeps warm default-loader SQL constant as readers join without a native row 
       expect(preparation).toHaveBeenCalledTimes(1);
       preparation.mockClear();
       await f.subscriptions.replace(f.client.connId!, [sessionKey]);
-      expect(preparation).toHaveBeenCalledTimes(2);
+      expect(preparation).not.toHaveBeenCalled();
     } finally {
       preparation.mockRestore();
     }

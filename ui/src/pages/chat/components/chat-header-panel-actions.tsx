@@ -1,12 +1,27 @@
-import { createMemo, Show } from "solid-js";
+import { createMemo, createUniqueId, Show } from "solid-js";
+import { BoardGrantedCapabilities } from "../../../components/board/board-widget-capabilities.solid.tsx";
+import {
+  BOARD_SIZE_PRESETS,
+  type BoardWidgetPageMenu,
+} from "../../../components/board/board-widget-cell-options.ts";
+import { boardWidgetMenuEntries } from "../../../components/board/board-widget-menu.tsx";
 import { Icon } from "../../../components/solid/icon.tsx";
-import { Menu, type MenuEntry, type MenuHandle } from "../../../components/solid/menu.tsx";
+import {
+  createMenuControls,
+  Menu,
+  type MenuControls,
+  type MenuEntry,
+  type MenuHandle,
+} from "../../../components/solid/menu.tsx";
+import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import type { KeyboardShortcutCombo } from "../../../lib/keyboard-shortcut-contract.ts";
-import { t } from "../../../lib/reactive/i18n.ts";
-import { ClearCompanion, ExternalPanelLink } from "../chat-pane-embedded-view.tsx";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
+import { ClearCompanion, ExternalPanelLink } from "../chat-panel-header-actions.tsx";
 import type { ChatPageHost } from "../chat-state-host.ts";
 import {
   ensureSidebarConversation,
+  isSidebarSlotVisible,
+  openSlot,
   promoteSidebarPanel,
   setSidebarDock,
   setSidebarExpanded,
@@ -20,6 +35,8 @@ import {
 import type { HeaderMenuQuickAction } from "./chat-header-session-menu.ts";
 import { useChatQuickActionEntries, type ChatQuickAction } from "./chat-quick-action.tsx";
 import type { SidebarPanelDefinition } from "./chat-sidebar-region-types.ts";
+
+registerEnglishCatalog(registerChatSessionEnglish);
 
 export type HeaderPanelAction = HeaderMenuQuickAction & { shortcut?: KeyboardShortcutCombo };
 
@@ -41,7 +58,7 @@ export type ChatPaneLayoutMenuProps = {
   onClosePane?: (paneId: string) => void;
 };
 
-function layoutModel(props: ChatPaneLayoutMenuProps) {
+export function chatPaneLayoutModel(props: ChatPaneLayoutMenuProps) {
   const layout = props.sidebarLayout;
   const definitions = props.panelDefinitions ?? [];
   const side = layout ? sidebarActivePanel(layout) : undefined;
@@ -97,7 +114,22 @@ function layoutModel(props: ChatPaneLayoutMenuProps) {
       id: "close-side-panel",
       label: t("chat.sidebarColumns.close", { panel: sideDefinition.label }),
       icon: "x",
-      onActivate: () => props.onCloseSidePanel?.(side.slot),
+      onActivate: async () => {
+        if (props.mobile === false && side.slot === "companion") {
+          const paneId = props.paneId;
+          const clear = sideDefinition.view?.onClearCompanion;
+          if (
+            !clear ||
+            !(await clear()) ||
+            props.paneId !== paneId ||
+            !props.sidebarLayout ||
+            sidebarActivePanel(props.sidebarLayout)?.id !== side.id
+          ) {
+            return;
+          }
+        }
+        props.onCloseSidePanel?.(side.slot);
+      },
     });
   }
   if (props.onToggleSidePanel) {
@@ -151,31 +183,276 @@ function layoutModel(props: ChatPaneLayoutMenuProps) {
     actions,
     panelActions,
     allActions,
-    mainHeaderAction: mainDefinition?.headerAction,
-    sideHeaderAction: sideDefinition?.headerAction,
     mainHeaderActionView: mainDefinition?.headerActionView,
     sideHeaderActionView: sideDefinition?.headerActionView,
     mainHeaderLink: mainDefinition?.headerLink,
     sideHeaderLink: sideDefinition?.headerLink,
   };
 }
+/** Renders definition-owned controls without mounting the panel's content/view. */
+export function ChatPanelHeaderActions(
+  props: Pick<SidebarPanelDefinition, "headerActionView" | "headerLink"> & {
+    controls?: MenuControls;
+  },
+) {
+  return (
+    <>
+      <Show when={props.headerActionView}>
+        {(view) => <ClearCompanion {...view()} actionRef={props.controls?.ref()} />}
+      </Show>
+      <Show when={props.headerLink}>
+        {(link) => <ExternalPanelLink {...link()} actionRef={props.controls?.ref()} />}
+      </Show>
+    </>
+  );
+}
+
+/** External Dashboard controls reuse the layout and page-widget owners. */
+export function ChatDashboardMenu(
+  props: ChatPaneLayoutMenuProps & {
+    widgetMenu?: BoardWidgetPageMenu;
+  },
+) {
+  const id = createUniqueId();
+  let menu: MenuHandle | undefined;
+  const actions = createMemo((): ChatQuickAction[] => {
+    const layout = props.sidebarLayout;
+    const result: ChatQuickAction[] = [];
+    // The shared mobile host owns expansion without changing the retained desktop layout.
+    if (!props.mobile && layout && props.onLayoutChange) {
+      const main = sidebarMainPanel(layout);
+      const dashboard = layout.columns
+        .flatMap((column) => column.panels)
+        .find((panel) => panel.slot === "dashboard");
+      if (dashboard && layout.open && !layout.expanded) {
+        result.push({
+          id: "dashboard-swap",
+          label: t("chat.sidePanel.swap", {
+            main: t("chat.sidePanel.conversation"),
+            side: t("chat.sidePanel.dashboard"),
+          }),
+          icon: "arrowLeftRight",
+          onActivate: () => {
+            const next = ensureSidebarConversation(layout);
+            const target =
+              main?.slot === "dashboard"
+                ? next.columns
+                    .flatMap((column) => column.panels)
+                    .find((panel) => panel.slot === "conversation")
+                : dashboard;
+            if (target) {
+              props.onLayoutChange?.(
+                openSlot(
+                  promoteSidebarPanel(next, target.id),
+                  main?.slot === "dashboard" ? "dashboard" : "conversation",
+                ),
+                { dashboardPresentation: "personal" },
+              );
+            }
+          },
+        });
+      }
+      if (dashboard) {
+        result.push({
+          id: "dashboard-expand",
+          label: t(layout.expanded ? "chat.sidePanel.restore" : "chat.sidePanel.expandPanel", {
+            panel: t("chat.sidePanel.dashboard"),
+          }),
+          icon: layout.expanded ? "minimize" : "maximize",
+          onActivate: () =>
+            props.onLayoutChange?.(
+              main?.slot === "dashboard" || layout.expanded
+                ? setSidebarExpanded(layout, !layout.expanded)
+                : toggleSidebarPanelExpanded(layout, dashboard.id),
+              { dashboardPresentation: "personal" },
+            ),
+        });
+      }
+      if (!isSidebarSlotVisible(layout, "conversation")) {
+        result.push({
+          id: "dashboard-show-chat",
+          label: t("chat.sidePanel.showChat"),
+          icon: "messageSquare",
+          onActivate: () =>
+            props.onLayoutChange?.(openSlot(ensureSidebarConversation(layout), "conversation"), {
+              dashboardPresentation: "personal",
+            }),
+        });
+      }
+    }
+    for (const action of props.layoutMenuActions ?? []) {
+      if (action.id === "dashboard-default") {
+        result.push({ ...action, icon: "bookmark" });
+      }
+    }
+    return result;
+  });
+  const actionItems = useChatQuickActionEntries(actions);
+  const groupedActionItems = createMemo((): MenuEntry[] =>
+    actionItems().flatMap((entry): MenuEntry[] =>
+      entry.id !== "dashboard-default"
+        ? [entry]
+        : [
+            {
+              kind: "content",
+              id: "default-separator",
+              content: <div class="board-widget__menu-separator" role="separator" />,
+            },
+            entry.kind === "content"
+              ? {
+                  id: `${entry.id}-status`,
+                  label: actions().find((action) => action.id === entry.id)!.label,
+                  disabled: true,
+                  render: (attributes) => (
+                    <div {...attributes} class="chat-dashboard-menu__default-status">
+                      {entry.content}
+                      <Icon name="check" />
+                    </div>
+                  ),
+                }
+              : entry,
+          ],
+    ),
+  );
+  const widgetItems = createMemo((): MenuEntry[] => {
+    const page = props.widgetMenu;
+    if (!page?.canMutate) {
+      return [];
+    }
+    const entries = boardWidgetMenuEntries({ ...page, disabled: false });
+    const destinations = entries.filter((entry) => entry.id.startsWith("move:"));
+    const currentSize = Object.entries(BOARD_SIZE_PRESETS).find(
+      ([, size]) => size.w === page.widget.sizeW && size.h === page.widget.sizeH,
+    )?.[0];
+    // These are fresh menu projections; widget state and action IDs stay native.
+    for (const entry of entries) {
+      if (entry.kind === "content" || entry.kind === "group") {
+        continue;
+      }
+      if (entry.id.startsWith("resize:")) {
+        entry.class = [
+          "board-widget__preset",
+          { "is-current": entry.id === `resize:${currentSize}` },
+        ];
+      } else if (entry.id === "height:auto") {
+        entry.icon = <Icon name="arrowUpDown" />;
+      }
+    }
+    return [
+      {
+        kind: "content",
+        id: "page-separator",
+        content: <div class="board-widget__menu-separator" role="separator" />,
+      },
+      {
+        kind: "content",
+        id: "resize-heading",
+        content: <div class="board-widget__menu-heading">{t("chat.sidePanel.dashboardSize")}</div>,
+      },
+      {
+        kind: "group",
+        id: "page-sizes",
+        class: "chat-dashboard-menu__sizes",
+        items: entries.filter((entry) => entry.id.startsWith("resize:")),
+      },
+      ...entries.filter((entry) => entry.id === "height:auto"),
+      ...(destinations.length
+        ? [
+            {
+              id: "page-move",
+              label: t("board.widget.moveToTab"),
+              icon: <Icon name="panelsTopLeft" />,
+              children: destinations,
+            },
+          ]
+        : []),
+      ...entries.filter((entry) => entry.id === "separator" || entry.id === "remove"),
+    ];
+  });
+  return (
+    <Menu
+      lazy="while-open"
+      id={`chat-dashboard-${id}`}
+      label={t("chat.sidePanel.dashboardOptions")}
+      class="chat-dashboard-menu"
+      panelClass="chat-dashboard-menu__panel"
+      placement="bottom-end"
+      triggerClass="chat-dashboard-menu__trigger"
+      triggerAttributes={{ title: t("chat.sidePanel.dashboardOptions") }}
+      trigger={
+        <>
+          <Icon name="layoutDashboard" />
+          <Icon name="chevronDown" class="chat-dashboard-menu__chevron" />
+        </>
+      }
+      items={[
+        ...groupedActionItems(),
+        ...widgetItems(),
+        {
+          kind: "content",
+          id: "page-granted-capabilities",
+          content: (
+            <Show when={props.widgetMenu}>
+              {(page) => <BoardGrantedCapabilities widget={page().widget} presentation="details" />}
+            </Show>
+          ),
+        },
+      ]}
+      ref={(handle) => {
+        menu = handle;
+      }}
+      onSelect={(item, event) => {
+        event.preventDefault();
+        menu?.close();
+        const action = actions().find((candidate) => candidate.id === item.id);
+        if (action) {
+          if (action.kind !== "status" && !action.disabled) {
+            void action.onActivate();
+          }
+        } else {
+          props.widgetMenu?.onSelect(item.id);
+        }
+      }}
+    />
+  );
+}
+
+export function ChatPaneLayoutHeaderActions(props: {
+  model: ReturnType<typeof chatPaneLayoutModel>;
+  controls?: MenuControls;
+  /** Set only when the corresponding visible panel header supplies these controls. */
+  omitMain?: boolean;
+  omitSide?: boolean;
+}) {
+  return (
+    <>
+      <Show when={!props.omitMain}>
+        <ChatPanelHeaderActions
+          controls={props.controls}
+          headerActionView={props.model.mainHeaderActionView}
+          headerLink={props.model.mainHeaderLink}
+        />
+      </Show>
+      <Show when={!props.omitSide}>
+        <ChatPanelHeaderActions
+          controls={props.controls}
+          headerActionView={props.model.sideHeaderActionView}
+          headerLink={props.model.sideHeaderLink}
+        />
+      </Show>
+    </>
+  );
+}
+
 let nextLayoutId = 0;
 
 export function ChatPaneLayoutMenu(props: ChatPaneLayoutMenuProps) {
   const id = `chat-pane-layout-${++nextLayoutId}`;
+  const controls = createMenuControls();
   let menu: MenuHandle | undefined;
-  const model = createMemo(() => layoutModel(props));
+  const model = createMemo(() => chatPaneLayoutModel(props));
   const headerActions = createMemo(
-    () => (
-      <>
-        {model().mainHeaderAction}
-        <Show when={model().mainHeaderActionView}>{(view) => <ClearCompanion {...view()} />}</Show>
-        <Show when={model().mainHeaderLink}>{(link) => <ExternalPanelLink {...link()} />}</Show>
-        {model().sideHeaderAction}
-        <Show when={model().sideHeaderActionView}>{(view) => <ClearCompanion {...view()} />}</Show>
-        <Show when={model().sideHeaderLink}>{(link) => <ExternalPanelLink {...link()} />}</Show>
-      </>
-    ),
+    () => <ChatPaneLayoutHeaderActions model={model()} controls={controls} />,
     { lazy: true },
   );
   const primary = useChatQuickActionEntries(
@@ -211,14 +488,10 @@ export function ChatPaneLayoutMenu(props: ChatPaneLayoutMenuProps) {
   );
   return (
     <Show
-      when={
-        model().allActions.length > 0 ||
-        model().mainHeaderAction ||
-        model().mainHeaderActionView ||
-        model().mainHeaderLink
-      }
+      when={model().allActions.length > 0 || model().mainHeaderActionView || model().mainHeaderLink}
     >
       <Menu
+        controls={controls}
         lazy
         id={id}
         class={[
@@ -245,7 +518,7 @@ export function ChatPaneLayoutMenu(props: ChatPaneLayoutMenuProps) {
           if (action && action.kind !== "status" && !action.disabled) {
             event.preventDefault();
             menu?.close();
-            action.onActivate();
+            void action.onActivate();
           }
         }}
       />

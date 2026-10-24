@@ -15,10 +15,11 @@ import {
 import { t } from "../lib/reactive/i18n.ts";
 import type { AppSidebarRenderHost } from "./app-sidebar-render.tsx";
 import { personActivityLink, personActivityRouting } from "./person-activity-link.ts";
+import { SidebarCollapseToggle } from "./sidebar-collapse-toggle.tsx";
 import { sidebarOnlineCountFor, SidebarOnlineOrder } from "./sidebar-online-order.ts";
 import { Icon } from "./solid/icon.tsx";
 import { Picker } from "./solid/select-picker.tsx";
-import "./sidebar-collapse-toggle.tsx";
+import { ViewerAvatar } from "./solid/viewer-facepile.tsx";
 
 const onlineOrders = new WeakMap<
   HTMLElement,
@@ -125,7 +126,7 @@ export function renderAppSidebarOnline(host: AppSidebarRenderHost): JSX.Element 
         >
           <Icon name="listFilter" />
         </button>
-        <openclaw-sidebar-collapse-toggle prop:onToggle={() => host.onToggleSidebar?.()} />
+        <SidebarCollapseToggle onToggle={() => host.onToggleSidebar?.()} />
       </div>
       {host.peopleView?.directory()?.loading && (
         <span class="sidebar-session-empty-hint">{t("common.loading")}</span>
@@ -160,8 +161,9 @@ export function renderAppSidebarOnline(host: AppSidebarRenderHost): JSX.Element 
                     running: String(workload()!.running),
                   })
                 : t("presence.sessions.unavailable");
-            const activity = () =>
-              personActivityLink(user().identity?.id, routing(), presenceViewerLabel(user()));
+            const activity = createMemo(() =>
+              personActivityLink(user().identity?.id, routing(), presenceViewerLabel(user())),
+            );
             let row: HTMLElement;
 
             return (
@@ -201,11 +203,7 @@ export function renderAppSidebarOnline(host: AppSidebarRenderHost): JSX.Element 
                   })}
                 >
                   <span class="sidebar-online__avatar" aria-hidden="true">
-                    <openclaw-viewer-avatar
-                      prop:user={user()}
-                      prop:markAsViewer={false}
-                      variant="footer"
-                    />
+                    <ViewerAvatar user={user()} markAsViewer={false} variant="footer" />
                   </span>
                   <span class="sidebar-online__person-name">{presenceViewerLabel(user())}</span>
                   {workload() && (workload()!.open > 0 || workload()!.running > 0) ? (

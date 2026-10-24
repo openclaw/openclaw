@@ -18,7 +18,7 @@ import {
   readConfigFileSnapshotMock,
   resetPluginsCliTestState,
   refreshPluginRegistryMock as refreshRegistry,
-  runPluginsCommand,
+  runPluginCli as plugins,
   pluginsCliRuntimeLogs as logs,
 } from "./plugins-cli-test-helpers.js";
 
@@ -91,10 +91,6 @@ function mockPluginDoctorValidationWarnings(warnings: ConfigValidationIssue[]) {
   mockDoctorReport({
     plugins: [createPluginRecord({ id: "google", enabled: false, status: "disabled" })],
   });
-}
-
-function plugins(...args: string[]) {
-  return runPluginsCommand(["plugins", ...args]);
 }
 
 describe("plugins cli list", () => {

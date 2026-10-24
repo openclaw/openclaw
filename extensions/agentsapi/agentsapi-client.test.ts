@@ -5,6 +5,7 @@ import {
   type AgentsApiInputFile,
 } from "./agentsapi-client.js";
 import { createTurn } from "./agentsapi.test-support.js";
+import { agentsApiConfigSchema } from "./config.js";
 
 const { fetchWithSsrFGuardMock } = vi.hoisted(() => ({
   fetchWithSsrFGuardMock:
@@ -23,56 +24,45 @@ afterEach(() => {
 const signal = new AbortController().signal;
 
 describe("Agents API self-hosted session connection", () => {
-  it.each([false, true])(
-    "handles matching self-hosted connection actions (controller: %s)",
-    async (controlled) => {
-      const environment = {
-        type: "self_hosted",
-        id: "environment-fixture",
-        workspace_directory: "/fixture/workspace",
-        remote_url: "wss://executor.invalid/session-fixture",
-      };
-      fetchWithSsrFGuardMock.mockImplementation(async () => ({
-        response: Response.json({
-          id: "session-fixture",
-          status: "requires_action",
-          error: null,
-          environment,
-          required_actions: [
-            { type: "environment_connection", environment_id: "environment-fixture" },
-            {
-              type: "function_call",
-              turn_id: "turn-fixture",
-              call_id: "call-fixture",
-              name: "fixture_tool",
-              arguments: {},
-            },
-          ],
-        }),
-        finalUrl: "https://api.openai.com/v1/agents/sessions/session-fixture",
-        release: async () => {},
-      }));
-      const client = new AgentsApiClient("fixture-not-a-real-api-key", vi.fn());
-      expect((await client.session("session-fixture", signal)).environment).toEqual(environment);
-      const connect = vi.fn(async () => {});
-      expect(
-        await client.pendingFunctionCalls(
-          "session-fixture",
-          signal,
-          controlled ? connect : undefined,
-        ),
-      ).toEqual([
-        {
-          type: "function_call",
-          turn_id: "turn-fixture",
-          call_id: "call-fixture",
-          name: "fixture_tool",
-          arguments: {},
-        },
-      ]);
-      expect(connect.mock.calls).toEqual(controlled ? [["environment-fixture"]] : []);
-    },
-  );
+  it("allows an external executor to satisfy matching self-hosted connection actions", async () => {
+    const environment = {
+      type: "self_hosted",
+      id: "environment-fixture",
+      workspace_directory: "/fixture/workspace",
+      remote_url: "wss://executor.invalid/session-fixture",
+    };
+    fetchWithSsrFGuardMock.mockImplementation(async () => ({
+      response: Response.json({
+        id: "session-fixture",
+        status: "requires_action",
+        error: null,
+        environment,
+        required_actions: [
+          { type: "environment_connection", environment_id: "environment-fixture" },
+          {
+            type: "function_call",
+            turn_id: "turn-fixture",
+            call_id: "call-fixture",
+            name: "fixture_tool",
+            arguments: {},
+          },
+        ],
+      }),
+      finalUrl: "https://api.openai.com/v1/agents/sessions/session-fixture",
+      release: async () => {},
+    }));
+    const client = new AgentsApiClient("fixture-not-a-real-api-key", vi.fn());
+    expect((await client.session("session-fixture", signal)).environment).toEqual(environment);
+    expect(await client.pendingFunctionCalls("session-fixture", signal)).toEqual([
+      {
+        type: "function_call",
+        turn_id: "turn-fixture",
+        call_id: "call-fixture",
+        name: "fixture_tool",
+        arguments: {},
+      },
+    ]);
+  });
 
   it.each([
     { type: "openai_hosted", requestedId: "environment-fixture" },
@@ -97,11 +87,9 @@ describe("Agents API self-hosted session connection", () => {
         release: async () => {},
       });
       const client = new AgentsApiClient("fixture-not-a-real-api-key", vi.fn());
-      const connect = vi.fn(async () => {});
-      await expect(client.pendingFunctionCalls("session-fixture", signal, connect)).rejects.toThrow(
+      await expect(client.pendingFunctionCalls("session-fixture", signal)).rejects.toThrow(
         "cannot reconnect an environment_connection",
       );
-      expect(connect).not.toHaveBeenCalled();
     },
   );
 });
@@ -142,7 +130,12 @@ describe("Agents API session creation", () => {
     queueResponse(Response.json({ id: "session-fixture" }));
     const client = new AgentsApiClient("fixture-not-a-real-api-key", vi.fn());
 
-    await expect(client.create(signal, "Fixture instructions", model)).resolves.toBe(
+    const options = {
+      nativeTools: agentsApiConfigSchema.parse({}).nativeTools,
+      functions: [],
+      mcpTools: [],
+    };
+    await expect(client.create(signal, "Fixture instructions", model, options)).resolves.toBe(
       "session-fixture",
     );
 

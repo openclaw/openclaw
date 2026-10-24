@@ -46,7 +46,7 @@ function makeTimeoutBin(command = "timeout", plain = false) {
   return dir;
 }
 
-function expectedRunArgs(wrapper: string[], cpus = "16") {
+function expectedRunArgs(wrapper: string[], cpus = "16", pids = "2048") {
   return [
     ...wrapper,
     "42s",
@@ -58,20 +58,20 @@ function expectedRunArgs(wrapper: string[], cpus = "16") {
     "--cpus",
     cpus,
     "--pids-limit",
-    "2048",
+    pids,
   ];
 }
 
 function runDockerRunArgs(pathPrefix: string) {
   const script = [
-    "source scripts/lib/live-docker-auth.sh",
+    sourceAuth,
     "unset OPENCLAW_LIVE_DOCKER_DISABLE_RESOURCE_LIMITS OPENCLAW_DOCKER_E2E_DISABLE_RESOURCE_LIMITS",
     "unset OPENCLAW_LIVE_DOCKER_MEMORY OPENCLAW_DOCKER_E2E_MEMORY",
     "unset OPENCLAW_LIVE_DOCKER_CPUS OPENCLAW_DOCKER_E2E_CPUS",
     "unset OPENCLAW_LIVE_DOCKER_PIDS_LIMIT OPENCLAW_DOCKER_E2E_PIDS_LIMIT",
     "ARGS=()",
     "openclaw_live_init_docker_run_args ARGS 42s || exit $?",
-    "printf '%s\\n' \"${ARGS[@]}\"",
+    printArgs,
   ];
   return runBash(script, { PATH: pathPrefix });
 }
@@ -103,19 +103,16 @@ describe("scripts/lib/live-docker-auth.sh", () => {
     expect(invalid.stderr).toContain("invalid OPENCLAW_LIVE_SAMPLE_SECONDS: 30s");
   });
 
-  it("collects default and provider-filtered auth under Bash 3 nounset", () => {
+  it("collects default and disabled auth under Bash 3 nounset", () => {
     const homeDir = tempDirs.make("openclaw-live-docker-auth-home-");
     const result = runBash(
       [
         "set -euo pipefail",
-        "source scripts/lib/live-docker-auth.sh",
+        sourceAuth,
         "unset OPENCLAW_DOCKER_AUTH_DIRS DOCKER_HOME_DIR",
         'openclaw_live_collect_auth_for_providers ","',
         "openclaw_live_finalize_auth_mounts",
         'printf "default-dirs=%s\\ndefault-files=%s\\ndefault-mounts=%s\\n" "$AUTH_DIRS_CSV" "$AUTH_FILES_CSV" "${#EXTERNAL_AUTH_MOUNTS[@]}"',
-        'openclaw_live_collect_auth_for_providers "openai, gemini"',
-        "openclaw_live_finalize_auth_mounts",
-        'printf "filtered-dirs=%s\\nfiltered-files=%s\\nfiltered-mounts=%s\\n" "$AUTH_DIRS_CSV" "$AUTH_FILES_CSV" "${#EXTERNAL_AUTH_MOUNTS[@]}"',
         "OPENCLAW_DOCKER_AUTH_DIRS=none",
         "openclaw_live_collect_auth_for_providers openai",
         "openclaw_live_finalize_auth_mounts",
@@ -129,9 +126,6 @@ describe("scripts/lib/live-docker-auth.sh", () => {
       "default-dirs=.factory,.gemini,.minimax",
       "default-files=.codex/auth.json,.codex/config.toml,.claude.json,.claude/.credentials.json,.claude/settings.json,.claude/settings.local.json,.gemini/settings.json",
       "default-mounts=0",
-      "filtered-dirs=.gemini",
-      "filtered-files=.codex/auth.json,.codex/config.toml",
-      "filtered-mounts=0",
       "none-dirs=",
       "none-files=",
       "none-mounts=0",
@@ -141,18 +135,19 @@ describe("scripts/lib/live-docker-auth.sh", () => {
   it("prestages selected auth and preserves equivalent external mounts", () => {
     const homeDir = tempDirs.make("openclaw-live-docker-auth-source-");
     const dockerHomeDir = tempDirs.make("openclaw-live-docker-auth-target-");
-    mkdirSync(path.join(homeDir, ".gemini"), { recursive: true });
-    mkdirSync(path.join(homeDir, ".codex"), { recursive: true });
-    writeFileSync(path.join(homeDir, ".gemini", "token"), "gemini-token\n", "utf8");
-    writeFileSync(path.join(homeDir, ".codex", "auth.json"), "codex-token\n", "utf8");
+    const authFiles = { ".gemini/token": "gemini-token\n", ".codex/auth.json": "codex-token\n" };
+    for (const [file, contents] of Object.entries(authFiles)) {
+      mkdirSync(path.dirname(path.join(homeDir, file)), { recursive: true });
+      writeFileSync(path.join(homeDir, file), contents, "utf8");
+    }
 
     const result = runBash(
       [
         "set -euo pipefail",
-        "source scripts/lib/live-docker-auth.sh",
+        sourceAuth,
         "unset OPENCLAW_DOCKER_AUTH_DIRS",
         "DOCKER_AUTH_PRESTAGED=0",
-        'openclaw_live_collect_auth_for_providers "openai,gemini"',
+        'openclaw_live_collect_auth_for_providers "openai, gemini"',
         "openclaw_live_finalize_auth_mounts",
         'printf "dirs=%s\\nfiles=%s\\nprestaged=%s\\n" "$AUTH_DIRS_CSV" "$AUTH_FILES_CSV" "$DOCKER_AUTH_PRESTAGED"',
         'printf "%s\\n" "${EXTERNAL_AUTH_MOUNTS[@]}"',
@@ -170,36 +165,31 @@ describe("scripts/lib/live-docker-auth.sh", () => {
       "-v",
       `${homeDir}/.codex/auth.json:/host-auth-files/.codex/auth.json:ro`,
     ]);
-    expect(readFileSync(path.join(dockerHomeDir, ".gemini", "token"), "utf8")).toBe(
-      "gemini-token\n",
-    );
-    expect(readFileSync(path.join(dockerHomeDir, ".codex", "auth.json"), "utf8")).toBe(
-      "codex-token\n",
-    );
+    for (const [file, contents] of Object.entries(authFiles)) {
+      expect(readFileSync(path.join(dockerHomeDir, file), "utf8")).toBe(contents);
+    }
   });
 
-  it("caps default CPU limits using live capacity before shared capacity", () => {
+  it("normalizes pids and caps default CPUs using live capacity before shared capacity", () => {
     const result = runBash(initArgs, {
       PATH: makeTimeoutBin(),
       OPENCLAW_LIVE_DOCKER_AVAILABLE_CPUS: "8",
       OPENCLAW_DOCKER_E2E_AVAILABLE_CPUS: "6",
+      OPENCLAW_LIVE_DOCKER_PIDS_LIMIT: "0008",
     });
 
     expect(result.status).toBe(0);
     expect(result.stdout.trimEnd().split("\n")).toEqual(
-      expectedRunArgs(["timeout", "--kill-after=30s"], "8"),
+      expectedRunArgs(["timeout", "--kill-after=30s"], "8", "8"),
     );
   });
 
-  it("falls back to plain timeout when kill-after is unavailable", () => {
-    expect(resolveDockerRunArgs(makeTimeoutBin("timeout", true))).toEqual(
-      expectedRunArgs(["timeout"]),
-    );
-  });
-
-  it("uses gtimeout when timeout is unavailable", () => {
-    expect(resolveDockerRunArgs(makeTimeoutBin("gtimeout"))).toEqual(
-      expectedRunArgs(["gtimeout", "--kill-after=30s"]),
+  it.each([
+    ["timeout", true, ["timeout"]],
+    ["gtimeout", false, ["gtimeout", "--kill-after=30s"]],
+  ] as const)("uses %s (plain=%s)", (command, plain, wrapper) => {
+    expect(resolveDockerRunArgs(makeTimeoutBin(command, plain))).toEqual(
+      expectedRunArgs([...wrapper]),
     );
   });
 
@@ -234,23 +224,8 @@ describe("scripts/lib/live-docker-auth.sh", () => {
     expect(args).not.toContain("--memory");
   });
 
-  it("normalizes live Docker pids limits", () => {
-    const result = runBash(
-      [
-        sourceAuth,
-        "ARGS=()",
-        "OPENCLAW_LIVE_DOCKER_PIDS_LIMIT=0008 openclaw_live_init_docker_run_args ARGS 42s",
-        "printf '%s\\n' \"${ARGS[@]}\"",
-      ],
-      { PATH: makeTimeoutBin() },
-    );
-
-    expect(result.status).toBe(0);
-    expect(result.stdout.trimEnd().split("\n")).toContain("8");
-  });
-
   it("rejects invalid live Docker pids limits before live Docker setup", () => {
-    const result = runBash([sourceAuth, "ARGS=()", "openclaw_live_init_docker_run_args ARGS 42s"], {
+    const result = runBash(initArgs.slice(0, -1), {
       OPENCLAW_DOCKER_E2E_PIDS_LIMIT: "",
       OPENCLAW_LIVE_DOCKER_PIDS_LIMIT: "many",
       PATH: makeTimeoutBin(),

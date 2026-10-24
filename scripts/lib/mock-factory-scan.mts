@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import * as ts from "typescript/unstable/ast";
+import * as ts from "typescript/ast";
 
 type ModuleResolver = (specifier: string) => string[];
 export type ClosedMockFactory = { line: number; specifier: string; fingerprint: string };

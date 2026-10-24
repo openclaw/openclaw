@@ -149,6 +149,61 @@ it("initializes an additive subset without warm-table DDL", () => {
         database === writer && classifySqliteMutation(query, "batch").mainSchemaChange,
     ),
   ).toEqual([]);
+  const warmQueryCount = queries.length;
+  writeExisting(({ db }) => insert(db, 2, "reopened subset"), options, {
+    ...contract,
+    initializeAdditiveSchema: true,
+  });
+  expectNoQueries(
+    queries.slice(warmQueryCount).map(({ query }) => query),
+    new RegExp(`${schemaInventorySql.source}|\\bFROM schema_meta\\b`, "iu"),
+  );
+  expect(readValues(options.path)).toEqual(["warm subset", "reopened subset"]);
+});
+
+it("performs requested orphan recovery after warming subset admission", () => {
+  const options = fixture(
+    false,
+    `CREATE TABLE task_runs (task_id TEXT PRIMARY KEY) STRICT;
+     CREATE TABLE task_delivery_state (
+       task_id TEXT PRIMARY KEY REFERENCES task_runs(task_id) ON DELETE CASCADE,
+       requester_origin_json TEXT, last_notified_event_at INTEGER
+     ) STRICT;`,
+  );
+  writeExisting(({ db }) => insert(db, 1, "warm"), options, contract);
+  {
+    using database = new DatabaseSync(options.path);
+    database.exec(`PRAGMA foreign_keys = OFF;
+      INSERT INTO task_delivery_state VALUES ('missing-task', 'synthetic retained payload', 77)`);
+  }
+
+  const changes = writeExisting(
+    ({ db, recoveryChanges }) => {
+      insert(db, 2, "recovered");
+      return recoveryChanges;
+    },
+    options,
+    { ...contract, recoverTaskDeliveryOrphans: true },
+  );
+
+  expect(readValues(options.path)).toEqual(["warm", "recovered"]);
+  expect(changes).toEqual([
+    expect.stringContaining("Preserved and recovered 1 orphan task delivery rows"),
+  ]);
+  const root = path.dirname(options.path);
+  const preserved = fs
+    .readdirSync(root)
+    .filter((name) => name.startsWith("openclaw-task-delivery-recovery-"))
+    .map((name) => {
+      using backup = new DatabaseSync(path.join(root, name, "database.sqlite"), { readOnly: true });
+      return readRow(
+        backup,
+        "SELECT requester_origin_json, last_notified_event_at FROM task_delivery_state",
+      );
+    });
+  expect(preserved).toEqual([
+    { requester_origin_json: "synthetic retained payload", last_notified_event_at: 77 },
+  ]);
 });
 
 it("refuses invalid repair admission before acquiring maintenance", () => {

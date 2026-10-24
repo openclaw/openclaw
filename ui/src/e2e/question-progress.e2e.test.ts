@@ -1,7 +1,11 @@
 import { expect, it } from "vitest";
 import { CHAT_TRANSCRIPT_END_THRESHOLD_PX } from "../pages/chat/scroll.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
-import { openChatDetails } from "./chat-details.test-support.ts";
+import {
+  closeChatDetails,
+  openChatDetails,
+  openChatTaskProgress,
+} from "./chat-details.test-support.ts";
 import {
   chatThreadDistanceFromBottom,
   createChatFlowE2eSuite,
@@ -14,13 +18,19 @@ const suite = createChatFlowE2eSuite();
 suite.define(() => {
   it.each([
     { width: 1440, progress: "collapsed" },
-    { width: 390, progress: "expanded" },
+    { width: 390, progress: "retained mobile page" },
     { width: 1440, progress: "absent" },
   ] as const)(
     "preserves question takeover, progress, and reader intent at $width with $progress progress",
     async ({ width, progress }) => {
       const context = await suite.newBrowserContext({ viewport: { width, height: 900 } });
       const page = await context.newPage();
+      const expectAtEnd = async () => {
+        await waitForChatScrollIdle(page);
+        await expect
+          .poll(() => chatThreadDistanceFromBottom(page))
+          .toBeLessThanOrEqual(CHAT_TRANSCRIPT_END_THRESHOLD_PX);
+      };
       const scenario = progressSubmitScenario(true);
       const gateway = await installMockGateway(page, {
         ...scenario,
@@ -57,38 +67,35 @@ suite.define(() => {
         await page.goto(`${suite.server.baseUrl}chat`);
         const composer = page.locator(".agent-chat__composer-combobox textarea");
         await composer.fill("Keep this draft.");
-        const progressCard = page.locator('[data-progress-card-placement="details"]');
+        const mobile = width < 768;
+        const progressCard = mobile
+          ? page.locator('.chat-mobile-details-page[data-details-page="task-progress"]')
+          : page.locator('[data-progress-card-placement="details"]');
         if (progress !== "absent") {
-          await openChatDetails(page);
-          await progressCard.waitFor();
-          const open = await progressCard.evaluate(
-            (element) => (element as HTMLDetailsElement).open,
-          );
-          if (open !== (progress === "expanded")) {
+          await openChatTaskProgress(page);
+          if (mobile) {
+            // The current mobile destination is retained when the user returns to chat.
+            await closeChatDetails(page);
+          } else {
             await progressCard.locator("summary").click();
+            await expect.poll(() => progressCard.getAttribute("open")).toBeNull();
           }
         }
         await page.locator(".chat-thread").hover({ position: { x: 4, y: 80 } });
         await page.mouse.wheel(0, 10_000);
-        await waitForChatScrollIdle(page);
-        await expect
-          .poll(() => chatThreadDistanceFromBottom(page))
-          .toBeLessThanOrEqual(CHAT_TRANSCRIPT_END_THRESHOLD_PX);
+        await expectAtEnd();
 
         await requestQuestion("question-progress-follow");
         const panel = page.locator(".chat-question-panel");
         await panel.waitFor();
         // The question owns the composer; it must not take over or auto-open Details.
-        expect(await progressCard.isVisible()).toBe(progress !== "absent");
+        expect(await progressCard.isVisible()).toBe(!mobile && progress !== "absent");
         expect(await composer.count()).toBe(0);
-        expect(await page.locator(".chat-details:popover-open").count()).toBe(
-          progress === "absent" ? 0 : 1,
+        expect(await page.locator(".chat-details:visible").count()).toBe(
+          mobile || progress === "absent" ? 0 : 1,
         );
         expect(await panel.evaluate((element) => document.activeElement === element)).toBe(true);
-        await waitForChatScrollIdle(page);
-        await expect
-          .poll(() => chatThreadDistanceFromBottom(page))
-          .toBeLessThanOrEqual(CHAT_TRANSCRIPT_END_THRESHOLD_PX);
+        await expectAtEnd();
         await page.keyboard.press("3");
         expect(
           await panel.getByRole("radio", { name: /Summarize/ }).getAttribute("aria-checked"),
@@ -104,10 +111,7 @@ suite.define(() => {
           answers: { answers: { next_step: ["Summarize"] } },
         });
         await composer.waitFor();
-        await waitForChatScrollIdle(page);
-        await expect
-          .poll(() => chatThreadDistanceFromBottom(page))
-          .toBeLessThanOrEqual(CHAT_TRANSCRIPT_END_THRESHOLD_PX);
+        await expectAtEnd();
         expect(await composer.inputValue()).toBe("Keep this draft.");
         expect(await composer.evaluate((element) => document.activeElement === element)).toBe(true);
 
@@ -115,9 +119,16 @@ suite.define(() => {
         await thread.hover({ position: { x: 4, y: 80 } });
         await page.mouse.wheel(0, -700);
         await waitForChatScrollIdle(page);
+        const beforeQuestion = await thread.evaluate((element) => element.scrollTop);
         await requestQuestion("question-progress-reader");
         await panel.waitFor();
-        await thread.hover({ position: { x: 4, y: 80 } });
+        await waitForChatScrollIdle(page);
+        expect(await thread.evaluate((element) => element.scrollTop)).toBeCloseTo(
+          beforeQuestion,
+          0,
+        );
+        // The question leaves a short viewport; its edge clears the floating end control.
+        await thread.hover({ position: { x: 4, y: 20 } });
         await page.mouse.wheel(0, -200);
         await page.waitForTimeout(201); // Separate gestures exceed the disclosure burst boundary.
         await page.mouse.wheel(0, -200);
@@ -130,11 +141,14 @@ suite.define(() => {
         expect(await thread.evaluate((element) => element.scrollTop)).toBeCloseTo(readingOffset, 0);
         await page.getByRole("button", { name: "Scroll to latest" }).waitFor();
         if (progress !== "absent") {
-          await openChatDetails(page);
-          await progressCard.waitFor();
-          expect(
-            await progressCard.evaluate((element) => (element as HTMLDetailsElement).open),
-          ).toBe(progress === "expanded");
+          await openChatTaskProgress(page);
+          if (mobile) {
+            await progressCard.locator(".task-progress-details__plan").waitFor();
+          } else {
+            expect(
+              await progressCard.evaluate((element) => (element as HTMLDetailsElement).open),
+            ).toBe(false);
+          }
           expect(await thread.evaluate((element) => element.scrollTop)).toBeCloseTo(
             readingOffset,
             0,

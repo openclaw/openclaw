@@ -319,28 +319,20 @@ it("validates, persists, composes, and updates registered source by name", async
   const { context, invoke, store, put, validateSource, composeDocument } =
     registeredWidgetHarness();
   await put("diagram:first");
-  const updated = await put("diagram:second");
+  await put("diagram:second");
   expect(validateSource).toHaveBeenCalledTimes(2);
-  expect(updated.mock.calls[0]?.[1]).toMatchObject({
-    widgets: [
-      {
-        name: "status",
-        contentKind: "plugin",
-        contentOwner: "registered",
-        registeredContentKind: "diagram",
-        pluginKind: "diagram:diagram",
-        revision: 2,
-      },
-    ],
-  });
   expect(
     await readBoardRegistered(store, { sessionKey: "session", agentId: "main" }, "status"),
   ).toMatchObject({ source: "diagram:second", pluginKind: "diagram:diagram", revision: 2 });
   const board = await invoke("board.get", { sessionKey: "session" });
   const widget = (board.mock.calls[0]![1] as BoardSnapshot).widgets[0]!;
   expect(widget).toMatchObject({
+    name: "status",
+    contentKind: "plugin",
     contentOwner: "registered",
     registeredContentKind: "diagram",
+    pluginKind: "diagram:diagram",
+    revision: 2,
     kindLabel: "Diagram",
     frameUrl: expect.stringContaining("/__openclaw__/board/"),
     sandboxUrl: expect.stringContaining("/mcp-app-sandbox"),

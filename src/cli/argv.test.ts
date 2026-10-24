@@ -18,18 +18,22 @@ import {
 const cli = (args: string) => ["node", "openclaw", ...args.split(" ")];
 
 it.each([
-  ["group short help", "--profile work backup help -h", "--profile work backup help"],
-  ["leaf positional help", "docs help --help", "docs help --help"],
-  ["group target help", "plugins help list --help", "plugins list --help"],
-  ["terminator", "backup help -- --help", "backup help -- --help"],
-])("normalizes generated help commands: %s", (_name, argv, expected) => {
+  ["--profile work backup help -h", "--profile work backup help"],
+  ["docs help --help"],
+  ["plugins help list --help", "plugins list --help"],
+  ["backup help -- --help"],
+  ["plugins help -- list", "plugins list --help"],
+  ["plugins help list -- --help"],
+])("normalizes generated help commands: %s", (argv, expected = argv) => {
   expect(normalizeGeneratedHelpCommandArgv(cli(argv))).toEqual(cli(expected));
 });
 
 it.each([
-  ["self-help", "help --help", "help --help"],
-  ["nested target", "help plugins list --help", "plugins list --help"],
-])("normalizes root help targets: %s", (_name, argv, expected) => {
+  ["help --help"],
+  ["help plugins list --help", "plugins list --help"],
+  ["help plugins -- list", "plugins list --help"],
+  ["help plugins list -- --profile work"],
+])("normalizes root help targets: %s", (argv, expected = argv) => {
   expect(normalizeRootHelpTargetArgv(cli(argv))).toEqual(cli(expected));
 });
 
@@ -45,20 +49,12 @@ it("allows final command metadata to lift no-color after boolean command flags",
 });
 
 it.each([
-  ["equals", "doctor --log-level=trace --json", "--log-level=trace doctor --json"],
-  [
-    "root options first",
-    "--profile work doctor --log-level debug",
-    "--profile work --log-level debug doctor",
-  ],
-  [
-    "command option value",
-    "agent --message --log-level debug",
-    "agent --message --log-level debug",
-  ],
-  ["terminator", "nodes run -- --log-level debug", "nodes run -- --log-level debug"],
-  ["missing value", "doctor --log-level --json", "doctor --log-level --json"],
-])("normalizes root --log-level before command parsing: %s", (_name, argv, expected) => {
+  ["doctor --log-level=trace --json", "--log-level=trace doctor --json"],
+  ["--profile work doctor --log-level debug", "--profile work --log-level debug doctor"],
+  ["agent --message --log-level debug"],
+  ["nodes run -- --log-level debug"],
+  ["doctor --log-level --json"],
+])("normalizes root --log-level before command parsing: %s", (argv, expected = argv) => {
   expect(normalizeRootLogLevelArgv(cli(argv))).toEqual(cli(expected));
 });
 
@@ -74,14 +70,14 @@ it("preserves log-level when final command metadata owns the option", () => {
 });
 
 it.each([
-  ["unknown plugin command help", cli("external-plugin tools help"), true],
-  ["help as option value", cli("agent --message help"), false],
-  ["help after terminator", cli("nodes invoke -- help"), false],
-  ["implicit root help command after terminator", cli("-- help config"), true],
-  ["implicit parent help command after terminator", cli("config -- help"), true],
-  ["root version flag", cli("--version"), true],
-])("detects help/version invocations: %s", (_name, argv, expected) => {
-  expect(isHelpOrVersionInvocation(argv)).toBe(expected);
+  ["external-plugin tools help", true],
+  ["agent --message help", false],
+  ["nodes invoke -- help", false],
+  ["-- help config", true],
+  ["config -- help", true],
+  ["--version", true],
+] as const)("detects help/version invocations: %s", (argv, expected) => {
+  expect(isHelpOrVersionInvocation(cli(argv))).toBe(expected);
 });
 
 it("detects root-only version invocations with a profile", () => {
@@ -110,10 +106,10 @@ it("ignores boolean flags after the terminator", () => {
 });
 
 it.each([
-  ["flag appears after terminator", cli("-- --timeout=99"), undefined],
-  ["repeated flag uses final value", cli("status --timeout 100 --timeout=200"), "200"],
-])("extracts flag values: %s", (_name, argv, expected) => {
-  expect(getFlagValue(argv, "--timeout")).toBe(expected);
+  ["-- --timeout=99", undefined],
+  ["status --timeout 100 --timeout=200", "200"],
+] as const)("extracts flag values: %s", (argv, expected) => {
+  expect(getFlagValue(cli(argv), "--timeout")).toBe(expected);
 });
 
 it("parses verbose flags", () => {
@@ -121,21 +117,17 @@ it("parses verbose flags", () => {
   expect(getVerboseFlag(cli("status --debug"))).toBe(true);
 });
 
-it.each([
-  ["missing value", cli("status --timeout"), null],
-  ["zero", cli("status --timeout 0"), null],
-])("parses positive integer flag values: %s", (_name, argv, expected) => {
-  expect(getPositiveIntFlagValue(argv, "--timeout")).toBe(expected);
+it.each(["status --timeout", "status --timeout 0"])("rejects invalid integer: %s", (argv) => {
+  expect(getPositiveIntFlagValue(cli(argv), "--timeout")).toBeNull();
 });
 
 it.each([
-  ["prefixes fallback when raw args start at program name", ["openclaw", "status"], cli("status")],
+  [["openclaw", "status"], cli("status")],
   [
-    "keeps bun execution argv",
     ["bun", "src/entry.ts", "status"],
     ["bun", "src/entry.ts", "status"],
   ],
-] as const)("builds parse argv from raw args: %s", (_name, rawArgs, expected) => {
+] as const)("builds parse argv from raw args: %j", (rawArgs, expected) => {
   const parsed = buildParseArgv([...rawArgs]);
   expect(parsed).toEqual([...expected]);
 });

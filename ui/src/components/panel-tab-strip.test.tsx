@@ -2,6 +2,8 @@
 
 import { createSignal } from "solid-js";
 import { afterEach, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
+import { createTabFocus } from "../lib/tabs.ts";
 import { createDataTransferStub } from "../test-helpers/drag-data.ts";
 import { cleanupSolid, mountSolid } from "../test-helpers/mount-solid.ts";
 import { flush } from "../test-helpers/solid-settle.ts";
@@ -213,6 +215,73 @@ it("closes the requested tab from its labeled close button", async () => {
   expect(onClose).toHaveBeenCalledWith(TAB.id);
 });
 
+it("keeps a fixed tab selectable without a close action", async () => {
+  const onClose = vi.fn();
+  const onSelect = vi.fn();
+  const container = await renderStrip({
+    tabs: [
+      { ...TAB, closable: false },
+      { ...TAB, id: "tab-2", domId: "test-tab-2", label: "Second tab" },
+    ],
+    activeId: "tab-2",
+    onClose,
+    onSelect,
+  });
+  const tab = renderedTabs(container)[0]!;
+  expect(tab.getAttribute("aria-selected")).toBe("false");
+  expect(container.querySelector(`#${TAB.domId}-close`)).toBeNull();
+  expect(container.querySelector('[role="group"]')?.getAttribute("aria-owns")).not.toContain(
+    `${TAB.domId}-close`,
+  );
+  tab.dispatchEvent(new MouseEvent("auxclick", { button: 1, bubbles: true }));
+  expect(onClose).not.toHaveBeenCalled();
+  tab.click();
+  expect(onSelect).toHaveBeenCalledWith(TAB.id);
+
+  await renderStrip({ tabs: [TAB], container, onClose });
+  expect(container.querySelector(".tabstrip-tab__close")).not.toBeNull();
+  tab.dispatchEvent(new MouseEvent("auxclick", { button: 1, bubbles: true }));
+  expect(onClose).toHaveBeenCalledExactlyOnceWith(TAB.id);
+});
+
+it.each([false, true])(
+  "preserves close focus across replacement (outside focus: %s)",
+  async (outsideFocus) => {
+    const focusOwner = createTabFocus();
+    const close = createDeferred();
+    const remaining = makeTab(2);
+    const outside = document.body.appendChild(document.createElement("button"));
+    let closing = Promise.resolve();
+    let container = host();
+    await renderStrip({
+      container,
+      tabs: [TAB, remaining],
+      focusOwner,
+      onClose: () => {
+        closing = close.promise.then(async () => {
+          const previous = container;
+          container = await renderStrip({ tabs: [remaining], focusOwner });
+          // The replacement may mount before the old owner is retired.
+          unmountStrip(previous);
+          previous.remove();
+          if (outsideFocus) {
+            outside.focus();
+          }
+        });
+        return closing;
+      },
+    });
+    const closeButton = tabStrip(container, "-tab__close");
+    closeButton.focus();
+    closeButton.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    closeButton.click();
+    close.resolve();
+    await closing;
+    await Promise.resolve();
+    expect(document.activeElement).toBe(outsideFocus ? outside : renderedTabs(container)[0]);
+  },
+);
+
 it("batches overflow reads after content commits and skips unchanged renders", async () => {
   const clock = tabMeasurementClock();
   const tabs = [TAB, makeTab(2)];
@@ -265,6 +334,37 @@ it("batches overflow reads after content commits and skips unchanged renders", a
     "read 1",
   ]);
   expect(labels[0]!.hasAttribute("data-tooltip-overflow")).toBe(false);
+});
+
+it("shares a read-before-write frame without sharing strip cancellation", async () => {
+  const clock = tabMeasurementClock();
+  const first = await renderStrip({ tabs: [TAB] });
+  const second = await renderStrip({ tabs: [makeTab(2)] });
+  const operations: string[] = [];
+  for (const [name, container] of [
+    ["first", first],
+    ["second", second],
+  ] as const) {
+    const label = tabStrip(container, "-tab__label");
+    widths(label, 100, () => {
+      operations.push(`read ${name}`);
+      return 200;
+    });
+    const toggle = label.classList.toggle.bind(label.classList);
+    vi.spyOn(label.classList, "toggle").mockImplementation((token, force) => {
+      operations.push(`write ${name}`);
+      return toggle(token, force);
+    });
+  }
+  clock.flush();
+  expect(operations).toEqual(["read first", "read second", "write first", "write second"]);
+
+  operations.length = 0;
+  tabStrip(first).dispatchEvent(new Event("scroll"));
+  tabStrip(second).dispatchEvent(new Event("scroll"));
+  unmountStrip(first);
+  clock.flush();
+  expect(operations).toEqual(["read second", "write second"]);
 });
 
 it("measures the visible label when its tooltip wrapper changes", async () => {

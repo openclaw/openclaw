@@ -21,7 +21,6 @@ vi.mock("./auth-profile.js", async () => {
   const { resolveAuthProfileOrder } = await import("openclaw/plugin-sdk/provider-auth");
   const { createCodexAuthProfileSelection } = await import("./auth-profile-selection.js");
   return createCodexAuthProfileSelection({
-    ensureAuthProfileStore: () => profiles.store,
     ensureAuthProfileStoreAsync: async () => profiles.store,
     resolveAuthProfileOrder,
   });
@@ -163,9 +162,6 @@ describe("Codex app-server model catalog", () => {
       limit: 100,
       includeHidden: true,
     });
-    expect(vi.mocked(withCodexAppServerJsonClient).mock.calls[0]?.[0].startOptions?.homeScope).toBe(
-      "agent",
-    );
     expect(probeCodexNativeAuth).not.toHaveBeenCalled();
   });
 

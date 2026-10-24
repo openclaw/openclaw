@@ -25,14 +25,12 @@ function resolveDiscordEmbedText(
 
 export function resolveDiscordMessageText(
   message: Message,
-  options?: { fallbackText?: string; includeForwarded?: boolean },
+  options?: { includeForwarded?: boolean },
 ): string {
   const rawText =
     resolveDiscordMessageMentionDocuments(message)
       .map((text) => text.trim())
-      .join("\n") ||
-    normalizeOptionalString(options?.fallbackText) ||
-    "";
+      .join("\n") || "";
   const baseText = resolveDiscordMentions(rawText, message);
   if (!options?.includeForwarded) {
     return baseText;
@@ -71,18 +69,6 @@ export function resolveDiscordMessageBatch(last: Message, preceding: readonly Me
     ...Object.getOwnPropertyDescriptors(last),
     content: { value: content, enumerable: true, configurable: true },
     attachments: { value: [], enumerable: true, configurable: true },
-    message_snapshots: {
-      // SAFETY: This optional transport field stays opaque until snapshot normalization.
-      value: (last as { message_snapshots?: unknown }).message_snapshots,
-      enumerable: true,
-      configurable: true,
-    },
-    messageSnapshots: {
-      // SAFETY: This optional wrapper field stays opaque until snapshot normalization.
-      value: (last as { messageSnapshots?: unknown }).messageSnapshots,
-      enumerable: true,
-      configurable: true,
-    },
     rawData: {
       value: { ...last.rawData },
       enumerable: true,
@@ -94,7 +80,7 @@ export function resolveDiscordMessageBatch(last: Message, preceding: readonly Me
 /** Adds native media text only for history surfaces that cannot carry structured facts. */
 export function resolveDiscordMessageHistoryText(
   message: Message,
-  options?: { fallbackText?: string; includeForwarded?: boolean },
+  options?: { includeForwarded?: boolean },
 ): string {
   const text = resolveDiscordMessageText(message, options);
   const mediaText = formatDiscordMediaText({

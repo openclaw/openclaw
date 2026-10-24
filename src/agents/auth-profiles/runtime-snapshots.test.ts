@@ -10,7 +10,7 @@ import { prepareSharedAuthStoreOwnershipForNative } from "./path-resolve.native.
 import {
   getPreparedRuntimeAuthMaterializations as getMaterializations,
   recordRuntimeAuthMaterialization as recordMaterialization,
-  registerRuntimeAuthMaterializationMutationListener as onMaterialization,
+  runtimeAuthMaterializationChanges,
   revokeRuntimeAuthMaterializations as revokeMaterializations,
 } from "./runtime-materializations.js";
 import {
@@ -35,7 +35,9 @@ import { resolveAuthProfileDatabasePath } from "./sqlite.js";
 import type { AuthProfileStore } from "./types.js";
 
 const cleanups: Array<() => void> = [];
+const publishMaterialization = runtimeAuthMaterializationChanges.onChange;
 afterEach(() => {
+  runtimeAuthMaterializationChanges.onChange = publishMaterialization;
   for (const cleanup of cleanups.splice(0).toReversed()) {
     cleanup();
   }
@@ -44,6 +46,14 @@ afterEach(() => {
 });
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const track = (cleanup: () => void) => cleanups.push(cleanup);
+function observeMaterializations(
+  listener: NonNullable<typeof runtimeAuthMaterializationChanges.onChange>,
+) {
+  runtimeAuthMaterializationChanges.onChange = (event) => {
+    publishMaterialization?.(event);
+    listener(event);
+  };
+}
 function apiStore(key: string, cooldownUntil = 20_000): AuthProfileStore {
   return {
     version: 1,
@@ -107,7 +117,7 @@ describe("runtime auth profile snapshots", () => {
 
   it("marks default-owner materializations as inherited mutations", () => {
     const listener = vi.fn();
-    track(onMaterialization(listener));
+    observeMaterializations(listener);
     recordMaterialization(materialization);
     expect(listener).toHaveBeenCalledWith({ affectsInheritedStores: true });
   });
@@ -118,7 +128,7 @@ describe("runtime auth profile snapshots", () => {
     const materializationListener = vi.fn();
     setSnapshot(createStore("materialized"), agentDir);
     track(onStoreMutation(pluginStoreListener));
-    track(onMaterialization(materializationListener));
+    observeMaterializations(materializationListener);
     const facts = { ...materialization, authProfileId: "openai:default" };
     const input = { ...facts, agentDir };
     expect(recordMaterialization(input)).toBe(true);
@@ -171,6 +181,24 @@ describe("runtime auth profile snapshots", () => {
     expect(getMetadataRevision(agentDir)).toBe(metadataRevision);
     expect(getMetadataRevision("/tmp/absent-auth-owner")).toBe(missingRevision);
     expect(listener).not.toHaveBeenCalled();
+  });
+
+  it("bounds remembered revisions while refreshing a repeatedly cleared owner", () => {
+    const root = tempDirs.make("auth-snapshot-revisions-");
+    const first = path.join(root, "first");
+    const second = path.join(root, "second");
+    const metadataRevision = getMetadataRevision(first);
+    const snapshotRevision = getSnapshotRevision(first);
+    clearSnapshot(first);
+    clearSnapshot(second);
+    clearSnapshot(first);
+    for (let index = 0; index < 255; index += 1) {
+      clearSnapshot(path.join(root, `missing-${index}`));
+    }
+    expect(getMetadataRevision(first)).toBe(metadataRevision + 3);
+    expect(getSnapshotRevision(first)).toBe(snapshotRevision + 3);
+    expect(getMetadataRevision(second)).toBe(metadataRevision + 258);
+    expect(getSnapshotRevision(second)).toBe(snapshotRevision + 258);
   });
 
   it.each(["replace", "remove"] as const)(
@@ -298,7 +326,7 @@ describe("runtime auth profile snapshots", () => {
     expect(cleared.lastGood).toBe(worker.lastGood);
     expect(worker.usageStats["acme:primary"]).toEqual({ cooldownUntil: 20_000 });
 
-    const usage = { cooldownUntil: 30_000, failureCounts: { rate_limit: 2 } };
+    const usage = { cooldownUntil: 30_000, failureCounts: { timeout: 2 } };
     setUsage(published, agentDir, { "acme:primary": usage });
     const blocked = read(worker);
     expect(blocked.usageStats?.["acme:primary"]).toEqual(usage);

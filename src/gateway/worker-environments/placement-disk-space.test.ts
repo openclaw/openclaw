@@ -1,4 +1,4 @@
-import { expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { withinTest } from "../../../test/helpers/promise.js";
 import type { SpawnResult } from "../../process/exec.js";
 import { onSessionLifecycleEvent } from "../../sessions/session-lifecycle-events.js";
@@ -11,6 +11,7 @@ import type { WorkerTunnelRequest, WorkerWorkspaceCommand } from "./tunnel-contr
 
 const MIB = 1024 * 1024;
 const GIB = 1024 * MIB;
+afterEach(() => vi.restoreAllMocks());
 
 function activePlacement(
   overrides: Partial<Extract<WorkerSessionPlacementRecord, { state: "active" }>> = {},
@@ -47,6 +48,7 @@ function createHarness(
   let runnerStatus: "available" | "offline" = "available";
   let runnerVersion = 0;
   let nowMs = 1_000;
+  vi.spyOn(Date, "now").mockImplementation(() => nowMs);
   const runCommand = vi.fn(runWorkspaceCommand);
   const unexpected = async () => {
     throw new Error("unexpected workspace mutation during a disk probe");
@@ -75,7 +77,6 @@ function createHarness(
       version: () => runnerVersion,
     },
     warn,
-    now: () => nowMs,
   });
   return {
     monitor,

@@ -15,6 +15,7 @@ import {
 } from "openclaw/plugin-sdk/ssrf-runtime";
 import { asFiniteNumber, isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { clampNumber, truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { racePromiseWithAbortSignal } from "openclaw/plugin-sdk/time-runtime";
 import {
   BEAM_MAX_BODY_BYTES,
   BEAM_MAX_ITEM_CHARS,
@@ -212,13 +213,10 @@ type TrackedMirrorSession = {
 export function createBeamMirrorRunner(params: {
   runtime: { config: Pick<PluginRuntime["config"], "current"> };
   logger: { warn: (message: string) => void; info: (message: string) => void };
-  fetchFn?: typeof fetch;
   now?: () => number;
-  listCatalogs?: () => ActiveSessionCatalog[];
   signal: AbortSignal;
 }) {
   const now = params.now ?? Date.now;
-  const listCatalogs = params.listCatalogs ?? listActiveSessionCatalogs;
   const tracked = new Map<string, TrackedMirrorSession>();
   const { signal } = params;
   let lastWarnAt = 0;
@@ -229,22 +227,8 @@ export function createBeamMirrorRunner(params: {
 
   // Catalog work cannot be cancelled, so detach its late result after stop.
   // Guarded transport cleanup remains joined to the active scan in upload().
-  const raceCatalog = async <T>(operation: Promise<T>): Promise<T> => {
-    let rejectAbort: (error: Error) => void;
-    const aborted = new Promise<never>((_, reject) => {
-      rejectAbort = reject;
-    });
-    const abort = () => rejectAbort(stopError);
-    signal.addEventListener("abort", abort, { once: true });
-    try {
-      if (signal.aborted) {
-        abort();
-      }
-      return await Promise.race([operation, aborted]);
-    } finally {
-      signal.removeEventListener("abort", abort);
-    }
-  };
+  const raceCatalog = <T>(operation: Promise<T>): Promise<T> =>
+    racePromiseWithAbortSignal(operation, signal, () => stopError);
 
   // Retry state keeps a bounded sender-owned superset until the receiver's TTL.
   // The extra capacity prevents independent clocks from dropping a live row.
@@ -292,7 +276,6 @@ export function createBeamMirrorRunner(params: {
     try {
       guarded = await fetchWithSsrFGuard({
         url: endpoint,
-        fetchImpl: params.fetchFn,
         timeoutMs: MIRROR_UPLOAD_TIMEOUT_MS,
         signal,
         policy: ssrfPolicyFromHttpBaseUrlAllowedOrigin(endpoint),
@@ -407,7 +390,7 @@ export function createBeamMirrorRunner(params: {
         return;
       }
       const activeSinceMs = now() - mirror.activeWindowMinutes * 60_000;
-      const catalogs = listCatalogs().filter(
+      const catalogs = listActiveSessionCatalogs().filter(
         (catalog) =>
           // Never mirror the local beam receiver back out: a two-gateway pair
           // would otherwise re-mirror each other's rows forever.

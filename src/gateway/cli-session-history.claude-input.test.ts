@@ -1,12 +1,14 @@
 import fs from "node:fs/promises";
 import { expect, it } from "vitest";
-import { buildCliSessionDriftNote } from "../agents/cli-session.js";
+import { buildCliSessionDriftNote } from "../agents/cli-session-drift.js";
 import { HEARTBEAT_PROMPT } from "../auto-reply/heartbeat.js";
 import { applySessionHints } from "../auto-reply/reply/body.js";
-import { buildExecEventPrompt } from "../infra/heartbeat-events-filter.js";
 import { buildInterSessionPromptContext } from "../sessions/input-provenance.js";
 import { formatSystemTurnPrompt } from "../sessions/system-turn-prompt.js";
-import { projectChatDisplayMessages } from "./chat-display-projection.js";
+import {
+  projectChatDisplayMessages,
+  projectChatDisplayMessagesWithState,
+} from "./chat-display-projection.js";
 import { classifyClaudeCliHistoryLine } from "./cli-session-history.claude-activity.js";
 import {
   cleanClaudeCliImportedUserDisplay,
@@ -16,6 +18,7 @@ import {
 import {
   buildLegacyReseedPrompt,
   claudeUser,
+  LEGACY_EXEC_COMPLETION_PROMPT,
   mergeImportedChatHistoryMessages,
   user,
   withClaudeProjectsDir,
@@ -36,7 +39,7 @@ const REQUESTER_HINT =
   'requester_profile is the verified linked requester. For "assign to me", use sessions assign_owner with ownerType="human" and ownerId=requester_profile.id, if available.';
 const frame = (json: string) =>
   `Conversation info: ⟦openclaw:ctx⟧\n\`\`\`json\n${json}\n\`\`\`\n\n`;
-const execPrompt = buildExecEventPrompt(["Exec completed (example, code 0) :: done"]);
+const execPrompt = LEGACY_EXEC_COMPLETION_PROMPT;
 
 function merge(localMessages: unknown[], importedMessages: unknown[]) {
   return mergeImportedChatHistoryMessages({ localMessages, importedMessages });
@@ -113,6 +116,37 @@ it.each(internalInputs)("hides %s copies without hiding real user messages", (_k
     expect(projectChatDisplayMessages(merged)).toMatchObject([{ role: "user", content }]);
   }
 });
+
+it.each(["[Request interrupted by user]", "[Request interrupted by user for tool use]"])(
+  "hides the native %s row without hiding human text or look-alikes",
+  async (text) => {
+    await withClaudeProjectsDir(async ({ filePath, readMessages }) => {
+      const interrupt = claudeUser(blocks(text), { uuid: "interrupt" });
+      const visible = [
+        claudeUser(text, { uuid: "string" }),
+        ...["promptSource", "turnOrigin", "turnPosition", "permissionMode"].map((field) =>
+          claudeUser(blocks(text), { uuid: field, [field]: "user" }),
+        ),
+        claudeUser(`${text} Please explain.`, { uuid: "suffix" }),
+        claudeUser(blocks(` ${text}`), { uuid: "whitespace" }),
+        claudeUser([...blocks(text), ...blocks("Please explain.")], { uuid: "sibling" }),
+      ];
+      await fs.writeFile(
+        filePath,
+        [interrupt, ...visible].map((entry) => JSON.stringify(entry)).join("\n"),
+      );
+      const projected = projectChatDisplayMessagesWithState(merge([], await readMessages()));
+      expect(projected.messages.map((message) => message.content)).toEqual(
+        visible.map((entry) => entry.message.content),
+      );
+      expect(projected.activity).toEqual([]);
+      expect(classify(JSON.stringify(interrupt)).humanTurn).toBe(false);
+      for (const entry of visible) {
+        expect(classify(JSON.stringify(entry)).humanTurn).toBe(true);
+      }
+    });
+  },
+);
 
 it.each(["sessions_send", "subagent_settle"])(
   "preserves routed %s input for the shared provenance projection",

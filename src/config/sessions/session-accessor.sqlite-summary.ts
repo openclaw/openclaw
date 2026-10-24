@@ -5,7 +5,7 @@ import {
 } from "../../infra/kysely-sync.js";
 import { sqlPublicationAnchor } from "../../infra/sql-connection.js";
 import { withSqlitePostCommitPublications } from "../../infra/sqlite-post-commit.js";
-import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
+import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import { isInternalSessionEffectsKey } from "./internal-session-key.js";
@@ -58,7 +58,7 @@ export function readSessionStoreSummaryReadOnly(
     (database) =>
       readWithCanonicalSessionReaderContinuation(database, options.continuation, () =>
         withSqlitePostCommitPublications(sqlPublicationAnchor(database.db), () =>
-          runSqliteDeferredTransactionSync(database.db, () => {
+          runSqliteReadSnapshotSync(database.db, () => {
             assertCanonicalSqliteSessionKeysCurrent(database);
             const db = getSessionKysely(database.db);
             // The read transaction keeps count, ordering, and selected payloads on one

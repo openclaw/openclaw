@@ -211,7 +211,7 @@ export function createSessionActorMemoryPending(
           row.session_key === input.sessionKey &&
           row.session_id === input.sessionId &&
           input.ids.includes(row.input_id) &&
-          row.state === "queued" &&
+          (row.state === "queued" || row.state === "interrupted") &&
           row.consumed_event_id === null,
       );
       const candidates = selected.map((row) => ({

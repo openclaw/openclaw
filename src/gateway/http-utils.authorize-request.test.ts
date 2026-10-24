@@ -98,6 +98,7 @@ const expectedGuestAuth = {
 function expectedProfileAuth(profile: typeof ownerProfile, aliases = [profile.profileId]) {
   return {
     ...expectedGuestAuth,
+    hasCurrentProfileAuthority: expect.any(Function),
     operatorAccessAuthority: null,
     authenticatedUserProfile: profile,
     preparedSessionProfile: {

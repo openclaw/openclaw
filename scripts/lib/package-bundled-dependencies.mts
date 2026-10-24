@@ -26,6 +26,7 @@ const REQUIRED_AI_RUNTIME_ENTRIES = [
   { subpath: "", whenExported: false },
   { subpath: "providers", whenExported: false },
   { subpath: "transports", whenExported: true },
+  { subpath: "internal/model-request-body", whenExported: true },
   { subpath: "internal/openai-completions-compat", whenExported: true },
   { subpath: "internal/openai-responses-payload-policy", whenExported: true },
   { subpath: "internal/runtime", whenExported: false },
@@ -36,7 +37,7 @@ const REQUIRED_AI_RUNTIME_ENTRIES = [
   whenExported: whenExported ? `./${subpath}` : undefined,
 }));
 
-function listBundleDependencies(packageJson: unknown): string[] {
+export function listBundleDependencies(packageJson: unknown): string[] {
   if (!isRecord(packageJson)) {
     return [];
   }

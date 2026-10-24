@@ -10,13 +10,14 @@ import {
   setActivePluginRegistry,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { RateLimitError } from "../internal/discord.js";
+import { RateLimitError, RequestClient } from "../internal/rest.js";
 import {
   baseConfig,
   baseRuntime,
   getProviderMonitorTestMocks,
   resetDiscordProviderMonitorMocks,
 } from "../test-support/provider.test-support.js";
+import * as voiceCommands from "../voice/command.js";
 import { DiscordGuildJoinIntroductionListener } from "./listeners.guild-join.js";
 import {
   formatDiscordDeployErrorDetails,
@@ -51,24 +52,6 @@ let monitorDiscordProvider: typeof import("./provider.js").monitorDiscordProvide
 
 function createAcpRuntimeError(code: string, message: string): Error & { code: string } {
   return Object.assign(new Error(message), { code });
-}
-
-function createRateLimitError(
-  response: Response,
-  body: { message: string; retry_after: number; global: boolean },
-  request?: Request,
-): RateLimitError {
-  const fallbackRequest =
-    request ??
-    new Request("https://discord.com/api/v10/applications/commands", {
-      method: "PUT",
-    });
-  const RateLimitErrorCtor = RateLimitError as unknown as new (
-    response: Response,
-    body: { message: string; retry_after: number; global: boolean },
-    request?: Request,
-  ) => RateLimitError;
-  return new RateLimitErrorCtor(response, body, fallbackRequest);
 }
 
 type MockCallReader = { mock: { calls: unknown[][] } };
@@ -424,6 +407,38 @@ describe("monitorDiscordProvider", () => {
     expect(voiceRuntimeModuleLoadedMock).toHaveBeenCalledTimes(1);
   });
 
+  it("keeps voice-owned commands out of the generic native dispatcher", async () => {
+    configureAccount({ voice: {} });
+    const standard = { name: "normal", description: "Normal", acceptsArgs: false };
+    listNativeCommandSpecsForConfigMock.mockReturnValue([
+      standard,
+      { name: "vc", description: "Shadow voice command", acceptsArgs: false },
+    ]);
+    const createVoiceCommand = vi.spyOn(voiceCommands, "createDiscordVoiceCommand");
+    try {
+      await runProvider();
+      expect(createDiscordNativeCommandMock).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ command: standard }),
+      );
+      expect(createVoiceCommand).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ accountId: "default", getManager: expect.any(Function) }),
+      );
+    } finally {
+      createVoiceCommand.mockRestore();
+    }
+  });
+
+  it("binds native slash commands to the owning Gateway dispatcher", async () => {
+    const channelRuntime = createPluginRuntimeMock().channel;
+    await runProvider({ channelRuntime });
+    expect(createDiscordNativeCommandMock).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        dispatchReplyFromConfig: channelRuntime.reply.dispatchReplyFromConfig,
+        buildContext: channelRuntime.inbound.buildContext,
+      }),
+    );
+  });
+
   it("registers the native approval runtime context when exec approvals are enabled", async () => {
     const channelRuntime = createPluginRuntimeMock().channel;
     const execApprovalsConfig = { enabled: true, approvers: ["123"] };
@@ -554,10 +569,7 @@ describe("monitorDiscordProvider", () => {
 
   it("continues startup when Discord daily slash-command create quota is exhausted", async () => {
     const runtime = baseRuntime();
-    const request = new Request("https://discord.com/api/v10/applications/commands", {
-      method: "PUT",
-    });
-    const rateLimitError = createRateLimitError(
+    const rateLimitError = new RateLimitError(
       new Response(null, {
         status: 429,
         headers: {
@@ -569,10 +581,9 @@ describe("monitorDiscordProvider", () => {
         message: "Max number of daily application command creates has been reached (200)",
         retry_after: 193.632,
         global: false,
+        code: 30034,
       },
-      request,
     );
-    rateLimitError.discordCode = 30034;
     clientDeployCommandsMock.mockRejectedValueOnce(rateLimitError);
 
     await runProvider({ runtime });
@@ -619,7 +630,7 @@ describe("monitorDiscordProvider", () => {
 
   it("skips native command deploy retries after one rate limit warning", async () => {
     const runtime = baseRuntime();
-    const rateLimitError = createRateLimitError(
+    const rateLimitError = new RateLimitError(
       new Response(null, {
         status: 429,
       }),
@@ -645,30 +656,24 @@ describe("monitorDiscordProvider", () => {
     expectMockLogNotContains(runtime.error, "native-slash-command-deploy-rest");
   });
 
-  it("does not parse malformed Discord deploy retry_after values", () => {
-    const details = formatDiscordDeployErrorDetails({
-      status: 429,
-      rawBody: {
-        message: "You are being rate limited.",
-        retry_after: "0x2",
-        global: false,
-      },
+  it("uses the native REST retry fallback for malformed Discord retry_after values", async () => {
+    const rest = new RequestClient("synthetic-token", {
+      queueRequests: false,
+      fetch: async () =>
+        Response.json(
+          {
+            message: "You are being rate limited.",
+            retry_after: "0x2",
+            global: false,
+          },
+          { status: 429 },
+        ),
     });
-
-    expect(details).toBe(" (status=429, scope=route)");
-  });
-
-  it("rejects malformed Discord deploy rate-limit status values", () => {
-    const details = formatDiscordDeployErrorDetails({
-      status: 429.5,
-      rawBody: {
-        message: "You are being rate limited.",
-        retry_after: 3.172,
-        global: false,
-      },
-    });
-
-    expect(details).toBe(" (retryAfter=3.2s, scope=route)");
+    await expect(
+      rest
+        .get("/applications/app-1/commands")
+        .catch((error: unknown) => formatDiscordDeployErrorDetails(error)),
+    ).resolves.toBe(" (status=429, retryAfter=1s, scope=route)");
   });
 
   it("keeps truncated Discord deploy response bodies UTF-16 safe", () => {

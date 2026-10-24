@@ -251,7 +251,7 @@ export async function buildDiscordMessageProcessContext(params: {
           entries: guildHistories.get(messageChannelId) ?? [],
           mode: contextVisibilityMode,
           isSenderAllowed: isSupplementalContextSenderAllowed,
-        }).entries.slice(-historyLimit);
+        }).slice(-historyLimit);
       }
       if (!isHistoryCurrent()) {
         return null;

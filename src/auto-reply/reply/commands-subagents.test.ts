@@ -81,11 +81,12 @@ function timedRun(
 }
 
 async function statusText(now: number, verboseEnabled = true) {
+  const context = await controlScope.buildControlledSubagentRunsReadContext("agent:main:main");
+  using _ = vi.spyOn(Date, "now").mockReturnValueOnce(now);
   return (
     buildSubagentsStatusLine({
-      context: await controlScope.buildControlledSubagentRunsReadContext("agent:main:main"),
+      context,
       verboseEnabled,
-      now,
     }) ?? ""
   );
 }
@@ -450,7 +451,7 @@ describe("subagents info", () => {
       suspendedReason: "permanent_failure",
       lastError: "requester unavailable\ntry retained result",
     };
-    SubagentLifecycleController.discardTerminalDelivery(run, now, discardReason);
+    SubagentLifecycleController.discardTerminalDelivery(run, now);
     expect(run.delivery.lastError).toBeUndefined();
     const text = await inspectRun(run, undefined, run.runId);
     expectText(text, [

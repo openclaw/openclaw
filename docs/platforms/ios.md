@@ -39,6 +39,29 @@ The app requires iOS 26.2 or iPadOS 26.2 or later.
 - **Settings** opens the Dashboard settings pages when connected with `operator.admin`; the native Gateway screen remains available for connection and pairing.
 - Speaks assistant messages on demand: long-press a message in Chat and choose **Listen**. The app plays supported Gateway `tts.speak` clips with the configured TTS provider and falls back to on-device speech when Gateway audio is unavailable or unplayable. Playback stops on session switch or backgrounding.
 
+## Chat text size
+
+Chat uses a 13.5-point base text size for a denser transcript. It still follows
+your system or per-app Dynamic Type setting, including accessibility text sizes.
+This makes chat text smaller than the previous 17-point base at the same setting;
+increase the app’s text size in iOS Settings if you prefer larger text.
+
+At accessibility text sizes, the composer shows a model icon instead of a cramped
+model name. Its accessibility label and value still identify the selected model.
+Icon glyphs stay within their controls while chat text continues to scale.
+
+## Model sign-in
+
+Open the model menu in the chat composer and choose **Model sign-in**. The menu
+remains available during a response, while session settings are saving, and when
+no models are listed. Model choices still respect their existing permission and
+busy-state restrictions; opening sign-in does not grant permission to change them.
+
+When the selected model cannot send because its credentials are missing or invalid,
+a **Model sign-in** link also appears beside the composer. The link stays available
+when camera or voice-note capture replaces the model menu. Provider authentication
+and Gateway permissions are unchanged.
+
 ## Settings
 
 Open **Settings** in the sidebar to use the same Dashboard settings pages as the
@@ -703,6 +726,10 @@ If mDNS is blocked, use a unicast DNS-SD zone (choose a domain; example: `opencl
 ### Manual host/port
 
 Open **Settings → Gateway**, enable **Use Manual Gateway**, and enter the Gateway host + port (default `18789`).
+
+IPv6 host fields accept raw addresses such as `fd00::1` and bracketed addresses
+such as `[fd00::1]`. Full Gateway URLs require brackets around the address,
+for example `wss://[fd00::1]:18789`.
 
 ## Multiple Gateways
 

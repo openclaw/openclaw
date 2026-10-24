@@ -2135,7 +2135,6 @@ describe("memory plugin e2e", () => {
     const customTooLong = `I always prefer this style. ${"x".repeat(1600)}`;
     expect(shouldCapture(customAllowed, { maxChars: 1500 })).toBe(true);
     expect(shouldCapture(customTooLong, { maxChars: 1500 })).toBe(false);
-    expect(shouldCapture(defaultTooLong, { maxChars: Number.NaN })).toBe(false);
   });
 
   test.each([

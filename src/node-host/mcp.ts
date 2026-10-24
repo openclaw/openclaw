@@ -8,6 +8,7 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import pLimit from "p-limit";
 import type { NodePluginToolDescriptor } from "../../packages/gateway-protocol/src/schema/nodes.js";
+import { listAllMcpTools } from "../agents/mcp-catalog-listing.js";
 import {
   connectMcpClient,
   disposeMcpClient,
@@ -16,7 +17,6 @@ import {
 import { redactMcpDiagnosticError } from "../agents/mcp-error.js";
 import { createMcpJsonSchemaValidator } from "../agents/mcp-json-schema-validator.js";
 import { sanitizeMcpMetadataText } from "../agents/mcp-metadata.js";
-import { collectMcpPaginatedItems } from "../agents/mcp-pagination.js";
 import {
   McpSdkCompatibilityError,
   mcpCallToolResultSchema,
@@ -28,7 +28,6 @@ import {
 } from "../agents/mcp-tool-metadata.js";
 import { resolveMcpRequestTimeoutMs } from "../agents/mcp-transport-config.js";
 import { resolveMcpTransport } from "../agents/mcp-transport.js";
-import { normalizeConfiguredMcpServers } from "../config/mcp-config-normalize.js";
 import type { McpServerConfig } from "../config/types.mcp.js";
 import {
   NODE_MCP_TOOL_CALL_TIMEOUT_MS,
@@ -44,9 +43,6 @@ const NODE_MCP_ERROR_MAX_CHARS = 1_024;
 const NODE_MCP_MAX_DESCRIPTORS = 128;
 const NODE_MCP_MAX_DESCRIPTOR_BYTES = 1024 * 1024;
 const NODE_MCP_MAX_CATALOG_BYTES = 10 * 1024 * 1024;
-const NODE_MCP_MAX_LIST_PAGES = NODE_MCP_MAX_DESCRIPTORS;
-// The byte cap charges every response; this separately bounds retained tiny-tool object overhead.
-const NODE_MCP_MAX_LISTED_TOOLS = NODE_MCP_MAX_DESCRIPTORS * NODE_MCP_MAX_LIST_PAGES;
 const NODE_MCP_CONNECT_CONCURRENCY = 6;
 const NODE_MCP_RETRY_INITIAL_MS = 250;
 const NODE_MCP_RETRY_MAX_MS = 60_000;
@@ -182,9 +178,16 @@ function buildNodeMcpToolDescriptors(
   return descriptors;
 }
 
-async function disposeNodeHostMcpSession(session: NodeHostMcpSession): Promise<void> {
+async function disposeNodeHostMcpSession(
+  serverName: string,
+  session: NodeHostMcpSession,
+): Promise<void> {
   session.abortController.abort(new Error("node host MCP session retired"));
-  await disposeMcpClient(session);
+  if ((await disposeMcpClient(session)) === "uncertain") {
+    console.warn(
+      `node host MCP server "${serverName}" cleanup could not be confirmed; check the server process`,
+    );
+  }
 }
 
 /** Starts process-lifetime MCP server state for the node host. */
@@ -283,29 +286,11 @@ export async function startNodeHostMcpManager(
     signal: AbortSignal,
     resetRetryDelay = false,
   ) => {
-    const normalized = await collectMcpPaginatedItems({
-      label: "MCP tool listing",
-      itemLabel: "tools",
-      timeoutMs: session.requestTimeoutMs,
-      maxPages: NODE_MCP_MAX_LIST_PAGES,
-      maxItems: NODE_MCP_MAX_LISTED_TOOLS,
-      maxBytes: NODE_MCP_MAX_CATALOG_BYTES,
-      signal,
-      loadPage: async ({ cursor, requestTimeoutMs, signal: requestSignal }) => {
-        const page = await session.client.request(
-          { method: "tools/list", params: cursor === undefined ? undefined : { cursor } },
-          {
-            timeout: requestTimeoutMs,
-            maxTotalTimeout: requestTimeoutMs,
-            signal: requestSignal,
-          },
-        );
-        return { items: page.tools, nextCursor: page.nextCursor, serializedValue: page };
-      },
-    }).then((tools) =>
-      normalizeMcpToolCatalog(tools, createMcpJsonSchemaValidator(), (toolName) =>
-        isMcpToolAllowed(state.config.toolFilter, toolName) ? "include" : "exclude",
-      ),
+    const normalized = await listAllMcpTools(session.client, session.requestTimeoutMs, signal).then(
+      (tools) =>
+        normalizeMcpToolCatalog(tools, createMcpJsonSchemaValidator(), (toolName) =>
+          isMcpToolAllowed(state.config.toolFilter, toolName) ? "include" : "exclude",
+        ),
     );
     if (closed || state.current !== session) {
       return;
@@ -370,7 +355,7 @@ export async function startNodeHostMcpManager(
         client.onclose = () => {
           if (createdSession.connected && invalidateCurrent(state, createdSession)) {
             enqueueWork(state, async () => {
-              await disposeNodeHostMcpSession(createdSession);
+              await disposeNodeHostMcpSession(state.serverName, createdSession);
               scheduleRetry(state);
             });
           }
@@ -396,7 +381,7 @@ export async function startNodeHostMcpManager(
         const lostOwnership = session !== undefined && state.current !== session;
         if (session && state.current === session) {
           invalidateCurrent(state, session);
-          await disposeNodeHostMcpSession(session);
+          await disposeNodeHostMcpSession(state.serverName, session);
         } else if (!session) {
           resolved?.detachStderr?.();
         }
@@ -441,7 +426,7 @@ export async function startNodeHostMcpManager(
         `node host MCP server "${state.serverName}" tool refresh failed: ${formatMcpError(error)}`,
       );
       invalidateCurrent(state, session);
-      await disposeNodeHostMcpSession(session);
+      await disposeNodeHostMcpSession(state.serverName, session);
       scheduleRetry(state);
     }
   };
@@ -536,7 +521,7 @@ export async function startNodeHostMcpManager(
         const sessionExpired = isMcpHttpSessionExpired(session, error);
         if (sessionExpired && invalidateCurrent(state, session)) {
           enqueueWork(state, async () => {
-            await disposeNodeHostMcpSession(session);
+            await disposeNodeHostMcpSession(state.serverName, session);
             scheduleRetry(state);
           });
         }
@@ -579,7 +564,7 @@ export async function startNodeHostMcpManager(
         state.current = undefined;
         state.listedTools = [];
         if (session) {
-          await disposeNodeHostMcpSession(session);
+          await disposeNodeHostMcpSession(state.serverName, session);
         }
         // Lifecycle work accepted before close may append catalog work. Drain it
         // first, then await the latest catalog tail before releasing ownership.
@@ -594,11 +579,10 @@ export async function startNodeHostMcpManager(
 function listEnabledNodeHostMcpServers(
   servers: Record<string, McpServerConfig> | undefined,
 ): ReadonlyArray<readonly [string, McpServerConfig]> {
-  return Object.entries(normalizeConfiguredMcpServers(servers))
+  return Object.entries(servers ?? {})
     .filter(
       ([serverName, config]) =>
         serverName.length > 0 && serverName === serverName.trim() && config.enabled !== false,
     )
-    .map(([serverName, config]) => [serverName, config as McpServerConfig] as const)
     .toSorted(([left], [right]) => left.localeCompare(right));
 }

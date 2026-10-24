@@ -110,6 +110,10 @@ async function addComment(page: Page, comment: string, passage = selectedText) {
   await commentEditor(page).getByRole("textbox").press("Enter");
 }
 async function selectText(text: Locator) {
+  // The selection toolbar dismisses on scroll, so settle before opening it.
+  await waitForChatScrollIdle(text.page());
+  await text.scrollIntoViewIfNeeded();
+  await waitForChatScrollIdle(text.page());
   await text.evaluate((element) => {
     const range = document.createRange();
     range.selectNodeContents(element);
@@ -125,11 +129,10 @@ suite.define(() => {
     { scenario: "oversized selection", viewport: viewports[0] },
     { scenario: "low media limit", viewport: viewports[0] },
     { scenario: "oversized edit", viewport: viewports[0] },
-    { scenario: "empty question", viewport: viewports[0] },
     { scenario: "normal", viewport: viewports[0] },
     { scenario: "normal", viewport: viewports[1] },
   ])(
-    "keeps side-chat selection drafts usable with $scenario at $viewport.width px",
+    "stages side-chat selection comments without a prefilled question with $scenario at $viewport.width px",
     async ({ scenario, viewport }) => {
       await withPage(
         async ({ page, composer, editor, comment, side, sideComposer, toolbar }) => {
@@ -161,12 +164,24 @@ suite.define(() => {
             expect(await editor.isVisible()).toBe(true);
           }
           await submitComment(comment, "Check the rollback steps.");
+          if (scenario === "oversized selection") {
+            // A passage Side chat cannot carry stays correctable in the editor.
+            await page
+              .getByText("These comments are too long for Side chat.", { exact: false })
+              .waitFor();
+            expect(await editor.isVisible()).toBe(true);
+            expect(await side.locator(".chat-selection-annotations__chip").count()).toBe(0);
+            expect(await gateway.getRequests("sessions.companion.ask")).toHaveLength(0);
+            expect(await composer.inputValue()).toBe(draft);
+            return;
+          }
           await sideComposer.waitFor({ state: "visible" });
-          const quotedDraft = await sideComposer.inputValue();
-          expect(quotedDraft).toContain(passage.slice(0, 300));
-          expect(quotedDraft.length).toBeLessThan(400);
+          // The comment chip carries the passage; the question field stays the user's.
+          expect(await sideComposer.inputValue()).toBe("");
+          await expect
+            .poll(() => sideComposer.evaluate((element) => document.activeElement === element))
+            .toBe(true);
           if (scenario === "normal") {
-            expect(quotedDraft).toBe(`Regarding "${selectedText}": `);
             expect(
               await page
                 .locator(".agent-chat__composer-shell .chat-selection-annotations__chip")
@@ -175,59 +190,46 @@ suite.define(() => {
             expect(await composer.inputValue()).toBe(draft);
           }
           const chip = side.locator(".chat-selection-annotations__chip");
-          if (scenario === "normal") {
-            await chip.waitFor({ state: "visible" });
-          }
-          expect(await chip.count()).toBe(scenario === "oversized selection" ? 0 : 1);
-          if (["normal", "oversized edit", "low media limit"].includes(scenario)) {
-            await chip.click();
-            await button(side, "Edit comment 1").click();
-            if (scenario === "oversized edit") {
-              await submitComment(comment, "x".repeat(16_001), "Save");
-              expect(await editor.isVisible()).toBe(true);
-              expect(await comment.inputValue()).toHaveLength(16_001);
-              expect(await sideComposer.inputValue()).toBe(quotedDraft);
-              expect(await gateway.getRequests("sessions.companion.ask")).toHaveLength(0);
-            }
-            await submitComment(
-              comment,
-              scenario === "normal"
-                ? "Check the rollback steps and the owner."
-                : "Corrected comment.",
-              "Save",
-            );
-            if (scenario === "normal") {
-              expect(await sideComposer.inputValue()).toBe(quotedDraft);
-            }
-            await editor.waitFor({ state: "detached" });
-          }
-          const send = side.locator(".chat-session-rail__composer button[type=submit]");
-          if (scenario === "empty question") {
-            await sideComposer.fill("");
-            expect(await send.isDisabled()).toBe(true);
-            await sideComposer.press("Enter");
+          // The preview loads independently of the side-chat textarea.
+          await chip.waitFor({ state: "visible" });
+          expect(await chip.count()).toBe(1);
+          await chip.click();
+          await button(side, "Edit comment 1").click();
+          if (scenario === "oversized edit") {
+            await submitComment(comment, "x".repeat(16_001), "Save");
+            expect(await editor.isVisible()).toBe(true);
+            expect(await comment.inputValue()).toHaveLength(16_001);
+            expect(await sideComposer.inputValue()).toBe("");
             expect(await gateway.getRequests("sessions.companion.ask")).toHaveLength(0);
-            expect(await chip.count()).toBe(1);
-            await sideComposer.fill("Explain the selected text.");
           }
+          await submitComment(
+            comment,
+            scenario === "normal"
+              ? "Check the rollback steps and the owner."
+              : "Corrected comment.",
+            "Save",
+          );
+          if (scenario === "normal") {
+            expect(await sideComposer.inputValue()).toBe("");
+          }
+          await editor.waitFor({ state: "detached" });
+          const send = side.locator(".chat-session-rail__composer button[type=submit]");
+          // A text comment alone is not a question.
+          expect(await send.isDisabled()).toBe(true);
+          await sideComposer.press("Enter");
+          expect(await gateway.getRequests("sessions.companion.ask")).toHaveLength(0);
+          expect(await chip.count()).toBe(1);
+          await sideComposer.fill("Explain the selected text.");
           await send.click();
           const params = await sideQuestion(gateway);
-          expect(params.question).toBe(
-            scenario === "empty question" ? "Explain the selected text." : quotedDraft.trim(),
-          );
+          expect(params.question).toBe("Explain the selected text.");
           expect(params.attachments).toBeUndefined();
-          if (scenario === "oversized selection") {
-            expect(params.selectionContext).toBeUndefined();
-          } else {
-            expect(params.selectionContext).toContain(`Selected text:\n${passage}`);
-            expect(params.selectionContext).toContain(
-              scenario === "normal"
-                ? "User comment:\nCheck the rollback steps and the owner."
-                : scenario === "oversized edit" || scenario === "low media limit"
-                  ? "Corrected comment."
-                  : "Check the rollback steps.",
-            );
-          }
+          expect(params.selectionContext).toContain(`Selected text:\n${passage}`);
+          expect(params.selectionContext).toContain(
+            scenario === "normal"
+              ? "User comment:\nCheck the rollback steps and the owner."
+              : "Corrected comment.",
+          );
           expect(await composer.inputValue()).toBe(draft);
           expect(await gateway.getRequests("chat.send")).toHaveLength(0);
         },
@@ -238,7 +240,11 @@ suite.define(() => {
 
   it("reveals draft and sent comments by touch before and after reload", async () => {
     await withPage(
-      async ({ page, composer, editor, comment, preview, sentChip, pendingChip }) => {
+      async ({ page, composer, editor, comment, preview, pendingChip }) => {
+        const sent = page.locator(".chat-sent-comments-inline");
+        const sentQuote = sent.getByRole("button", { name: selectedText, exact: true });
+        const fullQuote = sent.getByRole("region", { name: "Highlighted passage:", exact: true });
+        const sentComment = sent.locator(".chat-sent-comments-inline__comment");
         const gateway = await openSelection(page);
         const source = selectedSource(page);
         await source.waitFor({ state: "visible" });
@@ -259,22 +265,23 @@ suite.define(() => {
           text: "Selected passage received.",
         });
         await page.reload();
-        await sentChip.waitFor({ state: "visible" });
-        await sentChip.tap();
-        await expectReadOnlyPreview(preview, "Check the rollback steps. 🦞");
-        expect(await preview.textContent()).toContain(selectedText);
+        await sentQuote.waitFor({ state: "visible" });
+        expect(await sentComment.textContent()).toBe("Check the rollback steps. 🦞");
+        await sentQuote.tap();
+        await expectReadOnlyPreview(fullQuote, selectedText);
         await composer.tap();
-        await expect.poll(() => preview.isVisible()).toBe(false);
+        await expect.poll(() => fullQuote.isVisible()).toBe(false);
         await selectText(source);
         await button(page, "Add to chat").tap();
         await comment.fill("Remove only this pending comment.");
         await button(editor, "Save comment").tap();
         await button(pendingChip, "Remove all comments").tap();
         await pendingChip.waitFor({ state: "detached" });
-        expect(await sentChip.count()).toBe(1);
-        await sentChip.tap();
-        await expectReadOnlyPreview(preview, "Check the rollback steps. 🦞");
-        expect(await preview.textContent()).not.toContain("Remove only this pending comment.");
+        expect(await sentQuote.count()).toBe(1);
+        await sentQuote.tap();
+        await expectReadOnlyPreview(fullQuote, selectedText);
+        expect(await sentComment.textContent()).toBe("Check the rollback steps. 🦞");
+        expect(await sent.textContent()).not.toContain("Remove only this pending comment.");
       },
       { viewport: viewports[1], hasTouch: true, isMobile: true, reducedMotion: "no-preference" },
     );
@@ -469,8 +476,6 @@ suite.define(() => {
           await page.locator(".chat-thread").hover();
           await page.mouse.wheel(0, -32);
           await waitForChatScrollIdle(page);
-          await text.scrollIntoViewIfNeeded();
-          await waitForChatScrollIdle(page);
           await addComment(page, "Keep this pin on its original passage.", passage);
           const pin = button(page, "Edit comment 1");
           const aligned = async () => {
@@ -552,6 +557,8 @@ suite.define(() => {
             await addComment(page, "Review before deployment.");
             await pin.waitFor({ state: "visible" });
           };
+          await selectedSource(page).waitFor({ state: "visible" });
+          await waitForChatScrollIdle(page);
           await saveComment();
           await pin.click();
           await submitComment(comment, "Check rollback first.", "Save");
@@ -619,7 +626,10 @@ suite.define(() => {
   });
 
   it("keeps formatted selection text and DOM source offsets consistent", async () => {
-    await withPage(async ({ page, preview, sentChip }) => {
+    await withPage(async ({ page }) => {
+      const sent = page.locator(".chat-sent-comments-inline");
+      const sentQuote = sent.getByRole("button", { name: "A B", exact: true });
+      const fullQuote = sent.getByRole("region", { name: "Highlighted passage:", exact: true });
       const gateway = await openSelection(page, {}, "A  \nB");
       const paragraph = page.locator(".chat-bubble .chat-text p");
       await paragraph.waitFor({ state: "visible" });
@@ -639,17 +649,15 @@ suite.define(() => {
         runId: params.idempotencyKey,
         text: "Selected passage received.",
       });
-      await sentChip.waitFor({ state: "visible" });
-      await sentChip.hover();
-      await expect
-        .poll(() => preview.locator(".chat-comment-preview__text").textContent())
-        .toBe("A\nB");
+      await sentQuote.waitFor({ state: "visible" });
+      await sentQuote.hover();
+      await expectReadOnlyPreview(fullQuote, "A\nB");
+      expect(await fullQuote.textContent()).toBe("A\nB");
       await page.reload();
-      await sentChip.waitFor({ state: "visible" });
-      await sentChip.hover();
-      await expect
-        .poll(() => preview.locator(".chat-comment-preview__text").textContent())
-        .toBe("A\nB");
+      await sentQuote.waitFor({ state: "visible" });
+      await sentQuote.hover();
+      await expectReadOnlyPreview(fullQuote, "A\nB");
+      expect(await fullQuote.textContent()).toBe("A\nB");
     });
   });
 });

@@ -200,15 +200,27 @@ describe("Solid tooltip policy", () => {
 
   it("recaptures description ownership when a wrapper's focusable descendant changes", async () => {
     const [replacement, setReplacement] = createSignal(false);
+    let target!: HTMLButtonElement;
     const view = render(() => (
-      <Tooltip content="Details">
+      <Tooltip content="Details" descriptionTarget={() => target}>
         <span>
+          <button type="button" aria-describedby="other-description">
+            Other
+          </button>
           {replacement() ? (
-            <button type="button" aria-describedby="new-description">
+            <button
+              ref={(element) => (target = element)}
+              type="button"
+              aria-describedby="new-description"
+            >
               New
             </button>
           ) : (
-            <button type="button" aria-describedby="old-description">
+            <button
+              ref={(element) => (target = element)}
+              type="button"
+              aria-describedby="old-description"
+            >
               Old
             </button>
           )}
@@ -216,14 +228,17 @@ describe("Solid tooltip policy", () => {
       </Tooltip>
     ));
     flush();
-    const oldTrigger = view.container.querySelector("button")!;
+    const oldTrigger = target;
+    expect(view.container.querySelector("button")?.getAttribute("aria-describedby")).toBe(
+      "other-description",
+    );
     expect(oldTrigger.getAttribute("aria-describedby")).toContain(
       "old-description openclaw-tooltip-",
     );
     setReplacement(true);
     flush();
     await Promise.resolve();
-    const newTrigger = view.container.querySelector("button")!;
+    const newTrigger = target;
     expect(oldTrigger.getAttribute("aria-describedby")).toBe("old-description");
     expect(newTrigger.getAttribute("aria-describedby")).toContain(
       "new-description openclaw-tooltip-",
@@ -289,15 +304,17 @@ describe("Solid tooltip policy", () => {
       let action!: HTMLButtonElement;
       const view = render(
         () => (
-          <Tooltip content="Action details">
-            <button
-              ref={(element) => {
-                trigger = element;
-              }}
-              type="button"
-            >
-              Trigger
-            </button>
+          <Tooltip content="Action details" descriptionTarget={() => trigger}>
+            <span>
+              <button
+                ref={(element) => {
+                  trigger = element;
+                }}
+                type="button"
+              >
+                Trigger
+              </button>
+            </span>
             <span slot="content">
               <button
                 ref={(element) => {
@@ -318,7 +335,7 @@ describe("Solid tooltip policy", () => {
       try {
         flush();
         const host = view.container.querySelector("openclaw-tooltip")!;
-        expect(trigger.parentElement).toBe(host);
+        expect(trigger.parentElement?.parentElement).toBe(host);
         expect(action.closest('[slot="content"]')).not.toBeNull();
         trigger.focus();
         await host.updateComplete;

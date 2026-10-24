@@ -6,7 +6,7 @@ import {
   iterateSqliteQuerySync,
 } from "../../infra/kysely-sync.js";
 import { coerceRequiredSqliteNumber as sqliteNumber } from "../../infra/sqlite-number.js";
-import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
+import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
 import type { DatabaseFileIdentity } from "../../infra/sqlite-worker-identity.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import { assertOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
@@ -22,13 +22,15 @@ import {
 import type { SessionStateDeletePlan } from "./session-accessor.sqlite-archive-types.js";
 import type { SqliteSessionArtifactPreparationDiagnostics } from "./session-accessor.sqlite-contract.js";
 import { planSessionStateDeleteIfUnreferenced } from "./session-accessor.sqlite-delete-snapshot.js";
-import { readSessionEntryStore } from "./session-accessor.sqlite-entry-store.js";
-import { readReferencedSessionIds } from "./session-accessor.sqlite-lifecycle-state.js";
+import { readSessionEntryStore } from "./session-accessor.sqlite-entry-inventory.js";
 import type {
   LifecycleArtifactCleanupInput,
   LifecycleArtifactCleanupPlan,
 } from "./session-accessor.sqlite-lifecycle-types.js";
-import { collectSessionStateIdsForEntry } from "./session-accessor.sqlite-references.js";
+import {
+  collectSessionStateIdsForEntry,
+  readReferencedSessionIds,
+} from "./session-accessor.sqlite-references.js";
 import { getSessionKysely, withSqliteSessionDatabase } from "./session-accessor.sqlite-scope.js";
 import {
   assertCanonicalSqliteSessionKeysCurrent,
@@ -251,7 +253,7 @@ export function planSessionLifecycleArtifactCleanup(
   const pages = planSessionLifecycleArtifactCleanupPages(database, params);
   for (;;) {
     const page = readWithCanonicalSessionReaderContinuation(database, params.continuation, () =>
-      runSqliteDeferredTransactionSync(database.db, () => {
+      runSqliteReadSnapshotSync(database.db, () => {
         assertCanonicalSqliteSessionKeysCurrent(database);
         return pages.next();
       }),
@@ -291,10 +293,7 @@ function* planSessionLifecycleArtifactCleanupPages(
     const db = getSessionKysely(database.db);
     const rows = executeSqliteQuerySync(
       database.db,
-      db
-        .selectFrom("session_nodes")
-        .select(["session_key", "current_session_id", "updated_at"])
-        .orderBy("session_key", "asc"),
+      db.selectFrom("session_nodes").select(["session_key", "current_session_id", "updated_at"]),
     ).rows;
 
     if (diagnostics) {

@@ -2,10 +2,10 @@ import {
   normalizeFastMode,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { createMemo, For, Show } from "solid-js";
+import { createMemo, Errored, For, isPending, latest, Loading, Show } from "solid-js";
 import { formatAgentRuntimeLabel } from "../../../../src/shared/agent-runtime-display.js";
 import { formatFastModeValue } from "../../../../src/shared/fast-mode.js";
-import type { AgentIdentityResult, GatewaySessionRow } from "../../api/types.ts";
+import type { AgentIdentityResult, GatewaySessionRow, SessionRunStatus } from "../../api/types.ts";
 import { AgentRowChip } from "../../components/agent-row-chip.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { SettingsStatus } from "../../components/solid/settings-ui.tsx";
@@ -15,13 +15,16 @@ import {
   resolveChatThinkingSelectState,
 } from "../../lib/chat/thinking.ts";
 import { formatDurationCompact } from "../../lib/format-duration.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
 import { handleContextMenuEvent } from "../../lib/keyboard-shortcuts.ts";
-import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
+import { handleNavigationClick } from "../../lib/navigation-click.ts";
 import { formatSessionTokens } from "../../lib/presenter.ts";
 import { t } from "../../lib/reactive/i18n.ts";
+import { liveValue as createLiveValue } from "../../lib/reactive/live-value.ts";
 import { resolveSessionDisplayKind } from "../../lib/session-display.ts";
 import { formatGoalDetail, formatGoalSummary } from "../../lib/session-goal.ts";
+import { isSessionRunStateActive } from "../../lib/session-run-state.ts";
 import { SESSION_DRAG_MIME } from "../../lib/sessions/drag.ts";
 import {
   resolveSessionPreferredFace,
@@ -31,10 +34,53 @@ import { formatSessionArchiveReason } from "../../lib/sessions/session-archive-r
 import { parseAgentSessionKey, parseSessionKeyParts } from "../../lib/sessions/session-key.ts";
 import type { JSX as SolidJSX } from "../../types/solid-elements.js";
 import { CategoryCell } from "./category-cell.tsx";
-import { SessionStatusBadge } from "./session-status.tsx";
 import { categoryDropHandlers } from "./sessions-filters.tsx";
 import type { SessionsProps } from "./view-types.ts";
 import "../../components/tooltip.ts";
+
+const SESSION_RUN_STATUS_LABELS = {
+  queued: "sessionsView.statusQueued",
+  running: "sessionsView.statusRunning",
+  done: "sessionsView.statusDone",
+  failed: "sessionsView.statusFailed",
+  interrupted: "sessionsView.statusInterrupted",
+  killed: "sessionsView.statusKilled",
+  timeout: "sessionsView.statusTimeout",
+} as const satisfies Record<SessionRunStatus, string>;
+
+function SessionStatusBadge(props: { row: GatewaySessionRow }) {
+  const active = () => isSessionRunStateActive(props.row);
+  const idle = () =>
+    props.row.hasActiveRun === false && (!props.row.status || props.row.status === "running");
+  const label = () =>
+    t(
+      props.row.status === "queued"
+        ? "sessionsView.statusQueued"
+        : active()
+          ? "sessionsView.statusLive"
+          : idle()
+            ? "sessionsView.statusIdle"
+            : (props.row.status && SESSION_RUN_STATUS_LABELS[props.row.status]) ||
+              "sessionsView.statusUnknown",
+    );
+  const kind = (): "ok" | "warn" | "muted" | "danger" =>
+    props.row.status === "queued"
+      ? "warn"
+      : active() || props.row.status === "done"
+        ? "ok"
+        : idle() || !props.row.status || props.row.status === "interrupted"
+          ? "muted"
+          : "danger";
+  const detail = () => `${t("sessionsView.status")}: ${label()}`;
+  // The tooltip needs a focusable trigger for keyboard access.
+  return (
+    <openclaw-tooltip prop:content={detail()}>
+      <span tabindex="0" aria-label={detail()}>
+        <SettingsStatus kind={kind()} label={label()} />
+      </span>
+    </openclaw-tooltip>
+  );
+}
 
 const VERBOSE_LEVEL_VALUES = ["", "off", "on", "full"] as const;
 const FAST_LEVEL_VALUES = ["", "auto", "on", "off"] as const;
@@ -69,9 +115,8 @@ function formatRuntimeMs(runtimeMs: number | undefined): string | null {
 }
 
 function SessionGoalStatus(props: { goal: GatewaySessionRow["goal"] }) {
-  const kind = createMemo(() =>
-    props.goal?.status === "active" || props.goal?.status === "complete" ? "ok" : "warn",
-  );
+  const kind = (): "ok" | "warn" =>
+    props.goal?.status === "active" || props.goal?.status === "complete" ? "ok" : "warn";
   const detail = createMemo(() => {
     const goal = props.goal;
     return goal ? formatGoalDetail(goal) : "";
@@ -155,29 +200,28 @@ function isRowControlTarget(target: EventTarget | null): boolean {
 
 export function SessionRows(props: SessionsProps & { row: GatewaySessionRow }) {
   let menuTrigger: HTMLButtonElement | null = null;
+  let sessionLink: HTMLAnchorElement | undefined;
   const row = createMemo(() => props.row);
   const updated = createMemo(() =>
     row().updatedAt ? formatRelativeTimestamp(row().updatedAt) : t("common.na"),
   );
-  const isExpanded = createMemo(() => props.expandedSessionKey === row().key);
-  const detailsId = createMemo(() => `session-details-${encodeURIComponent(row().key)}`);
-  const displayName = createMemo(() => normalizeOptionalString(row().displayName) ?? null);
-  const trimmedLabel = createMemo(() => normalizeOptionalString(row().label) ?? "");
-  const showDisplayName = createMemo(() =>
-    Boolean(displayName() && displayName() !== row().key && displayName() !== trimmedLabel()),
-  );
+  const isExpanded = () => props.expandedSessionKey === row().key;
+  const detailsId = () => `session-details-${encodeURIComponent(row().key)}`;
+  const displayName = () => normalizeOptionalString(row().displayName) ?? null;
+  const trimmedLabel = () => normalizeOptionalString(row().label) ?? "";
+  const showDisplayName = () =>
+    Boolean(displayName() && displayName() !== row().key && displayName() !== trimmedLabel());
   const keyParts = createMemo(() => parseSessionKeyParts(row().key));
   const agentIdentity = createMemo(() =>
     keyParts() ? getAgentIdentity(props.agentIdentityById, keyParts()!.agentId) : null,
   );
-  const identityEmoji = createMemo(() => normalizeOptionalString(agentIdentity()?.emoji) ?? "");
-  const identityName = createMemo(() => normalizeOptionalString(agentIdentity()?.name) ?? "");
-  const friendlyKeyLabel = createMemo(() =>
+  const identityEmoji = () => normalizeOptionalString(agentIdentity()?.emoji) ?? "";
+  const identityName = () => normalizeOptionalString(agentIdentity()?.name) ?? "";
+  const friendlyKeyLabel = () =>
     identityName() && keyParts()
       ? `${identityEmoji() ? `${identityEmoji()} ` : ""}${identityName()} (${keyParts()!.channel})`
-      : null,
-  );
-  const keyCellTitle = createMemo(() => friendlyKeyLabel() ?? row().key);
+      : null;
+  const keyCellTitle = () => friendlyKeyLabel() ?? row().key;
   const canLink = createMemo(() => row().kind !== "global");
   const chatUrl = createMemo(() =>
     canLink()
@@ -192,22 +236,21 @@ export function SessionRows(props: SessionsProps & { row: GatewaySessionRow }) {
       : undefined,
   );
   const displayKind = createMemo(() => resolveSessionDisplayKind(row()));
-  const kindClass = createMemo(() => ["session-kind", `session-kind--${displayKind()}`]);
-  const rowClass = createMemo(() => [
+  const kindClass = () => ["session-kind", `session-kind--${displayKind()}`];
+  const rowClass = () => [
     "session-data-row session-data-row--expandable",
     {
       "session-data-row--archived": props.statusFilter === "all" && row().archived === true,
       "session-data-row--expanded": isExpanded(),
       "session-data-row--menu-open": props.sessionMenu?.key === row().key,
     },
-  ]);
+  ];
   // The {count} placeholder predates the drawer redesign; it carries the session title.
-  const detailsToggleLabel = createMemo(() =>
+  const detailsToggleLabel = () =>
     isExpanded()
       ? t("sessionsView.hideSessionDetails", { count: keyCellTitle() })
-      : t("sessionsView.showSessionDetails", { count: keyCellTitle() }),
-  );
-  const categoryMode = createMemo(() => props.groupBy === "category");
+      : t("sessionsView.showSessionDetails", { count: keyCellTitle() });
+  const categoryMode = () => props.groupBy === "category";
   // Dropping on a row targets that row's group so the whole section area accepts drops.
   const rowDrop = createMemo(() =>
     categoryDropHandlers(props, normalizeOptionalString(row().category) ?? null),
@@ -270,7 +313,10 @@ export function SessionRows(props: SessionsProps & { row: GatewaySessionRow }) {
           />
         </td>
         <td class="data-table-key-col">
-          <openclaw-tooltip prop:content={keyCellTitle()}>
+          <openclaw-tooltip
+            prop:content={keyCellTitle()}
+            prop:descriptionTarget={canLink() ? () => sessionLink ?? null : undefined}
+          >
             <div class={["session-key-cell", { mono: !friendlyKeyLabel() }]}>
               <div class="session-key-cell__text">
                 <span class="session-key-cell__primary">
@@ -283,15 +329,12 @@ export function SessionRows(props: SessionsProps & { row: GatewaySessionRow }) {
                   ) : undefined}
                   {canLink() ? (
                     <a
+                      ref={(element) => (sessionLink = element)}
                       href={chatUrl()}
                       class="session-link"
-                      onClick={(e: MouseEvent) => {
-                        if (!shouldHandleNavigationClick(e)) {
-                          return;
-                        }
-                        e.preventDefault();
-                        props.onNavigateToChat(row().key);
-                      }}
+                      onClick={(e: MouseEvent) =>
+                        handleNavigationClick(e, () => props.onNavigateToChat(row().key))
+                      }
                     >
                       {friendlyKeyLabel() ?? row().key}
                     </a>
@@ -340,7 +383,7 @@ export function SessionRows(props: SessionsProps & { row: GatewaySessionRow }) {
               class="icon-btn"
               type="button"
               title={t("chat.sidebar.openSessionMenu")}
-              aria-label={t("chat.sidebar.openSessionMenu")}
+              aria-label={`${t("chat.sidebar.openSessionMenu")}: ${row().key}`}
               aria-haspopup="menu"
               aria-expanded={props.sessionMenu?.key === row().key ? "true" : "false"}
               onClick={(event) => {
@@ -360,6 +403,7 @@ export function SessionRows(props: SessionsProps & { row: GatewaySessionRow }) {
   );
 
   function SessionDetails() {
+    const readKey = createMemo(() => props.detailsReadKey());
     const labelDisabledReason = createMemo(() => props.labelDisabledReason?.(row()));
     const labelValue = createMemo(() => row().label ?? "");
     const rawThinking = createMemo(() => row().thinkingLevel ?? "");
@@ -415,6 +459,90 @@ export function SessionRows(props: SessionsProps & { row: GatewaySessionRow }) {
       },
     ]);
 
+    function ReadDetails() {
+      return <>{(latest(props.detailsRead), null)}</>;
+    }
+
+    function DetailFields(fields: { pending: boolean }) {
+      // Each pending/ready slot retains its own native draft binding.
+      const labelRef = createLiveValue(labelValue);
+      return (
+        <>
+          <div class="session-details-section">
+            <div class="session-details-panel__eyebrow">{t("sessionsView.overrides")}</div>
+            <div class="session-overrides-grid">
+              <label class="session-override-field">
+                <span class="session-override-field__label">{t("sessionsView.label")}</span>
+                <input
+                  class="settings-input"
+                  ref={labelRef}
+                  disabled={props.loading || fields.pending || Boolean(labelDisabledReason())}
+                  title={labelDisabledReason() ?? undefined}
+                  placeholder={t("sessionsView.optionalPlaceholder")}
+                  onChange={(e) => {
+                    const value = normalizeOptionalString(e.currentTarget.value) ?? null;
+                    void props.onPatch(row().key, { label: value }, { sessionScope: true });
+                  }}
+                />
+              </label>
+              <For each={overrides()} keyed={(override) => override.id}>
+                {(override) => {
+                  const current = createMemo(() => override().current);
+                  const choices = createMemo(() => {
+                    const options = override().options;
+                    const value = current();
+                    return !value || options.some((option) => option.value === value)
+                      ? options
+                      : [...options, { value, label: formatThinkingOverrideLabel(value) }];
+                  });
+                  return (
+                    <label class="session-override-field">
+                      <span class="session-override-field__label">{override().label}</span>
+                      <select
+                        class="settings-select"
+                        disabled={
+                          props.loading || fields.pending || Boolean(props.patchAdminDisabledReason)
+                        }
+                        title={props.patchAdminDisabledReason ?? undefined}
+                        onChange={(event) => {
+                          void override().onChange(event.currentTarget.value);
+                        }}
+                      >
+                        <For each={choices()} keyed={(option) => option.value}>
+                          {(option) => {
+                            const value = createMemo(() => option().value);
+                            const selected = createMemo(() => current() === value());
+                            return (
+                              <option value={value()} selected={selected()}>
+                                {option().label}
+                              </option>
+                            );
+                          }}
+                        </For>
+                      </select>
+                    </label>
+                  );
+                }}
+              </For>
+            </div>
+          </div>
+
+          <div class="session-details-grid">
+            <For each={sessionDetailItems(row(), updated())}>
+              {(item) => (
+                <div class="session-detail-stat">
+                  <div class="session-detail-stat__label">{item.label}</div>
+                  <openclaw-tooltip prop:content={item.value}>
+                    <div class="session-detail-stat__value">{item.value}</div>
+                  </openclaw-tooltip>
+                </div>
+              )}
+            </For>
+          </div>
+        </>
+      );
+    }
+
     return (
       <tr id={detailsId()} class="session-details-row">
         <td colspan={sessionsTableColumnCount(props)}>
@@ -433,73 +561,25 @@ export function SessionRows(props: SessionsProps & { row: GatewaySessionRow }) {
               </div>
             </div>
 
-            <div class="session-details-section">
-              <div class="session-details-panel__eyebrow">{t("sessionsView.overrides")}</div>
-              <div class="session-overrides-grid">
-                <label class="session-override-field">
-                  <span class="session-override-field__label">{t("sessionsView.label")}</span>
-                  <input
-                    class="settings-input"
-                    value={labelValue()}
-                    disabled={props.loading || Boolean(labelDisabledReason())}
-                    title={labelDisabledReason() ?? undefined}
-                    placeholder={t("sessionsView.optionalPlaceholder")}
-                    onChange={(e) => {
-                      const value = normalizeOptionalString(e.currentTarget.value) ?? null;
-                      props.onPatch(row().key, { label: value }, { sessionScope: true });
-                    }}
-                  />
-                </label>
-                <For each={overrides()} keyed={(override) => override.id}>
-                  {(override) => {
-                    const current = createMemo(() => override().current);
-                    const choices = createMemo(() => {
-                      const options = override().options;
-                      const value = current();
-                      return !value || options.some((option) => option.value === value)
-                        ? options
-                        : [...options, { value, label: formatThinkingOverrideLabel(value) }];
-                    });
-                    return (
-                      <label class="session-override-field">
-                        <span class="session-override-field__label">{override().label}</span>
-                        <select
-                          class="settings-select"
-                          disabled={props.loading || Boolean(props.patchAdminDisabledReason)}
-                          title={props.patchAdminDisabledReason ?? undefined}
-                          onChange={(event) => override().onChange(event.currentTarget.value)}
-                        >
-                          <For each={choices()} keyed={(option) => option.value}>
-                            {(option) => {
-                              const value = createMemo(() => option().value);
-                              const selected = createMemo(() => current() === value());
-                              return (
-                                <option value={value()} selected={selected()}>
-                                  {option().label}
-                                </option>
-                              );
-                            }}
-                          </For>
-                        </select>
-                      </label>
-                    );
-                  }}
-                </For>
-              </div>
-            </div>
-
-            <div class="session-details-grid">
-              <For each={sessionDetailItems(row(), updated())}>
-                {(item) => (
-                  <div class="session-detail-stat">
-                    <div class="session-detail-stat__label">{item.label}</div>
-                    <openclaw-tooltip prop:content={item.value}>
-                      <div class="session-detail-stat__value">{item.value}</div>
-                    </openclaw-tooltip>
-                  </div>
-                )}
-              </For>
-            </div>
+            <Loading on={readKey()} fallback={<DetailFields pending />}>
+              <Show when={readKey()} keyed>
+                <Errored
+                  fallback={(error) => (
+                    <>
+                      <div class="sessions-error" role="alert">
+                        {formatUiError(error())}
+                      </div>
+                      <button class="chip" onClick={() => props.onRetryDetails()}>
+                        {t("common.retry")}
+                      </button>
+                    </>
+                  )}
+                >
+                  <ReadDetails />
+                </Errored>
+              </Show>
+              <DetailFields pending={isPending(props.detailsRead)} />
+            </Loading>
           </div>
         </td>
       </tr>

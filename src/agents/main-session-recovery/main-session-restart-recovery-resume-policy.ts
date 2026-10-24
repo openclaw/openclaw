@@ -24,8 +24,13 @@ import { isAgentToolReplaySafe } from "../tool-replay-safety.js";
 
 export function requiresDelegatedRecoverySource(
   entry: SessionEntry,
-  source: InputProvenance["kind"] | "completion" | "harness_completion" | undefined,
+  source: InputProvenance["kind"] | "completion" | "cron" | "harness_completion" | undefined,
 ): boolean {
+  // Cron owns retry admission through a fresh occurrence and current job policy.
+  // An earlier operator turn cannot authorize a generic recovery dispatch.
+  if (source === "cron") {
+    return true;
+  }
   // Steering is context, not a new admission. A non-browser operator can have
   // internal ingress too; its durable source goes through the Gateway's exact
   // claim and current-policy restoration before any recovery turn executes.

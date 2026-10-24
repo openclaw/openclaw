@@ -78,7 +78,7 @@ describe("downloadLineMedia", () => {
     expect(fetchMock.mock.calls[0]?.[0]).toBe(
       "https://api-data.line.me/v2/bot/message/a%2F..%2F..%2F..%2F..%2Fetc%2Fpasswd/content",
     );
-    expect(result).toMatchObject({ size: jpeg.length, contentType: "image/jpeg" });
+    expect(result).toMatchObject({ contentType: "image/jpeg" });
     expect(saveMediaStreamMock).toHaveBeenCalledOnce();
     for (const arg of saveMediaStreamMock.mock.calls[0]!) {
       if (typeof arg === "string") {
@@ -219,7 +219,7 @@ describe("downloadLineMedia", () => {
     const healthy = Buffer.from("healthy retry");
     fetchMock.mockResolvedValueOnce(content(healthy));
     await expect(downloadLineMedia("mid-body-stall", "token")).resolves.toMatchObject({
-      size: healthy.length,
+      path: "/home/user/.openclaw/media/inbound/saved-media",
     });
   });
 

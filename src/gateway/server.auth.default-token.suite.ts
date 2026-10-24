@@ -215,12 +215,13 @@ export function registerDefaultAuthTokenSuite(): void {
 
     test("hello-ok separates effective scopes from a reused device token grant", async () => {
       const { randomUUID } = await import("node:crypto");
-      const os = await import("node:os");
       const path = await import("node:path");
       const token = resolveGatewayTokenOrEnv();
       const deviceIdentityPath = path.join(
-        os.homedir(),
-        `openclaw-shared-auth-scope-reuse-${randomUUID()}.json`,
+        process.env.OPENCLAW_STATE_DIR!,
+        `shared-auth-scope-reuse-${randomUUID()}`,
+        "client",
+        "credentials.sqlite",
       );
       const wsInitial = await openWs(port);
       let pairedDeviceToken: string | undefined;
@@ -292,7 +293,6 @@ export function registerDefaultAuthTokenSuite(): void {
       const nonce = await readConnectChallengeNonce(ws);
 
       const { randomUUID } = await import("node:crypto");
-      const os = await import("node:os");
       const path = await import("node:path");
       // Fresh identity avoids inheriting a previously paired device's grant.
       const { device } = await createSignedDevice({
@@ -300,7 +300,13 @@ export function registerDefaultAuthTokenSuite(): void {
         scopes: [],
         clientId: GATEWAY_CLIENT_NAMES.TEST,
         clientMode: GATEWAY_CLIENT_MODES.TEST,
-        identityPath: path.join(os.homedir(), `openclaw-test-device-${randomUUID()}.sqlite`),
+        identityPath: path.join(
+          process.env.OPENCLAW_STATE_DIR!,
+          "test-device-identities",
+          randomUUID(),
+          "client",
+          "credentials.sqlite",
+        ),
         nonce,
       });
 

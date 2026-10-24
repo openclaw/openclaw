@@ -6,6 +6,7 @@ import { serialize } from "node:v8";
 import { MessageChannel, Worker } from "node:worker_threads";
 import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { resolveIdentityPathViaExistingAncestorSync } from "./boundary-path.js";
 import {
   acquireGatewayStateOwner,
@@ -236,7 +237,8 @@ it.each(["same", "different"])("holds schema authority only for the %s database"
   const revoked = new Error("Database owner revoked");
   let current = true;
   const release = vi.fn();
-  const acquireSchema = vi.fn(() => ({ assertCurrent() {}, release }));
+  const assertCurrent = vi.fn();
+  const acquireSchema = vi.fn(() => ({ assertCurrent, release }));
   const admit = vi.fn((_request: SqliteWorkerAdmissionRequest, grant: () => boolean) => grant());
   const admission = admissionFixture(admit);
   bindAuthority(admission, databasePath, {
@@ -264,6 +266,8 @@ it.each(["same", "different"])("holds schema authority only for the %s database"
     expect(requestSchema(databasePath)).toBe(true);
     requestAdmission({ stage: "transaction", facts: "ordinary write" });
     current = false;
+    expect(() => requestSchema(databasePath)).toThrow("SQLite transaction admission was refused");
+    expect(assertCurrent).toHaveBeenCalledTimes(2);
     expect(() => requestAdmission({ stage: "commit", facts: "revoked write" })).toThrow(
       "SQLite transaction admission was refused",
     );
@@ -512,8 +516,16 @@ it.each(
       }
       postMessage(message);
     });
-    const resolve = vi.fn(() => events.push("reply"));
-    const reject = vi.fn(() => events.push("reject"));
+    const completion = createDeferredCore<unknown>();
+    void completion.promise.catch(() => {});
+    const resolve = vi.fn((value: unknown) => {
+      events.push("reply");
+      completion.resolve(value);
+    });
+    const reject = vi.fn((error: unknown) => {
+      events.push("reject");
+      completion.reject(error);
+    });
     const custody = new SqliteWorkerSlotCustody().createRequest();
     custody.activate();
     custody.accept();
@@ -522,6 +534,7 @@ it.each(
       observation: { started() {}, completed() {} },
       request: { type: "execute", id: 1, actor: 1, input: new Uint8Array() },
       bytes: 0,
+      result: completion.promise,
       operationAdmission: { admission, releaseService() {} },
       resolve,
       reject,

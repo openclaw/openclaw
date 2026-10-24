@@ -24,10 +24,15 @@ const SCREENSHOTS = [
 ];
 const ATTEMPT_MODEL = {
   owner: "openclaw",
-  unit: "capture_ios_screenshots invocation",
+  unit: "device XCTest invocation",
   maxAttempts: 1,
-  fastlaneInternalRetries: "workflow-log",
 };
+const TEST_IDENTIFIERS = [
+  "OpenClawUITests/OpenClawSnapshotUITests/testReleaseControlScreenshot",
+  "OpenClawUITests/OpenClawSnapshotUITests/testReleaseChatScreenshot",
+  "OpenClawUITests/OpenClawSnapshotUITests/testReleaseAgentScreenshot",
+  "OpenClawUITests/OpenClawSnapshotUITests/testReleaseSettingsScreenshot",
+];
 type Family = "iphone" | "ipad-13" | "watch";
 const DEVICES = {
   iphone: "iPhone 17 Pro Max",
@@ -44,12 +49,12 @@ function provenance() {
     tooling: {
       xcode: "Xcode 26.6 Build version 17F113",
       fastlane: "2.236.1",
-      node: "v24.16.0",
+      node: "v24.22.1",
     },
   };
 }
 
-function writeCombinedSource(root: string, selectedFamily: Family = "iphone", retry?: string) {
+function writeCombinedSource(root: string, selectedFamily: Family = "iphone", retry = false) {
   const screenshots = path.join(root, "screenshots");
   const xcresults = path.join(root, "xcresults");
   fs.mkdirSync(screenshots, { recursive: true });
@@ -60,25 +65,50 @@ function writeCombinedSource(root: string, selectedFamily: Family = "iphone", re
     const names = family === "watch" ? ["01-now-face"] : SCREENSHOTS;
     for (const name of names) {
       fs.writeFileSync(path.join(screenshots, `${device}-${name}.png`), PNG);
-      if (family !== "watch") {
-        const retried = family === selectedFamily && retry === name;
-        for (const attempt of retried ? [1, 2] : [1]) {
-          captureAttempts.push({
-            deviceName: device,
-            screenshotName: name,
-            attempt,
-            captureOutcome: retried && attempt === 1 ? "failed" : "succeeded",
-          });
-          const result = path.join(xcresults, `${device}-${name}-attempt-${attempt}.xcresult`);
-          fs.mkdirSync(result, { recursive: true });
-          fs.writeFileSync(path.join(result, "summary.txt"), "pass");
-        }
-      }
+    }
+    if (family === "watch") {
+      continue;
+    }
+    const retried = family === selectedFamily && retry;
+    for (const attempt of retried ? [1, 2] : [1]) {
+      captureAttempts.push({
+        deviceName: device,
+        attempt,
+        captureOutcome: retried && attempt === 1 ? "failed" : "succeeded",
+      });
+      const result = path.join(xcresults, `${device}-attempt-${attempt}.xcresult`);
+      fs.mkdirSync(result, { recursive: true });
+      fs.writeFileSync(
+        path.join(result, "summary.json"),
+        JSON.stringify({ result: "Passed", failedTests: 0 }),
+      );
+      fs.writeFileSync(
+        path.join(result, "tests.json"),
+        JSON.stringify({
+          testNodes: [
+            {
+              nodeType: "UI test bundle",
+              name: "OpenClawUITests",
+              children: [
+                {
+                  nodeType: "Test Suite",
+                  name: "OpenClawSnapshotUITests",
+                  children: TEST_IDENTIFIERS.toReversed().map((identifier) => ({
+                    nodeType: "Test Case",
+                    nodeIdentifier: `${identifier.split("/").slice(1).join("/")}()`,
+                    result: "Passed",
+                  })),
+                },
+              ],
+            },
+          ],
+        }),
+      );
     }
   }
   fs.writeFileSync(
     path.join(xcresults, "capture-attempts.json"),
-    JSON.stringify({ schemaVersion: 1, attempts: captureAttempts }),
+    JSON.stringify({ schemaVersion: 2, attempts: captureAttempts }),
   );
   return { device: DEVICES[selectedFamily], screenshots, xcresults };
 }
@@ -117,10 +147,8 @@ function collect(
     xcresultDirectory: source.xcresults,
     outputDirectory,
     provenance: provenance(),
-    readXcresultSummary: (resultPath) =>
-      fs.readFileSync(path.join(resultPath, "summary.txt"), "utf8") === "pass"
-        ? { testResult: "Passed", failedTests: 0 }
-        : { testResult: "Failed", failedTests: 1 },
+    readXcresult: (resultPath, section) =>
+      JSON.parse(fs.readFileSync(path.join(resultPath, `${section}.json`), "utf8")),
   });
 }
 
@@ -143,7 +171,7 @@ function reduceAll(input: string, outputRoot: string, expected = provenance()) {
 
 function expectOutputCounts(output: string) {
   expect(fs.readdirSync(path.join(output, "apps/ios/fastlane/screenshots/en-US"))).toHaveLength(9);
-  expect(fs.readdirSync(path.join(output, "apps/ios/build/SnapshotTestResults"))).toHaveLength(8);
+  expect(fs.readdirSync(path.join(output, "apps/ios/build/SnapshotTestResults"))).toHaveLength(2);
 }
 
 function updateManifest(
@@ -210,13 +238,14 @@ describe("iOS screenshot evidence", () => {
         { family: "watch", runAttempt: captureAttempt },
       ],
     });
-    expect(iphoneManifest.captureAttempts).toHaveLength(4);
+    expect(iphoneManifest.captureAttempts).toHaveLength(1);
     for (const capture of iphoneManifest.captureAttempts) {
       expect(capture).toMatchObject({
         attempt: 1,
         captureOutcome: "succeeded",
         testResult: "Passed",
         failedTests: 0,
+        tests: TEST_IDENTIFIERS.map((testIdentifier) => ({ testIdentifier, testResult: "Passed" })),
       });
     }
     expectOutputCounts(output);
@@ -224,7 +253,7 @@ describe("iOS screenshot evidence", () => {
 
   it("rejects a passing retry after a failed capture", () => {
     const root = tempDirs.make("ios-screenshot-retry-");
-    const source = writeCombinedSource(root, "iphone", "02-chat-connected");
+    const source = writeCombinedSource(root, "iphone", true);
 
     expect(() => collect(source)).toThrow("expected exactly one OpenClaw capture attempt");
   });
@@ -232,12 +261,26 @@ describe("iOS screenshot evidence", () => {
   it("requires the successful capture to have a passing xcresult", () => {
     const root = tempDirs.make("ios-screenshot-missing-xcresult-");
     const source = writeCombinedSource(root, "iphone");
-    fs.rmSync(
-      path.join(source.xcresults, `${source.device}-02-chat-connected-attempt-1.xcresult`),
-      { recursive: true },
-    );
+    fs.rmSync(path.join(source.xcresults, `${source.device}-attempt-1.xcresult`), {
+      recursive: true,
+    });
 
     expect(() => collect(source)).toThrow("is missing for the successful capture attempt");
+  });
+
+  it("requires all four native test results even when the summary passed", () => {
+    const root = tempDirs.make("ios-screenshot-missing-test-");
+    const source = writeCombinedSource(root);
+    const testsPath = path.join(
+      source.xcresults,
+      `${source.device}-attempt-1.xcresult`,
+      "tests.json",
+    );
+    const tree = JSON.parse(fs.readFileSync(testsPath, "utf8"));
+    tree.testNodes[0].children[0].children.pop();
+    fs.writeFileSync(testsPath, JSON.stringify(tree));
+
+    expect(() => collect(source)).toThrow("test-identity-or-result");
   });
 
   it.each([
@@ -306,7 +349,7 @@ describe("iOS screenshot evidence", () => {
     [
       "xcresult",
       "iphone",
-      "xcresults/iPhone 17 Pro Max-01-control-connected-attempt-1.xcresult/summary.txt",
+      "xcresults/iPhone 17 Pro Max-attempt-1.xcresult/summary.json",
       "xcresult",
     ],
   ] as const)("rejects changed %s bytes after collection", (_kind, family, file, error) => {
@@ -318,9 +361,7 @@ describe("iOS screenshot evidence", () => {
   it("rejects a non-passing final capture attempt", () => {
     const { input, output } = collected();
     updateManifest(input, "ipad-13", (manifest) => {
-      const final = manifest.captureAttempts.find(
-        (entry: { screenshotName: string }) => entry.screenshotName === "01-control-connected",
-      );
+      const [final] = manifest.captureAttempts;
       final.testResult = "Failed";
       final.failedTests = 1;
     });
@@ -331,9 +372,7 @@ describe("iOS screenshot evidence", () => {
   it("rejects a passing replacement added to an already collected failed capture", () => {
     const { input, output } = collected();
     updateManifest(input, "iphone", (manifest) => {
-      const capture = manifest.captureAttempts.find(
-        (entry: { screenshotName: string }) => entry.screenshotName === "02-chat-connected",
-      );
+      const [capture] = manifest.captureAttempts;
       const replacement = {
         ...capture,
         attempt: 2,
@@ -379,9 +418,7 @@ describe("iOS screenshot evidence", () => {
       if (kind === "PNG") {
         fs.writeFileSync(path.join(source.screenshots, "Unknown-01-control-connected.png"), PNG);
       } else if (kind === "xcresult") {
-        fs.mkdirSync(
-          path.join(source.xcresults, "Unknown-01-control-connected-attempt-1.xcresult"),
-        );
+        fs.mkdirSync(path.join(source.xcresults, "Unknown-attempt-1.xcresult"));
       } else {
         const ledgerPath = path.join(source.xcresults, "capture-attempts.json");
         const ledger = JSON.parse(fs.readFileSync(ledgerPath, "utf8"));
@@ -392,19 +429,25 @@ describe("iOS screenshot evidence", () => {
     },
   );
 
-  it("rejects unexpected capture attempt entries in a shard manifest", () => {
-    const { input, output } = collected();
-    updateManifest(input, "iphone", (manifest) => {
-      manifest.captureAttempts.push({
-        ...manifest.captureAttempts[0],
-        screenshotName: "99-unexpected",
+  it.each(["missing", "duplicate", "unexpected", "failed"] as const)(
+    "rejects %s test results in a collected device manifest",
+    (kind) => {
+      const { input, output } = collected();
+      updateManifest(input, "iphone", (manifest) => {
+        const tests = manifest.captureAttempts[0].tests;
+        if (kind === "missing") {
+          tests.pop();
+        } else if (kind === "duplicate") {
+          tests[1] = tests[0];
+        } else if (kind === "unexpected") {
+          tests[0].testIdentifier = "OpenClawUITests/OpenClawSnapshotUITests/testOther";
+        } else {
+          tests[0].testResult = "Failed";
+        }
       });
-    });
-
-    expect(() => reduceAll(input, output)).toThrow(
-      "capture attempt union contains an unexpected screenshot",
-    );
-  });
+      expect(() => reduceAll(input, output)).toThrow("screenshot test result union mismatch");
+    },
+  );
 
   it("rejects unexpected files in a collected shard", () => {
     const { input, output } = collected();

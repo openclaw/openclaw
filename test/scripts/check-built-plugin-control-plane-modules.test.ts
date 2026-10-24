@@ -79,7 +79,7 @@ listCoreRuntimePostBuildOutputs({ rootDir: ${JSON.stringify(rootDir)} });
 assert.equal(compilerStarts, 0, "native compiler started by runtime postbuild inventory checks");
 await import(${JSON.stringify(resolveRuntimeWorkerUrl(toolingMtsEntrypoints.runNode).href)});
 assert.equal(compilerStarts, 0, "native compiler started by the development runner import");
-const { API } = await import("typescript/unstable/sync");
+const { API } = await import("typescript/sync");
 const api = new API();
 try {
   api.parseConfigFile("tsconfig.json");

@@ -34,6 +34,7 @@ import {
 } from "../config/sessions.js";
 import { rebindCliSessionReseedReceiptsForReset } from "../config/sessions/cli-session-binding.js";
 import { formatSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
+import { resolveCanonicalMainSessionKey } from "../config/sessions/main-session-key.js";
 import { preserveResetSessionPresentation } from "../config/sessions/reset-preserved-presentation.js";
 import { resolveResetPreservedSelection } from "../config/sessions/reset-preserved-selection.js";
 import {
@@ -109,6 +110,7 @@ import { notifyGatewaySessionReset } from "./session-reset-notifications.js";
 import { ensureSessionRuntimeCleanup } from "./session-reset-runtime-cleanup.js";
 import { resolveSessionResetTarget } from "./session-reset-target.js";
 import { readGatewayBeforeResetPluginHookMessages } from "./session-reset-transcript.js";
+import { buildResetWorkspaceFields } from "./session-reset-workspace.js";
 import { withGatewaySessionEntryReadOnly } from "./session-utils-read-lifetime.js";
 import type { GatewaySessionStoreTarget } from "./session-utils-store.types.js";
 import type { SessionWorkerPlacementContext } from "./session-worker-placement-context.js";
@@ -383,7 +385,16 @@ async function performPreparedGatewaySessionReset({
     const archivedSessionError = resolveSessionWorkStartError(canonicalKey, entry, {
       allowPendingWorkspace: true,
       allowRestartTombstoneReplacement:
-        entry !== undefined && entry.archivedAt === undefined && isRestartRecoveryTombstone(entry),
+        entry !== undefined &&
+        isRestartRecoveryTombstone(entry) &&
+        (entry.archivedAt === undefined ||
+          (entry.archiveReason === "restart-recovery" &&
+            canonicalKey ===
+              resolveCanonicalMainSessionKey({
+                agentId: resetTarget.target.agentId,
+                mainKey: resetTarget.cfg.session?.mainKey,
+                sessionScope: resetTarget.cfg.session?.scope,
+              }))),
     });
     if (archivedSessionError) {
       return errorShape(ErrorCodes.INVALID_REQUEST, archivedSessionError);
@@ -906,29 +917,7 @@ async function performPreparedGatewaySessionReset({
               queueDrop: currentEntry?.queueDrop,
               ...preserveSessionLineage(currentEntry),
               completionOwnerSessionKey: currentEntry?.completionOwnerSessionKey,
-              spawnedWorkspaceDir: currentEntry?.spawnedWorkspaceDir,
-              spawnedCwd: params.clearSpawnedCwd
-                ? undefined
-                : (preparedLifecycle?.spawnedCwd ?? params.spawnedCwd ?? currentEntry?.spawnedCwd),
-              sessionRoot: params.clearSpawnedCwd
-                ? undefined
-                : (preparedLifecycle?.sessionRoot ??
-                  params.sessionRoot ??
-                  currentEntry?.sessionRoot),
-              permissionMode: params.clearSpawnedCwd
-                ? undefined
-                : (params.permissionMode ?? currentEntry?.permissionMode),
-              // Reset keeps this logical chat's authorized containment choice.
-              sandboxMode: currentEntry?.sandboxMode,
-              worktree: params.clearSpawnedCwd
-                ? undefined
-                : (preparedLifecycle?.worktree ?? currentEntry?.worktree),
-              repositoryWorkspaceId:
-                preparedLifecycle?.repositoryWorkspaceId ?? currentEntry?.repositoryWorkspaceId,
-              // Placement can be retired by reset; the logical chat must still stay on its device.
-              deviceFolder: currentEntry?.deviceFolder
-                ? { ...currentEntry.deviceFolder }
-                : undefined,
+              ...buildResetWorkspaceFields(currentEntry, params, preparedLifecycle),
               ...creationStamp,
               delivery: currentEntry?.delivery,
               pendingDeliveryNotice: currentEntry?.pendingDeliveryNotice,
@@ -1024,7 +1013,6 @@ async function performPreparedGatewaySessionReset({
                     : { available: false, reason: "unsupported-source" },
                 });
                 emitGatewaySessionStartPluginHook({
-                  cfg,
                   sessionKey: resetSessionKey,
                   sessionId: mutation.nextEntry.sessionId,
                   resumedFrom: mutation.previousSessionId,

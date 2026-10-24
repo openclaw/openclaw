@@ -7,7 +7,6 @@ import {
 } from "discord-api-types/v10";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { describe, expect, it, vi } from "vitest";
-import { Container, TextDisplay } from "./components.message.js";
 import {
   AutocompleteInteraction,
   BaseComponentInteraction,
@@ -97,24 +96,19 @@ describe("BaseInteraction", () => {
     expect(interaction.responseState).toBe("replied");
   });
 
-  it.each([
-    { kind: "component", operation: "update" },
-    { kind: "component", operation: "show-modal" },
-    { kind: "component", operation: "launch-activity" },
-    { kind: "autocomplete", operation: "autocomplete" },
-  ] as const)(
-    "rejects a second initial $kind $operation without calling Discord",
-    async (testCase) => {
+  it.each(["update", "show-modal", "launch-activity", "autocomplete"] as const)(
+    "rejects a second initial %s without calling Discord",
+    async (operation) => {
       const raw =
-        testCase.kind === "component"
-          ? createInternalComponentInteractionPayload(identity)
-          : createInternalInteractionPayload({
+        operation === "autocomplete"
+          ? createInternalInteractionPayload({
               ...identity,
               type: InteractionType.ApplicationCommandAutocomplete,
-            });
+            })
+          : createInternalComponentInteractionPayload(identity);
       const { interaction, post } = interactionFixture({}, raw);
       const first =
-        testCase.kind === "autocomplete" && interaction instanceof AutocompleteInteraction
+        interaction instanceof AutocompleteInteraction
           ? interaction.respond([{ name: "First", value: "first" }])
           : interaction.reply("first");
       const next = () => {
@@ -124,7 +118,7 @@ describe("BaseInteraction", () => {
         if (!(interaction instanceof BaseComponentInteraction)) {
           throw new Error("expected a component interaction");
         }
-        switch (testCase.operation) {
+        switch (operation) {
           case "update":
             return interaction.update("second");
           case "show-modal":
@@ -136,14 +130,10 @@ describe("BaseInteraction", () => {
         }
       };
 
-      const [firstResult, secondResult] = await Promise.allSettled([first, next()]);
-      expect(firstResult.status).toBe("fulfilled");
-      expect(secondResult.status).toBe("rejected");
-      if (secondResult.status === "rejected") {
-        expect(secondResult.reason).toMatchObject({
-          message: expect.stringMatching(/already.*acknowledg/i),
-        });
-      }
+      expect(await Promise.allSettled([first, next()])).toMatchObject([
+        { status: "fulfilled" },
+        { status: "rejected", reason: { message: expect.stringMatching(/already.*acknowledg/i) } },
+      ]);
       expect(post).toHaveBeenCalledOnce();
       expect(interaction.acknowledged).toBe(true);
     },
@@ -226,7 +216,17 @@ describe("BaseInteraction", () => {
       } else {
         await interaction.defer();
       }
-      await interaction.reply({ components: [new Container([new TextDisplay("done")])] });
+      await interaction.reply({
+        components: [
+          {
+            isV2: true,
+            serialize: () => ({
+              type: ComponentType.Container,
+              components: [{ type: ComponentType.TextDisplay, content: "done" }],
+            }),
+          },
+        ],
+      });
       const args = [{ body: v2Payload }, { with_components: true }];
       if (mode === "follow-up") {
         expect(post).toHaveBeenNthCalledWith(2, "/webhooks/app1/token1", ...args);

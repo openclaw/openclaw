@@ -3,6 +3,7 @@ import {
   GATEWAY_CLIENT_IDS,
   GATEWAY_CLIENT_MODES,
 } from "../../../packages/gateway-protocol/src/client-info.js";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import type { PairedDevice } from "../../infra/device-pairing.types.js";
 import {
   NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
@@ -75,6 +76,54 @@ function deviceRuntime(params: {
 }
 
 describe("device worker provider", () => {
+  it.each(["pairing", "presence"] as const)(
+    "cancels an in-flight %s inspection without waiting for the read",
+    async (phase) => {
+      const entered = createDeferred();
+      const release = createDeferred();
+      const controller = new AbortController();
+      const read = async (current: typeof phase) => {
+        if (phase === current) {
+          entered.resolve();
+          await release.promise;
+        }
+      };
+      const listCurrentNodes = vi.fn(async () => {
+        await read("presence");
+        return [connectedNode()];
+      });
+      const { provider } = deviceRuntime({
+        getPairedDevice: async () => {
+          await read("pairing");
+          return pairedDevice();
+        },
+        listCurrentNodes,
+      });
+      let outcome: unknown;
+      const inspection = provider.inspect({ ...LEASE, signal: controller.signal }).then(
+        (result) => {
+          outcome = result;
+        },
+        (error: unknown) => {
+          outcome = error;
+        },
+      );
+      try {
+        await entered.promise;
+        controller.abort();
+        await vi.waitFor(() =>
+          expect(outcome).toMatchObject({ name: "AbortError", cause: controller.signal.reason }),
+        );
+        if (phase === "pairing") {
+          expect(listCurrentNodes).not.toHaveBeenCalled();
+        }
+      } finally {
+        release.resolve();
+        await inspection;
+      }
+    },
+  );
+
   it("binds targeted device reconciliation to the active worker service", async () => {
     const service = {};
     const reconcile = async (deviceId: string) => [`environment:${deviceId}`];

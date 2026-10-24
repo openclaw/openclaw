@@ -1,5 +1,6 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import type { JSX } from "@solidjs/web";
 import { createMemo, For, Show } from "solid-js";
 import { Icon } from "../../components/solid/icon.tsx";
 import { createMsFormatter } from "../../lib/format.ts";
@@ -8,6 +9,7 @@ import { t } from "../../lib/reactive/i18n.ts";
 import { parseSessionLog, prepareUsageDateRange, type ParsedSessionLog } from "./helpers.ts";
 import { charsToTokens, formatUsageCost, formatUsageTokens } from "./metrics.ts";
 import { renderUsageRefreshStatus } from "./page-shell.tsx";
+import { createUsageRead, UsagePending, UsageReadStatus, type UsageRead } from "./read-status.tsx";
 import type { SessionLogRole, UsageContextDetail, UsageProps, UsageSessionEntry } from "./types.ts";
 import { renderSessionSummary } from "./view-session-summary.tsx";
 import { deriveTimeSeries, TimeSeriesCompact } from "./view-timeseries.tsx";
@@ -169,20 +171,46 @@ function ContextPanel(props: {
   expanded: boolean;
   onToggleExpanded: () => void;
 }) {
+  const read = createUsageRead(
+    () => props.context.read,
+    () => props.context.status.error,
+  );
+  return (
+    <UsagePending read={read}>
+      {(loading) => <ContextContent {...props} read={read} loading={loading()} />}
+    </UsagePending>
+  );
+}
+
+function ContextContent(props: {
+  context: UsageContextDetail;
+  usage: UsageSessionEntry["usage"];
+  expanded: boolean;
+  onToggleExpanded: () => void;
+  read: UsageRead;
+  loading: boolean;
+}) {
+  const status = () => (
+    <UsageReadStatus read={props.read}>
+      {() =>
+        renderUsageRefreshStatus(
+          props.context.status,
+          "usage.details.systemPromptBreakdown",
+          "context",
+        )
+      }
+    </UsageReadStatus>
+  );
   return (
     <Show
       when={props.context.weight}
       fallback={
         <div class="context-details-panel">
-          {renderUsageRefreshStatus(
-            props.context.status,
-            "usage.details.systemPromptBreakdown",
-            "context",
-          )}
+          {status()}
           {props.context.status.error ? undefined : (
             <div class="usage-empty-block">
               {t(
-                props.context.loading || props.context.status.awaitingGateway
+                props.loading || props.context.status.awaitingGateway
                   ? "usage.loading.badge"
                   : "usage.details.noContextData",
               )}
@@ -195,6 +223,7 @@ function ContextPanel(props: {
         <LoadedContextPanel
           weight={weight()}
           status={props.context.status}
+          readStatus={status}
           usage={props.usage}
           expanded={props.expanded}
           onToggleExpanded={props.onToggleExpanded}
@@ -207,6 +236,7 @@ function ContextPanel(props: {
 function LoadedContextPanel(props: {
   weight: NonNullable<UsageContextDetail["weight"]>;
   status: UsageContextDetail["status"];
+  readStatus: () => JSX.Element;
   usage: UsageSessionEntry["usage"];
   expanded: boolean;
   onToggleExpanded: () => void;
@@ -297,11 +327,15 @@ function LoadedContextPanel(props: {
   });
   return (
     <div class="context-details-panel">
-      {renderUsageRefreshStatus(props.status, "usage.details.systemPromptBreakdown", "context")}
+      {props.readStatus()}
       <div class="context-breakdown-header">
         <div class="card-title usage-section-title">{t("usage.details.systemPromptBreakdown")}</div>
         <Show when={state().hasMore}>
-          <button class="btn btn--sm" onClick={() => props.onToggleExpanded()}>
+          <button
+            class="btn btn--sm"
+            aria-expanded={props.expanded ? "true" : "false"}
+            onClick={() => props.onToggleExpanded()}
+          >
             {props.expanded ? t("usage.details.collapse") : t("usage.details.expandAll")}
           </button>
         </Show>
@@ -395,11 +429,29 @@ function SessionLogs(props: {
   entries: ParsedSessionLog[];
   intervalEntries: ParsedSessionLog[];
 }) {
+  const read = createUsageRead(
+    () => props.detail.sessionLogsRead,
+    () => props.detail.sessionLogsStatus.error,
+  );
+  return (
+    <UsagePending read={read}>
+      {(loading) => <SessionLogsContent {...props} read={read} loading={loading()} />}
+    </UsagePending>
+  );
+}
+
+function SessionLogsContent(props: {
+  detail: UsageProps["detail"];
+  callbacks: UsageProps["callbacks"]["details"];
+  entries: ParsedSessionLog[];
+  intervalEntries: ParsedSessionLog[];
+  read: UsageRead;
+  loading: boolean;
+}) {
   const expandedState = createMemo(() => props.detail.sessionLogsExpanded);
   const state = createMemo(() => {
     const detail = props.detail;
     const {
-      sessionLogsLoading: loading,
       sessionLogsStatus: status,
       logFilters: filters,
       timeSeriesCursorStart: cursorStart,
@@ -407,7 +459,8 @@ function SessionLogs(props: {
     } = detail;
     const logs = detail.sessionLogs;
     const parsedEntries = props.entries;
-    const initialLoading = (loading || status.awaitingGateway) && !status.hasLoaded;
+    // Loaded logs must not join the pending lane during a background refresh.
+    const initialLoading = !status.hasLoaded && (props.loading || status.awaitingGateway);
     const initialError = status.error && !status.hasLoaded;
     const refreshStatus = initialLoading
       ? undefined
@@ -475,7 +528,7 @@ function SessionLogs(props: {
                 : t("usage.details.expandAll")}
             </button>
           </div>
-          {state().refreshStatus}
+          <UsageReadStatus read={props.read}>{() => state().refreshStatus}</UsageReadStatus>
           <div class="usage-filters-inline session-log-filters">
             <select
               multiple
@@ -603,7 +656,7 @@ function SessionLogs(props: {
       ) : (
         <div class="session-logs-compact">
           <div class="session-logs-header">{t("usage.details.conversation")}</div>
-          {state().refreshStatus}
+          <UsageReadStatus read={props.read}>{() => state().refreshStatus}</UsageReadStatus>
           {state().initialLoading || !state().initialError ? (
             <div class="usage-empty-block">{t(state().message)}</div>
           ) : undefined}

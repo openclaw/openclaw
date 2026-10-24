@@ -33,14 +33,11 @@ type ListParams = {
 function listResult(keys: string[] = [], totalCount = keys.length): SessionsListResult {
   const nextOffset = keys.length;
   return {
-    ts: 1,
+    ...sessionsResult(keys.map((key, updatedAt) => ({ key, kind: "direct", updatedAt }))),
     path: "",
-    count: keys.length,
     totalCount,
     hasMore: nextOffset < totalCount,
     nextOffset: nextOffset < totalCount ? nextOffset : null,
-    defaults: { modelProvider: null, model: null, contextTokens: null },
-    sessions: keys.map((key, updatedAt) => ({ key, kind: "direct", updatedAt })),
   };
 }
 
@@ -299,19 +296,20 @@ describe("session list requests", () => {
     },
   );
 
-  it("queues a reentrant observed refresh behind the current request", async () => {
+  it("queues a reentrant observed refresh of a loaded list behind the current request", async () => {
     const firstResponse = createDeferred<SessionsListResult>();
     const secondResponse = createDeferred<SessionsListResult>();
     const secondStarted = createDeferred();
     const request = vi
       .fn()
+      .mockResolvedValueOnce(listResult(["agent:writer:seed"]))
       .mockImplementationOnce(async () => firstResponse.promise)
       .mockImplementationOnce(async () => {
         secondStarted.resolve();
         return secondResponse.promise;
       });
     const { sessions } = sessionHarness(request);
-    let requestedAgain = false;
+    let requestedAgain = true;
     let reentrant: Promise<void> | undefined;
     let observedKeys: string[] = [];
     const observation = sessions.observeList({ agentId: "writer", limit: 2 }, (snapshot) => {
@@ -321,6 +319,9 @@ describe("session list requests", () => {
         reentrant = observation.refresh();
       }
     });
+    await observation.refresh();
+    request.mockClear();
+    requestedAgain = false;
     const initial = observation.refresh();
 
     onTestFinished(async () => {

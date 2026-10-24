@@ -179,8 +179,14 @@ it(
         idempotencyKey,
         queueMode: "followup",
       });
-    await send("SYNTHETIC_FIRST_REPLY", "rpc-first");
-    await vi.waitFor(() => expect(firstReceived).toBe(true), { timeout: 60_000 });
+    await vi.waitFor(
+      async () => {
+        // Startup may still be recovering inputs; retries retain the same receipt.
+        await send("SYNTHETIC_FIRST_REPLY", "rpc-first");
+        expect(firstReceived).toBe(true);
+      },
+      { timeout: 60_000 },
+    );
     await send("SYNTHETIC_QUEUED_REPLY", "rpc-queued");
     // Registration precedes queue publication. Followup enqueue settles this
     // source's ordering receipt only after publishing its accepted custody.

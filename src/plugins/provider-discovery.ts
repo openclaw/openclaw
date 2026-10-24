@@ -28,7 +28,6 @@ export type PreparedProviderStaticCatalog = Readonly<{
   entries: readonly PreparedProviderStaticCatalogEntry[];
 }>;
 
-/** Options for resolving plugin providers that can contribute model catalog entries. */
 export type ResolveRuntimePluginDiscoveryProvidersParams = {
   config?: OpenClawConfig;
   workspaceDir?: string;
@@ -210,18 +209,16 @@ export async function prepareProviderStaticCatalog(params: {
         providerIds: params.providerIds,
       });
       params.signal?.throwIfAborted();
-      entries.push(
-        Object.freeze({
-          provider,
-          providerConfigs: normalizePluginDiscoveryResult({ provider, result }),
-        }),
-      );
+      entries.push({
+        provider,
+        providerConfigs: normalizePluginDiscoveryResult({ provider, result }),
+      });
     }
   }
-  return Object.freeze({
-    providers: Object.freeze([...params.providers]),
-    entries: Object.freeze(entries),
-  });
+  return {
+    providers: [...params.providers],
+    entries,
+  };
 }
 
 export function resolvePreparedProviderStaticConfigs(

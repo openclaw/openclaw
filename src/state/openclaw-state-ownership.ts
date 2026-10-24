@@ -25,7 +25,7 @@ import {
 } from "../infra/sqlite-readonly-location.js";
 import { prepareSqliteReadOnlyLocationSync } from "../infra/sqlite-snapshot-source.js";
 import { withSqliteSourceReadDatabase } from "../infra/sqlite-source-handle.js";
-import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
+import { runSqliteReadSnapshotSync } from "../infra/sqlite-transaction.js";
 import { StateSchemaMutationConflictError } from "../infra/state-database-maintenance.js";
 import {
   OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
@@ -216,7 +216,7 @@ export function inspectOpenClawStateOwnershipInProcess(
       database.exec(
         `PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS}; PRAGMA query_only = ON; PRAGMA trusted_schema = OFF;`,
       );
-      return runSqliteDeferredTransactionSync(
+      return runSqliteReadSnapshotSync(
         database,
         () => inspectOpenClawStateOwnershipFromDatabase(database, databasePath),
         { operationLabel: "state.ownership.inspect" },

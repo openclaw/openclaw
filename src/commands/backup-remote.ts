@@ -174,7 +174,6 @@ export async function createOffsiteBackupArchive(
         retention,
       );
       for (const expired of selected.deleted) {
-        await assertBackupNamespaceOwner(location, namespace, deviceId);
         await location.delete(expired, {
           precondition: () => assertBackupNamespaceOwner(location, namespace, deviceId),
         });

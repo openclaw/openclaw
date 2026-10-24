@@ -125,6 +125,88 @@ class NodeEventHarness {
   active = () => this.nodeRegistry.getActiveNode();
 }
 
+it.each([
+  "current",
+  "foreign-node",
+  "owner-epoch",
+  "placement-generation",
+  "moving",
+  "reconnected",
+  "payload-key",
+])(
+  "publishes worker process invalidations only for the current placement (%s)",
+  async (scenario) => {
+    const h = new NodeEventHarness();
+    const client = h.register("process-node");
+    const placement = {
+      state: "active",
+      executionMode: "worker-turn",
+      environmentId: "environment-1",
+      sessionId: "session-1",
+      sessionKey: "agent:main:build",
+      agentId: "main",
+      activeOwnerEpoch: 3,
+      generation: 2,
+    };
+    const environment = {
+      nodeDeviceId: scenario === "foreign-node" ? "another-node" : "node-1",
+      ownerEpoch: scenario === "owner-epoch" ? 4 : 3,
+      state: "attached",
+      destroyRequestedAtMs: null,
+    };
+    const release = vi.fn();
+    const prepareRuntimeRefresh = vi.fn(async () => {
+      if (scenario === "reconnected") {
+        h.register("replacement-node");
+      }
+      return {
+        placement,
+        ...(scenario === "moving" ? { move: {} } : {}),
+        assertCurrent() {},
+        release,
+      };
+    });
+    Object.assign(h.context, {
+      workerSessionPlacementService: { prepareRuntimeRefresh },
+      workerEnvironmentService: { get: () => environment },
+    });
+    const respond = await h.send(
+      client,
+      {
+        environmentId: "environment-1",
+        sessionId: "session-1",
+        ownerEpoch: 3,
+        placementGeneration: scenario === "placement-generation" ? 1 : 2,
+        ...(scenario === "payload-key" ? { sessionKey: "agent:main:untrusted" } : {}),
+      },
+      "worker.processes.changed",
+    );
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      {
+        ok: true,
+        event: "worker.processes.changed",
+        handled: scenario === "current",
+      },
+      undefined,
+    );
+    if (scenario === "current") {
+      expect(h.broadcast).toHaveBeenCalledExactlyOnceWith(
+        "sessions.processes.changed",
+        { sessionKey: "agent:main:build", agentId: "main" },
+        { sessionKeys: ["agent:main:build"], agentId: "main", dropIfSlow: true },
+      );
+    } else {
+      expect(h.broadcast).not.toHaveBeenCalled();
+    }
+    if (scenario === "payload-key") {
+      expect(prepareRuntimeRefresh).not.toHaveBeenCalled();
+    } else {
+      expect(release).toHaveBeenCalledOnce();
+    }
+  },
+);
+
 it("invalidates only the reporting node's inventory on state changes and connection retirement", async () => {
   const h = new NodeEventHarness();
   const first = h.register("conn-first");

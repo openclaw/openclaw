@@ -28,9 +28,8 @@ import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createRpcSourceForTest } from "../test-helpers.rpc-source.js";
-import { chatHistoryHandlers } from "./chat-history-handler.js";
+import { historyPayload, historyRpc } from "./chat-history-fixture.test-support.js";
 import { createHistoryReadContext } from "./chat-history.test-helpers.js";
-import { chatMessageGetHandlers } from "./chat-message-get-handler.js";
 import { createChatMetadataHarness } from "./chat-metadata-runtime.test-support.js";
 import { readChatPendingInputs } from "./chat-pending-inputs.js";
 import { captureRpcTargetForTest } from "./rpc-source-fixtures.test-support.js";
@@ -77,22 +76,7 @@ async function read(
   params: Record<string, unknown>,
   method: "chat.history" | "chat.startup" | "chat.message.get" = "chat.history",
 ) {
-  const handler =
-    method === "chat.message.get" ? chatMessageGetHandlers[method] : chatHistoryHandlers[method];
-  let result: unknown;
-  const handle = expectDefined(handler, "read handler");
-  await handle({
-    params,
-    context,
-    respond: (ok, payload, error) => {
-      expect([ok, error]).toEqual([true, undefined]);
-      result = payload;
-    },
-    req: { type: "req", id: "history", method },
-    client: null,
-    isWebchatConnect: () => false,
-  });
-  return expectDefined(asOptionalRecord(result), "read response");
+  return historyPayload(await historyRpc(context, "")(method, params));
 }
 
 describe("pending input read boundary", () => {
@@ -124,8 +108,8 @@ describe("pending input read boundary", () => {
       const commands = Array.from({ length: 150 }, (_, index) => ({
         name: `synthetic_command_${index}`,
         description: "Synthetic skill or plugin command description. ".repeat(6),
-        source: index % 2 ? "skill" : "plugin",
-        scope: "text",
+        source: index % 2 ? ("skill" as const) : ("plugin" as const),
+        scope: "text" as const,
         acceptsArgs: true,
       }));
       metadata.buildCommands.mockResolvedValue({ commands });
@@ -167,14 +151,15 @@ describe("pending input read boundary", () => {
         messages: [],
         stateRevision: first.stateRevision,
       });
-      expect(warm.pendingInputs).toBeUndefined();
-      expect(warm.sessionInfo).toBeUndefined();
+      expect([warm.pendingInputs, warm.sessionInfo]).toEqual([undefined, undefined]);
       expect(warm.sessionInfoSnapshotAt).toBeTypeOf("number");
       expect(asOptionalRecord(warm.metadata)?.commands).toBeUndefined();
       expect(Buffer.byteLength(JSON.stringify(warm))).toBeLessThan(2_500);
 
       metadata.setSkillsVersion(2);
-      metadata.buildCommands.mockResolvedValue({ commands: [{ name: "replacement_skill" }] });
+      metadata.buildCommands.mockResolvedValue({
+        commands: [{ ...expectDefined(commands[0], "command"), name: "replacement_skill" }],
+      });
       await metadata.refresh();
       await metadata.read();
       const refreshed = await call({ cursor: warm.deltaCursor, knownState: warm.stateRevision });

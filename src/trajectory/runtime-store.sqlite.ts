@@ -21,7 +21,7 @@ import { isPostgresSqlConnection, type EngineConnection } from "../infra/sql-con
 import { withSqliteDatabaseWriteScope } from "../infra/sqlite-database-admission.js";
 import { assertSqliteJsonlReadBudget } from "../infra/sqlite-jsonl-budget.js";
 import { coerceRequiredSqliteNumber as sqliteNumber } from "../infra/sqlite-number.js";
-import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
+import { runSqliteReadSnapshotSync } from "../infra/sqlite-transaction.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../state/openclaw-agent-db.generated.js";
 import type { OpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
@@ -62,8 +62,6 @@ type TrajectoryRuntimeAppendResult = {
   receipt: {
     kind: "trajectory-runtime-append";
     sessionId: string;
-    appendedRange: { firstSeq: number; lastSeq: number } | undefined;
-    removedThroughSeq: number | undefined;
     windowFacts: TrajectoryRuntimeWindowFacts;
   };
 };
@@ -126,8 +124,6 @@ export function appendSqliteTrajectoryRuntimeEventsWithWriter(
       receipt: {
         kind: "trajectory-runtime-append",
         sessionId,
-        appendedRange: { firstSeq: known.nextSeq, lastSeq: known.nextSeq + rows.length - 1 },
-        removedThroughSeq: undefined,
         windowFacts: {
           nextSeq: known.nextSeq + rows.length,
           retainedBytes: known.retainedBytes + retainedBytes,
@@ -188,8 +184,6 @@ export function appendSqliteTrajectoryRuntimeEventsWithWriter(
         receipt: {
           kind: "trajectory-runtime-append" as const,
           sessionId,
-          appendedRange: rows.length ? { firstSeq: window.nextSeq, lastSeq: seq - 1 } : undefined,
-          removedThroughSeq: window.removeThroughSeq,
           windowFacts: {
             nextSeq: window.removeThroughSeq === seq - 1 ? 0 : seq,
             retainedBytes: window.retainedBytes,
@@ -281,7 +275,7 @@ export function loadSqliteTrajectoryRuntimeEventRowsSync(
         );
       // Budget checks and payload reads must share one snapshot so a concurrent
       // writer cannot cross the budget between admission and materialization.
-      return runSqliteDeferredTransactionSync(
+      return runSqliteReadSnapshotSync(
         database.db,
         () => {
           if (
@@ -314,7 +308,6 @@ export function loadSqliteTrajectoryRuntimeEventRowsSync(
               events.select(["event_json", "event_utf8_bytes"]).as("events"),
               Math.floor(scope.maxEventBytes),
               "Trajectory runtime store",
-              { hasExactUtf8Bytes: true },
             );
           }
           let query = events

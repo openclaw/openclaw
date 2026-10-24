@@ -1,16 +1,12 @@
 // Focused QA evidence for official plugin drift through doctor diagnostics.
 import { describe, expect, it, vi } from "vitest";
-import * as noteModule from "../../packages/terminal-core/src/note.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { fetchClawHubPackageDetail } from "../infra/clawhub-packages.js";
 import {
   detectPluginVersionDrift,
   resolvePluginVersionDriftTargets,
 } from "../plugins/plugin-version-drift.js";
-import {
-  collectWorkspaceStatusHealthFindings,
-  noteWorkspaceStatus,
-} from "./doctor-workspace-status.js";
+import { collectWorkspaceStatusHealthFindings } from "./doctor-workspace-status.js";
 
 vi.mock("../infra/clawhub-packages.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/clawhub-packages.js")>()),
@@ -82,17 +78,6 @@ describe("official Codex plugin version drift doctor evidence", () => {
         message: expect.stringContaining("Gateway service package version is unavailable"),
       }),
     ]);
-
-    const noteSpy = vi.spyOn(noteModule, "note").mockImplementation(() => {});
-    try {
-      noteWorkspaceStatus(config, { pluginVersionReadiness: readiness });
-      expect(noteSpy).toHaveBeenCalledWith(
-        expect.stringContaining("Running Gateway: OpenClaw 2026.5.30"),
-        "Plugin restart readiness",
-      );
-    } finally {
-      noteSpy.mockRestore();
-    }
   });
 
   it("reports when compatible plugins still need the older running Gateway restarted", () => {
@@ -113,17 +98,6 @@ describe("official Codex plugin version drift doctor evidence", () => {
         fixHint: "openclaw gateway restart",
       }),
     ]);
-
-    const noteSpy = vi.spyOn(noteModule, "note").mockImplementation(() => {});
-    try {
-      noteWorkspaceStatus(config, { pluginVersionReadiness: readiness });
-      expect(noteSpy).toHaveBeenCalledWith(
-        expect.stringContaining(`Running Gateway: OpenClaw ${runningGatewayVersion}`),
-        "Plugin restart readiness",
-      );
-    } finally {
-      noteSpy.mockRestore();
-    }
   });
 
   it("reports older and newer pins as advisory drift while accepting correction suffixes", () => {
@@ -159,6 +133,8 @@ describe("official Codex plugin version drift doctor evidence", () => {
         {
           checkId: "core/doctor/workspace-status",
           severity: "warning",
+          category: "fix-now",
+          docsUrl: "https://docs.openclaw.ai/cli/plugins/inspect-and-diagnose#doctor",
           message: `Plugin codex is ${installedVersion}, but a Gateway restart will load OpenClaw ${gatewayVersion}. The confirmed plugin target is ${gatewayVersion}.`,
           path: "plugins.entries.codex",
           target: "codex",
@@ -166,27 +142,6 @@ describe("official Codex plugin version drift doctor evidence", () => {
           fixHint: "openclaw plugins update @openclaw/codex@2026.6.1 && openclaw gateway restart",
         },
       ]);
-
-      const noteSpy = vi.spyOn(noteModule, "note").mockImplementation(() => {});
-      try {
-        noteWorkspaceStatus(config, {
-          pluginVersionReadiness: { status: "resolved", report },
-        });
-        const driftNotes = noteSpy.mock.calls.filter(
-          ([, title]) => title === "Plugin restart readiness",
-        );
-        expect(driftNotes).toHaveLength(1);
-        expect(driftNotes[0]?.[0]).toContain(
-          `1 active official plugin not on post-restart OpenClaw ${gatewayVersion}`,
-        );
-        expect(driftNotes[0]?.[0]).toContain(
-          `codex: ${installedVersion} (npm) -> expected ${gatewayVersion}`,
-        );
-        expect(driftNotes[0]?.[0]).toContain("openclaw plugins update @openclaw/codex@2026.6.1");
-        expect(driftNotes[0]?.[0]).toContain("openclaw gateway restart");
-      } finally {
-        noteSpy.mockRestore();
-      }
     }
 
     for (const [installedVersion, correctionGatewayVersion] of [
@@ -268,41 +223,22 @@ describe("ClawHub plugin version drift doctor evidence", () => {
         {},
         { pluginVersionReadiness: readiness },
       );
-      const noteSpy = vi.spyOn(noteModule, "note").mockImplementation(() => {});
-      try {
-        noteWorkspaceStatus({}, { pluginVersionReadiness: readiness });
-        expect(findings).toHaveLength(1);
-        expect(noteSpy).toHaveBeenCalledOnce();
-        const output = String(noteSpy.mock.calls[0]?.[0]);
-        if (result === "current") {
-          // Registry lag stays visible, but as an explanation with no repair command.
-          expect(findings[0]?.severity).toBe("info");
-          expect(findings[0]?.message).toContain("registry version 2026.9.3");
-          expect(findings[0]?.message).toContain("No plugin update can reach 2026.9.4");
-          expect(findings[0]?.fixHint).toBeUndefined();
-          expect(output).toContain("already holds registry version 2026.9.3");
-          expect(output).toContain("whatsapp: 2026.9.3 (clawhub) -> expected 2026.9.4");
-          expect(output).not.toContain("openclaw plugins update");
-          expect(output).not.toContain("No install command generated");
-        } else if (result === "resolved") {
-          expect(findings[0]?.message).toContain(`confirmed plugin target is ${latestVersion}`);
-          expect(output).toContain(
-            `whatsapp: ${installedVersion} (clawhub) -> expected ${latestVersion}`,
-          );
-          expect(output).not.toContain("expected 2026.9.4");
-          expect(findings[0]?.fixHint).toBe(
-            "openclaw plugins update whatsapp && openclaw gateway restart",
-          );
-          expect(output).toContain(findings[0]?.fixHint);
-        } else {
-          expect(findings[0]?.message).toContain("requires plugin API >=2026.10.1");
-          expect(output).toContain("requires plugin API >=2026.10.1");
-          expect(output).toContain("No install command generated");
-          expect(output).not.toContain("openclaw plugins update");
-          expect(findings[0]?.fixHint).not.toContain("openclaw plugins update");
-        }
-      } finally {
-        noteSpy.mockRestore();
+      expect(findings).toHaveLength(1);
+      if (result === "current") {
+        // Registry lag stays visible, but as an explanation with no repair command.
+        expect(findings[0]?.severity).toBe("info");
+        expect(findings[0]?.message).toContain("registry version 2026.9.3");
+        expect(findings[0]?.message).toContain("No plugin update can reach 2026.9.4");
+        expect(findings[0]?.fixHint).toContain("No plugin repair is available");
+      } else if (result === "resolved") {
+        expect(findings[0]?.message).toContain(`confirmed plugin target is ${latestVersion}`);
+
+        expect(findings[0]?.fixHint).toBe(
+          "openclaw plugins update whatsapp && openclaw gateway restart",
+        );
+      } else {
+        expect(findings[0]?.message).toContain("requires plugin API >=2026.10.1");
+        expect(findings[0]?.fixHint).not.toContain("openclaw plugins update");
       }
     },
   );

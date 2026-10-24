@@ -81,7 +81,6 @@ describe("warnIfModelConfigLooksOff", () => {
       await resolveDefaultModelAuthStatus(config, { env: {}, pendingAuthProfiles }),
     ).toMatchObject({
       status: "ready",
-      hasAuth: true,
     });
     await warnIfModelConfigLooksOff(config, prompter, {
       env: {},
@@ -133,7 +132,6 @@ describe("warnIfModelConfigLooksOff", () => {
       await resolveDefaultModelAuthStatus(config, { env: { OPENAI_API_KEY: "api-key" } }),
     ).toMatchObject({
       status: "missing",
-      hasAuth: false,
       authRequirement: "subscription",
     });
 
@@ -147,7 +145,6 @@ describe("warnIfModelConfigLooksOff", () => {
     useSubscription();
     expect(await resolveDefaultModelAuthStatus(config)).toMatchObject({
       status: "ready",
-      hasAuth: true,
     });
   });
 
@@ -157,8 +154,6 @@ describe("warnIfModelConfigLooksOff", () => {
 
     expect(await resolveDefaultModelAuthStatus(config)).toMatchObject({
       status: "incompatible",
-      hasAuth: false,
-      code: "platform-only-model-on-chatgpt",
     });
     await warnIfModelConfigLooksOff(config, prompter);
 
@@ -168,52 +163,44 @@ describe("warnIfModelConfigLooksOff", () => {
     );
   });
 
-  it("uses selected static ChatGPT catalog facts for auth checks", async () => {
-    useSubscription();
-    const catalog = [catalogEntry("gpt-5.4-nano", "GPT 5.4 Nano", chatGPTRoute)];
-    const config = modelConfig("openai/gpt-5.4-nano");
-
-    const catalogFacts = resolveDefaultModelCatalogFacts(config, catalog);
-    expect(catalogFacts.observedRoutes).toEqual([chatGPTRoute]);
-    expect(
-      await resolveDefaultModelAuthStatus(config, { observedRoutes: catalogFacts.observedRoutes }),
-    ).toMatchObject({ status: "ready", hasAuth: true });
-  });
-
-  it("matches shipped OpenAI aliases to their canonical catalog model", async () => {
-    const catalog = [catalogEntry("gpt-5.4", "GPT 5.4", platformRoute)];
-    const config = modelConfig("openai/gpt-5.4-codex");
-
-    const catalogFacts = resolveDefaultModelCatalogFacts(config, catalog);
-    expect(catalogFacts.observedRoutes).toEqual([platformRoute]);
-    expect(
-      await resolveDefaultModelAuthStatus(config, {
-        env: { OPENAI_API_KEY: "api-key" },
-        observedRoutes: catalogFacts.observedRoutes,
-      }),
-    ).toMatchObject({ status: "ready", hasAuth: true });
-  });
-
-  it("uses every physical route when the first route lacks compatible auth", async () => {
-    const platform = catalogEntry("gpt-5.4-nano", "GPT 5.4 Nano", platformRoute);
-    const chatGPT = { ...platform, ...chatGPTRoute };
-    const routeVariants = [platform, chatGPT];
-    useSubscription();
-    const config = modelConfig("openai/gpt-5.4-nano");
-
-    const catalogFacts = resolveDefaultModelCatalogFacts(config, [platform], { routeVariants });
-    expect(catalogFacts.observedRoutes).toEqual([platformRoute, chatGPTRoute]);
-    expect(
-      await resolveDefaultModelAuthStatus(config, { observedRoutes: catalogFacts.observedRoutes }),
-    ).toMatchObject({ status: "ready", hasAuth: true });
-  });
+  it.each([
+    ["static ChatGPT route", "gpt-5.4-nano", "gpt-5.4-nano", [chatGPTRoute], true],
+    ["canonical model alias", "gpt-5.4-codex", "gpt-5.4", [platformRoute], false],
+    [
+      "all physical route variants",
+      "gpt-5.4-nano",
+      "gpt-5.4-nano",
+      [platformRoute, chatGPTRoute],
+      true,
+    ],
+  ] as const)(
+    "resolves catalog auth through %s",
+    async (_name, model, canonical, routes, subscription) => {
+      if (subscription) {
+        useSubscription();
+      }
+      const config = modelConfig(`openai/${model}`);
+      const catalog = routes.map((route) => catalogEntry(canonical, canonical, route));
+      const { observedRoutes } = resolveDefaultModelCatalogFacts(
+        config,
+        catalog.slice(0, 1),
+        routes.length > 1 ? { routeVariants: catalog } : undefined,
+      );
+      expect(observedRoutes).toEqual(routes);
+      expect(
+        await resolveDefaultModelAuthStatus(config, {
+          ...(subscription ? {} : { env: { OPENAI_API_KEY: "api-key" } }),
+          observedRoutes,
+        }),
+      ).toMatchObject({ status: "ready" });
+    },
+  );
 
   it("reports an unknown static transport as indeterminate instead of missing auth", async () => {
     const config = modelConfig("openai/gpt-5.4-nano");
 
     expect(await resolveDefaultModelAuthStatus(config)).toMatchObject({
       status: "indeterminate",
-      hasAuth: false,
     });
     await warnIfModelConfigLooksOff(config, prompter);
 

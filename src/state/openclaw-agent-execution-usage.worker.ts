@@ -8,7 +8,7 @@ export async function loadUsageCacheOperations() {
     {
       pruneSessionCostUsageRollupsInDatabase,
       retireLegacySessionCostUsageCacheInDatabase,
-      writeSessionCostUsageRollupInDatabase,
+      writeSessionCostUsageRollupsInDatabase,
     },
     { withSqliteDatabaseWriteScope },
   ] = await Promise.all([
@@ -23,15 +23,11 @@ export async function loadUsageCacheOperations() {
         admit("commit");
       }),
     "usageCache.writeRollup": (
-      input: Parameters<typeof writeSessionCostUsageRollupInDatabase>[1][],
+      input: Parameters<typeof writeSessionCostUsageRollupsInDatabase>[1],
       { writeTransaction, admit },
     ) =>
       writeTransaction("session-cost-usage.rollup.write", "Usage cache", ({ db }) => {
-        withSqliteDatabaseWriteScope(db, [], () => {
-          for (const row of input) {
-            writeSessionCostUsageRollupInDatabase(db, row);
-          }
-        });
+        writeSessionCostUsageRollupsInDatabase(db, input);
         admit("commit");
         return true;
       }),

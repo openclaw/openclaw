@@ -194,49 +194,6 @@ function safeAvatarUrl(raw: string | undefined): URL | null {
   return url;
 }
 
-async function fetchCoAuthors(
-  authorLogin: string,
-  commits: unknown,
-  fetchImpl: typeof fetch,
-  signal: AbortSignal,
-): Promise<{ coAuthors: { login: string; avatarDataUrl?: string }[]; coAuthorCount: number }> {
-  const empty = { coAuthors: [], coAuthorCount: 0 };
-  if (!Array.isArray(commits)) {
-    return empty;
-  }
-  const byLogin = new Map<string, { login: string; accountId: string }>();
-  for (const entry of commits) {
-    const commit = isRecord(entry) && isRecord(entry.commit) ? entry.commit : undefined;
-    const message = readNonBlankString(commit?.message);
-    if (!message) {
-      continue;
-    }
-    for (const match of message.matchAll(CO_AUTHOR_TRAILER)) {
-      const login = match.groups?.login;
-      const accountId = match.groups?.id;
-      if (!login || !accountId || login.toLowerCase() === authorLogin.toLowerCase()) {
-        continue;
-      }
-      const key = login.toLowerCase();
-      if (!byLogin.has(key)) {
-        byLogin.set(key, { login, accountId });
-      }
-    }
-  }
-  const faces = [...byLogin.values()].slice(0, CO_AUTHOR_FACE_LIMIT);
-  const coAuthors = await Promise.all(
-    faces.map(async (face) => {
-      const avatarDataUrl = await fetchAvatarDataUrl(
-        `https://${GITHUB_AVATAR_HOST}/u/${face.accountId}`,
-        fetchImpl,
-        signal,
-      );
-      return avatarDataUrl ? { login: face.login, avatarDataUrl } : { login: face.login };
-    }),
-  );
-  return { coAuthors, coAuthorCount: byLogin.size };
-}
-
 async function fetchAvatarDataUrl(
   rawUrl: string | undefined,
   fetchImpl: typeof fetch,
@@ -257,28 +214,24 @@ async function fetchAvatarDataUrl(
       avatarCaches.set(fetchImpl, cache);
     }
     const { value } = await racePromiseWithAbortSignal(
-      cache.read(
-        url.href,
-        async () => {
-          const response = await fetchImpl(url, {
-            headers: { Accept: "image/webp,image/png,image/jpeg,image/gif" },
-            redirect: "error",
-            signal: AbortSignal.timeout(GITHUB_PREVIEW_TIMEOUT_MS),
-          });
-          const contentType = response.headers.get("content-type")?.split(";", 1)[0]?.trim();
-          if (
-            !response.ok ||
-            !contentType ||
-            !["image/gif", "image/jpeg", "image/png", "image/webp"].includes(contentType)
-          ) {
-            await discardResponse(response);
-            return undefined;
-          }
-          const body = await readBoundedResponse(response, GITHUB_AVATAR_MAX_BYTES);
-          return `data:${contentType};base64,${body.toString("base64")}`;
-        },
-        { allowStale: false },
-      ),
+      cache.read(url.href, async () => {
+        const response = await fetchImpl(url, {
+          headers: { Accept: "image/webp,image/png,image/jpeg,image/gif" },
+          redirect: "error",
+          signal: AbortSignal.timeout(GITHUB_PREVIEW_TIMEOUT_MS),
+        });
+        const contentType = response.headers.get("content-type")?.split(";", 1)[0]?.trim();
+        if (
+          !response.ok ||
+          !contentType ||
+          !["image/gif", "image/jpeg", "image/png", "image/webp"].includes(contentType)
+        ) {
+          await discardResponse(response);
+          return undefined;
+        }
+        const body = await readBoundedResponse(response, GITHUB_AVATAR_MAX_BYTES);
+        return `data:${contentType};base64,${body.toString("base64")}`;
+      }),
       signal,
     );
     return value;
@@ -375,7 +328,46 @@ async function fetchPreview(
   // Anonymous decoration can overlap visibility validation; delivery still awaits both.
   const [avatarDataUrl, coAuthorFacts] = await Promise.all([
     fetchAvatarDataUrl(avatarUrl, fetchImpl, signal),
-    commits.then((value) => fetchCoAuthors(preview.login, value, fetchImpl, signal)),
+    commits.then(async (value) => {
+      const authorLogin = preview.login;
+      const empty = { coAuthors: [], coAuthorCount: 0 };
+      if (!Array.isArray(value)) {
+        return empty;
+      }
+      const byLogin = new Map<string, { login: string; accountId: string }>();
+      for (const entry of value) {
+        const commit = isRecord(entry) && isRecord(entry.commit) ? entry.commit : undefined;
+        const message = readNonBlankString(commit?.message);
+        if (!message) {
+          continue;
+        }
+        for (const match of message.matchAll(CO_AUTHOR_TRAILER)) {
+          const login = match.groups?.login;
+          const accountId = match.groups?.id;
+          if (!login || !accountId || login.toLowerCase() === authorLogin.toLowerCase()) {
+            continue;
+          }
+          const key = login.toLowerCase();
+          if (!byLogin.has(key)) {
+            byLogin.set(key, { login, accountId });
+          }
+        }
+      }
+      const faces = [...byLogin.values()].slice(0, CO_AUTHOR_FACE_LIMIT);
+      const coAuthors = await Promise.all(
+        faces.map(async (face) => {
+          const coAuthorAvatarDataUrl = await fetchAvatarDataUrl(
+            `https://${GITHUB_AVATAR_HOST}/u/${face.accountId}`,
+            fetchImpl,
+            signal,
+          );
+          return coAuthorAvatarDataUrl
+            ? { login: face.login, avatarDataUrl: coAuthorAvatarDataUrl }
+            : { login: face.login };
+        }),
+      );
+      return { coAuthors, coAuthorCount: byLogin.size };
+    }),
     session
       ? assertSessionRepositoryUrl(previewRepositoryApiUrl(target, parsed), session)
       : token && assertRepository(previewRepositoryApiUrl(target, parsed)),

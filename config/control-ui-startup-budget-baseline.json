@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 338803,
-  "reason": "Integrated main after schema and syntax-highlighting deferrals measures 338803 B at startup; cap at 338900 B with the existing 64 B build-variance allowance.",
-  "updatedAt": "2026-10-17"
+  "startupJsGzipBytes": 281233,
+  "reason": "Defer optional root English at consuming routes: matched bf93c438 startup 282747 to 281233 B gzip; 7 JS and 1 CSS request unchanged.",
+  "updatedAt": "2026-10-23"
 }

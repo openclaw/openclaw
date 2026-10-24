@@ -4,7 +4,7 @@ import {
   controlUiBundledSettingsStorageKey,
   defaultControlUiFeatureMethods,
 } from "../test-helpers/control-ui-e2e.ts";
-import { openChatDetails } from "./chat-details.test-support.ts";
+import { openChatTaskProgress } from "./chat-details.test-support.ts";
 import { createChatFlowE2eSuite, installMockGateway } from "./chat-flow.test-support.ts";
 import { openProgressHomeDock } from "./session-progress-home.test-support.ts";
 
@@ -36,15 +36,16 @@ async function openProgress(page: Page) {
     methodResponses: { "progressCard.get": { card } },
   });
   await page.goto(`${suite.server.baseUrl}chat`);
-  await openChatDetails(page);
-  const disclosure = page.locator('[data-progress-card-placement="details"]');
-  await disclosure.waitFor();
-  if ((await disclosure.getAttribute("open")) === null) {
+  const disclosure = await openChatTaskProgress(page);
+  if (
+    (await disclosure.getAttribute("data-progress-card-placement")) === "details" &&
+    (await disclosure.getAttribute("open")) === null
+  ) {
     await disclosure.locator("summary").click();
   }
-  await disclosure.locator(".session-progress-card__body").waitFor();
+  await disclosure.locator(".task-progress-details__plan").waitFor();
   await page.evaluate(() => document.fonts.ready);
-  return { gateway, card };
+  return { gateway, card, details: disclosure };
 }
 
 suite.define(() => {
@@ -64,7 +65,7 @@ suite.define(() => {
       });
       try {
         const page = await context.newPage();
-        const { gateway } = await openProgress(page);
+        const { gateway, details } = await openProgress(page);
         for (const placement of ["details", "composer"] as const) {
           if (placement === "composer") {
             // A Home dock is suppressed while that same conversation owns the page.
@@ -72,9 +73,14 @@ suite.define(() => {
             await openProgressHomeDock(page);
             await gateway.waitForRequest("chat.startup", { match: { sessionKey } });
           }
-          const disclosure = page.locator(`[data-progress-card-placement="${placement}"]`);
+          const disclosure =
+            placement === "details"
+              ? details
+              : page.locator('[data-progress-card-placement="composer"]');
           await disclosure.waitFor();
-          if ((await disclosure.getAttribute("open")) === null) {
+          const mobileDetails =
+            (await disclosure.getAttribute("data-details-page")) === "task-progress";
+          if (!mobileDetails && (await disclosure.getAttribute("open")) === null) {
             await disclosure.locator("summary").click();
           }
           const measurements = await disclosure
@@ -86,22 +92,35 @@ suite.define(() => {
                 const icon = marker.getBoundingClientRect();
                 const bounds = text.getBoundingClientRect();
                 const line = Number.parseFloat(getComputedStyle(text).lineHeight);
+                const markerLine = row.closest("[data-desktop-details]") ? bounds.height : line;
                 return {
-                  delta: Math.abs(icon.top + icon.height / 2 - (bounds.top + line / 2)),
+                  delta: Math.abs(icon.top + icon.height / 2 - (bounds.top + markerLine / 2)),
                   lines: bounds.height / line,
                 };
               }),
             );
+          expect(measurements).toHaveLength(steps.length);
           expect(measurements.some(({ lines }) => lines > 1.5)).toBe(true);
           for (const { delta } of measurements) {
             expect(delta).toBeLessThanOrEqual(1);
           }
-          const summary = disclosure.locator(".session-progress-card__summary");
+          if (mobileDetails) {
+            expect(await disclosure.locator("summary").count()).toBe(0);
+            await disclosure
+              .getByRole("button", { name: "Task progress options", exact: true })
+              .waitFor();
+            continue;
+          }
+          const summary = disclosure.locator(
+            placement === "details"
+              ? ".task-progress-details__summary"
+              : ".session-progress-card__summary",
+          );
           const opacity = () => summary.evaluate((el) => getComputedStyle(el, "::before").opacity);
           await page.mouse.move(0, 0);
           expect(await page.evaluate(() => matchMedia("(hover: hover)").matches)).toBe(!touch);
           if (placement === "details") {
-            expect(await summary.evaluate((el) => getComputedStyle(el, "::before").display)).toBe(
+            expect(await summary.evaluate((el) => getComputedStyle(el, "::before").content)).toBe(
               "none",
             );
           } else {
@@ -146,19 +165,10 @@ suite.define(() => {
         const page = await context.newPage();
         const { gateway, card } = await openProgress(page);
         const detailsCard = page.locator('[data-progress-card-placement="details"]');
-        const detailsBody = detailsCard.locator(".session-progress-card__body");
+        const detailsBody = detailsCard.locator(".task-progress-details__body");
         expect(await detailsBody.evaluate((el) => getComputedStyle(el).maxHeight)).toBe("none");
         expect(await detailsBody.evaluate((el) => getComputedStyle(el).overflowY)).toBe("visible");
         expect(await detailsBody.evaluate((el) => getComputedStyle(el).maskImage)).toBe("none");
-        const detailsFrame = await detailsCard.evaluate((element) => {
-          const style = getComputedStyle(element);
-          return {
-            top: style.borderTopWidth,
-            side: style.borderLeftWidth,
-            radius: style.borderRadius,
-          };
-        });
-        expect(detailsFrame).toEqual({ top: "1px", side: "0px", radius: "0px" });
         const thread = page.locator(".chat-pane-cache__pane--active .chat-thread");
         const readerTop = await thread.evaluate((el) => el.scrollTop);
         await detailsCard.locator(".session-progress-card__step").last().scrollIntoViewIfNeeded();

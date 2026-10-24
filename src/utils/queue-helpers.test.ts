@@ -1,8 +1,6 @@
-// Queue helper tests cover queue ordering and dedupe utility behavior.
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   applyQueueDropPolicy,
-  applyQueueRuntimeSettings,
   countPendingQueueItems,
   previewQueueSummaryPrompt,
   waitForQueueDebounce,
@@ -13,109 +11,55 @@ function createQueue<T>(items: T[], cap: number, dropPolicy: "old" | "summarize"
   return { items, cap, dropPolicy, droppedCount: 0, summaryLines };
 }
 
-describe("applyQueueRuntimeSettings", () => {
-  it("updates runtime queue settings with normalization", () => {
-    const target = {
-      mode: "followup" as const,
-      debounceMs: 1000,
-      cap: 20,
-      dropPolicy: "summarize" as const,
-    };
-
-    applyQueueRuntimeSettings({
-      target,
-      settings: {
-        mode: "collect",
-        debounceMs: -12,
-        cap: 9.8,
-        dropPolicy: "new",
-      },
-    });
-
-    expect(target).toEqual({
-      mode: "collect",
-      debounceMs: 0,
-      cap: 9,
-      dropPolicy: "new",
-    });
+type Item = { id: string; protected?: boolean };
+function dropItems(queue: ReturnType<typeof createQueue<Item>>, inFlight?: Set<Item>) {
+  const dropped: string[] = [];
+  const admitted = applyQueueDropPolicy({
+    queue,
+    inFlight,
+    summarize: (item) => item.id,
+    isProtected: (item) => item.protected === true,
+    onDrop: (items) => dropped.push(...items.map((item) => item.id)),
   });
-
-  it("keeps existing values when optional settings are missing/invalid", () => {
-    const target = {
-      mode: "followup" as const,
-      debounceMs: 1000,
-      cap: 20,
-      dropPolicy: "summarize" as const,
-    };
-
-    applyQueueRuntimeSettings({
-      target,
-      settings: {
-        mode: "queue",
-        cap: 0,
-      },
-    });
-
-    expect(target).toEqual({
-      mode: "queue",
-      debounceMs: 1000,
-      cap: 20,
-      dropPolicy: "summarize",
-    });
-  });
-});
+  return { admitted, dropped };
+}
 
 describe("queue summary helpers", () => {
-  it.each([{ limit: undefined, retained: ["new"], elided: ["first", "second"] }])(
-    "preserves ordered summary elisions at limit $limit",
-    ({ limit, retained, elided }) => {
-      const queue = {
-        items: ["new"],
-        cap: 1,
-        dropPolicy: "summarize" as const,
-        droppedCount: 2,
-        summaryLines: ["first", "second"],
-      };
-      const calls: Array<[string, string[]]> = [];
-
-      expect(
-        applyQueueDropPolicy({
-          queue,
-          summaryLimit: limit,
-          summarize: (item) => item,
-          onDrop: (items) => calls.push(["drop", items]),
-          onSummaryElide: (lines) => calls.push(["elide", lines]),
-        }),
-      ).toBe(true);
-
-      expect(queue).toEqual({
-        items: [],
-        cap: 1,
-        dropPolicy: "summarize",
-        droppedCount: 3,
-        summaryLines: retained,
-      });
-      expect(calls).toEqual([["drop", ["new"]], ...(elided.length > 0 ? [["elide", elided]] : [])]);
-    },
-  );
-
-  it("renders pending summary state without mutating it", () => {
-    const state = {
+  it("preserves ordered summary elisions at the default limit", () => {
+    const queue = {
+      ...createQueue(["new"], 1, "summarize"),
       droppedCount: 2,
       summaryLines: ["first", "second"],
     };
+    const calls: Array<[string, string[]]> = [];
 
-    const prompt = previewQueueSummaryPrompt({
-      state,
-      noun: "message",
+    expect(
+      applyQueueDropPolicy({
+        queue,
+        summarize: (item) => item,
+        onDrop: (items) => calls.push(["drop", items]),
+        onSummaryElide: (lines) => calls.push(["elide", lines]),
+      }),
+    ).toBe(true);
+
+    expect(queue).toEqual({
+      ...createQueue([], 1, "summarize"),
+      droppedCount: 3,
+      summaryLines: ["new"],
     });
+    expect(calls).toEqual([
+      ["drop", ["new"]],
+      ["elide", ["first", "second"]],
+    ]);
+  });
+
+  it("renders pending summary state without mutating it", () => {
+    const state = { droppedCount: 2, summaryLines: ["first", "second"] };
+    const prompt = previewQueueSummaryPrompt(state);
 
     expect(prompt).toContain("[Queue overflow] Dropped 2 messages due to cap.");
     expect(prompt).toContain("first");
-    expect(state).toEqual({
-      droppedCount: 2,
-      summaryLines: ["first", "second"],
-    });
+    expect(state).toEqual({ droppedCount: 2, summaryLines: ["first", "second"] });
   });
 
   it("keeps dropped-item previews free of lone surrogates", () => {
@@ -128,128 +72,65 @@ describe("queue summary helpers", () => {
 });
 
 describe("waitForQueueDebounce", () => {
-  it("settles one debounce window after the system clock moves backward", async () => {
+  beforeEach(() => {
     vi.stubEnv("OPENCLAW_TEST_FAST", "0");
     vi.useFakeTimers();
-    try {
-      const queue = { debounceMs: 1_000, lastEnqueuedAt: Date.now() };
-      let settled = false;
-      const wait = waitForQueueDebounce(queue).then(() => {
-        settled = true;
-      });
-
-      await vi.advanceTimersByTimeAsync(500);
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllEnvs();
+  });
+  it("resolves and removes the pending timer when cancelled", async () => {
+    const controller = new AbortController();
+    const wait = waitForQueueDebounce(
+      { debounceMs: 1_000, lastEnqueuedAt: Date.now() },
+      controller.signal,
+    );
+    expect(vi.getTimerCount()).toBe(1);
+    await vi.advanceTimersByTimeAsync(250);
+    controller.abort(new Error("turn cancelled"));
+    await expect(wait).resolves.toBeUndefined();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+  it.each([false, true])("waits for the quiet window (clock rollback=%s)", async (rollback) => {
+    const queue = { debounceMs: 1_000, lastEnqueuedAt: Date.now() };
+    let settled = false;
+    const wait = waitForQueueDebounce(queue).then(() => {
+      settled = true;
+    });
+    await vi.advanceTimersByTimeAsync(500);
+    if (rollback) {
       vi.setSystemTime(Date.now() - 60 * 60_000);
-      await vi.advanceTimersByTimeAsync(499);
-      expect(settled).toBe(false);
-
-      await vi.advanceTimersByTimeAsync(1);
-      expect(settled).toBe(true);
-      await wait;
-    } finally {
-      vi.useRealTimers();
-      vi.unstubAllEnvs();
+    } else {
+      queue.lastEnqueuedAt = Date.now();
     }
+    await vi.advanceTimersByTimeAsync(rollback ? 499 : 999);
+    expect(settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(settled).toBe(true);
+    await wait;
+    expect(vi.getTimerCount()).toBe(0);
   });
 });
 
 describe("queue overflow protection", () => {
-  it("counts only in-flight identities that still intersect the queue", () => {
-    const active = { id: "active" };
-    const pending = { id: "pending" };
-    const alreadyRemoved = { id: "already-removed" };
-
-    expect(countPendingQueueItems([active, pending], new Set([active, alreadyRemoved]))).toBe(1);
-  });
-
-  it("skips in-flight items when selecting drop victims", () => {
-    type Item = { id: string };
-    const m1: Item = { id: "m1" };
-    const m2: Item = { id: "m2" };
-    const m3: Item = { id: "m3" };
-    const m4: Item = { id: "m4" };
-    const queue = createQueue([m1, m2, m3, m4], 2);
-    const inFlight = new Set<Item>([m1]);
-    const dropped: string[] = [];
-
-    applyQueueDropPolicy({
-      queue,
-      inFlight,
-      summarize: (item) => item.id,
-      onDrop: (items) => {
-        dropped.push(...items.map((item) => item.id));
-      },
-    });
-
-    expect(dropped).toEqual(["m2", "m3"]);
-    expect(queue.items).toEqual([m1, m4]);
-  });
-
-  it("skips protected items when selecting drop victims", () => {
-    type Item = { id: string; protected?: boolean };
-    const protectedItem: Item = { id: "priority", protected: true };
-    const normalA: Item = { id: "a" };
-    const normalB: Item = { id: "b" };
-    const normalC: Item = { id: "c" };
-    const queue = createQueue([protectedItem, normalA, normalB, normalC], 3);
-    const dropped: string[] = [];
-
-    // pending=4, cap=3 → drop 2 oldest unprotected; protected stays.
-    const shouldEnqueue = applyQueueDropPolicy({
-      queue,
-      summarize: (item) => item.id,
-      isProtected: (item) => item.protected === true,
-      onDrop: (items) => {
-        dropped.push(...items.map((item) => item.id));
-      },
-    });
-
-    expect(shouldEnqueue).toBe(true);
-    expect(dropped).toEqual(["a", "b"]);
-    expect(queue.items).toEqual([protectedItem, normalC]);
-  });
-
-  it("rejects admission without mutating when only protected items can be dropped", () => {
-    type Item = { id: string; protected?: boolean };
-    const priority: Item = { id: "priority", protected: true };
-    const alsoProtected: Item = { id: "also", protected: true };
-    const queue = createQueue([priority, alsoProtected], 1);
-    const dropped: string[] = [];
-
-    const shouldEnqueue = applyQueueDropPolicy({
-      queue,
-      summarize: (item) => item.id,
-      isProtected: (item) => item.protected === true,
-      onDrop: (items) => {
-        dropped.push(...items.map((item) => item.id));
-      },
-    });
-
-    expect(shouldEnqueue).toBe(false);
-    expect(dropped).toEqual([]);
-    expect(queue.items).toEqual([priority, alsoProtected]);
-  });
-
-  it("rejects when pending work is only in-flight or protected", () => {
-    type Item = { id: string; protected?: boolean };
-    const active: Item = { id: "active" };
-    const priority: Item = { id: "priority", protected: true };
-    const queue = createQueue([active, priority], 1);
-    const inFlight = new Set<Item>([active]);
-    const dropped: string[] = [];
-
-    const shouldEnqueue = applyQueueDropPolicy({
-      queue,
-      inFlight,
-      summarize: (item) => item.id,
-      isProtected: (item) => item.protected === true,
-      onDrop: (items) => {
-        dropped.push(...items.map((item) => item.id));
-      },
-    });
-
-    expect(shouldEnqueue).toBe(false);
-    expect(dropped).toEqual([]);
-    expect(queue.items).toEqual([active, priority]);
-  });
+  it.each`
+    active   | protectedFirst | protectedLast | cap  | admitted | dropped
+    ${true}  | ${false}       | ${false}      | ${2} | ${true}  | ${["a", "b"]}
+    ${false} | ${true}        | ${false}      | ${3} | ${true}  | ${["a", "b"]}
+    ${true}  | ${false}       | ${true}       | ${1} | ${false} | ${[]}
+    ${false} | ${true}        | ${true}       | ${1} | ${false} | ${[]}
+  `(
+    "selects only droppable pending items (active=$active, admitted=$admitted)",
+    ({ active, protectedFirst, protectedLast, cap, admitted, dropped }) => {
+      const first: Item = { id: "first", protected: protectedFirst };
+      const last: Item = { id: "c", protected: protectedLast };
+      const items = admitted ? [first, { id: "a" }, { id: "b" }, last] : [first, last];
+      const inFlight = active ? new Set([first, { id: "already-removed" }]) : undefined;
+      expect(countPendingQueueItems(items, inFlight)).toBe(items.length - Number(active));
+      const queue = createQueue(items, cap);
+      expect(dropItems(queue, inFlight)).toEqual({ admitted, dropped });
+      expect(queue.items).toEqual([first, last]);
+    },
+  );
 });

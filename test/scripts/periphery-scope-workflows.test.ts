@@ -16,7 +16,10 @@ const WORKFLOW_CASES = (
 ).map(([name, scopedPath]) =>
   Object.assign(
     { name, scopedPath },
-    compileScopeWorkflow(`.github/workflows/${name}-periphery.yml`),
+    compileScopeWorkflow(
+      `.github/workflows/${name === "shared-openclawkit" ? "macos" : name}-periphery.yml`,
+      name === "shared-openclawkit" ? "shared-scan" : "should-scan",
+    ),
   ),
 );
 const sharedWorkflow = WORKFLOW_CASES[2]!;
@@ -34,32 +37,35 @@ type ScopeWorkflow = {
   on: { pull_request: { paths?: string[]; types: string[] } };
   jobs: { scope: { steps: WorkflowStep[] } };
 };
-type ScopeFunction = (...args: [unknown, unknown, unknown, NodeJS.Require]) => Promise<void>;
+type ScopeFunction = (
+  ...args: [unknown, unknown, unknown, NodeJS.Require, unknown]
+) => Promise<void>;
 
 type ScopeOptions = {
   diffExitCode?: number;
   repoRoot?: string;
   draft?: boolean;
   eventName?: string;
+  sharedOnly?: boolean;
   files?: Array<string | { filename: string; previous_filename?: string }>;
 };
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const require = createRequire(import.meta.url);
 
-function compileScopeWorkflow(workflowPath: string) {
+function compileScopeWorkflow(workflowPath: string, outputName = "should-scan") {
   const workflow = parse(readFileSync(workflowPath, "utf8")) as ScopeWorkflow;
   const step = workflow.jobs?.scope?.steps?.find((candidate) => candidate.id === "scope");
   const script = step?.with?.script;
   if (!script) {
     throw new Error(`missing Periphery scope script in ${workflowPath}`);
   }
-  const parameters = ["context", "core", "exec", "require"];
+  const parameters = ["context", "core", "exec", "require", "process"];
   const execute = compileFunction(
     `return (async () => {\n${script}\n})();`,
     parameters,
   ) as ScopeFunction;
-  return { workflow, script, execute };
+  return { workflow, script, execute, outputName };
 }
 
 async function runScope(
@@ -105,8 +111,9 @@ async function runScope(
     { setOutput: (name: string, value: string) => outputs.set(name, value) },
     exec,
     require,
+    { env: { PERIPHERY_SHARED_ONLY: String(options.sharedOnly ?? false) } },
   );
-  return outputs.get("should-scan");
+  return outputs.get(fixture.outputName);
 }
 
 function makeRepo() {
@@ -151,7 +158,7 @@ it.each(WORKFLOW_CASES)("selects only $name scope changes", async (fixture) => {
   await check({ files: ["scripts/install-periphery.sh"] }, "true");
   await check({ files: ["docs/index.md"] }, "false");
   await check({ draft: true, files: [scopedPath] }, "false");
-  await check({ eventName: "workflow_dispatch" }, "true");
+  await check({ eventName: "workflow_dispatch", sharedOnly: fixture === sharedWorkflow }, "true");
   await check({ files: [{ filename: "docs/Moved.swift", previous_filename: scopedPath }] }, "true");
   await expect(runScope(fixture, { diffExitCode: 128 })).rejects.toThrow(
     "git diff failed with exit code 128",
@@ -201,6 +208,22 @@ it("selects shared scans from native protocol generator inputs", async () => {
     "scripts/native-protocol-inputs.json",
   ]) {
     await expect(runScope(sharedWorkflow, { files: [file] })).resolves.toBe("true");
+  }
+});
+
+it("keeps app and shared-only admission independent in the canonical graph", async () => {
+  const appWorkflow = WORKFLOW_CASES[1]!;
+  for (const fixture of [appWorkflow, sharedWorkflow]) {
+    const shared = fixture === sharedWorkflow;
+    await expect(
+      runScope(fixture, { files: ["apps/shared/OpenClawKit/Sources/Shared.swift"] }),
+    ).resolves.toBe(String(shared));
+    await expect(
+      runScope(fixture, { eventName: "workflow_dispatch", sharedOnly: true }),
+    ).resolves.toBe(String(shared));
+    await expect(runScope(fixture, { eventName: "workflow_dispatch" })).resolves.toBe(
+      String(!shared),
+    );
   }
 });
 
