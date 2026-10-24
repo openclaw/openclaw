@@ -425,18 +425,16 @@ try {
     proxy.close((error) => (error ? reject(error) : resolve()));
   });
 }
+// Final counters include late completion requests that arrived after cron.run.
+for (const item of evidence) {
+  const state = sampleStates.get(`${requestMarker}_${item.sample}`)!;
+  item.modelRequests = state.modelRequests;
+  item.imageRequests = state.imageRequests;
+}
 const result = {
   workload: "media-completion-gateway",
   imageDelayMs,
-  // Final counters include late completion requests that arrived after cron.run.
-  evidence: evidence.map((item) => {
-    const state = sampleStates.get(`${requestMarker}_${item.sample}`)!;
-    return {
-      ...item,
-      modelRequests: state.modelRequests,
-      imageRequests: state.imageRequests,
-    };
-  }),
+  evidence,
   ...(values["count-waits"]
     ? {
         waitTimers: JSON.parse(
