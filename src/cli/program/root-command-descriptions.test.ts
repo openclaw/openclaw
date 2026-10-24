@@ -35,7 +35,7 @@ function commandPaths(paths: string): string[] {
 const JSON_NOT_APPLICABLE = {
   // command group only; reporting subcommands declare JSON output individually.
   namespaces: commandPaths(`
-      agents team | claws | backup | backup git | backup sqlite | database | database ownership |
+      agents team | claws | backup | backup git | backup sqlite | presence | database | database ownership |
       message | message thread | message emoji | message sticker | message role | message channel |
       message member | message voice | message event | mcp | transcripts |
       gateway restart-handoff | gateway diagnostics | system | system heartbeat | promos | telemetry |
