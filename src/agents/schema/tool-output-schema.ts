@@ -9,10 +9,11 @@ type ToolOutputSchemaVariants = {
   canNarrow: boolean;
 };
 
-// Publications own lifetime; mutable schemas must still be read on every call.
+// Publications own metadata; weak views leave validator retention with the content LRU.
+// Mutable schemas must still be read on every call.
 const immutableOutputSchemas = new WeakMap<
   object,
-  { variants: ToolOutputSchemaVariants; selected: Map<number, unknown> }
+  { variants: ToolOutputSchemaVariants; selected: Map<number, WeakRef<object>> }
 >();
 
 const INPUT_DISCRIMINATOR = "x-openclaw-input-discriminator";
@@ -203,8 +204,9 @@ export function selectToolOutputSchema(schema: unknown, input: unknown): unknown
     return schema;
   }
   const selections = immutableOutputSchemas.get(schema)?.selected;
-  if (selections?.has(index)) {
-    return selections.get(index);
+  const cachedSelection = selections?.get(index)?.deref();
+  if (cachedSelection) {
+    return cachedSelection;
   }
   if (schema.allOf !== undefined && !Array.isArray(schema.allOf)) {
     throw new TypeError("Invalid tool output allOf constraint.");
@@ -213,7 +215,7 @@ export function selectToolOutputSchema(schema: unknown, input: unknown): unknown
   // Reference-free schemas can be narrowed while preserving every other root constraint.
   const selected = { ...schema, allOf: [...(schema.allOf ?? []), { $ref: `#/anyOf/${index}` }] };
   if (selections) {
-    selections.set(index, freezeJsonSnapshot(selected));
+    selections.set(index, new WeakRef(freezeJsonSnapshot(selected)));
   }
   return selected;
 }

@@ -4,7 +4,7 @@ import { writeFileSync } from "node:fs";
 import type { HeapProfiler, Profiler } from "node:inspector";
 import { Session } from "node:inspector/promises";
 import { loadavg } from "node:os";
-import { PerformanceObserver } from "node:perf_hooks";
+import { constants, PerformanceObserver } from "node:perf_hooks";
 import { setImmediate } from "node:timers/promises";
 import { parseArgs } from "node:util";
 import {
@@ -33,6 +33,8 @@ const integer = (raw: string, label: string) =>
   parseStrictIntegerOption({ raw, label, min: 1, fallback: 1 });
 const toolCount = integer(values.tools, "tools");
 const calls = integer(values.calls, "calls");
+const workloadLifetime =
+  "Each pass is synchronous: WeakRef targets remain live until the job yields. Above-capacity reuse counts do not predict inter-call GC behavior. Retention is measured after yielding and forced GC.";
 const samplingInterval = integer(values["sampling-interval"], "sampling-interval");
 const collect = globalThis.gc;
 assert.ok(collect, "Run with --expose-gc");
@@ -234,7 +236,7 @@ const retained = (await inspector.post("HeapProfiler.stopSampling")).profile;
 if (values["counts-only"]) {
   inspector.disconnect();
   process.stdout.write(
-    `${JSON.stringify({ countReport, schemaBytes: { min: Math.min(...schemaBytes), max: Math.max(...schemaBytes) }, retained: heapBytes(retained), coldHeapDelta: coldHeapAfter - coldHeapBefore }, null, 2)}\n`,
+    `${JSON.stringify({ workloadLifetime, countReport, schemaBytes: { min: Math.min(...schemaBytes), max: Math.max(...schemaBytes) }, retained: heapBytes(retained), coldHeapDelta: coldHeapAfter - coldHeapBefore }, null, 2)}\n`,
   );
   process.exit(0);
 }
@@ -263,7 +265,13 @@ const untraced = {
   gcMs: pauses.reduce((sum, pause) => sum + pause.duration, 0),
   maxPauseMs: Math.max(0, ...pauses.map((pause) => pause.duration)),
   gcByKind: Object.fromEntries(
-    [1, 2, 4, 8].map((kind) => [
+    [
+      constants.NODE_PERFORMANCE_GC_MINOR,
+      constants.NODE_PERFORMANCE_GC_MINOR_MARK_SWEEP,
+      constants.NODE_PERFORMANCE_GC_MAJOR,
+      constants.NODE_PERFORMANCE_GC_INCREMENTAL,
+      constants.NODE_PERFORMANCE_GC_WEAKCB,
+    ].map((kind) => [
       kind,
       {
         count: pauses.filter((pause) => pause.kind === kind).length,
@@ -339,6 +347,7 @@ const afterDrop = process.memoryUsage().heapUsed;
 const report = {
   boundary:
     "Real schema validator and output-selection owners in Tool Search validation order; no Gateway, tool execution, or whole-turn claim",
+  workloadLifetime,
   node: process.version,
   load: loadavg(),
   tools: toolCount,
