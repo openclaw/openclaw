@@ -5,6 +5,7 @@ import { i18n, t } from "../../i18n/index.ts";
 import type { HumanMention } from "../../lib/chat/chat-types.ts";
 import { createFrameQueue } from "../../test-helpers/animation-frame-queue.ts";
 import { mountSolid } from "../../test-helpers/solid-render.tsx";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { renderChatQueueSolid } from "./components/chat-composer-queue.tsx";
 
 type QueueProps = Parameters<typeof renderChatQueueSolid>[0];
@@ -154,6 +155,33 @@ const items = (
 ) => ids.split("").map((id, index) => waiting(id, index + 1, { sendState }));
 
 describe("chat composer queue reordering", () => {
+  it("offers click movement without editing and cannot cross a delivery or edit barrier", async () => {
+    const onQueueMove = vi.fn();
+    const queue = [
+      waiting("a", 1),
+      waiting("b", 2),
+      waiting("barrier", 3, { pendingRunId: "running", sendAttempts: 1 }),
+      waiting("c", 4),
+      waiting("d", 5),
+    ];
+    const container = renderQueue({ queue, onQueueMove });
+    const row = container.querySelector<HTMLElement>('[data-chat-queue-item="b"]')!;
+    const trigger = find(row, "more")!;
+    expect(trigger).not.toBeNull();
+    trigger.click();
+    await waitForSolid(() =>
+      expect(row.querySelector('[data-value="move-earlier"]')).not.toBeNull(),
+    );
+    const earlier = row.querySelector<HTMLElement>('[data-value="move-earlier"]')!;
+    const later = row.querySelector<HTMLElement>('[data-value="move-later"]')!;
+    expect(earlier.getAttribute("aria-disabled")).not.toBe("true");
+    expect(later.getAttribute("aria-disabled")).toBe("true");
+    earlier.click();
+    expect(onQueueMove).toHaveBeenCalledExactlyOnceWith("b", "a");
+    renderQueue({ queue, onQueueMove, queuedEdit: queueEdit({ editingId: "a" }) }, container);
+    expect(find(row, "more")).toBeNull();
+  });
+
   it("caps long queues and records both scroll boundaries", () => {
     const container = renderQueue({ queue: items("abcd") });
     const scroll = find(container, "scroll")!;

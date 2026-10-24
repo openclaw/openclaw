@@ -1,4 +1,4 @@
-import { For, createMemo, createUniqueId, onSettled } from "solid-js";
+import { For, createMemo, createSignal, createUniqueId, onSettled } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { Menu, type MenuHandle } from "../../../components/solid/menu.tsx";
 import { StrokeIcon } from "../../../components/solid/stroke-icon.tsx";
@@ -276,6 +276,7 @@ function ChatQueueItem(rowProps: {
   const menuId = createUniqueId();
   let menu!: MenuHandle;
   let pointerSelection = false;
+  const [moveAnnouncement, setMoveAnnouncement] = createSignal("");
   const item = () => rowProps.item;
   const reorder = () => rowProps.reorder;
   const edit = () => rowProps.controls.queuedEdit;
@@ -321,6 +322,33 @@ function ChatQueueItem(rowProps: {
   // handle so text stays on one x without adding a second grabber column.
   const showsHandle = () => Boolean(move()) && reorder().offered;
   const canMove = () => showsHandle() && moveIndex() >= 0 && segment().length > 1;
+  const moveBy = (delta: -1 | 1, control: HTMLElement | undefined) => {
+    const from = moveIndex();
+    const targetId = segment()[from + delta];
+    if (!canMove() || !targetId) {
+      return;
+    }
+    const id = item().id;
+    move()?.(id, targetId);
+    onSettled(() => {
+      // The owner can reject a durable write or a peer edit; announce only an applied move.
+      if (segment().indexOf(id) === from + delta) {
+        setMoveAnnouncement(
+          t("chat.queue.movedQueuedMessage", {
+            message: text(),
+            position: String(from + delta + 1),
+            count: String(segment().length),
+          }),
+        );
+      }
+      if (
+        control?.isConnected &&
+        control.ownerDocument.activeElement === control.ownerDocument.body
+      ) {
+        control.focus({ preventScroll: true });
+      }
+    });
+  };
   // Every row keeps its handle and action slots in every state and goes inert
   // instead of empty while an edit is open, so no column moves mid-flow.
   const editable = () =>
@@ -443,21 +471,7 @@ function ChatQueueItem(rowProps: {
             // The handle owns reordering for pointer and keyboard alike, so
             // arrow keys here must not also scroll the transcript.
             event.preventDefault();
-            const targetId = segment()[moveIndex() + delta];
-            if (targetId) {
-              const handle = event.currentTarget;
-              move()?.(item().id, targetId);
-              // Restore only after the keyed move settles, without stealing newer focus.
-              onSettled(() => {
-                if (
-                  handle.isConnected &&
-                  !handle.disabled &&
-                  handle.ownerDocument.activeElement === handle.ownerDocument.body
-                ) {
-                  handle.focus({ preventScroll: true });
-                }
-              });
-            }
+            moveBy(delta, event.currentTarget);
           }}
         >
           <span class="chat-queue__grip-state chat-queue__grip-state--idle" aria-hidden="true">
@@ -597,28 +611,48 @@ function ChatQueueItem(rowProps: {
             </button>
           </openclaw-tooltip>
         )}
-        {editing() || !editable() ? null : (
+        {editing() || (!editable() && !canMove()) ? null : (
           <Menu
             id={`chat-queue-${menuId}`}
             class="chat-queue__overflow"
             placement="top-end"
-            label={t("chat.queue.moreActions")}
+            label={t("chat.queue.actionsForQueuedMessage", { message: text() })}
             triggerClass="chat-queue__more"
             trigger={<Icon name="moreHorizontal" />}
-            disabled={!canEdit()}
+            disabled={!canEdit() && !canMove()}
             items={[
-              {
-                id: "edit",
-                label: t("chat.queue.editQueuedMessage"),
-                icon: <Icon name="pencil" />,
-                disabled: !canEdit(),
-                attributes: {
-                  onClick: (event) => {
-                    // Programmatic menu focus can retain :focus-visible after a pointer click.
-                    pointerSelection = event.detail > 0;
-                  },
-                },
-              },
+              ...(editable()
+                ? [
+                    {
+                      id: "edit",
+                      label: t("chat.queue.editQueuedMessage"),
+                      icon: <Icon name="pencil" />,
+                      disabled: !canEdit(),
+                      attributes: {
+                        onClick: (event: MouseEvent) => {
+                          // Programmatic menu focus can retain :focus-visible after a pointer click.
+                          pointerSelection = event.detail > 0;
+                        },
+                      },
+                    },
+                  ]
+                : []),
+              ...(canMove()
+                ? [
+                    {
+                      id: "move-earlier",
+                      label: t("chat.queue.moveEarlier"),
+                      icon: <Icon name="arrowUp" />,
+                      disabled: moveIndex() === 0,
+                    },
+                    {
+                      id: "move-later",
+                      label: t("chat.queue.moveLater"),
+                      icon: <Icon name="arrowDown" />,
+                      disabled: moveIndex() === segment().length - 1,
+                    },
+                  ]
+                : []),
             ]}
             ref={(handle) => {
               menu = handle;
@@ -629,10 +663,15 @@ function ChatQueueItem(rowProps: {
               if (selected.id === "edit" && canEdit()) {
                 markQueueEditFocus(menu.overlay.surface.closest(".chat-queue__item"), keyboard);
                 edit()?.onEdit?.(item().id);
+              } else if (selected.id === "move-earlier" || selected.id === "move-later") {
+                moveBy(selected.id === "move-earlier" ? -1 : 1, menu.overlay.trigger);
               }
             }}
           />
         )}
+      </span>
+      <span class="sr-only" aria-atomic="true">
+        {moveAnnouncement()}
       </span>
       {mentions()?.length ? (
         <span class="chat-queue__mentions">
