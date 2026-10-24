@@ -58,4 +58,40 @@ owner. A repeated `(path, source)` must be deduplicated before PostgreSQL
 effects in their current order. No new cache, freshness probe, or admission
 protocol is needed.
 
-Results are pending. This preregistration makes no measured savings claim.
+## Deterministic owner results
+
+The corrected SQLite owner suite passes all 33 tests on the candidate. The same
+count assertions fail on the baseline for 100 and 129 sources, while one source
+passes. Other chunk, recall, and provenance insert counts stay unchanged.
+
+| Distinct sources | Baseline header UPSERTs | Candidate header UPSERTs |
+| ---------------- | ----------------------- | ------------------------ |
+| 1                | 1                       | 1                        |
+| 100              | 100                     | 1                        |
+| 129              | 129                     | 2                        |
+
+The large UTF-8 empty-source case emits two statements instead of three and
+preserves the final repeated header. These are deterministic operation counts,
+not latency samples. An initial enlarged fixture exceeded the schema's maximum
+importance value; those failures were discarded and the corrected fixture was
+rerun on both baseline and candidate.
+
+## Baseline attribution
+
+The shared s45 synthetic Gateway run at `3f7b7765585` completed successfully and
+recorded three source-header UPSERTs in one `source.replace.group` worker request
+in `07.idle-settle`. The kernel, worker, PostgreSQL publication adapter, and
+transfer module are byte-identical at this lane's production base `90d9772045f`.
+The earlier s44 run independently records the same three-statement pattern.
+
+The current-head baseline build was canceled before starting while six jobs
+were queued ahead and the one-minute host load exceeded 80. Use the campaign's
+source-attribution exception for that evidence; it is not a fresh-head runtime
+or latency measurement. Frozen causal labels use a retired diagnostic source,
+so only observed execution phase/request identity is used for this attribution.
+
+Header batches hold at most 128 distinct keys and 64 KiB of estimated UTF-8
+payload. A single larger header retains the existing supported single-row write.
+The estimate includes path/hash UTF-8 bytes and fixed room for source/numbers.
+A repeated key replaces its pending header; committed chunks and metadata still
+follow the original per-source ordering inside the existing transaction.
