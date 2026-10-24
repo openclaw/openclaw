@@ -186,6 +186,23 @@ function startsMarkdownListItem(text: string, offset: number): boolean {
   return cursor >= text.length || /[ \t\r\n]/u.test(text[cursor] ?? "");
 }
 
+function completedLineStartsList(params: {
+  text: string;
+  previousLength: number;
+  appended: string;
+}): boolean {
+  const newline = Math.max(params.appended.lastIndexOf("\n"), params.appended.lastIndexOf("\r"));
+  if (newline < 0) {
+    return false;
+  }
+  const lineEnd = params.previousLength + newline;
+  const previousBreak = Math.max(
+    params.text.lastIndexOf("\n", lineEnd - 1),
+    params.text.lastIndexOf("\r", lineEnd - 1),
+  );
+  return startsMarkdownListItem(params.text, previousBreak + 1);
+}
+
 function createCheckpointTransform(
   project: CheckpointTransform,
 ): (source: string, delta: string | null, previous: string) => TextProjection {
@@ -208,12 +225,21 @@ function createCheckpointTransform(
     if (appended === undefined) {
       lineState.reset(text);
     }
+    const completedListLine =
+      appended !== undefined &&
+      lineCompletion?.completedLine === true &&
+      !retentionStartsList &&
+      completedLineStartsList({
+        text,
+        previousLength: ownershipSource.length,
+        appended,
+      });
     // Blank lines close paragraphs. Completed list lines advance the canonical item whose
     // settlement metadata must be refreshed even when the code ranges themselves are stable.
     if (
       ownership &&
       !lineCompletion?.completedBlankLine &&
-      !(lineCompletion?.completedLine && retentionStartsList) &&
+      !(lineCompletion?.completedLine && (retentionStartsList || completedListLine)) &&
       canReuseMarkdownOwnership(ownershipSource, text, ownership)
     ) {
       ownershipSource = text;

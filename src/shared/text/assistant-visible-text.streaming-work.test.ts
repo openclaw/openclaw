@@ -245,6 +245,24 @@ it("bounds completed plain-list reprojection work", () => {
   expect(projectedCharacters()).toBeLessThan(source.length * 28);
 }, 20_000);
 
+it("bounds list entry after a cached plain tool-call paragraph", () => {
+  const items = Array.from(
+    { length: 512 },
+    (_, index) => `- Step ${String(index).padStart(4, "0")}: verify the result.`,
+  );
+  const source = `[tool:read] {}\n\n${items.join("\n")}\n`;
+  const expected = sanitizeAssistantVisibleStreamText(source, "final_answer");
+  const stream = createAssistantVisibleStreamText("final_answer");
+  plainToolCallWork.projectedCharacters = 0;
+
+  for (let offset = 0; offset < source.length; offset += 4) {
+    stream.append(source.slice(offset, offset + 4));
+  }
+
+  expect(stream.text).toBe(expected);
+  expect(projectedCharacters()).toBeLessThan(source.length * 28);
+}, 20_000);
+
 it("bounds prefix line searches for an unfinished plain tool call", () => {
   const source = `[tool:write]\n{"path":"notes.txt","content":"${"x".repeat(16_384)}`;
   const stream = createTextProjection(assistantVisibleTextFilters("delivery", true));
