@@ -5,6 +5,7 @@ import {
 } from "../../scripts/lib/control-ui-cold-load-trace.ts";
 import {
   clipInteractionCpuProfile,
+  summarizeInteractionSelectors,
   summarizeInteractionTrace,
 } from "../../scripts/lib/control-ui-interaction-trace.ts";
 
@@ -69,6 +70,79 @@ it("measures only the marked renderer interval, unions nesting, and rejects miss
   expect(() =>
     summarizeInteractionTrace([...trace, event(marks.start, "I", 105_000)], marks),
   ).toThrow("exactly one mark: filter:start");
+});
+
+it("ranks Chromium selector snapshots inside the renderer interval without merging stylesheets", () => {
+  // The wire names match Chromium's ElementRuleCollector::DumpAndClearRulesPerfMap.
+  const timing = (styleSheetId: string, elapsedUs: number, attempts: number) => ({
+    selector: ".row",
+    style_sheet_id: styleSheetId,
+    "elapsed (us)": elapsedUs,
+    match_attempts: attempts,
+    match_count: 1,
+    fast_reject_count: attempts - 1,
+  });
+  const event = (ts: number, pid: number, timings: unknown[]) => ({
+    name: "SelectorStats",
+    ph: "X",
+    ts,
+    dur: 1,
+    pid,
+    tid: 1,
+    args: { selector_stats: { selector_timings: timings } },
+  });
+  const sheet = {
+    sourceURL: "http://localhost/assets/rows.css",
+    origin: "regular",
+    title: "",
+    startLine: 0,
+    startColumn: 0,
+  };
+  const interval = { startUs: 100, endUs: 200, rendererPid: 7, rendererTid: 1 };
+  expect(
+    summarizeInteractionSelectors(
+      [
+        event(50, 7, [timing("sheet-a", 1_000, 100)]),
+        event(110, 9, [timing("sheet-a", 1_000, 100)]),
+        { ...event(115, 7, []), args: {} },
+        event(120, 7, [timing("sheet-a", 12, 5), timing("sheet-b", 50, 2)]),
+        event(150, 7, [timing("sheet-a", 20, 8)]),
+        event(250, 7, [timing("sheet-a", 1_000, 100)]),
+      ],
+      interval,
+      new Map([["sheet-a", sheet]]),
+    ),
+  ).toEqual({
+    stylePasses: 2,
+    selectors: [
+      {
+        selector: ".row",
+        styleSheetId: "sheet-b",
+        elapsedUs: 50,
+        matchAttempts: 2,
+        matches: 1,
+        fastRejects: 1,
+      },
+      {
+        selector: ".row",
+        styleSheetId: "sheet-a",
+        styleSheet: sheet,
+        elapsedUs: 32,
+        matchAttempts: 13,
+        matches: 2,
+        fastRejects: 11,
+      },
+    ],
+  });
+  expect(() =>
+    summarizeInteractionSelectors([event(150, 7, [{ selector: ".invalid" }])], interval),
+  ).toThrow("Invalid Chromium selector timing");
+  expect(() =>
+    summarizeInteractionSelectors(
+      [{ ...event(150, 7, []), args: { selector_stats: {} } }],
+      interval,
+    ),
+  ).toThrow("SelectorStats event is missing selector_timings");
 });
 
 it("clips CPU sample contributions to marks after ordering signed sample timestamps", () => {

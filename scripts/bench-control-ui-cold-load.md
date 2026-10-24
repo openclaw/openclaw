@@ -184,6 +184,15 @@ Wall-clock durations and frame coalescing vary on a loaded host. The benchmark's
 static RPC responses are not authority for live title/run-state correctness; use
 focused browser contracts with updated authoritative mock responses for that proof.
 
+`--selector-stats` adds ranked Chromium selector snapshots to boot captures in
+`run-N.selectors.json`, with stylesheet identities, elapsed microseconds, match
+attempts, matches, and fast rejects. It requires tracing. The warm interaction
+runner (`scripts/bench-control-ui-interactions.ts`) accepts the same flag, plus
+`--theme light|dark` and `--thread-cpu-time` for thread CPU duration
+metrics on a loaded host. Selector instrumentation adds substantial overhead;
+use separate untraced interleaved runs for timing comparisons. Empty Chromium
+selector snapshots represent no matching work and are omitted from the ranking.
+
 Each invocation keeps its exact Git head and dirty-tree inventory, raw Chrome trace,
 CPU profile, settled screenshot, and JSON summary in a fresh timestamped directory.
 It measures renderer-main-thread task interval union, long tasks, layouts with

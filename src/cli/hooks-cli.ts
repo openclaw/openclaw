@@ -397,7 +397,8 @@ async function runOneShotHooksCliAction(
   const result = await action().catch((err: unknown) => {
     rethrowExpectedCliError(err);
     const message = formatErrorMessage(err);
-    const humanOutput = `${theme.error("Error:")} ${sanitizeTerminalText(message)}`;
+    // Owner remedies span lines (Config:/Fix:); keep the breaks, strip controls per line.
+    const humanOutput = `${theme.error("Error:")} ${message.split("\n").map(sanitizeTerminalText).join("\n")}`;
     if (failureOwner === "root") {
       throw new ExpectedCliError({ message, humanOutput, machineOutput: message });
     }

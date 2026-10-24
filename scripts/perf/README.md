@@ -4273,3 +4273,44 @@ loader/module overhead and the deliberately retained registry handles. This is
 an inspection-lifecycle probe in a real Gateway main isolate when `--gateway` is
 set, not Gateway RPC throughput or a production old-generation plateau
 measurement. Omit `--gateway` for the loader-only control.
+
+## Compressed WebSocket broadcast fanout
+
+`ws-compression-measure.ts` sends fresh synthetic publications through the production
+broadcaster and WebSocket transport to 70 negotiated `permessage-deflate` clients.
+It prepares 32 varied payloads before warmup; one quarter stay below the compression
+threshold and the remainder target 16 KiB of text (JSON escaping adds bytes).
+
+```sh
+node --import ./scripts/tsx.mjs scripts/perf/ws-compression-measure.ts \
+  --clients 70 --profiles 70 --batches 30000 --port 41649
+```
+
+Use `--profiles 1` for matching recipient envelopes, and `--size 512` or
+`--size 2048` for smaller payloads. Sequence counters start aligned; matching
+profiles therefore exercise the best case for whole-frame sharing. Distinct
+profiles exercise separate envelopes even with aligned counters.
+`--warm-start-at <epoch-ms>` synchronizes the
+100-broadcast warmup; `--start-at <epoch-ms>` synchronizes measurement after it.
+A missed deadline fails the run. `--ready-file <path>` records completed fixture
+and connection preparation. Run baseline and candidate with separate state,
+ports, identical counts, counterbalanced launch order, and swapped interleaved
+CPU placements under the campaign's quiet lock and production guard.
+
+Results report CPU per broadcast for the process, main thread, and synchronous
+broadcast call; exact server socket wire bytes; decoded frame bytes; latency and
+event-loop tails with sample counts; natural GC totals, per-kind counts/tails,
+and all maximum pauses. Every client's decoded-frame SHA256 must match its expected
+payloads, sequence, and recipient profile. Client inflation shares the measured
+process, so use `sendThreadCpuUsPerBroadcast` to attribute synchronous broadcast
+work and retain overall CPU/latency as context. Deferred socket writes are outside
+the synchronous interval. This is transport-boundary proof with synthetic admitted
+recipients, not a full Gateway authentication, agent, or maintenance workload.
+
+No collections are forced. Use untraced runs for timing/GC gates. A separate
+`--trace-gc-nvp` process measures promotion between `WS_COMPRESSION_MEASURE_START`
+and `WS_COMPRESSION_MEASURE_END`, with its own matched baseline controls. Calibrate
+at least four identical-source pairs before interpreting adverse GC/promotion/max
+pause signals; noisy controls make the protocol inconclusive. Keep all valid
+samples and report both absolute and relative deltas under the campaign's sample
+count and maximum-pause rules.

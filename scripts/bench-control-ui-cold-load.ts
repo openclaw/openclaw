@@ -2,6 +2,7 @@
 // --cpu-profile: source-mapped reload/live/streaming tables and per-run/median cpu-profile.json.
 // --thread-cpu-time excludes renderer descheduling from CDP duration metrics.
 // --cpu-profile-compare <baseline cpu-profile.json>: profile and diff against that report.
+// --selector-stats: ranked boot CSS selectors (instrumentation overhead included).
 // --allocations --untraced --live-events: collected-object renderer bytes per event.
 // --streaming-allocations: sampled allocation bytes including collected objects during deltas.
 // Sampling inflates timings: never compare profiled runs with unprofiled runs.
@@ -64,6 +65,10 @@ import {
   installRotatingBoardTickets,
   installWidgetReadiness,
 } from "./lib/control-ui-dashboard-probe.ts";
+import {
+  summarizeInteractionSelectors,
+  type InteractionStyleSheet,
+} from "./lib/control-ui-interaction-trace.ts";
 import { probeColdLoadOverlays } from "./lib/control-ui-overlay-probe.ts";
 import { warmReloadProbe } from "./lib/control-ui-warm-reload-probe.ts";
 import {
@@ -216,6 +221,7 @@ function summarizeSidebarWindows(
 const { values } = parseArgs({
   options: {
     "cpu-profile": { type: "boolean", default: false },
+    "selector-stats": { type: "boolean", default: false },
     "thread-cpu-time": { type: "boolean", default: false },
     "cpu-profile-compare": { type: "string" },
     allocations: { type: "boolean", default: false },
@@ -279,6 +285,9 @@ const { values } = parseArgs({
     output: { type: "string", default: ".artifacts/control-ui-cold-load" },
   },
 });
+if (values["selector-stats"] && (values.untraced || values["filmstrip-only"])) {
+  throw new Error("selector-stats requires tracing; exclude untraced and filmstrip-only");
+}
 if (values["streaming-reply"] && values["live-events"]) {
   throw new Error("streaming-reply measures an isolated answer; do not combine with live-events");
 }
@@ -1245,6 +1254,22 @@ try {
       await cdp.send("Emulation.setCPUThrottlingRate", { rate: cpuThrottle });
     }
     const rawTrace: unknown[] = [];
+    const styleSheets = new Map<string, InteractionStyleSheet>();
+    if (values["selector-stats"]) {
+      cdp.on(
+        "CSS.styleSheetAdded",
+        ({ header }: { header: InteractionStyleSheet & { styleSheetId: string } }) =>
+          styleSheets.set(header.styleSheetId, {
+            sourceURL: header.sourceURL,
+            origin: header.origin,
+            title: header.title,
+            startLine: header.startLine,
+            startColumn: header.startColumn,
+          }),
+      );
+      await cdp.send("DOM.enable");
+      await cdp.send("CSS.enable");
+    }
     let collectedTrace = rawTrace;
     cdp.on("Tracing.dataCollected", (data) => collectedTrace.push(...data.value));
     await cdp.send("Performance.enable", {
@@ -1260,7 +1285,18 @@ try {
       await cdp.send("Tracing.start", {
         categories: values["filmstrip-only"]
           ? "loading,blink.user_timing,disabled-by-default-devtools.screenshot"
-          : "toplevel,loading,blink.user_timing,devtools.timeline,disabled-by-default-devtools.timeline,disabled-by-default-devtools.timeline.stack,disabled-by-default-devtools.screenshot,v8",
+          : [
+              "toplevel,loading,blink.user_timing,devtools.timeline",
+              "disabled-by-default-devtools.timeline,disabled-by-default-devtools.timeline.stack",
+              "disabled-by-default-devtools.screenshot,v8",
+              ...(values["selector-stats"]
+                ? [
+                    "disabled-by-default-devtools.timeline.css",
+                    "disabled-by-default-blink.debug",
+                    "disabled-by-default-devtools.timeline.invalidationTracking",
+                  ]
+                : []),
+            ].join(","),
         transferMode: "ReportEvents",
       });
     }
@@ -1393,6 +1429,30 @@ try {
       );
     }
     const trace = rawTrace.map(prepareColdLoadTraceEvent);
+    const bootTrace = traced ? summarizeColdLoadTrace(trace, metrics.at) : undefined;
+    let selectorStats: { artifact: string; stylePasses: number; selectorCount: number } | undefined;
+    if (values["selector-stats"] && bootTrace) {
+      if (!bootTrace.navigationStartFound) {
+        throw new Error("Selector statistics require a boot navigationStart boundary");
+      }
+      const selectors = summarizeInteractionSelectors(
+        rawTrace,
+        {
+          startUs: bootTrace.navigationStartUs,
+          endUs: bootTrace.navigationStartUs + bootTrace.durationMs * 1_000,
+          rendererPid: bootTrace.rendererPid,
+          rendererTid: bootTrace.rendererTid,
+        },
+        styleSheets,
+      );
+      const artifact = `run-${run + 1}.selectors.json`;
+      await writeFile(path.join(artifactDir, artifact), JSON.stringify(selectors, null, 2));
+      selectorStats = {
+        artifact,
+        stylePasses: selectors.stylePasses,
+        selectorCount: selectors.selectors.length,
+      };
+    }
     const screenshots = trace
       .flatMap((event) =>
         event.name === "Screenshot" && event.args?.snapshot
@@ -2014,7 +2074,8 @@ try {
         ]),
       ),
       browserCpuTimeDomain: values["thread-cpu-time"] ? "threadTicks" : "timeTicks",
-      trace: traced ? summarizeColdLoadTrace(trace, metrics.at) : undefined,
+      trace: bootTrace,
+      selectorStats,
       cpu: mapped ? summarizeCpuProfile(mapped.profile) : undefined,
       mappedFrames: mapped?.mappedFrames,
       unmappedFrames: mapped?.unmappedFrames,
@@ -2118,6 +2179,7 @@ try {
         dashboardMcpApp: values["dashboard-mcp-app"],
         chatDashboardRoute: values["chat-dashboard-route"],
         traced,
+        selectorStats: values["selector-stats"],
         filmstripOnly: values["filmstrip-only"],
         historyValidatorDelayMs,
         dashboardPaintMarker: values["dashboard-paint-marker"],
