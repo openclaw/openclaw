@@ -5,8 +5,13 @@ import type {
   SessionCatalogHost,
   SessionCatalogSession,
 } from "../../../packages/gateway-protocol/src/index.ts";
-import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import {
+  controlUiBundledGatewayUrl,
+  controlUiBundledSettingsStorageKey,
+  installMockGateway,
+} from "../test-helpers/control-ui-e2e.ts";
 import { assertSessionSectionCountAlignment } from "../test-helpers/control-ui-session-section-layout.ts";
+import { readTextTone } from "../test-helpers/rendered-colors.ts";
 import {
   createControlUiE2eSuite,
   expandCodingSection,
@@ -225,9 +230,21 @@ suite.define(() => {
       colorScheme: "dark",
       viewport: { height: 1100, width: 1440 },
     });
+    await page.addInitScript(
+      ({ key, gatewayUrl }) =>
+        localStorage.setItem(key, JSON.stringify({ gatewayUrl, theme: "knot", themeMode: "dark" })),
+      {
+        key: controlUiBundledSettingsStorageKey(suite.server.baseUrl),
+        gatewayUrl: controlUiBundledGatewayUrl(suite.server.baseUrl),
+      },
+    );
     await installMockGateway(page, {
       featureMethods: catalogMethods,
       methodResponses: {
+        "config.get": {
+          config: { ui: { prefs: { theme: "knot", themeMode: "dark" } } },
+          hash: "catalog-knot-dark",
+        },
         "sessions.list": liveSessions(
           "agent:main:research",
           "Research thread",
@@ -273,6 +290,19 @@ suite.define(() => {
       await expandCodingSection(page);
       const section = page.locator('[data-session-section="catalog:codex"]');
       await section.waitFor({ state: "visible" });
+      await expect
+        .poll(() =>
+          page.evaluate(() => {
+            const palette = document.getElementById("openclaw-theme-palette-knot");
+            return (
+              document.documentElement.dataset.theme === "openknot" &&
+              document.documentElement.dataset.themeMode === "dark" &&
+              palette instanceof HTMLLinkElement &&
+              Boolean(palette.sheet)
+            );
+          }),
+        )
+        .toBe(true);
       await expect.poll(() => section.locator("[data-session-catalog-host]").count()).toBe(2);
       expect(await section.locator('[data-session-catalog-host="gateway:local"]').count()).toBe(1);
       expect(await section.locator('[data-session-catalog-host="node:build"]').count()).toBe(1);
@@ -316,6 +346,10 @@ suite.define(() => {
           (rows) => new Set(rows.map((row) => row.getBoundingClientRect().height)).size,
         ),
       ).toBe(1);
+      const tone = await readTextTone(
+        openclawProject.locator(".sidebar-session-catalog-project__label"),
+      );
+      expect(tone.distanceToText).toBeLessThan(tone.distanceToMuted);
       expect(await projectLabel(section, "project:/Users/dev/other")).toBe("other");
       expect(await section.getByText("Worktree fix session", { exact: true }).count()).toBe(1);
       const toggle = section.locator(".sidebar-session-group-toggle");

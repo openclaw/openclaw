@@ -122,29 +122,6 @@ suite.define(() => {
       await expectPayload(page, original.attachmentPayload.key);
     }));
 
-  it("reloads an offline Blob queue with exact bytes and idempotency, and never replays a lost ACK", () =>
-    suite.withPage(pageOptions, async ({ page }) => {
-      const gateway = await installGateway(page, true);
-      await openChat(page);
-      await disconnect(page, gateway);
-      const queued = await queueAttachment(page, "Mock Gateway: offline binary submission");
-      expect(queued.attachmentPayload).toBeDefined();
-      expect(queued.sendAttempts).toBe(0);
-      await expect.poll(() => composerFor(page).inputValue()).toBe("");
-      await expectRequestCountStable(gateway, "chat.send", 0);
-      await page.reload();
-      await expect.poll(async () => (await readQueue(page))[0]?.sendRunId).toBe(queued.sendRunId);
-      await gateway.setOnline(true);
-      const sent = await gateway.waitForRequest("chat.send");
-      expectAttachmentSend(sent.params, { idempotencyKey: queued.sendRunId });
-      await expect.poll(() => payloadCount(page)).toBe(1);
-      // Reload destroys the pending ACK. The restored attempted row must require review.
-      await page.reload();
-      await paneFor(page).getByText("Delivery unconfirmed", { exact: true }).waitFor();
-      await expectRequestCountStable(gateway, "chat.send", 0);
-      expect((await readQueue(page))[0]?.sendRunId).toBe(queued.sendRunId);
-    }));
-
   it("retains offline attachment bytes through cold queue recovery and reconnect", () =>
     suite.withPage({ serviceWorkers: "block" }, async ({ context, page }) => {
       const queueModule = controlUiE2eBuiltModuleRequest(

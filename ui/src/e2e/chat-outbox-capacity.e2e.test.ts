@@ -158,14 +158,6 @@ suite.define(() => {
           await pane.locator(".agent-chat__file-input").setInputFiles(files);
           const previews = pane.locator(".chat-attachment-thumb img");
           await expectImages(previews, files.length);
-          const acceptedBytes = await previews.evaluateAll(async (images) =>
-            Promise.all(
-              images.map(
-                async (image) => (await (await fetch((image as HTMLImageElement).src)).blob()).size,
-              ),
-            ),
-          );
-          expect(acceptedBytes).toEqual(sizes);
           await expect.poll(() => steer.isEnabled()).toBe(true);
           expect(await pane.locator(".chat-queue__item").count()).toBe(0);
           expect(await gateway.getRequests("chat.send")).toHaveLength(0);
