@@ -1,0 +1,298 @@
+import { randomUUID } from "node:crypto";
+import { Check } from "typebox/value";
+import { expect, it } from "vitest";
+import { contract } from "./contract.js";
+import { parseCron, nextRun } from "./cron.js";
+import { createKnowledgeService } from "./service.js";
+import {
+  adopt,
+  createVault,
+  hostApi,
+  operatorContext,
+  toolContext,
+  afterTest,
+  useTestTempDirs,
+  defaultOrder,
+} from "./test-support.js";
+
+const tempDirs = useTestTempDirs();
+
+/** Host-like service scheduler with a manual clock. */
+function fakeScheduler(start: any) {
+  const jobs = new Map(),
+    scheduler = {
+      version: 1,
+      clock: start,
+      signal: new AbortController().signal,
+      now: () => scheduler.clock,
+      schedule(job: any) {
+        jobs.set(job.id, { ...job, at: job.atMs ?? scheduler.clock + job.delayMs });
+        return {
+          cancel() {
+            jobs.delete(job.id);
+          },
+          async stop() {},
+        };
+      },
+      async fire(id: any) {
+        const job = jobs.get(id);
+        expect(job, `job ${id} is scheduled`).toBeTruthy();
+        jobs.delete(id);
+        scheduler.clock = Math.max(scheduler.clock, job.at);
+        await job.run();
+      },
+      jobs,
+    };
+  return scheduler;
+}
+
+async function fixture() {
+  const base = tempDirs.make("knowledge-maintenance-");
+
+  const policy = {
+    writesEnabled: true,
+    operatorRead: true,
+    maintenance: { schedule: "0 * * * *", timezone: "UTC" },
+  };
+  const host = hostApi(base, {
+    agents: ["main", "ops", "idle"],
+    stores: { team: { label: "Team", agents: ["ops"] } },
+    policy,
+  });
+  const own = await createVault(base, { name: "own" }),
+    team = await createVault(base, { name: "team" });
+  adopt(host.stateRoot, "agent:main", own.config);
+  adopt(host.stateRoot, "named:team", team.config, "Team");
+  const lifecycles: any = [],
+    logs: any = [];
+  host.api.registerService = (s) => lifecycles.push(s);
+  host.api.logger = {
+    info: (m: any) => logs.push(m),
+    warn: (m: any) => logs.push(`WARN ${m}`),
+    error() {},
+  };
+  const boot = async (scheduler: any) => {
+    lifecycles.length = 0;
+    const service = createKnowledgeService(host.api);
+    await lifecycles[0].start({ scheduler });
+    afterTest(() => lifecycles[0]?.stop());
+    return service;
+  };
+  return { host, boot, logs, lifecycles };
+}
+
+const remember = (service: any, context: any, text: any) =>
+  service.remember(
+    {
+      requestId: randomUUID(),
+      attribution: "test",
+      excerpt: `User: ${text}`,
+      items: [{ text, kind: "fact", infer_subject: false }],
+    },
+    context,
+  );
+const page = (service: any, context: any, title: any, type = "company") =>
+  service.save_page({ requestId: randomUUID(), title, type, body: "Page.\n" }, context);
+
+it("cron expressions evaluate in the configured time zone and skip impossible slots", () => {
+  const daily = parseCron("30 3 * * *", "America/Los_Angeles");
+  expect(new Date(nextRun(daily, Date.parse("2026-10-20T12:00:00Z"))).toISOString()).toBe(
+    "2026-10-21T10:30:00.000Z",
+  );
+  // Spring forward: 02:30 does not exist on 2026-03-08 in Los Angeles.
+  const early = parseCron("30 2 * * *", "America/Los_Angeles");
+  expect(new Date(nextRun(early, Date.parse("2026-03-08T08:00:00Z"))).toISOString()).toBe(
+    "2026-03-09T09:30:00.000Z",
+  );
+  // Fall back: 01:30 repeats on 2026-11-01 and runs once.
+  const repeat = parseCron("30 1 * * *", "America/Los_Angeles"),
+    first = nextRun(repeat, Date.parse("2026-11-01T07:00:00Z"));
+  expect(new Date(first).toISOString()).toBe("2026-11-01T08:30:00.000Z");
+  expect(new Date(nextRun(repeat, first)).toISOString()).toBe("2026-11-02T09:30:00.000Z");
+  expect(
+    new Date(
+      nextRun(parseCron("*/15 9-17 * * 1-5", "UTC"), Date.parse("2026-10-24T12:00:00Z")),
+    ).toISOString(),
+  ).toBe("2026-10-26T09:00:00.000Z");
+  expect(() => parseCron("61 * * * *", "UTC")).toThrow(/Invalid cron field/);
+  expect(() => parseCron("* * * *", "UTC")).toThrow(/five fields/);
+  expect(() => parseCron("* * * * *", "Mars/Base")).toThrow(/Unknown time zone/);
+});
+
+it("a scheduled pass links across every store and partition, skips unprovisioned stores, repeats as a no-op, and catches up after a miss", async () => {
+  const f = await fixture(),
+    start = Date.parse("2026-10-20T10:20:00Z");
+  const scheduler = fakeScheduler(start),
+    service = await f.boot(scheduler);
+  expect(scheduler.jobs.get("knowledge-maintenance").at).toBe(Date.parse("2026-10-20T11:00:00Z"));
+
+  const main = toolContext(f.host.api, "main"),
+    ops = toolContext(f.host.api, "ops");
+  const group = toolContext(f.host.api, "main", {
+    kind: "conversation",
+    agentId: "main",
+    sessionKey: "agent:main:group",
+    sessionId: randomUUID(),
+  });
+  const a = (await remember(service, main, "Atlas Labs moved its launch to March.")).items[0].id;
+  const b = (await remember(service, ops, "Nimbus Works hired a CFO.")).items[0].id;
+  const c = (await remember(service, group, "Atlas Labs joined the group call.")).items[0].id;
+  const atlas = await page(service, main, "Atlas Labs"),
+    nimbus = await page(service, ops, "Nimbus Works");
+  // A page in another store or partition is never a target.
+  await page(service, ops, "Atlas Labs");
+  const groupAtlas = await page(service, group, "Atlas Labs");
+
+  await scheduler.fire("knowledge-maintenance");
+  const status = await service.maintenance_status({}, operatorContext(f.host.api));
+  expect(Check(contract.operations.maintenance_status.output, status)).toBeTruthy();
+  const byBinding = Object.fromEntries(status.lastRun!.vaults.map((v) => [v.binding, v]));
+  expect(Object.keys(byBinding).toSorted(defaultOrder)).toStrictEqual([
+    "agent:idle",
+    "agent:main",
+    "named:team",
+  ]);
+  expect([
+    byBinding["agent:main"]!.outcome,
+    byBinding["agent:main"]!.partitions,
+    byBinding["agent:main"]!.linked,
+  ]).toStrictEqual(["ok", 2, 2]);
+  expect([
+    byBinding["named:team"]!.outcome,
+    byBinding["named:team"]!.linked,
+    byBinding["named:team"]!.label,
+  ]).toStrictEqual(["ok", 1, "Team"]);
+  expect(byBinding["agent:idle"]!.outcome).toBe("skipped");
+  expect(status.lastRun!.trigger).toBe("scheduled");
+  expect(status.lastRun!.slot).toBe("2026-10-20T11:00:00.000Z");
+  expect(status.lastRun!.linked).toBe(3);
+  expect(status.nextRunAt).toBe("2026-10-20T12:00:00.000Z");
+  const entities = async (ctx: any, id: any) =>
+    (await service.record({ id, includeMetadata: true }, ctx)).record!.metadata!.entities;
+  expect(await entities(main, a)).toStrictEqual([atlas.id]);
+  expect(await entities(ops, b)).toStrictEqual([nimbus.id]);
+  expect(
+    await entities(group, c),
+    "Conversation claims link only within their own partition",
+  ).toStrictEqual([groupAtlas.id]);
+  const history = await service.history({ id: a }, main);
+  expect(JSON.stringify(history)).toMatch(/maintenance/);
+  await expect(service.maintenance_status({}, main)).rejects.toThrow(/operators only/);
+
+  await scheduler.fire("knowledge-maintenance");
+  const again = await service.maintenance_status({}, operatorContext(f.host.api));
+  expect(again.lastRun!.linked, "A repeat pass links nothing new").toBe(0);
+  expect(again.lastRun!.slot).toBe("2026-10-20T12:00:00.000Z");
+
+  // The Gateway is down across the 13:00 slot; the next start catches up once.
+  await f.lifecycles[0].stop();
+  const later = fakeScheduler(Date.parse("2026-10-20T13:40:00Z")),
+    restarted = await f.boot(later);
+  const catchUp = later.jobs.get("knowledge-maintenance");
+  expect(catchUp.at).toBe(later.clock + 60_000);
+  await later.fire("knowledge-maintenance");
+  const caught = await restarted.maintenance_status({}, operatorContext(f.host.api));
+  expect([caught.lastRun!.trigger, caught.lastRun!.slot, caught.nextRunAt]).toStrictEqual([
+    "catch-up",
+    "2026-10-20T13:00:00.000Z",
+    "2026-10-20T14:00:00.000Z",
+  ]);
+});
+
+it("disabled maintenance, invalid schedules and write-disabled installs schedule nothing", async () => {
+  for (const [maintenance, writesEnabled, expected] of [
+    [{ enabled: false }, true, /^$/],
+    [{ schedule: "not a cron" }, true, /five fields/],
+    [{}, false, /^$/],
+  ] as const) {
+    const base = tempDirs.make("knowledge-maintenance-off-");
+
+    const host = hostApi(base, { policy: { writesEnabled, operatorRead: true, maintenance } }),
+      lifecycles: any = [];
+    host.api.registerService = (s) => lifecycles.push(s);
+    host.api.logger = { info() {}, warn() {}, error() {} };
+    const service = createKnowledgeService(host.api),
+      scheduler = fakeScheduler(Date.now());
+    await lifecycles[0].start({ scheduler });
+    afterTest(() => lifecycles[0].stop());
+    expect(scheduler.jobs.size).toBe(0);
+    const status = await service.maintenance_status({}, operatorContext(host.api));
+    expect(status.nextRunAt).toBe(null);
+    expect(status.configError ?? "").toMatch(expected);
+  }
+});
+
+it("a pass that leaves private claims unlinked queues the review automation once, and only then", async () => {
+  const base = tempDirs.make("knowledge-maintenance-review-");
+  const host = hostApi(base, {
+    policy: {
+      writesEnabled: true,
+      operatorRead: true,
+      maintenance: { schedule: "0 * * * *", timezone: "UTC", reviewJobId: "review-job" },
+    },
+  });
+  const own = await createVault(base, { name: "own" });
+  adopt(host.stateRoot, "agent:main", own.config);
+  const lifecycles: any = [];
+  host.api.registerService = (s) => lifecycles.push(s);
+  host.api.logger = { info() {}, warn() {}, error() {} };
+  const service = createKnowledgeService(host.api),
+    scheduler = fakeScheduler(Date.parse("2026-10-22T10:20:00Z"));
+  const calls: any[] = [];
+  let answer: any = { ok: true, enqueued: true, runId: "run-1" },
+    cron: any = {
+      enqueueRun: async (id: any, mode: any) => {
+        calls.push([id, mode]);
+        return answer;
+      },
+    };
+  await lifecycles[0].start({ scheduler, getCron: () => cron });
+  afterTest(() => lifecycles[0].stop());
+  const main = toolContext(host.api, "main");
+  const review = async () => {
+    await scheduler.fire("knowledge-maintenance");
+    return (await service.maintenance_status({}, operatorContext(host.api))).lastRun!.review;
+  };
+
+  const linkable = (await remember(service, main, "Atlas Labs moved its launch to March.")).items[0]
+    .id;
+  await remember(service, main, "I prefer short replies.");
+  await page(service, main, "Atlas Labs");
+  expect(await review(), "Relink links Atlas; the preference is left for review").toStrictEqual({
+    jobId: "review-job",
+    pending: 1,
+    outcome: "enqueued",
+    runId: "run-1",
+  });
+  expect(calls).toStrictEqual([["review-job", "if-enabled"]]);
+  expect((await service.record({ id: linkable }, main)).record).toBeTruthy();
+
+  answer = { ok: true, ran: false, reason: "disabled" };
+  expect((await review())!.outcome, "A disabled automation is reported, not forced").toBe(
+    "skipped",
+  );
+  cron = undefined;
+  expect((await review())!.outcome).toBe("unavailable");
+
+  // Once the review has linked everything, the pass does not queue it.
+  const left = (await service.relink({ dryRun: true }, main)).examples[0]!.id;
+  const record = (await service.record({ id: left }, main)).record!;
+  const prefs = await page(service, main, "Reply style", "concept");
+  await service.annotate(
+    {
+      requestId: randomUUID(),
+      id: left,
+      expectedRevision: record.revision,
+      expectedHash: record.hash,
+      reason: "Reviewed.",
+      annotations: {},
+      entities: [prefs.id],
+    },
+    main,
+  );
+  cron = { enqueueRun: async () => expect.unreachable("nothing to review") };
+  expect(await review()).toStrictEqual({ jobId: "review-job", pending: 0, outcome: "not_needed" });
+  const status = await service.maintenance_status({}, operatorContext(host.api));
+  expect(Check(contract.operations.maintenance_status.output, status)).toBeTruthy();
+  expect(status.reviewJobId).toBe("review-job");
+});

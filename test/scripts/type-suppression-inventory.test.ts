@@ -113,6 +113,11 @@ it("keeps unchecked any casts at zero and negative type assertions explicit", ()
       "src/plugins/registry.diagnostics.test.ts:@ts-expect-error Unknown JavaScript hook names must produce a diagnostic.",
       "src/plugins/registry.diagnostics.test.ts:@ts-expect-error Untyped hook input reaches the existing rejection/coercion path.",
       "src/plugins/registry.diagnostics.test.ts:@ts-expect-error Closed registration must stop before coercing untyped hook input.",
+      "extensions/knowledge/src/ingestion-contract.test.ts:@ts-expect-error claims have no relationship endpoints",
+      "extensions/knowledge/src/ingestion-contract.test.ts:@ts-expect-error relationships have no claim kind",
+      "extensions/knowledge/src/ingestion-contract.test.ts:@ts-expect-error page body is required",
+      "extensions/knowledge/src/ingestion-contract.test.ts:@ts-expect-error invalid assertion origin",
+      "extensions/knowledge/src/ingestion-contract.test.ts:@ts-expect-error batch-level request IDs are not item input fields",
     ].toSorted(),
   );
 });

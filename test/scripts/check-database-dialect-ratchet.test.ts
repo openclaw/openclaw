@@ -474,8 +474,24 @@ it.each([
   })),
   ...(
     [
+      ["CREATE VIRTUAL TABLE corpus USING fts5(id UNINDEXED, body)", "fts5", 0],
+      ["CREATE TEMP TABLE subset (id TEXT)", "temp-schema", 0],
+      ["DELETE FROM corpus WHERE rowid = 1", "rowid", 0],
+      ["INSERT OR IGNORE INTO t VALUES (1)", "insert-conflict", 1],
+      ["SELECT json_extract(value, '$') FROM t", "json-projection", 1],
+    ] as const
+  ).map(([sql, construct, result]) => ({
+    file: "extensions/knowledge/src/retrieval.ts",
+    sql,
+    construct,
+    result,
+    owner: result === 0,
+  })),
+  ...(
+    [
       ["BEGIN EXCLUSIVE", "transaction-mode"],
       ["SELECT * FROM archive ORDER BY rowid", "rowid"],
+      ["CREATE VIRTUAL TABLE corpus USING fts5(id UNINDEXED, body)", "fts5"],
     ] as const
   ).map(([sql, construct]) => ({
     file: "src/consumer.ts",

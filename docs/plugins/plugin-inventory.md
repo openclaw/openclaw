@@ -124,6 +124,8 @@ Each entry lists the package, distribution route, and description.
 
 - **[kie](/plugins/reference/kie)** (`@openclaw/kie-provider`) - included in OpenClaw. Adds Kie model provider support to OpenClaw.
 
+- **[knowledge](/plugins/reference/knowledge)** (`@openclaw/knowledge`) - included in OpenClaw. Evidence-backed knowledge, inspectable in OpenClaw.
+
 - **[linux-node](/plugins/reference/linux-node)** (`@openclaw/linux-node`) - included in OpenClaw. Desktop notifications, camera capture, and location for Linux node hosts.
 
 - **[litellm](/plugins/reference/litellm)** (`@openclaw/litellm-provider`) - included in OpenClaw. Adds LiteLLM model provider support to OpenClaw.
