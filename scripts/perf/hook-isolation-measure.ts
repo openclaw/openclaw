@@ -6,6 +6,7 @@ import { performance } from "node:perf_hooks";
 import { parseArgs } from "node:util";
 import { canonicalizeSessionEntry } from "../../src/agents/sessions/session-manager-persistence-entry.js";
 import { isOwnedTranscriptPayload } from "../../src/config/sessions/transcript-json.js";
+import type { PluginHookBeforePromptBuildEvent } from "../../src/plugins/hook-before-agent-start.types.js";
 import { createHookRunner } from "../../src/plugins/hooks.js";
 import { createEmptyPluginRegistry } from "../../src/plugins/registry-empty.js";
 
@@ -102,7 +103,7 @@ const cells = [200, 1_000].flatMap((size) => {
         pluginId: `synthetic-${handlerIndex}`,
         hookName: "before_prompt_build",
         source: "synthetic",
-        handler: (event) => {
+        handler: (event: PluginHookBeforePromptBuildEvent) => {
           handlerCalls++;
           if (verifyHistory) {
             assert.notEqual(event.messages, messages);
