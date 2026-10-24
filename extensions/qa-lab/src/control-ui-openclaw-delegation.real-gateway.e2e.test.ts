@@ -5,11 +5,13 @@ import { expect, it } from "vitest";
 import { createControlUiE2eSuite } from "../../../ui/src/e2e/control-ui-e2e-suite.test-support.ts";
 import { controlUiSessionUrl } from "../../../ui/src/test-helpers/control-ui-e2e.ts";
 import {
+  authenticateControlUi,
   captureControlUi,
   controlUiPageOptions as pageOptions,
   historyMessages,
   startControlUiGateway,
   stopControlUiGateway,
+  writeControlUiVerdict,
 } from "./control-ui-gateway.e2e.test-support.ts";
 import { createQaLiveLaneGateway } from "./live-transports/shared/live-gateway.runtime.ts";
 
@@ -37,21 +39,36 @@ function expectNoFallback(text: string | null, includeHeading = true) {
   }
 }
 
-function startGateway(owner: ReturnType<typeof createQaLiveLaneGateway>, baseUrl: string) {
+function startGateway(
+  owner: ReturnType<typeof createQaLiveLaneGateway>,
+  baseUrl: string,
+  ask = false,
+) {
   return startControlUiGateway(owner, baseUrl, {
-    mutateConfig: (cfg) => {
-      (cfg.logging ??= {}).level = "debug";
-      const agent = (((cfg.agents ??= {}).entries ??= {}).qa ??= {});
-      agent.identity = { name: "Approval proof" };
-      const tools = (agent.tools ??= {});
-      (tools.exec ??= {}).mode = "ask";
-      tools.alsoAllow = ["openclaw"];
-      return cfg;
-    },
+    mutateConfig: (cfg) => ({
+      ...cfg,
+      logging: { ...cfg.logging, level: "debug" },
+      ...(!ask ? { tools: { ...cfg.tools, exec: { ...cfg.tools?.exec, mode: "full" } } } : {}),
+      agents: {
+        ...cfg.agents,
+        entries: {
+          ...cfg.agents?.entries,
+          qa: {
+            ...cfg.agents?.entries?.qa,
+            identity: { name: "Approval proof" },
+            tools: {
+              ...cfg.agents?.entries?.qa?.tools,
+              ...(ask ? { exec: { ...cfg.agents?.entries?.qa?.tools?.exec, mode: "ask" } } : {}),
+              alsoAllow: ["openclaw"],
+            },
+          },
+        },
+      },
+    }),
   });
 }
 
-function observeEvents(page: Page, gatewayUrl: string, sessionKey: string) {
+function observeEvents(page: Page, gatewayUrl: string, sessionKey: string, activeOnly = false) {
   const events: string[] = [];
   let finals = 0;
   let activeUiSocket: WebSocket | undefined;
@@ -62,7 +79,7 @@ function observeEvents(page: Page, gatewayUrl: string, sessionKey: string) {
     // Reload overlaps sockets; the approval case observes only the replacement connection.
     activeUiSocket = socket;
     socket.on("framereceived", ({ payload }) => {
-      if (socket !== activeUiSocket) {
+      if (activeOnly && socket !== activeUiSocket) {
         return;
       }
       const frame = asOptionalRecord(JSON.parse(String(payload)));
@@ -72,19 +89,23 @@ function observeEvents(page: Page, gatewayUrl: string, sessionKey: string) {
       const data = asOptionalRecord(frame.payload);
       if (typeof frame.event === "string" && frame.event.startsWith("openclaw.approval.")) {
         const suffix =
-          typeof data?.applicationStatus === "string" ? `:${data.applicationStatus}` : "";
+          activeOnly && typeof data?.applicationStatus === "string"
+            ? `:${data.applicationStatus}`
+            : "";
         events.push(`${frame.event}${suffix}`);
       }
       if (frame.event === "chat" && data?.sessionKey === sessionKey && data.state === "final") {
         finals += 1;
-        events.push("chat.final");
+        if (activeOnly) {
+          events.push("chat.final");
+        }
       }
     });
   });
   return { events, finals: () => finals };
 }
 
-async function expandResult(page: Page) {
+async function expandResult(page: Page, onlyCollapsed: boolean) {
   const work = page.locator(".chat-work-group > .chat-activity-group__summary").first();
   await work.waitFor();
   if ((await work.getAttribute("aria-expanded")) !== "true") {
@@ -93,10 +114,19 @@ async function expandResult(page: Page) {
   const summaries = page.locator(".chat-tool-msg-summary");
   await summaries.first().waitFor();
   for (const summary of await summaries.all()) {
-    await summary.click();
+    if (!onlyCollapsed || (await summary.getAttribute("aria-expanded")) !== "true") {
+      await summary.click();
+    }
   }
   const result = page.locator(".chat-tool-msg-body", { hasText: /Updated logging\.level/u });
   await result.waitFor();
+  return result;
+}
+
+function expectApplied(result: Record<string, unknown> | undefined) {
+  expect(result?.needsApproval).not.toBe(true);
+  expect(result?.proposalId).toBeUndefined();
+  expect(result?.reply).toContain("Updated logging.level");
 }
 
 function loggingLevel(config: unknown): unknown {
@@ -132,7 +162,7 @@ suite.define(() => {
     const proofDir = suite.artifactDir;
     const errors: unknown[] = [];
     try {
-      const runtime = await startGateway(owner, suite.server.baseUrl);
+      const runtime = await startGateway(owner, suite.server.baseUrl, true);
       const gateway = runtime.gateway;
       const sessionKey = "agent:qa:dashboard:delegation-approval";
       await gateway.call("sessions.create", {
@@ -141,7 +171,12 @@ suite.define(() => {
       });
 
       await suite.withPage(pageOptions(proofDir), async ({ page }) => {
-        const { events: eventSequence, finals } = observeEvents(page, gateway.wsUrl, sessionKey);
+        const { events: eventSequence, finals } = observeEvents(
+          page,
+          gateway.wsUrl,
+          sessionKey,
+          true,
+        );
         await page.addInitScript(
           ({ gatewayUrl, token, browserFallbackMarkers }) => {
             const proofWindow = window as ProofWindow;
@@ -264,9 +299,7 @@ suite.define(() => {
         const history = await gateway.call("chat.history", { sessionKey, limit: 30 });
         const results = readDelegationResults(history);
         expect(results).toHaveLength(1);
-        expect(results[0]?.needsApproval).not.toBe(true);
-        expect(results[0]?.proposalId).toBeUndefined();
-        expect(results[0]?.reply).toContain("Updated logging.level");
+        expectApplied(results[0]);
         expect(JSON.stringify(history)).not.toContain("/approve");
         expect(loggingLevel(JSON.parse(await readFile(gateway.configPath, "utf8")))).toBe("info");
         expect(await approvalFallbackWasObserved()).toBe(false);
@@ -274,7 +307,7 @@ suite.define(() => {
         await composer.waitFor();
         await page.getByText(prompt, { exact: true }).waitFor();
         await expect.poll(() => approvalCard.count()).toBe(0);
-        await expandResult(page);
+        await expandResult(page, false);
         expectNoFallback(await page.locator("body").textContent());
         expect(await approvalFallbackWasObserved()).toBe(false);
       });
@@ -283,4 +316,130 @@ suite.define(() => {
     }
     await stopControlUiGateway(owner, proofDir, "native OpenClaw approval proof failed", errors);
   }, 180_000);
+});
+
+const fullAccessOwner = createQaLiveLaneGateway();
+let fullAccessRuntime: Awaited<ReturnType<typeof fullAccessOwner.start>>;
+let fullAccessProofDir: string;
+let fullAccessGatewayUsed = false;
+const stopFullAccess = (message: string) =>
+  stopControlUiGateway(fullAccessOwner, fullAccessProofDir, message);
+const fullAccessSuite = createControlUiE2eSuite({
+  name: "Control UI OpenClaw delegation with a real Gateway",
+  startServerBeforeBrowser: true,
+  setupTimeoutMs: 180_000,
+  resources: {
+    retainedState: () => fullAccessRuntime?.gateway.tempRoot,
+    run: async (signal) => {
+      // Suite logs span both cases; per-case artifact directories rotate before each test.
+      fullAccessProofDir = fullAccessSuite.artifactDir;
+      signal.throwIfAborted();
+      fullAccessRuntime = await startGateway(fullAccessOwner, fullAccessSuite.server.baseUrl);
+      signal.throwIfAborted();
+    },
+    close: () => stopFullAccess("Full Access Gateway cleanup failed"),
+  },
+});
+
+fullAccessSuite.define(() => {
+  it.for(["default", "full"] as const)(
+    "%s Full Access saves a delegated config change without a system-agent approval",
+    { timeout: 180_000 },
+    async (mode, context) => {
+      let completed = false;
+      await fullAccessSuite.runScenario(context, {
+        run: async (signal) => {
+          signal.throwIfAborted();
+          const proofDir = fullAccessSuite.artifactDir;
+          const gateway = fullAccessRuntime.gateway;
+          if (fullAccessGatewayUsed) {
+            // The previous turn finished; reset only its persisted logging change.
+            const current = await gateway.call("config.get", {});
+            if (!isRecord(current) || typeof current.hash !== "string") {
+              throw new Error("Gateway did not return a config revision");
+            }
+            expect(loggingLevel(current.config)).toBe("info");
+            await gateway.call("config.patch", {
+              raw: JSON.stringify({ logging: { level: "debug" } }),
+              baseHash: current.hash,
+            });
+          }
+          fullAccessGatewayUsed = true;
+          signal.throwIfAborted();
+          const initialConfig = await gateway.call("config.get", {});
+          expect(isRecord(initialConfig) && loggingLevel(initialConfig.config)).toBe("debug");
+          const sessionKey = `agent:qa:dashboard:delegation-${mode}`;
+          const created = await gateway.call("sessions.create", {
+            key: sessionKey,
+            label: mode === "full" ? "Full Access delegation" : "Default Full Access delegation",
+            ...(mode === "full" ? { permissionMode: "full" } : {}),
+          });
+          expect(created).toMatchObject({ key: sessionKey });
+          const entry = isRecord(created) && isRecord(created.entry) ? created.entry : undefined;
+          expect(entry?.permissionMode).toBe(mode === "full" ? "full" : undefined);
+          expect(loggingLevel(JSON.parse(await readFile(gateway.configPath, "utf8")))).toBe(
+            "debug",
+          );
+
+          await fullAccessSuite.withPage(pageOptions(proofDir), async ({ page }) => {
+            const { events: approvalEvents, finals } = observeEvents(
+              page,
+              gateway.wsUrl,
+              sessionKey,
+            );
+            await authenticateControlUi(page, gateway);
+            await page.goto(controlUiSessionUrl(fullAccessSuite.server.baseUrl, sessionKey));
+            const composer = page.locator(".agent-chat__composer-combobox textarea");
+            await composer.fill(prompt);
+            await captureControlUi(page, proofDir, "01-request.png");
+            await page.getByRole("button", { name: "Send message" }).click();
+
+            await expect.poll(finals, { timeout: 60_000 }).toBeGreaterThan(0);
+            const history = await gateway.call("chat.history", { sessionKey, limit: 30 });
+            const result = readDelegationResults(history).at(-1);
+            expect(result).toBeDefined();
+            expectApplied(result);
+            expect(approvalEvents).toEqual([]);
+
+            const savedConfig: unknown = JSON.parse(await readFile(gateway.configPath, "utf8"));
+            expect(loggingLevel(savedConfig)).toBe("info");
+            const configSnapshot = await gateway.call("config.get", {});
+            expect(isRecord(configSnapshot) && loggingLevel(configSnapshot.config)).toBe("info");
+            const finalMessage = historyMessages(history).findLast(
+              (message) => isRecord(message) && message.role === "assistant",
+            );
+            const finalMeta = isRecord(finalMessage) ? finalMessage["__openclaw"] : undefined;
+            const finalEntryId = isRecord(finalMeta) ? finalMeta.id : undefined;
+            if (typeof finalEntryId !== "string") {
+              throw new Error("chat.history returned no persisted assistant entry id");
+            }
+            // History replaces the live final and its work-group key. Expand the persisted row.
+            await page.locator(`.chat-bubble[data-entry-id="${finalEntryId}"]`).waitFor();
+            const appliedResult = await expandResult(page, true);
+            await appliedResult.scrollIntoViewIfNeeded();
+            expect(await page.locator(".chat-inline-approval [data-approval-id]").count()).toBe(0);
+            await captureControlUi(page, proofDir, "02-applied.png");
+            // Keep public proof independent of runtime tokens, paths, model metadata, and run ids.
+            await writeControlUiVerdict(proofDir, {
+              mode,
+              initialLoggingLevel: "debug",
+              savedLoggingLevel: loggingLevel(savedConfig),
+              finalDelegateResultObserved: true,
+              finalChatObserved: finals() > 0,
+              needsApproval: result?.needsApproval === true,
+              systemAgentApprovalEvents: approvalEvents,
+            });
+          });
+          completed = true;
+        },
+        close: async () => {
+          if (completed && !context.signal.aborted) {
+            return;
+          }
+          // Failed or cancelled cases close admission before another case can reuse state.
+          await stopFullAccess(`Full Access cleanup failed (${mode})`);
+        },
+      });
+    },
+  );
 });

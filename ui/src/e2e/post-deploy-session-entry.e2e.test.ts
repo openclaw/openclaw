@@ -6,6 +6,7 @@ import { chromium, type Browser, type Page, type Request } from "playwright";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { setRuntimeConfigSnapshot } from "../../../src/config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../../../src/config/sessions/session-accessor.js";
+import { replaceTranscriptEvents } from "../../../src/config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import type { OpenClawConfig } from "../../../src/config/types.openclaw.js";
 import * as documentTransport from "../../../src/gateway/control-ui-static.js";
 import { createGatewayHttpServer } from "../../../src/gateway/server-http.js";
@@ -22,6 +23,7 @@ import { reserveTestPortListener } from "../../../src/test-utils/port-claims.js"
 import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import {
   buildProductionControlUiE2e,
+  captureControlUiE2eFailureDiagnostics,
   controlUiE2eWaitTimeoutMs,
   installMockGateway,
   refreshProductionControlUiE2e,
@@ -42,6 +44,7 @@ const unrelatedScope = {
   sessionKey: "agent:main:unrelated-publication",
   sessionId: "unrelated-browser-instance",
 };
+const publishedMessage = "Synthetic published conversation.";
 const operatorEmail = "reload-operator@example.test";
 type HttpSample = { path: string; status: number };
 
@@ -95,6 +98,14 @@ describe("public-session post-deploy app handoff", () => {
       createdActor: { type: "human", source: "profile", id: owner.id },
       publicShare: { id: "a".repeat(48), sessionId: publicScope.sessionId, createdAt: 1 },
     });
+    await replaceTranscriptEvents(publicScope, [
+      { type: "session", version: 3, id: publicScope.sessionId },
+      {
+        type: "message",
+        id: "published-message",
+        message: { role: "user", content: publishedMessage },
+      },
+    ]);
     await upsertSessionEntryCore(unrelatedScope, {
       sessionId: unrelatedScope.sessionId,
       updatedAt: 2,
@@ -271,6 +282,14 @@ describe("public-session post-deploy app handoff", () => {
         recovery: false,
       });
       expect(documents).toBeLessThanOrEqual(maxDocuments);
+    } catch (error) {
+      if (error instanceof Error) {
+        await captureControlUiE2eFailureDiagnostics(page, {
+          error,
+          label: "post-deploy-session-entry",
+        });
+      }
+      throw error;
     } finally {
       held.resume();
       await Promise.allSettled([navigation]);
@@ -330,4 +349,24 @@ describe("public-session post-deploy app handoff", () => {
       }
     }, 60_000);
   }
+
+  it("keeps an unauthenticated public-session reload in the reader", async () => {
+    root.path = path.join(fixture!, buildB);
+    await using context = await browser!.newContext({ serviceWorkers: "block" });
+    const page = await context.newPage();
+    let documents = 0;
+    page.on("request", (request) => {
+      if (request.isNavigationRequest() && request.frame() === page.mainFrame()) {
+        documents += 1;
+      }
+    });
+    const probe = page.waitForResponse(
+      (response) => response.url().includes("session-entry?") && response.url().includes("probe=1"),
+    );
+    expect((await page.goto(baseUrl + publicPath))?.status()).toBe(200);
+    expect((await probe).status()).toBe(401);
+    await page.getByText(publishedMessage, { exact: true }).waitFor();
+    expect(await page.locator("openclaw-app").count()).toBe(0);
+    expect(documents).toBe(1);
+  });
 });

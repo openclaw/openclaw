@@ -115,7 +115,8 @@ function tarEntry(
   writeTarField(header, 0, 100, name);
   writeTarOctal(header, 100, 8, type === "5" ? 0o755 : 0o644);
   writeTarOctal(header, 124, 12, bytes.byteLength);
-  for (const offset of [108, 116, 136, 329, 337]) {
+  writeTarOctal(header, 136, 12, 0);
+  for (const offset of [108, 116, 329, 337]) {
     writeTarOctal(header, offset, 8, 0);
   }
   header.fill(0x20, 148, 156);

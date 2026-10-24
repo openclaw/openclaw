@@ -48,12 +48,14 @@ async function startHookAccountFixture() {
           accounts: {
             default: { name: "Default" },
             work: { name: "Work" },
+            disabled: { name: "Disabled", enabled: false },
           },
         });
         return config;
       },
     });
     return {
+      lab,
       stop,
       outbound: () =>
         lab.state.getSnapshot().messages.filter((message) => message.direction === "outbound"),
@@ -100,6 +102,30 @@ describe("hook agent account routing product proof", () => {
   }, 180_000);
 
   afterAll(() => fixture?.stop());
+
+  it(
+    "rejects invalid explicit accounts before running the agent",
+    { timeout: 180_000 },
+    async () => {
+      const messageCountBefore = fixture.lab.state.getSnapshot().messages.length;
+
+      for (const { accountId, expectedError } of [
+        { accountId: "missing", expectedError: 'Unknown account "missing"' },
+        { accountId: "disabled", expectedError: 'Account "disabled"' },
+        { accountId: "__proto__", expectedError: 'Invalid account ID "__proto__"' },
+      ]) {
+        const response = await fixture.post({ accountId });
+
+        expect(response.status, JSON.stringify(response.json)).toBe(400);
+        expect(response.json).toMatchObject({
+          ok: false,
+          runId: expect.any(String),
+          error: expect.stringContaining(expectedError),
+        });
+      }
+      expect(fixture.lab.state.getSnapshot().messages).toHaveLength(messageCountBefore);
+    },
+  );
 
   it(
     "delivers exactly once through the selected qa-channel account",

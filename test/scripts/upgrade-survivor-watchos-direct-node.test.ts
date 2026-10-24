@@ -218,9 +218,9 @@ describe.skipIf(process.platform === "win32")("watchOS direct-node survivor", ()
 
     expect(requests).toHaveLength(3);
     expect(pollTokens).toEqual(["Bearer session-1", "Bearer session-2", "Bearer session-3"]);
-    const [bootstrap, reconnect] = requests;
-    if (!bootstrap || !reconnect) {
-      throw new Error("watch fixture omitted bootstrap or reconnect request");
+    const [bootstrap, reconnect, rotated] = requests;
+    if (!bootstrap || !reconnect || !rotated) {
+      throw new Error("watch fixture omitted bootstrap, reconnect, or rotated request");
     }
     expect(bootstrap).toMatchObject({
       minProtocol: 4,
@@ -260,7 +260,7 @@ describe.skipIf(process.platform === "win32")("watchOS direct-node survivor", ()
     for (const [body, token] of [
       [bootstrap, bootstrapToken],
       [reconnect, deviceToken],
-      [requests[2], rotatedToken],
+      [rotated, rotatedToken],
     ] as const) {
       expect(
         crypto.verify(
