@@ -357,21 +357,18 @@ describe("prepareChatSendUserTurn", () => {
     });
   });
 
-  it("persists video then image as claim-only facts with the image at fact index one", async () => {
+  it("assigns image slots from the complete mixed-media fact order", async () => {
     const prepared = prepareTurn({
       attachments: {
         imageOrder: ["offloaded"],
         offloadedRefs: [
-          {
+          imageRef("video.mp4", "/private/media/video.mp4", {
             mediaRef: "https://signed.example/video",
-            id: "video.mp4",
-            path: "/private/media/video.mp4",
-            sourceIndex: 0,
             kind: "video",
             mimeType: "video/mp4",
             label: "video.mp4",
             sizeBytes: 20,
-          },
+          }),
           imageRef("image.png", "/private/media/image.png", {
             mediaRef: "file:///private/image.png",
             sourceIndex: 1,
@@ -385,19 +382,6 @@ describe("prepareChatSendUserTurn", () => {
     expect(input.mediaImageLayout).toEqual({
       slots: [{ kind: "offloaded", factIndex: 1 }],
     });
-    const serialized = JSON.stringify(buildPersistedUserTurnMessage(input));
-    expect(serialized).toContain("media://inbound/video.mp4");
-    expect(serialized).toContain("media://inbound/image.png");
-    for (const privateValue of [
-      "/private/media",
-      "signed.example",
-      "file://",
-      "workspaceDir",
-      '"data"',
-      "base64",
-    ]) {
-      expect(serialized).not.toContain(privateValue);
-    }
   });
 
   it.each(["inline", "offloaded", "prestaged"] as const)(

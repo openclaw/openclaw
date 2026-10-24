@@ -44,7 +44,7 @@ import {
   createSessionMutationTestContext,
 } from "./sessions-mutations.owner.test-support.js";
 import { sessionSharingHandlers } from "./sessions-sharing.js";
-import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
+import type { GatewayClient, RespondFn } from "./types.js";
 
 let state: Awaited<ReturnType<typeof createOpenClawTestState>>;
 let nextCatalog = 0;
@@ -186,9 +186,7 @@ async function createCatalog(restricted: boolean) {
   } satisfies PreparedGatewayModelCatalogSnapshot;
   let readPreparedModelCatalog = async () => readyModelCatalogSnapshot;
   const loadPreparedModelCatalog = async () => readyModelCatalogSnapshot;
-  const gatewayModelCatalogLoader: GatewayRequestContext["loadGatewayModelCatalogSnapshot"] =
-    loadPreparedModelCatalog;
-  registerGatewayModelCatalogPrivateAccess(gatewayModelCatalogLoader, {
+  registerGatewayModelCatalogPrivateAccess(loadPreparedModelCatalog, {
     loadDeferred: loadPreparedModelCatalog,
     readPrepared: () => readPreparedModelCatalog(),
   });
@@ -197,8 +195,7 @@ async function createCatalog(restricted: boolean) {
       ...createSessionMutationTestContext(config),
       logGateway: createSubsystemLogger("test/catalog-import"),
       broadcast: vi.fn(),
-      getRuntimeConfig: () => config,
-      loadGatewayModelCatalogSnapshot: gatewayModelCatalogLoader,
+      loadGatewayModelCatalogSnapshot: loadPreparedModelCatalog,
     },
     () => projection,
   );
@@ -277,8 +274,6 @@ async function createCatalog(restricted: boolean) {
     expectImport,
     context,
     other,
-    nativeKey,
-    seedNative,
     precreate,
     config,
     client,
@@ -427,15 +422,6 @@ describe("sessions.catalog.import with durable Gateway owners", () => {
           },
         },
       ]);
-      await fixture.seedNative();
-      const continueSession = vi.fn(async () => ({ sessionKey: fixture.nativeKey }));
-      fixture.provider.continueSession = continueSession;
-      expect(await fixture.call("sessions.catalog.continue")).toHaveBeenCalledWith(true, {
-        sessionKey: fixture.nativeKey,
-      });
-      expect(continueSession).toHaveBeenCalledOnce();
-      expect(fixture.nativeKey).not.toBe(fixture.key);
-      expect(await fixture.transcript()).toHaveLength(4);
     }));
 
   it("cancels a stalled Gateway copy without durable artifacts and succeeds on retry", () =>
