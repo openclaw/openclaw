@@ -21,6 +21,7 @@ type ScalarSample = {
   prefix: Buffer;
   value: number;
   rendered?: Uint8Array;
+  renderedDirty: boolean;
 };
 
 type HistogramSample = {
@@ -35,6 +36,7 @@ type HistogramSample = {
   countPrefix: Buffer;
   sum: number;
   rendered?: Uint8Array;
+  renderedDirty: boolean;
 };
 
 type LabelNode<T> = {
@@ -201,7 +203,7 @@ export function createPrometheusMetricStore(
             : value;
       if (next !== node.sample.value) {
         node.sample.value = next;
-        node.sample.rendered = undefined;
+        node.sample.renderedDirty = true;
       }
     } else {
       node.sample = {
@@ -210,6 +212,7 @@ export function createPrometheusMetricStore(
         name,
         prefix: encodePrefix(`${name}${formatLabels(labels)} `),
         value,
+        renderedDirty: true,
       };
       map.samples.push(node.sample);
       map.sorted = false;
@@ -268,6 +271,7 @@ export function createPrometheusMetricStore(
         sumPrefix: encodePrefix(`${name}_sum${formatLabels(labels)} `),
         countPrefix: encodePrefix(`${name}_count${formatLabels(labels)} `),
         sum: 0,
+        renderedDirty: true,
       };
       node.sample = sample;
       histograms.samples.push(sample);
@@ -296,7 +300,7 @@ export function createPrometheusMetricStore(
     }
     sample.count += 1;
     sample.sum += value;
-    sample.rendered = undefined;
+    sample.renderedDirty = true;
     for (let index = 0; index < sample.buckets.length; index += 1) {
       const bucket = sample.buckets[index];
       if (bucket !== undefined && value <= bucket) {
@@ -326,8 +330,9 @@ export function createPrometheusMetricStore(
       scratchOffset += scratch.write(number, scratchOffset, "ascii");
       scratch[scratchOffset++] = 10;
     };
-    const finish = () => {
-      const output = new Uint8Array(scratch.subarray(0, scratchOffset));
+    const finish = (previous?: Uint8Array) => {
+      const output = previous?.length === scratchOffset ? previous : new Uint8Array(scratchOffset);
+      scratch.copy(output, 0, 0, scratchOffset);
       scratchOffset = 0;
       return output;
     };
@@ -345,9 +350,10 @@ export function createPrometheusMetricStore(
     ] as const) {
       for (const sample of sortedSamples(map)) {
         header(sample.name, type, sample.help);
-        if (!sample.rendered) {
+        if (!sample.rendered || sample.renderedDirty) {
           write(sample.prefix, sample.value);
-          sample.rendered = finish();
+          sample.rendered = finish(sample.rendered);
+          sample.renderedDirty = false;
         }
         append(sample.rendered);
       }
@@ -375,13 +381,14 @@ export function createPrometheusMetricStore(
         continue;
       }
       header(sample.name, "histogram", sample.help);
-      if (!sample.rendered) {
+      if (!sample.rendered || sample.renderedDirty) {
         sample.bucketPrefixes.forEach((prefix, bucketIndex) => {
           write(prefix, sample.counts[bucketIndex] ?? sample.count);
         });
         write(sample.sumPrefix, sample.sum);
         write(sample.countPrefix, sample.count);
-        sample.rendered = finish();
+        sample.rendered = finish(sample.rendered);
+        sample.renderedDirty = false;
       }
       append(sample.rendered);
     }

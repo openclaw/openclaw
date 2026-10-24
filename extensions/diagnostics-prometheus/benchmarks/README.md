@@ -86,9 +86,10 @@ event-loop delay.
 The store encodes fixed prefixes into private 4 KiB chunks. Oversized prefixes
 own separate allocations, so clearing them cannot leave a large chunk held by
 the prefix allocator cursor.
-Each series lazily retains its rendered bytes until its value changes; removing
-gauges or resetting the store releases their blocks. Changed series use a growing
-scratch buffer, and every scrape copies the blocks into a fresh response buffer.
+Each series lazily retains its rendered bytes; removing gauges or resetting the
+store releases their blocks. Changed series use a growing scratch buffer and refill
+their block when its length is unchanged, otherwise replacing it with an exact-size
+block. Every scrape copies the blocks into a fresh response buffer.
 Report the additional retained blocks alongside allocation savings.
 `scrape.bufferByteLength` records the transient response allocation; it is not
 included in sampled V8 heap allocation. After consuming a render in an owner phase,

@@ -64,6 +64,18 @@ it("keeps earlier scrape bytes stable across value changes, gauge removal, and r
   expect(updated).toContain(
     'openclaw_run_duration_seconds_sum{a="first",le="replaced",z="雪\\"\\\\\\n"} 2.5\n',
   );
+  for (const value of [12345, -1234, 7]) {
+    store.gauge("openclaw_worker_queue_depth", "Depth.", {}, value);
+    const rendered = store.render();
+    expect(rendered.toString()).toContain(`openclaw_worker_queue_depth ${value}\n`);
+    rendered.buffer.transfer(0);
+  }
+  for (let index = 0; index < 8; index++) {
+    store.histogram("openclaw_run_duration_seconds", "Duration.", labels, 1, [1, 10]);
+  }
+  expect(store.render().toString()).toContain(
+    'openclaw_run_duration_seconds_count{a="first",le="replaced",z="雪\\"\\\\\\n"} 10\n',
+  );
   const largeLabel = "雪😀".repeat(1024);
   store.gauge("openclaw_worker_queue_depth", "Depth.", { label: largeLabel }, 7);
   expect(store.render().toString()).toContain(
