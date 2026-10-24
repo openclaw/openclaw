@@ -61,7 +61,7 @@ export type AppSidebarProps = {
   onNavigate:
     | ((routeId: NavigationRouteId, options?: ApplicationNavigationOptions) => void)
     | undefined;
-  onPreloadRoute: ((routeId: NavigationRouteId) => Promise<void>) | undefined;
+  onPreloadRoute: ((routeId: NavigationRouteId) => Promise<void> | void) | undefined;
 };
 
 export const appSidebarProperties = {

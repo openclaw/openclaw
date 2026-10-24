@@ -34,7 +34,10 @@ export function scheduleRoutePreload<TRouteId extends string>(
     return;
   }
   if (!timers.has(target)) {
-    timers.set(target, globalThis.setTimeout(() => void start(), 50));
+    timers.set(
+      target,
+      globalThis.setTimeout(() => void start(), 50),
+    );
   }
 }
 

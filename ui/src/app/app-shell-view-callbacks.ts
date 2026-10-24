@@ -1,4 +1,4 @@
-import { isRouteId } from "../app-routes.ts";
+import type { RouteId } from "../app-route-paths.ts";
 import { isGatewayConnectionAttemptPending } from "../lib/gateway-status.ts";
 import { readSessionMethodAccess } from "../lib/session-method-access.ts";
 import { areUiSessionKeysEquivalent } from "../lib/sessions/session-key.ts";
@@ -37,10 +37,7 @@ export function createShellViewCallbacks(host: ShellViewCallbackHost) {
     updateSidebarEntries: (entries: string[]) =>
       host.context?.navigation.update({ sidebarEntries: entries }),
     openDevicePairSetup: () => void host.context?.overlays.openDevicePairSetup(),
-    preloadRoute: (routeId: string): Promise<void> =>
-      isRouteId(routeId)
-        ? (host.context?.preload(routeId) ?? Promise.resolve())
-        : Promise.resolve(),
+    preloadRoute: (routeId: RouteId) => host.context?.preload(routeId),
     requestOpenNewSession: (agentId: string, target?: NewSessionTarget) => {
       const context = host.context;
       if (

@@ -42,7 +42,7 @@ export interface SidebarMenusOwner extends SidebarRouteView {
   readonly gatewayVersion: string | null;
   readonly onPairMobile?: () => void;
   readonly onRetryConnect?: () => void;
-  readonly onPreloadRoute?: (routeId: NavigationRouteId) => Promise<void>;
+  readonly onPreloadRoute?: (routeId: NavigationRouteId) => Promise<void> | void;
   sidebarAgentsMode: "chip" | "roster";
   navigationView: "pages" | "sessions" | "online";
   readonly pinnedAgentIds: readonly string[];
