@@ -21,8 +21,10 @@ import { acquireGatewayStateOwner } from "../../infra/gateway-state-owner.js";
 import * as sqliteQueries from "../../infra/kysely-sync.js";
 import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
+import { PluginInstance } from "../../plugins/plugin-instance.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import {
+  markPluginRecordBorrowed,
   markPluginRegistryActive,
   markPluginRegistryRetired,
   revokePluginRecord,
@@ -110,6 +112,8 @@ describe("session deletion and native owner state", () => {
   function nativeOwner(
     options: {
       activate?: boolean;
+      id?: string;
+      wrapped?: boolean;
       prepare?: (params: AgentHarnessSessionDeletionParams) => Promise<void>;
       finalize?: () => Promise<void>;
       afterCommit?: (key: string) => void;
@@ -118,7 +122,7 @@ describe("session deletion and native owner state", () => {
   ) {
     const registry = createEmptyPluginRegistry();
     const harness: AgentHarness = {
-      id: "native-test",
+      id: options.id ?? "native-test",
       label: "Native test owner",
       supports: () => ({ supported: true }),
       runAttempt: async () => {
@@ -155,15 +159,24 @@ describe("session deletion and native owner state", () => {
         return result;
       },
     };
-    const record = createPluginRecord({ id: "native-owner" });
+    const record = createPluginRecord({ id: options.id ?? "native-owner" });
     registry.plugins.push(record);
-    registry.agentHarnesses.push({ harness, pluginId: record.id, source: "runtime" });
+    const instance = options.wrapped
+      ? new PluginInstance(record.id, { record, registry })
+      : undefined;
+    const registration = {
+      harness: instance ? instance.wrap(harness) : harness,
+      pluginId: record.id,
+      source: "runtime" as const,
+    };
+    registry.agentHarnesses.push(registration);
     if (options.activate !== false) {
       markPluginRegistryActive(registry);
     }
     return {
       record,
       registry,
+      registration,
       run: <T>(operation: () => Promise<T>) => withPluginRuntimeRegistryScope(registry, operation),
     };
   }
@@ -944,6 +957,27 @@ describe("session deletion and native owner state", () => {
     expect(read()?.sessionId).toBe(sessionId);
     expect(bindings.has(sessionKey)).toBe(true);
   });
+
+  it.each([1, 2])(
+    "deletes through %i wrapped harness owner(s) borrowed by the caller",
+    async (count) => {
+      await seed(sessionKey, null);
+      const owners = Array.from({ length: count }, (_, index) =>
+        nativeOwner({ id: `native-owner-${index}`, wrapped: true }),
+      );
+      const borrower = createEmptyPluginRegistry();
+      for (const owner of owners) {
+        borrower.plugins.push(owner.record);
+        borrower.agentHarnesses.push(owner.registration);
+        markPluginRecordBorrowed(borrower, owner.record);
+      }
+      markPluginRegistryActive(borrower);
+
+      await withPluginRuntimeRegistryScope(borrower, () => remove());
+      expect(read()).toBeUndefined();
+      expect(bindings.has(sessionKey)).toBe(false);
+    },
+  );
 
   it("preserves history when its native owner retires during archive materialization", async () => {
     const historicalId = "historical-cleanup-session";
