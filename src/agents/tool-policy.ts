@@ -103,6 +103,12 @@ export function hasRestrictiveAllowPolicy(policy?: { allow?: string[] }): boolea
   );
 }
 
+/** Restrictive profiles retain a message tool explicitly requested by the runtime cap. */
+export function resolveRuntimeMessageProfileAllowlist(toolsAllow?: string[]): string[] {
+  const expanded = expandToolGroups(toolsAllow);
+  return expanded.includes("message") || expanded.includes("*") ? ["message"] : [];
+}
+
 /** Returns whether a policy removes at least one tool from the default surface. */
 export function toolPolicyRestrictsTools(policy?: ToolPolicyLike): boolean {
   if (!policy) {
