@@ -2204,6 +2204,7 @@
                   {
                     "group": "Chat and coding models",
                     "pages": [
+                      "providers/abstract",
                       "providers/alibaba",
                       "providers/anthropic",
                       "plugins/reference/anthropic-vertex",
