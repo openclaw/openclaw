@@ -20,7 +20,12 @@ const source = readFileSync(".github/workflows/full-release-validation.yml", "ut
 type Workflow = {
   jobs: Record<
     string,
-    { if?: string; steps: Array<Record<string, unknown>>; "timeout-minutes"?: number }
+    {
+      if?: string;
+      needs?: string[];
+      steps: Array<Record<string, unknown>>;
+      "timeout-minutes"?: number;
+    }
   >;
   on: { workflow_dispatch: { inputs: Record<string, unknown> } };
 };
@@ -435,6 +440,29 @@ else console.log(JSON.stringify({id:202,workflow_id:88,head_branch:'main',event:
       expect(step(job, "Recover original artifact producer").if).toBeUndefined();
     }
     expect(String(workflow.jobs.qualify_npm_package?.if)).not.toContain("github.run_attempt");
+    expect(workflow.jobs.release_execution_plan?.needs).toEqual(
+      expect.arrayContaining([
+        "prepare_npm_package",
+        "qualify_npm_package",
+        "prepare_docker_release",
+      ]),
+    );
+    expect(step("release_execution_plan", "Seal immutable release execution plan").env).toMatchObject(
+      {
+        PLUGIN_NPM_REQUIRED: "${{ needs.resolve_target.outputs.plugin_npm_preflight_required }}",
+        PLUGIN_NPM_PREPARATION_RESULT: "${{ needs.prepare_plugin_npm.result }}",
+      },
+    );
+    for (const jobName of ["release_decision", "diagnostic_drain"]) {
+      expect(workflow.jobs[jobName]?.needs).toEqual(
+        expect.arrayContaining([
+          "prepare_npm_package",
+          "qualify_npm_package",
+          "prepare_plugin_npm",
+          "prepare_docker_release",
+        ]),
+      );
+    }
     expect(source).not.toContain("continuationSource");
     expect(source).not.toContain("continuation_plan_json");
   });

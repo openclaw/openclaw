@@ -12,6 +12,7 @@ import {
   isReleaseGhArtifactMissingError,
   MAX_RELEASE_ARTIFACT_BYTES,
   releaseExecutionPlanSha256,
+  releasePlanGateFailures,
   terminalPolicyPass,
   validateReleaseChildDispatchBinding,
   validateReleaseCoveragePolicyBinding,
@@ -20,6 +21,7 @@ import {
   affectedActiveRunIds,
   buildReleaseStateArtifact,
   classifyReleaseSnapshot,
+  effectiveReleasePlanGates,
   formatReleaseStateOutcome,
   hydrateReusedPlan,
   readChild,
@@ -320,6 +322,43 @@ describe("full release execution plan", () => {
     expect(() =>
       validateReleaseExecutionPlanArtifact({ ...retained, knownFlakyJobs: undefined }),
     ).toThrow("knownFlakyJobs must be empty");
+  });
+
+  it("preserves legacy embedded-manifest reuse bytes across repeated validation", () => {
+    const candidate = candidateBinding();
+    const version = candidate.package.version;
+    const sectionVersion = version.replace(/-beta\.[1-9][0-9]*$/u, "");
+    const retained = executionPlan(
+      { childPhaseVersion: 3, rerunGroup: "ci", targetVersion: version },
+      {
+        attemptEvidenceVersion: 3,
+        candidateRequest: canonicalCandidateRequest(),
+        candidate,
+        evidenceReuse: {
+          changedPaths: [
+            `CHANGELOG/${sectionVersion}.md`,
+            `CHANGELOG/records/${sectionVersion}.md`,
+          ],
+          evidenceSha: TARGET_SHA,
+          policy: "split-changelog-release-v1",
+          requested: true,
+          rootRunId: "99",
+          runUrl: "https://example.invalid/runs/99",
+          selectedRunId: "99",
+          sourceManifest: {
+            ...evidenceManifest(),
+            validationInputs: { targetVersion: version },
+          },
+        },
+      },
+    );
+    delete retained.targetVersion;
+    retained.sha256 = releaseExecutionPlanSha256(retained);
+
+    const first = validateReleaseExecutionPlanArtifact(retained);
+    expect(Object.hasOwn(first.evidenceReuse, "sourceArtifact")).toBe(false);
+    const second = validateReleaseExecutionPlanArtifact(first);
+    expect(second).toEqual(first);
   });
 
   it("retains B observations and post-upload binding through completed plan sealing", () => {
@@ -726,6 +765,116 @@ describe("full release execution plan", () => {
       name: "Acquire full release candidate",
       required: false,
       result: "skipped",
+    });
+  });
+
+  it("retains every required artifact qualification result as a parent gate", () => {
+    const result = plan({
+      candidateRequired: false,
+      childPhaseVersion: 3,
+      npmPreparationResult: "success",
+      npmQualificationResult: "failure",
+      pluginNpmPreflightRequired: true,
+      pluginNpmPreparationResult: "timed_out",
+      dockerPreparationResult: "cancelled",
+    });
+
+    expect(result.gates).toEqual(
+      expect.arrayContaining([
+        { name: "Prepare release npm artifacts", required: true, result: "success" },
+        { name: "Qualify release npm artifacts", required: true, result: "failure" },
+        { name: "Prepare exact plugin npm artifacts", required: true, result: "timed_out" },
+        { name: "Prepare release Docker artifacts", required: true, result: "cancelled" },
+      ]),
+    );
+    expect(releasePlanGateFailures(result.gates)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ job: "Qualify release npm artifacts", conclusion: "failure" }),
+        expect.objectContaining({
+          job: "Prepare exact plugin npm artifacts",
+          conclusion: "timed_out",
+        }),
+        expect.objectContaining({
+          job: "Prepare release Docker artifacts",
+          conclusion: "cancelled",
+        }),
+      ]),
+    );
+  });
+
+  it("keeps the admitted gate set while accepting recovered producer outcomes", () => {
+    const frozen = plan({
+      npmQualificationResult: "failure",
+      pluginNpmPreflightRequired: true,
+      pluginNpmPreparationResult: "cancelled",
+      dockerPreparationResult: "failure",
+    });
+    const effective = effectiveReleasePlanGates(frozen.gates, {
+      NPM_PREPARATION_RESULT: "success",
+      NPM_QUALIFICATION_RESULT: "success",
+      PLUGIN_NPM_PREPARATION_RESULT: "success",
+      DOCKER_PREPARATION_RESULT: "success",
+    });
+
+    expect(effective.map(({ name, required }) => ({ name, required }))).toEqual(
+      frozen.gates.map(({ name, required }) => ({ name, required })),
+    );
+    expect(releasePlanGateFailures(effective)).toEqual([]);
+  });
+
+  it("clears a frozen qualification failure through the real decision collector", () => {
+    const root = tempDirs.make("frv-recovered-parent-gate-");
+    const output = join(root, "decision.json");
+    const executionPlanPath = join(root, "plan.json");
+    const gh = join(root, "gh");
+    const sealedPlan = executionPlan({ npmQualificationResult: "failure" });
+    writeFileSync(executionPlanPath, JSON.stringify(sealedPlan));
+    writeFileSync(
+      gh,
+      `#!/usr/bin/env node
+const args = process.argv.slice(2);
+const endpoint = args.find((entry) => entry.startsWith("repos/"));
+const children = JSON.parse(process.env.FRV_PLANNED_CHILDREN);
+if (args.includes("--paginate")) {
+  process.stdout.write(JSON.stringify({
+    name: "test", status: "completed", conclusion: "success",
+    started_at: "2026-08-21T00:00:00Z", completed_at: "2026-08-21T00:01:00Z",
+    html_url: "https://example.invalid/jobs/1"
+  }) + "\\n");
+  process.exit(0);
+}
+const runId = endpoint.match(/actions\\/runs\\/([0-9]+)/)[1];
+const child = children.find((entry) => entry.runId === runId);
+process.stdout.write(JSON.stringify({
+  id: Number(runId), event: "workflow_dispatch",
+  path: ".github/workflows/" + child.workflow + "@refs/heads/" + child.workflowRef,
+  display_title: child.displayTitle, head_branch: child.workflowRef,
+  head_sha: child.workflowSha, run_attempt: 1, status: "completed", conclusion: "success",
+  created_at: "2026-08-21T00:00:00Z", updated_at: "2026-08-21T00:01:00Z",
+  html_url: child.url, actor: { login: "github-actions[bot]" },
+  triggering_actor: { login: "github-actions[bot]" },
+  repository: { full_name: "openclaw/openclaw" }
+}));
+`,
+    );
+    chmodSync(gh, 0o755);
+
+    const result = runCollector("decision", {
+      FULL_RELEASE_EXECUTION_PLAN_PATH: executionPlanPath,
+      FULL_RELEASE_STATE_PATH: output,
+      FRV_PLANNED_CHILDREN: JSON.stringify(sealedPlan.children),
+      PATH: `${root}:${process.env.PATH}`,
+      RERUN_GROUP: "all",
+      FAIL_FAST: "false",
+      NPM_PREPARATION_RESULT: "success",
+      NPM_QUALIFICATION_RESULT: "success",
+      PLUGIN_NPM_PREPARATION_RESULT: "skipped",
+      DOCKER_PREPARATION_RESULT: "success",
+    });
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+    expect(JSON.parse(readFileSync(output, "utf8"))).toMatchObject({
+      blockers: [],
+      state: "passed",
     });
   });
 
@@ -2086,6 +2235,13 @@ try {
     const output = join(root, "full-release-execution-plan.json");
     const validator = join(root, "release-evidence-validator.mjs");
     const validatorArgs = join(root, "validator-args.json");
+    const sourceArtifact = {
+      digest: `sha256:${"f".repeat(64)}`,
+      id: "900",
+      name: "full-release-validation-99-1",
+      runAttempt: 1,
+      sizeInBytes: 4096,
+    };
     writeFileSync(
       validator,
       `import { writeFileSync } from "node:fs";
@@ -2102,6 +2258,7 @@ for (const [flag, wanted] of Object.entries(expected)) {
 console.log(JSON.stringify({
   children: JSON.parse(process.env.FRV_REUSED_CHILDREN),
   manifest: JSON.parse(process.env.FRV_EVIDENCE_MANIFEST),
+  root: {artifact: ${JSON.stringify(sourceArtifact)}},
   releaseProfile: process.env.RELEASE_PROFILE,
   rerunGroup: process.env.RERUN_GROUP,
 }));
@@ -2124,13 +2281,20 @@ console.log(JSON.stringify({
           sourceAdmissionContract: "1",
           sourceAdmission: rootSource,
           trustedWorkflow: TRUSTED_MAIN,
+          workflowRef: "release-ci/tooling",
+          workflowSha: SHA,
           validationInputs: {
             ...publicationIntentInputs(rootSource),
             targetContextRef: "release/2026.9.9",
             allowUnreleasedChangelog: "false",
           },
         }
-      : evidenceManifest();
+      : {
+          ...evidenceManifest(),
+          retainedDiagnostic: "x".repeat(50_000),
+          workflowRef: "release-ci/tooling",
+          workflowSha: SHA,
+        };
     const planInputs = planInput({
       ...(sourceAdmission ? { sourceAdmissionContract: "1", sourceAdmission } : {}),
       dockerPreflightResult: "skipped",
@@ -2196,7 +2360,14 @@ console.log(JSON.stringify({
         rootRunId: "99",
         runUrl: "https://example.invalid/runs/99",
         selectedRunId: "99",
-        sourceManifest,
+        sourceArtifact: {
+          digest: `sha256:${"f".repeat(64)}`,
+          id: "900",
+          name: "full-release-validation-99-1",
+          runAttempt: 1,
+          sizeInBytes: 4096,
+        },
+        sourceWorkflow: { ref: "release-ci/tooling", sha: SHA },
       },
       trustedWorkflow: reuse.trustedWorkflow,
     });
@@ -2209,7 +2380,7 @@ console.log(JSON.stringify({
       name: "changed source manifest",
       waived: false,
       mutation: "sha",
-      blocker: "provenance_mismatch",
+      blocker: "reused_evidence_invalid",
     },
     {
       name: "missing source waiver",
@@ -2273,6 +2444,90 @@ printf '%s\\n' '{"id":101,"event":"workflow_dispatch","path":".github/workflows/
       `console.log(JSON.stringify({
   children: ${JSON.stringify(reusedEvidenceChildren())},
   manifest: ${JSON.stringify(revalidatedManifest)},
+  root: {artifact: {digest: "sha256:${"f".repeat(64)}", id: "900", name: "full-release-validation-99-1", runAttempt: 1, sizeInBytes: 4096}},
+  releaseProfile: "stable",
+  rerunGroup: "ci"
+}));\n`,
+    );
+    const result = runCollector("decision", {
+      FAIL_FAST: "false",
+      FULL_RELEASE_EXECUTION_PLAN_PATH: executionPlanPath,
+      FULL_RELEASE_STATE_PATH: output,
+      OPENCLAW_RELEASE_CI_SUMMARY_VALIDATOR: validator,
+      PATH: `${root}:${process.env.PATH}`,
+    });
+    expect(result.status, result.stderr).not.toBe(2);
+    const decision = JSON.parse(readFileSync(output, "utf8"));
+    expect(result.status, JSON.stringify(decision.blockers)).toBe(blocker ? 1 : 0);
+    expect(decision.state).toBe(blocker ? "blocked_complete" : "passed");
+    if (blocker) {
+      expect(decision.blockers).toContainEqual(expect.objectContaining({ kind: blocker }));
+    } else {
+      expect(decision.blockers).toEqual([]);
+    }
+  });
+
+  it.each([
+    { name: "unchanged evidence artifact", mutation: "none", blocker: "" },
+    { name: "changed evidence artifact", mutation: "digest", blocker: "provenance_mismatch" },
+  ])("revalidates compact $name at the Decision boundary", ({ mutation, blocker }) => {
+    const root = tempDirs.make("frv-compact-reuse-decision-");
+    const output = join(root, "decision.json");
+    const executionPlanPath = join(root, "plan.json");
+    const gh = join(root, "gh");
+    const validator = join(root, "validator.mjs");
+    const sourceManifest = { ...evidenceManifest(), validationInputs: {} };
+    const sourceArtifact = {
+      digest: `sha256:${"f".repeat(64)}`,
+      id: "900",
+      name: "full-release-validation-99-1",
+      runAttempt: 1,
+      sizeInBytes: 4096,
+    };
+    const revalidatedArtifact = structuredClone(sourceArtifact);
+    if (mutation === "digest") {
+      revalidatedArtifact.digest = `sha256:${"e".repeat(64)}`;
+    }
+    const sealedPlan = executionPlan(
+      {
+        rerunGroup: "ci",
+        releaseProfile: "stable",
+        children: { normalCi: { result: "success", runAttempt: 1, runId: "101" } },
+      },
+      {
+        evidenceReuse: {
+          changedPaths: [],
+          evidenceSha: TARGET_SHA,
+          policy: "exact-target-full-validation-v1",
+          requested: true,
+          rootRunId: "99",
+          runUrl: "https://example.invalid/runs/99",
+          selectedRunId: "99",
+          sourceArtifact,
+          sourceWorkflow: { ref: "release-ci/tooling", sha: SHA },
+        },
+      },
+    );
+    writeFileSync(executionPlanPath, JSON.stringify(sealedPlan));
+    writeFileSync(
+      gh,
+      `#!/bin/sh
+case "$*" in
+  *"/attempts/1/jobs?"*)
+    printf '%s\\n' '{"name":"test","status":"completed","conclusion":"success","started_at":"2026-08-21T00:00:00Z","completed_at":"2026-08-21T00:01:00Z","html_url":"https://example.invalid/jobs/1"}'
+    exit 0
+    ;;
+esac
+printf '%s\\n' '{"id":101,"event":"workflow_dispatch","path":".github/workflows/ci.yml@refs/heads/release-ci/tooling","display_title":"CI full-release-validation-77-1-ci","head_branch":"release-ci/tooling","head_sha":"${SHA}","run_attempt":1,"status":"completed","conclusion":"success","created_at":"2026-08-21T00:00:00Z","updated_at":"2026-08-21T00:01:00Z","html_url":"https://example.invalid/runs/101","actor":{"login":"github-actions[bot]"},"triggering_actor":{"login":"github-actions[bot]"},"repository":{"full_name":"openclaw/openclaw"}}'
+`,
+    );
+    chmodSync(gh, 0o755);
+    writeFileSync(
+      validator,
+      `console.log(JSON.stringify({
+  children: ${JSON.stringify(reusedEvidenceChildren())},
+  manifest: ${JSON.stringify(sourceManifest)},
+  root: {artifact: ${JSON.stringify(revalidatedArtifact)}},
   releaseProfile: "stable",
   rerunGroup: "ci"
 }));\n`,

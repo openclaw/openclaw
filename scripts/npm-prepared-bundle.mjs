@@ -233,6 +233,31 @@ function githubJson(repository, suffix, runGh, query) {
   );
 }
 
+function jobExecution(job) {
+  return JSON.stringify([
+    job.status,
+    job.conclusion,
+    job.started_at,
+    job.completed_at,
+    (job.steps ?? []).map((step) => [
+      step.number,
+      step.name,
+      step.status,
+      step.conclusion,
+      step.started_at,
+      step.completed_at,
+    ]),
+  ]);
+}
+
+// Failed-job reruns list each retained green job again under the new attempt
+// with a fresh job ID; the copy keeps the original execution timestamps.
+export function sameJobExecution(left, right) {
+  return (
+    Boolean(left.started_at && left.completed_at) && jobExecution(left) === jobExecution(right)
+  );
+}
+
 function readAttemptJobs(repository, producer, runGh) {
   const jobs = [];
   for (let page = 1; page <= 10; page += 1) {

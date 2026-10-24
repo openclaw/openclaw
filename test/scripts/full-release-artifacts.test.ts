@@ -409,6 +409,18 @@ describe.skipIf(process.platform === "win32")("immutable release artifact CLI", 
         "prepared-npm-bundle.json",
         test.raw,
       );
+      if (outcome === "replacement preparation failed") {
+        await test.artifact(
+          "openclaw-npm-package-descriptor-81-2",
+          "prepared-npm-bundle.json",
+          test.raw,
+        );
+      } else {
+        test.api(
+          "actions/runs/81/artifacts?name=openclaw-npm-package-descriptor-81-2&per_page=100",
+          { total_count: 0, artifacts: [] },
+        );
+      }
       const raw = test.run("wait", { ARTIFACT_OUTPUT: "raw", ARTIFACT_RUN_ATTEMPT: "2" });
       if (outcome === "replacement preparation failed") {
         expectRejected(raw, "Successful npm preparation was replaced");
@@ -473,6 +485,31 @@ describe.skipIf(process.platform === "win32")("immutable release artifact CLI", 
           ? "HTTP 404: producer missing"
           : "Original artifact dispatch is unavailable or changed";
     expectRejected(result, message);
+  });
+
+  it.each([
+    ["raw", "Prepare npm artifacts / Prepare publishable npm package"],
+    ["receipt", "Prepare npm artifacts / Check npm dependencies"],
+  ] as const)("reports a failed %s producer job before its siblings finish", (output, name) => {
+    const test = fixture();
+    test.api("actions/runs/81/attempts/1/jobs?per_page=100&page=1", {
+      total_count: 2,
+      jobs: [
+        { ...test.jobs[0], name, conclusion: "failure" },
+        { ...test.jobs[1], status: "in_progress", conclusion: null },
+      ],
+    });
+    test.api("actions/runs/81/artifacts?name=openclaw-npm-package-descriptor-81-1&per_page=100", {
+      total_count: 0,
+      artifacts: [],
+    });
+    const result = test.run("wait", {
+      ARTIFACT_OUTPUT: output,
+      FIXTURE_STOP_ON_WAIT: "true",
+    });
+    expectRejected(result, `${name} ended with failure`);
+    expect(result.stderr).toContain(`https://github.com/${REPOSITORY}/actions/runs/81/job/901`);
+    expect(result.stderr).toContain("Other producer jobs continue running");
   });
 
   it.each([

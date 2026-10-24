@@ -631,7 +631,10 @@ describe("install smoke no-push root image transport", () => {
 
     for (const pair of pairs) {
       const producer = job(workflow, pair.producerName);
-      expect(producer.needs, pair.producerName).toEqual(["preflight"]);
+      expect(producer.needs, pair.producerName).toEqual([
+        "preflight",
+        "installer_smoke_candidate_payload",
+      ]);
       expect(producer["timeout-minutes"], pair.producerName).toBe(45);
       expect(producer.outputs, pair.producerName).toEqual({
         archive_sha256: "${{ steps.image_artifact.outputs.archive_sha256 }}",
@@ -917,9 +920,17 @@ describe("install smoke no-push root image transport", () => {
       expect(verify.env).toMatchObject({
         MANIFEST_SHA256: "${{ needs.installer_smoke_candidate_payload.outputs.manifest_sha256 }}",
         PACKAGE_VERSION: "${{ needs.installer_smoke_candidate_payload.outputs.package_version }}",
+        PRODUCER_RUN_ATTEMPT:
+          "${{ needs.installer_smoke_candidate_payload.outputs.artifact_run_attempt }}",
+        PRODUCER_RUN_ID:
+          "${{ needs.installer_smoke_candidate_payload.outputs.artifact_run_id }}",
         SOURCE_ARCHIVE_SHA256:
           "${{ needs.installer_smoke_candidate_payload.outputs.source_archive_sha256 }}",
       });
+      expect(verify.run).toContain('--run-id "$PRODUCER_RUN_ID"');
+      expect(verify.run).toContain('--run-attempt "$PRODUCER_RUN_ATTEMPT"');
+      expect(verify.run).not.toContain('--run-id "$GITHUB_RUN_ID"');
+      expect(verify.run).not.toContain('--run-attempt "$GITHUB_RUN_ATTEMPT"');
       expect(verify.run).toContain("--manifest-sha256");
       expect(verify.run).toContain("--source-archive-sha256");
     }
@@ -930,6 +941,13 @@ describe("install smoke no-push root image transport", () => {
     const update = job(workflow, "installer_smoke_update");
     const nonroot = job(workflow, "installer_smoke_nonroot");
     const aggregate = job(workflow, "installer_smoke");
+
+    for (const group of ["update", "nonroot"]) {
+      expect(job(workflow, `installer_smoke_${group}_image`).needs).toEqual([
+        "preflight",
+        "installer_smoke_candidate_payload",
+      ]);
+    }
 
     expect(update.needs).toEqual([
       "preflight",
