@@ -140,8 +140,7 @@ async function mount(
     showAccounts(next: UserModelAccount[]) {
       listed = inventory(next);
     },
-    query: <T extends Element = HTMLElement>(selector: string) =>
-      accounts.querySelector<T>(selector),
+    query: accounts.querySelector.bind(accounts),
     queryAll: (selector: string) => accounts.querySelectorAll(selector),
     button,
     input: (selector: string, value: string) => input(accounts, selector, value),

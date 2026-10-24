@@ -58,7 +58,11 @@ const modelLimits = (provider: string, id: string, contextWindow?: number) => ({
   contextWindow,
   contextTokens: contextWindow,
 });
-const tokenUsage = { totalTokens: 45_000, totalTokensFresh: true, totalTokensVersion: 1 };
+const tokenUsage = {
+  totalTokens: 45_000,
+  totalTokensFresh: true,
+  totalTokensVersion: 1,
+} satisfies Partial<Entry>;
 const fallback = "fallback/small-model";
 const fallbackNotice = {
   kind: "active",
