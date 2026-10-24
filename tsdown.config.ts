@@ -10,6 +10,7 @@ import {
   collectSourceCheckoutPluginBuildEntries,
   createBundledPluginBuildInventory,
 } from "./scripts/lib/bundled-plugin-build-entries.mjs";
+import { createFsSafeWindowsHelperAssetPlugin } from "./scripts/lib/fs-safe-windows-helper-asset.mts";
 import { createGatewayRunChunkMetadataPlugin } from "./scripts/lib/gateway-run-chunk-metadata.mts";
 import { createManagedHandoffBuildConfigs } from "./scripts/lib/managed-handoff-build-config.mts";
 import { createPackageRuntimeUrlBuildPlugin } from "./scripts/lib/package-runtime-url-build-plugin.mts";
@@ -53,6 +54,7 @@ import {
   WORKER_DEPLOY_OPTIONAL_NATIVE_MODULE_ID,
 } from "./scripts/lib/worker-deploy-build-plugin.mts";
 import { buildPackageDistEntriesFromExports } from "./scripts/lib/workspace-package-entries.mts";
+import { WORKER_BUNDLE_WINDOWS_SECURITY_HELPER_PATH } from "./src/shared/worker-bundle-hash.ts";
 
 type OutputOptions = Exclude<NonNullable<UserConfig["outputOptions"]>, Function>;
 type InputOptionsFactory = Extract<NonNullable<UserConfig["inputOptions"]>, Function>;
@@ -1084,7 +1086,18 @@ const configs: UserConfig[] = [
   workerHelperBuildConfig({
     "worker/workspace-rsync-receiver": "src/worker/workspace-rsync-receiver.ts",
   }),
-  workerHelperBuildConfig({ "worker/github-exec-launcher": "src/agents/github-exec-launcher.ts" }),
+  {
+    ...workerHelperBuildConfig({
+      "worker/github-exec-launcher": "src/agents/github-exec-launcher.ts",
+    }),
+    // Credential reads need fs-safe's relocated metadata/helper, but no runtime state schemas.
+    plugins: [
+      createFsSafeWindowsHelperAssetPlugin(
+        process.cwd(),
+        `worker/${WORKER_BUNDLE_WINDOWS_SECURITY_HELPER_PATH}`,
+      ),
+    ],
+  },
   ...["service-child-relay", "service-child-group-anchor"].map((name) =>
     workerHelperBuildConfig(
       { [`worker/${name}`]: `src/process/supervisor/${name}.ts` },
