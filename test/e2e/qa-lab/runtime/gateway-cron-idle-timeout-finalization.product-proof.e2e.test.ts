@@ -4,14 +4,12 @@ import type { ServerResponse } from "node:http";
 import path from "node:path";
 import { json } from "node:stream/consumers";
 import { setTimeout as sleep } from "node:timers/promises";
-import type { Locator } from "playwright";
 import { afterEach, expect, it } from "vitest";
 import {
   createQaBusState,
   createQaChannelTransport,
   createQaGatewayChild,
   startQaBusServer,
-  type QaGatewayChild,
 } from "../../../../extensions/qa-lab/api.js";
 import type { Settings } from "../../../../src/agents/sessions/settings-storage.js";
 import { startOpenAiResponsesModelServer } from "../../../helpers/openai-responses-model-fixture.js";
@@ -31,8 +29,6 @@ const RUN_WAIT_MS = 100_000;
 const TEST_TIMEOUT_MS = RUN_WAIT_MS + 500_000;
 const SETTLED_TOOL_FINALIZATION_FALLBACK_TEXT =
   "The tool run finished, but no final summary was produced. I did not repeat any completed actions.";
-const SCREENSHOT_DIR = process.env.OPENCLAW_CRON_IDLE_TIMEOUT_FINALIZATION_SCREENSHOT_DIR?.trim();
-const PROOF_LABEL = process.env.OPENCLAW_PROOF_HEAD_SHA?.trim() || "local-checkout";
 const GATEWAY_ENTRY = process.env.OPENCLAW_CRON_IDLE_TIMEOUT_FINALIZATION_GATEWAY_ENTRY?.trim();
 
 type ProviderRequest = {
@@ -136,105 +132,12 @@ async function startControlledProvider() {
   return { baseUrl, requests, stop };
 }
 
-async function captureAutomationsScreenshots(
-  gateway: Pick<QaGatewayChild, "baseUrl" | "wsUrl" | "token">,
-  jobId: string,
-  outputDir: string,
-): Promise<string[]> {
-  const { chromium } = await import("playwright");
-  const browser = await chromium.launch();
-  const written: string[] = [];
-  try {
-    await fs.mkdir(outputDir, { recursive: true });
-    const viewport = { width: 1440, height: 1000 };
-    const context = await browser.newContext({
-      locale: "en-US",
-      recordVideo: { dir: outputDir, size: viewport },
-      viewport,
-    });
-    const page = await context.newPage();
-    const waitFor = (locator: Locator, timeout = 60_000) =>
-      locator.waitFor({ timeout }).catch(() => undefined);
-    // Native-shell auth avoids an interactive pairing prompt.
-    await page.addInitScript(
-      (auth) => {
-        Object.assign(window, { __OPENCLAW_NATIVE_CONTROL_AUTH__: auth });
-      },
-      {
-        gatewayUrl: gateway.wsUrl,
-        token: gateway.token,
-        client: {
-          id: "openclaw-control-ui",
-          mode: "webchat",
-          platform: "linux",
-          deviceFamily: "desktop",
-          scopes: ["admin", "approvals", "questions", "read", "write"].map(
-            (scope) => `operator.${scope}`,
-          ),
-        },
-      },
-    );
-    const capture = async (name: string) => {
-      const file = path.join(outputDir, `${PROOF_LABEL}-${name}.png`);
-      await page.screenshot({ path: file, fullPage: true });
-      written.push(file);
-    };
-    await page.goto(`${gateway.baseUrl}/automations?job=${encodeURIComponent(jobId)}`, {
-      waitUntil: "domcontentloaded",
-      timeout: 60_000,
-    });
-    const exitSetup = page.getByRole("button", { name: /exit setup/i });
-    if (await exitSetup.isVisible({ timeout: 5_000 }).catch(() => false)) {
-      await exitSetup.click();
-    }
-    await waitFor(page.getByText(JOB_NAME).first());
-    await sleep(3_000);
-    await capture("automations-job");
-    // The job route opens on Settings; the run outcome lives under Run history.
-    const historyTab = page.getByRole("tab", { name: /run history/i }).first();
-    const historyText = page.getByText(/^Run history$/i).first();
-    const history = (await historyTab.isVisible().catch(() => false)) ? historyTab : historyText;
-    if (await history.isVisible().catch(() => false)) {
-      await history.click().catch(() => undefined);
-      await sleep(3_000);
-      await waitFor(page.locator(".cron-run-entry").first(), 30_000);
-      await sleep(1_000);
-      await capture("automations-run-history");
-    }
-    // Closing the context finalizes the recording.
-    const video = page.video();
-    await context.close();
-    const recordedPath = await video?.path();
-    if (recordedPath) {
-      const videoFile = path.join(outputDir, `${PROOF_LABEL}-automations.webm`);
-      await fs.rename(recordedPath, videoFile);
-      written.push(videoFile);
-    }
-  } finally {
-    await browser.close();
-  }
-  return written;
-}
-
 it.runIf(process.env.OPENCLAW_CRON_IDLE_TIMEOUT_FINALIZATION_PROOF === "1")(
   "Gateway cron idle-timeout finalization product proof records a stalled post-tool run as failed instead of announcing the fallback summary",
   { timeout: TEST_TIMEOUT_MS },
   async () => {
-    const startedAt = Date.now();
-    let phase = "provider";
-    const heartbeat = setInterval(() => {
-      console.log(
-        JSON.stringify({
-          phase: "proof-heartbeat",
-          step: phase,
-          elapsedMs: Date.now() - startedAt,
-        }),
-      );
-    }, 20_000);
-    cleanups.push(async () => clearInterval(heartbeat));
     const provider = await startControlledProvider();
     cleanups.push(() => provider.stop());
-    phase = "gateway-start";
     const busState = createQaBusState();
     const transport = createQaChannelTransport(busState);
     const bus = await startQaBusServer({ state: busState });
@@ -255,7 +158,7 @@ it.runIf(process.env.OPENCLAW_CRON_IDLE_TIMEOUT_FINALIZATION_PROOF === "1")(
       alternateModel: MODEL_REF,
       transport,
       transportBaseUrl: bus.baseUrl,
-      controlUiEnabled: Boolean(SCREENSHOT_DIR),
+      controlUiEnabled: false,
       onListening: ({ runtimeEnv }) => {
         const stateDir = runtimeEnv.OPENCLAW_STATE_DIR;
         if (!stateDir) {
@@ -286,9 +189,7 @@ it.runIf(process.env.OPENCLAW_CRON_IDLE_TIMEOUT_FINALIZATION_PROOF === "1")(
       },
     });
 
-    phase = "transport-ready";
     await transport.waitReady({ gateway });
-    phase = "cron";
     const added = (await gateway.call(
       "cron.add",
       {
@@ -311,7 +212,6 @@ it.runIf(process.env.OPENCLAW_CRON_IDLE_TIMEOUT_FINALIZATION_PROOF === "1")(
     const outboundBefore = busState
       .getSnapshot()
       .messages.filter((message) => message.direction === "outbound").length;
-    const logMark = gateway.markLogs();
     const triggered = (await gateway.call(
       "cron.run",
       { id: added.id, mode: "force" },
@@ -337,13 +237,7 @@ it.runIf(process.env.OPENCLAW_CRON_IDLE_TIMEOUT_FINALIZATION_PROOF === "1")(
     const job = (await gateway.call("cron.get", { id: added.id }, { timeoutMs: 10_000 })) as {
       state?: Record<string, unknown>;
     };
-    const { lastRunStatus, lastDeliveryStatus, lastError } = job.state ?? {};
-    const gatewayLogs = gateway
-      .readLogsSince(logMark)
-      .split("\n")
-      .filter((line) => /settled|idle timeout|fallback|cron/i.test(line))
-      .map((line) => line.trim())
-      .filter(Boolean);
+    const { lastRunStatus } = job.state ?? {};
     const noteExists = await fs
       .access(path.join(gateway.workspaceDir, NOTE_FILE))
       .then(() => true)
@@ -356,33 +250,6 @@ it.runIf(process.env.OPENCLAW_CRON_IDLE_TIMEOUT_FINALIZATION_PROOF === "1")(
       .messages.filter((message) => message.direction === "outbound")
       .slice(outboundBefore)
       .map((message) => ({ conversation: message.conversation, text: message.text }));
-
-    phase = "screenshots";
-    const screenshots = SCREENSHOT_DIR
-      ? await captureAutomationsScreenshots(gateway, added.id, SCREENSHOT_DIR)
-      : [];
-
-    const proof = {
-      phase: "cron-idle-timeout-finalization-proof",
-      head: process.env.OPENCLAW_PROOF_HEAD_SHA ?? process.env.GITHUB_SHA ?? "local-checkout",
-      providerIdleTimeoutSeconds: PROVIDER_IDLE_TIMEOUT_SECONDS,
-      providerMaxRetries: PROVIDER_MAX_RETRIES,
-      cronRunTrigger: triggered,
-      providerRequests: provider.requests.map((request) => ({
-        seq: request.seq,
-        kind: request.kind,
-        ...(request.clientClosedAt !== undefined
-          ? { clientClosedAfterMs: request.clientClosedAt - request.startedAt }
-          : {}),
-      })),
-      settledWriteLanded: noteExists,
-      announcedToChannel: announced,
-      screenshots,
-      cronRun: entry ?? null,
-      jobState: { lastRunStatus, lastDeliveryStatus, lastError },
-      gatewayLogs,
-    };
-    console.log(JSON.stringify(proof, null, 2));
 
     expect(entry, "cron run never finished").toBeDefined();
     expect(noteExists).toBe(true);

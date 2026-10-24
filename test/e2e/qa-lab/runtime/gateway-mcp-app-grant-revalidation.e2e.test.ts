@@ -305,20 +305,6 @@ it(
         expect(afterRejectedPin.widgets.map((widget) => widget.name)).toEqual(["bob-control"]);
         expect(boardEvents).toEqual([]);
         expect(await readExecutedMarkers(eventPath)).toEqual(markersBefore);
-        console.info(
-          "[mcp-board-requester-proof]",
-          JSON.stringify({
-            distinctAuthenticatedProfiles: aliceId !== bobId,
-            bobScopes: bobHello.auth?.scopes,
-            bobControlWidget: control.resolvedWidgetName,
-            revisionBefore: control.revision,
-            revisionAfterRejectedPin: afterRejectedPin.revision,
-            widgetsAfterRejectedPin: afterRejectedPin.widgets.map((widget) => widget.name),
-            publishedEventsAfterRejectedPin: boardEvents.length,
-            toolCallsAfterRejectedPin:
-              (await readExecutedMarkers(eventPath)).length - markersBefore.length,
-          }),
-        );
         const pinned = (await alice.request("board.widget.put", {
           sessionKey,
           name: "grant-proof",
@@ -333,14 +319,6 @@ it(
         expect(
           boardEvents.map((event) => (isRecord(event.payload) ? event.payload.widget : undefined)),
         ).toEqual(["grant-proof"]);
-        console.info(
-          "[mcp-board-requester-proof]",
-          JSON.stringify({
-            alicePinnedWidget: widget.name,
-            grantState: widget.grantState,
-            publishedEventsAfterAlicePin: boardEvents.length,
-          }),
-        );
         const widgetRef = {
           sessionKey,
           name: widget.name,
