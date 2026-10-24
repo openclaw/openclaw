@@ -172,6 +172,7 @@ export async function readBoundedResponseText(response, label, maxBytes, options
   return new TextDecoder().decode(bytes);
 }
 
+/** @param {unknown} value @param {string} fallbackMessage @returns {Error} */
 export function toLintErrorObject(value, fallbackMessage) {
   if (value instanceof Error) {
     return value;
@@ -181,7 +182,16 @@ export function toLintErrorObject(value, fallbackMessage) {
   }
   const error = new Error(fallbackMessage, { cause: value });
   if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
+    for (const key of Reflect.ownKeys(value)) {
+      if (!Reflect.getOwnPropertyDescriptor(value, key)?.enumerable) {
+        continue;
+      }
+      // Preserve getter order and failures, but never call the prototype setter.
+      const detail = Reflect.get(value, key);
+      if (key !== "__proto__") {
+        Object.assign(error, { [key]: detail });
+      }
+    }
   }
   return error;
 }

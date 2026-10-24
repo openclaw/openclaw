@@ -80,6 +80,25 @@ beforeEach(() => {
 });
 
 describe("retryAsync", () => {
+  it("retains Error identity and attempt history for parsed structured failures", async () => {
+    const first = new Error("first failure");
+    const terminal: unknown = JSON.parse(
+      '{"__proto__":{"tag":"fixture"},"code":"E_UPSTREAM","status":503}',
+    );
+    const operation = vi.fn().mockRejectedValueOnce(first).mockRejectedValueOnce(terminal);
+    const failure: unknown = await retryAsync(operation, {
+      attempts: 2,
+      minDelayMs: 0,
+      maxDelayMs: 0,
+    }).catch((error: unknown) => error);
+
+    expect(failure instanceof Error).toBe(true);
+    expect(Object.getPrototypeOf(failure) === Error.prototype).toBe(true);
+    expect(failure).toMatchObject({ code: "E_UPSTREAM", status: 503, cause: terminal });
+    expect(getRetryAttemptErrors(failure)).toEqual([first, terminal]);
+    expect(operation).toHaveBeenCalledTimes(2);
+  });
+
   it.each<NumberRetryCase>([
     {
       name: "returns on first success",
