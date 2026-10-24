@@ -77,35 +77,28 @@ describe("gh-read helpers", () => {
     );
   });
 
-  it("aborts stalled GitHub API fetches at the request timeout", async () => {
+  it.each(["fetch", "body"])("aborts a stalled GitHub API %s at the deadline", async (phase) => {
     let signal: AbortSignal | undefined;
     const fetchStarted = createDeferred();
-
+    const cancel = vi.fn();
     vi.useFakeTimers();
     const request = githubJson("/app", "token", undefined, {
       timeoutMs: 5,
-      fetchImpl: ((_url, init) => {
+      fetchImpl: async (_url, init) => {
         signal = init?.signal ?? undefined;
         fetchStarted.resolve();
-        return new Promise(() => {});
-      }) as typeof fetch,
+        return phase === "fetch"
+          ? new Promise<Response>(() => {})
+          : streamed({ pull: () => new Promise(() => {}), cancel });
+      },
     });
     await fetchStarted.promise;
     await expectTimeout(request, /GitHub API GET \/app exceeded timeout/u);
     expect(signal?.aborted).toBe(true);
-  });
-
-  it("times out stalled GitHub API response body reads", async () => {
-    const cancel = vi.fn();
-    vi.useFakeTimers();
-    const response = streamed({ pull: () => new Promise(() => {}), cancel });
-    const request = githubJson("/app/installations", "token", undefined, {
-      timeoutMs: 5,
-      fetchImpl: (() => Promise.resolve(response)) as typeof fetch,
-    });
-    await expectTimeout(request, /GitHub API GET \/app\/installations exceeded timeout/u);
-    await Promise.resolve();
-    expect(cancel).toHaveBeenCalled();
+    if (phase === "body") {
+      await Promise.resolve();
+      expect(cancel).toHaveBeenCalled();
+    }
   });
 
   it.each([

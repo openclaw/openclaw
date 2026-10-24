@@ -42,18 +42,12 @@ function fixture(present: boolean) {
   const git = (...args: string[]) =>
     execFileSync("git", ["-C", target, ...args], { encoding: "utf8" }).trim();
   git("init", "-q");
+  git("config", "core.hooksPath", "/dev/null");
+  git("config", "commit.gpgsign", "false");
+  git("config", "user.name", "Fixture");
+  git("config", "user.email", "fixture@example.invalid");
   git("add", ".");
-  git(
-    ...[
-      "core.hooksPath=/dev/null",
-      "commit.gpgsign=false",
-      "user.name=Fixture",
-      "user.email=fixture@example.invalid",
-    ].flatMap((setting) => ["-c", setting]),
-    "commit",
-    "-qm",
-    "recipe fixture\n\nCo-authored-by: RomneyDa <6581799+RomneyDa@users.noreply.github.com>",
-  );
+  git("commit", "-qm", "recipe fixture");
   const sha = git("rev-parse", "HEAD");
   const env = {
     HARNESS_ROOT_DIR: repo,
@@ -63,7 +57,7 @@ function fixture(present: boolean) {
     OPENCLAW_ALLOW_FROZEN_TARGET_SCENARIO_OMISSIONS: "1",
   };
   const select = (extra = {}) => run(root, "bash", ["-c", selection], { ...env, ...extra });
-  return { root, target, select, sha };
+  return { root, target, select };
 }
 
 function recipe(mode: string) {
@@ -72,12 +66,11 @@ function recipe(mode: string) {
   return resolveUpgradeSurvivorConfigStepsForBaseline("base", "2026.9.6");
 }
 
-function checkSearch(root: string, accepted: boolean, toolSearch: unknown, stage = "survival") {
+function checkSearch(root: string, toolSearch: unknown, stage = "survival") {
   const config = join(root, "config.json");
   const coverage = join(root, "coverage.json");
   io.writeJson(config, { tools: { toolSearch } });
-  // Isolate this assertion's input; recipe coverage retention is checked separately.
-  io.writeJson(coverage, { acceptedIntents: accepted ? ["tool-search"] : [] });
+  io.writeJson(coverage, { acceptedIntents: ["tool-search"] });
   return run(
     root,
     process.execPath,
@@ -107,10 +100,11 @@ describe.skipIf(process.platform === "win32")("frozen survivor Tool Search recip
     const newRecipe = recipe("current");
     expect(newRecipe).toContainEqual(expect.objectContaining({ intent: "tool-search" }));
     expect(oldRecipe).toEqual(newRecipe.filter(({ id }) => id !== "tools-tool-search"));
-    const legacySearch = { mode: "code", codeTimeoutMs: 5000 };
-    expect(checkSearch(newer.root, true, legacySearch, "baseline").status).toBe(0);
+    expect(checkSearch(newer.root, { mode: "code", codeTimeoutMs: 5000 }, "baseline").status).toBe(
+      0,
+    );
     for (const value of [{ mode: "tools", enabled: false }, undefined]) {
-      expect(checkSearch(newer.root, true, value).status).not.toBe(0);
+      expect(checkSearch(newer.root, value).status).not.toBe(0);
     }
   });
 
