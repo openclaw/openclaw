@@ -9,6 +9,7 @@ import { SessionManager } from "../../sessions/session-manager.js";
 import { MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES } from "../../workspace-bootstrap-read.js";
 import { prepareEmbeddedAttemptBootstrap } from "./attempt-bootstrap-prepare.js";
 import { createAttemptSetupFixture } from "./attempt-setup.test-support.js";
+import { buildAttemptSystemPrompt } from "./attempt-system-prompt.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
 const addedTempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -56,6 +57,33 @@ describe("prepareEmbeddedAttemptBootstrap", () => {
       isRawModelRun: options.isRawModelRun ?? false,
     });
   }
+
+  it.each(["Write the requested deliverable.", "Commit changes after completing requested edits."])(
+    "keeps Git workflow in workspace instructions, not bootstrap reminders: %s",
+    async (instructions) => {
+      const workspace = await makeWorkspace("commit-policy", {
+        "AGENTS.md": instructions,
+        "BOOTSTRAP.md": "Finish the workspace setup.",
+      });
+      const bootstrap = await prepare(workspace);
+      const { systemPrompt } = await buildAttemptSystemPrompt({
+        isRawModelRun: false,
+        transformSystemPrompt: (prompt) => prompt,
+        embeddedSystemPrompt: {
+          workspaceDir: workspace,
+          contextFiles: bootstrap.contextFiles,
+          workspaceNotes: bootstrap.workspaceNotes,
+          bootstrapMode: bootstrap.bootstrapMode,
+        },
+      });
+
+      expect(systemPrompt).toContain(instructions);
+      expect(systemPrompt).toContain("Finish the workspace setup.");
+      expect(systemPrompt).not.toContain(
+        "Reminder: commit your changes in this workspace after edits.",
+      );
+    },
+  );
 
   it.each([
     ["always", false, true, "default", "full", "none", false, true],

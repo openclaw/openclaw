@@ -154,6 +154,10 @@ left untouched. Partial Git metadata or a linked worktree whose metadata is miss
 still blocks Git operations with checkout-preservation guidance; repair the original
 repository metadata before retrying.
 
+Having `BOOTSTRAP.md` in the workspace does not instruct the agent to commit
+edits. Set your preferred Git workflow in `AGENTS.md` or ask for a commit as part
+of the task.
+
 Run these steps on the machine where the Gateway runs (that is where the workspace lives).
 
 <Steps>
