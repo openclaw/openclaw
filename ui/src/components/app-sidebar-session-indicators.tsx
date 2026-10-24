@@ -18,7 +18,7 @@ import {
   TeamSessionSlots,
   SessionRowBadges,
 } from "./solid/session-presentation.tsx";
-import { EMPTY_VIEWER_IDENTITIES } from "./viewer-facepile.ts";
+import { EMPTY_VIEWER_IDENTITIES } from "./solid/viewer-facepile.tsx";
 import "./tooltip.ts";
 /** Compose independently owned session state and context indicators. */
 export function renderSidebarSessionIndicators(

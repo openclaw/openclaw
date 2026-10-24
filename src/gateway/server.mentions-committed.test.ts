@@ -4,7 +4,6 @@ import { expect, it } from "vitest";
 import { writeOpenAiResponsesText } from "../../test/helpers/openai-responses-sse.js";
 import { TEST_TLS_CERT_PEM, TEST_TLS_KEY_PEM } from "../../test/helpers/tls-fixture.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
-import { areHeartbeatsEnabled, setHeartbeatsEnabled } from "../infra/heartbeat-wake.js";
 import { setDisplayName, setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -34,9 +33,6 @@ it("delivers a committed human mention once through authenticated chat.send", as
     prepareProfileCatalog: true,
   });
   await using cleanup = new AsyncDisposableStack();
-  const heartbeatsEnabled = areHeartbeatsEnabled();
-  cleanup.defer(() => setHeartbeatsEnabled(heartbeatsEnabled));
-  setHeartbeatsEnabled(false);
   cleanup.defer(() => state.cleanup());
   const alice = ensureProfileForEmail("alice@committed-mention.example.test");
   const bob = ensureProfileForEmail("bob@committed-mention.example.test");

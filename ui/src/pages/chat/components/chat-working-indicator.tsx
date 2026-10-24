@@ -8,7 +8,7 @@ import { currentThemeBranding, subscribeThemeBranding } from "../../../app/theme
 import { ElapsedTime } from "../../../components/elapsed-time.tsx";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { ThemeBrandIcon } from "../../../components/theme-brand-icon.tsx";
-import "../../../components/working-phrase.ts";
+import "../../../components/working-phrase-solid.tsx";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import type { ChatItem } from "../../../lib/chat/chat-types.ts";
 import { formatDurationLong } from "../../../lib/format-duration.ts";
@@ -19,7 +19,7 @@ import type { TurnRecap } from "../chat-progress.ts";
 import type { ChatSubagentWait } from "../chat-subagent-wait.ts";
 import { ChatRetryStatus } from "./chat-retry-status.tsx";
 import { ChatSubagentActivity } from "./chat-subagent-activity-lazy.tsx";
-import type { SubagentActivityProps } from "./chat-subagent-activity.ts";
+import type { SubagentActivityProps } from "./chat-subagent-activity.tsx";
 import { selectWorkingClawSurprise } from "./chat-working-indicator-surprise.ts";
 
 registerEnglishCatalog(registerChatSessionEnglish);
@@ -27,6 +27,7 @@ registerEnglishCatalog(registerChatSessionEnglish);
 type ReadingIndicator = Extract<ChatItem, { kind: "reading-indicator" }>;
 type ChatWorkingIndicatorOptions = {
   bubbleMode?: boolean;
+  bubbleActivityActive?: boolean;
   mascot?: ThemeMascot;
   workingIndicator?: ThemeWorkingIndicator;
   workingPhrases?: readonly string[];
@@ -113,7 +114,10 @@ function WorkingStatus(props: WorkingProps & { branding: ThemeBranding }) {
     >
       <Show
         when={
-          !continuation() && props.options.subagentActivity === undefined && indicator() !== "none"
+          !props.options.bubbleMode &&
+          !continuation() &&
+          props.options.subagentActivity === undefined &&
+          indicator() !== "none"
         }
       >
         <div
@@ -168,7 +172,7 @@ function WorkingStatus(props: WorkingProps & { branding: ThemeBranding }) {
           </Show>
           <ElapsedTime class="chat-working-indicator__elapsed" startMs={props.part.startedAt} />
         </Show>
-        <Show when={props.options.outputTokens == null && working()}>
+        <Show when={props.options.outputTokens == null && working() && !props.options.bubbleMode}>
           <openclaw-working-phrase
             aria-hidden="true"
             prop:startMs={props.part.startedAt}
@@ -198,13 +202,23 @@ function WorkingStatus(props: WorkingProps & { branding: ThemeBranding }) {
 
 export function ChatWorkingIndicator(props: WorkingProps) {
   const branding = projectBranding();
-  const working = () => !props.options.waitingApproval && !props.options.startupLabel;
+  const tasks = () => props.options.subagentActivity?.rows ?? [];
+  const taskCount = () => tasks().length || props.options.runningSubagents || 0;
+  const taskLabel = () =>
+    taskCount() === 1 && tasks()[0]
+      ? tasks()[0]!.activity || tasks()[0]!.label
+      : taskCount() > 0
+        ? t(taskCount() === 1 ? "chat.bubbleTaskOne" : "chat.bubbleTasks", {
+            count: String(taskCount()),
+          })
+        : "";
+  const attention = () => props.options.waitingApproval || props.options.retryAt !== undefined;
   return (
     <Show
-      when={props.options.waitingSubagents && props.options.subagentActivity !== undefined}
+      when={props.options.bubbleMode}
       fallback={
         <Show
-          when={props.options.bubbleMode && working() && !(props.options.runningSubagents ?? 0)}
+          when={props.options.waitingSubagents && props.options.subagentActivity !== undefined}
           fallback={
             <>
               <Show when={props.options.subagentActivity !== undefined}>
@@ -214,69 +228,103 @@ export function ChatWorkingIndicator(props: WorkingProps) {
             </>
           }
         >
-          <details class="chat-bubble-activity chat-bubble-activity--working">
-            <summary
-              class="chat-bubble-activity__summary"
-              aria-label={t("chat.view.workingDetails")}
-              title={t("chat.view.activityDetails")}
-            >
+          <ChatSubagentActivity
+            {...props.options.subagentActivity!}
+            fallback={
+              <WorkingStatus
+                part={props.part}
+                options={{ ...props.options, subagentActivity: undefined }}
+                branding={branding.read()}
+              />
+            }
+          />
+        </Show>
+      }
+    >
+      <Show when={!props.options.bubbleActivityActive}>
+        <details class="chat-bubble-activity chat-bubble-activity--working">
+          <summary
+            class="chat-bubble-activity__summary"
+            aria-label={
+              props.options.waitingApproval
+                ? t("chat.waitingForApproval")
+                : taskLabel() || t("chat.view.workingDetails")
+            }
+            title={t("chat.view.activityDetails")}
+          >
+            <Show when={!attention()}>
               <span class="chat-bubble-dots chat-bubble-dots--working" aria-hidden="true">
                 <span />
                 <span />
                 <span />
               </span>
-            </summary>
-            <div class="chat-bubble-activity__details">
-              <Show when={props.options.subagentActivity !== undefined}>
-                <ChatSubagentActivity {...props.options.subagentActivity!} />
-              </Show>
-              <WorkingStatus {...props} branding={branding.read()} />
-            </div>
-          </details>
-        </Show>
-      }
-    >
-      <ChatSubagentActivity
-        {...props.options.subagentActivity!}
-        fallback={
-          <WorkingStatus
-            part={props.part}
-            options={{ ...props.options, subagentActivity: undefined }}
-            branding={branding.read()}
-          />
-        }
-      />
+            </Show>
+            <Show
+              when={attention()}
+              fallback={
+                taskLabel() ? (
+                  <span class="chat-activity-group__label chat-activity-group__label--live">
+                    {taskLabel()}
+                  </span>
+                ) : undefined
+              }
+            >
+              <span class="chat-activity-group__label chat-activity-group__label--live">
+                <Show
+                  when={props.options.waitingApproval}
+                  fallback={<ChatRetryStatus retryAt={props.options.retryAt ?? null} />}
+                >
+                  {t("chat.waitingForApproval")}
+                </Show>
+              </span>
+            </Show>
+          </summary>
+          <div class="chat-bubble-activity__details">
+            <Show when={props.options.subagentActivity !== undefined}>
+              <ChatSubagentActivity {...props.options.subagentActivity!} />
+            </Show>
+            <WorkingStatus {...props} branding={branding.read()} />
+          </div>
+        </details>
+      </Show>
     </Show>
   );
 }
 
 export function TurnRecapRow(props: {
   recap: TurnRecap;
+  hideDuration?: boolean;
   presentation?: "standalone" | "continuation";
 }) {
   const branding = projectBranding();
   const duration = () =>
     formatDurationLong(Math.max(1, Math.round(props.recap.runtimeMs / 1_000)) * 1_000) ?? "";
   return (
-    <div
-      class={[
-        "chat-turn-recap",
-        { "chat-turn-recap--continuation": props.presentation === "continuation" },
-      ]}
-      role="status"
-    >
-      <Show when={props.presentation !== "continuation"}>
-        <span class="chat-turn-recap__claw" aria-hidden="true">
-          <BrandGlyph branding={branding.read()} claw="claw" />
-        </span>
-      </Show>
-      <Show when={typeof props.recap.outputTokens === "number"}>
-        <span>{outputTokensLabel(props.recap.outputTokens!)}</span>{" "}
-        <span class="chat-turn-recap__sep" aria-hidden="true">
-          ·
-        </span>{" "}
-      </Show>
-      <span>{t("chat.turnRecap.doneIn", { duration: duration() })}</span>
-    </div>
+    <Show when={!props.hideDuration || typeof props.recap.outputTokens === "number"}>
+      <div
+        class={[
+          "chat-turn-recap",
+          { "chat-turn-recap--continuation": props.presentation === "continuation" },
+        ]}
+        role="status"
+      >
+        <Show when={props.presentation !== "continuation"}>
+          <span class="chat-turn-recap__claw" aria-hidden="true">
+            <BrandGlyph branding={branding.read()} claw="claw" />
+          </span>
+        </Show>
+        <Show when={typeof props.recap.outputTokens === "number"}>
+          <span>{outputTokensLabel(props.recap.outputTokens!)}</span>
+          <Show when={!props.hideDuration}>
+            <span class="chat-turn-recap__sep" aria-hidden="true">
+              ·
+            </span>
+          </Show>
+        </Show>
+        <Show when={!props.hideDuration}>
+          <span>{t("chat.turnRecap.doneIn", { duration: duration() })}</span>
+        </Show>
+      </div>
+    </Show>
   );
 }

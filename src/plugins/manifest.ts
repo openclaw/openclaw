@@ -227,6 +227,30 @@ export function loadPluginManifest(
     return fail(`invalid plugin manifest categories: ${categories.error}`);
   }
 
+  const kind = parsePluginKind(raw.kind);
+  let contextEngineIds: string[] | undefined;
+  if (raw.contextEngineIds !== undefined) {
+    const kinds = Array.isArray(kind) ? kind : [kind];
+    if (
+      !kinds.includes("context-engine") ||
+      !Array.isArray(raw.contextEngineIds) ||
+      raw.contextEngineIds.length === 0 ||
+      raw.contextEngineIds.some(
+        (value) =>
+          typeof value !== "string" ||
+          !value.trim() ||
+          ["legacy", "none"].includes(value.trim().toLowerCase()),
+      )
+    ) {
+      return cacheResult({
+        ok: false,
+        error:
+          "contextEngineIds requires context-engine kind and a nonempty array of nonreserved engine IDs",
+        manifestPath,
+      });
+    }
+    contextEngineIds = [...new Set(normalizeTrimmedStringList(raw.contextEngineIds))];
+  }
   const requiresPlugins = normalizeTrimmedStringList(raw.requiresPlugins);
   const enabledByDefaultOnPlatforms = normalizeManifestPlatforms(raw.enabledByDefaultOnPlatforms);
   const legacyPluginIds = normalizeTrimmedStringList(raw.legacyPluginIds);
@@ -278,7 +302,8 @@ export function loadPluginManifest(
     ...(enabledByDefaultOnPlatforms.length > 0 ? { enabledByDefaultOnPlatforms } : {}),
     ...(legacyPluginIds.length > 0 ? { legacyPluginIds } : {}),
     ...(autoEnableWhenConfiguredProviders.length > 0 ? { autoEnableWhenConfiguredProviders } : {}),
-    kind: parsePluginKind(raw.kind),
+    kind,
+    ...(contextEngineIds ? { contextEngineIds } : {}),
     channels,
     channelAccountKeyPolicies: setupNormalizers.normalizeChannelAccountKeyPolicies(
       raw.channelAccountKeyPolicies,
@@ -301,7 +326,7 @@ export function loadPluginManifest(
       raw.modelIdNormalization,
       { ownedProviders: new Set(providers) },
     ),
-    providerEndpoints: modelProviderNormalizers.normalizeManifestProviderEndpoints(
+    providerEndpoints: capabilityNormalizers.normalizeManifestProviderEndpoints(
       raw.providerEndpoints,
     ),
     providerRequest: modelProviderNormalizers.normalizeManifestProviderRequest(

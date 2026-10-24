@@ -13,8 +13,8 @@ import { chooseSidebarOwner, closeSidebarMenu } from "./sidebar-session-menu.tes
 const suite = createChatFlowE2eSuite();
 
 suite.define(() => {
-  it("keeps person cards independent of Involving me while the sidebar stays filtered", async () => {
-    await suite.withPage(
+  it("keeps person cards independent of Involving me while the sidebar stays filtered", async () =>
+    suite.withPage(
       { viewport: { width: 1280, height: 900 }, colorScheme: "dark" },
       async ({ page }) => {
         const selected = "agent:main:shared-design";
@@ -95,6 +95,5 @@ suite.define(() => {
         await expectBrowser(sessionList.locator(`[data-session-key="${selected}"]`)).toBeVisible();
         await expectBrowser(personalRow).toHaveCount(0);
       },
-    );
-  });
+    ));
 });

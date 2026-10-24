@@ -3,7 +3,6 @@ import type { ConfigWriteOptions } from "../../config/io.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { persistProviderAuthProfilesAfterLogin } from "../../plugins/provider-auth-persistence.js";
 import type { ProviderAuthResult } from "../../plugins/types.js";
-import type { RuntimeEnv } from "../../runtime.js";
 import type { runModelsAuthLoginFlowCore } from "./auth.js";
 
 type PersistProviderAuthCall = Parameters<typeof persistProviderAuthProfilesAfterLogin>[0];
@@ -13,27 +12,24 @@ type PreparedEffect = Pick<PersistProviderAuthCall, "beforeWrite" | "profiles"> 
 
 export function registerModelsAuthAuthorityTests(fixture: {
   mocks: {
-    createClackPrompter: Mock;
     persistProviderAuthProfilesAfterLogin: Mock;
     promoteAuthProfileInOrder: Mock;
     updateConfig: Mock;
   };
-  createRuntime: () => RuntimeEnv;
-  runModelsAuthLoginFlowCore: typeof runModelsAuthLoginFlowCore;
+  loginFlow: (
+    options: Partial<Parameters<typeof runModelsAuthLoginFlowCore>[0]>,
+  ) => ReturnType<typeof runModelsAuthLoginFlowCore>;
   setProviderAuthResult: (result: ProviderAuthResult) => void;
 }) {
-  const { mocks, createRuntime, runModelsAuthLoginFlowCore } = fixture;
+  const { mocks, loginFlow } = fixture;
   function loginAuthority() {
     const authority = new AbortController();
     return {
       revoke: () => authority.abort(new Error("Login authority ended.")),
       reject: (options: Partial<Parameters<typeof runModelsAuthLoginFlowCore>[0]> = {}) =>
         expect(
-          runModelsAuthLoginFlowCore({
-            provider: "openai",
+          loginFlow({
             credentialOnly: true,
-            runtime: createRuntime(),
-            prompter: mocks.createClackPrompter(),
             assertCurrent: () => authority.signal.throwIfAborted(),
             ...options,
           }),

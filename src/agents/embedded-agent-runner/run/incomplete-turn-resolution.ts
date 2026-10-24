@@ -289,6 +289,9 @@ export const YIELD_DIAGNOSTIC_TEXT =
 export const TRUNCATED_REPLY_NOTICE_TEXT =
   "⚠️ Reply truncated at the model's output token limit. The text above is partial — ask to continue it.";
 
+export const CUT_OFF_SUMMARY_NOTICE_TEXT =
+  "⚠️ The model was cut off at its output token limit, so the summary above was written afterwards without tools. Some work may be unfinished — check before relying on it.";
+
 /**
  * Marks replay invalid whenever the recorded attempt might not be safe to
  * replay or the current run ended in a compaction/incomplete-turn state that

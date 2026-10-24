@@ -1,5 +1,6 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import type { OpenClawPluginServiceContextV2 } from "openclaw/plugin-sdk/plugin-entry";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import {
   createPluginStateKeyedStoreV2ForTests,
@@ -10,7 +11,7 @@ import type {
   SessionCatalogHost,
   SessionCatalogTranscriptItem,
 } from "openclaw/plugin-sdk/session-catalog";
-import type { ActiveSessionCatalog } from "openclaw/plugin-sdk/session-catalog-runtime";
+import * as sessionCatalogRuntime from "openclaw/plugin-sdk/session-catalog-runtime";
 import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, assert, vi } from "vitest";
@@ -25,6 +26,7 @@ import {
 } from "./types.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+afterEach(() => vi.restoreAllMocks());
 export function beamTestHandler(
   store: BeamStore,
   options: Partial<Parameters<typeof createBeamRequestHandler>[0]> = {},
@@ -70,13 +72,34 @@ export function persistentBeamTestStore(pluginId = "beam") {
 }
 
 export const beamTestNow = Date.parse("2026-07-27T12:00:00.000Z");
-export const beamTestLogger = { warn: () => {}, info: () => {}, error: () => {} };
+const beamTestLogger = { warn: () => {}, info: () => {}, error: () => {} };
+export function beamTestServiceContext(): OpenClawPluginServiceContextV2 {
+  return {
+    config: {},
+    stateDir: "/unused",
+    logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+    scheduler: createTestPluginServiceScheduler(),
+  };
+}
+
+export function beamTestBarrier() {
+  const started = createDeferred<void>();
+  const release = createDeferred<void>();
+  const run = vi.fn(async () => {
+    started.resolve();
+    await release.promise;
+  });
+  return { started: started.promise, release: release.resolve, run };
+}
+
 export type BeamTestSession = {
   threadId: string;
   name?: string;
   modelProvider?: string;
   recencyAt: number;
 };
+export const beamTestSessions = (ids: string[], recencyAt = beamTestNow): BeamTestSession[] =>
+  ids.map((threadId) => ({ threadId, recencyAt }));
 
 export function beamTestMirrorConfig(overrides: Record<string, unknown> = {}) {
   const mirror = {
@@ -102,7 +125,7 @@ export function createBeamTestCatalog(
     onRead?: (threadId: string) => unknown;
     processHomeFallbackAllowed?: boolean;
   } = {},
-): ActiveSessionCatalog {
+): sessionCatalogRuntime.ActiveSessionCatalog {
   const id = params.id ?? "claude";
   return {
     pluginId: id,
@@ -148,11 +171,15 @@ export function createBeamTestCatalog(
   };
 }
 
-type RunnerOptions = Parameters<typeof createBeamMirrorRunner>[0];
+type RunnerOptions = Parameters<typeof createBeamMirrorRunner>[0] & {
+  listCatalogs?: () => sessionCatalogRuntime.ActiveSessionCatalog[];
+};
 export function createBeamTestRunner({
   endpoint,
+  listCatalogs = () => [createBeamTestCatalog()],
   ...options
-}: Pick<RunnerOptions, "listCatalogs"> & Partial<RunnerOptions> & { endpoint?: string }) {
+}: Partial<RunnerOptions> & { endpoint?: string } = {}) {
+  vi.spyOn(sessionCatalogRuntime, "listActiveSessionCatalogs").mockImplementation(listCatalogs);
   return createBeamMirrorRunner({
     runtime: createBeamTestRuntime(beamTestMirrorConfig(endpoint ? { endpoint } : {})),
     logger: beamTestLogger,
@@ -202,8 +229,8 @@ export function beamMirrorTestFixture() {
         : "{}";
       return new Response(body, { status: response.status?.(payload) ?? 200 });
     });
+    vi.stubGlobal("fetch", fetchFn);
     return {
-      fetchFn: fetchFn as typeof fetch,
       logger,
       listCatalogs: () => [testCatalog],
       ...overrides,

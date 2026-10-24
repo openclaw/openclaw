@@ -27,17 +27,14 @@ import {
   persistRuns,
 } from "./cron-read.test-support.js";
 import {
+  expectCronReply as expectReply,
+  expectCronFailure as expectError,
+} from "./cron.validation.test-support.js";
+import {
   disposeSessionReadContexts,
   initializeSessionReadContext,
 } from "./sessions-read-cache.test-support.js";
 import type { GatewayClient, RespondFn } from "./types.js";
-
-function expectReply(respond: ReturnType<typeof vi.fn<RespondFn>>, payload: unknown) {
-  expect(respond).toHaveBeenCalledWith(true, payload, undefined);
-}
-function expectError(respond: ReturnType<typeof vi.fn<RespondFn>>, error: unknown) {
-  expect(respond).toHaveBeenCalledWith(false, undefined, error);
-}
 
 function expectNotFound(respond: ReturnType<typeof vi.fn<RespondFn>>, jobId: string) {
   expectError(respond, expect.objectContaining({ details: { code: "CRON_JOB_NOT_FOUND", jobId } }));

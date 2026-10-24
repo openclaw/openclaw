@@ -34,7 +34,11 @@ import type { InventoryRemovalRequest } from "../../lib/nodes/page-operations.ts
 import { prettifyPlatform } from "../../lib/platform-label.ts";
 import { t, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
 import { CapabilityChips } from "./capability-chips.tsx";
-import { deviceDesktopEnvironment, DeviceEntryMenu } from "./entry-menu.tsx";
+import {
+  deviceDesktopEnvironment,
+  DeviceEntryMenu,
+  PendingDeviceDecisions,
+} from "./entry-menu.tsx";
 import { HostStats } from "./host-stats.tsx";
 import { deviceIcon, DeviceTile, DeviceIdentityFacts } from "./view-shared.tsx";
 import type { DevicesProps } from "./view.types.ts";
@@ -89,7 +93,7 @@ export function DeviceInventoryContent(props: DevicesProps & { pending: boolean 
           title={
             props.connected && !props.canManagePairing ? t("devices.readOnly.pairingRequired") : ""
           }
-          disabled={!props.connected || !props.canManagePairing}
+          disabled={props.inventorySaving || !props.connected || !props.canManagePairing}
           onClick={() => props.onInventoryCleanup(stale().map(toRemovalRequest))}
         >
           <Icon name="trash" />{" "}
@@ -109,6 +113,11 @@ export function DeviceInventoryContent(props: DevicesProps & { pending: boolean 
   // Pending requests and unpaired presence render in their own sections, so
   // this section's empty state depends only on its own rows.
   const empty = () => groups().length === 0 && !gatewayPresence();
+  const groupedRows = (
+    <For each={groups()} keyed={(group) => group.key}>
+      {(group) => <InventoryGroup group={group()} devices={props} />}
+    </For>
+  );
   const deviceRows = (
     <>
       <Show when={gatewayPresence()}>
@@ -121,9 +130,7 @@ export function DeviceInventoryContent(props: DevicesProps & { pending: boolean 
       ) : empty() && (props.connected || props.devicesList) ? (
         <SettingsEmpty message={t("devices.inventory.empty")} />
       ) : (
-        <For each={groups()} keyed={(group) => group.key}>
-          {(group) => <InventoryGroup group={group()} devices={props} />}
-        </For>
+        groupedRows
       )}
     </>
   );
@@ -553,6 +560,8 @@ function TokenRow(props: {
   tokenSummary: DeviceTokenSummary;
   devices: DevicesProps;
 }) {
+  const disabled = () =>
+    props.devices.inventorySaving || !props.devices.connected || !props.devices.canManagePairing;
   const status = () =>
     props.tokenSummary.revokedAtMs ? t("devices.inventory.revoked") : t("devices.inventory.active");
   const scopes = createMemo(() => formatList(props.tokenSummary.scopes));
@@ -574,7 +583,7 @@ function TokenRow(props: {
         <div class="device-entry__token-actions">
           <button
             class="btn btn--sm"
-            disabled={!props.devices.connected || !props.devices.canManagePairing}
+            disabled={disabled()}
             onClick={() =>
               props.devices.onDeviceRotate(
                 props.device,
@@ -588,7 +597,7 @@ function TokenRow(props: {
           {props.tokenSummary.revokedAtMs ? undefined : (
             <button
               class="btn btn--sm danger"
-              disabled={!props.devices.connected || !props.devices.canManagePairing}
+              disabled={disabled()}
               onClick={() => props.devices.onDeviceRevoke(props.device.id, props.tokenSummary.role)}
             >
               {t("devices.inventory.revoke")}
@@ -685,20 +694,11 @@ function PendingDevice(props: {
         </span>
       </div>
       <div class="settings-row__control">
-        <button
-          class="btn btn--sm"
-          disabled={!props.devices.connected || !props.devices.canManagePairing}
-          onClick={() => props.devices.onDeviceApprove(props.req.requestId)}
-        >
-          {t("devices.inventory.approve")}
-        </button>
-        <button
-          class="btn btn--sm"
-          disabled={!props.devices.connected || !props.devices.canManagePairing}
-          onClick={() => props.devices.onDeviceReject(props.req.requestId)}
-        >
-          {t("devices.inventory.reject")}
-        </button>
+        <PendingDeviceDecisions
+          devices={props.devices}
+          requestId={props.req.requestId}
+          name={name()}
+        />
         <DeviceEntryMenu
           devices={props.devices}
           entry={{ name: name(), deviceId: props.req.deviceId }}

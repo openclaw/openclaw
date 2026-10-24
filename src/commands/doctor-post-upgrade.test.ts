@@ -36,6 +36,7 @@ vi.mock("../infra/clawhub-packages.js", async (importOriginal) => ({
 let root: string;
 beforeEach(async () => {
   root = await fs.mkdtemp(path.join(os.tmpdir(), "doctor-post-upgrade-"));
+  vi.stubEnv("OPENCLAW_STATE_DIR", root);
 });
 afterEach(async () => {
   vi.restoreAllMocks();
@@ -49,6 +50,7 @@ afterEach(async () => {
   expect(captureSqliteDatabaseAdmissions().map(({ location }) => location)).not.toContain(
     databasePath,
   );
+  vi.unstubAllEnvs();
 });
 
 async function writePluginFixture(params: {
@@ -123,7 +125,7 @@ function packageManifest(name: string, entry = "./dist/index.js") {
 }
 
 it("returns a structured finding when the installed plugin index is missing", async () => {
-  const report = await runPostUpgradeProbes({ stateDir: root });
+  const report = await runPostUpgradeProbes();
 
   expect(report.probesRun).toContain("plugin.index_unavailable");
   expectFinding(report, { level: "error", code: "plugin.index_unavailable" });
@@ -138,7 +140,7 @@ it("reports unreadable plugin packages as structured errors without losing JSON 
   });
   setLoggerOverride({ level: "silent", consoleLevel: "info", consoleStyle: "json" });
 
-  const report = await runPostUpgradeProbes({ stateDir: root });
+  const report = await runPostUpgradeProbes();
 
   expectFinding(report, {
     level: "error",
@@ -164,7 +166,7 @@ it.each([
 ])("rejects %s", async (_name, packageJsonRaw, message) => {
   vi.spyOn(process.stderr, "write").mockImplementation(() => true);
   await writePluginFixture({ id: "broken", packageJsonRaw, manifest: false });
-  expectFinding(await runPostUpgradeProbes({ stateDir: root }), {
+  expectFinding(await runPostUpgradeProbes(), {
     level: "error",
     code: "plugin.entry_unresolved",
     plugin: "broken",
@@ -182,7 +184,7 @@ it.each([
     packageJson: packageManifest(params.id, "./src/index.ts"),
     files: { "src/index.ts": "export default {};" },
   });
-  const report = await runPostUpgradeProbes({ stateDir: root });
+  const report = await runPostUpgradeProbes();
   expect(report.findings.find((f) => f.code === "plugin.entry_unresolved")).toMatchObject({
     level: "error",
     plugin: params.id,
@@ -203,7 +205,7 @@ it("flags a plugin whose manifest hash differs from the installed index", async 
     manifestHash: oldManifestHash,
   });
 
-  const report = await runPostUpgradeProbes({ stateDir: root });
+  const report = await runPostUpgradeProbes();
   const finding = report.findings.find((f) => f.code === "plugin.manifest_drift");
   expect(finding).toMatchObject({ level: "warn", plugin: "drifted" });
 });
@@ -242,7 +244,7 @@ describe("runPostUpgradeProbes — plugin.version_drift", () => {
         },
       });
 
-      const report = await runPostUpgradeProbes({ stateDir: root, updateChannel: channel });
+      const report = await runPostUpgradeProbes(channel);
 
       expectFinding(report, {
         code: "plugin.version_drift",
@@ -269,7 +271,7 @@ describe("runPostUpgradeProbes — plugin.version_drift", () => {
       },
     });
 
-    const report = await runPostUpgradeProbes({ stateDir: root });
+    const report = await runPostUpgradeProbes();
     expectFinding(report, {
       code: "plugin.version_drift",
       level: "warn",
@@ -287,7 +289,7 @@ it("reports a missing required manifest without a hash or changing the index", a
   const before = await readPersistedInstalledPluginIndex({ stateDir: root });
   await fs.unlink(manifestPath);
 
-  const report = await runPostUpgradeProbes({ stateDir: root });
+  const report = await runPostUpgradeProbes();
   expect(report.probesRun).toContain("plugin.manifest_unavailable");
   expectFinding(report, {
     level: "error",
@@ -318,7 +320,7 @@ it.each([true, false])(
     } else {
       await fs.mkdir(manifestPath);
     }
-    const report = await runPostUpgradeProbes({ stateDir: root });
+    const report = await runPostUpgradeProbes();
     expect(report.findings).toEqual(
       existed
         ? []

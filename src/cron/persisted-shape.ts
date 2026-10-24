@@ -7,6 +7,8 @@ import { asRecord } from "@openclaw/normalization-core/record-coerce";
 import { compileSafeRegex } from "../security/safe-regex.js";
 import { assertCronActiveHours } from "./active-hours.js";
 import { parseAbsoluteTimeMs } from "./parse.js";
+import { decodePluginCommandSchedule } from "./plugin-command-schedule.js";
+import { PLUGIN_COMMAND_SCHEDULE_MESSAGE } from "./plugin-command-schedule.types.js";
 import { isCronEventSchedule } from "./source-schedule.js";
 import { parseCronStreamSandboxTarget } from "./stream-sandbox-target.js";
 import type { CronJobState } from "./types.js";
@@ -45,6 +47,16 @@ function getInvalidCronJobStateTimestampField(state: unknown): string | undefine
 
 /** Rejects caller-authored state timestamps that cannot round-trip through Date and SQLite. */
 export function assertCronJobStateTimestamps(state: Partial<CronJobState>): void {
+  if (Object.hasOwn(state, "pluginCommandRuns")) {
+    throw new Error(
+      "cron state.pluginCommandRuns is private launch accounting and cannot be authored",
+    );
+  }
+  if (Object.hasOwn(state, "pluginCommandBinding")) {
+    throw new Error(
+      "cron state.pluginCommandBinding is private restart continuity and cannot be authored",
+    );
+  }
   const invalidField = getInvalidCronJobStateTimestampField(state);
   if (invalidField) {
     throw new Error(
@@ -59,6 +71,7 @@ type InvalidPersistedCronJobReason =
   | "missing-schedule"
   | "invalid-schedule"
   | "invalid-state"
+  | "invalid-plugin-command"
   | "invalid-execution-policy"
   | "unsatisfiable-schedule"
   | "invalid-trigger"
@@ -75,6 +88,13 @@ export function getInvalidPersistedCronJobReason(
   }
   if (getInvalidCronJobStateTimestampField(candidate.state)) {
     return "invalid-state";
+  }
+  if (candidate.pluginCommand !== undefined) {
+    try {
+      decodePluginCommandSchedule(candidate.pluginCommand);
+    } catch {
+      return "invalid-plugin-command";
+    }
   }
   if (candidate.idleOnly !== undefined && typeof candidate.idleOnly !== "boolean") {
     return "invalid-execution-policy";
@@ -212,6 +232,21 @@ export function getInvalidPersistedCronJobReason(
   }
   const payloadRecord = payload as Record<string, unknown>;
   const payloadKind = payloadRecord.kind;
+  if (payloadKind === "pluginCommand" || candidate.pluginCommand !== undefined) {
+    // Stored form `pluginCommand`; the decoded runtime form is the reserved agentTurn sentinel.
+    const stored =
+      payloadKind === "pluginCommand" &&
+      Object.keys(payloadRecord).every((key) => key === "kind" || key === "toolsAllow");
+    const decoded =
+      payloadKind === "agentTurn" && payloadRecord.message === PLUGIN_COMMAND_SCHEDULE_MESSAGE;
+    return candidate.pluginCommand !== undefined &&
+      (stored || decoded) &&
+      Array.isArray(payloadRecord.toolsAllow) &&
+      payloadRecord.toolsAllow.every((tool) => typeof tool === "string") &&
+      scheduleKind !== "event"
+      ? null
+      : "invalid-payload";
+  }
   if (
     payloadKind !== "systemEvent" &&
     payloadKind !== "agentTurn" &&

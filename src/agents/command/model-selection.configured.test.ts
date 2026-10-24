@@ -548,7 +548,9 @@ describe("command selection with session routing", () => {
         messageChannel: fixture.ctx.Provider,
         groupId: child.groupId,
         groupChannel: child.groupChannel,
-        ...(fixture.heartbeat ? { ...TURN_MODEL_OVERRIDE_REF, allowModelOverride: true } : {}),
+        ...(fixture.turnModelOverride
+          ? { ...TURN_MODEL_OVERRIDE_REF, allowModelOverride: true }
+          : {}),
       },
       pluginsEnabled: false,
       configuredThinkingCatalog: [],
@@ -565,7 +567,7 @@ describe("command selection with session routing", () => {
     expect(
       turnModelVerdict(
         { provider: selection.provider, model: selection.model },
-        fixture.locked ? "locked" : fixture.heartbeat ? "explicit" : undefined,
+        fixture.locked ? "locked" : fixture.turnModelOverride ? "explicit" : undefined,
       ),
     ).toEqual(fixture.expected.command);
   });

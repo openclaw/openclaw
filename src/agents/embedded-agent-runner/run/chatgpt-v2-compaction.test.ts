@@ -279,7 +279,6 @@ async function fixture(
       modelPrompt: prompt,
       transcriptPrompt: prompt,
       onFinalPromptText: () => {},
-      onSteeringAcknowledged: () => {},
       persistToolResultProjections: async () => {},
       withTranscriptWrite,
       runtimeOnly: false,

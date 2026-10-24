@@ -4,6 +4,8 @@ export type DefaultProactiveJobReceipt = {
   jobId: string;
   provisionedAtMs: number;
   phase: "pending" | "complete";
+  /** Original migration intent, retained until the cutover transfers ownership. */
+  heartbeatEnabled?: boolean;
   convertedJobIds?: string[];
 };
 

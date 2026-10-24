@@ -1,6 +1,6 @@
 import type { JSX } from "@solidjs/web";
 import { createMemo, Errored, For, Loading, Show } from "solid-js";
-import "../../../components/modal-dialog.ts";
+import "../../../components/modal-dialog.tsx";
 import { i18n } from "../../../i18n/index.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
 import { pathDisplayName } from "../../../lib/path-display.ts";

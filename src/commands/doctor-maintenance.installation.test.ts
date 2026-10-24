@@ -57,8 +57,10 @@ const mocks = vi.hoisted(() => ({
   confirm: vi.fn(),
   note: vi.fn(),
   health: vi.fn(async () => ({ outcome: "ready", healthy: true })),
-  suspend: vi.fn<typeof import("../daemon/schtasks.js").suspendScheduledTaskAutoStartForUpdate>(),
-  resume: vi.fn<typeof import("../daemon/schtasks.js").resumeScheduledTaskAutoStartAfterUpdate>(),
+  suspend:
+    vi.fn<typeof import("../daemon/schtasks-control.js").suspendScheduledTaskAutoStartForUpdate>(),
+  resume:
+    vi.fn<typeof import("../daemon/schtasks-control.js").resumeScheduledTaskAutoStartAfterUpdate>(),
 }));
 vi.mock("../daemon/service-process-membership.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../daemon/service-process-membership.js")>()),
@@ -87,8 +89,8 @@ vi.mock("@clack/prompts", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@clack/prompts")>()),
   confirm: mocks.confirm,
 }));
-vi.mock("../daemon/schtasks.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../daemon/schtasks.js")>()),
+vi.mock("../daemon/schtasks-control.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../daemon/schtasks-control.js")>()),
   suspendScheduledTaskAutoStartForUpdate: mocks.suspend,
   resumeScheduledTaskAutoStartAfterUpdate: mocks.resume,
 }));

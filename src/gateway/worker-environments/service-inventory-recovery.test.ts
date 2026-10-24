@@ -9,12 +9,66 @@ import {
   closeOpenClawStateDatabaseByPathAsync,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
+import { formatGatewayPendingCloseSteps } from "../restart-trace.js";
 import * as support from "./service.test-support.js";
 import { WorkerEnvironmentInventoryClosedError } from "./store-errors.js";
 import { createWorkerEnvironmentStore } from "./store.js";
 
 describe("worker inventory read-admission recovery", () => {
   support.setupWorkerEnvironmentServiceSuite();
+
+  it("releases queued reconciliation while retaining the admitted provider mutation", async () => {
+    const environment = await support.seedReady("shutdown-queued-reconcile");
+    const entered = createDeferred();
+    const remote = createDeferred();
+    const inspect = vi.fn(async () => ({ status: "active" as const }));
+    const service = support.createService(
+      support.createProvider({
+        inspect,
+        destroy: async () => {
+          entered.resolve();
+          await remote.promise;
+        },
+      }),
+    );
+    const mutation = service.destroy(environment.environmentId);
+    await entered.promise;
+    let reconciled = false;
+    const reconciliation = service
+      .reconcileEnvironment(environment.environmentId)
+      .catch(() => undefined)
+      .then(() => {
+        reconciled = true;
+      });
+    service.beginClose();
+    let stopped = false;
+    const stopping = service.stop().then(() => {
+      stopped = true;
+    });
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(reconciled).toBe(true);
+      expect(stopped).toBe(false);
+      const inventoryRead = vi.spyOn(support.testState.store, "get").mockImplementation(() => {
+        throw new WorkerEnvironmentInventoryClosedError();
+      });
+      try {
+        const pending = formatGatewayPendingCloseSteps();
+        expect(pending).toContain("environment=shutdown-queued-reconcile");
+        expect(pending).toContain("provider=fake");
+        expect(pending).toContain("step=destroy");
+      } finally {
+        inventoryRead.mockRestore();
+      }
+    } finally {
+      vi.useRealTimers();
+      remote.resolve();
+      await Promise.all([mutation, reconciliation, stopping]);
+    }
+    expect(inspect).not.toHaveBeenCalled();
+    expect(support.testState.store.get(environment.environmentId)?.state).toBe("destroyed");
+  });
 
   it("resumes reconciliation after a sealed database reopens, but keeps shutdown final", async () => {
     const record = await support.seedReady("recover-after-seal");
@@ -53,7 +107,7 @@ describe("worker inventory read-admission recovery", () => {
     support.testState.stateDb = openOpenClawStateDatabase({ path: stateDb.path });
     sharedHost = true;
     inspect.mockClear();
-    await service.reconcileOnce();
+    await service.reconcileEnvironment(record.environmentId);
     expect(inspect).toHaveBeenCalledOnce();
     expect(store.get(record.environmentId)?.sharedHost).toBe(true);
     expect(store.inventoryVersion()).toBeGreaterThan(originalVersion);

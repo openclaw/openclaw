@@ -4,8 +4,8 @@ import type { ControlUiSessionPullRequestCheckDetails } from "../../../../../src
 import { createDeferred } from "../../../../../test/helpers/promise.js";
 import { createGatewayHarness } from "../../../lib/session-pull-requests.test-support.ts";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
-import type { ChatCiDetailsElement } from "./chat-ci-details.ts";
-import "./chat-ci-details.ts";
+import type { ChatCiDetailsElement } from "./chat-ci-details.tsx";
+import "./chat-ci-details.tsx";
 
 const pullRequest = {
   owner: "example",

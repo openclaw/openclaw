@@ -250,8 +250,6 @@ export function prepareEmbeddedRunTerminal(input: {
     lastToolError: cleanYield ? undefined : attempt.lastToolError,
     config: runParams.config,
     isCronTrigger: runParams.trigger === "cron",
-    // A conversation's continuation keeps conversational silence and failure reporting.
-    isHeartbeatTrigger: runParams.trigger === "heartbeat" && !runParams.continuesConversation,
     sessionKey: runParams.sessionKey ?? runParams.sessionId,
     provider: input.activeErrorContext.provider,
     providerOwner: input.providerOwner,
@@ -362,7 +360,6 @@ export function prepareEmbeddedRunTerminal(input: {
     (attempt.toolMetas?.length ?? 0) === 0;
   const payloadsForVisibleCompletion = filterAgentRunTerminalPayloadsForPresentation({
     payloads: recoveredFinalAssistantPayloadsAfterPromptTimeout ?? payloadsWithToolMedia,
-    isHeartbeatTrigger: runParams.trigger === "heartbeat" && !runParams.continuesConversation,
   });
   const attemptToolSummary = buildTraceToolSummary(attempt);
   // Cron execution denials must not look like successful silent completions.

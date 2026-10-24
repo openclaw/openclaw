@@ -74,6 +74,7 @@ describe("worker placement idle suspension", () => {
     const isPlacementOperationInFlight = vi.fn(
       (sessionId: string) => options.isPlacementOperationInFlight?.(sessionId) ?? false,
     );
+    vi.spyOn(Date, "now").mockImplementation(() => nowMs);
     const idleSweep = createWorkerPlacementIdleSweep({
       placements,
       environments: harness.environments,
@@ -93,7 +94,6 @@ describe("worker placement idle suspension", () => {
         : {}),
       info,
       warn,
-      now: () => nowMs,
     });
     return { harness, idleSweep, profile, info, warn, isPlacementOperationInFlight };
   }

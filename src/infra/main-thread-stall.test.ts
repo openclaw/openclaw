@@ -63,12 +63,47 @@ describe("main-thread stall attribution", () => {
     expect(monitor.drain()).toEqual({ stalls: [], dropped: 0, delayMaxMs: 0 });
   });
 
+  it("restores same-name phases after nested work throws", () => {
+    const { monitor, elapse } = fixture();
+    const task = "gateway:rpc:sessions.list";
+    const failed = new Error("row preparation failed");
+    runWithMainThreadTask(task, () => {
+      runWithMainThreadTask(
+        task,
+        () => {
+          elapse(10);
+          expect(() =>
+            runWithMainThreadTask(
+              task,
+              () => {
+                expect(getMainThreadTaskName()).toBe(task);
+                elapse(300);
+                throw failed;
+              },
+              "agent-roster",
+            ),
+          ).toThrow(failed);
+          expect(getMainThreadTaskName()).toBe(task);
+          elapse(400);
+        },
+        "session-rows:select",
+      );
+    });
+    expect(getMainThreadTaskName()).toBeUndefined();
+    expect(monitor.drain()).toEqual({
+      stalls: [{ elapsedMs: 710, task: `${task}:session-rows:select`, taskMs: 400 }],
+      dropped: 0,
+      delayMaxMs: 710,
+    });
+  });
+
   it("keeps overlapping callers across waits and synchronous owner-context reentry", async () => {
     const { monitor, elapse } = fixture();
     const ownerContext = AsyncLocalStorage.snapshot();
     const ready = createDeferredCore();
     const first = runWithMainThreadTask("gateway:rpc:sessions.list", async () => {
       await ready.promise;
+      expect(getMainThreadTaskName()).toBe("gateway:rpc:sessions.list");
       runWithMainThreadTask(
         getMainThreadTaskName()!,
         () => {
@@ -79,6 +114,8 @@ describe("main-thread stall attribution", () => {
         },
         "session-rows:select",
       );
+      await Promise.resolve();
+      expect(getMainThreadTaskName()).toBe("gateway:rpc:sessions.list");
     });
     await runWithMainThreadTask("scheduler:maintenance:refresh", async () => {
       await Promise.resolve();

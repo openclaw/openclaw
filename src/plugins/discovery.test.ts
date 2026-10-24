@@ -1027,13 +1027,13 @@ describe("discoverOpenClawPlugins", () => {
       );
 
       const actualUid = (process as NodeJS.Process & { getuid: () => number }).getuid();
-      const result = discover({ ownershipUid: actualUid + 1 });
+      using _ = vi.spyOn(process, "getuid").mockReturnValue(actualUid + 1);
+      const result = discover();
       const shouldBlockForMismatch = actualUid !== 0;
       expect(result.candidates).toHaveLength(shouldBlockForMismatch ? 0 : 1);
-      const hasSuspiciousOwnershipDiagnostic = result.diagnostics.some((diagnostic) =>
-        diagnostic.message.includes("suspicious ownership"),
-      );
-      expect(hasSuspiciousOwnershipDiagnostic).toBe(shouldBlockForMismatch);
+      expect(
+        result.diagnostics.some(({ message }) => message.includes("suspicious ownership")),
+      ).toBe(shouldBlockForMismatch);
       if (shouldBlockForMismatch) {
         expect(result.diagnostics).toContainEqual(
           matchDiagnostic("suspicious ownership", { pluginId: "owner-mismatch" }),

@@ -2,6 +2,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import path from "node:path";
 import { getAgentWorkspaceAccess } from "../../agents/workspace-access.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { throwSettledAggregate } from "../../infra/error-graph-internal.js";
 import { observeOwnedDirectory } from "../../infra/owned-directory-observation.js";
 import { isPathInside } from "../../infra/path-guards.js";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
@@ -10,6 +11,7 @@ import { WorkerTaskPool } from "../../infra/worker-task-pool.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
+import { getOrCreatePromise } from "../../shared/lazy-promise.js";
 import type { readWorkspaceSkillStatusFacts } from "../discovery/status-files.js";
 import { resolveSkillDiscoveryLimits } from "../loading/skill-root-discovery.js";
 import type { SkillSnapshotProjectionInput } from "../loading/skill-snapshot-projection.js";
@@ -37,7 +39,6 @@ import {
   type SkillsWatcherParams,
 } from "./discovery-worker-input.js";
 import {
-  closeRemoteSkillsWatchersForAgent,
   closeRemoteSkillsWatchers,
   disposeRemoteSkillsWatcher,
   ensureRemoteSkillsWatcher,
@@ -57,8 +58,6 @@ const MAX_SOURCES = 128;
 type Source = {
   selection: SkillsDiscoverySourceSelection;
   workspaceDir: string;
-  agentIds: Set<string>;
-  unowned: boolean;
   environment: SkillsDiscoveryEnvironment;
   watch: boolean;
   dirty: boolean;
@@ -247,11 +246,7 @@ function scanDirtySources(): Promise<void> {
   return state.pending;
 }
 
-async function registerSource(
-  selection: SkillsDiscoverySourceSelection,
-  watch?: boolean,
-  agentId?: string,
-) {
+async function registerSource(selection: SkillsDiscoverySourceSelection, watch?: boolean) {
   if (state.closing) {
     await state.closing;
   }
@@ -281,8 +276,6 @@ async function registerSource(
         selection.kind === "planned"
           ? selection.plan.input.workspaceDir
           : selection.request.sourcePlan.workspaceDir,
-      agentIds: new Set(agentId ? [agentId] : []),
-      unowned: agentId === undefined,
       environment,
       watch: watch !== false,
       dirty: true,
@@ -292,11 +285,6 @@ async function registerSource(
   } else {
     // An opt-out read must not withdraw another consumer's passive observation.
     source.watch ||= watch !== false;
-    if (agentId) {
-      source.agentIds.add(agentId);
-    } else {
-      source.unowned = true;
-    }
     state.sources.delete(key);
     state.sources.set(key, source);
   }
@@ -339,27 +327,24 @@ export async function prepareSkillSourcePlan(
   }
   const input = captureSkillsSourcePlanInput(workspaceDir, options);
   const key = JSON.stringify(input);
-  let pending = state.plans.get(key);
-  if (!pending) {
-    if (state.plans.size >= MAX_SOURCES) {
-      state.plans.delete(state.plans.keys().next().value!);
-    }
-    pending = pool()
-      .run({ kind: "plan", input }, { timeoutMs: 120_000 })
-      .then((result) => {
-        if (result.kind !== "plan") {
-          throw new Error("Unexpected Skills source plan response");
-        }
-        return { plan: result.plan, input };
-      });
-    state.plans.set(key, pending);
-    void pending.catch(() => {
-      if (state.plans.get(key) === pending) {
-        state.plans.delete(key);
+  return getOrCreatePromise(
+    state.plans,
+    key,
+    () => {
+      if (state.plans.size >= MAX_SOURCES) {
+        state.plans.delete(state.plans.keys().next().value!);
       }
-    });
-  }
-  return pending;
+      return pool()
+        .run({ kind: "plan", input }, { timeoutMs: 120_000 })
+        .then((result) => {
+          if (result.kind !== "plan") {
+            throw new Error("Unexpected Skills source plan response");
+          }
+          return { plan: result.plan, input };
+        });
+    },
+    { cacheRejections: false },
+  );
 }
 
 export async function projectSkillSnapshot(
@@ -418,7 +403,6 @@ async function registerSkillsWatcher(params: SkillsWatcherParams) {
         plan: { input: captureSkillsSourcePlanInput(params.workspaceDir, params) },
       },
       params.config?.skills?.load?.watch,
-      params.agentId,
     );
   }
   const prepared = params.sourcePlan
@@ -430,7 +414,6 @@ async function registerSkillsWatcher(params: SkillsWatcherParams) {
     await ensureRemoteSkillsWatcher({
       watcherKey,
       workspaceDir: params.workspaceDir,
-      agentId: params.agentId,
       executionWorkspaceDir: split.workspaceExecutionWorkspaceDir,
       access: access!,
       sourcePlan: split.workspacePlan,
@@ -454,7 +437,6 @@ async function registerSkillsWatcher(params: SkillsWatcherParams) {
         : undefined,
     },
     params.config?.skills?.load?.watch,
-    params.agentId,
   );
 }
 
@@ -542,15 +524,10 @@ async function resetSkillsDiscoverySources(
     closeRemoteSkillsWatchers(),
   ])
     .then((results) => {
-      const failures = results.flatMap((result) =>
-        result.status === "rejected" ? [result.reason] : [],
-      );
       if (resetState) {
         resetSkillsRefreshStateForTest();
       }
-      if (failures.length) {
-        throw new AggregateError(failures, "Skills discovery shutdown failed");
-      }
+      throwSettledAggregate(results, "Skills discovery shutdown failed");
     })
     .finally(() => {
       state.closing = undefined;
@@ -560,19 +537,6 @@ async function resetSkillsDiscoverySources(
 
 export function closeSkillsWatchers(resetState = false): Promise<void> {
   return resetSkillsDiscoverySources(true, resetState);
-}
-
-export async function closeSkillsWatchersForAgent(params: { agentId: string }): Promise<void> {
-  for (const [key, source] of state.sources) {
-    if (!source.agentIds.delete(params.agentId) || source.agentIds.size || source.unowned) {
-      continue;
-    }
-    state.sources.delete(key);
-    closeSource(source);
-    bumpSkillsSnapshotVersion({ workspaceDir: source.workspaceDir, reason: "watch" });
-  }
-  state.plans.clear();
-  await closeRemoteSkillsWatchersForAgent(params);
 }
 
 export const detachSkillsWatchers = closeSkillsWatchers;

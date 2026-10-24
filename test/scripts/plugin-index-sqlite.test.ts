@@ -184,6 +184,48 @@ describe("plugin index SQLite E2E helpers", () => {
     expect(() => readPluginInstallIndex(options)).toThrow(expected);
   });
 
+  it.each([0, 12, 13])("bounds only required summary fields in schema v%s", async (schema) => {
+    const index = await loadPluginIndex();
+    const installRecords = { demo: { source: "npm", future: { values: [false, null, "keep"] } } };
+    const plugins = [
+      { pluginId: "disabled", enabled: false, rootDir: "/disabled" },
+      { pluginId: "enabled", enabled: true, rootDir: "/enabled" },
+      { pluginId: "missing" },
+      { pluginId: "null", enabled: null, rootDir: null },
+    ];
+    index.writePluginInstallIndexForE2E(
+      {
+        installRecords,
+        plugins: plugins.map((plugin) => ({ ...plugin, description: "x".repeat(300_000) })),
+        diagnostics: ["y".repeat(1024 * 1024)],
+      },
+      { ...options, storageMode: schema === 12 ? "pre-v13" : "current" },
+    );
+    withSqlite(root, (db) => db.exec(`PRAGMA user_version = ${schema}`));
+
+    expect(index.readPluginInstallIndex({ ...options, summary: true })).toEqual({
+      installRecords,
+      plugins,
+    });
+    expect(() => index.readPluginInstallIndex(options)).toThrow(/exceeded 1048576 bytes/u);
+  });
+
+  it.each(["receipts", "roots"])("retains the summary byte cap for required %s", async (field) => {
+    const index = await loadPluginIndex();
+    index.writePluginInstallIndexForE2E(
+      {
+        installRecords: { demo: { future: field === "receipts" ? "é".repeat(600_000) : "kept" } },
+        plugins: [
+          { pluginId: "demo", rootDir: field === "roots" ? "x".repeat(1024 * 1024) : "/demo" },
+        ],
+      },
+      options,
+    );
+    expect(() => index.readPluginInstallIndex({ ...options, summary: true })).toThrow(
+      "plugin index summary exceeded 1048576 bytes",
+    );
+  });
+
   it.each([
     { mode: "current", schemaVersion: 0, options: {}, current: true },
     { mode: "pre-v13", schemaVersion: 0, options: { storageMode: "pre-v13" }, current: false },

@@ -112,12 +112,13 @@ describe("config env vars", () => {
   });
 
   it("prepares updates and removals without mutating the target or rescanning per key", () => {
-    const env = { UPDATE_ME: "old", REMOVE_ME: "owned", KEEP_OVERRIDE: "ambient" };
+    const previousConfig = config({ UPDATE_ME: "old", REMOVE_ME: "owned", KEEP_OVERRIDE: "owned" });
+    const env: NodeJS.ProcessEnv = applied(previousConfig);
+    env.KEEP_OVERRIDE = "ambient";
     const prepared = prepareEnv({
-      previousConfig: config({ UPDATE_ME: "old", REMOVE_ME: "owned", KEEP_OVERRIDE: "owned" }),
+      previousConfig,
       nextConfig: config({ UPDATE_ME: "new" }),
       env,
-      previousOwnedEnv: { UPDATE_ME: "old", REMOVE_ME: "owned" },
     });
     expect(env).toEqual({ UPDATE_ME: "old", REMOVE_ME: "owned", KEEP_OVERRIDE: "ambient" });
     expect(prepared.env).toEqual({ UPDATE_ME: "new", KEEP_OVERRIDE: "ambient" });
@@ -175,10 +176,10 @@ describe("config env vars", () => {
   });
 
   it("retains live overrides during isolated loading and after publication", () => {
-    const env: NodeJS.ProcessEnv = { CONFIG_VALUE: "old" };
+    const previousConfig = config({ CONFIG_VALUE: "old" });
+    const env: NodeJS.ProcessEnv = applied(previousConfig);
     const stage = stageLoad({
-      previousConfig: config({ CONFIG_VALUE: "old" }),
-      previousOwnedEnv: { CONFIG_VALUE: "old" },
+      previousConfig,
       env,
     });
     stage.captureDotEnvBaseline();
@@ -232,12 +233,12 @@ describe("config env vars", () => {
     "rolls back Windows spelling unless concurrently renamed: %s",
     (concurrent) => {
       windows();
-      const env: NodeJS.ProcessEnv = { Config_Value: "old" };
+      const previousConfig = config({ Config_Value: "old" });
+      const env: NodeJS.ProcessEnv = applied(previousConfig);
       const prepared = prepareEnv({
-        previousConfig: config({ Config_Value: "old" }),
+        previousConfig,
         nextConfig: config({ CONFIG_VALUE: concurrent ? "new" : "old" }),
         env,
-        previousOwnedEnv: { Config_Value: "old" },
       });
       const rollback = prepared.publish();
       expect(env).toEqual({ CONFIG_VALUE: concurrent ? "new" : "old" });
@@ -307,7 +308,6 @@ describe("config env vars", () => {
       previousConfig,
       nextConfig: config({ [key]: "next" }),
       env,
-      previousOwnedEnv: ownedEnv,
     });
     expect(replacedLowerPrecedenceKeys).toEqual([key]);
     expect(ownedEnv).toEqual({ [key]: "shared" });

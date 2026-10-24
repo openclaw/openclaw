@@ -60,13 +60,29 @@ export function controlUiStableChunkName(id: string): string | undefined {
 
   switch (controlUiBootManifestKey(id)) {
     case "node_modules/@solidjs/signals/dist/prod/deferred.js":
-      // Only lazy resource consumers need this scheduler hook.
-      return "solid-deferred-runtime";
+      // Route readers share this hook below without adding it to eager Solid code.
+      return undefined;
     case "ui/src/lib/nodes/device-signing.runtime.ts":
       return "device-signing-runtime";
     case "ui/src/lib/device-pair-setup.ts":
       // Pairing loads on interaction; the earlier boot capture must not pull it into either route.
       return "device-pair-setup-runtime";
+    case "ui/src/lib/chat/emoji.ts":
+    case "node_modules/markdown-it-emoji/lib/data/full.mjs":
+      // Shortcode input owns the catalog; earlier boot captures must not keep it eager.
+      return "emoji-runtime";
+    case "ui/src/components/mascot-animator.ts":
+      // Only visible mascots request motion; stale boot captures must not keep it eager.
+      return "mascot-motion-runtime";
+    case "ui/src/components/emoji-search-panel.tsx":
+    case "ui/src/styles/emoji-search-panel.css":
+      return "emoji-search-panel";
+    case "ui/src/pages/chat/components/chat-composer-emoji-options.tsx":
+    case "ui/src/pages/chat/components/chat-composer-mention-menu-options.tsx":
+    case "ui/src/pages/chat/components/chat-composer-skill-menu-options.tsx":
+    case "ui/src/pages/chat/components/chat-composer-slash-menu-options.tsx":
+      // Share interaction-only rows without four separate preload-map entries.
+      return "composer-invocation-menus";
     case "ui/src/app/app-root-focus.ts":
     case "ui/src/app/app-root-focus-view.tsx":
       return "focus-dashboard-runtime";
@@ -77,8 +93,7 @@ export function controlUiStableChunkName(id: string): string | undefined {
       // Pending New Session previews must render while the Chat route entry waits.
       return "chat-route-entry";
     case "ui/src/i18n/locales/en-chat-composer.ts":
-    case "ui/src/i18n/locales/en-chat-session.ts":
-      // Share deferred English compression without combining either route's renderers.
+      // New Session shares composer copy; session copy stays with Chat's boot group.
       return "chat-english";
     case "ui/src/pages/devices/devices-page.tsx":
       return "devices-page";
@@ -95,7 +110,6 @@ export function controlUiStableChunkName(id: string): string | undefined {
     case "ui/src/components/copy-button-state.ts":
       // Login recovery also copies commands, before any Chat route can load.
       return "copy-button-runtime";
-    case "ui/src/components/login-gate.ts":
     case "ui/src/components/login-gate-solid.tsx":
     case "ui/src/components/login-gate-feedback.ts":
     case "ui/src/i18n/locales/en-login.ts":
@@ -127,20 +141,21 @@ export function controlUiStableChunkName(id: string): string | undefined {
     return `locale-namespace-${normalized.slice(resolvedLocaleNamespaceModulePrefix.length).replace("/", "-")}`;
   }
 
-  if (
-    normalized.endsWith("/ui/src/styles/chat/grouped.css") ||
-    normalized.endsWith("/ui/src/styles/chat/message-layout.css")
-  ) {
-    // Both routes load transcript styles; keep them outside the larger shared boot stylesheet.
-    return "chat-transcript-styles";
-  }
-
   // Code highlighting is requested by the first completed code block; it must
   // not share the parser/sanitizer chunk used by ordinary transcript prose.
   if (moduleIdIncludesPackage(id, "highlight.js")) {
     return "markdown-highlight-runtime";
   }
-  if (moduleIdIncludesPackage(id, "dompurify")) {
+  if (
+    moduleIdIncludesPackage(id, "dompurify") ||
+    moduleIdIncludesPackage(id, "markdown-it") ||
+    moduleIdIncludesPackage(id, "entities") ||
+    moduleIdIncludesPackage(id, "linkify-it") ||
+    moduleIdIncludesPackage(id, "mdurl") ||
+    moduleIdIncludesPackage(id, "punycode.js") ||
+    moduleIdIncludesPackage(id, "uc.micro")
+  ) {
+    // Keep the parser closure with its lazy consumers, outside stale shared boot captures.
     return "markdown-runtime";
   }
 
@@ -196,6 +211,10 @@ export function createControlUiCodeSplitting(options: { includeBootGroups?: bool
               if (route === "shared") {
                 // Plugin contributions can initialize after the New Session boot capture.
                 modules.add("ui/src/plugins/control-ui-actions.ts");
+                // Both routes read deferred resources; share their existing boot partition.
+                modules.add("node_modules/@solidjs/signals/dist/prod/deferred.js");
+                // Opened person cards share labels with New Session, not its composer chunk.
+                modules.add("ui/src/lib/platform-label.ts");
               }
               return {
                 name: `control-ui-boot-${route}`,
@@ -208,7 +227,7 @@ export function createControlUiCodeSplitting(options: { includeBootGroups?: bool
                 // modules can exceed the compressed-size budget after regrouping.
                 // Chat-only code can share a larger compression dictionary;
                 // shipped byte/request budgets still bound the output.
-                minSize: 128 * 1024,
+                minSize: (route === "chat" ? 384 : 128) * 1024,
                 maxSize: (route === "shared" ? 1280 : route === "chat" ? 1664 : 1408) * 1024,
               };
             }),

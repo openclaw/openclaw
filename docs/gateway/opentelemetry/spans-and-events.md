@@ -187,6 +187,10 @@ diagnostics-otel plugin converts them to metrics such as `openclaw.tokens` and
 `openclaw.cost.usd` and to `openclaw.model.usage` spans; those usage metrics
 and spans intentionally omit session identifiers.
 
+Completed memory-flush and Skill Workshop review inference records its own usage
+and available cost estimate. These internal runs do not add their usage to the
+foreground conversation's totals.
+
 For an external integration that needs session-correlated usage, query the
 authenticated Gateway instead:
 

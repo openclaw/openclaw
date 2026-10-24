@@ -33,7 +33,6 @@ import {
 import { captureRuntimeConfigAsyncReader } from "../io.js";
 import { copySqliteSessionOwnedStateForCanonicalRepair } from "./session-accessor.sqlite-canonical-repair.js";
 import { replaceSessionEntry } from "./session-accessor.sqlite-entry.js";
-import { readTranscriptMutationStateSync } from "./session-accessor.sqlite-metadata-read.js";
 import {
   findTranscriptEventInDatabase,
   loadTranscriptHeaderSync,
@@ -41,6 +40,7 @@ import {
   readTranscriptStatsSync,
 } from "./session-accessor.sqlite-read.js";
 import { loadTranscriptEventRowsAfterSeqInDatabase } from "./session-accessor.sqlite-transcript-incremental-read.js";
+import { readTranscriptMutationStateInTransaction } from "./session-accessor.sqlite-transcript-state.js";
 import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import { resolveSessionColdArchivePath } from "./session-cold-storage-codec.js";
 import { readSessionColdStorageInventory } from "./session-cold-storage-inventory.js";
@@ -372,7 +372,8 @@ it.each(["batch stats", "search", "mutation", "inventory"] as const)(
         "batch stats": () =>
           readTranscriptStatsBatchReadOnlySync([race.scope, ...missingScopes(race.scope, 10)]),
         search: () => searchSessionTranscripts({ ...race.scope, query: "Original" }),
-        mutation: () => readTranscriptMutationStateSync(race.scope),
+        mutation: () =>
+          readTranscriptMutationStateInTransaction(race.database, race.scope.sessionId),
         inventory: () => readSessionColdStorageInventory(race.database),
       }[kind];
       const original =

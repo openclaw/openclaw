@@ -281,7 +281,9 @@ describe("AppSidebar session source lifecycle", () => {
     sidebar.sidebarEntries = [`session:${key}`];
     await sidebar.updateComplete;
     const pinnedEntry = () =>
-      sidebar.querySelector(`.sidebar-rail [data-sidebar-entry="session:${key}"] a`);
+      sidebar.querySelector(
+        `[data-session-section="pinned"] [data-session-key="${key}"] .sidebar-recent-session__link`,
+      );
 
     expect(pinnedEntry()).not.toBeNull();
 
@@ -309,13 +311,10 @@ describe("AppSidebar session source lifecycle", () => {
     sidebar.onUpdateSidebarEntries = (entries) => {
       sidebar.sidebarEntries = entries;
     };
-    await sidebar.sidebarMenus.preloadMenuRenderer();
-    pinnedEntry()!.dispatchEvent(
-      new MouseEvent("contextmenu", { bubbles: true, cancelable: true }),
-    );
-    await sidebar.updateComplete;
-    const menu = sidebar.querySelector(".sidebar-rail-pin-menu")!;
-    menu.querySelector<HTMLElement>('[data-value="remove"]')!.click();
+    pinnedEntry()!
+      .closest(".sidebar-recent-session")!
+      .querySelector<HTMLButtonElement>("[data-sidebar-session-pin]")!
+      .click();
     await sidebar.updateComplete;
     expect(pinnedEntry()).toBeNull();
     expect(sidebar.sidebarEntries).toEqual([]);

@@ -174,7 +174,7 @@ function publicationHarness(responses?: {
     const view = binding.view()!;
     const response = createDeferred<unknown>();
     request.mockImplementationOnce(() => response.promise);
-    view.onPublish?.();
+    void view.onPublish?.();
     return { binding, view, response, original: request.mock.calls.at(-1) };
   };
   const globalHello = () => {
@@ -223,7 +223,7 @@ const acceptedResult = {
   message: "Accepted.",
 };
 async function publishAndSettle(binding: GitHubPublicationBinding) {
-  (await publicationSettled(binding)).onPublish?.();
+  void (await publicationSettled(binding)).onPublish?.();
   return publicationSettled(binding);
 }
 
@@ -245,7 +245,7 @@ describe("application-owned publication custody", () => {
     const research = await ready(globalRow("research", "research-parent"));
     const old = createDeferred<GitHubPublicationOptions>();
     request.mockImplementationOnce(() => old.promise);
-    research.view()!.onRefresh();
+    void research.view()!.onRefresh();
     research.detach();
     const mainOptions = {
       ...sharedOptions,
@@ -282,8 +282,8 @@ describe("application-owned publication custody", () => {
       // Let the publication response settle while the independent deletion is still pending.
       await nextTurn();
       expect(binding.view()).toBeUndefined();
-      view.onPublish?.();
-      view.onRefresh();
+      void view.onPublish?.();
+      void view.onRefresh();
       expect(publicationCalls(request)).toEqual([original]);
       binding.detach();
 
@@ -318,7 +318,7 @@ describe("application-owned publication custody", () => {
 
     first.detach();
     first.detach();
-    second.view()?.onRefresh();
+    void second.view()?.onRefresh();
     await publicationSettled(second);
     expect(request).toHaveBeenCalledTimes(2);
 
@@ -339,8 +339,8 @@ describe("application-owned publication custody", () => {
       const { attach, request, sessions, pending } = publicationHarness();
       const { binding: first, view: ready, response, original } = await pending();
       first.detach();
-      ready.onPublish?.();
-      ready.onRefresh();
+      void ready.onPublish?.();
+      void ready.onRefresh();
       ready.onSelect?.("personal");
       expect(request).toHaveBeenCalledTimes(2);
       // An empty filtered roster cannot retire an admitted operation.
@@ -381,11 +381,11 @@ describe("application-owned publication custody", () => {
     request.mockResolvedValueOnce(publishedResult);
     const terminal = await publishAndSettle(retained);
     expect(request.mock.calls.at(-1)).toEqual(original);
-    full.view()?.onPublish?.();
+    void full.view()?.onPublish?.();
     expect((await publicationSettled(full)).error).toContain("publications are awaiting review");
-    terminal.onNewAction?.();
+    void terminal.onNewAction?.();
     await publicationSettled(retained);
-    full.view()?.onPublish?.();
+    void full.view()?.onPublish?.();
     await publicationSettled(full);
     expect(publicationCalls(request)).toHaveLength(34);
   });
@@ -426,8 +426,8 @@ describe("application-owned publication custody", () => {
         sessionEvent({ ...session, updatedAt: 2 }, change === "delete" ? "delete" : "patch");
       }
       response.resolve(publishedResult);
-      ready.onPublish?.();
-      ready.onRefresh();
+      void ready.onPublish?.();
+      void ready.onRefresh();
       const returned = attach(session);
       if (change === "delete") {
         expect(returned.view()).toBeUndefined();
@@ -444,7 +444,7 @@ describe("application-owned publication custody", () => {
     const unknown = await publishAndSettle(first);
     const other = attach();
     first.detach();
-    unknown.onPublish?.();
+    void unknown.onPublish?.();
     expect(publicationCalls(request)).toHaveLength(1);
     await publishAndSettle(other);
     const calls = publicationCalls(request);
@@ -587,7 +587,7 @@ describe("shared publication event ownership", () => {
         expect(binding.view()?.locked).toBe(true);
       } else {
         const count = fixture.request.mock.calls.length;
-        pending.onRefresh();
+        void pending.onRefresh();
         expect(fixture.request).toHaveBeenCalledTimes(count);
         expect((await publicationSettled(fixture.attach(replacement))).result).toBeNull();
       }

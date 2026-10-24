@@ -37,18 +37,6 @@ type ParsedMediaOutputSegment =
       url: string;
     };
 
-type SplitMediaOutputOptions = {
-  extractAudioDirectives?: boolean;
-  extractMediaDirectives?: boolean;
-  preserveTrailingWhitespace?: boolean;
-  onAudioDirective?: () => void;
-};
-
-type MarkdownImageExtraction = {
-  scan: (text: string) => MarkdownImageMatch[];
-  allowlist?: readonly string[];
-};
-
 const FILE_URL_PREFIX_RE = /^file:(?:\/\/)?/i;
 
 // Classify spelling only; preserve file URLs in output so native loaders own decoding and access.
@@ -366,8 +354,16 @@ function removeMarkdownImageSpans(line: string, matches: MarkdownImageMatch[]): 
 /** Splits tool/stdout text into visible text, media attachments, voice tags, and ordered segments. */
 export function splitMediaOutput(
   raw: string,
-  options: SplitMediaOutputOptions = {},
-  imageExtraction?: MarkdownImageExtraction,
+  options: {
+    extractAudioDirectives?: boolean;
+    extractMediaDirectives?: boolean;
+    preserveTrailingWhitespace?: boolean;
+    onAudioDirective?: () => void;
+  } = {},
+  imageExtraction?: {
+    scan: (text: string) => MarkdownImageMatch[];
+    allowlist?: readonly string[];
+  },
 ): {
   text: string;
   mediaUrls?: string[];

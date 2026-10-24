@@ -56,45 +56,23 @@ vi.mock("openclaw/plugin-sdk/session-transcript-runtime", async (importOriginal)
   };
 });
 
-import {
-  capturePiContinuationCatalog,
-  createPiStoreFixture,
-  installFakePiFixture,
-  restorePiEnvironment,
-} from "./pi-session-catalog.test-support.js";
+import { capturePiContinuationCatalog, usePiFixtures } from "./pi-session-catalog.test-support.js";
 
-const temporaryDirectories: string[] = [];
-const originalEnvironment = {
-  PI_CODING_AGENT_SESSION_DIR: process.env.PI_CODING_AGENT_SESSION_DIR,
-  PI_CODING_AGENT_DIR: process.env.PI_CODING_AGENT_DIR,
-  PATH: process.env.PATH,
-};
+const { createStore, installPi } = usePiFixtures();
 let sessionDirectory: string;
 let catalog: ReturnType<typeof capturePiContinuationCatalog>;
 const continueRequest = { hostId: "gateway", threadId: "pi-session" };
 
 beforeEach(async () => {
-  sessionDirectory = await createPiStoreFixture(
-    temporaryDirectories,
-    "hi",
-    "Pi catalog session",
-    { command: "pwd" },
-    true,
-  );
-  await installFakePiFixture(temporaryDirectories, originalEnvironment.PATH);
+  sessionDirectory = await createStore("hi", "Pi catalog session", { command: "pwd" }, true);
+  await installPi();
   catalog = capturePiContinuationCatalog();
 });
 
-afterEach(async () => {
+afterEach(() => {
   acpRuntimeMocks.resolveAcpSessionAvailability.mockReset().mockReturnValue({ available: true });
-  restorePiEnvironment(originalEnvironment);
   transcriptMocks.messages.length = 0;
   transcriptMocks.failAfter = undefined;
-  await Promise.all(
-    temporaryDirectories
-      .splice(0)
-      .map((directory) => fs.rm(directory, { recursive: true, force: true })),
-  );
 });
 
 describe("Pi session catalog continuation", () => {
@@ -135,17 +113,15 @@ describe("Pi session catalog continuation", () => {
     expect(createSessionEntry).toHaveBeenCalledTimes(1);
     const createParams = createSessionEntry.mock.calls[0]?.[0];
     expect(createParams).not.toHaveProperty("label");
-    expect(createParams).toEqual(
-      expect.objectContaining({
-        displayName: "Pi catalog session",
-        spawnedCwd: "/workspace",
-        initialEntry: {
-          acpBackendId: "acpx",
-          acpSessionBinding: { acpAgentId: "pi", agentSessionId: "pi-session" },
-          pluginExtensions: { acpx: { piSessionCatalog: { sourceThreadId: "pi-session" } } },
-        },
-      }),
-    );
+    expect(createParams).toMatchObject({
+      displayName: "Pi catalog session",
+      spawnedCwd: "/workspace",
+    });
+    expect(createParams?.initialEntry).toEqual({
+      acpBackendId: "acpx",
+      acpSessionBinding: { acpAgentId: "pi", agentSessionId: "pi-session" },
+      pluginExtensions: { acpx: { piSessionCatalog: { sourceThreadId: "pi-session" } } },
+    });
     expect(
       transcriptMocks.messages.map((message) =>
         typeof message.content === "string"

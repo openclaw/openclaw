@@ -36,9 +36,7 @@ function resolve(store: Store, params: Partial<Parameters<Store["resolve"]>[0]> 
   return expect(store.resolve({ ...resolveDefaults, ...params })).resolves.toBe(true);
 }
 
-afterEach(() => {
-  vi.useRealTimers();
-});
+afterEach(() => vi.useRealTimers());
 
 it("replaces target timers without letting the old timer delete the new target", () => {
   vi.useFakeTimers();

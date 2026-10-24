@@ -380,7 +380,8 @@ it("preserves compensation provenance for later native scroll listeners", async 
   const readerIdle = new Promise<void>((resolve) => {
     let sawScrolling = false;
     const unsubscribe = subscribeTranscriptScroll(thread, (observation) => {
-      if (observation.type !== "offset") {
+      // Startup scrolling cannot establish that the later resize clamp is idle.
+      if (observation.type !== "offset" || thread.clientHeight !== 600 || distance() !== 0) {
         return;
       }
       // The clamp receipt can consume the delta before the native observation.
@@ -393,10 +394,12 @@ it("preserves compensation provenance for later native scroll listeners", async 
   });
   await commitTask(host, () => departAndClamp(host, thread));
   await readerIdle;
+  await expect.poll(() => thread.clientHeight).toBe(600);
   await expect.poll(distance).toBe(0);
   await settleFrames();
   expect(host.transcript.isProgrammaticScroll).toBe(false);
 
+  const expectedOffset = thread.scrollTop + 48;
   const observations: Array<{ trusted: boolean; programmatic: boolean }> = [];
   // Mount already installed the offset observer. Native dispatch has no outer
   // JavaScript stack, so microtasks may run before this later listener.
@@ -406,11 +409,11 @@ it("preserves compensation provenance for later native scroll listeners", async 
       programmatic: host.transcript.isProgrammaticScroll,
     });
   });
-  await commitTask(host, () => {
+  await commitScrollTask(host, thread, expectedOffset, () => {
     host.earlierRowHeight += 48;
   });
   await expect.poll(() => extent.offsetHeight).toBe(1348);
-  await expect.poll(() => observations.length).toBeGreaterThan(0);
+  expect(observations.length).toBeGreaterThan(0);
   expect(observations[0]).toEqual({ trusted: true, programmatic: true });
   thread.dispatchEvent(new WheelEvent("wheel", { deltaY: -1 }));
   expect(host.transcript.isProgrammaticScroll).toBe(false);

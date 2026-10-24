@@ -1,8 +1,8 @@
 import { createHash } from "node:crypto";
 import type { IncomingHttpHeaders } from "node:http";
 import type { ArtifactSummary } from "../../packages/gateway-protocol/src/schema/artifacts.js";
+import { type ArtifactRecord, toArtifactSummary } from "./artifacts-content.js";
 import { resolveByteResponse } from "./http-byte-range.js";
-import { type ArtifactRecord, toArtifactSummary } from "./server-methods/artifacts-content.js";
 
 export type PreparedArtifactDownload = {
   artifact: ArtifactSummary;

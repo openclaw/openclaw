@@ -270,10 +270,7 @@ const owner = expect.stringContaining("unrelated-name.plist");
 const writeShell = (file: string, source: string) => writeFileSync(file, source, { mode: 0o700 });
 
 type ProbeOptions = Partial<
-  Record<
-    "binary" | "parserDenied" | "deniedRead" | "directory" | "missingReader" | "loadedAfterScan",
-    boolean
-  >
+  Record<"binary" | "parserDenied" | "deniedRead" | "directory" | "missingReader", boolean>
 > & { perlUnicode?: string; extractionFailure?: 2 | 126 | 127 | "signal" };
 
 function runFallback(contents: string, options: ProbeOptions = {}) {
@@ -303,22 +300,11 @@ ${options.deniedRead ? '/bin/chmod 000 "$last"' : ":"}
 exit 1
 `,
   );
-  writeShell(
-    path.join(root, "launchctl"),
-    `#!/bin/sh
-if [ -e "$TEST_QUERY_MARKER" ]; then
-  ${options.loadedAfterScan ? "exit 0" : ":"}
-fi
-: >"$TEST_QUERY_MARKER"
-printf 'Could not find service\\n' >&2
-exit 113
-`,
-  );
+  writeShell(path.join(root, "launchctl"), `#!/bin/sh\n${absentQuery}\n`);
   const { conflict, detail } = executeProbe(
     root,
     parser,
     {
-      TEST_QUERY_MARKER: path.join(root, "queried"),
       PERL_UNICODE: options.perlUnicode,
     },
     { missingReader: options.missingReader, timeout: 10_000 },
@@ -338,7 +324,6 @@ describe.skipIf(hostPlatform !== "darwin")("detached launchd native fallback", (
     ["XML owner", xmlPlist(xmlLabel), { binary: false }, owner],
     ["binary owner", xmlPlist(xmlLabel), { binary: true }, owner],
     ["nested label", nested, {}, ""],
-    ["newly loaded owner", nested, { loadedAfterScan: true }, "system/ai.openclaw.gateway"],
     ["native label type", integer, { parserDenied: false }, ""],
     ["fallback label type", integer, { parserDenied: true }, ""],
     ["native label bytes", newline, { parserDenied: false }, ""],
@@ -355,12 +340,7 @@ describe.skipIf(hostPlatform !== "darwin")("detached launchd native fallback", (
   ] as const)("handles %s", (_name, contents, options, expected) => {
     expect(runFallback(contents, options)).toEqual(expected);
   });
-  it.skipIf(process.getuid?.() === 0).each([false, true])(
-    "handles read denial after preflight (loaded=%s)",
-    (loadedAfterScan) => {
-      expect(runFallback(xmlPlist(xmlLabel), { deniedRead: true, loadedAfterScan })).toBe(
-        loadedAfterScan ? "system/ai.openclaw.gateway" : "",
-      );
-    },
-  );
+  it.skipIf(process.getuid?.() === 0)("handles read denial after preflight", () => {
+    expect(runFallback(xmlPlist(xmlLabel), { deniedRead: true })).toBe("");
+  });
 });

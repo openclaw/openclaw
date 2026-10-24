@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { Value } from "typebox/value";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createCodexDynamicToolBridge } from "../extensions/codex/test-api.js";
@@ -5,10 +6,7 @@ import type {
   ConversationSendResult,
   ConversationTurnResult,
 } from "../packages/gateway-protocol/src/schema/agent.js";
-import {
-  createConversationsSendTool,
-  createConversationsTurnTool,
-} from "../src/agents/tools/conversation-tools.js";
+import { createHostedConversationTools } from "../src/agents/tools/conversation-tools.js";
 import * as gateway from "../src/agents/tools/in-process-gateway.js";
 
 const conversationRef = "conv_0123456789abcdef0123456789abcdef";
@@ -48,9 +46,12 @@ describe("Codex core conversation delivery", () => {
     const callGateway = vi
       .spyOn(gateway, "callAgentToolGatewayRequest")
       .mockResolvedValue(testCase.receipt);
-    const createTool =
-      testCase.kind === "send" ? createConversationsSendTool : createConversationsTurnTool;
-    const tool = createTool({ agentId: "main" });
+    const tool = expectDefined(
+      createHostedConversationTools(undefined, "main", {}).find(
+        (entry) => entry.name === `conversations_${testCase.kind}`,
+      ),
+      "conversation tool",
+    );
     const bridge = createCodexDynamicToolBridge({
       tools: [tool],
       signal: new AbortController().signal,

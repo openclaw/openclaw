@@ -10,6 +10,30 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
 
+it.each([
+  ["session-claim-repair-copy.ts", "copySessionClaimForRepair"],
+  ["session-accessor.sqlite-delivery-repair.ts", "copySessionDeliveriesForRepair"],
+  ["session-accessor.sqlite-delivery-repair.ts", "readSessionDeliveryRepairInventory"],
+])("keeps offline session repair classification operation-scoped: %s %s", (file, operation) => {
+  const relative = `src/config/sessions/${file}`;
+  const rows = inventory(
+    process.cwd(),
+    "",
+    false,
+    new Map([
+      [
+        relative,
+        `function ${operation}() { executeSqliteQuerySync(query); }
+         function unreviewedRuntime() { executeSqliteQuerySync(query); }`,
+      ],
+    ]),
+  );
+  expect(rows.map(({ tier, calls }) => [tier, calls.map((call) => call.operation)])).toEqual([
+    ["T1", ["unreviewedRuntime"]],
+    ["T2", [operation]],
+  ]);
+});
+
 function fixture(sources: Record<string, string>) {
   const root = tempDirs.make("openclaw-sqlite-ratchet-");
   const git = (...args: string[]) =>

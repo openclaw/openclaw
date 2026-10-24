@@ -199,6 +199,7 @@ export function registerIsolatedRuntime(
 
 export const nativeAuthPlan = {
   providerForAuth: "openai",
+  authProfileProviderForAuth: "openai",
   modelId: "gpt-test",
   harnessAuthProvider: "openai",
   modelRoute: {

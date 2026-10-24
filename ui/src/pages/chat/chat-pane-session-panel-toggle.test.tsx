@@ -50,13 +50,15 @@ const reader: ControlUiLinkReaderDescriptor = {
 function fixture() {
   const definitions = createDeferred<CustomElementConstructor>();
   const commit = createDeferred<boolean>();
-  vi.spyOn(customElements, "whenDefined").mockReturnValue(definitions.promise);
   const region = document.createElement("openclaw-chat-sidebar-region");
   const deliverPanelEvent = vi.fn();
   Object.defineProperty(region, "updateComplete", { value: commit.promise });
   region.deliverPanelEvent = deliverPanelEvent;
   const root = document.createElement("div");
   root.append(region);
+  const recipient = root.appendChild(document.createElement("div"));
+  let recipientMounted = false;
+  region.readPanelHost = () => (recipientMounted ? recipient : null);
   const state = createPageState(
     createInitializationContext(),
     { afterCommit: () => () => {} },
@@ -87,6 +89,11 @@ function fixture() {
     return stop;
   });
   onTestFinished(dispose);
+  // The region reports a committed lazy recipient through its readiness callback.
+  void definitions.promise.then(() => {
+    recipientMounted = true;
+    flush();
+  });
 
   const event = (url = "https://forge.example/items/1") =>
     new CustomEvent(LINK_READER_PANEL_TOGGLE_EVENT, {
@@ -292,6 +299,18 @@ describe("session link-reader intent delivery", () => {
     expect(event.defaultPrevented).toBe(false);
     expect(f.updateSidebarLayout).not.toHaveBeenCalled();
   });
+
+  it("retires an unmounted recipient's pending intent when its panel closes", async () => {
+    const f = fixture();
+    window.dispatchEvent(f.event());
+    f.state.sidebarLayout = { columns: [] };
+    f.flush();
+    expect(f.pending.requests.size).toBe(0);
+    f.definitions.resolve(HTMLElement);
+    f.commit.resolve(true);
+    await f.definitions.promise;
+    expect(f.deliverPanelEvent).not.toHaveBeenCalled();
+  });
 });
 
 it("delivers a browser card after the pane's scheduled render commits", async () => {
@@ -322,6 +341,7 @@ it("delivers a browser card after the pane's scheduled render commits", async ()
   let pendingUpdate: Promise<void> | undefined;
   let sidebarRegion: HTMLElementTagNameMap["openclaw-chat-sidebar-region"] | null = null;
   let browserPanel: HTMLElement | undefined;
+  let flushPending = () => {};
   const state = createPageState(
     createInitializationContext(),
     { afterCommit: () => () => {} },
@@ -331,7 +351,7 @@ it("delivers a browser card after the pane's scheduled render commits", async ()
   state.sessionKey = "agent:main:local-preview";
   const pending = { requests: new Map<SessionPanelToggleSlot, PendingSessionPanelToggle>() };
   const dispose = createRoot((stop) => {
-    createChatPaneSessionPanelToggles({
+    flushPending = createChatPaneSessionPanelToggles({
       current: () => ({
         sidebarRegion,
         state,
@@ -395,6 +415,7 @@ it("delivers a browser card after the pane's scheduled render commits", async ()
         }
         const region = createMemo(() =>
           renderSidebarRegion({
+            onPanelReady: flushPending,
             presentationId: "delayed-browser-card",
             onRegionViewRef: (element) => {
               sidebarRegion = element;

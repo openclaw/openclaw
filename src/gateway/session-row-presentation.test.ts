@@ -39,6 +39,7 @@ import type { GatewayWsClient } from "./server/ws-types.js";
 import { beginSessionPermissionChange } from "./session-permission-change.js";
 import { prepareProjectedSessionPresentation } from "./session-row-presentation.js";
 import { createSessionRowProjection } from "./session-row-projection.js";
+import { holdSubagentExecution } from "./session-row-projection.read-fixture.test-support.js";
 import { canReceiveSessionEvent } from "./session-sharing.js";
 import { rolePolicyConfig, sharingPolicyClient } from "./session-sharing.test-utils.js";
 import { listProjectedSessions } from "./session-utils-list.js";
@@ -300,7 +301,9 @@ it.each(["running", "queued", "capacity-wait"] as const)(
           generation: 2,
           requesterSessionKey: movedParent,
           controllerSessionKey: movedParent,
+          execution: { status: "running" as const, startedAt: Date.now() },
         };
+        using movedExecution = holdSubagentExecution(movedChild.runId, child);
         subagentRuns.set(movedChild.runId, movedChild);
         subagentRuns.commitOwnership(movedChild);
         expect((await list()).sessions[0]?.hasActiveSubagentRun).not.toBe(true);
@@ -310,9 +313,16 @@ it.each(["running", "queued", "capacity-wait"] as const)(
         });
         releaseWait?.();
         releaseAgentRunContext(runId, claim);
+        movedExecution[Symbol.dispose]();
+        const finishedChild = {
+          ...movedChild,
+          execution: { ...movedChild.execution, status: "terminal" as const, endedAt: Date.now() },
+        };
+        subagentRuns.set(finishedChild.runId, finishedChild);
+        subagentRuns.commitOwnership(finishedChild);
         const stopped = await list();
         expect(stopped.sessions[0]?.hasActiveSubagentRun).not.toBe(true);
-        expect(stopped.sessions[0]?.childSessions).toBeUndefined();
+        expect(stopped.sessions[0]?.childSessions).toEqual([child]);
         expect(
           projection.snapshot({ key: movedParent, agentId: "main" }).row?.hasActiveSubagentRun,
         ).not.toBe(true);

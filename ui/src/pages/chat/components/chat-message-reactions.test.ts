@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { MessageReactionSummary } from "../../../../../packages/gateway-protocol/src/index.js";
 /* @vitest-environment jsdom */
 import { cleanupSolid } from "../../../test-helpers/mount-solid.ts";
-import { flush } from "../../../test-helpers/solid-settle.ts";
+import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { createMessageGroupHarness } from "./chat-message-native.test-support.tsx";
 import { createMessageGroup } from "./chat-message.test-support.ts";
 
@@ -72,7 +72,9 @@ async function customEntry() {
   flush();
   root.querySelector<HTMLButtonElement>(".trigger")!.click();
   root.querySelector<HTMLButtonElement>(".more")!.click();
-  flush();
+  await waitForSolid(() =>
+    expect(root.querySelector<HTMLInputElement>(".emoji-search-panel__search")).not.toBeNull(),
+  );
   return {
     root,
     onReact,

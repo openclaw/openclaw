@@ -15,7 +15,11 @@ import {
 import { normalizeAcceptedSessionSpawnResult } from "openclaw/plugin-sdk/agent-harness-tool-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { registerCopilotActiveRun } from "./attempt-active-run.js";
-import { deferBackgroundCompactionCleanup } from "./attempt-cleanup.js";
+import {
+  deferBackgroundCompactionCleanup,
+  disconnectCopilotSession,
+  preserveCopilotAttemptCleanupError,
+} from "./attempt-cleanup.js";
 import {
   createMessageOptions,
   createResult,
@@ -98,6 +102,7 @@ export async function runCopilotExecution(context: {
   let timedOut = false;
   let promptError: Error | undefined;
   let sdkSessionId: string | undefined;
+  let runtimeArtifact: AgentHarnessAttemptResult["runtimeArtifact"];
   // Resumed sessions may predate the atomic journal or survive a crash. Only a
   // session created under this journal can be deleted after incomplete cleanup.
   let nativeSessionCreatedFresh = false;
@@ -110,6 +115,8 @@ export async function runCopilotExecution(context: {
   let activeRunRegistrationRef: ReturnType<typeof registerCopilotActiveRun> | undefined;
   let userInputBridgeRef: CopilotUserInputBridge | undefined;
   let cleanupToolBridge: (() => void) | undefined;
+  let settleToolCalls: (() => Promise<void>) | undefined;
+  const detached = input.sessionPersistence === "detached";
   let releaseError: Error | undefined;
   let downgradedFromResume = false;
   let resumeFailureRecovered = false;
@@ -158,7 +165,6 @@ export async function runCopilotExecution(context: {
             externalAbort: true,
             messagesSnapshot: messages,
             promptError: undefined,
-            sdkSessionId: undefined,
           }),
         );
       }
@@ -170,7 +176,6 @@ export async function runCopilotExecution(context: {
             `[copilot-attempt] sandbox resolution failed: ${toCopilotError(error).message}`,
             error,
           ),
-          sdkSessionId: undefined,
         }),
       );
     }
@@ -185,7 +190,6 @@ export async function runCopilotExecution(context: {
           "sandbox_cwd_override_unsupported",
           "[copilot-attempt] cwd override is not supported for sandboxed Copilot runs; omit cwd or use the agent workspace as cwd",
         ),
-        sdkSessionId: undefined,
       }),
     );
   }
@@ -220,7 +224,6 @@ export async function runCopilotExecution(context: {
       createResult(input, {
         messagesSnapshot: messages,
         promptError: createPromptError("model_not_supported", toCopilotError(error).message, error),
-        sdkSessionId: undefined,
       }),
     );
   }
@@ -296,6 +299,7 @@ export async function runCopilotExecution(context: {
           },
         });
         cleanupToolBridge = toolBridge.cleanup;
+        settleToolCalls = toolBridge.settle;
         codeModeEngaged = toolBridge.codeModeEngaged;
         promptToolPolicy = toolBridge.promptToolPolicy;
         resultContentSourceByToolName = new Map(
@@ -311,12 +315,21 @@ export async function runCopilotExecution(context: {
             `[copilot-attempt] tool-bridge construction failed: ${toCopilotError(error).message}`,
             error,
           ),
-          sdkSessionId: undefined,
         });
         return finishAttempt(result);
       }
     }
-    handle = await deps.pool.acquire(poolAcquire.key, poolAcquire.options);
+    const artifactRequest =
+      input.captureRuntimeArtifact || input.expectedRuntimeArtifact
+        ? { expected: input.expectedRuntimeArtifact }
+        : undefined;
+    handle = artifactRequest
+      ? await deps.pool.acquire(poolAcquire.key, poolAcquire.options, artifactRequest)
+      : await deps.pool.acquire(poolAcquire.key, poolAcquire.options);
+    runtimeArtifact = handle.runtimeArtifact;
+    if (artifactRequest && !runtimeArtifact) {
+      throw new Error("[copilot] verified attempt requires a captured runtime artifact");
+    }
     const client = handle.client;
     const sessionSetup = await createCopilotSessionSetup({
       attempt: input,
@@ -342,7 +355,9 @@ export async function runCopilotExecution(context: {
       userInputBridge,
     } = sessionSetup;
     userInputBridgeRef = userInputBridge;
-    const previousSessionId = normalizeOptionalString(input.initialReplayState?.sdkSessionId);
+    const previousSessionId = detached
+      ? undefined
+      : normalizeOptionalString(input.initialReplayState?.sdkSessionId);
     downgradedFromResume = Boolean(
       previousSessionId && input.initialReplayState?.replayInvalid === true,
     );
@@ -540,6 +555,10 @@ export async function runCopilotExecution(context: {
     }
   } finally {
     settled = true;
+    if (detached) {
+      // Seal native tool admission and join accepted effects before the final journal barrier.
+      await settleToolCalls?.();
+    }
     try {
       bridge?.flushTranscriptProjection();
       await transcriptJournal?.barrier("bridge detach");
@@ -577,14 +596,23 @@ export async function runCopilotExecution(context: {
         cleanupToolBridge,
         cleanupByokProxy,
         deleteSessionOnIncompleteCleanup: nativeSessionCreatedFresh && initialUserValidated,
+        deleteSessionOnCleanup: detached && nativeSessionCreatedFresh,
         handle,
         pool: deps.pool,
         sdkSessionId,
         session,
         timeoutMs: resolveCompactionTimeoutMs(input.config),
       });
-      void cleanup.catch(() => undefined);
-      if (sdkSessionId && !settledToolFinalization) {
+      if (detached) {
+        try {
+          await cleanup;
+        } catch (error) {
+          promptError = preserveCopilotAttemptCleanupError(promptError, error);
+        }
+      } else {
+        void cleanup.catch(() => undefined);
+      }
+      if (!detached && sdkSessionId && !settledToolFinalization) {
         try {
           await deps.onDeferredCompaction?.({
             abort: () => cleanupAbort.abort(),
@@ -601,13 +629,27 @@ export async function runCopilotExecution(context: {
       bridge?.detach();
       await bridge?.awaitAgentEventChain();
       cleanupToolBridge?.();
-      await cleanupByokProxy?.();
+      try {
+        await cleanupByokProxy?.();
+      } catch (error) {
+        if (detached) {
+          promptError = preserveCopilotAttemptCleanupError(promptError, error);
+        } else {
+          releaseError = toCopilotError(error);
+        }
+      }
       params.abortSignal?.removeEventListener("abort", abortActiveSession);
-      if (session) {
+      if (session && handle) {
         try {
-          await session.disconnect();
+          await disconnectCopilotSession({
+            session,
+            client: handle.client,
+            deleteSessionId: detached && nativeSessionCreatedFresh ? sdkSessionId : undefined,
+          });
         } catch (error: unknown) {
-          if (!promptError && !timedOut) {
+          if (detached) {
+            promptError = preserveCopilotAttemptCleanupError(promptError, error);
+          } else if (!promptError && !timedOut) {
             promptError = toCopilotError(error);
           }
         }
@@ -649,6 +691,7 @@ export async function runCopilotExecution(context: {
     promptError,
     releaseError,
     resumeFailureRecovered,
+    runtimeArtifact,
     sdkSessionId,
     sentTurnStarted,
     settledFinalizationAssistantCompleted,

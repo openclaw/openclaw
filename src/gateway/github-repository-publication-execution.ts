@@ -153,8 +153,11 @@ export function createRepositoryGitHubPublicationExecution(params: {
             );
           }
           assertExecution();
+          const actor = action ? undefined : getRequester().snapshot.actor;
           return await executeRepositoryGitHubPublication({
             execution: await claimExecution(),
+            requesterProfileId:
+              action?.owner ?? (actor?.kind === "operator" ? actor.profileId : undefined),
             snapshot: prepared.snapshot,
             snapshotRoot: prepared.snapshotRoot,
             storePath: loaded.storePath,

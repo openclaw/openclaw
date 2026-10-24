@@ -99,6 +99,12 @@ it.each([
     'web_search provider is not available: brave (install or enable plugin "brave", then run openclaw doctor --fix)',
     ["brave"],
   ],
+  [
+    "Brave",
+    missingPlugins,
+    'web_search provider is not available: Brave (install or enable plugin "brave", then run openclaw doctor --fix)',
+    ["brave"],
+  ],
   ["brvae", undefined, "unknown web_search provider: brvae", ["acme-search", "brave", "gemini"]],
 ] as const)("rejects unavailable provider %s", (provider, options, message, allowedValues) => {
   const result = validateWebSearchConfig(searchConfig(provider), options);
@@ -129,4 +135,14 @@ it("warns for unknown provider ids with stale plugin config", () => {
       message: expect.stringContaining("unknown web_search provider: missing-third-party"),
     }),
   );
+});
+
+it("accepts provider ids that differ from the manifest only in case or padding", () => {
+  for (const provider of ["Brave", "BRAVE", " brave "]) {
+    const res = validateWebSearchConfig(searchConfig(provider));
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.warnings).toEqual([]);
+    }
+  }
 });

@@ -24,7 +24,7 @@ function createFakeHttpServer(errors: string[]) {
       return this;
     }
 
-    close(cb?: () => void) {
+    close(cb?: (error?: Error) => void) {
       this.closeCalls += 1;
       setImmediate(() => cb?.());
       return this;
@@ -75,6 +75,23 @@ it("retries EADDRINUSE and closes server handle before retry", async () => {
 
   expect(fake.closeCalls).toBe(1);
   expect(sleepMock).toHaveBeenCalledTimes(1);
+});
+
+it.each(["callback", "throw"])("ignores close failures while retrying: %s", async (failure) => {
+  const fake = createFakeHttpServer(["EADDRINUSE"]);
+  const close = vi.spyOn(fake, "close").mockImplementation((callback) => {
+    const error = new Error("retry cleanup failed");
+    if (failure === "throw") {
+      throw error;
+    }
+    callback?.(error);
+    return fake;
+  });
+
+  await expect(listen(fake)).resolves.toBeUndefined();
+
+  expect(close).toHaveBeenCalledOnce();
+  expect(sleepMock).toHaveBeenCalledOnce();
 });
 
 it.each([

@@ -14,6 +14,11 @@ import {
   tryBeginGatewayRootWorkAdmission,
 } from "../../process/gateway-work-admission.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import {
+  captureGatewayDeviceRevocation,
+  invalidateGatewayDeviceRevocation,
+  retainGatewayDeviceRevocation,
+} from "../device-revocation.js";
 import { SessionCatalogListLifetime } from "./session-catalog-list-lifetime.js";
 import { listSessionCatalogProvider } from "./session-catalog-provider-access.js";
 import { catalogProvider } from "./session-catalog.fixtures.test-support.js";
@@ -25,6 +30,84 @@ const blockedProvider = (gate: ReturnType<typeof createDeferredCore<SessionCatal
   });
 
 describe("session catalog provider admission", () => {
+  it.each([false, true])(
+    "retains the catalog caller for delayed node discovery without admitting revoked access (%s)",
+    async (revoked) => {
+      const context = {};
+      const connection = new AbortController();
+      const sourceReleased = vi.fn();
+      const caller = captureGatewayDeviceRevocation(
+        context,
+        { deviceId: "catalog-device", role: "operator" },
+        () => true,
+        connection.signal,
+        { isCurrent: () => true, subscribe: () => sourceReleased },
+      );
+      const discovery = createDeferredCore();
+      const hosts: SessionCatalogHost[] = [
+        {
+          hostId: "node:catalog-device",
+          label: "Test node",
+          kind: "node",
+          connected: true,
+          sessions: [],
+        },
+      ];
+      const provider: SessionCatalogProvider = {
+        id: "delayed-node-catalog",
+        label: "Delayed node catalog",
+        list: async () => {
+          await discovery.promise;
+          const releaseNode = retainGatewayDeviceRevocation(
+            getPluginRuntimeGatewayRequestScope()?.hasCurrentClientAuthority,
+          );
+          try {
+            return hosts;
+          } finally {
+            releaseNode?.();
+          }
+        },
+        read: async ({ hostId, threadId }) => ({ hostId, threadId, items: [] }),
+      };
+      const lifetime = new SessionCatalogListLifetime([]);
+      const result = withPluginRuntimeGatewayRequestScope(
+        { hasCurrentClientAuthority: caller.isCurrent, isWebchatConnect: () => false },
+        () =>
+          lifetime.runProvider(undefined, (params) => listSessionCatalogProvider(provider, params)),
+      );
+      caller.release();
+      lifetime.finishListing();
+      if (revoked) {
+        invalidateGatewayDeviceRevocation(context, "catalog-device", "operator");
+      }
+      discovery.resolve();
+      try {
+        if (revoked) {
+          await expect(result).rejects.toThrow("Gateway caller authority is no longer active.");
+        } else {
+          await expect(result).resolves.toEqual([
+            {
+              hostId: "node:catalog-device",
+              label: "Test node",
+              kind: "node",
+              connected: true,
+              sessions: [],
+            },
+          ]);
+        }
+        expect(connection.signal.aborted).toBe(false);
+        expect(sourceReleased).toHaveBeenCalledOnce();
+        expect(() => retainGatewayDeviceRevocation(caller.isCurrent)).toThrow("no longer active");
+      } finally {
+        discovery.resolve();
+        await Promise.allSettled([result]);
+        lifetime.retire();
+        lifetime.finishListing();
+        caller.release();
+      }
+    },
+  );
+
   it("preserves the queued caller's plugin scope and retained Gateway root", async () => {
     resetGatewayWorkAdmission();
     const predecessor = tryBeginGatewayRootWorkAdmission("catalog-predecessor")!;

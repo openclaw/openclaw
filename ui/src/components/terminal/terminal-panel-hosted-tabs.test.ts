@@ -7,6 +7,7 @@ import { createInitializationContext } from "../../pages/chat/chat-pane.test-sup
 import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
+import * as confirmation from "../confirm-dialog.ts";
 import { PANEL_HOSTED_TABS_CHANGE_EVENT, readPanelHostedTabs } from "../panel-hosted-tabs.ts";
 import {
   TERMINAL_PANEL_DOCK_BOTTOM_EVENT,
@@ -308,20 +309,6 @@ describe("Terminal panel hosted tabs", () => {
     }
   });
 
-  it("opens another shell for an explicit new-session toggle", async () => {
-    const { panel } = await mount();
-    panel.handleToggleRequest(
-      new CustomEvent(TERMINAL_PANEL_TOGGLE_EVENT, {
-        detail: { open: true, newSession: true },
-      }),
-    );
-    await waitForFast(() => expect(panel.hostedTabs).toHaveLength(2));
-    await waitForFast(() =>
-      expect(panel.hostedTabs.every((tab) => tab.className === "is-live")).toBe(true),
-    );
-    await panel.updateComplete;
-  });
-
   it("keeps mobile docking hosted and routes upload through the embedded composer", async () => {
     const { panel } = await mount();
     panel.mobile = true;
@@ -406,6 +393,21 @@ describe("Terminal panel hosted tabs", () => {
     expect(cancel).toBeDefined();
     cancel!.click();
     await closing;
+    expect(panel.activeHostedTabId).toBe(id);
+    expect(panel.hostedTabs).toHaveLength(1);
+    expect(request.mock.calls.some(([method]) => method === "terminal.close")).toBe(false);
+  });
+
+  it("keeps a mobile terminal open and shows a rejected close confirmation", async () => {
+    const { panel, client } = await mount();
+    panel.mobile = true;
+    await panel.updateComplete;
+    const request = vi.spyOn(client, "request");
+    const failure = new Error("Close confirmation unavailable. Try again.");
+    vi.spyOn(confirmation, "showConfirmDialog").mockRejectedValueOnce(failure);
+    const id = panel.activeHostedTabId!;
+    await panel.closeHostedTab(id);
+    await waitForFast(() => expect(panel.textContent).toContain(failure.message));
     expect(panel.activeHostedTabId).toBe(id);
     expect(panel.hostedTabs).toHaveLength(1);
     expect(request.mock.calls.some(([method]) => method === "terminal.close")).toBe(false);

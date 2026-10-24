@@ -413,7 +413,7 @@ export async function dispatchGatewayMethodInProcess<T>(
       // create turns against its published runtime; a local import creates a second owner.
       const facade = await createAgentTurnFacade({
         assertContextCurrent:
-          method === "agent" ? resolved.assertSourceCurrent : resolved.assertContextCurrent,
+          method === "agent" ? resolved.assertGatewayCurrent : resolved.assertContextCurrent,
         client: resolved.client,
         isWebchatConnect: resolved.isWebchatConnect,
       });
@@ -422,6 +422,8 @@ export async function dispatchGatewayMethodInProcess<T>(
             controllerInput: options?.controllerInput,
             prepareDispatchCurrent: options?.prepareDispatchCurrent,
             assertAdmissionCurrent: composeSessionSourceAssertion([
+              // The caller authorizes admission; accepted execution retains its own authority.
+              resolved.assertSourceCurrent,
               resolved.assertInvocationCurrent,
               captureExternalSessionCommitGuard(options?.sessionMutationCommitGuard),
             ]),

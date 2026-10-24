@@ -13,10 +13,13 @@ import {
 import type { ArtifactSummary } from "../../../../../packages/gateway-protocol/src/schema/artifacts.js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { PanelEmptyState } from "../../../components/solid/panel-empty-state.tsx";
+import { registerChatOutputsEnglish } from "../../../i18n/locales/en-chat-outputs.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
-import { t } from "../../../lib/reactive/i18n.ts";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import type { SessionWorkspaceArtifacts } from "./chat-session-workspace-types.ts";
 import "./chat-outputs.css";
+
+registerEnglishCatalog(registerChatOutputsEnglish);
 
 type ChatOutputsDashboard = {
   title: string;
@@ -31,6 +34,8 @@ type ChatOutputsData = {
   /** undefined: not resolved; null: confirmed absent. Not one entry per widget. */
   dashboard: ChatOutputsDashboard | null | undefined;
   dashboardError: string | null;
+  /** Readiness of the acquired provider; observes its existing snapshot request. */
+  dashboardRead?: Promise<void>;
 };
 
 type ChatOutputsProps = ChatOutputsData & {
@@ -210,13 +215,52 @@ function ArtifactReadSlot(props: {
 }
 
 function DashboardStatus(props: ChatOutputsProps) {
+  const result = createMemo(() => ({ pending: props.dashboardRead }), {
+    equals: (previous, next) => previous.pending === next.pending,
+  });
+  const dashboard = createMemo(() => props.dashboard);
+  const error = createMemo(() => props.dashboardError);
+  const read = createMemo(async () => {
+    const pending = result().pending;
+    const value = dashboard();
+    const failure = error();
+    if (value === undefined && !failure) {
+      await pending;
+    }
+    if (failure) {
+      throw new Error(failure);
+    }
+    return value;
+  });
   return (
-    <OutputReadStatus
-      pending={props.dashboard === undefined && !props.dashboardError}
-      error={props.dashboardError}
-      label={t("outputs.loadingDashboard")}
-      onRetry={props.onRetryDashboard}
-    />
+    <Errored
+      fallback={(failure, reset) => (
+        <OutputReadStatus
+          pending={false}
+          error={formatUiError(failure())}
+          label=""
+          onRetry={
+            props.onRetryDashboard
+              ? () => {
+                  props.onRetryDashboard?.();
+                  reset();
+                }
+              : undefined
+          }
+        />
+      )}
+    >
+      <Loading
+        on={result()}
+        fallback={<OutputReadStatus pending error={null} label={t("outputs.loadingDashboard")} />}
+      >
+        <OutputReadStatus
+          pending={isPending(read) || latest(read) === undefined}
+          error={null}
+          label={t("outputs.loadingDashboard")}
+        />
+      </Loading>
+    </Errored>
   );
 }
 
@@ -293,6 +337,7 @@ export function ChatOutputsMobile(props: ChatOutputsProps) {
               }
             >
               <PanelEmptyState
+                presentation="mobile"
                 icon={<Icon name="fileText" />}
                 heading={t("outputs.emptyTitle")}
                 description={t("outputs.emptyDescription")}

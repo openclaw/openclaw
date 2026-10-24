@@ -144,17 +144,8 @@ function expectCancelled(
 }
 
 function expectSteered(steer: ReturnType<typeof vi.fn>, text: string, images?: unknown) {
-  expect(steer).toHaveBeenCalledWith(
-    text,
-    images,
-    undefined,
-    undefined,
-    undefined,
-    undefined,
-    undefined,
-    undefined,
-    undefined,
-  );
+  expect(steer).toHaveBeenCalledOnce();
+  expect(steer.mock.calls[0]?.slice(0, 2)).toEqual([text, images]);
 }
 
 function requestedQuestionId(mock: ReturnType<typeof gatewayStub>["mock"]): string {

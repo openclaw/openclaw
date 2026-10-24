@@ -72,6 +72,16 @@ export function render(value: NativeContent, container: HTMLElement): void {
   }
 }
 
+export function mountChatThread(container: HTMLElement, transcript: ChatTranscript) {
+  return {
+    unmount: () => render(null, container),
+    render(next: ChatThreadProps | null) {
+      render(next ? renderChatThread({ ...next }, transcript) : null, container);
+      flush();
+    },
+  };
+}
+
 export class TranscriptTestHost extends HTMLElement {
   transcript?: ChatTranscript;
   readonly transcriptRoot = document.createElement("div");

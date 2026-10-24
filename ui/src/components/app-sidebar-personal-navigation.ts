@@ -4,7 +4,7 @@ import { pathForRoute } from "../app-route-paths.ts";
 import type { ApplicationContext, ApplicationNavigationOptions } from "../app/context.ts";
 import { gatewayPresentationScope } from "../app/gateway-presentation-scope.ts";
 import { t } from "../i18n/index.ts";
-import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
+import { handleNavigationClick } from "../lib/navigation-click.ts";
 import { listen } from "../lib/reactive/listener.ts";
 import type {
   SessionConnectionScope,
@@ -18,6 +18,7 @@ import { applySidebarSessionOwnerFilter } from "./app-sidebar-session-ownership.
 import {
   setStoredSessionCatalogHidden,
   type SidebarRecentSession,
+  type SidebarPinZone,
 } from "./app-sidebar-session-types.ts";
 import type { SessionDataOwner } from "./session-data.ts";
 import type { SessionOwnerFilter } from "./session-owner-filter.ts";
@@ -70,13 +71,11 @@ export function hidePersonalSidebarCatalog(
   recoveryLink.className = "session-link";
   recoveryLink.href = recoveryHref;
   recoveryLink.textContent = t("chat.sidebar.sectionHiddenRecovery");
-  listen(recoveryLink, "click", (event) => {
-    if (!shouldHandleNavigationClick(event)) {
-      return;
-    }
-    event.preventDefault();
-    host.onNavigate?.(recovery.routeId, { search: recovery.search, hash: recovery.hash });
-  });
+  listen(recoveryLink, "click", (event) =>
+    handleNavigationClick(event, () =>
+      host.onNavigate?.(recovery.routeId, { search: recovery.search, hash: recovery.hash }),
+    ),
+  );
   message.append(t("chat.sidebar.sectionHidden", { section: label }), " ", recoveryLink);
   showToast({
     message,
@@ -271,4 +270,36 @@ export function personalSidebarOwnerProjection(
     selectedProfileId: host.sessionOwnerFilterId === self?.id ? self.id : undefined,
     self,
   });
+}
+
+/** Rendering and selection share archive visibility for personal references. */
+export function sidebarPinnedSessionRows(
+  zone: SidebarPinZone,
+  archiveVisibility?: ApplicationContext["sessions"]["archiveVisibility"],
+): SidebarRecentSession[] {
+  return zone.entries.flatMap((entry) => {
+    const row =
+      entry.type === "session" && !entry.rail ? zone.sessionRows.get(entry.key) : undefined;
+    return row && row.archived !== true && !archiveVisibility?.(row.key) ? [row] : [];
+  });
+}
+
+export function sidebarVisibleRowsInOrder(
+  zone: SidebarPinZone,
+  visibleRows: SidebarRecentSession[],
+  host: {
+    readonly collapsedSessionSections: ReadonlySet<string>;
+    readonly sessionDataContext?: {
+      sessions: Pick<ApplicationContext["sessions"], "archiveVisibility">;
+    };
+  },
+): SidebarRecentSession[] {
+  return host.collapsedSessionSections.has("pinned")
+    ? visibleRows
+    : [
+        ...sidebarPinnedSessionRows(zone, (key) =>
+          host.sessionDataContext?.sessions.archiveVisibility(key),
+        ),
+        ...visibleRows,
+      ];
 }

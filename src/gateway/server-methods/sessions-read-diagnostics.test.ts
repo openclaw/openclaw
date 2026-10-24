@@ -96,6 +96,9 @@ async function prepareListFixture() {
   const request = { agentId: "main", limit: 1 };
   // Reuse metrics require actual display demand, not only catalog readiness.
   await listSessions({ context, client, request });
+  // Observe the exercised operations, even when fixture warm-up itself logs a slow read.
+  records = [];
+  vi.mocked(sessionLog.warn).mockClear();
   return { context, client, projection, list: () => listSessions({ context, client, request }) };
 }
 

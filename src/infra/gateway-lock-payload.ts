@@ -95,12 +95,27 @@ export class GatewayLockNamespaceError extends Error {
   }
 }
 
-/** Qualify PID evidence before any local process probe or same-PID authority shortcut. */
+/** File-lock recovery also covers pre-namespace Windows records from supported upgrades. */
 export function classifyGatewayLockProcessNamespace(
-  value: unknown,
-  _lockPath?: string,
+  holder: { processNamespace?: unknown; pid?: unknown; startTime?: unknown } | null | undefined,
+  lockPath?: string,
 ): "same" | "dead" | "unknown" {
-  return classifyGatewayOwnerProcessNamespace(value);
+  if (process.platform === "win32" && holder && holder.processNamespace === undefined && lockPath) {
+    try {
+      // A missing namespace never grants local authority. Only an expired heartbeat
+      // plus native proof of process death can retire this legacy file owner.
+      if (
+        Date.now() - fs.statSync(lockPath).mtimeMs > GATEWAY_OWNER_HEARTBEAT_STALE_MS &&
+        isLockOwnerDefinitelyStale({ payload: { pid: holder.pid, starttime: holder.startTime } })
+      ) {
+        return "dead";
+      }
+    } catch {
+      // Unavailable heartbeat or process observations preserve the owner.
+    }
+    return "unknown";
+  }
+  return classifyGatewayOwnerProcessNamespace(holder?.processNamespace);
 }
 
 /** File locks and SQLite leases require comparable evidence of process death. */
@@ -116,7 +131,13 @@ export function classifyGatewayOwnerProcessNamespace(
   if (!current) {
     return "unknown";
   }
-  if (owner.host !== current.host || owner.platform !== current.platform) {
+  // macOS hostnames can change within one boot; the kernel UUID still binds
+  // PID inspection to that same kernel. A different host and boot stays unknown.
+  const sameDarwinBoot =
+    owner.platform === "darwin" &&
+    current.platform === "darwin" &&
+    owner.identity === current.identity;
+  if (owner.platform !== current.platform || (owner.host !== current.host && !sameDarwinBoot)) {
     return "unknown";
   }
   // Windows boot observations can disagree within one boot. Local Windows owners

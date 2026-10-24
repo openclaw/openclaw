@@ -16,8 +16,10 @@ import type {
   SessionTranscriptTurnExpectedState,
   SessionTranscriptTurnLifecyclePatch,
 } from "../config/sessions/session-transcript-turn-lifecycle.types.js";
-import type { TranscriptEntryAnchor } from "../config/sessions/transcript-entry-anchor.js";
-import type { TranscriptTurnAdmission } from "../config/sessions/transcript-turn-admission.js";
+import type {
+  TranscriptEntryAnchor,
+  TranscriptTurnAdmission,
+} from "../config/sessions/transcript-entry-anchor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { MediaFactInput } from "../media/media-facts.js";

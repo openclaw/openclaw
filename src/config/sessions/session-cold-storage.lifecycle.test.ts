@@ -34,7 +34,6 @@ import {
   loadSessionEntry,
   loadTranscriptEvents,
   loadTranscriptEventsSync,
-  persistCompactionBoundaryWithSessionEntrySync as persistBoundary,
   replaceSessionEntry,
   replaceSessionEntrySync,
   replaceTranscriptSuffixEventsSync as replaceSuffix,
@@ -490,15 +489,6 @@ describe("cold current transcript lifecycle", () => {
     ).toEqual([{ current_session_id: scope.sessionId }]);
     const event = { type: "custom", id: "sync-custom", customType: "sync-write", data: {} };
     const message = { role: "user", content: "A new synchronous message", timestamp: 20 };
-    const boundary = {
-      type: "compaction" as const,
-      id: "sync-boundary",
-      parentId: "question",
-      timestamp: new Date(20).toISOString(),
-      summary: "Compacted",
-      firstKeptEntryId: "question",
-      tokensBefore: 100,
-    };
     const mutations = {
       "append event": () => appendTranscriptEventSync(scope, event),
       "append event snapshot": () => appendTranscriptEventSnapshotSync(scope, event),
@@ -509,15 +499,6 @@ describe("cold current transcript lifecycle", () => {
       "replace full suffix": () => replaceSuffix(scope, original, original.slice(0, 1)),
       "replace incremental suffix": () =>
         replaceSuffix(scope, original.slice(1), [], 1, undefined, undefined, true),
-      "compaction boundary": () =>
-        persistBoundary(scope, {
-          prepared: { scope, event: boundary },
-          transcriptByteCompactionLatch: {
-            sessionId: scope.sessionId,
-            activeBytes: 2048,
-            maxBytes: 1024,
-          },
-        }),
     };
     for (const [name, run] of Object.entries(mutations)) {
       expect(run, name).toThrow(expect.objectContaining({ code: "TRANSCRIPT_COLD" }));

@@ -1,4 +1,12 @@
-import { createMemo, createSignal, onSettled } from "solid-js";
+import {
+  action,
+  createMemo,
+  createOptimistic,
+  createSignal,
+  Errored,
+  onSettled,
+  Show,
+} from "solid-js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import { registerModelSetupEnglish } from "../i18n/locales/en-model-setup.ts";
 import { registerSettingsEnglish } from "../i18n/locales/en-settings.ts";
@@ -23,15 +31,19 @@ export function createWizardLogin(options: {
   sessionExpiredMessage: () => string;
   finishingMessage?: () => string;
   onAnswer?: (value: unknown, includeValue?: boolean) => void;
+  onPresentationChange?: () => void;
   onBackgroundCompletion?: (completion: ModelSetupWizardCompletion) => Promise<void>;
 }) {
   const [state, setState] = createSignal<ModelSetupWizardState>({ phase: "idle" });
   const [draft, setValue] = createSignal<unknown>();
-  const [cancelling, setCancelling] = createSignal(false);
-  const [cancellationNotice, setCancellationNotice] = createSignal<string | null>(null);
+  const [cancelling, setCancelling] = createOptimistic(false);
+  const [cancellationAttempt, setCancellationAttempt] =
+    createSignal<Promise<"cancelled" | "running" | void>>();
+  const cancellationOutcome = createMemo(() => cancellationAttempt(), { loadingValue: undefined });
   let stepId: string | null = null;
   let generation = 0;
   let cancellation: number | undefined;
+  let retireCancellation: (() => void) | undefined;
   let disposed = false;
   const runner = new ModelSetupWizardRunner({
     ...options,
@@ -44,8 +56,9 @@ export function createWizardLogin(options: {
       }
       if (next.phase !== "step") {
         cancellation = undefined;
-        setCancelling(false);
-        setCancellationNotice(null);
+        retireCancellation?.();
+        retireCancellation = undefined;
+        setCancellationAttempt(undefined);
       }
       if (next.phase === "step" && next.step.id !== stepId) {
         setValue(() => initialWizardValue(next.step));
@@ -54,6 +67,9 @@ export function createWizardLogin(options: {
       }
       stepId = next.phase === "step" ? next.step.id : null;
       setState(next);
+      if (next.phase === "starting" || next.phase === "step") {
+        options.onPresentationChange?.();
+      }
     },
     cancelledMessage: () => t("modelSetup.wizard.cancelled"),
     gatewayNotRespondingMessage: () => t("modelSetup.wizard.gatewayNotResponding"),
@@ -63,6 +79,7 @@ export function createWizardLogin(options: {
     disposed = true;
     generation += 1;
     cancellation = undefined;
+    retireCancellation?.();
     void runner.cancel();
   });
 
@@ -93,51 +110,77 @@ export function createWizardLogin(options: {
       doneMessage: viewOptions.doneMessage,
       doneDescription: viewOptions.doneDescription,
       doneAction: viewOptions.doneAction,
-      cancellationNotice: cancellationNotice(),
+      cancellationFeedback,
       value: draft(),
       onValueChange: (value) => {
         setValue(() => value);
       },
       onAnswer:
         options.onAnswer ?? ((value, includeValue) => void runner.answer(value, includeValue)),
-      onCancel: () => void cancel(),
+      onCancel: cancel,
       onClose: options.onClose,
     };
   }
 
-  async function cancel(): Promise<void> {
+  const presentCancellation = action(function* (
+    pending: ReturnType<ModelSetupWizardRunner["requestCancellation"]>,
+    retired: Promise<void>,
+  ) {
+    setCancelling(true);
+    const outcome: Awaited<typeof pending> | void = yield Promise.race([pending, retired]);
+    return outcome;
+  });
+
+  function cancel(): void {
     if (cancellation !== undefined || runner.state.phase === "done") {
       return;
     }
     const currentGeneration = generation;
     cancellation = currentGeneration;
-    setCancelling(true);
-    setCancellationNotice(null);
-    try {
-      const result = await runner.requestCancellation();
-      if (currentGeneration !== generation) {
-        return;
-      }
-      if (result === "running") {
-        setCancellationNotice(options.finishingMessage?.() ?? t("modelProviders.login.finishing"));
-      } else if (result === "cancelled") {
-        options.onClose();
-      }
-    } catch (error) {
-      if (currentGeneration === generation) {
-        setCancellationNotice(
-          t("modelSetup.wizard.cancelFailed", {
-            error: formatUiError(error, options.requestFailedMessage()),
-          }),
-        );
-      }
-    } finally {
-      if (currentGeneration === generation) {
-        cancellation = undefined;
-        setCancelling(false);
-      }
-    }
+    const lifetime = Promise.withResolvers<void>();
+    retireCancellation = lifetime.resolve;
+    const pending = runner
+      .requestCancellation()
+      .then((outcome) => {
+        if (currentGeneration === generation && outcome === "cancelled") {
+          options.onClose();
+        }
+        return outcome;
+      })
+      .finally(() => {
+        if (currentGeneration === generation) {
+          cancellation = undefined;
+          retireCancellation = undefined;
+        }
+      });
+    const result = presentCancellation(pending, lifetime.promise);
+    void setCancellationAttempt(result);
+    // Retired dialogs still consume the admitted action's rejection.
+    void result.catch(() => {});
   }
+
+  function CancellationFeedback() {
+    return (
+      <Show when={!cancelling()}>
+        <Errored
+          fallback={(error) => (
+            <div class="callout warning" role="alert">
+              {t("modelSetup.wizard.cancelFailed", {
+                error: formatUiError(error(), options.requestFailedMessage()),
+              })}
+            </div>
+          )}
+        >
+          <Show when={cancellationOutcome() === "running"}>
+            <div class="callout warning" role="alert">
+              {options.finishingMessage?.() ?? t("modelProviders.login.finishing")}
+            </div>
+          </Show>
+        </Errored>
+      </Show>
+    );
+  }
+  const cancellationFeedback = <CancellationFeedback />;
   return {
     runner,
     state: () => {

@@ -759,7 +759,7 @@ it("returns empty points without reading for invalid maxPoints", async () => {
 
 it("returns empty logs for invalid limits", async () => {
   const sessionFile = await writeMessages(user("2026-02-12T10:00:00Z", "hello"));
-  for (const limit of [0, -1, Number.NaN, Number.POSITIVE_INFINITY]) {
+  for (const limit of [0, -1, 0.5, 1.5, Number.NaN, Number.POSITIVE_INFINITY]) {
     await expect(readLogs(sessionFile, limit)).resolves.toEqual([]);
   }
 });

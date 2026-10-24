@@ -105,15 +105,15 @@ Guest admission or restore authority for unfinished work.
 
 ## Invite, inspect, and revoke visitors
 
-| Tool             | Input                                                            | Result                                                                                      |
-| ---------------- | ---------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
-| `visitor_invite` | Exactly one of `github` or `email`; optional `days` or `forever` | Adds a grant or refreshes the same target's expiry.                                         |
-| `visitor_list`   | `{}`                                                             | Shows targets, verified GitHub identities, selection IDs, Gateway access, and policy drift. |
-| `visitor_revoke` | `profileId`, `grantId`, or `github`/`email`                      | Removes a person's recorded grants or cancels a selected invitation.                        |
+| Tool             | Input                                                                        | Result                                                                                      |
+| ---------------- | ---------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
+| `visitor_invite` | Exactly one of `github` or `email`; optional `days` or `forever`, and `note` | Adds a grant or refreshes the same target's expiry, and returns copyable invitation text.   |
+| `visitor_list`   | `{}`                                                                         | Shows targets, verified GitHub identities, selection IDs, Gateway access, and policy drift. |
+| `visitor_revoke` | `profileId`, `grantId`, or `github`/`email`                                  | Removes a person's recorded grants or cancels a selected invitation.                        |
 
 Each tool also returns structured `details`, visible to Code Mode, with the same
 information as its text: invite returns `outcome`, either `email` or `githubAccountId`, `grantId`, optional `githubLogin`,
-`expiresAt`, `gatewayAccess`, and `signInUrl`; revoke returns `outcome`, `emails`,
+`expiresAt`, `gatewayAccess`, optional `signInUrl`, `noteStored`, and `invitationText`; revoke returns `outcome`, `emails`,
 and optional `githubAccountIds` and `githubLogin`; list returns `counts`, `grants`, `unmanaged`, and `omitted`.
 Recorded list rows include `grantId` when the invitation has a qualified lifetime,
 and `profileId` when its target belongs to a current profile.
@@ -168,7 +168,7 @@ For example, invite a visitor for seven days:
 ```
 
 Invite results identify the target, grant expiry, Gateway access, and login
-URL. A repeat invite for the same email or GitHub account refreshes its expiry rather than creating
+URL when one is configured. A repeat invite for the same email or GitHub account refreshes its expiry rather than creating
 a second grant, and checks the current role again even when the target is already
 in the Access policy.
 Renewal before expiry preserves the grant attached to accepted shared GitHub
@@ -179,7 +179,8 @@ GitHub result; saved work and existing pull requests are retained.
 Permanent access requires `forever: true`. Invites beyond `maxVisitors` are
 refused; revoke an existing visitor or deliberately raise the configured cap.
 
-Visitors sign in at the normal <https://team.openclaw.ai> address through Team's
+Visitors sign in at the Gateway's configured `gateway.publicOrigin`, under
+`gateway.controlUi.basePath` when set (for Team, <https://team.openclaw.ai>), through Team's
 existing login. Invite either the email that login verifies or the GitHub account
 verified through the configured OIDC mapping. The address is a sign-in
 location, not a magic link: sharing it does not grant access and the plugin does
@@ -201,6 +202,66 @@ does not change the grant's target. Cloudflare must verify that account's ID und
 the configured provider and claim. A known profile retains its current
 role; an unknown account reports first sign-in as pending. The stored login is a
 display label, not an identity binding or GitHub authorship credit.
+
+## Invitation note and text
+
+Pass an optional `note` to `visitor_invite`: free text of at most 1000 characters
+from the inviter to the visitor, for example a session link to start from. A
+session link goes only in this note; the plugin does not share sessions itself.
+A supplied note replaces the stored one; renewal without `note` keeps it. The
+result confirms whether a note is stored but does not echo it separately.
+
+After a successful invite or renewal, `invitationText` (also at the end of the
+text result) is short plain text for the inviter to hand to the visitor. It
+names the inviter when their Gateway profile has a display name, the sign-in
+address, the email or GitHub account to sign in with, the expiry in UTC, and the
+stored note. It contains no grant IDs, tokens, or other credentials:
+
+```text
+Josh invited you to OpenClaw.
+Sign in at https://team.openclaw.ai with your GitHub account @octocat.
+Your access expires on 2026-11-07 12:00 UTC.
+
+Note from Josh:
+Start in https://team.openclaw.ai/chat/roboclaw/welcome
+```
+
+The sign-in address comes from `gateway.publicOrigin` plus
+`gateway.controlUi.basePath`, like other external Control UI links. When no
+public origin is configured or the Control UI is disabled, `signInUrl` is
+omitted, the text result names the missing setting, and the invitation text asks
+the visitor to get the OpenClaw sign-in address from the inviter.
+
+## Onboarding record
+
+Each new invitation records onboarding metadata with its grant: the inviter's
+Gateway profile (`invitedBy`, with a display label when available), an optional
+inviter note of at most 1000 characters stored as given, and welcome-session
+progress (`onboarding`) that starts as `pending`. The inviter comes only from the
+host's trusted requester context, never from tool input; when no human profile
+resolves, it stays unset.
+
+Renewal keeps the recorded inviter, note, and onboarding progress unless new
+values are supplied, and never resets progress to `pending`. Grants recorded
+before this metadata existed keep working without it.
+
+Welcome-session setup inside this plugin uses two service methods:
+
+- `findActiveInvitation({ emails, githubAccountIds })` returns a snapshot of the
+  current grant for a signed-in identity, checking emails before GitHub accounts,
+  or `undefined` when none is active.
+- `compareAndSetOnboarding({ grantId, expected, next })` replaces the onboarding
+  progress of that still-active grant only when the recorded progress matches
+  `expected` by `state` and `updatedAt` (`null` matches a grant without
+  progress). It runs on the same queue as invite, revoke, and sweep, so of
+  concurrent callers holding one snapshot exactly one applies; the others receive
+  `conflict` with the current progress. Expired, revoked, or replaced grants
+  return `inactive`; expiry during a write rejects it. Errors longer than 500 characters are truncated.
+  `updatedAt` advances monotonically, including a `pending` → `pending` reservation
+  in the same millisecond. Reserve a stable session key before creating it; retry
+  setup against that same key instead of allocating another session. This API
+  serializes the active Gateway service, not independent processes. Session
+  creation and restart recovery remain the welcome-setup owner's responsibility.
 
 ## Expiry and drift
 

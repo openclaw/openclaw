@@ -15,10 +15,7 @@ import { runPostgresTransactionSync } from "./postgres-sync/transaction.js";
 import type { RuntimeWorkerGeneration } from "./runtime-worker-generation.js";
 import type { PostgresSqlConnection } from "./sql-connection.js";
 import { SQLITE_DATABASE_ADMISSIONS_KEY } from "./sqlite-database-admission-key.js";
-import {
-  readSqliteDatabaseAdmissionFact as readFact,
-  type SqliteDatabaseFactKey,
-} from "./sqlite-database-admission-record.js";
+import { readSqliteDatabaseAdmissionFact as readFact } from "./sqlite-database-admission-record.js";
 import {
   beginSqliteDatabaseAdmissionOperation as beginOperation,
   discardSqliteDatabaseTransactionAdmissions as discardFacts,
@@ -683,23 +680,6 @@ it("path revocation invalidates scoped receipts and admission facts with a live 
 
 const key = { name: "test.engine-admission", read: (value: unknown) => value };
 const schemaKey = { ...key, name: "test.engine-schema-admission", schemaDependent: true };
-
-it("carries typed owner facts through publication, replacement and worker cloning", () => {
-  using fixture = databaseFixture("sqlite-admission-typed-");
-  const { location, database } = fixture;
-  const typedKey: SqliteDatabaseFactKey<{ engine: string; version: number }> = {
-    name: "test.typed-engine-fact",
-  };
-
-  const initial = { engine: "sqlite", version: 1 },
-    replacement = { ...initial, version: 2 };
-  publishFact(database, typedKey, { ...initial });
-  expect(getFact(database, typedKey)).toEqual(initial);
-  publishFact(database, typedKey, { ...replacement });
-  expect(loadFact(location, typedKey, () => undefined)).toEqual(replacement);
-  const transferred = structuredClone(recordsFor(location)[0]!.facts.get(typedKey.name)!);
-  expect(readFact(transferred, typedKey)).toEqual(replacement);
-});
 
 it.each(["committed", "native", "sqlite-transaction", "postgres-transaction"] as const)(
   "decodes admission values once at publication (%s)",

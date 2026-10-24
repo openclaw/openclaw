@@ -9,6 +9,7 @@ import type { RunEmbeddedAgentInternalParams } from "../../agents/embedded-agent
 import { finalizeCronPromptForResolvedTools } from "../../cron/isolated-agent/run-delivery-trace.js";
 import { resolveCronSourceDeliveryPlan } from "../../cron/isolated-agent/source-delivery-plan.js";
 import * as cronInference from "../../cron/run-inference.js";
+import { TEST_SCHEDULED_OCCURRENCE } from "../../cron/scheduled-occurrence.test-support.js";
 import type { CronAgentExecutionPhaseUpdate } from "../../cron/types.js";
 import { onAgentEvent, type AgentEventPayload } from "../../infra/agent-events.js";
 import {
@@ -26,6 +27,8 @@ import {
   type FallbackRunnerParams,
   setupAgentRunnerExecutionTestState,
 } from "./agent-runner-execution.test-support.js";
+import { createQueueCase } from "./queue.case.test-support.js";
+import { clearFollowupQueue, getExistingFollowupQueue } from "./queue/state.js";
 import type {
   ScheduledSessionAutomation,
   SessionEventExecution,
@@ -37,6 +40,7 @@ const executeAgentTurn = await getRawExecuteAgentTurnForTest();
 
 function createScheduledAutomation(): ScheduledSessionAutomation {
   return {
+    occurrence: TEST_SCHEDULED_OCCURRENCE,
     admissionSource: "operator-schedule",
     job: {
       id: "scheduled-target-test",
@@ -87,6 +91,89 @@ function expectedCompletionEvidence(runtime: "embedded" | "cli") {
 }
 
 describe("ordinary session event execution", () => {
+  it.for(["embedded", "cli"] as const)(
+    "restores exec guidance after queue overflow in the %s turn without changing the system prefix",
+    async (runtime, { signal, onTestFinished }) => {
+      const queue = createQueueCase({ cap: 1 }, 2);
+      onTestFinished(() => {
+        clearFollowupQueue(queue.key);
+      });
+      const completion = createFollowupRun({
+        inputProvenance: { kind: "internal_system", sourceTool: "exec" },
+        extraSystemPrompt: "Existing shared session instructions",
+        extraSystemPromptStatic: "Stable shared session instructions",
+      });
+      completion.prompt = `Exec completed (job-1234, code 0) :: ${"output ".repeat(40)}`;
+      completion.summaryLine = completion.prompt;
+      const next = {
+        ...completion,
+        prompt: "A plugin event",
+        summaryLine: "A plugin event",
+        run: {
+          ...completion.run,
+          inputProvenance: { kind: "internal_system" as const, sourceTool: "plugin" },
+        },
+      };
+      queue.add(completion);
+      queue.add(next);
+      const settlements = getExistingFollowupQueue(queue.key)!.entries.map(
+        (input) => input.settlement.promise,
+      );
+      const observed: (RunEmbeddedAgentInternalParams | RunCliAgentParams)[] = [];
+      const inspect = async (params: RunEmbeddedAgentInternalParams | RunCliAgentParams) => {
+        observed.push(params);
+        return { payloads: [{ text: "done" }], meta: {} };
+      };
+      state.runEmbeddedAgentMock.mockImplementation(inspect);
+      const staticPrompts: (string | undefined)[] = [];
+      state.runCliAgentMock.mockImplementation((params: RunCliAgentParams) => {
+        staticPrompts.push(params.extraSystemPromptStatic);
+        return inspect(params);
+      });
+      const failures: unknown[] = [];
+      await withinTest(
+        queue.drain(async (followupRun) => {
+          try {
+            if (runtime === "cli") {
+              useCliFallback(followupRun);
+            }
+            const result = await executeAgentTurn({
+              ...createMinimalRunAgentTurnParams({ followupRun }),
+              commandBody: followupRun.prompt,
+            });
+            expect(result.outcome).toMatchObject({ kind: "settled", status: "ok" });
+          } catch (error) {
+            failures.push(error);
+          } finally {
+            await queue.runFollowup(followupRun);
+          }
+        }),
+        signal,
+      );
+      await Promise.allSettled(settlements);
+      expect(failures).toEqual([]);
+      expect(observed).toHaveLength(2);
+      const prompt = observed[0]!.prompt;
+      expect(prompt).toContain("[Queue overflow]");
+      expect(prompt).not.toContain(completion.prompt);
+      expect(prompt).toContain("[OpenClaw exec completion]");
+      expect(prompt).toContain("internal continuation, not a new user request");
+      expect(prompt).toContain("requested results not yet delivered");
+      expect(prompt).toContain("duplicate or superseded results");
+      expect(prompt).toContain("reply NO_REPLY only");
+      expect(observed[1]!.prompt).toBe("A plugin event");
+      for (const params of observed) {
+        expect(params.extraSystemPrompt).toBe("Existing shared session instructions");
+      }
+      if (runtime === "cli") {
+        expect(staticPrompts).toEqual([
+          "Stable shared session instructions",
+          "Stable shared session instructions",
+        ]);
+      }
+    },
+  );
+
   it("captures a structured result before event settlement consumes the invocation", async () => {
     const runId = "automation-result-capture";
     const automation = createScheduledAutomation();
@@ -283,6 +370,7 @@ describe("ordinary session event execution", () => {
         onSuccessfulAuthProfile,
       },
       assertCandidate,
+      resolveCliAuthProfile: vi.fn(async () => "scheduled-profile"),
       dispose,
     });
     onTestFinished(() => acquire.mockRestore());
@@ -317,6 +405,60 @@ describe("ordinary session event execution", () => {
     expect(settle).toHaveBeenCalledOnce();
     expect(dispose).toHaveBeenCalledOnce();
   });
+
+  it.for([false, true])(
+    "carries scheduled credential authority into CLI preparation (revoked=%s)",
+    async (revoke, { onTestFinished }) => {
+      const followupRun = createFollowupRun();
+      useCliFallback(followupRun);
+      const automation = createScheduledAutomation();
+      followupRun.run.scheduledAutomation = automation;
+      automation.job.inferenceBinding = {
+        version: 1,
+        provider: "claude-cli",
+        profileId: "scheduled-profile",
+        authorizationId: "a".repeat(64),
+        authRequirement: "subscription",
+        source: "auto",
+      };
+      let retired = false;
+      const assertCurrent = vi.fn(() => {
+        if (retired) {
+          throw new Error("scheduled credential retired");
+        }
+      });
+      const acquire = vi.spyOn(cronInference, "prepareCronRunInference").mockResolvedValue({
+        runParams: {
+          authProfileId: "scheduled-profile",
+          authProfileBinding: {
+            profileId: "scheduled-profile",
+            authRequirement: "subscription",
+            assertCurrent,
+            revalidate: async () => {},
+          },
+        },
+        assertCandidate: vi.fn(),
+        resolveCliAuthProfile: vi.fn(async () => "scheduled-profile"),
+        dispose: vi.fn(),
+      });
+      onTestFinished(() => acquire.mockRestore());
+      state.runCliAgentMock.mockImplementationOnce(async (params: RunCliAgentParams) => {
+        expect(params.authProfileId).toBe("scheduled-profile");
+        expect(params.assertCurrent).toBeTypeOf("function");
+        params.assertCurrent?.();
+        retired = revoke;
+        // The real CLI owner invokes this guard again after awaited preparation.
+        params.assertCurrent?.();
+        return { payloads: [{ text: "done" }], meta: {} };
+      });
+      const result = await executeAgentTurn(createMinimalRunAgentTurnParams({ followupRun }));
+      expect(state.runCliAgentMock).toHaveBeenCalledOnce();
+      expect(assertCurrent).toHaveBeenCalledTimes(2);
+      expect(result.outcome).toMatchObject(
+        revoke ? { kind: "rejected" } : { kind: "settled", status: "ok" },
+      );
+    },
+  );
 
   it.for([
     { runtime: "embedded", outcome: "start" },

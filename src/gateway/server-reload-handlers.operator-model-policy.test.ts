@@ -1,12 +1,6 @@
 import { afterEach, assert, beforeEach, expect, it, vi } from "vitest";
-import { createInfoWarnErrorLogger } from "../../test/helpers/mock-logger.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { bindOperatorModelExecution } from "../agents/admitted-run-context.js";
-import {
-  getRuntimeAuthProfileStoreCredentialsRevision,
-  getRuntimeAuthProfileStoreSnapshotsRevision,
-  prepareRuntimeAuthProfileStoreSnapshots,
-} from "../agents/auth-profiles/runtime-snapshots.js";
 import * as preparedModelRuntime from "../agents/prepared-model-runtime.js";
 import {
   clearRuntimeConfigSnapshot,
@@ -24,7 +18,6 @@ import {
   setActivePluginRegistry,
 } from "../plugins/runtime.js";
 import { resetGatewayWorkAdmission } from "../process/gateway-work-admission.js";
-import { createEmptyRuntimeWebToolsMetadata } from "../secrets/runtime-fast-path.js";
 import { clearSecretsRuntimeSnapshot } from "../secrets/runtime.js";
 import * as sessionQueries from "../sessions/session-controller.queries.js";
 import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
@@ -42,15 +35,16 @@ import type { OperatorScope } from "./operator-scopes.js";
 import { createChannelManager } from "./server-channels.js";
 import { createContext as createGatewayTestContext } from "./server-plugin-in-process-dispatch.test-support.js";
 import {
-  createDefaultGatewayReloadState,
+  createManagedReloadTestParams,
   createDirectConfigWriteFixture,
   createConfigWriteNotification,
-  createTestConfigRevisionProjector,
   publishConfigWrite,
 } from "./server-reload-handlers.config.test-support.js";
 import { startManagedGatewayConfigReloader } from "./server-reload-managed.js";
-import { SharedGatewaySessionGenerationState } from "./server-shared-auth-generation.js";
-import { createTestRuntimeSecretsActivator } from "./server-startup-config.test-support.js";
+import {
+  createTestRuntimeSecretsActivator,
+  makePreparedSecretsSnapshot,
+} from "./server-startup-config.test-support.js";
 import {
   createDispatchTestHarness,
   createOperatorWsClient,
@@ -75,18 +69,6 @@ afterEach(() => {
   setGatewayRestartPolicy({ allowExternal: false });
   resetGatewayWorkAdmission();
 });
-
-function makePreparedSecretsSnapshot(config: OpenClawConfig) {
-  return {
-    sourceConfig: config,
-    config,
-    authStoreCredentialsRevision: getRuntimeAuthProfileStoreCredentialsRevision(),
-    authStoreSnapshotsRevision: getRuntimeAuthProfileStoreSnapshotsRevision(),
-    warnings: [],
-    webTools: createEmptyRuntimeWebToolsMetadata(),
-    authStores: prepareRuntimeAuthProfileStoreSnapshots([]),
-  };
-}
 
 it("commits model-only role changes without retiring permitted models or original source work", async () => {
   const profileState = { scenario: "minimal", prepareProfileCatalog: true } as const;
@@ -140,7 +122,6 @@ it("commits model-only role changes without retiring permitted models or origina
     const advance = vi.spyOn(preparedModelRuntime, "advancePreparedModelRuntimeConfig");
     const invalidate = vi.spyOn(preparedModelRuntime, "markPreparedModelRuntimeSnapshotsStale");
     const rebuild = vi.spyOn(preparedModelRuntime, "refreshPreparedModelRuntimeSnapshots");
-    let state = createDefaultGatewayReloadState();
     const channelManager = createChannelManager({
       scheduler: createTestGatewayScheduler(),
       getRuntimeConfig: () => initialConfig,
@@ -148,65 +129,34 @@ it("commits model-only role changes without retiring permitted models or origina
       channelLogs: {},
       channelRuntimeEnvs: {},
     });
-    const log = createInfoWarnErrorLogger();
-    const reloader = startManagedGatewayConfigReloader({
-      scheduler: createTestGatewayScheduler(clock.clock),
-      getPluginRegistry: () => registry,
-      configRevisionProjector: createTestConfigRevisionProjector(),
-      minimalTestGateway: false,
-      initialConfig,
-      initialCompareConfig: initialConfig,
-      initialSnapshotRawHash: null,
-      initialAuthoredConfig: {},
-      initialSnapshotValid: true,
-      initialSnapshotIssues: [],
-      initialPluginInstallRecords: {},
-      watchPath: "/tmp/openclaw.json",
-      promoteSnapshot: async () => true,
-      deps: {},
-      broadcast: vi.fn(),
-      getState: () => state,
-      setState: (next) => {
-        state = next;
-      },
-      channelManager,
-      startChannel: channelManager.startChannel,
-      stopChannel: channelManager.stopChannel,
-      reloadPlugins: async () => {
-        throw new Error("Unexpected plugin reload for model policy");
-      },
-      logHooks: log,
-      logChannels: log,
-      logCron: log,
-      logReload: log,
-      cronReconciliation: {
-        arm: () => ({ complete: async () => {} }),
-        invalidate: vi.fn(),
-      },
-      resolveSharedGatewaySessionGenerationForConfig: () => undefined,
-      sharedGatewaySessionGenerationState: new SharedGatewaySessionGenerationState({
-        current: undefined,
-        required: null,
+    const reloader = startManagedGatewayConfigReloader(
+      createManagedReloadTestParams({
+        scheduler: createTestGatewayScheduler(clock.clock),
+        getPluginRegistry: () => registry,
+        initialConfig,
+        channelManager,
+        startChannel: channelManager.startChannel,
+        stopChannel: channelManager.stopChannel,
+        reloadPlugins: async () => {
+          throw new Error("Unexpected plugin reload for model policy");
+        },
+        clients: [client],
+        reconcileRuntimePolicy: (config) =>
+          disconnectDisallowedGatewayPolicyClients([client], config),
+        readSnapshot: fixture.readSnapshot,
+        subscribeToWrites: fixture.subscribeToWrites,
+        resolveGatewayContext: () => context,
+        activateRuntimeSecrets: createTestRuntimeSecretsActivator(async ({ config }) => {
+          entered.resolve();
+          await releasePreparation.promise;
+          if (rejectCandidate) {
+            throw new Error("candidate preparation rejected");
+          }
+          return makePreparedSecretsSnapshot(config);
+        }),
+        requestRecoveryRestart,
       }),
-      clients: [client],
-      prepareTerminalConfig: vi.fn(),
-      reconcileRuntimePolicy: (config) =>
-        disconnectDisallowedGatewayPolicyClients([client], config),
-      commitRuntimePolicy: vi.fn(),
-      acceptTerminalConfig: vi.fn(),
-      readSnapshot: fixture.readSnapshot,
-      subscribeToWrites: fixture.subscribeToWrites,
-      resolveGatewayContext: () => context,
-      activateRuntimeSecrets: createTestRuntimeSecretsActivator(async ({ config }) => {
-        entered.resolve();
-        await releasePreparation.promise;
-        if (rejectCandidate) {
-          throw new Error("candidate preparation rejected");
-        }
-        return makePreparedSecretsSnapshot(config);
-      }),
-      requestRecoveryRestart,
-    });
+    );
     let original: Awaited<ReturnType<typeof captureGatewayOperatorRunAuthority>>;
     let modelA: ReturnType<typeof bindOperatorModelExecution>;
     let modelB: ReturnType<typeof bindOperatorModelExecution>;
@@ -368,7 +318,6 @@ it.each(["scopes", "access policy"] as const)(
         );
       });
       const fixture = createDirectConfigWriteFixture(initialConfig);
-      let state = createDefaultGatewayReloadState();
       const channelManager = createChannelManager({
         scheduler: createTestGatewayScheduler(),
         getRuntimeConfig: () => initialConfig,
@@ -376,59 +325,31 @@ it.each(["scopes", "access policy"] as const)(
         channelLogs: {},
         channelRuntimeEnvs: {},
       });
-      const log = createInfoWarnErrorLogger();
-      const reloader = startManagedGatewayConfigReloader({
-        scheduler: createTestGatewayScheduler(clock.clock),
-        getPluginRegistry: () => registry,
-        configRevisionProjector: createTestConfigRevisionProjector(),
-        minimalTestGateway: false,
-        initialConfig,
-        initialCompareConfig: initialConfig,
-        initialSnapshotRawHash: null,
-        initialAuthoredConfig: {},
-        initialSnapshotValid: true,
-        initialSnapshotIssues: [],
-        initialPluginInstallRecords: {},
-        watchPath: "/tmp/openclaw.json",
-        promoteSnapshot: async () => true,
-        deps: {},
-        broadcast: vi.fn(),
-        getState: () => state,
-        setState: (next) => {
-          state = next;
-        },
-        channelManager,
-        startChannel: channelManager.startChannel,
-        stopChannel: channelManager.stopChannel,
-        reloadPlugins: async () => {
-          throw new Error("Unexpected plugin reload for role scopes");
-        },
-        logHooks: log,
-        logChannels: log,
-        logCron: log,
-        logReload: log,
-        cronReconciliation: { arm: () => ({ complete: async () => {} }), invalidate: vi.fn() },
-        resolveSharedGatewaySessionGenerationForConfig: () => undefined,
-        sharedGatewaySessionGenerationState: new SharedGatewaySessionGenerationState({
-          current: undefined,
-          required: null,
+      const reloader = startManagedGatewayConfigReloader(
+        createManagedReloadTestParams({
+          scheduler: createTestGatewayScheduler(clock.clock),
+          getPluginRegistry: () => registry,
+          initialConfig,
+          channelManager,
+          startChannel: channelManager.startChannel,
+          stopChannel: channelManager.stopChannel,
+          reloadPlugins: async () => {
+            throw new Error("Unexpected plugin reload for role scopes");
+          },
+          clients,
+          reconcileRuntimePolicy: (config, phase) => {
+            if (phase === "committed") {
+              disconnectDisallowedGatewayPolicyClients(clients, config);
+            }
+          },
+          readSnapshot: fixture.readSnapshot,
+          subscribeToWrites: fixture.subscribeToWrites,
+          resolveGatewayContext: () => context,
+          activateRuntimeSecrets: createTestRuntimeSecretsActivator(async ({ config }) =>
+            makePreparedSecretsSnapshot(config),
+          ),
         }),
-        clients,
-        prepareTerminalConfig: vi.fn(),
-        reconcileRuntimePolicy: (config, phase) => {
-          if (phase === "committed") {
-            disconnectDisallowedGatewayPolicyClients(clients, config);
-          }
-        },
-        commitRuntimePolicy: vi.fn(),
-        acceptTerminalConfig: vi.fn(),
-        readSnapshot: fixture.readSnapshot,
-        subscribeToWrites: fixture.subscribeToWrites,
-        resolveGatewayContext: () => context,
-        activateRuntimeSecrets: createTestRuntimeSecretsActivator(async ({ config }) =>
-          makePreparedSecretsSnapshot(config),
-        ),
-      });
+      );
       const accepted: NonNullable<
         Awaited<ReturnType<typeof captureGatewayOperatorRunAuthority>>
       >[] = [];

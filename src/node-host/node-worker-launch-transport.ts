@@ -203,7 +203,11 @@ export async function prepareNodeWorkerLaunchTransport(
       exactEnv: true,
     });
     await ready;
-    return { kind: "started", adapter, cleanupMode: "process-group" };
+    return {
+      kind: "started",
+      adapter,
+      cleanupMode: adapter.jobKillOnClose ? "windows-job" : "process-group",
+    };
   }
 
   const endpoint = options.descriptor.connectionEndpoint;

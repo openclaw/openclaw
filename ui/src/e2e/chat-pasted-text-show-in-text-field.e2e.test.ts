@@ -1,12 +1,10 @@
-import { readFile, writeFile } from "node:fs/promises";
-import path from "node:path";
+import { readFile } from "node:fs/promises";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import {
   buildControlUiCspHeader,
   computeInlineScriptHashes,
 } from "../../../src/gateway/control-ui-csp.ts";
-import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { waitForCommittedComposerDraft } from "./settle.test-support.ts";
@@ -108,10 +106,6 @@ suite.define(() => {
           const input = document.querySelector<HTMLTextAreaElement>(inputSelector);
           return Boolean(input?.value || document.querySelector("openclaw-chat-pasted-text"));
         }, selector);
-        const frame = await takeControlUiScreenshotFrame(page, composer, [composer], {
-          animations: "disabled",
-        });
-        await writeFile(path.join(suite.artifactDir, `${route}-empty-long-paste.png`), frame.png);
         await expect.poll(() => composer.inputValue()).toBe(pastedText);
         expect(
           await page.locator(".chat-attachments-preview openclaw-chat-pasted-text").count(),
@@ -295,12 +289,12 @@ suite.define(() => {
                 restoreLegacy ? "readwrite" : "readonly",
               );
               const store = transaction.objectStore("composerDrafts");
-              const request = store.getAll() as IDBRequest<
+              const request: IDBRequest<
                 Array<{
                   scopeKey: string;
                   attachments: Array<{ fileName: string; origin?: string }>;
                 }>
-              >;
+              > = store.getAll();
               let savedFileName: string | undefined;
               once(request, "success", () => {
                 const draft = request.result.find((record) => record.scopeKey === storedScopeKey);
@@ -321,12 +315,11 @@ suite.define(() => {
                   ? resolve(savedFileName)
                   : reject(new Error("Missing persisted attachment")),
               );
-              once(transaction, "abort", () =>
-                reject(transaction.error ?? new Error("Draft fixture transaction aborted")),
-              );
-              once(transaction, "error", () =>
-                reject(transaction.error ?? new Error("Draft fixture transaction failed")),
-              );
+              for (const event of ["abort", "error"]) {
+                once(transaction, event, () =>
+                  reject(transaction.error ?? new Error("Draft fixture transaction failed")),
+                );
+              }
             });
           } finally {
             database.close();

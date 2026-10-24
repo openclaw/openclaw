@@ -23,6 +23,7 @@ import { registerClawsEnglish } from "../../i18n/locales/en-claws.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import type { GatewayConnectionScope } from "../../lib/gateway-connection-lifecycle.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
+import { createPageRequestDelay } from "../../lib/page-request.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { useGatewayPage } from "../../lib/reactive/gateway-page.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
@@ -133,27 +134,15 @@ export function ClawsExplore(props: { onSelect?: (entry: ClawCatalogEntry) => vo
       return;
     }
     loadedForConnection = true;
-    let cancelled = false;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    let resume: (() => void) | undefined;
-    const ready = delay
-      ? new Promise<void>((resolve) => {
-          resume = resolve;
-          timer = setTimeout(resolve, delay);
-        })
-      : undefined;
-    cancelSearch = () => {
-      cancelled = true;
-      clearTimeout(timer);
-      resume?.();
-    };
+    const { ready, isCancelled, cancel } = createPageRequestDelay(delay);
+    cancelSearch = cancel;
     setRequest({
       scope,
       query,
       category,
       ready,
       isCurrent: () =>
-        !cancelled &&
+        !isCancelled() &&
         gateway.isCurrent(scope) &&
         canCallGatewayMethod(context.gateway.snapshot, "claws.catalog.search", "operator.read"),
     });

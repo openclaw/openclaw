@@ -662,14 +662,7 @@ export function convertProviderResponsesMessages<TApi extends Api>(
   model: Model<TApi>,
   context: Context,
   allowedToolCallProviders: ReadonlySet<string>,
-  options?: {
-    includeSystemPrompt?: boolean;
-    replayResponsesItemIds?: boolean;
-    sessionId?: string;
-    authProfileId?: string;
-    replayMode?: OpenAIResponsesReplayMode;
-    retainUserProvenance?: boolean;
-  },
+  options?: ConvertResponsesMessagesOptions,
 ): ResponseInput {
   return convertResponsesMessagesWithStyle(
     model,

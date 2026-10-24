@@ -22,6 +22,7 @@ import {
 } from "./memory-panel.test-support.ts";
 import { AgentMemoryPanel } from "./memory-panel.tsx";
 import { installDreamingViewTestTranslations } from "./view.test-helpers.ts";
+import "../../../lib/toast-host.tsx";
 
 const restoreTranslations = installDreamingViewTestTranslations();
 afterAll(() => restoreTranslations());
@@ -31,7 +32,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-it.each(["maintenance", "confirmation"] as const)(
+it.each(["maintenance", "confirmation", "config"] as const)(
   "leaves Dreaming through RouterOutlet while %s is pending",
   async (operation) => {
     const pathname = "/systems";
@@ -45,6 +46,12 @@ it.each(["maintenance", "confirmation"] as const)(
           : emptyReply(name),
     );
     const context = contextWithRequest(request);
+    vi.mocked(context.runtimeConfig.openFile).mockImplementation(async () => {
+      await pending.promise;
+    });
+    const toastHost = document.createElement("openclaw-toast-host");
+    document.body.append(toastHost);
+    await toastHost.updateComplete;
     context.emit({
       hello: gatewayHelloForMethods(
         [STATUS, DIARY, method, "config.patch"],
@@ -113,6 +120,18 @@ it.each(["maintenance", "confirmation"] as const)(
         backfill!.click();
         await waitForSolid(() => expect(request).toHaveBeenCalledWith(method, { agentId: "main" }));
         await waitForSolid(() => expect(page.container.textContent).toContain("Working…"));
+      } else if (operation === "config") {
+        click(page.container, "#dreams-tab-diary");
+        click(page.container, "#dream-diary-tab-wiki");
+        const openConfig = page.container.querySelector<HTMLButtonElement>(
+          ".dreams-diary__empty-actions .btn",
+        )!;
+        openConfig.click();
+        await waitForSolid(() => {
+          expect(openConfig.disabled).toBe(true);
+          expect(openConfig.getAttribute("aria-busy")).toBe("true");
+          expect(context.runtimeConfig.openFile).toHaveBeenCalledOnce();
+        });
       } else {
         click(page.container, ".dreams__phase-toggle");
         click(page.container, ".exec-approval-actions button:last-child");
@@ -142,6 +161,7 @@ it.each(["maintenance", "confirmation"] as const)(
         expect(page.container.querySelector("openclaw-agent-memory-panel")).toBeNull();
         expect(page.container.querySelector('[role="alert"]')).toBeNull();
         expect(page.container.textContent).not.toContain("Late Dreaming failure");
+        expect(toastHost.textContent).not.toContain("Late Dreaming failure");
       });
     } finally {
       pending.resolve({ written: 1 });

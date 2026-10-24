@@ -2,7 +2,7 @@ import { runAgentHarnessGatewayQuestion } from "openclaw/plugin-sdk/agent-harnes
 import { createNativeSessionBindingAuthority } from "openclaw/plugin-sdk/agent-harness-session-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { registerCodexSteeringConfirmationCases } from "./attempt-steering.confirmation.cases.js";
+import { registerCodexSteeringConfirmationCases } from "./attempt-steering.confirmation.test-support.js";
 import {
   CodexSteeringAcceptedUnconfirmedError,
   createCodexSteeringQueue,

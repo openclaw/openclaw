@@ -204,6 +204,16 @@ function createPublicationBackend(
   admit: (stage: "transaction" | "commit") => void,
 ) {
   const vectorIndex = admitMemoryVectorIndex(db);
+  function assertSourceCurrent(header: MemorySourceIndexHeader): void {
+    if (
+      header.source === "sessions" &&
+      hasMemorySessionTombstone(db, header.agentId, header.sessionId)
+    ) {
+      throw new Error(
+        "A session was forgotten while memory indexing was running; retry the memory index.",
+      );
+    }
+  }
   // Agent handles are admitted by the database owner; private shadows are checked once on open.
   if (!("kind" in input)) {
     assertMemoryShadowIdentity(databasePath, input.fileIdentity);
@@ -550,7 +560,9 @@ function createPublicationBackend(
           write(() => {
             stageMemoryIndexSchemaExtension(db);
             stageOpenClawAgentDatabaseSchemaExtension(db);
-            vectorIndex.capability.drop(vectorIndex.index);
+            if (hasVectorTable) {
+              vectorIndex.capability.drop(vectorIndex.index);
+            }
             vectorIndex.capability.create(vectorIndex.index, dimensions);
             admitStoreSearch(db, memoryVectorSearchSchema(dimensions), {
               extension: "memory.vector",
@@ -600,14 +612,7 @@ function createPublicationBackend(
           const inputs = command.input.sources;
           function* sources() {
             for (const { header, fragments } of inputs) {
-              if (
-                header.source === "sessions" &&
-                hasMemorySessionTombstone(db, header.agentId, header.sessionId)
-              ) {
-                throw new Error(
-                  "A session was forgotten while memory indexing was running; retry the memory index.",
-                );
-              }
+              assertSourceCurrent(header);
               yield { header, rows: readPublicationRows<MemorySourceIndexRow>(fragments) };
             }
           }
@@ -633,14 +638,7 @@ function createPublicationBackend(
       }
       let facts: ReturnType<typeof readMemoryDatabaseFacts> | undefined;
       const outcome = write(() => {
-        if (
-          header.source === "sessions" &&
-          hasMemorySessionTombstone(db, header.agentId, header.sessionId)
-        ) {
-          throw new Error(
-            "A session was forgotten while memory indexing was running; retry the memory index.",
-          );
-        }
+        assertSourceCurrent(header);
         new MemorySourceIndexKernel(db, command.input.state).replaceRows(header, rows);
         advanceMemoryIndexRevision(db);
         facts = readMemoryDatabaseFacts(db, command.input.state.hasVectorTable);

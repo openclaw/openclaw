@@ -224,7 +224,6 @@ export function retainSessionWorkspaceArtifacts(
 export function loadSessionWorkspaceDirectory(
   state: SessionWorkspaceHost,
   path: string,
-  force = false,
 ): Promise<void> {
   const workspace = getSessionWorkspace(state);
   const directories = (workspace.directories ??= Object.create(null));
@@ -237,7 +236,7 @@ export function loadSessionWorkspaceDirectory(
   if (pending) {
     return pending;
   }
-  if (!state.connected || !state.client || (directories[path]?.browser && !force)) {
+  if (!state.connected || !state.client || directories[path]?.browser) {
     return Promise.resolve();
   }
   const directory = (directories[path] ??= { loading: false, error: null });
@@ -457,6 +456,10 @@ export function openSessionWorkspacePreview(
       workspace.catalogNavigation = captureSessionWorkspaceNavigation(workspace);
     }
   }
+  if (workspace.activePreviewId === null && content.kind !== "mcp-app") {
+    workspace.catalogNavigation = captureSessionWorkspaceNavigation(workspace);
+    workspace.tree!.treeVisible = false;
+  }
   let preview = workspace.previews.find(
     (entry) =>
       entry.id === id ||
@@ -487,6 +490,8 @@ export function openSessionWorkspacePreview(
   if (context?.navigation) {
     preview.catalogNavigation = context.navigation;
     preview.catalogVisible = false;
+  } else if (content.kind !== "mcp-app") {
+    preview.catalogNavigation ??= captureSessionWorkspaceNavigation(workspace);
   }
   if (context?.canonicalKey) {
     preview.canonicalKey = context.canonicalKey;
@@ -630,16 +635,16 @@ export async function requestCloseSessionWorkspacePreview(
         return false;
       }
     } else {
-      const choice = await showConfirmChoiceDialog({
-        message: t("chat.sidePanel.closeFileChanges", { file: preview.label }),
-        confirmLabel: t("common.save"),
-        alternativeLabel: t("chat.detailPanel.discard"),
-        cancelLabel: t("common.cancel"),
-      });
-      if (!choice || !current()) {
-        return false;
-      }
       try {
+        const choice = await showConfirmChoiceDialog({
+          message: t("chat.sidePanel.closeFileChanges", { file: preview.label }),
+          confirmLabel: t("common.save"),
+          alternativeLabel: t("chat.detailPanel.discard"),
+          cancelLabel: t("common.cancel"),
+        });
+        if (!choice || !current()) {
+          return false;
+        }
         const settled = choice === "confirm" ? await draft.save() : draft.discard();
         if (!current()) {
           return false;

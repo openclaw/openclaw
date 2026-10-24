@@ -7,21 +7,57 @@ import {
   createMemo,
   createOptimistic,
   createSignal,
+  isPending,
+  onSettled,
 } from "solid-js";
 import { SettingsRow, SettingsSection } from "../components/solid/settings-ui.tsx";
+import { registerPluginManagementEnglish } from "../i18n/locales/en-plugin-management.ts";
 import { useApplication } from "../lib/reactive/context.ts";
-import { t } from "../lib/reactive/i18n.ts";
+import { registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
 import { projectOwner } from "../lib/reactive/projection.ts";
 import { CustomPluginUiDisabled } from "./control-ui-disabled.solid.tsx";
+
+registerEnglishCatalog(registerPluginManagementEnglish);
 
 export function PluginManager() {
   const context = useApplication();
   const [reloading, setReloading] = createOptimistic(false);
-  const [reloadRead, setReloadRead] = createSignal<Promise<void> | null>(null);
+  const [operationRead, setOperationRead] = createSignal<{
+    result: Promise<void>;
+    revision: number;
+    kind: "reload" | "refresh";
+  } | null>(null);
   const source = projectOwner(context.plugins, (runtime) => runtime);
-  const reload = action(function* () {
+  const connection = projectOwner(
+    context.gateway,
+    (gateway) => gateway.connectionRevision,
+    Object.is,
+  );
+  let reloadLifetime = Promise.withResolvers<void>();
+  onSettled(() => {
+    const stop = connection.subscribe(() => {
+      // Retire at the synchronous owner; reactive cleanup waits for the action.
+      reloadLifetime.resolve();
+      reloadLifetime = Promise.withResolvers<void>();
+    });
+    return () => {
+      stop();
+      reloadLifetime.resolve();
+    };
+  });
+  const completion = createMemo(() => {
+    const read = operationRead();
+    return read?.revision === connection.read() ? read.result.then(() => null) : null;
+  });
+  const refreshing = () => isPending(completion) && operationRead()?.kind === "refresh";
+  const observe = (result: Promise<void>, kind: "reload" | "refresh") => {
+    // The surface can disappear before the admitted operation settles.
+    void result.catch(() => undefined);
+    setOperationRead({ result, kind, revision: context.gateway.connectionRevision });
+  };
+  const reload = action(function* (result: Promise<void>, retired: Promise<void>) {
     setReloading(true);
-    yield source.read().reload();
+    yield Promise.race([result, retired]);
   });
   const replacements = createMemo(() => source.read().registrations("replacements"));
   const surfaces = createMemo(() => [
@@ -49,10 +85,8 @@ export function PluginManager() {
                     type="button"
                     disabled={reloading()}
                     onClick={() => {
-                      const read = reload();
-                      // The settings surface can disappear before this action settles.
-                      void read.catch(() => undefined);
-                      void setReloadRead(read);
+                      const retired = reloadLifetime.promise;
+                      observe(reload(source.read().reload(), retired), "reload");
                     }}
                   >
                     {t("pluginUi.reload")}
@@ -61,8 +95,12 @@ export function PluginManager() {
                 <button
                   class="btn btn--sm oc-action oc-action-secondary"
                   type="button"
-                  onClick={() => void source.read().refresh()}
+                  aria-busy={refreshing() ? "true" : "false"}
+                  onClick={() => observe(source.read().refresh(), "refresh")}
                 >
+                  <Show when={refreshing()}>
+                    <span class="btn__spinner" aria-hidden="true" />
+                  </Show>
                   {t("common.retry")}
                 </button>
               </>
@@ -117,8 +155,8 @@ export function PluginManager() {
               />
             )}
           </For>
-          <For each={!reloading() && reloadRead() ? [reloadRead()!] : []}>
-            {(read) => (
+          <For each={!reloading() && operationRead() ? [operationRead()!] : []}>
+            {() => (
               <Errored
                 fallback={(error) => {
                   const message = () => {
@@ -128,9 +166,7 @@ export function PluginManager() {
                   return <SettingsRow title={message()} role="alert" carapace />;
                 }}
               >
-                <Loading>
-                  <ReloadCompletion read={read} />
-                </Loading>
+                <Loading>{completion()}</Loading>
               </Errored>
             )}
           </For>
@@ -138,9 +174,4 @@ export function PluginManager() {
       </Show>
     </openclaw-plugin-manager>
   );
-}
-
-function ReloadCompletion(props: { read: Promise<void> }) {
-  const completion = createMemo(() => props.read.then(() => null));
-  return <>{completion()}</>;
 }

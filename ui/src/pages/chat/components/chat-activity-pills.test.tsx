@@ -88,7 +88,6 @@ it("preserves Markdown-only progress refresh outcomes and clears them after reco
       updatedAt: 1,
       markdown: "Release notes preserved",
     },
-    showInChat: true,
     hasActiveRun: false,
     onOpen,
   };

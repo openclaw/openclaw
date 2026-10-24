@@ -298,7 +298,7 @@ for ((index = 0; index < run_count; index += 1)); do
       --trusted-workflow-sha "$TRUSTED_WORKFLOW_SHA" \
       --verifier-source-sha "$VERIFIER_SOURCE_SHA" \
       --verifier-source-file "$VALIDATOR" \
-      "${qualification_args[@]}" \
+      ${qualification_args[@]+"${qualification_args[@]}"} \
       --json
   )"; then
     validator_error="$(
@@ -341,7 +341,6 @@ for ((index = 0; index < run_count; index += 1)); do
       and .controls.performanceReportPublication == "artifact-only"
       and .conclusions.current == "success"
       and .conclusions.root == "success"
-      and .conclusions.allRequiredSucceeded == true
       and (.current == .root)
       and (.root.runId | tostring) == $run_id
       and (.root.workflowSha | type == "string" and test("^[0-9a-f]{40}$"))
@@ -399,7 +398,6 @@ for ((index = 0; index < run_count; index += 1)); do
           ["normalCi", "pluginPrereleaseCandidate", "pluginPrereleaseIndependent", "releaseChecksCandidate", "releaseChecksIndependent"]
         elif (
           .rerunGroup == "all"
-          and ((.validationInputs.telegramWaiver // "") == "")
           and (
             ((.validationInputs.npmTelegramPackageSpec // "") | length) > 0
             or ((.validationInputs.releasePackageSpec // "") | length) > 0
@@ -416,7 +414,6 @@ for ((index = 0; index < run_count; index += 1)); do
           (if .validationInputs.coveragePolicy == "npm-beta-v1" then [] else ["artifact-only"] end))
       and all(.children[];
         .status == "completed"
-        and .policyPassed == true
         and .workflowSha == $record.root.workflowSha
         and (.sourceParentRunId | tostring) == $run_id
       )

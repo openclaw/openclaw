@@ -76,7 +76,7 @@ describe.skipIf(!hasBrowserLayout)("dream diary browser layout", () => {
       onRefreshDiary: () => {},
       onRefreshImports: () => {},
       onRefreshWikiOverview: () => {},
-      onOpenConfig: () => {},
+      onOpenConfig: async () => {},
       onOpenWikiPage: async () => {},
       onCloseWikiPreview: () => {},
       wikiPreview: null,

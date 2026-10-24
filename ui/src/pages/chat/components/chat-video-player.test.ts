@@ -38,7 +38,9 @@ it("starts metadata loading only when the video card reaches the viewport", asyn
     intersect = callback;
     return { observe() {}, disconnect };
   });
-  const player = await open("clip", { sourceIdentity: "media:clip-metadata" });
+  const onFallbackExpand = vi.fn();
+  const player = await open("clip", { sourceIdentity: "media:clip-metadata", onFallbackExpand });
+  const status = player.querySelector('[role="status"]');
   const video = media(player);
   expect(video?.preload).toBe("metadata");
   expect(video?.hasAttribute("src")).toBe(false);
@@ -56,10 +58,21 @@ it("starts metadata loading only when the video card reaches the viewport", asyn
   video!.dispatchEvent(new Event("error"));
   await player.updateComplete;
   expect(media(player)).toBeNull();
+  expect(player.querySelector('[role="status"]')?.textContent).toBe(
+    "clip.mp4: Preview unavailable",
+  );
+  expect(player.querySelector('[role="status"]')).toBe(status);
+  expect(status?.getAttribute("aria-live")).toBe("polite");
+  expect(status?.getAttribute("aria-atomic")).toBe("true");
+  expect(player.querySelector("a[download]")?.getAttribute("href")).toBe(player.src);
+  expandButton(player).click();
+  expect(onFallbackExpand).toHaveBeenCalledOnce();
   expect(disconnect).toHaveBeenCalledTimes(2);
 
   player.src = "https://example.com/recovered.mp4";
   await player.updateComplete;
+  expect(player.querySelector('[role="status"]')).toBe(status);
+  expect(status?.textContent).toBe("");
   const recovered = media(player)!;
   expect(recovered).not.toBe(video);
   expect(recovered.hasAttribute("src")).toBe(false);
@@ -119,6 +132,7 @@ it("keeps one video element mounted across 202 preparation", async () => {
   const video = media(player);
   await vi.waitFor(() => expect(player.textContent).toContain("Preparing playback…"));
   expect(media(player)).toBe(video);
+  expect(player.querySelector('[role="status"]')?.textContent).toBe("");
 
   await vi.advanceTimersByTimeAsync(2_000);
   await player.updateComplete;
@@ -155,6 +169,8 @@ it("does not preserve a previous attachment when a new rendition fails", async (
   expect(media(player)?.hasAttribute("src")).toBe(false);
   await vi.waitFor(() => expect(card(player, "--compact")).not.toBeNull());
   expect(card(player, "__reason")).toBeNull();
+  const status = player.querySelector('[role="status"]');
+  expect(status?.textContent).toBe("first.mp4: Preview unavailable");
   expect(media(player)).toBeNull();
   expect(failedMedia.isConnected).toBe(false);
   expandButton(player).click();
@@ -173,6 +189,10 @@ it("does not preserve a previous attachment when a new rendition fails", async (
   expect(fetchMock).toHaveBeenCalledOnce();
   expect(media(player)).toBeNull();
   expect(card(player, "--compact")).not.toBeNull();
+  expect(status?.textContent).toBe("a.caf: Preview unavailable");
+  player.label = "   ";
+  await player.updateComplete;
+  expect(status?.textContent).toBe("Video: Preview unavailable");
 
   fetchMock.mockResolvedValue(new Response(null, { status: 200 }));
   player.src = "/__openclaw__/assistant-media?source=second.caf&mediaTicket=recovered";
@@ -183,6 +203,8 @@ it("does not preserve a previous attachment when a new rendition fails", async (
   expect(media(player)).not.toBe(failedMedia);
   expect(media(player)?.isConnected).toBe(true);
   expect(card(player, "--compact")).toBeNull();
+  expect(player.querySelector('[role="status"]')).toBe(status);
+  expect(status?.textContent).toBe("");
 });
 
 it("pauses and clears the source when disconnected while playing", async () => {

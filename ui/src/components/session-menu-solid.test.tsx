@@ -15,7 +15,7 @@ import {
 import { createSessionOwnerMenuHarness } from "../test-helpers/session-owner-menu.ts";
 import { createSolidApplicationContextProvider } from "../test-helpers/solid-application-context.tsx";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
-import { EMPTY_SESSION_MENU_DATA } from "./session-menu-actions.ts";
+import { EMPTY_SESSION_MENU_DATA } from "./session-menu-data.ts";
 import { SessionMenu, type SessionMenuAction } from "./session-menu-solid.tsx";
 
 function press(target: EventTarget, key: string, composed = false) {

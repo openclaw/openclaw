@@ -6,7 +6,7 @@
   :root {
     /* Shell-owned toasts clear the mobile task header. Content regions below
        that in-flow header do not reserve its height a second time. */
-    --chat-mobile-pane-header-height: 52px;
+    --chat-mobile-pane-header-height: 48px;
   }
 
   .sidebar-region [data-region] {
@@ -60,7 +60,7 @@
 .chat-thread-viewport,
 .chat-thread {
   --chat-thread-padding-top: clamp(20px, 3vh, 28px);
-  --chat-thread-padding-bottom: calc(6px + var(--chat-transcript-fade-height, 0px));
+  --chat-thread-padding-bottom: 6px;
 }
 
 .chat-thread-viewport {
@@ -84,8 +84,9 @@
   overflow-y: auto;
   overflow-x: hidden;
   overflow-anchor: none;
-  /* The transcript is document content, unlike the surrounding app chrome. */
-  user-select: text;
+  /* Only message text opts in; selecting across turns must not paint layout or media. */
+  -webkit-user-select: none;
+  user-select: none;
   scrollbar-gutter: stable both-edges;
   /* The pane header owns the titlebar and native drag surface. No horizontal
      padding: macOS overlay scrollbars render inside the
@@ -147,7 +148,6 @@
      shared writing-surface floor. Mobile and short-pane floors remain local. */
   --chat-composer-min-height: 88px;
   --chat-composer-top-margin: 8px;
-  --chat-transcript-fade-height: 24px;
   --chat-footer-max-height: calc(100cqh - clamp(60px, 20cqh, 160px));
 
   position: absolute;
@@ -191,21 +191,10 @@
   margin-inline: var(--chat-composer-side-inset, 16px);
 }
 
-/* The fade stays inside the transcript viewport; footer controls never cover it. */
-.chat-footer::before {
-  position: absolute;
-  inset: calc(0px - var(--chat-transcript-fade-height)) var(--chat-thread-gutter) auto;
-  height: var(--chat-transcript-fade-height);
-  background: linear-gradient(
-    to bottom,
-    transparent,
-    color-mix(in srgb, var(--chat-surface) 12%, transparent) 25%,
-    color-mix(in srgb, var(--chat-surface) 50%, transparent) 50%,
-    color-mix(in srgb, var(--chat-surface) 88%, transparent) 75%,
-    var(--chat-surface) calc(100% - 2px)
-  );
-  content: "";
-  pointer-events: none;
+.chat-text,
+.chat-thinking {
+  -webkit-user-select: text;
+  user-select: text;
 }
 
 .chat-text {
@@ -601,7 +590,7 @@
 }
 
 .chat-pane__header:not(.chat-pane__header--mobile) .chat-pane__connection-icon--busy {
-  animation: chat-pane-connection-spin 900ms linear infinite;
+  animation: btn-spinner-spin 900ms linear infinite;
 }
 
 .chat-pane__header:not(.chat-pane__header--mobile) .chat-pane__connection-retry {
@@ -625,12 +614,6 @@
   width: 1px;
   height: 12px;
   background: color-mix(in srgb, var(--muted) 35%, transparent);
-}
-
-@keyframes chat-pane-connection-spin {
-  to {
-    transform: rotate(360deg);
-  }
 }
 
 @media (prefers-reduced-motion: reduce) {

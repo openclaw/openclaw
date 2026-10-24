@@ -9,9 +9,8 @@ type TranscribeFirstAudio =
 type SendTranscriptEcho =
   typeof import("../media-understanding/echo-transcript.js").sendTranscriptEcho;
 
-const audioConfig = {
-  tools: { media: { audio: { echoTranscript: true, echoFormat: "heard: {transcript}" } } },
-};
+const audio = { echoTranscript: true, echoFormat: "heard: {transcript}" };
+const audioConfig = { tools: { media: { audio } } };
 const request = { ctx: { media: [] }, cfg: {} };
 const echo = {
   transcript: "cost is $& and $1",
@@ -24,41 +23,33 @@ const createPreflight = (
   overrides: Partial<Parameters<typeof createChannelPreflightAudio<{ contentType?: string }>>[0]>,
 ) => createChannelPreflightAudio({ channel: "test", isAudio: () => true, ...overrides });
 
-describe("formatAudioTranscriptForAgent", () => {
-  it("labels and escapes machine-generated transcripts", () => {
-    expect(formatAudioTranscriptForAgent('say "hi"\nthen go')).toBe(
-      '[Audio transcript (machine-generated, untrusted)]: "say \\"hi\\"\\nthen go"',
-    );
-  });
+it("labels and escapes machine-generated transcripts", () => {
+  expect(formatAudioTranscriptForAgent('say "hi"\nthen go')).toBe(
+    '[Audio transcript (machine-generated, untrusted)]: "say \\"hi\\"\\nthen go"',
+  );
 });
 
 describe("createChannelPreflightAudio", () => {
-  it("suppresses speculative echo without mutating the caller config", async () => {
-    const transcribeFirstAudio = vi.fn<TranscribeFirstAudio>().mockResolvedValue("hello");
-    const preflight = createPreflight({ transcribeFirstAudio });
-    const audioRequest = {
-      ctx: { media: [{ path: "/tmp/voice.ogg", contentType: "audio/ogg" }] },
-      cfg: audioConfig,
-    };
-    await expect(preflight.resolve({ request: audioRequest })).resolves.toBe("hello");
+  it.each([undefined, false])(
+    "defers speculative echo=%s without mutating config",
+    async (deferTranscriptEcho) => {
+      const transcribeFirstAudio = vi.fn<TranscribeFirstAudio>().mockResolvedValue("hello");
+      const preflight = createPreflight({ deferTranscriptEcho, transcribeFirstAudio });
+      const audioRequest = {
+        ctx: { media: [{ path: "/tmp/voice.ogg", contentType: "audio/ogg" }] },
+        cfg: audioConfig,
+      };
+      await expect(preflight.resolve({ request: audioRequest })).resolves.toBe("hello");
 
-    expect(transcribeFirstAudio).toHaveBeenCalledWith({
-      ctx: audioRequest.ctx,
-      cfg: {
-        tools: { media: { audio: { echoTranscript: false, echoFormat: "heard: {transcript}" } } },
-      },
-    });
-    expect(audioConfig.tools.media.audio.echoTranscript).toBe(true);
-  });
-
-  it("preserves the original config for channels without deferred echo", async () => {
-    const transcribeFirstAudio = vi.fn<TranscribeFirstAudio>().mockResolvedValue("hello");
-    const preflight = createPreflight({ deferTranscriptEcho: false, transcribeFirstAudio });
-
-    await preflight.resolve({ request: { ctx: { media: [] }, cfg: audioConfig } });
-
-    expect(transcribeFirstAudio).toHaveBeenCalledWith({ ctx: { media: [] }, cfg: audioConfig });
-  });
+      expect(transcribeFirstAudio).toHaveBeenCalledWith({
+        ctx: audioRequest.ctx,
+        cfg: {
+          tools: { media: { audio: { ...audio, echoTranscript: deferTranscriptEcho === false } } },
+        },
+      });
+      expect(audioConfig.tools.media.audio.echoTranscript).toBe(true);
+    },
+  );
 
   it("checks abort state before and after transcription", async () => {
     const before = new AbortController();

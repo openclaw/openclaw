@@ -127,7 +127,8 @@ describe("Apps local Chrome setup", () => {
   });
   it("blocks duplicate setup while pending and recovers after a rejected request", async () => {
     const pending = createDeferred<unknown>();
-    const post = vi.fn().mockReturnValueOnce(pending.promise).mockResolvedValue(result(connected));
+    const retry = createDeferred<unknown>();
+    const post = vi.fn().mockReturnValueOnce(pending.promise).mockReturnValueOnce(retry.promise);
     bridge(post);
     const { setup } = await mount();
     click(setup, labels.inspect);
@@ -141,6 +142,11 @@ describe("Apps local Chrome setup", () => {
     await expectText(setup, "Setup could not finish");
     await idle(setup);
     click(setup, labels.verify);
+    flush();
+    expect(setup.textContent).toContain("Working on this device…");
+    expect(setup.textContent).not.toContain("Setup could not finish");
+    expect([...setup.querySelectorAll("button")].every((button) => button.disabled)).toBe(true);
+    retry.resolve(result(connected));
     await expectText(setup, "Extension connected on this device.");
     await idle(setup);
     expect(setup.textContent).not.toContain("Setup could not finish");

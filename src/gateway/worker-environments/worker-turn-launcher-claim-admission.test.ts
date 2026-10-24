@@ -377,6 +377,7 @@ describe("worker turn launcher claim admission", () => {
           environments,
           resolveGatewayContext: unexpectedToolCall,
           dispatchChild: unexpectedToolCall,
+          waitForInitialPlacement: unexpectedToolCall,
           portals: {
             getService: unexpectedToolCall,
             carrier: { open: unexpectedToolCall },

@@ -138,13 +138,12 @@ public enum RealtimeTalkRelayTermination: Equatable, Sendable {
 }
 
 private enum RealtimeAudioSendOutcome {
-    case sent, inactive, saturated, failed(String)
+    case sent, inactive, failed(String)
 }
 
 private actor RealtimeAudioSender {
     private let request: @Sendable (String, [String: AnyCodable]?, Double) async throws -> Data
     private var relaySessionId: String?
-    private var pendingSends = 0
 
     init(
         relaySessionId: String,
@@ -160,9 +159,6 @@ private actor RealtimeAudioSender {
 
     func send(_ data: Data, timestampMs: Double) async -> RealtimeAudioSendOutcome {
         guard !Task.isCancelled, let relaySessionId else { return .inactive }
-        guard self.pendingSends < RealtimeTalkRelaySession.maxPendingAudioSends else { return .saturated }
-        self.pendingSends += 1
-        defer { self.pendingSends -= 1 }
         // The Gateway carries this straight into the provider's media timeline, and OpenAI rejects
         // a `conversation.item.truncate` whose `audio_end_ms` is not an integer -- a fractional
         // timestamp here kills the session on the first barge-in.
@@ -173,7 +169,10 @@ private actor RealtimeAudioSender {
         ]
         do {
             try Task.checkCancellation()
-            let response = try await self.request("talk.session.appendAudio", payload, 8000)
+            let response = try await self.request(
+                "talk.session.appendAudio",
+                payload,
+                RealtimeTalkRelaySession.audioAppendLivenessTimeoutMs)
             try Task.checkCancellation()
             _ = try JSONDecoder().decode(TalkSessionOkResult.self, from: response)
             return .sent
@@ -250,13 +249,15 @@ public final class RealtimeTalkRelaySession {
     private nonisolated static let bargeInCooldownMs: Double = 900
     private nonisolated static let minOutputBeforeBargeInMs: Double = 250
     private nonisolated static let startupReadyTimeoutSeconds = 12
+    /// Microphone audio in flight to the Gateway, measured in audio time like browser Talk. A slow
+    /// relay costs the frames past this budget and a repeat-the-last-part notice, not the call.
+    nonisolated static let maxPendingInputAudioMs: Double = 3000
+    /// An append unanswered this long means the relay stopped making progress. The Gateway answers
+    /// appends in order, so a per-request deadline acts as browser Talk's renewable liveness window.
+    nonisolated static let audioAppendLivenessTimeoutMs: Double = 30000
     /// Providers may deliver a whole reply faster than realtime (xAI sends it in one burst), so the
     /// bound must hold a full reply: 60 s of 20 ms frames (~2.9 MB at 24 kHz). Overflow still
     /// terminates the session so recovery replaces a stalled playback path.
-    /// In-flight `talk.session.appendAudio` requests before input counts as stalled. Each mic
-    /// callback (~43 ms) is one request; Gateway round trips over Wi-Fi/Tailscale spike to ~1 s, so
-    /// 48 tolerates ~2 s of latency instead of the ~170 ms that 4 allowed.
-    nonisolated static let maxPendingAudioSends = 48
     nonisolated static let maxBufferedOutputChunks = 3000
 
     private let transport: RealtimeTalkRelayTransport
@@ -288,6 +289,8 @@ public final class RealtimeTalkRelaySession {
     private var toolCallTasks: [UUID: Task<Void, Never>] = [:]
     private var audioSendTasks: [UUID: Task<Void, Never>] = [:]
     private var audioSender: RealtimeAudioSender?
+    private var pendingInputAudioBytes = 0
+    private var isInputAudioBehind = false
     private var isInputPaused = false
     private var audioCaptureGeneration: UInt64 = 0
     private var isClosed = false
@@ -1266,22 +1269,39 @@ extension RealtimeTalkRelaySession {
             self.handleInputLevelDuringOutput(rms, timestampMs: timestampMs)
         }
 
+        // Drop frames past the budget without ending the call, but tell the user once to repeat
+        // them. Only an explicit append failure or an unanswered append ends a slow relay.
+        let maxPendingBytes = Int(self.inputSampleRateHz * 2 * Self.maxPendingInputAudioMs / 1000)
+        guard self.pendingInputAudioBytes + encoded.count <= maxPendingBytes else {
+            if !self.isInputAudioBehind {
+                self.isInputAudioBehind = true
+                self.onStatus("Realtime audio input fell behind; repeat the last part")
+            }
+            return nil
+        }
+        self.pendingInputAudioBytes += encoded.count
+
         let taskID = UUID()
         let task = Task { @MainActor [weak self, audioSender] in
             guard let self else { return }
-            defer { self.audioSendTasks.removeValue(forKey: taskID) }
+            defer {
+                self.audioSendTasks.removeValue(forKey: taskID)
+                // A stopped pump already reset the budget for its replacement.
+                if self.audioCaptureGeneration == audioCaptureGeneration {
+                    self.pendingInputAudioBytes -= encoded.count
+                }
+            }
             guard self.isCurrentLifecycleLocally(lifecycleGeneration),
                   self.audioCaptureGeneration == audioCaptureGeneration,
                   !self.isInputPaused, self.output.withLock({ $0.suppressedOutputIdentity }) == nil
             else { return }
             switch await audioSender.send(encoded, timestampMs: timestampMs) {
-            case .sent, .inactive:
+            case .sent:
+                guard self.isInputAudioBehind, self.audioCaptureGeneration == audioCaptureGeneration else { return }
+                self.isInputAudioBehind = false
+                self.onStatus("Microphone input recovered; repeat the last part")
+            case .inactive:
                 return
-            case .saturated:
-                self.handleAudioInputFailure(
-                    String(localized: "Realtime audio input fell behind. Reconnecting…"),
-                    lifecycleGeneration: lifecycleGeneration,
-                    audioCaptureGeneration: audioCaptureGeneration)
             case let .failed(message):
                 self.handleAudioInputFailure(
                     String(format: String(localized: "Realtime audio failed: %@"), message),
@@ -1299,6 +1319,8 @@ extension RealtimeTalkRelaySession {
             task.cancel()
         }
         self.audioSendTasks.removeAll()
+        self.pendingInputAudioBytes = 0
+        self.isInputAudioBehind = false
         self.audioCapture.stop()
     }
 }

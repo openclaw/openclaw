@@ -8,6 +8,10 @@ import {
   WORKER_INFERENCE_PROTOCOL_FEATURE,
   WORKER_PROTOCOL_MAX_INFERENCE_PAYLOAD_BYTES,
 } from "../../../../packages/gateway-protocol/src/schema/worker-inference.js";
+import {
+  WORKER_TURN_ADMISSION_METHOD,
+  WORKER_TURN_ADMISSION_PROTOCOL_FEATURE,
+} from "../../../../packages/gateway-protocol/src/schema/worker-turn-admission.js";
 import { createNoisyPngBuffer } from "../../../../test/helpers/image-fixtures.js";
 import { prepareSystemAgentRunAdmission } from "../../../agents/admitted-run-context.js";
 import { prepareCoreToolPolicy } from "../../../agents/prepared-tool-surface.js";
@@ -300,6 +304,49 @@ describe("dedicated worker websocket protocol", () => {
     );
     expect(unsupported.service.startInference).not.toHaveBeenCalled();
   });
+
+  it.each([true, false])(
+    "requires negotiated admission for prompt-sized frames (%s)",
+    async (supported) => {
+      vi.useFakeTimers();
+      const identity = {
+        ...ATTACHED_IDENTITY,
+        protocolFeatures: [
+          ...HANDSHAKE.protocolFeatures.filter(
+            (feature) => feature !== WORKER_INFERENCE_PROTOCOL_FEATURE,
+          ),
+          ...(supported ? [WORKER_TURN_ADMISSION_PROTOCOL_FEATURE] : []),
+        ],
+      };
+      const harness = attachHarness({ identity });
+      const admitTurn = vi.fn(async () => ({
+        ok: true as const,
+        result: { outcome: "allow" as const, baseLeafId: "entry-1" },
+      }));
+      Object.assign(harness.service, { admitTurn });
+      harness.sendConnect();
+      await vi.advanceTimersByTimeAsync(0);
+      const request = {
+        runEpoch: 1,
+        systemPrompt: supported ? "x".repeat(65_536) : "system",
+        prompt: "hello",
+        messages: [{ role: "user", content: "hello", timestamp: 1 }],
+      };
+      harness.sendRequest(WORKER_TURN_ADMISSION_METHOD, request);
+      await vi.advanceTimersByTimeAsync(0);
+      if (supported) {
+        expect(harness.responses[1]).toMatchObject({
+          ok: true,
+          payload: { outcome: "allow", baseLeafId: "entry-1" },
+        });
+        expect(admitTurn).toHaveBeenCalledWith(identity, request);
+        expect(harness.close).not.toHaveBeenCalled();
+      } else {
+        expect(harness.close).toHaveBeenCalledWith(1008, "method-not-allowed");
+        expect(admitTurn).not.toHaveBeenCalled();
+      }
+    },
+  );
 
   it("acknowledges inference before forwarding synchronous stream frames", async () => {
     const harness = attachHarness({

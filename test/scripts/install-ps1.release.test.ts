@@ -228,7 +228,7 @@ function Save-InstallerDownload {
         [IO.File]::WriteAllText($OutFile, "$hash  $name")
         return
     }
-    if ($Uri -notmatch '^https://nodejs\.org/dist/v26\.1\.0/node-v26\.1\.0-win-(x64|arm64)\.zip$') { throw "unexpected archive URL: $Uri" }
+    if ($Uri -notmatch '^https://nodejs\.org/dist/v26\.12\.1/node-v26\.12\.1-win-(x64|arm64)\.zip$') { throw "unexpected archive URL: $Uri" }
     [IO.File]::WriteAllText($OutFile, 'downloaded archive bytes')
 }
 function Expand-PortableNodeArchive {
@@ -1456,7 +1456,8 @@ try {
         );
         const preflight = runNative(["-File", preflightPath], preflightRoot);
         const prerequisite = `${engine} requires usable Node/SQLite: ${preflight.stdout}\n${preflight.stderr}`;
-        expect(preflight, prerequisite).toMatchObject({ error: undefined, status: 0 });
+        expect(preflight.error, prerequisite).toBeUndefined();
+        expect(preflight.status, prerequisite).toBe(0);
         for (const usableCommand of [false, true]) {
           for (const mode of ["file", "scriptblock"]) {
             const root = harness.createTempDir("openclaw-native-upgrade-é-");

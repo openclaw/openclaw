@@ -272,7 +272,6 @@ export type SessionActorReceipt = {
   conversationPublication?: readonly ConversationPublication[];
   pendingInputReceipt?: SessionPendingInputWorkerReceipt;
   pendingInputMutationReceipt?: PendingInputMutationReceipt;
-  pendingFinalDelivery?: SessionEntry["pendingFinalDelivery"];
   reducers: SessionActorReducerOutcome[];
   /** Complete detached postimage, installed on MAIN before acknowledgement. */
   postimage: SessionActorHotState;

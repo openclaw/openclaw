@@ -1,9 +1,11 @@
 import { Command } from "commander";
-import { expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import type { AuditRow } from "./broker.js";
 import { registerOnePasswordCommands } from "./cli.js";
 import { parseOnePasswordConfig } from "./config.js";
 import { MemoryKeyedStore } from "./memory-store.test-support.js";
+
+afterEach(() => vi.restoreAllMocks());
 
 const config = parseOnePasswordConfig({
   vault: "Automation",
@@ -29,11 +31,10 @@ async function setupCommands(...rows: Partial<AuditRow>[]) {
     });
   }
   const program = new Command().exitOverride();
-  const write = vi.fn<(message: string) => void>();
+  const write = vi.spyOn(process.stdout, "write").mockReturnValue(true);
   registerOnePasswordCommands({
     program,
     auditStore,
-    write,
     resolveConfig: () => config,
     resolveOpClient: () => ({ opBin: "/usr/local/bin/op", tokenFilePresent: async () => true }),
   });

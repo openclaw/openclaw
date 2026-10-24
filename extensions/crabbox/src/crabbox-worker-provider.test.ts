@@ -473,7 +473,7 @@ it("rejects a CLI without native public setup egress before allocation", async (
   );
   await expect(
     providerWithRawRunner(runCommand).provision(SETUP_PROFILE, OPERATION_ID),
-  ).rejects.toThrow("update Crabbox to 0.77.0 or newer");
+  ).rejects.toThrow("update Crabbox to 0.79.2 or newer");
   expect(runCommand).toHaveBeenCalledOnce();
   expect(runCommand.mock.calls[0]?.[0]).toEqual([SIBLING_BINARY, "egress", "run", "--help"]);
   expect(secretEgressRuntime.withSetupSecretEgress).not.toHaveBeenCalled();

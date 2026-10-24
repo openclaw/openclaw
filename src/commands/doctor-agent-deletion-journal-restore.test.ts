@@ -48,6 +48,7 @@ async function withFixture(
     sharedPath: string;
   }) => Promise<void>,
   agentId = "main",
+  schemaVersion = 24,
 ) {
   const root = fs.realpathSync.native(dirs.make("doctor-published-journal-"));
   const env = {
@@ -72,16 +73,17 @@ async function withFixture(
     using agent = new DatabaseSync(agentPath);
     agent.exec(
       fs.readFileSync(
-        new URL("../../test/fixtures/sqlite/openclaw-agent-schema-v24.sql", import.meta.url),
+        new URL(
+          `../../test/fixtures/sqlite/openclaw-agent-schema-v${schemaVersion}.sql`,
+          import.meta.url,
+        ),
         "utf8",
       ),
     );
-    agent.exec("PRAGMA user_version = 24");
+    agent.exec(`PRAGMA user_version = ${schemaVersion}`);
     agent
-      .prepare(
-        "INSERT INTO schema_meta VALUES ('primary', 'agent', 24, ?, '2026.10.4', 1000, 1000)",
-      )
-      .run(agentId);
+      .prepare("INSERT INTO schema_meta VALUES ('primary', 'agent', ?, ?, '2026.10.4', 1000, 1000)")
+      .run(schemaVersion, agentId);
     agent
       .prepare(
         "INSERT INTO cache_entries(scope, key, value_json, updated_at) VALUES ('user', 'preserved', ?, 1000)",
@@ -313,58 +315,80 @@ it.each(["first-upgrade", "already-held"])(
     }),
 );
 
-it.each(["present-incomplete", "other-version", "rewritten-stamp"])(
-  "keeps %s stores held",
-  (kind) =>
-    withFixture(async ({ env, agentPath, sharedPath, root }) => {
-      using shared = new DatabaseSync(sharedPath);
-      if (kind === "present-incomplete") {
-        beginAgentDeletionJournal(
-          {
-            agentId: "main",
-            operationId: "lost-history",
-            agentDir: path.dirname(agentPath),
-            workspaceDir: path.join(root, "workspace"),
-            sessionsDir: path.join(root, "agents/main/sessions"),
-            databasePaths: [agentPath],
-            deleteFiles: false,
-          },
-          { env },
-        );
-        shared.exec(
-          "UPDATE agent_deletion_journal SET database_paths_json = '[' WHERE agent_id = 'main'",
-        );
-      } else {
-        shared.exec("DROP TABLE agent_deletion_journal");
-      }
-      shared.close();
-      if (kind !== "present-incomplete") {
-        using agent = new DatabaseSync(agentPath);
-        agent.exec(
-          kind === "other-version"
-            ? "UPDATE schema_meta SET app_version = '2026.9.6'"
-            : "UPDATE schema_meta SET updated_at = 2000",
-        );
-      }
+it("restores a configured store upgraded to 2026.10.6 after journal reconstruction", () =>
+  withFixture(
+    async ({ env, agentPath, sharedPath }) => {
+      exec(sharedPath, "DROP TABLE agent_deletion_journal");
+      exec(agentPath, "UPDATE schema_meta SET app_version = '2026.10.6', updated_at = 2000");
       const bytes = fs.readFileSync(agentPath);
       const result = await repair(env);
-      expect(result.warnings.join("\n")).not.toContain("Automatically restored");
-      expect(result.warnings.join("\n")).toContain("held back");
-      expect(result.warnings.join("\n")).toContain("agents add");
-      expect(recoveryHolds(env)).toContainEqual({
-        agentId: "main",
-        path: agentPath,
-      });
+      expect(result.warnings.join("\n")).toContain("Automatically restored agent main");
+      expect(recoveryHolds(env)).toEqual([]);
       expect(fs.readFileSync(agentPath)).toEqual(bytes);
-      await expect(
-        assertOpenClawDatabasesReady({
-          env,
-          operation: "doctor",
-          config: { agents: { entries: { main: {} } } },
-          configuredAgentDatabaseTargets: [{ agentId: "main", path: agentPath }],
+      verifyBackups(result.changes, [agentPath], (database) => {
+        expect(sourceReport(database, reconstructionKey)).toContain('"agentId":"main"');
+      });
+      expect(await repair(env)).toEqual({ changes: [], warnings: [] });
+    },
+    "main",
+    26,
+  ));
+
+it.each(["present-incomplete", "different-owner", "unconfigured"])("keeps %s stores held", (kind) =>
+  withFixture(async ({ env, agentPath, sharedPath, root }) => {
+    using shared = new DatabaseSync(sharedPath);
+    if (kind === "present-incomplete") {
+      beginAgentDeletionJournal(
+        {
+          agentId: "main",
+          operationId: "lost-history",
+          agentDir: path.dirname(agentPath),
+          workspaceDir: path.join(root, "workspace"),
+          sessionsDir: path.join(root, "agents/main/sessions"),
+          databasePaths: [agentPath],
+          deleteFiles: false,
+        },
+        { env },
+      );
+      shared.exec(
+        "UPDATE agent_deletion_journal SET database_paths_json = '[' WHERE agent_id = 'main'",
+      );
+    } else {
+      shared.exec("DROP TABLE agent_deletion_journal");
+    }
+    shared.close();
+    if (kind === "different-owner") {
+      exec(agentPath, "UPDATE schema_meta SET agent_id = 'other'");
+    } else if (kind === "unconfigured") {
+      fs.writeFileSync(
+        env.OPENCLAW_CONFIG_PATH!,
+        JSON.stringify({
+          agents: { ownership: "explicit", entries: { other: {} } },
+          plugins: { enabled: false },
         }),
-      ).rejects.toThrow("Doctor could not complete repair");
-    }),
+      );
+    }
+    const bytes = fs.readFileSync(agentPath);
+    const result = await repair(env);
+    expect(result.warnings.join("\n")).not.toContain("Automatically restored");
+    expect(result.warnings.join("\n")).toContain("held back");
+    expect(result.warnings.join("\n")).toContain("agents add");
+    expect(recoveryHolds(env)).toContainEqual({
+      agentId: "main",
+      path: agentPath,
+    });
+    expect(fs.readFileSync(agentPath)).toEqual(bytes);
+    await expect(
+      assertOpenClawDatabasesReady({
+        env,
+        operation: "doctor",
+        config: { agents: { entries: { main: {} } } },
+        configuredAgentDatabaseTargets: [{ agentId: "main", path: agentPath }],
+      }),
+    ).rejects.toThrow(
+      kind === "different-owner" ? "belongs to agent other" : "Doctor could not complete repair",
+    );
+  }),
 );
 
 it.each(["root", "included"])(

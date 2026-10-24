@@ -80,6 +80,12 @@ persisted user turn changes or the session reader is no longer current, OpenClaw
 preserves the session-state error for the session's retry owner or reports it to
 the caller. These errors do not produce an `unknown` provider-failure notice.
 
+Losing the canonical user turn during prompt projection also stops unchanged
+retries and model fallback. If MCP cleanup cannot confirm closure, OpenClaw
+preserves that cleanup failure instead of starting another model. Session and
+cleanup recovery remain with their respective owners; changing providers cannot
+repair these local faults.
+
 Thinking-level recovery applies only when the provider identifies a reasoning or
 thinking parameter. Model/account restrictions and unrelated unsupported options
 keep their original failure classification and follow the configured fallback
@@ -201,6 +207,7 @@ The selection source controls whether the fallback chain is allowed:
 - **Native agent primary**: `agents.entries.*.model` is strict unless that agent's model object includes its own `fallbacks`. Use `fallbacks: []` to make the strict behavior explicit, or a non-empty list to opt that agent into model fallback.
 - **ACP agent primary**: for `runtime.type: "acp"`, the agent primary selects its external harness model. Native OpenClaw calls inherit the primary and fallbacks from `agents.defaults.model`; an explicit agent `model.fallbacks` replaces the native fallback list, including `[]` to disable it. Explicit native session and subagent selections retain their normal precedence and strictness. This does not add fallback to commands such as `/btw` that run only their selected model.
 - **Runtime fallback**: the fallback candidate applies only to the current turn. The next turn starts from the selected primary again. OpenClaw still recognizes `modelOverrideSource: "auto"` entries stored by v2026.4.26 through v2026.6.0. It checks their configured origin every 5 minutes, and clears them once the origin recovers. Automatic clearing shipped in v2026.6.1. `/new`, `/reset`, and `sessions.reset` also clear those entries.
+- **Configured or inherited child selection**: a child can store an automatic selection whose provider/model match its own recorded origin. Ordinary replies preserve that selection; it is not legacy fallback residue.
 - **User session override**: selecting a specific model with `/model`, the model picker, `session_status(model=...)`, or `sessions.patch` writes `modelOverrideSource: "user"`. This is an exact session selection. If the selected provider/model fails before producing a reply, OpenClaw reports the failure instead of answering from an unrelated configured fallback.
 - **Explicit configured default**: choosing **Default** through the same surfaces writes `modelOverrideSource: "default"` without storing a provider/model override. This prevents a child session from inheriting a parent model pin while preserving the configured default's normal fallback policy.
 - **Legacy session override**: session entries written before v2026.4.26 may have `modelOverride` without `modelOverrideSource`. OpenClaw treats those as user overrides so an explicit old selection is not silently converted into fallback behavior.
@@ -416,6 +423,10 @@ State is stored in the per-agent SQLite auth state:
 ```
 
 Overloaded and rate-limit errors allow one same-provider auth-profile rotation by default before advancing to the next configured model fallback. The active runtime first uses its eligible same-model recovery budget. Auth-profile rotation and model fallback still require evidence that replaying the original attempt is safe.
+
+Confirmed pre-execution tool rejections do not by themselves make an attempt
+replay-unsafe. Non-replay-safe operations that started, or may have started,
+still block replay.
 
 ## Model fallback
 

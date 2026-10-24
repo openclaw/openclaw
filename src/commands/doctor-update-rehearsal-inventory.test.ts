@@ -113,6 +113,7 @@ function prepareFixture(source: OpenClawTestState) {
       selection: { kind: "explicit-tmpdir", directory: root },
     },
     cleanupDirectories: [root],
+    prepareRuntime: async (assertCurrent) => assertCurrent(),
     cleanup,
   });
   const launch = vi.spyOn(commands, "runUtf8CommandWithTimeout").mockResolvedValue(childResult());

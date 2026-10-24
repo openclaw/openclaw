@@ -1,4 +1,4 @@
-import type { IncomingMessage, ServerResponse } from "node:http";
+import type { IncomingMessage } from "node:http";
 import { withServer } from "openclaw/plugin-sdk/test-env";
 import { afterAll, describe, expect, it, vi } from "vitest";
 import { buildXaiVideoGenerationProvider } from "./video-generation-provider.js";
@@ -6,22 +6,7 @@ import { buildXaiVideoGenerationProvider } from "./video-generation-provider.js"
 vi.hoisted(() => vi.resetModules());
 vi.unmock("openclaw/plugin-sdk/provider-http");
 
-const resolveApiKeyForProviderMock = vi.hoisted(() =>
-  vi.fn(async () => ({
-    apiKey: "local-xai-key",
-    source: "profile",
-    mode: "api-key",
-  })),
-);
-
-vi.mock("openclaw/plugin-sdk/provider-auth-runtime", () => ({
-  resolveApiKeyForProvider: resolveApiKeyForProviderMock,
-}));
-
-afterAll(() => {
-  vi.doUnmock("openclaw/plugin-sdk/provider-auth-runtime");
-  vi.resetModules();
-});
+afterAll(() => vi.resetModules());
 
 type CapturedRequest = {
   body: string;
@@ -38,11 +23,6 @@ async function readRequestBody(request: IncomingMessage): Promise<string> {
   return Buffer.concat(chunks).toString("utf8");
 }
 
-function writeJson(response: ServerResponse, payload: unknown) {
-  response.writeHead(200, { "content-type": "application/json" });
-  response.end(JSON.stringify(payload));
-}
-
 async function withXaiVideoServer(
   run: (server: { baseUrl: string; requests: CapturedRequest[] }) => Promise<void>,
 ) {
@@ -57,25 +37,20 @@ async function withXaiVideoServer(
           headers: request.headers,
           body: await readRequestBody(request),
         });
-        if (request.method === "POST" && request.url === "/v1/videos/generations") {
-          writeJson(response, { request_id: "local_request" });
-          return;
-        }
-        if (request.method === "GET" && request.url === "/v1/videos/local_request") {
-          writeJson(response, {
+        const routes: Record<string, string | Buffer> = {
+          "POST /v1/videos/generations": JSON.stringify({ request_id: "local_request" }),
+          "GET /v1/videos/local_request": JSON.stringify({
             request_id: "local_request",
             status: "done",
             video: { url: videoUrl },
-          });
-          return;
-        }
-        if (request.method === "GET" && request.url === "/media/generated.mp4") {
-          response.writeHead(200, { "content-type": "video/mp4" });
-          response.end(Buffer.from("mp4"));
-          return;
-        }
-        response.writeHead(404, { "content-type": "text/plain" });
-        response.end("not found");
+          }),
+          "GET /media/generated.mp4": Buffer.from("mp4"),
+        };
+        const body = routes[`${request.method} ${request.url}`];
+        response.writeHead(body === undefined ? 404 : 200, {
+          "content-type": Buffer.isBuffer(body) ? "video/mp4" : "application/json",
+        });
+        response.end(body ?? "not found");
       })().catch((error: unknown) => {
         response.writeHead(500, { "content-type": "text/plain" });
         response.end(error instanceof Error ? error.message : String(error));
@@ -94,7 +69,9 @@ function generate(baseUrl: string, request?: Record<string, unknown>, prompt = "
     model: "grok-imagine-video",
     prompt,
     cfg: {
-      models: { providers: { xai: { baseUrl, ...(request ? { request } : {}) } } },
+      models: {
+        providers: { xai: { baseUrl, apiKey: "local-xai-key", ...(request ? { request } : {}) } },
+      },
     } as never,
   });
 }

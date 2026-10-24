@@ -2,9 +2,10 @@
 
 import { CallToolResultSchema } from "@modelcontextprotocol/core";
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { runWithAgentToolExecutionContext } from "../../packages/agent-core/src/tool-execution-context.js";
 import type { NodePluginToolDescriptor } from "../../packages/gateway-protocol/src/index.js";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   listConnectedNodePluginTools,
   removeConnectedNodePluginTools,
@@ -19,7 +20,7 @@ import {
 } from "./code-mode.js";
 import { testing } from "./code-mode.test-support.js";
 import { consumeMcpCodeModeGuestResult } from "./mcp-content.js";
-import { createNodePluginTools } from "./node-plugin-tools.js";
+import { resolveOpenClawPluginToolsForOptions } from "./openclaw-plugin-tools.js";
 import { makeAssistantMessageFixture } from "./test-helpers/assistant-message-fixtures.js";
 import { isToolResultError } from "./tool-result-error.js";
 import { compactToolSearchCatalogEntry } from "./tool-search-catalog.js";
@@ -38,6 +39,35 @@ const remoteEcho: NodePluginToolDescriptor = {
   description: "Echo through a remote node",
   command: "remote.echo",
 };
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+let workspaceDir: string;
+beforeEach(() => {
+  workspaceDir = tempDirs.make("node-plugin-tools-");
+});
+
+function materializeNodeTools(
+  params: {
+    existingToolNames?: Set<string>;
+    toolAllowlist?: string[];
+    toolDenylist?: string[];
+    agentSessionKey?: string;
+  } = {},
+) {
+  const config = { plugins: { enabled: false } };
+  return resolveOpenClawPluginToolsForOptions({
+    resolvedConfig: config,
+    existingToolNames: params.existingToolNames,
+    options: {
+      config,
+      workspaceDir,
+      senderIsOwner: true,
+      agentSessionKey: params.agentSessionKey,
+      pluginToolAllowlist: params.toolAllowlist,
+      pluginToolDenylist: params.toolDenylist,
+    },
+  });
+}
 
 function connectTool(
   descriptor: NodePluginToolDescriptor = remoteEcho,
@@ -70,12 +100,12 @@ function docsTool(
   };
 }
 
-function firstTool(params: Parameters<typeof createNodePluginTools>[0] = {}) {
-  return expectDefined(createNodePluginTools(params)[0], "node tool");
+function firstTool(params: Parameters<typeof materializeNodeTools>[0] = {}) {
+  return expectDefined(materializeNodeTools(params)[0], "node tool");
 }
 
-function toolNames(params: Parameters<typeof createNodePluginTools>[0] = {}) {
-  return createNodePluginTools(params).map((tool) => tool.name);
+function toolNames(params: Parameters<typeof materializeNodeTools>[0] = {}) {
+  return materializeNodeTools(params).map((tool) => tool.name);
 }
 
 function respond(payload: unknown) {
@@ -191,7 +221,7 @@ afterEach(() => {
   testing.resumingRunIds.clear();
 });
 
-describe("createNodePluginTools", () => {
+describe("materializeNodeTools", () => {
   it("scopes reused call IDs by turnId and preserves replay keys", async () => {
     connectTool();
     vi.mocked(callGatewayTool).mockResolvedValue({ payload: { ok: true } });
@@ -243,7 +273,7 @@ describe("createNodePluginTools", () => {
     );
     respond({ content: [textBlock("pong")], details: { ok: true } });
 
-    const tools = createNodePluginTools({
+    const tools = materializeNodeTools({
       existingToolNames: new Set(["read"]),
       agentSessionKey: "agent:main:canvas",
     });
@@ -368,7 +398,7 @@ describe("createNodePluginTools", () => {
       _meta: { privateAppState: "must-not-leak" },
     });
 
-    const nodeTools = createNodePluginTools({ agentSessionKey: "agent:main:node-mcp-code-mode" });
+    const nodeTools = materializeNodeTools({ agentSessionKey: "agent:main:node-mcp-code-mode" });
     const nodeTool = expectDefined(nodeTools[0], "node MCP tool");
     expect(nodeTool.executionMode).toBe("sequential");
     expect(nodeTool.resultContentSource).toBe("network");
@@ -443,7 +473,7 @@ describe("createNodePluginTools", () => {
     respond({ content: [], isError: true });
     respond({ content: [], isError: true });
 
-    const nodeTools = createNodePluginTools({});
+    const nodeTools = materializeNodeTools({});
     const tool = expectDefined(nodeTools[0], "node MCP tool");
     const result = await tool.execute("empty-error", {});
 
@@ -481,7 +511,7 @@ describe("createNodePluginTools", () => {
 
     const { catalogRef, codeModeTools, ctx } = createCodeModeHarness([
       gatewayMcpTool("tickets"),
-      ...createNodePluginTools({}),
+      ...materializeNodeTools({}),
     ]);
     expect(buildCodeModeCatalogPrompt(ctx, catalogRef.current?.entries ?? [])).toContain(
       "visible servers: nodeATickets (node: Node A), nodeBDocs (node: Node B), nodeCDocs (node: Node C), tickets",
@@ -557,8 +587,8 @@ describe("createNodePluginTools", () => {
       toolNames: ["remote_repo_search"],
     });
 
-    expect(createNodePluginTools({ toolAllowlist })).toEqual([]);
-    expect(createNodePluginTools({ toolAllowlist: ["git*"] })).toEqual([]);
+    expect(materializeNodeTools({ toolAllowlist })).toEqual([]);
+    expect(materializeNodeTools({ toolAllowlist: ["git*"] })).toEqual([]);
     expect(callGatewayTool).not.toHaveBeenCalled();
   });
 
@@ -571,7 +601,7 @@ describe("createNodePluginTools", () => {
     };
 
     connectTool(githubDescriptor);
-    expect(createNodePluginTools({ toolAllowlist: ["github"] })).toEqual([]);
+    expect(materializeNodeTools({ toolAllowlist: ["github"] })).toEqual([]);
 
     connectTool(githubDescriptor, { nodeId: "node-1", registered: true });
     expect(toolNames({ toolAllowlist: ["github"] })).toEqual(["remote_repo_search"]);
@@ -582,7 +612,7 @@ describe("createNodePluginTools", () => {
     connectTool(githubDescriptor);
     expect(toolNames({ toolAllowlist: ["remote_repo_search"] })).toEqual(["remote_repo_search"]);
     expect(
-      createNodePluginTools({
+      materializeNodeTools({
         toolAllowlist: ["remote_repo_search"],
         toolDenylist: ["github"],
       }),

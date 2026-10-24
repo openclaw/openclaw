@@ -69,6 +69,9 @@ import { createSessionConversationTestRegistry } from "../test-utils/session-con
 import { clearTestEmbeddedRun as clearActiveEmbeddedRun } from "./embedded-agent-runner/runs.test-support.js";
 import { createRequesterYieldCallback } from "./openclaw-tools.requester-yield.js";
 import {
+  deliveredRequesterReply,
+  endChildRun,
+  expectChildCleanupSettled,
   observeSubagentChange,
   seedDeliveredChild,
   childDeliverySettled,
@@ -89,6 +92,7 @@ import {
   resetSubagentRegistryForTests,
   settleRequesterAfterSessionSpawns,
 } from "./subagents/registry/subagent-registry.test-helpers.js";
+import { holdLiveRequesterTurns } from "./subagents/registry/subagent-requester-turn-liveness.test-support.js";
 import { withGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
 import * as sendDelivery from "./tools/sessions-send-tool.delivery.js";
 import { createSessionsSendTool } from "./tools/sessions-send-tool.js";
@@ -162,16 +166,6 @@ function yieldTool(
       requesterTurnRunId,
     }),
   });
-}
-function deliveredReply(text: string) {
-  return {
-    status: "ok",
-    inputProcessingCompleted: true,
-    result: {
-      payloads: [{ text }],
-      deliveryStatus: { status: "sent", resultCount: 1 },
-    },
-  };
 }
 function requesterCalls(requesterSessionKey: string) {
   return calls.filter(
@@ -425,11 +419,14 @@ it.each(["before admission", "before receipt", "after completion"] as const)(
 );
 
 it.each([
-  { acknowledgment: "acknowledged", watch: undefined },
-  { acknowledgment: "ACK lost", watch: true },
+  { acknowledgment: "acknowledged", watch: undefined, timeoutSeconds: 0, observation: "timeout" },
+  { acknowledgment: "ACK lost", watch: true, timeoutSeconds: 0, observation: "timeout" },
+  { acknowledgment: "acknowledged", watch: undefined, timeoutSeconds: 1, observation: "timeout" },
+  { acknowledgment: "acknowledged", watch: undefined, timeoutSeconds: 1, observation: "yielded" },
+  { acknowledgment: "acknowledged", watch: undefined, timeoutSeconds: 1, observation: "pending" },
 ] as const)(
-  "delivers a queued child follow-up after its original wake was consumed ($acknowledgment, watch=$watch)",
-  async ({ acknowledgment, watch }) => {
+  "delivers a queued child follow-up after its original wake was consumed ($acknowledgment, watch=$watch, timeout=$timeoutSeconds, $observation)",
+  async ({ acknowledgment, watch, timeoutSeconds, observation }) => {
     const requesterSessionKey = "agent:main:dashboard:requester";
     const childSessionKey = "agent:main:dashboard:existing-child";
     const requesterTurnRunId = "followup-requester-turn";
@@ -438,6 +435,7 @@ it.each([
     await resetSubagentRegistryForTests();
     await seedDeliveredChild("original-child-run", childSessionKey, requesterSessionKey);
     const childPending = createDeferredCore();
+    let inlineObserved = false;
     callGatewayMock.mockImplementation(async (request: GatewayCall) => {
       calls.push(request);
       if (request.method === "agent" && request.params?.sessionKey === childSessionKey) {
@@ -449,6 +447,12 @@ it.each([
         return receipt;
       }
       if (request.method === "agent.wait" && request.params?.runId === runId) {
+        if (!inlineObserved && request.params?.timeoutMs === 1000) {
+          inlineObserved = true;
+          return observation === "yielded"
+            ? { status: "ok", yielded: true }
+            : { status: observation };
+        }
         await childPending.promise;
         await writeFinal(childSessionKey, runId, "Follow-up result");
         return {
@@ -460,7 +464,7 @@ it.each([
         };
       }
       if (request.method === "agent") {
-        return deliveredReply("Follow-up reached the requester");
+        return deliveredRequesterReply("Follow-up reached the requester");
       }
       return {};
     });
@@ -471,7 +475,7 @@ it.each([
         sessionKey: childSessionKey,
         mode: "followup",
         ...(watch === undefined ? {} : { watch }),
-        timeoutSeconds: 0,
+        timeoutSeconds,
         message: "Return the follow-up result",
       });
       expect(result.details).toMatchObject({
@@ -480,6 +484,12 @@ it.each([
         targetDisposition: "queued",
         ...(watch ? { watched: true } : {}),
         delivery: { status: "pending" },
+      });
+      expect(getSubagentRunByRunId(runId)).toMatchObject({
+        childSessionKey,
+        requesterSessionKey,
+        requesterTurnRunId,
+        execution: { status: "running" },
       });
       const onYield = vi.fn();
       const yielded = await yieldTool(
@@ -544,6 +554,159 @@ it.each([
   },
 );
 
+it.each(["ok", "error", "timeout"] as const)(
+  "consumes an inline child follow-up result without a second requester delivery (%s)",
+  async (status) => {
+    const requesterSessionKey = "agent:main:dashboard:inline-parent";
+    const childSessionKey = "agent:main:dashboard:inline-child";
+    const requesterTurnRunId = "inline-parent-turn";
+    const runId = "inline-child-followup";
+    await writePair(requesterSessionKey, "inline-parent", childSessionKey, "inline-child");
+    await resetSubagentRegistryForTests();
+    await seedDeliveredChild("inline-original", childSessionKey, requesterSessionKey);
+    const { handle } = createDurableSessionsSendTestRun(requesterTurnRunId);
+    const closeRequester = await setSessionsSendTestActiveRun(
+      "inline-parent",
+      handle,
+      requesterSessionKey,
+      undefined,
+      config,
+    );
+    const terminalReply = { disposition: "visible", text: "Inline follow-up result" } as const;
+    callGatewayMock.mockImplementation(async (request: GatewayCall) => {
+      calls.push(request);
+      if (request.method === "agent" && request.params?.sessionKey === childSessionKey) {
+        return { runId, status: "accepted", targetDisposition: "queued" };
+      }
+      if (request.method === "agent.wait" && request.params?.runId === runId) {
+        if (status === "ok") {
+          await writeFinal(childSessionKey, runId, terminalReply.text);
+          // The real child ends while its requester still holds the inline claim.
+          await endChildRun(runId, childSessionKey, terminalReply);
+        }
+        return {
+          runId,
+          status,
+          startedAt: 1,
+          endedAt: Date.now(),
+          ...(status === "ok" ? { terminalReply } : { error: "Child failed" }),
+        };
+      }
+      if (request.method === "agent") {
+        return deliveredRequesterReply("Unexpected second delivery");
+      }
+      return {};
+    });
+    announceTesting.setDepsForTest({ callGateway: callGatewayMock });
+    // The fixture requester has no controller operation; model its live inline claim.
+    const requesterTurn = holdLiveRequesterTurns(requesterTurnRunId);
+    try {
+      const result = await sendTool(requesterSessionKey, requesterTurnRunId).execute("inline", {
+        sessionKey: childSessionKey,
+        mode: "followup",
+        timeoutSeconds: 1,
+        message: "Continue the child task",
+      });
+      expect(result.details).toMatchObject({
+        status,
+        ...(status === "ok"
+          ? { reply: terminalReply.text, delivery: { status: "skipped" } }
+          : { error: "Child failed" }),
+      });
+      expect(getSubagentRunByRunId(runId)).toMatchObject({
+        childSessionKey,
+        requesterSessionKey,
+        expectsCompletionMessage: false,
+        delivery: { status: "delivered" },
+      });
+      await closeRequester();
+      await settleRequesterAfterSessionSpawns({
+        requesterSessionKey,
+        requesterAgentId: "main",
+        requesterTurnRunId,
+        requesterYielded: false,
+        acceptedSessionSpawns: [{ runId, childSessionKey, expectsCompletionMessage: false }],
+      });
+      await settleSessionWork();
+      expect(requesterCalls(requesterSessionKey)).toHaveLength(0);
+      if (status === "ok") {
+        await expectChildCleanupSettled(runId, requesterSessionKey);
+      }
+    } finally {
+      requesterTurn.restore();
+      await closeRequester();
+      await settleSessionWork();
+      await resetSubagentRegistryForTests();
+      announceTesting.setDepsForTest();
+    }
+  },
+);
+
+it("retains quiet restart custody for a cron requester's fresh child follow-up", async () => {
+  const requesterSessionKey = "agent:main:cron:job:run:isolated-run";
+  const childSessionKey = "agent:main:dashboard:cron-child";
+  const requesterTurnRunId = "cron-requester-turn";
+  const runId = "cron-child-followup";
+  await writePair(requesterSessionKey, "cron-requester", childSessionKey, "cron-child");
+  await resetSubagentRegistryForTests();
+  await seedDeliveredChild("cron-original", childSessionKey, requesterSessionKey);
+  const childPending = createDeferredCore();
+  callGatewayMock.mockImplementation(async (request: GatewayCall) => {
+    calls.push(request);
+    if (request.method === "agent" && request.params?.sessionKey === childSessionKey) {
+      return { runId, status: "accepted", targetDisposition: "queued" };
+    }
+    if (request.method === "agent.wait" && request.params?.runId === runId) {
+      await childPending.promise;
+      await writeFinal(childSessionKey, runId, "Quiet child result");
+      return {
+        runId,
+        status: "ok",
+        startedAt: 1,
+        endedAt: Date.now(),
+        terminalReply: { disposition: "visible", text: "Quiet child result" },
+      };
+    }
+    return {};
+  });
+  announceTesting.setDepsForTest({ callGateway: callGatewayMock });
+  let stopObserving = () => {};
+  try {
+    const result = await sendTool(requesterSessionKey, requesterTurnRunId).execute("cron", {
+      sessionKey: childSessionKey,
+      mode: "followup",
+      timeoutSeconds: 0,
+      message: "Continue the scheduled child work",
+    });
+    expect(result.details).toMatchObject({
+      status: "accepted",
+      delivery: { status: "skipped" },
+    });
+    expect(getSubagentRunByRunId(runId)).toMatchObject({
+      childSessionKey,
+      requesterSessionKey,
+      requesterTurnRunId,
+      expectsCompletionMessage: false,
+      execution: { status: "running" },
+    });
+    const settled = observeSubagentChange(() => {
+      const child = getSubagentRunByRunId(runId);
+      return !child || child.cleanupCompletedAt !== undefined;
+    });
+    stopObserving = settled.stop;
+    childPending.resolve();
+    await settled.promise;
+    await settleSessionWork();
+    expect(requesterCalls(requesterSessionKey)).toHaveLength(0);
+  } finally {
+    childPending.resolve();
+    stopObserving();
+    await settleSessionWork();
+    await resetSubagentRegistryForTests();
+    announceTesting.setDepsForTest();
+  }
+});
+
 it("yields two watched followups when the first settles during yield preparation", async () => {
   const requesterSessionKey = "agent:main:dashboard:race-parent";
   const childSessionKey = "agent:main:dashboard:race-child";
@@ -571,7 +734,7 @@ it("yields two watched followups when the first settles during yield preparation
         };
       }
     }
-    return deliveredReply("Both replies reviewed");
+    return deliveredRequesterReply("Both replies reviewed");
   });
   announceTesting.setDepsForTest({ callGateway: callGatewayMock });
   const enteredPreparation = createDeferredCore();
@@ -677,7 +840,7 @@ registerSessionsSendRequesterRetirementTests({
   writePair,
   sendTool,
   yieldTool,
-  deliveredReply,
+  deliveredReply: deliveredRequesterReply,
   requesterCalls,
   settleSessionWork,
   drainRootWork: () => settleRootWork(true),

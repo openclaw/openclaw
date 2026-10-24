@@ -58,7 +58,7 @@ import type { PreparedChatSendSession } from "./chat-send-session.js";
 import type { prepareChatSendUserTurn } from "./chat-send-user-turn.js";
 import type { GatewayRequestContext } from "./types.js";
 
-/** Captures the prepared request data used by both pre-ACK and detached injection attempts. */
+/** Captures admitted request data for the detached injection attempt. */
 export function createChatSendMessageInjectionStarter(params: {
   target: ReplyMessageInjectionTarget | undefined;
   sourceRef: RpcSourceRef;
@@ -195,9 +195,9 @@ export function createChatSendMessageInjectionStarter(params: {
       join = await prepareReplyMessageContinuation({
         target,
         assertCurrent,
+        delivery,
         input: {
           kind: "continuation",
-          delivery,
           caller,
           config: cfg,
           executionSelection: captureReplySessionExecutionSelection({
@@ -224,6 +224,7 @@ export function createChatSendMessageInjectionStarter(params: {
       if (join.kind === "deferred") {
         params.logGateway.warn("chat steering rejected; falling back to follow-up dispatch", {
           reason: join.reason,
+          error: join.errorMessage,
           runId: clientRunId,
           activeRunId: target.runId,
           sessionKey,
@@ -319,23 +320,12 @@ export function createChatSendMessageInjectionStarter(params: {
   };
 }
 
-type PreAckMessageInjectionResult =
-  | {
-      status: "continue";
-      attempt: ReplyMessageInjectionAttempt | undefined;
-      disposition?: "collaborative-steering-disabled";
-    }
-  | { status: "handled" };
-
 /** Keep a terminal injection decision through detached preparation and reply dispatch. */
 export function createChatSendInjectionDisposition(
-  initialDisposition: "collaborative-steering-disabled" | undefined,
   run: Parameters<typeof refuseCollaborativeSteering>[0],
 ) {
-  let refused = initialDisposition !== undefined;
-  const runState: ReplyOperationRunState = refused
-    ? { admission: { status: "skipped", reason: "collaborative-steering-disabled" } }
-    : {};
+  let refused = false;
+  const runState: ReplyOperationRunState = {};
   const isRefused = () =>
     refused ||
     (runState.admission?.status === "skipped" &&
@@ -360,39 +350,7 @@ export function createChatSendInjectionDisposition(
   };
 }
 
-/** Wait for runtime ownership before ACK without waiting for transcript commitment. */
-export async function settleChatSendPreAckMessageInjection(params: {
-  attempt: ReplyMessageInjectionAttempt | undefined;
-  isAborted: () => boolean;
-  sessionRoutingChanged: () => boolean;
-  onAborted: () => void;
-  onSessionRoutingChanged: () => void;
-}): Promise<PreAckMessageInjectionResult> {
-  if (!params.attempt || (await params.attempt.acceptance)) {
-    return { status: "continue", attempt: params.attempt };
-  }
-  const outcome = await params.attempt.outcome;
-  if (outcome.status === "failed") {
-    throw outcome.error;
-  }
-  if (params.isAborted()) {
-    params.onAborted();
-    return { status: "handled" };
-  }
-  if (params.sessionRoutingChanged()) {
-    params.onSessionRoutingChanged();
-    return { status: "handled" };
-  }
-  return {
-    status: "continue",
-    attempt: undefined,
-    ...(outcome.status === "rejected" && outcome.reason === "collaborative_steering_disabled"
-      ? { disposition: "collaborative-steering-disabled" as const }
-      : {}),
-  };
-}
-
-/** Pre-ACK steering is already owned; join it before fallible source preparation. */
+/** Join steering before fallible source preparation can trigger a separate reply. */
 export async function settleChatSendMessageInjection(
   attempt: ReplyMessageInjectionAttempt | undefined,
 ): Promise<boolean> {

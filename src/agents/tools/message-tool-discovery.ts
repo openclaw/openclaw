@@ -19,11 +19,17 @@ import type { ChannelMessageCapability } from "../../channels/plugins/message-ca
 import type { ChannelMessageActionName } from "../../channels/plugins/types.public.js";
 import { listRouteBindings } from "../../config/bindings.js";
 import { readExactSessionDeliveryContext } from "../../config/sessions/delivery-info.js";
+import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
+import { loadExactSessionEntryReadOnly } from "../../config/sessions/session-accessor.js";
+import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { SessionRowProjectionBinding } from "../../gateway/session-row-projection-binding.js";
 import { stripTargetProviderPrefix } from "../../infra/outbound/channel-target-prefix.js";
 import { resolveImplicitMessageActionTarget } from "../../infra/outbound/message-action-normalization.js";
 import { actionHasTarget } from "../../infra/outbound/message-action-spec.js";
 import { resolveAllowedMessageActions } from "../../infra/outbound/outbound-policy.js";
+import { getInProcessGatewayRequestContext } from "../../plugins/runtime/gateway-request-scope.js";
 import { normalizeRouteBindingChannelId } from "../../routing/binding-scope.js";
 import {
   normalizeAccountId,
@@ -37,6 +43,7 @@ import {
   normalizeMessageChannel,
 } from "../../utils/message-channel.js";
 import { listChannelSupportedActionsSteps } from "../channel-tools.js";
+import type { ScheduledToolPolicyContext } from "../scheduled-tool-policy.js";
 import { buildMessageToolSchemaFromActions } from "./message-tool-schema.js";
 export type MessageToolDiscoveryParams = {
   cfg: OpenClawConfig;
@@ -53,9 +60,8 @@ export type MessageToolDiscoveryParams = {
   agentId?: string;
   requesterSenderId?: string;
   senderIsOwner?: boolean;
-  /** Host-redeemed scheduled turn, including trusted jobs without account scoping. */
+  /** Scheduled session identity; independent of the current turn's authority. */
   isScheduledRun?: boolean;
-  /** Host-redeemed scheduled account; never changes the current delivery context. */
   scheduledAccountScope?: { channels?: readonly string[]; accountId: string };
   preparedMessageToolCatalog?: PreparedMessageToolCatalog;
 };
@@ -74,6 +80,49 @@ type MessageToolCurrentContextOptions = {
   currentChatType?: ChatType;
   currentMessagingTarget?: string;
 };
+type MessageToolSessionOptions = MessageToolCurrentContextOptions & {
+  config?: OpenClawConfig;
+  agentId?: string;
+};
+
+function readMessageToolSessionBinding(options?: MessageToolSessionOptions) {
+  const sessionKey = options?.agentSessionKey;
+  const agentId = options?.agentId ?? parseAgentSessionKey(sessionKey)?.agentId;
+  if (!sessionKey || !agentId || !options?.config) {
+    return undefined;
+  }
+  const scope = {
+    agentId,
+    storePath: resolveSessionStorePathCore(options.config.session?.store, { agentId }),
+    sessionKey,
+    projection: "list" as const,
+  };
+  const owner = getInProcessGatewayRequestContext()?.sessionRowProjectionOwner;
+  const current =
+    owner instanceof SessionRowProjectionBinding
+      ? owner.readCommittedEntry({ ...scope, key: sessionKey })
+      : undefined;
+  return { scope, current };
+}
+
+/** Released synchronous SDK factories retain the existing synchronous session reader. */
+export function readMessageToolSessionEntry(options?: MessageToolSessionOptions) {
+  const binding = readMessageToolSessionBinding(options);
+  return binding?.current
+    ? binding.current.entry
+    : binding
+      ? loadExactSessionEntryReadOnly(binding.scope)?.entry
+      : undefined;
+}
+
+export async function prepareMessageToolSessionBinding(options?: MessageToolSessionOptions) {
+  const binding = readMessageToolSessionBinding(options);
+  return binding?.current
+    ? binding.current.entry
+    : binding
+      ? await readSessionEntryReadOnlyInWorker(binding.scope)
+      : undefined;
+}
 type InferredSessionDelivery = {
   accountId?: string;
   channel: string;
@@ -179,12 +228,59 @@ function inferDeliveryFromSessionKey(
   };
 }
 
-/** Dashboard ingress stays local even when delivery resolves to an external conversation. */
+/** A session can receive WebChat prompts independently of its delivery route. */
 export function supportsMessageToolPromptReactions(options?: MessageToolCurrentContextOptions) {
   return (
-    parseAgentSessionKey(options?.agentSessionKey)?.rest.startsWith("dashboard:") ||
+    Boolean(options?.agentSessionKey) ||
     normalizeMessageChannel(options?.currentChannelProvider) === INTERNAL_MESSAGE_CHANNEL
   );
+}
+
+export function resolveMessageToolDefinitionContext(
+  options?: MessageToolCurrentContextOptions,
+  entry?: SessionEntry,
+) {
+  // Standalone tools have no session prefix to retain; session tools never use ingress facts.
+  if (!options?.agentSessionKey) {
+    return resolveEffectiveCurrentChannelContext(options);
+  }
+  const delivery = inferDeliveryFromSessionKey(options.agentSessionKey);
+  const stored = entry?.delivery?.kind === "external" ? entry.delivery : undefined;
+  return {
+    currentChannelProvider:
+      stored?.context.channel ??
+      delivery?.channel ??
+      (parseAgentSessionKey(options.agentSessionKey)?.rest.startsWith("dashboard:")
+        ? INTERNAL_MESSAGE_CHANNEL
+        : undefined),
+    currentChannelId: stored?.context.to ?? delivery?.to,
+    currentChatType: stored?.origin.chatType ?? delivery?.chatType,
+    currentThreadTs: stored?.context.threadId?.toString() ?? delivery?.threadId,
+    accountId: stored?.context.accountId ?? delivery?.accountId,
+  };
+}
+
+export function resolveMessageToolScheduledAccountScope(
+  suppliedPolicy?: ScheduledToolPolicyContext,
+  entry?: SessionEntry,
+) {
+  const continuation = entry?.cronRunContinuation;
+  const policy =
+    continuation?.scheduledToolPolicy?.mode === "account"
+      ? {
+          ...continuation.scheduledToolPolicy,
+          ownerOrigin: continuation.scheduledToolCallerOrigin,
+        }
+      : suppliedPolicy;
+  if (policy?.mode !== "account") {
+    return undefined;
+  }
+  const origin = policy.ownerOrigin;
+  return origin?.kind === "local"
+    ? { accountId: policy.ownerAccountId }
+    : origin?.kind === "external"
+      ? { accountId: policy.ownerAccountId, channels: [origin.channel] }
+      : undefined;
 }
 
 export function resolveEffectiveCurrentChannelContext(options?: MessageToolCurrentContextOptions) {

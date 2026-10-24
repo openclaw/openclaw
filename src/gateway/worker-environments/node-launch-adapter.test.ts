@@ -633,43 +633,32 @@ describe("node worker launch adapter", () => {
     expect(error.message.length).toBeLessThanOrEqual(1_024);
   });
 
-  it.each(["launch", "cancel"] as const)(
-    "retries a timed-out %s RPC within its deadline",
-    async (command) => {
-      let timedCalls = 0;
-      invoke.mockImplementation(async (request) => {
-        if (request.command === "worker.launch.v1") {
-          request.onDispatchReady?.("invoke-1");
-        }
-        if (request.command === `worker.${command}.v1`) {
-          timedCalls += 1;
-          return timedCalls === 1
-            ? await new Promise<never>(() => {})
-            : wire(receipt(input, command === "launch" ? "completed" : "cancelled"));
-        }
-        return wire(receipt(input, "running"));
-      });
-      vi.useFakeTimers();
-      adapter = adapterFor(invoke, {
-        rpcTimeoutMs: 10,
-        cancellationTimeoutMs: 100,
-        sleep: async () => {
-          if (command === "cancel") {
-            controller.abort();
-          }
-        },
-      });
-      const result = expect(launch({ timeoutMs: 100, signal: controller.signal })).resolves.toEqual(
-        receipt(input, command === "launch" ? "completed" : "cancelled"),
-      );
-      await vi.advanceTimersByTimeAsync(9);
-      expect(timedCalls).toBe(1);
-      await vi.advanceTimersByTimeAsync(1);
-      await result;
-      expect(timedCalls).toBe(2);
-      expect(invoke).toHaveBeenCalledTimes(command === "launch" ? 2 : 3);
-    },
-  );
+  it("retries a timed-out launch RPC within its deadline", async () => {
+    let timedCalls = 0;
+    invoke.mockImplementation(async (request) => {
+      if (request.command === "worker.launch.v1") {
+        request.onDispatchReady?.("invoke-1");
+        timedCalls += 1;
+        return timedCalls === 1
+          ? await new Promise<never>(() => {})
+          : wire(receipt(input, "completed"));
+      }
+      return wire(receipt(input, "running"));
+    });
+    vi.useFakeTimers();
+    adapter = adapterFor(invoke, {
+      sleep: async () => {},
+    });
+    const result = expect(
+      launch({ timeoutMs: 90_000, signal: controller.signal }),
+    ).resolves.toEqual(receipt(input, "completed"));
+    await vi.advanceTimersByTimeAsync(29_999);
+    expect(timedCalls).toBe(1);
+    await vi.advanceTimersByTimeAsync(1);
+    await result;
+    expect(timedCalls).toBe(2);
+    expect(invoke).toHaveBeenCalledTimes(2);
+  });
 
   it.each(["hosting withdrawn", "unsettled receipts", "dispatch authority closed"] as const)(
     "settles cancellation with independent authority after %s",
@@ -724,6 +713,7 @@ describe("node worker launch adapter", () => {
   );
 
   it("reports unknown cancellation outcome after a hard cancellation deadline", async () => {
+    vi.useFakeTimers();
     invoke.mockImplementation(async (request) => {
       if (request.command === "worker.cancel.v1") {
         return await new Promise<never>(() => {});
@@ -735,7 +725,6 @@ describe("node worker launch adapter", () => {
     let cancelling = false;
     let cancelClockReads = 0;
     adapter = adapterFor(invoke, {
-      cancellationTimeoutMs: 25,
       now: () => Date.now() + (cancelling && ++cancelClockReads === 3 ? 5 : 0),
       sleep: async () => {
         controller.abort();
@@ -743,9 +732,9 @@ describe("node worker launch adapter", () => {
       },
     });
 
-    const failure: unknown = await launch({ signal: controller.signal }).catch(
-      (error: unknown) => error,
-    );
+    const pending = launch({ signal: controller.signal }).catch((error: unknown) => error);
+    await vi.advanceTimersByTimeAsync(30_000);
+    const failure: unknown = await pending;
     expect(failure).toBeInstanceOf(Error);
     const diagnostic = formatErrorMessage(failure);
     expect(diagnostic).toContain(

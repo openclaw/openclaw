@@ -14,14 +14,16 @@ import {
   replaceSlashCommands,
 } from "../../lib/chat/commands.ts";
 import * as outboxPayloadStore from "../../lib/chat/outbox-payload-store.runtime.ts";
+import { listStoredChatOutboxes } from "../../lib/chat/outbox-store-projection.ts";
+import { storedChatOutboxScopeKey } from "../../lib/chat/outbox-store-scope.ts";
 import { captureChatOutboxAdmission } from "../../lib/chat/outbox-store.ts";
+import "../../lib/toast-host.tsx";
 import {
   createGatewayHarness,
   createTestSessionCapability,
   sessionsResult as sessionListFixture,
 } from "../../lib/sessions/session-capability.test-support.ts";
 import { resolveUiConversationIdentity } from "../../lib/sessions/session-key.ts";
-import "../../lib/toast-host.tsx";
 import { createResolvedModelPatch } from "../../test-helpers/chat-model.ts";
 import { createTestGatewayClient as clientWithRequest } from "../../test-helpers/gateway-client.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
@@ -83,12 +85,8 @@ import {
   retireChatMetadataRequests,
 } from "./chat-state-refresh.ts";
 import { selectedChatSessionRow } from "./chat-state-route.ts";
-import {
-  listStoredChatOutboxes,
-  loadChatComposerState,
-  storedChatOutboxScopeKey,
-  updateStoredChatComposerQueueItems,
-} from "./composer-persistence.ts";
+import { loadChatComposerState } from "./composer-draft-storage.ts";
+import { updateStoredChatComposerQueueItems } from "./composer-queue-persistence.ts";
 import { getChatSessionProjection, publishChatSessionProjection } from "./history-merge.ts";
 import { handleChatInputHistoryKey } from "./input-history.ts";
 import { installOutboxBrowserStorage } from "./outbox-browser.test-support.ts";

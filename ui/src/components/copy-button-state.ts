@@ -10,6 +10,7 @@ export function copyMarkdownLabel(): string {
 type CopyButtonTargets = {
   label?: HTMLElement;
   feedback?: HTMLElement;
+  announcement?: HTMLElement;
 };
 
 function readButtonLabel(button: HTMLButtonElement, targets: CopyButtonTargets) {
@@ -27,6 +28,10 @@ function setButtonLabel(
   if (feedback) {
     feedback.hidden = !showFeedback;
     feedback.textContent = label;
+  }
+  // Keep the live region present while clearing idle and pending announcements.
+  if (targets.announcement) {
+    targets.announcement.textContent = showFeedback ? label : "";
   }
   // Preserve renderer-owned text markers while updating visible feedback.
   const visibleLabel = targets.label?.lastChild;

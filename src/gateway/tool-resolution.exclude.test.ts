@@ -246,6 +246,48 @@ describe("resolveGatewayScopedTools excludeToolNames", () => {
     },
   );
 
+  it.each([
+    ["event", "internal_system", "cron", true],
+    // The agent RPC can assert provenance but never the host-derived trigger.
+    ["user", "internal_system", "cron", false],
+    ["event", "internal_system", "exec", false],
+    ["event", "inter_session", "cron", false],
+    [undefined, undefined, undefined, false],
+  ] as const)(
+    "serves CLI automation reads on a trigger=%s %s/%s non-owner turn: %s",
+    async (trigger, kind, sourceTool, readsServed) => {
+      const admission = prepareSystemAgentRunAdmission({}, "system-notice", "main", "test");
+      try {
+        const automations = makeTool("automations");
+        const gateway = makeTool("gateway");
+        createTools.mockReturnValueOnce([automations, gateway]);
+        const result = await resolveTools({
+          cfg: { gateway: { tools: { allow: ["automations", "gateway"] } } },
+          sessionKey: "agent:main:telegram:group:chat123",
+          senderIsOwner: false,
+          admittedRunContext: await admission.admit("gateway"),
+          ...(trigger ? { trigger } : {}),
+          ...(kind ? { inputProvenance: { kind, sourceTool } } : {}),
+        });
+        const run = (name: string, args: object) =>
+          result.tools.find((tool) => tool.name === name)?.execute(`call-${name}`, args);
+
+        await run("automations", { action: "runs", jobId: "job-1" });
+        expect(automations.execute).toHaveBeenCalledTimes(readsServed ? 1 : 0);
+        await expect(
+          run("automations", { action: "update", jobId: "job-1" }),
+        ).resolves.toMatchObject({ details: { gated: true } });
+        await expect(run("gateway", { action: "config.get" })).resolves.toMatchObject({
+          details: { gated: true },
+        });
+        expect(automations.execute).toHaveBeenCalledTimes(readsServed ? 1 : 0);
+        expect(gateway.execute).not.toHaveBeenCalled();
+      } finally {
+        admission.close();
+      }
+    },
+  );
+
   it("keeps real gateway deny policy inheritable while excluding native dedup tools", async () => {
     const result = await resolveNodeExecTools({
       cfg: { gateway: { tools: { deny: ["exec"] } } },

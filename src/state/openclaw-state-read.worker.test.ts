@@ -1,6 +1,11 @@
 import path from "node:path";
 import type { Worker } from "node:worker_threads";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import type {
+  WorkerTaskChannel,
+  WorkerTaskControl,
+  WorkerTaskHandler,
+} from "@openclaw/worker-runtime/worker";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { PostgresPhysicalFacts } from "../infra/database-engine/physical-facts.js";
 import type { DatabaseEngineSelection } from "../infra/database-engine/types.js";
@@ -17,11 +22,24 @@ import type {
 const mock = vi.hoisted(() => {
   vi.resetModules();
   return {
-    handler: vi.fn<(input: unknown) => Promise<OpenClawStateReadReply>>(),
+    handler:
+      vi.fn<
+        (
+          input: unknown,
+          channel?: WorkerTaskChannel,
+          control?: WorkerTaskControl,
+        ) => Promise<OpenClawStateReadReply>
+      >(),
+    control: {
+      runNativeSection: async <T>(operation: () => T | Promise<T>) => operation(),
+      throwIfCancelled: () => {},
+    } satisfies WorkerTaskControl,
+    open: vi.fn(),
     admit: vi.fn<() => void>(),
     query: vi.fn<() => []>(),
     settle: vi.fn<(operation: (source: { db: object }) => unknown) => unknown>(),
     unrelatedHandlerLoaded: false,
+    database: undefined as object | undefined,
     bridges: [] as { worker: Worker; control: Int32Array; online: Promise<void> }[],
     bootstrapLoading: Promise.withResolvers<void>(),
     bootstrapRelease: Promise.withResolvers<void>(),
@@ -47,7 +65,11 @@ vi.mock("node:worker_threads", async (importOriginal) => {
 });
 vi.mock("../infra/worker-task-server.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/worker-task-server.js")>()),
-  serveOwnedWorkerTasks: mock.handler.mockImplementation.bind(mock.handler),
+  serveOwnedWorkerTasks: (handler: WorkerTaskHandler<OpenClawStateReadReply>) => {
+    mock.handler.mockImplementation(async (input, channel, control) =>
+      handler(input, channel, control ?? mock.control),
+    );
+  },
 }));
 vi.mock("./backup-run-records.kernel.js", async (importOriginal) => {
   mock.unrelatedHandlerLoaded = true;
@@ -84,12 +106,14 @@ vi.mock("../infra/gateway-owner-lease.worker.js", async (importOriginal) => ({
     onAdmitted();
   },
 }));
+// mock-isolation: Dispatch tests supply fixture handles without opening their synthetic source paths.
 vi.mock("./openclaw-state-db-read-connection.js", () => ({
   closeRetainedOpenClawStateReadConnections: vi.fn(),
+  openOpenClawStateReadConnection: mock.open,
   readOpenClawStateReadOnlyLocation: mock.settle,
   withOpenClawStateReadOnlyLocation: (operation: (source: { db: object }) => unknown) => {
     mock.admit();
-    return operation({ db: {} });
+    return operation({ db: mock.database ?? {} });
   },
 }));
 
@@ -109,6 +133,10 @@ afterEach(async () => {
 });
 
 beforeEach(() => {
+  mock.open.mockReset().mockImplementation(() => {
+    throw new Error("Unexpected database open");
+  });
+  mock.database = undefined;
   mock.admit.mockReset();
   mock.query.mockReset().mockReturnValue([]);
   mock.settle.mockReset().mockImplementation((operation) => {
@@ -135,6 +163,33 @@ it.each([
     expect(mock.query).toHaveBeenCalledExactlyOnceWith({}, request.databasePath, false);
   }
   expect(mock.unrelatedHandlerLoaded).toBe(false);
+});
+
+it("reads an absent publication receipt without loading unrelated handlers", async () => {
+  const db = openNodeSqliteDatabase(":memory:");
+  mock.database = db;
+  try {
+    const reply = await mock.handler({
+      ...request,
+      command: {
+        type: "githubPublications.sharedObservation",
+        input: {
+          session: { agentId: "main", sessionKey: "agent:main:fixture", sessionId: "fixture" },
+          selector: {},
+          entry: {},
+        },
+      },
+    });
+    expect(reply).toEqual({
+      ok: true,
+      type: "githubPublications.sharedObservation",
+      sourceAdmitted: true,
+      row: undefined,
+    });
+    expect(mock.unrelatedHandlerLoaded).toBe(false);
+  } finally {
+    db.close();
+  }
 });
 
 it("starts its PG bridge while the first command module is still loading", async () => {
@@ -225,4 +280,189 @@ it.each([
     expect(reply).toEqual({ ok: true, type, sourceAdmitted, result: { status: "unavailable" } });
   }
   expect(mock.query).toHaveBeenCalledTimes(outcome === "schema-error" ? 0 : 1);
+});
+
+describe.each([
+  { type: "subagents.restore" },
+  {
+    type: "meetingTranscripts.export",
+    format: "library",
+    selector: "fixture-session",
+    includeNotes: true,
+  },
+] as const)("$type stream loading", (command) => {
+  const loaded = new Set<string>();
+  const freshAdmission = vi.fn<() => void>();
+  const nativeSection = vi.fn();
+  const restore =
+    vi.fn<
+      typeof import("../agents/subagents/registry/subagent-registry.store.restore.worker.js").streamSubagentRegistryInWorker
+    >();
+  const exportTranscript =
+    vi.fn<typeof import("../transcripts/store-export.worker.js").streamTranscriptExportInWorker>();
+  const channel: WorkerTaskChannel = {
+    consumeInput: vi.fn(),
+    notify: vi.fn(),
+    request: vi.fn<WorkerTaskChannel["request"]>(),
+  };
+  const control: WorkerTaskControl = {
+    runNativeSection: async <T>(operation: () => T | Promise<T>) => {
+      nativeSection();
+      return operation();
+    },
+    throwIfCancelled: () => {},
+  };
+  let holdImport = false;
+  let importStarted: PromiseWithResolvers<void>;
+  let releaseImport: PromiseWithResolvers<void>;
+
+  beforeEach(async () => {
+    // Each command must start cold, including Vitest's separate mock-module cache.
+    vi.resetModules();
+    loaded.clear();
+    holdImport = false;
+    importStarted = Promise.withResolvers<void>();
+    releaseImport = Promise.withResolvers<void>();
+    freshAdmission.mockReset();
+    nativeSection.mockReset();
+    restore.mockReset().mockImplementation(async (_input, _channel, onAdmitted) => {
+      onAdmitted();
+      return 2;
+    });
+    exportTranscript
+      .mockReset()
+      .mockImplementation(async (_input, _command, _channel, onAdmitted) => {
+        onAdmitted();
+        return { ok: true };
+      });
+    vi.doMock("./openclaw-state-read-handlers.js", async (importOriginal) => {
+      loaded.add("catchall");
+      return importOriginal<typeof import("./openclaw-state-read-handlers.js")>();
+    });
+    vi.doMock(
+      "../agents/subagents/registry/subagent-registry.store.worker.js",
+      async (importOriginal) => {
+        loaded.add("mixed-store");
+        return importOriginal<
+          typeof import("../agents/subagents/registry/subagent-registry.store.worker.js")
+        >();
+      },
+    );
+    vi.doMock(
+      "../agents/subagents/registry/subagent-registry.store.restore.worker.js",
+      async (importOriginal) => {
+        loaded.add("subagents.restore");
+        if (holdImport && command.type === "subagents.restore") {
+          importStarted.resolve();
+          await releaseImport.promise;
+        }
+        return {
+          ...(await importOriginal<
+            typeof import("../agents/subagents/registry/subagent-registry.store.restore.worker.js")
+          >()),
+          streamSubagentRegistryInWorker: restore,
+        };
+      },
+    );
+    vi.doMock("../transcripts/store-export.worker.js", async (importOriginal) => {
+      loaded.add("meetingTranscripts.export");
+      if (holdImport && command.type === "meetingTranscripts.export") {
+        importStarted.resolve();
+        await releaseImport.promise;
+      }
+      return {
+        ...(await importOriginal<typeof import("../transcripts/store-export.worker.js")>()),
+        streamTranscriptExportInWorker: exportTranscript,
+      };
+    });
+    const { openClawStateDatabaseCache } = await import("./openclaw-state-db-cache.js");
+    vi.spyOn(
+      openClawStateDatabaseCache,
+      "assertOpenClawStateDatabaseFreshOpenAllowedAtPath",
+    ).mockImplementation(freshAdmission);
+    await import("./openclaw-state-read.worker.js");
+  });
+
+  afterEach(() => {
+    releaseImport.resolve();
+    vi.doUnmock("./openclaw-state-read-handlers.js");
+    vi.doUnmock("../agents/subagents/registry/subagent-registry.store.worker.js");
+    vi.doUnmock("../agents/subagents/registry/subagent-registry.store.restore.worker.js");
+    vi.doUnmock("../transcripts/store-export.worker.js");
+    vi.restoreAllMocks();
+  });
+
+  it("loads only its stream owner and preserves the reply", async () => {
+    const input = { ...request, checkFreshAdmission: true, command };
+    const reply = await mock.handler(input, channel, control);
+    expect(reply).toEqual(
+      command.type === "subagents.restore"
+        ? { ok: true, type: command.type, sourceAdmitted: true, count: 2 }
+        : { ok: true, type: command.type, sourceAdmitted: true, result: { ok: true } },
+    );
+    if (command.type === "subagents.restore") {
+      expect(restore).toHaveBeenCalledExactlyOnceWith(input, channel, expect.any(Function));
+      expect(exportTranscript).not.toHaveBeenCalled();
+    } else {
+      expect(exportTranscript).toHaveBeenCalledExactlyOnceWith(
+        input,
+        command,
+        channel,
+        expect.any(Function),
+      );
+      expect(restore).not.toHaveBeenCalled();
+    }
+    expect(freshAdmission).toHaveBeenCalledOnce();
+    expect(nativeSection).toHaveBeenCalledOnce();
+    expect(loaded).toEqual(new Set([command.type]));
+  });
+
+  it("requires a receiver before entering either stream owner", async () => {
+    const reply = await mock.handler({ ...request, command }, undefined, control);
+    const operation =
+      command.type === "subagents.restore" ? "Subagent restore" : "Transcript export";
+    expect(reply).toMatchObject({
+      ok: false,
+      message: `${operation} requires a bounded receiver`,
+      sourceAdmitted: undefined,
+    });
+    expect(restore).not.toHaveBeenCalled();
+    expect(exportTranscript).not.toHaveBeenCalled();
+    expect(mock.open).not.toHaveBeenCalled();
+  });
+
+  it("checks fresh admission after the pending owner import settles", async () => {
+    holdImport = true;
+    const pending = mock.handler(
+      { ...request, checkFreshAdmission: true, command },
+      channel,
+      control,
+    );
+    let reply: OpenClawStateReadReply | undefined;
+    try {
+      await Promise.race([
+        importStarted.promise,
+        pending.then(() => {
+          throw new Error("Worker returned before loading the selected stream owner");
+        }),
+      ]);
+      expect(freshAdmission).not.toHaveBeenCalled();
+      freshAdmission.mockImplementation(() => {
+        throw new Error("Fresh source admission refused");
+      });
+    } finally {
+      releaseImport.resolve();
+      reply = await pending;
+    }
+    expect(reply).toMatchObject({
+      ok: false,
+      message: "Fresh source admission refused",
+      sourceAdmitted: undefined,
+    });
+    expect(freshAdmission).toHaveBeenCalledOnce();
+    expect(nativeSection).not.toHaveBeenCalled();
+    expect(restore).not.toHaveBeenCalled();
+    expect(exportTranscript).not.toHaveBeenCalled();
+    expect(mock.open).not.toHaveBeenCalled();
+  });
 });

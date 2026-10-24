@@ -332,12 +332,12 @@ describe("selected automation runtime refresh", () => {
       await mutation;
       const expectedFeedback =
         operation === "run" ? "Run queued. Run ID: queued-run" : "Update rejected by Gateway";
-      expect(state.cronError).toBe(expectedFeedback);
+      expect(state[operation === "run" ? "cronNotice" : "cronError"]).toBe(expectedFeedback);
       if (!failWhileBusy) {
         pending.reject(new Error("Older refresh failed"));
       }
       await Promise.all([activeRead, queued]);
-      expect(state.cronError).toBe(expectedFeedback);
+      expect(state[operation === "run" ? "cronNotice" : "cronError"]).toBe(expectedFeedback);
       expect(state.cronEditingJob).toBe(job);
     },
   );
@@ -382,7 +382,7 @@ describe("selected automation runtime refresh", () => {
     await queued;
     expect(job.state.triggerEvalCount).toBe(9);
     expect(state.cronStatus?.jobs).toBe(9);
-    expect(state.cronError).toBe("Run queued. Run ID: queued-run");
+    expect(state.cronNotice).toBe("Run queued. Run ID: queued-run");
   });
 
   it.each(["cron.get", "cron.status"] as const)(

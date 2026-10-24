@@ -38,6 +38,7 @@ LIVE_ANTHROPIC_API_KEY="${ANTHROPIC_API_KEY:-}"
 LIVE_GEMINI_API_KEY="${GEMINI_API_KEY:-}"
 resolve_upgrade_survivor_paths
 mkdir -p "$ARTIFACT_ROOT"
+export OPENCLAW_UPGRADE_SURVIVOR_ARCHIVE_PROOF_ROOT="$ARTIFACT_ROOT/session-archives"
 LIVE_MODELS_JSON="$ARTIFACT_ROOT/live-models.json"
 node scripts/e2e/lib/upgrade-survivor/live-models.mjs init "$LIVE_MODELS_JSON"
 export GATEWAY_AUTH_TOKEN_REF="upgrade-survivor-token"
@@ -1137,8 +1138,22 @@ assert.equal(result.status, "skipped", "second update was not a clean no-op");
 assert.equal(result.reason, "already-current", "second update was not already current");
 // The isolated state directory records a service refusal without running the suggested command.
 assert(Array.isArray(result.steps), "second update did not report its steps");
+// Already-current updates still retire verified recovery artifacts, never packages.
+const cleanups = result.steps.filter((step) => step.name === "recovery-artifact-cleanup");
+assert(cleanups.length <= 1, "second update repeated recovery cleanup");
+for (const { durationMs, diagnostics, ...step } of cleanups) {
+  assert(Number.isFinite(durationMs) && durationMs >= 0, "invalid recovery cleanup duration");
+  assert.deepEqual(step, {
+    name: "recovery-artifact-cleanup", command: "openclaw update cleanup", cwd: "", exitCode: 0,
+  }, "second update recovery cleanup did not finish cleanly");
+  assert(Array.isArray(diagnostics) && diagnostics.length === 1 &&
+    typeof diagnostics[0] === "string" &&
+    /^Recovery cleanup removed \d+ files \(\d+ logical bytes\); protected recovery artifacts were retained\.$/.test(diagnostics[0]),
+    "second update omitted its verified recovery cleanup outcome");
+}
 // Advisory guidance is product prose that releases reword; require one, not its text.
-const steps = result.steps.map(({ advisory, ...step }) => advisory ? {
+const steps = result.steps.filter((step) => step.name !== "recovery-artifact-cleanup")
+  .map(({ advisory, ...step }) => advisory ? {
   ...step,
   advisory: { kind: advisory.kind, explained: typeof advisory.message === "string" && advisory.message.trim() !== "" },
 } : step);
@@ -1159,18 +1174,30 @@ NODE
 }
 
 assert_legacy_operator_doctor_clean() {
+  local doctor_status=0
   openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" openclaw doctor --lint --json \
-    >"$ARTIFACT_ROOT/doctor-lint.json" 2>"$ARTIFACT_ROOT/doctor-lint.err"
-  node --input-type=module - "$ARTIFACT_ROOT/doctor-lint.json" "$STATUS_JSON" "$candidate_version" <<'NODE'
+    >"$ARTIFACT_ROOT/doctor-lint.json" 2>"$ARTIFACT_ROOT/doctor-lint.err" || doctor_status=$?
+  node --input-type=module - \
+    "$ARTIFACT_ROOT/doctor-lint.json" "$STATUS_JSON" "$candidate_version" "$doctor_status" <<'NODE'
 import assert from "node:assert/strict";
 import fs from "node:fs";
 const report = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
-assert.equal(report.ok, true, "Doctor reported an unhealthy candidate");
+const findings = report.findings;
+const doctorStatus = Number(process.argv[5]);
+assert(Array.isArray(findings), "Doctor report did not include findings");
+const exactLegacyAuthWarning = findings.length === 1 &&
+  findings[0]?.checkId === "core/doctor/browser" &&
+  findings[0]?.severity === "warning" &&
+  findings[0]?.message === "Legacy Browser Relay Authentication is enabled (browser.extensionRelay.allowLegacyAuth=true).";
+assert(
+  (doctorStatus === 0 && report.ok === true && findings.length === 0) ||
+    (doctorStatus === 1 && report.ok === false && exactLegacyAuthWarning),
+  "Doctor reported an unexpected exit/payload combination",
+);
 assert(report.checksRun > 0, "Doctor did not run health checks");
-assert.deepEqual(report.findings, [], "Doctor reported unresolved findings");
 const gateway = JSON.parse(fs.readFileSync(process.argv[3], "utf8"));
 assert.equal(gateway.gateway.version, process.argv[4], "Gateway is not serving the candidate version");
-console.log(`Doctor clean; Gateway serves candidate ${process.argv[4]}.`);
+console.log(`Doctor report accepted; Gateway serves candidate ${process.argv[4]}.`);
 NODE
 }
 
@@ -1581,6 +1608,9 @@ update_candidate() {
   local update_node_options="${NODE_OPTIONS:+$NODE_OPTIONS }--import=$PWD/scripts/e2e/lib/upgrade-survivor/diagnostics.mjs"
   if [ -n "${OPENCLAW_UPGRADE_SURVIVOR_NPM_REGISTRY:-}" ]; then
     update_node_options+=" --import=$PWD/scripts/e2e/lib/upgrade-survivor/plugin-registry-redirect.mjs"
+  fi
+  if [ "$SCENARIO" = "legacy-operator-state" ]; then
+    update_node_options+=" --import=$PWD/scripts/e2e/lib/upgrade-survivor/session-archive-proof.mjs"
   fi
   if [ "$SCENARIO" = "custom-plugin-siblings" ]; then
     update_node_options+=" --import=$ARTIFACT_ROOT/sibling-refusal-preload.mjs"

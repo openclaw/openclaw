@@ -186,23 +186,50 @@ suite.define(() => {
         )
         .waitFor();
       await page.locator(".chat-pane--history-loading").waitFor({ state: "hidden" });
+      await page.locator(".sidebar-connection-flag[data-open]").waitFor({ state: "hidden" });
       let sampleIndex = 0;
+      const visibleWidth = () =>
+        page.locator(".shell-nav").evaluate((navigation) => {
+          const bounds = navigation.getBoundingClientRect();
+          if (navigation.closest(".shell--mobile-nav")) {
+            return bounds.right;
+          }
+          // Measure the painted/hit-testable edge, including a clipped fixed-width panel.
+          let left = 0;
+          let right = bounds.width;
+          while (right - left > 0.01) {
+            const middle = (left + right) / 2;
+            const hit = document.elementFromPoint(
+              bounds.left + middle,
+              bounds.top + bounds.height / 2,
+            );
+            if (hit && navigation.contains(hit)) {
+              left = middle;
+            } else {
+              right = middle;
+            }
+          }
+          return Math.round(left * 100) / 100;
+        });
       const sampleToggle = async (input: "click" | "shortcut") => {
+        await page.locator(".shell").evaluate((shell) => {
+          for (const element of [
+            shell,
+            ...shell.querySelectorAll(".shell-nav, .shell-nav-backdrop"),
+          ]) {
+            for (const animation of element.getAnimations()) {
+              animation.finish();
+            }
+          }
+        });
+        const start = await visibleWidth();
         const sampled = await page.evaluate(async (interaction) => {
           const shell = document.querySelector<HTMLElement>(".shell")!;
           const navigation = document.querySelector<HTMLElement>(".shell-nav")!;
           const mobile = shell.classList.contains("shell--mobile-nav");
-          const width = () =>
-            mobile
-              ? navigation.getBoundingClientRect().right
-              : navigation.getBoundingClientRect().width;
           const backdrop = shell.querySelector<HTMLElement>(".shell-nav-backdrop")!;
           const animations = () =>
             [shell, navigation, backdrop].flatMap((element) => element.getAnimations());
-          for (const animation of animations()) {
-            animation.finish();
-          }
-          const start = width();
           if (interaction === "shortcut") {
             const mac = navigator.platform.startsWith("Mac");
             document.dispatchEvent(
@@ -228,18 +255,18 @@ suite.define(() => {
           await new Promise<void>((resolve) => {
             requestAnimationFrame(() => resolve());
           });
-          const firstFrame = width();
           const current = animations();
           const moving = current.some((animation) => animation.playState === "running");
           for (const animation of current) {
             animation.pause();
           }
-          return { start, firstFrame, moving };
+          return { moving };
         }, input);
+        const firstFrame = await visibleWidth();
         if (railProofDir) {
           await page.screenshot({ path: path.join(railProofDir, `${sampleIndex++}-${input}.png`) });
         }
-        const end = await page.locator(".shell").evaluate((shell) => {
+        await page.locator(".shell").evaluate((shell) => {
           const navigation = shell.querySelector(".shell-nav")!;
           const backdrop = shell.querySelector<HTMLElement>(".shell-nav-backdrop")!;
           for (const element of [shell, navigation, backdrop]) {
@@ -247,10 +274,8 @@ suite.define(() => {
               animation.finish();
             }
           }
-          const bounds = navigation.getBoundingClientRect();
-          return shell.classList.contains("shell--mobile-nav") ? bounds.right : bounds.width;
         });
-        return { ...sampled, end };
+        return { ...sampled, start, firstFrame, end: await visibleWidth() };
       };
 
       for (const input of ["click", "shortcut", "shortcut", "click"] as const) {
@@ -509,6 +534,7 @@ suite.define(() => {
               "chat.startup",
               "device.scopes.requestUpgrade",
               "device.scopes.waitUpgrade",
+              "sessions.companion.state",
               "sessions.create",
             ],
             methodResponses: { "sessions.list": chatSessionListResponse() },

@@ -11,11 +11,13 @@ import {
 import { t } from "../../../i18n/index.ts";
 import { registerDreamingEnglish } from "../../../i18n/locales/en-dreaming.ts";
 import { currentConfigObject } from "../../../lib/config/config-state-model.ts";
+import { formatUiError } from "../../../lib/format-error.ts";
 import { formatTimeMs } from "../../../lib/format.ts";
 import { GatewayPageBinding, type GatewayPageChange } from "../../../lib/gateway-page-binding.ts";
 import { pathDisplayName } from "../../../lib/path-display.ts";
 import { isPluginEnabledInConfigSnapshot } from "../../../lib/plugin-activation.ts";
 import { projectOwner, projectMutableSource } from "../../../lib/reactive/projection.ts";
+import { showToast } from "../../../lib/toast.ts";
 import {
   canCallDreamingMethod,
   clearSettledDreamingRead,
@@ -78,6 +80,8 @@ export function createAgentMemory(
   let pendingEnabled: boolean | null = null;
   let wikiPreview: WikiPreviewRequest | null = null;
   let pendingWikiRead: { request: WikiPreviewRequest } | null = null;
+  const [configOpenScope, setConfigOpenScope] = createOptimistic<DreamingState>();
+  const [configOpening, setConfigOpening] = createOptimistic(false);
   const [diaryRequest, setDiaryRequest] = createOptimistic<DreamingState>();
   const [diarySaving, setDiarySaving] = createOptimistic(false);
   let diaryPresentationLifetime = Promise.withResolvers<void>();
@@ -166,6 +170,33 @@ export function createAgentMemory(
     diaryPresentationLifetime.resolve();
     diaryPresentationLifetime = Promise.withResolvers<void>();
   }
+
+  const openConfig = async () => {
+    const scope = captureTaskScope();
+    if (!scope || !isTaskScopeCurrent(scope)) {
+      return;
+    }
+    const retired = diaryPresentationLifetime.promise;
+    const pending = Promise.race([context.runtimeConfig.openFile(), retired]);
+    // The runtime owner publishes admission before the presentation action starts.
+    await Promise.resolve();
+    await presentConfigOpen(scope, pending);
+  };
+
+  const presentConfigOpen = action(function* (scope: DreamingTaskScope, pending: Promise<unknown>) {
+    try {
+      if (isTaskScopeCurrent(scope)) {
+        setConfigOpenScope(scope.state);
+        setConfigOpening(true);
+      }
+      yield pending;
+    } catch (error) {
+      // Expected failures already use the runtime owner's toast contract.
+      if (isTaskScopeCurrent(scope)) {
+        showToast({ message: formatUiError(error) });
+      }
+    }
+  });
 
   function createGatewayState(snapshot = context.gateway.snapshot): DreamingState {
     return {
@@ -479,7 +510,7 @@ export function createAgentMemory(
           void runDreamingTask((current) => loadDreamingResource(current, "dreamDiary")),
         onRefreshImports: () => void loadResources("wikiImportInsights"),
         onRefreshWikiOverview: () => void loadResources("wikiOverview"),
-        onOpenConfig: () => void context.runtimeConfig.openFile(),
+        onOpenConfig: openConfig,
         onOpenWikiPage: openWikiPreview,
         onCloseWikiPreview: () => {
           wikiPreview = null;
@@ -667,6 +698,10 @@ export function createAgentMemory(
     };
   });
   return {
+    configOpening: () => {
+      projection.revision();
+      return configOpening() && configOpenScope() === dreaming;
+    },
     diaryActionBusy,
     diaryOutcome,
     loadResources,

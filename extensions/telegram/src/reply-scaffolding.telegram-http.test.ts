@@ -1,9 +1,5 @@
 import { buildHistoryContext } from "openclaw/plugin-sdk/reply-history";
-import {
-  createReplyDispatcher,
-  dispatchInboundMessage,
-  type ReplyPayload,
-} from "openclaw/plugin-sdk/reply-runtime";
+import { createReplyDispatcher, dispatchInboundMessage } from "openclaw/plugin-sdk/reply-runtime";
 import { describe, expect, it } from "vitest";
 import { createTelegramDraftStream } from "./draft-stream.js";
 import { splitTelegramReasoningText } from "./reasoning-lane-coordinator.js";
@@ -17,9 +13,15 @@ describe("reply scaffolding through final preparation and Telegram HTTP", () => 
     fixture.requests
       .filter(({ method }) => method === "sendMessage" || method === "editMessageText")
       .map(({ fields }) => (typeof fields.text === "string" ? fields.text : ""));
+  const history = (currentMessage = "private inbound paragraph", lineBreak = "\n") =>
+    buildHistoryContext({
+      historyText: "[Telegram] Alice: private history",
+      currentMessage,
+      lineBreak,
+    });
 
   async function prepareAndDispatch(
-    payload: ReplyPayload,
+    finalText: string,
     conversationContext?: string,
     reasoningSnapshots: readonly string[] = [],
   ) {
@@ -73,11 +75,11 @@ describe("reply scaffolding through final preparation and Telegram HTTP", () => 
             for (const text of reasoningSnapshots) {
               await options?.onReasoningStream?.({ text, isReasoningSnapshot: true });
             }
-            return payload;
+            return { text: finalText };
           },
         });
       } else {
-        dispatcher.sendFinalReply(payload);
+        dispatcher.sendFinalReply({ text: finalText });
         dispatcher.markComplete();
         await dispatcher.waitForIdle();
       }
@@ -99,7 +101,7 @@ describe("reply scaffolding through final preparation and Telegram HTTP", () => 
           `${internal}\n\nReading config.\n\nChecking files.`,
         );
       }
-      await prepareAndDispatch({ text: "Visible answer." }, "Show status.", snapshots);
+      await prepareAndDispatch("Visible answer.", "Show status.", snapshots);
       expect(delivered()).toEqual(
         visible
           ? [
@@ -112,31 +114,26 @@ describe("reply scaffolding through final preparation and Telegram HTTP", () => 
     },
   );
 
-  it("removes the full copied prompt before XML and metadata cleanup changes it", async () => {
-    const conversationContext = buildHistoryContext({
-      historyText: "[Telegram] Alice: private history paragraph",
-      currentMessage: `Conversation info: ⟦openclaw:ctx⟧
+  const xmlContext = history(`Conversation info: ⟦openclaw:ctx⟧
 \`\`\`json
 {"private":"sender metadata"}
 \`\`\`
 <function_calls><invoke name="exec">private XML</invoke></function_calls>
 
-private second inbound paragraph`,
-    });
-
-    await prepareAndDispatch(
-      { text: `${conversationContext}\n\n${conversationContext}\n\nVisible answer.` },
-      conversationContext,
-    );
-
+private second inbound paragraph`);
+  it.each([
+    ["XML and metadata cleanup", xmlContext, (prompt: string) => `${prompt}\n\n${prompt}`],
+    [
+      "line-ending normalization",
+      history("private first paragraph\n\nprivate second paragraph", "\r\n"),
+      (prompt: string) => prompt.replace(/\r\n/g, "\n"),
+    ],
+  ] as const)("removes a copied prompt before %s", async (_name, context, copy) => {
+    await prepareAndDispatch(`${copy(context)}\n\nVisible answer.`, context);
     expect(delivered()).toEqual(["Visible answer."]);
   });
 
   it("preserves literal fenced scaffolding examples that do not copy the private prompt", async () => {
-    const conversationContext = buildHistoryContext({
-      historyText: "[Telegram] Alice: earlier message",
-      currentMessage: "[Telegram] Alice: current message",
-    });
     const literal = `The prompt format is:
 
 \`\`\`text
@@ -147,7 +144,7 @@ Example: this is public placeholder history.
 Example: this is a public placeholder message.
 \`\`\``;
 
-    await prepareAndDispatch({ text: literal }, conversationContext);
+    await prepareAndDispatch(literal, history("[Telegram] Alice: current message"));
 
     expect(delivered()).toHaveLength(1);
     expect(delivered()[0]).toContain("[Chat messages since your last reply - for context]");
@@ -167,22 +164,7 @@ Conversation info: (openclaw:ctx)
 
 Visible answer.`;
 
-    await prepareAndDispatch({ text: leaked });
-
-    expect(delivered()).toEqual(["Visible answer."]);
-  });
-
-  it("removes a copied prompt when the source and model normalize line endings differently", async () => {
-    const conversationContext = buildHistoryContext({
-      historyText: "[Telegram] Alice: private history",
-      currentMessage: "private first paragraph\n\nprivate second paragraph",
-      lineBreak: "\r\n",
-    });
-
-    await prepareAndDispatch(
-      { text: `${conversationContext.replace(/\r\n/g, "\n")}\n\nVisible answer.` },
-      conversationContext,
-    );
+    await prepareAndDispatch(leaked);
 
     expect(delivered()).toEqual(["Visible answer."]);
   });
@@ -199,11 +181,8 @@ Visible answer.`;
       visible: ["Visible answer."],
     },
   ])("never delivers a private prompt hidden in $name", async ({ wrap, visible }) => {
-    const conversationContext = buildHistoryContext({
-      historyText: "[Telegram] Alice: private history",
-      currentMessage: "private inbound paragraph",
-    });
-    await prepareAndDispatch({ text: wrap(conversationContext) }, conversationContext);
+    const conversationContext = history();
+    await prepareAndDispatch(wrap(conversationContext), conversationContext);
     expect(delivered()).toHaveLength(1);
     for (const text of visible) {
       expect(delivered()[0]).toContain(text);

@@ -588,6 +588,40 @@ describe("createCopilotToolBridge tool conversion", () => {
     );
   });
 
+  it("seals one-shot tool admission and joins calls already accepted", async () => {
+    const entered = createDeferred<void>();
+    const finish = createDeferred<void>();
+    const bridge = await bridgeWithTools(
+      [
+        makeTool({
+          name: "pending",
+          execute: vi.fn(async () => {
+            entered.resolve();
+            await finish.promise;
+            return textToolResult("done");
+          }),
+        }),
+      ],
+      { config: directConfig },
+    );
+    const pending = run(bridge, "pending");
+    await entered.promise;
+    let settled = false;
+    const cleanup = bridge.settle?.().then(() => {
+      settled = true;
+    });
+    try {
+      await expect(run(bridge, "pending")).rejects.toThrow("attempt is closing");
+      expect(settled).toBe(false);
+    } finally {
+      finish.resolve();
+      await pending;
+      await cleanup;
+      bridge.cleanup?.();
+    }
+    expect(settled).toBe(true);
+  });
+
   it("runs SDK-dispatched tools in the attempt's async context, not the pooled connection's", async () => {
     const turn = new AsyncLocalStorage<string>();
     let seen: string | undefined;

@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
-import { vi } from "vitest";
+import { afterEach, vi } from "vitest";
 import { registerPiSessionCatalog } from "./pi-session-catalog-plugin.js";
 
 type RegisteredSessionCatalogProvider = Parameters<OpenClawPluginApi["registerSessionCatalog"]>[0];
@@ -40,7 +40,7 @@ export const piMessage = (
 export const piJsonl = (entries: unknown[]) =>
   `${entries.map((entry) => JSON.stringify(entry)).join("\n")}\n`;
 
-export function restorePiEnvironment(original: NodeJS.ProcessEnv) {
+function restorePiEnvironment(original: NodeJS.ProcessEnv) {
   for (const [key, value] of Object.entries(original)) {
     if (value === undefined) {
       delete process.env[key];
@@ -50,7 +50,54 @@ export function restorePiEnvironment(original: NodeJS.ProcessEnv) {
   }
 }
 
-export function bindTestCatalogOwner(
+export function usePiFixtures() {
+  const directories: string[] = [];
+  const original = Object.fromEntries(
+    ["PI_CODING_AGENT_SESSION_DIR", "PI_CODING_AGENT_DIR", "HOME", "USERPROFILE", "PATH"].map(
+      (key) => [key, process.env[key]],
+    ),
+  );
+  afterEach(async () => {
+    vi.restoreAllMocks();
+    restorePiEnvironment(original);
+    await Promise.all(
+      directories.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })),
+    );
+  });
+  return {
+    directories,
+    createStore: createPiStoreFixture.bind(null, directories),
+    installPi: () => installFakePiFixture(directories, original.PATH),
+  };
+}
+
+export function capturePiCatalog(
+  runtime: {
+    config?: Pick<OpenClawPluginApi["runtime"]["config"], "current">;
+    nodes: Partial<OpenClawPluginApi["runtime"]["nodes"]>;
+    agent?: { session: Partial<OpenClawPluginApi["runtime"]["agent"]["session"]> };
+  } = {
+    config: { current: () => ({}) },
+    nodes: { list: vi.fn().mockResolvedValue({ nodes: [] }) },
+  },
+  context: Partial<Pick<OpenClawPluginApi, "id" | "config">> = {},
+) {
+  let provider: TestSessionCatalogProvider | undefined;
+  const commands: NodeCommand[] = [];
+  registerPiSessionCatalog({
+    ...context,
+    pluginConfig: {},
+    runtime,
+    registerSessionCatalog: (value: RegisteredSessionCatalogProvider) => {
+      provider = bindTestCatalogOwner(value);
+    },
+    registerNodeHostCommand: (command: NodeCommand) => commands.push(command),
+    registerNodeInvokePolicy: vi.fn(),
+  } as unknown as OpenClawPluginApi);
+  return { provider: provider!, commands };
+}
+
+function bindTestCatalogOwner(
   provider: RegisteredSessionCatalogProvider,
 ): TestSessionCatalogProvider {
   const { continueSession, archive, openTerminal } = provider;
@@ -131,7 +178,7 @@ export async function createPiStoreFixture(
   return directory;
 }
 
-export async function installFakePiFixture(
+async function installFakePiFixture(
   temporaryDirectories: string[],
   originalPath: string | undefined,
 ): Promise<string> {
@@ -150,20 +197,10 @@ export async function installFakePiFixture(
   return directory;
 }
 
-export function registerPiNodeHostCommands(): NodeCommand[] {
-  const commands: NodeCommand[] = [];
-  registerPiSessionCatalog({
-    pluginConfig: {},
-    registerSessionCatalog: vi.fn(),
-    registerNodeHostCommand: (command: NodeCommand) => commands.push(command),
-    registerNodeInvokePolicy: vi.fn(),
-  } as unknown as OpenClawPluginApi);
-  return commands;
-}
-
 export function capturePiContinuationCatalog() {
-  let provider: TestSessionCatalogProvider | undefined;
-  const entries: Array<{ sessionKey: string; entry: Record<string, unknown> }> = [];
+  const entries: ReturnType<
+    NonNullable<OpenClawPluginApi["runtime"]["agent"]["session"]["listSessionEntries"]>
+  > = [];
   const createSessionEntry = vi.fn(
     async (
       params: Parameters<OpenClawPluginApi["runtime"]["agent"]["session"]["createSessionEntry"]>[0],
@@ -200,11 +237,8 @@ export function capturePiContinuationCatalog() {
       }
     },
   );
-  registerPiSessionCatalog({
-    id: "acpx",
-    pluginConfig: {},
-    config: {},
-    runtime: {
+  const { provider } = capturePiCatalog(
+    {
       config: { current: () => ({}) },
       nodes: { list: vi.fn().mockResolvedValue({ nodes: [] }) },
       agent: {
@@ -214,11 +248,7 @@ export function capturePiContinuationCatalog() {
         },
       },
     },
-    registerSessionCatalog: (value: RegisteredSessionCatalogProvider) => {
-      provider = bindTestCatalogOwner(value);
-    },
-    registerNodeHostCommand: vi.fn(),
-    registerNodeInvokePolicy: vi.fn(),
-  } as unknown as OpenClawPluginApi);
-  return { createSessionEntry, entries, provider: provider! };
+    { id: "acpx", config: {} },
+  );
+  return { createSessionEntry, entries, provider };
 }

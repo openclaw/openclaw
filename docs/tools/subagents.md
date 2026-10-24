@@ -42,7 +42,7 @@ from the parent conversation to see child runs, including swarm workers, under *
 the parent. **Back to Subagents** returns to the list without replacing the
 parent conversation or its draft. The panel loads all child pages automatically;
 older running workers remain visible even when newer children have finished.
-The parallel-tasks view also shows aggregate swarm progress.
+Delegated tasks appear inline with the turn that launched them, not above the composer. Batches of up to five tasks use a compact expandable row; larger active batches expand with progress and task details. Collected results stay with that turn after completion. If bounded history no longer contains a task’s outcome, its row says **Outcome unavailable** rather than assuming success or ongoing work.
 
 A directly opened subagent page keeps a compact notice naming its parent and an
 **Open parent session** button. The embedded panel omits that notice because the

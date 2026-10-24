@@ -104,7 +104,8 @@ function placementDatabase(databaseOptions: OpenClawStateDatabaseOptions) {
 }
 
 function createRuntime(databaseOptions: OpenClawStateDatabaseOptions, now = () => NOW_MS + 2_000) {
-  return createPlacementStandingGrantRuntime({ runtimeEpoch: "runtime-1", databaseOptions, now });
+  vi.spyOn(Date, "now").mockImplementation(now);
+  return createPlacementStandingGrantRuntime({ runtimeEpoch: "runtime-1", databaseOptions });
 }
 
 function grantInput(binding: PlacementStandingGrantMintSpec, approvalId = "approval-1") {
@@ -114,6 +115,7 @@ function grantInput(binding: PlacementStandingGrantMintSpec, approvalId = "appro
 beforeEach(resetPluginRuntimeStateForTest);
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   resetPluginRuntimeStateForTest();
   await Promise.all(
     [...databasePaths].map((databasePath) => closeOpenClawStateDatabaseByPathAsync(databasePath)),

@@ -557,7 +557,7 @@ suite.define(() => {
       expect((await page.goto(`${suite.server.baseUrl}settings/updates`))?.status()).toBe(200);
       await gateway.waitForRequest("config.get");
       await gateway.emitGatewayEvent("update.available", { updateAvailable: UPDATE_AVAILABLE });
-      await button(page, "Update now").click();
+      await button(page, "Update Gateway…").click();
 
       const dialog = confirmationDialog(page);
       await dialog.waitFor();

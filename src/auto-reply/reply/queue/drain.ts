@@ -370,15 +370,6 @@ export function scheduleFollowupDrain(
   mailbox.wake();
 }
 
-/** Wake the existing controller dispatcher without acquiring another execution owner. */
-export function kickFollowupDrainIfIdle(key: string, owner?: SessionControllerEntry): void {
-  const mailbox = owner ? owner.mailbox : getExistingSessionControllerMailbox(key);
-  if (mailbox?.dispatch) {
-    mailbox.dispatchEnabled = true;
-    mailbox.wake();
-  }
-}
-
 export async function dropAbortedFollowups(
   queue: SessionControllerMailbox,
   runFollowup: (run: FollowupRun) => Promise<void>,

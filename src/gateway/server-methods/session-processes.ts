@@ -12,7 +12,10 @@ import {
 } from "../../agents/bash-process-observation.js";
 import type { WorkerProcessOperation } from "../../worker/worker-process-observation.js";
 import { authorizeOperatorScopesForMethod } from "../method-scopes.js";
-import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
+import {
+  SessionMutationAuthorizationChangedError,
+  sessionMutationForbiddenError,
+} from "../session-mutation-authorization-error.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { withReadySessionRows, type SessionRowReadView } from "../session-row-prepared-read.js";
 import { prepareProjectedSessionPresentation } from "../session-row-presentation.js";
@@ -70,11 +73,8 @@ async function observeProcesses(options: GatewayRequestHandlerOptions, stop: boo
           row.agentId !== captured.agentId ||
           row.storeTarget.storePath !== captured.storeTarget.storePath))
     ) {
-      throw new SessionMutationAuthorizationChangedError(
-        errorShape(
-          ErrorCodes.FORBIDDEN,
-          "Session process access changed; refresh the conversation.",
-        ),
+      throw sessionMutationForbiddenError(
+        "Session process access changed; refresh the conversation.",
       );
     }
     return row;

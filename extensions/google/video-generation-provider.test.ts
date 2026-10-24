@@ -264,6 +264,49 @@ describe("google video generation provider", () => {
   });
 
   it.each([
+    {
+      name: "image default MIME",
+      input: { inputImages: [{ buffer: Buffer.from([0, 255, 128]) }] },
+      image: { imageBytes: "AP+A", mimeType: "image/png" },
+      video: undefined,
+    },
+    {
+      name: "video default MIME",
+      input: { inputVideos: [{ buffer: Buffer.from([0, 255, 128]), mimeType: " " }] },
+      image: undefined,
+      video: { videoBytes: "AP+A", mimeType: "video/mp4" },
+    },
+    {
+      name: "image explicit MIME",
+      input: { inputImages: [{ buffer: Buffer.from([0, 255, 128]), mimeType: " image/WebP " }] },
+      image: { imageBytes: "AP+A", mimeType: "image/WebP" },
+      video: undefined,
+    },
+    {
+      name: "video empty buffer",
+      input: { inputVideos: [{ buffer: Buffer.alloc(0), mimeType: " video/WebM " }] },
+      image: undefined,
+      video: { videoBytes: "", mimeType: "video/WebM" },
+    },
+    {
+      name: "URL-only image",
+      input: { inputImages: [{ url: "https://example.com/reference.png" }] },
+      image: undefined,
+      video: undefined,
+    },
+  ])("encodes $name at the SDK boundary", async ({ input, image, video }) => {
+    mockGoogleApiKeyAuth();
+    generateVideosMock.mockResolvedValue(completedVideo({ videoBytes: "b3V0" }));
+
+    const result = await generateVideo(input);
+
+    expect(generateVideosMock).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ image, video }),
+    );
+    expect(result.videos[0]?.buffer).toEqual(Buffer.from("out"));
+  });
+
+  it.each([
     ["non-canonical pad bits", "ZE=="],
     ["mixed alphabet", "aGVsbG8+_"],
   ])("rejects %s in inline video bytes", async (_scenario, videoBytes) => {

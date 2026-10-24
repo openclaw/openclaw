@@ -741,8 +741,7 @@ describe("restart recovery authenticated operator source", () => {
             expect.objectContaining({ grantId: original.grantId }),
           );
           restored.authority.assertCurrent();
-          restored.authority.readCurrentRoleAssignment?.();
-          restored.authority.readCurrentGithubLogin?.();
+          restored.authority.readCurrentRoleFacts?.();
           expect(resume).toHaveBeenCalledTimes(1);
           if (revocation === "signal") {
             controller.abort(new Error("Original grant revoked"));
@@ -799,7 +798,7 @@ describe("restart recovery authenticated operator source", () => {
         ],
         updateMode: "none",
       });
-      expect(admitted.appendedCount).toBe(1);
+      expect(admitted.messages.filter((m) => m.appended)).toHaveLength(1);
       expect(admitted.rejectedReason).toBeUndefined();
       const restored = expectDefined(await fixture.restore(), "restored operator source");
       using _ = { [Symbol.dispose]: restored.release };

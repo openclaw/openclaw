@@ -220,6 +220,14 @@ suite.define(() => {
           await archivedRow.waitFor({ state: "detached" });
           await navigate(own.key);
           await ui.expectText(ownRow, "Organized workspace");
+          // Ordinary Unarchive leaves personal pins cleared; only Undo restores them.
+          await ui.expectCount(
+            page.locator(`[data-session-section="pinned"] [data-session-key="${own.key}"]`),
+            0,
+          );
+          await ownRow.hover();
+          await ui.button(ownRow, "Pin session").click();
+          await ui.button(ownRow, "Unpin session").waitFor();
         } else {
           await rename.click({ force: true });
           await archive.click({ force: true });
@@ -232,7 +240,10 @@ suite.define(() => {
           await ui.button(ownRow, "Unpin session").waitFor();
         }
         const pinRef = `session:${own.key}`;
-        await ui.expectCount(page.locator(`.sidebar-rail [data-sidebar-entry="${pinRef}"]`), 1);
+        await ui.expectCount(
+          page.locator(`[data-session-section="pinned"] [data-session-key="${own.key}"]`),
+          1,
+        );
         await expect
           .poll(() =>
             page.evaluate(

@@ -16,18 +16,14 @@ import { registerSessionOrganizationEnglish } from "../../i18n/locales/en-sessio
 import { formatUiError } from "../../lib/format-error.ts";
 import { formatMs, formatRelativeTimestamp } from "../../lib/format.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import type { searchVisibleSessionTranscripts } from "../../lib/sessions/transcript-search.ts";
+import type { TranscriptSearchResult, TranscriptSearchState } from "./transcript-search.ts";
 
 registerSessionOrganizationEnglish();
 
 registerCommandPaletteEnglish();
 
-type TranscriptSearchResult = Awaited<ReturnType<typeof searchVisibleSessionTranscripts>>;
-
-export type TranscriptSearchProps = {
+export type TranscriptSearchProps = TranscriptSearchState & {
   transcriptSearchAvailable: boolean;
-  transcriptSearchQuery: string;
-  transcriptSearch: Promise<TranscriptSearchResult | null> | null;
   onTranscriptSearchChange: (query: string) => void;
   onTranscriptSearch: () => void;
   onClearTranscriptSearch: () => void;
@@ -74,7 +70,16 @@ export function TranscriptSearchForm(props: TranscriptSearchProps) {
             value={query()}
             onInput={(event) => props.onTranscriptSearchChange(event.currentTarget.value)}
             onKeyDown={(event: KeyboardEvent) => {
-              if (event.key === "Escape") {
+              if (
+                event.key === "Escape" &&
+                !event.defaultPrevented &&
+                !event.isComposing &&
+                event.keyCode !== 229 &&
+                !event.altKey &&
+                !event.ctrlKey &&
+                !event.metaKey &&
+                !event.shiftKey
+              ) {
                 event.preventDefault();
                 setExpanded(false);
                 onSettled(() => trigger?.focus({ preventScroll: true }));

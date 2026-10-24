@@ -2,6 +2,51 @@ import { describe, expect, it } from "vitest";
 import { createColdLoadProbeInitScript } from "./control-ui-cold-load-probes.ts";
 
 describe("serialized cold-load probes", () => {
+  it("serializes ready reply bytes on the selected download link", () => {
+    const iframe = document.createElement("iframe");
+    document.body.append(iframe);
+    try {
+      const target = iframe.contentWindow;
+      const doc = iframe.contentDocument;
+      if (!target || !doc) {
+        throw new Error("Probe realm was not created");
+      }
+      const script = doc.createElement("script");
+      script.textContent = `
+        Object.defineProperty(performance, "now", { value: () => 0 });
+        const timers = [];
+        window.setTimeout = (callback, delay) => { timers.push({callback, delay}); return timers.length; };
+        window.WebSocket = class extends EventTarget { send() {} };
+        ${createColdLoadProbeInitScript({ ownerProbes: false, latencyMs: 100, downloadKbps: 8, frameGapMs: 0, events: [] })}
+        const socket = new WebSocket();
+        let delivered = 0;
+        socket.addEventListener("message", () => delivered++);
+        const data = JSON.stringify({type: "event", event: "example", payload: "é"});
+        socket.dispatchEvent(new MessageEvent("message", {data}));
+        socket.dispatchEvent(new MessageEvent("message", {data}));
+        const eligibility = timers.splice(0);
+        eligibility.forEach(timer => timer.callback());
+        const delivery = timers.splice(0);
+        const before = delivered;
+        delivery.forEach(timer => timer.callback());
+        window.downloadProof = {
+          eligibility: eligibility.map(timer => timer.delay),
+          delivery: delivery.map(timer => timer.delay),
+          bytes: new TextEncoder().encode(data).length,
+          before, delivered
+        };
+      `;
+      doc.body.append(script);
+      const proof = Reflect.get(target, "downloadProof");
+      expect(proof.eligibility).toEqual([100, 100]);
+      expect(proof.delivery).toEqual([proof.bytes, proof.bytes * 2]);
+      expect(proof.before).toBe(0);
+      expect(proof.delivered).toBe(2);
+    } finally {
+      iframe.remove();
+    }
+  });
+
   it("retires closed-socket requests without losing their RPC count or another socket's work", () => {
     const iframe = document.createElement("iframe");
     document.body.append(iframe);
@@ -31,6 +76,47 @@ describe("serialized cold-load probes", () => {
         first: { pending: ["chat.startup"], rpcs: [{ method: "sessions.list", abandoned: true }] },
         pending: 0,
         rpcs: 2,
+      });
+    } finally {
+      iframe.remove();
+    }
+  });
+
+  it("holds the challenge until connect can leave without an intercepted send", () => {
+    const iframe = document.createElement("iframe");
+    document.body.append(iframe);
+    try {
+      const target = iframe.contentWindow;
+      const doc = iframe.contentDocument;
+      if (!target || !doc) {
+        throw new Error("Probe realm was not created");
+      }
+      const script = doc.createElement("script");
+      script.textContent = `
+        const timers = [];
+        window.setTimeout = (callback, delay) => { timers.push({callback, delay}); return timers.length; };
+        const sent = [];
+        window.WebSocket = class extends EventTarget { send(data) { sent.push(JSON.parse(data).method); } };
+        ${createColdLoadProbeInitScript({ ownerProbes: false, latencyMs: 0, frameGapMs: 0, connectNotBeforeMs: 1e9, events: [] })}
+        const socket = new WebSocket();
+        let challenges = 0;
+        socket.addEventListener("message", () => {
+          challenges++;
+          socket.send(JSON.stringify({type: "req", id: "connect", method: "connect"}));
+        });
+        socket.dispatchEvent(new MessageEvent("message", { data: JSON.stringify({type: "event", event: "connect.challenge", payload: {nonce: "synthetic"}}) }));
+        const before = { challenges, sent: [...sent] };
+        const timer = timers.shift();
+        timer.callback();
+        window.connectDispatchProof = { before, challenges, sent, delayed: timer.delay > 0, pendingTimers: timers.length };
+      `;
+      doc.body.append(script);
+      expect(Reflect.get(target, "connectDispatchProof")).toEqual({
+        before: { challenges: 0, sent: [] },
+        challenges: 1,
+        sent: ["connect"],
+        delayed: true,
+        pendingTimers: 0,
       });
     } finally {
       iframe.remove();

@@ -8,7 +8,7 @@ import { i18n, t } from "../i18n/index.ts";
 import { pt_BR } from "../i18n/locales/pt-BR.ts";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../test-helpers/solid-settle.ts";
-import type { AgentSelectElement } from "./agent-select.ts";
+import type { AgentSelectElement } from "./agent-select.tsx";
 import { saveIndicatorProps as saveIndicator } from "./settings-save-indicator.test-support.ts";
 import { renderSettingsSidebar as SettingsSidebar } from "./settings-sidebar.tsx";
 import "./tooltip.ts";

@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { getEnvironmentData, threadId } from "node:worker_threads";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { openNodeSqliteDatabase } from "../node-sqlite.js";
 import { isPostgresSqlConnection, type PostgresSqlConnection } from "../sql-connection.js";
@@ -11,12 +11,17 @@ import { withEngineStoreAdmission } from "./admission-scope.js";
 import { DatabaseSearchCapabilityUnavailableError } from "./capability-unavailable.js";
 import type { StoreSchema } from "./contract.js";
 import { openEngineStore, readEngineAnchor } from "./open.js";
-import { pgSearchName } from "./postgres-search-schema.js";
+import {
+  admitPostgresSearch,
+  assertPostgresSearchAdmitted,
+  pgSearchName,
+} from "./postgres-search-schema.js";
 import type { SearchSchema } from "./search.js";
 
 const configured = getEnvironmentData("openclaw.test.workboard.connection");
 const connection = typeof configured === "string" ? configured : undefined;
 const dirs = useAutoCleanupTempDirTracker(afterEach);
+afterEach(() => vi.restoreAllMocks());
 const search: SearchSchema = {
   text: {
     notes: { table: "notes", fields: ["text"], postgres: { identity: "id", mode: "trigram" } },
@@ -79,6 +84,41 @@ function fixture(
 }
 
 describe.skipIf(!connection)("PostgreSQL search admission failures", () => {
+  it.each(["0.6.2", "0.7.0", "0.8.7"])(
+    "gates binary search on pgvector %s once at admission while historical search remains exact",
+    (version) => {
+      fixture(connection!, undefined, (db) => {
+        const selected: SearchSchema = { vector: search.vector };
+        const namespace = String(db.prepare("SELECT current_schema() AS name").get()?.name);
+        const prepare = db.prepare.bind(db);
+        const statements = vi.spyOn(db, "prepare").mockImplementation((sql) => {
+          const statement = prepare(sql);
+          if (sql.includes("pg_catalog.pg_available_extensions")) {
+            const all = statement.all.bind(statement);
+            vi.spyOn(statement, "all").mockImplementation((...values) =>
+              all(...values).map((row) =>
+                row.name === "vector" ? Object.assign({}, row, { extversion: version }) : row,
+              ),
+            );
+          }
+          return statement;
+        });
+        admitPostgresSearch(db, selected, namespace, 1)?.();
+        if (version.startsWith("0.6")) {
+          expect(() => admitPostgresSearch(db, selected, namespace, 2)).toThrow(
+            /requires pgvector 0.7 or newer.*ALTER EXTENSION vector UPDATE/,
+          );
+          return;
+        }
+        admitPostgresSearch(db, selected, namespace, 2)?.();
+        const count = statements.mock.calls.length;
+        expect(admitPostgresSearch(db, selected, namespace, 2)).toBeUndefined();
+        assertPostgresSearchAdmitted(db, selected);
+        expect(statements.mock.calls).toHaveLength(count);
+      });
+    },
+  );
+
   it.each(["unaccent", "pg_trgm", "vector"])("names missing %s with operator SQL", (missing) => {
     fixture(connection!, undefined, (admin) => {
       const name = `r6_${randomUUID().replaceAll("-", "")}`;

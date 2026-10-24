@@ -126,7 +126,7 @@ export function resolveMcpTransport(
     }
     oauthIdentity = requesterMcpOAuthIdentity(serverName, resolved.url, requesterScope);
   } else {
-    oauthIdentity = operatorMcpOAuthIdentity(serverName, resolved.url);
+    oauthIdentity = operatorMcpOAuthIdentity(serverName, resolved.url, options?.cfg);
   }
   // The SDK reuses one fetch for OAuth and long-lived SSE/streamable bodies.
   // Per-RPC deadlines belong to client calls, not this transport fetch.

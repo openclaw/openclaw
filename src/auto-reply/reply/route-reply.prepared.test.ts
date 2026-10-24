@@ -93,6 +93,42 @@ describe("prepared reply routing", () => {
     expect(visible).toEqual([{ text: "Reasoning for the report. transformed" }]);
   });
 
+  it.each(["raw", "prepared"] as const)(
+    "rejects a reset generation after awaited %s channel preparation",
+    async (operation) => {
+      const { replaceSessionEntry } = await import("../../config/sessions/session-accessor.js");
+      const sessionGeneration = {
+        agentId: "main",
+        storePath: path.join(fixtures.tmpDir(), "sessions.json"),
+        sessionKey: "agent:main:route-generation",
+        sessionId: "original-session",
+        lifecycleRevision: "original-generation",
+      };
+      const entry = { sessionId: sessionGeneration.sessionId, updatedAt: 1 };
+      await replaceSessionEntry(sessionGeneration, {
+        ...entry,
+        lifecycleRevision: sessionGeneration.lifecycleRevision,
+      });
+      beforeDelivery = async () => {
+        await replaceSessionEntry(sessionGeneration, { ...entry, lifecycleRevision: "reset" });
+      };
+      const payload = { text: "old answer", mediaUrl: "https://example.invalid/clip.ogg" };
+      const params = {
+        ...destination,
+        cfg: { session: { store: sessionGeneration.storePath } },
+        sessionGeneration,
+        sessionKey: sessionGeneration.sessionKey,
+      };
+      const result =
+        operation === "prepared"
+          ? await routePreparedReply({ ...params, plan: prepare(payload) })
+          : await routeReply({ ...params, payload });
+      expect(result).toMatchObject({ ok: false, delivered: false });
+      expect(result.error).toContain("original session generation no longer accepts");
+      expect(visible).toEqual([]);
+    },
+  );
+
   it("rejects a producer retired during its final delivery preparation", async () => {
     let current = true;
     const beforeDeliver = vi.fn(async () => {

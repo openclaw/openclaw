@@ -210,6 +210,8 @@ with a notice asking you to repeat the last part. A successful acknowledgment
 renews the relay's liveness window; if pending audio receives no acknowledgment
 for 30 seconds, Talk ends with a connection error and guidance to restart it.
 Explicit Gateway errors or a lost connection still end the call immediately.
+iOS and macOS Gateway-relay Talk use the same three-second input budget and
+30-second acknowledgment limit; iOS shows the same repeat-the-last-part notice.
 
 If the microphone disconnects or its permission is revoked, browser Talk ends
 the call and shows an error. Choose an available **Microphone input**, restore

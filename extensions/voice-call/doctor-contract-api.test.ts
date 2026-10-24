@@ -164,6 +164,7 @@ describe("voice-call doctor state migration", () => {
         "- Voice Call SQLite schema: GitHub publication requests -> durable draft choice",
         "- Voice Call SQLite schema: client credentials and native socket material -> local owner",
         "- Voice Call SQLite schema: heartbeat monitors -> ordinary automation timing and delivery policy fence",
+        "- Voice Call SQLite schema: local workspace baselines -> incremental checkpoint manifests",
         "- Voice Call SQLite schema: audit event ledger -> versioned message lifecycle schema",
         "- Voice Call SQLite schema: tables -> SQLite STRICT typing",
       ],

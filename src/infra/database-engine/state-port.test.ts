@@ -16,6 +16,27 @@ const env = {
   OPENCLAW_STATE_DIR: "/unselected",
   OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
 };
+const legacyWorkspaceSchema = `CREATE TABLE local_workspace_projections (
+  worktree_id TEXT NOT NULL PRIMARY KEY,
+  agent_id TEXT NOT NULL,
+  session_key TEXT NOT NULL,
+  session_id TEXT NOT NULL,
+  lifecycle_revision TEXT,
+  projection_path TEXT NOT NULL UNIQUE,
+  base_commit TEXT NOT NULL,
+  source_paths_json TEXT NOT NULL,
+  baseline_json TEXT,
+  baseline_ref TEXT,
+  pending_ref TEXT,
+  pending_target TEXT CHECK (pending_target IN ('canonical', 'projection')),
+  paused_runtimes_json TEXT,
+  journal_json TEXT,
+  journal_pack BLOB CHECK (journal_pack IS NULL OR length(journal_pack) <= 268435456),
+  revision INTEGER NOT NULL DEFAULT 0 CHECK (revision >= 0),
+  created_at_ms INTEGER NOT NULL,
+  CHECK ((baseline_json IS NULL) = (baseline_ref IS NULL)),
+  CHECK ((journal_json IS NULL) = (journal_pack IS NULL))
+) STRICT;`;
 
 it.each<{
   label: string;
@@ -72,17 +93,18 @@ it.each<{
 });
 
 it.each(
-  [24, 25, 26, 27, 28, 29].flatMap((version) => [
+  [24, 25, 26, 27, 28, 29, 30].flatMap((version) => [
     { version, profiles: false },
     { version, profiles: true },
   ]),
 )(
-  "selects only present fragment catalogs for v$version with profiles=$profiles",
+  "selects only present fragment catalogs for v$version with profiles and workspace=$profiles",
   async ({ version, profiles }) => {
     const descriptor = await statePortProvider.loadDescriptor(undefined, version);
     using source = openNodeSqliteDatabase(":memory:");
     source.exec(descriptor.sqlite);
     if (profiles) {
+      source.exec(legacyWorkspaceSchema);
       source.exec(
         descriptor.fragments!.find((fragment) => fragment.id === "user_profiles")!.sqlite,
       );
@@ -91,7 +113,27 @@ it.each(
       { engine: "sqlite", db: source },
       descriptor,
     );
-    expect(admitted.activeFragments).toEqual(profiles ? ["user_profiles"] : []);
+    expect(admitted.activeFragments).toEqual(
+      profiles ? ["local_workspace_projections", "user_profiles"] : [],
+    );
+    const workspace = descriptor.fragments!.find(
+      (fragment) => fragment.id === "local_workspace_projections",
+    )!;
+    expect(workspace.tables.map((table) => table.name)).toEqual(["local_workspace_projections"]);
+    expect(workspace.sqlite).not.toContain("checkpoint_json");
+    expect(workspace.preData).not.toContain("checkpoint_json");
+    expect(workspace.preData + workspace.postData).not.toContain("local_workspace_manifest_nodes");
+    if (profiles) {
+      expect(workspace.expectedCatalog.filter((fact) => fact.kind === "column")).toMatchObject(
+        source
+          .prepare("PRAGMA table_info(local_workspace_projections)")
+          .all()
+          .map((column) => ({
+            table: "local_workspace_projections",
+            value: { name: column.name, position: Number(column.cid) + 1 },
+          })),
+      );
+    }
     const tables = source
       .prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name NOT LIKE 'sqlite_%'")
       .all()
@@ -175,7 +217,7 @@ it("captures only the credential retirement scope plus required schema metadata 
 
 it("retains the v29 catalog and backs up only policy-fence metadata", async () => {
   const predecessor = await loadStatePortDescriptor(29);
-  const current = await loadStatePortDescriptor();
+  const current = await loadStatePortDescriptor(30);
   expect(predecessor.version).toBe(29);
   expect(current.version).toBe(30);
   expect(predecessor.tables).toEqual(current.tables);
@@ -188,4 +230,49 @@ it("retains the v29 catalog and backs up only policy-fence metadata", async () =
       supportedVersion: 30,
     }),
   ).toEqual(["config_machine_state", "schema_meta"]);
+});
+
+it("preserves v30 workspace recovery shape and admits incremental storage only at v31", async () => {
+  for (const version of [30, 31]) {
+    const descriptor = await loadStatePortDescriptor(version);
+    expect(descriptor.version).toBe(version);
+    const workspace = descriptor.fragments!.find(
+      (fragment) => fragment.id === "local_workspace_projections",
+    )!;
+    using source = openNodeSqliteDatabase(":memory:");
+    source.exec(workspace.sqlite);
+    const insert = () =>
+      source.exec(`INSERT INTO local_workspace_projections (
+        worktree_id, agent_id, session_key, session_id, projection_path,
+        base_commit, source_paths_json, baseline_ref, created_at_ms
+      ) VALUES ('workspace', 'main', 'session', 'session', '/synthetic/workspace',
+        'base', '[]', 'sha256:root', 1)`);
+    if (version === 30) {
+      expect(insert).toThrow("CHECK constraint failed");
+    } else {
+      insert();
+      source
+        .prepare(`INSERT INTO local_workspace_manifest_nodes VALUES (?, ?, ?)`)
+        .run("workspace", "deleted.txt", '{"retained":"bytes"}');
+      source.prepare("UPDATE local_workspace_projections SET checkpoint_json = ?").run("receipt");
+      expect(
+        source.prepare("SELECT checkpoint_json FROM local_workspace_projections").get(),
+      ).toEqual({
+        checkpoint_json: "receipt",
+      });
+    }
+    expect(source.prepare("PRAGMA table_info(local_workspace_manifest_nodes)").all()).toHaveLength(
+      version === 30 ? 0 : 3,
+    );
+  }
+  expect(
+    resolveSchemaMigrationBackupTables({ kind: "state", foundVersion: 30, supportedVersion: 31 }),
+  ).toEqual([
+    "config_machine_state",
+    "local_workspace_manifest_nodes",
+    "local_workspace_projections",
+    "schema_meta",
+    "sqlite_stat1",
+    "sqlite_stat4",
+  ]);
 });

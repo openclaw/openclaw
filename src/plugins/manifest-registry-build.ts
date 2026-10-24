@@ -182,30 +182,6 @@ function resolveDuplicatePrecedenceRank(params: {
   return 5;
 }
 
-function isIntentionalInstalledBundledDuplicate(params: {
-  left: PluginCandidate;
-  right: PluginCandidate;
-  env: NodeJS.ProcessEnv;
-  installRecords: Record<string, PluginInstallRecord>;
-}): boolean {
-  return (
-    [
-      [params.left, params.right],
-      [params.right, params.left],
-    ] as const
-  ).some(
-    ([installed, bundled]) =>
-      matchesInstalledPluginRecord({
-        candidate: installed,
-        env: params.env,
-        installRecords: params.installRecords,
-      }) &&
-      !isStaleForeignBundledPin({ candidate: installed, env: params.env }) &&
-      bundled.origin === "bundled" &&
-      !isBundledPluginInsideDevSourceRoot({ rootDir: bundled.rootDir, env: params.env }),
-  );
-}
-
 function isSameGlobalPackageDuplicate(left: PluginCandidate, right: PluginCandidate): boolean {
   if (left.origin !== "global" || right.origin !== "global") {
     return false;
@@ -492,13 +468,21 @@ export function buildPluginManifestRegistry(
       if (candidateWins) {
         seenIds.set(effectivePluginId, { candidate, record });
       }
+      const existingCandidate = existing.candidate;
+      const installRecords = getInstallRecords();
       if (
-        isIntentionalInstalledBundledDuplicate({
-          left: candidate,
-          right: existing.candidate,
-          env,
-          installRecords: getInstallRecords(),
-        })
+        (
+          [
+            [candidate, existingCandidate],
+            [existingCandidate, candidate],
+          ] as const
+        ).some(
+          ([installed, bundled]) =>
+            matchesInstalledPluginRecord({ candidate: installed, env, installRecords }) &&
+            !isStaleForeignBundledPin({ candidate: installed, env }) &&
+            bundled.origin === "bundled" &&
+            !isBundledPluginInsideDevSourceRoot({ rootDir: bundled.rootDir, env }),
+        )
       ) {
         continue;
       }

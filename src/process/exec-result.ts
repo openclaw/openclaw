@@ -147,15 +147,9 @@ export function createSanitizedCommandError(result: {
   });
 }
 
-type CommandFailure = {
+type CommandFailure = Omit<Parameters<typeof createSanitizedCommandError>[0], "code"> & {
   failed: boolean;
-  exitCode?: unknown;
-  signal?: unknown;
   cause?: unknown;
-  timedOut?: boolean;
-  isCanceled?: boolean;
-  isMaxBuffer?: boolean;
-  isTerminated?: boolean;
 };
 
 export function isPlainCommandExitFailure(result: CommandFailure): boolean {

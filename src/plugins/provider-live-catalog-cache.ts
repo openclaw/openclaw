@@ -70,7 +70,10 @@ export async function getCachedLiveCatalogValue<T>(params: {
   const refresh = consumeLiveCatalogRefresh(key);
   // Different acquisition budgets must not inherit each other's pending transport deadline.
   const budget = getProviderCatalogDiscoveryBudget();
-  const pendingKey = key + ":" + (budget ? (budget.timeoutMs ?? "unscoped") : 5_000);
+  const pendingKey =
+    key +
+    ":" +
+    JSON.stringify([budget ? (budget.timeoutMs ?? "unscoped") : 5_000, budget?.providerTimeouts]);
   // SAFETY: Callers reuse key parts only for the same catalog loader and result type.
   const existing = liveCatalogCache.get(key) as LiveCatalogCacheEntry<T> | undefined;
   if (

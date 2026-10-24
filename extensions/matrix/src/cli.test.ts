@@ -329,7 +329,6 @@ describe("matrix CLI verification commands", () => {
       backup: diagnosticMatrixBackup({ serverVersion: "2", activeVersion: "2" }),
     });
     mocks.profile.mockResolvedValue({
-      skipped: false,
       displayNameUpdated: true,
       avatarUpdated: false,
       resolvedAvatarUrl: null,

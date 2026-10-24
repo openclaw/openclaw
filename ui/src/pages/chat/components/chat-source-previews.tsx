@@ -1,10 +1,10 @@
-import { For, Show, createSignal, createStore, createUniqueId, onSettled } from "solid-js";
+import { For, Show, createSignal, createUniqueId, onSettled } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { Popover, type PopoverHandle } from "../../../components/solid/popover.tsx";
 import { registerChatMessageMetadataEnglish } from "../../../i18n/locales/en-chat-message-metadata.ts";
 import type { ChatSourcePreview } from "../../../lib/chat/source-previews.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
-import { readLinkFavicon, type LinkFaviconFetcher } from "../link-favicon-cache.ts";
+import { createLinkFaviconReader, type LinkFaviconFetcher } from "../link-favicon-cache.ts";
 
 registerEnglishCatalog(registerChatMessageMetadataEnglish);
 
@@ -13,12 +13,26 @@ type SourcePreviewsProps = {
   fetchFavicon?: LinkFaviconFetcher;
 };
 
-function SourceCard(props: {
-  source: ChatSourcePreview;
-  favicon: string | null;
-  onImageError: (url: string) => void;
-}) {
+function SourceCard(props: { source: ChatSourcePreview; fetchFavicon?: LinkFaviconFetcher }) {
   const id = `chat-source-${createUniqueId()}`;
+  const [ready, setReady] = createSignal(false);
+  const [revision, setRevision] = createSignal(0);
+  const [failedFavicon, setFailedFavicon] = createSignal<string>();
+  const favicons = createLinkFaviconReader(() => setRevision((value) => value + 1));
+  onSettled(() => {
+    setReady(true);
+    return () => favicons.dispose();
+  });
+  const favicon = () => {
+    if (!ready()) {
+      return null;
+    }
+    revision();
+    const url = props.fetchFavicon
+      ? favicons.read(new URL(props.source.url).hostname, props.fetchFavicon)
+      : null;
+    return url && url !== failedFavicon() ? url : null;
+  };
   let popover: PopoverHandle | undefined;
   return (
     <div class="chat-source-strip__item">
@@ -32,8 +46,17 @@ function SourceCard(props: {
             <span class="chat-source-card__title">{props.source.title}</span>
             <span class="chat-source-card__domain">
               <span class="chat-source-card__icon" aria-hidden="true">
-                <Show when={props.favicon} fallback={<Icon name="globe" />}>
-                  {(url) => <img src={url()} alt="" onError={() => props.onImageError(url())} />}
+                <Show when={favicon()} fallback={<Icon name="globe" />}>
+                  {(url) => (
+                    <img
+                      src={url()}
+                      width="14"
+                      height="14"
+                      decoding="async"
+                      alt=""
+                      onError={() => setFailedFavicon(url())}
+                    />
+                  )}
                 </Show>
               </span>
               {props.source.domain}
@@ -95,24 +118,6 @@ function SourceCard(props: {
 }
 
 export function ChatSourcePreviews(props: SourcePreviewsProps) {
-  const [revision, setRevision] = createSignal(0);
-  const [failedFavicons, setFailedFavicons] = createStore<Record<string, boolean>>({});
-  let active = true;
-  onSettled(() => () => {
-    active = false;
-  });
-  const refreshFavicons = () => {
-    if (active) {
-      setRevision((value) => value + 1);
-    }
-  };
-  const favicon = (source: ChatSourcePreview) => {
-    revision();
-    const url = props.fetchFavicon
-      ? readLinkFavicon(new URL(source.url).hostname, props.fetchFavicon, refreshFavicons)
-      : null;
-    return url && !failedFavicons[url] ? url : null;
-  };
   return (
     <Show when={props.sources.length > 0}>
       <openclaw-chat-sources>
@@ -124,17 +129,7 @@ export function ChatSourcePreviews(props: SourcePreviewsProps) {
           <div class="chat-source-strip__label">{t("chat.messages.sourcePreviews.label")}</div>
           <div class="chat-source-strip__cards">
             <For each={props.sources} keyed={(source) => source.url}>
-              {(source) => (
-                <SourceCard
-                  source={source()}
-                  favicon={favicon(source())}
-                  onImageError={(url) =>
-                    setFailedFavicons((failed) => {
-                      failed[url] = true;
-                    })
-                  }
-                />
-              )}
+              {(source) => <SourceCard source={source()} fetchFavicon={props.fetchFavicon} />}
             </For>
           </div>
         </div>

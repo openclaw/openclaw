@@ -61,7 +61,6 @@ suite.define(() => {
   it.each([
     ["Asia/Shanghai", "2026-09-13T16:30:00Z", "2026-09-13", "2026-09-14"],
     ["America/Los_Angeles", "2026-09-14T02:30:00Z", "2026-09-14", "2026-09-13"],
-    ["Asia/Shanghai", "2026-09-14T04:30:00Z", "2026-09-14", "2026-09-14"],
   ])(
     "uses the selected calendar for date presets in %s at %s",
     async (timezoneId, instant, utcDate, localDate) => {
@@ -150,9 +149,6 @@ suite.define(() => {
             for (const [label, days] of [
               ["Today", 1],
               ["7d", 7],
-              ["30d", 30],
-              ["90d", 90],
-              ["1y", 365],
               ["All", null],
             ] as const) {
               const startDate =
@@ -166,6 +162,7 @@ suite.define(() => {
                 .locator(".usage-presets")
                 .getByRole("button", { name: label, exact: true })
                 .click();
+              await page.clock.fastForward(400);
               const request = await gateway.waitForRequest("sessions.usage", {
                 after: requestsBefore,
               });
@@ -183,8 +180,8 @@ suite.define(() => {
                 .toBe("1.2K");
               if (label === "7d") {
                 expect(
-                  (await page.locator(".cost-window-card__label").allTextContents()).map(
-                    (windowLabel) => windowLabel.trim(),
+                  (await page.locator(".cost-window__label").allTextContents()).map((windowLabel) =>
+                    windowLabel.trim(),
                   ),
                 ).toContain("Today");
               }

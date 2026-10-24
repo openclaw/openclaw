@@ -22,7 +22,7 @@ import { chatOutboxOwner } from "./chat-outbox-owner.ts";
 import { excludeComposerAttachments } from "./chat-queue.ts";
 import type { ChatHost } from "./chat-send-contract.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
-import { chatAttachmentDraftSignature } from "./durable-composer-persistence.ts";
+import { chatAttachmentDraftSignature } from "./composer-draft.ts";
 import { resetChatInputHistoryNavigation } from "./input-history.ts";
 
 export function chatSubmitKey(
@@ -192,28 +192,6 @@ function commandComposerFallbackRetainsAttachments(
   );
 }
 
-function releaseCommandComposerAttachments(
-  host: ChatHost,
-  recovery: ChatCommandComposerRecovery,
-  attachments: readonly ChatAttachment[] | undefined,
-): void {
-  const owner = recovery.owner?.resolveOwner();
-  const retained: ChatAttachment[][] = [];
-  for (const candidate of owner && owner !== host ? [host, owner] : [host]) {
-    retained.push(candidate.chatAttachments);
-    for (const fallback of Object.values(
-      chatCommandRecoveryHost(candidate)?.chatComposerFallbackByScope ?? {},
-    )) {
-      retained.push(fallback.attachments);
-    }
-  }
-  const stagedIds = recovery.owner?.retainedAttachmentIds(attachments ?? []);
-  releaseDisplacedChatAttachmentPayloads(
-    attachments?.filter((attachment) => !stagedIds?.has(attachment.id)) ?? [],
-    retained,
-  );
-}
-
 function composerRetainsSubmittedAnnotations(
   host: ChatHost,
   submittedAttachments?: readonly ChatAttachment[],
@@ -303,7 +281,21 @@ export function settleChatCommandComposer(
     ? commandComposerFallbackRetainsAttachments(host, recovery)
     : restoreFailedCommandComposer(host, recovery);
   if (!retained) {
-    releaseCommandComposerAttachments(host, recovery, attachments);
+    const owner = recovery.owner?.resolveOwner();
+    const retainedAttachments: ChatAttachment[][] = [];
+    for (const candidate of owner && owner !== host ? [host, owner] : [host]) {
+      retainedAttachments.push(candidate.chatAttachments);
+      for (const fallback of Object.values(
+        chatCommandRecoveryHost(candidate)?.chatComposerFallbackByScope ?? {},
+      )) {
+        retainedAttachments.push(fallback.attachments);
+      }
+    }
+    const stagedIds = recovery.owner?.retainedAttachmentIds(attachments ?? []);
+    releaseDisplacedChatAttachmentPayloads(
+      attachments?.filter((attachment) => !stagedIds?.has(attachment.id)) ?? [],
+      retainedAttachments,
+    );
   }
 }
 

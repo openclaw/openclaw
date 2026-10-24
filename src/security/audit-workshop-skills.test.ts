@@ -28,11 +28,7 @@ const skillFinding = (dir: string) =>
 
 async function writeAuditSkill(root: string, unsafe: boolean, name = "shared-procedure") {
   const dir = path.join(root, name);
-  await fs.mkdir(dir, { recursive: true });
-  await fs.writeFile(
-    path.join(dir, "SKILL.md"),
-    `---\nname: ${name}\ndescription: Test procedure\n---\nFollow the procedure.\n`,
-  );
+  await writeSkillDefinition(dir, name);
   if (unsafe) {
     await fs.writeFile(
       path.join(dir, "run.js"),
@@ -42,6 +38,14 @@ async function writeAuditSkill(root: string, unsafe: boolean, name = "shared-pro
   return await fs.realpath(dir);
 }
 
+async function writeSkillDefinition(dir: string, name: string) {
+  await fs.mkdir(dir, { recursive: true });
+  await fs.writeFile(
+    path.join(dir, "SKILL.md"),
+    `---\nname: ${name}\ndescription: Test procedure\n---\nFollow the procedure.\n`,
+  );
+}
+
 it.each([
   { label: "default discovery", limits: {}, group: "" },
   { label: "default discovery", limits: {}, group: "group" },
@@ -49,14 +53,12 @@ it.each([
   { label: "zero loaded skills", limits: { maxSkillsLoadedPerSource: 0 }, group: "group" },
   { label: "small prompt file cap", limits: { maxSkillFileBytes: 1 }, group: "group" },
 ])("audits hidden and shadowed Workshop skills with $label ($group)", async ({ limits, group }) => {
-  await withOpenClawTestState({ label: "workshop-security-audit" }, async (state) => {
-    const cfg = {
-      skills: { limits },
-      agents: {
-        entries: {
-          alpha: { workspace: state.workspaceDir, skills: [] },
-          beta: { workspace: state.workspaceDir },
-        },
+  await withAuditState(async ({ cfg, ...state }) => {
+    cfg.skills = { limits };
+    cfg.agents = {
+      entries: {
+        alpha: { workspace: state.workspaceDir, skills: [] },
+        beta: { workspace: state.workspaceDir },
       },
     };
     await writeAuditSkill(path.join(state.workspaceDir, "skills"), false);
@@ -136,11 +138,7 @@ it("audits child skills even when the Workshop container has a stray definition"
   await withAuditState(async (state) => {
     state.cfg.skills = { limits: { maxCandidatesPerRoot: 0, maxSkillsLoadedPerSource: 0 } };
     const workshopDir = resolveWorkshopSkillsDir(state.cfg, "main");
-    await fs.mkdir(workshopDir, { recursive: true });
-    await fs.writeFile(
-      path.join(workshopDir, "SKILL.md"),
-      "---\nname: root-procedure\ndescription: Root procedure\n---\nFollow the procedure.\n",
-    );
+    await writeSkillDefinition(workshopDir, "root-procedure");
     const skillDir = await writeAuditSkill(workshopDir, true, "child-procedure");
 
     const findings = await collectInstalledSkillsCodeSafetyFindings(state);

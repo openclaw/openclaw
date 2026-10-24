@@ -17,6 +17,7 @@ describe("model auth status reads", () => {
     const expiresAt = startedAt + 25 * 60 * 60_000;
     const request = vi.fn(async (): Promise<ModelAuthStatusResult> => ({
       ts: Date.now(),
+      usageRefreshAt: Date.now() + 60_000,
       providers: [
         {
           provider: "test",
@@ -37,6 +38,9 @@ describe("model auth status reads", () => {
     await loadModelAuthStatus(client, { agentId: "main" });
     for (const boundary of [expiresAt - 24 * 60 * 60_000, expiresAt - 5 * 60_000, expiresAt]) {
       vi.setSystemTime(boundary - 1);
+      // Usage can expire between distant credential boundaries. Prime a fresh
+      // response, then prove the earlier credential deadline still wins.
+      await loadModelAuthStatus(client, { agentId: "main" });
       const before = request.mock.calls.length;
       await loadModelAuthStatus(client, { agentId: "main" });
       expect(request).toHaveBeenCalledTimes(before);
@@ -47,9 +51,9 @@ describe("model auth status reads", () => {
       expect(request).toHaveBeenCalledTimes(before + 1);
       expect(results[0]?.providers[0]?.status).toBe(boundary === expiresAt ? "expired" : "ok");
     }
-    vi.setSystemTime(expiresAt + 60_000);
+    vi.setSystemTime(expiresAt + 59_999);
     await loadModelAuthStatus(client, { agentId: "main" });
-    expect(request).toHaveBeenCalledTimes(4);
+    expect(request).toHaveBeenCalledTimes(7);
   });
 
   it.each([-3_600_000, 3_600_000])(
@@ -79,6 +83,35 @@ describe("model auth status reads", () => {
       await loadModelAuthStatus(client, { agentId: "main" });
       await loadModelAuthStatus(client, { agentId: "main" });
       expect(request).toHaveBeenCalledTimes(2);
+    },
+  );
+
+  it.each([-3_600_000, 3_600_000])(
+    "shares post-run reads until the Gateway deadline with %s ms skew",
+    async (offset) => {
+      vi.useFakeTimers();
+      vi.setSystemTime(1_000_000);
+      const fresh = createDeferred<ModelAuthStatusResult>();
+      const request = vi.fn((_method: string, params: { refreshUsage?: boolean }) =>
+        params.refreshUsage ? fresh.promise : Promise.resolve(status(Date.now() + offset)),
+      );
+      const client = { request } as unknown as GatewayBrowserClient;
+      const first = loadModelAuthStatus(client, { agentId: "main", refreshUsage: true });
+      const second = loadModelAuthStatus(client, { agentId: "main", refreshUsage: true });
+      // Ordinary status remains nonblocking while the usage request is unresolved.
+      await expect(loadModelAuthStatus(client, { agentId: "main" })).resolves.toEqual(
+        status(1_000_000 + offset),
+      );
+      fresh.resolve({ ...status(1_000_000 + offset), usageRefreshAt: 1_120_000 + offset });
+      await Promise.all([first, second]);
+      vi.setSystemTime(1_119_999);
+      for (let run = 0; run < 10; run += 1) {
+        await loadModelAuthStatus(client, { agentId: "main", refreshUsage: true });
+      }
+      expect(request).toHaveBeenCalledTimes(2);
+      vi.setSystemTime(1_120_000);
+      await loadModelAuthStatus(client, { agentId: "main", refreshUsage: true });
+      expect(request).toHaveBeenCalledTimes(3);
     },
   );
 

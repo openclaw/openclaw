@@ -117,4 +117,51 @@ describe("createMatrixRoomInfoResolver", () => {
     await expect(f.member(bob)).resolves.toBe("Bob");
     expect(f.lookup).toHaveBeenCalledTimes(3);
   });
+
+  it("serves the current name of a renamed room only when asked for it", async () => {
+    let roomName = "Original Room";
+    const lookup = vi.fn(async (roomId: string, eventType: string) => {
+      if (eventType === "m.room.name") {
+        return { name: roomId === "!room:example.org" ? roomName : "Other Room" };
+      }
+      return { alias: "#room:example.org" };
+    });
+    const resolver = createMatrixRoomInfoResolver({
+      getRoomStateEvent: lookup,
+    } as unknown as MatrixClient);
+
+    await resolver.getRoomInfo("!room:example.org", { includeAliases: true });
+    await resolver.getRoomInfo("!other:example.org");
+
+    roomName = "Renamed Room";
+    resolver.invalidateRoomName("!room:example.org");
+
+    await expect(
+      resolver.getRoomInfo("!room:example.org", { includeAliases: true, currentName: true }),
+    ).resolves.toMatchObject({ name: "Renamed Room", canonicalAlias: "#room:example.org" });
+    // Without currentName (the lookup DM promotion uses) the first resolved name is kept.
+    await expect(
+      resolver.getRoomInfo("!room:example.org", { includeAliases: true }),
+    ).resolves.toMatchObject({ name: "Original Room", canonicalAlias: "#room:example.org" });
+    await expect(
+      resolver.getRoomInfo("!other:example.org", { currentName: true }),
+    ).resolves.toMatchObject({ name: "Other Room" });
+    expect(lookup.mock.calls.filter(([, type]) => type === "m.room.name")).toHaveLength(3);
+    expect(lookup.mock.calls.filter(([, type]) => type === "m.room.canonical_alias")).toHaveLength(
+      1,
+    );
+
+    roomName = "Recovered Room";
+    resolver.invalidateRoomName(room);
+    lookup.mockRejectedValueOnce(new Error("room name lookup unavailable"));
+    await expect(resolver.getRoomInfo(room, { currentName: true })).resolves.toMatchObject({
+      name: undefined,
+      nameResolved: false,
+    });
+    await expect(resolver.getRoomInfo(room, { currentName: true })).resolves.toMatchObject({
+      name: "Recovered Room",
+      nameResolved: true,
+    });
+    await expect(resolver.getRoomInfo(room)).resolves.toMatchObject({ name: "Original Room" });
+  });
 });

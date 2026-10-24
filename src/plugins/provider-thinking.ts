@@ -67,15 +67,13 @@ function resolveProviderPublicPolicySurface(providerId: string) {
   });
 }
 
-type ThinkingHookParams<TContext> = {
-  provider: string;
-  context: TContext;
-  catalogEntry?: ThinkingCatalogPolicyCarrier;
-};
-
 /** Resolves a provider thinking profile from active plugins or bundled policy surface. */
 export function resolveEffectiveThinkingProfile(
-  params: ThinkingHookParams<ProviderDefaultThinkingPolicyContext>,
+  params: {
+    provider: string;
+    context: ProviderDefaultThinkingPolicyContext;
+    catalogEntry?: ThinkingCatalogPolicyCarrier;
+  },
   options?: { allowPublicArtifactFallback?: boolean; registry?: ProviderThinkingRegistry },
 ) {
   // The catalog's exact provider owner outranks ambient runtime registration.

@@ -145,22 +145,38 @@ describe("session progress card projection", () => {
     const host = mountProgress({ store, target });
     const inactive = mountProgress({ store, target: undefined });
     const notified = vi.fn();
+    const targetNotified = vi.fn();
     const stop = store.subscribe(notified);
     onTestFinished(stop);
+    onTestFinished(host.progress.subscribe(targetNotified));
     await store.load(target);
     flush();
+    expect(store.getReadCompletion(target)).toBeUndefined();
     const clearNotifications = () =>
-      [host.redraw, inactive.redraw, notified].forEach((mock) => mock.mockClear());
+      [host.redraw, inactive.redraw, notified, targetNotified].forEach((mock) => mock.mockClear());
     clearNotifications();
     emit("sessions.changed", { sessionKey: "agent:main:unrelated", reason: "delete" });
     flush();
     expect.soft(notified).not.toHaveBeenCalled();
+    expect.soft(targetNotified).not.toHaveBeenCalled();
     expect.soft(host.redraw).not.toHaveBeenCalled();
     clearNotifications();
 
-    await store.load({ sessionKey: "agent:main:other-progress" });
+    const otherTarget = { sessionKey: "agent:main:other-progress" };
+    const otherRead = store.load(otherTarget);
     flush();
-    expect(notified).toHaveBeenCalledOnce();
+    expect(store.getReadCompletion(otherTarget)).toBeDefined();
+    expect(notified).toHaveBeenCalled();
+    expect.soft(targetNotified).not.toHaveBeenCalled();
+    expect.soft(host.redraw).not.toHaveBeenCalled();
+    expect.soft(inactive.redraw).not.toHaveBeenCalled();
+    clearNotifications();
+
+    await otherRead;
+    flush();
+    expect(store.getReadCompletion(otherTarget)).toBeUndefined();
+    expect(notified).toHaveBeenCalled();
+    expect.soft(targetNotified).not.toHaveBeenCalled();
     expect.soft(host.redraw).not.toHaveBeenCalled();
     expect.soft(inactive.redraw).not.toHaveBeenCalled();
 

@@ -69,18 +69,6 @@ describe("pending delivery notice", () => {
     });
   });
 
-  it("retains acknowledgment after the stable notice is recorded", async () => {
-    await deliver();
-
-    expect(sendRecoveryNotice).toHaveBeenCalledWith({
-      ...context,
-      text: PENDING_DELIVERY_NOTICE,
-      idempotencyKey: "main-session-restart-recovery:pending-final:intent-1",
-    });
-    expectTranscript();
-    expectNotice("acknowledged");
-  });
-
   it("does not cross an account or thread route", async () => {
     const current = entry();
     assert(current.delivery?.kind === "external");
@@ -95,15 +83,6 @@ describe("pending delivery notice", () => {
     expectNotice("owed");
   });
 
-  it("retains debt terminally when the notice send is suppressed", async () => {
-    sendRecoveryNotice.mockResolvedValue({ suppressed: true });
-
-    await deliver();
-
-    expect(appendAssistantMessageToSessionTranscript).not.toHaveBeenCalled();
-    expectNotice("unresolved");
-  });
-
   it.each([
     ["failed", "unresolved"],
     ["completed", "acknowledged"],
@@ -113,6 +92,11 @@ describe("pending delivery notice", () => {
     findDeliveryIntentOwner.mockReturnValue({ status });
     await deliver();
     if (status === "completed") {
+      expect(sendRecoveryNotice).toHaveBeenCalledWith({
+        ...context,
+        text: PENDING_DELIVERY_NOTICE,
+        idempotencyKey: "main-session-restart-recovery:pending-final:intent-1",
+      });
       expectTranscript();
     }
     expectNotice(state);

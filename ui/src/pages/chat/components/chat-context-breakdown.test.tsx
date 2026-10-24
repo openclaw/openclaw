@@ -99,6 +99,41 @@ it("retires a pending report on session replacement and rejects a report from an
   view.unmount();
 });
 
+it("keeps refresh available after a rejected read and shows loading until its retry settles", async () => {
+  const first = createDeferredCore<ReturnType<typeof usage>>();
+  const retry = createDeferredCore<ReturnType<typeof usage>>();
+  const request = createGatewayRequestMock(() =>
+    request.mock.calls.length === 1 ? first.promise : retry.promise,
+  );
+  const { gateway, publish } = createApplicationGateway();
+  publish({ ...gateway.snapshot, phase: "connected", client: createTestGatewayClient(request) });
+  const view = mountSolid(() => (
+    <ChatContextBreakdown
+      gateway={gateway}
+      session={{ key: "agent:main:current", kind: "direct", sessionId: "current" }}
+      used={50000}
+      limit={100000}
+    />
+  ));
+  const refresh = view.getByRole("button", { name: "Refresh" });
+  await expect.poll(() => request.mock.calls.length).toBe(1);
+  first.reject(new Error("Context read failed"));
+  await expect
+    .poll(() => view.getByRole("status").textContent)
+    .toBe("Couldn't load the context breakdown. Try refreshing.");
+  expect(view.getByRole("button", { name: "Refresh" })).toBe(refresh);
+  refresh.click();
+  await expect.poll(() => request.mock.calls.length).toBe(2);
+  expect(view.getByRole("status").textContent).toBe("Loading context breakdown…");
+  expect(view.getByRole("button", { name: "Refresh" })).toBe(refresh);
+  retry.resolve(usage("current"));
+  await expect.poll(() => view.container.querySelector(".chat-context__bar")).not.toBeNull();
+  expect(view.queryByRole("status")).toBeNull();
+  expect(view.container.textContent).toContain("AGENTS.md");
+  expect(view.getByRole("button", { name: "Refresh" })).toBe(refresh);
+  view.unmount();
+});
+
 it("groups duplicate filenames by producer origin and keeps deferred schemas outside usage", () => {
   const grouped = structuredClone(report);
   grouped.injectedWorkspaceFiles[0]!.origin = {

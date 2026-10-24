@@ -81,11 +81,9 @@ let root: string;
 let store: WorkerTranscriptCommitStore;
 let input: WorkerTranscriptCommitInput;
 let sequence = 0;
-let nowMs = 1_000;
 const openStore = () =>
   createWorkerTranscriptCommitStore({
     database: openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } }),
-    now: () => nowMs,
   });
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterAll(async () => {
@@ -101,7 +99,6 @@ beforeAll(() => {
 
 beforeEach(() => {
   input = { ...BASE_INPUT, sessionId: `session-${++sequence}` };
-  nowMs = 1_000;
 });
 afterEach(() => vi.restoreAllMocks());
 
@@ -109,13 +106,12 @@ it("recovers pending work and replays a terminal result across reopen", async ()
   expect(await store.begin(input)).toEqual({ kind: "claimed" });
   expect(await store.begin(input)).toEqual({ kind: "recover" });
 
-  nowMs = 1_010;
   expect(await store.complete({ ...input, outcome: SUCCESS_OUTCOME })).toEqual(SUCCESS_OUTCOME);
   expect(await store.begin(input)).toEqual({ kind: "replay", outcome: SUCCESS_OUTCOME });
 
   await closeStateDatabaseForTest();
   const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
-  store = createWorkerTranscriptCommitStore({ database, now: () => nowMs });
+  store = createWorkerTranscriptCommitStore({ database });
   expect(await store.begin(input)).toEqual({ kind: "replay", outcome: SUCCESS_OUTCOME });
 });
 

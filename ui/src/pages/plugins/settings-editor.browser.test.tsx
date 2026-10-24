@@ -57,6 +57,8 @@ async function mount(overrides: Partial<PluginSettingsEditorModel> = {}) {
     canEditConfig: true,
     configBusy: false,
     configSchemaLoading: false,
+    configRead: undefined,
+    configSchemaRead: undefined,
     configError: null,
     onConfigPatch: vi.fn(),
     onConfigRemove: vi.fn(),
@@ -126,6 +128,8 @@ describe("grouped plugin settings", () => {
           canEditConfig
           configBusy={false}
           configSchemaLoading={false}
+          configRead={undefined}
+          configSchemaRead={undefined}
           configError={null}
           onConfigPatch={onPatch}
           onConfigRemove={vi.fn()}
@@ -467,6 +471,7 @@ describe("grouped plugin settings", () => {
         capture: () => scope,
         isCurrent: (candidate: unknown) => candidate === scope,
       } as unknown as GatewayPageBinding;
+      const presentationLifetime = new Promise<void>(() => {});
       await update({
         resolveCredential: (field) =>
           field.path.at(-1) === "apiKey"
@@ -478,6 +483,7 @@ describe("grouped plugin settings", () => {
                   baseHash: "revision",
                   gateway,
                   canInspect: true,
+                  getPresentationLifetime: () => presentationLifetime,
                   onCommit: async (path, next) => {
                     field.onPatch(path, next);
                     return true;
@@ -672,7 +678,7 @@ describe("plugin map layout", () => {
       expect(editor.scrollWidth).toBeLessThanOrEqual(editor.clientWidth);
       editor
         .querySelector<HTMLButtonElement>(
-          '[data-setting="populated"] button[aria-label="Remove entry"]',
+          '[data-setting="populated"] button[aria-label="Remove entry: first"]',
         )!
         .click();
       expect(model.onConfigPatch).toHaveBeenCalledExactlyOnceWith(

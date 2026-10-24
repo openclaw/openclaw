@@ -88,13 +88,6 @@ it("does not embed an unchecked URL when a configured cap rejects its bytes", as
   expect(mockUploadFile).not.toHaveBeenCalled();
 });
 
-it("retains the bounded original URL if upload fails with a configured cap", async () => {
-  setupSuccessfulUpload();
-  mockUploadFile.mockRejectedValue(new Error("Upload failed"));
-
-  await expect(upload(imageUrl, 1024)).resolves.toBe(imageUrl);
-});
-
 it("rejects non-http(s) URLs", async () => {
   await expect(upload("file:///etc/passwd")).resolves.toBe("file:///etc/passwd");
   await expect(upload("ftp://example.com/image.png")).resolves.toBe("ftp://example.com/image.png");

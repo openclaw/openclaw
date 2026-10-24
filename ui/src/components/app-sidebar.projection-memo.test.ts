@@ -173,63 +173,71 @@ describe("sidebar projection memo", () => {
     ).toHaveLength(limit);
   });
 
-  it("keeps the cached roster until live changes can replace it", async () => {
-    const initial = session("cached");
-    const deleted = session("deleted-during-load");
-    const { sidebar, row, publish, sessions } = await mount([initial, deleted]);
-    const owner = getAppSidebarOwner(sidebar.hostElement)!;
-    vi.spyOn(owner, "sidebarSnapshotSettled").mockReturnValue(false);
-    const rows = snapshotSessions(
-      [initial, deleted].map((entry) =>
-        sidebar.getSessionNavigationState().toSidebarSession(entry),
-      ),
-    );
-    owner.restoreSidebarSnapshot({
-      ...sidebarBootSnapshot(captureBootRoster(sessions.sessions.state)),
-      mode: "chip",
-      sessions: rows,
-      entries: [`session:${initial.key}`],
-      sections: [
+  it.each(["session-rail", "session"])(
+    "keeps the cached roster until live changes can replace it (%s)",
+    async (placement) => {
+      const initial = session("cached");
+      const deleted = session("deleted-during-load");
+      const { sidebar, row, publish, sessions } = await mount([initial, deleted]);
+      const owner = getAppSidebarOwner(sidebar.hostElement)!;
+      vi.spyOn(owner, "sidebarSnapshotSettled").mockReturnValue(false);
+      const rows = snapshotSessions(
+        [initial, deleted].map((entry) =>
+          sidebar.getSessionNavigationState().toSidebarSession(entry),
+        ),
+      );
+      const entries = [`${placement}:${initial.key}`];
+      const sectionRows =
+        placement === "session" ? rows.filter((entry) => entry.key !== initial.key) : rows;
+      // Snapshot and saved preferences must agree: moving sections legitimately replaces a row.
+      sidebar.sidebarEntries = entries;
+      owner.restoreSidebarSnapshot({
+        ...sidebarBootSnapshot(captureBootRoster(sessions.sessions.state)),
+        mode: "chip",
+        sessions: rows,
+        entries,
+        sections: [
+          {
+            id: "ungrouped",
+            rows: sectionRows,
+            totalRowCount: sectionRows.length,
+            visibleRowCount: sectionRows.length,
+            visibleLimit: 10,
+            collapsedVisibleRowCount: sectionRows.length,
+            renderHeader: false,
+          },
+        ],
+      });
+      owner.invalidate();
+      await settleLitElement(sidebar);
+      const cachedRow = row(initial.key);
+      const zone = owner.reconciledSidebarZone();
+      publish([
         {
-          id: "ungrouped",
-          rows,
-          totalRowCount: 2,
-          visibleRowCount: 2,
-          visibleLimit: 10,
-          collapsedVisibleRowCount: 2,
-          renderHeader: false,
+          ...initial,
+          label: "Renamed while loading",
+          hasActiveRun: true,
+          activeRunIds: ["live-run"],
+          status: "running",
         },
-      ],
-    });
-    owner.invalidate();
-    await settleLitElement(sidebar);
-    const cachedRow = row(initial.key);
-    const zone = owner.reconciledSidebarZone();
-    publish([
-      {
-        ...initial,
-        label: "Renamed while loading",
-        hasActiveRun: true,
-        activeRunIds: ["live-run"],
-        status: "running",
-      },
-      session("new-live-row", { owner: { actor: bob } }),
-    ]);
-    await settleLitElement(sidebar);
-    expect(owner.reconciledSidebarZone()).toBe(zone);
-    expect(row(initial.key)).toBe(cachedRow);
-    expect(row(key("new-live-row"))).toBeNull();
-    expect(row(deleted.key)).not.toBeNull();
-    expect(row(initial.key)?.textContent).not.toContain("Renamed while loading");
-    owner.releaseSidebarSnapshot();
-    owner.invalidate();
-    await settleLitElement(sidebar);
-    expect(row(key("new-live-row"))).not.toBeNull();
-    expect(row(deleted.key)).toBeNull();
-    expect(row(initial.key)).toBe(cachedRow);
-    expect(row(initial.key)?.textContent).toContain("Renamed while loading");
-    expect(row(initial.key)?.querySelector('[aria-label="Active run"]')).not.toBeNull();
-  });
+        session("new-live-row", { owner: { actor: bob } }),
+      ]);
+      await settleLitElement(sidebar);
+      expect(owner.reconciledSidebarZone()).toBe(zone);
+      expect(row(initial.key)).toBe(cachedRow);
+      expect(row(key("new-live-row"))).toBeNull();
+      expect(row(deleted.key)).not.toBeNull();
+      expect(row(initial.key)?.textContent).not.toContain("Renamed while loading");
+      owner.releaseSidebarSnapshot();
+      owner.invalidate();
+      await settleLitElement(sidebar);
+      expect(row(key("new-live-row"))).not.toBeNull();
+      expect(row(deleted.key)).toBeNull();
+      expect(row(initial.key)).toBe(cachedRow);
+      expect(row(initial.key)?.textContent).toContain("Renamed while loading");
+      expect(row(initial.key)?.querySelector('[aria-label="Active run"]')).not.toBeNull();
+    },
+  );
   it("prepares initially hidden session rows from shell inputs while keeping later owner updates parked", async () => {
     const target = session("question-proof");
     const sessions = createSessionsHarness("main", []);

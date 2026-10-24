@@ -1,9 +1,10 @@
 /* @vitest-environment jsdom */
 import { getQueriesForElement } from "@solidjs/testing-library";
 import { flush } from "solid-js";
-import { afterEach, beforeEach, expect, it } from "vitest";
+import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { captureI18nStateForTesting } from "../../i18n/lib/translate.test-support.ts";
 import { i18n } from "../../i18n/lib/translate.ts";
+import * as idleImport from "../../lib/idle-import.ts";
 import { ApplicationProvider } from "../../lib/reactive/context.ts";
 import { createSidebarTestRouter } from "../../test-helpers/app-sidebar-router.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
@@ -19,6 +20,7 @@ const hosts: PersonReferenceElement[] = [];
 let restoreI18n: ReturnType<typeof captureI18nStateForTesting>;
 const queries = (element: HTMLElement = document.body) => getQueriesForElement(element);
 const dialog = () => queries().queryByRole("dialog");
+const createIdleImport = idleImport.createIdleImport;
 
 async function settle(host?: PersonReferenceElement) {
   await (host?.updateComplete ?? Promise.resolve());
@@ -77,7 +79,9 @@ it("shares the admitted directory read and only resolves the currently open card
     expect(first.card.isConnected).toBe(false);
     expect(second.card.getAttribute("aria-label")).toBe("Activity for Bob");
     expect(queries(second.card).getByRole("status").textContent).toBe("Loading…");
-    expect(request.mock.calls.filter(([method]) => method === "users.list")).toHaveLength(1);
+    await waitForSolid(() =>
+      expect(request.mock.calls.filter(([method]) => method === "users.list")).toHaveLength(1),
+    );
 
     pending.resolve(sessionOwnerProfiles("Alice", "Bob"));
     await waitForSolid(() =>
@@ -98,6 +102,7 @@ it("routes label and profile changes to their active mention only", async () => 
   const alice = await createReference("alice", "Alice");
   const bob = await createReference("bob", "Bob");
   const { trigger, card } = openReference(alice);
+  await vi.dynamicImportSettled();
 
   bob.label = "Robert";
   bob.profileId = "robert";
@@ -160,3 +165,60 @@ it("refreshes an open unresolved card after a locale change without replacing it
   );
   expect(trigger.getAttribute("aria-expanded")).toBe("true");
 });
+
+it.each(["escape", "profile", "disconnect", "connection"] as const)(
+  "retires a pending person-card import on %s without reading or reopening",
+  async (retirement) => {
+    const gate = Promise.withResolvers<void>();
+    const spy = vi
+      .spyOn(idleImport, "createIdleImport")
+      .mockImplementation(<T,>(load: () => Promise<T>, onLoaded?: (value: T) => void) =>
+        createIdleImport(async () => {
+          await gate.promise;
+          return load();
+        }, onLoaded),
+      );
+    onTestFinished(() => {
+      gate.resolve();
+      spy.mockRestore();
+    });
+    const { context: ownerContext, request, publish } = createSessionOwnerMenuHarness();
+    const context = { ...ownerContext, router: createSidebarTestRouter() };
+    const provider = document.createElement("div");
+    const view = mountSolid(() => <ApplicationProvider host={provider} value={context} />, {
+      container: provider,
+    });
+    document.body.append(provider);
+    try {
+      const host = await createReference("profile-ada", "Ada", provider);
+      const directoryReads = request.mock.calls.filter(
+        ([method]) => method === "users.list",
+      ).length;
+      const { trigger, card } = openReference(host);
+      expect(queries(card).getByRole("status").textContent).toBe("Loading…");
+      if (retirement === "escape") {
+        document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+      } else if (retirement === "profile") {
+        host.profileId = "profile-grace";
+      } else if (retirement === "disconnect") {
+        host.remove();
+      } else {
+        publish({ phase: "reconnecting" });
+      }
+      await settle(host);
+      gate.resolve();
+      await vi.dynamicImportSettled();
+      await settle();
+      expect(dialog()).toBeNull();
+      expect(card.isConnected).toBe(false);
+      expect(trigger.getAttribute("aria-expanded")).toBe("false");
+      expect(request.mock.calls.filter(([method]) => method === "users.list")).toHaveLength(
+        directoryReads,
+      );
+    } finally {
+      gate.resolve();
+      provider.remove();
+      view.unmount();
+    }
+  },
+);

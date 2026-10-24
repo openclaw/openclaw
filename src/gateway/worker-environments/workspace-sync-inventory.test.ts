@@ -225,7 +225,6 @@ describe("runWorkspaceInventoryCommandToFile", () => {
           : preflightWorkerWorkspace({
               localPath: root,
               signal: controller.signal,
-              timeoutMs: 10_000,
             });
       const settled = vi.fn();
       void producing.then(settled, settled);
@@ -619,7 +618,7 @@ describe("preflightWorkerWorkspace", () => {
     await fs.symlink("tracked.txt", path.join(root, "safe-link"));
     await git(path.join(root, "nested"), "init", "--quiet");
 
-    await preflightWorkerWorkspace({ localPath: root, timeoutMs: 10_000 });
+    await preflightWorkerWorkspace({ localPath: root });
     const transferPath = await transferList(root, transferDirectory);
     const paths = new Set((await fs.readFile(transferPath, "utf8")).split("\0").filter(Boolean));
 
@@ -639,7 +638,7 @@ describe("preflightWorkerWorkspace", () => {
     const root = await workspace({ "tracked.txt": "tracked\n" }, true);
     await fs.symlink("../outside", path.join(root, "escape"));
 
-    const error = await preflightWorkerWorkspace({ localPath: root, timeoutMs: 10_000 }).catch(
+    const error = await preflightWorkerWorkspace({ localPath: root }).catch(
       (value: unknown) => value,
     );
 

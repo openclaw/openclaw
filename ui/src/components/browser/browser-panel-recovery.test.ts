@@ -12,7 +12,7 @@ beforeEach(() => {
   originalFonts = Object.getOwnPropertyDescriptor(document, "fonts");
   Object.defineProperty(document, "fonts", {
     configurable: true,
-    value: { ready: Promise.resolve() },
+    value: Object.assign(new EventTarget(), { ready: Promise.resolve() }),
   });
   vi.stubGlobal("localStorage", createStorageMock());
   vi.stubGlobal("ResizeObserver", undefined);

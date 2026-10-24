@@ -35,6 +35,28 @@ function createStore(input: DatabaseStoreInspection, version: number) {
   using db = openNodeSqliteDatabase(input.path!);
   db.exec(`PRAGMA user_version = ${version}; CREATE TABLE entries (id TEXT PRIMARY KEY)`);
 }
+async function stateStore(version: number) {
+  const input = {
+    ...fixture(),
+    family: "state" as const,
+    descriptor: await loadStatePortDescriptor(),
+  };
+  using db = openNodeSqliteDatabase(input.path!);
+  for (const schema of [input.descriptor, ...(input.descriptor.fragments ?? [])]) {
+    db.exec(version === 25 ? withLegacyStateHeadLayout(schema.sqlite) : schema.sqlite);
+  }
+  if (version === 25) {
+    addPreCutoverClientCredentialTablesForTest(db);
+  }
+  db.exec(`PRAGMA user_version = ${version}`);
+  db.prepare("INSERT INTO schema_meta VALUES ('primary', 'global', ?, NULL, NULL, 1, 1)").run(
+    version,
+  );
+  db.prepare("INSERT INTO config_machine_state VALUES ('state.schema.contentVersion', ?, 1)").run(
+    String(version),
+  );
+  return input;
+}
 
 describe("physical store diagnostics", () => {
   it("reports missing and damaged stores as unknown without creating or repairing them", async () => {
@@ -93,26 +115,7 @@ describe("physical store diagnostics", () => {
   ])(
     "preserves readable state schema $version when port admission refuses it",
     async ({ version, pending, issue }) => {
-      const input = fixture();
-      input.family = "state";
-      input.descriptor = await loadStatePortDescriptor();
-      {
-        using db = openNodeSqliteDatabase(input.path!);
-        const schemas = [input.descriptor, ...(input.descriptor.fragments ?? [])];
-        for (const schema of schemas) {
-          db.exec(version === 25 ? withLegacyStateHeadLayout(schema.sqlite) : schema.sqlite);
-        }
-        if (version === 25) {
-          addPreCutoverClientCredentialTablesForTest(db);
-        }
-        db.exec(`PRAGMA user_version = ${version}`);
-        db.prepare("INSERT INTO schema_meta VALUES ('primary', 'global', ?, NULL, NULL, 1, 1)").run(
-          version,
-        );
-        db.prepare(
-          "INSERT INTO config_machine_state VALUES ('state.schema.contentVersion', ?, 1)",
-        ).run(String(version));
-      }
+      const input = await stateStore(version);
       const before = fs.readFileSync(input.path!);
       const result = await inspectDatabaseStore(input);
       expect(result.schema).toEqual({
@@ -131,21 +134,9 @@ describe("physical store diagnostics", () => {
   );
 
   it("admits retained legacy state without requiring first-use schema migrations", async () => {
-    const input = fixture();
-    input.family = "state";
-    input.descriptor = await loadStatePortDescriptor();
+    const input = await stateStore(OPENCLAW_STATE_SCHEMA_VERSION);
     {
       using db = openNodeSqliteDatabase(input.path!);
-      for (const schema of [input.descriptor, ...(input.descriptor.fragments ?? [])]) {
-        db.exec(schema.sqlite);
-      }
-      db.exec(`PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION}`);
-      db.prepare("INSERT INTO schema_meta VALUES ('primary', 'global', ?, NULL, NULL, 1, 1)").run(
-        OPENCLAW_STATE_SCHEMA_VERSION,
-      );
-      db.prepare(
-        "INSERT INTO config_machine_state VALUES ('state.schema.contentVersion', ?, 1)",
-      ).run(String(OPENCLAW_STATE_SCHEMA_VERSION));
       // Published installs retain fleet rows after tenant-container retirement.
       db.exec(`CREATE TABLE fleet_cells (
           tenant_id TEXT NOT NULL PRIMARY KEY,

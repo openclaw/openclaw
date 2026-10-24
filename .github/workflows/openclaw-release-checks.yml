@@ -71,11 +71,6 @@ on:
         required: false
         default: false
         type: boolean
-      telegram_waiver:
-        description: Reviewed stable/full waiver; 2026.8.1/9.1 cover Telegram, 2026.9.5 covers Telegram and Matrix QA-live
-        required: false
-        default: ""
-        type: string
       allow_frozen_target_scenario_omissions:
         description: Allow trusted compatibility filtering for a canonical frozen release target
         required: false
@@ -90,6 +85,7 @@ on:
           - all
           - install-smoke
           - cross-os
+          - windows-node
           - live-e2e
           - package
           - qa
@@ -182,8 +178,6 @@ jobs:
       run_maturity_scorecard: ${{ steps.inputs.outputs.run_maturity_scorecard }}
       allow_unreleased_changelog: ${{ steps.inputs.outputs.allow_unreleased_changelog }}
       skip_package_telegram_e2e: ${{ steps.inputs.outputs.skip_package_telegram_e2e }}
-      telegram_waiver: ${{ steps.inputs.outputs.telegram_waiver }}
-      waived_integration_channels: ${{ steps.inputs.outputs.waived_integration_channels }}
       trusted_qa_tooling_eligible: ${{ steps.trusted_qa_tooling.outputs.eligible }}
       rerun_group: ${{ steps.inputs.outputs.rerun_group }}
       live_suite_filter: ${{ steps.inputs.outputs.live_suite_filter }}
@@ -202,6 +196,7 @@ jobs:
       package_acceptance_package_spec: ${{ steps.inputs.outputs.package_acceptance_package_spec }}
       codex_plugin_spec: ${{ steps.inputs.outputs.codex_plugin_spec }}
       cross_os_scheduled: ${{ steps.inputs.outputs.cross_os_scheduled }}
+      windows_node_scheduled: ${{ steps.inputs.outputs.windows_node_scheduled }}
       live_e2e_scheduled: ${{ steps.inputs.outputs.live_e2e_scheduled }}
       package_acceptance_scheduled: ${{ steps.inputs.outputs.package_acceptance_scheduled }}
       qa_parity_scheduled: ${{ steps.inputs.outputs.qa_parity_scheduled }}
@@ -383,18 +378,6 @@ jobs:
           fi
           echo "sha=${normalized_selected_sha}" >> "$GITHUB_OUTPUT"
 
-      - name: Read Telegram waiver target manifest
-        if: inputs.telegram_waiver != ''
-        env:
-          GH_TOKEN: ${{ github.token }}
-          TARGET_SHA: ${{ steps.ref.outputs.sha }}
-        run: |
-          set -euo pipefail
-          # Admission needs package metadata only; never execute the target here.
-          mkdir -p waiver-target
-          gh api "repos/${GITHUB_REPOSITORY}/contents/package.json?ref=${TARGET_SHA}" --jq .content |
-            base64 --decode > waiver-target/package.json
-
       - name: Capture selected inputs
         id: inputs
         env:
@@ -410,7 +393,6 @@ jobs:
           RELEASE_RUN_MATURITY_SCORECARD_INPUT: ${{ inputs.run_maturity_scorecard }}
           RELEASE_ALLOW_UNRELEASED_CHANGELOG_INPUT: ${{ inputs.allow_unreleased_changelog }}
           RELEASE_SKIP_PACKAGE_TELEGRAM_E2E_INPUT: ${{ inputs.skip_package_telegram_e2e }}
-          TELEGRAM_WAIVER: ${{ inputs.telegram_waiver }}
           RELEASE_RERUN_GROUP_INPUT: ${{ inputs.rerun_group }}
           RELEASE_LIVE_SUITE_FILTER_INPUT: ${{ inputs.live_suite_filter }}
           RELEASE_CROSS_OS_SUITE_FILTER_INPUT: ${{ inputs.cross_os_suite_filter }}
@@ -538,26 +520,6 @@ jobs:
                 "$RELEASE_RERUN_GROUP_INPUT" == "all" ]]; then
             skip_package_telegram_e2e=true
           fi
-          waived_channels='[]'
-          if [[ -n "$TELEGRAM_WAIVER" ]]; then
-            waived_channels="$(
-            TARGET_VERSION="$(jq -er '.version | select(type == "string")' waiver-target/package.json)" \
-              RELEASE_PROFILE="$release_profile" node --input-type=module <<'NODE'
-          import { releaseWaivedIntegrationChannels } from './workflow/scripts/full-release-validation-policy.mjs';
-          console.log(JSON.stringify(releaseWaivedIntegrationChannels({
-            telegramWaiver: process.env.TELEGRAM_WAIVER,
-            targetVersion: process.env.TARGET_VERSION,
-            releaseProfile: process.env.RELEASE_PROFILE,
-            rerunGroup: process.env.RELEASE_RERUN_GROUP_INPUT,
-            liveSuiteFilter: process.env.RELEASE_LIVE_SUITE_FILTER_INPUT,
-            releasePackageSpec: process.env.RELEASE_PACKAGE_SPEC_INPUT,
-            packageAcceptancePackageSpec: process.env.RELEASE_PACKAGE_ACCEPTANCE_PACKAGE_SPEC_INPUT,
-            candidateVersion: process.env.CANDIDATE_ARTIFACT_JSON_INPUT?.trim()
-              ? JSON.parse(process.env.CANDIDATE_ARTIFACT_JSON_INPUT).packageVersion : undefined,
-          })));
-          NODE
-            )"
-          fi
           codex_plugin_spec="$RELEASE_CODEX_PLUGIN_SPEC_INPUT"
           if [[ -z "${codex_plugin_spec// }" && "$release_package_spec" =~ ^openclaw@(.+)$ ]]; then
             codex_plugin_spec="npm:@openclaw/codex@${BASH_REMATCH[1]}"
@@ -654,10 +616,6 @@ jobs:
             fi
           fi
 
-          while IFS= read -r waived_channel; do
-            printf -v "qa_live_${waived_channel}_enabled" '%s' false
-          done < <(jq -r '.[]' <<< "$waived_channels")
-
           selection="$(RUN_RELEASE_SOAK="$run_release_soak" QA_FILTER_SEEN="$qa_filter_seen" \
             REPO_LIVE_SUITE_FILTER="$repo_live_suite_filter" node --input-type=module <<'NODE'
           import { createReleaseCheckSelection } from './workflow/scripts/plan-release-workflow-matrix.mjs';
@@ -670,7 +628,7 @@ jobs:
           })));
           NODE
           )"
-          for key in release_check_groups_json install_smoke_scheduled cross_os_scheduled \
+          for key in release_check_groups_json install_smoke_scheduled cross_os_scheduled windows_node_scheduled \
             live_e2e_scheduled package_acceptance_scheduled qa_parity_scheduled \
             qa_live_scheduled docker_required package_required package_acceptance_lanes; do
             printf -v "$key" '%s' "$(jq -r --arg key "$key" '.[$key]' <<< "$selection")"
@@ -680,6 +638,7 @@ jobs:
             candidate_artifact_required=false
             if [[ -z "$release_package_spec" ]] &&
               { [[ "$cross_os_scheduled" == "true" ]] ||
+                [[ "$windows_node_scheduled" == "true" ]] ||
                 [[ "$docker_required" == "true" ]]; }; then
               candidate_artifact_required=true
             fi
@@ -710,8 +669,6 @@ jobs:
             printf 'run_maturity_scorecard=%s\n' "$run_maturity_scorecard"
             printf 'allow_unreleased_changelog=%s\n' "$allow_unreleased_changelog"
             printf 'skip_package_telegram_e2e=%s\n' "$skip_package_telegram_e2e"
-            printf 'telegram_waiver=%s\n' "$TELEGRAM_WAIVER"
-            printf 'waived_integration_channels=%s\n' "$waived_channels"
             printf 'rerun_group=%s\n' "$RELEASE_RERUN_GROUP_INPUT"
             printf 'live_suite_filter=%s\n' "$live_suite_filter"
             printf 'repo_live_suite_filter=%s\n' "$repo_live_suite_filter"
@@ -729,6 +686,7 @@ jobs:
             printf 'package_acceptance_package_spec=%s\n' "$package_acceptance_package_spec"
             printf 'codex_plugin_spec=%s\n' "$codex_plugin_spec"
             printf 'cross_os_scheduled=%s\n' "$cross_os_scheduled"
+            printf 'windows_node_scheduled=%s\n' "$windows_node_scheduled"
             printf 'live_e2e_scheduled=%s\n' "$live_e2e_scheduled"
             printf 'package_acceptance_scheduled=%s\n' "$package_acceptance_scheduled"
             printf 'package_acceptance_lanes=%s\n' "$package_acceptance_lanes"
@@ -872,8 +830,6 @@ jobs:
           FAIL_FAST: ${{ steps.inputs.outputs.fail_fast }}
           RUN_MATURITY_SCORECARD: ${{ steps.inputs.outputs.run_maturity_scorecard }}
           SKIP_PACKAGE_TELEGRAM_E2E: ${{ steps.inputs.outputs.skip_package_telegram_e2e }}
-          TELEGRAM_WAIVER: ${{ steps.inputs.outputs.telegram_waiver }}
-          WAIVED_INTEGRATION_CHANNELS: ${{ steps.inputs.outputs.waived_integration_channels }}
           ALLOW_UNRELEASED_CHANGELOG: ${{ steps.inputs.outputs.allow_unreleased_changelog }}
           RELEASE_RERUN_GROUP: ${{ inputs.rerun_group }}
           RELEASE_LIVE_SUITE_FILTER: ${{ inputs.live_suite_filter }}
@@ -902,10 +858,6 @@ jobs:
             echo "- Package Acceptance Telegram E2E deferred: \`${SKIP_PACKAGE_TELEGRAM_E2E}\`"
             if [[ "$SKIP_PACKAGE_TELEGRAM_E2E" == "true" ]]; then
               echo "- Package Acceptance Telegram E2E: not run; deferred to postpublish confidence."
-            fi
-            if [[ -n "$TELEGRAM_WAIVER" ]]; then
-              echo "- Source and Package Acceptance Telegram E2E: waived/not run (\`${TELEGRAM_WAIVER}\`); not a pass"
-              echo "- Owner-waived QA-live channels: $(jq -r 'join(", ")' <<< "$WAIVED_INTEGRATION_CHANNELS"); waived/not run, not a pass"
             fi
             echo "- Allow Unreleased changelog packaging: \`${ALLOW_UNRELEASED_CHANGELOG}\`"
             echo "- Rerun group: \`${RELEASE_RERUN_GROUP}\`"
@@ -963,6 +915,8 @@ jobs:
       upgrade_baseline: ${{ steps.upgrade_baseline.outputs.value }}
       upgrade_survivor_baselines: ${{ steps.upgrade_survivor_profile.outputs.baselines }}
       upgrade_survivor_scenarios: ${{ steps.upgrade_survivor_profile.outputs.scenarios }}
+      windows_node_artifact_name: ${{ steps.windows_node_candidate_upload.outputs.artifact-id && format('windows-node-candidate-{0}-{1}', github.run_id, github.run_attempt) || '' }}
+      windows_node_package_sha256: ${{ steps.windows_node_candidate.outputs.sha256 }}
     steps:
       - name: Checkout trusted workflow ref
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -1370,6 +1324,244 @@ jobs:
           fi
           echo "json=" >> "$GITHUB_OUTPUT"
 
+      - name: Download shared release package for Windows-node
+        if: needs.resolve_target.outputs.windows_node_scheduled == 'true' && needs.resolve_target.outputs.package_mode == 'artifact'
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: ${{ fromJSON(needs.resolve_target.outputs.candidate_artifact_json).packageArtifactName }}
+          run-id: ${{ fromJSON(needs.resolve_target.outputs.candidate_artifact_json).packageArtifactRunId }}
+          github-token: ${{ github.token }}
+          path: .artifacts/docker-e2e-package
+
+      - name: Download shared prerelease plugin registry for Windows-node
+        if: needs.resolve_target.outputs.windows_node_scheduled == 'true' && needs.resolve_target.outputs.package_mode == 'artifact' && steps.registry_identity.outputs.json != ''
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: ${{ fromJSON(steps.registry_identity.outputs.json).prepublishPluginRegistryArtifactName }}
+          run-id: ${{ fromJSON(steps.registry_identity.outputs.json).prepublishPluginRegistryArtifactRunId }}
+          github-token: ${{ github.token }}
+          path: .artifacts/prepublish-plugin-registry
+
+      # The Windows-node harness installs exactly one local tarball inside WSL, so
+      # unpublished core dependencies (for example @openclaw/ai) must ride inside it.
+      - name: Prepare self-contained Windows-node candidate
+        id: windows_node_candidate
+        if: needs.resolve_target.outputs.windows_node_scheduled == 'true'
+        env:
+          REGISTRY_IDENTITY_JSON: ${{ steps.registry_identity.outputs.json }}
+          SELECTED_SHA: ${{ needs.resolve_target.outputs.revision }}
+        run: |
+          set -euo pipefail
+          registry_args=()
+          if [[ -n "$REGISTRY_IDENTITY_JSON" ]]; then
+            node scripts/prepublish-plugin-registry-artifact.mjs verify \
+              --artifact-dir .artifacts/prepublish-plugin-registry \
+              --source-sha "$SELECTED_SHA" \
+              --candidate-version "$(jq -er .version .artifacts/docker-e2e-package/package-candidate.json)" \
+              --manifest-sha256 "$(jq -er .prepublishPluginRegistryManifestSha256 <<< "$REGISTRY_IDENTITY_JSON")" \
+              >/dev/null
+            registry_args=(--registry-dir .artifacts/prepublish-plugin-registry)
+          fi
+          result="$(node scripts/self-contained-candidate-package.mjs \
+            --package-dir .artifacts/docker-e2e-package \
+            --output-dir .artifacts/windows-node-candidate \
+            "${registry_args[@]}")"
+          echo "sha256=$(jq -er .sha256 <<< "$result")" >> "$GITHUB_OUTPUT"
+          echo "- Windows-node candidate bundles: \`$(jq -cr .bundled <<< "$result")\`" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload self-contained Windows-node candidate
+        id: windows_node_candidate_upload
+        if: steps.windows_node_candidate.outcome == 'success'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: windows-node-candidate-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            .artifacts/windows-node-candidate/openclaw-current.tgz
+            .artifacts/windows-node-candidate/package-candidate.json
+          retention-days: 14
+          if-no-files-found: error
+
+  resolve_windows_node_release_artifacts:
+    name: Resolve Windows-node release artifacts
+    needs: [resolve_target]
+    if: needs.resolve_target.outputs.windows_node_scheduled == 'true'
+    runs-on: *linux_runner_ubuntu
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      stable_tag: ${{ steps.resolve.outputs.stable_tag }}
+      stable_release_sha: ${{ steps.resolve.outputs.stable_release_sha }}
+      stable_asset_name: ${{ steps.resolve.outputs.stable_asset_name }}
+      stable_asset_sha256: ${{ steps.resolve.outputs.stable_asset_sha256 }}
+      prerelease_tag: ${{ steps.resolve.outputs.prerelease_tag }}
+      prerelease_release_sha: ${{ steps.resolve.outputs.prerelease_release_sha }}
+      prerelease_asset_name: ${{ steps.resolve.outputs.prerelease_asset_name }}
+      prerelease_asset_sha256: ${{ steps.resolve.outputs.prerelease_asset_sha256 }}
+    steps:
+      - name: Select immutable stable and prerelease assets
+        id: resolve
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Windows-node owns its release channels: stable vX.Y.Z[-N] corrections
+          # and installable vX.Y.Z-alpha.N prereleases. Throwaway signing releases
+          # are not candidates (docs/VERSIONING.md in openclaw-windows-node).
+          stable_tag_pattern='^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9]+)?$'
+          prerelease_tag_pattern='^v[0-9]+\.[0-9]+\.[0-9]+-alpha\.[0-9]+$'
+
+          # GitHub returns releases newest-first. One 100-item page is enough to
+          # resolve the current stable and prerelease without concatenating pages.
+          releases="$(gh api 'repos/openclaw/openclaw-windows-node/releases?per_page=100')"
+
+          select_release() {
+            local prerelease="$1"
+            local tag_pattern="$2"
+            jq -cer --argjson prerelease "$prerelease" --arg tag_pattern "$tag_pattern" '
+              [ .[]
+                | select(.draft == false and .prerelease == $prerelease)
+                | select(.tag_name | test($tag_pattern))
+              ]
+              | sort_by(.published_at)
+              | last
+              | select(. != null)
+              | . as $release
+              | [.assets[]
+                  | select(.state == "uploaded")
+                  | select(.name | test("^OpenClawTray-[0-9A-Za-z.+-]+-win-x64\\.zip$|^OpenClaw\\.Tray\\.WinUI_[0-9A-Za-z.+-]+_x64\\.msix$"))
+                  | select((.digest // "") | test("^sha256:[a-f0-9]{64}$"))] as $assets
+              | [$assets[] | select(.name | endswith(".zip"))] as $zip_assets
+              | [$assets[] | select(.name | endswith(".msix"))] as $msix_assets
+              | (if ($zip_assets | length) == 1 then $zip_assets[0]
+                 elif ($zip_assets | length) == 0 and ($msix_assets | length) == 1 then $msix_assets[0]
+                 else empty
+                 end) as $asset
+              | {
+                  published_at: $release.published_at,
+                  tag: $release.tag_name,
+                  asset_name: $asset.name,
+                  asset_sha256: ($asset.digest | sub("^sha256:"; ""))
+                }
+            ' <<< "$releases"
+          }
+
+          stable="$(select_release false "$stable_tag_pattern")" || {
+            echo "No published stable Windows-node release (vX.Y.Z or vX.Y.Z-N) exposes a hashed x64 ZIP or MSIX tray artifact." >&2
+            exit 1
+          }
+          prerelease="$(select_release true "$prerelease_tag_pattern")" || {
+            echo "::warning::No published Windows-node production prerelease (vX.Y.Z-alpha.N) exposes a hashed x64 ZIP or MSIX tray artifact. Stable validation will still run."
+            prerelease=""
+          }
+
+          # `docs/VERSIONING.md` keeps release tags plus GitVersion SemVer as the
+          # versioning contract, so `vX.Y.Z-alpha.N` is the prerelease of `X.Y.Z`.
+          # A superseded alpha is unavailable advisory coverage, not evidence
+          # against the current preview channel and not a stable-lane blocker.
+          if [[ -n "$prerelease" ]] && ! jq -ne --argjson stable "$stable" --argjson prerelease "$prerelease" '
+              def semver_key:
+                ltrimstr("v")
+                | capture("^(?<major>[0-9]+)\\.(?<minor>[0-9]+)\\.(?<patch>[0-9]+)(?:-alpha\\.(?<alpha>[0-9]+)|-(?<correction>[0-9]+))?$")
+                | [
+                    (.major | tonumber),
+                    (.minor | tonumber),
+                    (.patch | tonumber),
+                    (if .alpha == null then 1 else 0 end),
+                    ((.correction // .alpha // "0") | tonumber)
+                  ];
+              ($prerelease.tag | semver_key) > ($stable.tag | semver_key)
+            ' > /dev/null; then
+            echo "::warning::Windows-node prerelease $(jq -r .tag <<< "$prerelease") is superseded by stable $(jq -r .tag <<< "$stable"); the alpha channel has no current production prerelease to validate."
+            prerelease=""
+          fi
+
+          resolve_tag_sha() {
+            local tag="$1"
+            local ref object_type object_sha
+            ref="$(gh api "repos/openclaw/openclaw-windows-node/git/ref/tags/$tag")"
+            object_type="$(jq -r '.object.type' <<< "$ref")"
+            object_sha="$(jq -r '.object.sha' <<< "$ref")"
+            if [[ "$object_type" == "tag" ]]; then
+              object_sha="$(gh api "repos/openclaw/openclaw-windows-node/git/tags/$object_sha" --jq '.object.sha')"
+              object_type="$(gh api "repos/openclaw/openclaw-windows-node/git/tags/$(jq -r '.object.sha' <<< "$ref")" --jq '.object.type')"
+            fi
+            [[ "$object_type" == "commit" && "$object_sha" =~ ^[0-9a-f]{40}$ ]] || {
+              echo "Windows-node release tag $tag does not resolve to an immutable commit." >&2
+              exit 1
+            }
+            printf '%s\n' "$object_sha"
+          }
+
+          for channel in stable prerelease; do
+            selection="${!channel}"
+            [[ -n "$selection" ]] || continue
+            tag="$(jq -er '.tag | select(type == "string" and length > 0)' <<< "$selection")"
+            asset_name="$(jq -er '.asset_name | select(type == "string" and length > 0)' <<< "$selection")"
+            asset_sha256="$(jq -er '.asset_sha256 | select(test("^[a-f0-9]{64}$"))' <<< "$selection")"
+            [[ -n "${tag// }" && "$tag" != "null" ]] || {
+              echo "Windows-node $channel release is missing its tag." >&2
+              exit 1
+            }
+            if ! release_sha="$(resolve_tag_sha "$tag")"; then
+              if [[ "$channel" == "stable" ]]; then
+                exit 1
+              fi
+              echo "::warning::Windows-node prerelease tag could not be bound to a commit. Stable validation will still run."
+              prerelease=""
+              continue
+            fi
+            echo "${channel}_tag=${tag}" >> "$GITHUB_OUTPUT"
+            echo "${channel}_release_sha=${release_sha}" >> "$GITHUB_OUTPUT"
+            echo "${channel}_asset_name=${asset_name}" >> "$GITHUB_OUTPUT"
+            echo "${channel}_asset_sha256=${asset_sha256}" >> "$GITHUB_OUTPUT"
+          done
+
+          {
+            echo "## Windows-node release artifacts"
+            echo
+            echo "- Stable: \`$(jq -r .tag <<< "$stable")\` / \`$(jq -r .asset_name <<< "$stable")\` (published $(jq -r .published_at <<< "$stable"))"
+            if [[ -n "$prerelease" ]]; then
+              echo "- Prerelease (advisory): \`$(jq -r .tag <<< "$prerelease")\` / \`$(jq -r .asset_name <<< "$prerelease")\` (published $(jq -r .published_at <<< "$prerelease"))"
+            else
+              echo "- Prerelease (advisory): unavailable; see resolver warnings."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  resolve_windows_node_main_source:
+    name: Resolve Windows-node main source
+    needs: [resolve_target]
+    if: needs.resolve_target.outputs.windows_node_scheduled == 'true'
+    runs-on: *linux_runner_ubuntu
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      main_source_sha: ${{ steps.resolve.outputs.main_source_sha }}
+    steps:
+      - name: Resolve immutable Windows-node main revision
+        id: resolve
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          ref="$(gh api repos/openclaw/openclaw-windows-node/git/ref/heads/main)"
+          object_type="$(jq -r '.object.type' <<< "$ref")"
+          source_sha="$(jq -r '.object.sha' <<< "$ref")"
+          [[ "$object_type" == "commit" && "$source_sha" =~ ^[0-9a-f]{40}$ ]] || {
+            echo "Windows-node main must resolve to an immutable commit." >&2
+            exit 1
+          }
+
+          echo "main_source_sha=${source_sha}" >> "$GITHUB_OUTPUT"
+          {
+            echo "## Windows-node main source"
+            echo
+            echo "- Resolved main commit: \`${source_sha}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
   install_smoke_release_checks:
     needs: [resolve_target]
     if: needs.resolve_target.outputs.install_smoke_scheduled == 'true'
@@ -1421,6 +1613,69 @@ jobs:
       OPENCLAW_DISCORD_SMOKE_BOT_TOKEN: ${{ secrets.OPENCLAW_DISCORD_SMOKE_BOT_TOKEN }}
       OPENCLAW_DISCORD_SMOKE_GUILD_ID: ${{ secrets.OPENCLAW_DISCORD_SMOKE_GUILD_ID }}
       OPENCLAW_DISCORD_SMOKE_CHANNEL_ID: ${{ secrets.OPENCLAW_DISCORD_SMOKE_CHANNEL_ID }}
+
+  windows_node_prerelease_e2e:
+    name: Run Windows-node prerelease E2E
+    needs: [resolve_target, prepare_release_package, resolve_windows_node_release_artifacts]
+    if: needs.resolve_target.outputs.windows_node_scheduled == 'true' && needs.resolve_windows_node_release_artifacts.outputs.prerelease_tag != ''
+    permissions:
+      actions: read
+      contents: read
+      id-token: write
+    uses: openclaw/openclaw-windows-node/.github/workflows/release-candidate-e2e.yml@fb45902950fd4f62d20a37dbbafac27e916917f2
+    with:
+      candidate_artifact_name: ${{ needs.prepare_release_package.outputs.windows_node_artifact_name }}
+      candidate_artifact_run_id: ${{ github.run_id }}
+      candidate_sha256: ${{ needs.prepare_release_package.outputs.windows_node_package_sha256 }}
+      candidate_version: ${{ needs.prepare_release_package.outputs.package_version }}
+      windows_node_source: release
+      windows_node_source_sha: ${{ needs.resolve_windows_node_release_artifacts.outputs.prerelease_release_sha }}
+      windows_node_workflow_sha: fb45902950fd4f62d20a37dbbafac27e916917f2
+      windows_node_release_tag: ${{ needs.resolve_windows_node_release_artifacts.outputs.prerelease_tag }}
+      windows_node_release_asset_name: ${{ needs.resolve_windows_node_release_artifacts.outputs.prerelease_asset_name }}
+      windows_node_release_asset_sha256: ${{ needs.resolve_windows_node_release_artifacts.outputs.prerelease_asset_sha256 }}
+      allow_protocol_mismatch: false
+
+  windows_node_stable_e2e:
+    name: Run Windows-node stable E2E
+    needs: [resolve_target, prepare_release_package, resolve_windows_node_release_artifacts]
+    if: needs.resolve_target.outputs.windows_node_scheduled == 'true'
+    permissions:
+      actions: read
+      contents: read
+      id-token: write
+    uses: openclaw/openclaw-windows-node/.github/workflows/release-candidate-e2e.yml@fb45902950fd4f62d20a37dbbafac27e916917f2
+    with:
+      candidate_artifact_name: ${{ needs.prepare_release_package.outputs.windows_node_artifact_name }}
+      candidate_artifact_run_id: ${{ github.run_id }}
+      candidate_sha256: ${{ needs.prepare_release_package.outputs.windows_node_package_sha256 }}
+      candidate_version: ${{ needs.prepare_release_package.outputs.package_version }}
+      windows_node_source: release
+      windows_node_source_sha: ${{ needs.resolve_windows_node_release_artifacts.outputs.stable_release_sha }}
+      windows_node_workflow_sha: fb45902950fd4f62d20a37dbbafac27e916917f2
+      windows_node_release_tag: ${{ needs.resolve_windows_node_release_artifacts.outputs.stable_tag }}
+      windows_node_release_asset_name: ${{ needs.resolve_windows_node_release_artifacts.outputs.stable_asset_name }}
+      windows_node_release_asset_sha256: ${{ needs.resolve_windows_node_release_artifacts.outputs.stable_asset_sha256 }}
+      allow_protocol_mismatch: false
+
+  windows_node_main_e2e:
+    name: Run Windows-node main E2E
+    needs: [resolve_target, prepare_release_package, resolve_windows_node_main_source]
+    if: needs.resolve_target.outputs.windows_node_scheduled == 'true'
+    permissions:
+      actions: read
+      contents: read
+      id-token: write
+    uses: openclaw/openclaw-windows-node/.github/workflows/release-candidate-e2e.yml@fb45902950fd4f62d20a37dbbafac27e916917f2
+    with:
+      candidate_artifact_name: ${{ needs.prepare_release_package.outputs.windows_node_artifact_name }}
+      candidate_artifact_run_id: ${{ github.run_id }}
+      candidate_sha256: ${{ needs.prepare_release_package.outputs.windows_node_package_sha256 }}
+      candidate_version: ${{ needs.prepare_release_package.outputs.package_version }}
+      windows_node_source: main
+      windows_node_source_sha: ${{ needs.resolve_windows_node_main_source.outputs.main_source_sha }}
+      windows_node_workflow_sha: fb45902950fd4f62d20a37dbbafac27e916917f2
+      allow_protocol_mismatch: false
 
   live_repo_e2e_release_checks:
     name: Run repo/live E2E validation
@@ -1598,7 +1853,7 @@ jobs:
       published_upgrade_survivor_baseline: ${{ inputs.qualification_baselines_json != '' && fromJSON(inputs.qualification_baselines_json).upgradeBaseline || (needs.resolve_target.outputs.package_acceptance_package_spec == '' && format('openclaw@{0}', needs.prepare_release_package.outputs.upgrade_baseline) || 'openclaw@latest') }}
       published_upgrade_survivor_baselines: ${{ needs.prepare_release_package.outputs.upgrade_survivor_baselines }}
       published_upgrade_survivor_scenarios: ${{ needs.prepare_release_package.outputs.upgrade_survivor_scenarios }}
-      telegram_mode: ${{ (needs.resolve_target.outputs.telegram_waiver != '' || needs.resolve_target.outputs.skip_package_telegram_e2e == 'true') && 'none' || 'mock-openai' }}
+      telegram_mode: ${{ needs.resolve_target.outputs.skip_package_telegram_e2e == 'true' && 'none' || 'mock-openai' }}
       shared_image_artifact_namespace: release-package
       candidate_artifact_json: ${{ needs.resolve_target.outputs.package_acceptance_package_spec == '' && needs.prepare_release_package.outputs.candidate_artifact_json || '' }}
       shared_image_policy: no-push-artifact
@@ -2870,8 +3125,13 @@ jobs:
     needs:
       - resolve_target
       - prepare_release_package
+      - resolve_windows_node_release_artifacts
+      - resolve_windows_node_main_source
       - install_smoke_release_checks
       - cross_os_release_checks
+      - windows_node_prerelease_e2e
+      - windows_node_stable_e2e
+      - windows_node_main_e2e
       - live_repo_e2e_release_checks
       - docker_e2e_release_checks
       - package_acceptance_release_checks
@@ -2994,8 +3254,14 @@ jobs:
           VALIDATE_ADVISORY_STATUSES_OUTCOME: ${{ steps.validate_advisory_statuses.outcome }}
           RESOLVE_TARGET_RESULT: ${{ needs.resolve_target.result }}
           PREPARE_RELEASE_PACKAGE_RESULT: ${{ needs.prepare_release_package.result }}
+          RESOLVE_WINDOWS_NODE_RELEASE_ARTIFACTS_RESULT: ${{ needs.resolve_windows_node_release_artifacts.result }}
+          RESOLVE_WINDOWS_NODE_MAIN_SOURCE_RESULT: ${{ needs.resolve_windows_node_main_source.result }}
           INSTALL_SMOKE_RELEASE_CHECKS_RESULT: ${{ needs.install_smoke_release_checks.result }}
           CROSS_OS_RELEASE_CHECKS_RESULT: ${{ needs.cross_os_release_checks.result }}
+          WINDOWS_NODE_PRERELEASE_E2E_RESULT: ${{ needs.windows_node_prerelease_e2e.result }}
+          WINDOWS_NODE_STABLE_E2E_RESULT: ${{ needs.windows_node_stable_e2e.result }}
+          WINDOWS_NODE_MAIN_E2E_RESULT: ${{ needs.windows_node_main_e2e.result }}
+          WINDOWS_NODE_SELECTED: ${{ needs.resolve_target.outputs.windows_node_scheduled == 'true' }}
           LIVE_REPO_E2E_RELEASE_CHECKS_RESULT: ${{ needs.live_repo_e2e_release_checks.result }}
           DOCKER_E2E_RELEASE_CHECKS_RESULT: ${{ needs.docker_e2e_release_checks.result }}
           PACKAGE_ACCEPTANCE_RELEASE_CHECKS_RESULT: ${{ needs.package_acceptance_release_checks.result }}
@@ -3041,6 +3307,11 @@ jobs:
             release_check_items+=(
               "prepare_release_package=${PREPARE_RELEASE_PACKAGE_RESULT}"
               "cross_os_release_checks=${CROSS_OS_RELEASE_CHECKS_RESULT}"
+              "resolve_windows_node_release_artifacts=${RESOLVE_WINDOWS_NODE_RELEASE_ARTIFACTS_RESULT:-skipped}"
+              "resolve_windows_node_main_source=${RESOLVE_WINDOWS_NODE_MAIN_SOURCE_RESULT:-skipped}"
+              "windows_node_prerelease_e2e=${WINDOWS_NODE_PRERELEASE_E2E_RESULT:-skipped}"
+              "windows_node_stable_e2e=${WINDOWS_NODE_STABLE_E2E_RESULT:-skipped}"
+              "windows_node_main_e2e=${WINDOWS_NODE_MAIN_E2E_RESULT:-skipped}"
               "docker_e2e_release_checks=${DOCKER_E2E_RELEASE_CHECKS_RESULT}"
               "package_acceptance_release_checks=${PACKAGE_ACCEPTANCE_RELEASE_CHECKS_RESULT}"
             )
@@ -3146,6 +3417,22 @@ jobs:
               fi
               continue
             fi
+            case "$name" in
+              resolve_windows_node_main_source|windows_node_prerelease_e2e|windows_node_main_e2e)
+                if [[ "$WINDOWS_NODE_SELECTED" == "true" ]]; then
+                  echo "- ${name} (advisory): ${result}" >> "$GITHUB_STEP_SUMMARY"
+                  if [[ "$result" != "success" ]]; then
+                    echo "::warning::${name} (advisory) ended with ${result}"
+                  fi
+                fi
+                continue
+                ;;
+            esac
+            if [[ "$name" == "windows_node_stable_e2e" && "$WINDOWS_NODE_SELECTED" == "true" && "$result" != "success" ]]; then
+              echo "::error::${name} ended with ${result}"
+              failed=1
+              continue
+            fi
             if [[ "$result" != "success" && "$result" != "skipped" ]]; then
               echo "::error::${name} ended with ${result}"
               failed=1
@@ -3160,6 +3447,11 @@ jobs:
       - prepare_release_package
       - install_smoke_release_checks
       - cross_os_release_checks
+      - resolve_windows_node_release_artifacts
+      - resolve_windows_node_main_source
+      - windows_node_prerelease_e2e
+      - windows_node_stable_e2e
+      - windows_node_main_e2e
       - live_repo_e2e_release_checks
       - docker_e2e_release_checks
       - package_acceptance_release_checks

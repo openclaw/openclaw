@@ -202,7 +202,7 @@ export async function patchSessionRows(
         return [];
       }
       const row = chunkRows[index];
-      if (row?.pinned && patch.archived === true) {
+      if (row && patch.archived === true) {
         deps.pruneSidebarSessionEntry(row.key);
       }
       return row ? [row] : [];

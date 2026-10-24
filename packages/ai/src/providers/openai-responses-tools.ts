@@ -16,11 +16,8 @@ import { withPreparedToolSchemaNormalization } from "./tool-schema-normalization
 interface ConvertResponsesToolsOptions {
   strict?: boolean | null;
   model?: Model;
-  supportsStrictMode?: boolean;
   mutableParameters?: boolean;
 }
-
-type OpenAIToolSchemaCompat = Parameters<typeof normalizeOpenAIStrictToolParameters>[2];
 
 /** Projects direct provider descriptors before resolving their strict policy. */
 export function convertResponsesToolPayload(
@@ -72,7 +69,7 @@ function convertPreparedResponsesTools(
         normalizeOpenAIStrictToolParameters(
           tool.parameters,
           strict === true,
-          model?.compat as OpenAIToolSchemaCompat,
+          model?.compat as Parameters<typeof normalizeOpenAIStrictToolParameters>[2],
         ),
         strict,
         mutableParameters,
@@ -92,9 +89,7 @@ function resolveResponsesStrictToolSetting(
   if (options?.model) {
     return getAiTransportHost().resolveOpenAIStrictToolSetting(options.model, {
       transport: "stream",
-      supportsStrictMode:
-        options.supportsStrictMode ??
-        resolveOpenAICompletionsCompat(options.model).supportsStrictMode,
+      supportsStrictMode: resolveOpenAICompletionsCompat(options.model).supportsStrictMode,
     });
   }
   return false;

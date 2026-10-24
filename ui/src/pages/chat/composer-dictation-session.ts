@@ -152,16 +152,12 @@ export class ComposerDictationSession {
     return [...this.finalTranscripts, this.currentPartial].filter(Boolean).join(" ").trim();
   }
 
-  async finish(drainFinalTranscript = false): Promise<string> {
-    const lateFinal =
-      drainFinalTranscript && !this.gatewayDisconnected ? this.waitForLateFinal() : null;
-    const cleanup = this.stopAndClose(true);
-    if (lateFinal) {
-      // Bound admission separately; a started close uses the media provider timeout.
-      void cleanup.catch(() => undefined);
-      return lateFinal;
-    }
-    return cleanup.then(() => this.transcriptSnapshot());
+  async finish(): Promise<string> {
+    const transcript =
+      this.gatewayDisconnected || this.failed ? this.transcriptSnapshot() : this.waitForLateFinal();
+    // Bound admission separately; a started close uses the media provider timeout.
+    void this.stopAndClose(true).catch(() => undefined);
+    return transcript;
   }
 
   async cancel(): Promise<void> {
@@ -297,6 +293,7 @@ export class ComposerDictationSession {
       return;
     }
     this.failed = true;
+    this.settleLateFinalDrain?.(false);
     this.callbacks.onError(message, this.hasTranscript());
   }
 
@@ -344,7 +341,9 @@ export class ComposerDictationSession {
 
   private waitForLateFinal(): Promise<string> {
     return new Promise((resolve) => {
+      const initialTranscript = this.transcriptSnapshot();
       const transcripts: string[] = [...this.finalTranscripts];
+      let partial = this.currentPartial;
       let timer: ReturnType<typeof globalThis.setTimeout> | undefined;
       let unsubscribe = () => {};
       const finish = (text: string) => {
@@ -355,7 +354,7 @@ export class ComposerDictationSession {
         this.resumeFinalDrain = null;
         resolve(text);
       };
-      const transcript = () => transcripts.join(" ").trim();
+      const transcript = () => [...transcripts, partial].filter(Boolean).join(" ").trim();
       this.pauseFinalDrain = () => globalThis.clearTimeout(timer);
       this.resumeFinalDrain = () => {
         timer = globalThis.setTimeout(() => finish(transcript()), FINAL_TRANSCRIPT_MAX_WAIT_MS);
@@ -373,6 +372,7 @@ export class ComposerDictationSession {
           payload.text.trim()
         ) {
           transcripts.push(payload.text.trim());
+          partial = "";
         } else if (payload.type === "error" || payload.type === "close") {
           if (payload.type === "error" || payload.reason === "error") {
             this.reportFailure(
@@ -381,11 +381,14 @@ export class ComposerDictationSession {
                 t("chat.composer.dictationFailed"),
               ),
             );
+          } else {
+            finish(transcript());
           }
-          finish(transcript());
         }
       });
-      this.settleLateFinalDrain = (discard) => finish(discard ? "" : transcript());
+      // Failed finalization retains the preview, not its provisional result.
+      this.settleLateFinalDrain = (discard) =>
+        finish(discard ? "" : this.failed ? initialTranscript : transcript());
     });
   }
 }

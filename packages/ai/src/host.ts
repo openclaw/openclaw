@@ -205,13 +205,11 @@ export interface AiTransportHost {
 
 const MAX_PENDING_CUSTOM_API_REGISTRATIONS = 32;
 
-type PendingCustomApiRegistration = {
+const pendingCustomApiRegistrations: Array<{
   registry: ApiRegistry;
   api: Api;
   streamFn: StreamFn;
-};
-
-const pendingCustomApiRegistrations: PendingCustomApiRegistration[] = [];
+}> = [];
 
 function queueCustomApiRegistration(registry: ApiRegistry, api: Api, streamFn: StreamFn): boolean {
   const existing = pendingCustomApiRegistrations.find(

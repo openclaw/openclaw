@@ -96,6 +96,12 @@ profile emits the guidance to stderr and does not create a state database for a
 skipped update. These non-outcomes do not run rollback verification or offer an
 update failure report.
 
+After durable success, updates automatically retire eligible superseded recovery
+copies through the state owner, retaining the current update's rollback generation.
+Cleanup warnings never fail or roll back the successful update. Manual
+`openclaw update cleanup` remains available for inspection and retry; see
+[recovery retirement](/cli/update/repair-and-recovery#update-cleanup).
+
 ## Usage
 
 ```bash
@@ -903,6 +909,10 @@ Use `openclaw update status` and Doctor for recovery guidance.
 | `--reapply-local-overrides`                      | Replay trusted local packaged `dist` edits when the new package has the same baseline. Otherwise preserve them for manual recovery.                                                                                                                                                                                                                               |
 | `--accept-capabilities`                          | Accept each plugin's reviewed capability changes during post-update sync. This acknowledges the exact staged capability surface; it does not disable capability checks or establish future trust.                                                                                                                                                                 |
 | `--full-integrity-check`                         | Request full SQLite integrity checks during candidate migrations, including Doctor subprocesses. Also accepted by `update repair` and `update wizard`.                                                                                                                                                                                                            |
+
+Invalid `--channel` values are quoted as JSON strings in diagnostics, including
+escaped quotes, newlines, and control characters. This applies to `update`,
+`update repair`, and `update finalize`, in both human and `--json` output.
 
 There is no `--verbose` flag. Use `--dry-run` to preview planned actions,
 `--json` for machine-readable results, and `openclaw update status --json`

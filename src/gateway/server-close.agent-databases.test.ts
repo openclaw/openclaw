@@ -170,7 +170,7 @@ it("settles accepted incognito outbox work after the close prelude and before ac
       async run() {
         accepted.resolve();
         await release.promise;
-        writing = outbox.enqueueIntent({ ...filter, admission, isHeartbeat: false });
+        writing = outbox.enqueueIntent({ ...filter, admission });
         await writing;
         persisted = await outbox.readNextPending(filter);
       },

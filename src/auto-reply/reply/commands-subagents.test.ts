@@ -81,11 +81,12 @@ function timedRun(
 }
 
 async function statusText(now: number, verboseEnabled = true) {
+  const context = await controlScope.buildControlledSubagentRunsReadContext("agent:main:main");
+  using _ = vi.spyOn(Date, "now").mockReturnValueOnce(now);
   return (
     buildSubagentsStatusLine({
-      context: await controlScope.buildControlledSubagentRunsReadContext("agent:main:main"),
+      context,
       verboseEnabled,
-      now,
     }) ?? ""
   );
 }

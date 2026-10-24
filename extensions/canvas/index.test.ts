@@ -1,5 +1,3 @@
-import { IncomingMessage, ServerResponse } from "node:http";
-import { Socket } from "node:net";
 import type { AnyAgentTool, OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { assert, beforeEach, describe, expect, it, vi } from "vitest";
@@ -8,18 +6,10 @@ import canvasPlugin from "./index.js";
 const mocks = vi.hoisted(() => {
   const toolExecute = vi.fn(async () => ({ content: [{ type: "text", text: "ok" }] }));
   return {
-    handleHttpRequest: vi.fn(async () => true),
-    loadRenderer: vi.fn(),
     registerNodesCanvasCommands: vi.fn(),
     toolExecute,
     createCanvasTool: vi.fn(() => ({ execute: toolExecute })),
   };
-});
-
-// mock-isolation: the real renderer must stay unloaded until the HTTP route is used.
-vi.mock("./src/host/a2ui.js", () => {
-  mocks.loadRenderer();
-  return { handleA2uiHttpRequest: mocks.handleHttpRequest };
 });
 
 vi.mock("./src/cli.js", async (importOriginal) => ({
@@ -43,7 +33,6 @@ function registerCanvas(config: OpenClawPluginApi["config"] = {}) {
     registerTool: vi.fn<OpenClawPluginApi["registerTool"]>(),
     registerNodeCliFeature: vi.fn<OpenClawPluginApi["registerNodeCliFeature"]>(),
     registerNodeInvokePolicy: vi.fn<OpenClawPluginApi["registerNodeInvokePolicy"]>(),
-    registerBoardWidgetContentKind: vi.fn<OpenClawPluginApi["registerBoardWidgetContentKind"]>(),
   };
   canvasPlugin.register?.(
     createTestPluginApi({ id: "canvas", name: "Canvas", config, ...registrations }),
@@ -62,12 +51,8 @@ describe("Canvas plugin entry", () => {
       commands: ["canvas.present", "canvas.hide", "canvas.navigate"],
       defaultPlatforms: ["macos"],
     });
-    expect(api.registerHttpRoute).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({ path: "/__openclaw__/a2ui", match: "prefix" }),
-    );
-    expect(api.registerBoardWidgetContentKind).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({ kind: "a2ui", label: "A2UI" }),
-    );
+    expect(api.registerHttpRoute).not.toHaveBeenCalled();
+    expect(api.registerService).not.toHaveBeenCalled();
     expect(api.registerWidgetPresenter).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({
         target: "node_panel",
@@ -78,27 +63,12 @@ describe("Canvas plugin entry", () => {
     );
   });
 
-  it("uses host.enabled as the single presenter and hosted-resource gate", () => {
+  it("uses host.enabled as the presenter gate", () => {
     const api = registerCanvas({
       plugins: { entries: { canvas: { config: { host: { enabled: false } } } } },
     });
-    expect(api.registerBoardWidgetContentKind).not.toHaveBeenCalled();
     expect(api.registerHttpRoute).not.toHaveBeenCalled();
     expect(api.registerWidgetPresenter).not.toHaveBeenCalled();
-  });
-
-  it("defers A2UI asset implementation until the route is used", async () => {
-    const api = registerCanvas();
-    expect(api.registerService).not.toHaveBeenCalled();
-    expect(mocks.loadRenderer).not.toHaveBeenCalled();
-
-    const request = new IncomingMessage(new Socket());
-    request.url = "/__openclaw__/a2ui/a2ui.bundle.js";
-    const [route] = api.registerHttpRoute.mock.calls;
-    assert(route);
-    await route[0].handler(request, new ServerResponse(request));
-    expect(mocks.loadRenderer).toHaveBeenCalledTimes(1);
-    expect(mocks.handleHttpRequest).toHaveBeenCalledTimes(1);
   });
 
   it("defers Canvas CLI and tool implementations until use", async () => {

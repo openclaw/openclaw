@@ -456,9 +456,11 @@ describe("Tool Search", () => {
     await expect(dispatch("computer")).rejects.toThrow("Call it directly by its declared name");
     expect(computer.execute).not.toHaveBeenCalled();
     let activeToolNames = compacted.tools.map((tool) => tool.name);
+    const definitions = toToolDefinitions(compacted.tools);
     const policy = createPromptBuildToolPolicy({
       session: {
         getActiveToolNames: () => activeToolNames,
+        getToolDefinition: (name) => definitions.find((tool) => tool.name === name),
         setActiveToolsByName: (names) => {
           activeToolNames = names;
         },
@@ -479,11 +481,9 @@ describe("Tool Search", () => {
   it("keeps run-contract tools direct-only so search never hides them", async () => {
     const { createStructuredOutputTool } = await import("./tools/structured-output-tool.js");
     const { createSessionsYieldTool } = await import("./tools/sessions-yield-tool.js");
-    const { resolveHeartbeatResponseTool } = await import("./tools/heartbeat-response-tool.js");
     const contractTools = [
       createStructuredOutputTool({ runId: "run-contract-tools", schema: { type: "object" } }),
       createSessionsYieldTool({ sessionId: "session-contract-tools" }),
-      expectDefined(resolveHeartbeatResponseTool({ enableHeartbeatTool: true }), "heartbeat tool"),
     ];
 
     const { catalogRef, compacted } = catalogFixture([
@@ -495,7 +495,6 @@ describe("Tool Search", () => {
       ...controlNames,
       "structured_output",
       "sessions_yield",
-      "heartbeat_respond",
     ]);
     expect(catalogRef.current?.entries.map((entry) => entry.name)).toEqual(["fake_lookup"]);
   });

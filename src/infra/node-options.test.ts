@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseNodeOptionsEnvVar } from "./node-options.js";
+import { parseNodeOptionsEnvVar } from "../../node-runtime-env.mjs";
 
 describe("parseNodeOptionsEnvVar", () => {
   it.each([

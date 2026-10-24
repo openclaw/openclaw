@@ -1,6 +1,7 @@
 import {
   createContext,
   createMemo,
+  createProjection,
   createSignal,
   createStore,
   createUniqueId,
@@ -12,6 +13,7 @@ import { elementRef } from "../../../lib/reactive/element-ref.ts";
 
 export type ChatModelSearchRow = {
   key: string;
+  list?: string;
   name: string;
   keywords?: string;
   providerLabel: string;
@@ -34,7 +36,9 @@ export type ChatModelSearchCatalog = {
 
 type SearchMatch = { row: ChatModelSearchRow; rank: number };
 type SearchView = {
+  matches(): SearchMatch[];
   selectable(): SearchMatch[];
+  reveal(key: string): void;
   highlighted(): string | undefined;
   highlight(value: string | undefined): void;
   providerOpen(provider: string): boolean;
@@ -42,7 +46,13 @@ type SearchView = {
   filtering(): boolean;
   empty(): boolean;
   controls(): string;
-  row(key: string): { hidden: boolean; rank: number | undefined; shortcut: number | undefined };
+  row(key: string): {
+    hidden: boolean;
+    rank: number | undefined;
+    shortcut: number | undefined;
+    position?: number;
+    size?: number;
+  };
   toggleProvider(provider: string): void;
   expandMore(provider: string, event: MouseEvent): void;
 };
@@ -50,6 +60,7 @@ type ModelSearchState = {
   details?: HTMLDetailsElement;
   summary?: HTMLElement;
   input?: HTMLInputElement;
+  focusRow?: string;
   rows: Map<string, HTMLButtonElement>;
   query(): string;
   setQuery(value: string): void;
@@ -124,6 +135,12 @@ export function createChatModelSearch() {
         // The keyed row keeps this identity for its mounted lifetime.
         const initialKey = readKey();
         state.rows.set(initialKey, element);
+        if (state.focusRow === initialKey) {
+          state.focusRow = undefined;
+          if (state.details?.open) {
+            element.focus({ preventScroll: true });
+          }
+        }
         return () => {
           if (state.rows.get(initialKey) === element) {
             state.rows.delete(initialKey);
@@ -137,7 +154,7 @@ export function createChatModelSearch() {
     },
     highlighted: () => state.view?.highlighted(),
     /** Initialize derivations under the retained lazy panel, without moving its catalog into boot. */
-    createView(read: () => ChatModelSearchCatalog) {
+    createView(read: () => ChatModelSearchCatalog, reveal: (key: string) => void) {
       const scope = createMemo(
         () => ({ active: read().activeProvider, providers: read().providers }),
         {
@@ -170,19 +187,25 @@ export function createChatModelSearch() {
       );
       const providerOpen = (provider: string) =>
         disclosure.groups[provider]?.open ?? disclosure.active === provider;
-      const matches = createMemo(() => {
-        const term = query().trim().toLocaleLowerCase();
-        return read()
-          .rows.flatMap((row, index) => {
-            const visible = row.provider
-              ? providerOpen(row.provider) && (!row.more || disclosure.groups[row.provider]?.more)
-              : row.visible !== false;
-            const score = term ? modelMatchRank(row, term) : visible ? 0 : null;
-            return score === null ? [] : [{ row, score, index }];
-          })
-          .toSorted((a, b) => a.score - b.score || a.index - b.index)
-          .map(({ row }, rank): SearchMatch => ({ row, rank }));
-      });
+      const matches = createMemo(
+        () => {
+          const term = query().trim().toLocaleLowerCase();
+          return read()
+            .rows.flatMap((row, index) => {
+              const visible = row.provider
+                ? providerOpen(row.provider) && (!row.more || disclosure.groups[row.provider]?.more)
+                : row.visible !== false;
+              const score = term ? modelMatchRank(row, term) : visible ? 0 : null;
+              return score === null ? [] : [{ row, score, index }];
+            })
+            .toSorted((a, b) => a.score - b.score || a.index - b.index)
+            .map(({ row }, rank): SearchMatch => ({ row, rank }));
+        },
+        {
+          equals: (a, b) =>
+            a.length === b.length && a.every((match, index) => match.row === b[index]!.row),
+        },
+      );
       const selectable = createMemo(() => matches().filter(({ row }) => !row.disabled));
       // Keep a surviving choice on refresh; a removed choice adopts the current fallback.
       const [highlighted, highlight] = createSignal<string | undefined>((previous) => {
@@ -193,29 +216,43 @@ export function createChatModelSearch() {
           rows[0]?.row.key
         );
       });
-      const byKey = createMemo(() => new Map(matches().map((match) => [match.row.key, match])));
-      const shortcuts = createMemo(
-        () =>
-          new Map(
-            selectable()
-              .slice(0, 9)
-              .flatMap(({ row }, index) =>
-                row.hasShortcut ? [[row.key, index + 1] as const] : [],
-              ),
-          ),
-      );
+      const rowStates = createProjection<Record<string, ReturnType<SearchView["row"]>>>(() => {
+        const states: Record<string, ReturnType<SearchView["row"]>> = {};
+        const lists = new Map<string | undefined, string[]>();
+        let selectableIndex = 0;
+        for (const { row, rank } of matches()) {
+          const shortcut = !row.disabled ? ++selectableIndex : undefined;
+          states[row.key] = {
+            hidden: false,
+            rank,
+            shortcut: row.hasShortcut && shortcut && shortcut <= 9 ? shortcut : undefined,
+          };
+          const list = lists.get(row.list) ?? [];
+          list.push(row.key);
+          lists.set(row.list, list);
+        }
+        for (const keys of lists.values()) {
+          keys.forEach((key, index) => {
+            states[key]!.position = index + 1;
+            states[key]!.size = keys.length;
+          });
+        }
+        return states;
+      });
+      const filtering = createMemo(() => Boolean(query().trim()));
       const view = {
+        matches,
         selectable,
+        reveal,
         highlighted,
         highlight,
         providerOpen,
         moreOpen: (provider: string) => disclosure.groups[provider]?.more ?? false,
-        filtering: () => Boolean(query().trim()),
+        filtering,
         empty: () => Boolean(query().trim()) && matches().length === 0,
         controls: () => read().lists.map(listId).join(" "),
         row(key: string) {
-          const match = byKey().get(key);
-          return { hidden: !match, rank: match?.rank, shortcut: shortcuts().get(key) };
+          return rowStates[key] ?? { hidden: true, rank: undefined, shortcut: undefined };
         },
         toggleProvider(provider: string) {
           const next = !providerOpen(provider);
@@ -232,9 +269,18 @@ export function createChatModelSearch() {
           if (hadFocus) {
             onSettled(() => {
               const next = selectable().find(({ row }) => row.provider === provider && row.more);
-              ((next && state.rows.get(next.row.key)) || state.input)?.focus({
-                preventScroll: true,
-              });
+              if (next) {
+                // The ref completes keyboard focus when a virtual row mounts.
+                state.focusRow = next.row.key;
+                reveal(next.row.key);
+                const element = state.rows.get(next.row.key);
+                if (element) {
+                  state.focusRow = undefined;
+                  element.focus({ preventScroll: true });
+                }
+              } else {
+                state.input?.focus({ preventScroll: true });
+              }
             });
           }
         },
@@ -284,6 +330,9 @@ export function updateModelSearch(input: HTMLInputElement): void {
 
 export function resetModelSearch(details: HTMLDetailsElement): void {
   const state = pickers.get(details);
+  if (state) {
+    state.focusRow = undefined;
+  }
   const rows = state?.view?.selectable() ?? [];
   // An unchanged empty query cannot invalidate the writable highlight derivation.
   const fallback = rows.find(({ row }) => row.selected) ?? rows[0];
@@ -340,7 +389,11 @@ export function handleModelSearchKeydown(event: KeyboardEvent): void {
   const next = rows[index < 0 ? 0 : (index + offset) % rows.length];
   if (next) {
     view.highlight(next.row.key);
-    state.rows.get(next.row.key)?.scrollIntoView?.({ block: "nearest" });
+    view.reveal(next.row.key);
+    onSettled(() => {
+      // Chromium returns a promise; settlement callbacks must not return it as cleanup.
+      state.rows.get(next.row.key)?.scrollIntoView?.({ block: "nearest" });
+    });
   }
 }
 

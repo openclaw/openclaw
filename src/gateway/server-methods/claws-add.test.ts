@@ -342,9 +342,7 @@ describe("claws.add.apply Gateway method", () => {
     const request = await callAdd("apply", () => enabled, { cron });
 
     expect(removeAgentJobsTransactional).toHaveBeenCalledWith(agentId, expect.any(Function));
-    expect(deleteAgent).toHaveBeenCalledWith(
-      expect.objectContaining({ agentId, allowConfigSizeDrop: true }),
-    );
+    expect(deleteAgent).toHaveBeenCalledWith(expect.objectContaining({ agentId }));
     const { validate } = expectDefined(deleteAgent.mock.calls[0], "agent rollback attempt")[0];
     expect(() => validate(expectedAgentConfig)).not.toThrow();
     expect(() => validate({ ...expectedAgentConfig, name: "Edited" })).toThrow(

@@ -70,6 +70,18 @@ cannot replace the batch's delivery state; already committed delivery evidence
 remains valid. Restart activation reconciles retained requester-turn bindings
 before resuming child completion.
 
+Restart restores pending completion reservations in requester FIFO order. When a
+restored wave needs no further delivery, the registry releases its unclaimed
+mailbox reservations after its settlement commits. Already delivered waves must
+not hold later yielded cohorts behind an unprepared input. Claimed turns keep
+their existing execution owner.
+
+Restored delivery preparation uses the bounded background budget only until the
+Gateway accepts the input. Waiting for mailbox dispatch or requester completion
+does not hold a preparation slot: earlier FIFO inputs may need that same budget
+to become ready. The registry retains the delivery lifetime and records its
+outcome after the requester finishes.
+
 For a nested requester, settlement persists its paused run together with the
 child wake batch before scheduling the continuation. This also covers a child
 that finishes before the requester yields: successor admission must not depend
@@ -192,6 +204,10 @@ owner, so callbacks from the closed Gateway cannot settle the recovered wake.
   idle. `requesterTurnRunId` identifies the spawning cohort. Whether that turn
   still owns its children is read from the session controller, so a turn that
   ended without transferring them no longer holds their completions.
+  Failed announcement preparation retains only the durable obligation; prompt
+  assembly does not drain those records into a separate steering queue. Recovery
+  retries the same controller reservation, whose confirmed consumption settles
+  delivery. An unconsumed input remains owed across requester or Gateway failure.
 - **Retirement is an event.** Kill, Stop of a paused or queued child, child
   session deletion, and requester reset or deletion retire the child's owed
   inputs. A retired member is terminal, so it never holds its siblings'
@@ -208,9 +224,10 @@ owner, so callbacks from the closed Gateway cannot settle the recovered wake.
   regardless of its size. A mixed wave delivers only its undelivered results;
   already delivered children are referenced in one short line without their
   payloads. An explicit `sessions_yield` still owes one continuation, using the
-  same rule even when every result was already delivered.
+  same rule even when every result was already delivered, but that continuation may finish silently without missing-answer recovery when no member still needs delivery or restart reconciliation.
   Restart-interrupted children still need reconciliation: their retained partial
-  results remain in the continuation even if an earlier result was delivered.
+  results remain in the continuation if delivery predates the interruption. A
+  confirmed delivery of the interruption notice satisfies that obligation.
   The unfinished-child roster is independent of result delivery and includes
   only children whose captured requester identity still matches.
   A Stop, reset, or deletion

@@ -78,11 +78,13 @@ function verifyLaunchAgentStopProbe(
 
 async function waitForLaunchAgentUnloaded(
   serviceTarget: string,
-  initialPid: number | undefined,
+  initialPids: readonly number[],
   assertCurrent?: () => void,
+  onWait?: (pids: readonly number[]) => void,
 ): Promise<void> {
-  const pids = new Set<number>(initialPid === undefined ? [] : [initialPid]);
+  const pids = new Set(initialPids);
   const deadline = Date.now() + LAUNCH_AGENT_STOP_TIMEOUT_MS;
+  let warned = false;
   for (;;) {
     const probe = await probeLaunchAgentState(serviceTarget, 5_000);
     assertCurrent?.();
@@ -93,6 +95,10 @@ async function waitForLaunchAgentUnloaded(
     const alivePids = [...pids].filter((pid) => !isPidDefinitelyDead(pid));
     if (probe.state === "not-loaded" && alivePids.length === 0) {
       return;
+    }
+    if (probe.state === "not-loaded" && !warned) {
+      warned = true;
+      onWait?.(alivePids);
     }
     if (Date.now() >= deadline) {
       throw launchAgentStopError(
@@ -211,6 +217,7 @@ export async function stopLaunchAgent({
     serviceTarget,
     await probeLaunchAgentState(serviceTarget, 5_000),
   );
+  const stoppingPids = new Set(initialPid === undefined ? [] : [initialPid]);
   let clearIntent: (() => void) | undefined;
   let assertServingCurrent = assertNativeCurrent;
   let warning: string | undefined;
@@ -279,6 +286,12 @@ export async function stopLaunchAgent({
           clearIntent = clear;
         },
       });
+      // Intent admission verifies the serving child's membership in this job.
+      // Its listener and launchd wrapper can disappear before database cleanup.
+      const servingPid = owner?.pid ?? legacyLock?.pid;
+      if (servingPid !== undefined) {
+        stoppingPids.add(servingPid);
+      }
     }
     if (persistDisable) {
       await assertStopCurrent();
@@ -308,7 +321,11 @@ export async function stopLaunchAgent({
     throw error;
   }
   reportMutation(persistDisable ? "disable-bootout" : "bootout");
-  await waitForLaunchAgentUnloaded(serviceTarget, initialPid, assertCurrent);
+  await waitForLaunchAgentUnloaded(serviceTarget, [...stoppingPids], assertCurrent, (pids) => {
+    stdout.write(
+      `${formatLine("Warning", `Waiting for Gateway PID ${pids.join(", ")} to exit and release its databases before continuing.`)}\n`,
+    );
+  });
   if (warning) {
     stdout.write(`${formatLine("Warning", warning)}\n`);
   }
@@ -319,12 +336,8 @@ export async function stopLaunchAgent({
   );
 }
 
-export async function parkCurrentLaunchAgentForMaintenance(
-  params: {
-    env?: GatewayServiceEnv;
-  } = {},
-): Promise<boolean> {
-  const serviceEnv = params.env ?? (process.env as GatewayServiceEnv);
+export async function parkCurrentLaunchAgentForMaintenance(): Promise<boolean> {
+  const serviceEnv = process.env as GatewayServiceEnv;
   const domain = resolveLaunchAgentGuiDomain();
   const label = resolveLaunchAgentLabel(serviceEnv);
   if (!(await isCurrentProcessInsideLaunchdService(label))) {

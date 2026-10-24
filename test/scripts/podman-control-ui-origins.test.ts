@@ -1,14 +1,10 @@
-import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { podmanEntrypoints, podmanFixture } from "./podman.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-const entrypoints = {
-  seed: "scripts/podman/setup.sh",
-  sync: "scripts/run-openclaw-podman.sh",
-} as const;
 const localOrigins = ["http://127.0.0.1:43123", "http://localhost:43123"];
 const json = (value: unknown) => `${JSON.stringify(value, null, 2)}\n`;
 const publicOrigin = "https://public.example";
@@ -16,43 +12,16 @@ function configJson(controlUi: Record<string, unknown>, extraGateway = {}) {
   return json({ label: "keep", gateway: { publicOrigin, controlUi, ...extraGateway }, tail: [1] });
 }
 
-function runPodman(operation: keyof typeof entrypoints, input: string, python = true) {
+function runPodman(operation: keyof typeof podmanEntrypoints, input: string, python = true) {
   const root = tempDirs.make("openclaw-podman-origins-");
-  const bin = path.join(root, "bin");
-  const home = path.join(root, "home");
-  const config = path.join(home, ".openclaw");
+  const { config, command, run } = podmanFixture(root, python ? ["python3"] : []);
   const configPath = path.join(config, "openclaw.json");
   const cliCalls = path.join(root, "cli-calls");
-  fs.mkdirSync(bin);
   fs.mkdirSync(config, { recursive: true, mode: 0o700 });
   fs.writeFileSync(configPath, input, { mode: 0o640 });
   fs.writeFileSync(path.join(config, ".env"), "OPENCLAW_GATEWAY_TOKEN=fixture-token\n", {
     mode: 0o600,
   });
-  for (const relative of [
-    ...Object.values(entrypoints),
-    "scripts/podman/common.sh",
-    "scripts/lib/host-timeout.sh",
-    "scripts/lib/build-metadata.sh",
-  ]) {
-    const target = path.join(root, relative);
-    fs.mkdirSync(path.dirname(target), { recursive: true });
-    fs.copyFileSync(path.resolve(relative), target);
-  }
-  const tools = "awk cat chmod dirname install mkdir mktemp mv rm tr".split(" ");
-  for (const name of [...tools, ...(python ? ["python3"] : [])]) {
-    const executable = ["/usr/bin", "/bin"].map((dir) => path.join(dir, name)).find(fs.existsSync);
-    if (!executable) {
-      throw new Error(`Missing shell fixture tool: ${name}`);
-    }
-    fs.symlinkSync(executable, path.join(bin, name));
-  }
-  const command = (name: string, body: string) =>
-    fs.writeFileSync(path.join(bin, name), `#!/bin/bash\n${body}\n`, { mode: 0o755 });
-  // Rootless identity is synthetic; config bytes and Python transformations are real.
-  command("id", 'case "$1" in -un) printf "fixture\\n";; *) printf "1000\\n";; esac');
-  command("stat", 'case "$2" in %u) echo 1000;; %Lp|%a) echo 700;; *) exit 97;; esac');
-  command("uname", "echo Linux");
   command("podman", "exit 0");
   command(
     "openclaw",
@@ -62,18 +31,9 @@ case "$*" in
   'config get gateway.controlUi.allowedOrigins') echo '["https://fallback.example"]' ;;
 esac`,
   );
-  const result = spawnSync("/bin/bash", [path.join(root, entrypoints[operation])], {
-    encoding: "utf8",
-    env: {
-      HOME: home,
-      PATH: bin,
-      OPENCLAW_REPO_PATH: root,
-      OPENCLAW_CONFIG_DIR: config,
-      OPENCLAW_IMAGE: "fixture:local",
-      OPENCLAW_PODMAN_GATEWAY_HOST_PORT: "43123",
-      OPENCLAW_BUILD_TIMESTAMP: "2026-09-28T12:00:00Z",
-      CLI_CALLS: cliCalls,
-    },
+  const result = run(podmanEntrypoints[operation], {
+    OPENCLAW_PODMAN_GATEWAY_HOST_PORT: "43123",
+    CLI_CALLS: cliCalls,
   });
   expect(result.status, result.stderr).toBe(0);
   expect(fs.readdirSync(config).filter((name) => name.startsWith(".config.tmp."))).toEqual([]);

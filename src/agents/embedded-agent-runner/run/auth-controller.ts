@@ -378,13 +378,16 @@ export function createEmbeddedRunAuthController(params: {
     if (!profileId || params.authProfileStateMode === "read-only") {
       return;
     }
-    const reason = resolveAuthProfileFailureReason({
-      failoverReason: resolveAuthProfileFailoverReason({
-        allInCooldown: false,
-        message: errorText,
-      }),
-      policy: params.authProfileFailurePolicy,
-    });
+    const reason =
+      error.retryable && params.authProfileFailurePolicy !== "local"
+        ? "timeout"
+        : resolveAuthProfileFailureReason({
+            failoverReason: resolveAuthProfileFailoverReason({
+              allInCooldown: false,
+              message: errorText,
+            }),
+            policy: params.authProfileFailurePolicy,
+          });
     if (!reason) {
       return;
     }

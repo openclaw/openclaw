@@ -680,7 +680,7 @@ it.each(["reentrant", "abort-frozen", "retained-terminal"] as const)(
     const terminal = state === "retained-terminal";
     const order: string[] = [];
     const beforeSupersede = vi.fn(() => order.push("record"));
-    const operation = createTestReplyOperation({ turnKind: terminal ? undefined : "heartbeat" });
+    const operation = createTestReplyOperation();
     const cancel = vi.fn((reason) => {
       order.push(`cancel:${reason}`);
       if (state === "reentrant") {

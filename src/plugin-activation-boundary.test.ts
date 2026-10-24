@@ -17,19 +17,19 @@ const testModelIdNormalization = {
 const loadBundledPluginPublicSurfaceModuleSyncCore = vi.hoisted(() => vi.fn());
 
 const loadPluginManifestRegistryForPluginRegistry = vi.hoisted(() => vi.fn());
+const channelEnvs = vi.hoisted((): Record<string, NodeJS.ProcessEnv> => ({
+  telegram: { TELEGRAM_BOT_TOKEN: "token" },
+  discord: { DISCORD_BOT_TOKEN: "token" },
+  slack: { SLACK_BOT_TOKEN: "xoxb-test" },
+  irc: { IRC_HOST: "irc.example.com", IRC_NICK: "openclaw" },
+}));
 
-const facadeMockHelpers = vi.hoisted(() => {
-  const createLazyFacadeObjectValue = <T extends object>(load: () => T): T =>
-    new Proxy(
-      {},
-      {
-        get(_target, property, receiver) {
-          return Reflect.get(load(), property, receiver);
-        },
-      },
-    ) as T;
-  return { createLazyFacadeObjectValue };
-});
+const facadeMockHelpers = vi.hoisted(() => ({
+  createLazyFacadeObjectValue: <T extends object>(load: () => T): T =>
+    new Proxy({} as T, {
+      get: (_target, property, receiver) => Reflect.get(load(), property, receiver),
+    }),
+}));
 
 vi.mock("./plugins/plugin-registry.js", () => ({
   loadPluginManifestRegistryForPluginRegistry,
@@ -40,16 +40,9 @@ vi.mock("./plugins/plugin-registry.js", () => ({
   }),
 }));
 
+// mock-isolation: Keep channel environment lookup independent of runtime plugin discovery.
 vi.mock("./secrets/channel-env-vars.js", () => ({
-  getChannelEnvVars: (channelId: string) => {
-    const varsByChannel: Record<string, string[]> = {
-      discord: ["DISCORD_BOT_TOKEN"],
-      irc: ["IRC_HOST", "IRC_NICK"],
-      slack: ["SLACK_BOT_TOKEN"],
-      telegram: ["TELEGRAM_BOT_TOKEN"],
-    };
-    return varsByChannel[channelId] ?? [];
-  },
+  getChannelEnvVars: (channelId: string) => Object.keys(channelEnvs[channelId] ?? {}),
 }));
 
 vi.mock("./plugin-sdk/facade-loader.js", () => ({
@@ -74,12 +67,7 @@ vi.mock("./plugin-sdk/facade-runtime.js", () => ({
 it("keeps generic channel and model-normalization boundaries cold", () => {
   loadBundledPluginPublicSurfaceModuleSyncCore.mockReset();
 
-  for (const [channel, env] of Object.entries({
-    telegram: { TELEGRAM_BOT_TOKEN: "token" },
-    discord: { DISCORD_BOT_TOKEN: "token" },
-    slack: { SLACK_BOT_TOKEN: "xoxb-test" },
-    irc: { IRC_HOST: "irc.example.com", IRC_NICK: "openclaw" },
-  })) {
+  for (const [channel, env] of Object.entries(channelEnvs)) {
     expect(isStaticallyChannelConfigured({}, channel, env)).toBe(true);
   }
   expect(isStaticallyChannelConfigured({}, "whatsapp", {})).toBe(false);

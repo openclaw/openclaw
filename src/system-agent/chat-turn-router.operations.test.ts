@@ -19,7 +19,6 @@ import {
   createOAuthVerifiedBinding,
   expectDefined,
   SystemAgentInferenceUnavailableError,
-  verifyConfigAfterSystemAgentWrite,
   type OpenClawConfig,
 } from "./chat-engine.test-support.js";
 import * as hostedSetup from "./hosted-setup.runtime.js";
@@ -569,66 +568,63 @@ describe("SystemAgentChatEngine operations", () => {
     expect(runAgentTurn.mock.calls[0]?.[0]?.input).toContain("[config-verify]");
   });
 
-  it.each(["unavailable", "empty"] as const)(
-    "guides repair when inference is %s",
-    async (failure) => {
+  it("warns when invalid written config prevents repair inference", async () => {
+    useTempStateDir();
+    const runAgentTurn = vi.fn<SystemAgentTurnRunner>(async () => ({ text: "unused" }));
+    const executeOperation = vi.fn<typeof nativeExecuteOperation>(async () => {
       mocks.readConfigFileSnapshot.mockResolvedValue({
-        exists: true,
+        ...configSnapshot({}),
         valid: false,
-        path: "/tmp/openclaw.json",
-        hash: "h",
-        config: {},
-        sourceConfig: {},
-        issues: [
-          {
-            path: "gateway.port",
-            message:
-              failure === "unavailable" ? "Expected number, received string" : "Expected number",
-          },
-        ],
-      } as never);
-      const reply = await verifyConfigAfterSystemAgentWrite(async () => {
-        if (failure === "unavailable") {
-          throw new SystemAgentInferenceUnavailableError("agent-turn");
-        }
-        return { text: "" };
+        issues: [{ path: "gateway.port", message: "Expected number, received string" }],
       });
-      expect(reply).toContain("openclaw doctor --fix");
-      if (failure === "unavailable") {
-        expect(reply).toContain("failed validation");
-        expect(reply).toContain("The write was applied");
-      } else {
-        expect(reply).toContain("with OpenClaw stopped");
-        expect(reply).toContain("machine running it");
-      }
-    },
-  );
+      return { applied: true };
+    });
+    mockApprovedOperation(executeOperation);
+    const engine = createEngine({ yes: true, runAgentTurn });
+
+    const reply = await engine.handle("config set gateway.port 18789");
+
+    expect(reply.applied).toBe(true);
+    expect(reply.text).toContain("openclaw doctor --fix");
+    expect(reply.text).toContain("failed validation");
+    expect(reply.text).toContain("gateway.port: Expected number, received string");
+    expect(reply.text).toContain("The write was applied");
+    expect(reply.text).toContain("could not propose a repair");
+    expect(executeOperation).toHaveBeenCalledOnce();
+    expect(runAgentTurn).not.toHaveBeenCalled();
+  });
 
   it.each(["missing", "unreadable"] as const)(
     "warns when written config is %s",
     async (failure) => {
-      if (failure === "missing") {
-        mocks.readConfigFileSnapshot.mockResolvedValue({
-          exists: false,
-          valid: true,
-          path: "/tmp/openclaw.json",
-          hash: null,
-          config: {},
-          sourceConfig: {},
-          issues: [],
-        } as never);
-      } else {
-        mocks.readConfigFileSnapshot.mockRejectedValue(new Error("snapshot read failed"));
-      }
-      const resolveRepair = vi.fn(async () => ({ text: "unused" }));
-      const reply = await verifyConfigAfterSystemAgentWrite(resolveRepair);
-      expect(resolveRepair).not.toHaveBeenCalled();
-      expect(reply).toContain("The write was applied");
-      expect(reply).toContain("post-write verification is unavailable");
-      expect(reply).toContain(
+      useTempStateDir();
+      const executeOperation = vi.fn<typeof nativeExecuteOperation>(async () => {
+        if (failure === "missing") {
+          mocks.readConfigFileSnapshot.mockResolvedValue({
+            ...configSnapshot({}),
+            exists: false,
+            hash: undefined,
+          });
+        } else {
+          mocks.readConfigFileSnapshot.mockRejectedValue(new Error("snapshot read failed"));
+        }
+        return { applied: true };
+      });
+      mockApprovedOperation(executeOperation);
+      const runAgentTurn = vi.fn<SystemAgentTurnRunner>(async () => ({ text: "unused" }));
+      const engine = createEngine({ yes: true, runAgentTurn });
+
+      const reply = await engine.handle("config set gateway.port 18789");
+
+      expect(reply.applied).toBe(true);
+      expect(executeOperation).toHaveBeenCalledOnce();
+      expect(runAgentTurn).not.toHaveBeenCalled();
+      expect(reply.text).toContain("The write was applied");
+      expect(reply.text).toContain("post-write verification is unavailable");
+      expect(reply.text).toContain(
         failure === "missing" ? "openclaw.json was not found" : "openclaw.json could not be read",
       );
-      expect(reply).toContain("openclaw doctor --fix");
+      expect(reply.text).toContain("openclaw doctor --fix");
     },
   );
 });

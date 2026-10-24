@@ -20,7 +20,6 @@ import {
   normalizeOptionalAgentRuntimeId,
   OPENCLAW_AGENT_RUNTIME_ID,
 } from "../../agents/agent-runtime-id.js";
-import { isHeartbeatLifecycleRunKind } from "../../agents/bootstrap-mode.js";
 import { bindActiveOperatorTurnAuthority } from "../../agents/cron-creator-authority-context.js";
 import {
   buildUsageAgentMetaFields,
@@ -76,14 +75,12 @@ import {
 } from "../agent-runtime-identity-token.js";
 import type { WorkerSessionTurnClaim } from "./placement-record.js";
 import type { WorkerSessionPlacementStore } from "./placement-store.js";
-import {
-  bindWorkerTurnOwner,
-  type WorkerTurnPromptCacheContext,
-} from "./placement-turn-claim-events.js";
+import { bindWorkerTurnOwner } from "./placement-turn-claim-events.js";
 import type { WorkerTurnProcessResult } from "./tunnel-contract.js";
 import type { WorkerReplyMediaPreparer } from "./worker-reply-media.types.js";
 import { WorkerTurnExecutionError } from "./worker-turn-failure.js";
 import type { prepareWorkerTurnPrompt } from "./worker-turn-prompt.js";
+import type { WorkerTurnPromptCacheContext } from "./worker-turn-prompt.types.js";
 import {
   captureWorkerTurnTranscriptSource,
   resolveWorkerTurnTranscriptTarget,
@@ -384,7 +381,6 @@ export async function finalizeWorkerTurnResult(
     takeFinishingOutcome: () => ReturnType<
       Awaited<ReturnType<typeof prepareWorkerAgentRuntimeIdentity>>["takeFinishingOutcome"]
     >;
-    settleSteering: () => Promise<void>;
     signal: AbortSignal;
     startedAt: number;
     onReply: (result: EmbeddedAgentRunResult) => void;
@@ -485,7 +481,6 @@ export async function finalizeWorkerTurnResult(
       promptError: workerTurnFailed,
       aborted,
       yieldAborted: false,
-      isHeartbeat: isHeartbeatLifecycleRunKind(turn.bootstrapContextRunKind),
       messagesSnapshot: [
         ...promptContext.history,
         ...(userEntry?.type === "message" && userEntry.message.role === "user"
@@ -539,7 +534,6 @@ export async function finalizeWorkerTurnResult(
     });
     throw workerFailure;
   }
-  await params.settleSteering();
   const durationMs = Date.now() - params.startedAt;
   const usageAccumulator = createUsageAccumulator();
   const assistants = workerMessages.filter(

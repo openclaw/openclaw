@@ -26,7 +26,11 @@ vi.mock("node:inspector/promises", () => ({
   Session: class {
     connect() {}
     disconnect() {}
-    async post() {}
+    async post(method: string) {
+      if (method === "HeapProfiler.enable") {
+        throw new Error("Inspector error -32601: HeapProfiler.enable is unavailable");
+      }
+    }
   },
 }));
 vi.mock("node:trace_events", () => ({ getEnabledCategories: () => undefined }));
@@ -160,7 +164,7 @@ describe("diagnostics.heapSnapshot", () => {
     );
   });
 
-  it("returns only file metadata, writes privately, and refuses immediate recapture", async () => {
+  it("writes a native snapshot without enabling heap sampling, privately and with cooldown", async () => {
     const stat = fs.stat.bind(fs);
     // Model queued allocations running after native capture while metadata is awaited.
     vi.spyOn(fs, "stat").mockImplementation(async (...args) => {

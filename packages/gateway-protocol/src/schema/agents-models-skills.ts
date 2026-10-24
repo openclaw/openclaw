@@ -161,6 +161,8 @@ export const AgentsDeleteResultSchema = closedObject({
 /** Reads model-provider credential health for one configured agent. */
 export const ModelsAuthStatusParamsSchema = closedObject({
   refresh: Type.Optional(Type.Boolean()),
+  /** Await cold or stale provider usage using prepared credentials, without refreshing auth. */
+  refreshUsage: Type.Optional(Type.Boolean()),
   agentId: Type.Optional(Type.String()),
 });
 

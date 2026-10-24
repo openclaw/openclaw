@@ -42,7 +42,7 @@ import {
   adoptSuggestedWorkerProfile,
   listSuggestedWorkerProfile,
 } from "./environments.suggested-profile.js";
-import { respondUnavailableOnThrow } from "./response.js";
+import { respondError, respondUnavailableOnThrow } from "./response.js";
 import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
 import type {
   GatewayRequestContext,
@@ -207,15 +207,12 @@ function defineEnvironmentMutation<T extends Record<string, unknown>>(
     const { respond, context } = options;
     const service = context.workerEnvironmentService;
     if (!service) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          method === "destroy"
-            ? "unknown environmentId"
-            : "cloud worker environments are not configured",
-        ),
+      respondError(
+        respond,
+        ErrorCodes.INVALID_REQUEST,
+        method === "destroy"
+          ? "unknown environmentId"
+          : "cloud worker environments are not configured",
       );
       return;
     }
@@ -265,11 +262,7 @@ export const environmentsHandlers: GatewayRequestHandlers = {
     if (params.runtimeId) {
       const access = authorizeOperatorScopesForRequiredScope(WRITE_SCOPE, scopes);
       if (!access.allowed) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.FORBIDDEN, `missing scope: ${access.missingScope}`),
-        );
+        respondError(respond, ErrorCodes.FORBIDDEN, `missing scope: ${access.missingScope}`);
         return;
       }
     }
@@ -352,11 +345,7 @@ export const environmentsHandlers: GatewayRequestHandlers = {
       try {
         worker = context.workerEnvironmentService?.get(params.environmentId);
       } catch {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.UNAVAILABLE, "environment status unavailable"),
-        );
+        respondError(respond, ErrorCodes.UNAVAILABLE, "environment status unavailable");
         return;
       }
       respond(

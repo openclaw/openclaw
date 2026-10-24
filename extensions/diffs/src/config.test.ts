@@ -13,7 +13,6 @@ import {
   getServedLanguagePackViewerAsset,
   LANGUAGE_PACK_VIEWER_ASSET_PREFIX,
 } from "./viewer-assets.js";
-import { parseViewerPayloadJson } from "./viewer-payload.js";
 
 const LANGUAGE_PACK_VIEWER_LOADER_PATH = `${LANGUAGE_PACK_VIEWER_ASSET_PREFIX}viewer.js`;
 
@@ -205,11 +204,5 @@ describe("viewer assets", () => {
     }
     expect(loader.contentType).toBe("text/javascript; charset=utf-8");
     expect(String(loader.body)).toContain(`./viewer-runtime.js?v=`);
-  });
-});
-
-describe("parseViewerPayloadJson", () => {
-  it("rejects invalid JSON", () => {
-    expect(() => parseViewerPayloadJson("{not-json")).toThrow("Diff payload is not valid JSON.");
   });
 });

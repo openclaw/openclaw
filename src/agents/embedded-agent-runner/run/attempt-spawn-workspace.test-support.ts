@@ -99,7 +99,7 @@ type AttemptSpawnWorkspaceHoisted = {
   isWorkspaceBootstrapPendingMock: Mock<(workspaceDir: string) => Promise<boolean>>;
   resolveContextInjectionModeMock: Mock<() => "always" | "continuation-skip">;
   hasCompletedBootstrapTurnMock: Mock<() => Promise<boolean>>;
-  resolveEmbeddedRunSkillEntriesMock: UnknownMock;
+  prepareWorkspaceSkillsMock: Mock<(...args: unknown[]) => Promise<unknown[]>>;
   resolveSkillsPromptForRunMock: UnknownMock;
   supportsModelToolsMock: Mock<(model?: unknown) => boolean>;
   getGlobalHookRunnerMock: Mock<typeof getGlobalHookRunner>;
@@ -486,15 +486,13 @@ vi.mock("../extra-params.js", async () => {
       modelId: string;
       agentId?: string;
       extraParamsOverride?: Record<string, unknown>;
-      resolvedExtraParams?: Record<string, unknown>;
     }) => ({
-      ...(params.resolvedExtraParams ??
-        actual.resolveExtraParams({
-          cfg: params.cfg as Parameters<typeof actual.resolveExtraParams>[0]["cfg"],
-          provider: params.provider,
-          modelId: params.modelId,
-          agentId: params.agentId,
-        })),
+      ...actual.resolveExtraParams({
+        cfg: params.cfg as Parameters<typeof actual.resolveExtraParams>[0]["cfg"],
+        provider: params.provider,
+        modelId: params.modelId,
+        agentId: params.agentId,
+      }),
       ...(params.extraParamsOverride
         ? Object.fromEntries(
             Object.entries(params.extraParamsOverride).filter(([, value]) => value !== undefined),
@@ -895,6 +893,7 @@ export function createDefaultEmbeddedSession(params?: {
       },
     },
     getActiveToolNames: () => [...activeToolNames],
+    getToolDefinition: () => undefined,
     setActiveToolsByName: (toolNames) => {
       activeToolNames = [...toolNames];
     },
@@ -1037,6 +1036,8 @@ export async function createContextEngineAttemptRunner(params: {
     session.setActiveToolsByName(session.agent.state.tools.map((tool) => tool.name));
     // Nested tool observations append through the same manager the runner prepared.
     session.sessionManager = options.sessionManager;
+    const definitions = new Map((options.customTools ?? []).map((tool) => [tool.name, tool]));
+    session.getToolDefinition = (name) => definitions.get(name);
     if (session.agent.streamFn) {
       bindStreamLlmRuntime(session.agent.streamFn, modelRuntime);
     }

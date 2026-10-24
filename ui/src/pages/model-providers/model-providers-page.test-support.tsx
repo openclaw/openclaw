@@ -174,6 +174,26 @@ export function createApiKeyProviderData(): ModelProvidersData {
   };
 }
 
+/** Opens a connected provider row so its accounts, messages and actions render. */
+export async function expandProvider(
+  page: ModelProvidersPageTestElement,
+  providerId: string,
+): Promise<HTMLElement> {
+  const selector = `li.provider-row[data-provider-id="${providerId}"]`;
+  await waitForSolid(() =>
+    expect(page.querySelector(selector), `${providerId} provider row`).not.toBeNull(),
+  );
+  const row = page.querySelector<HTMLElement>(selector);
+  const summary = row!.querySelector<HTMLButtonElement>(":scope > button.provider-row__summary");
+  expect(summary, `${providerId} provider summary`).not.toBeNull();
+  if (summary!.getAttribute("aria-expanded") !== "true") {
+    summary!.click();
+    await page.updateComplete;
+  }
+  expect(summary!.getAttribute("aria-expanded")).toBe("true");
+  return row!;
+}
+
 export async function saveKey(page: ModelProvidersPageTestElement, value: string) {
   publishRouteData(page, createApiKeyProviderData());
   page.view.props.onOpenKeyEditor("openai");
@@ -235,8 +255,6 @@ export function createHarness(initialScopeId: string) {
           throw new Error("usage.status unavailable");
         }
         return usageStatus;
-      case "sessions.usage":
-        return { aggregates: { byProvider: [] } };
       default:
         return {};
     }

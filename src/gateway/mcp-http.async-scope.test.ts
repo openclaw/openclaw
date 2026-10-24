@@ -320,7 +320,7 @@ describe("MCP HTTP keepalive", () => {
     resolveTools.mockImplementation(() => mcp.probeTools("wait_probe", execute));
     // Keep real network I/O and deadlines; only advance the heartbeat intervals.
     vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
-    await ensureMcpLoopbackServer(0);
+    await ensureMcpLoopbackServer();
     const runtime = mcp.runtime();
     send = (method, message) => mcp.request(runtime, message, { method });
   });

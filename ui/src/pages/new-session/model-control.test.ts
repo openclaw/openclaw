@@ -209,7 +209,7 @@ it("drops a stored model and reasoning when manual selection is denied", async (
 });
 
 it("clears xhigh when an interactive model switch targets a profile ending at high", async () => {
-  const { control, context, find, changed } = setup([
+  const { control, context, find, draw, changed } = setup([
     testModel("kimi", "k3", {
       reasoning: true,
       thinkingLevels: levels(["off", "low", "medium", "high", "xhigh"]),
@@ -225,6 +225,10 @@ it("clears xhigh when an interactive model switch targets a profile ending at hi
   await vi.waitFor(() => expect(find("model-option", "demo/limited")).not.toBeNull());
   control.selected = "kimi/k3";
   control.thinkingLevel = "xhigh";
+  const search = draw().querySelector<HTMLInputElement>("[data-chat-model-search]")!;
+  search.value = "demo/limited";
+  search.dispatchEvent(new InputEvent("input", { bubbles: true }));
+  flush();
   find("model-option", "demo/limited")!.click();
   expect(control).toMatchObject({ selected: "demo/limited", thinkingLevel: "" });
   expect(changed).toHaveBeenLastCalledWith({ model: "demo/limited", thinkingLevel: "" });

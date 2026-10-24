@@ -719,10 +719,10 @@ it.each(["cancelled", "retired"])(
     const [codeModeSkill] = resolveCodeModeSkills({
       skillsPrompt: resources!.snapshot.prompt,
       candidates: [selected],
-      reader: async () => {
-        throw new Error("Paired nodes have no Gateway filesystem bridge");
-      },
     });
+    codeModeSkill!.reader = async () => {
+      throw new Error("Paired nodes have no Gateway filesystem bridge");
+    };
     expect(await readCodeModeSkill(codeModeSkill!)).toBe(instructions);
     expect(await fs.readFile(selected.filePath, "utf8")).toBe(instructions);
     if (outcome === "cancelled") {

@@ -343,6 +343,11 @@ without needing the broader `operator.write` scope. If the original grant has
 been revoked, recovery records an interruption and a notice in the session
 instead of repeatedly retrying the same input. Send a new authenticated message
 after access is restored to continue.
+If the recorded source no longer matches the session or interrupted input,
+recovery also retires that stale input with one local interruption notice.
+The incoming message can then continue normally without resetting the session.
+Pending replies, harness completions, and independent runs retain their existing
+recovery protection.
 Older interrupted turns without a recorded authorization source remain restricted;
 send a fresh authenticated message to continue privileged work. Session ownership
 or a saved display name never grants recovery permissions.
@@ -404,6 +409,10 @@ apply to the continuation.
 A session already recovered into a replacement opens that replacement instead;
 resuming both could duplicate the task. If a CLI runtime cannot enforce the
 required restart-safe tools, WebChat offers **Resume in new session** instead.
+For SQLite-backed sessions, this copies the complete transcript, including large
+histories, without loading the entire conversation into memory. The replacement
+and its recovery link are saved together; a failed copy leaves the original
+session available for retry.
 An unresolved final-delivery record must
 settle before an in-place continuation, and missing transcripts require repair.
 In other channels, `/new` or `/reset` still starts a replacement session.
@@ -422,6 +431,9 @@ sessions must be restored before reset.
 Archive discovery uses the selected store, recorded transcript paths, and agent
 directories. The pre-agent `~/.openclaw/sessions/` directory is no longer an
 implicit fallback; explicitly configured paths still work.
+
+State directories reached through symlinks are supported on SQLite and PostgreSQL,
+including session deletion, transcript archiving, and retained cron history reads.
 
 The session rows in the per-agent SQLite database keep separate lifecycle
 timestamps:

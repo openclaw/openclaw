@@ -390,7 +390,11 @@ export function createSqliteSessionActorExecutor(
             } else if (!reply.ok) {
               // Actor mutations require host admission after hydration. A worker
               // lost before that grant cannot have applied this command.
-              result = { kind: "rolled-back", error: errorFacts(reply.error) };
+              // This command did not run, but its carrier can retain an earlier uncertain write.
+              result = {
+                kind: "rolled-back",
+                error: reply.error instanceof Error ? reply.error : errorFacts(reply.error),
+              };
             } else if (reply.value.kind === "rolled-back") {
               result = reply.value;
             } else {

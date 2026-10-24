@@ -2,6 +2,13 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
+import {
+  loadExactSessionEntryReadOnly,
+  loadTranscriptEventsSync,
+  replaceSessionEntry,
+} from "../config/sessions/session-accessor.js";
+import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import * as usageCacheSqlite from "../infra/session-cost-usage-cache.sqlite.js";
 import { USAGE_COST_ROLLUP_SCOPE } from "../infra/session-cost-usage-rollup-codec.js";
 import {
@@ -9,6 +16,8 @@ import {
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { beginDoctorRepair } from "./doctor-maintenance.admission.test-support.js";
 import { maybeRepairLegacyRuntimeFiles } from "./doctor-usage-cost-cache.js";
 
 const note = vi.hoisted(() => vi.fn());
@@ -130,6 +139,67 @@ describe("legacy usage-cost cache cleanup", () => {
     await maybeRepairLegacyRuntimeFiles(true, { OPENCLAW_STATE_DIR: root });
     await missing(uploadRoot);
     await contents(path.join(external, "keep.txt"), "keep");
+  });
+  it("cleans obsolete rows under real Doctor custody without warning on clean stores", async () => {
+    await withOpenClawTestState({ scenario: "external-service" }, async (state) => {
+      setRuntimeConfigSnapshot({});
+      const scopes = ["clean", "stale"].map((agentId) => ({
+        agentId,
+        env: state.env,
+        sessionKey: `agent:${agentId}:history`,
+        sessionId: `${agentId}-history`,
+      }));
+      const events = [{ type: "message", message: { role: "user", content: "Keep history." } }];
+      const current = { value_json: '{"current":true}', blob: Uint8Array.of(1, 17, 255) };
+      for (const scope of scopes) {
+        await replaceSessionEntry(scope, { sessionId: scope.sessionId, updatedAt: 123 });
+        await replaceTranscriptEvents(scope, events);
+        const { db } = openOpenClawAgentDatabase(scope);
+        db.prepare(
+          "INSERT INTO cache_entries (scope, key, value_json, blob, updated_at) VALUES (?, 'current', ?, ?, 1)",
+        ).run(USAGE_COST_ROLLUP_SCOPE, current.value_json, current.blob);
+        const insert = db.prepare(
+          "INSERT INTO cache_entries (scope, key, value_json, updated_at) VALUES (?, ?, '{}', 1)",
+        );
+        insert.run("session-cost-usage", "refresh-lock");
+        if (scope.agentId === "stale") {
+          insert.run("session-cost-usage", "cache");
+          insert.run("session-cost-usage-rollup-v1", "old");
+          insert.run("session-cost-usage-rollup-v2", "old");
+        }
+      }
+      await closeOpenClawAgentDatabasesAsync();
+      const maintenance = await beginDoctorRepair({ env: state.env });
+      expect(maintenance).toBeDefined();
+      try {
+        await maintenance!.run(async () => {
+          await maybeRepairLegacyRuntimeFiles(true, state.env);
+          expect(note).not.toHaveBeenCalledWith(expect.anything(), "Doctor warnings");
+          for (const scope of scopes) {
+            const { db } = openOpenClawAgentDatabase(scope);
+            expect(
+              db
+                .prepare(
+                  "SELECT scope, key, value_json, blob FROM cache_entries ORDER BY scope, key",
+                )
+                .all(),
+            ).toEqual([
+              { scope: "session-cost-usage", key: "refresh-lock", value_json: "{}", blob: null },
+              { scope: USAGE_COST_ROLLUP_SCOPE, key: "current", ...current },
+            ]);
+            expect(loadExactSessionEntryReadOnly(scope)?.entry).toMatchObject({
+              sessionId: scope.sessionId,
+              updatedAt: 123,
+            });
+            expect(loadTranscriptEventsSync(scope)).toEqual(events);
+          }
+          await maybeRepairLegacyRuntimeFiles(true, state.env);
+          expect(note).not.toHaveBeenCalledWith(expect.anything(), "Doctor warnings");
+        });
+      } finally {
+        await maintenance?.release();
+      }
+    });
   });
   it.each(["none", "write", "inspection"] as const)(
     "continues retired-row cleanup after an agent failure (failure=%s)",

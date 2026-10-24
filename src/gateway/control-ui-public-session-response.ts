@@ -60,7 +60,7 @@ export async function servePublicSessionRepresentation(params: {
         if (item.kind !== "message") {
           continue;
         }
-        for (const { docId } of item.widgets) {
+        for (const { docId } of item.embeds.filter((embed) => embed.kind === "widget")) {
           const token = await mintPublicSessionWidgetToken(locator, docId);
           if (token) {
             widgetUrls.set(
@@ -80,6 +80,34 @@ export async function servePublicSessionRepresentation(params: {
           : {}),
       });
     },
+    consume: (representation) =>
+      withReadySessionRows(
+        projection,
+        () => [{ key: locator.sessionKey, agentId: locator.agentId }],
+        () => {
+          if (!representation || !isPublicSessionShareActive(config, locator, projection)) {
+            return 404 as const;
+          }
+          if (!representation.isCurrent()) {
+            return false as const;
+          }
+          const { body, etag } = representation;
+          if (typeof body !== "string") {
+            return 503 as const;
+          }
+          res.setHeader("ETag", etag);
+          if (req.headers["if-none-match"] === etag) {
+            res.statusCode = 304;
+            res.end();
+          } else {
+            res.statusCode = 200;
+            res.setHeader("Content-Type", "text/html; charset=utf-8");
+            res.setHeader("Content-Length", Buffer.byteLength(body));
+            res.end(body);
+          }
+          return undefined;
+        },
+      ),
   });
   if (result.kind !== "ok") {
     await unavailable(
@@ -88,36 +116,8 @@ export async function servePublicSessionRepresentation(params: {
     );
     return true;
   }
-  const unavailableStatus = await withReadySessionRows(
-    projection,
-    () => [{ key: locator.sessionKey, agentId: locator.agentId }],
-    () => {
-      const representation = result.value;
-      if (!representation || !isPublicSessionShareActive(config, locator, projection)) {
-        return 404 as const;
-      }
-      if (!representation.isCurrent()) {
-        return 503 as const;
-      }
-      const { body, etag } = representation;
-      if (typeof body !== "string") {
-        return 503 as const;
-      }
-      res.setHeader("ETag", etag);
-      if (req.headers["if-none-match"] === etag) {
-        res.statusCode = 304;
-        res.end();
-      } else {
-        res.statusCode = 200;
-        res.setHeader("Content-Type", "text/html; charset=utf-8");
-        res.setHeader("Content-Length", Buffer.byteLength(body));
-        res.end(body);
-      }
-      return undefined;
-    },
-  );
-  if (unavailableStatus !== undefined) {
-    await unavailable(unavailableStatus);
+  if (result.value !== undefined) {
+    await unavailable(result.value);
   }
   return true;
 }

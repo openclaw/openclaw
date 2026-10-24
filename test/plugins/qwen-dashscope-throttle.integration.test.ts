@@ -11,15 +11,14 @@ import { loadAuthProfileStoreWithoutExternalProfiles } from "../../src/agents/au
 import type { AuthProfileState } from "../../src/agents/auth-profiles/types.js";
 import { isProfileInCooldown } from "../../src/agents/auth-profiles/usage-state.js";
 import { handleEmbeddedAssistantFailure } from "../../src/agents/embedded-agent-runner/run/assistant-failure.js";
+import { makeAssistantFailureInput } from "../../src/agents/embedded-agent-runner/run/assistant-failure.test-support.js";
 import { createEmbeddedRunFailoverRetryController } from "../../src/agents/embedded-agent-runner/run/failover-retry-controller.js";
 import { resolveEmbeddedRunAttemptTerminalState } from "../../src/agents/embedded-agent-runner/run/terminal-outcome.js";
-import { makeEmbeddedRunnerAttempt } from "../../src/agents/test-helpers/embedded-agent-runner-e2e-fixtures.js";
 import { makeProviderModelFixture } from "../../src/agents/test-helpers/provider-model-fixture.js";
 import { withPluginMetadataSnapshotScope } from "../../src/plugins/current-plugin-metadata-snapshot.js";
 import { loadPluginManifestRegistryCore } from "../../src/plugins/manifest-registry.js";
 import { createPluginMetadataSnapshotFixture } from "../../src/plugins/plugin-metadata.test-support.js";
 import type { ProviderPlugin } from "../../src/plugins/types.js";
-import { loadBundledPluginFacade } from "../../src/test-utils/bundled-plugin-public-surface.js";
 import { withOpenClawTestState } from "../../src/test-utils/openclaw-test-state.js";
 import {
   registerProviderPlugin,
@@ -30,6 +29,7 @@ import {
   listenLoopback,
   respondJson,
 } from "../helpers/gateway-integration-fixtures.js";
+import { loadBundledProviderPlugin } from "../helpers/media-generation/bundled-provider-builders.js";
 
 const MODEL_ID = "qwen3.8-max";
 const QWEN_TOKEN_PLAN_PROVIDER_ID = "qwen-token-plan";
@@ -56,9 +56,7 @@ beforeAll(async () => {
   });
   availabilitySnapshot = createPluginMetadataSnapshotFixture(registry);
   for (const pluginId of ["qwen", "openrouter"]) {
-    const { default: plugin } = await loadBundledPluginFacade<{
-      default: Parameters<typeof registerProviderPlugin>[0]["plugin"];
-    }>({ pluginId, artifactBasename: "index.js" });
+    const plugin = await loadBundledProviderPlugin(pluginId);
     const { providers } = await registerProviderPlugin({ plugin, id: pluginId, name: pluginId });
     registeredProviders.set(pluginId, providers);
   }
@@ -132,79 +130,53 @@ async function runThroughFailureRecovery(
           });
           await state.writeAuthProfiles(profileStore);
           const sessionId = `session:${provider}:${fixture.code}`;
-          const runParams = {
+          const input = makeAssistantFailureInput(assistant, {
+            profileId,
+            fallbackConfigured: false,
+          });
+          const { runInput, preparedRuntime, runtime, normalizedAttempt } = input;
+          Object.assign(runInput.runParams, {
             runId: `run:${provider}:${fixture.code}`,
             sessionId,
             sessionKey: `agent:main:${provider}:${fixture.code}`,
             sessionFile: `${agentDir}/session.jsonl`,
             workspaceDir: agentDir,
             prompt: "hello",
-            timeoutMs: 60_000,
             config: {},
-          } satisfies Parameters<typeof handleEmbeddedAssistantFailure>[0]["runInput"]["runParams"];
+          });
           const suspensionReasons: string[] = [];
-          const runInput = {
-            runParams,
+          const controllerRunInput = Object.assign(runInput, {
             agentDir,
-            fallbackConfigured: false,
-            isProbeSession: false,
             globalLane: "qwen-dashscope-throttle-test",
             suspendForFailure: ({ reason }: { reason: string }) => {
               suspensionReasons.push(reason);
             },
-          };
-          const runtime = {
-            pluginHarnessOwnsTransport: false,
-            lastProfileId: profileId,
-            thinkLevel: "off" as const,
-          };
-          const preparedRuntime = {
-            provider,
-            modelId: MODEL_ID,
-            model: { id: MODEL_ID },
+          });
+          runtime.thinkLevel = "off";
+          const controllerRuntime = Object.assign(preparedRuntime, {
             attemptedThinking: new Set([runtime.thinkLevel]),
             attemptAuthProfileStore: profileStore,
-            maybeRefreshRuntimeAuthForAuthError: async () => false,
             profileFailureStore: profileStore,
-            snapshot: () => ({
-              ...runtime,
-              agentHarness: { id: "embedded" },
-            }),
+            snapshot: () => ({ ...runtime, agentHarness: { id: "embedded" } }),
             getApiKeyInfo: () => null,
             advanceAttemptAuthProfile: async () => false,
-          };
-          const failover = createEmbeddedRunFailoverRetryController({
-            runInput,
-            preparedRuntime,
-            getSessionId: () => sessionId,
           });
-          const attempt = makeEmbeddedRunnerAttempt({
-            lastAssistant: assistant,
-            messagesSnapshot: [assistant],
+          normalizedAttempt.attempt.messagesSnapshot = [assistant];
+          normalizedAttempt.terminalState = resolveEmbeddedRunAttemptTerminalState({
+            attempt: normalizedAttempt.attempt,
+            assistant,
+          });
+          input.providerOwner = providerOwner;
+          input.getThinkLevel = () => "off";
+          input.suspensionSessionId = sessionId;
+          input.failover = createEmbeddedRunFailoverRetryController({
+            runInput: controllerRunInput,
+            preparedRuntime: controllerRuntime,
+            getSessionId: () => sessionId,
           });
           let failureReason: unknown;
           try {
-            await handleEmbeddedAssistantFailure({
-              runInput,
-              normalizedAttempt: {
-                attempt,
-                attemptAssistant: assistant,
-                currentAttemptAssistant: assistant,
-                terminalState: resolveEmbeddedRunAttemptTerminalState({ attempt, assistant }),
-                activeErrorContext: { provider, model: MODEL_ID },
-              },
-              preparedRuntime,
-              runtime,
-              providerOwner,
-              getThinkLevel: () => "off",
-              runtimeAuthRetry: false,
-              failover,
-              emptyErrorRetries: 0,
-              overloadProfileRotations: 0,
-              previousRetryFailoverReason: null,
-              traceAttempts: [],
-              suspensionSessionId: sessionId,
-            });
+            await handleEmbeddedAssistantFailure(input);
           } catch (error) {
             failureReason =
               typeof error === "object" && error !== null && "reason" in error

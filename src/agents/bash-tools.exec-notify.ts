@@ -23,6 +23,7 @@ import { enqueueSystemEventWithReceipt } from "../infra/system-events.js";
 import { logWarn } from "../logger.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { isCronRunSessionKey, isSubagentSessionKey } from "../sessions/session-key-utils.js";
+import { recoverAfterAgentDatabasePreparation } from "../state/agent-database-preparation-recovery.js";
 import { resolveAgentConfig } from "./agent-scope-config.js";
 import {
   processSessionInstanceId,
@@ -132,10 +133,8 @@ function installExecNotificationPersistence(session: ProcessSession) {
 }
 
 /** Replay only the notification obligation, through the ordinary exit owner. */
-export async function recoverExecExitNotifications(cfg: OpenClawConfig, signal: AbortSignal) {
-  const { recoverAfterAgentDatabasePreparation } =
-    await import("../state/agent-database-preparation-recovery.js");
-  await recoverAfterAgentDatabasePreparation(signal, (agentIds) =>
+export function recoverExecExitNotifications(cfg: OpenClawConfig, signal: AbortSignal) {
+  return recoverAfterAgentDatabasePreparation(signal, (agentIds) =>
     recoverExecExitNotificationsForAgents(cfg, signal, agentIds),
   );
 }
@@ -388,7 +387,6 @@ export async function maybeNotifyOnExit(
       sessionKey: eventSessionKey,
       contextKey: `exec:${session.id}`,
       deliveryContext: session.notifyDeliveryContext,
-      fromConversationTurn: session.notifyFromConversationTurn,
     },
     readExecRequestOwners(session),
   );

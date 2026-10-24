@@ -556,10 +556,14 @@ describe("session menu", () => {
     expect(onAction).toHaveBeenCalledWith({ kind: "new-group" });
   });
 
-  it.each([false, true])("edits appearance (compact=%s)", async (compact) => {
+  it.each([
+    { compact: false, icon: "🦞" },
+    { compact: true, icon: "🦞" },
+    { compact: false, icon: null },
+  ])("edits appearance (compact=$compact, icon=$icon)", async ({ compact, icon }) => {
     const { menu, onAction, onClose } = await actionMenu({
       compact,
-      session: { icon: "🦞", color: "blue" },
+      session: { icon, color: "blue" },
     });
     await openAppearance(menu, compact);
     if (compact) {
@@ -570,14 +574,29 @@ describe("session menu", () => {
     expect(blue?.getAttribute("aria-pressed")).toBe("true");
     expect(menu.querySelectorAll('.session-menu__colors [aria-pressed="true"]')).toHaveLength(1);
     const choices = iconChoices(menu);
-    expect(choices[0]?.getAttribute("role")).toBeNull();
-    expect(choices[0]?.getAttribute("aria-pressed")).toBe("true");
-    expect(choices.filter((choice) => choice.tabIndex === 0)).toEqual([choices[0]]);
+    // Emoji and icon grids both lead with the clear choice.
+    const noIcon = () => [
+      ...menu.querySelectorAll<HTMLElement>(
+        '.session-menu__icon-grid > [aria-label="No icon"]:first-child',
+      ),
+    ];
+    expect(noIcon()).toHaveLength(2);
+    if (icon === null) {
+      expect(
+        noIcon().map((choice) => [choice.getAttribute("aria-pressed"), choice.tabIndex]),
+      ).toEqual([
+        ["true", 0],
+        ["true", -1],
+      ]);
+    }
+    expect(choices[1]?.getAttribute("role")).toBeNull();
+    expect(choices[1]?.getAttribute("aria-pressed")).toBe(icon === null ? "false" : "true");
+    expect(choices.filter((choice) => choice.tabIndex === 0)).toEqual([
+      choices[icon === null ? 0 : 1],
+    ]);
     queryButton(menu, '.session-menu__color-choice[aria-label="Purple"]')?.click();
-    iconChoices(menu)[1]?.click();
-    const noIcon = queryButton(menu, '[aria-label="No icon"]');
-    expect(noIcon).not.toBeNull();
-    noIcon?.click();
+    iconChoices(menu)[2]?.click();
+    noIcon().forEach((choice) => choice.click());
     queryButton(menu, '.session-menu__color-choice[aria-label="No color"]')?.click();
     const reset = queryButton(menu, ".session-menu__icon-remove");
     expect(reset?.previousElementSibling?.getAttribute("role")).toBe("separator");
@@ -586,6 +605,7 @@ describe("session menu", () => {
     expect(onAction.mock.calls).toEqual([
       [{ kind: "set-color", color: "purple" }],
       [{ kind: "set-icon", icon: "🚀" }],
+      [{ kind: "set-icon", icon: null }],
       [{ kind: "set-icon", icon: null }],
       [{ kind: "set-color", color: null }],
       [{ kind: "reset-appearance" }],
@@ -674,6 +694,13 @@ describe("session menu", () => {
 
     expect(calls).toEqual([`set-icon:${icon}`]);
     expect(document.activeElement).toBe(input);
+    queryButton(submenu, ".session-menu__icon-back")!.click();
+    await settleSessionMenu(menu);
+    const custom = queryButton(submenu, '[aria-label="Custom icon…"]')!;
+    expect(document.activeElement).toBe(custom);
+    expect(iconChoices(submenu).filter((choice) => choice.tabIndex === 0)).toEqual([custom]);
+    expect(input.value).toBe("");
+    expect(calls).toEqual([`set-icon:${icon}`]);
   });
 
   it("returns from custom entry on Escape without closing the menu", async () => {
@@ -727,8 +754,15 @@ describe("session menu", () => {
     }
     choices[1]?.focus();
 
+    press(choices[1]!, "ArrowLeft");
+    expect(document.activeElement).toBe(choices[0]);
+    expect(choices[0]!.getAttribute("aria-label")).toBe("No icon");
+    press(choices[0]!, "ArrowRight");
+    expect(document.activeElement).toBe(choices[1]);
     press(choices[1]!, "ArrowRight");
     expect(document.activeElement).toBe(choices[2]);
+    expect(choices[1]!.tabIndex).toBe(-1);
+    expect(choices[2]!.tabIndex).toBe(0);
     press(choices[2]!, "ArrowDown");
     expect(document.activeElement).toBe(choices[2 + columns]);
     expect(choices.filter((choice) => choice.tabIndex === 0)).toEqual([choices[2 + columns]]);

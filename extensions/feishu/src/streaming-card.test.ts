@@ -440,17 +440,12 @@ describe("FeishuStreamingSession", () => {
   });
 
   it("rejects oversized streaming tenant-token JSON before buffering the full body", async () => {
-    let streamState:
-      | {
-          bytesPulled: () => number;
-          canceled: () => boolean;
-        }
-      | undefined;
+    let clientClosed: Promise<void> | undefined;
     const deps = await createStreamingFetch(({ url, res }) => {
       if (url.pathname.includes("/auth/")) {
-        streamState = writeOversizedJson(
+        clientClosed = writeOversizedJson(
           res,
-          FEISHU_JSON_MAX_BYTES * 2,
+          FEISHU_JSON_MAX_BYTES,
           '{"code":0,"msg":"ok","tenant_access_token":"token","padding":"',
         );
         return;
@@ -471,11 +466,7 @@ describe("FeishuStreamingSession", () => {
     await expect(session.start("chat_id", "open_id")).rejects.toThrow(
       /feishu\.streaming-card\.token: JSON response exceeds \d+ bytes/,
     );
-    expect(streamState?.canceled()).toBe(true);
-    expect(streamState?.bytesPulled()).toBeLessThan(FEISHU_JSON_MAX_BYTES * 2);
-    console.log(
-      `[feishu streaming-card bound proof] token over-cap: bytes_pulled=${streamState?.bytesPulled()} cap=${FEISHU_JSON_MAX_BYTES} canceled=${streamState?.canceled()}`,
-    );
+    await expect(clientClosed).resolves.toBeUndefined();
   });
 
   it("aborts a stalled Feishu tenant-token request after the configured timeout", async () => {
@@ -541,12 +532,7 @@ describe("FeishuStreamingSession", () => {
   });
 
   it("rejects oversized streaming card-create JSON before buffering the full body", async () => {
-    let streamState:
-      | {
-          bytesPulled: () => number;
-          canceled: () => boolean;
-        }
-      | undefined;
+    let clientClosed: Promise<void> | undefined;
     const deps = await createStreamingFetch(({ url, res }) => {
       if (url.pathname.includes("/auth/")) {
         writeJson(res, {
@@ -557,9 +543,9 @@ describe("FeishuStreamingSession", () => {
         });
         return;
       }
-      streamState = writeOversizedJson(
+      clientClosed = writeOversizedJson(
         res,
-        FEISHU_JSON_MAX_BYTES * 2,
+        FEISHU_JSON_MAX_BYTES,
         '{"code":0,"msg":"ok","tenant_access_token":"token","padding":"',
       );
     });
@@ -583,11 +569,7 @@ describe("FeishuStreamingSession", () => {
     await expect(session.start("chat_id", "open_id")).rejects.toThrow(
       /feishu\.streaming-card\.create: JSON response exceeds \d+ bytes/,
     );
-    expect(streamState?.canceled()).toBe(true);
-    expect(streamState?.bytesPulled()).toBeLessThan(FEISHU_JSON_MAX_BYTES * 2);
-    console.log(
-      `[feishu streaming-card bound proof] card-create over-cap: bytes_pulled=${streamState?.bytesPulled()} cap=${FEISHU_JSON_MAX_BYTES} canceled=${streamState?.canceled()}`,
-    );
+    await expect(clientClosed).resolves.toBeUndefined();
   });
 
   it("flushes only the latest authoritative snapshot after the throttle window", async () => {

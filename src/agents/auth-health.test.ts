@@ -5,6 +5,11 @@
  */
 import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  createApiKeyCredential,
+  createAuthProfileStoreFixture,
+  createOAuthRefreshCredential,
+} from "./auth-profiles/credential-fixtures.test-support.js";
 import { parseLegacyCredentialEntry } from "./auth-profiles/legacy-flat-credential.js";
 import type { OAuthCredential } from "./auth-profiles/types.js";
 import type { ProviderAuthAliasLookupParams } from "./provider-auth-aliases.js";
@@ -56,16 +61,9 @@ describe("buildAuthHealthSummary", () => {
     expires: number;
     accountId?: string;
   }) {
-    return {
-      version: 1,
-      profiles: {
-        "openai:default": {
-          type: "oauth" as const,
-          provider: "openai",
-          ...params,
-        },
-      },
-    };
+    return createAuthProfileStoreFixture({
+      "openai:default": createOAuthRefreshCredential(params),
+    });
   }
 
   afterEach(() => {
@@ -75,11 +73,7 @@ describe("buildAuthHealthSummary", () => {
   beforeEach(() => {
     vi.spyOn(Date, "now").mockReturnValue(now);
     readCodexCliCredentialsCachedMock.mockReset();
-    readCodexCliCredentialsCachedMock.mockReturnValue(null);
     resolveProviderIdForAuthMock.mockReset();
-    resolveProviderIdForAuthMock.mockImplementation((provider: string) =>
-      provider === "codex-cli" ? "openai" : provider,
-    );
   });
 
   it.each([
@@ -90,51 +84,44 @@ describe("buildAuthHealthSummary", () => {
       shortLivedStatus: "expiring",
     },
   ])("classifies OAuth and API key profiles with $name", ({ warnAfterMs, shortLivedStatus }) => {
-    const store = {
-      version: 1,
-      profiles: {
-        "anthropic:ok": {
-          type: "oauth" as const,
-          provider: "anthropic",
-          access: "access",
-          refresh: "refresh",
-          expires: now + DEFAULT_OAUTH_WARN_MS + 60_000,
-        },
-        "anthropic:expiring": {
-          type: "oauth" as const,
-          provider: "anthropic",
-          access: "access",
-          refresh: "refresh",
-          expires: now + 10_000,
-        },
-        "anthropic:short-lived": {
-          type: "oauth" as const,
-          provider: "anthropic",
-          access: "access",
-          refresh: "refresh",
-          expires: now + 60 * 60_000,
-        },
-        "anthropic:manual-renewal": parseLegacyCredentialEntry({
-          type: "oauth",
-          provider: "anthropic",
-          access: "access",
-          refresh: "",
-          expires: now + 60 * 60_000,
-        })!,
-        "anthropic:expired": {
-          type: "oauth" as const,
-          provider: "anthropic",
-          access: "access",
-          refresh: "refresh",
-          expires: now - 10_000,
-        },
-        "anthropic:api": {
-          type: "api_key" as const,
-          provider: "anthropic",
-          key: "sk-ant-api",
-        },
+    const store = createAuthProfileStoreFixture({
+      "anthropic:ok": {
+        type: "oauth" as const,
+        provider: "anthropic",
+        access: "access",
+        refresh: "refresh",
+        expires: now + DEFAULT_OAUTH_WARN_MS + 60_000,
       },
-    };
+      "anthropic:expiring": {
+        type: "oauth" as const,
+        provider: "anthropic",
+        access: "access",
+        refresh: "refresh",
+        expires: now + 10_000,
+      },
+      "anthropic:short-lived": {
+        type: "oauth" as const,
+        provider: "anthropic",
+        access: "access",
+        refresh: "refresh",
+        expires: now + 60 * 60_000,
+      },
+      "anthropic:manual-renewal": parseLegacyCredentialEntry({
+        type: "oauth",
+        provider: "anthropic",
+        access: "access",
+        refresh: "",
+        expires: now + 60 * 60_000,
+      })!,
+      "anthropic:expired": {
+        type: "oauth" as const,
+        provider: "anthropic",
+        access: "access",
+        refresh: "refresh",
+        expires: now - 10_000,
+      },
+      "anthropic:api": createApiKeyCredential("anthropic", "sk-ant-api"),
+    });
 
     const summary = buildAuthHealthSummary({
       store,
@@ -159,21 +146,18 @@ describe("buildAuthHealthSummary", () => {
 
   it("reports unresolved legacy Codex OAuth sidecars as missing auth", () => {
     mockFreshCodexCliCredentials();
-    const store = {
-      version: 1,
-      profiles: {
-        "openai-codex:default": {
-          type: "oauth" as const,
-          provider: "openai-codex",
-          expires: now + DEFAULT_OAUTH_WARN_MS + 60_000,
-          oauthRef: {
-            source: "openclaw-credentials" as const,
-            provider: "openai-codex" as const,
-            id: "0123456789abcdef0123456789abcdef",
-          },
-        } as unknown as OAuthCredential,
-      },
-    };
+    const store = createAuthProfileStoreFixture({
+      "openai-codex:default": {
+        type: "oauth" as const,
+        provider: "openai-codex",
+        expires: now + DEFAULT_OAUTH_WARN_MS + 60_000,
+        oauthRef: {
+          source: "openclaw-credentials" as const,
+          provider: "openai-codex" as const,
+          id: "0123456789abcdef0123456789abcdef",
+        },
+      } as unknown as OAuthCredential,
+    });
 
     const summary = buildAuthHealthSummary({ store });
 
@@ -186,15 +170,12 @@ describe("buildAuthHealthSummary", () => {
 
   it("does not replace missing OpenClaw auth with a native Codex login", () => {
     mockFreshCodexCliCredentials();
-    const store = {
-      version: 1,
-      profiles: {
-        "openai:default": {
-          type: "oauth" as const,
-          provider: "openai",
-        } as unknown as OAuthCredential,
-      },
-    };
+    const store = createAuthProfileStoreFixture({
+      "openai:default": {
+        type: "oauth" as const,
+        provider: "openai",
+      } as unknown as OAuthCredential,
+    });
 
     const summary = buildAuthHealthSummary({ store });
 
@@ -208,15 +189,12 @@ describe("buildAuthHealthSummary", () => {
 
   it("does not open Codex credentials during prompt-free health checks", () => {
     mockFreshCodexCliCredentials();
-    const store = {
-      version: 1,
-      profiles: {
-        "openai:default": {
-          type: "oauth" as const,
-          provider: "openai",
-        } as unknown as OAuthCredential,
-      },
-    };
+    const store = createAuthProfileStoreFixture({
+      "openai:default": {
+        type: "oauth" as const,
+        provider: "openai",
+      } as unknown as OAuthCredential,
+    });
 
     const summary = buildAuthHealthSummary({
       store,
@@ -295,18 +273,15 @@ describe("buildAuthHealthSummary", () => {
   });
 
   it("reports expired for OAuth without a refresh token", () => {
-    const store = {
-      version: 1,
-      profiles: {
-        "google:no-refresh": {
-          type: "oauth" as const,
-          provider: "google-antigravity",
-          access: "access",
-          refresh: "",
-          expires: now - 10_000,
-        },
+    const store = createAuthProfileStoreFixture({
+      "google:no-refresh": {
+        type: "oauth" as const,
+        provider: "google-antigravity",
+        access: "access",
+        refresh: "",
+        expires: now - 10_000,
       },
-    };
+    });
 
     const summary = buildAuthHealthSummary({ store });
 
@@ -316,16 +291,12 @@ describe("buildAuthHealthSummary", () => {
   });
 
   it("reports command-shaped API-key profiles as missing malformed auth", () => {
-    const store = {
-      version: 1,
-      profiles: {
-        "zai:default": {
-          type: "api_key" as const,
-          provider: "zai",
-          key: "openclaw onboard --auth-choice zai-coding-global",
-        },
-      },
-    };
+    const store = createAuthProfileStoreFixture({
+      "zai:default": createApiKeyCredential(
+        "zai",
+        "openclaw onboard --auth-choice zai-coding-global",
+      ),
+    });
 
     const summary = buildAuthHealthSummary({ store });
 
@@ -335,18 +306,15 @@ describe("buildAuthHealthSummary", () => {
   });
 
   it("uses runtime provider credentials for profile health", () => {
-    const store = {
-      version: 1,
-      profiles: {
-        "anthropic:claude-cli": {
-          type: "oauth" as const,
-          provider: "claude-cli",
-          access: "stale-access",
-          refresh: "stale-refresh",
-          expires: now - 10_000,
-        },
+    const store = createAuthProfileStoreFixture({
+      "anthropic:claude-cli": {
+        type: "oauth" as const,
+        provider: "claude-cli",
+        access: "stale-access",
+        refresh: "stale-refresh",
+        expires: now - 10_000,
       },
-    };
+    });
 
     const summary = buildAuthHealthSummary({
       store,
@@ -393,18 +361,13 @@ describe("buildAuthHealthSummary", () => {
       expires: now + 7 * DEFAULT_OAUTH_WARN_MS,
       accountId: "acct-cli",
     });
-    const store = {
-      version: 1,
-      profiles: {
-        "openai:default": {
-          type: "oauth" as const,
-          provider: "openai",
-          access: "healthy-local-access",
-          refresh: "healthy-local-refresh",
-          expires: now + DEFAULT_OAUTH_WARN_MS + 10_000,
-        },
-      },
-    };
+    const store = createAuthProfileStoreFixture({
+      "openai:default": createOAuthRefreshCredential({
+        access: "healthy-local-access",
+        refresh: "healthy-local-refresh",
+        expires: now + DEFAULT_OAUTH_WARN_MS + 10_000,
+      }),
+    });
 
     const summary = buildAuthHealthSummary({ store });
 
@@ -432,17 +395,14 @@ describe("buildAuthHealthSummary", () => {
   });
 
   it("marks token profiles with invalid expires as missing with reason code", () => {
-    const store = {
-      version: 1,
-      profiles: {
-        "github-copilot:invalid-expires": {
-          type: "token" as const,
-          provider: "github-copilot",
-          token: "gh-token",
-          expires: 0,
-        },
+    const store = createAuthProfileStoreFixture({
+      "github-copilot:invalid-expires": {
+        type: "token" as const,
+        provider: "github-copilot",
+        token: "gh-token",
+        expires: 0,
       },
-    };
+    });
 
     const summary = buildAuthHealthSummary({ store });
     const statuses = profileStatuses(summary);
@@ -453,18 +413,13 @@ describe("buildAuthHealthSummary", () => {
   });
 
   it("does not expose out-of-range oauth expiry values in health rollups", () => {
-    const store = {
-      version: 1,
-      profiles: {
-        "openai:bad-expiry": {
-          type: "oauth" as const,
-          provider: "openai",
-          access: "oauth-access",
-          refresh: "oauth-refresh",
-          expires: MAX_DATE_TIMESTAMP_MS + 1,
-        },
-      },
-    };
+    const store = createAuthProfileStoreFixture({
+      "openai:bad-expiry": createOAuthRefreshCredential({
+        access: "oauth-access",
+        refresh: "oauth-refresh",
+        expires: MAX_DATE_TIMESTAMP_MS + 1,
+      }),
+    });
 
     const summary = buildAuthHealthSummary({ store });
 
@@ -478,16 +433,13 @@ describe("buildAuthHealthSummary", () => {
   });
 
   it("keeps unavailable profiles in explicit auth order authoritative", () => {
-    const store = {
-      version: 1,
-      profiles: {
-        "claude-cli:token": {
-          type: "token" as const,
-          provider: "claude-cli",
-          token: "fake-token",
-        },
+    const store = createAuthProfileStoreFixture({
+      "claude-cli:token": {
+        type: "token" as const,
+        provider: "claude-cli",
+        token: "fake-token",
       },
-    };
+    });
     const cfg = {
       auth: {
         order: {
@@ -505,21 +457,10 @@ describe("buildAuthHealthSummary", () => {
   });
 
   it("does not normalize provider aliases when filtering and grouping profile health", () => {
-    const store = {
-      version: 1,
-      profiles: {
-        "zai:dot": {
-          type: "api_key" as const,
-          provider: "z.ai",
-          key: "sk-dot",
-        },
-        "zai:dash": {
-          type: "api_key" as const,
-          provider: "z-ai",
-          key: "sk-dash",
-        },
-      },
-    };
+    const store = createAuthProfileStoreFixture({
+      "zai:dot": createApiKeyCredential("z.ai", "sk-dot"),
+      "zai:dash": createApiKeyCredential("z-ai", "sk-dash"),
+    });
 
     const summary = buildAuthHealthSummary({
       store,
@@ -556,16 +497,13 @@ describe("buildAuthHealthSummary", () => {
     } as unknown as NonNullable<ProviderAuthAliasLookupParams["metadataSnapshot"]>;
     const summary = buildAuthHealthSummary({
       cfg: { auth: { order: { "fixture-provider": [] } } },
-      store: {
-        version: 1,
-        profiles: {
-          "fixture-alias:token": {
-            type: "token",
-            provider: "fixture-alias",
-            token: "fake-token",
-          },
+      store: createAuthProfileStoreFixture({
+        "fixture-alias:token": {
+          type: "token" as const,
+          provider: "fixture-alias",
+          token: "fake-token",
         },
-      },
+      }),
       authAliasLookupParams: {
         metadataSnapshot,
       },

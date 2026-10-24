@@ -64,6 +64,7 @@ import { startOrResumeThread as startOrResumeThreadImpl } from "./thread-lifecyc
 import { registerThreadWebSearchBindingTests } from "./thread-lifecycle-web-search.test-support.js";
 import {
   createLeasedCodexLifecycleHarness,
+  DEFAULT_CODEX_RUNTIME_THREAD_CONFIG,
   createLifecycleRequest,
   startOrResumeAttemptThreadWithoutSkills as startOrResumeAttemptThread,
   twoStartsThenResumeMethods,
@@ -223,19 +224,6 @@ function createParams(sessionFile: string, workspaceDir: string) {
   params.config = undefined;
   return params;
 }
-
-const DEFAULT_CODEX_RUNTIME_THREAD_CONFIG = {
-  project_doc_max_bytes: 131_072,
-  "features.goals": false,
-  "tools.update_plan.enabled": false,
-  "features.code_mode": true,
-  "features.code_mode_only": false,
-  "features.shell_tool": true,
-  "features.apply_patch_streaming_events": true,
-  suppress_unstable_features_warning: true,
-  "features.standalone_web_search": false,
-  web_search: "cached",
-} as const;
 
 const DEFAULT_CODEX_WEB_SEARCH_THREAD_CONFIG_FINGERPRINT = JSON.stringify({
   "features.standalone_web_search": false,
@@ -1152,7 +1140,7 @@ describe("Codex app-server thread lifecycle bindings", () => {
         }
         const before = await readCodexAppServerBinding(fixture.sessionFile);
         await expect(fixture.start()).rejects.toThrow(
-          owner === "claimed" ? "claimed by active work" : "owned by another",
+          owner === "claimed" ? AgentHarnessPreflightError : /owned by another/,
         );
         expect(await readCodexAppServerBinding(fixture.sessionFile)).toEqual(before);
         expect(

@@ -14,7 +14,7 @@ suite.define(() => {
         const requested: string[] = [];
         page.on("request", (request) => requested.push(new URL(request.url()).pathname));
         const loginModuleRequest = controlUiE2eBuiltModuleRequest(
-          "ui/src/components/login-gate.ts",
+          "ui/src/components/login-gate-solid.tsx",
         );
         const loginRequests = () => requested.filter((path) => loginModuleRequest.test(path));
         const mediaModules = [
@@ -25,7 +25,7 @@ suite.define(() => {
         const mediaRequests = () =>
           requested.filter((path) => mediaModules.some((module) => module.test(path)));
         const swarmModule = controlUiE2eBuiltModuleRequest(
-          "ui/src/pages/chat/components/chat-swarm-progress.solid.tsx",
+          "ui/src/pages/chat/components/chat-delegation.tsx",
         );
         const activityPillsModule = controlUiE2eBuiltModuleRequest(
           "ui/src/pages/chat/components/chat-activity-pills.tsx",

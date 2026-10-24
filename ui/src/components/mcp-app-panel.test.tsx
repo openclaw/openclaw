@@ -20,7 +20,7 @@ const viewLoad = vi.hoisted(() => ({
 }));
 
 // mock-isolation: Exercise panel retirement without registering the real iframe protocol view.
-vi.mock("./mcp-app-view-registration.ts", async () => {
+vi.mock("./mcp-app-view.tsx", async () => {
   viewLoad.started();
   await viewLoad.promise;
   const fields = ["sessionKey", "agentId", "viewId", "title", "deepLink"] as const;

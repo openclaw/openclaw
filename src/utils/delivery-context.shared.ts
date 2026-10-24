@@ -90,7 +90,7 @@ export function deliveryContextFromChannelRoute(
   });
 }
 
-function isInternalRouteContext(context?: DeliveryContext): boolean {
+export function isInternalRouteContext(context?: DeliveryContext): boolean {
   const channel = context?.channel;
   return Boolean(
     channel && (channel === INTERNAL_MESSAGE_CHANNEL || isInternalNonDeliveryChannel(channel)),
@@ -107,7 +107,22 @@ function hasExternalDeliveryTarget(context?: DeliveryContext): boolean {
   );
 }
 
-type SessionDeliveryProjection = {
+export function mergeExternalDeliveryContextOverInternalRoute(
+  deliveryContext?: DeliveryContext,
+  internalContext?: DeliveryContext,
+): DeliveryContext | undefined {
+  // Internal webchat/heartbeat routes are session plumbing. When a real channel
+  // target is also present, preserve internal account/thread hints but let the
+  // external channel/to pair own delivery.
+  return normalizeDeliveryContext({
+    channel: deliveryContext?.channel,
+    to: deliveryContext?.to,
+    accountId: deliveryContext?.accountId ?? internalContext?.accountId,
+    threadId: deliveryContext?.threadId ?? internalContext?.threadId,
+  });
+}
+
+export type SessionDeliveryProjection = {
   route?: ChannelRouteRef;
   deliveryContext?: DeliveryContext;
   origin?: SessionOrigin;
@@ -159,16 +174,8 @@ export function normalizeSessionDeliveryState(params?: {
   const internalContext = routeIsInternalFallback
     ? mergeDeliveryContext(routeContext, originContext)
     : undefined;
-  // Internal webchat/heartbeat routes are session plumbing. When a real channel
-  // target is also present, preserve internal account/thread hints but let the
-  // external channel/to pair own delivery.
   const merged = routeIsInternalFallback
-    ? normalizeDeliveryContext({
-        channel: context?.channel,
-        to: context?.to,
-        accountId: context?.accountId ?? internalContext?.accountId,
-        threadId: context?.threadId ?? internalContext?.threadId,
-      })
+    ? mergeExternalDeliveryContextOverInternalRoute(context, internalContext)
     : mergeDeliveryContext(routeContext, fallbackContext);
 
   if (!merged) {

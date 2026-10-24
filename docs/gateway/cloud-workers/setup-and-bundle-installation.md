@@ -43,6 +43,8 @@ Use a Crabbox bootstrap or image that supplies a supported Node.js release and n
 
 Headless Windows guests must include Crabbox's managed launcher at `C:\Program Files\Crabbox\bin\Start-CrabboxDetachedProcess.ps1`. It keeps the node alive after Crabbox closes its SSH command. Enrollment fails with guidance if the launcher is absent. A hidden PowerShell parent redirects node output to `node.log` under its isolated state directory because the launcher does not inherit SSH output handles.
 
+New native Windows workers use a short, account- and lease-specific state directory on the profile's drive, leaving more path-length headroom for tools launched from their workspaces. Existing workers keep their original state directory across enrollment retries and recovery; reprovision a worker to use the shorter layout. Linux and macOS paths are unchanged.
+
 Desktop-enabled Windows workers use Crabbox's interactive desktop service; see [native desktop prerequisites](/gateway/cloud-workers/desktop#native-windows-prerequisites).
 
 ## Bundle installation
@@ -52,6 +54,10 @@ Before enrollment, the Gateway prepares a reusable archive from its current buil
 The worker bundle includes the pinned Windows permission-inspection helper alongside its JavaScript runtime. Its bytes are covered by the same archive manifest and content verification.
 
 Archives and successful installs are verified by content digest, rather than version alone, and reused when they match. A snapshot fork tops up an older runtime before enrollment. Native dependencies install for the destination OS and CPU, so registry access is still required; this is not an offline dependency bundle. Enrollment and archive-download credentials are not passed to npm or the node process.
+
+Each prepared runtime archive also gets a best-effort npm project lock, generated once by the Gateway and transferred separately from the lockless runtime tarball. Fresh workers use `npm ci --omit=dev` with that lock, while npm still selects and installs native optional packages for the worker's OS and CPU. A missing lock, failed download, or rejected locked install falls back to the ordinary unlocked install with a warning. Lock-generation failures are cached with the prepared archive, so each worker does not retry generation.
+
+Successful worker starts log the `openclaw-bootstrap-*` phase durations at info level in the Gateway log, including download, installation, and verification. The installation phase can overlap the independent worker-bundle download. Unlocked-install fallback warnings also appear in the Gateway log.
 
 Concurrent workspace installs on the same node share an in-progress integrity scan of the same already prewarmed bundle. Later requests scan the installed files again, so edits or damage still trigger repair. Retention and replacement separate scans; each request keeps its own cancellation and download credentials.
 

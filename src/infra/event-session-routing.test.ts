@@ -1,11 +1,10 @@
-// Covers event session routing policy resolution.
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import {
   resolveEventSessionKeyForPolicy,
   resolveEventSessionRoutingPolicy,
   resolveMainScopedEventSessionKey,
-  scopedHeartbeatWakeOptionsForPolicy,
+  type EventSessionRoutingPolicy,
 } from "./event-session-routing.js";
 
 const telegramSessionKey = "agent:main:telegram:work:direct:123";
@@ -14,6 +13,9 @@ const singleOwnerConfig: OpenClawConfig = {
   session: { dmScope: "main" },
   channels: { telegram: { accounts: { work: { allowFrom: ["123"] } } } },
 };
+function expectRoute(sessionKey: string, policy: EventSessionRoutingPolicy, destination: string) {
+  expect(resolveEventSessionKeyForPolicy(sessionKey, policy)).toBe(destination);
+}
 
 describe("event session routing", () => {
   it.each([
@@ -90,10 +92,7 @@ describe("event session routing", () => {
     const sessionKey = telegramSessionKey;
     const policy = resolveEventSessionRoutingPolicy({ cfg: singleOwnerConfig, sessionKey });
 
-    expect(resolveEventSessionKeyForPolicy(sessionKey, policy)).toBe("agent:main:main");
-    expect(
-      scopedHeartbeatWakeOptionsForPolicy(sessionKey, { reason: "exec-event" }, policy),
-    ).toEqual({ reason: "exec-event", sessionKey: "agent:main:main" });
+    expectRoute(sessionKey, policy, "agent:main:main");
     expect(resolveEventSessionKeyForPolicy(`${sessionKey}:thread:1712345678.123`, policy)).toBe(
       "agent:main:main",
     );
@@ -124,28 +123,18 @@ describe("event session routing", () => {
         },
       ],
     };
-    const policy = resolveEventSessionRoutingPolicy({ cfg, sessionKey });
-    const threadSessionKey = `${sessionKey}:thread:1712345678.123`;
-    const threadPolicy = resolveEventSessionRoutingPolicy({ cfg, sessionKey: threadSessionKey });
-
-    expect(policy.preserveSessionKey).toBe(true);
-    expect(resolveEventSessionKeyForPolicy(sessionKey, policy)).toBe(sessionKey);
-    expect(threadPolicy.preserveSessionKey).toBe(true);
-    expect(resolveEventSessionKeyForPolicy(threadSessionKey, threadPolicy)).toBe(threadSessionKey);
+    for (const key of [sessionKey, `${sessionKey}:thread:1712345678.123`]) {
+      const policy = resolveEventSessionRoutingPolicy({ cfg, sessionKey: key });
+      expect(policy.preserveSessionKey).toBe(true);
+      expect(resolveEventSessionKeyForPolicy(key, policy)).toBe(key);
+    }
   });
 
   it("keeps cron-run remapping behavior unchanged", () => {
-    const policy = { mainKey: "primary", sessionScope: "per-sender" as const };
-
-    expect(resolveEventSessionKeyForPolicy("agent:ops:cron:nightly:run:abc", policy)).toBe(
+    expectRoute(
+      "agent:ops:cron:nightly:run:abc",
+      { mainKey: "primary", sessionScope: "per-sender" },
       "agent:ops:primary",
     );
-    expect(
-      scopedHeartbeatWakeOptionsForPolicy(
-        "agent:ops:cron:nightly:run:abc",
-        { reason: "exec-event" },
-        policy,
-      ),
-    ).toEqual({ reason: "exec-event", sessionKey: "agent:ops:primary" });
   });
 });

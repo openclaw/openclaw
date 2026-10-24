@@ -41,8 +41,6 @@ import type {
   EmbeddedAgentParams,
 } from "./agent-runner-execution.test-support.js";
 import type { AgentTurnParams } from "./agent-runner-execution.types.js";
-import type { InternalGetReplyOptions } from "./get-reply.types.js";
-import { withReplySystemEventContext } from "./system-event-session-key.js";
 
 useBundledProviderPolicyArtifactsForTest(["openai", "anthropic"]);
 const state = await setupAgentRunnerExecutionTestState();
@@ -613,39 +611,6 @@ describe("executeAgentTurn: run lifecycle and ownership", () => {
       replyOperation.complete();
     }
   });
-
-  it.each([
-    { backend: "embedded", provider: "anthropic", model: "claude", text: "HEARTBEAT_OK" },
-    { backend: "CLI", provider: "claude-cli", model: "sonnet-4.6", text: "final" },
-  ])(
-    "forwards the event queue and bundle MCP retirement to isolated heartbeat $backend runs",
-    async ({ backend, provider, model, text }) => {
-      const isCli = backend === "CLI";
-      state.isCliProviderMock.mockReturnValue(isCli);
-      state.runWithModelFallbackMock.mockImplementationOnce((params: FallbackRunnerParams) =>
-        runFallbackCandidate(params, provider, model),
-      );
-      const run = isCli ? state.runCliAgentMock : state.runEmbeddedAgentMock;
-      run.mockResolvedValueOnce(createRunResult(text));
-      const followupRun = createFollowupRun({ provider, model });
-      const opts = withReplySystemEventContext<InternalGetReplyOptions>(
-        { isHeartbeat: true, cleanupBundleMcpOnRunEnd: true },
-        {
-          sessionKey: "agent:main:heartbeat:heartbeat",
-          heartbeatEventQueueSessionKey: "agent:main:heartbeat",
-        },
-      );
-      const params = createMinimalRunAgentTurnParams({ followupRun, opts });
-      params.isHeartbeat = true;
-      await executeAgentTurn(params);
-      expectMockCallArgFields(run, 0, "isolated heartbeat run params", {
-        trigger: "heartbeat",
-        requireExplicitMessageTarget: true,
-        heartbeatEventQueueSessionKey: "agent:main:heartbeat",
-        cleanupBundleMcpOnRunEnd: true,
-      });
-    },
-  );
 
   it("omits requireExplicitMessageTarget on ordinary embedded runs", async () => {
     state.runWithModelFallbackMock.mockImplementationOnce((params: FallbackRunnerParams) =>

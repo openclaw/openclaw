@@ -7,12 +7,14 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { recordUpdateDatabaseWrites } from "../../cli/update-cli/update-command-database-receipts.js";
 import { prepareDoctorDatabaseMigrations } from "../../commands/doctor-schema-migrations.js";
+import { repairLegacySessionEntryStates } from "../../commands/doctor-session-delivery-state.js";
 import {
   preparePostgresRestore,
   readBackupEngine,
   verifyMatchedPostgresBackup,
 } from "../../snapshot/database-backup.js";
 import { agentEngineSchema, openAgentEngineStore } from "../../state/openclaw-agent-db-engine.js";
+import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import { preflightOpenClawDatabaseSchemas } from "../../state/openclaw-database-preflight.js";
 import { stateEngineSchema } from "../../state/openclaw-state-db-engine.js";
 import { withOpenClawStateReadOnlyLocation } from "../../state/openclaw-state-db-read-connection.js";
@@ -39,7 +41,7 @@ import { createUpdateDatabaseBackup } from "../update-database-backup.js";
 import { restoreUpdateDatabaseBackup } from "../update-database-restore.js";
 import { createUpdateDoctorDatabaseWriteCapture } from "../update-doctor-result.js";
 import { createUpdateRun, recordUpdateRunPhase } from "../update-run-ledger.js";
-import { withEngineStoreAdmission } from "./admission-scope.js";
+import { installDatabaseProcessRole, withEngineStoreAdmission } from "./admission-scope.js";
 import { createUpdateDatabaseBackupWithFixtureTransport } from "./backup-capture.test-support.js";
 import { installDatabaseEngineSelection } from "./context.js";
 import { resetDatabaseEngineSelectionForTest } from "./context.test-support.js";
@@ -162,6 +164,7 @@ describe.skipIf(!connection)("Doctor PostgreSQL version migration", () => {
         }).createTransport(command),
     }));
     await client.connect();
+    installDatabaseProcessRole("cli-oneshot");
     env = { ...process.env, OPENCLAW_STATE_DIR: dirs.make("doctor-pg-migration-") };
     pathname = resolveOpenClawStateSqlitePath(env);
     installDatabaseEngineSelection({
@@ -357,6 +360,7 @@ describe.skipIf(!connection)("Doctor PostgreSQL version migration", () => {
   it("captures the predecessor before migration, re-admits exact DDL, and publishes", async () => {
     await prepare();
     const original = await readMeta();
+    expect(admit(predecessor)?.version).toBe(target - 1);
     const anchorBytes = fs.readFileSync(pathname);
     const before = new Set(archives());
     const result = await runDoctor();
@@ -378,12 +382,6 @@ describe.skipIf(!connection)("Doctor PostgreSQL version migration", () => {
     ).toEqual({ value_json: '"before"' });
     expect(image.prepare("PRAGMA user_version").get()?.user_version).toBe(target - 1);
     expect(original.version).toBe(String(target - 1));
-    if (target === 30) {
-      // The v30 automation policy fence changes metadata, not the PostgreSQL catalog.
-      expect(original.fingerprint).toBe(targetFingerprint);
-    } else {
-      expect(original.fingerprint).not.toBe(targetFingerprint);
-    }
     expect(fs.readFileSync(pathname)).toEqual(anchorBytes);
   });
 
@@ -611,6 +609,8 @@ describe.skipIf(!connection)("Doctor PostgreSQL version migration", () => {
     [27, false],
     [27, true],
     [30, false],
+    [31, false],
+    [32, false],
   ] as const)(
     "keeps the real agent v%s→current rollback exact (foreign write: %s)",
     async (sourceVersion, foreignWrite) => {
@@ -629,8 +629,13 @@ describe.skipIf(!connection)("Doctor PostgreSQL version migration", () => {
       vi.stubEnv("OPENCLAW_CONFIG_PATH", configPath);
       const agentPath = path.join(
         env.OPENCLAW_STATE_DIR!,
-        `agent-${sourceVersion}-${foreignWrite}.sqlite`,
+        `agent-${sourceVersion}-${foreignWrite}`,
+        "agents",
+        "main",
+        "agent",
+        "openclaw-agent.sqlite",
       );
+      fs.mkdirSync(path.dirname(agentPath), { recursive: true });
       const candidate = { ...agentEngineSchema };
       const migration = candidate.postgresMigrations!.find(
         (step) => step.version === sourceVersion + 1,
@@ -638,7 +643,9 @@ describe.skipIf(!connection)("Doctor PostgreSQL version migration", () => {
       const installed: StoreSchema = {
         ...candidate,
         version: sourceVersion,
-        postgres: migration.fromSchema.postgres,
+        ...migration.fromSchema,
+        postgresVectorDecoderVersion: migration.fromSchema.postgresVectorDecoderVersion,
+        postgresVectorSearchVersion: migration.fromSchema.postgresVectorSearchVersion,
         postgresMigrations: [],
       };
       // Build the actual historical layout; dropping current columns would leave
@@ -769,6 +776,32 @@ describe.skipIf(!connection)("Doctor PostgreSQL version migration", () => {
             ],
       );
       const beforeNavigation = await readNavigationFunction();
+      if (sourceVersion === 32) {
+        expect(() =>
+          withOpenClawAgentDatabaseReadOnly(() => {}, {
+            agentId: "main",
+            path: agentPath,
+            env: updateEnv,
+          }),
+        ).toThrow(/stopped-writer maintenance/);
+        const inspected: string[] = [];
+        await expect(
+          repairLegacySessionEntryStates({
+            apply: true,
+            cfg: config,
+            env: updateEnv,
+            deferSchemaRepair: true,
+            targets: [{ agentId: "main", storePath: agentPath, sqlitePath: agentPath }],
+            onInspectedTargets: (targets) => {
+              inspected.push(...targets.map((item) => item.sqlitePath));
+            },
+          }),
+        ).resolves.toEqual({ found: 0, repaired: 0, scannedStores: 1 });
+        expect(inspected).toEqual([]);
+        expect(
+          (await client.query(`SELECT version FROM "${agentNamespace}".openclaw_schema_meta`)).rows,
+        ).toEqual([{ version: "32" }]);
+      }
       const lock = await acquireGatewayLock({
         env: updateEnv,
         allowInTests: true,
@@ -942,7 +975,7 @@ describe.skipIf(!connection)("Doctor PostgreSQL version migration", () => {
             VALUES ('restored.md', 'memory', 'hash', 1, 1);`);
         expect(
           (await client.query(`SELECT revision FROM "${agentNamespace}".memory_index_state`)).rows,
-        ).toEqual([{ revision: "1" }]);
+        ).toEqual([{ revision: sourceVersion < 31 ? "1" : "0" }]);
       } finally {
         Object.assign(agentEngineSchema, candidate);
         vi.unstubAllEnvs();

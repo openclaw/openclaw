@@ -17,6 +17,21 @@ function createHandle() {
     transport: { close: vi.fn(async () => undefined) },
   };
 }
+function reconnectFixture() {
+  const tempState = createMcpClientTempState({ gatewayToken: "pairing-token" });
+  const first = createHandle();
+  const second = createHandle();
+  const connect = vi
+    .fn<(state: McpClientTempState) => Promise<ReturnType<typeof createHandle>>>()
+    .mockResolvedValueOnce(first)
+    .mockResolvedValueOnce(second);
+  return { tempState, first, second, connect };
+}
+function expectClosed(handle: ReturnType<typeof createHandle>) {
+  for (const close of [handle.client.close, handle.transport.close, handle.cleanup]) {
+    expect(close).toHaveBeenCalledOnce();
+  }
+}
 afterEach(() => vi.useRealTimers());
 
 it("creates unique client temp state and removes token files on cleanup", () => {
@@ -40,9 +55,7 @@ it("creates unique client temp state and removes token files on cleanup", () => 
 it.each([false, true])(
   "reuses one MCP temp state after pairing (auto-approved: %s)",
   async (autoApproved) => {
-    const tempState = createMcpClientTempState({ gatewayToken: "pairing-token" });
-    const first = createHandle();
-    const second = createHandle();
+    const { tempState, first, second, connect } = reconnectFixture();
     const request = vi
       .fn<Parameters<typeof maybeApprovePendingBridgePairing>[0]["request"]>()
       .mockResolvedValueOnce({
@@ -55,10 +68,6 @@ it.each([false, true])(
     } else {
       request.mockResolvedValueOnce({});
     }
-    const connect = vi
-      .fn<(state: McpClientTempState) => Promise<ReturnType<typeof createHandle>>>()
-      .mockResolvedValueOnce(first)
-      .mockResolvedValueOnce(second);
     try {
       await expect(
         connectMcpClientWithPairingReconnect({
@@ -68,9 +77,7 @@ it.each([false, true])(
         }),
       ).resolves.toBe(second);
       expect(connect.mock.calls).toEqual([[tempState], [tempState]]);
-      for (const close of [first.client.close, first.transport.close, first.cleanup]) {
-        expect(close).toHaveBeenCalledOnce();
-      }
+      expectClosed(first);
       expect(second.cleanup).not.toHaveBeenCalled();
     } finally {
       tempState.cleanup();
@@ -99,43 +106,24 @@ it.each([
   await expect(maybeApprovePendingBridgePairing({ request })).rejects.toBe(failure);
 });
 
-it.each([true, false])(
-  "cleans the first MCP client on pairing approval (succeeds=%s)",
-  async (approved) => {
-    const tempState = createMcpClientTempState({ gatewayToken: "pairing-token" });
-    const first = createHandle();
-    const second = createHandle();
-    const failure = new Error("pairing approval failed");
-    const connect = vi
-      .fn<(state: McpClientTempState) => Promise<ReturnType<typeof createHandle>>>()
-      .mockResolvedValueOnce(first)
-      .mockResolvedValueOnce(second);
-    try {
-      const result = connectMcpClientWithPairingReconnect({
+it("cleans the first MCP client when pairing approval fails", async () => {
+  const { tempState, first, connect } = reconnectFixture();
+  const failure = new Error("pairing approval failed");
+  try {
+    await expect(
+      connectMcpClientWithPairingReconnect({
         connect,
         tempState,
         maybeApprovePairing: async () => {
-          if (!approved) {
-            throw failure;
-          }
-          return true;
+          throw failure;
         },
-      });
-      if (approved) {
-        await expect(result).resolves.toBe(second);
-        expect(connect.mock.calls).toEqual([[tempState], [tempState]]);
-        expect(second.cleanup).not.toHaveBeenCalled();
-      } else {
-        await expect(result).rejects.toBe(failure);
-      }
-      for (const close of [first.client.close, first.transport.close, first.cleanup]) {
-        expect(close).toHaveBeenCalledOnce();
-      }
-    } finally {
-      tempState.cleanup();
-    }
-  },
-);
+      }),
+    ).rejects.toBe(failure);
+    expectClosed(first);
+  } finally {
+    tempState.cleanup();
+  }
+});
 
 it.each([false, true])(
   "preserves the timeout after transport cleanup (rejects=%s)",

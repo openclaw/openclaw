@@ -105,7 +105,6 @@ describe("agent-runner-utils", () => {
             assertCurrent: vi.fn(),
           },
         },
-        isHeartbeat: false,
       };
     }
 
@@ -148,12 +147,7 @@ describe("agent-runner-utils", () => {
         Object.assign(mismatch.followupRun.run, change);
         return mismatch;
       });
-      for (const candidate of [
-        queued,
-        ...mismatches,
-        { ...turn, isHeartbeat: true },
-        { ...turn, opts: { runId: source.runId } },
-      ]) {
+      for (const candidate of [queued, ...mismatches, { ...turn, opts: { runId: source.runId } }]) {
         const token = mintReplyMessageActionTurnCapability(
           candidate,
           candidate.opts?.runId ?? source.runId,

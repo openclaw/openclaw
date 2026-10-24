@@ -354,6 +354,7 @@ interface SupervisedFixtureOptions {
   accelerateTimeouts?: boolean;
   env?: NodeJS.ProcessEnv;
   materializedAnchor?: boolean;
+  terminateWhenReady?: string;
 }
 
 async function runSupervisedFixture(
@@ -418,6 +419,10 @@ async function runSupervisedFixture(
   controller.stdout!.on("data", (chunk) => (stdout += chunk));
   controller.stderr!.on("data", (chunk) => (stderr += chunk));
   try {
+    if (options.terminateWhenReady) {
+      await waitForFixtureEvent(options.terminateWhenReady, controller, options.signal);
+      controller.kill("SIGTERM");
+    }
     await withinTest(childCompletion(controller, "close"), options.signal);
   } catch (error) {
     const failures: unknown[] = [error];
@@ -1524,7 +1529,7 @@ exec ${shellQuote(mktemp)} "$@"
         "mark_pr_operation_side_effects_started",
         "exit 1",
       ],
-      { signal },
+      { signal, materializedAnchor: true },
     );
     expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(1);
     expect(result.stderr).toContain(
@@ -1532,6 +1537,30 @@ exec ${shellQuote(mktemp)} "$@"
     );
     expect(result.stderr).not.toContain("lock-recover");
     expect(refExists(repoDir)).toBe(false);
+    expect(existsSync(result.anchorDir!)).toBe(false);
+  });
+  it("retires a materialized anchor after forwarded SIGTERM while retaining the lock", async ({
+    signal,
+  }) => {
+    const repoDir = createRepo();
+    const ready = join(repoDir, "anchor-interrupt-ready");
+    const result = await runSupervisedOperation(
+      repoDir,
+      "anchor-interrupt-operation.sh",
+      [
+        "trap 'exit 143' TERM",
+        "acquire_pr_operation_lock 42",
+        `: > '${ready}'`,
+        fixtureReceiptCommand(repoDir, ready),
+        "sleep 30",
+      ],
+      { signal, materializedAnchor: true, terminateWhenReady: ready },
+    );
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(143);
+    expect(existsSync(ready)).toBe(true);
+    expect(existsSync(result.anchorDir!)).toBe(false);
+    expect(refExists(repoDir)).toBe(true);
+    recoverOperationLock(repoDir, refOid(repoDir));
   });
   it("waits while a live supervisor finishes draining a dead operation group", async ({
     signal,

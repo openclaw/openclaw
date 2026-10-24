@@ -1,7 +1,4 @@
-import {
-  buildLiveModelProviderConfig,
-  type LiveModelCatalogFetchGuard,
-} from "openclaw/plugin-sdk/provider-catalog-live-runtime";
+import { buildLiveModelProviderConfig } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import type {
   ModelDefinitionConfig,
   ModelProviderConfig,
@@ -22,14 +19,6 @@ import { isGoogleTextGenerationModelId, resolveGoogleStaticModelId } from "./pro
 
 const GOOGLE_GEMINI_MODELS_CACHE_TTL_MS = 60_000;
 const GOOGLE_GEMINI_MODELS_ENDPOINT = `${GOOGLE_GEMINI_MANIFEST_PROVIDER.baseUrl}/models?pageSize=1000`;
-
-function readGoogleLiveModels(body: unknown): readonly unknown[] {
-  const record = asOptionalRecord(body);
-  if (!record || (record.models !== undefined && !Array.isArray(record.models))) {
-    throw new Error("Google models.list returned an invalid model list");
-  }
-  return record.models ?? [];
-}
 
 function googleLiveModelInput(id: string): ModelDefinitionConfig["input"] {
   if (!id.startsWith("gemma-")) {
@@ -82,21 +71,10 @@ function buildGoogleLiveModel(row: unknown): ModelDefinitionConfig | undefined {
   };
 }
 
-function parseGoogleLiveModels(rows: readonly unknown[]): ModelDefinitionConfig[] {
-  const models = rows
-    .map(buildGoogleLiveModel)
-    .filter((model): model is ModelDefinitionConfig => Boolean(model));
-  return [...new Map(models.map((model) => [model.id, model])).values()].toSorted((a, b) =>
-    a.id.localeCompare(b.id),
-  );
-}
-
 export async function buildGoogleLiveCatalogProvider(params: {
   discoveryMode?: "strict";
   apiKey?: string;
   discoveryApiKey?: string;
-  fetchGuard?: LiveModelCatalogFetchGuard;
-  signal?: AbortSignal;
 }): Promise<ModelProviderConfig> {
   const { models, ...providerConfig } = buildGoogleStaticCatalogProvider();
   return await buildLiveModelProviderConfig({
@@ -107,11 +85,24 @@ export async function buildGoogleLiveCatalogProvider(params: {
     ...params,
     ttlMs: GOOGLE_GEMINI_MODELS_CACHE_TTL_MS,
     auditContext: "google-model-discovery",
-    readRows: readGoogleLiveModels,
+    readRows(body: unknown): readonly unknown[] {
+      const record = asOptionalRecord(body);
+      if (!record || (record.models !== undefined && !Array.isArray(record.models))) {
+        throw new Error("Google models.list returned an invalid model list");
+      }
+      return record.models ?? [];
+    },
     buildRequestHeaders: ({ discoveryApiKey, apiKey }) => ({
       Accept: "application/json",
       ...((discoveryApiKey ?? apiKey) ? { "x-goog-api-key": discoveryApiKey ?? apiKey } : {}),
     }),
-    projectRows: parseGoogleLiveModels,
+    projectRows(rows: readonly unknown[]): ModelDefinitionConfig[] {
+      const liveModels = rows
+        .map(buildGoogleLiveModel)
+        .filter((model): model is ModelDefinitionConfig => Boolean(model));
+      return [...new Map(liveModels.map((model) => [model.id, model])).values()].toSorted((a, b) =>
+        a.id.localeCompare(b.id),
+      );
+    },
   });
 }

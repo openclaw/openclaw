@@ -60,9 +60,7 @@ export async function readSessionEntryList(
             getNodeSqliteKysely<OpenClawAgentKyselyDatabase>(database.db)
               .selectFrom("session_nodes")
               .select("session_key")
-              .where((eb) =>
-                eb(jsonExtractText(database.db, eb.ref("entry_json"), "archivedAt"), "is", null),
-              )
+              .where("archived_at", "is", null)
               .where((eb) =>
                 eb(
                   jsonPathValue(

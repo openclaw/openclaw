@@ -173,11 +173,11 @@ export async function withSqliteSessionPageReclamation<T>(
               },
               assertNativeCurrent,
             ),
-          readRetentionCandidates: async () =>
+          readRetentionCandidates: async (offset = 0) =>
             withSqliteSessionDatabase(
               databaseOptions,
               (database) =>
-                readSessionArchivePruningInDatabase(database, ARCHIVE_RETENTION_BATCH_SIZE)
+                readSessionArchivePruningInDatabase(database, ARCHIVE_RETENTION_BATCH_SIZE, offset)
                   .archives,
               assertNativeCurrent,
             ),
@@ -312,12 +312,13 @@ export async function withSqliteSessionPageReclamation<T>(
                 assertPruningCurrent();
                 return result.archives[0] ?? null;
               },
-              readRetentionCandidates: async () => {
+              readRetentionCandidates: async (offset = 0) => {
                 assertPruningCurrent();
                 const result = await reader.readArchivePruning({
                   env: databaseOptions.env,
                   expectedIdentity,
                   limit: ARCHIVE_RETENTION_BATCH_SIZE,
+                  offset,
                 });
                 assertPruningCurrent();
                 return result.archives;

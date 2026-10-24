@@ -39,8 +39,8 @@ describe("imported PR source refresh", () => {
           withStore(params, (store) =>
             operation({
               ...store,
-              update: async (row, patch, authority) => {
-                const result = await store.update(row, patch, authority);
+              update: async (row, patch, authority, manifest) => {
+                const result = await store.update(row, patch, authority, manifest);
                 if (
                   !interrupted &&
                   patch.pending_target === "projection" &&

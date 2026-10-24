@@ -30,7 +30,14 @@ import {
   REALTIME_READY_TIMEOUT_MS,
   resolveFaceTimeRealtimeProvider,
 } from "./talk-driver-config.js";
-import { createFaceTimeInitialGreeting } from "./talk-initial-greeting.js";
+
+// The carrier can report active before its newly enabled media route is audible.
+// Give that route one short settling window. Only a real caller transcript may
+// cancel the greeting because raw VAD can fire on route noise and never report a
+// matching stop event, which would otherwise leave an answered call silent.
+const FACETIME_INITIAL_GREETING =
+  "Greet the caller briefly, introduce yourself using your configured identity, and ask how you can help.";
+const FACETIME_GREETING_MEDIA_SETTLE_MS = 100;
 
 export type FaceTimeTalkDriver = {
   readonly recentTalkEvents: readonly TalkEvent[];
@@ -136,13 +143,29 @@ export async function startFaceTimeTalkDriver(params: {
     startupFailureDeferred.reject(error);
   };
 
-  const initialGreeting = createFaceTimeInitialGreeting({
-    speak: (instructions) => {
-      if (!stopped && !mediaSuspended && activated && providerReady) {
-        bridge?.triggerGreeting(instructions);
+  let timer: NodeJS.Timeout | undefined;
+  let dismissed = false;
+  const initialGreeting = {
+    instructions: FACETIME_INITIAL_GREETING,
+    schedule() {
+      if (dismissed || timer) {
+        return;
       }
+      timer = setTimeout(() => {
+        timer = undefined;
+        dismissed = true;
+        if (!stopped && !mediaSuspended && activated && providerReady) {
+          bridge?.triggerGreeting(FACETIME_INITIAL_GREETING);
+        }
+      }, FACETIME_GREETING_MEDIA_SETTLE_MS);
+      timer.unref?.();
     },
-  });
+    cancel() {
+      dismissed = true;
+      clearTimeout(timer);
+      timer = undefined;
+    },
+  };
 
   const reportFailure = (error: Error): Promise<boolean> => {
     if (failurePromise) {

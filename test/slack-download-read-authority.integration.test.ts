@@ -9,7 +9,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { slackPlugin } from "../extensions/slack/api.js";
 import { createMessageTool } from "../src/agents/tools/message-tool-execution.js";
 import { dispatchChannelMessageAction } from "../src/channels/plugins/message-action-dispatch.js";
-import type { ChannelMessageActionContext } from "../src/channels/plugins/types.js";
+import type { ChannelMessageActionContext } from "../src/channels/plugins/types.core.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../src/config/config.js";
 import type { OpenClawConfig } from "../src/config/types.js";
 import type { GatewayRequestContext, RespondFn } from "../src/gateway/server-methods/types.js";

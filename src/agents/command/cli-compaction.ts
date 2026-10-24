@@ -206,12 +206,17 @@ export async function runCliTurnCompactionLifecycle(
       }
       host.onCommitted?.(accepted);
     };
-    const sessionManager = await SessionManager.openAsync({
-      agentId: params.sessionAgentId,
-      sessionId: params.sessionId,
-      sessionKey: params.sessionKey,
-      storePath,
-    });
+    const sessionManager = await SessionManager.openAsync(
+      {
+        agentId: params.sessionAgentId,
+        sessionId: params.sessionId,
+        sessionKey: params.sessionKey,
+        storePath,
+      },
+      undefined,
+      { compaction: true },
+      abortSignal,
+    );
     assertActive();
     const sessionFile = params.sessionKey;
     const settingsManager = createPreparedEmbeddedAgentSettingsManager({

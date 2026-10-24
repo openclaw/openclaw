@@ -7,9 +7,10 @@ import { Icon } from "../../components/solid/icon.tsx";
 import { LearnMoreLink } from "../../components/solid/settings-ui.tsx";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
 import { registerModelSetupEnglish } from "../../i18n/locales/en-model-setup.ts";
+import { registerRouteSubtitlesEnglish } from "../../i18n/locales/en-route-subtitles.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import type { JSX } from "../../types/solid-elements.js";
 import "../../styles/model-setup.css";
+import type { JSX } from "../../types/solid-elements.js";
 import {
   renderMutationMessage,
   ModelProviderConnectAction,
@@ -29,6 +30,8 @@ import { manualProviderName, ManualProviderPicker } from "./provider-picker.tsx"
 import { ModelSetupSuccessDialog } from "./success-dialog.tsx";
 import type { ModelSetupViewProps } from "./view-types.ts";
 import { ModelSetupWizard } from "./wizard-view-solid.tsx";
+
+registerRouteSubtitlesEnglish();
 
 registerModelSetupEnglish();
 
@@ -536,6 +539,7 @@ export function ModelSetupView(props: ModelSetupViewProps): JSX.Element {
           onDialogRef={props.onWizardDialog}
           mode={props.wizardMode}
           state={props.wizard}
+          busy={props.wizardBusy}
           refreshWarning={props.refreshWarning}
           cancellationNotice={props.cancellationNotice}
           value={props.wizardValue}
@@ -545,8 +549,8 @@ export function ModelSetupView(props: ModelSetupViewProps): JSX.Element {
           onClose={props.onWizardClose}
         />
       </div>
-      <Show when={props.activation.phase === "success" ? props.activation : undefined}>
-        {(activation) => <ModelSetupSuccessDialog {...props} activation={activation()} />}
+      <Show when={props.activation.phase === "success" ? props.activation : undefined} keyed>
+        {(activation) => <ModelSetupSuccessDialog {...props} activation={activation} />}
       </Show>
     </>
   );

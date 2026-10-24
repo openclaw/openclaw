@@ -85,7 +85,6 @@ type SecurityAuditOptions = {
   platform?: NodeJS.Platform;
   deep?: boolean;
   includeFilesystem?: boolean;
-  includeChannelSecurity?: boolean;
   /** Override where to check state (default: resolveStateDir()). */
   stateDir?: string;
   /** Override config path check (default: resolveConfigPath()). */
@@ -102,8 +101,6 @@ type SecurityAuditOptions = {
   execDockerRawFn?: ExecDockerRawFn;
   /** Optional preloaded config snapshot to skip audit-time config file reads. */
   configSnapshot?: ConfigFileSnapshot | null;
-  /** Optional cache for code-safety summaries across repeated deep audits. */
-  codeSafetySummaryCache?: import("./audit.deep.runtime.js").CodeSafetySummaryCache;
   /** Optional explicit auth for deep gateway probe. */
   deepProbeAuth?: SecurityAuditExplicitGatewayAuth;
   /** Optional explicit Gateway auth mode/secret for config-only audit checks. */
@@ -120,14 +117,12 @@ type AuditExecutionContext = Omit<SecurityAuditOptions, "config"> & {
   env: NodeJS.ProcessEnv;
   platform: NodeJS.Platform;
   includeFilesystem: boolean;
-  includeChannelSecurity: boolean;
   deep: boolean;
   deepTimeoutMs: number;
   stateDir: string;
   configPath: string;
   loadPluginSecurityCollectors: boolean;
   configSnapshot: ConfigFileSnapshot | null;
-  codeSafetySummaryCache: import("./audit.deep.runtime.js").CodeSafetySummaryCache;
 };
 
 function countBySeverity(findings: SecurityAuditFinding[]): SecurityAuditSummary {
@@ -150,7 +145,6 @@ function emitSecurityAuditReportEvent(params: {
   summary: SecurityAuditSummary;
   deep: boolean;
   includeFilesystem: boolean;
-  includeChannelSecurity: boolean;
   suppressedCount: number;
 }) {
   const hasCritical = params.summary.critical > 0;
@@ -182,7 +176,7 @@ function emitSecurityAuditReportEvent(params: {
       suppressed_count: params.suppressedCount,
       deep: params.deep,
       include_filesystem: params.includeFilesystem,
-      include_channel_security: params.includeChannelSecurity,
+      include_channel_security: true,
     },
   });
 }
@@ -384,7 +378,7 @@ async function collectPluginSecurityAuditFindings(
           .map(([id]) => id),
       ]),
     );
-    if (context.includeChannelSecurity && context.plugins !== undefined) {
+    if (context.plugins !== undefined) {
       const { resolveConfiguredChannelPluginIdsAsync } =
         await import("../plugins/channel-plugin-ids.js");
       const auditedChannelPluginIds = new Set(context.plugins.map((plugin) => plugin.id));
@@ -971,7 +965,6 @@ async function createAuditExecutionContext(
   const env = opts.env ?? process.env;
   const platform = opts.platform ?? process.platform;
   const includeFilesystem = opts.includeFilesystem !== false;
-  const includeChannelSecurity = opts.includeChannelSecurity !== false;
   const deep = opts.deep === true;
   const deepTimeoutMs = Math.max(250, opts.deepTimeoutMs ?? 5000);
   const stateDir = opts.stateDir ?? resolveStateDir(env);
@@ -993,7 +986,6 @@ async function createAuditExecutionContext(
     env,
     platform,
     includeFilesystem,
-    includeChannelSecurity,
     deep,
     deepTimeoutMs,
     stateDir,
@@ -1005,7 +997,6 @@ async function createAuditExecutionContext(
     loadPluginSecurityCollectors: opts.loadPluginSecurityCollectors ?? deep,
     workspaceDir,
     configSnapshot,
-    codeSafetySummaryCache: opts.codeSafetySummaryCache ?? new Map(),
     deepProbeAuth: opts.deepProbeAuth,
     auditGatewayAuthOverride: opts.auditGatewayAuthOverride,
   };
@@ -1102,34 +1093,31 @@ export async function runSecurityAuditCore(
         stateDir,
         deep: context.deep,
         workspaceDir: context.workspaceDir,
-        summaryCache: context.codeSafetySummaryCache,
       })),
     );
   }
 
-  let shouldAuditChannelSecurity = false;
-  if (context.includeChannelSecurity) {
-    if (context.plugins !== undefined) {
-      shouldAuditChannelSecurity = true;
-    } else {
-      const { hasConfiguredChannelsForReadOnlyScopeAsync, resolveConfiguredChannelPluginIdsAsync } =
-        await import("../plugins/channel-plugin-ids.js");
-      shouldAuditChannelSecurity =
-        (await hasConfiguredChannelsForReadOnlyScopeAsync({
+  let shouldAuditChannelSecurity: boolean;
+  if (context.plugins !== undefined) {
+    shouldAuditChannelSecurity = true;
+  } else {
+    const { hasConfiguredChannelsForReadOnlyScopeAsync, resolveConfiguredChannelPluginIdsAsync } =
+      await import("../plugins/channel-plugin-ids.js");
+    shouldAuditChannelSecurity =
+      (await hasConfiguredChannelsForReadOnlyScopeAsync({
+        config: cfg,
+        activationSourceConfig: context.sourceConfig,
+        workspaceDir: context.workspaceDir,
+        env,
+      })) ||
+      (
+        await resolveConfiguredChannelPluginIdsAsync({
           config: cfg,
           activationSourceConfig: context.sourceConfig,
           workspaceDir: context.workspaceDir,
           env,
-        })) ||
-        (
-          await resolveConfiguredChannelPluginIdsAsync({
-            config: cfg,
-            activationSourceConfig: context.sourceConfig,
-            workspaceDir: context.workspaceDir,
-            env,
-          })
-        ).length > 0;
-    }
+        })
+      ).length > 0;
   }
   if (shouldAuditChannelSecurity) {
     const channelPlugins =
@@ -1186,7 +1174,6 @@ export async function runSecurityAuditCore(
     summary,
     deep: context.deep,
     includeFilesystem: context.includeFilesystem,
-    includeChannelSecurity: context.includeChannelSecurity,
     suppressedCount: filtered.suppressedFindings.length,
   });
   return {

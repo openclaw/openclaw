@@ -11,7 +11,6 @@ import {
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
-import { isSubagentSessionKey } from "../routing/session-key.js";
 import { defaultRuntime, type RuntimeEnv, withoutRuntimeOutput } from "../runtime.js";
 import { resolveSendPolicy } from "../sessions/send-policy.js";
 import { withSessionTurn } from "../sessions/session-controller.admission.js";
@@ -178,6 +177,9 @@ async function agentCommandInternalOwned(
   let lifecycleGeneration = opts.lifecycleGeneration ?? captureAgentRunLifecycleGeneration(runId);
   let sessionEntry = prepared.sessionEntry,
     runOwnedSessionId = sessionId;
+  const pendingFinalRecovery = opts.mainRestartRecoveryAdmitted
+    ? sessionEntry?.pendingFinalDelivery
+    : undefined;
   // Subagent-lane turns are the parent's own task dispatch into the child (they
   // carry no inter_session provenance today); classifying them as human would tell
   // the parent a human interjected on every spawn, for embedded and ACP children alike.
@@ -224,7 +226,6 @@ async function agentCommandInternalOwned(
       sessionStateActor.actorType === "human" &&
       !isSubagentLane &&
       !opts.internalEvents?.length &&
-      opts.bootstrapContextRunKind !== "heartbeat" &&
       opts.bootstrapContextRunKind !== "cron"
     ) {
       releaseForeground = await beginForegroundSessionMaintenance(sessionKey ?? sessionId);
@@ -303,12 +304,9 @@ async function agentCommandInternalOwned(
         }
       };
 
-      if (
-        sessionStore &&
-        sessionKey &&
-        !suppressVisibleSessionEffects &&
-        !isSubagentSessionKey(sessionKey)
-      ) {
+      // Native children need the same retained requester source for registry recovery.
+      // The main-session recovery owner independently excludes delegated sessions.
+      if (sessionStore && sessionKey && !suppressVisibleSessionEffects) {
         const now = Date.now();
         const currentStoreEntry = sessionStore[sessionKey];
         const allowCreate = currentStoreEntry === undefined && sessionEntry === undefined;
@@ -346,7 +344,13 @@ async function agentCommandInternalOwned(
               isCompletionCurrent(current) &&
               (isSessionRollover
                 ? current?.sessionId === initialEntry.sessionId
-                : shouldPersistRestartRecoveryContextClaim(current, sessionId, runId, allowCreate))
+                : shouldPersistRestartRecoveryContextClaim(
+                    current,
+                    sessionId,
+                    runId,
+                    allowCreate,
+                    entry,
+                  ))
             );
           },
         });
@@ -533,6 +537,7 @@ async function agentCommandInternalOwned(
       runOwnedSessionId,
       sessionReboundDuringRun,
       trackedRestartRecoveryDeliveryClaim,
+      pendingFinalRecovery,
       terminalDeliveryEvidence: restartRecoveryTerminalDeliveryEvidence,
       terminalEvent: {
         data: { phase: commandError === undefined ? "end" : "error", error: commandError },
@@ -576,11 +581,10 @@ export async function agentCommand(
 
 export async function agentCommandFromSystem(
   opts: AgentCommandOpts,
-  admission: { boundary: string },
   runtime: RuntimeEnv = defaultRuntime,
   deps?: CliDeps,
 ) {
-  const ingress = executionIdentity.systemIngress(admission.boundary);
+  const ingress = executionIdentity.systemIngress("gateway.boot");
   return await agentCommandWithAdmissionIngress(opts, ingress, runtime, deps);
 }
 

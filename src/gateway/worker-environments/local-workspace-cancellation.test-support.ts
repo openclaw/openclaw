@@ -17,9 +17,9 @@ import { createSandboxTestContext } from "../../agents/sandbox/test-fixtures.js"
 import { insertRegistryWorktree } from "../../agents/worktrees/registry.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import { readGatewayLockProcessNamespace } from "../../infra/gateway-lock-payload.js";
+import * as workspaceStore from "./local-workspace-store.js";
 import { withLocalWorkspaceStore } from "./local-workspace-store.js";
 import type { LocalWorkspaceOwner } from "./local-workspace-types.js";
-import * as manifests from "./workspace-manifest-worker.js";
 
 const command = () => ({ command: "true", env: {}, usePty: false });
 const failedOutcome = { status: "failed" as const, exitCode: 0, timedOut: false };
@@ -64,23 +64,41 @@ async function proveQueuedLocalWorkspaceCheckpoint(
     await release.promise;
   });
   await acquired.promise;
-  const readSnapshot = manifests.captureWorkspaceManifestDocument;
-  const capture = vi.spyOn(manifests, "captureWorkspaceManifestDocument");
+  const withStore = workspaceStore.withLocalWorkspaceStore;
+  const capture = vi.fn<workspaceStore.LocalWorkspaceStore["manifest"]>();
+  let afterCapture: (() => Promise<void>) | undefined;
+  const spy = vi
+    .spyOn(workspaceStore, "withLocalWorkspaceStore")
+    .mockImplementation((params, run) =>
+      withStore(params, (store) =>
+        run({
+          ...store,
+          manifest: async (...args) => {
+            void capture(...args);
+            const result = await store.manifest(...args);
+            const afterScan = afterCapture;
+            afterCapture = undefined;
+            await afterScan?.();
+            return result;
+          },
+        }),
+      ),
+    );
   const first = projection.checkpoint();
   const second = projection.checkpoint();
   release.resolve();
   await Promise.all([custody, first, second]);
   await expectSource(owner.worktree.path, "first edit\n");
-  expect(capture.mock.calls.map(([input]) => input.root)).toEqual([projection.workspaceDir]);
+  expect(capture.mock.calls.map(([, action]) => action)).toEqual([
+    { kind: "scan", target: "canonical", canonicalRoot: owner.worktree.path },
+  ]);
 
   const captured = createDeferred();
   const finishCapture = createDeferred();
-  capture.mockImplementationOnce(async (input) => {
-    const result = await readSnapshot(input);
+  afterCapture = async () => {
     captured.resolve();
     await finishCapture.promise;
-    return result;
-  });
+  };
   const third = projection.checkpoint();
   await captured.promise;
   const later = projection.checkpoint();
@@ -98,7 +116,7 @@ async function proveQueuedLocalWorkspaceCheckpoint(
     "later edit\n",
   );
   expect(capture).toHaveBeenCalledTimes(4);
-  capture.mockRestore();
+  spy.mockRestore();
 }
 
 export async function proveStoppedLocalWorkspaceCheckpoint(

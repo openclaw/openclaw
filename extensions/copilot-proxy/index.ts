@@ -66,7 +66,8 @@ export default definePluginEntry({
           run: async (ctx: ProviderAuthContext): Promise<ProviderAuthResult> => {
             const baseUrlInput = await ctx.prompter.text({
               message: "Copilot Proxy base URL",
-              initialValue: DEFAULT_BASE_URL,
+              // Prefilling the default makes typed input append to it; blank input keeps it.
+              placeholder: DEFAULT_BASE_URL,
               validate: validateBaseUrl,
             });
 

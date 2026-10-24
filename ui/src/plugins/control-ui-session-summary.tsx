@@ -10,6 +10,7 @@ import {
   createSignal,
   createStore,
   isPending,
+  latest,
   onCleanup,
   onSettled,
 } from "solid-js";
@@ -20,13 +21,14 @@ import { SessionProgressCard } from "../components/session-progress-card-solid.t
 import { AgentAvatar } from "../components/solid/agent-avatar.tsx";
 import { Icon } from "../components/solid/icon.tsx";
 import { SanitizedHtml } from "../components/solid/sanitized-html.tsx";
+import { registerPluginManagementEnglish } from "../i18n/locales/en-plugin-management.ts";
 import type { AgentIdentityCapability } from "../lib/agents/identity.ts";
 import { extractText } from "../lib/chat/message-extract.ts";
 import { normalizeMessage } from "../lib/chat/message-normalizer.ts";
 import { formatSenderLabel } from "../lib/chat/sender-label.ts";
 import { projectGateway } from "../lib/reactive/application.ts";
 import { projectProgressCard } from "../lib/reactive/domain-keyed.ts";
-import { t } from "../lib/reactive/i18n.ts";
+import { registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
 import { projectSource } from "../lib/reactive/projection.ts";
 import { sessionProgressCardsForGateway } from "../lib/session-progress-cards.ts";
 import { createSessionEventRefreshCoordinator } from "../lib/sessions/event-refresh-coordinator.ts";
@@ -41,6 +43,8 @@ import { ChatAuthorAvatar } from "../pages/chat/components/chat-author-avatar.ts
 import "../styles/chat/progress-card.css";
 import "../styles/sidebar-markdown.css";
 import "../styles/plugin-session-summary.css";
+
+registerEnglishCatalog(registerPluginManagementEnglish);
 
 export type PluginSessionSummaryProps = {
   session: BoardGetParams | null;
@@ -84,6 +88,27 @@ function SessionHistory(props: PluginSessionSummaryProps, scope: SummaryScope) {
     target: scope.session,
     options: { admitAutomaticRead: current },
   }));
+  const progressReceipt = createMemo(() => ({ completion: progress.read().completion }), {
+    equals: (previous, next) => previous.completion === next.completion,
+  });
+  const progressReady = createMemo(() => progressReceipt().completion?.then(() => null) ?? null);
+  const ProgressView = () => (
+    <Show
+      when={progress.read().error}
+      fallback={
+        <SessionProgressCard
+          card={progress.read().card}
+          placement="board"
+          sessionStatus={metadata.sessionInfo?.status}
+          startedAt={metadata.sessionInfo?.startedAt}
+          endedAt={metadata.sessionInfo?.endedAt}
+          hasActiveRun={metadata.sessionInfo?.hasActiveRun === true}
+        />
+      }
+    >
+      <p role="alert">{t("sessionProgressCard.widgetUnavailable")}</p>
+    </Show>
+  );
   const refresh = () => {
     if (!current()) {
       return Promise.resolve();
@@ -321,20 +346,21 @@ function SessionHistory(props: PluginSessionSummaryProps, scope: SummaryScope) {
     <div class="plugin-session-summary">
       <Show when={progress.read().error || progress.read().card !== null}>
         <section class="plugin-session-summary__progress">
-          {progress.read().error ? (
-            <p role="alert">{t("sessionProgressCard.widgetUnavailable")}</p>
-          ) : progress.read().card === undefined ? (
-            <p>{t("sessionProgressCard.widgetLoading")}</p>
-          ) : (
-            <SessionProgressCard
-              card={progress.read().card}
-              placement="board"
-              sessionStatus={metadata.sessionInfo?.status}
-              startedAt={metadata.sessionInfo?.startedAt}
-              endedAt={metadata.sessionInfo?.endedAt}
-              hasActiveRun={metadata.sessionInfo?.hasActiveRun === true}
-            />
-          )}
+          <Loading
+            on={progressReceipt()}
+            fallback={
+              progress.read().card === undefined ? (
+                <p>{t("sessionProgressCard.widgetLoading")}</p>
+              ) : (
+                <ProgressView />
+              )
+            }
+          >
+            <Errored fallback={<p role="alert">{t("sessionProgressCard.widgetUnavailable")}</p>}>
+              {progress.read().card === undefined ? progressReady() : latest(progressReady)}
+              <ProgressView />
+            </Errored>
+          </Loading>
         </section>
       </Show>
       <Errored

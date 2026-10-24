@@ -1,21 +1,17 @@
 export type FollowupQueueDisposition = "queue-cap" | "queue-cap-old" | "queue-cap-new";
 
-export type ActiveRunQueueAction = "run-now" | "enqueue-followup" | "drop";
+export type ActiveRunQueueAction = "run-now" | "enqueue-followup";
 
-/** Resolves whether an active session should run, queue, or drop a new inbound turn. */
+/** Resolves whether an active session should run or queue a new inbound turn. */
 export function resolveActiveRunQueueAction(params: {
   hasQueuedFollowups?: boolean;
   isActive: boolean;
-  isHeartbeat: boolean;
   shouldFollowup: boolean;
   resetTriggered?: boolean;
   interrupt?: boolean;
 }): ActiveRunQueueAction {
   if (!params.isActive && !params.hasQueuedFollowups) {
     return "run-now";
-  }
-  if (params.isHeartbeat) {
-    return "drop";
   }
   if (params.resetTriggered || params.interrupt) {
     return "run-now";

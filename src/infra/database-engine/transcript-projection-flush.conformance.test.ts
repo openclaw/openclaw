@@ -48,6 +48,14 @@ function projection(db: EngineConnection, sessionId: string) {
   };
 }
 
+function transcriptWindow(db: EngineConnection, sessionId: string) {
+  return db
+    .prepare(
+      "SELECT updated_at, transcript_updated_at, row_transcript_updated_at, row_transcript_json FROM session_windows WHERE session_id = ?",
+    )
+    .get(sessionId);
+}
+
 function transcriptIdentities(db: EngineConnection, sessionId: string) {
   return db
     .prepare("SELECT * FROM transcript_event_identities WHERE session_id = ? ORDER BY seq")
@@ -167,21 +175,32 @@ describe.skipIf(!mixedAgentConnection).each(["sqlite", "postgres"] as const)(
             },
           },
         ];
+        let expectedUpdatedAt: number | null | undefined;
         const trips = observePgTrips(f.database.db);
         try {
           for (const command of commands) {
-            expect((await execute(command)).kind).toBe("committed");
+            const outcome = await execute(command);
+            expect(outcome.kind).toBe("committed");
+            if (outcome.kind === "committed") {
+              expectedUpdatedAt = outcome.receipt.transcript.after.updatedAt;
+            }
           }
         } finally {
           trips.restore();
         }
         if (engine === "postgres") {
-          const writes = trips.statements.filter((sql) =>
-            /(?:insert into|update)\s+"?session_transcript_(?:active_events|fts_rows|index_state)"?/iu.test(
-              sql,
-            ),
+          const writes = trips.statements.filter(
+            (sql) =>
+              /(?:insert into|update)\s+"?session_transcript_(?:active_events|fts_rows|index_state)"?/iu.test(
+                sql,
+              ) || /update\s+"?session_windows"?\s+set[^;]*"transcript_updated_at"/iu.test(sql),
           );
           expect(writes).toHaveLength(3);
+          expect(
+            writes.every((sql) =>
+              /update\s+"?session_windows"?\s+set[^;]*"transcript_updated_at"/iu.test(sql),
+            ),
+          ).toBe(true);
           expect(
             trips.statements.filter((sql) =>
               /insert into\s+"?transcript_(?:events|event_identities)"?/iu.test(sql),
@@ -198,6 +217,7 @@ describe.skipIf(!mixedAgentConnection).each(["sqlite", "postgres"] as const)(
             JSON.parse(row.eventJson),
           ),
           projection: projection(f.database.db, f.scope.sessionId),
+          window: transcriptWindow(f.database.db, f.scope.sessionId),
           identities: transcriptIdentities(f.database.db, f.scope.sessionId),
           search: searchSessionTranscriptsReadOnlySync(
             { agentId: "main", sessionId: f.scope.sessionId, query: "Needle", order: "recent" },
@@ -232,6 +252,12 @@ describe.skipIf(!mixedAgentConnection).each(["sqlite", "postgres"] as const)(
           ],
           identities: ["previous", "input", "final"].map((message_id) => ({ message_id })),
         });
+        expect(persisted.window).toMatchObject({
+          updated_at: 30,
+          transcript_updated_at: expectedUpdatedAt,
+          row_transcript_updated_at: expectedUpdatedAt,
+          row_transcript_json: expect.stringContaining("Needle answer"),
+        });
         const retry = plan("final", "assistant", "Needle answer", 30);
         expect(
           persisted.search.hits.map(({ messageId, role, timestamp }) => ({
@@ -258,9 +284,11 @@ describe.skipIf(!mixedAgentConnection).each(["sqlite", "postgres"] as const)(
         const stable = withEngineStoreAdmission(() => ({
           transcript: readTranscriptEventRows(f.database, f.scope.sessionId),
           projection: projection(f.database.db, f.scope.sessionId),
+          window: transcriptWindow(f.database.db, f.scope.sessionId),
           identities: transcriptIdentities(f.database.db, f.scope.sessionId),
         }));
         expect(stable.projection).toEqual(persisted.projection);
+        expect(stable.window).toEqual(persisted.window);
         expect(stable.identities).toEqual(persisted.identities);
         expect(stable.transcript.map((row) => JSON.parse(row.eventJson))).toEqual(
           persisted.transcript,
@@ -294,6 +322,7 @@ describe.skipIf(!mixedAgentConnection).each(["sqlite", "postgres"] as const)(
             withEngineStoreAdmission(() => ({
               transcript: readTranscriptEventRows(f.database, f.scope.sessionId),
               projection: projection(f.database.db, f.scope.sessionId),
+              window: transcriptWindow(f.database.db, f.scope.sessionId),
               identities: transcriptIdentities(f.database.db, f.scope.sessionId),
             })),
           ).toEqual(stable);

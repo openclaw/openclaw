@@ -14,7 +14,9 @@ import {
 import { createPluginCache, getPluginCache, withPluginCache } from "../plugins/plugin-cache.js";
 import {
   buildPluginMetadataSnapshot,
+  cachePluginMetadataSnapshot,
   projectPluginMetadataSnapshot,
+  readPluginMetadataSnapshotCache,
   resolvePluginMetadataSnapshot,
   resolvePluginMetadataSnapshotInput,
   resolvePluginMetadataSnapshotCacheKey,
@@ -144,7 +146,7 @@ export async function resolveConfigWidePluginMetadataSnapshotAsync(
       return preparedCurrent;
     }
     const { key } = resolveConfigWideMetadataSelection(captured);
-    const existing = cache.metadata.snapshots.get(key);
+    const existing = readPluginMetadataSnapshotCache(key);
     if (existing) {
       activateDiscovery();
       return existing;
@@ -189,13 +191,12 @@ export function resolveConfigWidePluginMetadataSnapshot(
       });
     }
     const { key, workspaceDirs } = resolveConfigWideMetadataSelection(params);
-    const cache = getPluginCache();
-    const cached = cache.metadata.snapshots.get(key);
+    const cached = readPluginMetadataSnapshotCache(key);
     if (cached) {
       return cached;
     }
     const snapshot = resolveConfigWidePluginMetadataSnapshotImpl(params, workspaceDirs);
-    cache.metadata.snapshots.set(key, snapshot);
+    cachePluginMetadataSnapshot(key, snapshot);
     return snapshot;
   });
 }

@@ -10,6 +10,7 @@ import {
   parseGitHubLinkTarget,
 } from "./github-link-target.ts";
 import { installAssistantTranscriptRoleMarkdown } from "./markdown-assistant-transcript.ts";
+import { installMarkdownAudioTranscript } from "./markdown-audio-transcript.ts";
 import { markdownCodeBlockCopyText, renderMarkdownCodeBlock } from "./markdown-code-blocks.ts";
 import { installMarkdownDetails } from "./markdown-details.ts";
 import {
@@ -135,12 +136,26 @@ export function createMarkdownParser(): MarkdownItParser {
   });
   markdownParser.use(markdownItCjkFriendly);
   markdownParser.enable("strikethrough");
+  installMarkdownAudioTranscript(markdownParser);
   installAssistantTranscriptRoleMarkdown(markdownParser);
   installMarkdownDetails(markdownParser);
   installMarkdownTables(markdownParser);
 
   // Bare filenames such as README.md are not web destinations.
   markdownParser.linkify.set({ fuzzyLink: false });
+
+  // A raw quote ends an HTTP URL in prose/JSON; encoded quotes remain URL data.
+  // Bound the input before matching so native path and punctuation rules still apply.
+  for (const schema of ["http:", "https:"]) {
+    markdownParser.linkify.add(schema, {
+      validate(text, pos, self) {
+        const pattern = self.re.get_http_validator();
+        const quote = text.indexOf('"', pos);
+        pattern.lastIndex = pos;
+        return pattern.exec(quote < 0 ? text : text.slice(0, quote))?.[0].length ?? 0;
+      },
+    });
+  }
 
   // Keep GFM's www. autolinks without fuzzy filename detection.
   markdownParser.linkify.add("www", {
@@ -555,7 +570,7 @@ export function createMarkdownParser(): MarkdownItParser {
   markdownParser.renderer.rules.link_favicon = (tokens, index) => {
     const hostname: unknown = tokens[index]?.meta?.hostname;
     return typeof hostname === "string"
-      ? `<img class="markdown-link-favicon" data-link-favicon-host="${escapeHtml(hostname)}" alt="" role="presentation">`
+      ? `<img class="markdown-link-favicon" data-link-favicon-host="${escapeHtml(hostname)}" width="16" height="16" loading="lazy" decoding="async" alt="" role="presentation">`
       : "";
   };
   // Fenced and indented blocks share one interaction and overflow surface.

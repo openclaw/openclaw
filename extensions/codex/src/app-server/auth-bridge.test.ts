@@ -1549,17 +1549,18 @@ describe("Codex auth bridge", () => {
     agentDir: root,
   }) => {
     const codexHome = path.join(root, "codex-cli");
+    vi.stubEnv("CODEX_HOME", codexHome);
+    vi.stubEnv("CODEX_API_KEY", "");
+    vi.stubEnv("OPENAI_API_KEY", "");
 
     await writeCodexCliApiKeyAuthFile(codexHome);
 
     const first = resolveCodexAppServerFallbackApiKeyCacheKey({
       startOptions: createStartOptions(),
-      baseEnv: { CODEX_HOME: codexHome },
     });
     await writeCodexCliAuthFile(codexHome, "second-cli-auth-json-api-key");
     const second = resolveCodexAppServerFallbackApiKeyCacheKey({
       startOptions: createStartOptions(),
-      baseEnv: { CODEX_HOME: codexHome },
     });
 
     expect(first).toMatch(/^CODEX_AUTH_JSON:sha256:[a-f0-9]{64}$/);
@@ -1607,7 +1608,6 @@ describe("Codex auth bridge", () => {
     expect(
       resolveCodexAppServerFallbackApiKeyCacheKey({
         startOptions,
-        baseEnv: { CODEX_HOME: codexHome },
       }),
     ).toBeUndefined();
     await applyAuth({

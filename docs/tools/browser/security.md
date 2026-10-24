@@ -14,13 +14,24 @@ Key ideas:
   configured gateway password.
 - Tailscale Serve identity headers and `gateway.auth.mode: "trusted-proxy"` do
   **not** authenticate this standalone loopback browser API.
-- If browser control is enabled and no shared-secret auth is configured, OpenClaw
-  auto-generates and persists a browser-control credential at startup:
-  a token when `gateway.auth.mode` is `none`, or a password when it is
-  `trusted-proxy` (persisted through `gateway.auth.password` so out-of-process
-  loopback clients can resolve it). Auto-generation is skipped when an explicit
-  string credential is already configured for that mode, or when
-  `gateway.auth.mode` is `password`.
+- If an HTTP listener (the standalone browser server or a sandbox browser bridge)
+  starts and no shared-secret auth is configured, OpenClaw generates a
+  browser-control credential for it:
+  - When `gateway.auth.mode` is `none`, it generates a token and persists it as
+    `gateway.auth.token`.
+  - When `gateway.auth.mode` is `trusted-proxy`, it generates a password that
+    stays in the Gateway process and is never written to config. Under
+    trusted-proxy auth, `gateway.auth.password` is also a local Gateway login,
+    and changing it restarts the Gateway.
+
+  Out-of-process clients of the standalone loopback API under trusted-proxy
+  therefore need an explicit `gateway.auth.password`.
+
+  Auto-generation is skipped when an explicit string credential is already
+  configured for that mode, or when `gateway.auth.mode` is `password`.
+
+- The Gateway's in-process browser service has no HTTP listener. Starting it on
+  first browser use never generates a credential or writes config.
 - Configure `gateway.auth.token`, `gateway.auth.password`, `OPENCLAW_GATEWAY_TOKEN`, or
   `OPENCLAW_GATEWAY_PASSWORD` explicitly if you want a stable secret you control
   instead of the generated one.
