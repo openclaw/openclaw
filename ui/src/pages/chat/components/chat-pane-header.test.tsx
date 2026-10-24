@@ -402,9 +402,12 @@ describe("chat pane header", () => {
       }),
     });
 
-    expect(container.querySelector(".chat-pane__public-share-indicator")?.textContent).toBe(
-      "Public",
+    const indicator = container.querySelector(".chat-pane__public-share-indicator")!;
+    expect(indicator.getAttribute("aria-label")).toBe(
+      "Public — anyone can read without signing in.",
     );
+    expect(indicator.querySelector("svg")).not.toBeNull();
+    expect(indicator.textContent).toBe("");
   });
 
   it("replaces the header owner avatar when visibility is available", () => {

@@ -81,6 +81,7 @@ it("retains the People page and lookup across native host replacement and deskto
     mobilePeople: {
       header: [
         { key: "ada", sender: { name: "Ada" }, label: "Ada", firstName: "Ada", viewing: true },
+        { key: "sam", sender: { name: "Sam" }, label: "Sam", firstName: "Sam", viewing: true },
       ],
       viewers: [],
       participants: [],
@@ -92,6 +93,9 @@ it("retains the People page and lookup across native host replacement and deskto
   function refreshHost() {
     mounted.update({ detailsControl: { ...detailsControl, mobileHost: { ...mobileHost } } });
   }
+  await waitForSolid(() =>
+    expect(mounted.container.querySelector(".chat-mobile-people-grid")).not.toBeNull(),
+  );
   const trigger = mounted.container.querySelector<HTMLButtonElement>(".chat-mobile-people-grid")!;
   expect(mentions.activate).not.toHaveBeenCalled();
   trigger.click();

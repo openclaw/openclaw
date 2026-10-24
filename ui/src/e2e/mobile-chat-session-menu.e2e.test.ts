@@ -44,7 +44,16 @@ async function installSessionSharing(
       sessionRow(key, title, updatedAt, {
         sharingRole: role,
         visibility,
-        ...(includePeople ? { createdActor: { type: "human", id: "owner", label: "Owner" } } : {}),
+        ...(includePeople
+          ? {
+              createdActor: {
+                type: "human",
+                id: "owner",
+                label: "Owner",
+                identity: { type: "profile", id: "owner" },
+              },
+            }
+          : {}),
       }),
     ]),
   };
@@ -70,6 +79,14 @@ async function installSessionSharing(
   }
   return installMockGateway(page, {
     sessionKey: key,
+    presenceUsers: includePeople
+      ? ["owner", "guest"].map((id) => ({
+          id,
+          identity: { type: "profile" as const, id },
+          name: id,
+          watchedSessions: [key],
+        }))
+      : [],
     featureMethods,
     methodResponses,
     operatorScopes: role === "owner" ? ["operator.read", "operator.write"] : ["operator.read"],
@@ -376,7 +393,12 @@ suite.define(() => {
           .click();
         await host.waitFor({ state: "hidden" });
         await expect
-          .poll(() => trigger.evaluate((element) => element === document.activeElement))
+          .poll(() =>
+            (colorScheme === "light"
+              ? page.getByRole("button", { name: "People", exact: true })
+              : trigger
+            ).evaluate((element) => element === document.activeElement),
+          )
           .toBe(true);
         if (colorScheme === "light") {
           await page.getByRole("button", { name: "People", exact: true }).click();

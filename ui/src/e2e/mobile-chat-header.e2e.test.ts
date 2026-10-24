@@ -18,6 +18,14 @@ async function installFixture(page: Page, defaultWorkspace = false) {
   return installMockGateway(page, {
     sessionKey,
     workspace: "/local/workspace-main",
+    presenceUsers: defaultWorkspace
+      ? []
+      : ["alex", "sam"].map((id) => ({
+          id,
+          identity: { type: "profile" as const, id },
+          name: id,
+          watchedSessions: [sessionKey],
+        })),
     methodResponses: {
       "sessions.list": chatSessionListResponse([
         {
@@ -26,7 +34,14 @@ async function installFixture(page: Page, defaultWorkspace = false) {
           label: title,
           spawnedCwd: defaultWorkspace ? "/local/workspace-main" : "/repo/openclaw",
           updatedAt: 1,
-          owner: { actor: { type: "human", id: "alex", label: "Alex" } },
+          owner: {
+            actor: {
+              type: "human",
+              id: "alex",
+              label: "Alex",
+              identity: { type: "profile", id: "alex" },
+            },
+          },
         },
       ]),
       "sessions.files.list": {
@@ -41,13 +56,14 @@ async function installFixture(page: Page, defaultWorkspace = false) {
 
 suite.define(() => {
   it("opens native Details while disconnected and after reconnecting", async () => {
-    await suite.withPage({ viewport: { width: 560, height: 900 } }, async ({ page }) => {
+    await suite.withPage({ viewport: { width: 320, height: 700 } }, async ({ page }) => {
       const gateway = await installFixture(page);
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
       const header = page.locator(".chat-pane-cache__pane--active .agent-chat__header--mobile");
       await header.getByRole("button", { name: title + " — Details", exact: true }).waitFor();
       await gateway.setOnline(false);
       await header.locator(".mobile-header__notices").waitFor();
+      await header.locator(".chat-header-session-menu__trigger").waitFor();
       const offlineDetails = await openChatDetails(page);
       expect(
         await offlineDetails
@@ -70,6 +86,8 @@ suite.define(() => {
   for (const viewport of [
     { width: 390, height: 844, colorScheme: "light" },
     { width: 320, height: 700, colorScheme: "dark" },
+    { width: 349, height: 700, colorScheme: "light" },
+    { width: 350, height: 700, colorScheme: "light" },
     { width: 852, height: 393, colorScheme: "light" },
   ] as const) {
     it(`keeps native mobile header actions at ${viewport.width}px`, async () => {
@@ -87,12 +105,16 @@ suite.define(() => {
           const header = page.locator(".chat-pane-cache__pane--active .agent-chat__header--mobile");
           await header.locator(".mobile-header__title-text", { hasText: title }).waitFor();
           const panels = header.getByRole("button", { name: "Panels", exact: true });
-          await panels.waitFor();
+          if (viewport.width >= 350) {
+            await panels.waitFor();
+          } else {
+            expect(await panels.isVisible()).toBe(false);
+          }
           const actions = header.locator(".chat-header-session-menu__trigger");
           await actions.waitFor();
           expect(
             await header.locator(".mobile-header__capsule").getByRole("button").allTextContents(),
-          ).toHaveLength(2);
+          ).toHaveLength(viewport.width < 350 ? 1 : 2);
           expect(await header.locator(".header-new-session").count()).toBe(0);
           expect(await header.getByRole("button", { name: "Details", exact: true }).count()).toBe(
             0,
@@ -124,7 +146,7 @@ suite.define(() => {
           expect(geometry.bodyWidth).toBe(geometry.viewportWidth);
           expect(geometry.buttons.map((button) => button.label)).toEqual([
             "Expand sidebar",
-            "Panels",
+            ...(viewport.width < 350 ? [] : ["Panels"]),
             "Actions for " + title,
           ]);
           for (const button of geometry.buttons) {
@@ -132,7 +154,11 @@ suite.define(() => {
             expect(button.height).toBeGreaterThanOrEqual(40);
           }
 
-          await header.locator(".chat-pane__workspace-chip", { hasText: "openclaw" }).waitFor();
+          const project = header.locator(".chat-pane__workspace-chip", { hasText: "openclaw" });
+          await project.waitFor();
+          expect(
+            (await header.locator(".mobile-header__title-text").boundingBox())!.y,
+          ).toBeLessThan((await project.boundingBox())!.y);
           await header.getByRole("button", { name: "People", exact: true }).waitFor();
           if (captureUiProofEnabled) {
             await captureFrame(
@@ -154,7 +180,12 @@ suite.define(() => {
               .evaluate((element) => element === document.activeElement),
           ).toBe(true);
 
-          await panels.click();
+          if (viewport.width < 350) {
+            await actions.click();
+            await page.getByRole("menuitem", { name: "Panels", exact: true }).click();
+          } else {
+            await panels.click();
+          }
           const host = page.locator(".chat-pane-cache__pane--active .chat-mobile-host");
           await host.getByRole("button", { name: "Panels", exact: true }).click();
           await host
@@ -181,7 +212,9 @@ suite.define(() => {
             .waitFor();
           await expect.poll(async () => (await files.boundingBox())!.width).toBeLessThan(800);
           await page.setViewportSize({ width: viewport.width, height: viewport.height });
-          await panels.waitFor();
+          if (viewport.width >= 350) {
+            await panels.waitFor();
+          }
           await expect
             .poll(async () => (await files.boundingBox())!.width)
             .toBeGreaterThanOrEqual(viewport.width - 24);
@@ -208,7 +241,7 @@ suite.define(() => {
       const header = pane.locator(".agent-chat__header--mobile");
       await header.getByRole("button", { name: title + " — Details", exact: true }).waitFor();
       await header.getByRole("button", { name: "Panels", exact: true }).waitFor();
-      await header.getByRole("button", { name: "People", exact: true }).waitFor();
+      expect(await header.getByRole("button", { name: "People", exact: true }).count()).toBe(0);
       expect(await header.locator(".chat-pane__workspace-chip").count()).toBe(0);
       if (captureUiProofEnabled) {
         await captureFrame(

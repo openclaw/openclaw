@@ -59,11 +59,15 @@ export async function openChatPanels(
     const trigger = pane
       .locator(".agent-chat__header--mobile")
       .getByRole("button", { name: "Panels", exact: true });
-    await trigger.waitFor({ state: "visible" });
-    if (!(await pane.locator(".chat-mobile-host").isVisible())) {
-      await trigger.click();
+    if (await trigger.isVisible()) {
+      if (!(await pane.locator(".chat-mobile-host").isVisible())) {
+        await trigger.click();
+      }
+      return trigger;
     }
-    return trigger;
+    const menu = await openSessionActions(pane);
+    await menu.getByRole("menuitem", { name: "Panels", exact: true }).click();
+    return menu.locator(".chat-header-session-menu__trigger");
   }
   const trigger = pane
     .locator(".sidebar-region__panels-toggle")

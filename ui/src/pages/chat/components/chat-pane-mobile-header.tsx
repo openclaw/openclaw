@@ -38,6 +38,7 @@ export type ChatPaneMobileHeaderProps = {
   onOpenDetails: (source: HTMLElement) => void;
   onOpenPanels: (source: HTMLElement) => void;
   panelsOpen: boolean;
+  compactActions?: boolean;
   /** The People control owns its trigger, presence facts and expanded action. */
   people?: Element;
   /** Native menu trigger; the owner omits it while disconnected/reconnecting. */
@@ -109,6 +110,7 @@ export function ChatPaneMobileHeader(props: ChatPaneMobileHeaderProps) {
   let header!: HTMLDivElement;
   const drawerRef = createRouteElementRef(NAV_DRAWER_TOGGLE_REGISTRATION);
   const project = children(() => props.project);
+  const people = children(() => props.people);
   const titleOverflow = useScrollState(true, false);
   const drawerLabel = () => (props.navDrawerOpen ? t("nav.collapse") : t("nav.expand"));
   return (
@@ -153,17 +155,9 @@ export function ChatPaneMobileHeader(props: ChatPaneMobileHeaderProps) {
           </button>
         </openclaw-tooltip>
       </Show>
-      <div class="mobile-header__identity">
-        <Show
-          when={project()}
-          fallback={
-            <Show when={props.publicAccess}>
-              {(access) => <ChatSessionPublicIndicator {...access()} mobile />}
-            </Show>
-          }
-        >
-          <div class="mobile-header__project">{project()}</div>
-        </Show>
+      <div
+        class={["mobile-header__identity", { "mobile-header__identity--title-only": !project() }]}
+      >
         <div class="mobile-header__title-row">
           <button
             type="button"
@@ -177,19 +171,24 @@ export function ChatPaneMobileHeader(props: ChatPaneMobileHeaderProps) {
               </Show>
             </span>
           </button>
-          <Show when={project() ? props.publicAccess : undefined}>
+          <Show when={props.publicAccess}>
             {(access) => <ChatSessionPublicIndicator {...access()} mobile />}
           </Show>
         </div>
+        <Show when={project()}>
+          <div class="mobile-header__project">{project()}</div>
+        </Show>
       </div>
-      <Show when={props.people}>
-        {(people) => <div class="mobile-header__people">{people()}</div>}
+      <Show when={people()}>
+        <div class="mobile-header__people">{people()}</div>
       </Show>
       <div class="mobile-header__capsule">
         <Show when={props.onOpenDashboard}>
           <button
             type="button"
             class="mobile-header__control mobile-header__dashboard"
+            hidden={props.compactActions}
+            style={{ display: props.compactActions ? "none" : undefined }}
             aria-label={t("pluginUi.dashboardTitle")}
             onClick={(event) => props.onOpenDashboard?.(event.currentTarget)}
           >
@@ -199,6 +198,8 @@ export function ChatPaneMobileHeader(props: ChatPaneMobileHeaderProps) {
         <button
           type="button"
           class="mobile-header__control"
+          hidden={props.compactActions}
+          style={{ display: props.compactActions ? "none" : undefined }}
           aria-label={t("chat.sessionHeader.panels")}
           aria-expanded={props.panelsOpen ? "true" : "false"}
           onClick={(event) => props.onOpenPanels(event.currentTarget)}
