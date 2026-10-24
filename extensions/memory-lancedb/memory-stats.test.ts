@@ -1,17 +1,33 @@
 import fs from "node:fs/promises";
+import { registerHooks } from "node:module";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { isPidAlive, runUtf8CommandWithTimeout } from "openclaw/plugin-sdk/process-runtime";
-import { afterEach, assert, expect, it, vi } from "vitest";
+import { afterAll, afterEach, assert, expect, it, vi } from "vitest";
 import { createMemoryCliHarness } from "./memory-cli.test-support.js";
 import { readMemoryStats } from "./memory-stats.js";
 import { installTmpDirHarness } from "./test-helpers.js";
 
-const { getDbPath } = installTmpDirHarness({ prefix: "openclaw-memory-stats-" });
+const { getDbPath, getTmpDir } = installTmpDirHarness({ prefix: "openclaw-memory-stats-" });
+
+// Source children do not inherit the host's plugin SDK resolver.
+const sdkHook = registerHooks({
+  resolve(specifier, context, nextResolve) {
+    return specifier === "openclaw/plugin-sdk/file-lock"
+      ? {
+          shortCircuit: true,
+          url: new URL("../../src/plugin-sdk/file-lock.ts", import.meta.url).href,
+        }
+      : nextResolve(specifier, context);
+  },
+});
+afterAll(() => sdkHook.deregister());
 
 const readStats = (dbPath: string) => readMemoryStats({ dbPath }, "main");
 const transport = vi.hoisted(() => ({
   moduleUrl: "",
+  tsconfigPath: undefined as string | undefined,
   onOutput: undefined as ((chunk: Buffer) => void) | undefined,
   controller: new AbortController(),
   pending: new Set<Promise<unknown>>(),
@@ -34,6 +50,7 @@ vi.mock("openclaw/plugin-sdk/process-runtime", async (importOriginal) => {
         [...argv.slice(0, entryIndex), "--input-type=module", "--eval", script],
         {
           ...options,
+          env: { ...process.env, ...options.env, TSX_TSCONFIG_PATH: transport.tsconfigPath },
           onOutputChunk: (chunk) => transport.onOutput?.(chunk),
           signal: transport.controller.signal,
         },
@@ -80,6 +97,7 @@ transport.moduleUrl = fixtureModuleUrl;
 
 afterEach(async () => {
   transport.moduleUrl = fixtureModuleUrl;
+  transport.tsconfigPath = undefined;
   transport.controller.abort();
   await Promise.allSettled(transport.pending);
   transport.controller = new AbortController();
@@ -154,6 +172,20 @@ it("does not claim cancellation succeeded when process cleanup is uncertain", as
 });
 
 it("keeps the table lease in the stats child until its native read closes", async () => {
+  transport.tsconfigPath = path.join(getTmpDir(), "tsconfig.json");
+  const configUrl = new URL("../../tsconfig.json", import.meta.url);
+  const config: { compilerOptions: { paths: Record<string, string[]> } } = JSON.parse(
+    await fs.readFile(configUrl, "utf8"),
+  );
+  const paths = Object.fromEntries(
+    Object.entries(config.compilerOptions.paths)
+      .filter(([specifier]) => specifier !== "openclaw/plugin-sdk/*")
+      .map(([specifier, targets]) => [
+        specifier,
+        targets.map((target) => fileURLToPath(new URL(target, configUrl))),
+      ]),
+  );
+  await fs.writeFile(transport.tsconfigPath, JSON.stringify({ compilerOptions: { paths } }));
   transport.moduleUrl = `data:text/javascript,${encodeURIComponent(`
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";

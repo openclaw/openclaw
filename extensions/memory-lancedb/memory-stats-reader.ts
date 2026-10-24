@@ -5,6 +5,7 @@ import { acquireMemoryTableUsage } from "./lancedb-custody.js";
 
 type MemoryStatsRequest = {
   dbPath: string;
+  fileLockUrl?: string;
   storageOptions?: Record<string, string>;
   tableName: string;
   predicate: string;
@@ -20,7 +21,10 @@ export async function runMemoryStatsReader(
   let usage: FileLockHandle | null = null;
   const result: { columns?: string[]; count?: number; error?: string } = {};
   try {
-    usage = await acquireMemoryTableUsage(input.dbPath);
+    usage = await acquireMemoryTableUsage(
+      input.dbPath,
+      input.fileLockUrl ? await import(input.fileLockUrl) : undefined,
+    );
     const lancedb = await loadLanceDbModule();
     db = await lancedb.connect(input.dbPath, { storageOptions: input.storageOptions });
     if ((await db.tableNames()).includes(input.tableName)) {
