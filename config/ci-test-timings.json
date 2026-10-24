@@ -3224,7 +3224,6 @@
       "ui/src/e2e/appearance-settings-defaults.e2e.test.ts": 21,
       "ui/src/e2e/approval-bootstrap.e2e.test.ts": 5,
       "ui/src/e2e/approval-flow.e2e.test.ts": 6,
-      "ui/src/e2e/approval-lookup.real-gateway.e2e.test.ts": 11,
       "ui/src/e2e/approval-page.e2e.test.ts": 13,
       "ui/src/e2e/assistant-panel-context.e2e.test.ts": 6,
       "ui/src/e2e/avatar-initial-emoji.e2e.test.ts": 4,
