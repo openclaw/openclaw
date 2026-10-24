@@ -90,9 +90,7 @@ describe("memory index", () => {
       reopened.db
         .prepare("SELECT value_json FROM cache_entries WHERE scope = ? AND key = ?")
         .get("test", "keep-me"),
-    ).toEqual({
-      value_json: JSON.stringify({ value: "keep-me" }),
-    });
+    ).toEqual({ value_json: JSON.stringify({ value: "keep-me" }) });
   });
 
   const writeMemory = (filename: string, content: string) =>
@@ -154,10 +152,7 @@ describe("memory index", () => {
 
   async function seedTargets(markers: Record<string, string>, sessionKey: (id: string) => string) {
     for (const [id, marker] of Object.entries(markers)) {
-      await seedSession(id, marker, {
-        timestamp: Date.now(),
-        sessionKey: sessionKey(id),
-      });
+      await seedSession(id, marker, { timestamp: Date.now(), sessionKey: sessionKey(id) });
     }
   }
 
@@ -208,11 +203,7 @@ describe("memory index", () => {
     const curated = await manager.listCuratedProjectCandidates({ activeProjectKeys });
     const triggers = await manager.listTriggerCandidates({ activeProjectKeys });
     const expectedCandidates = [
-      {
-        projectKey,
-        triggers: "kraken deploy ritual",
-        provenance: { originClass: "agent" },
-      },
+      { projectKey, triggers: "kraken deploy ritual", provenance: { originClass: "agent" } },
     ];
     expect(curated).toMatchObject(expectedCandidates);
     expect(triggers).toMatchObject(expectedCandidates);
@@ -438,11 +429,7 @@ describe("memory index", () => {
 
     expect(providerFixture.providerRuntimeBatchCalls).toHaveLength(attempts);
     expect(providerFixture.embedBatchCalls).toBe(1);
-    expect(manager.status().batch).toMatchObject({
-      enabled: false,
-      failures: 2,
-      lastError,
-    });
+    expect(manager.status().batch).toMatchObject({ enabled: false, failures: 2, lastError });
   });
 
   it("resets batch failures when a timeout retry recovers", async () => {
@@ -1038,10 +1025,7 @@ describe("memory index", () => {
     });
 
     await manager.sync({ reason: "test", force: true });
-    const results = await manager.search("owner prefers green tea", {
-      minScore: 0,
-      maxResults: 3,
-    });
+    const results = await manager.search("owner prefers green tea", { minScore: 0, maxResults: 3 });
 
     expect(results[0]?.source).toBe("sessions");
     expect(results[0]?.provenance).toEqual({

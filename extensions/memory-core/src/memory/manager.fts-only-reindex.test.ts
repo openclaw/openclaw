@@ -20,6 +20,7 @@ import {
   closeOpenClawStateDatabaseAsync,
   openOpenClawAgentDatabase,
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import { captureEnv } from "openclaw/plugin-sdk/test-env";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { runInMemoryTestBackgroundContext } from "./background-context.test-support.js";
 import { closeAllMemorySearchManagers, getMemorySearchManager } from "./index.js";
@@ -80,19 +81,7 @@ function missingProviderAuth() {
   );
 }
 
-const originalFtsOnlyStateDir = process.env.OPENCLAW_STATE_DIR;
-
-function setFtsOnlyStateDir(stateDir: string): void {
-  Reflect.set(process.env, "OPENCLAW_STATE_DIR", stateDir);
-}
-
-function restoreFtsOnlyStateDir(): void {
-  if (originalFtsOnlyStateDir === undefined) {
-    Reflect.deleteProperty(process.env, "OPENCLAW_STATE_DIR");
-  } else {
-    Reflect.set(process.env, "OPENCLAW_STATE_DIR", originalFtsOnlyStateDir);
-  }
-}
+const stateEnv = captureEnv(["OPENCLAW_STATE_DIR"]);
 
 vi.mock("./embeddings.js", () => ({
   createEmbeddingProvider: createEmbeddingProviderMock,
@@ -125,7 +114,7 @@ describe("memory manager FTS-only reindex", () => {
     workspaceDir = path.join(fixtureRoot, `case-${caseId++}`);
     await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });
     await writeMemory("Alpha topic\n\nKeep this note.");
-    setFtsOnlyStateDir(path.join(workspaceDir, "state"));
+    Reflect.set(process.env, "OPENCLAW_STATE_DIR", path.join(workspaceDir, "state"));
     indexPath = resolveOpenClawAgentSqlitePath({ agentId: "main" });
   });
 
@@ -137,7 +126,7 @@ describe("memory manager FTS-only reindex", () => {
     managers = [];
     await closeAllMemorySearchManagers();
     clearRuntimeConfigSnapshot();
-    restoreFtsOnlyStateDir();
+    stateEnv.restore();
   });
 
   afterAll(async () => {
@@ -546,10 +535,7 @@ describe("memory manager FTS-only reindex", () => {
     await expect(memoryManager.search("Delta fallback refresh")).resolves.toHaveLength(1);
     expect(providerQueryCalls).toBeGreaterThan(queryCallsAfterProbe);
     const recoveredStatus = memoryManager.status();
-    expect(recoveredStatus.custom?.providerState).toEqual({
-      mode: "active",
-      providerId: "openai",
-    });
+    expect(recoveredStatus.custom?.providerState).toEqual({ mode: "active", providerId: "openai" });
     expect(recoveredStatus.custom?.providerUnavailableReason).toBeUndefined();
   });
 
