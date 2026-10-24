@@ -1,13 +1,11 @@
-import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import type { Page } from "playwright-core";
 import { afterEach } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test-support.js";
 import { resolveBrowserConfig } from "../config.js";
-import { getPlaywrightCore } from "../playwright-core.runtime.js";
+import { launchChromium, readTargetId } from "../pw-chromium.test-support.js";
 import { closePlaywrightBrowserConnection } from "../pw-session.js";
 import { createBrowserRouteContext, type BrowserServerState } from "../server-context.js";
-import { getFreePort } from "../test-port.js";
 import { createRouteFixture } from "./request.test-support.js";
 
 export const chromiumTempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -27,15 +25,8 @@ export async function withChromiumPage(
     ctx: ReturnType<typeof createBrowserRouteContext>,
   ) => void,
 ) {
-  const port = await getFreePort();
-  const cdpUrl = `http://127.0.0.1:${port}`;
-  const context = await getPlaywrightCore().chromium.launchPersistentContext(
-    path.join(chromiumTempDirs.make("openclaw-browser-routes-"), "profile"),
-    {
-      headless: true,
-      executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH,
-      args: [`--remote-debugging-port=${port}`],
-    },
+  const { context, cdpUrl } = await launchChromium(
+    chromiumTempDirs.make("openclaw-browser-routes-"),
   );
   try {
     const page = context.pages()[0] ?? (await context.newPage());
@@ -45,9 +36,7 @@ export async function withChromiumPage(
       await page.route(url, (route) => route.fulfill({ contentType: "text/html", body }));
     }
     await page.goto(expectDefined(Object.keys(pages)[0], "fixture page URL"));
-    const session = await context.newCDPSession(page);
-    const { targetInfo } = await session.send("Target.getTargetInfo");
-    await session.detach();
+    const targetId = await readTargetId(page);
     const state: BrowserServerState = {
       port: 0,
       resolved: resolveBrowserConfig({
@@ -62,9 +51,9 @@ export async function withChromiumPage(
     register(routes.app, createBrowserRouteContext({ getState: () => state }));
     await run({
       page,
-      targetId: targetInfo.targetId,
+      targetId,
       call: async (method, route, values, params, signal) => {
-        const input = { targetId: targetInfo.targetId, ...values };
+        const input = { targetId, ...values };
         return routes.request(method, route, {
           params: params ?? {},
           query: method === "get" ? input : {},

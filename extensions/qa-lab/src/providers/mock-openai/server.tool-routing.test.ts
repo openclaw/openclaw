@@ -39,15 +39,18 @@ const catalogTools = ["dispatch_action", "tool_search", "tool_describe", "sessio
     name,
   }),
 );
-const shellExec = {
-  type: "function",
-  name: "exec",
-  parameters: {
-    type: "object",
-    properties: { command: { type: "string" } },
-    required: ["command"],
-  },
-};
+function makeShellExecTool() {
+  return {
+    type: "function",
+    name: "exec",
+    parameters: {
+      type: "object",
+      properties: { command: { type: "string" } },
+      required: ["command"],
+    },
+  };
+}
+const shellExec = makeShellExecTool();
 const namespace = [{ type: "namespace", name: "openclaw", tools: catalogTools }];
 function catalogOutput(name: string, result: Record<string, unknown>) {
   return JSON.stringify({ tool: { id: `openclaw:${name}`, name, source: "openclaw" }, result });
@@ -723,17 +726,7 @@ describe("subagent-handoff", () => {
 
   // Captured smoke-ci surface: exec is a shell tool, not Code Mode (no wait).
   const structuredTools = ["exec", "sessions_yield", "dispatch_action", "write"].map((name) =>
-    name === "exec"
-      ? {
-          type: "function",
-          name,
-          parameters: {
-            type: "object",
-            properties: { command: { type: "string" } },
-            required: ["command"],
-          },
-        }
-      : { type: "function", name },
+    name === "exec" ? makeShellExecTool() : { type: "function", name },
   );
   const metadataCarrier = user(
     [

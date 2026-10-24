@@ -2,6 +2,7 @@ import crypto, { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { buffer as consumeBuffer } from "node:stream/consumers";
 import { gzipSync } from "node:zlib";
 import * as tar from "tar";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
@@ -52,14 +53,7 @@ async function createTarBuffer(files: Record<string, string | Buffer>): Promise<
     await fs.mkdir(path.dirname(filename), { recursive: true });
     await fs.writeFile(filename, contents);
   }
-  const chunks: Buffer[] = [];
-  for await (const chunk of tar.c(
-    { cwd: sourceDir, gzip: true, portable: true },
-    Object.keys(files),
-  )) {
-    chunks.push(Buffer.from(chunk));
-  }
-  return Buffer.concat(chunks);
+  return consumeBuffer(tar.c({ cwd: sourceDir, gzip: true, portable: true }, Object.keys(files)));
 }
 
 type RawTarEntry = {

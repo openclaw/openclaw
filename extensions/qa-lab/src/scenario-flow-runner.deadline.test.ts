@@ -18,14 +18,8 @@ describe("scenario flow deadline", () => {
       const controller = new AbortController();
       const timeoutError = new Error("scenario deadline expired");
       const sideEffect = vi.fn();
-      let markInputStarted!: () => void;
-      let releaseInput!: (value: unknown) => void;
-      const inputStarted = new Promise<void>((resolve) => {
-        markInputStarted = resolve;
-      });
-      const input = new Promise<unknown>((resolve) => {
-        releaseInput = resolve;
-      });
+      const { promise: inputStarted, resolve: markInputStarted } = Promise.withResolvers<void>();
+      const { promise: input, resolve: releaseInput } = Promise.withResolvers<unknown>();
 
       const pending = runScenarioFlow({
         api: {
@@ -81,19 +75,10 @@ describe("scenario flow deadline", () => {
     const finallyMutation = vi.fn();
     const laterMutation = vi.fn();
     const detailsMutation = vi.fn(() => "details");
-    let markActionStarted!: () => void;
-    let releaseAction!: () => void;
-    let expireDeadline!: (reason: Error) => void;
     let pendingStep: Promise<QaSuiteStepOutcome | void> | undefined;
-    const actionStarted = new Promise<void>((resolve) => {
-      markActionStarted = resolve;
-    });
-    const action = new Promise<void>((resolve) => {
-      releaseAction = resolve;
-    });
-    const deadline = new Promise<never>((_resolve, reject) => {
-      expireDeadline = reject;
-    });
+    const { promise: actionStarted, resolve: markActionStarted } = Promise.withResolvers<void>();
+    const { promise: action, resolve: releaseAction } = Promise.withResolvers<void>();
+    const { promise: deadline, reject: expireDeadline } = Promise.withResolvers<never>();
     const thenKey = ["th", "en"].join("");
     const ifAction = Object.fromEntries([
       ["expr", "true"],

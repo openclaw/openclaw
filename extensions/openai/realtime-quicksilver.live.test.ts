@@ -208,29 +208,20 @@ describeLive("OpenAI GA Gateway-controlled WebRTC", () => {
       let reservation:
         | Awaited<ReturnType<NonNullable<typeof provider.createBrowserSession>>>
         | undefined;
-      let resolveTool!: () => void;
-      let resolveFunctionOutputAdded!: () => void;
-      let resolveFunctionOutputDone!: () => void;
-      let resolveResponse!: () => void;
-      let rejectFunctionOutputAdded!: (error: Error) => void;
       let responseDoneCount = 0;
       let responseCreateCount = 0;
       let responseCreateCountAtToolCall = 0;
       let sessionPolicyReady = false;
       const eventClasses: string[] = [];
-      const toolObserved = new Promise<void>((resolve) => {
-        resolveTool = resolve;
-      });
-      const functionOutputAdded = new Promise<void>((resolve, reject) => {
-        resolveFunctionOutputAdded = resolve;
-        rejectFunctionOutputAdded = reject;
-      });
-      const functionOutputDone = new Promise<void>((resolve) => {
-        resolveFunctionOutputDone = resolve;
-      });
-      const responseObserved = new Promise<void>((resolve) => {
-        resolveResponse = resolve;
-      });
+      const { promise: toolObserved, resolve: resolveTool } = Promise.withResolvers<void>();
+      const {
+        promise: functionOutputAdded,
+        resolve: resolveFunctionOutputAdded,
+        reject: rejectFunctionOutputAdded,
+      } = Promise.withResolvers<void>();
+      const { promise: functionOutputDone, resolve: resolveFunctionOutputDone } =
+        Promise.withResolvers<void>();
+      const { promise: responseObserved, resolve: resolveResponse } = Promise.withResolvers<void>();
       try {
         await page.goto(baseUrl);
         reservation = await provider.createBrowserSession!({

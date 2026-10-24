@@ -7,6 +7,7 @@ import { rawDataToString } from "openclaw/plugin-sdk/webhook-ingress";
 import { WebSocket, WebSocketServer } from "openclaw/plugin-sdk/websocket-runtime";
 import type { BrowserContext, Frame, Page } from "playwright-core";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { listenOnLoopback } from "../../../../test-support/hanging-loopback-server.js";
 import { useAutoCleanupTempDirTracker } from "../../../test-support.js";
 import { resolveBrowserConfig } from "../config.js";
 import { closePlaywrightBrowserConnection } from "../pw-session.js";
@@ -334,14 +335,8 @@ describe.runIf(process.env.OPENCLAW_BROWSER_SCOPED_REFS_E2E === "1")(
         );
       });
       const proxy = new WebSocketServer({ server: proxyHttp });
-      await new Promise<void>((resolve) => {
-        proxyHttp.listen(0, "127.0.0.1", resolve);
-      });
-      const address = proxyHttp.address();
-      if (!address || typeof address === "string") {
-        throw new Error("Missing proxy address");
-      }
-      proxyUrl = `http://127.0.0.1:${address.port}`;
+      const port = await listenOnLoopback(proxyHttp);
+      proxyUrl = `http://127.0.0.1:${port}`;
       const sockets = new Set<WebSocket>();
       const entered = createDeferred<void>();
       let armed = false;

@@ -14,10 +14,7 @@ installPinnedHostnameTestHooks();
 const LOOPBACK_RESPONSE_BYTES = 18 * 1024 * 1024;
 
 function createOversizedJsonServer(): { server: Server; closed: Promise<number> } {
-  let resolveClosed: (sentBytes: number) => void = () => {};
-  const closed = new Promise<number>((resolve) => {
-    resolveClosed = resolve;
-  });
+  const { promise: closed, resolve: resolveClosed } = Promise.withResolvers<number>();
   const server = createServer((_req, res) => {
     let sentBytes = 0;
     const chunk = Buffer.alloc(64 * 1024, 0x20);

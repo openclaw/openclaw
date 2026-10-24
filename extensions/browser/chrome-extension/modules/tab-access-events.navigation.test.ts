@@ -117,10 +117,7 @@ async function createNavigationHarness(
       }
     },
     deferLookup() {
-      let release = (_value: BrowserTabSnapshot) => {};
-      const pending = new Promise<BrowserTabSnapshot>((resolve) => {
-        release = resolve;
-      });
+      const { promise: pending, resolve: release } = Promise.withResolvers<BrowserTabSnapshot>();
       chromeApi.tabs.get.mockImplementation(async () => await pending);
       return async () => {
         release(tab);
@@ -206,14 +203,8 @@ describe("Chrome navigation event access", () => {
     const harness = await createNavigationHarness("selected");
     await harness.controlBlank();
     const stale = await harness.chromeApi.tabs.query();
-    let release = (_tabs: BrowserTabSnapshot[]) => {};
-    const lookup = new Promise<BrowserTabSnapshot[]>((resolve) => {
-      release = resolve;
-    });
-    let queried = () => {};
-    const started = new Promise<void>((resolve) => {
-      queried = resolve;
-    });
+    const { promise: lookup, resolve: release } = Promise.withResolvers<BrowserTabSnapshot[]>();
+    const { promise: started, resolve: queried } = Promise.withResolvers<void>();
     harness.chromeApi.tabs.query.mockImplementationOnce(() => {
       queried();
       return lookup;
@@ -334,14 +325,8 @@ describe("Chrome navigation event access", () => {
 
   it("preserves commands admitted after a newer tab event when an older group lookup completes", async () => {
     const harness = await createNavigationHarness("selected");
-    let release = () => {};
-    const pending = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    let observed = () => {};
-    const started = new Promise<void>((resolve) => {
-      observed = resolve;
-    });
+    const { promise: pending, resolve: release } = Promise.withResolvers<void>();
+    const { promise: started, resolve: observed } = Promise.withResolvers<void>();
     const get = harness.chromeApi.tabs.get.getMockImplementation()!;
     harness.chromeApi.tabs.get.mockImplementationOnce(async (tabId) => {
       observed();
