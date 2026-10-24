@@ -236,10 +236,12 @@ function publishRuntimeConfigSnapshot(
     sourceUnchanged: sourceMatchesPublished,
     previousEditedInPlace: previousEditedInPlace || previousSourceEditedInPlace,
   });
+  // Retain publication-time values even if the caller later mutates its live config.
+  const captured = captureRuntimeConfigWithSource(config, sourceConfig ?? config);
   prepareRuntimePluginsConfig(config);
   clearExecutablePathCache();
   runtimeConfigSnapshot = config;
-  runtimeConfigCapturedSnapshot = null;
+  runtimeConfigCapturedSnapshot = captured;
   runtimeConfigSourceSnapshot = sourceConfig ?? null;
   runtimeConfigSnapshotMetadata = metadata;
   if (
@@ -364,13 +366,7 @@ export function clearRuntimeConfigSnapshot(): void {
 }
 
 export function getRuntimeConfigSnapshot(options?: { capture?: boolean }): OpenClawConfig | null {
-  if (options?.capture && runtimeConfigSnapshot) {
-    return (runtimeConfigCapturedSnapshot ??= captureRuntimeConfigWithSource(
-      runtimeConfigSnapshot,
-      runtimeConfigSourceSnapshot ?? runtimeConfigSnapshot,
-    ));
-  }
-  return runtimeConfigSnapshot;
+  return options?.capture ? runtimeConfigCapturedSnapshot : runtimeConfigSnapshot;
 }
 
 /** Read the config published by runtime preparation without cold-loading storage. */
