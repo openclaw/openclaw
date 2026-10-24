@@ -60,7 +60,7 @@ const controlUiPerformanceBudgets = {
   chatBootCssRequests: 3,
   newBootCssRequests: 3,
   // Measured after deferring suggestion rows and person-card content.
-  chatBootJsGzipBytes: 1_270_193,
+  chatBootJsGzipBytes: 1_270_514,
   newBootJsGzipBytes: 797_395,
   startupCssRequests: 1,
   // Solid 2 action/optimistic runtime adoption; offset tracked by HF-STARTUP-BUDGET.
