@@ -1,4 +1,3 @@
-import { AsyncLocalStorage } from "node:async_hooks";
 import os from "node:os";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
@@ -6,39 +5,15 @@ import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 import { resolveHostExecMemoryLimit, watchChildMemory } from "./child-memory.js";
 
 const procfs = vi.hoisted(() => ({
-  readFile: vi.fn<(path: string) => Promise<Buffer>>(),
+  readFile: vi.fn<(path: string) => Promise<string>>(),
   readdir: vi.fn<(path: string) => Promise<string[]>>(),
 }));
-
-const stops: (() => void)[] = [];
-function watch(pid = 100) {
-  const onLimit = vi.fn();
-  const onDiagnostic = vi.fn();
-  const stop = watchChildMemory({ pid, limitBytes: 128 * 1024, onLimit, onDiagnostic });
-  stops.push(stop);
-  return { stop, onLimit, onDiagnostic };
-}
-
-function mockProc(files: Record<string, string>, beforeRead?: (path: string) => Promise<void>) {
-  procfs.readFile.mockImplementation(async (path) => {
-    await beforeRead?.(path);
-    const contents = files[path];
-    if (contents === undefined) {
-      throw Object.assign(new Error("gone"), { code: "ENOENT" });
-    }
-    return Buffer.from(contents);
-  });
-  procfs.readdir.mockResolvedValue([]);
-}
 vi.mock("node:fs/promises", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:fs/promises")>()),
   ...procfs,
 }));
 
 afterEach(() => {
-  for (const stop of stops.splice(0)) {
-    stop();
-  }
   vi.clearAllTimers();
   vi.useRealTimers();
   vi.restoreAllMocks();
@@ -64,107 +39,105 @@ it("scales the host bound with host memory, cgroup constraints, and the owner's 
   expect(resolveHostExecMemoryLimit()).toBeUndefined();
 });
 
-it("counts nonleader descendants and swapped memory without truncating long status files", async () => {
+it("counts descendants from nonleader threads and swapped memory, then stops sampling", async () => {
   vi.useFakeTimers();
   mockProcessPlatform("linux");
   const files: Record<string, string> = {
-    "/proc/100/status": `Name:\t${"x".repeat(4086)}\nVmRSS:\t32 kB\nVmSwap:\t0 kB\nVmSize:\t999999 kB\n`,
+    "/proc/100/status": "VmRSS:\t32 kB\nVmSwap:\t0 kB\n",
     "/proc/100/task/100/children": "",
     "/proc/100/task/101/children": "200",
     "/proc/200/status": "VmRSS:\t32 kB\nVmSwap:\t80 kB\n",
   };
-  mockProc(files);
-  procfs.readdir.mockResolvedValue(["100", "101", "102"]);
-  const { onLimit, onDiagnostic } = watch();
+  const read = procfs.readFile.mockImplementation(async (file) => {
+    const value = files[file];
+    if (value === undefined) {
+      throw Object.assign(new Error("gone"), { code: "ENOENT" });
+    }
+    return value;
+  });
+  procfs.readdir.mockResolvedValue(["100", "101"]);
+  const onLimit = vi.fn();
+  const onDiagnostic = vi.fn();
+  const stop = watchChildMemory({ pid: 100, limitBytes: 128 * 1024, onLimit, onDiagnostic });
   await vi.advanceTimersByTimeAsync(2000);
   expect(onLimit).toHaveBeenCalledExactlyOnceWith(144 * 1024);
   expect(onDiagnostic).toHaveBeenCalledExactlyOnceWith(expect.stringContaining("1 MiB limit"));
-  const reads = procfs.readFile.mock.calls.length;
+  const reads = read.mock.calls.length;
   await vi.advanceTimersByTimeAsync(5000);
-  expect(procfs.readFile).toHaveBeenCalledTimes(reads);
+  expect(read).toHaveBeenCalledTimes(reads);
+  stop();
 });
 
-it("protects other trees during a blocked read without overlapping ticks, then restarts after idle", async () => {
-  vi.useFakeTimers();
-  mockProcessPlatform("linux");
-  const blocked = createDeferred();
-  mockProc(
-    {
-      "/proc/100/status": "VmRSS:\t256 kB\n",
-      "/proc/200/status": "VmRSS:\t64 kB\n",
-      "/proc/300/status": "VmRSS:\t256 kB\n",
-    },
-    async (path) => {
-      if (path === "/proc/100/status") {
-        await blocked.promise;
+it.each(["half the bound", "new descendants"])(
+  "samples quiet trees every five seconds and returns to one second at %s",
+  async (growth) => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    mockProcessPlatform("linux");
+    const files: Record<string, string> = {
+      "/proc/100/status": "VmRSS:\t32 kB\n",
+      "/proc/100/task/100/children": "",
+      "/proc/200/status": "VmRSS:\t16 kB\n",
+    };
+    const sampledAt: number[] = [];
+    procfs.readFile.mockImplementation(async (file) => {
+      if (file === "/proc/100/status") {
+        sampledAt.push(Date.now());
       }
-    },
-  );
-  const first = watch();
-  const second = watch(200);
-  const third = watch(300);
-  expect(vi.getTimerCount()).toBe(1);
-  await vi.advanceTimersByTimeAsync(1000);
-  expect(third.onLimit).toHaveBeenCalledExactlyOnceWith(256 * 1024);
-  first.stop();
-  await vi.advanceTimersByTimeAsync(5000);
-  expect(procfs.readFile).toHaveBeenCalledTimes(3);
-  blocked.resolve();
-  await vi.advanceTimersByTimeAsync(0);
-  expect(first.onLimit).not.toHaveBeenCalled();
-  expect(first.onDiagnostic).not.toHaveBeenCalled();
-  expect(second.onLimit).not.toHaveBeenCalled();
-  expect(second.onDiagnostic).not.toHaveBeenCalled();
-  expect(procfs.readFile).toHaveBeenCalledTimes(3);
-  expect(vi.getTimerCount()).toBe(1);
-  await vi.advanceTimersByTimeAsync(1000);
-  expect(procfs.readFile).toHaveBeenCalledTimes(4);
-  second.stop();
-  expect(vi.getTimerCount()).toBe(0);
-  const restarted = watch(300);
-  await vi.advanceTimersByTimeAsync(1000);
-  expect(restarted.onLimit).toHaveBeenCalledExactlyOnceWith(256 * 1024);
-  expect(vi.getTimerCount()).toBe(0);
-});
+      const contents = files[file];
+      if (contents === undefined) {
+        throw Object.assign(new Error("gone"), { code: "ENOENT" });
+      }
+      return contents;
+    });
+    procfs.readdir.mockImplementation(async (dir) => (dir === "/proc/100/task" ? ["100"] : []));
+    const onLimit = vi.fn();
+    const onDiagnostic = vi.fn();
+    const stop = watchChildMemory({ pid: 100, limitBytes: 128 * 1024, onLimit, onDiagnostic });
+    await vi.advanceTimersByTimeAsync(5999);
+    expect(sampledAt).toEqual([1000]);
+    if (growth === "half the bound") {
+      files["/proc/100/status"] = "VmRSS:\t64 kB\n";
+    } else {
+      files["/proc/100/task/100/children"] = "200";
+    }
+    await vi.advanceTimersByTimeAsync(1);
+    expect(sampledAt).toEqual([1000, 6000]);
+    expect(onLimit).not.toHaveBeenCalled();
+    files["/proc/100/status"] = "VmRSS:\t256 kB\n";
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(sampledAt).toEqual([1000, 6000, 7000]);
+    expect(onLimit).toHaveBeenCalledExactlyOnceWith(256 * 1024);
+    expect(onDiagnostic).toHaveBeenCalledExactlyOnceWith(expect.stringContaining("1 MiB limit"));
+    stop();
+  },
+);
 
-it("warns once about an unreadable tree while protecting other trees", async () => {
+it("retries a failed quiet-tree sample after one second and cancels an awaited retry", async () => {
   vi.useFakeTimers();
   mockProcessPlatform("linux");
-  mockProc({ "/proc/200/status": "VmRSS:\t256 kB\n" });
-  procfs.readFile.mockRejectedValueOnce(Object.assign(new Error("denied"), { code: "EACCES" }));
-  const unreadable = watch();
-  const other = watch(200);
-  await vi.advanceTimersByTimeAsync(2000);
-  expect(unreadable.onLimit).not.toHaveBeenCalled();
-  expect(unreadable.onDiagnostic).toHaveBeenCalledExactlyOnceWith(
+  const blocked = createDeferred<string>();
+  procfs.readFile
+    .mockResolvedValueOnce("VmRSS:\t32 kB\n")
+    .mockRejectedValueOnce(Object.assign(new Error("denied"), { code: "EACCES" }))
+    .mockImplementation(() => blocked.promise);
+  procfs.readdir.mockResolvedValue([]);
+  const onLimit = vi.fn();
+  const onDiagnostic = vi.fn();
+  const stop = watchChildMemory({ pid: 100, limitBytes: 128 * 1024, onLimit, onDiagnostic });
+  await vi.advanceTimersByTimeAsync(6000);
+  expect(procfs.readFile).toHaveBeenCalledTimes(2);
+  expect(onDiagnostic).toHaveBeenCalledExactlyOnceWith(
     expect.stringContaining("memory protection is degraded"),
   );
-  expect(other.onLimit).toHaveBeenCalledExactlyOnceWith(256 * 1024);
-  expect(other.onDiagnostic).toHaveBeenCalledExactlyOnceWith(
-    expect.stringContaining("1 MiB limit"),
-  );
-});
-
-it("does not sample or warn on non-Linux hosts", async () => {
-  vi.useFakeTimers();
-  mockProcessPlatform("darwin");
-  const { onLimit, onDiagnostic } = watch();
+  await vi.advanceTimersByTimeAsync(1000);
+  expect(procfs.readFile).toHaveBeenCalledTimes(3);
   await vi.advanceTimersByTimeAsync(5000);
-  expect(procfs.readFile).not.toHaveBeenCalled();
+  expect(procfs.readFile).toHaveBeenCalledTimes(3);
+  stop();
+  blocked.resolve("VmRSS:\t256 kB\n");
+  await vi.advanceTimersByTimeAsync(5000);
   expect(onLimit).not.toHaveBeenCalled();
-  expect(onDiagnostic).not.toHaveBeenCalled();
-});
-
-it("does not retain the first execution's async context in the shared timer", () => {
-  vi.useFakeTimers();
-  mockProcessPlatform("linux");
-  const context = new AsyncLocalStorage<object>();
-  const registeredContexts: unknown[] = [];
-  const schedule = globalThis.setTimeout;
-  vi.spyOn(globalThis, "setTimeout").mockImplementation((callback, delay, ...args) => {
-    registeredContexts.push(context.getStore());
-    return schedule(callback, delay, ...args);
-  });
-  context.run({ execution: "first" }, () => watch());
-  expect(registeredContexts).toEqual([undefined]);
+  expect(onDiagnostic).toHaveBeenCalledTimes(1);
+  expect(procfs.readFile).toHaveBeenCalledTimes(3);
 });

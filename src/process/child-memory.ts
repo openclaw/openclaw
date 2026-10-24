@@ -1,7 +1,6 @@
 import { readFile, readdir } from "node:fs/promises";
 import os from "node:os";
 import { hasErrnoCode } from "../infra/errno.js";
-import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 
 /** Host exec budgets physical memory, not V8/Go's virtual address reservations. */
 export function resolveHostExecMemoryLimit(): number | undefined {
@@ -17,69 +16,41 @@ function formatChildMemoryLimit(limitBytes: number, observedBytes: number): stri
   return `Command killed for exceeding its host memory bound (${Math.ceil(observedBytes / 1024 ** 2)} MiB observed; ${Math.ceil(limitBytes / 1024 ** 2)} MiB limit). Reduce command concurrency or input size, split the work, or use a separately resource-limited worker.`;
 }
 
-function parseProcNumbers(data: Buffer, memory: boolean, consume: (value: number) => void): void {
-  let column = 0;
-  let rss = true;
-  let swap = true;
-  let value = 0;
-  let digits = false;
-  for (let i = 0; i < data.length; i++) {
-    const byte = data.readUInt8(i);
-    if (memory) {
-      rss &&= column >= 6 || byte === "VmRSS:".charCodeAt(column);
-      swap &&= column >= 7 || byte === "VmSwap:".charCodeAt(column);
-    }
-    if ((!memory || rss || swap) && byte >= 48 && byte <= 57) {
-      value = value * 10 + byte - 48;
-      digits = true;
-    } else if (digits) {
-      consume(value * (memory ? 1024 : 1));
-      value = 0;
-      digits = false;
-    }
-    column++;
-    if (byte === 10) {
-      column = 0;
-      rss = swap = true;
-    }
-  }
-  if (digits) {
-    consume(value * (memory ? 1024 : 1));
-  }
-}
-
 /** Follow every thread's children: native worker threads can spawn subprocesses too. */
 async function readTreeMemory(
   rootPid: number,
   limitBytes: number,
   isStopped: () => boolean,
-): Promise<number> {
+): Promise<{ bytes: number; pids: Set<number> }> {
   const pending = [rootPid];
   const seen = new Set(pending);
   let bytes = 0;
-  const addMemory = (value: number) => (bytes += value);
-  const addChild = (childPid: number) => {
-    if (childPid > 0 && !seen.has(childPid)) {
-      seen.add(childPid);
-      pending.push(childPid);
-    }
-  };
   for (const pid of pending) {
     if (isStopped()) {
-      return bytes;
+      return { bytes, pids: seen };
     }
     try {
+      const status = await readFile(`/proc/${pid}/status`, "utf8");
       // Include swapped private pages so swapping cannot hide a runaway allocation.
-      parseProcNumbers(await readFile(`/proc/${pid}/status`), true, addMemory);
+      for (const match of status.matchAll(/^(?:VmRSS|VmSwap):\s+(\d+) kB$/gm)) {
+        bytes += Number(match[1]) * 1024;
+      }
       if (bytes > limitBytes) {
-        return bytes;
+        return { bytes, pids: seen };
       }
       for (const tid of await readdir(`/proc/${pid}/task`)) {
         if (isStopped()) {
-          return bytes;
+          return { bytes, pids: seen };
         }
         try {
-          parseProcNumbers(await readFile(`/proc/${pid}/task/${tid}/children`), false, addChild);
+          const children = await readFile(`/proc/${pid}/task/${tid}/children`, "utf8");
+          for (const child of children.trim().split(/\s+/)) {
+            const childPid = Number(child);
+            if (childPid > 0 && !seen.has(childPid)) {
+              seen.add(childPid);
+              pending.push(childPid);
+            }
+          }
         } catch (error) {
           if (!hasErrnoCode(error, "ENOENT") && !hasErrnoCode(error, "ESRCH")) {
             throw error;
@@ -92,76 +63,58 @@ async function readTreeMemory(
       }
     }
   }
-  return bytes;
+  return { bytes, pids: seen };
 }
 
-type MemoryWatch = {
+/** Nonoverlapping samples: every second near the bound or after discovering descendants. */
+export function watchChildMemory(params: {
   pid?: number;
   limitBytes?: number;
   onLimit: (observedBytes: number) => void;
   onDiagnostic: (text: string) => void;
-};
-const watches = new Set<MemoryWatch & { pid: number; limitBytes: number; warned: boolean }>();
-let timer: NodeJS.Timeout | undefined;
-let sampling = false;
-
-async function sample(): Promise<void> {
-  timer = undefined;
-  sampling = true;
-  // Trees admitted while reads are pending join the next tick.
-  try {
-    await Promise.all(
-      Array.from(watches, async (watch) => {
-        const stopped = () => !watches.has(watch);
-        if (stopped()) {
-          return;
-        }
-        try {
-          const bytes = await readTreeMemory(watch.pid, watch.limitBytes, stopped);
-          if (!stopped() && bytes > watch.limitBytes) {
-            watches.delete(watch);
-            watch.onLimit(bytes);
-            watch.onDiagnostic(`\n${formatChildMemoryLimit(watch.limitBytes, bytes)}\n`);
-          }
-        } catch {
-          if (!stopped() && !watch.warned) {
-            watch.warned = true;
-            watch.onDiagnostic(
-              "\nWarning: OpenClaw could not read child memory usage; memory protection is degraded. Check procfs permissions.\n",
-            );
-          }
-        }
-      }),
-    );
-  } finally {
-    sampling = false;
-    if (watches.size > 0) {
-      scheduleSample();
-    }
-  }
-}
-
-function scheduleSample() {
-  timer = runInDetachedAsyncContext(() => setTimeout(() => void sample(), 1000));
-  timer.unref();
-}
-
-/** One nonoverlapping sampler; execution-tree owners retain their own budgets. */
-export function watchChildMemory(params: MemoryWatch): () => void {
+}): () => void {
   const { pid, limitBytes } = params;
   if (process.platform !== "linux" || !pid || !limitBytes) {
     return () => {};
   }
-  const watch = { ...params, pid, limitBytes, warned: false };
-  watches.add(watch);
-  if (!timer && !sampling) {
-    scheduleSample();
-  }
-  return () => {
-    watches.delete(watch);
-    if (watches.size === 0) {
-      clearTimeout(timer);
-      timer = undefined;
+  let stopped = false;
+  let warned = false;
+  let previousPids = new Set([pid]);
+  let timer: NodeJS.Timeout | undefined;
+  const sample = async () => {
+    let intervalMs = 1000;
+    try {
+      const { bytes, pids } = await readTreeMemory(pid, limitBytes, () => stopped);
+      intervalMs = bytes < limitBytes / 2 ? 5000 : 1000;
+      for (const childPid of pids) {
+        if (!previousPids.has(childPid)) {
+          intervalMs = 1000;
+        }
+      }
+      previousPids = pids;
+      if (!stopped && bytes > limitBytes) {
+        stopped = true;
+        params.onLimit(bytes);
+        params.onDiagnostic(`\n${formatChildMemoryLimit(limitBytes, bytes)}\n`);
+      }
+    } catch {
+      if (!stopped && !warned) {
+        warned = true;
+        params.onDiagnostic(
+          "\nWarning: OpenClaw could not read child memory usage; memory protection is degraded. Check procfs permissions.\n",
+        );
+      }
+    } finally {
+      if (!stopped) {
+        timer = setTimeout(() => void sample(), intervalMs);
+        timer.unref();
+      }
     }
+  };
+  timer = setTimeout(() => void sample(), 1000);
+  timer.unref();
+  return () => {
+    stopped = true;
+    clearTimeout(timer);
   };
 }
