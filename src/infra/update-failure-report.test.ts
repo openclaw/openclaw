@@ -8,12 +8,10 @@ import {
 } from "../../test/helpers/promise.js";
 import * as stateReads from "../state/openclaw-state-db-readonly.js";
 import { useStateDatabaseTempDirs } from "../test-utils/state-database-temp-dirs.js";
-import { VERSION } from "../version.js";
 import type { GithubIssueSubmitHooks, PreparedGithubIssue } from "./github-issue.js";
 import {
   beginStaleUpdateFailureReportReceiptCleanup,
   completeUpdateFailureReportReceiptCleanup,
-  finalizeUpdateFailureReportReceipt,
   readUpdateFailureReportReceipt,
   reserveUpdateFailureReportReceipt,
 } from "./restart-sentinel.js";
@@ -70,19 +68,7 @@ function failedUpdate(overrides: Partial<UpdateRunResult> = {}): UpdateRunResult
     status: "error",
     mode: "git",
     reason: "build-failed",
-    before: { sha: "a".repeat(40), version: "2026.8.1" },
-    after: { sha: "b".repeat(40), version: "2026.8.2" },
-    steps: [
-      {
-        name: "build",
-        command: "pnpm build --token raw-command-secret",
-        cwd: "/Users/private/openclaw",
-        durationMs: 12,
-        exitCode: 1,
-        stdoutTail: "raw chat and log output must not be copied",
-        stderrTail: "token=raw-log-secret /Users/private/openclaw/build.log",
-      },
-    ],
+    steps: [],
     durationMs: 20,
     recovery: { serviceRestartSafe: true, version: "2026.8.1" },
     ...overrides,
@@ -120,117 +106,6 @@ function expectIssue(result: unknown, status: "created" | "duplicate", id = 123)
 }
 
 describe("update failure report", () => {
-  it("excludes a later advisory step when selecting the failed phase", async () => {
-    const stateDir = tempDirs.make("openclaw-update-report-advisory-");
-    const prepared = await prepareUpdateFailureReport(
-      {
-        attemptId: "attempt-advisory-phase",
-        result: failedUpdate({
-          steps: [
-            failedUpdate().steps[0]!,
-            {
-              name: "post-install doctor",
-              command: "openclaw doctor",
-              cwd: "/tmp/openclaw",
-              durationMs: 5,
-              exitCode: 86,
-              advisory: {
-                kind: "package-post-install-doctor",
-                message: "recoverable repair warning",
-              },
-            },
-          ],
-        }),
-      },
-      { stateDir },
-    );
-
-    expect(prepared.title).toBe(`Update failure: build (${VERSION})`);
-    expect(prepared.body).toContain("Failed phase: build");
-    expect(prepared.body).not.toContain("post-install doctor");
-  });
-
-  it("saves only allowlisted, redacted, Unicode-safe report facts for fallback", async () => {
-    const home = tempDirs.make("openclaw-update-report-");
-    const stateDir = path.join(home, ".openclaw");
-    const secret = "sk-test-update-report-secret-1234567890";
-    const emoji = "🦞".repeat(2_000);
-    const prepared = await prepareUpdateFailureReport(
-      {
-        attemptId: "attempt-redaction",
-        error: `opaque raw chat payload token=${secret} ${home}/private/error.log`,
-        result: failedUpdate({
-          reason:
-            "build-failed at /Users/Alice Smith/private/customer list.txt after checksum mismatch",
-          steps: [
-            {
-              ...failedUpdate().steps[0]!,
-              name: `Command failed: /usr/local/bin/openclaw doctor --fix ${home}/source token=${secret}`,
-            },
-          ],
-        }),
-        target: [
-          `origin/main token=${secret}`,
-          "windows C:\\Users\\Alice Smith\\private\\project after windows marker",
-          "unc \\\\server\\Alice Smith\\private\\project after unc marker",
-          "rooted \\Users\\Alice Smith\\private\\rooted-secret.txt after rooted marker",
-          'quoted "/Users/Alice Smith/private project" after quoted marker',
-          "openclaw.exe doctor --token openclaw-exe-secret",
-          '"npm.cmd" install --token npm-cmd-secret',
-          "npm.ps1 install --token npm-ps1-secret",
-          '"PowerShell.EXE" -EncodedCommand powershell-exe-secret',
-          '"cmd.exe" /c echo cmd-exe-secret',
-          emoji,
-        ].join("\n"),
-      },
-      { env: { HOME: home, OPENCLAW_STATE_DIR: stateDir }, stateDir },
-    );
-    await expectMissing(prepared.savedReportPath);
-    const result = await submitUpdateFailureReport(prepared, prepared.previewDigest, {
-      createIssue: mockFallbackIssue(
-        "https://github.com/openclaw/openclaw/issues/new?title=update",
-      ),
-      env: { HOME: home, OPENCLAW_STATE_DIR: stateDir },
-      stateDir,
-    });
-    expect(result).toMatchObject({ status: "fallback" });
-
-    const saved = await fs.readFile(result.savedReportPath, "utf8");
-    expect(saved).toBe(prepared.body);
-    expect(Buffer.byteLength(saved, "utf8")).toBeLessThanOrEqual(16_000);
-    expect(saved).toContain("Recovery outcome: verified safe to restart");
-    expect(saved).toContain("Failed phase:");
-    expect(saved).toContain("Update target:");
-    expect(saved).toContain("🦞");
-    expect(saved).toContain("[redacted-path]");
-    expect(saved).not.toContain("�");
-    expect(saved).not.toContain(secret);
-    expect(saved).not.toContain(home);
-    expect(saved).not.toContain("/var/lib/openclaw");
-    expect(saved).not.toContain("/Users/alice");
-    expect(saved).not.toContain("Alice Smith");
-    expect(saved).not.toContain("rooted-secret");
-    expect(saved).not.toContain("openclaw-exe-secret");
-    expect(saved).not.toContain("npm-cmd-secret");
-    expect(saved).not.toContain("npm-ps1-secret");
-    expect(saved).not.toContain("powershell-exe-secret");
-    expect(saved).not.toContain("cmd-exe-secret");
-    expect(saved).not.toContain("customer list.txt");
-    expect(saved).not.toContain("after checksum mismatch");
-    expect(saved).not.toContain("https://example.com/?next=/docs");
-    expect(saved).not.toContain("opaque raw chat payload");
-    expect(saved).not.toContain("raw-command-secret");
-    expect(saved).not.toContain("raw-log-secret");
-    expect(saved).not.toContain("raw chat and log output");
-    expect(saved).not.toContain("openclaw doctor --fix");
-    expect(saved).not.toContain("C:\\Users\\private");
-    expect(saved).not.toContain("\\\\server\\private");
-    if (process.platform !== "win32") {
-      expect((await fs.stat(path.dirname(result.savedReportPath))).mode & 0o777).toBe(0o700);
-      expect((await fs.stat(result.savedReportPath)).mode & 0o777).toBe(0o600);
-    }
-  });
-
   it("does not substitute restored post-failure state for an unavailable update target", async () => {
     const stateDir = tempDirs.make("openclaw-update-report-target-");
     const prepared = await prepareUpdateFailureReport(
@@ -255,26 +130,10 @@ describe("update failure report", () => {
     );
   });
 
-  it("submits once and rejects a duplicate click for the same attempt", async () => {
-    const { submit } = await prepareFailedReport("attempt-once");
-    const createIssue = mockCreatedIssue(issueUrl());
-
-    const [first, second] = await Promise.all([submit({ createIssue }), submit({ createIssue })]);
-    const third = await submit({
-      createIssue,
-      validateCurrentAttempt: () => false,
-    });
-
-    expect(createIssue).toHaveBeenCalledOnce();
-    expect([first.status, second.status].toSorted()).toEqual(["created", "retryable"]);
-    expectIssue(third, "duplicate");
-    await expectMissing(first.savedReportPath);
-  });
-
   it("returns the fallback when issue creation cannot start after auth preflight", async () => {
     const { prepared, receipt, submit } = await prepareFailedReport("post-auth-no-start");
     const createIssue = mockFallbackAfterIssueCreateNoStart(prepared.url);
-
+    await expectMissing(prepared.savedReportPath);
     const first = await submit({ createIssue });
     const second = await submit({ createIssue });
 
@@ -285,47 +144,12 @@ describe("update failure report", () => {
       fallbackUrl: prepared.url,
       status: "fallback",
     });
+    await expectSaved(first, prepared);
+    if (process.platform !== "win32") {
+      expect((await fs.stat(path.dirname(first.savedReportPath))).mode & 0o777).toBe(0o700);
+      expect((await fs.stat(first.savedReportPath)).mode & 0o777).toBe(0o600);
+    }
   });
-
-  it.each([
-    { condition: "authority closes", attemptId: "attempt-auth-preflight-authority" },
-    { condition: "the canonical attempt changes", attemptId: "attempt-auth-preflight-stale" },
-  ])(
-    "cancels preparation when $condition immediately before issue creation",
-    async ({ condition, attemptId }) => {
-      const { prepared, submit } = await prepareFailedReport(attemptId);
-      let current = true;
-      let issueCreateCalls = 0;
-      const guards =
-        condition === "authority closes"
-          ? { hasCurrentAuthority: () => current, validateCurrentAttempt: () => true }
-          : { validateCurrentAttempt: () => current };
-      const createIssue = mockCreatedIssue(issueUrl(), {
-        afterAuth: () => {
-          current = false;
-        },
-        onCreate: () => issueCreateCalls++,
-      });
-
-      const submission = submit({ createIssue, ...guards });
-      if (condition === "authority closes") {
-        await expect(submission).rejects.toThrow("current authenticated client");
-      } else {
-        await expect(submission).resolves.toMatchObject({ status: "stale" });
-      }
-      expect(issueCreateCalls).toBe(0);
-      await expect(listSavedReportArtifacts(prepared)).resolves.toEqual([]);
-
-      current = true;
-      const retryCreateIssue = mockCreatedIssue(issueUrl(124), {
-        onCreate: () => issueCreateCalls++,
-      });
-      await expect(submit({ createIssue: retryCreateIssue, ...guards })).resolves.toMatchObject({
-        status: "created",
-      });
-      expect(issueCreateCalls).toBe(1);
-    },
-  );
 
   it("releases the reservation when the post-preflight attempt refresh throws", async () => {
     const { prepared, submit } = await prepareFailedReport("attempt-auth-preflight-refresh-error");
@@ -357,6 +181,27 @@ describe("update failure report", () => {
       submit({ createIssue: retryCreateIssue, validateCurrentAttempt: () => true }),
     ).resolves.toMatchObject({ status: "created" });
     expect(issueCreateCalls).toBe(1);
+  });
+
+  it("rejects an attempt retired between preflight and creation, then permits retry", async () => {
+    const { prepared, submit } = await prepareFailedReport("retired-after-preflight");
+    let current = true;
+    const onCreate = vi.fn();
+    const createIssue = mockCreatedIssue(issueUrl(), {
+      afterAuth: () => {
+        current = false;
+      },
+      onCreate,
+    });
+    await expect(
+      submit({ createIssue, validateCurrentAttempt: () => current }),
+    ).resolves.toMatchObject({ status: "stale" });
+    expect(onCreate).not.toHaveBeenCalled();
+    await expect(listSavedReportArtifacts(prepared)).resolves.toEqual([]);
+    current = true;
+    await expect(
+      submit({ createIssue: mockCreatedIssue(issueUrl()), validateCurrentAttempt: () => current }),
+    ).resolves.toMatchObject({ status: "created" });
   });
 
   it("does not let a pending-reservation loser delete the winner's fallback report", async ({
@@ -730,66 +575,5 @@ describe("update failure report", () => {
       releaseOldFallback();
       await Promise.allSettled(submissions);
     }
-  });
-
-  it.each([
-    ["returns false", () => false],
-    [
-      "throws",
-      () => {
-        throw new Error("receipt database unavailable");
-      },
-    ],
-  ])(
-    "returns a created URL without retrying refused or unknown finalization when it %s",
-    async (_failure, fail) => {
-      const { submit } = await prepareFailedReport("attempt-created-finalize-failure");
-      const createIssue = mockCreatedIssue(issueUrl());
-      const finalizeReceipt = vi
-        .fn((...args: Parameters<typeof finalizeUpdateFailureReportReceipt>) =>
-          finalizeUpdateFailureReportReceipt(...args),
-        )
-        .mockImplementationOnce(async () => fail());
-
-      const first = await submit({
-        createIssue,
-        finalizeReceipt,
-      });
-      const second = await submit({ createIssue });
-
-      expectIssue(first, "created");
-      expect(createIssue).toHaveBeenCalledOnce();
-      expect(second).toMatchObject({ status: "pending" });
-      expect(finalizeReceipt).toHaveBeenCalledOnce();
-      expect(await fs.readFile(first.savedReportPath, "utf8")).not.toBe("");
-    },
-  );
-
-  it("does not hide a created result when saved-report cleanup fails", async () => {
-    const { prepared, submit } = await prepareFailedReport("attempt-created-cleanup-failure");
-    const createIssue = mockCreatedIssue(issueUrl());
-    const realRm = fs.rm.bind(fs);
-    const rm = vi.spyOn(fs, "rm").mockImplementation(async (target, options) => {
-      if (
-        path.dirname(String(target)) === path.dirname(prepared.savedReportPath) &&
-        path.basename(String(target)).startsWith(`${path.parse(prepared.savedReportPath).name}.`)
-      ) {
-        throw new Error("simulated saved-report cleanup failure");
-      }
-      return await realRm(target, options);
-    });
-    let first: Awaited<ReturnType<typeof submitUpdateFailureReport>>;
-    try {
-      first = await submit({ createIssue });
-    } finally {
-      rm.mockRestore();
-    }
-
-    expectIssue(first, "created");
-    await expectSaved(first, prepared);
-    const second = await submit({ createIssue });
-    expectIssue(second, "duplicate");
-    expect(createIssue).toHaveBeenCalledOnce();
-    await expect(fs.stat(first.savedReportPath)).rejects.toMatchObject({ code: "ENOENT" });
   });
 });

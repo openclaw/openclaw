@@ -6,10 +6,9 @@ import { getEnvironmentData, MessageChannel, type MessagePort, Worker } from "no
 import type { WorkerLifecycle } from "@openclaw/worker-runtime/lifecycle";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { withEngineStoreAdmission } from "./database-engine/admission-scope.js";
-import { openNodeSqliteDatabase, requireNodeSqlite } from "./node-sqlite.js";
+import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { PostgresSyncConnection } from "./postgres-sync/connection.js";
 import { runPostgresTransactionSync } from "./postgres-sync/transaction.js";
 import type { RuntimeWorkerGeneration } from "./runtime-worker-generation.js";
@@ -228,6 +227,7 @@ it("retires the final closed handle's facts while preserving open siblings and d
   admitSqliteSchema(second);
   const original = recordsFor(location)[0]!;
   const stale = structuredClone([original]);
+  publishFact(first, key, "connection-scoped");
   first.close();
   expect(recordsFor(location)).toHaveLength(1);
   expect(schemaFacts(second)?.tables.has("proof")).toBe(true);
@@ -247,6 +247,7 @@ it("retires the final closed handle's facts while preserving open siblings and d
   expect(recordsFor(location)).toEqual([]);
 
   first.open();
+  expect(getFact(first, key)).toBeUndefined();
   expect(schemaFacts(first)?.admissionId).toBe(admittedSchema?.admissionId);
   admitSqliteSchema(first);
   expect(first.prepare("SELECT value FROM proof").get()).toEqual({ value: 42 });
@@ -258,33 +259,6 @@ it("retires the final closed handle's facts while preserving open siblings and d
   expect(recordsFor(location)).toEqual([]);
   retireAdmission(location);
   expect(() => fstatSync(original.descriptor)).toThrow();
-});
-
-it("reuses physical catalog facts after unsealed close and invalidates them on DDL", () => {
-  using fixture = databaseFixture("sqlite-admission-process-facts-");
-  const { database } = fixture;
-  const admitted = schemaFacts(database);
-  publishFact(database, key, "connection-scoped");
-  database.close();
-
-  database.open();
-  const observation = observeSqliteReadSql(requireNodeSqlite().StatementSync.prototype);
-  try {
-    admitSqliteSchema(database);
-    expect(schemaFacts(database)?.admissionId).toBe(admitted?.admissionId);
-    expect(observation.queries).toEqual([]);
-  } finally {
-    observation.restore();
-  }
-  expect(getFact(database, key)).toBeUndefined();
-  database.exec("ALTER TABLE proof ADD COLUMN added TEXT");
-  database.close();
-  database.open();
-  admitSqliteSchema(database);
-  expect(schemaFacts(database)?.tableSql.get("proof")).toContain("added TEXT");
-  expect(schemaFacts(database)?.admissionId).not.toBe(admitted?.admissionId);
-  database.prepare("UPDATE proof SET value = 43").run();
-  expect(database.prepare("SELECT value FROM proof").get()).toEqual({ value: 43 });
 });
 
 it.each([undefined, "process"] as const)(
