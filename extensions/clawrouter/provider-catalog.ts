@@ -2,7 +2,6 @@ import type { ProviderRuntimeModel } from "openclaw/plugin-sdk/plugin-entry";
 import {
   getCachedLiveProviderModelRows,
   loadBundledModelIdentityFactsResolver,
-  type LiveModelCatalogFetchGuard,
 } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import type {
   ModelDefinitionConfig,
@@ -168,6 +167,8 @@ type ResolveNativeModelFacts = Awaited<ReturnType<typeof loadBundledModelIdentit
 // Upstream catalogs whose first-party model facts are qualified for routed rows. A row
 // inherits only when its upstream id and wire API match the bundled native row exactly.
 const NATIVE_MODEL_FACT_PROVIDERS = new Set(["openai", "anthropic"]);
+// Catalog providers whose id differs from the bundled provider serving the same native API.
+const BUNDLED_CATALOG_PROVIDER_IDS = new Map([["google-gemini", "google"]]);
 
 function microsPerMillionToCost(value: number | undefined): number {
   return value === undefined ? 0 : value / 1_000_000;
@@ -248,9 +249,13 @@ function buildRoutedModel(
   const serviceTiers = Array.isArray(pricing?.serviceTiers)
     ? normalizeTrimmedStringList(pricing.serviceTiers.map((tier) => asOptionalRecord(tier)?.id))
     : undefined;
-  const nativeFacts = NATIVE_MODEL_FACT_PROVIDERS.has(provider.id)
-    ? resolveNativeModelFacts({ provider: provider.id, api, modelId: upstream })
-    : undefined;
+  // Identity facts match only an exact bundled row with the same upstream id and wire API.
+  const identityFacts = resolveNativeModelFacts({
+    provider: BUNDLED_CATALOG_PROVIDER_IDS.get(provider.id) ?? provider.id,
+    api,
+    modelId: upstream,
+  });
+  const nativeFacts = NATIVE_MODEL_FACT_PROVIDERS.has(provider.id) ? identityFacts : undefined;
   // Service catalog facts win over inherited native defaults.
   const compat = {
     ...nativeFacts?.compat,
@@ -272,6 +277,8 @@ function buildRoutedModel(
     ...(thinkingLevelMap ? { thinkingLevelMap } : {}),
     ...(Object.keys(compat).length > 0 ? { compat } : {}),
     ...(nativeFacts?.mediaInput ? { mediaInput: nativeFacts.mediaInput } : {}),
+    // A family comes from the bundled catalog's declaration, never from this row's id.
+    ...(identityFacts?.family ? { family: identityFacts.family } : {}),
     input:
       parseCatalogInput(row?.input) ??
       ((provider.id === "openai" && OPENAI_NATIVE_IMAGE_MODEL_IDS.has(upstream)) ||
@@ -340,7 +347,6 @@ export async function buildClawRouterProviderConfig(params: {
   apiKey: string;
   discoveryApiKey?: string;
   baseUrl?: string;
-  fetchGuard?: LiveModelCatalogFetchGuard;
 }): Promise<ModelProviderConfig & { api: "openai-responses"; baseUrl: string }> {
   const rootUrl = normalizeClawRouterRootUrl(params.baseUrl);
   const rows = await getCachedLiveProviderModelRows({
@@ -348,7 +354,6 @@ export async function buildClawRouterProviderConfig(params: {
     endpoint: `${rootUrl}/v1/catalog`,
     apiKey: params.apiKey,
     discoveryApiKey: params.discoveryApiKey,
-    fetchGuard: params.fetchGuard,
     readRows: readCatalogRows,
     ttlMs: CATALOG_CACHE_TTL_MS,
     auditContext: "clawrouter-model-discovery",

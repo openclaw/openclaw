@@ -199,8 +199,9 @@ describe("worker inference SQLite store", async () => {
     };
     claimOpenClawStateOwnership("inference-owner", options);
     expect(openOpenClawStateDatabase(options)).toBe(database);
+    vi.stubEnv("OPENCLAW_SUPERVISOR_MODE", "external");
     await expect(
-      createWorkerInferenceStore(options).recoverPending(PROVIDER_ERROR),
+      createWorkerInferenceStore({ path: database.path }).recoverPending(PROVIDER_ERROR),
     ).rejects.toThrow("is externally supervised by inference-owner");
   });
 

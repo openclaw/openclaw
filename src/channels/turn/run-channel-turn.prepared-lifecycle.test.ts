@@ -1,3 +1,4 @@
+import { AsyncResource } from "node:async_hooks";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { withinTest } from "../../../test/helpers/promise.js";
@@ -12,7 +13,7 @@ import {
   recordAgentDatabaseAdmissions,
 } from "../../state/agent-database-admission.js";
 import { withAgentDatabaseStartupAdmission } from "../../state/agent-database-startup.js";
-import { withAgentInputRecoveryContext } from "../../state/agent-input-recovery-context.js";
+import { enterAgentInputRecoveryContext } from "../../state/agent-input-recovery-context.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import type { OpenClawDatabaseSchemaPreflight as Preflight } from "../../state/openclaw-database-preflight.types.js";
 import {
@@ -151,19 +152,23 @@ it.each([
     });
     const healthy = createTurn();
     const withRecovery = <T>(run: () => T) =>
-      withAgentInputRecoveryContext(
-        () => ({
-          isPending: (agentId) => agentId === "qa",
-          waitForAgentInputRecovery: (agentId, options) => {
-            if (agentId !== "qa") {
-              return undefined;
-            }
-            waiting.resolve();
-            return racePromiseWithAbortSignal(recovery.promise, options?.signal);
-          },
-        }),
-        run,
-      );
+      new AsyncResource("TestAgentInputRecovery").runInAsyncScope(() => {
+        enterAgentInputRecoveryContext({
+          resolveGatewayContext: () => ({
+            inputRecovery: {
+              isPending: (agentId) => agentId === "qa",
+              waitForAgentInputRecovery: (agentId, options) => {
+                if (agentId !== "qa") {
+                  return undefined;
+                }
+                waiting.resolve();
+                return racePromiseWithAbortSignal(recovery.promise, options?.signal);
+              },
+            },
+          }),
+        });
+        return run();
+      });
     const turn = withRecovery(() =>
       withPluginServiceScheduler(scheduler, () => runPreparedChannelTurn(pending.turn)),
     );

@@ -3,6 +3,36 @@ import { en } from "./en.ts";
 
 // Plugin management and its lazy sibling surfaces register this shared copy on use.
 const enPluginManagement = {
+  pluginUi: {
+    sessionRecentMessages: "Recent messages",
+    sessionHistoryUnavailable: "Session history could not be loaded. Try again.",
+    sessionHistoryEmpty: "No recent messages.",
+    customize: "Customize UI",
+    selectionScope: "Choose views for this browser window. Built-in views are always available.",
+    builtin: "Built-in view",
+    retryView: en.pluginUi.retryView,
+    inlineLoading: en.pluginUi.inlineLoading,
+    inlineUnavailable: en.pluginUi.inlineUnavailable,
+    reload: "Reload plugin UI",
+    dashboardTitle: en.pluginUi.dashboardTitle,
+    dashboardEmpty: "This session has no dashboard widgets yet.",
+    customPluginsDisabled: en.pluginUi.customPluginsDisabled,
+    customPluginsEnableHint: en.pluginUi.customPluginsEnableHint,
+    openLabs: en.pluginUi.openLabs,
+    surface: {
+      "session-list": "Session list",
+      composer: "Composer",
+      workspace: "Workspace",
+      transcript: "Transcript",
+      "tool-result": "Tool results",
+    },
+  },
+  chat: {
+    clawhub: {
+      retryStatus: "Status unavailable · Retry",
+      viewDetails: "View details",
+    },
+  },
   custodian: {
     pluginPlaceholder: "Ask OpenClaw about {plugin}",
     pluginIntroTitle: "Ask about {plugin}",
@@ -517,6 +547,10 @@ export const registerPluginManagementEnglish = Object.assign(
   () => {
     Object.assign(en.custodian, enPluginManagement.custodian);
     en.pluginsPage = enPluginManagement.pluginsPage;
+    const { surface, ...labels } = enPluginManagement.pluginUi;
+    Object.assign(en.pluginUi, labels);
+    Object.assign(en.pluginUi.surface, surface);
+    Object.assign(en.chat.clawhub, enPluginManagement.chat.clawhub);
   },
   { catalog: enPluginManagement },
 );

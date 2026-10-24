@@ -10,6 +10,7 @@ import {
   Switch,
   Match,
 } from "solid-js";
+import { registerBoardDocumentEnglish } from "../../i18n/locales/en-board-document.ts";
 import { registerBoardEnglish } from "../../i18n/locales/en-board.ts";
 import {
   BOARD_DOCUMENT_AUTO_MAX_ROWS,
@@ -45,6 +46,8 @@ import { BoardWidgetError } from "./board-widget-error.tsx";
 import { createBoardWidgetFrame, BoardWidgetFrame } from "./board-widget-frame.tsx";
 import { BoardWidgetMenu } from "./board-widget-menu.tsx";
 import { CoreBoardWidget } from "./core-board-widget.tsx";
+
+registerEnglishCatalog(registerBoardDocumentEnglish);
 
 registerEnglishCatalog(registerBoardEnglish);
 

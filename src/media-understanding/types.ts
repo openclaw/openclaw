@@ -5,28 +5,12 @@ import type { ModelProviderRequestTransportOverrides } from "../agents/provider-
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ProviderResolveSyntheticAuthContext } from "../plugins/provider-external-auth.types.js";
 
-/** Agent-owned runtime handle carried opaquely through media provider requests. */
-type MediaPreparedModelRuntime = Readonly<{
-  agentDir: string;
-  workspaceDir?: string;
-  config: OpenClawConfig;
-  createStores: () => unknown;
-}>;
-
 export type {
   MediaAttachment,
   MediaUnderstandingCapability,
   MediaUnderstandingCapabilityRegistry,
   MediaUnderstandingOutput,
 } from "../../packages/media-understanding-common/src/types.js";
-
-type MediaUnderstandingDecisionOutcome =
-  | "success"
-  | "failed"
-  | "skipped"
-  | "disabled"
-  | "no-attachment"
-  | "scope-deny";
 
 export type MediaUnderstandingModelDecision = {
   provider?: string;
@@ -36,12 +20,6 @@ export type MediaUnderstandingModelDecision = {
   type: "provider" | "cli";
   outcome: "success" | "skipped" | "failed";
   reason?: string;
-};
-
-type MediaUnderstandingAttachmentDecision = {
-  attachmentIndex: number;
-  attempts: MediaUnderstandingModelDecision[];
-  chosen?: MediaUnderstandingModelDecision;
 };
 
 export type MediaAttachmentDisposition =
@@ -57,8 +35,12 @@ export type MediaAttachmentProcessing = "completed" | "omitted";
 
 export type MediaUnderstandingDecision = {
   capability: MediaUnderstandingCapability;
-  outcome: MediaUnderstandingDecisionOutcome;
-  attachments: MediaUnderstandingAttachmentDecision[];
+  outcome: "success" | "failed" | "skipped" | "disabled" | "no-attachment" | "scope-deny";
+  attachments: {
+    attachmentIndex: number;
+    attempts: MediaUnderstandingModelDecision[];
+    chosen?: MediaUnderstandingModelDecision;
+  }[];
   // Optional on the shipped SDK contract: plugins pass FinalizedMsgContext into
   // inbound-reply dispatch and may hold legacy decision literals. Core producers
   // (runner, apply, runtime) always populate it; absence renders no
@@ -141,7 +123,13 @@ export type ImagesDescriptionRequest = {
   agentId?: string;
   agentDir: string;
   workspaceDir?: string;
-  preparedModelRuntime?: MediaPreparedModelRuntime;
+  /** Agent-owned runtime handle carried opaquely through media provider requests. */
+  preparedModelRuntime?: Readonly<{
+    agentDir: string;
+    workspaceDir?: string;
+    config: OpenClawConfig;
+    createStores: () => unknown;
+  }>;
   cfg: OpenClawConfig;
 };
 

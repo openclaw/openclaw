@@ -29,13 +29,12 @@ function normalizeQaLiveProviderConfig(value: unknown): ModelProviderConfig | nu
 
 export async function readQaLiveProviderConfigOverrides(params: {
   providerIds: readonly string[];
-  env?: NodeJS.ProcessEnv;
 }) {
   const providerIds = normalizeUniqueStringEntries(params.providerIds);
   if (providerIds.length === 0) {
     return {};
   }
-  const configPath = resolveQaLiveProviderConfigPath(params.env);
+  const configPath = resolveQaLiveProviderConfigPath();
   if (!existsSync(configPath.path)) {
     return {};
   }

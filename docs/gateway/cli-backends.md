@@ -508,6 +508,11 @@ Serialization: `serialize: true` keeps same-lane runs ordered (most CLIs seriali
 When the resolved MCP tool names change, OpenClaw starts a fresh native CLI session
 and logs `cli session reset: provider=<backend> reason=prompt-tools`. This refreshes
 the CLI's cached tool catalog; resending prompt text alone cannot refresh it.
+Tools that follow the calling client (`screen`, `show_widget`, `suggest_task`,
+`dismiss_task`) do not count: subagent-completion and channel turns drop them, and
+resetting on each change would discard the session's context. Their change still
+alters the system prompt, so a warm process restarts and the resumed CLI lists the
+current tools.
 The OpenClaw chat remains intact, and saved-history recovery follows the
 [history account boundaries](#history-account-boundaries) above. System-prompt-only
 changes continue to reuse the native session when the backend can resend the prompt.

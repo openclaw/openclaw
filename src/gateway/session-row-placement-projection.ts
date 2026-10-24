@@ -412,7 +412,7 @@ export function createSessionRowPlacementProjection(
                 return readPreparedSessionRows(
                   projection,
                   isActive,
-                  () => preparedQueries,
+                  () => (hasPrivateQueries ? preparedQueries : []),
                   (read) => consume(read, preparedQueries),
                   privateRepositories,
                   privateRows,

@@ -675,8 +675,9 @@ tasks:
     ).toEqual(committedJobs);
   });
 
-  it("refuses orphan task fields beside a valid task without changing scratch", async () => {
-    const content = `# Operations
+  it.each([
+    [
+      `# Operations
 tasks:
   interval: 15m
   prompt: Orphaned work must not disappear
@@ -684,27 +685,40 @@ tasks:
     interval: 1h
     prompt: Check urgent inbox items
 # Keep alerts concise
-`;
-    const fixture = await createFixture(2_000_000_000_000, content);
+`,
+      "incomplete name/interval/prompt entry",
+    ],
+    ["tasks:\n- name: inbox\n  interval: 1h\n", "no complete name/interval/prompt entries"],
+    [
+      "tasks:\n- check the queue\n  interval: 1h\n  prompt: Preserve this schedule\n",
+      "no complete name/interval/prompt entries",
+    ],
+  ])(
+    "retains incomplete task declarations without changing scratch: %s",
+    async (content, reason) => {
+      const fixture = await createFixture(2_000_000_000_000, content);
 
-    await expect(collectHeartbeatTaskMigrationFindings(fixture.cfg, fixture.env)).resolves.toEqual([
-      expect.objectContaining({
-        severity: "error",
-        requirement: "heartbeat-task-migration-blocked",
-        message: expect.stringContaining("incomplete name/interval/prompt entry"),
-      }),
-    ]);
-    const result = await migrate(fixture);
+      await expect(
+        collectHeartbeatTaskMigrationFindings(fixture.cfg, fixture.env),
+      ).resolves.toEqual([
+        expect.objectContaining({
+          severity: "error",
+          requirement: "heartbeat-task-migration-blocked",
+          message: expect.stringContaining(reason),
+        }),
+      ]);
+      const result = await migrate(fixture);
 
-    expect(result.changes).toEqual([]);
-    expect(result.warnings.join("\n")).toContain("incomplete name/interval/prompt entry");
-    expect(readScratch(fixture).scratch?.content).toBe(content);
-    expect(
-      (await loadCronJobsStore(fixture.storePath)).jobs.filter(
-        (job) => job.id !== fixture.monitor.id,
-      ),
-    ).toEqual([]);
-  });
+      expect(result.changes).toEqual([]);
+      expect(result.warnings.join("\n")).toContain(reason);
+      expect(readScratch(fixture).scratch?.content).toBe(content);
+      expect(
+        (await loadCronJobsStore(fixture.storePath)).jobs.filter(
+          (job) => job.id !== fixture.monitor.id,
+        ),
+      ).toEqual([]);
+    },
+  );
 
   it("does not migrate a task block hidden by a mid-line HTML comment opener", async () => {
     const content = `Notes <!--

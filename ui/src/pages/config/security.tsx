@@ -18,8 +18,6 @@ import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 
 registerEnglishCatalog(registerPreferencesEnglish);
 
-type SecurityOverview = ReturnType<typeof extractQuickSettingsSecurity>;
-
 export function extractQuickSettingsSecurity(root: Record<string, unknown>) {
   const gateway = asConfigRecord(root.gateway);
   const auth = asConfigRecord(gateway?.auth);
@@ -52,7 +50,7 @@ export function extractQuickSettingsSecurity(root: Record<string, unknown>) {
 }
 
 export type SecurityViewProps = {
-  security: SecurityOverview;
+  security: ReturnType<typeof extractQuickSettingsSecurity>;
   configBusy: boolean;
   canPairDevice: boolean;
   onPairMobile?: () => void;

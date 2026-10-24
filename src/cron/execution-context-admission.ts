@@ -18,6 +18,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveCreatorSandbox } from "../gateway/operator-role-policy.js";
 import { decodeGatewayOperatorRecoverySource } from "../gateway/operator-run-recovery-source.codec.js";
 import { captureResidentUserProfileAccess } from "../state/user-profile-list.js";
+import { bindScheduledExecutionContext } from "./execution-context-registry.js";
 import {
   buildScheduledExecutionContext,
   classifyScheduledParent,
@@ -58,7 +59,10 @@ async function checkRequesterOwner(
 ): Promise<boolean> {
   switch (requester.kind) {
     case "channel": {
-      const prepared = await prepareCommandOwnerAuthority(cfg, requester.requester);
+      // The stored envelope's version would select the recovery-reference branch; pass
+      // only the native sender identity so configured and linked owners are rechecked.
+      const { channel, accountId, senderId } = requester.requester;
+      const prepared = await prepareCommandOwnerAuthority(cfg, { channel, accountId, senderId });
       return prepared.source !== undefined && prepared.isCurrent(cfg);
     }
     case "profile":
@@ -276,22 +280,35 @@ export async function admitScheduledOccurrence(
           ? () => lease.assertCurrent()
           : () => {};
       let context: ScheduledExecutionContext | undefined;
+      let unbind = () => {};
       return {
         result,
-        bind(assertAdmitted) {
+        bind(admittedRun, assertAdmitted) {
           if (result.status !== "ready") {
             return;
           }
+          // Tools built for the run keep this assertion, so it must also fail once the run settles.
+          let released = false;
           context = {
             ...result.facts,
             assertCurrent: () => {
+              if (released) {
+                throw new Error("Scheduled occurrence has settled");
+              }
               assertAdmitted();
               assertParentCurrent();
             },
           };
+          const unbindContext = bindScheduledExecutionContext(admittedRun, context);
+          unbind = () => {
+            released = true;
+            unbindContext();
+          };
         },
         current: () => context,
         release() {
+          unbind();
+          unbind = () => {};
           context = undefined;
         },
       };

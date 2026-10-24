@@ -1,3 +1,4 @@
+import { AsyncResource } from "node:async_hooks";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
@@ -13,7 +14,10 @@ import {
 } from "../../sessions/session-controller.mailbox.js";
 import { createReplyOperation } from "../../sessions/session-controller.operation.js";
 import { testing } from "../../sessions/session-controller.test-support.js";
-import { withAgentInputRecoveryContext } from "../../state/agent-input-recovery-context.js";
+import {
+  enterAgentInputRecoveryContext,
+  type AgentInputRecoveryAdmission,
+} from "../../state/agent-input-recovery-context.js";
 import type { TurnAdoptionLifecycle } from "../get-reply-options.types.js";
 import { runPreparedReply } from "./get-reply-run.js";
 import { baseParams } from "./get-reply-run.test-support.js";
@@ -29,6 +33,16 @@ import {
 } from "./reply-source-binding.js";
 
 afterEach(() => testing.resetSessionControllerForTest());
+
+function withInputRecovery<T>(
+  resolve: () => AgentInputRecoveryAdmission | undefined,
+  run: () => T,
+) {
+  return new AsyncResource("TestAgentInputRecovery").runInAsyncScope(() => {
+    enterAgentInputRecoveryContext({ resolveGatewayContext: () => ({ inputRecovery: resolve() }) });
+    return run();
+  });
+}
 
 const key = "agent:main:source-binding";
 const target = captureSessionTarget({ storeScope: "/test/source.sqlite", sessionKey: key });
@@ -117,7 +131,7 @@ it("preserves lifecycle cancellation before pending recovery without reserving i
   const reason = new Error("source cancelled");
   lifecycle.abort(reason);
   try {
-    const prepared = await withAgentInputRecoveryContext(
+    const prepared = await withInputRecovery(
       () => ({
         isPending: () => true,
         waitForAgentInputRecovery: (_agentId, options) =>
@@ -146,7 +160,7 @@ it("preserves lifecycle cancellation before pending recovery without reserving i
 it("waits for only its agent's recovery before reserving fresh input", async () => {
   const recovery = createDeferred();
   const otherKey = "agent:other:source-binding";
-  const waiting = withAgentInputRecoveryContext(
+  const waiting = withInputRecovery(
     () => ({
       isPending: (agentId) => agentId === "main",
       waitForAgentInputRecovery: (agentId) => (agentId === "main" ? recovery.promise : undefined),
@@ -154,7 +168,7 @@ it("waits for only its agent's recovery before reserving fresh input", async () 
     () => prepare(),
   );
   expect(getExistingSessionControllerMailbox(key, target)).toBeUndefined();
-  const other = await withAgentInputRecoveryContext(
+  const other = await withInputRecovery(
     () => ({
       isPending: (agentId) => agentId === "main",
       waitForAgentInputRecovery: (agentId) => (agentId === "main" ? recovery.promise : undefined),
@@ -196,7 +210,7 @@ it.each([
     };
     const reserved = existing ? await prepare() : undefined;
     const continued = vi.fn();
-    const preparing = withAgentInputRecoveryContext(
+    const preparing = withInputRecovery(
       () => ({
         isPending: (agentId) => agentId === "other",
         waitForAgentInputRecovery: (agentId) =>
@@ -243,7 +257,7 @@ it.each([
 it("preserves an exact live recovery source that already owns the command target", async () => {
   const targetKey = "agent:other:command-target";
   const source = await prepare(targetKey);
-  const result = await withAgentInputRecoveryContext(
+  const result = await withInputRecovery(
     () => ({
       isPending: (agentId) => agentId === "other",
       waitForAgentInputRecovery: () => {
@@ -277,7 +291,7 @@ it("prepares a late command target from the physical source context", async () =
     CommandTargetSessionKey: targetKey,
   };
   const waited = vi.fn();
-  const outcome = withAgentInputRecoveryContext(
+  const outcome = withInputRecovery(
     () => ({
       isPending: (agentId) => agentId === "other",
       waitForAgentInputRecovery: (agentId, options) => {
@@ -326,7 +340,7 @@ it.each(["live", "retired", "other session", "other store"] as const)(
     if (kind === "retired") {
       retireSessionControllerInput(input);
     }
-    const preparing = withAgentInputRecoveryContext(
+    const preparing = withInputRecovery(
       () => ({
         isPending: () => true,
         waitForAgentInputRecovery: () => {

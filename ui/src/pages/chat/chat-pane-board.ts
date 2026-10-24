@@ -9,7 +9,7 @@ import {
 import { loadSettings, patchSettings } from "../../app/settings.ts";
 import type { BoardWidgetPageMenu } from "../../components/board/board-widget-cell-options.ts";
 import { t } from "../../i18n/index.ts";
-import { BOARD_GRID_COLUMNS } from "../../lib/board/grid.ts";
+import { BOARD_GRID_COLUMNS } from "../../lib/board/grid-constants.ts";
 import {
   acquireBoardProviderForSession,
   boardProviderCacheKey,

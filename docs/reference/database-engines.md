@@ -123,10 +123,14 @@ The supported PostgreSQL families are:
   retained registry paths and explicit session or agent directories. Older SQLite
   schemas migrate only in the port's private copy. Compressed transcript events
   become plain JSON on PostgreSQL; transcript search is rebuilt before publication.
-  Rebuildable memory indexes are omitted. Their rebuild hook remains explicitly
-  pending the memory owner's rebuild entry point; empty metadata requests reindexing.
-  Canonical memory origins and
-  tombstones remain intact. Duplicate-key voice JSON refuses the port with a hashed
+  Rebuildable memory indexes are omitted; canonical memory origins, tombstones,
+  and the embedding cache remain intact. After publication and port-owner release,
+  the selected memory plugin rebuilds ported agents under fresh offline ownership.
+  Unchanged cached chunks reuse their embeddings. Output and `--json` report
+  per-agent results; a failure leaves the port successful and warns to retry
+  `openclaw memory index --agent <id>` before starting the Gateway. Retained stores
+  need their original agent configuration to rebuild.
+  Duplicate-key voice JSON refuses the port with a hashed
   row locator. Cold archive references are retained; user backups embed their blobs.
   PostgreSQL agent schemas support current-version
   bootstrap and the schema 27 to 28 forward migration, and reject schema drift
@@ -522,6 +526,10 @@ Keep this directory private and retain the complete set. Former PostgreSQL
 namespaces are not dropped automatically.
 
 All destination stores are privately migrated and verified before publication.
+Agent and shared-state columns normally created on a feature's first use are
+completed in the private copy when absent, preserving existing rows with `NULL`
+values and leaving the original SQLite store unchanged. Unknown columns still
+refuse the port.
 The command replaces each store atomically, switches config last while preserving
 SecretRefs, environment references, and includes, then archives its completed
 manifest with the captures. After success, start the Gateway through its service
@@ -620,6 +628,12 @@ PostgreSQL model-context navigation reads parse each selected transcript row onc
 and keep intermediate projections as JSONB until the navigation and byte counts
 cross the database boundary. The read remains bounded by the context page, and
 PostgreSQL transcript writes do not precompute navigation envelopes.
+
+Clean resident-actor appends write the transcript projection and session-window
+mutation in one PostgreSQL statement. Each write still targets its own table
+inside the existing locked transaction; commit and receipt publication keep
+their original boundaries. Batch imports, dirty projections, and native callers
+retain their existing flush paths.
 
 ## Anchors and backups
 

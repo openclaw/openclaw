@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { afterAll, beforeAll, expect, it } from "vitest";
+import { afterAll, beforeAll, expect, it, vi } from "vitest";
 import { createDeferredCore } from "../shared/deferred.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
@@ -14,13 +14,14 @@ const caller = { callerScopes: operator.scopes };
 const profile = { roles: [operator.role], scopes: operator.scopes };
 const requestOperator = (baseDir: string) =>
   requestDevicePairing({ ...operator, publicKey: "browser-key" }, baseDir);
-const issueToken = (baseDir: string, generation: string, isIssuanceCurrent?: () => boolean) =>
-  ensureDeviceToken({
+const issueToken = (baseDir: string, generation: string, isIssuanceCurrent?: () => boolean) => {
+  vi.stubEnv("OPENCLAW_STATE_DIR", baseDir);
+  return ensureDeviceToken({
     ...operator,
-    baseDir,
     issuer: { kind: "shared-gateway-auth", generation },
     isIssuanceCurrent,
   });
+};
 
 async function withHeldPairingLock(work: (unlock: () => Promise<void>) => Promise<void>) {
   const locked = createDeferredCore();

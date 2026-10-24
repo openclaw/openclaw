@@ -5,10 +5,12 @@ import type {
 } from "../../gateway/server-methods/types.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import { withAgentDatabasePreparationContext } from "../../state/agent-database-preparation-context.js";
-import { withAgentInputRecoveryContext } from "../../state/agent-input-recovery-context.js";
+import {
+  enterAgentInputRecoveryContext,
+  getAgentInputRecoveryContext,
+} from "../../state/agent-input-recovery-context.js";
 import {
   getPluginExecutionFrame,
-  pluginInstanceInvocation,
   runWithPluginExecutionFrame,
 } from "../plugin-instance-invocation.js";
 import type { PluginInstanceInvocation } from "../plugin-instance-invocation.types.js";
@@ -38,35 +40,27 @@ type PluginRuntimePluginScope = {
   pluginTrustedOfficialInstall?: boolean;
 };
 
-// Native async resources retain this resolver; do not capture the execution callback's frame.
-function createAgentInputRecoveryResolver(gatewayScope: PluginRuntimeGatewayRequestScope) {
-  return () =>
-    (gatewayScope.resolveGatewayContext
-      ? gatewayScope.resolveGatewayContext()
-      : gatewayScope.context
-    )?.inputRecovery;
-}
-
 function runWithPluginGatewayScope<T>(
   gatewayScope: PluginRuntimeGatewayRequestScope,
   run: () => T,
-  invocation = pluginInstanceInvocation.getStore(),
+  invocation?: PluginInstanceInvocation,
 ): T {
   const current = getPluginExecutionFrame();
+  const call = invocation ?? current?.invocation;
   const runtime = getPluginRuntimeExecutionFrame(current);
-  return withAgentInputRecoveryContext(createAgentInputRecoveryResolver(gatewayScope), () =>
-    runWithPluginExecutionFrame(
-      runtime?.gatewayScope === gatewayScope && runtime.invocation === invocation
-        ? runtime
-        : new PluginRuntimeExecutionFrame(
-            // Reuse prepared frame facts; the mutable Gateway view remains call-local.
-            current ?? {},
-            gatewayScope,
-            runtime?.generationRegistry,
-            invocation,
-          ),
-      run,
-    ),
+  if (
+    runtime?.gatewayScope === gatewayScope &&
+    runtime.invocation === call &&
+    getAgentInputRecoveryContext() === gatewayScope
+  ) {
+    return run();
+  }
+  return runWithPluginExecutionFrame(
+    new PluginRuntimeExecutionFrame(current ?? {}, gatewayScope, runtime?.generationRegistry, call),
+    () => {
+      enterAgentInputRecoveryContext(gatewayScope);
+      return run();
+    },
   );
 }
 

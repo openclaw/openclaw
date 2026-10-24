@@ -1,5 +1,6 @@
 import { redactToolPayloadText } from "openclaw/plugin-sdk/logging-core";
 import { readProviderTextResponse } from "openclaw/plugin-sdk/provider-http";
+import { ssrfPolicyFromPrivateNetworkOptIn } from "openclaw/plugin-sdk/ssrf-runtime";
 
 // Nextcloud Talk guarded fetches own their dispatcher until the response body
 // settles. Cancel unread bodies before release so streaming responses cannot
@@ -31,4 +32,21 @@ export async function readNextcloudTalkErrorBody(
   } catch {
     return "";
   }
+}
+
+export function buildNextcloudTalkOcsOptions(
+  auth: string,
+  allowPrivateNetwork: boolean | undefined,
+) {
+  return {
+    init: {
+      method: "GET",
+      headers: {
+        Authorization: `Basic ${auth}`,
+        "OCS-APIRequest": "true",
+        Accept: "application/json",
+      },
+    },
+    policy: ssrfPolicyFromPrivateNetworkOptIn(allowPrivateNetwork),
+  };
 }

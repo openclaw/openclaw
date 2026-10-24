@@ -43,6 +43,28 @@ new directory taxonomy.
 | Commits         | `git add <files...>` then `git commit -m "<message>"`                          | Stage only the intended files for each commit.                                                                      |
 | Remote proof    | `node scripts/crabbox-wrapper.mjs ...`                                         | Use when the current host lacks the required isolation, OS, device, or capacity; sync each run and reuse the lease. |
 
+## Exact memory search benchmark
+
+Use `scripts/bench-memory-search.mjs` against a disposable PostgreSQL database
+with pgvector, pg_trgm, and unaccent installed. Set `PGMEMSEARCH_CONNECTION`,
+`PGMEMSEARCH_OUT` (a new directory), and `PGMEMSEARCH_CHUNKS` to 20000 or 50000;
+run it through `node --import ./scripts/tsx.mjs`. The deterministic corpus needs
+no embedding provider. `--help` lists all inputs.
+
+The benchmark interleaves 100 baseline/candidate pairs after five warmups for
+vector, keyword, and hybrid retrieval. It captures every search statement,
+EXPLAIN ANALYZE/BUFFERS, exact result hashes, p50/p95, and five paired blocks.
+The candidate orders by the selected distance; the baseline repeats the bound
+cosine expression. `PGMEMSEARCH_SOURCE_MODE` identifies which SQL shape the
+checkout produces, so that arm executes unchanged. Eligibility, ranking, and
+limits stay fixed. Compare the block deltas and spread at both corpus sizes;
+unchanged hashes and statement counts are required before accepting a speedup.
+
+Run `scripts/bench-memory-search-sqlite.mjs` with a separate fresh output
+directory and the same chunk count for the production sqlite-vec KNN control.
+Both benchmarks create synthetic state; stop and remove only their disposable
+database state after collecting results.
+
 ## Control UI warm interactions
 
 Build with `pnpm ui:build`, then collect the production renderer's desktop and

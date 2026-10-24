@@ -89,6 +89,48 @@ function sharedHeartbeatConfig(workspace: string, ollamaEvery = "0m") {
 }
 
 describe("HEARTBEAT.md cron scratch migration", () => {
+  it.each(["file", "imported scratch"])(
+    "retires a checklist with an entry-less tasks: marker from %s",
+    async (source) => {
+      const fixture = await createFixture();
+      const content = "# Checklist\n\ntasks:\n- check the queue\n- review alerts\n";
+      await fs.writeFile(fixture.heartbeatPath, content);
+      if (source === "imported scratch") {
+        await maybeMigrateHeartbeatFilesToScratch({ cfg: fixture.cfg, shouldRepair: true });
+      }
+
+      const retired = await retireHeartbeatWithDoctor(fixture.cfg);
+
+      expect(retired.agents?.defaults?.heartbeat).toBeUndefined();
+      const { monitor, storePath } = await loadMonitor();
+      expect(readCronJobScratchState(storePath, monitor.id).scratch?.content).toBe(content);
+      expect(
+        withExistingOpenClawStateDatabaseReadOnly(({ db }) =>
+          readDefaultProactiveJobReceiptInDatabase(db, storePath, "main"),
+        ),
+      ).toMatchObject({ jobId: monitor.id, phase: "complete" });
+      await expect(fs.lstat(fixture.heartbeatPath)).rejects.toMatchObject({ code: "ENOENT" });
+      const jobs = (await loadCronJobsStore(storePath)).jobs;
+      expect(jobs).toHaveLength(1);
+      await retireHeartbeatWithDoctor(retired);
+      expect((await loadCronJobsStore(storePath)).jobs).toEqual(jobs);
+    },
+  );
+
+  it("retains an incomplete task source before importing or archiving it", async () => {
+    const fixture = await createFixture();
+    const content = "tasks:\n- name: inbox\n  interval: 1h\n";
+    await fs.writeFile(fixture.heartbeatPath, content);
+
+    await expect(retireHeartbeatWithDoctor(fixture.cfg)).rejects.toThrow(
+      "no complete name/interval/prompt entries",
+    );
+
+    await expect(fs.readFile(fixture.heartbeatPath, "utf8")).resolves.toBe(content);
+    const { monitor, storePath } = await loadMonitor();
+    expect(readCronJobScratchState(storePath, monitor.id).scratch).toBeUndefined();
+  });
+
   it.each(["0m", "15m"])(
     "finishes the Doctor pass with disabled defaults and an explicit %s sibling",
     async (every) => {

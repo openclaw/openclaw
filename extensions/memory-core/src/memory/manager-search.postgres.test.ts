@@ -270,7 +270,16 @@ describe.skipIf(!connection)("PostgreSQL memory search worker", () => {
   );
 
   it("applies model, source and candidate eligibility before exact nearest limit", async () => {
-    const nearest = await regular.vector(vectorQuery({ limit: 1 }));
+    const queried = vi.spyOn(regular.pg(), "query");
+    let nearest;
+    try {
+      nearest = await regular.vector(vectorQuery({ limit: 1 }));
+      expect(queried).toHaveBeenCalledTimes(1);
+      // A separately bound ORDER BY expression makes PostgreSQL evaluate cosine twice per row.
+      expect(queried.mock.calls[0]![0].match(/<=>/g)).toHaveLength(1);
+    } finally {
+      queried.mockRestore();
+    }
     expect(nearest.rows.map((row) => row.path)).toEqual(["memory/semantic.md"]);
     expect(nearest.rows[0]!.score).toBeCloseTo(0.8, 6);
     const alias = await regular.vector(

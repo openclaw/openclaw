@@ -781,6 +781,13 @@ refresh its heap and external counters; ArrayBuffer coverage remains unavailable
 until the worker responds. Memory pressure warnings include these counters and the external-memory
 limit caveat; Node does not provide a worker limit for external/native allocations.
 
+`postgresBridgeCount` separately counts live PostgreSQL bridge isolates, including
+bridges inside registered worker parents. The count updates when a bridge exits,
+without waiting for a heap sample, and drops the parent's bridges when that parent
+exits. It includes direct bridges already present in `workerCount`; do not add the
+two counts together. Worker heap totals and coverage still describe the registered
+workers, so this count does not imply heap coverage for nested bridges.
+
 Linux samples add anonymous-page counters asynchronously. Worker sample ages
 include that delay; coverage and heap counters describe acquisition. These fields
 are not an atomic process snapshot.

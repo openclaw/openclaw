@@ -4,10 +4,6 @@ import { normalizeStringEntries, uniqueStrings } from "openclaw/plugin-sdk/strin
 import { resolveMatrixRoomKeyBackupReadinessError } from "./backup-health.js";
 import { isMatrixNotFoundError } from "./errors.js";
 import {
-  listMatrixOwnDevices,
-  resolveMatrixCrossSigningPublicationStatus,
-} from "./sdk/client-device-info.js";
-import {
   emitMatrixMembershipForRoom,
   refreshMatrixDmRoomIds,
   registerMatrixClientBridge,
@@ -348,18 +344,34 @@ export class MatrixClient extends MatrixClientVerification {
   }
 
   async getOwnCrossSigningPublicationStatus(): Promise<MatrixOwnCrossSigningPublicationStatus> {
-    const userId = this.client.getUserId() ?? this.selfUserId ?? null;
-    return await resolveMatrixCrossSigningPublicationStatus({
+    const requestedUserId = this.client.getUserId() ?? this.selfUserId ?? null;
+    const query = async () =>
+      (await this.doRequest("POST", "/_matrix/client/v3/keys/query", undefined, {
+        device_keys: requestedUserId ? { [requestedUserId]: [] as string[] } : {},
+      })) as {
+        master_keys?: Record<string, unknown>;
+        self_signing_keys?: Record<string, unknown>;
+        user_signing_keys?: Record<string, unknown>;
+      };
+    let response: Awaited<ReturnType<typeof query>> | undefined;
+    if (requestedUserId) {
+      try {
+        response = await query();
+      } catch {
+        // Failed diagnostics report unpublished keys.
+      }
+    }
+    const userId = requestedUserId || null;
+    const masterKeyPublished = Boolean(userId && response?.master_keys?.[userId]);
+    const selfSigningKeyPublished = Boolean(userId && response?.self_signing_keys?.[userId]);
+    const userSigningKeyPublished = Boolean(userId && response?.user_signing_keys?.[userId]);
+    return {
       userId,
-      query: async () =>
-        (await this.doRequest("POST", "/_matrix/client/v3/keys/query", undefined, {
-          device_keys: userId ? { [userId]: [] as string[] } : {},
-        })) as {
-          master_keys?: Record<string, unknown>;
-          self_signing_keys?: Record<string, unknown>;
-          user_signing_keys?: Record<string, unknown>;
-        },
-    });
+      masterKeyPublished,
+      selfSigningKeyPublished,
+      userSigningKeyPublished,
+      published: masterKeyPublished && selfSigningKeyPublished && userSigningKeyPublished,
+    };
   }
 
   async bootstrapOwnDeviceVerification(params?: {
@@ -454,7 +466,20 @@ export class MatrixClient extends MatrixClientVerification {
   }
 
   async listOwnDevices(): Promise<MatrixOwnDeviceInfo[]> {
-    return await listMatrixOwnDevices(this.client);
+    const client = this.client;
+    const currentDeviceId = client.getDeviceId()?.trim() || null;
+    const devices = await client.getDevices();
+    const entries = Array.isArray(devices?.devices) ? devices.devices : [];
+    return entries.map((device) => ({
+      deviceId: device.device_id,
+      displayName: device.display_name?.trim() || null,
+      lastSeenIp: device.last_seen_ip?.trim() || null,
+      lastSeenTs:
+        typeof device.last_seen_ts === "number" && Number.isFinite(device.last_seen_ts)
+          ? device.last_seen_ts
+          : null,
+      current: currentDeviceId !== null && device.device_id === currentDeviceId,
+    }));
   }
 
   async deleteOwnDevices(deviceIds: string[]): Promise<MatrixOwnDeviceDeleteResult> {

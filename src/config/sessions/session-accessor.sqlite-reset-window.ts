@@ -209,7 +209,6 @@ function readLatestActiveBoundaryMetadataByType(
   eventType: "compaction" | "reset",
   beforeRawSeq?: number,
 ) {
-  const db = getActiveTranscriptKysely(projection.database);
   const preparedReset = projection.latestIndexedReset;
   const indexed =
     eventType === "reset" &&
@@ -218,13 +217,7 @@ function readLatestActiveBoundaryMetadataByType(
       ? (preparedReset ?? undefined)
       : executeSqliteQueryTakeFirstSync(
           projection.database.db,
-          db
-            .selectFrom("session_transcript_active_events as active")
-            .innerJoin("transcript_event_identities as identity", (join) =>
-              join
-                .onRef("identity.session_id", "=", "active.session_id")
-                .onRef("identity.seq", "=", "active.event_seq"),
-            )
+          selectActiveTranscriptIdentityRows(projection.database)
             .select([
               "active.active_position",
               "identity.event_id",

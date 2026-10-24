@@ -213,11 +213,13 @@ export function createPluginRegistrars(state: PluginRegistryState) {
         capability.providerRuntime !== undefined ||
         capability.recallToolNames !== undefined ||
         capability.deterministicRecallToolName !== undefined ||
-        capability.supportsPrivateTranscriptRecall !== undefined);
+        capability.supportsPrivateTranscriptRecall !== undefined ||
+        capability.learnToolNames !== undefined ||
+        capability.learnGuidanceBuilder !== undefined);
     if (dropsSlotOwnerFacts) {
       reportRegistrationWarning(
         record,
-        "memory plugin not selected for the memory slot; skipping its indexing runtime and recall registration (consolidation lifecycle preserved)",
+        "memory plugin not selected for the memory slot; skipping its indexing runtime, recall and learn registration (consolidation lifecycle preserved)",
       );
     }
     const {
@@ -226,6 +228,8 @@ export function createPluginRegistrars(state: PluginRegistryState) {
       recallToolNames: _droppedRecallToolNames,
       deterministicRecallToolName: _droppedRecallToolName,
       supportsPrivateTranscriptRecall: _droppedPrivateRecall,
+      learnToolNames: _droppedLearnToolNames,
+      learnGuidanceBuilder: _droppedLearnGuidanceBuilder,
       ...consolidationCapability
     } = capability;
     if (memorySlotSelected && capability.runtime) {

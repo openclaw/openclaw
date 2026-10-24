@@ -356,7 +356,10 @@ export function SidebarPanel(props: SidebarPanelProps) {
                 when={
                   props.filePresentation === "desktop" &&
                   props.fileView &&
-                  (props.content?.kind === "markdown" || props.content?.kind === "attachment") &&
+                  (props.content?.kind === "markdown" ||
+                    (props.content?.kind === "attachment" &&
+                      !props.content.src &&
+                      !props.content.resolveSource)) &&
                   props.content.file
                     ? props.content.file
                     : undefined

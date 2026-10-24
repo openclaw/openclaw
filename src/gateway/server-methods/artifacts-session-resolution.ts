@@ -95,20 +95,20 @@ function resolveQuerySession(
 }
 
 export class ArtifactSessionResolutionError extends Error {
-  constructor(readonly shape: ReturnType<typeof errorShape>) {
+  constructor(
+    readonly shape: ReturnType<typeof errorShape> = errorShape(
+      ErrorCodes.UNAVAILABLE,
+      "session changed while reading artifact; reload the conversation",
+      { retryable: true },
+    ),
+  ) {
     super(shape.message);
   }
 }
 
 function throwArtifactSessionReadError(error: unknown): never {
   if (error instanceof SessionMutationFactsUnavailableError) {
-    throw new ArtifactSessionResolutionError(
-      errorShape(
-        ErrorCodes.UNAVAILABLE,
-        "session changed while reading artifact; reload the conversation",
-        { retryable: true },
-      ),
-    );
+    throw new ArtifactSessionResolutionError();
   }
   throw error;
 }

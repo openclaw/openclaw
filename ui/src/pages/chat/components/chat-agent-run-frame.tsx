@@ -248,6 +248,19 @@ export function AgentRunFrame(props: FrameProps) {
 
 function RunFrame(props: FrameProps) {
   const state = createMemo(() => prepareFrame(props.frame, props.options));
+  const timedWork = createMemo(() => {
+    const recap = props.options.turnRecap;
+    const work = props.frame.parts.find(
+      (part) => part.kind === "work-group" && part.replyRunId === props.frame.runId,
+    );
+    // The recap retains this run's terminal timing after the session moves on.
+    // Handoffs have no work summary: their request-wide timing stays in the recap.
+    if (!recap || work?.kind !== "work-group") {
+      return undefined;
+    }
+    const durationMs = work.durationMs ?? recap.runtimeMs;
+    return durationMs > 0 ? { ...work, durationMs } : undefined;
+  });
   const frameContent = [
     <FrameBody parts={state().bodyParts} options={props.options}>
       {(input) => {
@@ -295,7 +308,7 @@ function RunFrame(props: FrameProps) {
               {(work) => (
                 <>
                   <WorkGroupSummary
-                    item={work()}
+                    item={timedWork()?.key === work().key ? timedWork()! : work()}
                     options={{
                       expanded: options().isWorkExpanded(work().key),
                       bubbleMode: options().streamOptions.bubbleMode,
@@ -362,6 +375,7 @@ function RunFrame(props: FrameProps) {
         frameReplyLine: state().frameReplyLine,
         frameActionOwner: state().actionOwner,
         turnRecap: props.options.turnRecap,
+        hideTurnRecapDuration: timedWork() !== undefined,
       }}
     />
   );

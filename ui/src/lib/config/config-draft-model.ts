@@ -6,6 +6,7 @@ import type { ConfigSnapshot } from "../../api/types.ts";
 import { coerceConfigFormNumberString } from "../../components/config-form.numeric.ts";
 import { t } from "../../i18n/index.ts";
 import {
+  copyWithPathPatch,
   removePathValue,
   pruneEmptyConfigForm,
   schemaMayAcceptString,
@@ -320,14 +321,51 @@ export function adoptConfigWriteAck(
   return state.configAutoSaveStatus;
 }
 
+function configFormValuesEqual(left: unknown, right: unknown): boolean {
+  const before = typeof left === "number" && !Number.isFinite(left) ? null : left;
+  const after = typeof right === "number" && !Number.isFinite(right) ? null : right;
+  if (before === after) {
+    return true;
+  }
+  if (Array.isArray(before) && Array.isArray(after)) {
+    if (before.length !== after.length) {
+      return false;
+    }
+    for (let index = 0; index < before.length; index += 1) {
+      if (!configFormValuesEqual(before[index] ?? null, after[index] ?? null)) {
+        return false;
+      }
+    }
+    return true;
+  }
+  if (!isRecord(before) || !isRecord(after)) {
+    return false;
+  }
+  // Match JSON's omitted fields and key order without formatting unchanged branches.
+  const beforeKeys = Object.keys(before).filter((key) => before[key] !== undefined);
+  const afterKeys = Object.keys(after).filter((key) => after[key] !== undefined);
+  return (
+    beforeKeys.length === afterKeys.length &&
+    beforeKeys.every(
+      (key, index) => key === afterKeys[index] && configFormValuesEqual(before[key], after[key]),
+    )
+  );
+}
+
+export function configRawForDisplay(state: RuntimeConfigState): string {
+  return state.configFormMode === "form" && state.configFormDirty && state.configForm
+    ? serializeConfigForm(state.configForm)
+    : state.configRaw;
+}
+
 function syncConfigDraft(state: RuntimeConfigState, nextForm: Record<string, unknown>) {
   const original =
     state.configFormOriginal ?? resolveEditableSnapshotConfig(state.configSnapshot) ?? {};
-  const nextRaw = serializeConfigForm(nextForm);
-  const originalRaw = serializeConfigForm(original);
   state.configForm = nextForm;
-  state.configRaw = nextRaw;
-  state.configFormDirty = nextRaw !== originalRaw;
+  state.configFormDirty = !configFormValuesEqual(original, nextForm);
+  if (!state.configFormDirty) {
+    state.configRaw = state.configRawOriginal;
+  }
   // configFormMode tracks which draft is authoritative for submission; a form
   // edit supersedes any earlier raw-text draft.
   state.configFormMode = "form";
@@ -403,6 +441,8 @@ function setConfigRawOriginal(state: RuntimeConfigState, raw: string) {
 function mutateConfigForm(
   state: RuntimeConfigState,
   mutate: (draft: Record<string, unknown>) => void,
+  path?: Array<string | number>,
+  value?: unknown,
 ) {
   let base: Record<string, unknown>;
   if (state.configFormDirty && state.configFormMode === "raw") {
@@ -423,9 +463,15 @@ function mutateConfigForm(
     base = parsedRawDraft;
   } else {
     // Saved receipts and clean drafts share a tree; this is the mutation boundary.
-    base = structuredClone(
-      state.configForm ?? resolveEditableSnapshotConfig(state.configSnapshot) ?? {},
-    );
+    const current = state.configForm ?? resolveEditableSnapshotConfig(state.configSnapshot) ?? {};
+    base = path ? current : structuredClone(current);
+  }
+  if (path) {
+    const next = copyWithPathPatch(base, path, value, "copy-set");
+    if (!next.ok || !isRecord(next.value)) {
+      return;
+    }
+    base = next.value;
   }
   mutate(base);
   syncConfigDraft(state, base);
@@ -495,14 +541,18 @@ export function updateConfigFormValue(
   path: Array<string | number>,
   value: unknown,
 ) {
-  mutateConfigForm(state, (draft) => {
-    setPathValue(draft, path, value);
-    if (path[0] === "plugins" && path[1] === "allow") {
-      autoAllowlistedPluginIdsByState.delete(state);
-      return;
-    }
-    syncEnabledPluginAllowlist(state, draft, path, value);
-  });
+  mutateConfigForm(
+    state,
+    (draft) => {
+      if (path[0] === "plugins" && path[1] === "allow") {
+        autoAllowlistedPluginIdsByState.delete(state);
+        return;
+      }
+      syncEnabledPluginAllowlist(state, draft, path, value);
+    },
+    path,
+    value,
+  );
 }
 
 export function updateConfigRawValue(

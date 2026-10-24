@@ -9,17 +9,30 @@ export type AgentInputRecoveryAdmission = {
   ) => Promise<void> | undefined;
 };
 
-const recovery = new AsyncLocalStorage<() => AgentInputRecoveryAdmission | undefined>();
+type AgentInputRecoveryContext = {
+  context?: { inputRecovery?: AgentInputRecoveryAdmission };
+  resolveGatewayContext?: () => { inputRecovery?: AgentInputRecoveryAdmission } | undefined;
+};
 
-export function withAgentInputRecoveryContext<T>(
-  resolveOwner: () => AgentInputRecoveryAdmission | undefined,
-  run: () => T,
-): T {
-  return recovery.run(resolveOwner, run);
+const recovery = new AsyncLocalStorage<AgentInputRecoveryContext>();
+
+export function getAgentInputRecoveryContext(): AgentInputRecoveryContext | undefined {
+  return recovery.getStore();
+}
+
+/** Install inside the Gateway's async resource, which restores both scopes together. */
+export function enterAgentInputRecoveryContext(context: AgentInputRecoveryContext): void {
+  recovery.enterWith(context);
+}
+
+function resolveOwner(): AgentInputRecoveryAdmission | undefined {
+  const scope = recovery.getStore();
+  return (scope?.resolveGatewayContext ? scope.resolveGatewayContext() : scope?.context)
+    ?.inputRecovery;
 }
 
 export function isAgentInputRecoveryPending(agentId: string): boolean {
-  return recovery.getStore()?.()?.isPending(agentId) ?? false;
+  return resolveOwner()?.isPending(agentId) ?? false;
 }
 
 /** Fresh sources wait before reservation; recovery itself never borrows this gate. */
@@ -30,7 +43,7 @@ export function waitForAgentInputRecovery(
   const signals = [options.signal, getAsyncWorkSignal()].filter(
     (signal): signal is AbortSignal => signal !== undefined,
   );
-  return (options.owner ?? recovery.getStore()?.())?.waitForAgentInputRecovery(agentId, {
+  return (options.owner ?? resolveOwner())?.waitForAgentInputRecovery(agentId, {
     signal: signals.length ? AbortSignal.any(signals) : undefined,
   });
 }

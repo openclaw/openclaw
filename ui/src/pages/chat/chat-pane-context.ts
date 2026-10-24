@@ -339,6 +339,7 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       retireChatMetadataRequests(state, { keepPresentation: !metadataOwnerChanged });
     }
     if (sourceChanged) {
+      this.retireDetailsOutputs();
       this.resetSessionReadAcknowledgements();
       this.headerPresentation.continueInTerminalDialog = null;
       cancelChatScroll(state);

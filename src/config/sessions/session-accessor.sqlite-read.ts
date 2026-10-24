@@ -524,7 +524,6 @@ export function loadTranscriptEventsFromDatabase(
     afterEventSeq?: number;
     projection?: "reset-boundary";
     maxEventBytes?: number;
-    projectEvent?: (event: TranscriptEvent) => TranscriptEvent;
   } = {},
 ): TranscriptEvent[] {
   return readHotSessionTranscriptSnapshot(database, sessionId, "events", () => {
@@ -541,7 +540,7 @@ export function loadTranscriptEventsFromDatabase(
     // Array.from closes the iterator on parse failure; no live cursor escapes a fenced read.
     return Array.from(rows, (row) => {
       const event: TranscriptEvent = JSON.parse(row.event_json);
-      return options.projectEvent ? options.projectEvent(event) : event;
+      return event;
     });
   });
 }

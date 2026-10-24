@@ -829,6 +829,8 @@ export interface Model<TApi extends Api = Api> {
   contextTokens?: number;
   /** Provider/catalog-declared total parameter count, including inactive experts. */
   parameterCount?: number;
+  /** Provider/catalog-declared canonical developer lineage, such as `anthropic`. */
+  family?: string;
   maxTokens: number;
   /** Provider-specific request/runtime parameters passed through to provider plugins. */
   params?: Record<string, unknown>;

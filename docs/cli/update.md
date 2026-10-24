@@ -96,6 +96,12 @@ profile emits the guidance to stderr and does not create a state database for a
 skipped update. These non-outcomes do not run rollback verification or offer an
 update failure report.
 
+After durable success, updates automatically retire eligible superseded recovery
+copies through the state owner, retaining the current update's rollback generation.
+Cleanup warnings never fail or roll back the successful update. Manual
+`openclaw update cleanup` remains available for inspection and retry; see
+[recovery retirement](/cli/update/repair-and-recovery#update-cleanup).
+
 ## Usage
 
 ```bash

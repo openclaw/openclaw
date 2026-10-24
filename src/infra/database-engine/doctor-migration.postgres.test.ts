@@ -606,6 +606,7 @@ describe.skipIf(!connection)("Doctor PostgreSQL version migration", () => {
     [27, false],
     [27, true],
     [30, false],
+    [31, false],
   ] as const)(
     "keeps the real agent v%s→current rollback exact (foreign write: %s)",
     async (sourceVersion, foreignWrite) => {
@@ -633,7 +634,8 @@ describe.skipIf(!connection)("Doctor PostgreSQL version migration", () => {
       const installed: StoreSchema = {
         ...candidate,
         version: sourceVersion,
-        postgres: migration.fromSchema.postgres,
+        ...migration.fromSchema,
+        postgresVectorDecoderVersion: migration.fromSchema.postgresVectorDecoderVersion,
         postgresMigrations: [],
       };
       // Build the actual historical layout; dropping current columns would leave
@@ -937,7 +939,7 @@ describe.skipIf(!connection)("Doctor PostgreSQL version migration", () => {
             VALUES ('restored.md', 'memory', 'hash', 1, 1);`);
         expect(
           (await client.query(`SELECT revision FROM "${agentNamespace}".memory_index_state`)).rows,
-        ).toEqual([{ revision: "1" }]);
+        ).toEqual([{ revision: sourceVersion < 31 ? "1" : "0" }]);
       } finally {
         Object.assign(agentEngineSchema, candidate);
         vi.unstubAllEnvs();

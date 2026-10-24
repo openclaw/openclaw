@@ -1,6 +1,8 @@
 // Status JSON tests cover command output and runtime JSON writes.
+import fs from "node:fs";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createMockGatewayService } from "../daemon/service.test-helpers.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { statusJsonCommand } from "./status-json.js";
 import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
@@ -239,5 +241,24 @@ describe("statusJsonCommand", () => {
     };
     expect(payload.health).toEqual({ error: "Error: gateway health probe timed out" });
     expect(payload.securityAudit?.summary?.critical).toBe(1);
+  });
+});
+
+it("includes local recovery copy bytes in status --json without retiring them", async () => {
+  await withOpenClawTestState({ label: "status-recovery-json", applyEnv: true }, async (state) => {
+    fs.mkdirSync(state.statePath("state"), { recursive: true });
+    const file = state.statePath("state", "openclaw.sqlite.pre-startup-migration-old.bak");
+    fs.writeFileSync(file, "original");
+    mocks.scanStatusJsonFast.mockResolvedValueOnce({ ...createScanResult(), env: state.env });
+    const { runtime, logs } = createRuntimeCapture();
+    await statusJsonCommand({}, runtime);
+    const payload = JSON.parse(logs[0] ?? "{}");
+    expect(payload.recoveryCopies).toMatchObject({
+      scope: "local",
+      incomplete: false,
+      total: { count: 1, logicalBytes: 8, unmanifestedOrOrphan: { count: 1, logicalBytes: 8 } },
+      byKind: { migrationOriginals: { count: 1, logicalBytes: 8 } },
+    });
+    expect(fs.readFileSync(file, "utf8")).toBe("original");
   });
 });

@@ -267,7 +267,7 @@ Model-selection precedence for isolated jobs, highest first:
 3. User-selected stored automation-session model override
 4. Agent/default model selection
 
-A user-selected stored session model is an exact selection, as described in [selection source policy](/concepts/model-failover#selection-source-policy): if it fails, the run reports the failure instead of answering from configured fallbacks. The same applies when an agent turn runs in a main or custom (`session:<key>`) session whose model was selected by the user. Per-job `--fallbacks` still apply.
+A user-selected stored session model is an exact selection, as described in [selection source policy](/concepts/model-failover#selection-source-policy): if it fails, the run reports the failure instead of answering from configured fallbacks. The same applies to an agent turn in a main or custom (`session:<key>`) session and to a main-session system event when the session's model was selected by the user. Per-job `--fallbacks` still apply.
 
 Fast mode follows the resolved live selection. Isolated automation resolves it in this order: stored session `fastMode`, per-agent `agents.entries.*.fastModeDefault`, global `agents.defaults.fastModeDefault`, then selected-model `params.fastMode`. Auto mode uses the model's `params.fastAutoOnSeconds` cutoff, defaulting to 60 seconds.
 

@@ -1,10 +1,11 @@
 /* @vitest-environment jsdom */
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
+import { listChatOutboxAttention } from "../../lib/chat/outbox-attention.ts";
 import { createStoredChatOutboxReader } from "../../lib/chat/outbox-store-projection.ts";
 import { captureChatOutboxAdmission } from "../../lib/chat/outbox-store.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
-import { chatOutboxOwner, listChatOutboxAttention } from "./chat-outbox-owner.ts";
+import { chatOutboxOwner } from "./chat-outbox-owner.ts";
 import { loadChatComposerState } from "./composer-draft-storage.ts";
 import {
   admitStoredChatComposerQueueItemResult,

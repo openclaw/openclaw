@@ -931,6 +931,9 @@ it("accounts only the identified main isolate inside the requested heap capture"
     'OPENCLAW_GATEWAY_BENCH_GC {"phase":"diagnostics-stop","pid":42,"profilePath":"soak"}',
     '[42:0xabc:0] 18 ms: GC: {"gc":"mc","promoted":256}',
     'OPENCLAW_GATEWAY_BENCH_GC {"phase":"heap-stop","pid":42,"profilePath":"measured"}',
+    'OPENCLAW_GATEWAY_BENCH_GC {"phase":"diagnostics-start","pid":42,"profilePath":"round-1"}',
+    "[42:0xabc] 19 ms: pause=2.0 gc=s promoted=2048",
+    'OPENCLAW_GATEWAY_BENCH_GC {"phase":"diagnostics-stop","pid":42,"profilePath":"round-1"}',
     "[42:0xabc] 20 ms: pause=1.0 gc=s promoted=4096",
     '[42:0xabc:0] 25 ms: GC: {"gc":"s",interleaved shutdown log',
   ].join("\n");
@@ -946,6 +949,11 @@ it("accounts only the identified main isolate inside the requested heap capture"
     promotedBytes: 1024,
     gcCount: 1,
     excludedWorkerGcCount: 2,
+  });
+  expect(readGatewayGcTrace(logPath, "round-1", "diagnostics")).toMatchObject({
+    promotedBytes: 2048,
+    gcCount: 1,
+    excludedWorkerGcCount: 0,
   });
   expect(() => readGatewayGcTrace(logPath, "missing")).toThrow("complete heap capture window");
   for (const malformed of [

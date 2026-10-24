@@ -2,6 +2,7 @@ import { expect, it, vi } from "vitest";
 import { createApplicationConfigCapability } from "../app/config.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
+import { gatewayHelloForMethods } from "../test-helpers/gateway-methods.ts";
 import { initializeControlUiPlugin } from "./control-ui-loader.ts";
 import { type ControlUiPluginOwner, ControlUiPluginRuntime } from "./control-ui-runtime.ts";
 
@@ -16,12 +17,16 @@ it.each(["load", "error", "abort"] as const)(
       evaluated();
       return { default: { id: "fixture", activate } };
     });
-    const client = createTestGatewayClient(async () => ({}));
+    const client = createTestGatewayClient(async () => ({ plugins: [], diagnostics: [] }));
     const context = {
       config: createApplicationConfigCapability({ resourceBasePath: "" }),
       resourceBasePath: "",
       gateway: {
-        snapshot: { phase: "connected", client },
+        snapshot: {
+          phase: "connected",
+          client,
+          hello: gatewayHelloForMethods(["plugins.controlUi.list"]),
+        },
         subscribe: () => () => undefined,
         subscribeEvents: () => () => undefined,
       },

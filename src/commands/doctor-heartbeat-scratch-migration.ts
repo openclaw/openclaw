@@ -32,11 +32,17 @@ import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-sta
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { shortenHomePath } from "../utils.js";
 import { ensureHeartbeatMonitorJobs } from "./doctor-heartbeat-cadence-migration.js";
+import { decodeDoctorHeartbeatJobRows } from "./doctor-heartbeat-jobs.js";
 import {
   resolveLegacyHeartbeatAgents,
   resolveLegacyHeartbeatConfig,
 } from "./doctor-heartbeat-legacy.js";
+import {
+  resolveDoctorHeartbeatReceiptJob,
+  selectDoctorHeartbeatMonitor,
+} from "./doctor-heartbeat-monitors.js";
 import { noteDoctorMigrationResult } from "./doctor-migration-notes.js";
+import { analyzeLegacyHeartbeatTasks, validateHeartbeatTasks } from "./heartbeat-task-legacy.js";
 
 const LEGACY_HEARTBEAT_FILENAME = "HEARTBEAT.md";
 const utf8Decoder = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
@@ -407,6 +413,7 @@ export async function collectHeartbeatScratchMigrationFindings(
     fixHint: `Run ${formatCliCommand("openclaw doctor --fix")} to migrate HEARTBEAT.md into cron scratch.`,
   } as const;
   const findings: HealthFinding[] = [];
+  const storePath = resolveCronJobsStorePathFromConfig(cfg, env);
   for (const agentId of resolveHeartbeatFileAgentIds(cfg)) {
     const heartbeatPath = path.join(
       resolveAgentWorkspaceDir(cfg, agentId, env),
@@ -416,6 +423,32 @@ export async function collectHeartbeatScratchMigrationFindings(
       const source = await readHeartbeatSource(cfg, agentId, { env });
       if (!source) {
         continue;
+      }
+      const shouldImport =
+        withExistingOpenClawStateDatabaseReadOnly(
+          ({ db }) => {
+            const receipt = readDefaultProactiveJobReceiptInDatabase(db, storePath, agentId);
+            if (receipt?.phase === "complete") {
+              return false;
+            }
+            const jobs = decodeDoctorHeartbeatJobRows(loadCronRows(db, cronStoreKey(storePath)));
+            const previous = selectDoctorHeartbeatMonitor(jobs, agentId);
+            const monitor = receipt
+              ? resolveDoctorHeartbeatReceiptJob(cfg, jobs, agentId, receipt, previous)
+              : previous;
+            return (
+              !monitor ||
+              !heartbeatScratchMigrationConflict(
+                agentId,
+                source.content,
+                readScratchStateFromDatabase(db, cronStoreKey(storePath), monitor.id),
+              )
+            );
+          },
+          { env },
+        ) ?? true;
+      if (shouldImport) {
+        validateHeartbeatTasks(analyzeLegacyHeartbeatTasks(source.content));
       }
       findings.push({
         ...MIGRATION_FINDING_DEFAULTS,
@@ -560,18 +593,19 @@ export async function maybeMigrateHeartbeatFilesToScratch(params: {
       continue;
     }
 
-    if (!keepSource) {
-      // Archive before the claim rename: if doctor dies mid-claim, the content is
-      // already durable under the state backups instead of only at a hidden
-      // .doctor-importing-* path nothing rescans.
-      try {
+    try {
+      validateHeartbeatTasks(analyzeLegacyHeartbeatTasks(source.content));
+      if (!keepSource) {
+        // Archive before the claim rename: if doctor dies mid-claim, the content is
+        // already durable under the state backups instead of only at a hidden
+        // .doctor-importing-* path nothing rescans.
         await archiveSource({ agentId: importAgents[0]![0], source, env });
-      } catch (error) {
-        warnings.push(
-          `${shortenHomePath(source.path)} was not migrated: ${errorMessage(error)}. Rerun doctor to retry safely.`,
-        );
-        continue;
       }
+    } catch (error) {
+      warnings.push(
+        `${shortenHomePath(source.path)} was not migrated: ${errorMessage(error)}. Rerun doctor to retry safely.`,
+      );
+      continue;
     }
 
     // Claim before committing so path replacement cannot redirect imported bytes.
