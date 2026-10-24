@@ -25,10 +25,40 @@ export type SqliteFileGeneration = {
   wal?: SqliteFileFingerprint;
 };
 
+function canRetainDigest(stat: FileMutationFingerprint, observedAtNs: bigint): boolean {
+  // Nanosecond fields can still describe a coarse filesystem clock. A digest
+  // must start beyond the entire two-second timestamp quantum, including FAT.
+  const cutoff = observedAtNs - 2_000_000_000n;
+  return (
+    typeof stat.dev === "bigint" &&
+    typeof stat.ino === "bigint" &&
+    typeof stat.size === "bigint" &&
+    stat.dev !== 0n &&
+    stat.ino !== 0n &&
+    typeof stat.birthtimeNs === "bigint" &&
+    typeof stat.mtimeNs === "bigint" &&
+    typeof stat.ctimeNs === "bigint" &&
+    stat.mtimeNs > 0n &&
+    stat.ctimeNs > 0n &&
+    stat.mtimeNs < cutoff &&
+    stat.ctimeNs < cutoff
+  );
+}
+
+function timestampNs(nanoseconds: bigint | undefined, milliseconds: bigint | number): bigint {
+  return (
+    nanoseconds ??
+    (typeof milliseconds === "bigint"
+      ? milliseconds * 1_000_000n
+      : BigInt(Math.trunc(milliseconds * 1_000_000)))
+  );
+}
+
 function fingerprintFile(
   pathname: string,
   verified: Map<string, SqliteFileFingerprint>,
 ): SqliteFileFingerprint {
+  const observedAtNs = BigInt(Date.now()) * 1_000_000n;
   const fd = fs.openSync(pathname, "r");
   try {
     const before = fs.fstatSync(fd, { bigint: true });
@@ -38,8 +68,7 @@ function fingerprintFile(
     const previous = verified.get(pathname);
     if (
       previous &&
-      before.dev !== 0n &&
-      before.ino !== 0n &&
+      canRetainDigest(before, observedAtNs) &&
       sameFileMutationFingerprint(previous, before)
     ) {
       const after = fs.fstatSync(fd, { bigint: true });
@@ -60,16 +89,21 @@ function fingerprintFile(
     }
     // Retain native descriptor IDs when Windows pathname stats report unknown IDs.
     const fingerprint = {
-      birthtimeNs: after.birthtimeNs,
-      ctimeNs: after.ctimeNs,
+      birthtimeNs: timestampNs(after.birthtimeNs, after.birthtimeMs),
+      ctimeNs: timestampNs(after.ctimeNs, after.ctimeMs),
       dev: after.dev,
       ino: after.ino,
-      mtimeNs: after.mtimeNs,
+      mtimeNs: timestampNs(after.mtimeNs, after.mtimeMs),
       sha256,
       size: after.size,
     };
-    // Timestamp drift still gets byte verification, but cannot seed digest reuse.
-    if (sameFileMutationFingerprint(before, after) && sameFileMutationFingerprint(after, current)) {
+    // Fresh, imprecise, or drifting timestamps cannot seed digest reuse, even
+    // when hashing itself outlasted the timestamp quantum.
+    if (
+      canRetainDigest(before, observedAtNs) &&
+      sameFileMutationFingerprint(before, after) &&
+      sameFileMutationFingerprint(after, current)
+    ) {
       verified.set(pathname, fingerprint);
     } else {
       verified.delete(pathname);

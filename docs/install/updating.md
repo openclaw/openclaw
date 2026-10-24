@@ -65,7 +65,11 @@ modification, and change times remain identical. Each family observation still
 checks the database, WAL, and rollback journal; private-copy verification and
 WAL commit checks remain in place. Changed or unavailable identities require
 hashing again. Reuse ends with that observation and does not cross Doctor
-invocations. The runtime performing the observation must contain this change;
+invocations. Reuse also requires nanosecond bigint stat fields and modification
+and change times more than two seconds older than the start of hashing. Recent
+writes can share a coarse filesystem timestamp even when nanosecond fields are
+available, so their digests are recomputed. Millisecond-only stats never enable
+reuse. The runtime performing the observation must contain this change;
 a newer candidate cannot change an older installed updater's own reads.
 
 Update snapshots and database backups accept a database whose only integrity
