@@ -22,7 +22,7 @@ import { useApplication } from "../../lib/reactive/context.ts";
 import { createDocumentTitle } from "../../lib/reactive/document-title.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { createPendingFocus } from "../../lib/reactive/pending-focus.ts";
-import { projectSource } from "../../lib/reactive/projection.ts";
+import { projectOwner } from "../../lib/reactive/projection.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../lib/solid-bridge.ts";
 import { ChatQuestionCard } from "../chat/components/chat-question-card-view.tsx";
 import { createGatewayQuestionPanelProps } from "../chat/components/chat-question-card.ts";
@@ -74,21 +74,8 @@ function createQuestionPage(
       questionPanel?.contains(document.activeElement) ||
       (questionPanelHadFocus && document.activeElement === document.body);
   };
-  let publishQuestions = () => {};
-  const questionState = createQuestionPromptState(() => {
-    rememberPanelFocus();
-    publishQuestions();
-  });
-  const questions = projectSource(questionState, {
-    read: listQuestionPrompts,
-    subscribe: (_state, notify) => {
-      publishQuestions = notify;
-      return () => {
-        publishQuestions = () => {};
-      };
-    },
-    equality: "revision",
-  });
+  const questionState = createQuestionPromptState(rememberPanelFocus);
+  const questions = projectOwner(questionState, listQuestionPrompts);
   const prompt = () => questions.read().find((candidate) => candidate.id === props.questionId);
   onSettled(() => {
     // Native receipts retire operations before another question can dispatch.
