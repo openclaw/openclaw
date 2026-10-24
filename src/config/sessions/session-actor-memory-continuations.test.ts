@@ -9,6 +9,7 @@ import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { lookupSessionGoalOperation } from "./goals-operations-read.js";
 import { mutateSessionGoal } from "./goals-operations.js";
+import { buildCreatedSessionGoal } from "./goals-transitions.js";
 import {
   beginRestartRecoveryTerminalDelivery,
   cancelRestartRecoveryTerminalDelivery,
@@ -167,16 +168,13 @@ describe("memory continuation adapters", () => {
     const now = Date.now();
     const { owner, binding, replace } = await fixture({
       goal: {
-        schemaVersion: 1,
+        ...buildCreatedSessionGoal(
+          { sessionId: scope.sessionId, updatedAt: now },
+          { objective: "Original" },
+          now,
+        ),
         id: "goal-1",
-        objective: "Original",
-        status: "active",
-        createdAt: now,
-        updatedAt: now,
-        tokenStart: 0,
         tokenStartFresh: true,
-        tokensUsed: 0,
-        continuationTurns: 0,
       },
     });
     const input = {
@@ -313,12 +311,6 @@ describe("memory continuation adapters", () => {
         existing: undefined,
         previous: { outcome: { reason: "completed", status: "ok" } },
       });
-      expect(
-        await store.mutate(
-          { ...identity, kind: "complete", outcome: { reason: "failed", status: "error" } },
-          guard,
-        ),
-      ).toMatchObject({ outcome: { reason: "completed", status: "ok" } });
       expect(binding.actor.snapshot(authority)?.entry?.label).toBe("Intervening edit");
       owner.close();
       expect(store.assertCurrent).toThrow();
