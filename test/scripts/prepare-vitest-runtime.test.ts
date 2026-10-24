@@ -4,7 +4,10 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import * as buildAll from "../../scripts/build-all.mts";
 import { acquireDistArtifactOwnership } from "../../scripts/lib/dist-artifact-lock.mts";
 import * as artifactOwnership from "../../scripts/lib/dist-artifact-ownership.mts";
-import { prepareVitestRuntime } from "../../scripts/lib/vitest-build-prerequisites.mts";
+import {
+  prepareVitestRuntime,
+  runE2eGlobalSetup,
+} from "../../scripts/lib/vitest-build-prerequisites.mts";
 import { prepareTestRuntime } from "../../scripts/prepare-vitest-runtime.mts";
 import * as sourceRunner from "../../scripts/run-node.mts";
 import * as postbuild from "../../scripts/runtime-postbuild.mts";
@@ -24,15 +27,39 @@ vi.mock("../../scripts/lib/managed-child-process.mts", async (importOriginal) =>
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 let root: string;
 let env: NodeJS.ProcessEnv;
+const entryPath = (directory = root) => path.join(directory, "dist/entry.js");
+const readEntry = () => fs.readFile(entryPath(), "utf8");
+async function writeRuntime(directory: string) {
+  await fs.writeFile(path.join(directory, "package.json"), JSON.stringify({ name: "openclaw" }));
+  await fs.mkdir(path.join(directory, "dist"));
+  await fs.writeFile(entryPath(directory), "original\n");
+}
+function mockCompiler(overrides: Parameters<typeof buildAll.runBuildAllSteps>[1]) {
+  const runBuild = buildAll.runBuildAllSteps;
+  return vi.spyOn(buildAll, "runBuildAllSteps").mockImplementation((profile, params) =>
+    runBuild(profile, {
+      ...params,
+      logger: { error() {}, warn() {} },
+      steps: [{ label: "fixture-compiler", args: [] }],
+      resolveCacheState: () => ({ cacheable: false, fresh: false, reason: "no-cache" }),
+      ...overrides,
+    }),
+  );
+}
+function mockPreparation(runtime: boolean) {
+  vi.spyOn(sourceRunner, "resolveRunNodePreparation").mockReturnValue({
+    build: false,
+    runtime,
+    immutable: false,
+  });
+}
 
 beforeEach(async () => {
   root = tempDirs.make("test-runtime-preparation-");
   env = { HOME: root, OPENCLAW_STATE_DIR: path.join(root, "state"), OPENCLAW_RUNNER_LOG: "0" };
   // Keep artifact ownership inside the fixture even when TMPDIR is in another checkout.
-  await fs.writeFile(path.join(root, "package.json"), JSON.stringify({ name: "openclaw" }));
+  await writeRuntime(root);
   await fs.writeFile(path.join(root, "pnpm-workspace.yaml"), "packages: []\n");
-  await fs.mkdir(path.join(root, "dist"));
-  await fs.writeFile(path.join(root, "dist", "entry.js"), "original\n");
   vi.spyOn(gatewayBindings, "discoverManagedGatewayBindings").mockImplementation(
     async (bindingEnv, options) => (options?.includeInvoking ? [{ env: bindingEnv }] : []),
   );
@@ -67,6 +94,100 @@ beforeEach(async () => {
   });
 });
 afterEach(() => vi.restoreAllMocks());
+
+it.each([undefined, "0", "1"])(
+  "admits E2E readers after one equivalent AI writer: caller DTS=%s",
+  async (dts) => {
+    env.OPENCLAW_RUN_NODE_SKIP_DTS_BUILD = dts;
+    vi.spyOn(sourceRunner, "resolveRunNodePreparation").mockReturnValue({
+      build: true,
+      runtime: true,
+      immutable: false,
+    });
+    const writers: string[] = [];
+    // Keep the real qaRuntime planner, completion records, and dist ownership;
+    // only terminal workloads are fixtures, not evidence of actual compilation.
+    mockCompiler({
+      steps: undefined,
+      runStep: async ({ args, options }) => {
+        if (args.includes("scripts/tsdown-build.mts")) {
+          expect(options.env?.OPENCLAW_RUN_NODE_SKIP_DTS_BUILD).toBe("0");
+          writers.push("typed runtime");
+          await fs.writeFile(entryPath(), "typed runtime\n");
+        }
+        return { status: 0 };
+      },
+    });
+    const standalone = async (commandEnv: NodeJS.ProcessEnv, signal?: AbortSignal) => {
+      expect(commandEnv).toBe(env);
+      const claim = await acquireDistArtifactOwnership(root, false, signal);
+      try {
+        writers.push("standalone");
+        await fs.writeFile(entryPath(), `standalone DTS=${dts}\n`);
+      } finally {
+        await claim.release();
+      }
+      return 0;
+    };
+    commands.prepare.mockImplementation(({ env: commandEnv, signal }) =>
+      standalone(commandEnv, signal),
+    );
+    await runE2eGlobalSetup(async (args, commandEnv) => {
+      if (args[0] === "scripts/prepare-vitest-runtime.mjs") {
+        return prepareTestRuntime(root, commandEnv, undefined, {
+          withAiPackage: args.includes("--with-ai-package"),
+        });
+      }
+      return standalone(commandEnv);
+    }, env);
+    expect(writers).toEqual(dts === "1" ? ["typed runtime", "standalone"] : ["typed runtime"]);
+    expect(await readEntry()).toBe(dts === "1" ? "standalone DTS=1\n" : "typed runtime\n");
+  },
+);
+
+it.each(["warm", "postbuild", "locked recheck"])(
+  "retains the original-environment AI writer after %s preparation",
+  async (preparation) => {
+    env.OPENCLAW_RUN_NODE_SKIP_DTS_BUILD = "1";
+    const resolvePreparation = vi.spyOn(sourceRunner, "resolveRunNodePreparation");
+    resolvePreparation.mockReturnValue({
+      build: false,
+      runtime: preparation === "postbuild",
+      immutable: false,
+    });
+    if (preparation === "locked recheck") {
+      resolvePreparation.mockReturnValueOnce({ build: true, runtime: true, immutable: false });
+    }
+    vi.spyOn(postbuild, "runRuntimePostBuild").mockImplementation(() => {});
+    const build = vi.spyOn(buildAll, "runBuildAllSteps");
+    commands.prepare.mockImplementation(async ({ env: commandEnv, signal }) => {
+      expect(commandEnv).toBe(env);
+      const claim = await acquireDistArtifactOwnership(root, false, signal);
+      await claim.release();
+      return 0;
+    });
+    expect(await prepareTestRuntime(root, env, undefined, { withAiPackage: true })).toBe(0);
+    expect(commands.prepare).toHaveBeenCalledOnce();
+    expect(build).not.toHaveBeenCalled();
+  },
+);
+
+it("propagates the joined standalone AI writer's failure", async () => {
+  mockPreparation(false);
+  commands.prepare.mockResolvedValue(23);
+  expect(await prepareTestRuntime(root, env, undefined, { withAiPackage: true })).toBe(23);
+});
+
+it("does not start another writer after a failed compiler generation", async () => {
+  vi.spyOn(sourceRunner, "resolveRunNodePreparation").mockReturnValue({
+    build: true,
+    runtime: true,
+    immutable: false,
+  });
+  mockCompiler({ steps: undefined, runStep: async () => ({ status: 7 }) });
+  expect(await prepareTestRuntime(root, env, undefined, { withAiPackage: true })).toBe(7);
+  expect(commands.prepare).not.toHaveBeenCalled();
+});
 
 it.each([
   "unavailable service",
@@ -106,9 +227,7 @@ it.each([
     ].includes(service)
   ) {
     const other = tempDirs.make("serving-runtime-");
-    await fs.writeFile(path.join(other, "package.json"), JSON.stringify({ name: "openclaw" }));
-    await fs.mkdir(path.join(other, "dist"));
-    await fs.writeFile(path.join(other, "dist", "entry.js"), "original\n");
+    await writeRuntime(other);
     if (service === "shared dist") {
       await fs.rm(path.join(root, "dist"), { recursive: true });
       await fs.symlink(path.join(other, "dist"), path.join(root, "dist"));
@@ -122,7 +241,7 @@ it.each([
     vi.mocked(systemdFiles.readSystemdServiceCommandLocation).mockResolvedValue({
       kind: "command",
       command: {
-        programArguments: [process.execPath, path.join(other, "dist", "entry.js"), "gateway"],
+        programArguments: [process.execPath, entryPath(other), "gateway"],
       },
     });
     if (service === "unreadable dist") {
@@ -145,25 +264,16 @@ it.each([
       running: true,
       env: {},
       command: {
-        programArguments: [process.execPath, path.join(root, "dist", "entry.js"), "gateway"],
+        programArguments: [process.execPath, entryPath(), "gateway"],
       },
       runtime: { status: "running" },
     });
   }
-  const runBuild = buildAll.runBuildAllSteps;
   const compiler = vi.fn(async () => {
-    await fs.writeFile(path.join(root, "dist", "entry.js"), "rebuilt\n");
+    await fs.writeFile(entryPath(), "rebuilt\n");
     return { status: 0 };
   });
-  const build = vi.spyOn(buildAll, "runBuildAllSteps").mockImplementation((profile, params) =>
-    runBuild(profile, {
-      ...params,
-      logger: { error() {}, warn() {} },
-      steps: [{ label: "fixture-compiler", args: [] }],
-      resolveCacheState: () => ({ cacheable: false, fresh: false, reason: "no-cache" }),
-      runStep: compiler,
-    }),
-  );
+  const build = mockCompiler({ runStep: compiler });
   const status = await prepareVitestRuntime(
     [{ includePatterns: ["extensions/qa-lab/src/suite-process-lifecycle.test.ts"] }],
     env,
@@ -177,9 +287,7 @@ it.each([
     }),
   );
   expect(compiler).toHaveBeenCalledTimes(admitted ? 1 : 0);
-  expect(await fs.readFile(path.join(root, "dist", "entry.js"), "utf8")).toBe(
-    admitted ? "rebuilt\n" : "original\n",
-  );
+  expect(await readEntry()).toBe(admitted ? "rebuilt\n" : "original\n");
   if (admitted) {
     expect(gatewayService.readGatewayServiceState).not.toHaveBeenCalled();
   }
@@ -191,11 +299,7 @@ it.each(["current artifacts", "immutable deployment"])("does not rebuild %s", as
     vi.spyOn(artifactOwnership, "withDistArtifactOwnership").mockRejectedValue(
       Object.assign(new Error("read-only checkout"), { code: "EROFS" }),
     );
-    vi.spyOn(sourceRunner, "resolveRunNodePreparation").mockReturnValue({
-      build: false,
-      runtime: false,
-      immutable: false,
-    });
+    mockPreparation(false);
     expect(await prepareTestRuntime(root, env)).toBe(0);
     expect(gatewayService.readGatewayServiceState).not.toHaveBeenCalled();
   } else {
@@ -206,17 +310,13 @@ it.each(["current artifacts", "immutable deployment"])("does not rebuild %s", as
     await expect(prepareTestRuntime(root, env)).rejects.toThrow("immutable deployment");
   }
   expect(build).not.toHaveBeenCalled();
-  expect(await fs.readFile(path.join(root, "dist", "entry.js"), "utf8")).toBe("original\n");
+  expect(await readEntry()).toBe("original\n");
 });
 
 it.each(["success", "failure", "unverified service"])(
   "does not compile when only postbuild is stale: %s",
   async (outcome) => {
-    vi.spyOn(sourceRunner, "resolveRunNodePreparation").mockReturnValue({
-      build: false,
-      runtime: true,
-      immutable: false,
-    });
+    mockPreparation(true);
     const build = vi.spyOn(buildAll, "runBuildAllSteps");
     const sync = vi.spyOn(postbuild, "runRuntimePostBuild");
     if (outcome === "unverified service") {
@@ -240,7 +340,7 @@ it.each(["success", "failure", "unverified service"])(
     }
     if (outcome === "unverified service") {
       expect(sync).not.toHaveBeenCalled();
-      expect(await fs.readFile(path.join(root, "dist", "entry.js"), "utf8")).toBe("original\n");
+      expect(await readEntry()).toBe("original\n");
     } else {
       expect(sync).toHaveBeenCalledOnce();
     }
@@ -252,23 +352,16 @@ it("joins a canceled compiler before releasing checkout ownership", async () => 
   const controller = new AbortController();
   const started = createDeferred();
   const finish = createDeferred();
-  const runBuild = buildAll.runBuildAllSteps;
   const finalize = vi.fn(() => true);
-  vi.spyOn(buildAll, "runBuildAllSteps").mockImplementation((profile, params) =>
-    runBuild(profile, {
-      ...params,
-      logger: { error() {}, warn() {} },
-      steps: [{ label: "fixture-compiler", args: [] }],
-      resolveCacheState: () => ({ cacheable: false, fresh: false, reason: "no-cache" }),
-      finalizeCache: finalize,
-      runStep: async () => {
-        started.resolve();
-        await finish.promise;
-        return { status: 0 };
-      },
-    }),
-  );
-  const attempt = prepareTestRuntime(root, env, controller.signal);
+  mockCompiler({
+    finalizeCache: finalize,
+    runStep: async () => {
+      started.resolve();
+      await finish.promise;
+      return { status: 0 };
+    },
+  });
+  const attempt = prepareTestRuntime(root, env, controller.signal, { withAiPackage: true });
   try {
     await Promise.race([started.promise, attempt]);
     controller.abort();
@@ -280,6 +373,7 @@ it("joins a canceled compiler before releasing checkout ownership", async () => 
     await expect(attempt).rejects.toMatchObject({ name: "AbortError" });
   }
   expect(finalize).not.toHaveBeenCalled();
+  expect(commands.prepare).not.toHaveBeenCalled();
   const next = await acquireDistArtifactOwnership(root);
   await next.release();
 });

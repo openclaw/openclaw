@@ -276,6 +276,9 @@ describe("resolveOllamaDiscoveryResult — hosted Ollama Cloud guard", () => {
     },
   );
 
+  // Success cases must prove discovered models and a ready outcome, not just a
+  // non-null result. Check credential forwarding apart from the persisted local
+  // auth marker.
   it.each([undefined, "http://localhost:11434", "https://ollama.mycompany.com", "not a url"])(
     "still auto-discovers for non-hosted base URL %s",
     async (baseUrl) => {

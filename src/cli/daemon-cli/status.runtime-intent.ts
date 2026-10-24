@@ -1,8 +1,12 @@
-import { readDaemonRuntimePin } from "../../daemon/runtime-pin-state.js";
+import {
+  readDaemonRuntimePin,
+  readDaemonRuntimePinMigrationPending,
+} from "../../daemon/runtime-pin-state.js";
 import type { DaemonRuntimePinSnapshot } from "../../daemon/runtime-pin-types.js";
 import type { GatewayService, GatewayServiceCommandConfig } from "../../daemon/service-types.js";
 import { hasGatewayServiceLauncherOverride } from "../../daemon/service-types.js";
 import { sha256Hex } from "../../infra/crypto-digest.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { projectDaemonServiceForJson } from "./shared.js";
 
 export type CliRuntimeStatus = {
@@ -22,7 +26,8 @@ export async function inspectCliRuntime(): Promise<CliRuntimeStatus> {
 }
 
 export type ServiceRuntimeIntentStatus =
-  | { runtimeIntent: { status: "unknown" } }
+  | { runtimeIntent: { status: "unknown"; error?: string } }
+  | { runtimeIntent: { status: "migrationPending"; nextStep: "run openclaw doctor" } }
   | {
       runtimeIntent: DaemonRuntimePinSnapshot & { status: "known" };
       revision: string;
@@ -43,18 +48,14 @@ export async function inspectServiceRuntimeIntent(params: {
     return { runtimeIntent: { status: "unknown" } };
   }
   try {
+    if (readDaemonRuntimePinMigrationPending(params.serviceEnv)) {
+      return { runtimeIntent: { status: "migrationPending", nextStep: "run openclaw doctor" } };
+    }
     const pin = readDaemonRuntimePin({ kind: params.kind, env: params.serviceEnv }, params.command);
     const capability = await params.service.readDefinitionMutationCapability?.({
       env: params.env,
       environment: params.serviceEnv,
     });
-    const currentPin = readDaemonRuntimePin(
-      { kind: params.kind, env: params.serviceEnv },
-      params.command,
-    );
-    if (currentPin.revision !== pin.revision) {
-      return { runtimeIntent: { status: "unknown" } };
-    }
     const { command } = projectDaemonServiceForJson(
       { command: params.command },
       { includeDefinitionPaths: false },
@@ -67,8 +68,8 @@ export async function inspectServiceRuntimeIntent(params: {
       definitionMutation: capability?.kind ?? "unknown",
       launcherOverridden: hasGatewayServiceLauncherOverride(params.command),
     };
-  } catch {
+  } catch (error) {
     // Missing, unreadable, malformed, and stale metadata cannot authorize adoption.
-    return { runtimeIntent: { status: "unknown" } };
+    return { runtimeIntent: { status: "unknown", error: formatErrorMessage(error) } };
   }
 }

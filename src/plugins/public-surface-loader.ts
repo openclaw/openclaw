@@ -58,7 +58,6 @@ export function loadValidatedPublicSurfaceModule(params: {
 export function loadBundledPluginPublicArtifactModuleSync<T extends object>(params: {
   dirName: string;
   artifactBasename: string;
-  env?: NodeJS.ProcessEnv;
 }): T {
   const loaded = loadBundledPluginPublicArtifactModuleFromCandidatesSync<T>({
     ...params,
@@ -77,7 +76,6 @@ export function loadPluginPublicArtifactModuleSync<T extends object>(params: {
   pluginRoot: string;
   artifactBasename: string;
   origin?: "bundled" | "global";
-  pluginId?: string;
 }): T {
   const modulePath = resolvePluginRootPublicSurfacePath(params);
   if (!modulePath) {
@@ -90,7 +88,6 @@ export function loadPluginPublicArtifactModuleSync<T extends object>(params: {
     boundaryRoot: params.pluginRoot,
     surfaceLabel: `plugin public surface ${params.artifactBasename}`,
     origin: params.origin ?? "global",
-    pluginId: params.pluginId,
   }) as T;
 }
 

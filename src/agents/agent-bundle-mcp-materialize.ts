@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import { normalizeToolParameterSchema } from "@openclaw/ai/internal/tool-schema";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { logWarn } from "../logger.js";
 import {
@@ -9,6 +10,7 @@ import {
   setPluginToolMeta,
   type PluginToolMcpMeta,
 } from "../plugins/tool-metadata.js";
+import { sanitizeModelSpecialTokens } from "../security/external-content.js";
 import { releaseSessionMcpRuntime } from "./agent-bundle-mcp-manager-cleanup.js";
 import {
   buildSafeToolName,
@@ -48,8 +50,12 @@ import {
 } from "./mcp-ui-resource.js";
 import { recordAgentCleanupFailure } from "./run-cleanup-timeout.js";
 import type { AgentToolResult } from "./runtime/index.js";
+import { neutralizePromptControlMarkers } from "./sanitize-for-prompt.js";
 import { toToolSearchJsonSafe } from "./tool-search-json.js";
 import type { AnyAgentTool } from "./tools/common.js";
+
+const MAX_MCP_SERVER_INSTRUCTIONS_CHARS = 2_000;
+
 function isAppOnlyTool(tool: McpCatalogTool): boolean {
   return tool.uiVisibility !== undefined && !tool.uiVisibility.includes("model");
 }
@@ -176,6 +182,19 @@ export function buildBundleMcpToolsFromCatalog(params: {
   includeSessionDenied?: boolean;
   includeAppOnlyInventory?: boolean;
 }): AnyAgentTool[] {
+  const serverInstructions = new Map<string, string>();
+  for (const server of Object.values(params.catalog.servers)) {
+    if (server.instructions) {
+      const text =
+        server.instructions.length > MAX_MCP_SERVER_INSTRUCTIONS_CHARS
+          ? `${truncateUtf16Safe(server.instructions, MAX_MCP_SERVER_INSTRUCTIONS_CHARS)} …[truncated: server instructions exceed ${MAX_MCP_SERVER_INSTRUCTIONS_CHARS} characters]`
+          : server.instructions;
+      serverInstructions.set(
+        server.serverName,
+        sanitizeModelSpecialTokens(neutralizePromptControlMarkers(text)),
+      );
+    }
+  }
   const initialReservedNames = normalizeReservedToolNames(params.reservedToolNames);
   const sessionDeniedOnly = params.includeSessionDenied === true;
   const appOnlyInventory = params.includeAppOnlyInventory === true;
@@ -214,6 +233,7 @@ export function buildBundleMcpToolsFromCatalog(params: {
       continue;
     }
     const server = params.catalog.servers[tool.serverName];
+    const instructions = serverInstructions.get(tool.serverName);
     const executionMode: AnyAgentTool["executionMode"] =
       server?.supportsParallelToolCalls === true ? "parallel" : "sequential";
     const safeToolName = buildSafeToolName({
@@ -250,6 +270,7 @@ export function buildBundleMcpToolsFromCatalog(params: {
         safeServerName: tool.safeServerName,
         toolName: tool.toolName,
         operation: "tool",
+        ...(instructions ? { instructions } : {}),
         ...(tool.oauthConnectBootstrap ? { oauthConnectBootstrap: true } : {}),
         ...(tool.excludedFromOpenClawCatalog || appOnly
           ? { excludedFromOpenClawCatalog: true }
@@ -268,6 +289,7 @@ export function buildBundleMcpToolsFromCatalog(params: {
     a.serverName.localeCompare(b.serverName),
   )) {
     const safeServerName = server.safeServerName ?? server.serverName;
+    const instructions = serverInstructions.get(server.serverName);
     const executionMode: AnyAgentTool["executionMode"] = server.supportsParallelToolCalls
       ? "parallel"
       : "sequential";
@@ -323,6 +345,7 @@ export function buildBundleMcpToolsFromCatalog(params: {
           safeServerName,
           toolName: operation,
           operation,
+          ...(instructions ? { instructions } : {}),
           ...(sessionDeniedOnly ? { deniedBySession: true } : {}),
         },
       });
@@ -640,21 +663,12 @@ export async function createBundleMcpToolRuntime(params: {
   excludeServerNames?: ReadonlySet<string>;
   reservedToolNames?: Iterable<string>;
   safeServerNamesByServer?: ReadonlyMap<string, string>;
-  createRuntime?: (params: {
-    sessionId: string;
-    workspaceDir: string;
-    agentDir?: string;
-    cfg?: OpenClawConfig;
-    excludeServerNames?: ReadonlySet<string>;
-    safeServerNamesByServer?: ReadonlyMap<string, string>;
-  }) => SessionMcpRuntime;
 }): Promise<BundleMcpToolRuntime> {
   const signal = getSessionMcpRequestSignal();
   signal?.throwIfAborted();
-  const createRuntime =
-    params.createRuntime ?? (await import("./agent-bundle-mcp-runtime.js")).createSessionMcpRuntime;
+  const { createSessionMcpRuntime } = await import("./agent-bundle-mcp-runtime.js");
   signal?.throwIfAborted();
-  const runtime = createRuntime({
+  const runtime = createSessionMcpRuntime({
     sessionId: `bundle-mcp:${crypto.randomUUID()}`,
     workspaceDir: params.workspaceDir,
     cfg: params.cfg,

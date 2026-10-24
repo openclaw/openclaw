@@ -1,5 +1,5 @@
-import { createRequire } from "node:module";
-import { asRecord, readStringField } from "@openclaw/normalization-core/record-coerce";
+import { asRecord } from "@openclaw/normalization-core/record-coerce";
+import packageManifest from "../../package.json" with { type: "json" };
 import { getAiTransportHost } from "../host.js";
 import { transformProviderMessages as transformMessages } from "../provider-transcript-transform.js";
 import type { Context, Model } from "../types.js";
@@ -11,56 +11,25 @@ import {
   type GoogleProviderOptions,
 } from "./google-shared.js";
 
-const DEFAULT_GOOGLE_API_BASE_URL = "https://generativelanguage.googleapis.com";
-
 let packageVersionMemo: string | undefined;
 
 function resolvePackageVersion(): string {
-  if (packageVersionMemo) {
-    return packageVersionMemo;
+  if (!packageVersionMemo) {
+    packageVersionMemo =
+      (typeof process !== "undefined" && process.env?.OPENCLAW_VERSION) || packageManifest.version;
   }
-  if (typeof process !== "undefined" && process.env?.OPENCLAW_VERSION) {
-    packageVersionMemo = process.env.OPENCLAW_VERSION;
-    return packageVersionMemo;
-  }
-  try {
-    const require = createRequire(import.meta.url);
-    const candidates = [
-      "../package.json",
-      "../../package.json",
-      "../../../package.json",
-      "../../../../package.json",
-    ];
-    for (const candidate of candidates) {
-      try {
-        const parsed = asRecord(require(candidate));
-        const name = readStringField(parsed, "name");
-        const version = readStringField(parsed, "version");
-        if (version && (name === "openclaw" || name === "@openclaw/ai")) {
-          packageVersionMemo = version;
-          return packageVersionMemo;
-        }
-      } catch {
-        // Continue to the next package root candidate.
-      }
-    }
-  } catch {
-    // Fall through to the standalone package fallback.
-  }
-  packageVersionMemo = "0.0";
   return packageVersionMemo;
 }
 
-export function resolveGoogleApiClientHeaders(params?: {
-  api?: string;
-  baseUrl?: string;
-  model?: Model;
+export function resolveGoogleApiClientHeaders(params: {
+  baseUrl: string;
+  model: Model;
 }): Record<string, string> {
   const hostHeaders = getAiTransportHost().resolveProviderRequestHeaders({
     provider: "google",
-    api: params?.api ?? params?.model?.api ?? "google-generative-ai",
-    baseUrl: params?.baseUrl ?? DEFAULT_GOOGLE_API_BASE_URL,
-    model: params?.model,
+    api: "google-generative-ai",
+    baseUrl: params.baseUrl,
+    model: params.model,
   });
   if (hostHeaders?.["x-goog-api-client"]) {
     return hostHeaders;

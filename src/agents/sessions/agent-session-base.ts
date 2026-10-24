@@ -37,6 +37,10 @@ import {
 } from "./extensions/index.js";
 import type { RegisteredTool } from "./extensions/types.js";
 import type { CustomMessage } from "./messages.js";
+import {
+  getModelPromptProjectionAppend,
+  sessionManagerAppendPromptContext,
+} from "./model-prompt-projection-append.js";
 import { getModelRegistryRuntime } from "./model-registry-runtime.js";
 import type { ModelRegistry } from "./model-registry.js";
 import type { PromptTemplate } from "./prompt-templates.js";
@@ -74,7 +78,6 @@ export abstract class AgentSessionBase {
   protected contextOverflowRecoveryOwner: "session" | "caller";
   protected resolveCompactionThinkingLevel?: AgentSessionConfig["resolveCompactionThinkingLevel"];
 
-  protected branchSummaryAbortController: AbortController | undefined = undefined;
   private extensionModifiedToolResultIds = new Set<string>();
 
   protected retryAbortController: AbortController | undefined = undefined;
@@ -266,11 +269,7 @@ export abstract class AgentSessionBase {
   }
 
   protected emitQueueUpdate(): void {
-    this.emit({
-      type: "queue_update",
-      steering: this.steeringMessages.map((entry) => entry.text),
-      followUp: this.followUpMessages.map((entry) => entry.text),
-    });
+    this.emit({ type: "queue_update" });
   }
 
   protected trackQueuedUserMessage(
@@ -364,13 +363,18 @@ export abstract class AgentSessionBase {
     if (event.type === "message_end") {
       if (event.message.role === "custom") {
         const message = event.message;
-        await this.sessionManager.appendCustomMessageEntryAsync(
-          message.customType,
-          message.content,
-          message.display,
-          message.details,
-          message.timestamp,
-        );
+        const prepareProjection = getModelPromptProjectionAppend(message);
+        if (prepareProjection) {
+          await this.sessionManager[sessionManagerAppendPromptContext](message, prepareProjection);
+        } else {
+          await this.sessionManager.appendCustomMessageEntryAsync(
+            message.customType,
+            message.content,
+            message.display,
+            message.details,
+            message.timestamp,
+          );
+        }
       } else if (
         event.message.role === "user" ||
         event.message.role === "assistant" ||
@@ -426,14 +430,7 @@ export abstract class AgentSessionBase {
         this.overflowRecoveryAttempts = 0;
       }
       if (assistantMsg.stopReason !== "error" && this.retryCount > 0) {
-        this.emit({
-          type: "auto_retry_end",
-          success: assistantMsg.stopReason !== "aborted",
-          attempt: this.retryCount,
-          ...(assistantMsg.stopReason === "aborted"
-            ? { finalError: assistantMsg.errorMessage }
-            : {}),
-        });
+        this.emit({ type: "auto_retry_end" });
         this.retryCount = 0;
       }
     }
@@ -551,12 +548,7 @@ export abstract class AgentSessionBase {
    */
   dispose(): void {
     notifyListeners(
-      [
-        () => this.abortRetry(),
-        () => this.abortCompaction(),
-        () => this.abortBranchSummary(),
-        () => this.agent.abort(),
-      ],
+      [() => this.abortRetry(), () => this.abortCompaction(), () => this.agent.abort()],
       undefined,
     );
 
@@ -587,11 +579,6 @@ export abstract class AgentSessionBase {
   /** Current effective system prompt (includes any per-turn extension modifications) */
   get systemPrompt(): string {
     return this.agent.state.systemPrompt;
-  }
-
-  /** Current retry attempt (0 if not retrying) */
-  get retryAttempt(): number {
-    return this.retryCount;
   }
 
   getActiveToolNames(): string[] {
@@ -641,12 +628,11 @@ export abstract class AgentSessionBase {
     this.agent.state.systemPrompt = systemPrompt;
   }
 
-  /** Whether compaction or branch summarization is currently running */
+  /** Whether manual or automatic compaction is currently running */
   get isCompacting(): boolean {
     return (
       this.autoCompactionAbortController !== undefined ||
-      this.compactionAbortController !== undefined ||
-      this.branchSummaryAbortController !== undefined
+      this.compactionAbortController !== undefined
     );
   }
 
@@ -726,5 +712,4 @@ export abstract class AgentSessionBase {
   ): Promise<boolean>;
   abstract abortRetry(): void;
   abstract abortCompaction(): void;
-  abstract abortBranchSummary(): void;
 }

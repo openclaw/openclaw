@@ -2,17 +2,18 @@ import fs from "node:fs/promises";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolvePreparedExecEnvironment } from "../agents/bash-tools.exec-request-preparation.js";
 import { createExecTool } from "../agents/bash-tools.js";
 import { resolveExecToolConfig } from "../agents/lazy-exec-tool.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { captureEnv } from "../test-utils/env.js";
+import { captureEnv, withEnvAsync } from "../test-utils/env.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
-import { resolveCurrentOpenClawCliInvocation } from "./openclaw-cli-invocation.js";
+import { withMockedWindowsPlatform } from "../test-utils/vitest-spies.js";
+import * as cliInvocation from "./openclaw-cli-invocation.js";
 import {
   createSourceCliFixture,
   runSourceCliProbe,
+  withSourceCliParent,
 } from "./openclaw-cli-invocation.test-support.js";
 import { clearGatewayAgentCliShim, prepareGatewayAgentCliShim } from "./openclaw-cli-shim.js";
 
@@ -25,6 +26,7 @@ const envSnapshot = captureEnv([
 ]);
 
 afterEach(() => {
+  vi.restoreAllMocks();
   clearGatewayAgentCliShim();
   envSnapshot.restore();
 });
@@ -32,12 +34,15 @@ afterEach(() => {
 function readExecText(result: Awaited<ReturnType<ReturnType<typeof createExecTool>["execute"]>>) {
   return result.content.find((entry) => entry.type === "text")?.text?.trim() ?? "";
 }
+function execConfig(pathPrepend?: string[]) {
+  return resolveExecToolConfig({ cfg: { tools: { exec: { pathPrepend } } } });
+}
 
 describe.skipIf(process.platform === "win32")("Gateway agent CLI shim", () => {
   it.each(["file URL", "bare TSX", "inline bare TSX"])(
-    "runs the checkout's source CLI version command outside the checkout (%s)",
-    async (parentLoader) => {
-      await withTempDir("openclaw-agent-cli-version-", async (root) => {
+    "runs the source CLI version command outside the checkout (%s)",
+    (parentLoader) =>
+      withTempDir("openclaw-agent-cli-version-", async (root) => {
         const checkout = fileURLToPath(new URL("../../", import.meta.url));
         const loader = pathToFileURL(createRequire(import.meta.url).resolve("tsx")).href;
         const execArgv =
@@ -55,12 +60,10 @@ describe.skipIf(process.platform === "win32")("Gateway agent CLI shim", () => {
           OPENCLAW_STATE_DIR: stateDir,
           OPENCLAW_CONFIG_PATH: path.join(stateDir, "openclaw.json"),
         };
-        const invocation = resolveCurrentOpenClawCliInvocation([], {
-          argv1: entryPath,
-          cwd: checkout,
-          execArgv,
-          execPath: process.execPath,
-        });
+        const parent = { entryPath, execArgv };
+        const invocation = withSourceCliParent(parent, () =>
+          cliInvocation.resolveCurrentOpenClawCliInvocation([]),
+        );
         const control = runSourceCliProbe(
           invocation.command,
           [...execArgv, entryPath, "--version"],
@@ -70,24 +73,20 @@ describe.skipIf(process.platform === "win32")("Gateway agent CLI shim", () => {
         expect(control.status, "checkout source CLI --version").toBe(0);
         expect(control.stdout).toMatch(/^OpenClaw \d+\./);
 
-        await prepareGatewayAgentCliShim({ invocation, env, stateDir });
-        const result = runSourceCliProbe(
-          path.join(stateDir, "tmp", "agent-cli", "openclaw"),
-          ["--version"],
-          callerCwd,
-          { env },
-        );
-        expect(result.status, "external source CLI --version through agent launcher").toBe(0);
-        expect(result.stdout).toBe(control.stdout);
-      });
-    },
+        await withEnvAsync(env, () => withSourceCliParent(parent, prepareGatewayAgentCliShim));
+        const bin = path.join(stateDir, "tmp", "agent-cli");
+        const result = runSourceCliProbe(path.join(bin, "openclaw"), ["--version"], callerCwd, {
+          env,
+        });
+        expect(result).toMatchObject({ status: 0, stdout: control.stdout });
+      }),
   );
 
   it.each([
     { profile: "work", expectedArgs: ["--profile", "work", "probe"] },
     { profile: undefined, expectedArgs: ["probe"] },
-  ])("pins the running CLI before configured PATH entries (profile=$profile)", async (testCase) => {
-    await withTempDir("openclaw-agent-cli-shim-", async (root) => {
+  ])("pins the running CLI before configured PATH entries (profile=$profile)", (testCase) =>
+    withTempDir("openclaw-agent-cli-shim-", async (root) => {
       const fixture = await createSourceCliFixture(root);
       const staleBinDir = path.join(root, "stale-bin");
       const staleCliPath = path.join(staleBinDir, "openclaw");
@@ -97,17 +96,12 @@ describe.skipIf(process.platform === "win32")("Gateway agent CLI shim", () => {
         mode: 0o700,
       });
 
-      await prepareGatewayAgentCliShim({
-        env: testCase.profile ? { OPENCLAW_PROFILE: testCase.profile } : {},
-        invocation: fixture.invocation,
-        stateDir,
-      });
+      await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir, OPENCLAW_PROFILE: testCase.profile }, () =>
+        withSourceCliParent(fixture, prepareGatewayAgentCliShim),
+      );
       const shimBinDir = path.join(stateDir, "tmp", "agent-cli");
-      const config = {
-        tools: { exec: { pathPrepend: [staleBinDir] } },
-      } satisfies OpenClawConfig;
-      const execConfig = resolveExecToolConfig({ cfg: config });
-      expect(execConfig.pathPrepend?.slice(0, 2)).toEqual([shimBinDir, staleBinDir]);
+      const config = execConfig([staleBinDir]);
+      expect(config.pathPrepend?.slice(0, 2)).toEqual([shimBinDir, staleBinDir]);
 
       process.env.OPENCLAW_EXEC_SHELL_SNAPSHOT = "0";
       process.env.PATH = `${staleBinDir}${path.delimiter}${process.env.PATH ?? ""}`;
@@ -115,7 +109,7 @@ describe.skipIf(process.platform === "win32")("Gateway agent CLI shim", () => {
       delete process.env.TSX_TSCONFIG_PATH;
       process.env.TSX_DISABLE_CACHE = "1";
       const tool = createExecTool({
-        ...execConfig,
+        ...config,
         host: "gateway",
         security: "full",
         ask: "off",
@@ -132,8 +126,8 @@ describe.skipIf(process.platform === "win32")("Gateway agent CLI shim", () => {
         cwd: fixture.callerCwd,
         pathHead: shimBinDir,
       });
-    });
-  });
+    }),
+  );
 });
 
 it.each([
@@ -146,47 +140,37 @@ it.each([
   },
 ])(
   "warns about node-host pathPrepend only for operator entries (configured=$configured)",
-  async ({ configured, expectedWarnings }) => {
-    await withTempDir("openclaw-agent-cli-shim-node-", async (stateDir) => {
-      await prepareGatewayAgentCliShim({
-        env: {},
-        invocation: { command: process.execPath, args: ["openclaw.mjs"], cwd: stateDir },
-        stateDir,
-      });
-      const config = {
-        tools: { exec: configured ? { pathPrepend: configured } : {} },
-      } satisfies OpenClawConfig;
-      const execConfig = resolveExecToolConfig({ cfg: config });
-      expect(execConfig.pathPrepend?.[0]).toBe(path.join(stateDir, "tmp", "agent-cli"));
+  ({ configured, expectedWarnings }) =>
+    withTempDir("openclaw-agent-cli-shim-node-", async (stateDir) => {
+      await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, prepareGatewayAgentCliShim);
+      const config = execConfig(configured);
+      expect(config.pathPrepend?.[0]).toBe(path.join(stateDir, "tmp", "agent-cli"));
 
       const warnings: string[] = [];
       resolvePreparedExecEnvironment({
         execParams: { command: "openclaw --version" },
         host: "node",
-        defaultPathPrepend: execConfig.pathPrepend ?? [],
+        defaultPathPrepend: config.pathPrepend ?? [],
         warnings,
       });
       expect(warnings).toEqual(expectedWarnings);
-    });
-  },
+    }),
 );
 
-it("renders a Windows PATH launcher for the running CLI", async () => {
-  await withTempDir("openclaw-agent-cli-shim-win-", async (root) => {
-    await prepareGatewayAgentCliShim({
-      env: { OPENCLAW_PROFILE: "work" },
-      invocation: {
-        command: "C:\\Program Files\\nodejs\\node.exe",
-        args: ["C:\\OpenClaw\\dist\\index.js"],
-        cwd: "C:\\OpenClaw %USERPROFILE%!",
-      },
-      platform: "win32",
-      stateDir: root,
+it("renders a Windows PATH launcher for the running CLI", () =>
+  withTempDir("openclaw-agent-cli-shim-win-", async (root) => {
+    vi.spyOn(cliInvocation, "resolveCurrentOpenClawCliInvocation").mockReturnValue({
+      command: "C:\\Program Files\\nodejs\\node.exe",
+      args: ["C:\\OpenClaw\\dist\\index.js"],
+      cwd: "C:\\OpenClaw %USERPROFILE%!",
     });
-
-    const executablePath = path.join(root, "tmp", "agent-cli", "openclaw.cmd");
-    expect(await fs.readFile(executablePath, "utf8")).toBe(
+    await withMockedWindowsPlatform(() =>
+      withEnvAsync(
+        { OPENCLAW_STATE_DIR: root, OPENCLAW_PROFILE: "work" },
+        prepareGatewayAgentCliShim,
+      ),
+    );
+    expect(await fs.readFile(path.join(root, "tmp", "agent-cli", "openclaw.cmd"), "utf8")).toBe(
       '@echo off\r\nsetlocal DisableDelayedExpansion\r\n"C:\\Program Files\\nodejs\\node.exe" C:\\OpenClaw\\dist\\index.js --profile work %*\r\n',
     );
-  });
-});
+  }));

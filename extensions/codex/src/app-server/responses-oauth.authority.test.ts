@@ -16,19 +16,17 @@ import {
 
 function expectNoDatabaseWork(assertCurrent: () => void) {
   const sql = observeHostDataSql();
-  const requests = vi.spyOn(Worker.prototype, "postMessage");
-  const messages = vi.spyOn(MessagePort.prototype, "postMessage");
+  const spies = [
+    vi.spyOn(Worker.prototype, "postMessage"),
+    vi.spyOn(MessagePort.prototype, "postMessage"),
+  ];
   try {
     assertCurrent();
   } finally {
-    const workerRequests = requests.mock.calls.length;
-    const portMessages = messages.mock.calls.length;
+    const counts = spies.map((spy) => spy.mock.calls.length);
     sql.restore();
-    requests.mockRestore();
-    messages.mockRestore();
-    expect(sql.queries).toEqual([]);
-    expect(workerRequests).toBe(0);
-    expect(portMessages).toBe(0);
+    spies.forEach((spy) => spy.mockRestore());
+    expect({ queries: sql.queries, counts }).toEqual({ queries: [], counts: [0, 0] });
   }
 }
 
@@ -40,6 +38,7 @@ it.each(["shared", "agent"] as const)(
       await state.writeConfig(config);
       const profileId = "openai:token-sharing:authority";
       const agentDir = scope === "agent" ? state.agentDir("fixture") : undefined;
+      const persisted = () => findPersistedAuthProfileCredentialAsync({ profileId, agentDir });
       const credential: OAuthCredential = {
         type: "oauth",
         provider: "openai",
@@ -71,9 +70,7 @@ it.each(["shared", "agent"] as const)(
       });
       const prepared = await auth.resolve(false);
       expect(prepared.token).toBe("synthetic-access");
-      expect(await findPersistedAuthProfileCredentialAsync({ profileId, agentDir })).toEqual(
-        credential,
-      );
+      expect(await persisted()).toEqual(credential);
       expectNoDatabaseWork(() => {
         for (let attempt = 0; attempt < 3; attempt++) {
           prepared.assertCurrent();
@@ -98,9 +95,7 @@ it.each(["shared", "agent"] as const)(
       ).rejects.toThrow("subscription sharing is unavailable");
       expect(beforeRequest).toHaveBeenCalledOnce();
       expect(fetchImpl).not.toHaveBeenCalled();
-      expect(await findPersistedAuthProfileCredentialAsync({ profileId, agentDir })).toEqual(
-        revoked,
-      );
+      expect(await persisted()).toEqual(revoked);
     });
   },
 );

@@ -109,7 +109,6 @@ export const restartHandlers: GatewayRequestHandlers = {
     }
     const result = scheduleSafeGatewayRestart({
       reason,
-      delayMs: 0,
       skipDeferral: params.skipDeferral === true,
     });
     respond(true, result);

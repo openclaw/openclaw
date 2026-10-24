@@ -2,6 +2,7 @@ import { clampPositiveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime"
 import { sleepWithAbort } from "openclaw/plugin-sdk/retry-runtime";
 import { asNullableRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveBrowserNavigationTimeoutMs } from "../act-policy.js";
+import { isLocalManagedProfile } from "../config.js";
 import {
   BrowserProfileUnavailableError,
   BrowserTabNotFoundError,
@@ -88,38 +89,6 @@ async function ensureBrowserRunning(
   }
 }
 
-async function redactBlockedTabUrls(params: {
-  tabs: Awaited<ReturnType<ProfileContext["listTabs"]>>;
-  navigationPolicy: ReturnType<typeof browserNavigationPolicyForProfile>;
-}): Promise<Awaited<ReturnType<ProfileContext["listTabs"]>>> {
-  if (!params.navigationPolicy.ssrfPolicy) {
-    return params.tabs;
-  }
-
-  const redactedTabs: Awaited<ReturnType<ProfileContext["listTabs"]>> = [];
-  for (const tab of params.tabs) {
-    try {
-      await assertBrowserNavigationResultAllowed({
-        url: tab.url,
-        ...params.navigationPolicy,
-      });
-      redactedTabs.push(tab);
-    } catch (error) {
-      const failure = toBrowserErrorResponse(error);
-      // Preserve safe tab management without turning a DNS failure into a policy denial.
-      redactedTabs.push({
-        ...tab,
-        url: "",
-        urlUnavailableReason:
-          failure && "reason" in failure && failure.reason === "navigation_blocked"
-            ? "navigation_blocked"
-            : "navigation_check_failed",
-      });
-    }
-  }
-  return redactedTabs;
-}
-
 function parseRequiredTargetId(res: BrowserResponse, rawTargetId: unknown): string | null {
   const targetId = toStringOrEmpty(rawTargetId);
   if (!targetId) {
@@ -194,12 +163,40 @@ export function registerBrowserTabRoutes(app: BrowserRouteRegistrar, ctx: Browse
     if (!running) {
       return { running: false, tabs: [] };
     }
-    const tabs = await redactBlockedTabUrls({
-      tabs: await profileCtx.listTabs({ signal }),
-      navigationPolicy: browserNavigationPolicyForProfile(ctx, profileCtx),
-    });
+    let tabs = await profileCtx.listTabs({ signal });
+    const navigationPolicy = browserNavigationPolicyForProfile(ctx, profileCtx);
+    if (navigationPolicy.ssrfPolicy) {
+      const redactedTabs: typeof tabs = [];
+      for (const tab of tabs) {
+        try {
+          await assertBrowserNavigationResultAllowed({
+            url: tab.url,
+            ...navigationPolicy,
+          });
+          redactedTabs.push(tab);
+        } catch (error) {
+          const failure = toBrowserErrorResponse(error);
+          // Preserve safe tab management without turning a DNS failure into a policy denial.
+          redactedTabs.push({
+            ...tab,
+            url: "",
+            urlUnavailableReason:
+              failure && "reason" in failure && failure.reason === "navigation_blocked"
+                ? "navigation_blocked"
+                : "navigation_check_failed",
+          });
+        }
+      }
+      tabs = redactedTabs;
+    }
     signal.throwIfAborted();
-    return { running: true, tabs };
+    // Only an isolated browser owned by OpenClaw may follow the preview size.
+    // Attached sessions and remote CDP browsers retain their existing viewport.
+    return {
+      running: true,
+      tabs,
+      canAutoResizeViewport: isLocalManagedProfile(profileCtx.profile),
+    };
   };
 
   const focusTab = async (

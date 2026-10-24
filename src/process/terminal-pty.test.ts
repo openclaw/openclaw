@@ -2,8 +2,8 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { setTimeout as waitForProcessTick } from "node:timers/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { waitForDead } from "../../test/helpers/process-wait.js";
 import {
   awaitGateBeforeSettlement,
   createDeferred,
@@ -147,6 +147,10 @@ describe("terminal PTY spawn diagnostics", () => {
     "counts an admitted %s PTY once with the agent owner",
     async (backend) => {
       const bunDescriptor = Object.getOwnPropertyDescriptor(process.versions, "bun");
+      const bunGlobalDescriptor = Object.getOwnPropertyDescriptor(globalThis, "Bun");
+      const bunRuntime =
+        (globalThis as typeof globalThis & { Bun?: { Terminal?: unknown } }).Bun ?? {};
+      const terminalDescriptor = Object.getOwnPropertyDescriptor(bunRuntime, "Terminal");
       Object.defineProperty(process.versions, "bun", {
         configurable: true,
         value: backend === "node-pty" ? undefined : "synthetic-bun",
@@ -156,27 +160,49 @@ describe("terminal PTY spawn diagnostics", () => {
       mocks.spawn.mockReturnValueOnce(pty);
       mocks.spawnBunTerminalPty.mockReturnValueOnce(pty);
       mocks.spawnNodeTerminalPty.mockResolvedValueOnce(pty);
-      vi.stubGlobal(
-        "Bun",
-        backend === "bun-native" ? { Terminal: { prototype: { pause() {} } } } : {},
-      );
+      // The real Bun global is immutable; its Terminal capability is writable.
+      Object.defineProperty(bunRuntime, "Terminal", {
+        ...(terminalDescriptor ?? { configurable: true, writable: true }),
+        value: backend === "bun-native" ? { prototype: { pause() {} } } : undefined,
+      });
+      if (!bunGlobalDescriptor) {
+        vi.stubGlobal("Bun", bunRuntime);
+      }
       try {
+        const aborted = AbortSignal.abort();
+        await expect(
+          spawnTerminalPty(
+            { file: "/bin/bash", args: ["-c", "synthetic"], cols: 80, rows: 24 },
+            { abortSignal: aborted },
+          ),
+        ).rejects.toThrow("PTY construction aborted");
+        expect(mocks.spawn).not.toHaveBeenCalled();
+        expect(mocks.spawnBunTerminalPty).not.toHaveBeenCalled();
+        expect(mocks.spawnNodeTerminalPty).not.toHaveBeenCalled();
         await withChildProcessOperation("agent.exec", () =>
           spawnTerminalPty({ file: "/bin/bash", args: ["-c", "synthetic"], cols: 80, rows: 24 }),
         );
-        platform.mockRestore();
-        now = 60_000;
-        emitChildProcessSpawnSample();
-        expect(events).toEqual([
-          expect.objectContaining({ family: "bash", operation: "agent.exec", count: 1 }),
-        ]);
       } finally {
+        platform.mockRestore();
+        if (terminalDescriptor) {
+          Object.defineProperty(bunRuntime, "Terminal", terminalDescriptor);
+        } else {
+          Reflect.deleteProperty(bunRuntime, "Terminal");
+        }
+        if (!bunGlobalDescriptor) {
+          vi.unstubAllGlobals();
+        }
         if (bunDescriptor) {
           Object.defineProperty(process.versions, "bun", bunDescriptor);
         } else {
           Reflect.deleteProperty(process.versions, "bun");
         }
       }
+      now = 60_000;
+      emitChildProcessSpawnSample();
+      expect(events).toEqual([
+        expect.objectContaining({ family: "bash", operation: "agent.exec", count: 1 }),
+      ]);
     },
   );
 
@@ -476,20 +502,6 @@ describe("terminal PTY invocation", () => {
   );
 });
 
-// The PTY exit callback owns the shell, but kill() only signals foreign session members.
-async function waitForPidToExit(pid: number, signal: AbortSignal): Promise<void> {
-  try {
-    while (isPidAlive(pid)) {
-      await waitForProcessTick(10, undefined, { signal });
-    }
-  } catch (error) {
-    if (signal.aborted) {
-      throw new Error(`Timed out waiting for PTY descendant ${pid} to exit`, { cause: error });
-    }
-    throw error;
-  }
-}
-
 describe.runIf(process.platform !== "win32")("terminal PTY process-session teardown", () => {
   it("kills a background job in a distinct process group within the PTY session", async ({
     signal,
@@ -563,7 +575,8 @@ describe.runIf(process.platform !== "win32")("terminal PTY process-session teard
       handle.kill();
       await withinTest(exited.promise, signal);
       expect(isPidAlive(shellPid)).toBe(false);
-      await waitForPidToExit(childPid, signal);
+      // The PTY exit callback owns the shell, but kill() only signals foreign session members.
+      await waitForDead(childPid, signal);
       expect(isPidAlive(childPid)).toBe(false);
     } finally {
       try {

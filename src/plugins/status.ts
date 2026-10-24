@@ -44,6 +44,7 @@ import { listImportedRuntimePluginIds } from "./runtime.js";
 import { buildPluginRuntimeLoadOptions } from "./runtime/load-context.js";
 import { resolvePluginRuntimeLoadContext } from "./runtime/load-context.resolve.js";
 import { loadPluginMetadataRegistrySnapshot } from "./runtime/metadata-registry-loader.js";
+import { buildPluginSdkDeprecationNotices } from "./sdk-deprecation-notices.js";
 import {
   formatPluginCompatibilityNotice,
   type PluginCompatibilityNotice,
@@ -64,14 +65,8 @@ export {
 } from "./status-snapshot.js";
 export type { PluginCapabilityKind, PluginInspectShape } from "./inspect-shape.js";
 
-export {
-  formatPluginCompatibilityNotice,
-  summarizePluginCompatibility,
-} from "./status-compatibility.js";
-export type {
-  PluginCompatibilityNotice,
-  PluginCompatibilitySummary,
-} from "./status-compatibility.js";
+export { formatPluginCompatibilityNotice } from "./status-compatibility.js";
+export type { PluginCompatibilityNotice } from "./status-compatibility.js";
 
 export type PluginInspectReport = ReturnType<typeof buildPluginShapeSummary> & {
   workspaceDir?: string;
@@ -123,7 +118,9 @@ function buildCompatibilityNoticesForInspect(
     diagnostics: readonly PluginDiagnostic[];
   },
 ): PluginCompatibilityNotice[] {
-  const warnings: PluginCompatibilityNotice[] = [];
+  const warnings: PluginCompatibilityNotice[] = buildPluginSdkDeprecationNotices(
+    inspect.plugin.id,
+  ).map((notice) => Object.assign(notice, { pluginId: inspect.plugin.id }));
   if (inspect.shape === "hook-only") {
     warnings.push({
       pluginId: inspect.plugin.id,
@@ -358,24 +355,22 @@ export function buildPluginSnapshotReport(params?: PluginReportParams): PluginSt
 }
 
 export async function buildPluginSnapshotReportAsync(
-  params?: PluginReportParams,
+  params: Omit<PluginReportParams, "effectiveOnly">,
 ): Promise<PluginStatusReport> {
   const prepared = preparePluginReport({ ...params, effectiveOnly: false });
-  if (params?.effectiveOnly === true) {
-    const requestedPluginIds = normalizePluginIdScope(params.onlyPluginIds);
-    const effectivePluginIds = await resolveEffectivePluginIdsAsync({
-      config: prepared.rawConfig,
-      workspaceDir: prepared.workspaceDir,
-      env: params.env ?? process.env,
-      metadataSnapshot: prepared.metadataSnapshot,
-    });
-    const onlyPluginIds =
-      requestedPluginIds === undefined
-        ? effectivePluginIds
-        : effectivePluginIds.filter((pluginId) => requestedPluginIds.includes(pluginId));
-    prepared.onlyPluginIds = onlyPluginIds;
-    prepared.runtimeLoadOptions = { ...prepared.runtimeLoadOptions, onlyPluginIds };
-  }
+  const requestedPluginIds = normalizePluginIdScope(params.onlyPluginIds);
+  const effectivePluginIds = await resolveEffectivePluginIdsAsync({
+    config: prepared.rawConfig,
+    workspaceDir: prepared.workspaceDir,
+    env: params.env ?? process.env,
+    metadataSnapshot: prepared.metadataSnapshot,
+  });
+  const onlyPluginIds =
+    requestedPluginIds === undefined
+      ? effectivePluginIds
+      : effectivePluginIds.filter((pluginId) => requestedPluginIds.includes(pluginId));
+  prepared.onlyPluginIds = onlyPluginIds;
+  prepared.runtimeLoadOptions = { ...prepared.runtimeLoadOptions, onlyPluginIds };
   return buildPluginReport(params, false, prepared);
 }
 
@@ -626,8 +621,6 @@ export function buildPluginCompatibilityNotices(
 
 export function buildPluginCompatibilitySnapshotNotices(params?: {
   config?: OpenClawConfig;
-  workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
 }): PluginCompatibilityNotice[] {
   const report = buildPluginSnapshotReport(params);
   const context = resolvePluginRuntimeLoadContext(params);

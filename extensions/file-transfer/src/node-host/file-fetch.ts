@@ -18,7 +18,7 @@ import {
 } from "../shared/path-binding.js";
 import { streamFetchedFile } from "./file-fetch-stream.js";
 import {
-  classifyFsSafeReadError,
+  createReadErrorClassifier,
   readAbsolutePath,
   rejectCanonicalPathChange,
   resolveCanonicalReadPath,
@@ -38,31 +38,19 @@ type FileFetchParams = {
   expectedBinding?: unknown;
 };
 
-function classifyFsError(err: unknown) {
-  if (err instanceof FsSafeError && err.code === "too-large") {
-    return "FILE_TOO_LARGE";
-  }
-  const safeCode = classifyFsSafeReadError(err);
-  if (safeCode) {
-    return safeCode;
-  }
-  const code = (err as { code?: string } | null)?.code;
-  if (code === "FILE_TOO_LARGE") {
-    return code;
-  }
-  if (code === "not-file") {
-    return "IS_DIRECTORY";
-  }
-  if (code === "ENOENT") {
-    return "NOT_FOUND";
-  }
-  if (code === "EACCES" || code === "EPERM") {
-    return "PERMISSION_DENIED";
-  }
-  if (code === "EISDIR") {
-    return "IS_DIRECTORY";
-  }
-  return "READ_ERROR";
+const classifyReadError = createReadErrorClassifier({
+  FILE_TOO_LARGE: "FILE_TOO_LARGE",
+  "not-file": "IS_DIRECTORY",
+  ENOENT: "NOT_FOUND",
+  EACCES: "PERMISSION_DENIED",
+  EPERM: "PERMISSION_DENIED",
+  EISDIR: "IS_DIRECTORY",
+} as const);
+
+function classifyFsError(error: unknown) {
+  return error instanceof FsSafeError && error.code === "too-large"
+    ? "FILE_TOO_LARGE"
+    : classifyReadError(error);
 }
 
 function isLikelyPlainText(buffer: Buffer): boolean {
@@ -85,17 +73,6 @@ function isLikelyPlainText(buffer: Buffer): boolean {
     }
   }
   return controlBytes / sample.byteLength < 0.01;
-}
-
-async function detectFetchedFileMime(params: {
-  buffer: Buffer;
-  filePath: string;
-}): Promise<string> {
-  const detected = await detectMime(params);
-  if (detected) {
-    return detected;
-  }
-  return isLikelyPlainText(params.buffer) ? "text/plain" : "application/octet-stream";
 }
 
 export async function handleFileFetch(
@@ -228,7 +205,9 @@ export async function handleFileFetch(
 
     const sha256 = crypto.createHash("sha256").update(buffer).digest("hex");
     const base64 = buffer.toString("base64");
-    const mimeType = await detectFetchedFileMime({ buffer, filePath: opened.realPath });
+    const detectedMime = await detectMime({ buffer, filePath: opened.realPath });
+    const mimeType =
+      detectedMime || (isLikelyPlainText(buffer) ? "text/plain" : "application/octet-stream");
 
     return {
       ok: true as const,

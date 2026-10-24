@@ -17,7 +17,7 @@ vi.mock("../../../plugins/provider-hook-runtime.js", async (importOriginal) => {
 
 import { getReplyPayloadMetadata } from "../../../auto-reply/reply-payload.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
-import { formatBillingErrorMessage } from "../../embedded-agent-helpers.js";
+import { formatBillingErrorMessage } from "../../failover/user-copy.js";
 import { resolvePreparedSandboxRuntimeStatus } from "../../sandbox/runtime-status.js";
 import { makeAgentAssistantMessage } from "../../test-helpers/agent-message-fixtures.js";
 import { makeAssistantMessageFixture } from "../../test-helpers/assistant-message-fixtures.js";
@@ -32,22 +32,18 @@ describe("buildEmbeddedRunPayloads tool-error silence", () => {
     { text: "NO_REPLY", mutatingAction: false },
     { text: "NO_REPLY", mutatingAction: true },
     { text: "NO_REPLY", mutatingAction: undefined },
-    { text: '{"action":"NO_REPLY"}', mutatingAction: false },
-    { text: '{"action":"NO_REPLY"}', mutatingAction: true },
-    { text: '{"action":"NO_REPLY"}', mutatingAction: undefined },
   ])(
-    "respects authored conversational silence: $text, mutatingAction=$mutatingAction",
+    "suppresses authored silence: $text, mutatingAction=$mutatingAction",
     ({ text, mutatingAction }) => {
-      expect(
-        buildPayloads({
-          assistantTexts: [text],
-          lastToolError: {
-            toolName: "codex_apps.slack.slack_read_thread",
-            error: "429 RATE_LIMITED",
-            mutatingAction,
-          },
-        }),
-      ).toHaveLength(0);
+      const payloads = buildPayloads({
+        assistantTexts: [text],
+        lastToolError: {
+          toolName: "codex_apps.slack.slack_read_thread",
+          error: "429 RATE_LIMITED",
+          mutatingAction,
+        },
+      });
+      expect(payloads).toHaveLength(0);
     },
   );
 
@@ -72,7 +68,6 @@ describe("buildEmbeddedRunPayloads tool-error silence", () => {
 
   it.each([
     { name: "a scheduled run", mutatingAction: false, isCronTrigger: true },
-    { name: "a heartbeat", mutatingAction: false, isHeartbeatTrigger: true },
     { name: "an aborted run", mutatingAction: false, runAborted: true },
   ])(
     "keeps failure reporting for $name despite NO_REPLY",

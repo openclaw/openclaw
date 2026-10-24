@@ -1,6 +1,7 @@
 import path from "node:path";
-import * as ts from "typescript/unstable/ast";
-import { SymbolFlags, type Symbol } from "typescript/unstable/sync";
+import * as ts from "typescript/ast";
+import { serverFS } from "typescript/fs";
+import { SymbolFlags, type Symbol } from "typescript/sync";
 import { createNativeTypeScriptProject } from "./native-typescript.mts";
 import { inspectPersonalCredentialWriters } from "./personal-credential-writer-guard.mts";
 
@@ -112,8 +113,26 @@ const reviewed = new Map<string, readonly string[]>([
 // Mixed SDK receivers retain only these deprecated members, never their live factories.
 const reviewedMembers = new Map<string, readonly string[]>([
   [
+    "src/gateway/github-oauth-lifecycle.ts",
+    ["createGitHubOAuthLifecycle.cancelAuthorization", "createGitHubOAuthLifecycle.retireProfile"],
+  ],
+  [
+    "src/gateway/github-personal-oauth.ts",
+    [
+      "createPersonalGitHubOAuthLifecycle.cancelAuthorization",
+      "createPersonalGitHubOAuthLifecycle.disconnect",
+    ],
+  ],
+  [
     "src/agents/sessions/session-manager.ts",
-    ["open", "openBounded", "openDetachedBounded", "openModelContext", "readSessionContext"],
+    [
+      "open",
+      "openBounded",
+      "openDetachedBounded",
+      "openModelContext",
+      "readSessionContext",
+      "prepareTranscriptRewrite",
+    ],
   ],
   [
     "src/agents/sessions/session-manager-core.ts",
@@ -164,7 +183,6 @@ const reviewedMembers = new Map<string, readonly string[]>([
 // another proven candidate or an inventory-reviewed worker/maintenance entry.
 const nonRuntimeCandidates = new Map<string, readonly string[]>([
   ["src/state/openclaw-state-db-maintenance.ts", ["writeCurrentStateSchemaMetadata"]],
-  ["src/state/user-github-connections.kernel.ts", ["listUserGitHubConnectionsInDatabase"]],
   ["src/state/user-profile-mutation.ts", ["runUserProfileWriteTransaction"]],
   ["src/gateway/channel-operator-authority.ts", ["resolveChannelOperatorIdentityFacts"]],
   [
@@ -174,7 +192,6 @@ const nonRuntimeCandidates = new Map<string, readonly string[]>([
       "selectUserProfileIdentityInDatabase",
       "selectUserProfileDisplaysInDatabase",
       "readUserProfileSnapshotCommand",
-      "readUserProfileIdForEmail",
     ],
   ],
   [
@@ -274,7 +291,13 @@ const synchronousScopes = new Map<string, ReadonlyMap<string, number>>([
   ["src/state/openclaw-state-db.ts", new Map([["runOpenClawStateWriteTransaction", 0]])],
   ["src/state/user-profile-mutation.ts", new Map([["runUserProfileWriteTransaction", 0]])],
   ["src/state/user-profiles-internal.ts", new Map([["readResolvedUserProfile", 1]])],
-  ["src/infra/sqlite-transaction.ts", new Map([["runSqliteDeferredTransactionSync", 1]])],
+  [
+    "src/infra/sqlite-transaction.ts",
+    new Map([
+      ["runSqliteDeferredTransactionSync", 1],
+      ["runSqliteReadSnapshotSync", 1],
+    ]),
+  ],
   [
     "src/plugins/runtime/generation-state.ts",
     new Map([["withPluginRuntimeGenerationRegistryScope", 1]]),
@@ -318,6 +341,7 @@ export function inspectDatabaseWorkerBoundaries(
   isNonRuntime: (file: string, operation: string) => boolean = (file) =>
     /\.worker\.[cm]?[jt]s$/.test(file),
   classifyEntry: (file: string, operation: string) => NonRuntimeTier | undefined = () => undefined,
+  validateCredentialWriters = true,
 ): {
   operations: Map<string, Set<string>>;
   callLocations: Map<string, Set<string>>;
@@ -364,18 +388,29 @@ export function inspectDatabaseWorkerBoundaries(
     configFileName: config,
     files,
     fs: {
-      readFile: () => null,
+      readFile: () => undefined,
       fileExists: () => false,
       directoryExists: () => false,
-      getAccessibleEntries: () => ({ files: [], directories: [] }),
-      realpath: (file) => file,
+      getAccessibleEntries: () => ({ files: [], directories: [], symlinks: undefined }),
+      realpath: serverFS.identity,
+      stat: serverFS.fakeStat,
+      writeFile: serverFS.error,
+      removeFile: serverFS.error,
     },
   });
   const { checker, program } = session.project;
   const forwarded = new Map<Symbol, Symbol>();
+  // Compiler aliases are immutable; prepared binding overrides are applied separately.
+  const aliasTargets = new Map<Symbol, Symbol>();
   const resolveSymbol = (symbol: Symbol | undefined): Symbol | undefined => {
-    const target =
-      symbol && symbol.flags & SymbolFlags.Alias ? checker.getAliasedSymbol(symbol) : symbol;
+    let target = symbol;
+    if (symbol && symbol.flags & SymbolFlags.Alias) {
+      target = aliasTargets.get(symbol);
+      if (!target) {
+        target = checker.getAliasedSymbol(symbol);
+        aliasTargets.set(symbol, target);
+      }
+    }
     return target && (forwarded.get(target) ?? target);
   };
   const operationName = (node: ts.Node) => {
@@ -520,7 +555,9 @@ export function inspectDatabaseWorkerBoundaries(
     }
     return { file, source };
   });
-  violations.push(...inspectPersonalCredentialWriters(sources, checker));
+  if (validateCredentialWriters) {
+    violations.push(...inspectPersonalCredentialWriters(sources, checker));
+  }
   // Follow named kernels from the reviewed boundaries. A symbol reference from
   // outside this closure (or an escaped callback) will make that kernel live.
   // A returned receiver exists only through its factory. Keep its methods in
@@ -673,7 +710,7 @@ export function inspectDatabaseWorkerBoundaries(
     for (const member of pending) {
       expandedMembers.add(member.node);
     }
-    const symbols = checker.getSymbolAtLocation(references);
+    const symbols = references.length ? checker.getSymbolAtLocation(references) : [];
     for (const raw of symbols) {
       const symbol = resolveSymbol(raw);
       if (!symbol || examined.has(symbol) || registered.has(symbol)) {
@@ -878,8 +915,13 @@ export function inspectDatabaseWorkerBoundaries(
       edges.set(member, memberEdges);
     }
   }
+  const compiledAccesses = new Map<ts.Expression, Symbol | undefined>();
+  const compilerSymbol = (expression: ts.Expression): Symbol | undefined =>
+    compiledAccesses.has(expression)
+      ? compiledAccesses.get(expression)
+      : checker.getSymbolAtLocation(expression);
   const accessSymbol = (expression: ts.Expression): Symbol | undefined => {
-    const known = resolveSymbol(checker.getSymbolAtLocation(expression));
+    const known = resolveSymbol(compilerSymbol(expression));
     if (known) {
       return known;
     }
@@ -891,7 +933,7 @@ export function inspectDatabaseWorkerBoundaries(
       expression.expression.kind === ts.SyntaxKind.ImportKeyword &&
       expression.arguments[0]
     ) {
-      return resolveSymbol(checker.getSymbolAtLocation(expression.arguments[0]));
+      return resolveSymbol(compilerSymbol(expression.arguments[0]));
     }
     if (ts.isPropertyAccessExpression(expression)) {
       const base = accessSymbol(expression.expression);
@@ -956,7 +998,41 @@ export function inspectDatabaseWorkerBoundaries(
       node.forEachChild(visit);
     };
     source.forEachChild(visit);
-    const symbols = checker.getSymbolAtLocation(references);
+    const symbols = references.length ? checker.getSymbolAtLocation(references) : [];
+    compiledAccesses.clear();
+    const pendingAccesses = new Set<ts.Expression>();
+    for (const [index, node] of references.entries()) {
+      if (symbols[index]) {
+        continue;
+      }
+      const parent = node.parent;
+      let receiver: ts.Expression | undefined =
+        ts.isPropertyAccessExpression(parent) && parent.name === node
+          ? parent
+          : ts.isElementAccessExpression(parent) && ts.isStringLiteral(node)
+            ? parent.expression
+            : undefined;
+      while (receiver && !pendingAccesses.has(receiver)) {
+        pendingAccesses.add(receiver);
+        receiver =
+          ts.isAwaitExpression(receiver) ||
+          ts.isParenthesizedExpression(receiver) ||
+          ts.isPropertyAccessExpression(receiver)
+            ? receiver.expression
+            : ts.isCallExpression(receiver) &&
+                receiver.expression.kind === ts.SyntaxKind.ImportKeyword
+              ? receiver.arguments[0]
+              : undefined;
+      }
+    }
+    // Query the same receiver nodes as the fallback, without a round trip per access.
+    const accessLocations = [...pendingAccesses];
+    const accessSymbols = accessLocations.length
+      ? checker.getSymbolAtLocation(accessLocations)
+      : [];
+    for (const [index, expression] of accessLocations.entries()) {
+      compiledAccesses.set(expression, accessSymbols[index]);
+    }
     for (const [index, node] of references.entries()) {
       const bindingMember =
         ts.isIdentifier(node) &&

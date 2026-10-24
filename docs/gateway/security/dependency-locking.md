@@ -53,7 +53,7 @@ Neither path publishes a lockfile:
 
 - root and plugin tarballs contain neither `npm-shrinkwrap.json` nor `package-lock.json`;
 - `pnpm-lock.yaml` remains the reviewed source dependency graph;
-- npm package locks exist only transiently while OpenClaw validates package graphs or runs `npm ci` to assemble a bundled plugin.
+- npm package locks exist transiently while OpenClaw validates package graphs, assembles a bundled plugin with `npm ci`, or prepares a cloud worker runtime install. Cloud worker project locks travel separately from the runtime tarball; see [Worker setup and bundle installation](/gateway/cloud-workers/setup-and-bundle-installation).
 
 ## Validate npm dependency graphs
 

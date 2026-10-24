@@ -1,7 +1,7 @@
 import {
   getAgentEventLifecycleGeneration,
   isAgentEventLifecycleGenerationCurrent,
-  type AgentEventPayload,
+  onAgentEvent,
 } from "../../../infra/agent-events.js";
 import { runWithGatewayIndependentRootWorkContinuation } from "../../../process/gateway-work-admission.js";
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
@@ -14,6 +14,7 @@ import {
 } from "./subagent-lifecycle-events.js";
 import { shouldSuppressSubagentRecoverySessionEffects } from "./subagent-recovery-state.js";
 import { prepareSubagentTerminalObservation } from "./subagent-registry-completion-runtime.js";
+import { subagentRegistryLog } from "./subagent-registry-lifecycle-log.js";
 import { createPendingLifecycleScheduler } from "./subagent-registry-pending-lifecycle.js";
 import {
   assertSubagentRegistryWriteSourceCurrent,
@@ -25,7 +26,6 @@ import { isSameSubagentRunOwner } from "./subagent-run-generation.js";
 export function createSubagentRegistryListener(config: {
   runs: Map<string, SubagentRunRecord>;
   pendingLifecycle: ReturnType<typeof createPendingLifecycleScheduler>;
-  onAgentEvent: (listener: (event: AgentEventPayload) => void) => () => void;
   resumeRequesterSettleWake: (runId: string, entry: SubagentRunRecord) => void;
   adoptPausedSubagentRunIntoSuccessor: (entry: SubagentRunRecord) => Promise<boolean>;
   refreshFrozenResultFromSession: (sessionKey: string) => Promise<unknown>;
@@ -33,15 +33,12 @@ export function createSubagentRegistryListener(config: {
     params: SubagentCompletionRequest,
     source: string,
   ) => Promise<void>;
-  warn: (message: string, meta?: Record<string, unknown>) => void;
 }) {
   const {
     runs,
     pendingLifecycle,
-    onAgentEvent,
     refreshFrozenResultFromSession,
     completeSubagentRunWithRecovery,
-    warn,
   } = config;
   let listenerStop: (() => void) | null = null;
 
@@ -185,7 +182,7 @@ export function createSubagentRegistryListener(config: {
           `lifecycle-${terminalOutcome.reason}-event`,
         );
       }, "subagents:lifecycle-event").catch((err: unknown) => {
-        warn("lifecycle event handler failed", { err, runId: evt.runId });
+        subagentRegistryLog.warn("lifecycle event handler failed", { err, runId: evt.runId });
       });
     });
   }

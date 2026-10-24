@@ -12,7 +12,8 @@ import {
 } from "./session-cost-usage-rollup.js";
 import { resolveZstdCodec } from "./zstd-codec.js";
 
-export const USAGE_COST_PARTITION_SCOPE = "session-cost-usage-projection-v1";
+export const LEGACY_USAGE_COST_PARTITION_SCOPE = "session-cost-usage-projection-v1";
+export const USAGE_COST_PARTITION_SCOPE = "session-cost-usage-projection-v2";
 export const USAGE_COST_QUARTER_MS = 15 * 60 * 1000;
 const codec = resolveZstdCodec();
 
@@ -23,7 +24,17 @@ export type UsageCostPartition = {
 };
 
 export function usageCostPartitionKey(sessionFile: string, date: string): string {
-  return `${sessionFile}\0${date}`;
+  // JSON escapes path delimiters and NULs before the key reaches PostgreSQL text.
+  return `${JSON.stringify(sessionFile)}:${date}`;
+}
+
+export function readUsageCostPartitionKey(key: string): { sessionFile: string; date: string } {
+  const separator = key.lastIndexOf(":");
+  const sessionFile: unknown = JSON.parse(key.slice(0, separator));
+  if (typeof sessionFile !== "string") {
+    throw new Error("Invalid usage partition key");
+  }
+  return { sessionFile, date: key.slice(separator + 1) };
 }
 
 function encodeUsageCostPartition(
@@ -31,7 +42,7 @@ function encodeUsageCostPartition(
   rollup: SessionUsageRollupData,
 ): UsageCostPartition & { blob: Uint8Array<ArrayBuffer> } {
   const raw = Buffer.from(JSON.stringify(rollup));
-  const compressed = raw.byteLength >= 1024 ? codec?.compress(raw, 1) : undefined;
+  const compressed = raw.byteLength >= 1024 ? codec.compress(raw, 1) : undefined;
   const useCompressed = compressed !== undefined && compressed.byteLength < raw.byteLength;
   return {
     date,
@@ -84,9 +95,9 @@ export function decodeUsageCostPartition(
     }
     const raw =
       metadata.encoding === "zstd"
-        ? codec?.decompress(blob, metadata.bytes)
+        ? codec.decompress(blob, metadata.bytes)
         : Buffer.from(blob.buffer, blob.byteOffset, blob.byteLength);
-    if (!raw || raw.byteLength !== metadata.bytes || sha256Hex(raw) !== metadata.sha256) {
+    if (raw.byteLength !== metadata.bytes || sha256Hex(raw) !== metadata.sha256) {
       return undefined;
     }
     const value: unknown = JSON.parse(raw.toString("utf8"));
@@ -141,7 +152,7 @@ export function partitionUsageCostRollup(entry: UsageCostRollupEntry): {
   const encoded = encodeUsageCostRollup(checkpoint);
   const envelope: UsageCostRollupEnvelope = JSON.parse(encoded.valueJson);
   // Keep the existing envelope shape; report readers accept aggregate rounding.
-  envelope.projection = { version: 2, dates: [...months.keys()], canonicalNumbers: false };
+  envelope.projection = { version: 3, dates: [...months.keys()], canonicalNumbers: false };
   return {
     valueJson: JSON.stringify(envelope),
     blob: encoded.blob,

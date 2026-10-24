@@ -1,4 +1,5 @@
 import { formatErrorMessage, toErrorObject } from "../../../infra/errors.js";
+import { createPendingPromiseTracker } from "../../../shared/pending-promises.js";
 import type { createTrajectoryRuntimeRecorder } from "../../../trajectory/runtime.js";
 import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
 import { buildExecAutoReviewTranscript } from "../../exec-auto-review-transcript.js";
@@ -27,14 +28,7 @@ export function createEmbeddedAttemptSessionSettleTracker(
       recordAgentCleanupFailure();
     }
   };
-  const trackSettlePromise = (promise: Promise<void>): Promise<void> => {
-    inFlight.add(promise);
-    const settled = () => {
-      inFlight.delete(promise);
-    };
-    void promise.then(settled, settled);
-    return promise;
-  };
+  const trackSettlePromise = createPendingPromiseTracker(inFlight);
 
   return {
     abortActiveSession: (reason?: unknown) =>
@@ -72,28 +66,31 @@ export type EmbeddedAttemptSessionResources = {
 
 /** Keep retained review callbacks outside the attempt's tool-execution closure scope. */
 export function createEmbeddedAttemptSessionResources(signal: AbortSignal) {
-  const resources: EmbeddedAttemptSessionResources = {
+  let resources: EmbeddedAttemptSessionResources = {
     trajectoryRecorder: null,
     buildAbortSettlePromise: () => null,
   };
-  let live: EmbeddedAttemptSessionResources | undefined = resources;
   return {
-    resources,
+    get resources() {
+      return resources;
+    },
     reviewTranscript: () => {
-      if (!live?.session || signal.aborted) {
+      if (!resources.session || signal.aborted) {
         return undefined;
       }
       return buildExecAutoReviewTranscript({
-        messages: live.session.messages,
+        messages: resources.session.messages,
         userTurnOrigins: new Map(
-          live
+          resources
             .getUserTranscriptContexts?.()
             ?.map(({ runtimeMessage, transcriptMessage }) => [runtimeMessage, transcriptMessage]),
         ),
       });
     },
-    releaseReview: () => {
-      live = undefined;
+    takeForCleanup: () => {
+      const released = resources;
+      resources = { trajectoryRecorder: null, buildAbortSettlePromise: () => null };
+      return released;
     },
   };
 }
@@ -117,6 +114,7 @@ export async function cleanupEmbeddedAttemptSessionPhase(
   input: CleanupEmbeddedAttemptSessionInput,
 ): Promise<void> {
   using _ = input.promptStateLease;
+  const clearTranscriptRunCallbacks = input.sessionManager?.clearTranscriptRunCallbacks;
   const { attempt } = input;
   const initialState = projectAgentRunAttemptTerminal(input.state.terminal);
   if (input.trajectoryRecorder && !input.trajectoryEndRecorded) {
@@ -164,7 +162,7 @@ export async function cleanupEmbeddedAttemptSessionPhase(
   let cleanupError: unknown;
   try {
     clearToolSearchCatalog({ catalogRef: input.toolSearchCatalogRef });
-    await input.transcriptLifecycle.beginCleanup();
+    await input.transcriptLifecycle.beginCleanup(clearTranscriptRunCallbacks);
     // Cancellation can arrive during trajectory flushing or the transcript drain.
     // Read it only after both waits before deciding whether to wait for idle.
     const cleanupState = projectAgentRunAttemptTerminal(input.state.terminal);

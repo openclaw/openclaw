@@ -3,8 +3,8 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import { createWizardPrompter } from "../../test/helpers/wizard-prompter.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
+import type { GuidedOrchestrationFixture as GuidedOnboardingDeps } from "./onboard-guided-runtime.test-support.js";
 import { setupGuidedCustodianTestSuite } from "./onboard-guided.custodian.test-support.js";
-import type { GuidedOnboardingDeps } from "./onboard-guided.js";
 
 describe("guided onboarding post-inference steps", () => {
   const {
@@ -94,7 +94,10 @@ describe("guided onboarding post-inference steps", () => {
       activate.mock.invocationCallOrder[0]!,
     );
     expect(text).not.toHaveBeenCalled();
-    expect(deps.launchHatchTui).toHaveBeenCalledWith("/tmp/work");
+    expect(deps.observeHandoff).toHaveBeenCalledWith(
+      expect.objectContaining({ workspace: "/tmp/work", next: "hatch" }),
+    );
+    expect(deps.launchHatchTui).toHaveBeenCalledWith(expect.objectContaining({ deliver: false }));
     expect(applySetup).toHaveBeenCalledWith(
       expect.objectContaining({ workspace: "/tmp/work", surface: "cli" }),
       expect.objectContaining({ beforePersistentApply: expect.any(Function) }),
@@ -161,7 +164,7 @@ describe("guided onboarding post-inference steps", () => {
     const deps = setupDeps({
       prompter: createWizardPrompter(),
       runAppRecommendations: async ({ config }) => ({ config, commitResult }),
-      runBrowserHandoff: vi.fn(async () => ({ handedOff: true as const })),
+      runBrowserHandoff: vi.fn(async () => true),
     });
     const outcome = runGuidedOnboarding(
       { acceptRisk: true, workspace: "/tmp/work" },

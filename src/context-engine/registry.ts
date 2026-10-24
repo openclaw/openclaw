@@ -10,6 +10,7 @@ import type {
 import { capturePluginLifecycleAuthority } from "../plugins/registry-lifecycle.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import { getActivePluginRegistry, requireActivePluginRegistry } from "../plugins/runtime.js";
+import { getSelectedContextEngineOwner } from "../plugins/runtime/load-context-state.js";
 import { defaultSlotIdForKey } from "../plugins/slots.js";
 import { getAsyncWorkSignal, trackAsyncWork } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -48,7 +49,7 @@ import type {
 export type { ContextEngineFactory } from "../plugins/registry-contribution-types.js";
 export { listContextEngineQuarantines } from "./registry-quarantine.js";
 
-type ContextEngineRegistrationResult = { ok: true } | { ok: false; existingOwner: string };
+type ContextEngineRegistrationResult = { ok: true } | { ok: false; existingOwner: string | null };
 
 type RegisterContextEngineForOwnerOptions = {
   allowSameOwnerRefresh?: boolean;
@@ -287,15 +288,11 @@ export async function registerContextEngineForOwner(
   id: string,
   factory: ContextEngineFactory,
   owner: string,
-  opts?: RegisterContextEngineForOwnerOptions,
+  opts?: Omit<RegisterContextEngineForOwnerOptions, "lifecycle">,
 ): Promise<ContextEngineRegistrationResult> {
   const targetRegistry = requireActivePluginRegistry();
   const result = registerContextEngineInRegistry(targetRegistry, id, factory, owner, opts);
-  if (
-    result.ok &&
-    (opts?.lifecycle ?? "runtime") === "runtime" &&
-    getActivePluginRegistry() === targetRegistry
-  ) {
+  if (result.ok && getActivePluginRegistry() === targetRegistry) {
     const assertCurrent = () => {
       if (getActivePluginRegistry() !== targetRegistry) {
         throw new Error("Context engine registration was superseded");
@@ -330,6 +327,10 @@ export function registerContextEngineInRegistry(
   ) {
     // The default fallback id is core-owned; plugins can select other ids through slots.
     return { ok: false, existingOwner: CORE_CONTEXT_ENGINE_OWNER };
+  }
+  const selectedOwner = getSelectedContextEngineOwner(pluginRegistry, id);
+  if (selectedOwner !== undefined && selectedOwner !== normalizedOwner) {
+    return { ok: false, existingOwner: selectedOwner };
   }
   if (existing && existing.owner !== normalizedOwner) {
     return { ok: false, existingOwner: existing.owner };
@@ -529,7 +530,10 @@ export async function resolveLogicalTurnContextEngines(
   try {
     return await runContextEngineFactoryResolution(async (abandon) => {
       const defaultEngineId = defaultSlotIdForKey("contextEngine");
-      const configuredEngineId = resolveEffectiveContextEngineId(config, getContextEngines());
+      const configuredEngineId = resolveEffectiveContextEngineId(
+        config,
+        requireActivePluginRegistry(),
+      );
       const factoryCtx: ContextEngineFactoryContext = {
         config,
         agentDir: options?.agentDir,
@@ -628,7 +632,7 @@ export async function resolveContextEngine(
     : undefined;
   try {
     const defaultEngineId = defaultSlotIdForKey("contextEngine");
-    const engineId = resolveEffectiveContextEngineId(config, getContextEngines());
+    const engineId = resolveEffectiveContextEngineId(config, requireActivePluginRegistry());
     const isDefaultEngine = engineId === defaultEngineId;
 
     const factoryCtx: ContextEngineFactoryContext = {

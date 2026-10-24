@@ -53,5 +53,4 @@ html.openclaw-native-web-chrome openclaw-sidebar-attention.sidebar-attention--fl
   .sidebar-issues-button {
   box-shadow: var(--shadow-sm);
   backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
 }

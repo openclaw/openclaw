@@ -62,21 +62,6 @@ CREATE TABLE "agent_databases" (
   PRIMARY KEY ("agent_id", "path")
 );
 
-CREATE TABLE "agent_deletion_journal" (
-  "agent_id" text COLLATE "C" NOT NULL,
-  "operation_id" text COLLATE "C" NOT NULL DEFAULT '',
-  "phase" text COLLATE "C",
-  "agent_dir" text COLLATE "C" NOT NULL,
-  "workspace_dir" text COLLATE "C" NOT NULL,
-  "sessions_dir" text COLLATE "C" NOT NULL,
-  "database_paths_json" text COLLATE "C" NOT NULL DEFAULT '[]',
-  "cleanup_paths_json" text COLLATE "C" NOT NULL DEFAULT '[]',
-  "created_at" bigint NOT NULL,
-  "cleanup_completed" bigint NOT NULL DEFAULT 0,
-  "delete_files" bigint NOT NULL DEFAULT 1,
-  PRIMARY KEY ("agent_id")
-);
-
 CREATE TABLE "apns_registration_tombstones" (
   "node_id" text COLLATE "C" NOT NULL,
   "deleted_at_ms" bigint NOT NULL,
@@ -447,15 +432,6 @@ CREATE TABLE "delivery_queue_entries" (
   PRIMARY KEY ("queue_name", "id")
 );
 
-CREATE TABLE "device_auth_tokens" (
-  "device_id" text COLLATE "C" NOT NULL,
-  "role" text COLLATE "C" NOT NULL,
-  "token" text COLLATE "C" NOT NULL,
-  "scopes_json" text COLLATE "C" NOT NULL,
-  "updated_at_ms" bigint NOT NULL,
-  PRIMARY KEY ("device_id", "role")
-);
-
 CREATE TABLE "device_bootstrap_tokens" (
   "token_key" text COLLATE "C" NOT NULL,
   "token" text COLLATE "C" NOT NULL,
@@ -469,16 +445,6 @@ CREATE TABLE "device_bootstrap_tokens" (
   "issued_at_ms" bigint NOT NULL,
   "last_used_at_ms" bigint,
   PRIMARY KEY ("token_key")
-);
-
-CREATE TABLE "device_identities" (
-  "identity_key" text COLLATE "C" NOT NULL,
-  "device_id" text COLLATE "C" NOT NULL,
-  "public_key_pem" text COLLATE "C" NOT NULL,
-  "private_key_pem" text COLLATE "C" NOT NULL,
-  "created_at_ms" bigint NOT NULL,
-  "updated_at_ms" bigint NOT NULL,
-  PRIMARY KEY ("identity_key")
 );
 
 CREATE TABLE "device_pairing_paired" (
@@ -586,16 +552,6 @@ CREATE TABLE "gateway_boot_lifecycle" (
   PRIMARY KEY ("boot_id")
 );
 
-CREATE TABLE "gateway_origin_device_tokens" (
-  "gateway_scope" text COLLATE "C" NOT NULL,
-  "device_id" text COLLATE "C" NOT NULL,
-  "role" text COLLATE "C" NOT NULL,
-  "token" text COLLATE "C" NOT NULL,
-  "scopes_json" text COLLATE "C" NOT NULL,
-  "updated_at_ms" bigint NOT NULL,
-  PRIMARY KEY ("gateway_scope", "device_id", "role")
-);
-
 CREATE TABLE "gateway_restart_handoff" (
   "handoff_key" text COLLATE "C" NOT NULL,
   "kind" text COLLATE "C" NOT NULL,
@@ -689,6 +645,7 @@ CREATE TABLE "mcp_oauth_stores" (
 );
 
 CREATE TABLE "meeting_transcript_sessions" (
+  "started_at_ms" bigint,
   "session_id" text COLLATE "C" NOT NULL,
   "started_at" text COLLATE "C" NOT NULL,
   "selector" text COLLATE "C" NOT NULL,
@@ -1382,8 +1339,6 @@ CREATE TABLE "worktrees" (
   CHECK (("owner_kind" IN ('manual', 'workboard', 'session')))
 );
 
-CREATE INDEX "idx_acp_replay_events_session_seq" ON "acp_replay_events" (("session_id") ASC NULLS FIRST, ("seq") ASC NULLS FIRST);
-
 CREATE INDEX "idx_acp_replay_sessions_key_updated" ON "acp_replay_sessions" (("session_key") ASC NULLS FIRST, ("complete") ASC NULLS FIRST, ("updated_at") DESC NULLS LAST, ("session_id") ASC NULLS FIRST);
 
 CREATE INDEX "idx_acp_replay_sessions_updated" ON "acp_replay_sessions" (("updated_at") DESC NULLS LAST, ("session_id") ASC NULLS FIRST);
@@ -1452,11 +1407,7 @@ CREATE INDEX "idx_delivery_queue_session" ON "delivery_queue_entries" (("queue_n
 
 CREATE INDEX "idx_delivery_queue_target" ON "delivery_queue_entries" (("queue_name") ASC NULLS FIRST, ("status") ASC NULLS FIRST, ("channel") ASC NULLS FIRST, ("target") ASC NULLS FIRST, ("enqueued_at") ASC NULLS FIRST, ("id") ASC NULLS FIRST) WHERE "channel" IS NOT NULL AND "target" IS NOT NULL;
 
-CREATE INDEX "idx_device_auth_tokens_updated" ON "device_auth_tokens" (("updated_at_ms") DESC NULLS LAST, ("device_id") ASC NULLS FIRST, ("role") ASC NULLS FIRST);
-
 CREATE INDEX "idx_device_bootstrap_tokens_ts" ON "device_bootstrap_tokens" (("ts") ASC NULLS FIRST);
-
-CREATE INDEX "idx_device_identities_device" ON "device_identities" (("device_id") ASC NULLS FIRST, ("updated_at_ms") DESC NULLS LAST);
 
 CREATE INDEX "idx_device_pairing_paired_approved" ON "device_pairing_paired" (("approved_at_ms") DESC NULLS LAST, ("device_id") ASC NULLS FIRST);
 
@@ -1489,6 +1440,8 @@ CREATE INDEX "idx_managed_outgoing_images_session" ON "managed_outgoing_image_re
 CREATE INDEX "idx_meeting_transcript_sessions_account" ON "meeting_transcript_sessions" (("source_account_id") ASC NULLS FIRST);
 
 CREATE INDEX "idx_meeting_transcript_sessions_agent" ON "meeting_transcript_sessions" (("metadata_agent_id") ASC NULLS FIRST);
+
+CREATE INDEX "idx_meeting_transcript_sessions_chronology" ON "meeting_transcript_sessions" (("started_at_ms") DESC NULLS LAST, ("session_id") ASC NULLS FIRST, ("started_at") ASC NULLS FIRST);
 
 CREATE INDEX "idx_meeting_transcript_sessions_export_key" ON "meeting_transcript_sessions" (("export_key") ASC NULLS FIRST);
 
@@ -1554,11 +1507,9 @@ CREATE INDEX "idx_skill_uploads_expiry" ON "skill_uploads" (("expires_at") ASC N
 
 CREATE INDEX "idx_skill_uploads_idempotency" ON "skill_uploads" (("idempotency_key_hash") ASC NULLS FIRST) WHERE "idempotency_key_hash" IS NOT NULL;
 
-CREATE INDEX "idx_skill_usage_key" ON "skill_usage" (("skill_key") ASC NULLS FIRST, ("skill_file") ASC NULLS FIRST);
-
 CREATE INDEX "idx_state_leases_expiry" ON "state_leases" (("expires_at") ASC NULLS FIRST, ("scope") ASC NULLS FIRST, ("lease_key") ASC NULLS FIRST) WHERE "expires_at" IS NOT NULL;
 
-CREATE INDEX "idx_state_leases_owner" ON "state_leases" (("owner") ASC NULLS FIRST, ("updated_at") DESC NULLS LAST);
+CREATE INDEX "idx_state_leases_owner" ON "state_leases" (("owner") ASC NULLS FIRST);
 
 CREATE INDEX "idx_subagent_runs_child_session_key" ON "subagent_runs" (("child_session_key") ASC NULLS FIRST, ("created_at") DESC NULLS LAST, ("run_id") ASC NULLS FIRST);
 
@@ -1566,27 +1517,11 @@ CREATE INDEX "idx_subagent_runs_controller_session_key" ON "subagent_runs" (("co
 
 CREATE INDEX "idx_subagent_runs_requester_session_key" ON "subagent_runs" (("requester_session_key") ASC NULLS FIRST, ("created_at") DESC NULLS LAST, ("run_id") ASC NULLS FIRST);
 
-CREATE INDEX "idx_task_runs_child_session_key" ON "task_runs" (("child_session_key") ASC NULLS FIRST);
+CREATE INDEX "idx_task_runs_cron_runtime_order" ON "task_runs" (("runtime") ASC NULLS FIRST, ("created_at") ASC NULLS FIRST, ("task_id") ASC NULLS FIRST) WHERE ("runtime" = 'cron');
 
-CREATE INDEX "idx_task_runs_cleanup_after" ON "task_runs" (("cleanup_after") ASC NULLS FIRST);
+CREATE INDEX "idx_task_runs_cron_source_order" ON "task_runs" (("source_id") ASC NULLS FIRST, ("created_at") ASC NULLS FIRST, ("task_id") ASC NULLS FIRST) WHERE ("runtime" = 'cron');
 
-CREATE INDEX "idx_task_runs_last_event_at" ON "task_runs" (("last_event_at") ASC NULLS FIRST);
-
-CREATE INDEX "idx_task_runs_owner_key" ON "task_runs" (("owner_key") ASC NULLS FIRST);
-
-CREATE INDEX "idx_task_runs_parent_flow_id" ON "task_runs" (("parent_flow_id") ASC NULLS FIRST);
-
-CREATE INDEX "idx_task_runs_requester_session_key" ON "task_runs" (("requester_session_key") ASC NULLS FIRST);
-
-CREATE INDEX "idx_task_runs_run_id" ON "task_runs" (("run_id") ASC NULLS FIRST);
-
-CREATE INDEX "idx_task_runs_runtime_ended" ON "task_runs" (("runtime") ASC NULLS FIRST, ("ended_at") ASC NULLS FIRST, ("created_at") ASC NULLS FIRST, ("task_id") ASC NULLS FIRST);
-
-CREATE INDEX "idx_task_runs_runtime_source_ended" ON "task_runs" (("runtime") ASC NULLS FIRST, ("source_id") ASC NULLS FIRST, ("ended_at") ASC NULLS FIRST, ("created_at") ASC NULLS FIRST, ("task_id") ASC NULLS FIRST);
-
-CREATE INDEX "idx_task_runs_runtime_status" ON "task_runs" (("runtime") ASC NULLS FIRST, ("status") ASC NULLS FIRST);
-
-CREATE INDEX "idx_task_runs_status" ON "task_runs" (("status") ASC NULLS FIRST);
+CREATE INDEX "idx_task_runs_runtime_run" ON "task_runs" (("runtime") ASC NULLS FIRST, ("run_id") ASC NULLS FIRST, ("source_id") ASC NULLS FIRST, ("created_at") ASC NULLS FIRST, ("task_id") ASC NULLS FIRST);
 
 CREATE INDEX "idx_web_push_subscriptions_updated" ON "web_push_subscriptions" (("updated_at_ms") DESC NULLS LAST, ("subscription_id") ASC NULLS FIRST);
 

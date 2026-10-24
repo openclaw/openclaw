@@ -15,6 +15,11 @@ export type OpenClawStateLeaseContext = {
   assertOwnedAsync?(this: void): Promise<void>;
   /** Verify ownership using the caller's active write transaction. */
   assertOwnedInTransaction(database: EngineConnection): void;
+  /** SQLite maintenance retains authority until its managed write transaction settles. */
+  holdWriteFence?(
+    this: void,
+    database: EngineConnection,
+  ): { renew(): string | undefined } | undefined;
 };
 
 /** Ordinary runtime leases whose durable checks and renewal are awaited. */

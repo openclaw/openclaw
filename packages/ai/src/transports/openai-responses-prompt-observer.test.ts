@@ -1,5 +1,4 @@
-import { zstdDecompressSync } from "node:zlib";
-import type { Api, Context, Model } from "@openclaw/llm-core";
+import type { Api, AssistantMessage, Context, Model } from "@openclaw/llm-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { configureAiTransportHost, getAiTransportHost } from "../host.js";
 import { responsesPromptObserver, type ResponsesPromptObservation } from "../internal/openai.js";
@@ -14,15 +13,7 @@ import { streamOpenAIResponses } from "../providers/openai-responses.js";
 import { cleanupSessionResources } from "../session-resources.js";
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "../utils/system-prompt-cache-boundary.js";
 import { resolveResponsesContextUsageBoundary } from "./openai-responses-context-usage.js";
-import {
-  completedSdkResponse,
-  createModel,
-  createContext,
-  createCompactionContext,
-  createOrphanedToolOutputCompactionContext,
-  SDK_FULL_HISTORY_PREFIX,
-  SDK_REASONING_CIPHERTEXT,
-} from "./openai-responses-prompt-observer.test-support.js";
+import * as fixtures from "./openai-responses-prompt-observer.test-support.js";
 
 type SdkResponse = { data: AsyncIterable<unknown>; response: Response };
 
@@ -62,6 +53,94 @@ import {
 } from "./openai-responses-client.js";
 
 const initialHost = getAiTransportHost();
+const { SDK_FULL_HISTORY_PREFIX: fullHistory, SDK_REASONING_CIPHERTEXT: reasoningCiphertext } =
+  fixtures;
+const requestInput = (index: number) => JSON.stringify(sdkState.requests[index]?.input);
+const nativeModel = () =>
+  fixtures.createModel({
+    api: "openai-chatgpt-responses",
+    baseUrl: "https://chatgpt.test/backend-api",
+  });
+const invalidEncryptedContent = () =>
+  Object.assign(new Error("invalid encrypted content"), { code: "invalid_encrypted_content" });
+const identity = { sessionId: "observer-session", authProfileId: "observer-profile" };
+const sdkOptions = { apiKey: "test-key", ...identity };
+function compactionCase(): { model: Model<"openai-responses">; context: Context };
+function compactionCase<TApi extends Api>(
+  model: Model<TApi>,
+  includeReasoning?: boolean,
+): { model: Model<TApi>; context: Context };
+function compactionCase(model: Model = fixtures.createModel(), includeReasoning = false) {
+  return { model, context: fixtures.createCompactionContext(model, identity, includeReasoning) };
+}
+const runManaged = (
+  model: Model,
+  context: Context,
+  options: Record<string, unknown>,
+  azure = false,
+) =>
+  (azure
+    ? createAzureOpenAIResponsesTransportStreamFn()
+    : createOpenAIResponsesTransportStreamFn())(model, context, options as never);
+const managedResult = async (
+  model: Model,
+  context: Context,
+  options: Record<string, unknown>,
+  azure = false,
+) => {
+  const result = await (await runManaged(model, context, options, azure)).result();
+  expect(result.stopReason).toBe("stop");
+  return result;
+};
+function usageBoundary(
+  context: Context,
+  result: AssistantMessage,
+  model: Model,
+  persisted = false,
+) {
+  const messages = [...context.messages, result];
+  const saved = persisted ? JSON.stringify(messages) : undefined;
+  return resolveResponsesContextUsageBoundary(
+    saved === undefined ? messages : JSON.parse(saved),
+    model,
+    identity,
+    context.systemPrompt,
+  );
+}
+const addHostMetadata = () =>
+  configureAiTransportHost({
+    ...initialHost,
+    plugin: {
+      ...initialHost.plugin,
+      resolveTransportTurnState: () => ({ metadata: { host: "added" } }),
+    },
+  });
+function observe(options: object, order?: string[]) {
+  const observations: ResponsesPromptObservation[] = [];
+  responsesPromptObserver.set(options, (observation) => {
+    order?.push("observe");
+    observations.push(observation);
+  });
+  return observations;
+}
+function expectObservations(
+  observations: ResponsesPromptObservation[],
+  egress: string,
+  prompt: string,
+  count = 1,
+) {
+  expect(observations).toEqual(
+    Array.from({ length: count }, () => ({
+      egress,
+      payloadVariant: "initial",
+      promptSource: "instructions",
+      expectedChars: prompt.length,
+      observedChars: prompt.length,
+      matchesAssembledPrompt: true,
+    })),
+  );
+  expect(JSON.stringify(observations)).not.toContain(prompt);
+}
 
 function createJwt(): string {
   const encode = (value: object) => Buffer.from(JSON.stringify(value)).toString("base64url");
@@ -70,18 +149,23 @@ function createJwt(): string {
   })}.signature`;
 }
 
-function completedSseResponse(responseId = "resp_test"): Response {
-  return new Response(
-    `data: ${JSON.stringify({
-      type: "response.completed",
-      response: {
-        id: responseId,
-        status: "completed",
-        output: [],
-        usage: { input_tokens: 5, output_tokens: 3, total_tokens: 8 },
-      },
-    })}\n\n`,
-    { status: 200, headers: { "content-type": "text/event-stream" } },
+const completedSseResponse = (id = "resp_test") =>
+  fixtures.sseResponse([fixtures.completedResponse(id, [], { usage: fixtures.responseUsage })]);
+const expectedBoundary = (context: Context, totalTokens = 8) => ({
+  index: context.messages.length,
+  totalTokens,
+  suffix: [],
+});
+function mockSse(order?: string[], onRequest?: (request: Record<string, unknown>) => void) {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (_input, init) => {
+      order?.push("fetch");
+      if (onRequest) {
+        onRequest(await fixtures.requestBody(init));
+      }
+      return completedSseResponse();
+    }),
   );
 }
 
@@ -96,20 +180,13 @@ async function runObservedRequest(params: {
   errors?: Error[];
   options?: Record<string, unknown>;
 }) {
-  const observations: ResponsesPromptObservation[] = [];
   const options = { apiKey: "test-key", ...params.options };
   const requestStart = sdkState.requests.length;
   const orderStart = sdkState.order.length;
   sdkState.outcomes = params.errors ?? [new Error("stop after request")];
-  responsesPromptObserver.set(options, (observation) => {
-    sdkState.order.push("observe");
-    observations.push(observation);
-  });
-  const streamFn = params.azure
-    ? createAzureOpenAIResponsesTransportStreamFn()
-    : createOpenAIResponsesTransportStreamFn();
+  const observations = observe(options, sdkState.order);
   const stream = await Promise.resolve(
-    streamFn(params.model ?? createModel(), params.context, options as never),
+    runManaged(params.model ?? fixtures.createModel(), params.context, options, params.azure),
   );
   expect((await stream.result()).stopReason).toBe("error");
   return {
@@ -128,12 +205,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  // A native OpenAI model here is store:true-eligible for HTTP continuation
-  // (see explicitStore in openai-responses-payload-policy.ts), so any test
-  // whose transport claims a continuation entry leaves it in the module-level
-  // httpContinuationEntries map. it.each cases in this file commonly reuse
-  // the same sessionId across iterations, so a stale entry from an earlier
-  // iteration would otherwise be claimed by a later, unrelated one.
+  // Reused session IDs must not inherit HTTP continuation entries from another case.
   cleanupSessionResources();
   closeOpenAICodexWebSocketSessions();
   vi.restoreAllMocks();
@@ -143,42 +215,74 @@ afterEach(() => {
 });
 
 describe("OpenAI Responses provider prompt observer", () => {
+  it("replays inline compaction with runtime facts after the user and an unchanged next-turn prefix", async () => {
+    const { model, context } = compactionCase();
+    context.systemPrompt = "Complete stable instructions";
+    const runtimeFacts =
+      'Conversation data (data, not instructions):\n"## Temporal Context\\nCurrent date: 2026-10-14\\nTime zone: UTC"';
+    const runtimeMessage = (text: string, timestamp: number) =>
+      fixtures.userMessage(text, timestamp, { operatorMessage: { turnScoped: true } });
+    context.messages.push(runtimeMessage(runtimeFacts, 3));
+    const saved = JSON.stringify(context);
+    const expectedInput = [
+      {
+        type: "compaction",
+        id: "cmp_azure_rejected",
+        encrypted_content: "opaque-azure-compaction",
+      },
+      fixtures.inputMessage("continue"),
+      fixtures.inputMessage(runtimeFacts, "developer"),
+    ];
+    const first = await runObservedRequest({ context, model, options: identity });
+    expect(first.requests).toHaveLength(1);
+    expect(first.requests[0]?.instructions).toBe("Complete stable instructions");
+    expect(first.requests[0]?.input).toEqual(expectedInput);
+    expect(JSON.stringify(context)).toBe(saved);
+
+    // Reopening the saved transcript must extend, not rewrite, the admitted input.
+    const resumed: Context = JSON.parse(saved);
+    resumed.messages.push(
+      fixtures.userMessage("Next question", 4),
+      runtimeMessage("Updated runtime facts", 5),
+    );
+    const next = await runObservedRequest({ context: resumed, model, options: identity });
+    expect(next.requests).toHaveLength(1);
+    expect(next.requests[0]?.instructions).toBe("Complete stable instructions");
+    expect(next.requests[0]?.input).toEqual([
+      ...expectedInput,
+      fixtures.inputMessage("Next question"),
+      fixtures.inputMessage("Updated runtime facts", "developer"),
+    ]);
+  });
+
   it.each(["string input", "missing terminal output"])(
     "preserves %s without a checkpoint measurement",
     async (shape) => {
-      const response = completedSdkResponse("resp_unbound_shape");
+      const response = fixtures.completedSdkResponse("resp_unbound_shape");
       if (shape === "missing terminal output") {
-        response.data = (async function* () {
-          yield {
-            type: "response.completed",
-            response: {
-              id: "resp_unbound_shape",
-              status: "completed",
-              usage: { input_tokens: 5, output_tokens: 3, total_tokens: 8 },
-            },
-          };
-        })();
+        response.data = fixtures.responseEvents({
+          type: "response.completed",
+          response: {
+            id: "resp_unbound_shape",
+            status: "completed",
+            usage: fixtures.responseUsage,
+          },
+        });
       }
       sdkState.outcomes = [response];
-      const model = createModel();
-      const identity = { sessionId: "unbound-shape", authProfileId: "profile-a" };
-      const stream = await Promise.resolve(
-        createOpenAIResponsesTransportStreamFn()(model, createCompactionContext(model, identity), {
-          apiKey: "test-key",
-          ...identity,
-          transport: "sse",
-          onPayload:
-            shape === "string input"
-              ? () => ({ model: model.id, input: "hello", stream: true })
-              : undefined,
-        }),
-      );
-      const result = await stream.result();
+      const { model, context } = compactionCase();
+      const result = await managedResult(model, context, {
+        ...sdkOptions,
+        transport: "sse",
+        onPayload:
+          shape === "string input"
+            ? () => ({ model: model.id, input: "hello", stream: true })
+            : undefined,
+      });
       if (shape === "string input") {
         expect(sdkState.requests[0]?.input).toBe("hello");
       }
       expect(result.errorMessage).toBeUndefined();
-      expect(result.stopReason).toBe("stop");
       expect(result).not.toHaveProperty("openclawResponsesInputReplay.contextUsage");
     },
   );
@@ -186,30 +290,25 @@ describe("OpenAI Responses provider prompt observer", () => {
   it.each(["shared", "chatgpt"] as const)(
     "preserves measured checkpoint usage through %s egress and saved-history replay",
     async (transport) => {
-      const identity = { sessionId: `usage-${transport}`, authProfileId: "usage-profile" };
-      const model = createModel<Api>(
+      const model = fixtures.createModel<Api>(
         transport === "chatgpt"
           ? { api: "openai-chatgpt-responses", baseUrl: "https://chatgpt.test/backend-api" }
           : {},
       );
-      const context = createOrphanedToolOutputCompactionContext(model, identity);
+      const context = fixtures.createOrphanedToolOutputCompactionContext(model, identity);
       const toolOutput = context.messages.find((message) => message.role === "toolResult");
       if (!toolOutput || toolOutput.role !== "toolResult") {
         throw new Error("missing tool-output fixture");
       }
       toolOutput.content = [{ type: "text", text: "large historical tool output\n".repeat(8_000) }];
-      context.messages.push({
-        role: "user",
-        content: "OpenClaw runtime context:\ncurrent runtime facts",
-        timestamp: 2,
-        runtimeContext: {},
-      });
+      context.messages.push(
+        fixtures.userMessage("OpenClaw runtime context:\ncurrent runtime facts", 2, {
+          runtimeContext: {},
+        }),
+      );
       const run = async (rewriteInput: boolean) => {
-        sdkState.outcomes = [completedSdkResponse(`resp_usage_${transport}`)];
-        vi.stubGlobal(
-          "fetch",
-          vi.fn(async () => completedSseResponse(`resp_usage_${transport}`)),
-        );
+        sdkState.outcomes = [fixtures.completedSdkResponse(`resp_usage_${transport}`)];
+        mockSse();
         const options = {
           ...identity,
           apiKey: transport === "chatgpt" ? createJwt() : "test-key",
@@ -235,11 +334,7 @@ describe("OpenAI Responses provider prompt observer", () => {
                 context,
                 options,
               )
-            : transport === "shared"
-              ? streamOpenAIResponses({ ...model, api: "openai-responses" }, context, options)
-              : await Promise.resolve(
-                  createOpenAIResponsesTransportStreamFn()(model, context, options),
-                );
+            : streamOpenAIResponses({ ...model, api: "openai-responses" }, context, options);
         const result = await stream.result();
         expect(result.stopReason).toBe("stop");
         expect(result.usage.contextUsage).toEqual({
@@ -247,16 +342,9 @@ describe("OpenAI Responses provider prompt observer", () => {
           promptTokens: 5,
           totalTokens: 8,
         });
-        const persisted = JSON.stringify([...context.messages, result]);
-        const savedMessages = JSON.parse(persisted) as Context["messages"];
         return {
           result,
-          boundary: resolveResponsesContextUsageBoundary(
-            savedMessages,
-            model,
-            identity,
-            context.systemPrompt,
-          ),
+          boundary: usageBoundary(context, result, model, true),
         };
       };
 
@@ -264,21 +352,15 @@ describe("OpenAI Responses provider prompt observer", () => {
       expect(measured.result).toMatchObject({
         openclawResponsesInputReplay: { contextUsage: { totalTokens: 8 } },
       });
-      expect(measured.boundary).toEqual({
-        index: context.messages.length,
-        totalTokens: 8,
-        suffix: [],
-      });
+      expect(measured.boundary).toEqual(expectedBoundary(context));
 
       const rewritten = await run(true);
       expect(rewritten.boundary).toBeUndefined();
     },
   );
 
-  it("binds measured usage to streamed reasoning when the terminal ciphertext changes", async () => {
-    const model = createModel();
-    const identity = { sessionId: "reasoning-session", authProfileId: "reasoning-profile" };
-    const context = createCompactionContext(model, identity);
+  it("binds measured usage to terminal reasoning when its ciphertext changes", async () => {
+    const { model, context } = compactionCase();
     const reasoning = {
       type: "reasoning",
       id: "rs_streamed",
@@ -288,93 +370,58 @@ describe("OpenAI Responses provider prompt observer", () => {
     };
     sdkState.outcomes.push({
       response: new Response(null, { status: 200 }),
-      data: (async function* () {
-        yield { type: "response.output_item.added", output_index: 0, item: reasoning };
-        yield { type: "response.output_item.done", output_index: 0, item: reasoning };
-        yield {
-          type: "response.completed",
-          response: {
-            id: "resp_streamed_reasoning",
-            status: "completed",
-            output: [{ ...reasoning, encrypted_content: "opaque-terminal-reasoning" }],
-            usage: { input_tokens: 500, output_tokens: 25, total_tokens: 525 },
-          },
-        };
-      })(),
+      data: fixtures.responseEvents(
+        { type: "response.output_item.added", output_index: 0, item: reasoning },
+        { type: "response.output_item.done", output_index: 0, item: reasoning },
+        fixtures.completedResponse(
+          "resp_streamed_reasoning",
+          [{ ...reasoning, encrypted_content: "opaque-terminal-reasoning" }],
+          { usage: { input_tokens: 500, output_tokens: 25, total_tokens: 525 } },
+        ),
+      ),
     });
-    const stream = await Promise.resolve(
-      createOpenAIResponsesTransportStreamFn()(model, context, {
-        apiKey: "test-key",
-        ...identity,
-        transport: "sse",
-      }),
-    );
-    const result = await stream.result();
+    const result = await managedResult(model, context, { ...sdkOptions, transport: "sse" });
     expect(result.content[0]).toMatchObject({
       type: "thinking",
-      thinkingSignature: expect.stringContaining("opaque-streamed-reasoning"),
+      thinkingSignature: expect.stringContaining("opaque-terminal-reasoning"),
     });
-    const persisted = JSON.stringify([...context.messages, result]);
-    expect(
-      resolveResponsesContextUsageBoundary(
-        JSON.parse(persisted),
-        model,
-        identity,
-        context.systemPrompt,
-      ),
-    ).toEqual({ index: context.messages.length, totalTokens: 525, suffix: [] });
+    expect(usageBoundary(context, result, model, true)).toEqual(expectedBoundary(context, 525));
   });
 
   it("recovers Azure compaction rejection and suppresses it on the next turn", async () => {
-    const identity = { sessionId: "azure-recovery-session", authProfileId: "azure-profile" };
-    const azureModel = createModel({
+    const azureModel = fixtures.createModel({
       api: "azure-openai-responses",
       provider: "azure-openai-responses",
       baseUrl: "https://example.openai.azure.com",
     });
-    const context = createCompactionContext(azureModel, identity);
-    const observations: ResponsesPromptObservation[] = [];
-    const options = { apiKey: "test-key", ...identity };
-    responsesPromptObserver.set(options, (observation) => observations.push(observation));
+    const context = fixtures.createCompactionContext(azureModel, identity);
+    const options = { ...sdkOptions };
+    const observations = observe(options);
     sdkState.outcomes = [
-      Object.assign(new Error("invalid encrypted content"), {
-        code: "invalid_encrypted_content",
-      }),
-      completedSdkResponse("resp_azure_recovered"),
-      completedSdkResponse("resp_azure_next"),
+      invalidEncryptedContent(),
+      fixtures.completedSdkResponse("resp_azure_recovered"),
+      fixtures.completedSdkResponse("resp_azure_next"),
     ];
-    const streamFn = createAzureOpenAIResponsesTransportStreamFn();
-
-    const recoveredStream = await Promise.resolve(streamFn(azureModel, context, options as never));
-    const recovered = await recoveredStream.result();
+    const recovered = await managedResult(azureModel, context, options, true);
     expect(recovered).toMatchObject({
       stopReason: "stop",
       providerReplay: { type: "openai-responses-compaction-suppression", data: "rejected" },
     });
     expect(recovered).not.toHaveProperty("openclawResponsesInputReplay.contextUsage");
-    const nextStream = await Promise.resolve(
-      streamFn(
-        azureModel,
-        {
-          ...context,
-          messages: [
-            ...context.messages,
-            recovered,
-            { role: "user", content: "continue again", timestamp: 3 },
-          ],
-        },
-        options as never,
-      ),
+    await managedResult(
+      azureModel,
+      {
+        ...context,
+        messages: [...context.messages, recovered, fixtures.userMessage("continue again", 3)],
+      },
+      options,
+      true,
     );
-    expect((await nextStream.result()).stopReason).toBe("stop");
 
     expect(sdkState.clients).toEqual(["azure", "azure", "azure"]);
-    expect(sdkState.requests).toHaveLength(3);
-    expect(requestHasCompaction(sdkState.requests[0])).toBe(true);
-    expect(requestHasCompaction(sdkState.requests[1])).toBe(false);
-    expect(requestHasCompaction(sdkState.requests[2])).toBe(false);
-    expect(JSON.stringify(sdkState.requests[0]?.input)).not.toContain(SDK_FULL_HISTORY_PREFIX);
-    expect(JSON.stringify(sdkState.requests[1]?.input)).toContain(SDK_FULL_HISTORY_PREFIX);
+    expect(sdkState.requests.map(requestHasCompaction)).toEqual([true, false, false]);
+    expect(requestInput(0)).not.toContain(fullHistory);
+    expect(requestInput(1)).toContain(fullHistory);
     expect(observations.map((entry) => entry.payloadVariant)).toEqual([
       "initial",
       "compaction-stripped",
@@ -384,36 +431,29 @@ describe("OpenAI Responses provider prompt observer", () => {
   });
 
   it("rebuilds full history when compaction leaves an orphaned function output", async () => {
-    const identity = { sessionId: "orphan-recovery-session", authProfileId: "openai-profile" };
-    const openAIModel = createModel();
-    const context = createOrphanedToolOutputCompactionContext(openAIModel, identity);
-    const observations: ResponsesPromptObservation[] = [];
-    const options = { apiKey: "test-key", ...identity };
-    responsesPromptObserver.set(options, (observation) => observations.push(observation));
+    const openAIModel = fixtures.createModel();
+    const context = fixtures.createOrphanedToolOutputCompactionContext(openAIModel, identity);
+    const options = { ...sdkOptions };
+    const observations = observe(options);
     sdkState.outcomes = [
       Object.assign(
         new Error("400 No tool call found for function call output with call_id call_compacted."),
         { status: 400, type: "invalid_request_error", param: "input", code: null },
       ),
-      completedSdkResponse("resp_orphan_recovered"),
+      fixtures.completedSdkResponse("resp_orphan_recovered"),
     ];
 
-    const stream = await Promise.resolve(
-      createOpenAIResponsesTransportStreamFn()(openAIModel, context, options as never),
-    );
-    const recovered = await stream.result();
+    const recovered = await managedResult(openAIModel, context, options);
 
     expect(recovered).toMatchObject({
       stopReason: "stop",
       providerReplay: { type: "openai-responses-compaction-suppression", data: "rejected" },
     });
-    expect(sdkState.requests).toHaveLength(2);
-    expect(requestHasCompaction(sdkState.requests[0])).toBe(true);
-    expect(JSON.stringify(sdkState.requests[0]?.input)).toContain("function_call_output");
-    expect(JSON.stringify(sdkState.requests[0]?.input)).not.toContain('"type":"function_call"');
-    expect(requestHasCompaction(sdkState.requests[1])).toBe(false);
-    expect(JSON.stringify(sdkState.requests[1]?.input)).toContain('"type":"function_call"');
-    expect(JSON.stringify(sdkState.requests[1]?.input)).toContain("function_call_output");
+    expect(sdkState.requests.map(requestHasCompaction)).toEqual([true, false]);
+    expect(requestInput(0)).toContain("function_call_output");
+    expect(requestInput(0)).not.toContain('"type":"function_call"');
+    expect(requestInput(1)).toContain('"type":"function_call"');
+    expect(requestInput(1)).toContain("function_call_output");
     expect(observations.map((entry) => entry.payloadVariant)).toEqual([
       "initial",
       "compaction-stripped",
@@ -421,123 +461,93 @@ describe("OpenAI Responses provider prompt observer", () => {
   });
 
   it("lazily rebuilds full history after reasoning and compaction rejection", async () => {
-    const identity = { sessionId: "sdk-recovery-session", authProfileId: "sdk-profile" };
-    const openAIModel = createModel();
-    const context = createCompactionContext(openAIModel, identity, true);
-    const invalidEncryptedContent = () =>
-      Object.assign(new Error("invalid encrypted content"), {
-        code: "invalid_encrypted_content",
-      });
+    const { model, context } = compactionCase(fixtures.createModel(), true);
     const onPayload = vi.fn((request: unknown) => request);
     const onCompactionRejected = vi.fn();
     sdkState.outcomes = [
       invalidEncryptedContent(),
       invalidEncryptedContent(),
-      completedSdkResponse("resp_sdk_recovered"),
+      fixtures.completedSdkResponse("resp_sdk_recovered"),
     ];
 
-    const stream = await Promise.resolve(
-      createOpenAIResponsesTransportStreamFn()(openAIModel, context, {
-        apiKey: "test-key",
-        ...identity,
-        onCompactionRejected,
-        onPayload,
-      } as never),
-    );
-    expect((await stream.result()).stopReason).toBe("stop");
-
-    expect(sdkState.requests).toHaveLength(3);
-    expect(requestHasCompaction(sdkState.requests[0])).toBe(true);
-    expect(JSON.stringify(sdkState.requests[0]?.input)).toContain(SDK_REASONING_CIPHERTEXT);
-    expect(JSON.stringify(sdkState.requests[0]?.input)).not.toContain(SDK_FULL_HISTORY_PREFIX);
-    expect(requestHasCompaction(sdkState.requests[1])).toBe(true);
-    expect(JSON.stringify(sdkState.requests[1]?.input)).not.toContain(SDK_REASONING_CIPHERTEXT);
-    expect(requestHasCompaction(sdkState.requests[2])).toBe(false);
-    expect(JSON.stringify(sdkState.requests[2]?.input)).toContain(SDK_FULL_HISTORY_PREFIX);
-    expect(JSON.stringify(sdkState.requests[2]?.input)).not.toContain(SDK_REASONING_CIPHERTEXT);
+    await managedResult(model, context, {
+      ...sdkOptions,
+      onCompactionRejected,
+      onPayload,
+    });
+    expect(sdkState.requests.map(requestHasCompaction)).toEqual([true, true, false]);
+    expect(requestInput(0)).toContain(reasoningCiphertext);
+    expect(requestInput(0)).not.toContain(fullHistory);
+    expect(requestInput(1)).not.toContain(reasoningCiphertext);
+    expect(requestInput(2)).toContain(fullHistory);
+    expect(requestInput(2)).not.toContain(reasoningCiphertext);
     expect(onPayload).toHaveBeenCalledTimes(2);
     expect(onCompactionRejected).toHaveBeenCalledOnce();
   });
 
-  it.each(["response.failed"] as const)(
-    "retries encrypted reasoning rejected by the SDK %s drain without dropping compaction",
-    async () => {
-      const identity = { sessionId: "sdk-drain-session", authProfileId: "sdk-drain-profile" };
-      const model = createModel({
-        api: "openai-chatgpt-responses",
-        baseUrl: "https://chatgpt.com/backend-api/codex",
-      });
-      const context = createCompactionContext(model, identity, true);
-      const onResponse = vi.fn();
-      const options = { apiKey: createJwt(), ...identity, onResponse };
-      const observations: ResponsesPromptObservation[] = [];
-      responsesPromptObserver.set(options, (observation) => observations.push(observation));
-      const failureMessage =
-        "400 The encrypted content [REDACTED] could not be verified. " +
-        "Reason: Encrypted content could not be decrypted or parsed.";
-      const failedResponse: SdkResponse = {
-        data: (async function* () {
-          yield { type: "response.created", response: { id: "resp_rejected" } };
-          yield {
-            type: "response.failed",
-            response: {
-              id: "resp_rejected",
-              status: "failed",
-              error: { code: null, message: failureMessage },
-            },
-          };
-        })(),
-        response: new Response(null, {
-          status: 200,
-          headers: {
-            "openai-model": "gpt-5.4-stale-rejected-attempt",
-            "x-request-id": "req_rejected",
+  it("retries encrypted reasoning rejected by the SDK response.failed drain without dropping compaction", async () => {
+    const model = fixtures.createModel({
+      api: "openai-chatgpt-responses",
+      baseUrl: "https://chatgpt.com/backend-api/codex",
+    });
+    const context = fixtures.createCompactionContext(model, identity, true);
+    const onResponse = vi.fn();
+    const options = { apiKey: createJwt(), ...identity, onResponse };
+    const observations = observe(options);
+    const failureMessage =
+      "400 The encrypted content [REDACTED] could not be verified. " +
+      "Reason: Encrypted content could not be decrypted or parsed.";
+    const failedResponse: SdkResponse = {
+      data: fixtures.responseEvents(
+        { type: "response.created", response: { id: "resp_rejected" } },
+        {
+          type: "response.failed",
+          response: {
+            id: "resp_rejected",
+            status: "failed",
+            error: { code: null, message: failureMessage },
           },
-        }),
-      };
-      const recoveredResponse = completedSdkResponse("resp_recovered");
-      recoveredResponse.response = new Response(null, {
+        },
+      ),
+      response: new Response(null, {
         status: 200,
-        headers: { "x-request-id": "req_recovered" },
-      });
-      sdkState.outcomes = [failedResponse, recoveredResponse];
+        headers: {
+          "openai-model": "gpt-5.4-stale-rejected-attempt",
+          "x-request-id": "req_rejected",
+        },
+      }),
+    };
+    const recoveredResponse = fixtures.completedSdkResponse("resp_recovered");
+    recoveredResponse.response = new Response(null, {
+      status: 200,
+      headers: { "x-request-id": "req_recovered" },
+    });
+    sdkState.outcomes = [failedResponse, recoveredResponse];
 
-      const stream = await Promise.resolve(
-        createOpenAIResponsesTransportStreamFn()(model, context, options as never),
-      );
-      const eventTypes: string[] = [];
-      for await (const event of stream) {
-        eventTypes.push(event.type);
-      }
-      const result = await stream.result();
-      expect(result).toMatchObject({ stopReason: "stop" });
-      expect(result.responseModel).toBeUndefined();
-      expect(result).not.toHaveProperty("openclawResponsesInputReplay.contextUsage");
-      expect(
-        resolveResponsesContextUsageBoundary(
-          [...context.messages, result],
-          model,
-          identity,
-          context.systemPrompt,
-        ),
-      ).toBeUndefined();
+    const stream = await runManaged(model, context, options);
+    const eventTypes: string[] = [];
+    for await (const event of stream) {
+      eventTypes.push(event.type);
+    }
+    const result = await stream.result();
+    expect(result).toMatchObject({ stopReason: "stop" });
+    expect(result.responseModel).toBeUndefined();
+    expect(result).not.toHaveProperty("openclawResponsesInputReplay.contextUsage");
+    expect(usageBoundary(context, result, model)).toBeUndefined();
 
-      expect(sdkState.requests).toHaveLength(2);
-      expect(requestHasCompaction(sdkState.requests[0])).toBe(true);
-      expect(requestHasCompaction(sdkState.requests[1])).toBe(true);
-      expect(JSON.stringify(sdkState.requests[0]?.input)).toContain(SDK_REASONING_CIPHERTEXT);
-      expect(JSON.stringify(sdkState.requests[1]?.input)).not.toContain(SDK_REASONING_CIPHERTEXT);
-      expect(observations.map((observation) => observation.payloadVariant)).toEqual([
-        "initial",
-        "reasoning-stripped",
-      ]);
-      expect(onResponse.mock.calls.map(([response]) => response.headers["x-request-id"])).toEqual([
-        "req_rejected",
-        "req_recovered",
-      ]);
-      expect(eventTypes).toEqual(["start", "done"]);
-    },
-  );
+    expect(sdkState.requests.map(requestHasCompaction)).toEqual([true, true]);
+    expect(requestInput(0)).toContain(reasoningCiphertext);
+    expect(requestInput(1)).not.toContain(reasoningCiphertext);
+    expect(observations.map((observation) => observation.payloadVariant)).toEqual([
+      "initial",
+      "reasoning-stripped",
+    ]);
+    expect(onResponse.mock.calls.map(([response]) => response.headers["x-request-id"])).toEqual([
+      "req_rejected",
+      "req_recovered",
+    ]);
+    expect(eventTypes).toEqual(["start", "done"]);
+  });
 
   it("observes the async replacement immediately before final transformed egress", async () => {
     const prompt = "PRIVATE-FINAL-TRANSFORMED-PROMPT";
@@ -547,13 +557,7 @@ describe("OpenAI Responses provider prompt observer", () => {
       description: name,
       parameters: { type: "object", properties: {} },
     });
-    configureAiTransportHost({
-      ...initialHost,
-      plugin: {
-        ...initialHost.plugin,
-        resolveTransportTurnState: () => ({ metadata: { host: "added" } }),
-      },
-    });
+    addHostMetadata();
     const options = {
       openclawCodeModeToolSurface: true,
       openclawCodeModeAllowedHostedToolTypes: new Set(["web_search"]),
@@ -584,7 +588,7 @@ describe("OpenAI Responses provider prompt observer", () => {
     };
     codeModeToolSurfaceObserver.set(options, toolSurfaceObserver);
     const run = await runObservedRequest({
-      context: createContext(prompt, { tools: [tool("exec"), tool("wait")] as never }),
+      context: fixtures.createContext(prompt, { tools: [tool("exec"), tool("wait")] as never }),
       options,
     });
 
@@ -606,66 +610,40 @@ describe("OpenAI Responses provider prompt observer", () => {
     expect(JSON.stringify(run.requests[0]?.input)).toContain("omitted image payload");
   });
 
-  it.each([{ azure: true, remove: false }])(
-    "honors the payload hook's metadata choice (azure=$azure, remove=$remove)",
-    async ({ azure, remove }) => {
-      configureAiTransportHost({
-        ...initialHost,
-        plugin: {
-          ...initialHost.plugin,
-          resolveTransportTurnState: () => ({ metadata: { host: "added" } }),
+  it("honors the Azure payload hook's metadata choice", async () => {
+    addHostMetadata();
+    const run = await runObservedRequest({
+      azure: true,
+      context: fixtures.createContext("prompt"),
+      options: {
+        onPayload: (payload: unknown) => {
+          const request = payload as Record<string, unknown>;
+          expect(request.metadata).toEqual({ host: "added" });
+          return request;
         },
-      });
-      const run = await runObservedRequest({
-        azure,
-        context: createContext("prompt"),
-        options: {
-          onPayload: (payload: unknown) => {
-            const request = payload as Record<string, unknown>;
-            expect(request.metadata).toEqual({ host: "added" });
-            if (remove) {
-              delete request.metadata;
-            }
-            return request;
-          },
-        },
-      });
-      expect(run.requests).toHaveLength(1);
-      if (remove) {
-        expect(run.requests[0]).not.toHaveProperty("metadata");
-      } else {
-        expect(run.requests[0]?.metadata).toEqual({ host: "added" });
-      }
-    },
-  );
+      },
+    });
+    expect(run.requests).toHaveLength(1);
+    expect(run.requests[0]?.metadata).toEqual({ host: "added" });
+  });
 
   it("uses cache-boundary and surrogate normalization as the expected prompt owner", async () => {
     const systemPrompt = `stable${SYSTEM_PROMPT_CACHE_BOUNDARY}dynamic\ud800`;
     const normalizedPrompt = "stable\ndynamic";
-    const run = await runObservedRequest({ context: createContext(systemPrompt) });
+    const run = await runObservedRequest({ context: fixtures.createContext(systemPrompt) });
 
     expect(run.observations[0]).toMatchObject({
       expectedChars: normalizedPrompt.length,
       observedChars: normalizedPrompt.length,
       matchesAssembledPrompt: true,
     });
-    const request = run.requests[0];
-    if (!request) {
-      throw new Error("missing captured request");
-    }
-    expect(request.instructions).toBe(normalizedPrompt);
+    expect(run.requests[0]?.instructions).toBe(normalizedPrompt);
   });
 
   it("observes each native WebSocket connection-limit dispatch before send", async () => {
     const prompt = "PRIVATE-NATIVE-WEBSOCKET-PROMPT";
-    const identity = { sessionId: "websocket-usage-session", authProfileId: "websocket-profile" };
-    const model = createModel({
-      api: "openai-chatgpt-responses",
-      baseUrl: "https://chatgpt.test/backend-api",
-    });
-    const context = createCompactionContext(model, identity);
+    const { model, context } = compactionCase(nativeModel());
     context.systemPrompt = prompt;
-    const observations: ResponsesPromptObservation[] = [];
     const order: string[] = [];
     const sentRequests: Array<Record<string, unknown>> = [];
     let connections = 0;
@@ -682,15 +660,7 @@ describe("OpenAI Responses provider prompt observer", () => {
         sentRequests.push(JSON.parse(payload) as Record<string, unknown>);
         const event = this.limitReached
           ? { type: "error", error: { code: "websocket_connection_limit_reached" } }
-          : {
-              type: "response.completed",
-              response: {
-                id: "resp_ws",
-                status: "completed",
-                output: [],
-                usage: { input_tokens: 5, output_tokens: 3, total_tokens: 8 },
-              },
-            };
+          : fixtures.completedResponse("resp_ws", [], { usage: fixtures.responseUsage });
         queueMicrotask(() => {
           this.dispatchEvent(Object.assign(new Event("message"), { data: JSON.stringify(event) }));
         });
@@ -701,63 +671,25 @@ describe("OpenAI Responses provider prompt observer", () => {
     vi.stubGlobal("WebSocket", ConnectionLimitWebSocket);
     vi.stubGlobal("fetch", vi.fn());
     const options = { apiKey: createJwt(), transport: "websocket" as const, ...identity };
-    responsesPromptObserver.set(options, (observation) => {
-      order.push("observe");
-      observations.push(observation);
-    });
+    const observations = observe(options, order);
 
     const result = await streamOpenAICodexResponses(model, context, options).result();
 
     expect(result.stopReason).toBe("stop");
-    expect(
-      resolveResponsesContextUsageBoundary(
-        [...context.messages, result],
-        model,
-        identity,
-        context.systemPrompt,
-      ),
-    ).toEqual({ index: context.messages.length, totalTokens: 8, suffix: [] });
+    expect(usageBoundary(context, result, model)).toEqual(expectedBoundary(context));
     expect(connections).toBe(2);
     expect(order).toEqual(["observe", "send", "observe", "send"]);
     expect(sentRequests.map((request) => request.instructions)).toEqual([prompt, prompt]);
-    expect(observations).toEqual([
-      {
-        egress: "native-codex-websocket",
-        payloadVariant: "initial",
-        promptSource: "instructions",
-        expectedChars: prompt.length,
-        observedChars: prompt.length,
-        matchesAssembledPrompt: true,
-      },
-      {
-        egress: "native-codex-websocket",
-        payloadVariant: "initial",
-        promptSource: "instructions",
-        expectedChars: prompt.length,
-        observedChars: prompt.length,
-        matchesAssembledPrompt: true,
-      },
-    ]);
-    expect(JSON.stringify(observations)).not.toContain(prompt);
+    expectObservations(observations, "native-codex-websocket", prompt, 2);
   });
 
   it("forwards the private observer through simple options to final native SSE egress", async () => {
     const prompt = "PRIVATE-NATIVE-SSE-PROMPT";
-    const observations: ResponsesPromptObservation[] = [];
     const order: string[] = [];
     let sentRequest: Record<string, unknown> | undefined;
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (_input, init) => {
-        order.push("fetch");
-        const body =
-          typeof init?.body === "string"
-            ? init.body
-            : zstdDecompressSync(init?.body as Uint8Array).toString("utf8");
-        sentRequest = JSON.parse(body) as Record<string, unknown>;
-        return completedSseResponse();
-      }),
-    );
+    mockSse(order, (request) => {
+      sentRequest = request;
+    });
     const options = {
       apiKey: createJwt(),
       transport: "sse" as const,
@@ -766,117 +698,70 @@ describe("OpenAI Responses provider prompt observer", () => {
         return { ...(body as Record<string, unknown>), finalTransform: true };
       },
     };
-    responsesPromptObserver.set(options, (observation) => {
-      order.push("observe");
-      observations.push(observation);
-    });
+    const observations = observe(options, order);
 
     const result = await streamSimpleOpenAICodexResponses(
-      createModel({
-        api: "openai-chatgpt-responses",
-        baseUrl: "https://chatgpt.test/backend-api",
-      }),
-      createContext(prompt),
+      nativeModel(),
+      fixtures.createContext(prompt),
       options,
     ).result();
 
     expect(result.stopReason).toBe("stop");
     expect(order).toEqual(["observe", "fetch"]);
     expect(sentRequest).toMatchObject({ instructions: prompt, finalTransform: true });
-    expect(observations).toEqual([
-      {
-        egress: "native-codex-sse",
-        payloadVariant: "initial",
-        promptSource: "instructions",
-        expectedChars: prompt.length,
-        observedChars: prompt.length,
-        matchesAssembledPrompt: true,
-      },
-    ]);
-    expect(JSON.stringify(observations)).not.toContain(prompt);
+    expectObservations(observations, "native-codex-sse", prompt);
   });
 
-  it("observes only SSE when automatic WebSocket fallback happens before send", async () => {
-    const prompt = "PRIVATE-PRE-SEND-FALLBACK-PROMPT";
-    const observations: ResponsesPromptObservation[] = [];
-    function FailingWebSocket() {
-      throw new Error("websocket connect failed");
-    }
-    vi.stubGlobal("WebSocket", FailingWebSocket);
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => completedSseResponse()),
-    );
-    const options = { apiKey: createJwt(), transport: "auto" as const };
-    responsesPromptObserver.set(options, (observation) => observations.push(observation));
+  it.each(["before", "after"])(
+    "observes each dispatched transport when fallback happens %s send",
+    async (phase) => {
+      const prompt = `PRIVATE-${phase}-SEND-FALLBACK-PROMPT`;
+      const observations: ResponsesPromptObservation[] = [];
+      const order: string[] = [];
+      class SendThenFailWebSocket extends EventTarget {
+        constructor() {
+          super();
+          queueMicrotask(() => this.dispatchEvent(new Event("open")));
+        }
 
-    const result = await streamOpenAICodexResponses(
-      createModel({
-        api: "openai-chatgpt-responses",
-        baseUrl: "https://chatgpt.test/backend-api",
-      }),
-      createContext(prompt),
-      options,
-    ).result();
+        send(): void {
+          order.push("send");
+          queueMicrotask(() =>
+            this.dispatchEvent(
+              Object.assign(new Event("error"), { message: "connection dropped after send" }),
+            ),
+          );
+        }
 
-    expect(result.stopReason).toBe("stop");
-    expect(observations.map((entry) => entry.egress)).toEqual(["native-codex-sse"]);
-  });
-
-  it("observes WebSocket then SSE when fallback happens after send", async () => {
-    const prompt = "PRIVATE-POST-SEND-FALLBACK-PROMPT";
-    const observations: ResponsesPromptObservation[] = [];
-    const order: string[] = [];
-    class SendThenFailWebSocket extends EventTarget {
-      constructor() {
-        super();
-        queueMicrotask(() => this.dispatchEvent(new Event("open")));
+        close(): void {}
       }
-
-      send(): void {
-        order.push("send");
-        queueMicrotask(() =>
-          this.dispatchEvent(
-            Object.assign(new Event("error"), { message: "connection dropped after send" }),
-          ),
-        );
+      function FailingWebSocket() {
+        throw new Error("websocket connect failed");
       }
+      vi.stubGlobal("WebSocket", phase === "before" ? FailingWebSocket : SendThenFailWebSocket);
+      mockSse(order);
+      const options = { apiKey: createJwt(), transport: "auto" as const };
+      responsesPromptObserver.set(options, (observation) => {
+        order.push(`observe:${observation.egress}`);
+        observations.push(observation);
+      });
 
-      close(): void {}
-    }
-    vi.stubGlobal("WebSocket", SendThenFailWebSocket);
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => {
-        order.push("fetch");
-        return completedSseResponse();
-      }),
-    );
-    const options = { apiKey: createJwt(), transport: "auto" as const };
-    responsesPromptObserver.set(options, (observation) => {
-      order.push(`observe:${observation.egress}`);
-      observations.push(observation);
-    });
+      const result = await streamOpenAICodexResponses(
+        nativeModel(),
+        fixtures.createContext(prompt),
+        options,
+      ).result();
 
-    const result = await streamOpenAICodexResponses(
-      createModel({
-        api: "openai-chatgpt-responses",
-        baseUrl: "https://chatgpt.test/backend-api",
-      }),
-      createContext(prompt),
-      options,
-    ).result();
-
-    expect(result.stopReason).toBe("stop");
-    expect(order).toEqual([
-      "observe:native-codex-websocket",
-      "send",
-      "observe:native-codex-sse",
-      "fetch",
-    ]);
-    expect(observations.map((entry) => entry.egress)).toEqual([
-      "native-codex-websocket",
-      "native-codex-sse",
-    ]);
-  });
+      expect(result.stopReason).toBe("stop");
+      expect(order).toEqual([
+        ...(phase === "after" ? ["observe:native-codex-websocket", "send"] : []),
+        "observe:native-codex-sse",
+        "fetch",
+      ]);
+      expect(observations.map((entry) => entry.egress)).toEqual([
+        ...(phase === "after" ? ["native-codex-websocket"] : []),
+        "native-codex-sse",
+      ]);
+    },
+  );
 });

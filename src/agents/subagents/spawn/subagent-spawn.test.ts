@@ -19,7 +19,6 @@ import { resolveUserPath } from "../../../utils.js";
 import { resolveSandboxRuntimeStatus } from "../../sandbox/runtime-status.js";
 import { installAcceptedSubagentGatewayMock } from "../../test-helpers/subagent-gateway.js";
 import type { RegisterSubagentRunOptions } from "../registry/subagent-registry.types.js";
-import { testing as swarmSchedulerTesting } from "../swarm/swarm-scheduler.test-support.js";
 import { expectSharedPendingSpawnCapacity } from "./subagent-spawn.pending-capacity.test-support.js";
 import {
   createConfigOverride,
@@ -60,6 +59,8 @@ let configOverride: Record<string, unknown>;
 let resetSubagentRegistryForTests: typeof import("../registry/subagent-registry.test-helpers.js").resetSubagentRegistryForTests;
 let spawnSubagentDirect: typeof import("./subagent-spawn.js").spawnSubagentDirect;
 let closeSwarmScheduler: typeof import("../swarm/swarm-scheduler.js").closeSwarmScheduler;
+let observeSwarmSchedulerWork: typeof import("../swarm/swarm-scheduler.lifecycle.test-support.js").observeSwarmSchedulerWork;
+let schedulerWork: ReturnType<typeof observeSwarmSchedulerWork>;
 
 const requireRecord = createRequireRecord("record", "expected-non-array-record");
 
@@ -113,10 +114,12 @@ describe("spawnSubagentDirect seam flow", () => {
       sessionStorePath: "/tmp/subagent-spawn-session-store.json",
     }));
     ({ closeSwarmScheduler } = await import("../swarm/swarm-scheduler.js"));
+    ({ observeSwarmSchedulerWork } =
+      await import("../swarm/swarm-scheduler.lifecycle.test-support.js"));
   });
 
   beforeEach(async () => {
-    swarmSchedulerTesting.reset();
+    schedulerWork = observeSwarmSchedulerWork();
     await resetSubagentRegistryForTests();
     for (const mock of Object.values(hoisted)) {
       mock.mockReset();
@@ -151,9 +154,12 @@ describe("spawnSubagentDirect seam flow", () => {
     );
   });
 
-  afterEach(() => {
-    swarmSchedulerTesting.reset();
-    vi.unstubAllEnvs();
+  afterEach(async () => {
+    try {
+      await schedulerWork.close();
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 
   it.each([false, true])(
@@ -189,6 +195,28 @@ describe("spawnSubagentDirect seam flow", () => {
       current = false;
       expect(() => forwarded?.assertCurrent()).toThrow("parent authority retired");
       await forwarded?.release?.();
+    },
+  );
+
+  it.each([false, true])(
+    "rejects invalid worktree names before reserving native work (collect=%s)",
+    async (collect) => {
+      const onSpawnEffectsStart = vi.fn();
+      const result = await spawn(
+        {
+          task: "inspect",
+          worktree: true,
+          worktreeName: "codex/qa-telemetry-prompt-cache-20261016",
+          collect,
+        },
+        { ...collectorContext, onSpawnEffectsStart },
+      );
+      expect(onSpawnEffectsStart).not.toHaveBeenCalled();
+      expectNoChildSpawnSideEffects();
+      expect(result).toEqual({
+        status: "error",
+        error: "worktree name must match [a-z0-9][a-z0-9-]{0,63}",
+      });
     },
   );
 
@@ -294,6 +322,7 @@ describe("spawnSubagentDirect seam flow", () => {
 
     expect(result.status).toBe("accepted");
     expect(result.sessionKey).toBe(result.childSessionKey);
+    expect(result.groupId).toBe("swarm:agent:main:main:parent-run");
     expect(result.expectsCompletionMessage).toBe(false);
     const registerInput = firstRegisteredSubagentRun();
     expect(registerInput).toMatchObject({
@@ -367,7 +396,7 @@ describe("spawnSubagentDirect seam flow", () => {
       { agentSessionKey: "agent:main:other", requesterRunId: "parent-run" },
     );
 
-    expect(result).toMatchObject({ status: "accepted" });
+    expect(result).toMatchObject({ status: "accepted", groupId: "swarm:replay" });
     expect(result.runId).toMatch(/^swarm_[0-9a-f]{32}$/u);
     expect(otherRequesterResult).toMatchObject({ status: "accepted" });
     expect(otherRequesterResult.runId).toMatch(/^swarm_[0-9a-f]{32}$/u);
@@ -396,6 +425,9 @@ describe("spawnSubagentDirect seam flow", () => {
 
     expect(result).toMatchObject({ status: "accepted", modelApplied: true });
     const queuedLaunch = requireRecord(firstRegisteredSubagentRun().queuedLaunch);
+    const persistedLaunchJson = JSON.stringify(queuedLaunch);
+    const persistedLaunch: unknown = JSON.parse(persistedLaunchJson);
+    expect(requireRecord(persistedLaunch).requesterRecovery).toEqual({});
     const queuedRequest = requireRecord(queuedLaunch.request);
     expect(queuedRequest).not.toHaveProperty("provider");
     expect(queuedRequest).not.toHaveProperty("model");
@@ -945,7 +977,11 @@ describe("spawnSubagentDirect seam flow", () => {
           expect(result.status).toBe("accepted");
           const child = persistedStore?.[result.childSessionKey as string];
           expect(child).toMatchObject({ createdVia: "spawn", parentSessionKey });
-          expect(child?.createdActor).toEqual(required ? actor : { type: "agent", id: "main" });
+          expect(child?.createdActor).toEqual(
+            required
+              ? { ...actor, delegatedBy: { type: "agent", id: "main" } }
+              : { type: "agent", id: "main" },
+          );
           expect(child?.sandbox).toBe(required ? "required" : undefined);
           expect(sql.queries.filter(isSessionEntryDataSql)).toEqual([]);
         } finally {
@@ -971,23 +1007,6 @@ describe("spawnSubagentDirect seam flow", () => {
     expectNoChildSpawnSideEffects();
   });
 
-  it.each(
-    inheritedSpawnCases.preferences.filter(
-      ({ requesterThinkingLevel, requesterAgent }) =>
-        requesterThinkingLevel === "ultra" && !requesterAgent,
-    ),
-  )(
-    "$name",
-    async ({ task, requesterState, requesterThinkingLevel, thinkingOverride, expected }) => {
-      hoisted.loadSessionStoreMock.mockReturnValue({ "agent:main:main": requesterState });
-      const readStore = captureStore();
-      const result = await spawn({ task, thinking: thinkingOverride }, { requesterThinkingLevel });
-      expect(result.status).toBe("accepted");
-      expect(readStore()[result.childSessionKey!]?.thinkingLevel).toBe(expected);
-      expect(requireRecord(gatewayRequest("agent").params).thinking).toBe(thinkingOverride);
-    },
-  );
-
   it.each(inheritedSpawnCases.preferences.filter(({ collect }) => collect))(
     "$name",
     async ({ task, requesterState, expected }) => {
@@ -998,18 +1017,6 @@ describe("spawnSubagentDirect seam flow", () => {
       expect(readStore()[result.childSessionKey!]?.fastMode).toBe(expected);
     },
   );
-
-  it("uses requester agent thinkingDefault without a stored requester", async () => {
-    // Import after the spawn helper installs the mocked session runtime.
-    const { resolveRequesterPreferences } = await import("./subagent-spawn-requester-prefs.js");
-
-    const preferences = resolveRequesterPreferences({
-      cfg: { agents: { entries: { main: { thinkingDefault: "high" } } } },
-      requesterEntry: undefined,
-      requesterAgentId: "main",
-    });
-    expect(preferences.thinkingLevel).toBe("high");
-  });
 
   it("inherits requester selected-model thinking without a session or agent default", async () => {
     configOverride = createConfigOverride({

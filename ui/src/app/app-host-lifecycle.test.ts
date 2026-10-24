@@ -8,7 +8,6 @@ import {
 } from "../pages/chat/chat-history-events.ts";
 import { createShellOwner } from "./app-host-solid.test-support.ts";
 import { resetAppHostTestGlobals } from "./app-host.test-support.ts";
-import { NATIVE_HISTORY_STATE_EVENT } from "./native-web-chrome.ts";
 
 afterEach(resetAppHostTestGlobals);
 
@@ -32,17 +31,15 @@ describe("OpenClaw shell event lifecycle", () => {
       update.mockRestore();
     }
   });
-  it("retires host, window, and document actions on disconnect and reconnects once", () => {
+  it("retires palette targets and keyboard actions on disconnect and reconnects once", () => {
     const shell = createShellOwner();
-    const navigate = vi.spyOn(shell, "navigate").mockImplementation(() => {});
+    const navigate = vi.spyOn(shell.shellNavigation, "navigate").mockImplementation(() => {});
     const onSlashCommand = vi.fn();
     const target = { owner: shell.element, onSlashCommand };
-    const history = { canGoBack: true, canGoForward: false };
     const dispatchActions = () => {
       shell.element.dispatchEvent(
         new CustomEvent(COMMAND_PALETTE_TARGET_EVENT, { detail: target }),
       );
-      window.dispatchEvent(new CustomEvent(NATIVE_HISTORY_STATE_EVENT, { detail: history }));
       document.dispatchEvent(
         new KeyboardEvent("keydown", { code: "Comma", key: ",", ctrlKey: true, shiftKey: true }),
       );
@@ -53,16 +50,13 @@ describe("OpenClaw shell event lifecycle", () => {
         shell.connect();
         dispatchActions();
         expect(shell.commandPaletteTarget).toBe(target);
-        expect(shell.nativeHistoryState).toBe(history);
         expect(navigate).toHaveBeenCalledTimes(connection);
         expect(navigate).toHaveBeenLastCalledWith("appearance");
 
         shell.disconnect();
         shell.commandPaletteTarget = undefined;
-        shell.nativeHistoryState = { canGoBack: false, canGoForward: false };
         dispatchActions();
         expect(shell.commandPaletteTarget).toBeUndefined();
-        expect(shell.nativeHistoryState.canGoBack).toBe(false);
         expect(navigate).toHaveBeenCalledTimes(connection);
       }
     } finally {

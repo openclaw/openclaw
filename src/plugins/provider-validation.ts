@@ -1,8 +1,10 @@
 /** Validates and normalizes provider plugin definitions before registry registration. */
+import { omitUndefinedFields } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import {
-  omitUndefinedManifestFields,
+  isPluginManifestOnboardingScope,
+  normalizeProviderAssistantVisibility,
   optionalManifestFields,
 } from "./manifest-capability-normalizers.js";
 import type { PluginDiagnostic } from "./manifest-types.js";
@@ -20,16 +22,7 @@ function normalizeTextList(values: string[] | undefined): string[] | undefined {
 function normalizeOnboardingScopes(
   values: Array<"text-inference" | "image-generation" | "music-generation"> | undefined,
 ): Array<"text-inference" | "image-generation" | "music-generation"> | undefined {
-  const normalized = Array.from(
-    new Set(
-      (values ?? []).filter(
-        (value): value is "text-inference" | "image-generation" | "music-generation" =>
-          value === "text-inference" ||
-          value === "image-generation" ||
-          value === "music-generation",
-      ),
-    ),
-  );
+  const normalized = Array.from(new Set((values ?? []).filter(isPluginManifestOnboardingScope)));
   return normalized.length > 0 ? normalized : undefined;
 }
 
@@ -73,7 +66,7 @@ function buildNormalizedWizardSetup(
   setup: ProviderWizardSetup,
   methodId: string | undefined,
 ): ProviderWizardSetup {
-  return omitUndefinedManifestFields({
+  return omitUndefinedFields({
     choiceId: normalizeOptionalString(setup.choiceId),
     modelTarget: setup.modelTarget === "utility" ? ("utility" as const) : undefined,
     choiceLabel: normalizeOptionalString(setup.choiceLabel),
@@ -82,12 +75,7 @@ function buildNormalizedWizardSetup(
       typeof setup.assistantPriority === "number" && Number.isFinite(setup.assistantPriority)
         ? setup.assistantPriority
         : undefined,
-    assistantVisibility:
-      setup.assistantVisibility === "manual-only" ||
-      setup.assistantVisibility === "visible" ||
-      setup.assistantVisibility === "detected-only"
-        ? setup.assistantVisibility
-        : undefined,
+    assistantVisibility: normalizeProviderAssistantVisibility(setup.assistantVisibility),
     onboardingFeatured: setup.onboardingFeatured === true ? true : undefined,
     groupId: normalizeOptionalString(setup.groupId),
     groupLabel: normalizeOptionalString(setup.groupLabel),
@@ -112,7 +100,7 @@ function buildNormalizedModelPicker(
   modelPicker: ProviderWizardModelPicker,
   methodId: string | undefined,
 ): ProviderWizardModelPicker {
-  return omitUndefinedManifestFields({
+  return omitUndefinedFields({
     label: normalizeOptionalString(modelPicker.label),
     hint: normalizeOptionalString(modelPicker.hint),
     methodId,
@@ -131,6 +119,14 @@ export function normalizeRegisteredProvider(params: {
   const id = normalizeOptionalString(params.provider.id);
   if (!id) {
     diagnose("error", "provider registration missing id");
+    return null;
+  }
+  if (
+    params.provider.authScope !== undefined &&
+    params.provider.authScope !== "agent" &&
+    params.provider.authScope !== "plugin"
+  ) {
+    diagnose("error", `provider "${id}" authScope must be agent or plugin`);
     return null;
   }
   function normalizeWizardSurface<T extends { methodId?: string }>(

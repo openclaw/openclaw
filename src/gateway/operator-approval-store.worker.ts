@@ -44,8 +44,8 @@ function transact<Payload, Result>(
   receiptOf?: (result: Result) => OperatorApprovalCommitReceipt | undefined,
 ): Result {
   const options = { ...context.stateOptions(), database: context.open() };
+  requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
   return runOpenClawStateWriteTransaction((database) => {
-    requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
     const approval = operatorApprovalPublication.capture(database.db, () =>
       operatorStandingGrantPublication.capture(database.db, () =>
         execApprovalsPublication.capture(database.db, () =>
@@ -97,6 +97,21 @@ export const operatorApprovalOperations = {
     input: Input<typeof store.listPendingOperatorApprovalsInDatabase>,
     context,
   ) => transact(input, context, store.listPendingOperatorApprovalsInDatabase),
+  "operatorApprovals.prepareReplay": (
+    input: Input<typeof store.listPendingOperatorApprovalsInDatabase>,
+    context,
+  ) =>
+    transact(input, context, (params) => {
+      const expired = transitions.expireDueOperatorApprovalsInDatabase(params);
+      if (expired.affected > 0) {
+        // Release the store before terminal reconciliation can reenter the approval owner.
+        return { outcome: "expired" as const, records: expired.records };
+      }
+      return {
+        outcome: "pending" as const,
+        records: store.listPendingOperatorApprovalsInDatabase(params),
+      };
+    }),
   "operatorApprovals.resolve": (
     input: Input<typeof transitions.resolveOperatorApprovalInDatabase>,
     context,
@@ -113,10 +128,6 @@ export const operatorApprovalOperations = {
     input: Input<typeof transitions.forceDenyOperatorApprovalInDatabase>,
     context,
   ) => transact(input, context, transitions.forceDenyOperatorApprovalInDatabase),
-  "operatorApprovals.expire": (
-    input: Input<typeof transitions.expireDueOperatorApprovalsInDatabase>,
-    context,
-  ) => transact(input, context, transitions.expireDueOperatorApprovalsInDatabase),
   "operatorApprovals.consume": (
     input: Input<typeof transitions.consumeOperatorApprovalAllowOnceInDatabase>,
     context,

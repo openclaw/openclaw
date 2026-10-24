@@ -2,12 +2,21 @@ import { prepareOpenClawAgentDatabaseRegistrySnapshotRead } from "../../state/op
 import { createOpenClawAgentDatabasePathMatcher } from "../../state/openclaw-agent-db.paths.js";
 import { captureOpenClawStateReadWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import type { OpenClawConfig } from "../types.js";
-import { prepareSessionStoreTargetInventory } from "./session-store-target-inventory.js";
+import {
+  prepareSessionStoreTargetInventory,
+  type SessionStoreTargetInventoryResult,
+} from "./session-store-target-inventory.js";
 import { withSessionHistoryWorkerReadCandidates } from "./session-transcript-worker-resources.js";
 import { listConfiguredSessionStoreAgentIds } from "./targets.js";
 
-export async function prepareSessionColdStorageTargets(
+export async function withSessionColdStorageInventory<T>(
   config: OpenClawConfig,
+  kind: "status" | "maintenance",
+  operation: (
+    inventory: Extract<SessionStoreTargetInventoryResult, { kind: "session-target-inventory" }>,
+    env: NodeJS.ProcessEnv,
+    assertCurrent: () => void,
+  ) => T | Promise<T>,
   assertCallerCurrent?: () => void,
 ) {
   const prepared = prepareSessionStoreTargetInventory(
@@ -28,14 +37,21 @@ export async function prepareSessionColdStorageTargets(
     context.maintenanceScope?.assertAdmission();
     context.admission.assertCurrent();
     if (!source.isCurrent()) {
-      throw new Error("Session store changed during cold maintenance");
+      throw new Error(
+        kind === "status"
+          ? "Session store changed while reading cold storage status. Retry the request."
+          : "Session store changed during cold maintenance",
+      );
     }
   };
-  const stores = await withSessionHistoryWorkerReadCandidates(candidates, async (discovery) => {
+  const result = await withSessionHistoryWorkerReadCandidates(candidates, async (discovery) => {
+    const assertDiscoveryCurrent = () => {
+      assertCurrent();
+      registryRead.assertCurrent();
+      discovery.assertCurrent();
+    };
     const registry = await registryRead.read();
-    assertCurrent();
-    registryRead.assertCurrent();
-    discovery.assertCurrent();
+    assertDiscoveryCurrent();
     const inventory = await discovery.readTargetInventory({
       ...prepared,
       registeredDatabases:
@@ -43,27 +59,43 @@ export async function prepareSessionColdStorageTargets(
           ? registry.result.entries
           : { status: "unavailable" },
     });
-    assertCurrent();
-    registryRead.assertCurrent();
-    discovery.assertCurrent();
+    assertDiscoveryCurrent();
     if (inventory.kind === "session-target-registry-required") {
-      throw new Error("Cold maintenance did not receive its registry snapshot");
+      throw new Error(
+        kind === "status"
+          ? "Cold storage inventory did not receive its registry snapshot"
+          : "Cold maintenance did not receive its registry snapshot",
+      );
     }
-    return inventory.agents.flatMap(({ result, reads }) =>
-      result.available
-        ? result.targets.map((target, index) => ({
-            databaseOptions: {
-              ...reads[index]!.database,
-              // Archive paths and restore cooldowns retain the configured SQLite locator.
-              path: reads[index]!.target.storePath,
-              env,
-            },
-            ownerStorePath: target.storePath,
-          }))
-        : [],
-    );
+    return operation(inventory, env, assertDiscoveryCurrent);
   });
   assertCurrent();
   registryRead.assertCurrent();
+  return { result, assertCurrent };
+}
+
+export async function prepareSessionColdStorageTargets(
+  config: OpenClawConfig,
+  assertCallerCurrent?: () => void,
+) {
+  const { result: stores, assertCurrent } = await withSessionColdStorageInventory(
+    config,
+    "maintenance",
+    (inventory, env) =>
+      inventory.agents.flatMap(({ result, reads }) =>
+        result.available
+          ? result.targets.map((target, index) => ({
+              databaseOptions: {
+                ...reads[index]!.database,
+                // Archive paths and restore cooldowns retain the configured SQLite locator.
+                path: reads[index]!.target.storePath,
+                env,
+              },
+              ownerStorePath: target.storePath,
+            }))
+          : [],
+      ),
+    assertCallerCurrent,
+  );
   return { stores, assertCurrent };
 }

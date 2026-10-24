@@ -1,7 +1,6 @@
-import type { SessionTreeEntry } from "@openclaw/agent-core";
 import { sql } from "kysely";
-import { iterateSessionContextEntries } from "../../../packages/agent-core/src/harness/session/session.js";
 import { jsonArrayFrom, jsonObjectFrom } from "../../infra/database-engine/json-values.js";
+import { getPostgresPhysicalFacts } from "../../infra/database-engine/physical-facts.js";
 import {
   executeSqliteQuerySync,
   getNodeSqliteKysely,
@@ -16,25 +15,29 @@ import {
   withProjectedParticipants,
 } from "./session-accessor.sqlite-participant-projection.js";
 import { seedSessionActorContextMetadata } from "./session-actor-context-metadata.js";
+import { initializeSessionActorContextStats } from "./session-actor-context-stats.worker.js";
 import type {
   SessionActorHotState,
   SessionActorTarget,
   SessionActorVersion,
 } from "./session-actor-contract.js";
-import type { SessionActorStoredState } from "./session-actor-hydration.types.js";
+import {
+  MAX_SESSION_ACTOR_COMPLETIONS,
+  type SessionActorStoredState,
+} from "./session-actor-hydration.types.js";
+import {
+  retainSessionActorTranscriptWindow,
+  SESSION_ACTOR_TRANSCRIPT_WINDOW,
+} from "./session-actor-transcript-window.worker.js";
 import { canonicalSessionValidationQuery } from "./session-canonical-key.js";
 import { sessionColdArchiveMetadataColumns } from "./session-cold-storage-state.js";
-import { normalizeSessionContextEntryBoundaries } from "./session-entry-navigation.js";
 import { sessionEntrySnapshotColumnsForKeys } from "./session-entry-snapshots.js";
 import { sessionEntryWindowColumns } from "./session-entry-window.types.js";
+import { projectTranscriptNavigationSql } from "./session-model-context-projection.js";
 import { projectSessionTranscriptFacts } from "./session-transcript-projection-facts.js";
 import { transcriptEventReadBytesSql } from "./session-transcript-read-bytes.js";
 import { collectSessionEntryLookupKeys } from "./store-entry.js";
-import { transcriptEventModelNavigationSql } from "./transcript-payload.js";
-import {
-  scanSessionTranscriptTree,
-  selectSessionTranscriptTreePathNodes,
-} from "./transcript-tree.js";
+import { transcriptEventNavigationSql, transcriptPredicateSql } from "./transcript-payload.js";
 
 // SQL JSON projections retain their declared shape but cross the driver as TEXT.
 function decodeJsonProjection<T>(value: T | string): T {
@@ -66,7 +69,13 @@ export function hydrateSessionActorState(
 ): SessionActorStoredState {
   const keys = collectSessionEntryLookupKeys(target.sessionKey);
   const db = getNodeSqliteKysely<OpenClawAgentKyselyDatabase>(database.db);
-  const tables = getAdmittedSqliteSchemaFacts(database.db)?.tables;
+  const tables =
+    getAdmittedSqliteSchemaFacts(database.db)?.tables ??
+    new Set(
+      getPostgresPhysicalFacts(database.db)
+        ?.catalog.filter((fact) => fact.kind === "table")
+        .map((fact) => fact.table),
+    );
   const rows = executeSqliteQuerySync(
     database.db,
     canonicalSessionValidationQuery(database, { metadata: true })
@@ -167,8 +176,10 @@ export function hydrateSessionActorState(
                   "session_input_completions.session_id",
                   "=",
                   eb.ref("session_nodes.current_session_id"),
-                ),
-              [],
+                )
+                .orderBy("idempotency_key")
+                .limit(MAX_SESSION_ACTOR_COMPLETIONS + 1),
+              ["idempotency_key"],
             ).as("actor_completions")
           : eb.val("[]").as("actor_completions"),
         jsonObjectFrom(
@@ -219,6 +230,19 @@ export function hydrateSessionActorState(
               eb.ref("session_nodes.current_session_id"),
             ),
         ).as("actor_projection"),
+        eb
+          .exists(
+            db
+              .selectFrom("session_transcript_active_events")
+              .select("session_id")
+              .where(
+                "session_transcript_active_events.session_id",
+                "=",
+                eb.ref("session_nodes.current_session_id"),
+              )
+              .where("context_eligible", "is", null),
+          )
+          .as("actor_has_unclassified"),
         jsonArrayFrom(
           database.db,
           db
@@ -237,7 +261,8 @@ export function hydrateSessionActorState(
               "=",
               eb.ref("session_nodes.current_session_id"),
             )
-            .orderBy("seq"),
+            .orderBy("seq", "desc")
+            .limit(SESSION_ACTOR_TRANSCRIPT_WINDOW + 1),
           ["seq"],
         ).as("actor_identities"),
         jsonArrayFrom(
@@ -256,7 +281,8 @@ export function hydrateSessionActorState(
               "=",
               eb.ref("session_nodes.current_session_id"),
             )
-            .orderBy("active_position"),
+            .orderBy("active_position", "desc")
+            .limit(SESSION_ACTOR_TRANSCRIPT_WINDOW + 1),
           ["active_position"],
         ).as("actor_active"),
         jsonArrayFrom(
@@ -265,14 +291,18 @@ export function hydrateSessionActorState(
             .selectFrom("transcript_events")
             .select([
               "seq",
-              "navigation_type",
-              "navigation_valid",
-              transcriptEventModelNavigationSql(database.db).as("navigation_json"),
+              transcriptPredicateSql(database.db, "navigation_type").as("navigation_type"),
+              transcriptPredicateSql(database.db, "navigation_valid").as("navigation_valid"),
+              projectTranscriptNavigationSql(
+                database.db,
+                transcriptEventNavigationSql(database.db),
+              ).as("navigation_json"),
               /* kysely-allow-raw: retain exact stored JSONL sizes without loading payloads. */
               sql<number>`${transcriptEventReadBytesSql()} + 1`.as("serialized_bytes"),
             ])
             .where("transcript_events.session_id", "=", eb.ref("session_nodes.current_session_id"))
-            .orderBy("seq"),
+            .orderBy("seq", "desc")
+            .limit(SESSION_ACTOR_TRANSCRIPT_WINDOW + 1),
           ["seq"],
         ).as("actor_navigation"),
       ])
@@ -285,25 +315,28 @@ export function hydrateSessionActorState(
   for (const row of rows) {
     const entry = parseReadableSessionEntryData(database, row, "full");
     const participants = decodeJsonProjection(row.actor_participants).map(readParticipantRecord);
+    // Keep exact persisted columns for no-op comparisons, without retaining aggregate payloads.
+    const {
+      actor_has_board: _hasBoard,
+      actor_participants: _participants,
+      actor_members: _members,
+      actor_pending: _pending,
+      actor_completions: _completions,
+      actor_window: _window,
+      actor_rewrite: _rewrite,
+      actor_cold: _cold,
+      actor_projection: _projection,
+      actor_has_unclassified: _hasUnclassified,
+      actor_identities: _identities,
+      actor_active: _active,
+      actor_navigation: _navigation,
+      ...entryRow
+    } = row;
     entryRows.set(
       row.session_key,
       entry
         ? {
-            row: {
-              current_session_id: row.current_session_id,
-              entry_json: row.entry_json,
-              session_key: row.session_key,
-              updated_at: row.updated_at,
-              owner_actor_type: row.owner_actor_type,
-              owner_actor_id: row.owner_actor_id,
-              owner_assigned_by_type: row.owner_assigned_by_type,
-              owner_assigned_by_id: row.owner_assigned_by_id,
-              owner_assigned_at: row.owner_assigned_at,
-              legacy_acp_migration_json: row.legacy_acp_migration_json,
-              session_diff_baseline_json: row.session_diff_baseline_json,
-              skills_snapshot_json: row.skills_snapshot_json,
-              system_prompt_report_json: row.system_prompt_report_json,
-            },
+            row: entryRow,
             entry: withProjectedParticipants(entry, participants),
           }
         : undefined,
@@ -326,11 +359,9 @@ export function hydrateSessionActorState(
       row,
     ]),
   );
+  const completionRows = selected ? decodeJsonProjection(selected.actor_completions) : [];
   const completions = new Map(
-    (selected ? decodeJsonProjection(selected.actor_completions) : []).map((row) => [
-      row.idempotency_key,
-      row,
-    ]),
+    completionRows.slice(0, MAX_SESSION_ACTOR_COMPLETIONS).map((row) => [row.idempotency_key, row]),
   );
   const window = selected ? (decodeJsonProjection(selected.actor_window) ?? undefined) : undefined;
   const rewrite = selected ? decodeJsonProjection(selected.actor_rewrite) : undefined;
@@ -339,22 +370,26 @@ export function hydrateSessionActorState(
     : undefined;
   const projection = selected ? decodeJsonProjection(selected.actor_projection) : undefined;
   const identities = new Map(
-    (selected ? decodeJsonProjection(selected.actor_identities) : []).map((row) => [
-      row.event_id,
-      row,
-    ]),
+    (selected
+      ? decodeJsonProjection(selected.actor_identities).toSorted((a, b) => a.seq - b.seq)
+      : []
+    ).map((row) => [row.event_id, row]),
   );
   const active = new Map(
-    (selected ? decodeJsonProjection(selected.actor_active) : []).map((row) => [
-      row.event_seq,
-      row,
-    ]),
+    (selected
+      ? decodeJsonProjection(selected.actor_active).toSorted(
+          (a, b) => a.active_position - b.active_position,
+        )
+      : []
+    ).map((row) => [row.event_seq, row]),
   );
-  const storedNavigation = selected ? decodeJsonProjection(selected.actor_navigation) : [];
+  const storedNavigation = selected
+    ? decodeJsonProjection(selected.actor_navigation).toSorted((a, b) => a.seq - b.seq)
+    : [];
   const navigation = storedNavigation.map((row) =>
     Object.assign(
-      // SAFETY: The canonical model codec preserves discriminants with readable empty payloads.
-      JSON.parse(row.navigation_json) as SessionTreeEntry,
+      // SAFETY: SQL selects only tree fields; the tree reader owns their interpretation.
+      JSON.parse(row.navigation_json) as Record<string, unknown>,
       { seq: row.seq },
     ),
   );
@@ -391,7 +426,9 @@ export function hydrateSessionActorState(
     hasBoard: Boolean(selected?.actor_has_board),
     pendingInputs,
     completions,
+    completionsComplete: completionRows.length <= MAX_SESSION_ACTOR_COMPLETIONS,
     transcript: {
+      complete: true,
       coldArchive,
       identities,
       active,
@@ -404,14 +441,14 @@ export function hydrateSessionActorState(
             indexedSeq: projection.indexed_seq,
             leafEventId: projection.leaf_event_id,
             needsRebuild: projection.needs_rebuild !== 0,
-            hasUnclassifiedEvents: [...active.values()].some(
-              (row) => row.context_eligible === null,
-            ),
+            hasUnclassifiedEvents: Boolean(selected?.actor_has_unclassified),
           }
         : undefined,
     },
   };
+  retainSessionActorTranscriptWindow(state);
   seedSessionActorContextMetadata(state, storedNavigation);
+  initializeSessionActorContextStats(database, state);
   state.hot = projectSessionActorHotState(state);
   return state;
 }
@@ -441,7 +478,12 @@ export function projectSessionActorHotState(state: SessionActorStoredState): Ses
       modelContext: { kind: "resident", entries: [] },
     },
   };
-  hot.transcript.projection = projectSessionTranscriptFacts(state);
+  hot.transcript.projection = state.transcript.complete
+    ? projectSessionTranscriptFacts(state)
+    : undefined;
+  hot.transcript.contextStats = state.transcript.contextStats && {
+    ...state.transcript.contextStats,
+  };
   hot.dependencySessionIds = [
     ...new Set([
       ...[...state.entryRows.values()].flatMap((row) => (row ? [row.entry.sessionId] : [])),
@@ -452,68 +494,12 @@ export function projectSessionActorHotState(state: SessionActorStoredState): Ses
   hot.pendingInputs = [...state.pendingInputs.values()].map(
     ({ message_json: _message, ...row }) => row,
   );
-  hot.completionKeys = [...state.completions.keys()];
-  hot.transcript.idempotency = [...state.transcript.identities.values()].flatMap((row) =>
-    row.message_idempotency_key
-      ? [{ key: row.message_idempotency_key, eventId: row.event_id, rawSeq: row.seq }]
-      : [],
-  );
-  hot.transcript.anchorsState =
-    !state.transcript.coldArchive && hot.transcript.version.rawSeq === null
-      ? "resident"
-      : "unavailable";
-  const generation = hot.transcript.version.generation;
-  const projection = state.transcript.projection;
-  if (
-    !state.transcript.coldArchive &&
-    hot.entry &&
-    generation &&
-    projection &&
-    !projection.needsRebuild &&
-    !projection.hasUnclassifiedEvents &&
-    projection.indexedSeq === hot.transcript.version.rawSeq
-  ) {
-    hot.transcript.anchorsState = "resident";
-    for (const row of state.transcript.identities.values()) {
-      const active = state.transcript.active.get(row.seq);
-      if (active?.message_position === undefined || active.message_position === null) {
-        continue;
-      }
-      hot.transcript.anchors.push({
-        agentId: state.agentId,
-        sessionKey: hot.target.sessionKey,
-        sessionId: hot.entry.sessionId,
-        storePath: state.path,
-        generation,
-        entryId: row.event_id,
-        rawSeq: row.seq,
-        effectiveParentId: row.parent_id,
-        activeMessagePosition: active.message_position,
-        ...(row.message_idempotency_key ? { idempotencyKey: row.message_idempotency_key } : {}),
-      });
-    }
-  }
-  if (state.transcript.coldArchive) {
-    hot.transcript.modelContext = { kind: "unavailable", reason: "cold", generation };
-  } else {
-    const tree = scanSessionTranscriptTree(state.transcript.navigation);
-    if (tree.hasInvalidLeafControl) {
-      hot.transcript.modelContext = { kind: "unavailable", reason: "projection", generation };
-    } else {
-      const entries = normalizeSessionContextEntryBoundaries(
-        selectSessionTranscriptTreePathNodes(tree, tree.leafId).map(({ entry, parentId }) =>
-          Object.assign({}, entry, { parentId }),
-        ),
-        tree.nodes,
-      );
-      hot.transcript.modelContext = {
-        kind: "resident",
-        entries: [...iterateSessionContextEntries(entries)].map(({ entry }) => ({
-          rawSeq: entry.seq,
-          eventId: entry.id ?? null,
-        })),
-      };
-    }
-  }
+  // Durable history stays with its reader. Publishing these indexes on every
+  // append made the receipt proportional to the entire transcript.
+  hot.transcript.modelContext = {
+    kind: "unavailable",
+    reason: state.transcript.coldArchive ? "cold" : "projection",
+    generation: hot.transcript.version.generation,
+  };
   return hot;
 }

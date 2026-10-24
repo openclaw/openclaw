@@ -14,6 +14,7 @@ import type {
 } from "../../../talk/provider-types.js";
 import { resolveRealtimeVoiceBargeIn } from "../../../talk/realtime-session-policy.js";
 import { abortChatRunById } from "../../chat-abort.js";
+import { createTalkRunCancel } from "../realtime-run-control.js";
 import { decodeTalkRelayAudioBase64 } from "../relay-audio-base64.js";
 import {
   closeTalkRelaySessionsForConnection,
@@ -493,7 +494,6 @@ export function prepareTalkRealtimeRelayAgentControl(
     }
   };
   const runTarget = resolveOwnedActiveTalkRunTarget({
-    context: session.context,
     clientConnId: session.connId,
     sessionTarget: session.sessionTarget,
     scope: { kind: "voice-session", voiceSessionId: session.id },
@@ -513,6 +513,17 @@ export function prepareTalkRealtimeRelayAgentControl(
       text: params.text,
       mode: params.mode,
       recentEvents: session.harness.talk.recentEvents,
+      cancelRun: createTalkRunCancel({
+        context: session.context,
+        sessionTarget: session.sessionTarget,
+        connId: session.connId,
+        assertCurrent: () => {
+          params.assertCurrent?.();
+          if (relaySessions.get(session.id) !== session) {
+            throw new Error("Realtime relay session closed while cancelling the agent run");
+          }
+        },
+      }),
     });
     if (relaySessions.get(session.id) !== session) {
       throw new Error("Realtime relay session closed while steering the agent run");

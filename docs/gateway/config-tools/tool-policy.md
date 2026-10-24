@@ -75,7 +75,7 @@ whether the tool is available. Subagent and non-owner restrictions still apply.
 | `group:memory`     | `memory_search`, `memory_get`                                                                                                                                                                                                                            |
 | `group:web`        | `web_search`, `x_search`, `web_fetch`                                                                                                                                                                                                                    |
 | `group:ui`         | `browser`, `screen`, `theme`, `dashboard`, `terminal`, `portal`, `canvas`, `show_widget`                                                                                                                                                                 |
-| `group:automation` | `heartbeat_respond`, `automations` (`cron` alias), `gateway`, `plugins`, `openclaw`                                                                                                                                                                      |
+| `group:automation` | `automations` (`cron` alias), `gateway`, `plugins`, `openclaw`                                                                                                                                                                                           |
 | `group:messaging`  | `message`                                                                                                                                                                                                                                                |
 | `group:nodes`      | `nodes`, `computer`                                                                                                                                                                                                                                      |
 | `group:agents`     | `agents_list`, `get_goal`, `create_goal`, `update_goal`, `progress_card`, `ask_user`, `skill_workshop`                                                                                                                                                   |
@@ -211,6 +211,66 @@ still match other tools and adds `view_image` when the pattern no longer covers
 inspection. Patterns that already cover both names, such as `*` or `*image*`,
 remain unchanged.
 
+## `tools.gatewayPolicy`
+
+Deployment owners can require a concrete tool and action allowlist for model-directed work. OpenClaw applies this limit after ordinary tool and plugin grants, including owner-started conversations. Without this setting, existing tool policies behave as before.
+
+```json5
+{
+  tools: {
+    gatewayPolicy: {
+      allow: ["read", "exec", "sessions_list", "sessions"],
+      actions: { sessions: ["patch"] },
+    },
+  },
+}
+```
+
+This example permits only those underlying tools, subject to the other tool policies. `allow` is required; an empty array permits no underlying tools. Use concrete tool identities, including individual plugin tool names. Wildcards, tool groups and plugin-wide grants are rejected. Existing tool aliases, such as `cron` for `automations`, resolve to the same identity.
+
+Every selected tool with an `action` field also needs an explicit `actions` entry. Its published schema contains only those actions, and execution requires an explicit permitted action. An empty action list withholds the tool. Action filtering supports a top-level string action field; unsupported action schemas fail clearly during assembly.
+
+Tool Search and Code Mode remain available as dispatchers over the permitted catalog. They do not grant access to omitted tools. The execution check runs after hooks and approval preparation, so a hook cannot rewrite an allowed request into a prohibited action. Tool assembly captures the deployment policy; retained executors and catalogs keep that policy.
+
+Adding, changing or removing `tools.gatewayPolicy` requires a Gateway restart. Deployment owners such as OCE supply the policy when deploying the Gateway and activate changes through restart or replacement after affected old work ends. Newly assembled tools then use the new deployment policy. Ordinary tool-policy settings keep their existing reload behavior.
+
+This policy limits model-directed tools. Direct human Gateway administration keeps its existing authorization. It does not configure native Codex tools or restrict arbitrary Harness-local programs.
+
+### Automation scope and command jobs
+
+The tool/action allowlist alone cannot distinguish an ordinary Agent-turn schedule from a command job. Add automation restrictions when model turns should keep caller-scoped scheduling:
+
+```json5
+{
+  tools: {
+    gatewayPolicy: {
+      allow: ["automations"],
+      actions: {
+        automations: [
+          "status",
+          "list",
+          "get",
+          "add",
+          "update",
+          "remove",
+          "run",
+          "runs",
+          "next_check",
+          "wake",
+        ],
+      },
+      automations: { scope: "caller", allowCommandJobs: false },
+    },
+  },
+}
+```
+
+`scope: "caller"` withholds administrative automation grants from model turns, including conversations started by administrators or configured channel owners and restored continuations. Existing caller ownership and visibility checks still apply.
+
+`allowCommandJobs: false` rejects model creation, conversion, editing, enablement and manual execution of command jobs and on-exit command watchers. The Gateway checks the stored job as well as the requested change, so a patch that omits the payload kind cannot bypass the restriction. Ordinary Agent-turn schedules remain available. Use `cron.triggers.enabled: false` separately to disable streams, script payloads, condition triggers and event sources; that setting also applies to humans.
+
+These automation fields affect model-directed calls. Direct authorized human UI, CLI and RPC administration remains available. Omit the fields to retain existing conversational administrator management. Changes follow the Gateway restart contract above.
+
 ## `tools.byProvider`
 
 Further restrict tools for specific providers or models. Order: base profile → provider profile → allow/deny.
@@ -243,7 +303,7 @@ Restricts tools for the current turn's originating requester. This is defense-in
 }
 ```
 
-Keys use explicit prefixes: `channel:<channelId>:<senderId>`, `id:<senderId>`, `e164:<phone>`, `username:<handle>`, `name:<displayName>`, or `"*"`. Channel ids are standard OpenClaw ids; aliases such as `teams` normalize to `msteams`. Run `openclaw doctor --fix` to migrate retired unprefixed keys to `id:` entries. Matching order is channel+id, id, e164, username, name, then wildcard.
+Keys use explicit prefixes: `channel:<channelId>:<senderId>`, `id:<senderId>`, `e164:<phone>`, `username:<handle>`, `name:<displayName>`, or `"*"`. Channel ids are standard OpenClaw ids; aliases such as `teams` normalize to `msteams`. Run `openclaw doctor --fix` to migrate retired unprefixed keys to `id:` entries. Matching order is channel+id, id, e164, username, name, then wildcard. Prefer `id:` or `channel:` keys when granting extra tools because `username:` and `name:` match mutable sender attributes.
 
 Per-agent `agents.entries.*.tools.toolsBySender` overrides the global sender match when it matches, even with an empty `{}` policy.
 

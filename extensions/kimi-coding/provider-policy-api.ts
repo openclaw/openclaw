@@ -4,8 +4,19 @@ import type {
   ProviderThinkingProfile,
 } from "openclaw/plugin-sdk/plugin-entry";
 
-export const KIMI_K3_MODEL_IDS = ["k3", "k3-256k", "kimi-k3"] as const;
+// K3.1 Pro shares K3's efforts and adaptive request shape, but Kimi Code rejects disabled thinking.
+const KIMI_K3_1_MODEL_IDS = ["k3.1-pro", "k3.1-pro-highspeed"] as const;
+export const KIMI_K3_MODEL_IDS = ["k3", "k3-256k", "kimi-k3", ...KIMI_K3_1_MODEL_IDS] as const;
 const KIMI_K3_LEGACY_MODEL_IDS = ["k3[1m]"] as const;
+// Kimi Code's K2.8 backend leaks reasoning when thinking is disabled; K3.1 Pro rejects it.
+const KIMI_CODE_ENABLED_ONLY_MODEL_IDS = [
+  "kimi-for-coding",
+  "kimi-for-coding-highspeed",
+  // Legacy aliases of kimi-for-coding.
+  "kimi-code",
+  "k2p5",
+  ...KIMI_K3_1_MODEL_IDS,
+] as const;
 
 export const KIMI_K3_THINKING_EFFORTS = {
   minimal: "low",
@@ -35,15 +46,26 @@ export function isKimiK3ModelId(modelId: string): boolean {
   );
 }
 
+/** Kimi Code models whose backend cannot honor disabled thinking. */
+export function isKimiCodeEnabledOnlyModelId(modelId: string): boolean {
+  const normalized = modelId.trim().toLowerCase();
+  return KIMI_CODE_ENABLED_ONLY_MODEL_IDS.some((id) => id === normalized);
+}
+
 export function resolveThinkingProfile({
   modelId,
 }: ProviderDefaultThinkingPolicyContext): ProviderThinkingProfile {
   if (isKimiK3ModelId(modelId)) {
     return {
-      levels: KIMI_K3_THINKING_LEVELS,
+      levels: isKimiCodeEnabledOnlyModelId(modelId)
+        ? KIMI_K3_THINKING_LEVELS.filter(({ id }) => id !== "off")
+        : KIMI_K3_THINKING_LEVELS,
       defaultLevel: modelId.trim().toLowerCase() === "kimi-k3" ? "off" : "high",
       preserveWhenCatalogReasoningFalse: true,
     };
+  }
+  if (isKimiCodeEnabledOnlyModelId(modelId)) {
+    return { levels: [{ id: "low", label: "on" }], defaultLevel: "low" };
   }
   return {
     levels: [

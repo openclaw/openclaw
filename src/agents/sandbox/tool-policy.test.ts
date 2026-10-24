@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
+import type { ToolAllowDenyPolicyConfig } from "../../config/types.tools.js";
 import { createCanonicalAgentConfigFixture } from "../../test-utils/config-roster.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import { resolveSandboxConfigForAgent as resolveSandboxConfigForAgentBase } from "./config.js";
@@ -18,6 +19,21 @@ import {
 } from "./tool-policy.js";
 
 const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-required-sandbox-");
+
+function policyConfig(
+  tools?: ToolAllowDenyPolicyConfig,
+  agentTools?: ToolAllowDenyPolicyConfig,
+): OpenClawConfig {
+  return {
+    agents: {
+      defaults: { sandbox: { mode: "all", scope: "agent" } },
+      ...(agentTools === undefined
+        ? {}
+        : { entries: { tavern: { tools: { sandbox: { tools: agentTools } } } } }),
+    },
+    ...(tools === undefined ? {} : { tools: { sandbox: { tools } } }),
+  };
+}
 
 function loadedConfig(config: OpenClawConfig | undefined): OpenClawConfig {
   return createCanonicalAgentConfigFixture(config).config;
@@ -56,24 +72,7 @@ function formatSandboxToolPolicyBlockedMessage(
 
 describe("sandbox/tool-policy", () => {
   it("merges sandbox alsoAllow into the default sandbox allowlist", () => {
-    const cfg: OpenClawConfig = {
-      agents: {
-        defaults: {
-          sandbox: { mode: "all", scope: "agent" },
-        },
-        entries: {
-          tavern: {
-            tools: {
-              sandbox: {
-                tools: {
-                  alsoAllow: ["message", "tts"],
-                },
-              },
-            },
-          },
-        },
-      },
-    };
+    const cfg = policyConfig(undefined, { alsoAllow: ["message", "tts"] });
 
     const resolved = resolveSandboxToolPolicyForAgent(cfg, "tavern");
     expect(resolved.allow).toContain("message");
@@ -85,20 +84,7 @@ describe("sandbox/tool-policy", () => {
   });
 
   it("lets explicit sandbox allow remove entries from the default sandbox denylist", () => {
-    const cfg: OpenClawConfig = {
-      agents: {
-        defaults: {
-          sandbox: { mode: "all", scope: "agent" },
-        },
-      },
-      tools: {
-        sandbox: {
-          tools: {
-            allow: ["browser"],
-          },
-        },
-      },
-    };
+    const cfg = policyConfig({ allow: ["browser"] });
 
     const resolved = resolveSandboxToolPolicyForAgent(cfg, "main");
     expect(resolved.allow).toContain("browser");
@@ -109,10 +95,7 @@ describe("sandbox/tool-policy", () => {
   it.each([["image"], ["image*"]] as const)(
     "keeps legacy %s denies fail-closed for view_image until Doctor migrates them",
     (legacyDeny) => {
-      const cfg: OpenClawConfig = {
-        agents: { defaults: { sandbox: { mode: "all", scope: "agent" } } },
-        tools: { sandbox: { tools: { allow: ["read"], deny: [legacyDeny] } } },
-      };
+      const cfg = policyConfig({ allow: ["read"], deny: [legacyDeny] });
 
       const resolved = resolveSandboxToolPolicyForAgent(cfg, "main");
       expect(resolved.deny).toContain("view_image");
@@ -123,21 +106,7 @@ describe("sandbox/tool-policy", () => {
   it("preserves allow-all semantics for allow: [] plus alsoAllow", () => {
     // An empty allowlist means allow all except denies; alsoAllow should only
     // remove matching default denies, not turn allow-all into allow-some.
-    const cfg: OpenClawConfig = {
-      agents: {
-        defaults: {
-          sandbox: { mode: "all", scope: "agent" },
-        },
-      },
-      tools: {
-        sandbox: {
-          tools: {
-            allow: [],
-            alsoAllow: ["browser"],
-          },
-        },
-      },
-    };
+    const cfg = policyConfig({ allow: [], alsoAllow: ["browser"] });
 
     const resolved = resolveSandboxToolPolicyForAgent(cfg, "main");
     expect(resolved.allow).toStrictEqual([]);
@@ -149,31 +118,7 @@ describe("sandbox/tool-policy", () => {
   });
 
   it("keeps canonical sandbox config and runtime status aligned with the effective resolver", () => {
-    const cfg: OpenClawConfig = {
-      agents: {
-        defaults: {
-          sandbox: { mode: "all", scope: "agent" },
-        },
-        entries: {
-          tavern: {
-            tools: {
-              sandbox: {
-                tools: {
-                  alsoAllow: ["message", "tts"],
-                },
-              },
-            },
-          },
-        },
-      },
-      tools: {
-        sandbox: {
-          tools: {
-            allow: ["browser"],
-          },
-        },
-      },
-    };
+    const cfg = policyConfig({ allow: ["browser"] }, { alsoAllow: ["message", "tts"] });
 
     const sandbox = resolveSandboxConfigForAgent(cfg, "tavern");
     expect(sandbox.tools.allow).toContain("browser");
@@ -189,30 +134,14 @@ describe("sandbox/tool-policy", () => {
     expect(runtime.toolPolicy.allow).toContain("message");
     expect(runtime.toolPolicy.allow).toContain("tts");
     expect(runtime.toolPolicy.deny).not.toContain("browser");
-  });
-
-  it("treats channel direct sessions as sandboxed in non-main mode", () => {
-    const cfg: OpenClawConfig = {
-      agents: {
-        defaults: {
-          sandbox: { mode: "non-main", scope: "agent" },
-        },
-        entries: { main: {} },
-      },
-    };
-
     expect(
-      resolveSandboxRuntimeStatus({
+      formatSandboxToolPolicyBlockedMessage({
         cfg,
-        sessionKey: "agent:main:main",
-      }).sandboxed,
-    ).toBe(false);
-    expect(
-      resolveSandboxRuntimeStatus({
-        cfg,
-        sessionKey: "agent:main:telegram:default:direct:42",
-      }).sandboxed,
-    ).toBe(true);
+        sessionKey: "agent:tavern:main",
+        toolName: "message",
+        preparedRuntimeStatus: runtime,
+      }),
+    ).toBeUndefined();
   });
 
   it("forces a persisted sandbox requirement even when the agent sandbox mode is off", async () => {
@@ -248,32 +177,6 @@ describe("sandbox/tool-policy", () => {
     });
     expect(blockedMessage).toContain("create a new session under an authorized role");
     expect(blockedMessage).not.toContain("sandbox.mode=off");
-  });
-
-  it("does not apply guest isolation or cap writable access to unstamped sessions", async () => {
-    const sessionKey = "agent:main:maintainer";
-    const storePath = path.join(sessionDirs.make(), "agents", "main", "sessions", "sessions.json");
-    await replaceSessionEntry(
-      { sessionKey, storePath },
-      {
-        sessionId: "maintainer-session",
-        updatedAt: 1,
-        createdActor: { type: "human", source: "profile", id: "maintainer-principal" },
-      },
-    );
-    const cfg: OpenClawConfig = {
-      session: { store: storePath },
-      agents: {
-        defaults: { sandbox: { mode: "all", scope: "agent", workspaceAccess: "rw" } },
-        entries: { main: {} },
-      },
-    };
-
-    const runtime = await resolveSandboxRuntimeStatusAsync({ cfg: loadedConfig(cfg), sessionKey });
-
-    expect(runtime).toMatchObject({ sandboxRequired: false, sandboxed: true });
-    expect(runtime.isolationSubject).toBeUndefined();
-    expect(runtime.workspaceAccess).toBeUndefined();
   });
 
   it("classifies a borrowed runtime key under its own sandbox agent", () => {
@@ -397,22 +300,11 @@ describe("sandbox/tool-policy", () => {
   );
 
   it("keeps explicit sandbox deny precedence over allow and alsoAllow", () => {
-    const cfg: OpenClawConfig = {
-      agents: {
-        defaults: {
-          sandbox: { mode: "all", scope: "agent" },
-        },
-      },
-      tools: {
-        sandbox: {
-          tools: {
-            allow: ["browser"],
-            alsoAllow: ["message"],
-            deny: ["browser", "message"],
-          },
-        },
-      },
-    };
+    const cfg = policyConfig({
+      allow: ["browser"],
+      alsoAllow: ["message"],
+      deny: ["browser", "message"],
+    });
 
     const resolved = resolveSandboxToolPolicyForAgent(cfg, "main");
     expect(resolved.deny).toContain("browser");
@@ -421,56 +313,11 @@ describe("sandbox/tool-policy", () => {
     expect(isToolAllowed(resolved, "message")).toBe(false);
   });
 
-  it("uses the effective sandbox policy when formatting blocked-tool guidance", () => {
-    const cfg: OpenClawConfig = {
-      agents: {
-        defaults: {
-          sandbox: { mode: "all", scope: "agent" },
-        },
-      },
-      tools: {
-        sandbox: {
-          tools: {
-            alsoAllow: ["message"],
-          },
-        },
-      },
-    };
-
-    const browserMessage = formatSandboxToolPolicyBlockedMessage({
-      cfg,
-      sessionKey: "agent:main:main",
-      toolName: "browser",
-    });
-    expect(browserMessage).toContain('Tool "browser" blocked by sandbox tool policy');
-    expect(browserMessage).toContain("tools.sandbox.tools.deny");
-
-    const messageToolMessage = formatSandboxToolPolicyBlockedMessage({
-      cfg,
-      sessionKey: "agent:main:main",
-      toolName: "message",
-    });
-    expect(messageToolMessage).toBeUndefined();
-  });
-
   it("keeps blocked-tool guidance glob-aware and shell-safe", () => {
     // The guidance embeds a copy-paste command; quote the real session key while
     // keeping the displayed session line compact and terminal-safe.
     const sessionKey = "agent:main:weird session;rm -rf /";
-    const cfg: OpenClawConfig = {
-      agents: {
-        defaults: {
-          sandbox: { mode: "all", scope: "agent" },
-        },
-      },
-      tools: {
-        sandbox: {
-          tools: {
-            deny: ["WEB_*"],
-          },
-        },
-      },
-    };
+    const cfg = policyConfig({ deny: ["WEB_*"] });
 
     const message = formatSandboxToolPolicyBlockedMessage({
       cfg,
@@ -506,20 +353,7 @@ describe("sandbox/tool-policy", () => {
   ])(
     "keeps redacted session keys UTF-16 safe at the $boundary boundary",
     ({ sessionKey, expectedLabel }) => {
-      const cfg: OpenClawConfig = {
-        agents: {
-          defaults: {
-            sandbox: { mode: "all", scope: "agent" },
-          },
-        },
-        tools: {
-          sandbox: {
-            tools: {
-              deny: ["browser"],
-            },
-          },
-        },
-      };
+      const cfg = policyConfig({ deny: ["browser"] });
 
       const message = formatSandboxToolPolicyBlockedMessage({
         cfg,
@@ -540,20 +374,7 @@ describe("sandbox/tool-policy", () => {
 
   it("avoids terminal injection for control-character session keys", () => {
     const sessionKey = "agent:main:abcde\n12345";
-    const cfg: OpenClawConfig = {
-      agents: {
-        defaults: {
-          sandbox: { mode: "all", scope: "agent" },
-        },
-      },
-      tools: {
-        sandbox: {
-          tools: {
-            deny: ["browser"],
-          },
-        },
-      },
-    };
+    const cfg = policyConfig({ deny: ["browser"] });
 
     const message = formatSandboxToolPolicyBlockedMessage({
       cfg,

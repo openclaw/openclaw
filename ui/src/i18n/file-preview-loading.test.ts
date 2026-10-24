@@ -4,7 +4,7 @@ import { useLazyEnglishTest } from "./lazy-english.test-support.ts";
 const loadI18n = useLazyEnglishTest();
 
 it.each([
-  { surface: "bundle preview", load: () => import("../components/file-preview-modal.ts") },
+  { surface: "bundle preview", load: () => import("../components/file-preview-modal.tsx") },
   { surface: "file draft", load: () => import("../pages/chat/components/chat-file-drafts.ts") },
   { surface: "embedded panel", load: () => import("../pages/chat/chat-pane-embedded-panels.ts") },
 ])("loads file preview fallback copy with the $surface instead of startup", async ({ load }) => {

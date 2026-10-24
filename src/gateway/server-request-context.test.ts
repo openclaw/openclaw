@@ -9,6 +9,7 @@ import {
   GATEWAY_CLIENT_MODES,
 } from "../../packages/gateway-protocol/src/client-info.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
+import { heartbeatNotifications } from "../infra/heartbeat-events.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import {
@@ -40,7 +41,6 @@ import {
   makeContextParams,
   makeCronState,
   makeGatewayClient,
-  type RequestRuntime,
 } from "./server-request-context.test-support.js";
 import { startGatewayEventSubscriptions } from "./server-runtime-subscriptions.js";
 import { GatewayClientRegistry } from "./server/client-registry.js";
@@ -222,7 +222,6 @@ describe("createGatewayRequestContext", () => {
         toolEventRecipients: chatRunState.toolEventRecipients,
         sessionEventSubscribers: subscribers,
         sessionMessageSubscribers: createSessionMessageSubscriberRegistry(),
-        chatAbortControllers: new Map(),
         restartRecoveryCandidates: new Map(),
         refreshConnectedUserProfiles: () => context.refreshConnectedUserProfile?.(),
       });
@@ -258,7 +257,7 @@ describe("createGatewayRequestContext", () => {
         }
       } finally {
         subscriptions.lifecycleUnsub();
-        subscriptions.heartbeatUnsub();
+        heartbeatNotifications.onEvent = () => {};
         subscriptions.transcriptUnsub();
         await subscriptions.agentUnsub();
       }
@@ -327,21 +326,13 @@ describe("createGatewayRequestContext", () => {
   });
 
   it("reads cron state live from runtime state", () => {
-    const cronA = { start: vi.fn(), stop: vi.fn() } as never;
-    const cronB = { start: vi.fn(), stop: vi.fn() } as never;
-    const runtimeState: RequestRuntime["runtimeState"] = {
-      cronState: makeCronState({ cron: cronA, storePath: "/tmp/cron-a" }),
-      configReloader: { isConfigReloadSettled: () => true },
-    };
-
-    const context = createGatewayRequestContext(makeContextParams({ runtimeState }));
-
-    expect(context.cron).toBe(cronA);
-    expect(context.cronStorePath).toBe("/tmp/cron-a");
-
-    runtimeState.cronState = makeCronState({ cron: cronB, storePath: "/tmp/cron-b" });
-
-    expect(context.cron).toBe(cronB);
+    const params = makeContextParams();
+    const context = createGatewayRequestContext(params);
+    expect(context.cron).toBe(params.runtime.runtimeState.cronState.cron);
+    expect(context.cronStorePath).toBe("/tmp/cron");
+    const replacement = makeCronState({ storePath: "/tmp/cron-b" });
+    params.runtime.runtimeState.cronState = replacement;
+    expect(context.cron).toBe(replacement.cron);
     expect(context.cronStorePath).toBe("/tmp/cron-b");
   });
 

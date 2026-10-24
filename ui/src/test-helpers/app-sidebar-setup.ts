@@ -6,13 +6,13 @@ import type { ApplicationGateway } from "../app/context.ts";
 import { storeSidebarSessionOwnerFilter } from "../components/app-sidebar-session-types.ts";
 import type { AppSidebarElement } from "../components/app-sidebar.tsx";
 import { disposeSidebarContextLifecycles } from "./app-sidebar-context-lifecycle.ts";
-import { settleLitElements } from "./lit-settle.ts";
 import { createStorageMock } from "./storage.ts";
 
 export function setupSidebarTest() {
-  let originalLocalStorage: PropertyDescriptor | undefined;
   let layoutGlobals: Array<[string, PropertyDescriptor | undefined]>;
   let frameChannel: MessageChannel | undefined;
+  const defineGlobal = (name: string, value: unknown) =>
+    Object.defineProperty(globalThis, name, { configurable: true, writable: true, value });
 
   beforeEach(() => {
     layoutGlobals = [
@@ -21,14 +21,13 @@ export function setupSidebarTest() {
       "IntersectionObserver",
       "requestAnimationFrame",
       "cancelAnimationFrame",
+      "localStorage",
     ].map((name) => [name, Object.getOwnPropertyDescriptor(globalThis, name)]);
-    // JSDOM has no paint cycle. Settle ordinary frames in microtasks, but yield
-    // recursive frames so overlay positioning cannot starve the test runner.
+    // Settle jsdom frames in microtasks; yield recursive overlay frames to avoid starvation.
     if (!("__vitest_browser__" in globalThis)) {
-      // Fake clocks must leave this fixture's frame scheduler in place.
+      // Keep our frame scheduler; jsdom may retire a native timer after fake-clock installation.
       vi.setConfig({
         fakeTimers: {
-          // jsdom can retire its native frame timer after the fake clock is installed.
           shouldClearNativeTimers: true,
           toFake: [
             "setTimeout",
@@ -61,67 +60,36 @@ export function setupSidebarTest() {
         runFrame(event.data),
       );
       channel.port1.start();
-      Object.defineProperty(globalThis, "requestAnimationFrame", {
-        configurable: true,
-        writable: true,
-        value: (callback: FrameRequestCallback) => {
-          const id = ++nextFrame;
-          frames.set(id, callback);
-          if (inFrame) {
-            channel.port2.postMessage(id);
-          } else {
-            queueMicrotask(() => runFrame(id));
-          }
-          return id;
-        },
+      defineGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+        const id = ++nextFrame;
+        frames.set(id, callback);
+        if (inFrame) {
+          channel.port2.postMessage(id);
+        } else {
+          queueMicrotask(() => runFrame(id));
+        }
+        return id;
       });
-      Object.defineProperty(globalThis, "cancelAnimationFrame", {
-        configurable: true,
-        writable: true,
-        value: (id: number) => frames.delete(id),
-      });
+      defineGlobal("cancelAnimationFrame", (id: number) => frames.delete(id));
     }
-    // JSDOM has no media queries or layout observation. Real browser tests keep
-    // their native implementations and own the layout and motion assertions.
-    if (typeof matchMedia === "undefined") {
-      Object.defineProperty(globalThis, "matchMedia", {
-        configurable: true,
-        writable: true,
-        value: (media: string) => ({
-          media,
-          matches: false,
-          onchange: null,
-          addListener() {},
-          removeListener() {},
-          addEventListener() {},
-          removeEventListener() {},
-          dispatchEvent: () => true,
-        }),
-      });
-    }
-
     for (const name of ["ResizeObserver", "IntersectionObserver"] as const) {
-      if (globalThis[name] !== undefined) {
-        continue;
+      if (globalThis[name] === undefined) {
+        defineGlobal(
+          name,
+          class {
+            observe() {}
+            unobserve() {}
+            disconnect() {}
+          },
+        );
       }
-      Object.defineProperty(globalThis, name, {
-        configurable: true,
-        writable: true,
-        value: class {
-          observe() {}
-          unobserve() {}
-          disconnect() {}
-        },
-      });
     }
 
-    originalLocalStorage = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
     Object.defineProperty(globalThis, "localStorage", {
       configurable: true,
       value: createStorageMock(),
     });
-    // Coding defaults to compact; most cases assert expanded contents, so start
-    // expanded. Collapse tests override this value.
+    // Most cases assert expanded contents; collapse tests override this preference.
     localStorage.setItem("openclaw:sidebar:sessions:collapsed-sections", JSON.stringify([]));
   });
 
@@ -131,9 +99,8 @@ export function setupSidebarTest() {
     vi.useRealTimers();
     vi.resetConfig();
     const sidebars = document.body.querySelectorAll<AppSidebarElement>("openclaw-app-sidebar");
-    // Open native menus keep scheduling frames while imports settle.
+    // Dismiss upgraded menus before settling imports; lazy shells may retain an unupgraded tag.
     for (const sidebar of sidebars) {
-      // Lazy shell fixtures can retain an unupgraded sidebar tag.
       if (sidebar.matches(":defined")) {
         sidebar.dismissTransientMenus();
       }
@@ -148,8 +115,8 @@ export function setupSidebarTest() {
     await Promise.resolve();
     flush();
     disposeSidebarContextLifecycles();
-    // Disconnection queues Lit updates; finish them before retiring the DOM globals.
-    await settleLitElements(sidebars);
+    // A disconnected Solid sidebar resolves abandoned rendering as false, not another update.
+    await Promise.all(Array.from(sidebars, (sidebar) => sidebar.updateComplete));
     frameChannel?.port1.close();
     frameChannel?.port2.close();
     frameChannel = undefined;
@@ -160,17 +127,10 @@ export function setupSidebarTest() {
         Reflect.deleteProperty(globalThis, name);
       }
     }
-    if (originalLocalStorage) {
-      Object.defineProperty(globalThis, "localStorage", originalLocalStorage);
-    } else {
-      Reflect.deleteProperty(globalThis, "localStorage");
-    }
   });
 }
 
-// jsdom does not reliably track :focus-visible across these synthetic events.
-// Model the keyboard intent requested by each fixture, only while its target
-// is actually focused. Real browser E2E owns pointer/keyboard modality proof.
+// Model jsdom's missing :focus-visible only while the keyboard-intent target is focused.
 export function focusSidebarPersonWithKeyboard(target: HTMLElement): void {
   const matches = target.matches.bind(target);
   const keyboardFocus = vi
@@ -182,7 +142,6 @@ export function focusSidebarPersonWithKeyboard(target: HTMLElement): void {
   target.focus();
 }
 
-/** Select a view through its actual fixed rail control. */
 export async function selectSidebarView(
   sidebar: HTMLElement & Pick<AppSidebarElement, "updateComplete">,
   view: "pages" | "sessions" | "online",
@@ -208,10 +167,9 @@ export function seedSidebarEveryonePreference(gateway: ApplicationGateway): void
   }
 }
 
-export const manyAgents = (count: number) =>
-  ({
-    defaultId: "agent-1",
-    mainKey: "main",
-    scope: "per-sender",
-    agents: Array.from({ length: count }, (_, index) => ({ id: `agent-${index + 1}` })),
-  }) as AgentsListResult;
+export const manyAgents = (count: number): AgentsListResult => ({
+  defaultId: "agent-1",
+  mainKey: "main",
+  scope: "per-sender",
+  agents: Array.from({ length: count }, (_, index) => ({ id: `agent-${index + 1}` })),
+});

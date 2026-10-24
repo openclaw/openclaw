@@ -1,18 +1,19 @@
 import type { ClientOptions } from "openai";
+import type { ResponseCreateParamsStreaming } from "openai/resources/responses/responses.js";
 import { afterEach, assert, describe, expect, it, vi } from "vitest";
 import { configureAiTransportHost } from "../host.js";
 import type { Context, Model } from "../types.js";
 
 const openAiMockState = vi.hoisted(() => ({
   configs: [] as ClientOptions[],
-  params: [] as unknown[],
+  params: [] as ResponseCreateParamsStreaming[],
   requestOptions: [] as unknown[],
 }));
 
 vi.mock("openai", () => ({
   default: class MockOpenAI {
     responses = {
-      create: vi.fn((params: unknown, requestOptions: unknown) => {
+      create: vi.fn((params: ResponseCreateParamsStreaming, requestOptions: unknown) => {
         openAiMockState.params.push(params);
         openAiMockState.requestOptions.push(requestOptions);
         throw new Error("stop after constructor");
@@ -26,28 +27,50 @@ vi.mock("openai", () => ({
 }));
 
 import { createOpenAIResponsesClient } from "../transports/openai-responses-client.js";
+import type { OpenAIResponsesOptions as Options } from "../transports/openai-responses-contracts.js";
 import { buildOpenAIResponsesParams } from "../transports/openai-responses-params-internal.js";
+import { makeOpenAIProviderModel } from "./openai-provider.test-support.js";
 import { streamOpenAIResponses, streamSimpleOpenAIResponses } from "./openai-responses.js";
 
-const context = {
-  messages: [{ role: "user", content: "hello", timestamp: 0 }],
-} satisfies Context;
+const context = { messages: [{ role: "user", content: "hello", timestamp: 0 }] } satisfies Context;
+type ResponsesModel = Model<"openai-responses">;
 
-function model(overrides: Partial<Model<"openai-responses">> = {}) {
-  return {
-    id: "gpt-5.5",
-    name: "GPT-5.5",
-    api: "openai-responses",
-    provider: "openai",
-    baseUrl: "https://api.openai.com/v1",
-    reasoning: true,
-    input: ["text"],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+function model(overrides: Partial<ResponsesModel> = {}) {
+  return makeOpenAIProviderModel("openai-responses", {
     contextWindow: 200_000,
     maxTokens: 8192,
     ...overrides,
-  } satisfies Model<"openai-responses">;
+  });
 }
+
+function runRequest(options: Options, requestModel = model()) {
+  return streamOpenAIResponses(requestModel, context, options).result();
+}
+
+async function bothRequests(options: Options, overrides: Partial<ResponsesModel> = {}) {
+  const requestModel = model(overrides);
+  const requestOptions = { apiKey: "sentinel-key", ...options };
+  const params = buildOpenAIResponsesParams(requestModel, context, requestOptions);
+  const result = await runRequest(requestOptions, requestModel);
+  expect(result.stopReason).toBe("error");
+  const capturedParams = openAiMockState.params[0];
+  assert.isDefined(capturedParams);
+  return [params, capturedParams] as const;
+}
+
+function guardedResponse(body: string | null = null) {
+  const hostResponse = new Response(body, { status: 500 });
+  const hostFetch = vi.fn<typeof fetch>(async () => hostResponse);
+  configureAiTransportHost({ buildModelFetch: () => hostFetch });
+  return { hostResponse, hostFetch };
+}
+
+const schema = { type: "object", properties: { answer: { type: "string" } } };
+const rawFormat = { type: "json_schema", name: "openclaw_response", schema };
+const nestedSchema = { name: "answer", schema: { type: "object" }, strict: false };
+const nestedInput = { type: "json_schema", json_schema: nestedSchema };
+const nestedFormat = { type: "json_schema", ...nestedSchema };
+const nativeFormat = { ...nestedFormat, strict: null };
 
 describe("OpenAI Responses provider", () => {
   afterEach(() => {
@@ -58,51 +81,13 @@ describe("OpenAI Responses provider", () => {
   });
 
   it.each([
-    {
-      label: "raw schema",
-      responseFormat: { type: "object", properties: { answer: { type: "string" } } },
-      expected: {
-        type: "json_schema",
-        name: "openclaw_response",
-        schema: { type: "object", properties: { answer: { type: "string" } } },
-      },
-    },
-    {
-      label: "nested schema",
-      responseFormat: {
-        type: "json_schema",
-        json_schema: { name: "answer", schema: { type: "object" }, strict: false },
-      },
-      expected: {
-        type: "json_schema",
-        name: "answer",
-        schema: { type: "object" },
-        strict: false,
-      },
-    },
-    {
-      label: "native schema",
-      responseFormat: {
-        type: "json_schema",
-        name: "answer",
-        schema: { type: "object" },
-        strict: null,
-      },
-      expected: {
-        type: "json_schema",
-        name: "answer",
-        schema: { type: "object" },
-        strict: null,
-      },
-    },
-    {
-      label: "text",
-      responseFormat: { type: "text" },
-      expected: { type: "text" },
-    },
-  ])(
-    "projects $label output constraints in provider and transport requests",
-    async ({ responseFormat, expected }) => {
+    ["raw schema", structuredClone(schema), rawFormat],
+    ["nested schema", structuredClone(nestedInput), nestedFormat],
+    ["native schema", structuredClone(nativeFormat), nativeFormat],
+    ["text", { type: "text" }, { type: "text" }],
+  ] as const)(
+    "projects %s output constraints in provider and transport requests",
+    async (_label, responseFormat, expected) => {
       const options = { apiKey: "test", responseFormat };
       const transportParams = buildOpenAIResponsesParams(model(), context, options);
       await streamSimpleOpenAIResponses(model(), context, options).result();
@@ -111,49 +96,30 @@ describe("OpenAI Responses provider", () => {
     },
   );
 
-  it.each(["long"] as const)(
-    "identifies OpenCode conversations with %s cache retention",
-    async (cacheRetention) => {
-      await streamOpenAIResponses(model({ baseUrl: "https://opencode.ai/zen/v1" }), context, {
-        apiKey: "test",
-        sessionId: "conversation-123",
-        cacheRetention,
-      }).result();
-      expect(openAiMockState.configs[0]).toMatchObject({
-        defaultHeaders: { "x-opencode-session": "conversation-123" },
-      });
-    },
-  );
+  it("identifies OpenCode conversations with long cache retention", async () => {
+    await runRequest(
+      { apiKey: "test", sessionId: "conversation-123", cacheRetention: "long" },
+      model({ baseUrl: "https://opencode.ai/zen/v1" }),
+    );
+    expect(openAiMockState.configs[0]).toMatchObject({
+      defaultHeaders: { "x-opencode-session": "conversation-123" },
+    });
+  });
 
-  it.each(["priority"] as const)(
-    "sends service tier %s from simple completions",
-    async (serviceTier) => {
-      await streamSimpleOpenAIResponses(model(), context, { apiKey: "test", serviceTier }).result();
-      expect(openAiMockState.params).toHaveLength(1);
-      if (serviceTier) {
-        expect(openAiMockState.params[0]).toMatchObject({ service_tier: serviceTier });
-      } else {
-        expect(openAiMockState.params[0]).not.toHaveProperty("service_tier");
-      }
-    },
-  );
+  it("sends priority service tier from simple completions", async () => {
+    const options = { apiKey: "test", serviceTier: "priority" } as const;
+    await streamSimpleOpenAIResponses(model(), context, options).result();
+    expect(openAiMockState.params).toHaveLength(1);
+    expect(openAiMockState.params[0]).toMatchObject({ service_tier: "priority" });
+  });
 
   it("routes the SDK fetch through the host guard without changing the request or response", async () => {
-    const hostResponse = new Response("synthetic rejection", { status: 500 });
-    const hostFetch = vi.fn<typeof fetch>(async () => hostResponse);
-    configureAiTransportHost({ buildModelFetch: () => hostFetch });
-
-    const result = await streamOpenAIResponses(model(), context, {
-      apiKey: "sentinel-key",
-    }).result();
-
-    expect(result.stopReason).toBe("error");
+    const { hostResponse, hostFetch } = guardedResponse("synthetic rejection");
+    const result = await runRequest({ apiKey: "sentinel-key" });
     // Fail before a terminal usage event: zeros are unmeasured, not free.
-    expect(result.usage).toMatchObject({
-      input: 0,
-      output: 0,
-      totalTokens: 0,
-      usageReport: { state: "unavailable" },
+    expect(result).toMatchObject({
+      stopReason: "error",
+      usage: { input: 0, output: 0, totalTokens: 0, usageReport: { state: "unavailable" } },
     });
     expect(openAiMockState.configs).toHaveLength(1);
     expect(openAiMockState.configs[0]).toMatchObject({ maxRetries: 0 });
@@ -175,79 +141,45 @@ describe("OpenAI Responses provider", () => {
       ...model(),
       provider: "openrouter",
       baseUrl: undefined,
-    } as unknown as Model<"openai-responses">;
-
-    const result = await streamOpenAIResponses(missingEndpointModel, context, {
-      apiKey: "sentinel-openrouter-key",
-    }).result();
-
+    } as unknown as ResponsesModel;
+    const apiKey = "sentinel-openrouter-key";
+    const result = await runRequest({ apiKey }, missingEndpointModel);
     expect(result.stopReason).toBe("error");
     expect(result.errorMessage).toContain('Provider "openrouter" requires an explicit base URL');
-    expect(() =>
-      createOpenAIResponsesClient(missingEndpointModel, "sentinel-openrouter-key", {}),
-    ).toThrow('Provider "openrouter" requires an explicit base URL');
+    expect(() => createOpenAIResponsesClient(missingEndpointModel, apiKey, {})).toThrow(
+      'Provider "openrouter" requires an explicit base URL',
+    );
     expect(openAiMockState.configs).toEqual([]);
 
-    const configuredModel = {
-      ...missingEndpointModel,
-      baseUrl: "https://openrouter.ai/api/v1",
-    };
-    await streamOpenAIResponses(configuredModel, context, {
-      apiKey: "sentinel-openrouter-key",
-    }).result();
-    expect(() =>
-      createOpenAIResponsesClient(configuredModel, "sentinel-openrouter-key", {}),
-    ).not.toThrow();
-    expect(
-      openAiMockState.configs.map((config) => (config as { baseURL?: string }).baseURL),
-    ).toEqual(["https://openrouter.ai/api/v1", "https://openrouter.ai/api/v1"]);
+    const baseUrl = "https://openrouter.ai/api/v1";
+    const configuredModel = { ...missingEndpointModel, baseUrl };
+    await runRequest({ apiKey }, configuredModel);
+    expect(() => createOpenAIResponsesClient(configuredModel, apiKey, {})).not.toThrow();
+    expect(openAiMockState.configs.map((config) => config.baseURL)).toEqual([baseUrl, baseUrl]);
   });
 
   it("keeps Cloudflare composed upstream auth opaque in SDK headers", async () => {
-    const hostResponse = new Response(null, { status: 500 });
-    const hostFetch = vi.fn<typeof fetch>(async () => hostResponse);
+    const { hostResponse, hostFetch } = guardedResponse();
     const apiKey = "oc-sent-v2.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA.end";
-    configureAiTransportHost({ buildModelFetch: () => hostFetch });
-
-    await streamOpenAIResponses(
-      model({
-        provider: "cloudflare-ai-gateway",
-        baseUrl: "https://gateway.ai.cloudflare.com/v1/account/gateway/openai",
-      }),
-      context,
-      { apiKey },
-    ).result();
-
+    const baseUrl = "https://gateway.ai.cloudflare.com/v1/account/gateway/openai";
+    await runRequest({ apiKey }, model({ provider: "cloudflare-ai-gateway", baseUrl }));
     const config = openAiMockState.configs[0];
     assert.isDefined(config);
     expect(config).toMatchObject({
       apiKey,
-      baseURL: "https://gateway.ai.cloudflare.com/v1/account/gateway/openai",
-      defaultHeaders: {
-        Authorization: null,
-        "cf-aig-authorization": `Bearer ${apiKey}`,
-      },
+      baseURL: baseUrl,
+      defaultHeaders: { Authorization: null, "cf-aig-authorization": `Bearer ${apiKey}` },
     });
-    const request = new Request(`${config.baseURL}/responses`, {
-      headers: {
-        "cf-aig-authorization": `Bearer ${apiKey}`,
-      },
+    const outgoing = new Request(`${config.baseURL}/responses`, {
+      headers: { "cf-aig-authorization": `Bearer ${apiKey}` },
     });
-    expect(await config.fetch?.(request)).toBe(hostResponse);
-    expect(hostFetch).toHaveBeenCalledExactlyOnceWith(request, undefined);
+    expect(await config.fetch?.(outgoing)).toBe(hostResponse);
+    expect(hostFetch).toHaveBeenCalledExactlyOnceWith(outgoing, undefined);
   });
 
   it("clamps small output limits and disables implicit SDK retries", async () => {
-    const requestModel = model();
-    const options = {
-      apiKey: String(1),
-      maxTokens: 1,
-    };
-    const transportParams = buildOpenAIResponsesParams(requestModel, context, options);
-    const result = await streamOpenAIResponses(requestModel, context, options).result();
-
-    expect(result.stopReason).toBe("error");
-    for (const params of [transportParams, openAiMockState.params[0]]) {
+    const requests = await bothRequests({ apiKey: String(1), maxTokens: 1 });
+    for (const params of requests) {
       expect(params).toMatchObject({ store: false, max_output_tokens: 16 });
     }
     expect(openAiMockState.requestOptions[0]).toMatchObject({ maxRetries: 0 });
@@ -260,20 +192,14 @@ describe("OpenAI Responses provider", () => {
   ] as const)(
     "serializes $id $cacheRetention caching through both Responses builders",
     async ({ id, cacheRetention, ttl, retention }) => {
-      const requestModel = model({ id });
-      const options = { apiKey: "sentinel-key", sessionId: "cache-session", cacheRetention };
-      const transportParams = buildOpenAIResponsesParams(requestModel, context, options);
-      await streamOpenAIResponses(requestModel, context, options).result();
-
-      for (const params of [transportParams, openAiMockState.params[0]]) {
+      const requests = await bothRequests({ sessionId: "cache-session", cacheRetention }, { id });
+      for (const params of requests) {
         expect(params).toHaveProperty(
           "prompt_cache_key",
           cacheRetention === "none" ? undefined : "cache-session",
         );
         expect(params).toMatchObject({ model: id });
-        expect((params as { prompt_cache_retention?: unknown }).prompt_cache_retention).toBe(
-          retention,
-        );
+        expect(params.prompt_cache_retention).toBe(retention);
         if (ttl) {
           expect(params).toHaveProperty("prompt_cache_options", { ttl });
         } else {
@@ -283,15 +209,63 @@ describe("OpenAI Responses provider", () => {
     },
   );
 
-  it("omits cache fields for custom endpoints without cache-key opt-in", async () => {
-    const requestModel = model({ id: "gpt-5.6-sol", baseUrl: "https://proxy.example/v1" });
-    const options = { apiKey: "sentinel-key", cacheRetention: "long" as const };
-    const transportParams = buildOpenAIResponsesParams(requestModel, context, options);
-    await streamOpenAIResponses(requestModel, context, options).result();
+  it.each<{
+    options: Options;
+    model: Partial<ResponsesModel>;
+    expected: { ttl: "30m" | "12h" } | undefined;
+  }>([
+    {
+      options: { promptCacheTtl: "12h", cacheRetention: "long" },
+      model: { id: "gpt-5.6-sol" },
+      expected: { ttl: "12h" },
+    },
+    { options: { promptCacheTtl: "30m" }, model: { id: "gpt-6.1-sol" }, expected: { ttl: "30m" } },
+    {
+      options: { promptCacheTtl: "12h", cacheRetention: "none" },
+      model: { id: "gpt-6.1-sol" },
+      expected: undefined,
+    },
+    { options: { promptCacheTtl: "12h" }, model: { id: "gpt-5.5" }, expected: undefined },
+    {
+      options: { promptCacheTtl: "12h" },
+      model: { id: "gpt-6.1-sol", compat: { supportsLongCacheRetention: false } },
+      expected: undefined,
+    },
+    {
+      options: { promptCacheTtl: "12h" },
+      model: { id: "gpt-6.1-sol", baseUrl: "https://proxy.example/v1" },
+      expected: undefined,
+    },
+  ])(
+    "honors the explicit Responses cache lifetime only on eligible routes: %j",
+    async ({ options, model: modelOverrides, expected }) => {
+      const requests = await bothRequests(
+        { sessionId: "cache-session", ...options },
+        modelOverrides,
+      );
+      for (const params of requests) {
+        expect(params.prompt_cache_options).toEqual(expected);
+        expect(params.prompt_cache_retention).toBeUndefined();
+      }
+    },
+  );
 
-    expect(transportParams.prompt_cache_retention).toBeUndefined();
-    expect(openAiMockState.params[0]).not.toHaveProperty("prompt_cache_retention");
-    for (const params of [transportParams, openAiMockState.params[0]]) {
+  it("preserves the cache lifetime through simple Responses completions", async () => {
+    await streamSimpleOpenAIResponses(model({ id: "gpt-6.1-sol" }), context, {
+      apiKey: "test",
+      promptCacheTtl: "12h",
+    }).result();
+    expect(openAiMockState.params[0]).toMatchObject({ prompt_cache_options: { ttl: "12h" } });
+  });
+
+  it("omits cache fields for custom endpoints without cache-key opt-in", async () => {
+    const requests = await bothRequests(
+      { cacheRetention: "long" },
+      { id: "gpt-5.6-sol", baseUrl: "https://proxy.example/v1" },
+    );
+    expect(requests[0].prompt_cache_retention).toBeUndefined();
+    expect(requests[1]).not.toHaveProperty("prompt_cache_retention");
+    for (const params of requests) {
       expect(params).not.toHaveProperty("prompt_cache_options");
     }
   });
@@ -303,20 +277,11 @@ describe("OpenAI Responses provider", () => {
   ] as const)(
     "honors $id reasoning and sampling without catalog metadata for $reasoningEffort",
     async ({ id, reasoningEffort, expectedEffort }) => {
-      const requestModel = model({ id });
-      const options = { apiKey: "sentinel-key", reasoningEffort, temperature: 0.5, topP: 0.8 };
-      const transportParams = buildOpenAIResponsesParams(requestModel, context, options);
-      await streamOpenAIResponses(requestModel, context, options).result();
-
-      for (const params of [transportParams, openAiMockState.params[0]]) {
-        const request = params as {
-          reasoning?: { effort: string };
-          temperature?: number;
-          top_p?: number;
-        };
-        expect(request.reasoning?.effort).toBe(expectedEffort);
-        expect(request.temperature).toBeUndefined();
-        expect(request.top_p).toBeUndefined();
+      const requests = await bothRequests({ reasoningEffort, temperature: 0.5, topP: 0.8 }, { id });
+      for (const params of requests) {
+        expect(params.reasoning?.effort).toBe(expectedEffort);
+        expect(params.temperature).toBeUndefined();
+        expect(params.top_p).toBeUndefined();
       }
     },
   );

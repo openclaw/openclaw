@@ -1,9 +1,11 @@
-import { createMemo, For, Show } from "solid-js";
+import { createMemo, For, onSettled, Show } from "solid-js";
 import type {
   SessionParticipant,
   SessionParticipantIdentity,
 } from "../../../../packages/gateway-protocol/src/schema/session-participant.js";
 import type { AuthenticatedUser } from "../../app/user-profile.ts";
+import { resolveAgentTextAvatar } from "../../lib/agents/display.ts";
+import { resolveAgentAvatarUrl } from "../../lib/avatar.ts";
 import { sessionParticipantIdentityKey } from "../../lib/chat/sender-label.ts";
 import { resolveAvatar } from "../../lib/identity-avatar.ts";
 import {
@@ -11,10 +13,12 @@ import {
   projectPresenceViewers,
   type PresenceViewer,
 } from "../../lib/presence-users.ts";
+import { useOptionalApplication } from "../../lib/reactive/context.ts";
+import { projectAgentIdentity, projectAgents } from "../../lib/reactive/domain-capabilities.ts";
 import { i18nRevision, t } from "../../lib/reactive/i18n.ts";
-import { defineSolidBridge, type SolidBridgeElement } from "../../lit/solid-bridge.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../../lib/solid-bridge.ts";
 import { personActivityLink, type PersonActivityRouting } from "../person-activity-link.ts";
-import { IdentityAvatarImage, identityAvatarState } from "./identity-avatar-image.tsx";
+import { IdentityAvatarImage, createIdentityAvatarPresentation } from "./identity-avatar-image.tsx";
 import { useIdentityAvatarView } from "./identity-avatar-view.ts";
 import { AgentIdentityAvatar } from "./identity-avatar.tsx";
 import "../tooltip.ts";
@@ -35,39 +39,58 @@ export type ViewerAvatarProps = {
   markAsViewer?: boolean;
 };
 
-export function ViewerAvatarContent(props: ViewerAvatarProps) {
-  const view = useIdentityAvatarView(() => ({
-    identity: props.identity ?? props.user?.identity,
-    id: props.user?.id,
-    name: props.user?.name,
-    username: props.user?.email,
-    profileAvatarUrl: props.user?.avatarUrl,
-  }));
-  return (
-    <Show when={props.user}>
-      <span
-        ref={identityAvatarState(view)}
-        class={["viewer-avatar", `viewer-avatar--${props.variant ?? "session"}`]}
-        data-viewer-id={props.markAsViewer !== false ? props.user?.id : undefined}
-        aria-label={
-          props.variant === "profile"
-            ? (props.user?.name ?? props.user?.email ?? props.user?.id)
-            : presenceViewerLabel(props.user!)
-        }
-      >
-        <Show when={Boolean(view().imageUrl)}>
-          <IdentityAvatarImage view={view()} fallbackSelector=".viewer-avatar" />
-        </Show>
+export const ViewerAvatar = defineSolidBridge<ViewerAvatarProps>(
+  "openclaw-viewer-avatar",
+  (props, host) => {
+    host.style.display = "contents";
+    const view = useIdentityAvatarView(() => ({
+      identity: props.identity ?? props.user?.identity,
+      id: props.user?.id,
+      name: props.user?.name,
+      username: props.user?.email,
+      profileAvatarUrl: props.user?.avatarUrl,
+    }));
+    const presentation = createIdentityAvatarPresentation(view);
+    const fallbackColor = () => `hsl(${view().fallback.colorSeed % 360} 48% 42%)`;
+    return (
+      <Show when={props.user}>
         <span
-          class={view().imageUrl ? "viewer-avatar__fallback" : undefined}
-          style={{ background: `hsl(${view().fallback.colorSeed % 360} 48% 42%)` }}
+          data-avatar-state={presentation.state()}
+          style={{ "--viewer-avatar-color": fallbackColor() }}
+          class={[
+            "viewer-avatar",
+            `viewer-avatar--${props.variant ?? "session"}`,
+            presentation.classes(),
+          ]}
+          data-viewer-id={props.markAsViewer !== false ? props.user?.id : undefined}
+          aria-label={
+            props.variant === "profile"
+              ? (props.user?.name ?? props.user?.email ?? props.user?.id)
+              : presenceViewerLabel(props.user!)
+          }
         >
-          <span class="viewer-avatar__initials">{view().fallback.initials}</span>
+          <Show when={Boolean(view().imageUrl)}>
+            <IdentityAvatarImage view={view()} onStateChange={presentation.onStateChange} />
+          </Show>
+          <span
+            class={view().imageUrl ? "viewer-avatar__fallback" : undefined}
+            style={{ background: fallbackColor() }}
+          >
+            <span class="viewer-avatar__initials">{view().fallback.initials}</span>
+          </span>
         </span>
-      </span>
-    </Show>
-  );
-}
+      </Show>
+    );
+  },
+  {
+    properties: {
+      user: { default: null, attribute: false },
+      variant: { default: "session" },
+      identity: { default: undefined, attribute: false },
+      markAsViewer: { default: true, attribute: false },
+    },
+  },
+);
 
 export type ViewerFacepileProps = {
   presencePayload?: unknown;
@@ -80,168 +103,77 @@ export type ViewerFacepileProps = {
   maxVisible?: number;
   totalCount?: number;
   personActivity?: PersonActivityRouting;
+  registerLink?: (element: HTMLAnchorElement) => (() => void) | undefined;
 };
 
-export function ViewerFacepileContent(props: ViewerFacepileProps) {
-  const users = createMemo(() =>
-    props.staticParticipants
-      ? props.staticParticipants.map(({ identity, label, avatarUrl }) => ({
-          identity,
-          id: identity.id,
-          name: label,
-          avatarUrl,
-          watchedSessions: [],
-        }))
-      : (props.staticUsers ??
-        projectPresenceViewers(
-          props.presencePayload,
-          props.selfUser,
-          props.selfInstanceId,
-          props.sessionKey,
-          props.excludeIdentities ?? EMPTY_VIEWER_IDENTITIES,
-        )),
-  );
-  const visible = createMemo(() => users().slice(0, props.maxVisible ?? 3));
-  const overflowCount = () => Math.max(users().length, props.totalCount ?? 0) - visible().length;
-  const overflowLabel = () => {
-    const overflow = users().slice(props.maxVisible ?? 3);
-    return overflow.length === overflowCount()
-      ? overflow.map(presenceViewerLabel).join("\n")
-      : t("sessionHovercard.moreParticipantsLabel", { count: String(overflowCount()) });
-  };
-  return (
-    <Show when={users().length > 0}>
-      <span
-        class="viewer-facepile viewer-facepile--session"
-        data-viewer-count={Math.max(users().length, props.totalCount ?? 0)}
-        aria-label={users().map(presenceViewerLabel).join(", ")}
-      >
-        <For
-          each={visible()}
-          keyed={(user) =>
-            user.identity ? sessionParticipantIdentityKey(user.identity) : `raw:${user.id}`
-          }
-        >
-          {(user) => (
-            <openclaw-tooltip prop:content={presenceViewerLabel(user())}>
-              <span class="viewer-facepile__tooltip-anchor">
-                <FacepilePerson
-                  user={user()}
-                  markAsViewer={!props.staticParticipants}
-                  routing={props.personActivity}
-                />
-              </span>
-            </openclaw-tooltip>
-          )}
-        </For>
-        <Show when={overflowCount() > 0}>
-          <openclaw-tooltip prop:content={overflowLabel()}>
-            <span class="viewer-avatar viewer-avatar--overflow" aria-label={overflowLabel()}>
-              +{overflowCount()}
-            </span>
-          </openclaw-tooltip>
-        </Show>
-      </span>
-    </Show>
-  );
-}
+const mountedFacepiles = new Map<HTMLElement, ViewerFacepileProps>();
 
-function FacepilePerson(props: {
-  user: FacepileUser;
-  markAsViewer: boolean;
-  routing?: PersonActivityRouting;
-}) {
-  const link = createMemo(() =>
-    props.user.identity?.type === "profile"
-      ? personActivityLink(props.user.identity.id, props.routing, presenceViewerLabel(props.user))
-      : null,
-  );
-  const avatar = (
-    <Show
-      when={props.user.identity?.type === "agent" ? props.user.identity : undefined}
-      fallback={
-        <ViewerAvatar
-          user={props.user}
-          identity={props.user.identity}
-          markAsViewer={props.markAsViewer}
-          variant="session"
-        />
-      }
-    >
-      {(identity) => (
-        <AgentViewerAvatar
-          user={props.user}
-          identity={identity()}
-          markAsViewer={props.markAsViewer}
-        />
-      )}
-    </Show>
-  );
-  return (
-    <Show when={link()} fallback={avatar}>
-      {(target) => (
-        <a
-          class="person-activity-avatar-link"
-          href={target().href}
-          onClick={(event) => target().open(event)}
-        >
-          {avatar}
-        </a>
-      )}
-    </Show>
-  );
-}
-
-export function AgentViewerAvatar(props: {
-  user: Pick<PresenceViewer, "id" | "name" | "email" | "avatarUrl">;
-  identity: Extract<SessionParticipantIdentity, { type: "agent" }>;
-  markAsViewer?: boolean;
-  label?: string;
-}) {
-  const avatar = createMemo(() => {
-    const resolved = resolveAvatar({
-      identity: props.identity,
-      id: props.user.id,
-      name: props.user.name,
-      profileAvatarUrl: props.user.avatarUrl,
-    });
-    return resolved.kind === "profile" ? resolved.url : null;
-  });
-  return (
-    <span
-      class="viewer-avatar viewer-avatar--session"
-      aria-label={props.label ?? presenceViewerLabel(props.user)}
-      data-viewer-id={props.markAsViewer ? props.user.id : undefined}
-    >
-      <AgentIdentityAvatar agent={{ id: props.identity.id, avatar: avatar() }} />
-    </span>
-  );
-}
-
-export type ViewerAvatarElement = SolidBridgeElement<ViewerAvatarProps>;
-export type ViewerFacepileElement = SolidBridgeElement<ViewerFacepileProps>;
-
-export const ViewerAvatar = defineSolidBridge<ViewerAvatarProps>(
-  "openclaw-viewer-avatar",
-  (props, host) => {
-    host.style.display = "contents";
-    return <ViewerAvatarContent {...props} />;
-  },
-  {
-    properties: {
-      user: { default: null, attribute: false },
-      variant: { default: "session" },
-      identity: { default: undefined, attribute: false },
-      markAsViewer: { default: true, attribute: false },
-    },
-  },
-);
-
-defineSolidBridge<ViewerFacepileProps>(
+export const ViewerFacepile = defineSolidBridge<ViewerFacepileProps>(
   "openclaw-viewer-facepile",
   (props, host) => {
     host.style.display = "contents";
-    return <ViewerFacepileContent {...props} />;
+    onSettled(() => {
+      mountedFacepiles.set(host, host);
+      return () => mountedFacepiles.delete(host);
+    });
+    const users = createMemo(() =>
+      props.staticParticipants
+        ? props.staticParticipants.map(({ identity, label, avatarUrl }) => ({
+            identity,
+            id: identity.id,
+            name: label,
+            avatarUrl,
+            watchedSessions: [],
+          }))
+        : (props.staticUsers ??
+          projectPresenceViewers(
+            props.presencePayload,
+            props.selfUser,
+            props.selfInstanceId,
+            props.sessionKey,
+            props.excludeIdentities ?? EMPTY_VIEWER_IDENTITIES,
+          )),
+    );
+    const visible = createMemo(() => users().slice(0, props.maxVisible ?? 3));
+    const overflowCount = () => Math.max(users().length, props.totalCount ?? 0) - visible().length;
+    const overflowLabel = () => {
+      const overflow = users().slice(props.maxVisible ?? 3);
+      return overflow.length === overflowCount()
+        ? overflow.map(presenceViewerLabel).join("\n")
+        : t("sessionHovercard.moreParticipantsLabel", { count: String(overflowCount()) });
+    };
+    return (
+      <Show when={users().length > 0}>
+        <span
+          class="viewer-facepile viewer-facepile--session"
+          data-viewer-count={Math.max(users().length, props.totalCount ?? 0)}
+          aria-label={users().map(presenceViewerLabel).join(", ")}
+        >
+          <For
+            each={visible()}
+            keyed={(user) =>
+              user.identity ? sessionParticipantIdentityKey(user.identity) : `raw:${user.id}`
+            }
+          >
+            {(user) => (
+              <FacepilePerson
+                user={user()}
+                markAsViewer={!props.staticParticipants}
+                routing={props.personActivity}
+                registerLink={props.registerLink}
+              />
+            )}
+          </For>
+          <Show when={overflowCount() > 0}>
+            <openclaw-tooltip prop:content={overflowLabel()}>
+              <span class="viewer-avatar viewer-avatar--overflow" aria-label={overflowLabel()}>
+                +{overflowCount()}
+              </span>
+            </openclaw-tooltip>
+          </Show>
+        </span>
+      </Show>
+    );
   },
   {
     properties: {
@@ -255,9 +187,131 @@ defineSolidBridge<ViewerFacepileProps>(
       maxVisible: { default: 3, attribute: "max-visible", type: Number },
       totalCount: { default: undefined, attribute: false },
       personActivity: { default: undefined, attribute: false },
+      registerLink: { default: undefined, attribute: false },
     },
   },
 );
+
+function FacepilePerson(props: {
+  user: FacepileUser;
+  markAsViewer: boolean;
+  routing?: PersonActivityRouting;
+  registerLink?: ViewerFacepileProps["registerLink"];
+}) {
+  const link = createMemo(() =>
+    props.user.identity?.type === "profile"
+      ? personActivityLink(props.user.identity.id, props.routing, presenceViewerLabel(props.user))
+      : null,
+  );
+  const avatar = <ParticipantAvatar user={props.user} markAsViewer={props.markAsViewer} />;
+  let profileLink: HTMLAnchorElement | undefined;
+  return (
+    <openclaw-tooltip
+      prop:content={presenceViewerLabel(props.user)}
+      prop:descriptionTarget={link() ? () => profileLink ?? null : undefined}
+    >
+      <span class="viewer-facepile__tooltip-anchor">
+        <Show when={link()} fallback={avatar}>
+          {(target) => {
+            let anchor!: HTMLAnchorElement;
+            onSettled(() => props.registerLink?.(anchor));
+            return (
+              <a
+                ref={(element) => {
+                  anchor = element;
+                  profileLink = element;
+                }}
+                class="person-activity-avatar-link"
+                href={target().href}
+                onClick={(event) => target().open(event)}
+              >
+                {avatar}
+              </a>
+            );
+          }}
+        </Show>
+      </span>
+    </openclaw-tooltip>
+  );
+}
+
+export function ParticipantAvatar(props: {
+  user: FacepileUser;
+  markAsViewer?: boolean;
+  label?: string;
+  "aria-hidden"?: "true";
+}) {
+  const agent = () => {
+    const identity = props.user.identity;
+    return identity?.type === "agent" ? identity : undefined;
+  };
+  return (
+    <Show
+      when={agent()}
+      fallback={
+        <ViewerAvatar
+          user={props.user}
+          markAsViewer={props.markAsViewer}
+          variant="session"
+          aria-hidden={props["aria-hidden"]}
+        />
+      }
+    >
+      {(identity) => {
+        const app = useOptionalApplication();
+        const agents = app ? projectAgents(app.agents) : undefined;
+        const agentIdentity = app
+          ? projectAgentIdentity({
+              identities: app.agentIdentity,
+              get agentId() {
+                return identity().id;
+              },
+            })
+          : undefined;
+        const avatar = createMemo(() => {
+          const rosterAgent = agents
+            ?.read()
+            .agentsList?.agents.find((entry) => entry.id === identity().id);
+          const hydrated = agentIdentity?.read();
+          const resolved = resolveAvatar({
+            identity: identity(),
+            id: props.user.id,
+            name: props.user.name,
+            profileAvatarUrl: props.user.avatarUrl,
+          });
+          return {
+            id: identity().id,
+            avatar: hydrated
+              ? resolveAgentAvatarUrl(rosterAgent ?? {}, hydrated)
+              : (resolveAgentAvatarUrl(rosterAgent ?? {}) ??
+                (resolved.kind === "profile" ? resolved.url : null)),
+            textAvatar: resolveAgentTextAvatar(rosterAgent ?? {}, hydrated),
+          };
+        });
+        return (
+          <span
+            class="viewer-avatar viewer-avatar--session"
+            aria-label={props.label ?? presenceViewerLabel(props.user)}
+            data-viewer-id={props.markAsViewer ? props.user.id : undefined}
+          >
+            <AgentIdentityAvatar agent={avatar()} />
+          </span>
+        );
+      }}
+    </Show>
+  );
+}
+
+type ViewerAvatarElement = SolidBridgeElement<ViewerAvatarProps>;
+type ViewerFacepileElement = SolidBridgeElement<ViewerFacepileProps>;
+
+export function mountedViewerSessionKeys(root: HTMLElement): ReadonlySet<string> {
+  return new Set(
+    [...mountedFacepiles].flatMap(([element, props]) =>
+      root.contains(element) ? [props.sessionKey ?? ""] : [],
+    ),
+  );
+}
 
 declare global {
   interface HTMLElementTagNameMap {

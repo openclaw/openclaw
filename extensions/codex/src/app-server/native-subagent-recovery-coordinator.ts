@@ -14,7 +14,6 @@ type NativeSubagentRecoveryDependencies = {
     completion: CodexNativeSubagentCompletion,
     eventAt: number,
   ) => Promise<void>;
-  recoveryPollDelaysMs?: readonly number[];
 };
 
 export const DEFAULT_RECOVERY_POLL_DELAYS_MS = [
@@ -23,12 +22,7 @@ export const DEFAULT_RECOVERY_POLL_DELAYS_MS = [
 
 export class CodexNativeSubagentRecoveryCoordinator {
   private readonly terminalThreads = new Map<string, string>();
-  private readonly recoveryPollDelaysMs: readonly number[];
-
-  constructor(private readonly dependencies: NativeSubagentRecoveryDependencies) {
-    this.recoveryPollDelaysMs =
-      dependencies.recoveryPollDelaysMs ?? DEFAULT_RECOVERY_POLL_DELAYS_MS;
-  }
+  constructor(private readonly dependencies: NativeSubagentRecoveryDependencies) {}
 
   isTerminalThread(threadId: string): boolean {
     return this.terminalThreads.has(threadId);
@@ -55,9 +49,7 @@ export class CodexNativeSubagentRecoveryCoordinator {
     try {
       return await recovery;
     } finally {
-      if (childState.recoveryInFlight === recovery) {
-        childState.recoveryInFlight = undefined;
-      }
+      childState.recoveryInFlight = undefined;
     }
   }
 
@@ -74,12 +66,11 @@ export class CodexNativeSubagentRecoveryCoordinator {
       childState.terminal ||
       childState.settledWithoutCompletion ||
       childState.recoveryTimer ||
-      this.dependencies.isDisposed() ||
-      this.recoveryPollDelaysMs.length === 0
+      this.dependencies.isDisposed()
     ) {
       return;
     }
-    const delayMs = delayForAttempt(this.recoveryPollDelaysMs, childState.recoveryAttempt++);
+    const delayMs = delayForAttempt(DEFAULT_RECOVERY_POLL_DELAYS_MS, childState.recoveryAttempt++);
     childState.recoveryTimer = setTimeout(() => {
       childState.recoveryTimer = undefined;
       void this.reconcileRegisteredChild(childState)

@@ -13,7 +13,10 @@ import {
   retainLoadedPluginSourceCapture,
   retainPluginSourceCaptureInstance,
 } from "./plugin-source-capture-directory.js";
-import { PLUGIN_SOURCE_CAPTURE_PREFIX } from "./plugin-source-capture-path.js";
+import {
+  mkdtempPluginCaptureSync,
+  PLUGIN_SOURCE_CAPTURE_PREFIX,
+} from "./plugin-source-capture-path.js";
 import { isPluginSourceEntry } from "./plugin-source-file.js";
 
 export type PluginDependencyResolution = { root: string; lookupDirectory: string };
@@ -292,87 +295,6 @@ function* pluginPackageTargets(value: unknown): Generator<string> {
   }
 }
 
-/** Package '*' substitutes one subpath everywhere; only its declared fixed prefix is walked. */
-function visitPluginPackageTargetFiles(params: {
-  metadata: string;
-  boundary: string;
-  target: string;
-  wildcard: boolean;
-  visit: (filename: string) => void;
-  isRetainedReference?: (source: string, real: string) => boolean;
-  resolveSource?: (source: string) => { path: string; boundary: string } | undefined;
-}): void {
-  if (!params.target.startsWith("./")) {
-    return;
-  }
-  const marker = randomUUID();
-  let filename: string;
-  try {
-    filename = fileURLToPath(
-      new URL(
-        params.wildcard ? params.target.replaceAll("*", marker) : params.target,
-        pathToFileURL(params.metadata),
-      ),
-    );
-  } catch {
-    // Native selection owns invalid URL/target errors; unused branches remain inert.
-    return;
-  }
-  if (!isPathInside(params.boundary, filename)) {
-    return;
-  }
-  const parts = filename.split(marker);
-  const matcher =
-    parts.length > 1
-      ? new RegExp(
-          `^${escapeRegExp(parts[0]!)}([\\s\\S]*)${parts.slice(1).map(escapeRegExp).join("\\1")}$`,
-          "i",
-        )
-      : undefined;
-  const ancestors = new Set<string>();
-  const visit = (source: string) => {
-    if (
-      path
-        .relative(params.boundary, source)
-        .split(path.sep)
-        .some((name) => name === ".git" || name === "node_modules")
-    ) {
-      return;
-    }
-    const prepared = params.resolveSource?.(source);
-    const input = prepared?.path ?? source;
-    const stat = fs.statSync(input, { throwIfNoEntry: false });
-    if (!stat) {
-      return;
-    }
-    const real = fs.realpathSync(input);
-    if (
-      !isPathInside(prepared?.boundary ?? params.boundary, real) &&
-      !(stat.isFile() && params.isRetainedReference?.(source, real))
-    ) {
-      return;
-    }
-    if (stat.isDirectory()) {
-      if (!matcher) {
-        return;
-      }
-      if (ancestors.has(real)) {
-        throw new Error(`Plugin source contains a directory cycle: ${source}`);
-      }
-      ancestors.add(real);
-      for (const name of fs.readdirSync(input).filter(isPluginSourceEntry).toSorted()) {
-        visit(path.join(source, name));
-      }
-      ancestors.delete(real);
-    } else if (stat.isFile()) {
-      if (!matcher || matcher.test(source)) {
-        params.visit(source);
-      }
-    }
-  };
-  visit(matcher ? path.dirname(parts[0]! + "_") : filename);
-}
-
 type PluginPackageCaptureState = "metadata" | "entry" | "body" | { error: unknown };
 export type PluginPackageCapture = {
   /** Absolute normalized root captured by the artifact producer. */
@@ -490,22 +412,84 @@ export function createPluginPackageMetadataCapture(params: {
       ];
       for (const [key, value] of declarations) {
         for (const target of pluginPackageTargets(value)) {
-          visitPluginPackageTargetFiles({
-            metadata: sourceMetadata,
-            boundary: owner.sourceRoot,
-            target,
-            wildcard: key.includes("*"),
-            isRetainedReference: params.isRetainedReference,
-            resolveSource: params.resolveSource,
-            visit(filename) {
-              owner.captureTarget(
-                path.join(
-                  path.dirname(metadata),
-                  path.relative(path.dirname(sourceMetadata), filename),
-                ),
-              );
-            },
-          });
+          const boundary = owner.sourceRoot;
+          const wildcard = key.includes("*");
+          const { isRetainedReference, resolveSource } = params;
+          // Package '*' substitutes one subpath everywhere; only its fixed prefix is walked.
+          if (!target.startsWith("./")) {
+            continue;
+          }
+          const marker = randomUUID();
+          let filename: string;
+          try {
+            filename = fileURLToPath(
+              new URL(
+                wildcard ? target.replaceAll("*", marker) : target,
+                pathToFileURL(sourceMetadata),
+              ),
+            );
+          } catch {
+            // Native selection owns invalid URL/target errors; unused branches remain inert.
+            continue;
+          }
+          if (!isPathInside(boundary, filename)) {
+            continue;
+          }
+          const parts = filename.split(marker);
+          const matcher =
+            parts.length > 1
+              ? new RegExp(
+                  `^${escapeRegExp(parts[0]!)}([\\s\\S]*)${parts.slice(1).map(escapeRegExp).join("\\1")}$`,
+                  "i",
+                )
+              : undefined;
+          const ancestors = new Set<string>();
+          const visit = (source: string) => {
+            if (
+              path
+                .relative(boundary, source)
+                .split(path.sep)
+                .some((name) => name === ".git" || name === "node_modules")
+            ) {
+              return;
+            }
+            const prepared = resolveSource?.(source);
+            const input = prepared?.path ?? source;
+            const stat = fs.statSync(input, { throwIfNoEntry: false });
+            if (!stat) {
+              return;
+            }
+            const real = fs.realpathSync(input);
+            if (
+              !isPathInside(prepared?.boundary ?? boundary, real) &&
+              !(stat.isFile() && isRetainedReference?.(source, real))
+            ) {
+              return;
+            }
+            if (stat.isDirectory()) {
+              if (!matcher) {
+                return;
+              }
+              if (ancestors.has(real)) {
+                throw new Error(`Plugin source contains a directory cycle: ${source}`);
+              }
+              ancestors.add(real);
+              for (const name of fs.readdirSync(input).filter(isPluginSourceEntry).toSorted()) {
+                visit(path.join(source, name));
+              }
+              ancestors.delete(real);
+            } else if (stat.isFile()) {
+              if (!matcher || matcher.test(source)) {
+                owner.captureTarget(
+                  path.join(
+                    path.dirname(metadata),
+                    path.relative(path.dirname(sourceMetadata), source),
+                  ),
+                );
+              }
+            }
+          };
+          visit(matcher ? path.dirname(parts[0]! + "_") : filename);
         }
       }
     }
@@ -628,9 +612,10 @@ export function createPluginSourceCapture() {
   try {
     created =
       override !== undefined
-        ? fs.mkdtempSync(path.join(override.directory, PLUGIN_SOURCE_CAPTURE_PREFIX))
+        ? mkdtempPluginCaptureSync(path.join(override.directory, PLUGIN_SOURCE_CAPTURE_PREFIX))
         : instance!.createDirectory();
-    directory = fs.realpathSync(created);
+    // Copies admit only targets already in native spelling (Windows 8.3 names expanded).
+    directory = fs.realpathSync.native(created);
     fs.chmodSync(directory, 0o700);
   } catch (error) {
     const cleanupErrors: unknown[] = [];

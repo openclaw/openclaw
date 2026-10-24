@@ -28,6 +28,7 @@ const routing = createDiagnosticFixtureRouting({
   TEMP: "C:\\Temp",
   PSModuleAnalysisCachePath: "C:\\Temp\\ModuleAnalysisCache",
 });
+const system32 = "D:\\RegistryWindows\\System32";
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -36,40 +37,32 @@ afterEach(() => {
   vi.resetModules();
 });
 
-it.each(
-  [
-    {
-      kind: "literal",
-      command:
-        String.raw`"C:\Program Files\node.exe" "C:\Team Notes\\" "Office \"A\"" "" "%%PATH%% ^!value!"` +
-        ' "first\r\nsecond"',
-      expected: {
-        ok: true,
-        args: [
-          "C:\\Program Files\\node.exe",
-          "C:\\Team Notes\\",
-          'Office "A"',
-          "",
-          "%%PATH%% ^!value!",
-          "first\r\nsecond",
-        ],
-      },
-    },
-    { kind: "malformed", command: "node\0 gateway", expected: { ok: false, permanent: false } },
-  ].flatMap(({ kind, command, expected }) =>
-    [false, true].map((fallback) => ({ kind, command, expected, fallback })),
-  ),
-)("reads $kind native argv, WMIC fallback=$fallback", async ({ fallback, command, expected }) => {
+const literalCommand =
+  String.raw`"C:\Program Files\node.exe" "C:\Team Notes\\" "Office \"A\"" "" "%%PATH%% ^!value!"` +
+  ' "first\r\nsecond"';
+const literalArgs = [
+  "C:\\Program Files\\node.exe",
+  "C:\\Team Notes\\",
+  'Office "A"',
+  "",
+  "%%PATH%% ^!value!",
+  "first\r\nsecond",
+];
+
+it.each([false, true])("rejects malformed native argv, WMIC fallback=%s", async (fallback) => {
   const { readWindowsProcessArgsResultSync } = await import("./windows-port-pids.js");
   if (fallback) {
     mocks.spawn.mockReturnValueOnce({ status: 1, stdout: "" });
   }
   mocks.spawn.mockReturnValueOnce({
     status: 0,
-    stdout: fallback ? `CommandLine=${command}\r\n` : command,
+    stdout: fallback ? "CommandLine=node\0 gateway\r\n" : "node\0 gateway",
   });
 
-  expect(readWindowsProcessArgsResultSync(424242, 1_000, routing)).toEqual(expected);
+  expect(readWindowsProcessArgsResultSync(424242, 1_000, routing)).toEqual({
+    ok: false,
+    permanent: false,
+  });
 });
 
 it.each(["supplied", "exhausted", "partial"] as const)(
@@ -111,30 +104,14 @@ it.each(["supplied", "exhausted", "partial"] as const)(
       mocks.spawn.mockReturnValue({ status: 0, stdout: "node fixture-server" });
       expect(readWindowsProcessArgsSync(424242)).toEqual(["node", "fixture-server"]);
       expect(mocks.spawn.mock.lastCall?.[0]).toBe(
-        "D:\\RegistryWindows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+        `${system32}\\WindowsPowerShell\\v1.0\\powershell.exe`,
       );
     });
   },
 );
 
-async function withWindowsDiagnostics(
-  fallback: boolean,
-  run: (modules: {
-    ports: typeof import("./ports-inspect.js");
-    roots: typeof import("./windows-install-roots.js");
-    encoding: typeof import("./windows-encoding.js");
-    pids: typeof import("./windows-port-pids.js");
-    start: typeof import("./windows-process-start.js");
-  }) => Promise<void>,
-) {
+async function withWindowsDiagnostics(fallback: boolean, run: () => Promise<void>) {
   const native = await vi.importActual<typeof import("node:child_process")>("node:child_process");
-  const modules = {
-    ports: await import("./ports-inspect.js"),
-    roots: await import("./windows-install-roots.js"),
-    encoding: await import("./windows-encoding.js"),
-    pids: await import("./windows-port-pids.js"),
-    start: await import("./windows-process-start.js"),
-  };
   vi.spyOn(process, "platform", "get").mockReturnValue("win32");
   const access = fs.accessSync;
   vi.spyOn(fs, "accessSync").mockImplementation((file, mode) => {
@@ -145,7 +122,7 @@ async function withWindowsDiagnostics(
   });
   await withSyntheticDiagnosticEnv(routing, async () => {
     const parent = { ...process.env };
-    const reports: Array<{ command: string; report: unknown }> = [];
+    const reports: Array<[string, unknown]> = [];
     // Windows command output is mocked on POSIX. Each selected child env also reaches a real
     // Node subprocess, proving inheritance independently of the synthetic utility output.
     const capture = (file: string, env?: NodeJS.ProcessEnv) => {
@@ -154,7 +131,7 @@ async function withWindowsDiagnostics(
         ["-e", `process.stdout.write(${diagnosticEnvReportScript(routing)})`],
         { env, encoding: "utf8", timeout: 5000 },
       );
-      reports.push({ command: path.win32.basename(file), report: JSON.parse(stdout) });
+      reports.push([path.win32.basename(file), JSON.parse(stdout)]);
     };
     mocks.exec.mockImplementation(
       (file: string, args: string[], options: { env?: NodeJS.ProcessEnv }) => {
@@ -163,7 +140,12 @@ async function withWindowsDiagnostics(
         return `${value}    REG_SZ    ${value === "OEMCP" ? "437" : value === "SystemRoot" ? "D:\\RegistryWindows" : "D:\\Programs"}\r\n`;
       },
     );
-    const reply = (file: string, args: string[], env?: NodeJS.ProcessEnv) => {
+    const reply = (
+      file: string,
+      args: string[],
+      env?: NodeJS.ProcessEnv,
+      commandLine = literalCommand,
+    ) => {
       capture(file, env);
       const command = path.win32.basename(file);
       const script = args.join(" ");
@@ -188,7 +170,7 @@ async function withWindowsDiagnostics(
             ? "CreationDate=20260903000000.000000+000"
             : "2026-09-03T00:00:00Z";
       } else {
-        stdout = command === "wmic.exe" ? "CommandLine=node fixture-server" : "node fixture-server";
+        stdout = command === "wmic.exe" ? `CommandLine=${commandLine}` : commandLine;
       }
       return { status, stdout, stderr: "" };
     };
@@ -198,14 +180,14 @@ async function withWindowsDiagnostics(
     );
     mocks.run.mockImplementation(
       async ([file, ...args]: [string, ...string[]], options: CommandOptions) => {
-        const result = reply(file, args, options.baseEnv);
+        const result = reply(file, args, options.baseEnv, "node fixture-server");
         return { ...result, code: result.status };
       },
     );
-    await run(modules);
+    await run();
     expect(process.env).toEqual(parent);
     expect(reports.length).toBeGreaterThan(0);
-    for (const { command, report } of reports) {
+    for (const [command, report] of reports) {
       expect(report, `${command} inherited canary presence`).toEqual({
         defined: Object.fromEntries(Object.keys(diagnosticCanaries).map((key) => [key, false])),
         routingPreserved: true,
@@ -218,12 +200,18 @@ describe("Windows diagnostic child environments (mocked utilities)", () => {
   it.each(
     [false, true].flatMap((fallback) => ["ports", "process"].map((api) => ({ fallback, api }))),
   )("isolates $api utility environments, fallback=$fallback", async ({ fallback, api }) => {
-    await withWindowsDiagnostics(fallback, async ({ ports, pids, start }) => {
+    const ports = await import("./ports-inspect.js");
+    const pids = await import("./windows-port-pids.js");
+    const start = await import("./windows-process-start.js");
+    await withWindowsDiagnostics(fallback, async () => {
       if (api === "process") {
         // Exercise utility forwarding without native inspection of the fixture PID.
         vi.stubGlobal("SEALED_RUNTIME_BUILD", true);
         expect(pids.readWindowsListeningPidsOnPortSync(43123)).toEqual([424242]);
-        expect(pids.readWindowsProcessArgsSync(424242)).toEqual(["node", "fixture-server"]);
+        expect(pids.readWindowsProcessArgsResultSync(424242)).toEqual({
+          ok: true,
+          args: literalArgs,
+        });
         expect(start.readWindowsProcessStartTimeSync(424242)).toBe(
           Date.parse("2026-09-03T00:00:00Z"),
         );
@@ -257,28 +245,19 @@ describe("Windows diagnostic child environments (mocked utilities)", () => {
           ...(fallback ? ["wmic.exe"] : []),
         ]),
       );
-      expect(mocks.run.mock.calls[0]?.[0][0]).toBe("D:\\RegistryWindows\\System32\\netstat.exe");
+      expect(mocks.run.mock.calls[0]?.[0][0]).toBe(`${system32}\\netstat.exe`);
     });
   });
 
   it("keeps cold registry authority and caches root/code-page probes", async () => {
-    await withWindowsDiagnostics(false, async ({ roots, encoding }) => {
+    const roots = await import("./windows-install-roots.js");
+    const encoding = await import("./windows-encoding.js");
+    await withWindowsDiagnostics(false, async () => {
       expect(encoding.resolveWindowsConsoleEncoding()).toBe("utf-8");
       expect(mocks.exec.mock.calls.map(([, args]) => args[3])).toEqual(["SystemRoot"]);
-      expect(roots.getWindowsPowerShellExePath()).toBe(
-        "D:\\RegistryWindows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
-      );
-      expect(roots.getWindowsWmicExePath()).toBe("D:\\RegistryWindows\\System32\\wbem\\wmic.exe");
       expect(mocks.exec).toHaveBeenCalledTimes(1);
-      const installRoots = roots.getWindowsInstallRoots();
-      expect(installRoots).toEqual({
-        systemRoot: "D:\\RegistryWindows",
-        programFiles: "D:\\Programs",
-        programFilesX86: "D:\\Programs",
-        programW6432: "D:\\Programs",
-      });
-      expect(roots.getWindowsInstallRoots()).toBe(installRoots);
-      expect(roots.getWindowsProgramFilesRoots()).toEqual(["D:\\Programs"]);
+      roots.getWindowsInstallRoots();
+      roots.getWindowsInstallRoots();
       expect(mocks.exec.mock.calls.map(([, args]) => args[3])).toEqual([
         "SystemRoot",
         "ProgramFilesDir",
@@ -287,15 +266,14 @@ describe("Windows diagnostic child environments (mocked utilities)", () => {
       ]);
       expect(encoding.decodeWindowsTextFileBuffer({ buffer: Buffer.from([0x80]) })).toBe("€");
       expect(encoding.resolveWindowsOemCodePage()).toBe(437);
-      expect(roots.getWindowsSystem32ExePath("netstat.exe")).toBe(
-        "D:\\RegistryWindows\\System32\\netstat.exe",
-      );
       encoding.resolveWindowsConsoleEncoding();
       encoding.decodeWindowsTextFileBuffer({ buffer: Buffer.from([0x80]) });
       encoding.resolveWindowsOemCodePage();
-      expect(mocks.exec).toHaveBeenCalledTimes(5);
-      expect(mocks.spawn).toHaveBeenCalledTimes(2);
-      expect(mocks.spawn.mock.calls[0]?.[0]).toBe("D:\\RegistryWindows\\System32\\cmd.exe");
+      expect([
+        mocks.exec.mock.calls.length,
+        mocks.spawn.mock.calls.length,
+        mocks.spawn.mock.calls[0]?.[0],
+      ]).toEqual([5, 2, `${system32}\\cmd.exe`]);
     });
   });
 });

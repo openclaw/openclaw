@@ -1,14 +1,11 @@
 // Startup log tests cover security warnings, model detail formatting, plugin
 // summaries, ANSI output, and dangerous config reporting.
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
 import { makeProviderModelFixture } from "../agents/test-helpers/provider-model-fixture.js";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
-import {
-  formatAgentModelStartupDetails,
-  formatAgentModelStartupLogLine,
-  logGatewayStartup,
-} from "./server-startup-log.js";
+import { logGatewayStartup } from "./server-startup-log.js";
 
 const modelMocks = vi.hoisted(() => ({
   resolveThinkingDefault: vi.fn((): "medium" | "off" => "medium"),
@@ -37,7 +34,7 @@ vi.mock("../agents/model-thinking-default.js", () => ({
 }));
 
 async function startup(overrides: Partial<Parameters<typeof logGatewayStartup>[0]>) {
-  const info = vi.fn();
+  const info = vi.fn<Parameters<typeof logGatewayStartup>[0]["log"]["info"]>();
   const warn = vi.fn();
   await logGatewayStartup({
     cfg: {},
@@ -49,6 +46,29 @@ async function startup(overrides: Partial<Parameters<typeof logGatewayStartup>[0
     ...overrides,
   });
   return { info, warn };
+}
+
+async function startupModelLog(params: {
+  cfg: Parameters<typeof logGatewayStartup>[0]["cfg"];
+  provider: string;
+  model: string;
+}) {
+  const { info } = await startup({
+    cfg: {
+      ...params.cfg,
+      agents: {
+        ...params.cfg.agents,
+        defaults: {
+          ...params.cfg.agents?.defaults,
+          model: `${params.provider}/${params.model}`,
+        },
+      },
+    },
+  });
+  return {
+    message: info.mock.calls[0]?.[0],
+    consoleMessage: String(info.mock.calls[0]?.[1]?.consoleMessage),
+  };
 }
 
 describe("gateway startup log", () => {
@@ -231,8 +251,8 @@ describe("gateway startup log", () => {
     expect(warn.mock.calls.flat().join("\n")).not.toContain("configured channel warning");
   });
 
-  it("formats configured model thinking and fast mode defaults with the startup model", () => {
-    const line = formatAgentModelStartupLogLine({
+  it("formats configured model thinking and fast mode defaults with the startup model", async () => {
+    const line = await startupModelLog({
       cfg: {
         agents: {
           defaults: {
@@ -261,106 +281,101 @@ describe("gateway startup log", () => {
 
   it.each(["medium", "off"] as const)(
     "reports the provider's unset thinking default: %s",
-    (level) => {
+    async (level) => {
       modelMocks.resolveThinkingDefault.mockReturnValue(level);
-      expect(
-        formatAgentModelStartupDetails({
-          cfg: {
-            agents: {
-              defaults: {
-                model: "openai/gpt-5.5",
-              },
-              entries: { main: { fastModeDefault: true } },
+      const line = await startupModelLog({
+        cfg: {
+          agents: {
+            defaults: {
+              model: "openai/gpt-5.5",
             },
+            entries: { main: { fastModeDefault: true } },
           },
-          provider: "openai",
-          model: "gpt-5.5",
-        }),
-      ).toBe(`thinking=${level}, fast=on`);
+        },
+        provider: "openai",
+        model: "gpt-5.5",
+      });
+      expect(line.message).toBe(`agent model: openai/gpt-5.5 (thinking=${level}, fast=on)`);
       expect(modelMocks.resolveThinkingDefault).toHaveBeenCalledTimes(1);
     },
   );
 
-  it("preserves explicit startup thinking off", () => {
-    expect(
-      formatAgentModelStartupDetails({
-        cfg: {
-          agents: {
-            defaults: {
-              models: {
-                "openai/gpt-5.5": { params: { thinking: "off", fastMode: true } },
-              },
+  it("preserves explicit startup thinking off", async () => {
+    const line = await startupModelLog({
+      cfg: {
+        agents: {
+          defaults: {
+            models: {
+              "openai/gpt-5.5": { params: { thinking: "off", fastMode: true } },
             },
           },
         },
-        provider: "openai",
-        model: "gpt-5.5",
-      }),
-    ).toBe("thinking=off, fast=on");
+      },
+      provider: "openai",
+      model: "gpt-5.5",
+    });
+    expect(line.message).toBe("agent model: openai/gpt-5.5 (thinking=off, fast=on)");
     expect(modelMocks.resolveThinkingDefault).not.toHaveBeenCalled();
   });
 
-  it("preserves explicit Ultra in startup model details", () => {
-    expect(
-      formatAgentModelStartupDetails({
-        cfg: { agents: { defaults: { thinkingDefault: "ultra" } } },
-        provider: "openai",
-        model: "gpt-5.6-sol",
-      }),
-    ).toBe("thinking=ultra, fast=off");
+  it("preserves explicit Ultra in startup model details", async () => {
+    const line = await startupModelLog({
+      cfg: { agents: { defaults: { thinkingDefault: "ultra" } } },
+      provider: "openai",
+      model: "gpt-5.6-sol",
+    });
+    expect(line.message).toBe("agent model: openai/gpt-5.6-sol (thinking=ultra, fast=off)");
     expect(modelMocks.resolveThinkingDefault).not.toHaveBeenCalled();
   });
 
-  it("shows thinking off for configured provider models with reasoning disabled", () => {
-    expect(
-      formatAgentModelStartupDetails({
-        cfg: {
-          models: {
-            providers: {
-              google: {
-                api: "google-generative-ai",
-                baseUrl: "https://generativelanguage.googleapis.com/v1beta",
-                models: [
-                  {
-                    id: "gemma-4-26b-a4b-it",
-                    name: "Gemma 4 26B",
-                    reasoning: false,
-                    input: ["text"],
-                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                    contextWindow: 32_000,
-                    maxTokens: 8_192,
-                  },
-                ],
-              },
+  it("shows thinking off for configured provider models with reasoning disabled", async () => {
+    const line = await startupModelLog({
+      cfg: {
+        models: {
+          providers: {
+            google: {
+              api: "google-generative-ai",
+              baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+              models: [
+                {
+                  id: "gemma-4-26b-a4b-it",
+                  name: "Gemma 4 26B",
+                  reasoning: false,
+                  input: ["text"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  contextWindow: 32_000,
+                  maxTokens: 8_192,
+                },
+              ],
             },
           },
         },
-        provider: "google",
-        model: "gemma-4-26b-a4b-it",
-      }),
-    ).toBe("thinking=off, fast=off");
+      },
+      provider: "google",
+      model: "gemma-4-26b-a4b-it",
+    });
+    expect(line.message).toBe("agent model: google/gemma-4-26b-a4b-it (thinking=off, fast=off)");
     expect(modelMocks.resolveThinkingDefault).not.toHaveBeenCalled();
   });
 
-  it("uses default agent mode overrides in the startup model details", () => {
-    expect(
-      formatAgentModelStartupDetails({
-        cfg: {
-          agents: {
-            defaults: {
-              thinkingDefault: "low",
-              reasoningDefault: "off",
-              models: {
-                "openai/gpt-5.5": { params: { fastMode: false } },
-              },
+  it("uses default agent mode overrides in the startup model details", async () => {
+    const line = await startupModelLog({
+      cfg: {
+        agents: {
+          defaults: {
+            thinkingDefault: "low",
+            reasoningDefault: "off",
+            models: {
+              "openai/gpt-5.5": { params: { fastMode: false } },
             },
-            entries: { alpha: { thinkingDefault: "high", fastModeDefault: true } },
           },
+          entries: { alpha: { thinkingDefault: "high", fastModeDefault: true } },
         },
-        provider: "openai",
-        model: "gpt-5.5",
-      }),
-    ).toBe("thinking=high, fast=on");
+      },
+      provider: "openai",
+      model: "gpt-5.5",
+    });
+    expect(line.message).toBe("agent model: openai/gpt-5.5 (thinking=high, fast=on)");
   });
 
   it("logs a compact listening line with loaded plugin ids and duration", async () => {
@@ -380,13 +395,18 @@ describe("gateway startup log", () => {
     ]);
     const messages = info.mock.calls.map((call) => call[0]);
     const nativeRuntime = messages.find((message) => message.startsWith("native runtime: "));
-    expect(JSON.parse(nativeRuntime!.slice("native runtime: ".length))).toMatchObject({
-      pid: process.pid,
-      node: process.versions.node,
-      sqlite: process.versions.sqlite,
-      uv: process.versions.uv,
-      openssl: process.versions.openssl,
-    });
+    const database = new DatabaseSync(":memory:");
+    try {
+      expect(JSON.parse(nativeRuntime!.slice("native runtime: ".length))).toMatchObject({
+        pid: process.pid,
+        node: process.versions.node,
+        sqlite: database.prepare("SELECT sqlite_version() AS version").get()?.version,
+        uv: process.versions.uv,
+        openssl: process.versions.openssl,
+      });
+    } finally {
+      database.close();
+    }
     const workers = messages.find((message) => message.startsWith("worker startup state: "));
     expect(JSON.parse(workers!.slice("worker startup state: ".length))).toMatchObject({
       workerCount: expect.any(Number),

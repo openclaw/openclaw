@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import {
   createOperationalRunInstanceRef,
@@ -5,92 +7,131 @@ import {
 } from "../../agents/admitted-run-context.js";
 import { acceptCompactionSuccessor } from "../../agents/embedded-agent-runner/compaction-successor.js";
 import { withPreparedEmbeddedRunToolAuthority } from "../../agents/harness/tool-authority.runtime.js";
+import * as capabilityReads from "../../agents/subagents/spawn/subagent-session-store.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
-import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
+import type { SessionEntry } from "../../config/sessions.js";
+import {
+  patchSessionEntryCore,
+  upsertSessionEntryCore,
+} from "../../config/sessions/session-accessor.js";
 import { loadSessionEntryForAdmission } from "../../config/sessions/session-accessor.sqlite-entry-admission.js";
 import {
   projectionLane,
   targetDiscoveryLane,
 } from "../../config/sessions/session-transcript-worker-resources.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { createDirectChatContext } from "../../gateway/server-chat.agent-events.test-helpers.js";
+import { bindSessionRowProjection } from "../../gateway/session-row-projection-access.js";
+import { createSessionRowProjection } from "../../gateway/session-row-projection.js";
 import * as sessionReaders from "../../gateway/session-utils-store-worker.js";
-import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
-import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
-import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
-import { createQueueTestRun } from "./queue.test-helpers.js";
-import { waitForReplyRunSuccessorAdmission } from "./reply-run-registry.js";
+import { withPluginRuntimeGatewayContextResolver } from "../../plugins/runtime/gateway-request-scope.js";
+import { closeAgentWorkAdmissions } from "../../sessions/session-controller.lifecycle.js";
 import {
   acknowledgeReplySessionTransition,
   captureReplyOperationSessionReader,
   getReplyOperationSessionReader,
-} from "./reply-run-registry.state.js";
-import { createTestReplyOperation } from "./reply-run-registry.test-helpers.js";
-import { testing } from "./reply-run-registry.test-support.js";
+} from "../../sessions/session-controller.session-reader.js";
+import { getSessionControllerEntryForOperation } from "../../sessions/session-controller.state.js";
+import { testing } from "../../sessions/session-controller.test-support.js";
+import { waitForReplyRunSuccessorAdmission } from "../../sessions/session-controller.wait.js";
+import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
+import { beginAgentDeletionJournal } from "../../test-utils/agent-deletion-journal.js";
+import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
+import {
+  withOpenClawTestState,
+  type OpenClawTestState,
+} from "../../test-utils/openclaw-test-state.js";
+import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
+import {
+  createTestReplyOperation,
+  queueCurrentReplyRunMessage,
+} from "./reply-run-registry.test-helpers.js";
 import { prepareReplyToolAuthority } from "./reply-tool-authority.js";
+import { createQueueTestRun, toolAuthorityOverlay } from "./reply-tool-authority.test-support.js";
 import { admitReplyTurn } from "./reply-turn-admission.js";
 
 afterEach(() => {
-  testing.resetReplyRunRegistry();
+  testing.resetSessionControllerForTest();
   vi.restoreAllMocks();
 });
 
 const executionKey = "agent:main:authority-execution";
 const policyKey = "agent:main:authority-policy";
 
+function withState(run: (state: OpenClawTestState, config: OpenClawConfig) => Promise<void>) {
+  return withOpenClawTestState({ scenario: "minimal" }, (state) => run(state, {}));
+}
+
+function seed(sessionKey: string, entry: Partial<SessionEntry>, agentId = "main") {
+  return upsertSessionEntryCore({ agentId, sessionKey }, { updatedAt: 1, ...entry });
+}
+
+function makeRun(overrides: Partial<ReturnType<typeof createQueueTestRun>["run"]>) {
+  const run = createQueueTestRun({ prompt: "authority" });
+  Object.assign(run.run, { agentId: "main" }, overrides);
+  return run;
+}
+
+async function prepareEmbedded(
+  state: OpenClawTestState,
+  config: OpenClawConfig,
+  runId: string,
+  overrides: Partial<Parameters<typeof withPreparedEmbeddedRunToolAuthority>[1]> = {},
+  boundary = "worker-authority-test",
+) {
+  const admission = prepareAgentRunAdmission({
+    cfg: config,
+    operationalRunInstance: createOperationalRunInstanceRef(runId),
+    facts: {
+      agentId: "main",
+      runId,
+      ingress: { kind: "system", state: "present", boundary },
+    },
+  });
+  try {
+    const admittedRunContext = await admission.admit("embedded", boundary);
+    const attempt = {
+      sessionId: "execution",
+      sessionKey: executionKey,
+      runId,
+      agentId: "main",
+      config,
+      sessionFile: "/tmp/authority-worker.jsonl",
+      workspaceDir: state.workspaceDir,
+      provider: "openai",
+      modelId: "gpt-test",
+      senderIsOwner: true,
+      messageProvider: "webchat",
+      ...overrides,
+    };
+    return {
+      admission,
+      submit: (effect: () => Promise<string>) =>
+        withPreparedEmbeddedRunToolAuthority({ admittedRunContext }, attempt, undefined, effect),
+    };
+  } catch (error) {
+    admission.close();
+    throw error;
+  }
+}
+
 it("prepares embedded tool authority without caller-thread SQL and refuses a closing owner", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const config: OpenClawConfig = {};
+  await withState(async (state, config) => {
     setRuntimeConfigSnapshot(config);
-    await upsertSessionEntryCore(
-      { agentId: "main", sessionKey: policyKey },
-      { sessionId: "policy", updatedAt: 1, sandboxMode: "off" },
-    );
-    const admission = prepareAgentRunAdmission({
-      cfg: config,
-      operationalRunInstance: createOperationalRunInstanceRef("worker-authority"),
-      facts: {
-        agentId: "main",
-        runId: "worker-authority",
-        ingress: { kind: "system", state: "present", boundary: "worker-authority-test" },
-      },
+    await seed(policyKey, { sessionId: "policy", sandboxMode: "off" });
+    const { admission, submit } = await prepareEmbedded(state, config, "worker-authority", {
+      sandboxSessionKey: policyKey,
     });
+    const effects = vi.fn(async () => "admitted");
+    const calls = observeMainThreadSql();
     try {
-      const admittedRunContext = await admission.admit("embedded", "worker-authority-test");
-      const attempt = {
-        sessionId: "execution",
-        sessionKey: executionKey,
-        runId: "worker-authority",
-        agentId: "main",
-        config,
-        sessionFile: "/tmp/authority-worker.jsonl",
-        workspaceDir: state.workspaceDir,
-        provider: "openai",
-        modelId: "gpt-test",
-        sandboxSessionKey: policyKey,
-        senderIsOwner: true,
-        messageProvider: "webchat",
-      };
-      const effects = vi.fn(async () => "admitted");
-      const calls = observeMainThreadSql();
-      try {
-        await expect(
-          withPreparedEmbeddedRunToolAuthority({ admittedRunContext }, attempt, undefined, effects),
-        ).resolves.toBe("admitted");
-        calls.expectIdle();
-        const pending = withPreparedEmbeddedRunToolAuthority(
-          { admittedRunContext },
-          attempt,
-          undefined,
-          effects,
-        );
-        admission.close();
-        await expect(pending).rejects.toThrow();
-        expect(effects).toHaveBeenCalledTimes(1);
-        calls.expectIdle();
-      } finally {
-        calls.restore();
-      }
+      await expect(submit(effects)).resolves.toBe("admitted");
+      calls.expectIdle();
+      const pending = submit(effects);
+      admission.close();
+      await expect(pending).rejects.toThrow();
+      expect(effects).toHaveBeenCalledTimes(1);
+      calls.expectIdle();
     } finally {
       admission.close();
     }
@@ -100,7 +141,7 @@ it("prepares embedded tool authority without caller-thread SQL and refuses a clo
 it.each(["main", "policy", "borrowed"] as const)(
   "retains the %s-agent source while rereading changed sandbox policy before steering",
   async (policyAgent) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    await withState(async (state) => {
       const config: OpenClawConfig = {
         agents: { defaults: { sandbox: { mode: "all" } }, entries: { main: {}, policy: {} } },
         tools: { sandbox: { tools: { deny: ["exec"] } } },
@@ -109,17 +150,12 @@ it.each(["main", "policy", "borrowed"] as const)(
       const policyAgentId = policyAgent === "borrowed" ? "main" : policyAgent;
       const classificationKey =
         policyAgent === "borrowed" ? executionKey : `agent:${policyAgent}:authority-policy`;
-      await upsertSessionEntryCore(
-        { agentId: policyAgentId, sessionKey: classificationKey },
-        { sessionId: "policy", updatedAt: 1, sandboxMode: "off" },
-      );
+      await seed(classificationKey, { sessionId: "policy", sandboxMode: "off" }, policyAgentId);
       // Settle setup maintenance before retaining the readers used across the policy change.
       await cleanupSessionStateForTest({ stateDir: state.stateDir, rootPath: state.root });
-      const run = createQueueTestRun({ prompt: "authority" });
-      Object.assign(run.run, {
+      const run = makeRun({
         sessionKey: executionKey,
         runtimePolicySessionKey: classificationKey,
-        agentId: "main",
         config,
       });
       const admission =
@@ -162,12 +198,9 @@ it.each(["main", "policy", "borrowed"] as const)(
         });
         try {
           await operation.bindToolAuthoritySnapshotAsync(snapshot);
-          // The borrowed admission read already warmed the entry facts.
           expect(initialEntries).toBe(policyAgent === "borrowed" ? 0 : 1);
         } finally {
-          for (const read of initialReads) {
-            read.mockRestore();
-          }
+          initialReads.forEach((read) => read.mockRestore());
         }
         const admitted = await operation.bindToolAuthorityRouteAsync(run.run);
         await upsertSessionEntryCore(
@@ -175,37 +208,28 @@ it.each(["main", "policy", "borrowed"] as const)(
           { sandboxMode: undefined },
         );
         const calls = observeMainThreadSql();
-        try {
-          discovery.mockClear();
-          expect(() => snapshot.fingerprint(run.run)).toThrow(
-            "Tool authority classification session changed",
-          );
-          expect(await snapshot.fingerprintAsync(run.run)).not.toBe(admitted);
-          if (reader) {
-            expect(discovery).not.toHaveBeenCalled();
-          }
-          discovery.mockClear();
-          await expect(
-            operation.projectToolAuthorityFingerprintAsync({
-              senderIsOwner: run.run.senderIsOwner === true,
-              disableTools: false,
-              traceAuthorized: false,
-            }),
-          ).resolves.toBeUndefined();
-          calls.expectIdle();
+        discovery.mockClear();
+        expect(() => snapshot.fingerprint(run.run)).toThrow(
+          "Tool authority classification session changed",
+        );
+        expect(await snapshot.fingerprintAsync(run.run)).not.toBe(admitted);
+        if (reader) {
           expect(discovery).not.toHaveBeenCalled();
-          if (admission) {
-            await admission.databaseClaim.release();
-            discovery.mockClear();
-            await expect(snapshot.fingerprintAsync(run.run)).rejects.toThrow();
-            expect(discovery).not.toHaveBeenCalled();
-          }
-        } finally {
-          calls.restore();
+        }
+        discovery.mockClear();
+        await expect(
+          operation.projectToolAuthorityFingerprintAsync(toolAuthorityOverlay(run)),
+        ).resolves.toBeUndefined();
+        calls.expectIdle();
+        expect(discovery).not.toHaveBeenCalled();
+        if (admission) {
+          await admission.databaseClaim.release();
+          discovery.mockClear();
+          await expect(snapshot.fingerprintAsync(run.run)).rejects.toThrow();
+          expect(discovery).not.toHaveBeenCalled();
         }
       } finally {
         snapshot.close();
-        discovery.mockRestore();
         await admission?.databaseClaim.release();
       }
     });
@@ -215,7 +239,7 @@ it.each(["main", "policy", "borrowed"] as const)(
 it.each(["execution", "separate"] as const)(
   "retains frozen %s-policy authority across an acknowledged compaction reader handoff",
   async (classification) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    await withState(async (state) => {
       const scope = {
         agentId: "main",
         sessionKey: executionKey,
@@ -243,13 +267,12 @@ it.each(["execution", "separate"] as const)(
       if (admitted.status !== "owned") {
         throw new Error("Fixture requires retained reply admission");
       }
-      const run = createQueueTestRun({ prompt: "authority after compaction" });
-      Object.assign(run.run, {
-        agentId: "main",
+      const controller = getSessionControllerEntryForOperation(admitted.operation);
+      const run = makeRun({
+        workspaceDir: state.workspaceDir,
         sessionKey: executionKey,
         sessionId: original.sessionId,
         sessionFile: executionKey,
-        workspaceDir: state.workspaceDir,
         runtimePolicySessionKey: classification === "separate" ? policyKey : executionKey,
         config: {},
       });
@@ -262,7 +285,6 @@ it.each(["execution", "separate"] as const)(
         undefined,
         captureReplyOperationSessionReader(admitted.operation),
       );
-      // Main's independent policy lookup already refuses a changed classification identity.
       const independent = prepareReplyToolAuthority(run);
       const discovery = vi.spyOn(sessionReaders, "prepareGatewaySessionEntryReadOnlyInWorker");
       try {
@@ -285,31 +307,170 @@ it.each(["execution", "separate"] as const)(
         await acknowledgeReplySessionTransition(admitted.operation, accepted.admissionTransition);
         admitted.operation.updateSessionId(accepted.sessionId);
         expect(() => reader.assertCurrent()).toThrow(/released/u);
+        for (const authority of [independent, snapshot]) {
+          const refreshed = expect(authority.fingerprintAsync(run.run));
+          if (classification === "separate") {
+            await refreshed.resolves.toBe(fingerprint);
+          } else {
+            await refreshed.rejects.toThrow("Tool authority classification source changed");
+          }
+        }
         if (classification === "separate") {
-          await expect(independent.fingerprintAsync(run.run)).resolves.toBe(fingerprint);
-          await expect(snapshot.fingerprintAsync(run.run)).resolves.toBe(fingerprint);
           await expect(admitted.operation.bindToolAuthorityRouteAsync(run.run)).resolves.toBe(
             fingerprint,
           );
-        } else {
-          await expect(independent.fingerprintAsync(run.run)).rejects.toThrow(
-            "Tool authority classification source changed",
-          );
-          await expect(snapshot.fingerprintAsync(run.run)).rejects.toThrow(
-            "Tool authority classification source changed",
-          );
         }
         admitted.operation.complete();
-        await waitForReplyRunSuccessorAdmission(executionKey, null);
+        await waitForReplyRunSuccessorAdmission(executionKey, null, { target: controller.target });
         discovery.mockClear();
         await expect(snapshot.fingerprintAsync(run.run)).rejects.toThrow();
         expect(discovery).not.toHaveBeenCalled();
       } finally {
         independent.close();
-        discovery.mockRestore();
         admitted.operation.complete();
-        await waitForReplyRunSuccessorAdmission(executionKey, null);
+        await waitForReplyRunSuccessorAdmission(executionKey, null, { target: controller.target });
       }
     });
   },
 );
+
+it.each([
+  "unrelated deletion",
+  "revoked policy",
+  "reassigned session",
+  "deleted requester",
+] as const)(
+  "rechecks reply capability authority after an await during %s before queueMessage",
+  async (change) => {
+    await withState(async (state, config) => {
+      setRuntimeConfigSnapshot(config);
+      const sessionKey = "agent:main:subagent:replay-requester";
+      const sessionId = "replay-requester";
+      const scope = { agentId: "main", sessionKey };
+      await seed(sessionKey, {
+        sessionId,
+        spawnDepth: 1,
+        spawnedBy: "agent:main:main",
+        inheritedToolPolicyVersion: 1,
+        inheritedToolAllow: ["read", "exec"],
+      });
+      const projection = await createSessionRowProjection({ cfg: config });
+      const run = makeRun({
+        workspaceDir: state.workspaceDir,
+        sessionKey,
+        sessionId,
+        config,
+      });
+      const snapshot = prepareReplyToolAuthority(run);
+      let releaseIngress: (() => void) | undefined;
+      try {
+        await projection.ensureMaterialized();
+        const context = bindSessionRowProjection(createDirectChatContext({}), () => projection);
+        await withPluginRuntimeGatewayContextResolver(
+          () => context,
+          async () => {
+            const operation = createTestReplyOperation({ sessionKey, sessionId });
+            await operation.bindToolAuthoritySnapshotAsync(snapshot);
+            await operation.bindToolAuthorityRouteAsync(run.run);
+            const queueMessage = vi.fn(async () => {});
+            operation.attachBackend({
+              kind: "embedded",
+              cancel: vi.fn(),
+              isStreaming: () => true,
+              queueMessage,
+            });
+            operation.setPhase("running");
+            const prepare = capabilityReads.prepareSessionCapabilityRead;
+            let interleaved = false;
+            vi.spyOn(capabilityReads, "prepareSessionCapabilityRead").mockImplementation(
+              async (read) => {
+                const prepared = await prepare(read);
+                if (!interleaved) {
+                  if (change === "unrelated deletion" || change === "deleted requester") {
+                    const deletedAgent = change === "unrelated deletion" ? "deleting" : "main";
+                    releaseIngress = closeAgentWorkAdmissions({
+                      agentId: deletedAgent,
+                      env: state.env,
+                      reason: new Error("Agent deletion is draining active work"),
+                    });
+                    beginAgentDeletionJournal(
+                      {
+                        agentId: deletedAgent,
+                        operationId: "capability-replay",
+                        agentDir: state.agentDir(deletedAgent),
+                        workspaceDir: state.workspaceDir,
+                        sessionsDir: state.sessionsDir(deletedAgent),
+                        databasePaths: [],
+                        deleteFiles: false,
+                      },
+                      { env: state.env },
+                    );
+                  } else {
+                    await patchSessionEntryCore(scope, () =>
+                      change === "revoked policy"
+                        ? { inheritedToolDeny: ["exec"] }
+                        : {
+                            sessionId: "replacement-requester",
+                            spawnedBy: "agent:main:other-parent",
+                          },
+                    );
+                  }
+                  interleaved = true;
+                }
+                return prepared;
+              },
+            );
+            const result = await queueCurrentReplyRunMessage(sessionId, "continue", {
+              isInboundUserMessage: true,
+              toolAuthorityOverlay: toolAuthorityOverlay(run),
+            });
+            expect(interleaved).toBe(true);
+            if (change === "unrelated deletion") {
+              expect(result).toEqual({ status: "accepted" });
+              expect(queueMessage).toHaveBeenCalledOnce();
+            } else {
+              expect(result).toEqual({ status: "rejected", reason: "tool_authority_mismatch" });
+              expect(queueMessage).not.toHaveBeenCalled();
+            }
+          },
+        );
+      } finally {
+        releaseIngress?.();
+        snapshot.close();
+        projection.dispose();
+      }
+    });
+  },
+);
+
+it("propagates a lineage database failure before submitTurn", async () => {
+  await withState(async (state, config) => {
+    setRuntimeConfigSnapshot(config);
+    const sessionKey = "agent:main:subagent:unreadable-lineage";
+    const sessionId = "unreadable-lineage";
+    const runId = "worker-authority-database-failure";
+    await seed(sessionKey, {
+      sessionId,
+      spawnedBy: "agent:broken:subagent:parent",
+      subagentRole: "orchestrator",
+      inheritedToolPolicyVersion: 1,
+    });
+    const { admission, submit } = await prepareEmbedded(
+      state,
+      config,
+      runId,
+      { sessionId, sessionKey, sessionFile: state.statePath("unreadable-lineage.jsonl") },
+      "database-failure-test",
+    );
+    try {
+      const brokenPath = resolveOpenClawAgentSqlitePath({ agentId: "broken", env: state.env });
+      fs.mkdirSync(path.dirname(brokenPath), { recursive: true });
+      fs.writeFileSync(brokenPath, "not a SQLite database");
+      const submitTurn = vi.fn(async () => "submitted");
+      await expect(submit(submitTurn)).rejects.toThrow(/not a database/i);
+      expect(submitTurn).not.toHaveBeenCalled();
+    } finally {
+      admission.close();
+    }
+  });
+});

@@ -1,4 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { GATEWAY_STARTUP_ADMISSION_WAIT_MS } from "../../packages/gateway-protocol/src/startup-unavailable.js";
+import { raceWithTimeout } from "../../packages/retry/src/index.js";
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { sleepWithAbort } from "../infra/backoff.js";
@@ -8,6 +10,7 @@ import {
   getOrLoadSqliteDatabaseAdmissionForPath,
   prepareSqliteDatabaseAdmission,
 } from "../infra/sqlite-database-admission.js";
+import { isSqliteLockError } from "../infra/sqlite-error-diagnostics.js";
 import { readSqliteIntegrityFileIdentity } from "../infra/sqlite-file-generation.js";
 import { withSqliteReadOnlyWorkerScope } from "../infra/sqlite-readonly-worker.js";
 import { schemaAdmission } from "../infra/sqlite-schema-admission.js";
@@ -17,7 +20,10 @@ import { normalizeAgentId } from "../routing/session-key.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { createPermitPool } from "../shared/permit-pool.js";
+import { AgentDatabaseSchemaAdmissionChangedError } from "./agent-database-admission-error.js";
 import {
+  AgentDatabaseAdmissionError,
+  assertAgentDatabaseAdmitted,
   createAgentDatabaseInspectionRefusal,
   failPendingAgentDatabase,
   listAgentDatabaseAdmissionRefusals,
@@ -55,7 +61,7 @@ type PreparationInput = {
 type Activation = {
   isCurrent: () => boolean;
   preparationReady: Promise<void>;
-  openAgent: (input: PreparationInput) => Promise<void>;
+  openAgent: (input: PreparationInput) => Promise<AsyncDisposable | void>;
   migrateAgent: (input: PreparationInput) => Promise<void | { maintain: () => Promise<void> }>;
   publishAgent: (input: PreparationInput) => Promise<void>;
 };
@@ -270,16 +276,32 @@ class AgentDatabaseStartupAdmission {
   /** Join only the current agent preparation, without holding channel startup or healthy agents. */
   waitForAgentPreparation(
     agentId: string,
-    options: { env?: NodeJS.ProcessEnv; signal?: AbortSignal } = {},
+    options: { env?: NodeJS.ProcessEnv; signal?: AbortSignal; forWrite?: boolean } = {},
   ): Promise<void> | undefined {
     const pending = this.pending.get(normalizeAgentId(agentId));
     if (!pending || readAgentDatabaseAdmissionRefusal(agentId, options) !== pending.refusal) {
       return undefined;
     }
-    return racePromiseWithAbortSignal(
+    const signal = options.signal ? AbortSignal.any([this.signal, options.signal]) : this.signal;
+    if (!options.forWrite) {
+      return racePromiseWithAbortSignal(pending.completion, signal);
+    }
+    // Allow five minutes for slow-host startup, plus a minute per queued inspection batch.
+    const timeoutMs =
+      GATEWAY_STARTUP_ADMISSION_WAIT_MS +
+      Math.ceil(this.pending.size / AGENT_DATABASE_PREFLIGHT_CONCURRENCY) * 60_000;
+    return raceWithTimeout(
       pending.completion,
-      options.signal ? AbortSignal.any([this.signal, options.signal]) : this.signal,
-    );
+      timeoutMs,
+      () => {
+        throw new AgentDatabaseAdmissionError({
+          ...pending.refusal,
+          repairHint:
+            "This agent is still preparing. Retry the request after background inspection and preparation finish.",
+        });
+      },
+      { signal, ref: false },
+    ).then(() => assertAgentDatabaseAdmitted(agentId, options));
   }
 
   track(work: Promise<unknown>): void {
@@ -486,6 +508,7 @@ class AgentDatabaseStartupAdmission {
             async () => {
               await assertNotDeleted();
               await preparePendingAgentDatabase(refusal, { env, assertCurrent }, async () => {
+                await using prepared = new AsyncDisposableStack();
                 const input = {
                   agentId,
                   paths,
@@ -494,25 +517,59 @@ class AgentDatabaseStartupAdmission {
                   assertCurrent,
                   phase,
                 };
-                phase("open-wait");
-                const release = await this.opening.acquire({ signal: this.signal });
-                try {
-                  assertCurrent();
-                  phase("open");
-                  await activation.openAgent(input);
-                } finally {
-                  release?.();
-                }
-                phase("migration-wait");
-                const releaseMigration = await this.migrating.acquire({ signal: this.signal });
-                try {
-                  assertCurrent();
-                  phase("migration");
-                  const migrated = await activation.migrateAgent(input);
-                  preparation.maintenance = migrated ? migrated.maintain : undefined;
-                } finally {
-                  releaseMigration?.();
-                }
+                const retryLockedPreparation = async (run: () => Promise<void>) => {
+                  let preparationAttempts = 0;
+                  await retryAsync(
+                    async () => {
+                      if (preparationAttempts++ > 0) {
+                        await assertNotDeleted();
+                      }
+                      assertCurrent();
+                      await run();
+                    },
+                    {
+                      attempts: 4,
+                      minDelayMs: 500,
+                      maxDelayMs: 8000,
+                      jitter: 0.2,
+                      sleep: (ms) => sleepWithAbort(ms, this.signal),
+                      // Mixed cleanup failures and uncertain outcomes must not replay preparation.
+                      shouldRetry: isSqliteLockError,
+                      onRetry: ({ attempt }) =>
+                        log.warn("agent database startup locked; retrying preparation", {
+                          agentId,
+                          phase: recovery.phase,
+                          attempt,
+                        }),
+                    },
+                  );
+                };
+                await retryLockedPreparation(async () => {
+                  phase("open-wait");
+                  const release = await this.opening.acquire({ signal: this.signal });
+                  try {
+                    assertCurrent();
+                    phase("open");
+                    const opened = await activation.openAgent(input);
+                    if (opened) {
+                      prepared.use(opened);
+                    }
+                  } finally {
+                    release?.();
+                  }
+                });
+                await retryLockedPreparation(async () => {
+                  phase("migration-wait");
+                  const releaseMigration = await this.migrating.acquire({ signal: this.signal });
+                  try {
+                    assertCurrent();
+                    phase("migration");
+                    const migrated = await activation.migrateAgent(input);
+                    preparation.maintenance = migrated ? migrated.maintain : undefined;
+                  } finally {
+                    releaseMigration?.();
+                  }
+                });
                 // Keep the revision until admission publishes after its final journal check.
                 phase("publication-wait");
                 const previous = this.publication;
@@ -526,10 +583,10 @@ class AgentDatabaseStartupAdmission {
                     await activation.publishAgent(input);
                     break;
                   } catch (error) {
-                    if (
-                      !(error instanceof AgentDatabaseStartupSupersededError) ||
-                      attempt >= STARTUP_PUBLICATION_ATTEMPTS
-                    ) {
+                    const retryable =
+                      error instanceof AgentDatabaseStartupSupersededError ||
+                      error instanceof AgentDatabaseSchemaAdmissionChangedError;
+                    if (!retryable || attempt >= STARTUP_PUBLICATION_ATTEMPTS) {
                       throw error;
                     }
                     log.warn("agent database startup preparation was superseded; retrying", {

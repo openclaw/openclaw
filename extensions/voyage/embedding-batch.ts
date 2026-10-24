@@ -47,69 +47,18 @@ function buildVoyageBatchRequest<T>(params: {
   client: RemoteEmbeddingClient;
   path: string;
   signal?: AbortSignal;
-  onResponse: (res: Response) => Promise<T>;
+  onResponse: (res: Response, requestHeaders?: HeadersInit) => Promise<T>;
 }) {
   return {
     url: resolveEmbeddingEndpointUrl(params.client.baseUrl, params.path),
     ssrfPolicy: params.client.ssrfPolicy,
+    resolveRequestHeaders: params.client.resolveRequestHeaders,
     signal: params.signal,
     init: {
       headers: buildBatchHeaders(params.client, { json: true }),
     },
     onResponse: params.onResponse,
   };
-}
-
-async function submitVoyageBatch(params: {
-  client: RemoteEmbeddingClient;
-  requests: VoyageBatchRequest[];
-  agentId: string;
-}): Promise<EmbeddingBatchStatus> {
-  const inputFileId = await uploadBatchJsonlFile({
-    client: params.client,
-    requests: params.requests,
-    errorPrefix: "voyage batch file upload failed",
-  });
-
-  return await postJsonWithRetry<EmbeddingBatchStatus>({
-    url: resolveEmbeddingEndpointUrl(params.client.baseUrl, "batches"),
-    headers: buildBatchHeaders(params.client, { json: true }),
-    ssrfPolicy: params.client.ssrfPolicy,
-    body: {
-      input_file_id: inputFileId,
-      endpoint: EMBEDDING_BATCH_ENDPOINT,
-      completion_window: VOYAGE_BATCH_COMPLETION_WINDOW,
-      request_params: {
-        model: params.client.model,
-        input_type: "document",
-      },
-      metadata: {
-        source: "clawdbot-memory",
-        agent: params.agentId,
-      },
-    },
-    errorPrefix: "voyage batch create failed",
-  });
-}
-
-async function fetchVoyageBatchStatus(params: {
-  client: RemoteEmbeddingClient;
-  batchId: string;
-  signal?: AbortSignal;
-}): Promise<EmbeddingBatchStatus> {
-  return await withRemoteHttpResponse(
-    buildVoyageBatchRequest({
-      client: params.client,
-      path: `batches/${params.batchId}`,
-      signal: params.signal,
-      onResponse: async (res) => {
-        await assertOkOrThrowProviderError(res, "voyage.batch-status");
-        return await readProviderJsonResponse<EmbeddingBatchStatus>(res, "voyage-batch-status", {
-          maxBytes: VOYAGE_BATCH_RESPONSE_MAX_BYTES,
-        });
-      },
-    }),
-  );
 }
 
 async function readVoyageBatchError(params: {
@@ -121,8 +70,10 @@ async function readVoyageBatchError(params: {
       buildVoyageBatchRequest({
         client: params.client,
         path: `files/${params.errorFileId}/content`,
-        onResponse: async (res) => {
-          await assertOkOrThrowProviderError(res, "voyage.batch-error-file-content");
+        onResponse: async (res, requestHeaders) => {
+          await assertOkOrThrowProviderError(res, "voyage.batch-error-file-content", {
+            requestHeaders,
+          });
           const bytes = await readResponseWithLimit(res, VOYAGE_BATCH_RESPONSE_MAX_BYTES, {
             onOverflow: ({ maxBytes: maxBytesLocal }) =>
               new Error(`voyage batch error file content exceeds ${maxBytesLocal} bytes`),
@@ -156,16 +107,44 @@ export async function runVoyageEmbeddingBatches(
       maxRequests: VOYAGE_BATCH_MAX_REQUESTS,
       debugLabel: "memory embeddings: voyage batch submit",
     }),
-    submit: (group) =>
-      submitVoyageBatch({ client: params.client, requests: group, agentId: params.agentId }),
+    submit: async (group) => {
+      const { client, agentId } = params;
+      const inputFileId = await uploadBatchJsonlFile({
+        client,
+        requests: group,
+        errorPrefix: "voyage batch file upload failed",
+      });
+      return await postJsonWithRetry<EmbeddingBatchStatus>({
+        url: resolveEmbeddingEndpointUrl(client.baseUrl, "batches"),
+        headers: buildBatchHeaders(client, { json: true }),
+        ssrfPolicy: client.ssrfPolicy,
+        resolveRequestHeaders: client.resolveRequestHeaders,
+        body: {
+          input_file_id: inputFileId,
+          endpoint: EMBEDDING_BATCH_ENDPOINT,
+          completion_window: VOYAGE_BATCH_COMPLETION_WINDOW,
+          request_params: {
+            model: client.model,
+            input_type: "document",
+          },
+          metadata: {
+            source: "clawdbot-memory",
+            agent: agentId,
+          },
+        },
+        errorPrefix: "voyage batch create failed",
+      });
+    },
     readError: (errorFileId) => readVoyageBatchError({ client: params.client, errorFileId }),
     readOutput: (fileId, read) =>
       withRemoteHttpResponse(
         buildVoyageBatchRequest({
           client: params.client,
           path: `files/${fileId}/content`,
-          onResponse: async (response) => {
-            await assertOkOrThrowProviderError(response, "voyage.batch-file-content");
+          onResponse: async (response, requestHeaders) => {
+            await assertOkOrThrowProviderError(response, "voyage.batch-file-content", {
+              requestHeaders,
+            });
             await read(response);
           },
         }),
@@ -187,7 +166,22 @@ export async function runVoyageEmbeddingBatches(
         timeoutMs,
         debug,
         initial: batchInfo,
-        fetchStatus: (signal) => fetchVoyageBatchStatus({ client, batchId, signal }),
+        fetchStatus: async (signal) =>
+          await withRemoteHttpResponse(
+            buildVoyageBatchRequest({
+              client,
+              path: `batches/${batchId}`,
+              signal,
+              onResponse: async (res, requestHeaders) => {
+                await assertOkOrThrowProviderError(res, "voyage.batch-status", { requestHeaders });
+                return await readProviderJsonResponse<EmbeddingBatchStatus>(
+                  res,
+                  "voyage-batch-status",
+                  { maxBytes: VOYAGE_BATCH_RESPONSE_MAX_BYTES },
+                );
+              },
+            }),
+          ),
         resolveTimeoutMs: () =>
           resolveProviderOperationTimeoutMs({ deadline, defaultTimeoutMs: timeoutMs }),
         waitForPoll: (delayMs) =>

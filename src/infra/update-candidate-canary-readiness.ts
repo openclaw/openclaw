@@ -135,8 +135,9 @@ export async function waitForUpdateCandidateReadiness(
       throw new Error(params.getExitReason() ?? "The updated Gateway exited before it was ready");
     }
     if (Date.now() >= hardDeadline) {
-      throw new Error(
+      throw new DOMException(
         `Candidate still starting after ${(Date.now() - waitStarted) / 1_000} s; milestones reached: ${[...milestones].join(", ") || "none"}`,
+        "TimeoutError",
       );
     }
   };
@@ -161,12 +162,13 @@ export async function waitForUpdateCandidateReadiness(
           }
           if (Date.now() >= workDeadline) {
             if (lastProgress && (candidatePending || !proxy)) {
-              throw new Error(
+              throw new DOMException(
                 `Candidate Gateway startup stalled for ${stallBudgetMs}ms after ${lastProgress.milestone}`,
+                "TimeoutError",
               );
             }
             if (!failure) {
-              throw new Error("Update validation deadline exceeded");
+              throw new DOMException("Update validation deadline exceeded", "TimeoutError");
             }
             params.capture(failure.message);
             probeFailure = failure;

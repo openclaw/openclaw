@@ -1,4 +1,5 @@
 import type { ControlUiHost } from "../../../src/plugin-sdk/control-ui.js";
+import { listen } from "../lib/reactive/listener.ts";
 
 /** A mounted view cannot retain host calls or listeners after its own lifetime ends. */
 export function scopeControlUiHost(
@@ -40,7 +41,9 @@ export function scopeControlUiHost(
           return next;
         })
       : result;
-  signal.addEventListener(
+  // The view's lifetime owns this one-shot teardown of its retained service handles.
+  listen(
+    signal,
     "abort",
     () => {
       for (const dispose of disposers) {
@@ -120,6 +123,7 @@ export function scopeControlUiHost(
       check();
       return keep(host.onEvent(name, bindCallback(listener)));
     },
+    // The SDK callback retains synchronous delivery and this view's live authority check.
     subscribe: (listener) => {
       check();
       return keep(host.subscribe(bindCallback(listener)));

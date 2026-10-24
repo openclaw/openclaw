@@ -131,7 +131,6 @@ export const MattermostAccountSchemaBase = z
     groups: z.record(z.string(), MattermostGroupSchema.optional()).optional(),
     /** Network policy overrides for self-hosted Mattermost on trusted private/internal hosts. */
     network: MattermostNetworkSchema,
-    /** Retry configuration for DM channel creation */
     dmChannelRetry: DmChannelRetrySchema,
   })
   .strict();

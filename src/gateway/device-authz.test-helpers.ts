@@ -17,7 +17,7 @@ import { trackConnectChallengeNonce } from "./test-helpers.js";
 
 export function resolveDeviceIdentityPath(name: string): string {
   const root = process.env.OPENCLAW_STATE_DIR ?? process.env.HOME ?? os.tmpdir();
-  return path.join(root, "test-device-identities", `${name}.sqlite`);
+  return path.join(root, "test-device-identities", name, "client", "credentials.sqlite");
 }
 
 export function loadDeviceIdentity(name: string): {
@@ -42,11 +42,7 @@ export async function pairDeviceIdentity(params: {
   clientMode?: string;
   platform?: string;
   deviceFamily?: string;
-}): Promise<{
-  identityPath: string;
-  identity: DeviceIdentity;
-  publicKey: string;
-}> {
+}): Promise<ReturnType<typeof loadDeviceIdentity>> {
   const loaded = loadDeviceIdentity(params.name);
   const request = await requestDevicePairing({
     deviceId: loaded.identity.deviceId,
@@ -82,35 +78,25 @@ export async function issueOperatorToken(params: {
     clientId: params.clientId,
     clientMode: params.clientMode,
   });
+  const deviceId = paired.identity.deviceId;
+  let token: string | undefined;
   if (params.tokenScopes) {
     const rotated = await rotateDeviceToken({
-      deviceId: paired.identity.deviceId,
+      deviceId,
       role: "operator",
       scopes: params.tokenScopes,
     });
     expect(rotated.ok).toBe(true);
-    const token = rotated.ok ? rotated.entry.token : "";
-    if (!token) {
-      throw new Error(`expected rotated operator token for device ${paired.identity.deviceId}`);
-    }
-    return {
-      deviceId: paired.identity.deviceId,
-      identityPath: paired.identityPath,
-      token,
-    };
+    token = rotated.ok ? rotated.entry.token : undefined;
+  } else {
+    const device = await getPairedDevice(deviceId);
+    token = device?.tokens?.operator?.token;
+    expect(device?.approvedScopes).toEqual(params.approvedScopes);
   }
-
-  const device = await getPairedDevice(paired.identity.deviceId);
-  const token = device?.tokens?.operator?.token ?? "";
   if (!token) {
-    throw new Error(`expected operator token for paired device ${paired.identity.deviceId}`);
+    throw new Error(`expected operator token for device ${deviceId}`);
   }
-  expect(device?.approvedScopes).toEqual(params.approvedScopes);
-  return {
-    deviceId: paired.identity.deviceId,
-    identityPath: paired.identityPath,
-    token,
-  };
+  return { deviceId, identityPath: paired.identityPath, token };
 }
 
 export async function openTrackedWs(

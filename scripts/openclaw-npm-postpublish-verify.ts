@@ -89,8 +89,9 @@ const MAX_INSTALLED_ROOT_PACKAGE_JSON_BYTES = 1024 * 1024;
 const MAX_INSTALLED_ROOT_DIST_JS_BYTES = 6 * 1024 * 1024;
 const MAX_INSTALLED_WORKER_DEPLOY_DIST_JS_BYTES = 80 * 1024 * 1024;
 // Keep each generated ownership scope bounded without making independent worker
-// chunks consume the root-runtime budget.
-const MAX_INSTALLED_ROOT_DIST_JS_FILES = 10_000;
+// chunks consume the root-runtime budget. The root runtime shipped 10,130 files in
+// 2026.10.10-beta.1 (9,473 in 2026.10.5-beta.4); keep roughly 2x headroom.
+const MAX_INSTALLED_ROOT_DIST_JS_FILES = 20_000;
 const MAX_INSTALLED_WORKER_DIST_JS_FILES = 10_000;
 const ROOT_DIST_JAVASCRIPT_MODULE_FILE_RE = /\.(?:c|m)?js$/u;
 // Self-contained bundles (the ~69 MB worker, the ~66 MB sealed package-update recovery helper)
@@ -102,8 +103,10 @@ const SELF_CONTAINED_WORKER_DEPLOY_DIST_PATHS = new Set([
   packageActivationRuntimeEntrypoint.distWorkerPath,
 ]);
 const OPTIONAL_OR_EXTERNALIZED_RUNTIME_IMPORTS = new Set([
-  // Optional A2UI markdown renderer. The Canvas host bundle catches the missing
-  // package and falls back when the optional renderer is unavailable.
+  // Optional A2UI markdown renderer. Main no longer builds Canvas A2UI, but main's
+  // release tooling verifies already-qualified stable/extended-stable packages
+  // whose dist/canvas-host/a2ui/a2ui.bundle.js catches this missing package and
+  // falls back. Remove once no supported release line ships canvas-host/a2ui.
   "@a2ui/markdown-it",
   "@discordjs/opus",
   "@lancedb/lancedb",

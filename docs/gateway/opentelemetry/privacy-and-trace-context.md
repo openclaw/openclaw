@@ -50,9 +50,10 @@ tool source, tool owner, skill name/source) and never include prompt text,
 response text, tool inputs, tool outputs, skill file paths, or session keys.
 Values that look like scoped agent session keys (for example starting with
 `agent:`) are replaced with `unknown` on low-cardinality attributes. OTLP log
-records keep severity, logger, code location, trusted trace context, and
+records keep severity, logger, available code locations, trusted trace context, and
 sanitized attributes by default; the raw log message body is exported only
-when `diagnostics.otel.captureContent` is `true`. Talk metrics export only
+when `diagnostics.otel.captureContent` is `true`. Subsystem `info` records omit code
+locations to avoid capturing a stack for each routine message. Talk metrics export only
 bounded event metadata (mode, transport, provider, event type) - no
 transcripts, audio payloads, session ids, turn ids, call ids, room ids, or
 handoff tokens.

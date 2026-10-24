@@ -203,8 +203,8 @@ describe("AppSidebar session ownership filtering", () => {
         );
       const everyoneSections = sectionIds();
       if (grouping === "category") {
-        expect(everyoneSections).toContain("category:Empty");
-        expect(everyoneSections).toContain("groups");
+        expect(everyoneSections).not.toContain("category:Empty");
+        expect(everyoneSections).not.toContain("groups");
       }
 
       await selectOwner(sidebar, "profile-ada", filter === "involving-me");
@@ -544,11 +544,11 @@ describe("AppSidebar session ownership filtering", () => {
       },
     });
     await settleLitElement(sidebar);
-    expect(sidebar.querySelector(`[data-session-key="${childKey}"]`)).toBeNull();
-
-    sidebar
-      .querySelector<HTMLButtonElement>(`[data-child-session-toggle="${navigationParentKey}"]`)
-      ?.click();
+    expect(
+      sidebar
+        .querySelector(`[data-child-session-toggle="${navigationParentKey}"]`)
+        ?.getAttribute("aria-expanded"),
+    ).toBe("true");
     await waitForFast(() =>
       expect(harness.list).toHaveBeenCalledWith(
         expect.objectContaining({ spawnedBy: navigationParentKey }),

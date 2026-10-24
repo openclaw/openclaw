@@ -15,14 +15,6 @@ export type ChannelSetupPromotionSurface = Pick<
   | "resolveSingleAccountPromotionTarget"
 >;
 
-type SingleAccountPromotionParams = {
-  channelKey: string;
-  channel: Record<string, unknown>;
-  setupSurface?: ChannelSetupPromotionSurface;
-  includeSetupKeys?: boolean;
-  resolveBundledSurface?: (channelKey: string) => ChannelSetupPromotionSurface | null;
-};
-
 type SingleAccountPromotion =
   | { kind: "preserve-root" }
   | { kind: "promote"; keysToMove: string[]; shouldDeferPromotion: boolean };
@@ -69,9 +61,13 @@ function getLoadedChannelSetupPromotionSurface(
 /**
  * Resolves all root-level keys eligible for single-account promotion.
  */
-export function resolveSingleAccountPromotion(
-  params: SingleAccountPromotionParams,
-): SingleAccountPromotion {
+export function resolveSingleAccountPromotion(params: {
+  channelKey: string;
+  channel: Record<string, unknown>;
+  setupSurface?: ChannelSetupPromotionSurface;
+  includeSetupKeys?: boolean;
+  resolveBundledSurface?: (channelKey: string) => ChannelSetupPromotionSurface | null;
+}): SingleAccountPromotion {
   const setupSurface =
     params.setupSurface === undefined
       ? (getLoadedChannelSetupPromotionSurface(params.channelKey) ??

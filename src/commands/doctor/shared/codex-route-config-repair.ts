@@ -8,12 +8,12 @@ import { listMutableCodexRouteAgentEntries } from "./codex-route-agent-entries.j
 import {
   canAutoMigrateLegacyLosslessCompaction,
   collectLegacyLosslessCompactionConfigs,
-  COMPACTION_OVERRIDE_KEYS,
   getSharedDefaultCompactionOverrideConsumers,
   legacyLosslessSummaryModels,
   LOSSLESS_CONTEXT_ENGINE_ID,
   readLosslessSummaryModel,
   sharedDefaultLosslessCompactionHasNonCodexConsumer,
+  UNSUPPORTED_CODEX_COMPACTION_KEYS,
 } from "./codex-route-compaction-scan.js";
 import {
   agentUsesCodexRuntimeForCompaction,
@@ -232,14 +232,12 @@ function rewriteAgentCompactionRefs(params: {
       preservePaths: params.preserveUnsupportedCompactionPaths,
       changes: params.unsupportedCompactionChanges,
     });
-    if (params.preserveUnsupportedCompactionOverrides?.model) {
-      rewriteStringModelSlot({
-        ...params,
-        container: compaction,
-        key: "model",
-        path: `${params.path}.compaction.model`,
-      });
-    }
+    rewriteStringModelSlot({
+      ...params,
+      container: compaction,
+      key: "model",
+      path: `${params.path}.compaction.model`,
+    });
   }
   rewriteStringModelSlotIfCanonicalCodexRuntime({
     ...params,
@@ -327,7 +325,7 @@ function removeUnsupportedCodexCompactionOverrides(params: {
   if (normalizeString(params.compaction.provider) === LOSSLESS_CONTEXT_ENGINE_ID) {
     return;
   }
-  for (const key of COMPACTION_OVERRIDE_KEYS) {
+  for (const key of UNSUPPORTED_CODEX_COMPACTION_KEYS) {
     const path = `${params.path}.compaction.${key}`;
     if (params.preservePaths?.has(path) || params.preserve?.[key]) {
       continue;

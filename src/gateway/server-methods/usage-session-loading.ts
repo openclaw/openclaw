@@ -12,6 +12,7 @@ import {
   type UsageCacheStatus,
 } from "../../infra/session-cost-usage.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
+import { readWithSessionStoreTopology } from "../../sessions/session-row-changes.js";
 import {
   AsyncWorkScope,
   getAsyncWorkSignal,
@@ -54,22 +55,24 @@ export async function discoverAllSessionsForUsage(params: {
   startMs: number;
   endMs: number;
 }): Promise<DiscoveredSessionWithAgent[]> {
-  const requestedAgentId = normalizeOptionalString(params.agentId);
-  const agents = requestedAgentId
-    ? [{ id: normalizeAgentId(requestedAgentId) }]
-    : (await listGatewayAgentsBasic(params.config)).agents;
-  const discovered = await runUsageAgentTasks(
-    agents.map((agent) => async () => {
-      const agentId = normalizeAgentId(agent.id);
-      const sessions = await discoverAllSessions({
-        agentId,
-        startMs: params.startMs,
-        endMs: params.endMs,
-      });
-      return sessions.map((session) => Object.assign({}, session, { agentId }));
-    }),
-  );
-  return discovered.flat().toSorted((a, b) => b.mtime - a.mtime);
+  return readWithSessionStoreTopology(async () => {
+    const requestedAgentId = normalizeOptionalString(params.agentId);
+    const agents = requestedAgentId
+      ? [{ id: normalizeAgentId(requestedAgentId) }]
+      : (await listGatewayAgentsBasic(params.config)).agents;
+    const discovered = await runUsageAgentTasks(
+      agents.map((agent) => async () => {
+        const agentId = normalizeAgentId(agent.id);
+        const sessions = await discoverAllSessions({
+          agentId,
+          startMs: params.startMs,
+          endMs: params.endMs,
+        });
+        return sessions.map((session) => Object.assign({}, session, { agentId }));
+      }),
+    );
+    return discovered.flat().toSorted((a, b) => b.mtime - a.mtime);
+  });
 }
 
 export function mergeUsageCacheStatus(
@@ -91,26 +94,19 @@ export function mergeUsageCacheStatus(
         : source.refreshedAt === undefined
           ? target.refreshedAt
           : Math.max(target.refreshedAt, source.refreshedAt),
+    ...((target.partial ?? source.partial) ? { partial: target.partial ?? source.partial } : {}),
   };
 }
 
 export async function loadUsageSessionSummaries(params: {
-  entries: Array<{
-    agentId: string;
-    sessionId?: string;
-    sessionFile?: string;
-    instances: Array<{
-      sessionId?: string;
-      sessionFile: string;
-      transcriptFile?: DiscoveredSession["transcriptFile"];
-    }>;
-  }>;
+  entries: UsageSessionSummaryTarget[];
   read: <T>(load: () => Promise<T>, partial: () => T) => Promise<T>;
   config: OpenClawConfig;
   startMs: number;
   endMs: number;
   includeUntimestamped?: boolean;
   dayBucket?: UsageDailyBucket;
+  committedOnly?: boolean;
 }) {
   const {
     entries: mergedEntries,
@@ -131,12 +127,7 @@ export async function loadUsageSessionSummaries(params: {
   // Batch all included instances by agent so cache reads do not scale with the row limit.
   const sessionsByAgent = new Map<
     string,
-    Array<{
-      entryIndex: number;
-      sessionId?: string;
-      sessionFile: string;
-      transcriptFile?: DiscoveredSession["transcriptFile"];
-    }>
+    Array<UsageSessionSummaryTarget["instances"][number] & { entryIndex: number }>
   >();
   for (const [entryIndex, merged] of mergedEntries.entries()) {
     for (const { sessionId, sessionFile, transcriptFile } of merged.instances) {
@@ -172,6 +163,7 @@ export async function loadUsageSessionSummaries(params: {
               dayBucket,
               maxPublicationWaitMs: USAGE_REPORT_PUBLICATION_WAIT_MS,
               reportBudgetBytes,
+              committedOnly: params.committedOnly,
             }),
           () => ({
             summaries: batch.map(() => null),
@@ -194,8 +186,8 @@ export async function loadUsageSessionSummaries(params: {
           if (summary) {
             const merged = expectDefined(mergedEntries[session.entryIndex], "usage entry");
             const identity = {
-              sessionId: merged.sessionId ?? merged.instances[0]?.sessionId,
-              sessionFile: merged.sessionFile ?? merged.instances[0]?.sessionFile,
+              sessionId: merged.sessionId,
+              sessionFile: merged.sessionFile,
             };
             if (merged.instances.length === 1) {
               usageByEntryIndex[session.entryIndex] = { ...summary, ...identity };

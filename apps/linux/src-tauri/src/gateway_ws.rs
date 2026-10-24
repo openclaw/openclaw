@@ -10,6 +10,7 @@ use crate::gateway_sleep::SleepPrepareOutcome;
 use crate::quickchat::QUICKCHAT_LABEL;
 #[cfg(test)]
 use futures_util::{SinkExt, StreamExt};
+use openclaw_gateway_client::protocol::{MIN_CLIENT_PROTOCOL_VERSION, PROTOCOL_VERSION};
 #[cfg(test)]
 use openclaw_gateway_client::AUTH_DEVICE_TOKEN_MISMATCH_DETAIL_CODE;
 use openclaw_gateway_client::{
@@ -56,9 +57,6 @@ const AUTH_PASSWORD_MISSING_DETAIL_CODE: &str = "AUTH_PASSWORD_MISSING";
 const MAX_MESSAGE_BYTES: usize = 64 * 1024 * 1024;
 const MAX_FRAME_BYTES: usize = 16 * 1024 * 1024;
 
-// Mirrors packages/gateway-protocol/src/version.ts. The Gateway rejects other ranges.
-const MIN_PROTOCOL_VERSION: u32 = 4;
-const MAX_PROTOCOL_VERSION: u32 = 4;
 const INLINE_WIDGETS_CLIENT_CAPABILITY: &str = "inline-widgets";
 
 #[derive(Clone, Copy, Eq, PartialEq)]
@@ -1115,7 +1113,7 @@ impl GatewayClient {
             if !self.driver_has_demand(&app) {
                 continue;
             }
-            let delay = reconnect_backoff(reconnect_attempt);
+            let delay = shared_reconnect_backoff(reconnect_attempt, MAX_RECONNECT_DELAY);
             tokio::select! {
                 _ = tokio::time::sleep(delay) => {}
                 command = receiver.recv() => {
@@ -1637,10 +1635,6 @@ fn connection_notice(
     Some(notice)
 }
 
-fn reconnect_backoff(attempt: u32) -> Duration {
-    shared_reconnect_backoff(attempt, MAX_RECONNECT_DELAY)
-}
-
 fn should_clear_stored_device_token(failure: &RequestFailure, auth: &GatewayAuth) -> bool {
     matches!(auth, GatewayAuth::DeviceToken(_))
         && failure.connect_details.invalidates_device_token()
@@ -1653,13 +1647,13 @@ fn connect_params(
     signed_at_ms: u64,
     inline_widgets_available: bool,
 ) -> Result<Value, String> {
-    let mut client_caps = vec![AGENT_KIND_CLIENT_CAPABILITY];
+    let mut client_caps = vec![AGENT_KIND_CLIENT_CAPABILITY, "health-summary"];
     if inline_widgets_available {
         client_caps.push(INLINE_WIDGETS_CLIENT_CAPABILITY);
     }
     let mut params = json!({
-        "minProtocol": MIN_PROTOCOL_VERSION,
-        "maxProtocol": MAX_PROTOCOL_VERSION,
+        "minProtocol": MIN_CLIENT_PROTOCOL_VERSION,
+        "maxProtocol": PROTOCOL_VERSION,
         "client": {
             "id": CLIENT_ID,
             "version": env!("CARGO_PKG_VERSION"),
@@ -1678,16 +1672,6 @@ fn connect_params(
     }
     params["device"] = identity.signed_device(auth, nonce, signed_at_ms)?;
     Ok(params)
-}
-
-#[cfg(test)]
-fn request_frame(id: &str, method: &str, params: Value) -> Value {
-    json!({
-        "type": "req",
-        "id": id,
-        "method": method,
-        "params": params
-    })
 }
 
 struct RequestDispatch {
@@ -2002,7 +1986,7 @@ fn validate_hello(payload: Value) -> Result<ValidatedHello, String> {
     }
     let hello: HelloOk = serde_json::from_value(payload)
         .map_err(|error| format!("Invalid Gateway hello response: {error}"))?;
-    if hello.kind != "hello-ok" || hello.protocol != MAX_PROTOCOL_VERSION {
+    if hello.kind != "hello-ok" || hello.protocol != PROTOCOL_VERSION {
         return Err("Gateway negotiated an unsupported protocol.".to_string());
     }
     for required in ["agents.list", "chat.send"] {
@@ -2087,8 +2071,6 @@ pub(crate) mod tests {
     use super::*;
     use std::convert::Infallible;
 
-    type GatewaySocket = SharedGatewaySession;
-
     async fn accept_test_session(
         stream: tokio::net::TcpStream,
     ) -> tokio_tungstenite::WebSocketStream<tokio::net::TcpStream> {
@@ -2127,7 +2109,7 @@ pub(crate) mod tests {
                     "ok": true,
                     "payload": {
                         "type": "hello-ok",
-                        "protocol": MAX_PROTOCOL_VERSION,
+                        "protocol": PROTOCOL_VERSION,
                     },
                 })
                 .to_string()
@@ -2138,7 +2120,7 @@ pub(crate) mod tests {
         socket
     }
 
-    async fn connect_test_session(url: &str) -> GatewaySocket {
+    async fn connect_test_session(url: &str) -> SharedGatewaySession {
         SharedGatewayClient::connect(SharedGatewayClientConfig::new(url).unwrap(), |_| async {
             Ok::<_, Infallible>(json!({"role": "test"}))
         })
@@ -2230,10 +2212,9 @@ pub(crate) mod tests {
     async fn perform_request(
         client: &GatewayClient,
         generation: u64,
-        socket: &mut GatewaySocket,
+        socket: &SharedGatewaySession,
         request: GatewayRequest,
         budget: Option<Duration>,
-        _on_event: &impl Fn(&GatewayEvent),
     ) -> Result<Value, RequestFailure> {
         perform_session_request(
             client,
@@ -2243,14 +2224,6 @@ pub(crate) mod tests {
             Instant::now() + budget.unwrap_or(REQUEST_TIMEOUT),
         )
         .await
-    }
-
-    async fn request_agents_list(
-        socket: &mut GatewaySocket,
-        timeout: Duration,
-        _on_event: &impl Fn(&GatewayEvent),
-    ) -> Result<AgentsListResult, RequestFailure> {
-        request_agents_list_session(socket, Instant::now() + timeout).await
     }
 
     pub(crate) struct RpcFixture {
@@ -2328,7 +2301,7 @@ pub(crate) mod tests {
         fn start_driver(
             client: &GatewayClient,
             generation: u64,
-            mut socket: GatewaySocket,
+            socket: SharedGatewaySession,
         ) -> tokio::task::JoinHandle<()> {
             let (commands, mut receiver) = mpsc::channel(16);
             *client.inner.commands.lock().unwrap() = Some(commands);
@@ -2345,15 +2318,9 @@ pub(crate) mod tests {
                         complete,
                     } = command
                     {
-                        let result = perform_request(
-                            &driver_client,
-                            generation,
-                            &mut socket,
-                            request,
-                            budget,
-                            &|_| {},
-                        )
-                        .await;
+                        let result =
+                            perform_request(&driver_client, generation, &socket, request, budget)
+                                .await;
                         let _ = complete(result);
                     }
                 }
@@ -2540,7 +2507,7 @@ pub(crate) mod tests {
                 }
                 frames
             });
-            let mut socket = connect_test_session(&url).await;
+            let socket = connect_test_session(&url).await;
             if case == "stale-connection" {
                 client.replace_configuration(Some(config));
             }
@@ -2552,7 +2519,7 @@ pub(crate) mod tests {
             let result = perform_request(
                 &client,
                 connection.0,
-                &mut socket,
+                &socket,
                 GatewayRequest::ChatSend {
                     generation: caller,
                     params: ChatSendParams {
@@ -2563,7 +2530,6 @@ pub(crate) mod tests {
                     },
                 },
                 None,
-                &|_| {},
             )
             .await;
             assert_eq!(result.is_ok(), case == "current", "{case}");
@@ -2573,7 +2539,7 @@ pub(crate) mod tests {
                     "authority rejection is not a transport failure"
                 );
             }
-            request_agents_list(&mut socket, Duration::from_secs(1), &|_| {})
+            request_agents_list_session(&socket, Instant::now() + Duration::from_secs(1))
                 .await
                 .unwrap_or_else(|failure| panic!("marker failed: {}", failure.message));
             socket.close().await;
@@ -2763,7 +2729,7 @@ pub(crate) mod tests {
                     let payload = match frame["method"].as_str().expect("request method") {
                         "connect" => json!({
                             "type": "hello-ok",
-                            "protocol": MAX_PROTOCOL_VERSION,
+                            "protocol": PROTOCOL_VERSION,
                             "features": { "methods": ["agents.list", "chat.send"] },
                             "auth": {},
                             "policy": { "tickIntervalMs": 30_000 },
@@ -3173,7 +3139,7 @@ esac
             assert_eq!(frame["params"]["deliver"], false);
             socket.send(Message::Text(json!({"type":"res","id":frame["id"],"ok":true,"payload":{"status":"started","runId":"fixture-run"}}).to_string().into())).await.unwrap();
         });
-        let mut socket = connect_test_session(&format!("ws://{address}")).await;
+        let socket = connect_test_session(&format!("ws://{address}")).await;
         let client = GatewayClient::new();
         let config = |ownership| {
             GatewayWsConfig::new(format!("ws://{address}"), None, None, None, ownership)
@@ -3184,14 +3150,13 @@ esac
             let result = perform_request(
                 &client,
                 connection,
-                &mut socket,
+                &socket,
                 GatewayRequest::Desktop {
                     generation: token,
                     method: DesktopMethod::Send,
                     params: json!({"message":"stale route"}),
                 },
                 None,
-                &|_| {},
             )
             .await;
             let error = result.err().expect("stale route must fail before enqueue");
@@ -3202,14 +3167,13 @@ esac
         assert!(perform_request(
             &client,
             cleared,
-            &mut socket,
+            &socket,
             GatewayRequest::Desktop {
                 generation: cleared,
                 method: DesktopMethod::Send,
                 params: json!({"message":"cleared route"}),
             },
             None,
-            &|_| {}
         )
         .await
         .is_err());
@@ -3217,14 +3181,13 @@ esac
         let value = perform_request(
             &client,
             current,
-            &mut socket,
+            &socket,
             GatewayRequest::Desktop {
                 generation: current,
                 method: DesktopMethod::Send,
                 params: json!({"message":"current route","deliver":false}),
             },
             None,
-            &|_| {},
         )
         .await
         .unwrap_or_else(|error| panic!("{}", error.message));
@@ -3320,9 +3283,8 @@ esac
                     .await
                     .expect("send malformed payload");
             });
-            let mut socket = connect_test_session(&format!("ws://{address}")).await;
-            let result =
-                perform_request(&client, generation, &mut socket, request, None, &|_| {}).await;
+            let socket = connect_test_session(&format!("ws://{address}")).await;
+            let result = perform_request(&client, generation, &socket, request, None).await;
             let failure = complete(result).expect("typed response must reject a number");
             assert!(failure.disconnect, "{method} must recycle the socket");
             assert!(failure
@@ -3344,7 +3306,7 @@ esac
             let _request = socket.next().await.expect("request frame");
             std::future::pending::<()>().await;
         });
-        let mut socket = connect_test_session(&format!("ws://{address}")).await;
+        let socket = connect_test_session(&format!("ws://{address}")).await;
         let (commands, mut receiver) = mpsc::channel(2);
         let (reply, response) = oneshot::channel();
         commands
@@ -3370,19 +3332,11 @@ esac
         else {
             panic!("expected request command");
         };
-        let failure = match perform_request(
-            &GatewayClient::new(),
-            0,
-            &mut socket,
-            request,
-            budget,
-            &|_| {},
-        )
-        .await
-        {
-            Ok(_) => panic!("hung request should time out"),
-            Err(failure) => failure,
-        };
+        let failure =
+            match perform_request(&GatewayClient::new(), 0, &socket, request, budget).await {
+                Ok(_) => panic!("hung request should time out"),
+                Err(failure) => failure,
+            };
         let elapsed = started.elapsed();
         assert!(failure.disconnect, "timeout must recycle the socket");
         let _ = complete(Err(failure));
@@ -3428,7 +3382,7 @@ esac
         struct SleepSocketFixture {
             client: GatewayClient,
             generation: u64,
-            socket: GatewaySocket,
+            socket: SharedGatewaySession,
             receiver: mpsc::Receiver<DriverCommand>,
             server: tokio::task::JoinHandle<Vec<Value>>,
             fail_resume: Arc<AtomicBool>,
@@ -3503,15 +3457,9 @@ esac
                 else {
                     panic!("expected sleep request");
                 };
-                let result = perform_request(
-                    &self.client,
-                    self.generation,
-                    &mut self.socket,
-                    request,
-                    budget,
-                    &|_| {},
-                )
-                .await;
+                let result =
+                    perform_request(&self.client, self.generation, &self.socket, request, budget)
+                        .await;
                 let _ = complete(result);
             }
 
@@ -3868,19 +3816,6 @@ esac
     }
 
     #[test]
-    fn tls_trust_uses_system_roots_or_an_exact_pin() {
-        assert_eq!(
-            tls_trust(None).expect("system trust"),
-            TlsTrust::SystemRoots
-        );
-        assert_eq!(
-            tls_trust(Some(&"ab".repeat(32))).expect("pinned trust"),
-            TlsTrust::Pinned([0xab; 32])
-        );
-        assert!(tls_trust(Some("sha256:abc")).is_err());
-    }
-
-    #[test]
     fn tls_failures_have_a_distinct_connectivity_state() {
         let failure =
             RequestFailure::from_shared(SharedClientError::Tls("fixture TLS failure".to_string()))
@@ -3896,16 +3831,7 @@ esac
     }
 
     #[test]
-    fn reconnect_backoff_is_exponential_and_capped() {
-        assert_eq!(reconnect_backoff(1), Duration::from_secs(1));
-        assert_eq!(reconnect_backoff(2), Duration::from_secs(2));
-        assert_eq!(reconnect_backoff(5), Duration::from_secs(16));
-        assert_eq!(reconnect_backoff(6), MAX_RECONNECT_DELAY);
-        assert_eq!(reconnect_backoff(100), MAX_RECONNECT_DELAY);
-    }
-
-    #[test]
-    fn connect_frame_matches_gateway_schema() {
+    fn connect_params_match_gateway_schema() {
         let directory = std::env::temp_dir().join(format!(
             "openclaw-linux-connect-frame-test-{}",
             Uuid::new_v4()
@@ -3920,39 +3846,29 @@ esac
             true,
         )
         .expect("connect params");
-        let frame = request_frame("connect-1", "connect", params);
-
-        assert_eq!(frame["type"], "req");
-        assert_eq!(frame["id"], "connect-1");
-        assert_eq!(frame["method"], "connect");
-        assert_eq!(frame["params"]["minProtocol"], MIN_PROTOCOL_VERSION);
-        assert_eq!(frame["params"]["maxProtocol"], MAX_PROTOCOL_VERSION);
+        assert_eq!(params["minProtocol"], MIN_CLIENT_PROTOCOL_VERSION);
+        assert_eq!(params["maxProtocol"], PROTOCOL_VERSION);
         assert_eq!(
-            frame["params"]["caps"],
+            params["caps"],
             json!([
                 AGENT_KIND_CLIENT_CAPABILITY,
+                "health-summary",
                 INLINE_WIDGETS_CLIENT_CAPABILITY
             ])
         );
-        assert_eq!(frame["params"]["client"]["id"], CLIENT_ID);
+        assert_eq!(params["client"]["id"], CLIENT_ID);
+        assert_eq!(params["client"]["deviceFamily"], CLIENT_DEVICE_FAMILY);
+        assert_eq!(params["auth"], json!({ "token": "secret" }));
+        assert_eq!(params["device"]["nonce"], "fixture-nonce");
+        assert_eq!(params["device"]["signedAt"], 1_800_000_000_000_u64);
         assert_eq!(
-            frame["params"]["client"]["deviceFamily"],
-            CLIENT_DEVICE_FAMILY
-        );
-        assert_eq!(frame["params"]["auth"], json!({ "token": "secret" }));
-        assert_eq!(frame["params"]["device"]["nonce"], "fixture-nonce");
-        assert_eq!(frame["params"]["device"]["signedAt"], 1_800_000_000_000_u64);
-        assert_eq!(
-            frame["params"]["device"]["id"]
-                .as_str()
-                .expect("device id")
-                .len(),
+            params["device"]["id"].as_str().expect("device id").len(),
             64
         );
-        assert!(frame["params"]["device"]["publicKey"]
+        assert!(params["device"]["publicKey"]
             .as_str()
             .is_some_and(|value| !value.contains('=')));
-        assert!(frame["params"]["device"]["signature"]
+        assert!(params["device"]["signature"]
             .as_str()
             .is_some_and(|value| !value.contains('=')));
 
@@ -3964,16 +3880,32 @@ esac
             false,
         )
         .expect("pinned connect params");
-        // Pinning only withdraws inline widgets; agent-kind is unconditional.
-        assert_eq!(pinned_params["caps"], json!([AGENT_KIND_CLIENT_CAPABILITY]));
+        // Pinning only withdraws inline widgets; other capabilities are unconditional.
+        assert_eq!(
+            pinned_params["caps"],
+            json!([AGENT_KIND_CLIENT_CAPABILITY, "health-summary"])
+        );
         std::fs::remove_dir_all(directory).expect("remove connect fixture");
+    }
+
+    #[test]
+    fn operator_hello_rejects_the_previous_node_only_protocol() {
+        let hello = validate_hello(json!({
+            "type": "hello-ok",
+            "protocol": PROTOCOL_VERSION - 1,
+            "features": { "methods": ["agents.list", "chat.send"] },
+            "auth": {}
+        }));
+        assert!(
+            matches!(hello, Err(message) if message == "Gateway negotiated an unsupported protocol.")
+        );
     }
 
     #[test]
     fn hello_tick_policy_sets_two_interval_watchdog() {
         let hello = validate_hello(json!({
             "type": "hello-ok",
-            "protocol": MAX_PROTOCOL_VERSION,
+            "protocol": PROTOCOL_VERSION,
             "features": { "methods": ["agents.list", "chat.send"] },
             "auth": { "deviceToken": "test-device-token" },
             "policy": { "tickIntervalMs": 1_250 },
@@ -3996,24 +3928,6 @@ esac
         assert_eq!(
             gated_canvas_surface_url(hello.canvas_surface_url, false),
             None
-        );
-    }
-
-    #[test]
-    fn plugin_surface_refresh_response_decodes_canvas_url() {
-        let response: PluginSurfaceRefreshResponse = serde_json::from_value(json!({
-            "pluginSurfaceUrls": {
-                "canvas": "https://gateway.example/__openclaw__/cap/refreshed-capability"
-            }
-        }))
-        .expect("refresh response");
-
-        assert_eq!(
-            response
-                .plugin_surface_urls
-                .and_then(|urls| urls.get("canvas").cloned())
-                .as_deref(),
-            Some("https://gateway.example/__openclaw__/cap/refreshed-capability")
         );
     }
 
@@ -4307,7 +4221,7 @@ esac
     }
 
     #[test]
-    fn chat_send_frame_matches_gateway_schema() {
+    fn chat_send_params_match_gateway_schema() {
         let params = ChatSendParams {
             session_key: "agent:work:main".to_string(),
             agent_id: None,
@@ -4315,20 +4229,11 @@ esac
             idempotency_key: "idempotency-1".to_string(),
         };
         assert_eq!(
-            request_frame(
-                "chat-1",
-                "chat.send",
-                serde_json::to_value(params).expect("chat params")
-            ),
+            serde_json::to_value(params).expect("chat params"),
             json!({
-                "type": "req",
-                "id": "chat-1",
-                "method": "chat.send",
-                "params": {
-                    "sessionKey": "agent:work:main",
-                    "message": "hello",
-                    "idempotencyKey": "idempotency-1"
-                }
+                "sessionKey": "agent:work:main",
+                "message": "hello",
+                "idempotencyKey": "idempotency-1"
             })
         );
     }

@@ -34,6 +34,7 @@ import {
   writeMemoryCoreWorkspaceEntry,
 } from "./dreaming-state.js";
 import { listMemoryEntryOrigins, recordMemoryEntryOrigins } from "./memory-entry-origins.js";
+import { memoryOrigin } from "./memory-forget.suite.test-support.js";
 import { withMemoryMutationAuthority } from "./memory-mutation-authority.js";
 import { executeSessionBackfillBatch } from "./session-backfill.js";
 import { appendSessionCorpusLines, appendSessionCorpusText } from "./session-ingestion.js";
@@ -48,14 +49,22 @@ const roots = useAutoCleanupTempDirTracker(afterAll);
 let stateDir: string;
 let workspace: string;
 const namespace = DREAMING_SESSION_INGESTION_FILES_NAMESPACE;
-const origin = (entryKey: string) => ({
-  entryKey,
-  agentId: "main",
-  sessionId: "synthetic-session",
-  sessionKey: "agent:main:synthetic-session",
-  originClass: "owner" as const,
-  observedAt: 1_000,
-});
+const read = (file: string) => fs.readFile(file, "utf8");
+const active = () => {};
+function revocableOwner() {
+  let current = true;
+  return {
+    setCurrent(value: boolean) {
+      current = value;
+    },
+    assertCurrent: () => {
+      if (!current) {
+        throw new Error("fixture owner revoked");
+      }
+    },
+  };
+}
+const origin = (entryKey: string) => memoryOrigin(entryKey, "synthetic-session");
 
 beforeAll(async () => {
   stateDir = await fs.realpath(roots.make("openclaw-memory-mutation-authority-"));
@@ -110,33 +119,25 @@ describe("memory mutation authority at durable effects", () => {
         bridge: { readFile: unexpected, writeFile: unexpected, stat: unexpected },
       });
       try {
-        await withMemoryMutationAuthority(
-          () => {},
-          async () => {
-            if (kind === "diary") {
-              await writeDreamsFileAtomic(path.join(workspace, "DREAMS.md"), "entry\n", workspace);
-            } else {
-              await appendSessionCorpusLines({
-                workspaceDir: workspace,
-                day: "2026-01-02",
-                lines: [
-                  {
-                    day: "2026-01-02",
-                    snippet: "entry",
-                    rendered: "entry",
-                    provenance: {
-                      originClass: "owner",
-                      sessionKind: "interactive",
-                      observedAt: 1_000,
-                    },
-                  },
-                ],
-              });
-            }
-            expect(captured).toBeTypeOf("function");
-            expect(() => captured!()).not.toThrow();
-          },
-        );
+        await withMemoryMutationAuthority(active, async () => {
+          if (kind === "diary") {
+            await writeDreamsFileAtomic(path.join(workspace, "DREAMS.md"), "entry\n", workspace);
+          } else {
+            const day = "2026-01-02";
+            const provenance = {
+              originClass: "owner",
+              sessionKind: "interactive",
+              observedAt: 1_000,
+            } as const;
+            await appendSessionCorpusLines({
+              workspaceDir: workspace,
+              day,
+              lines: [{ day, snippet: "entry", rendered: "entry", provenance }],
+            });
+          }
+          expect(captured).toBeTypeOf("function");
+          expect(() => captured!()).not.toThrow();
+        });
         expect(() => captured!()).toThrow("Memory mutation authority is closed");
       } finally {
         unregister();
@@ -145,25 +146,20 @@ describe("memory mutation authority at durable effects", () => {
   );
 
   it("keeps a captured SQLite store bound to the invocation that opened it", async () => {
-    const store = await withMemoryMutationAuthority(
-      () => {},
-      async () => {
-        const current = openMemoryCoreStateStore<string>({
-          namespace: "mutation-authority-fixture",
-          maxEntries: 100,
-        });
-        await current.register("retained-store", "accepted");
-        return current;
-      },
-    );
+    const openStore = () =>
+      openMemoryCoreStateStore<string>({
+        namespace: "mutation-authority-fixture",
+        maxEntries: 100,
+      });
+    const store = await withMemoryMutationAuthority(active, async () => {
+      const current = openStore();
+      await current.register("retained-store", "accepted");
+      return current;
+    });
     await expect(store.register("retained-store", "escaped callback")).rejects.toThrow(
       "Memory mutation authority is closed",
     );
-    const reader = openMemoryCoreStateStore<string>({
-      namespace: "mutation-authority-fixture",
-      maxEntries: 100,
-    });
-    expect(await reader.lookup("retained-store")).toBe("accepted");
+    expect(await openStore().lookup("retained-store")).toBe("accepted");
   });
 
   it.each(["state", "diary", "corpus", "origin"] as const)(
@@ -178,26 +174,19 @@ describe("memory mutation authority at durable effects", () => {
       } else {
         await fs.writeFile(file, "accepted\n");
       }
-      let current = true;
-      const failure = await withMemoryMutationAuthority(
-        () => {
-          if (!current) {
-            throw new Error("fixture owner revoked");
-          }
-        },
-        async () => {
-          const writing =
-            kind === "state"
-              ? writeMemoryCoreWorkspaceEntry({ ...state, value: "revoked" })
-              : kind === "diary"
-                ? writeDreamsFileAtomic(file, "revoked\n")
-                : kind === "corpus"
-                  ? appendSessionCorpusText(file, "revoked\n")
-                  : recordMemoryEntryOrigins({ agentId: "main", origins: [origin("revoked")] });
-          current = false;
-          await writing;
-        },
-      ).catch((error: unknown) => error);
+      const owner = revocableOwner();
+      const failure = await withMemoryMutationAuthority(owner.assertCurrent, async () => {
+        const writing =
+          kind === "state"
+            ? writeMemoryCoreWorkspaceEntry({ ...state, value: "revoked" })
+            : kind === "diary"
+              ? writeDreamsFileAtomic(file, "revoked\n")
+              : kind === "corpus"
+                ? appendSessionCorpusText(file, "revoked\n")
+                : recordMemoryEntryOrigins({ agentId: "main", origins: [origin("revoked")] });
+        owner.setCurrent(false);
+        await writing;
+      }).catch((error: unknown) => error);
       expect(collectErrorGraphCandidates(failure, (record) => [record.cause])).toContainEqual(
         expect.objectContaining({ message: "fixture owner revoked" }),
       );
@@ -210,7 +199,7 @@ describe("memory mutation authority at durable effects", () => {
           await listMemoryEntryOrigins({ agentId: "main", entryKeys: ["accepted", "revoked"] }),
         ).toEqual([origin("accepted")]);
       } else {
-        expect(await fs.readFile(file, "utf8")).toBe("accepted\n");
+        expect(await read(file)).toBe("accepted\n");
       }
     },
   );
@@ -227,12 +216,12 @@ describe("memory mutation authority at durable effects", () => {
       },
     ]);
     const list = sessionCorpus.listSessionTranscriptCorpusEntriesForAgent;
-    let current = true;
+    const owner = revocableOwner();
     const discovery = vi
       .spyOn(sessionCorpus, "listSessionTranscriptCorpusEntriesForAgent")
       .mockImplementationOnce(async (...args) => {
         const entries = await list(...args);
-        current = false;
+        owner.setCurrent(false);
         return entries;
       });
     const params = {
@@ -240,11 +229,7 @@ describe("memory mutation authority at durable effects", () => {
       workspaceDir: backfillWorkspace,
       apply: true,
       timezone: "UTC",
-      assertCurrent: () => {
-        if (!current) {
-          throw new Error("fixture owner revoked");
-        }
-      },
+      assertCurrent: owner.assertCurrent,
     };
     await expect(executeSessionBackfillBatch(params)).rejects.toThrow("fixture owner revoked");
     discovery.mockRestore();
@@ -253,31 +238,23 @@ describe("memory mutation authority at durable effects", () => {
       maxEntries: SHORT_TERM_LOCK_MAX_ENTRIES,
     });
     expect(await locks.lookup(memoryCoreWorkspaceStateKey(backfillWorkspace))).toBeUndefined();
-    await expect(
-      fs.readFile(path.join(backfillWorkspace, "DREAMS.md"), "utf8"),
-    ).rejects.toMatchObject({ code: "ENOENT" });
-    expect(
-      await listMemoryEntryOrigins({ agentId: "main", sessionIds: ["backfill-source"] }),
-    ).toEqual([]);
-    current = true;
+    const diary = path.join(backfillWorkspace, "DREAMS.md");
+    const origins = () =>
+      listMemoryEntryOrigins({ agentId: "main", sessionIds: ["backfill-source"] });
+    await expect(read(diary)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(await origins()).toEqual([]);
+    owner.setCurrent(true);
     const next = await executeSessionBackfillBatch(params);
     expect(next.result).toMatchObject({
       candidateCount: 1,
       writtenDiaryEntries: 1,
       stagedEntries: 1,
     });
-    expect(await fs.readFile(path.join(backfillWorkspace, "DREAMS.md"), "utf8")).toContain(
-      "Always use green tea for the weekly review.",
-    );
+    expect(await read(diary)).toContain("Always use green tea for the weekly review.");
     expect(
-      await fs.readFile(
-        path.join(backfillWorkspace, "memory", ".dreams", "session-corpus", "2026-01-02.txt"),
-        "utf8",
-      ),
+      await read(path.join(backfillWorkspace, "memory/.dreams/session-corpus/2026-01-02.txt")),
     ).toContain("Always use green tea for the weekly review.");
-    expect(
-      await listMemoryEntryOrigins({ agentId: "main", sessionIds: ["backfill-source"] }),
-    ).not.toHaveLength(0);
+    expect(await origins()).not.toHaveLength(0);
     expect(await locks.lookup(memoryCoreWorkspaceStateKey(backfillWorkspace))).toBeUndefined();
   });
 
@@ -314,7 +291,7 @@ describe("memory mutation authority at durable effects", () => {
       agentId: "main",
       workspaceDir: rollbackWorkspace,
       rollback: true,
-      assertCurrent: () => {},
+      assertCurrent: active,
     }).then(
       () => {
         throw new Error("Rollback unexpectedly succeeded");
@@ -358,12 +335,11 @@ describe("memory mutation authority at durable effects", () => {
         alias = path.join(link, "original.txt");
       }
       await expect(
-        withMemoryMutationAuthority(
-          () => {},
-          () => appendSessionCorpusText(alias, "must not append\n"),
+        withMemoryMutationAuthority(active, () =>
+          appendSessionCorpusText(alias, "must not append\n"),
         ),
       ).rejects.toThrow();
-      expect(await fs.readFile(original, "utf8")).toBe("accepted corpus\n");
+      expect(await read(original)).toBe("accepted corpus\n");
     },
   );
 });

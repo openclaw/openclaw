@@ -1,17 +1,13 @@
-import { normalizeAgentId, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import { normalizeAgentId } from "../../routing/session-key.js";
+import { tryResolveCronJobEffectiveAgentId } from "../agent-id.js";
 import { sweepCronRunSessions } from "../session-reaper.js";
-import type { CronJob } from "../types.js";
 import type { CronServiceState } from "./state.js";
 import { ensureLoaded } from "./store.js";
 
 /** Reap expired sessions independently of worker-owned run recovery. */
 export async function runCronSchedulerMaintenance(state: CronServiceState): Promise<void> {
-  const generation = state.lifecycleGeneration;
   try {
-    if (
-      state.lifecycleGeneration === generation &&
-      (state.deps.resolveSessionStorePath || state.deps.sessionStorePath)
-    ) {
+    if (state.deps.resolveSessionStorePath || state.deps.sessionStorePath) {
       if (!state.store) {
         try {
           await ensureLoaded(state);
@@ -29,19 +25,8 @@ export async function runCronSchedulerMaintenance(state: CronServiceState): Prom
       const reaperAgentIds = new Set(
         ((await state.deps.resolveSessionStoreAgentIds?.()) ?? []).map(normalizeAgentId),
       );
-      const resolveJobAgentId = (job: CronJob): string | undefined => {
-        if (typeof job.agentId === "string" && job.agentId.trim()) {
-          return normalizeAgentId(job.agentId);
-        }
-        try {
-          return resolveAgentIdFromSessionKey(job.sessionKey, defaultAgentId);
-        } catch {
-          // Legacy ownerless rows need a configured default; other stores can still be swept.
-          return undefined;
-        }
-      };
       for (const job of state.store?.jobs ?? []) {
-        const agentId = resolveJobAgentId(job);
+        const agentId = tryResolveCronJobEffectiveAgentId(job, defaultAgentId);
         if (agentId) {
           reaperAgentIds.add(agentId);
         }

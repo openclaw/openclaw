@@ -1,17 +1,16 @@
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { BrowserContext, Page } from "playwright";
-import { beforeEach, expect, it } from "vitest";
-import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { expect, it } from "vitest";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   controlUiBundledGatewayUrl,
   controlUiBundledSettingsStorageKey,
   installMockGateway,
   type ControlUiMockGatewayScenario,
-  type MockGatewayControls,
   waitForControlUiRoute,
 } from "../test-helpers/control-ui-e2e.ts";
+import { agentRoster } from "./agent-roster.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -22,41 +21,29 @@ const suite = createControlUiE2eSuite({
 });
 
 const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
-let proofDir: string;
-beforeEach(() => {
-  if (captureUiProof) {
-    proofDir = createControlUiE2eArtifactDir("agent-selection-persistence");
-  }
-});
 
+const roster = agentRoster({ dummy: "Dummy", openclaw: "OpenClaw" }, "dummy", "global");
 const agentsList = {
-  agents: [
-    { id: "dummy", identity: { name: "Dummy" }, kind: "agent", name: "Dummy" },
-    { id: "openclaw", identity: { name: "OpenClaw" }, kind: "agent", name: "OpenClaw" },
-  ],
-  defaultId: "dummy",
-  mainKey: "main",
-  scope: "global",
+  ...roster,
+  agents: roster.agents.map(({ id, name }) => ({
+    id,
+    name,
+    identity: { name },
+    kind: "agent",
+  })),
 };
 
 const scenario: ControlUiMockGatewayScenario = {
-  assistantAgentId: "dummy",
   assistantName: "Dummy",
   defaultAgentId: "dummy",
   sessionKey: "global",
   sessionScope: "global",
   methodResponses: {
     "agent.identity.get": {
-      cases: [
-        {
-          match: { agentId: "dummy" },
-          response: { agentId: "dummy", avatar: "", emoji: "D", name: "Dummy" },
-        },
-        {
-          match: { agentId: "openclaw" },
-          response: { agentId: "openclaw", avatar: "", emoji: "O", name: "OpenClaw" },
-        },
-      ],
+      cases: agentsList.agents.map(({ id: agentId, name }) => ({
+        match: { agentId },
+        response: { agentId, avatar: "", emoji: name[0], name },
+      })),
     },
     "agents.list": agentsList,
     "chat.startup": {
@@ -82,30 +69,21 @@ async function screenshot(page: Page, name: string) {
   }
   await page.waitForTimeout(600);
   await writeFile(
-    path.join(proofDir, name),
+    path.join(suite.artifactDir, name),
     await takeControlUiViewportScreenshot(page, page.locator(".shell"), [
       page.locator(".sidebar-agent-card__main"),
     ]),
   );
 }
 
-async function selectedAgentName(page: Page): Promise<string> {
-  const text =
-    (await page.locator("openclaw-app-sidebar .sidebar-agent-card__name").textContent()) ?? "";
-  return text.trim();
-}
+const selectedAgentName = async (page: Page) =>
+  (
+    (await page.locator("openclaw-app-sidebar .sidebar-agent-card__name").textContent()) ?? ""
+  ).trim();
 
-async function hasOpenClawStartup(gateway: MockGatewayControls): Promise<boolean> {
-  return (await gateway.getRequests("chat.startup")).some((request) => {
-    const params = request.params as
-      | { agentId?: unknown; limit?: unknown; sessionKey?: unknown }
-      | undefined;
-    return (
-      params?.agentId === "openclaw" &&
-      params.sessionKey === "agent:openclaw:main" &&
-      params.limit === 80
-    );
-  });
+async function expectOpenClaw(page: Page) {
+  await expect.poll(() => selectedAgentName(page)).toBe("OpenClaw");
+  await expect.poll(() => page.getByRole("heading", { name: "OpenClaw" }).isVisible()).toBe(true);
 }
 
 async function persistCanonicalGlobalSession(page: Page): Promise<void> {
@@ -129,13 +107,13 @@ async function persistCanonicalGlobalSession(page: Page): Promise<void> {
   );
 }
 
-async function openPage(
-  context: BrowserContext,
-): Promise<{ gateway: MockGatewayControls; page: Page }> {
+async function openPage(context: BrowserContext) {
   const page = await context.newPage();
   const gateway = await installMockGateway(page, scenario);
   await page.goto(`${suite.server.baseUrl}chat`);
   await page.locator("openclaw-app-sidebar").waitFor();
+  await gateway.waitForRequest("chat.startup");
+  await waitForControlUiRoute(page, { routeId: "chat" });
   return { gateway, page };
 }
 
@@ -146,14 +124,12 @@ suite.define(() => {
       serviceWorkers: "block",
       viewport: { height: 900, width: 1440 },
       ...(captureUiProof
-        ? { recordVideo: { dir: proofDir, size: { height: 900, width: 1440 } } }
+        ? { recordVideo: { dir: suite.artifactDir, size: { height: 900, width: 1440 } } }
         : {}),
     });
     try {
-      const first = await openPage(context);
-      const firstPage = first.page;
+      const { gateway: firstGateway, page: firstPage } = await openPage(context);
       const sidebar = firstPage.locator("openclaw-app-sidebar");
-      await first.gateway.waitForRequest("chat.startup");
       await expect.poll(() => selectedAgentName(firstPage)).toBe("Dummy");
       await screenshot(firstPage, "01-default-agent.png");
 
@@ -162,11 +138,17 @@ suite.define(() => {
         .locator(".sidebar-agent-menu")
         .getByRole("menuitem", { name: "OpenClaw" })
         .click();
-      await waitForControlUiRoute(firstPage, { pathname: "/chat/openclaw", routeId: "chat" });
-      await expect.poll(() => selectedAgentName(firstPage)).toBe("OpenClaw");
-      await expect
-        .poll(() => firstPage.getByRole("heading", { name: "OpenClaw" }).isVisible())
-        .toBe(true);
+      try {
+        await waitForControlUiRoute(firstPage, { pathname: "/chat/openclaw", routeId: "chat" });
+      } catch (error) {
+        console.error("Agent switch did not reach OpenClaw", {
+          diagnostics: await firstPage.evaluate(() => window.openclawControlUi?.diagnostics()),
+          resolutions: await firstGateway.getRequests("sessions.resolve", { agentId: "openclaw" }),
+          startups: await firstGateway.getRequests("chat.startup", { agentId: "openclaw" }),
+        });
+        throw error;
+      }
+      await expectOpenClaw(firstPage);
       await screenshot(firstPage, "02-selected-openclaw.png");
 
       // The macOS host reopens the Gateway's canonical session key. Unlike the
@@ -174,20 +156,27 @@ suite.define(() => {
       await persistCanonicalGlobalSession(firstPage);
 
       await firstPage.close();
-      const reopened = await openPage(context);
-      const reopenedPage = reopened.page;
-      await reopened.gateway.waitForRequest("chat.startup");
-      await waitForControlUiRoute(reopenedPage, {
-        pathname: "/chat/openclaw",
-        routeId: "chat",
-      });
+      const { gateway: reopenedGateway, page: reopenedPage } = await openPage(context);
+      await waitForControlUiRoute(reopenedPage, { pathname: "/chat/openclaw", routeId: "chat" });
       await screenshot(reopenedPage, "03-reopened-agent.png");
-      await expect.poll(() => hasOpenClawStartup(reopened.gateway)).toBe(true);
-      await expect.poll(() => selectedAgentName(reopenedPage)).toBe("OpenClaw");
       await expect
-        .poll(() => reopenedPage.getByRole("heading", { name: "OpenClaw" }).isVisible())
-        .toBe(true);
+        .poll(() =>
+          reopenedGateway.getRequests("chat.startup", {
+            agentId: "openclaw",
+            sessionKey: "agent:openclaw:main",
+            limit: 80,
+          }),
+        )
+        .not.toHaveLength(0);
+      await expectOpenClaw(reopenedPage);
       await screenshot(reopenedPage, "04-verified-reopened-agent.png");
+      await reopenedPage.getByRole("link", { name: "New conversation", exact: true }).click();
+      await waitForControlUiRoute(reopenedPage, {
+        routeId: "new-session",
+        search: "?agent=openclaw",
+      });
+      await reopenedPage.locator(".new-session-page__message").waitFor();
+      expect(await reopenedGateway.getRequests("sessions.create")).toHaveLength(0);
     } finally {
       await suite.closeBrowserContext(context);
     }

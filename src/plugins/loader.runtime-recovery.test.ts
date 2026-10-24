@@ -12,6 +12,12 @@ import {
 } from "./current-plugin-metadata-snapshot.js";
 import { selectCurrentPluginMetadataCache } from "./current-plugin-metadata-state.js";
 import { createHookRunner } from "./hooks.js";
+import {
+  disposeLoaderFixtures,
+  pluginFixtureConfig,
+  writeFixtureJson,
+} from "./loader-fixture-builders.test-support.js";
+import type { PluginLoadOptions } from "./loader-types.js";
 import { loadOpenClawPlugins } from "./loader.js";
 import {
   makePluginLoaderTempDir,
@@ -39,7 +45,17 @@ import {
 import { withPluginRuntimeRegistryScope } from "./runtime/gateway-request-scope.js";
 import { getPluginRuntimeLoadContext } from "./runtime/load-context.js";
 
-afterEach(resetPluginLoaderTestStateForTest);
+const registries: PluginRegistry[] = [];
+afterEach(async () => {
+  await disposeLoaderFixtures(registries);
+  resetPluginLoaderTestStateForTest();
+});
+
+function load(options: PluginLoadOptions) {
+  const registry = loadOpenClawPlugins({ activate: false, cache: false, ...options });
+  registries.push(registry);
+  return registry;
+}
 
 function resolveProbe(registry: PluginRegistry) {
   const tool = registry.tools
@@ -93,21 +109,22 @@ it.each(["installed", "bundled-mjs"] as const)(
           }
         };`,
     });
-    const config: OpenClawConfig = {
+    const configWith = (marker = "original", fail = false): OpenClawConfig => ({
       plugins: {
         allow: [id],
         slots: { memory: "none" },
         ...(!bundled ? { load: { paths: [plugin.dir] } } : {}),
-        entries: { [id]: { enabled: true, config: { marker: "original", fail: false } } },
+        entries: { [id]: { enabled: true, config: { marker, fail } } },
       },
-    };
+    });
+    const config = configWith();
+    const context = { config, workspaceDir: root };
     const manifestPath = path.join(plugin.dir, "openclaw.plugin.json");
     const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
-    fs.writeFileSync(
-      manifestPath,
-      JSON.stringify({ ...manifest, contracts: { tools: ["recovery_inbound_probe"] } }),
-    );
-    const registries: PluginRegistry[] = [];
+    writeFixtureJson(plugin.dir, "openclaw.plugin.json", {
+      ...manifest,
+      contracts: { tools: ["recovery_inbound_probe"] },
+    });
     const previousCache = getProcessPluginCache();
     await using operationCache = createPluginCache();
     await using publishedCache = createPluginCache();
@@ -121,21 +138,17 @@ it.each(["installed", "bundled-mjs"] as const)(
         },
         async () => {
           const metadata = withPluginCache(publishedCache, () =>
-            loadPluginMetadataSnapshot({ config, workspaceDir: root }),
+            loadPluginMetadataSnapshot(context),
           );
           bindPluginMetadataSnapshotCache(metadata, publishedCache);
           const options = {
-            config,
-            workspaceDir: root,
+            ...context,
             manifestRegistry: metadata.manifestRegistry,
             discovery: metadata.discovery,
-            activate: false,
-            cache: false,
             runtimeSideEffects: true,
             throwOnLoadError: true,
           };
-          const previous = withPluginCache(publishedCache, () => loadOpenClawPlugins(options));
-          registries.push(previous);
+          const previous = withPluginCache(publishedCache, () => load(options));
           const oldRecord = previous.plugins.find((record) => record.id === id)!;
           expect(oldRecord.origin).toBe(bundled ? "bundled" : "config");
           const oldInstance = getPluginInstance(oldRecord)!;
@@ -147,21 +160,13 @@ it.each(["installed", "bundled-mjs"] as const)(
           try {
             await disposePluginRegistryInstances(previous);
             const candidate = withPluginCache(operationCache, () =>
-              loadOpenClawPlugins({
+              load({
                 ...options,
-                config: {
-                  plugins: {
-                    ...config.plugins,
-                    entries: {
-                      [id]: { enabled: true, config: { marker: "replacement", fail: true } },
-                    },
-                  },
-                },
+                config: configWith("replacement", true),
                 previousRegistry: previous,
                 throwOnLoadError: false,
               }),
             );
-            registries.push(candidate);
             expect(candidate.plugins.find((record) => record.id === id)?.error).toContain(
               "replacement registration failed",
             );
@@ -174,28 +179,21 @@ it.each(["installed", "bundled-mjs"] as const)(
               fs.rmSync(plugin.dir, { recursive: true });
             }
             await withPluginCache(operationCache, async () => {
-              const restored = loadOpenClawPlugins({
+              const restored = load({
                 ...options,
                 previousRegistry: previous,
                 moduleRecoveries: new Map([[id, recovery]]),
               });
-              registries.push(restored);
               const restoredRecord = restored.plugins.find((record) => record.id === id)!;
               expect(restoredRecord).not.toBe(oldRecord);
               expect(getPluginInstance(restoredRecord)).not.toBe(oldInstance);
-              prepareOwnedPluginLoadContext(
-                { config, workspaceDir: root },
-                process.env,
-                restored,
-                metadata,
-              );
+              prepareOwnedPluginLoadContext(context, process.env, restored, metadata);
               bindPluginRegistryGatewayOwner(restored, { current: () => restored });
               setActivePluginRegistry(restored, undefined, "gateway-bindable", root);
-              setGatewayPluginMetadataSnapshot(metadata, { config, workspaceDir: root });
+              setGatewayPluginMetadataSnapshot(metadata, context);
               expect(
                 getCurrentPluginMetadataSnapshot({
-                  config,
-                  workspaceDir: root,
+                  ...context,
                   allowWorkspaceScopedSnapshot: true,
                 }),
               ).toBeUndefined();
@@ -203,34 +201,26 @@ it.each(["installed", "bundled-mjs"] as const)(
               const expected = { content: [{ text: bundled ? "original:3" : "original:1" }] };
               expect(await restoredTool.execute("recovered", {})).toMatchObject(expected);
               expect(() => oldTool.execute("retired", {})).toThrow(/reloaded or disabled/);
-              expect(registered).toHaveBeenCalledTimes(3);
-              expect(evaluated).toHaveBeenCalledTimes(bundled ? 1 : 3);
 
               const loadInbound = createPreparedInboundRegistryLoader();
               for (let pass = 0; pass < 2; pass++) {
                 const inbound = withPluginRuntimeRegistryScope(restored, () =>
-                  loadInbound(
-                    { config, workspaceDir: root, allowGatewaySubagentBinding: true },
-                    metadata,
-                  ),
+                  loadInbound({ ...context, allowGatewaySubagentBinding: true }, metadata),
                 );
                 expect(inbound).toBe(restored);
-                expect(inbound.tools[0]).toBe(restored.tools[0]);
                 expect(await resolveProbe(inbound).execute("inbound", {})).toMatchObject(expected);
               }
               expect(registered).toHaveBeenCalledTimes(3);
               expect(evaluated).toHaveBeenCalledTimes(bundled ? 1 : 3);
             });
           } finally {
-            recovery.module.dispose();
+            await recovery.module.dispose();
           }
         },
       );
     } finally {
       await clearActivePluginRegistry();
-      for (const registry of registries.toReversed()) {
-        await disposePluginRegistryInstances(registry);
-      }
+      await disposeLoaderFixtures(registries);
       selectCurrentPluginMetadataCache(previousCache);
       process.off(evaluatedEvent, evaluated);
       process.off(registeredEvent, registered);
@@ -244,37 +234,22 @@ it("joins a failed candidate's declared stop hook before recovering the previous
   const gate = createDeferredCore();
   const plugin = writePlugin({
     id: "failed-resource-owner",
-    body: `const fs = require('node:fs');
-      module.exports = { id: 'failed-resource-owner', register(api) {
+    configSchema: { type: "object", properties: { fail: { type: "boolean" } } },
+    registration: `const fs = require('node:fs');
         const lock = ${JSON.stringify(lock)};
         const fd = fs.openSync(lock, 'wx');
         api.on('gateway_stop', async () => {
           require('./close.cjs').close(fd, lock);
         });
         if (api.pluginConfig.fail) throw new Error('candidate registration failed');
-      } };`,
+    `,
   });
   fs.writeFileSync(
     path.join(plugin.dir, "close.cjs"),
     "exports.close = (fd, lock) => { const fs = require('node:fs'); fs.closeSync(fd); fs.unlinkSync(lock); };",
   );
-  fs.writeFileSync(
-    path.join(plugin.dir, "openclaw.plugin.json"),
-    JSON.stringify({
-      id: plugin.id,
-      configSchema: { type: "object", properties: { fail: { type: "boolean" } } },
-    }),
-  );
-  const config = {
-    plugins: {
-      allow: [plugin.id],
-      load: { paths: [plugin.file] },
-      slots: { memory: "none" },
-      entries: { [plugin.id]: { config: { fail: false } } },
-    },
-  };
-  const options = { config, activate: false, runtimeSideEffects: true, cache: false };
-  const registries: PluginRegistry[] = [];
+  const config = pluginFixtureConfig(plugin, { config: { fail: false } });
+  const options = { config, runtimeSideEffects: true };
   let recovery: ReturnType<typeof capturePluginRuntimeRecovery>;
   const stop = (registry: PluginRegistry) =>
     createHookRunner(registry, { catchErrors: false }).runGatewayStop(
@@ -282,20 +257,14 @@ it("joins a failed candidate's declared stop hook before recovering the previous
       { port: 0, config, getCron: () => undefined },
     );
   try {
-    const old = loadOpenClawPlugins(options);
-    registries.push(old);
+    const old = load(options);
     recovery = capturePluginRuntimeRecovery(old.plugins[0]!);
     const manifestRegistry = getPluginRuntimeLoadContext(old)!.manifestRegistry;
     await stop(old);
     await disposePluginRegistryInstances(old);
-    const candidate = loadOpenClawPlugins({
+    const candidate = load({
       ...options,
-      config: {
-        plugins: {
-          ...config.plugins,
-          entries: { [plugin.id]: { config: { fail: true } } },
-        },
-      },
+      config: pluginFixtureConfig(plugin, { config: { fail: true } }),
       manifestRegistry,
       previousRegistry: old,
       prepareRegistrationFailureCleanup(registry, record) {
@@ -309,7 +278,6 @@ it("joins a failed candidate's declared stop hook before recovering the previous
         });
       },
     });
-    registries.push(candidate);
     expect(candidate.plugins[0]!.error).toContain("candidate registration failed");
     expect(candidate.typedHooks).toEqual([]);
     expect(fs.existsSync(lock)).toBe(true);
@@ -323,24 +291,21 @@ it("joins a failed candidate's declared stop hook before recovering the previous
     await retirement;
     expect(fs.existsSync(lock)).toBe(false);
 
-    const restored = loadOpenClawPlugins({
+    const restored = load({
       ...options,
       manifestRegistry,
       previousRegistry: old,
       moduleRecoveries: new Map([[plugin.id, recovery!]]),
       throwOnLoadError: true,
     });
-    registries.push(restored);
     expect(restored.plugins[0]!.status).toBe("loaded");
     expect(fs.existsSync(lock)).toBe(true);
     await stop(restored);
     expect(fs.existsSync(lock)).toBe(false);
   } finally {
     gate.resolve();
-    recovery?.module.dispose();
-    for (const registry of registries.toReversed()) {
-      await disposePluginRegistryInstances(registry);
-    }
+    await recovery?.module.dispose();
+    await disposeLoaderFixtures(registries);
   }
 });
 
@@ -349,30 +314,17 @@ it("preserves the registration error and disposes resources when cleanup prepara
   const marker = path.join(makePluginLoaderTempDir(), "disposed");
   const plugin = writePlugin({
     id: "cleanup-preparation-failure",
-    body: `module.exports = { id: 'cleanup-preparation-failure', register(api) {
-      api.lifecycle.onDispose(() => require('node:fs').writeFileSync(${JSON.stringify(marker)}, 'disposed'));
-      throw new Error('original registration failure');
-    } };`,
+    registration: `api.lifecycle.onDispose(() => require('node:fs').writeFileSync(${JSON.stringify(marker)}, 'disposed'));
+      throw new Error('original registration failure');`,
   });
-  let registry: PluginRegistry | undefined;
-  try {
-    registry = loadOpenClawPlugins({
-      config: {
-        plugins: { allow: [plugin.id], load: { paths: [plugin.file] }, slots: { memory: "none" } },
-      },
-      activate: false,
-      cache: false,
-      prepareRegistrationFailureCleanup() {
-        throw new Error("cleanup preparation failure");
-      },
-    });
-    expect(registry.plugins[0]!.error).toContain("original registration failure");
-    expect(registry.plugins[0]!.error).toContain("cleanup preparation failure");
-    await disposePluginRegistryInstances(registry);
-    expect(fs.readFileSync(marker, "utf8")).toBe("disposed");
-  } finally {
-    if (registry) {
-      await disposePluginRegistryInstances(registry);
-    }
-  }
+  const registry = load({
+    config: pluginFixtureConfig(plugin),
+    prepareRegistrationFailureCleanup() {
+      throw new Error("cleanup preparation failure");
+    },
+  });
+  expect(registry.plugins[0]!.error).toContain("original registration failure");
+  expect(registry.plugins[0]!.error).toContain("cleanup preparation failure");
+  await disposePluginRegistryInstances(registry);
+  expect(fs.readFileSync(marker, "utf8")).toBe("disposed");
 });

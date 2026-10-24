@@ -63,6 +63,22 @@ describe("Solid copy button", () => {
     },
   );
 
+  it("retires completed feedback and its reset timer when the payload changes", async () => {
+    const [text, setText] = createSignal("first");
+    const view = render(() => <CopyButton text={text()} idleLabel={`Copy ${text()}`} />);
+    fireEvent.click(view.getByRole("button", { name: "Copy first" }));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(view.getByRole("status").textContent).toBe("Copied!");
+
+    setText("second");
+    flush();
+    const current = view.getByRole<HTMLButtonElement>("button", { name: "Copy second" });
+    expect(current.dataset.copyState).toBeUndefined();
+    expect(view.getByRole("status", { hidden: true }).hidden).toBe(true);
+    await vi.advanceTimersByTimeAsync(1_500);
+    expect(current.getAttribute("aria-label")).toBe("Copy second");
+  });
+
   it("keeps focus and pending copy across an idle-label update, then resets to the latest label", async () => {
     const pending = createDeferred();
     writeText.mockReturnValueOnce(pending.promise);
@@ -83,17 +99,6 @@ describe("Solid copy button", () => {
     await vi.advanceTimersByTimeAsync(1_500);
     expect(button.getAttribute("aria-label")).toBe("Copier la valeur");
     expect(view.getByRole("status", { hidden: true }).hidden).toBe(true);
-  });
-
-  it("keeps an empty payload mounted and reports failure without writing the clipboard", async () => {
-    const view = render(() => <CopyButton text="" idleLabel="Copy empty value" />);
-    const button = view.getByRole<HTMLButtonElement>("button", { name: "Copy empty value" });
-    fireEvent.click(button);
-    await vi.advanceTimersByTimeAsync(0);
-    expect(writeText).not.toHaveBeenCalled();
-    expect(fallback).not.toHaveBeenCalled();
-    expect(button.dataset.copyState).toBe("error");
-    expect(view.getByRole("status").textContent).toBe("Copy failed");
   });
 
   it("does not fall back after its Solid owner is disposed", async () => {

@@ -1,8 +1,11 @@
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createThrowingTestRuntime } from "../../commands/test-runtime-config-helpers.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import * as runtimeConfig from "../agent-runtime-config.js";
+import { AgentSelectionRequiredError } from "../agent-scope.js";
 import { testing as cliBackendsTesting } from "../cli-backends.test-support.js";
 import {
   buildDefaultTestCliBackend,
@@ -57,6 +60,46 @@ describe("direct CLI command continuity", () => {
     resetCliRunnerPrepareTestDeps();
     cliBackendsTesting.resetDepsForTest();
     vi.restoreAllMocks();
+  });
+
+  it.each([
+    { name: "configured fixed-store owner", owner: "ops", agentId: undefined, error: false },
+    { name: "conflicting explicit agent", owner: "ops", agentId: "research", error: true },
+    { name: "retired fixed-store owner", owner: "retired", agentId: undefined, error: true },
+  ])("resolves bare command session keys: $name", async ({ owner, agentId, error }) => {
+    const { dir } = cli.session;
+    const config: OpenClawConfig = {
+      session: { store: path.join(dir, "shared.sqlite") },
+      agents: {
+        ownership: "explicit",
+        defaults: {
+          workspace: dir,
+          model: { primary: "anthropic/claude-sonnet-4-6" },
+          sessionStore: { agentId: owner },
+        },
+        entries: { ops: {}, research: {} },
+      },
+      plugins: { enabled: false },
+      messages: { visibleReplies: "automatic" },
+    };
+    vi.spyOn(runtimeConfig, "resolveAgentRuntimeConfig").mockResolvedValue(config);
+    let prepared: Awaited<ReturnType<typeof prepareAgentCommandExecution>> | undefined;
+    try {
+      const preparation = prepareAgentCommandExecution(
+        { message: "Explain the incident", sessionKey: "incident-42", agentId },
+        createThrowingTestRuntime(),
+      );
+      if (error) {
+        await expect(preparation).rejects.toBeInstanceOf(AgentSelectionRequiredError);
+      } else {
+        prepared = await preparation;
+        expect(prepared.sessionKey).toBe("agent:ops:incident-42");
+        expect(prepared.sessionAgentId).toBe("ops");
+      }
+    } finally {
+      await prepared?.runLease?.release();
+      await cleanupSessionStateForTest({ stateDir: dir });
+    }
   });
 
   it.each(["new", "published", "published-explicit-false"] as const)(
@@ -227,6 +270,8 @@ describe("direct CLI command continuity", () => {
         config,
         sessionKey: "main",
         prompt: "first ask",
+        messageChannel: "telegram",
+        currentChannelId: "123",
         requireExplicitMessageTarget: true,
         extraSystemPrompt: `volatile msg-1\n\n${staticPrompt}`,
         sourceReplyDeliveryMode: "message_tool_only",
@@ -238,6 +283,8 @@ describe("direct CLI command continuity", () => {
         config,
         sessionKey: "main",
         prompt: "second ask",
+        messageChannel: "telegram",
+        currentChannelId: "123",
         extraSystemPrompt: `volatile msg-2\n\n${staticPrompt}`,
         sourceReplyDeliveryMode: stableMode,
         currentMessageId: "msg-2",

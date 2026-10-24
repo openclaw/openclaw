@@ -3,6 +3,7 @@ import type { FormatCapabilityProfile } from "./format-capabilities.js";
 import {
   copyMarkdownLinkSpan,
   isAutoLinkedMarkdownLink,
+  MARKDOWN_STYLE_ORDER as STYLE_ORDER,
   type MarkdownAnnotationSpan,
 } from "./ir-spans.js";
 import type { MarkdownIR, MarkdownLinkSpan, MarkdownStyle, MarkdownStyleSpan } from "./ir.js";
@@ -44,23 +45,6 @@ export type RenderOptions = {
     context: { origin: MarkdownLinkOrigin },
   ) => RenderLink | null;
 };
-
-const STYLE_ORDER: MarkdownStyle[] = [
-  "blockquote",
-  "code_block",
-  "code",
-  "heading_1",
-  "heading_2",
-  "heading_3",
-  "heading_4",
-  "heading_5",
-  "heading_6",
-  "bold",
-  "italic",
-  "underline",
-  "strikethrough",
-  "spoiler",
-];
 
 const STYLE_RANK = new Map<MarkdownStyle, number>(
   STYLE_ORDER.map((style, index) => [style, index]),

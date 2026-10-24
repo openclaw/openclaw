@@ -128,7 +128,7 @@ export type CreateManagedWorktreeParams = {
   /** Guest projections receive committed source, never host ignored-file provisioning. */
   provisionIgnoredFiles?: boolean;
   signal?: AbortSignal;
-  onProgress?: (phase: "checkout" | "setup") => void;
+  onProgress?: (phase: "base" | "checkout" | "setup") => void;
   /** Committed prompt files are ready; workspace tools must still await creation. */
   onPromptReady?: (facts: {
     id: string;
@@ -187,11 +187,19 @@ export type ManagedWorktreeGcResult = {
   /** Complete recovery locations, even when individual issue details are omitted. */
   retiredCheckoutPaths: string[];
   snapshotsPruned: number;
+  /** Current or last repository stage; independent of checkout removal counts. */
+  gitMaintenance?: {
+    repoRoot: string;
+    stage: "packs" | "objects" | "maintenance" | "completed" | "suspended" | "throttled";
+    packsBefore?: number;
+    packsAfter?: number;
+  };
+  packsRemoved?: number;
   outcome: "completed" | "deferred" | "partial";
   /** Bounded per-worktree cleanup disposition; issueCount includes omitted entries. */
   issues: {
     id?: string;
-    stage: "idle" | "templates" | "limits" | "size" | "orphans" | "snapshots";
+    stage: "idle" | "templates" | "limits" | "size" | "orphans" | "snapshots" | "git-maintenance";
     outcome: "failed" | "deferred" | "retired";
     reason: string;
   }[];

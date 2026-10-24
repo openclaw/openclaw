@@ -112,6 +112,12 @@ function requirePositiveDuration(
   return { duration, milliseconds: Number(nanoseconds) / 1_000_000 };
 }
 
+export function parseCrabboxDurationMs(value: unknown): number | undefined {
+  const text = nonEmptyString(value);
+  const nanoseconds = text ? parsePositiveGoDurationNanoseconds(text) : undefined;
+  return nanoseconds === undefined ? undefined : Number(nanoseconds) / 1_000_000;
+}
+
 function parsePositiveGoDurationNanoseconds(duration: string): bigint | undefined {
   if (!GO_DURATION_PATTERN.test(duration)) {
     return undefined;
@@ -140,7 +146,7 @@ function parsePositiveGoDurationNanoseconds(duration: string): bigint | undefine
   return total > 0n ? total : undefined;
 }
 
-function heartbeatIntervalMs(idleTimeoutMs: number): number {
+export function heartbeatIntervalMs(idleTimeoutMs: number): number {
   const referenceIntervalMs = Math.max(5_000, Math.min(60_000, idleTimeoutMs / 3));
   // Crabbox's floor can exceed short accepted timeouts. Keep renewal ahead of
   // coordinator idle expiry without changing the profile contract.
@@ -360,6 +366,15 @@ export function resolveCrabboxPreparedIdleTimeoutMs(profile: WorkerProfile): num
   return parsed.warmImage === false || parsed.target !== "linux" ? undefined : parsed.idleTimeoutMs;
 }
 
+// Setup belongs to the configured target's interpreter, not the requested OS.
+// POSIX-to-POSIX portability remains the profile author's responsibility.
+export function isCrabboxSetupTargetCompatible(
+  profile: CrabboxProfile,
+  target: CrabboxOperatingSystem,
+): boolean {
+  return !profile.setup || (profile.target === "windows/normal") === (target === "windows/normal");
+}
+
 type CrabboxProvisionProfile = CrabboxProfile &
   ({ warmImage: false } | { warmImage: true; class: string });
 
@@ -385,6 +400,12 @@ export function resolveCrabboxProvisionProfile(
       ? configured.target
       : parseCrabboxOperatingSystem(requestedOsValue),
   );
+  if (!isCrabboxSetupTargetCompatible(configured, resolved.target)) {
+    const shell = resolved.target === "windows/normal" ? "PowerShell" : "POSIX";
+    throw new WorkerProviderError(
+      `Crabbox profile setup for ${configured.target} cannot run on ${resolved.target}; select a profile with settings.target=${resolved.target} and a compatible ${shell} setup command`,
+    );
+  }
   let provisionProfile: CrabboxProvisionProfile;
   if (!resolved.warmImage) {
     provisionProfile = { ...resolved, warmImage: false };

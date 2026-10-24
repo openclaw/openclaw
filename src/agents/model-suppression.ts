@@ -48,7 +48,6 @@ export function buildSuppressedBuiltInModelError(params: {
 
 export function buildShouldSuppressBuiltInModelCore(params: {
   config?: OpenClawConfig;
-  workspaceDir?: string;
 }): (input: { provider?: string | null; id?: string | null; baseUrl?: string | null }) => boolean {
   const resolver = buildManifestBuiltInModelSuppressionResolver({
     env: process.env,

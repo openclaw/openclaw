@@ -4,7 +4,7 @@ import path from "node:path";
 import { tempFile } from "@openclaw/fs-safe/advanced";
 import { root } from "@openclaw/fs-safe/root";
 import { sha256Hex } from "../infra/crypto-digest.js";
-import { hasErrnoCode } from "../infra/errno.js";
+import { ignoreMissingPath } from "../infra/errno.js";
 import { removePathWithinRoot } from "../infra/fs-safe-remove.js";
 import type { TranscriptSessionDescriptor } from "./provider-types.js";
 
@@ -162,10 +162,8 @@ export async function isCaseSensitiveDirectory(directory: string): Promise<boole
       await fs.access(alternatePath);
       return false;
     } catch (error) {
-      if (hasErrnoCode(error, "ENOENT")) {
-        return true;
-      }
-      throw error;
+      ignoreMissingPath(error);
+      return true;
     }
   } finally {
     await fs.rm(probePath, { force: true });

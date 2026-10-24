@@ -52,7 +52,6 @@ export async function createBaseDiscordMessageContext(
     baseText: "hi",
     messageText: "hi",
     preparedMedia: [],
-    wasMentioned: false,
     shouldRequireMention: true,
     canDetectMention: true,
     effectiveWasMentioned: true,

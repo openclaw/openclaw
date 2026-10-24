@@ -5,6 +5,10 @@ import { withSqliteReadOnlyWorkerScope } from "../../infra/sqlite-readonly-worke
 import { hasSqliteWorkerOutcomeUnknown } from "../../infra/sqlite-worker-contract.js";
 import { isUserModelAuthProfileId } from "../../state/user-model-account-id.js";
 import {
+  continueAuthProfileAuthorization,
+  continueAuthProfileAuthorizationInheritance,
+} from "./authorization-lifetime.js";
+import {
   fenceCandidateAuthProfileStore,
   listCandidateAuthProfileStores,
   loadCandidateAuthProfileStoreAsync,
@@ -51,6 +55,7 @@ export function mergeOAuthRefreshPeerClaims(
 }
 
 type OAuthRefreshPeerTransition = {
+  assertCurrent?: () => void;
   profileId: string;
   fence: OAuthCredential;
   claims: readonly OAuthRefreshPeerClaim[];
@@ -141,7 +146,6 @@ function isRemovableOAuthRefreshPeer(params: {
 
 async function listPeerCandidates(params: {
   cfg: OpenClawConfig;
-  env?: NodeJS.ProcessEnv;
   ownerDatabasePath: string;
 }): Promise<CandidateAuthProfileStore[]> {
   const ownerDatabasePath = resolvePathViaExistingAncestorSync(params.ownerDatabasePath);
@@ -157,11 +161,13 @@ function updateOAuthRefreshPeer(
   expected: OAuthCredential,
   update: (store: AuthProfileStore) => void,
   preserveProfileState?: boolean,
+  assertCurrent?: () => void,
 ) {
   return updateCandidateAuthProfileStore({
     candidate,
     profileId,
     preserveProfileState,
+    assertCurrent,
     updater: (store) => {
       if (!isExactOAuthCredential(store.profiles[profileId], expected)) {
         return false;
@@ -179,7 +185,6 @@ function updateOAuthRefreshPeer(
  */
 export async function fenceOAuthRefreshPeers(params: {
   cfg: OpenClawConfig;
-  env?: NodeJS.ProcessEnv;
   ownerDatabasePath: string;
   profileId: string;
   generation: OAuthCredential;
@@ -219,7 +224,9 @@ export async function fenceOAuthRefreshPeers(params: {
           }
           // Retain provisional custody if COMMIT succeeds but its reply is lost.
           claims.push({ candidate, original: { ...credential } });
-          store.profiles[params.profileId] = { ...params.fence };
+          store.profiles[params.profileId] = continueAuthProfileAuthorization(credential, {
+            ...params.fence,
+          });
           return true;
         },
       });
@@ -263,8 +270,12 @@ export async function rollbackOAuthRefreshPeerClaims(
         params.profileId,
         params.fence,
         (store) => {
-          store.profiles[params.profileId] = { ...claim.original! };
+          store.profiles[params.profileId] = continueAuthProfileAuthorization(params.fence, {
+            ...claim.original!,
+          });
         },
+        undefined,
+        params.assertCurrent,
       );
       if (restored.changed) {
         continue;
@@ -330,6 +341,11 @@ export async function settleOAuthRefreshPeerClaims(
               (!hasOAuthIdentity(claim.original) &&
                 isExactOAuthCredential(inherited, params.replacement)));
           if (canInherit) {
+            continueAuthProfileAuthorizationInheritance(
+              store.profiles,
+              params.profileId,
+              params.fence,
+            );
             delete store.profiles[params.profileId];
           } else {
             store.profiles[params.profileId] = createFailedOAuthRefreshFence(params.fence);
@@ -376,7 +392,6 @@ export type OAuthRefreshGenerationPeer = {
 /** Capture exact historical peers before removal updates their config references. */
 export async function listOAuthRefreshGenerationPeers(params: {
   cfg: OpenClawConfig;
-  env?: NodeJS.ProcessEnv;
   ownerDatabasePath: string;
   profileId: string;
   generation: OAuthCredential;

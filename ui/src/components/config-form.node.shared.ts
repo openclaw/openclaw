@@ -1,12 +1,12 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Accessor } from "@solidjs/signals";
 import type { JSX } from "@solidjs/web";
-import type { nothing, TemplateResult } from "lit";
 import { isSensitiveConfigPath } from "../../../src/config/sensitive-paths.js";
 import type { ConfigUiHints } from "../api/types.ts";
 import { t } from "../i18n/index.ts";
 import { isEnvPlaceholder, REDACTED_SENTINEL } from "../lib/config-form-utils.ts";
 import { formatUnknownText } from "../lib/format.ts";
+import { isSupportedConfigValueValid } from "./config-form.constraints.ts";
 import { formatConfigFormNumber } from "./config-form.numeric.ts";
 import { resolveConfigFieldMeta, type ConfigSearchCriteria } from "./config-form.search.ts";
 import {
@@ -57,9 +57,6 @@ export type ConfigNodeRenderParams = {
 };
 
 export type ConfigNodeRenderer = (params: Accessor<ConfigNodeRenderParams>) => JSX.Element;
-export type LegacyNodeRenderer = (
-  params: ConfigNodeRenderParams,
-) => TemplateResult | typeof nothing;
 
 export function configChildRenderOptions(params: ConfigNodeRenderParams) {
   return {
@@ -83,22 +80,24 @@ export function resolveConfigFieldPresentation(params: ConfigNodeRenderParams) {
     label,
     help,
     showLabel,
+    required: configFieldRequiresInput(params),
     helpId:
       params.descriptionId ??
       (showLabel && help ? configFieldId(params.path, "description") : undefined),
   };
 }
 
-export type SensitiveRenderState = {
-  isSensitive: boolean;
-  /** The path or hint marks the field sensitive, whether or not it holds a value yet. */
-  isSensitiveField: boolean;
-  isMasked: boolean;
-  isRedacted: boolean;
-  isRevealed: boolean;
-  canReveal: boolean;
-  sentinelRedacted: boolean;
-};
+export function configFieldRequiresInput(
+  params: Pick<ConfigNodeRenderParams, "schema" | "isRequired">,
+): boolean {
+  return (
+    params.isRequired === true &&
+    (params.schema.default === undefined ||
+      !isSupportedConfigValueValid(params.schema, params.schema.default))
+  );
+}
+
+export type SensitiveRenderState = ReturnType<typeof getSensitiveRenderState>;
 
 export function isAnySchema(schema: JsonSchema): boolean {
   return Object.keys(schema).every((key) => META_KEYS.has(key));
@@ -140,7 +139,7 @@ export function getSensitiveRenderState(params: {
   revealSensitive?: boolean;
   maskSensitive?: boolean;
   isSensitivePathRevealed?: (path: Array<string | number>) => boolean;
-}): SensitiveRenderState {
+}) {
   const isSensitive = hasSensitiveConfigData(params.value, params.path, params.hints);
   // The server never sends plaintext secrets: a stored secret arrives as the
   // redaction sentinel. Revealing it would display the sentinel as an editable
@@ -150,6 +149,7 @@ export function getSensitiveRenderState(params: {
     isSensitive &&
     !sentinel &&
     (params.revealSensitive || (params.isSensitivePathRevealed?.(params.path) ?? false));
+  // The path or hint is sensitive even when it does not hold a value yet.
   const isSensitiveField =
     hintForPath(params.path, params.hints)?.sensitive ||
     isSensitiveConfigPath(configPathKey(params.path));

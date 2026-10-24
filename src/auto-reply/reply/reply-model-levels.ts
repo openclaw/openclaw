@@ -6,25 +6,22 @@ import type { InlineDirectives } from "./directive-handling.parse.js";
 import type { createModelSelectionState } from "./model-selection.js";
 import { assertReplyPreprocessingActive } from "./reply-preprocessing-abort.js";
 
-type ReplyModelLevelSelection = {
-  provider: string;
-  model: string;
-  agentRuntime?: string | null;
-  thinkLevel?: ThinkLevel;
-  thinkingExplicit: boolean;
-  reasoningLevel: ReasoningLevel;
-  reasoningExplicit: boolean;
-};
-
-type ReplyModelLevels = {
+export type ReplyModelLevelResolver = () => Promise<{
   resolvedThinkLevel: ThinkLevel | undefined;
   resolvedReasoningLevel: ReasoningLevel;
-};
-
-export type ReplyModelLevelResolver = () => Promise<ReplyModelLevels>;
+  thinkingExplicit?: boolean;
+}>;
 
 export function createReplyModelLevelResolver(params: {
-  selection: ReplyModelLevelSelection;
+  selection: {
+    provider: string;
+    model: string;
+    agentRuntime?: string | null;
+    thinkLevel?: ThinkLevel;
+    thinkingExplicit: boolean;
+    reasoningLevel: ReasoningLevel;
+    reasoningExplicit: boolean;
+  };
   abortSignal?: AbortSignal;
   modelState: Pick<
     Awaited<ReturnType<typeof createModelSelectionState>>,
@@ -54,7 +51,11 @@ export function createReplyModelLevelResolver(params: {
               abortSignal,
             )
           : selection.reasoningLevel;
-      return { resolvedThinkLevel, resolvedReasoningLevel };
+      return {
+        resolvedThinkLevel,
+        resolvedReasoningLevel,
+        thinkingExplicit: selection.thinkingExplicit,
+      };
     },
     { cacheRejections: true },
   );

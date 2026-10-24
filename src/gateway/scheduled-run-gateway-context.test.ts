@@ -7,7 +7,7 @@ import {
 } from "../agents/tools/gateway-caller-context.js";
 import { getSpawnBroker, runWithSpawnBroker } from "../process/spawn-broker/context.js";
 import { useSpawnBrokerTestFixture } from "../process/spawn-broker/host.test-support.js";
-import { spawnWithFallback } from "../process/spawn-utils.js";
+import { spawnAndWait } from "../process/spawn-utils.js";
 import { createScheduledGatewayRunner } from "./scheduled-run-gateway-context.js";
 
 describe.skipIf(process.platform === "win32")("scheduled Gateway broker ownership", () => {
@@ -40,7 +40,7 @@ describe.skipIf(process.platform === "win32")("scheduled Gateway broker ownershi
     await expect(
       runWithSpawnBroker(secondBroker, () =>
         runFirst(() =>
-          spawnWithFallback({
+          spawnAndWait({
             argv: [process.execPath, "-e", "process.exit(0)"],
             options: { stdio: "ignore" },
           }),

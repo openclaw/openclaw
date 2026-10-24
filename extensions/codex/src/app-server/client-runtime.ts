@@ -8,8 +8,10 @@ import {
   initializeCodexClientForkSettings,
   forgetCodexClientForkSettings,
 } from "./client-fork-settings.js";
+import * as threadClosure from "./client-thread-closure.js";
 import {
   createThreadOwnerToken,
+  isThreadBackgroundOnly,
   releaseThreadProtection,
   forgetThreadOwnership,
   hasSiblingThreadWork,
@@ -143,6 +145,7 @@ export function ensureCodexAppServerClientRuntime(
     workspaceReferences: new Map(),
   };
   configuredClients.set(client, runtime);
+  threadClosure.ensureCodexAppServerThreadClosureTracking(client);
   initializeCodexClientForkSettings(client);
   client.addCloseHandler(() => {
     // Pending releases may settle after close; their continuations must never
@@ -301,11 +304,7 @@ async function releaseRetainedThread(
     retainedOwnerToken: retained.ownerToken,
     completion: Promise.resolve().then(() => {
       assertCurrent?.();
-      return withCurrent
-        ? retained.release(threadId, assertCurrent, withCurrent)
-        : assertCurrent
-          ? retained.release(threadId, assertCurrent)
-          : retained.release(threadId);
+      return retained.release(threadId, assertCurrent, withCurrent);
     }),
   };
   runtime.releasingThreads.set(threadId, transition);
@@ -397,6 +396,7 @@ export async function retainCodexAppServerLiveThread(
     return false;
   }
   const previousOwner = runtime.retainedThreads.get(threadId)?.ownerToken;
+  threadClosure.clearCodexAppServerThreadClosed(client, threadId);
   runtime.retainedThreads.delete(threadId);
   const retained: RetainedLiveThread = {
     ownerToken,
@@ -513,6 +513,7 @@ function claimCodexAppServerThreadOwnership(
   const previousClaim = runtime.claimedThreads.get(threadId);
   runtime.retainedThreads.delete(threadId);
   const claimed = createThreadOwnerToken(threadId, onInvalidated);
+  claimed.configFingerprint = retained.configFingerprint;
   runtime.claimedThreads.set(threadId, claimed);
   previousClaim?.invalidate();
   retained.ownerToken?.invalidate();
@@ -568,11 +569,7 @@ function claimCodexAppServerThreadOwnership(
           return;
         }
         assertReleaseCurrent?.();
-        await (withCurrent
-          ? retained.release(releasedThreadId, assertReleaseCurrent, withCurrent)
-          : assertReleaseCurrent
-            ? retained.release(releasedThreadId, assertReleaseCurrent)
-            : retained.release(releasedThreadId));
+        await retained.release(releasedThreadId, assertReleaseCurrent, withCurrent);
       }),
     };
     runtime.releasingThreads.set(threadId, transition);
@@ -649,6 +646,15 @@ export function isCodexAppServerLiveThreadClaimed(
 ): boolean {
   const runtime = configuredClients.get(client);
   return runtime !== undefined && !runtime.closed && runtime.claimedThreads.has(threadId);
+}
+
+/** Completed foreground work may leave cleanup custody with native background work. */
+export function isCodexAppServerLiveThreadBackgroundOnly(
+  client: CodexAppServerClient,
+  threadId: string,
+  configFingerprint?: string,
+): boolean {
+  return isThreadBackgroundOnly(configuredClients.get(client), threadId, configFingerprint);
 }
 
 /** Native commands and children can still need an otherwise-idle subscription. */

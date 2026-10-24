@@ -1,15 +1,13 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import { Server } from "@modelcontextprotocol/sdk/server/index.js";
-import { ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
+import { InMemoryTransport } from "@modelcontextprotocol/client";
+import { Server } from "@modelcontextprotocol/server";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
-import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
@@ -81,11 +79,9 @@ describe("CLI attempt session MCP overrides", () => {
       const [client, transport] = InMemoryTransport.createLinkedPair();
       const server = new Server(
         { name: "session-override-proof", version: "1" },
-        {
-          capabilities: { tools: {} },
-        },
+        { capabilities: { tools: {} } },
       );
-      server.setRequestHandler(ListToolsRequestSchema, async () => ({
+      server.setRequestHandler("tools/list", async () => ({
         tools: [{ name: "read_docs", inputSchema: { type: "object" } }],
       }));
       void server.connect(transport);
@@ -157,7 +153,7 @@ describe("CLI attempt session MCP overrides", () => {
   ])(
     "serializes global=$globalEnabled session=$sessionEnabled as enabled=$expectedEnabled",
     async ({ globalEnabled, sessionEnabled, expectedEnabled }) => {
-      const sessionEntry: SessionEntry = makeSessionEntry(
+      const sessionEntry = makeSessionEntry(
         "session-mcp",
         sessionEnabled !== undefined
           ? { toolOverrides: { mcpServers: { docs: sessionEnabled } } }

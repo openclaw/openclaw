@@ -17,14 +17,14 @@ it("supplies the accepted artifact record without depending on the bundled modul
   expect(mocks.inspect).toHaveBeenCalledWith(
     expect.objectContaining({
       pluginManifest: expect.objectContaining({
-        dependencies: expect.objectContaining({ "@trycua/cua-driver": "0.33.4" }),
+        dependencies: expect.objectContaining({ "@trycua/cua-driver": "0.36.0" }),
         cuaDriverArtifacts: expect.objectContaining({
           "win32-arm64-msvc": {
             files: {
               "cua_driver_node_runtime.node":
-                "003d7de1f901d91b94bc362ae387ee6d5371436574195390f33517406afa7c7f",
+                "b7ea68942239fac0efb92a6062ac195979f1b91aa973ec6c091d41e285bfce11",
               "cua_driver_sdk.dll":
-                "5f5784a148486c057e5b425c12770fb26f03f9ddf1ecf19fd067978a67cc551c",
+                "8395838747ee50e7cb47c29fcee48f58cc9a0cc7e9d48e40e98959fe74984a0a",
             },
           },
         }),

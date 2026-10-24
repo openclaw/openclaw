@@ -170,30 +170,6 @@ describe("media-understanding runtime", () => {
     expect(mocks.runCapability).not.toHaveBeenCalled();
   });
 
-  it("resolves the agent directory for agent-scoped file media", async () => {
-    mocks.normalizeMediaAttachments.mockReturnValue([
-      { index: 0, path: "/tmp/sample.ogg", mime: "audio/ogg" },
-    ]);
-    mocks.runCapability.mockResolvedValue({
-      outputs: [],
-      decision: { capability: "audio", outcome: "skipped", attachments: [] },
-    });
-
-    await runMediaUnderstandingFile({
-      capability: "audio",
-      filePath: "/tmp/sample.ogg",
-      mime: "audio/ogg",
-      cfg: {
-        agents: { entries: { worker: { agentDir: "/tmp/worker-agent" } } },
-      } as OpenClawConfig,
-      agentId: "worker",
-    });
-
-    expect(mocks.runCapability).toHaveBeenCalledWith(
-      expect.objectContaining({ agentId: "worker", agentDir: "/tmp/worker-agent" }),
-    );
-  });
-
   it("passes media scope context through file media understanding requests", async () => {
     const output: MediaUnderstandingOutput = {
       kind: "image.description",
@@ -236,86 +212,38 @@ describe("media-understanding runtime", () => {
     });
   });
 
-  it("passes image file URLs as remote media understanding inputs", async () => {
-    const output: MediaUnderstandingOutput = {
-      kind: "image.description",
-      attachmentIndex: 0,
-      provider: "vision-plugin",
-      model: "vision-v1",
-      text: "image ok",
-    };
-    const media = [{ index: 0, url: "https://example.com/photo.png", mime: "image/png" }];
-    mocks.normalizeMediaAttachments.mockReturnValue(media);
-    mocks.runCapability.mockResolvedValue({ outputs: [output] });
-
-    await describeImageFile({
-      filePath: "https://example.com/photo.png",
-      mediaUrl: "https://example.com/photo.png",
-      mime: "image/png",
-      cfg: {} as OpenClawConfig,
-      agentDir: "/tmp/agent",
-    });
-
-    expect(mocks.normalizeMediaAttachments).toHaveBeenCalledWith({
-      media: [{ url: "https://example.com/photo.png", contentType: "image/png" }],
-    });
-    expect(requireRunCapabilityRequest()).toMatchObject({
-      ctx: {
-        media: [{ url: "https://example.com/photo.png", contentType: "image/png" }],
-      },
-      media,
-    });
-  });
-
   it("passes workspaceDir through audio and video file helpers", async () => {
-    mocks.runCapability.mockResolvedValue({
-      outputs: [],
-      decision: { capability: "video", outcome: "skipped", attachments: [] },
-    });
-    mocks.normalizeMediaAttachments.mockReturnValue([
-      { index: 0, path: "/tmp/sample.mp4", mime: "video/mp4" },
-    ]);
+    for (const [capability, filePath, mime, runFile] of [
+      ["video", "/tmp/sample.mp4", "video/mp4", describeVideoFile],
+      ["audio", "/tmp/sample.ogg", "audio/ogg", transcribeAudioFile],
+    ] as const) {
+      if (capability === "audio") {
+        mocks.runCapability.mockReset();
+      }
+      mocks.runCapability.mockResolvedValue({
+        outputs: [],
+        decision: { capability, outcome: "skipped", attachments: [] },
+      });
+      mocks.normalizeMediaAttachments.mockReturnValue([{ index: 0, path: filePath, mime }]);
 
-    await describeVideoFile({
-      filePath: "/tmp/sample.mp4",
-      mime: "video/mp4",
-      cfg: {} as OpenClawConfig,
-      agentDir: "/tmp/agent",
-      workspaceDir: "/tmp/workspace",
-    });
+      await runFile({
+        filePath,
+        mime,
+        cfg: {} as OpenClawConfig,
+        agentDir: "/tmp/agent",
+        workspaceDir: "/tmp/workspace",
+      });
 
-    expect(requireRunCapabilityRequest()).toMatchObject({
-      capability: "video",
-      agentDir: "/tmp/agent",
-      workspaceDir: "/tmp/workspace",
-    });
-
-    mocks.runCapability.mockReset();
-    mocks.runCapability.mockResolvedValue({
-      outputs: [],
-      decision: { capability: "audio", outcome: "skipped", attachments: [] },
-    });
-    mocks.normalizeMediaAttachments.mockReturnValue([
-      { index: 0, path: "/tmp/sample.ogg", mime: "audio/ogg" },
-    ]);
-
-    await transcribeAudioFile({
-      filePath: "/tmp/sample.ogg",
-      mime: "audio/ogg",
-      cfg: {} as OpenClawConfig,
-      agentDir: "/tmp/agent",
-      workspaceDir: "/tmp/workspace",
-    });
-
-    expect(requireRunCapabilityRequest()).toMatchObject({
-      capability: "audio",
-      agentDir: "/tmp/agent",
-      workspaceDir: "/tmp/workspace",
-    });
+      expect(requireRunCapabilityRequest()).toMatchObject({
+        capability,
+        agentDir: "/tmp/agent",
+        workspaceDir: "/tmp/workspace",
+      });
+    }
   });
 
   it("passes per-request image prompts into media understanding config", async () => {
-    const media = [{ index: 0, path: "/tmp/sample.jpg", mime: "image/jpeg" }];
+    const media = [{ index: 0, url: "https://example.com/photo.png", mime: "image/png" }];
     const providerRegistry = new Map();
     const cache = { cleanup: mocks.cleanup, getBuffer: mocks.getBuffer };
     const output: MediaUnderstandingOutput = {
@@ -333,6 +261,7 @@ describe("media-understanding runtime", () => {
     });
 
     const cfg = {
+      agents: { entries: { worker: { agentDir: "/tmp/worker-agent" } } },
       tools: {
         media: {
           image: {
@@ -343,25 +272,30 @@ describe("media-understanding runtime", () => {
     } as OpenClawConfig;
 
     await describeImageFile({
-      filePath: "/tmp/sample.jpg",
-      mime: "image/jpeg",
+      filePath: "https://example.com/photo.png",
+      mediaUrl: "https://example.com/photo.png",
+      mime: "image/png",
       cfg,
-      agentDir: "/tmp/agent",
+      agentId: "worker",
       prompt: "Count visible buttons",
       timeoutMs: 90_000,
     });
 
     expect(mocks.runCapability).toHaveBeenCalledOnce();
+    expect(mocks.normalizeMediaAttachments).toHaveBeenCalledWith({
+      media: [{ url: "https://example.com/photo.png", contentType: "image/png" }],
+    });
     expect(requireRunCapabilityRequest()).toMatchObject({
       capability: "image",
       cfg,
       request: { prompt: "Count visible buttons" },
       ctx: {
-        media: [{ path: "/tmp/sample.jpg", contentType: "image/jpeg" }],
+        media: [{ url: "https://example.com/photo.png", contentType: "image/png" }],
       },
       attachments: cache,
       media,
-      agentDir: "/tmp/agent",
+      agentId: "worker",
+      agentDir: "/tmp/worker-agent",
       providerRegistry,
       config: {
         prompt: "Count visible buttons",
@@ -391,6 +325,9 @@ describe("media-understanding runtime", () => {
         ...IMAGE_MODEL_DEFAULTS,
         filePath: "/tmp/sample.bin",
         mime: testCase.mime,
+        cfg: { agents: { entries: { worker: { agentDir: "/tmp/worker-agent" } } } },
+        agentId: "worker",
+        agentDir: undefined,
       });
 
       expect(mocks.convertHeicToJpeg).toHaveBeenCalledWith(testCase.bytes);
@@ -399,6 +336,8 @@ describe("media-understanding runtime", () => {
           buffer: Buffer.from("optimized:jpeg-normalized"),
           fileName: "sample.bin",
           mime: "image/jpeg",
+          agentId: "worker",
+          agentDir: "/tmp/worker-agent",
         }),
       );
     },
@@ -467,33 +406,6 @@ describe("media-understanding runtime", () => {
     );
     expect(mocks.describeImageWithModel).toHaveBeenCalledWith(
       expect.objectContaining({ timeoutMs: MAX_TIMER_TIMEOUT_MS }),
-    );
-  });
-
-  it("resolves the agent directory when direct image description only names an agent", async () => {
-    mocks.getBuffer.mockResolvedValue({
-      buffer: Buffer.from("image-bytes"),
-      fileName: "sample.jpg",
-      mime: "image/jpeg",
-      size: 11,
-    });
-
-    await describeImageFileWithModel({
-      ...IMAGE_MODEL_DEFAULTS,
-      filePath: "/tmp/sample.jpg",
-      mime: "image/jpeg",
-      provider: "gemini",
-      model: "vision-v1",
-      prompt: "Describe the sample.",
-      cfg: {
-        agents: { entries: { worker: { agentDir: "/tmp/worker-agent" } } },
-      } as OpenClawConfig,
-      agentId: "worker",
-      agentDir: undefined,
-    });
-
-    expect(mocks.describeImageWithModel).toHaveBeenCalledWith(
-      expect.objectContaining({ agentId: "worker", agentDir: "/tmp/worker-agent" }),
     );
   });
 

@@ -13,12 +13,13 @@ import {
 } from "./session-cold-storage-source-guard.worker.js";
 import { assertSessionTranscriptHot } from "./session-cold-storage-state.js";
 import { transferSessionEntryWorkerCandidate } from "./session-entry-patch.worker.js";
+import { applyManualCompactInTransaction } from "./session-manual-compact-mutation.worker.js";
 import { selectManualCompactTranscriptLines } from "./session-manual-compact-selection.js";
-import { applyManualCompactInTransaction } from "./session-manual-compact.kernel.js";
 import type {
   SessionSourcePredicate,
   SessionSourceValidation,
 } from "./session-source-authority.js";
+import { createSessionSourceConversationMatches } from "./session-source-conversation-matches.js";
 import { reconcileSessionTranscriptIndexInTransaction } from "./session-transcript-index.js";
 
 export type ManualCompactInput = {
@@ -45,20 +46,7 @@ export function compactManualTranscript(
   input: ManualCompactInput,
   context: AgentWorkerOperationContext,
 ) {
-  const sourceMatches = input.sources.flatMap((source, index) =>
-    source.conversationAlternatives
-      ? [
-          {
-            index,
-            matches: new Int32Array(
-              new SharedArrayBuffer(
-                (source.conversationAlternatives.length + 1) * Int32Array.BYTES_PER_ELEMENT,
-              ),
-            ),
-          },
-        ]
-      : [],
-  );
+  const sourceMatches = createSessionSourceConversationMatches(input.sources);
   using source = prepareSessionColdSourceGuard(context.options, input.sources, sourceMatches);
   const database = context.open();
   const rows = readTranscriptEventRows(database, input.scope.sessionId);
@@ -88,19 +76,12 @@ export function compactManualTranscript(
         result: selected.result,
       };
       if (selected.result.compacted) {
-        const identity = applyManualCompactInTransaction(
-          current,
-          input.scope,
-          {
-            rows,
-            entries,
-            events,
-            nowMs: input.nowMs,
-          },
-          {
-            scheduleProjectionReconcile: false,
-          },
-        );
+        const identity = applyManualCompactInTransaction(current, input.scope, {
+          rows,
+          entries,
+          events,
+          nowMs: input.nowMs,
+        });
         // Finish the retained projection before the next turn can use this generation.
         reconcileSessionTranscriptIndexInTransaction(current.db, input.scope.sessionId);
         candidate.publication = prepareSessionEntryReplacementPublication(
@@ -117,8 +98,10 @@ export function compactManualTranscript(
         current,
         (stage, publication) => {
           context.admit(stage, publication);
-          // The target transaction pins same-store predicates; foreign owners can change at a host grant.
-          source.assertForeign();
+          if (stage === "commit") {
+            // The target transaction pins same-store predicates; check foreign owners at commit.
+            source.assertForeign();
+          }
         },
         candidate,
       );

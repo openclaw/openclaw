@@ -23,7 +23,6 @@ import {
   resolveFlushTimerForDelay,
 } from "./bot-media-timers.test-support.js";
 import { telegramBotInfoForTest } from "./bot.create-telegram-bot.test-support.js";
-import { createTelegramBot } from "./bot.js";
 import type { TelegramTransport } from "./fetch.js";
 import * as messageDispatchDedupe from "./message-dispatch-dedupe.js";
 import { setTelegramRuntime } from "./runtime.js";
@@ -31,11 +30,12 @@ import { resetTelegramAccountThrottlersForTest } from "./runtime.test-support.js
 import type { TelegramRuntime } from "./runtime.types.js";
 import {
   createBotApiTransport,
-  createTelegramDeps,
+  configureTelegramModuleMocks,
   photoUpdate,
 } from "./telegram-ingress-coalescing.test-support.js";
 import { createTelegramTransportIngressMonitor } from "./telegram-ingress-drain-factory.js";
 import { openTelegramIngressQueue, telegramQueueEventId } from "./telegram-ingress-spool.js";
+import { writeTelegramSpooledUpdate } from "./telegram-ingress-spool.test-support.js";
 
 export const runtimeErrors: unknown[] = [];
 
@@ -208,6 +208,7 @@ export function resetTelegramIngressRuntime() {
 export type TelegramIngressMonitorOptions = {
   telegramTransport?: TelegramTransport;
   adoptionStallTimeoutMs?: number;
+  pollIntervalMs?: number;
   onRuntimeError?: (error: unknown) => void;
 };
 
@@ -217,11 +218,12 @@ export async function createIngressMonitor(
 ) {
   const telegramTransport = options.telegramTransport ?? createBotApiTransport();
   const abortController = new AbortController();
+  configureTelegramModuleMocks(stateDir, cfg);
+  const { createTelegramBot } = await import("./bot.js");
   const bot = await createTelegramBot({
     token: "tok",
     botInfo: telegramBotInfoForTest,
     config: cfg,
-    telegramDeps: createTelegramDeps(stateDir, cfg),
     telegramTransport,
     fetchAbortSignal: abortController.signal,
     mediaAbortSignal: abortController.signal,
@@ -248,9 +250,9 @@ export async function createIngressMonitor(
     ...(options.adoptionStallTimeoutMs === undefined
       ? {}
       : { adoptionStallTimeoutMs: options.adoptionStallTimeoutMs }),
-    pollIntervalMs: 10,
+    pollIntervalMs: options.pollIntervalMs ?? 10,
   });
-  const resources = { monitor, telegramTransport, abortController };
+  const resources = { monitor, telegramTransport, abortController, bot };
   return resources;
 }
 
@@ -270,6 +272,34 @@ export async function admitAlbum(
     await monitor.waitForIdle();
   }
   await vi.advanceTimersByTimeAsync(40);
+}
+
+/** Every update is settled except `pending`, which stays retryable in the spool. */
+export async function expectOnlyPending(
+  queue: ReturnType<typeof openTelegramIngressQueue>,
+  pending: Array<Record<string, unknown>>,
+) {
+  expect(await queue.listClaims()).toEqual([]);
+  expect(await queue.listFailed?.({ limit: "all" })).toEqual([]);
+  expect(await queue.listPending({ limit: "all" })).toMatchObject(pending);
+}
+
+/** Buffers `first`, then pauses the pump so `second` is durably pending but not yet buffered. */
+export async function spoolBehindPausedPump(params: {
+  monitor: ReturnType<typeof createTelegramTransportIngressMonitor>;
+  queue: ReturnType<typeof openTelegramIngressQueue>;
+  stateDir: string;
+  first: Parameters<ReturnType<typeof createTelegramTransportIngressMonitor>["admit"]>[0];
+  second: { update_id: number };
+}) {
+  params.monitor.start();
+  await params.monitor.admit(params.first);
+  await params.monitor.waitForIdle();
+  await params.monitor.pause();
+  await writeTelegramSpooledUpdate({ stateDir: params.stateDir, update: params.second });
+  expect(await params.queue.listPending({ limit: "all" })).toMatchObject([
+    { id: telegramQueueEventId(params.second.update_id) },
+  ]);
 }
 
 export type TelegramIngressResources = Awaited<ReturnType<typeof createIngressMonitor>>;

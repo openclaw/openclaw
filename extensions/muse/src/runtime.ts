@@ -1,4 +1,6 @@
 import { createHash } from "node:crypto";
+import fs from "node:fs/promises";
+import path from "node:path";
 import {
   MspError,
   Session,
@@ -6,9 +8,9 @@ import {
   spawnMspConnection,
   type SpawnedMspConnection,
 } from "@muse-code/sdk";
+import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import musePackage from "../package.json" with { type: "json" };
-import { museEnvironment } from "./environment.js";
 
 export type MuseOpenSession = {
   sessionId?: string;
@@ -95,23 +97,59 @@ export async function openMuseSession(runtime: MuseRuntime, options: MuseOpenSes
 export class MusePool {
   private readonly entries = new Map<
     string,
-    { credentialIdentity: string; pending: Promise<MuseRuntime> }
+    { credentialIdentity: string; pending: Promise<MuseRuntime>; startup: AbortController }
   >();
   private disposed = false;
-  constructor(private readonly binaryPath = "muse") {}
+  constructor(
+    private readonly binaryPath = "muse",
+    private readonly noSessionLog = false,
+  ) {}
 
   async acquire(
-    workspace: string,
+    workspace: string | undefined,
     apiKey: string | undefined,
     readOnly: boolean,
+    signal?: AbortSignal,
   ): Promise<MuseLease> {
+    signal?.throwIfAborted();
     if (this.disposed) {
       throw new Error("Muse runtime has been disposed");
     }
-    const { env, credentialSource } = await museEnvironment(apiKey);
+    const inherited = { ...process.env };
+    const managedHome = path.join(resolveStateDir(inherited), "muse");
+    const authPath = path.join(managedHome, "muse", "auth.json");
+    let credentialSource: string;
+    try {
+      const stat = await fs.stat(authPath);
+      credentialSource = JSON.stringify([
+        "managed",
+        authPath,
+        stat.dev,
+        stat.ino,
+        stat.size,
+        stat.mtimeMs,
+        stat.ctimeMs,
+      ]);
+    } catch (error) {
+      if (error instanceof Error && "code" in error && error.code === "ENOENT") {
+        credentialSource = "native";
+      } else {
+        throw error;
+      }
+    }
+    // An existing managed store remains authoritative even if its contents are unusable.
+    const env: NodeJS.ProcessEnv = {
+      ...inherited,
+      MUSE_NO_AUTO_UPDATE: "1",
+      ...(credentialSource !== "native"
+        ? { TBH_CREDENTIAL_BACKEND: "file", XDG_CONFIG_HOME: managedHome }
+        : {}),
+      ...(apiKey ? { META_API_KEY: apiKey } : {}),
+    };
     if (this.disposed) {
       throw new Error("Muse runtime was disposed during environment preparation");
     }
+    signal?.throwIfAborted();
     const apiKeyIdentity = credentialFingerprint(apiKey);
     const key = JSON.stringify([workspace, apiKeyIdentity, readOnly]);
     const credentialIdentity = JSON.stringify([
@@ -121,14 +159,15 @@ export class MusePool {
     let entry = this.entries.get(key);
     if (!entry || entry.credentialIdentity !== credentialIdentity) {
       const previous = entry;
+      const startup = new AbortController();
       const pending = (async () => {
         if (previous) {
           const runtime = await previous.pending.catch(() => undefined);
           await runtime?.close();
         }
-        return this.spawn(workspace, env, readOnly, credentialIdentity);
+        return this.spawn(workspace, env, readOnly, credentialIdentity, startup.signal);
       })();
-      entry = { credentialIdentity, pending };
+      entry = { credentialIdentity, pending, startup };
       this.entries.set(key, entry);
       void pending.catch(() => {
         if (this.entries.get(key) === entry) {
@@ -136,7 +175,18 @@ export class MusePool {
         }
       });
     }
-    const runtime = await entry.pending;
+    const abort = () => entry.startup.abort(signal?.reason);
+    signal?.addEventListener("abort", abort, { once: true });
+    let runtime: MuseRuntime;
+    try {
+      runtime = await entry.pending;
+    } finally {
+      signal?.removeEventListener("abort", abort);
+    }
+    if (signal?.aborted) {
+      await runtime.close();
+      signal.throwIfAborted();
+    }
     if (this.disposed) {
       await runtime.close();
       throw new Error("Muse runtime was disposed during startup");
@@ -145,7 +195,7 @@ export class MusePool {
       if (this.entries.get(key) === entry) {
         this.entries.delete(key);
       }
-      return this.acquire(workspace, apiKey, readOnly);
+      return this.acquire(workspace, apiKey, readOnly, signal);
     }
     clearTimeout(runtime.timer);
     runtime.users++;
@@ -167,17 +217,23 @@ export class MusePool {
   }
 
   private async spawn(
-    workspace: string,
+    workspace: string | undefined,
     env: NodeJS.ProcessEnv,
     readOnly: boolean,
     credentialIdentity: string,
+    signal: AbortSignal,
   ): Promise<MuseRuntime> {
     if (this.disposed) {
       throw new Error("Muse runtime was disposed during environment preparation");
     }
+    signal.throwIfAborted();
     const handshake = spawnMspConnection({
       command: this.binaryPath,
-      args: ["serve", ...(readOnly ? ["--disable-shell", "--disable-write"] : [])],
+      args: [
+        "serve",
+        ...(this.noSessionLog ? ["--no-session-log"] : []),
+        ...(readOnly ? ["--disable-shell", "--disable-write"] : []),
+      ],
       cwd: workspace,
       env,
       shutdownTimeoutMs: 1000,
@@ -186,10 +242,15 @@ export class MusePool {
       void handshake.close();
     }, 30_000);
     startup.unref();
+    const abort = () => {
+      void handshake.close();
+    };
+    signal.addEventListener("abort", abort, { once: true });
     try {
       const host = await handshake.initialize({
         clientInfo: { name: "openclaw", version: musePackage.version },
       });
+      signal.throwIfAborted();
       const runtime: MuseRuntime = {
         host,
         credentialIdentity,
@@ -233,6 +294,7 @@ export class MusePool {
       );
     } finally {
       clearTimeout(startup);
+      signal.removeEventListener("abort", abort);
     }
   }
 

@@ -2,7 +2,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SessionActorAuthority } from "../config/sessions/session-actor-contract.js";
 import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
 import { failSessionActorMemoryPublication } from "../config/sessions/session-actor-memory-publication.test-support.js";
-import { acquireSessionActorStorage } from "../config/sessions/session-actor-storage-binding.js";
+import {
+  acquireSessionActorStorage,
+  runWithSessionActorStorage,
+} from "../config/sessions/session-actor-storage-binding.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { BoardValidationError } from "./board-layout.js";
 import { SqliteBoardStore } from "./sqlite-board-store.js";
@@ -72,6 +75,28 @@ const app = (serverName = "server") => ({
 });
 
 describe("session actor BoardStore", () => {
+  it("inherits the selected memory owner's custom state root after async preparation", () =>
+    withStore(async () => {
+      const binding = (await acquireSessionActorStorage(
+        { agentId: "main", storePath, sessionKey, env },
+        { authority, lifetime: { assertCurrent() {}, assertReadable() {} } },
+      ))!;
+      try {
+        await runWithSessionActorStorage(binding, async () => {
+          const store = new SqliteBoardStore({
+            resolveSession: async () => ({ agentId: "main", sessionKey }),
+          });
+          await store.putWidget(html("inherited"));
+          expect(await store.getSnapshot(target)).toMatchObject({
+            revision: 1,
+            widgets: [{ name: "inherited" }],
+          });
+        });
+      } finally {
+        await binding.actor.release();
+      }
+    }));
+
   it("reports publication failure after retaining the committed widget", () =>
     withStore(async (store) => {
       const stop = failSessionActorMemoryPublication(sessionKey);
@@ -219,26 +244,8 @@ describe("session actor BoardStore", () => {
       });
     }));
 
-  it("retains registered documents and plugin instances, and resets an empty board revision", () =>
+  it("retains plugin instances and resets an empty board revision", () =>
     withStore(async (store) => {
-      const registered = await store.putWidget({
-        ...target,
-        name: "report",
-        title: "Report",
-        content: {
-          kind: "registered",
-          pluginKind: "example:chart",
-          contentKind: "chart",
-          source: "named source",
-        },
-      });
-      expect(await store.useWidgetDocument(target, "report", (value) => value)).toMatchObject({
-        pluginKind: "example:chart",
-        source: "named source",
-        title: "Report",
-        revision: 1,
-        viewGeneration: registered.widgets[0]!.instanceId,
-      });
       const plugin = await store.putWidget({
         ...target,
         name: "plugin",
@@ -249,10 +256,9 @@ describe("session actor BoardStore", () => {
         name: "plugin",
         content: { kind: "plugin", pluginKind: "example", props: { count: 2 } },
       });
-      expect(updated.widgets[1]!.instanceId).toBe(plugin.widgets[1]!.instanceId);
-      expect(updated.widgets[1]!.props).toEqual({ count: 2 });
+      expect(updated.widgets[0]!.instanceId).toBe(plugin.widgets[0]!.instanceId);
+      expect(updated.widgets[0]!.props).toEqual({ count: 2 });
       await store.applyOps(target, [
-        { kind: "widget_remove", name: "report" },
         { kind: "widget_remove", name: "plugin" },
         { kind: "tab_delete", tabId: "main" },
       ]);

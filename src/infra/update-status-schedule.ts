@@ -73,12 +73,10 @@ export function refreshGatewayUpdateStatus(getConfig: () => OpenClawConfig): Pro
       if (channel !== "dev" && (await lifecycle.initialize()).status.installKind !== "immutable") {
         return;
       }
-      const generation = lifecycle.publicationGeneration;
       const assertCurrent = () => {
         const schedule = getUpdateSchedule();
         const campaign = lifecycle.campaign?.getState();
         if (
-          generation !== lifecycle.publicationGeneration ||
           campaign?.state === "applying" ||
           !lifecycle.isCurrent() ||
           signal.aborted ||
@@ -132,7 +130,6 @@ export function refreshGatewayUpdateStatus(getConfig: () => OpenClawConfig): Pro
           onUpdateScheduleChange: lifecycle.onUpdateScheduleChange,
         });
       const retireGitTarget = () => {
-        lifecycle.publicationGeneration += 1;
         setUpdateAvailableCache({
           next: null,
           onUpdateAvailableChange: lifecycle.onUpdateAvailableChange,
@@ -155,7 +152,6 @@ export function refreshGatewayUpdateStatus(getConfig: () => OpenClawConfig): Pro
         // target or campaign owned by a Git checkout that no longer exists.
         if (status.installKind === "package" && schedule?.target?.kind !== "git") {
           if (schedule?.channel !== refreshedChannel) {
-            lifecycle.publicationGeneration += 1;
             setUpdateAvailableCache({
               next: null,
               onUpdateAvailableChange: lifecycle.onUpdateAvailableChange,
@@ -170,7 +166,6 @@ export function refreshGatewayUpdateStatus(getConfig: () => OpenClawConfig): Pro
       const update = await resolveDevGitUpdate(status, signal);
       assertCurrent();
       lifecycle.installStatus = { root, status, installReceipt };
-      lifecycle.publicationGeneration += 1;
       const campaign = lifecycle.campaign;
       if (!update) {
         campaign?.clear();

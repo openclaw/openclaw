@@ -125,13 +125,17 @@ concurrency:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-  NODE_VERSION: "24.21.0"
+  NODE_VERSION: "24.22.1"
 
 jobs:
   preview_plugins_npm:
     # Scheduled preview is nonpublishing and considers all unpublished packages.
     if: (github.event_name != 'schedule' || github.repository == 'openclaw/openclaw') && (github.event_name != 'push' || github.ref != 'refs/heads/main' || vars.OPENCLAW_CI_ON_PUSH == 'true')
-    runs-on: ${{ (github.event_name == 'workflow_dispatch' && inputs.release_publish_run_id != '' && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '') != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON((github.event_name == 'workflow_dispatch' && inputs.release_publish_run_id != '' && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '')), toJSON('ubuntu-latest'))) || ('ubuntu-latest') }}
+    runs-on: &linux_runner_release_ubuntu_latest >-
+      ${{ (github.event_name == 'workflow_dispatch' && inputs.release_publish_run_id != '' &&
+      vars.OPENCLAW_RELEASE_RUNNER_GROUP || '') != '' && fromJSON(format('{{"group":{0},"labels":{1}}}',
+      toJSON((github.event_name == 'workflow_dispatch' && inputs.release_publish_run_id != '' &&
+      vars.OPENCLAW_RELEASE_RUNNER_GROUP || '')), toJSON('ubuntu-latest'))) || ('ubuntu-latest') }}
     permissions:
       actions: read
       contents: read
@@ -145,7 +149,7 @@ jobs:
       all_matrix: ${{ steps.prepared_plan.outputs.all_matrix || steps.plan.outputs.all_matrix }}
     steps:
       - name: Prepare Git owner
-        uses: openclaw/openclaw/.github/actions/git-owner@dd4528b6393e7d00063067a080ca7241b48ce475
+        uses: openclaw/openclaw/.github/actions/git-owner@88095dc00eef288c3829909d4dc64a9e249fa7ef
 
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -178,7 +182,7 @@ jobs:
           PYTHON
 
       - name: Setup supported Node runtime
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: ${{ env.NODE_VERSION }}
           package-manager-cache: false
@@ -415,7 +419,7 @@ jobs:
 
       - name: Setup trusted Node for prepared publication
         if: inputs.prepared_artifact != ''
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: ${{ env.NODE_VERSION }}
 
@@ -565,7 +569,7 @@ jobs:
 
       - name: Upload resolved npm publication plan
         if: inputs.defer_registry_verification && inputs.release_publish_run_id != ''
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: plugin-npm-plan-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/npm-publication-plan.json
@@ -576,7 +580,7 @@ jobs:
     name: Validate release publish approval
     needs: preview_plugins_npm
     if: github.event_name == 'workflow_dispatch' && !inputs.preflight_only && needs.preview_plugins_npm.outputs.has_candidates == 'true'
-    runs-on: ${{ (github.event_name == 'workflow_dispatch' && inputs.release_publish_run_id != '' && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '') != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON((github.event_name == 'workflow_dispatch' && inputs.release_publish_run_id != '' && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '')), toJSON('ubuntu-latest'))) || ('ubuntu-latest') }}
+    runs-on: *linux_runner_release_ubuntu_latest
     permissions:
       actions: read
       attestations: read
@@ -592,7 +596,7 @@ jobs:
           persist-credentials: false
 
       - name: Setup supported Node runtime
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: ${{ env.NODE_VERSION }}
           package-manager-cache: false
@@ -656,7 +660,7 @@ jobs:
   preview_plugin_pack:
     needs: preview_plugins_npm
     if: inputs.prepared_artifact == '' && ((needs.preview_plugins_npm.outputs.has_candidates == 'true' && !(github.event_name == 'workflow_dispatch' && inputs.preflight_only)) || (github.event_name == 'workflow_dispatch' && inputs.preflight_only && !inputs.trusted_publisher_preflight && needs.preview_plugins_npm.outputs.has_selection == 'true'))
-    runs-on: ${{ (github.event_name == 'workflow_dispatch' && inputs.release_publish_run_id != '' && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '') != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON((github.event_name == 'workflow_dispatch' && inputs.release_publish_run_id != '' && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '')), toJSON('ubuntu-latest'))) || ('ubuntu-latest') }}
+    runs-on: *linux_runner_release_ubuntu_latest
     permissions:
       contents: read
     strategy:
@@ -696,6 +700,8 @@ jobs:
       - name: Prepare immutable npm preflight artifact
         id: preflight_artifact
         env:
+          # Resolve trusted tooling workspace packages from its tsconfig, not the candidate's.
+          TSX_TSCONFIG_PATH: ${{ github.workspace }}/.release-tooling/tsconfig.json
           ARTIFACT_NAME: plugin-npm-package-source-${{ needs.preview_plugins_npm.outputs.ref_revision }}-${{ matrix.plugin.extensionId }}
           EXTENSION_ID: ${{ matrix.plugin.extensionId }}
           INSTALL_NPM_SPEC: ${{ matrix.plugin.installNpmSpec }}
@@ -903,6 +909,7 @@ jobs:
       - name: Qualify packed plugin runtime
         env:
           ARTIFACT_DIR: ${{ steps.preflight_artifact.outputs.dir }}
+          TSX_TSCONFIG_PATH: ${{ github.workspace }}/.release-tooling/tsconfig.json
         run: |
           set -euo pipefail
           node --import tsx --input-type=module <<'NODE'
@@ -928,6 +935,7 @@ jobs:
       - name: Scan exact plugin npm artifact
         env:
           ARTIFACT_DIR: ${{ steps.preflight_artifact.outputs.dir }}
+          TSX_TSCONFIG_PATH: ${{ github.workspace }}/.release-tooling/tsconfig.json
           PACKAGE_NAME: ${{ matrix.plugin.packageName }}
           PACKAGE_VERSION: ${{ matrix.plugin.version }}
         run: |
@@ -940,7 +948,7 @@ jobs:
 
       - name: Upload immutable npm preflight artifact
         id: upload_preflight_artifact
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ${{ steps.preflight_artifact.outputs.name }}
           path: ${{ steps.preflight_artifact.outputs.dir }}
@@ -965,7 +973,7 @@ jobs:
     name: Preflight plugin npm package (${{ matrix.plugin.packageName }})
     needs: [preview_plugins_npm, preview_plugin_pack]
     if: ${{ inputs.prepared_artifact == '' && github.event_name == 'workflow_dispatch' && ((inputs.preflight_only && !inputs.trusted_publisher_preflight && needs.preview_plugins_npm.outputs.has_selection == 'true') || (!inputs.preflight_only && needs.preview_plugins_npm.outputs.has_candidates == 'true')) }}
-    runs-on: ${{ (github.event_name == 'workflow_dispatch' && inputs.release_publish_run_id != '' && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '') != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON((github.event_name == 'workflow_dispatch' && inputs.release_publish_run_id != '' && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '')), toJSON('ubuntu-latest'))) || ('ubuntu-latest') }}
+    runs-on: *linux_runner_release_ubuntu_latest
     permissions:
       actions: read
       contents: read
@@ -975,7 +983,7 @@ jobs:
         plugin: ${{ fromJson(inputs.preflight_only && !inputs.trusted_publisher_preflight && needs.preview_plugins_npm.outputs.all_matrix || needs.preview_plugins_npm.outputs.matrix) }}
     steps:
       - name: Prepare Git owner
-        uses: openclaw/openclaw/.github/actions/git-owner@dd4528b6393e7d00063067a080ca7241b48ce475
+        uses: openclaw/openclaw/.github/actions/git-owner@88095dc00eef288c3829909d4dc64a9e249fa7ef
 
       - name: Checkout trusted npm preflight tooling
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -989,7 +997,7 @@ jobs:
             src/plugins
 
       - name: Download immutable npm preflight artifact
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: plugin-npm-package-source-${{ needs.preview_plugins_npm.outputs.ref_revision }}-${{ matrix.plugin.extensionId }}
           path: ${{ runner.temp }}/plugin-npm-preflight-readback
@@ -1035,7 +1043,7 @@ jobs:
           PYTHON
 
       - name: Setup supported Node runtime
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: ${{ env.NODE_VERSION }}
           package-manager-cache: false
@@ -1415,7 +1423,7 @@ jobs:
           echo "artifact_path=$output_dir" >> "$GITHUB_OUTPUT"
 
       - name: Upload immutable plugin npm preflight evidence
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ${{ steps.preflight_evidence.outputs.artifact_name }}
           path: ${{ steps.preflight_evidence.outputs.artifact_path }}/*
@@ -1442,7 +1450,7 @@ jobs:
     name: Seal prepared plugin npm release
     needs: [preview_plugins_npm, verify_plugin_npm_preflight]
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.preflight_only && !inputs.trusted_publisher_preflight }}
-    runs-on: ${{ (github.event_name == 'workflow_dispatch' && inputs.release_publish_run_id != '' && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '') != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON((github.event_name == 'workflow_dispatch' && inputs.release_publish_run_id != '' && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '')), toJSON('ubuntu-latest'))) || ('ubuntu-latest') }}
+    runs-on: *linux_runner_release_ubuntu_latest
     permissions:
       actions: read
       contents: read
@@ -1455,7 +1463,7 @@ jobs:
           fetch-depth: 1
 
       - name: Setup trusted Node
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: ${{ env.NODE_VERSION }}
 
@@ -1489,7 +1497,7 @@ jobs:
 
       - name: Upload qualified npm preparation manifest
         id: upload
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ${{ steps.seal.outputs.artifact_name }}
           path: ${{ runner.temp }}/plugin-npm-prepared/plugin-npm-prepared.json
@@ -1513,7 +1521,7 @@ jobs:
     name: Trusted publisher OIDC exchange
     needs: preview_plugins_npm
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.preflight_only && inputs.trusted_publisher_preflight && needs.preview_plugins_npm.outputs.has_selection == 'true' }}
-    runs-on: ubuntu-latest
+    runs-on: &linux_runner_ubuntu_latest ubuntu-latest
     environment: npm-publish
     permissions:
       contents: read
@@ -1527,7 +1535,7 @@ jobs:
           fetch-depth: 1
 
       - name: Setup trusted Node
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: ${{ env.NODE_VERSION }}
 
@@ -1556,7 +1564,7 @@ jobs:
   approve_plugins_npm_release:
     needs: [preview_plugins_npm, validate_release_publish_approval]
     if: ${{ github.event_name == 'workflow_dispatch' && !inputs.preflight_only && needs.preview_plugins_npm.outputs.has_candidates == 'true' && needs.validate_release_publish_approval.result == 'success' && needs.validate_release_publish_approval.outputs.parent_approval != 'receipt' }}
-    runs-on: ubuntu-latest
+    runs-on: *linux_runner_ubuntu_latest
     environment: npm-release
     permissions:
       contents: read
@@ -1575,7 +1583,7 @@ jobs:
         approve_plugins_npm_release,
       ]
     if: ${{ always() && !cancelled() && github.event_name == 'workflow_dispatch' && !inputs.preflight_only && needs.preview_plugins_npm.result == 'success' && needs.validate_release_publish_approval.result == 'success' && (needs.approve_plugins_npm_release.result == 'success' || (needs.approve_plugins_npm_release.result == 'skipped' && needs.validate_release_publish_approval.outputs.parent_approval == 'receipt')) && needs.preview_plugins_npm.outputs.has_candidates == 'true' && (inputs.prepared_artifact != '' || (needs.preview_plugin_pack.result == 'success' && needs.verify_plugin_npm_preflight.result == 'success')) }}
-    runs-on: ubuntu-latest
+    runs-on: *linux_runner_ubuntu_latest
     environment: npm-publish
     permissions:
       actions: read
@@ -1588,7 +1596,7 @@ jobs:
         plugin: ${{ fromJson(needs.preview_plugins_npm.outputs.matrix) }}
     steps:
       - name: Prepare Git owner
-        uses: openclaw/openclaw/.github/actions/git-owner@dd4528b6393e7d00063067a080ca7241b48ce475
+        uses: openclaw/openclaw/.github/actions/git-owner@88095dc00eef288c3829909d4dc64a9e249fa7ef
 
       - name: Checkout trusted publication tooling
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -1603,7 +1611,7 @@ jobs:
             scripts
 
       - name: Setup trusted Node
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: ${{ env.NODE_VERSION }}
 
@@ -1869,7 +1877,7 @@ jobs:
 
       - name: Upload consumed npm qualification
         if: inputs.defer_registry_verification && inputs.release_publish_run_id != ''
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: plugin-npm-qualification-${{ matrix.plugin.extensionId }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/${{ matrix.plugin.extensionId }}-npm-qualification.json
@@ -1973,7 +1981,7 @@ jobs:
 
       - name: Download stable npm bootstrap approval
         if: ${{ steps.publication_evidence.outputs.publish_route == 'npm-token-bootstrap' && steps.publication_evidence.outputs.publish_tag == 'latest' }}
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: npm-stable-bootstrap-approval-${{ inputs.release_publish_run_id }}-${{ inputs.release_publish_run_attempt }}
           path: ${{ runner.temp }}/npm-stable-bootstrap-approval
@@ -2120,7 +2128,7 @@ jobs:
   verify_plugins_npm:
     needs: [preview_plugins_npm, publish_plugins_npm]
     if: ${{ always() && github.event_name == 'workflow_dispatch' && !inputs.preflight_only && inputs.npm_dist_tag == 'extended-stable' && needs.preview_plugins_npm.result == 'success' && (needs.publish_plugins_npm.result == 'success' || (needs.preview_plugins_npm.outputs.has_candidates == 'false' && needs.publish_plugins_npm.result == 'skipped')) }}
-    runs-on: ${{ (github.event_name == 'workflow_dispatch' && inputs.release_publish_run_id != '' && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '') != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON((github.event_name == 'workflow_dispatch' && inputs.release_publish_run_id != '' && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '')), toJSON('ubuntu-latest'))) || ('ubuntu-latest') }}
+    runs-on: *linux_runner_release_ubuntu_latest
     permissions:
       contents: read
     strategy:
@@ -2129,7 +2137,7 @@ jobs:
         plugin: ${{ fromJson(needs.preview_plugins_npm.outputs.all_matrix) }}
     steps:
       - name: Setup trusted Node
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: ${{ env.NODE_VERSION }}
 

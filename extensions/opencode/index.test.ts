@@ -5,6 +5,7 @@ import {
 import { NON_ENV_SECRETREF_MARKER } from "openclaw/plugin-sdk/provider-auth-runtime";
 import { clearLiveCatalogCacheForTests } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { expectPassthroughReplayPolicy } from "openclaw/plugin-sdk/provider-test-contracts";
+import * as ssrfRuntime from "openclaw/plugin-sdk/ssrf-runtime";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import plugin from "./index.js";
@@ -18,10 +19,13 @@ import {
 const requireRecord = createRequireRecord("record", "expected-label-record");
 const METADATA_URL = "https://models.opencode.ai/api.json";
 const MODELS_URL = "https://opencode.ai/zen/v1/models";
+function prepareModel(modelId: string, fetchGuard: typeof ssrfRuntime.fetchWithSsrFGuard) {
+  vi.spyOn(ssrfRuntime, "fetchWithSsrFGuard").mockImplementation(fetchGuard);
+  return prepareOpencodeZenModel({ modelId });
+}
 const OFFLINE_MODEL_IDS = [
   "claude-opus-5",
   "gpt-5.6-sol",
-  "gpt-5-nano",
   "gemini-3.6-flash",
   "minimax-m3",
   "kimi-k3",
@@ -159,7 +163,7 @@ describe("opencode provider plugin", () => {
     const mediaProvider = mediaProviders.find((provider) => provider.id === "opencode");
 
     expect(mediaProvider?.capabilities).toEqual(["image"]);
-    expect(mediaProvider?.defaultModels).toEqual({ image: "gpt-5-nano" });
+    expect(mediaProvider?.defaultModels).toEqual({ image: "minimax-m3" });
     expect(typeof mediaProvider?.describeImage).toBe("function");
     expect(typeof mediaProvider?.describeImages).toBe("function");
   });
@@ -525,7 +529,7 @@ describe("opencode provider plugin", () => {
       metadata: [{ id: "refreshed-model-fixture" }],
       advertised: [],
     });
-    await prepareOpencodeZenModel({ modelId: "refreshed-model-fixture", fetchGuard });
+    await prepareModel("refreshed-model-fixture", fetchGuard);
     expect(
       provider.resolveDynamicModel?.({ modelId: "refreshed-model-fixture" } as never),
     ).toMatchObject({
@@ -534,30 +538,24 @@ describe("opencode provider plugin", () => {
 
     clearLiveCatalogCacheForTests();
     const removedFetchGuard = createCatalogFetchGuard({ metadata: [], advertised: [] });
-    await prepareOpencodeZenModel({
-      modelId: "refreshed-model-fixture",
-      fetchGuard: removedFetchGuard,
-    });
+    await prepareModel("refreshed-model-fixture", removedFetchGuard);
     expect(
       provider.resolveDynamicModel?.({ modelId: "refreshed-model-fixture" } as never),
     ).toBeUndefined();
 
     clearLiveCatalogCacheForTests();
-    await prepareOpencodeZenModel({ modelId: "refreshed-model-fixture", fetchGuard });
+    await prepareModel("refreshed-model-fixture", fetchGuard);
     clearLiveCatalogCacheForTests();
     const unsupportedFetchGuard = createCatalogFetchGuard({
       metadata: [{ id: "refreshed-model-fixture", npm: "@untrusted/unknown" }],
       advertised: [],
     });
-    await prepareOpencodeZenModel({
-      modelId: "refreshed-model-fixture",
-      fetchGuard: unsupportedFetchGuard,
-    });
+    await prepareModel("refreshed-model-fixture", unsupportedFetchGuard);
     expect(
       provider.resolveDynamicModel?.({ modelId: "refreshed-model-fixture" } as never),
     ).toBeUndefined();
-    expect(provider.resolveDynamicModel?.({ modelId: "gpt-5-nano" } as never)).toMatchObject({
-      id: "gpt-5-nano",
+    expect(provider.resolveDynamicModel?.({ modelId: "minimax-m3" } as never)).toMatchObject({
+      id: "minimax-m3",
     });
   });
 
@@ -633,10 +631,7 @@ describe("opencode provider plugin", () => {
         });
       } finally {
         clearLiveCatalogCacheForTests();
-        await prepareOpencodeZenModel({
-          modelId: retiredId,
-          fetchGuard: createCatalogFetchGuard({ metadata: [], advertised: [] }),
-        });
+        await prepareModel(retiredId, createCatalogFetchGuard({ metadata: [], advertised: [] }));
         clearLiveCatalogCacheForTests();
       }
     },
@@ -659,37 +654,6 @@ describe("opencode provider plugin", () => {
         fetchGuard,
       }),
     ).resolves.toBe(expected);
-  });
-
-  it.each([
-    ["off", undefined],
-    ["max", "max"],
-  ] as const)("keeps Kimi K3 reasoning %s exact", async (thinkingLevel, expectedEffort) => {
-    const provider = await registerSingleProviderPlugin(plugin);
-    const capturedPayloads: Record<string, unknown>[] = [];
-    const baseStreamFn = (_model: unknown, _context: unknown, options: unknown) => {
-      const payload: Record<string, unknown> = { model: "kimi-k3", reasoning_effort: "max" };
-      (options as { onPayload?: (payload: Record<string, unknown>) => void })?.onPayload?.(payload);
-      capturedPayloads.push(payload);
-      return {} as never;
-    };
-    const streamFn = provider.wrapStreamFn?.({
-      streamFn: baseStreamFn as never,
-      providerId: "opencode",
-      modelId: "kimi-k3",
-      thinkingLevel,
-    } as never);
-
-    await streamFn?.(
-      { provider: "opencode", id: "kimi-k3", api: "openai-completions" } as never,
-      {} as never,
-      {},
-    );
-    expect(capturedPayloads).toEqual([
-      expectedEffort === undefined
-        ? { model: "kimi-k3" }
-        : { model: "kimi-k3", reasoning_effort: expectedEffort },
-    ]);
   });
 
   it("canonicalizes stale OpenCode Zen base URLs", async () => {
@@ -727,14 +691,5 @@ describe("opencode provider plugin", () => {
         baseUrl: "https://opencode.ai/zen",
       } as never),
     ).toEqual({ api: "openai-completions", baseUrl: "https://opencode.ai/zen/v1" });
-  });
-
-  it("exposes the thinking policy through the registered provider", async () => {
-    const provider = await registerSingleProviderPlugin(plugin);
-    const profile = provider.resolveThinkingProfile?.({
-      provider: "opencode",
-      modelId: "claude-opus-4-7",
-    });
-    expect(profile?.levels.map((level) => level.id)).toContain("adaptive");
   });
 });

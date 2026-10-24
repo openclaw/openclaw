@@ -202,7 +202,6 @@ describe("managed Codex plugin refresh", () => {
         }
       }
       params.model = { ...params.model, input: ["text", "image"] };
-      params.toolAuthorityFingerprint = "plugin-refresh-tools";
       params.contextTokenBudget = 16_000;
       params.agentDir = path.join(tempDir, "agent");
       params.runtimePlan = createCodexRuntimePlanFixture();

@@ -1,21 +1,16 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import {
-  clearRuntimeConfigSnapshot,
-  setRuntimeConfigSnapshot,
-} from "../config/runtime-snapshot.js";
+import { afterEach, beforeEach, expect, it } from "vitest";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getGlobalHookRunner, resetGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { EMPTY_LEGACY_SESSION_SURFACES } from "../plugins/legacy-session-surfaces.types.js";
 import { resetPluginLoaderTestStateForTest } from "../plugins/loader.test-fixtures.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
-import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import {
-  closeOpenClawStateDatabaseAsync,
-  closeOpenClawStateDatabaseForTest,
-} from "../state/openclaw-state-db.js";
+  createOpenClawTestState,
+  type OpenClawTestState,
+} from "../test-utils/openclaw-test-state.js";
 import {
   loadDeliveryQueueEntry,
   seedDeliveryQueueEntry,
@@ -24,8 +19,8 @@ import type { LegacyQueuedDelivery, QueuedDelivery } from "./outbound/delivery-q
 import { createUnmodifiedPreparedOutboundBatch } from "./outbound/prepared-batch.js";
 import { autoMigrateLegacyState } from "./state-migrations.doctor.js";
 
-const temporary = useAutoCleanupTempDirTracker(afterEach);
-let stateDir: string;
+const pluginId = "doctor-outbound-fixture";
+let state: OpenClawTestState;
 let pluginFile: string;
 let eventsFile: string;
 let cfg: OpenClawConfig;
@@ -64,156 +59,124 @@ async function writePluginFixture({ failDisposal = false }: { failDisposal?: boo
 }
 
 beforeEach(async () => {
-  const home = temporary.make("openclaw-doctor-outbound-");
-  stateDir = path.join(home, ".openclaw");
-  const pluginDir = path.join(home, "plugin");
+  state = await createOpenClawTestState({
+    label: "doctor-outbound",
+    env: { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" },
+  });
+  const pluginDir = state.path("plugin");
   pluginFile = path.join(pluginDir, "index.cjs");
-  eventsFile = path.join(home, "events.txt");
-  vi.stubEnv("HOME", home);
-  vi.stubEnv("OPENCLAW_HOME", home);
-  vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-  vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(stateDir, "openclaw.json"));
-  vi.stubEnv("OPENCLAW_DISABLE_BUNDLED_PLUGINS", "1");
+  eventsFile = state.path("events.txt");
   await fs.mkdir(pluginDir, { recursive: true });
-  await fs.mkdir(stateDir, { recursive: true });
   await fs.writeFile(
     path.join(pluginDir, "openclaw.plugin.json"),
-    JSON.stringify({
-      id: "doctor-outbound-fixture",
-      channels: ["matrix"],
-      configSchema: { type: "object" },
-    }),
+    JSON.stringify({ id: pluginId, channels: ["matrix"], configSchema: { type: "object" } }),
   );
   await writePluginFixture();
   cfg = {
     plugins: {
-      allow: ["doctor-outbound-fixture"],
+      allow: [pluginId],
       load: { paths: [pluginFile] },
-      entries: { "doctor-outbound-fixture": { enabled: true } },
+      entries: { [pluginId]: { enabled: true } },
       slots: { memory: "none" },
     },
     channels: { matrix: { enabled: true } },
   };
-  await fs.writeFile(process.env.OPENCLAW_CONFIG_PATH!, JSON.stringify(cfg));
+  await state.writeConfig(cfg);
   setRuntimeConfigSnapshot(cfg);
   resetGlobalHookRunner();
 });
 
 afterEach(async () => {
-  await closeOpenClawStateDatabaseAsync();
-  closeOpenClawAgentDatabasesForTest();
-  closeOpenClawStateDatabaseForTest();
   resetPluginLoaderTestStateForTest();
   resetGlobalHookRunner();
-  clearRuntimeConfigSnapshot();
-  vi.unstubAllEnvs();
+  await state.cleanup();
 });
 
-function repair() {
+function repair(doctorOnlyStateMigrations = true) {
   return autoMigrateLegacyState({
     cfg,
     env: process.env,
-    doctorOnlyStateMigrations: true,
+    doctorOnlyStateMigrations,
     legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
   });
 }
 
-function legacy(id: string): LegacyQueuedDelivery {
-  return {
-    id,
-    enqueuedAt: Date.now(),
-    retryCount: 0,
-    attemptCount: 0,
-    channel: "matrix",
-    to: "!synthetic:example",
-    payloads: [{ text: "original" }],
-    replyPayloadSendingHook: { kind: "final", context: { channelId: "matrix" } },
-  };
-}
-
-describe("Doctor outbound preparation", () => {
-  it.each(["sqlite", "claimed"] as const)(
-    "prepares %s custody with real plugin modifiers once without publishing a registry",
-    async (kind) => {
-      seedDeliveryQueueEntry({
-        stateDir,
-        queueName: kind === "sqlite" ? "outbound" : "outbound-legacy-preparing-v1",
-        entry: {
-          ...legacy("from-sqlite"),
-          ...(kind === "claimed" ? { legacyPreparationState: "claimed" } : {}),
-        },
-      });
-      await autoMigrateLegacyState({
-        cfg,
-        env: process.env,
-        legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
-      });
-      const active = getActivePluginRegistry();
-      expect(getGlobalHookRunner()).toBeNull();
-      const result = await repair();
-      expect(result.warnings).toEqual([]);
-      expect(result.stepReceipts.find((receipt) => receipt.id === "delivery-queues")).toMatchObject(
-        {
-          outcome: "completed",
-        },
-      );
-      expect(loadDeliveryQueueEntry("outbound-prepared-v1", "from-sqlite", stateDir)).toMatchObject(
-        {
-          preparedBatch: { entries: [{ payload: { text: "original|reply|message" } }] },
-        },
-      );
-      expect(await fs.readFile(eventsFile, "utf8")).toBe("reply\nmessage\ndispose\n");
-      expect(getActivePluginRegistry()).toBe(active);
-      expect(getGlobalHookRunner()).toBeNull();
-      await repair();
-      expect(await fs.readFile(eventsFile, "utf8")).toBe("reply\nmessage\ndispose\n");
+function seed(queueName: string, prepared = false) {
+  const route = { channel: "matrix", to: "!synthetic:example" };
+  const counters = { retryCount: 0, attemptCount: 0 };
+  const common = { id: "fixture", enqueuedAt: Date.now(), ...counters, ...route };
+  const entry: QueuedDelivery | LegacyQueuedDelivery = prepared
+    ? {
+        ...common,
+        preparedBatch: createUnmodifiedPreparedOutboundBatch([{ text: "already prepared" }]),
+      }
+    : {
+        ...common,
+        payloads: [{ text: "original" }],
+        replyPayloadSendingHook: { kind: "final", context: { channelId: "matrix" } },
+      };
+  seedDeliveryQueueEntry({
+    queueName,
+    stateDir: state.stateDir,
+    entry: {
+      ...entry,
+      ...(queueName === "outbound-legacy-preparing-v1"
+        ? { legacyPreparationState: "claimed" }
+        : {}),
     },
-  );
-
-  it("records a refused delivery migration when its resource disposer fails", async () => {
-    await writePluginFixture({ failDisposal: true });
-    seedDeliveryQueueEntry({ queueName: "outbound", entry: legacy("disposal-failure"), stateDir });
-
-    const result = await repair();
-
-    expect(result.stepReceipts.find((receipt) => receipt.id === "delivery-queues")).toMatchObject({
-      outcome: "refused",
-      refusal: { code: "step-threw" },
-    });
-    expect(await fs.readFile(eventsFile, "utf8")).toBe("reply\nmessage\ndispose\n");
   });
+  return entry;
+}
+const load = (queue: string, id: string) => loadDeliveryQueueEntry(queue, id, state.stateDir);
+const deliveryReceipt = (result: Awaited<ReturnType<typeof repair>>) =>
+  result.stepReceipts.find((receipt) => receipt.id === "delivery-queues");
+const expectEvents = async () =>
+  expect(await fs.readFile(eventsFile, "utf8")).toBe("reply\nmessage\ndispose\n");
 
-  it("preserves an unclaimed SQLite legacy row when its plugin cannot load", async () => {
-    const entry = legacy("sqlite-only");
-    seedDeliveryQueueEntry({ queueName: "outbound", entry, stateDir });
-    await fs.writeFile(pluginFile, 'throw new Error("synthetic plugin unavailable");');
+it.each(["sqlite", "claimed", "disposal-failure"] as const)(
+  "handles %s preparation with real plugin modifiers",
+  async (kind) => {
+    if (kind === "disposal-failure") {
+      await writePluginFixture({ failDisposal: true });
+    }
+    const entry = seed(kind === "claimed" ? "outbound-legacy-preparing-v1" : "outbound");
+    await repair(false);
+    const active = getActivePluginRegistry();
+    expect(getGlobalHookRunner()).toBeNull();
     const result = await repair();
-    expect(result.warnings.join("\n")).toContain("synthetic plugin unavailable");
-    expect(loadDeliveryQueueEntry("outbound", entry.id, stateDir)).toEqual(entry);
-    expect(loadDeliveryQueueEntry("outbound-legacy-preparing-v1", entry.id, stateDir)).toBeNull();
-  });
-
-  it("finishes prepared checkpoints without loading an unavailable plugin", async () => {
-    const entry: QueuedDelivery = {
-      id: "checkpoint",
-      enqueuedAt: Date.now(),
-      retryCount: 0,
-      attemptCount: 0,
-      channel: "matrix",
-      to: "!synthetic:example",
-      preparedBatch: createUnmodifiedPreparedOutboundBatch([{ text: "already prepared" }]),
-    };
-    seedDeliveryQueueEntry({
-      queueName: "outbound-prepared-migration-v1",
-      stateDir,
-      entry,
-    });
-    await fs.writeFile(pluginFile, 'throw new Error("synthetic plugin unavailable");');
-    const result = await repair();
+    await expectEvents();
+    if (kind === "disposal-failure") {
+      expect(deliveryReceipt(result)).toMatchObject({
+        outcome: "refused",
+        refusal: { code: "step-threw" },
+      });
+      return;
+    }
     expect(result.warnings).toEqual([]);
-    expect(loadDeliveryQueueEntry("outbound-prepared-v1", "checkpoint", stateDir)).toMatchObject({
+    expect(deliveryReceipt(result)).toMatchObject({ outcome: "completed" });
+    expect(load("outbound-prepared-v1", entry.id)).toMatchObject({
+      preparedBatch: { entries: [{ payload: { text: "original|reply|message" } }] },
+    });
+    expect(getActivePluginRegistry()).toBe(active);
+    expect(getGlobalHookRunner()).toBeNull();
+    await repair();
+    await expectEvents();
+  },
+);
+
+it.each([false, true])("handles an unavailable plugin (already prepared: %s)", async (prepared) => {
+  const entry = seed(prepared ? "outbound-prepared-migration-v1" : "outbound", prepared);
+  await fs.writeFile(pluginFile, 'throw new Error("synthetic plugin unavailable");');
+  const result = await repair();
+  if (prepared) {
+    expect(result.warnings).toEqual([]);
+    expect(load("outbound-prepared-v1", entry.id)).toMatchObject({
       preparedBatch: { entries: [{ payload: { text: "already prepared" } }] },
     });
     await expect(fs.stat(eventsFile)).rejects.toMatchObject({ code: "ENOENT" });
-  });
+  } else {
+    expect(result.warnings.join("\n")).toContain("synthetic plugin unavailable");
+    expect(load("outbound", entry.id)).toEqual(entry);
+    expect(load("outbound-legacy-preparing-v1", entry.id)).toBeNull();
+  }
 });

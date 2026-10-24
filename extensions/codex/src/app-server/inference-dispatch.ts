@@ -59,6 +59,34 @@ export function authorizationFailure(error: unknown): string | undefined {
   });
 }
 
+/**
+ * A request body over the relay limit is deterministic: replaying the same history on a
+ * fresh connection cannot make it fit, so it must not look like a transport failure.
+ */
+export class CodexInferenceRequestTooLargeError extends Error {
+  constructor() {
+    super(
+      `Request exceeds the maximum size accepted by the Codex inference relay (${MAX_BODY_BYTES} bytes).`,
+    );
+  }
+}
+
+/** Native Codex maps status 400 to a terminal invalid request; 5xx and other statuses replay. */
+export function requestTooLargeFailure(error: unknown): string | undefined {
+  if (!(error instanceof CodexInferenceRequestTooLargeError)) {
+    return undefined;
+  }
+  return JSON.stringify({
+    type: "error",
+    status: 400,
+    error: {
+      type: "invalid_request_error",
+      code: "request_too_large",
+      message: error.message,
+    },
+  });
+}
+
 /** The route supplies its selected provider; native custody supplies the execution's source. */
 export function createCodexInferenceModelBinding(params: {
   client: CodexAppServerClient;
@@ -314,7 +342,7 @@ export function createCodexInferenceDispatch(params: {
           ? Buffer.from(JSON.stringify(prepared.body))
           : bytes;
       if (rewritten.length > MAX_BODY_BYTES) {
-        throw new Error(FAILURE);
+        throw new CodexInferenceRequestTooLargeError();
       }
       const requestSignal = AbortSignal.any([
         signal,
@@ -340,13 +368,23 @@ export function createCodexInferenceDispatch(params: {
     release: () => void,
     retryable = false,
   ) => {
-    const wire = await readProxyBody(req, MAX_BODY_BYTES);
+    const wire = await readProxyBody(
+      req,
+      MAX_BODY_BYTES,
+      () => new CodexInferenceRequestTooLargeError(),
+    );
     const encoding = req.headers["content-encoding"];
     if (encoding && encoding !== "identity" && encoding !== "zstd") {
       throw new Error(FAILURE);
     }
     const decoded =
-      encoding === "zstd" ? await decompress(wire, { maxOutputLength: MAX_BODY_BYTES }) : wire;
+      encoding === "zstd"
+        ? await decompress(wire, { maxOutputLength: MAX_BODY_BYTES }).catch((error: unknown) => {
+            throw error instanceof Error && "code" in error && error.code === "ERR_BUFFER_TOO_LARGE"
+              ? new CodexInferenceRequestTooLargeError()
+              : error;
+          })
+        : wire;
     signal.throwIfAborted();
     const prepared = await prepare(decoded, path, req.headers, signal, "http");
     try {
@@ -377,14 +415,18 @@ export function createCodexInferenceDispatch(params: {
   return { prepare, prepareHttp };
 }
 
-export async function readProxyBody(stream: IncomingMessage, maxBytes: number): Promise<Buffer> {
+export async function readProxyBody(
+  stream: IncomingMessage,
+  maxBytes: number,
+  oversized: () => Error = () => new Error(FAILURE),
+): Promise<Buffer> {
   const chunks: Buffer[] = [];
   let size = 0;
   for await (const chunk of stream) {
     const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
     size += bytes.length;
     if (size > maxBytes) {
-      throw new Error(FAILURE);
+      throw oversized();
     }
     chunks.push(bytes);
   }

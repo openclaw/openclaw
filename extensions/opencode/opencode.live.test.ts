@@ -1,12 +1,15 @@
 import {
   completeSimple,
+  streamSimple,
   type AssistantMessage,
   type Model,
   type Tool,
 } from "openclaw/plugin-sdk/llm";
+import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { extractNonEmptyAssistantText, isLiveTestEnabled } from "openclaw/plugin-sdk/test-live";
 import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
+import plugin from "./index.js";
 import {
   buildOpencodeZenLiveProviderConfig,
   listOpencodeZenModelCatalogEntries,
@@ -15,7 +18,7 @@ import {
 const OPENCODE_ZEN_MODELS_URL = "https://opencode.ai/zen/v1/models";
 const OPENCODE_API_KEY =
   process.env.OPENCODE_API_KEY?.trim() || process.env.OPENCODE_ZEN_API_KEY?.trim() || "";
-const LIVE_MODEL_ID = process.env.OPENCLAW_LIVE_OPENCODE_MODEL?.trim() || "ling-3.0-flash-fin-free";
+const LIVE_MODEL_ID = process.env.OPENCLAW_LIVE_OPENCODE_MODEL?.trim() || "deepseek-v4-flash";
 const LIVE = isLiveTestEnabled(["OPENCODE_LIVE_TEST"]) && OPENCODE_API_KEY.length > 0;
 const describeLive = LIVE ? describe : describe.skip;
 
@@ -93,7 +96,7 @@ async function fetchOpencodeZenModelIds(): Promise<string[]> {
 }
 
 describeLive("opencode Zen live catalog drift", () => {
-  it("discovers active live ids from authoritative metadata without hardcoding the catalog", async () => {
+  it("discovers every listed live id except inactive metadata rows", async () => {
     const liveIds = await fetchOpencodeZenModelIds();
     const discovered = await buildOpencodeZenLiveProviderConfig({
       apiKey: OPENCODE_API_KEY,
@@ -102,13 +105,15 @@ describeLive("opencode Zen live catalog drift", () => {
     const discoveredIds = discovered.models.map((model) => model.id).toSorted();
     expect(new Set(discoveredIds).size).toBe(discoveredIds.length);
 
-    const trustedRows = listOpencodeZenModelCatalogEntries();
-    const activeIds = new Set(
-      trustedRows.filter((row) => !row.status).map((row) => row.id.toLowerCase()),
+    // Listed ids without public metadata stay visible; only inactive metadata rows hide them.
+    const inactiveIds = new Set(
+      listOpencodeZenModelCatalogEntries()
+        .filter((row) => row.status)
+        .map((row) => row.id.toLowerCase()),
     );
 
     expect(discoveredIds.length).toBeGreaterThan(0);
-    expect(discoveredIds).toEqual(liveIds.filter((id) => activeIds.has(id)));
+    expect(discoveredIds).toEqual(liveIds.filter((id) => !inactiveIds.has(id)));
   }, 30_000);
 });
 
@@ -178,4 +183,60 @@ describeLive("opencode plugin live", () => {
 
     expect(extractNonEmptyAssistantText(second.content)).toMatch(/^ok[.!]?$/i);
   }, 120_000);
+});
+
+(LIVE && LIVE_MODEL_ID === "kimi-k3" ? describe : describe.skip)("Kimi K3 live thinking", () => {
+  it.each(["off", "low", "high", "max"] as const)(
+    "honors %s through the registered Zen provider",
+    async (reasoning) => {
+      const { model } = await resolveOpencodeToolLiveModel();
+      const provider = await registerSingleProviderPlugin(plugin);
+      const streamFn = provider.wrapStreamFn?.({
+        provider: provider.id,
+        modelId: model.id,
+        model,
+        thinkingLevel: reasoning,
+        streamFn: streamSimple,
+      });
+      if (!streamFn) {
+        throw new Error("Registered Zen stream wrapper missing");
+      }
+      let sentEffort: unknown;
+      const stream = await streamFn(
+        model,
+        {
+          messages: [
+            {
+              role: "user",
+              content: "What is 17 times 23? Reply with the number only.",
+              timestamp: Date.now(),
+            },
+          ],
+        },
+        {
+          apiKey: OPENCODE_API_KEY,
+          sessionId: `openclaw-kimi-live-${reasoning}`,
+          reasoning,
+          maxTokens: 1024,
+          onPayload: (payload) => {
+            sentEffort = (payload as { reasoning_effort?: unknown }).reasoning_effort;
+          },
+        },
+      );
+      const result = await stream.result();
+      expect(result.stopReason, result.errorMessage).toBe("stop");
+      expect(sentEffort).toBe(reasoning === "off" ? "none" : reasoning);
+      expect(extractNonEmptyAssistantText(result.content)).toMatch(/^391[.!]?$/);
+      const thinking = result.content
+        .filter((block) => block.type === "thinking")
+        .map((block) => block.thinking)
+        .join("");
+      if (reasoning === "off") {
+        expect(thinking).toBe("");
+      } else {
+        expect(thinking.length).toBeGreaterThan(0);
+      }
+    },
+    120_000,
+  );
 });

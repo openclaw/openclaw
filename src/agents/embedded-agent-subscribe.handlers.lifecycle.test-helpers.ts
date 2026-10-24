@@ -29,6 +29,7 @@ export function createContext(
       onBlockReplyFlush: overrides?.onBlockReplyFlush,
     },
     state: {
+      assistantTexts: [],
       toolMetas: [],
       itemActiveIds: new Set(),
       itemStartedCount: 0,

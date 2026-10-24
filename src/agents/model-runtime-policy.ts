@@ -50,13 +50,11 @@ export function resolveAgentRuntimePolicyAgentId(
     : params.agentId;
 }
 
-/** Config surface that supplied a resolved model runtime policy. */
-type ModelRuntimePolicySource = "model" | "provider";
-
 /** Runtime policy plus the config surface that supplied it. */
 type ResolvedModelRuntimePolicy = {
   policy?: AgentRuntimePolicyConfig;
-  source?: ModelRuntimePolicySource;
+  /** Config surface that supplied a resolved model runtime policy. */
+  source?: "model" | "provider";
   matchedProvider?: string;
   forcedByEnvironment?: true;
 };
@@ -256,12 +254,13 @@ function resolveModelConfig(params: {
   modelId?: string;
 }): ModelDefinitionConfig | undefined {
   const modelId = normalizeModelIdForProvider(params.provider, params.modelId);
-  if (!modelId || !Array.isArray(params.providerConfig?.models)) {
+  const models = params.providerConfig?.models;
+  if (!modelId || !models) {
     return undefined;
   }
   // Catalog projection resolves every row against its provider's authored rows, so this scan
   // runs rows² times. An exact match ends with the model id; skip parsing rows that cannot match.
-  return params.providerConfig.models.find((entry) => {
+  return models.find((entry) => {
     const entryId = entry.id.trim();
     return (
       entryId === modelId ||

@@ -208,17 +208,6 @@ export function createDiagnosticsTraceRuntime(tracer: Tracer) {
   ) =>
     exportedInternalOrTrustedContext(evt, metadata) ??
     internalOrTrustedParentContext(evt, metadata);
-  const trackTrustedSpan = (
-    evt: DiagnosticEventPayload,
-    metadata: DiagnosticEventMetadata,
-    span: ReturnType<typeof tracer.startSpan>,
-  ) => {
-    const spanId = trustedTraceContext(evt, metadata)?.spanId;
-    if (spanId) {
-      activeTrustedSpans.set(spanId, span);
-    }
-    return span;
-  };
   const trackInternalOrTrustedSpan = (
     evt: DiagnosticEventPayload,
     metadata: DiagnosticEventMetadata,
@@ -320,17 +309,11 @@ export function createDiagnosticsTraceRuntime(tracer: Tracer) {
       trigger?: string;
     },
   ) => {
-    if (evt.provider) {
-      spanAttrs["openclaw.provider"] = evt.provider;
-    }
-    if (evt.model) {
-      spanAttrs["openclaw.model"] = evt.model;
-    }
-    if (evt.channel) {
-      spanAttrs["openclaw.channel"] = evt.channel;
-    }
-    if (evt.trigger) {
-      spanAttrs["openclaw.trigger"] = evt.trigger;
+    for (const key of ["provider", "model", "channel", "trigger"] as const) {
+      const value = evt[key];
+      if (value) {
+        spanAttrs[`openclaw.${key}`] = value;
+      }
     }
     if (evt.agentId) {
       spanAttrs["openclaw.agent"] = normalizeDiagnosticValue(evt.agentId);
@@ -361,7 +344,6 @@ export function createDiagnosticsTraceRuntime(tracer: Tracer) {
     activeInternalOrTrustedContext,
     exportedInternalOrTrustedContext,
     exportedSpanContextForDiagnosticTraceContext,
-    trackTrustedSpan,
     trackInternalOrTrustedSpan,
     takeTrackedTrustedSpan,
     getTrackedInternalOrTrustedSpan,

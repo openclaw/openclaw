@@ -1,10 +1,16 @@
-// Process regression coverage for ACP bridge disconnect and startup-handshake exit paths.
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
-import { createServer } from "node:http";
+import { once } from "node:events";
 import path from "node:path";
 import { stripVTControlCharacters } from "node:util";
-import { describe, expect, it } from "vitest";
-import { type RawData, WebSocketServer } from "ws";
+import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
+import { expect, it, onTestFinished } from "vitest";
+import { WebSocketServer } from "ws";
+import {
+  buildMinimalGatewayHelloOkPayload,
+  closeMinimalGatewayServer,
+  sendMinimalGatewayConnectChallenge,
+  sendMinimalGatewayResponse,
+} from "../gateway/minimal-gateway.test-helpers.js";
 import { closeOpenClawStateDatabaseByPath } from "../state/openclaw-state-db-cache.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -23,27 +29,17 @@ const INITIALIZE_FRAME = {
   },
 };
 
-async function createPreparedAcpProcessState() {
+async function createAcpProcessEnv(): Promise<NodeJS.ProcessEnv> {
   const state = await createOpenClawTestState({
     applyEnv: false,
     label: "acp-process",
     scenario: "minimal",
   });
-  try {
-    // These cases assert bridge stderr after normal startup. Prepare canonical
-    // shared state so the one-time migration diagnostic is not part of that signal.
-    const database = openOpenClawStateDatabase({ env: state.env });
-    closeOpenClawStateDatabaseByPath(database.path);
-    return state;
-  } catch (error) {
-    await state.cleanup();
-    throw error;
-  }
-}
-
-function createAcpProcessEnv(baseEnv: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  onTestFinished(() => state.cleanup());
+  // Exclude the one-time migration diagnostic from the clean-exit signal.
+  closeOpenClawStateDatabaseByPath(openOpenClawStateDatabase({ env: state.env }).path);
   return {
-    ...baseEnv,
+    ...state.env,
     NODE_ENV: undefined,
     NODE_OPTIONS: "--use-openssl-ca",
     NODE_USE_SYSTEM_CA: "0",
@@ -55,7 +51,7 @@ function createAcpProcessEnv(baseEnv: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
 
 function withoutSqliteTransactionWarnings(stderr: string): string {
   // Slow-hold logger output is load-dependent performance diagnostics, not ACP clean-exit
-  // signal; see logSlowTransactionHold in sqlite-transaction.ts.
+  // signal; see the settlement diagnostics in sqlite-transaction.ts.
   return stderr
     .split("\n")
     .filter(
@@ -94,126 +90,72 @@ function waitForJsonLine(child: ChildProcessWithoutNullStreams, id: number) {
   });
 }
 
-function rawDataToText(data: RawData): string {
-  if (Array.isArray(data)) {
-    return Buffer.concat(data).toString("utf8");
-  }
-  if (data instanceof ArrayBuffer) {
-    return Buffer.from(new Uint8Array(data)).toString("utf8");
-  }
-  return Buffer.from(data).toString("utf8");
-}
-
-describe("ACP CLI process exit", () => {
-  it("exits when the client disconnects after sending an initialize frame", async () => {
-    const state = await createPreparedAcpProcessState();
-    try {
-      const result = await runCliProcessChild({
-        nodeArgs: [path.resolve("openclaw.mjs"), "acp", "--require-existing"],
-        env: createAcpProcessEnv(state.env),
-        input: `${JSON.stringify(INITIALIZE_FRAME)}\n`,
-      });
-
-      expect(result).toMatchObject({ code: 0, signal: null });
-      expect(withoutSqliteTransactionWarnings(result.stderr)).toBe("");
-    } finally {
-      await state.cleanup();
-    }
+it("exits when the client disconnects after sending an initialize frame", async () => {
+  const result = await runCliProcessChild({
+    nodeArgs: [path.resolve("openclaw.mjs"), "acp", "--require-existing"],
+    env: await createAcpProcessEnv(),
+    input: `${JSON.stringify(INITIALIZE_FRAME)}\n`,
   });
+  expect(result).toMatchObject({ code: 0, signal: null });
+  expect(withoutSqliteTransactionWarnings(result.stderr)).toBe("");
+});
 
-  it("processes an initialize frame buffered before Gateway hello", async () => {
-    const state = await createPreparedAcpProcessState();
-    const server = createServer();
-    const wss = new WebSocketServer({ server });
+it("processes an initialize frame buffered before Gateway hello", async () => {
+  const env = await createAcpProcessEnv();
+  const wss = new WebSocketServer({ port: 0, host: "127.0.0.1" });
 
-    try {
-      wss.on("connection", (socket) => {
-        socket.send(
-          JSON.stringify({
-            type: "event",
-            event: "connect.challenge",
-            seq: 1,
-            payload: { nonce: "acp-process-test", ts: Date.now() },
+  try {
+    wss.on("connection", (socket) => {
+      sendMinimalGatewayConnectChallenge(socket, "acp-process-test");
+      socket.on("message", (data) => {
+        const frame = JSON.parse(rawDataToString(data)) as { id: string; method: string };
+        if (frame.method !== "connect") {
+          return;
+        }
+        sendMinimalGatewayResponse(
+          socket,
+          frame.id,
+          buildMinimalGatewayHelloOkPayload({
+            connId: "acp-process-test",
+            auth: { role: "operator", scopes: ["operator.admin"] },
           }),
         );
-        socket.on("message", (data) => {
-          const frame = JSON.parse(rawDataToText(data)) as { id: string; method: string };
-          if (frame.method !== "connect") {
-            return;
-          }
-          socket.send(
-            JSON.stringify({
-              type: "res",
-              id: frame.id,
-              ok: true,
-              payload: {
-                type: "hello-ok",
-                protocol: 4,
-                server: { version: "acp-process-test", connId: "acp-process-test" },
-                features: { methods: [], events: [] },
-                snapshot: {
-                  presence: [],
-                  health: {},
-                  stateVersion: { presence: 1, health: 1 },
-                  uptimeMs: 1,
-                },
-                auth: { role: "operator", scopes: ["operator.admin"] },
-                policy: {
-                  maxPayload: 512 * 1024,
-                  maxBufferedBytes: 1024 * 1024,
-                  tickIntervalMs: 1000,
-                },
-              },
-            }),
-          );
-        });
       });
-      await new Promise<void>((resolve) => {
-        server.listen(0, "127.0.0.1", resolve);
-      });
-      const address = server.address();
-      if (!address || typeof address === "string") {
-        throw new Error("ACP process test Gateway did not get a TCP address");
-      }
-
-      let response: Record<string, unknown> | undefined;
-      const result = await runCliProcessChild({
-        nodeArgs: [
-          path.resolve("openclaw.mjs"),
-          "acp",
-          "--require-existing",
-          "--url",
-          `ws://127.0.0.1:${address.port}`,
-        ],
-        env: createAcpProcessEnv(state.env),
-        interact: async (runningChild) => {
-          const responsePromise = waitForJsonLine(runningChild, INITIALIZE_FRAME.id);
-          // Write before the Gateway handshake completes. Startup monitoring must
-          // retain this frame for the eventual AgentSideConnection reader.
-          runningChild.stdin.write(`${JSON.stringify(INITIALIZE_FRAME)}\n`);
-          response = await responsePromise;
-          runningChild.stdin.end();
-        },
-      });
-
-      expect(response).toMatchObject({
-        jsonrpc: "2.0",
-        id: INITIALIZE_FRAME.id,
-        result: { protocolVersion: INITIALIZE_FRAME.params.protocolVersion },
-      });
-      expect(result).toMatchObject({ code: 0, signal: null });
-      expect(withoutSqliteTransactionWarnings(result.stderr)).toBe("");
-    } finally {
-      for (const socket of wss.clients) {
-        socket.terminate();
-      }
-      await new Promise<void>((resolve) => {
-        wss.close(() => resolve());
-      });
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-      });
-      await state.cleanup();
+    });
+    await once(wss, "listening");
+    const address = wss.address();
+    if (!address || typeof address === "string") {
+      throw new Error("ACP process test Gateway did not get a TCP address");
     }
-  });
+
+    let response: Record<string, unknown> | undefined;
+    const result = await runCliProcessChild({
+      nodeArgs: [
+        path.resolve("openclaw.mjs"),
+        "acp",
+        "--require-existing",
+        "--url",
+        `ws://127.0.0.1:${address.port}`,
+      ],
+      env,
+      interact: async (runningChild) => {
+        const responsePromise = waitForJsonLine(runningChild, INITIALIZE_FRAME.id);
+        // Write before the Gateway handshake completes. Startup monitoring must
+        // retain this frame for the eventual AgentSideConnection reader.
+        runningChild.stdin.write(`${JSON.stringify(INITIALIZE_FRAME)}\n`);
+        response = await responsePromise;
+        runningChild.stdin.end();
+      },
+    });
+
+    expect(response).toMatchObject({
+      jsonrpc: "2.0",
+      id: INITIALIZE_FRAME.id,
+      result: { protocolVersion: INITIALIZE_FRAME.params.protocolVersion },
+    });
+    expect(result).toMatchObject({ code: 0, signal: null });
+    expect(withoutSqliteTransactionWarnings(result.stderr)).toBe("");
+  } finally {
+    await closeMinimalGatewayServer(wss);
+  }
 });

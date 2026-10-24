@@ -29,6 +29,11 @@ import { createWorkerNodeEnrollmentManager } from "./node-enrollment.js";
 import { createWorkerEnvironmentStore, type WorkerEnvironmentStore } from "./store.js";
 import { createWorkerBootstrapArtifactTransferService } from "./worker-bootstrap-artifact-transfer-service.js";
 
+// mock-isolation: enrollment authority fixtures do not resolve synthetic packages from npm.
+vi.mock("./node-bootstrap-install-lock.js", () => ({
+  prepareNodeBootstrapInstallLock: async () => undefined,
+}));
+
 vi.mock("../../infra/device-bootstrap.js", () => ({
   revokeDeviceBootstrapToken: vi.fn(async () => ({ removed: true })),
   ensureDevicePairSetupBootstrapToken: vi.fn(async ({ setupId }: { setupId: string }) => ({
@@ -137,7 +142,9 @@ describe("worker node enrollment", () => {
         path.join(packageRoot, "node-runtime-recovery.mjs"),
         "export const recovery = true;",
       ),
+      fs.writeFile(path.join(packageRoot, "cli-parent-lifetime.mjs"), "export {};"),
       fs.writeFile(path.join(packageRoot, "cli-root-options.mjs"), "export {};"),
+      fs.writeFile(path.join(packageRoot, "cli-invocation.mjs"), "export {};"),
       fs.writeFile(path.join(packageRoot, "node-runtime-env.mjs"), "export {};"),
       fs.writeFile(path.join(packageRoot, "node-compile-cache.mjs"), "export {};"),
       fs.writeFile(path.join(packageRoot, "gateway-run-argv.mjs"), "export {};"),
@@ -286,11 +293,33 @@ describe("worker node enrollment", () => {
     },
   );
 
+  it("transfers the prepared project lock under the runtime's revocable authority", async () => {
+    const record = await createProvisioning();
+    const manager = createManager({
+      prepareArtifact: async () => ({ ...artifact(), installLock: bundle() }),
+    });
+    const runtime = await manager.prepareRuntime(record, bundle());
+    const lock = runtime.nodeBootstrap.installLock!;
+    const request = { token: lock.token, artifactKey: lock.sha256 };
+    expect(lock.sha256).toBe(bundle().tarballSha256);
+    expect(lock.token).not.toBe(runtime.nodeBootstrap.token);
+    const authorization = transfer.authorize(request)!;
+    const opened = await transfer.openFile(authorization);
+    expect(opened).not.toBeNull();
+    if (opened) {
+      expect(await opened.handle.readFile("utf8")).toBe("worker");
+      await opened.handle.close();
+    }
+    manager.closeRuntime(runtime);
+    expect(transfer.authorize(request)).toBeUndefined();
+  });
+
   it("sizes grants and download authority for the actual artifacts", async () => {
     const record = await createProvisioning();
     let transferNow = 0;
     let tarballBytes = 1;
-    transfer = createWorkerBootstrapArtifactTransferService({ now: () => transferNow });
+    vi.spyOn(Date, "now").mockImplementation(() => transferNow);
+    transfer = createWorkerBootstrapArtifactTransferService();
     const manager = createManager({
       prepareArtifact: async () => ({ ...artifact(), tarballBytes }),
     });

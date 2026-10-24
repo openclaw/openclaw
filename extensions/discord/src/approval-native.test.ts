@@ -2,7 +2,10 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { splitChannelApprovalCapability } from "openclaw/plugin-sdk/approval-delivery-runtime";
-import type { PluginApprovalRequest } from "openclaw/plugin-sdk/approval-runtime";
+import type {
+  ExecApprovalRequest,
+  PluginApprovalRequest,
+} from "openclaw/plugin-sdk/approval-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { clearSessionStoreCacheForTest } from "openclaw/plugin-sdk/session-store-runtime";
 import { describe, expect, it } from "vitest";
@@ -11,20 +14,23 @@ import { shouldHandleDiscordApprovalRequest } from "./approval-shared.js";
 
 const STORE_PATH = path.join(os.tmpdir(), "openclaw-discord-approval-native-test.json");
 const NATIVE_APPROVAL_CFG = {
-  commands: {
-    ownerAllowFrom: ["discord:555555555"],
-  },
+  commands: { ownerAllowFrom: ["discord:555555555"] },
 } satisfies OpenClawConfig;
 const NATIVE_DELIVERY_CFG = {
   ...NATIVE_APPROVAL_CFG,
-  channels: {
-    discord: {
-      execApprovals: {
-        enabled: true,
-      },
-    },
-  },
+  channels: { discord: { execApprovals: { enabled: true } } },
 } satisfies OpenClawConfig;
+const ORIGIN = {
+  turnSourceChannel: "discord",
+  turnSourceTo: "123456789",
+  turnSourceAccountId: "main",
+};
+const execRequest = (request: ExecApprovalRequest["request"]): ExecApprovalRequest => ({
+  id: "approval-1",
+  request,
+  createdAtMs: 1,
+  expiresAtMs: 2,
+});
 
 function createDiscordNativeApprovalAdapter() {
   return splitChannelApprovalCapability(getDiscordApprovalCapability());
@@ -39,7 +45,7 @@ function resolveOriginTarget(
   request: Partial<PluginApprovalRequest["request"]>,
   options: { cfg?: OpenClawConfig; accountId?: string } = {},
 ) {
-  return createDiscordNativeApprovalAdapter().native?.resolveOriginTarget?.({
+  return createDiscordNativeApprovalAdapter().nativeAsync?.resolveOriginTarget?.({
     cfg: options.cfg ?? NATIVE_DELIVERY_CFG,
     accountId: options.accountId ?? "main",
     approvalKind: "plugin",
@@ -61,7 +67,7 @@ describe("createDiscordNativeApprovalAdapter", () => {
     expect(getDiscordApprovalCapability().nativeRuntimeAsync?.eventKinds).toContain("system-agent");
   });
 
-  it("keeps approval availability enabled when approvers exist but native delivery is off", () => {
+  it("keeps approval availability enabled when approvers exist but native delivery is off", async () => {
     const adapter = createDiscordNativeApprovalAdapter();
     const cfg = {
       ...NATIVE_APPROVAL_CFG,
@@ -84,22 +90,16 @@ describe("createDiscordNativeApprovalAdapter", () => {
       }),
     ).toEqual({ kind: "enabled" });
     expect(
-      adapter.native?.describeDeliveryCapabilities({
+      await adapter.nativeAsync?.describeDeliveryCapabilities({
         cfg: cfg as never,
         accountId: "main",
         approvalKind: "exec",
-        request: {
-          id: "approval-1",
-          request: {
-            command: "pwd",
-            turnSourceChannel: "discord",
-            turnSourceTo: "channel:123456789",
-            turnSourceAccountId: "main",
-            sessionKey: "agent:main:discord:channel:123456789",
-          },
-          createdAtMs: 1,
-          expiresAtMs: 2,
-        },
+        request: execRequest({
+          command: "pwd",
+          ...ORIGIN,
+          turnSourceTo: "channel:123456789",
+          sessionKey: "agent:main:discord:channel:123456789",
+        }),
       }),
     ).toEqual({
       enabled: false,
@@ -114,25 +114,63 @@ describe("createDiscordNativeApprovalAdapter", () => {
     expect(
       await shouldHandleDiscordApprovalRequest({
         cfg: {
-          commands: {
-            ownerAllowFrom: ["discord:123"],
-          },
+          commands: { ownerAllowFrom: ["discord:123"] },
         } as never,
         accountId: "main",
         configOverride: { enabled: true } as never,
-        request: {
-          id: "approval-1",
-          request: {
-            command: "pwd",
-            turnSourceChannel: "discord",
-            turnSourceTo: "channel:123456789",
-            turnSourceAccountId: "main",
-          },
-          createdAtMs: 1,
-          expiresAtMs: 2,
-        },
+        request: execRequest({ command: "pwd", ...ORIGIN, turnSourceTo: "channel:123456789" }),
       }),
     ).toBe(true);
+  });
+
+  it("lets only the current typed Discord owner approve owner-derived exec requests", async () => {
+    const capability = getDiscordApprovalCapability();
+    const cfg = {
+      commands: { ownerAllowFrom: ["discord:user:555555555"] },
+      channels: {
+        discord: {
+          execApprovals: { enabled: "auto" },
+          accounts: { main: {}, ops: { execApprovals: { approvers: ["777777777"] } } },
+        },
+      },
+    } as OpenClawConfig;
+    const authorize = async (
+      senderId: string,
+      options: { cfg?: OpenClawConfig; accountId?: string } = {},
+    ) =>
+      (
+        await capability.authorizeActorActionAsync?.({
+          cfg: options.cfg ?? cfg,
+          accountId: options.accountId ?? "main",
+          senderId,
+          action: "approve",
+          approvalKind: "exec",
+        })
+      )?.authorized;
+    const request = execRequest({
+      command: "pwd",
+      turnSourceChannel: "discord",
+      turnSourceAccountId: "main",
+    });
+
+    expect(
+      await createDiscordNativeApprovalAdapter().nativeAsync?.resolveApproverDmTargets?.({
+        cfg,
+        accountId: "main",
+        approvalKind: "exec",
+        request,
+      }),
+    ).toEqual([{ to: "555555555" }]);
+    expect(await authorize("555555555")).toBe(true);
+    expect(await authorize("666666666")).toBe(false);
+    // Explicit account approvers still replace the global owner fallback.
+    expect(await authorize("555555555", { accountId: "ops" })).toBe(false);
+    // Authority is read from the config current at decision time.
+    expect(
+      await authorize("555555555", {
+        cfg: { ...cfg, commands: { ownerAllowFrom: ["discord:user:888888888"] } },
+      }),
+    ).toBe(false);
   });
 
   it("describes the correct Discord exec-approval setup path", () => {
@@ -162,9 +200,8 @@ describe("createDiscordNativeApprovalAdapter", () => {
 
   it("normalizes prefixed turn-source channel ids", async () => {
     const target = await resolveOriginTarget({
-      turnSourceChannel: "discord",
+      ...ORIGIN,
       turnSourceTo: "channel:123456789",
-      turnSourceAccountId: "main",
     });
 
     expect(target).toEqual({ to: "123456789" });
@@ -173,9 +210,7 @@ describe("createDiscordNativeApprovalAdapter", () => {
   it("falls back to approver DMs for account-scoped Discord direct sessions", async () => {
     const target = await resolveOriginTarget({
       sessionKey: "agent:main:discord:default:direct:123456789",
-      turnSourceChannel: "discord",
-      turnSourceTo: "123456789",
-      turnSourceAccountId: "main",
+      ...ORIGIN,
     });
 
     expect(target).toBeNull();
@@ -196,9 +231,7 @@ describe("createDiscordNativeApprovalAdapter", () => {
     const target = await resolveOriginTarget(
       {
         sessionKey: "agent:main:discord:dm:123456789",
-        turnSourceChannel: "discord",
-        turnSourceTo: "123456789",
-        turnSourceAccountId: "main",
+        ...ORIGIN,
       },
       {
         cfg: {
@@ -214,9 +247,7 @@ describe("createDiscordNativeApprovalAdapter", () => {
   it("accepts raw turn-source ids when a Discord channel session backs them", async () => {
     const target = await resolveOriginTarget({
       sessionKey: "agent:main:discord:channel:123456789",
-      turnSourceChannel: "discord",
-      turnSourceTo: "123456789",
-      turnSourceAccountId: "main",
+      ...ORIGIN,
     });
 
     expect(target).toEqual({ to: "123456789", threadId: undefined });
@@ -236,7 +267,7 @@ describe("createDiscordNativeApprovalAdapter", () => {
   it("rejects origin delivery for requests bound to another Discord account", async () => {
     const target = await resolveOriginTarget(
       {
-        turnSourceChannel: "discord",
+        ...ORIGIN,
         turnSourceTo: "channel:123456789",
         turnSourceAccountId: "other",
         sessionKey: "agent:main:missing",

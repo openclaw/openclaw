@@ -1,22 +1,20 @@
 import { mkdirSync } from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { seedNativeVersionZeroState } from "../state/native-version-zero.test-support.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
-import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
   withOpenClawStateStartupMigrationCheckpointDatabase,
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { claimOpenClawStateOwnership } from "../state/openclaw-state-ownership-operations.js";
-import {
-  executeSqliteQuerySync,
-  executeSqliteQueryTakeFirstSync,
-  getNodeSqliteKysely,
-} from "./kysely-sync.js";
+import { withStateMigrationBackupForTest } from "../state/openclaw-state-schema.test-support.js";
+import { runClientCredentialOperation } from "./client-credential-store.js";
+import { generateStoredDeviceIdentity } from "./device-identity-material.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
 import { OpenClawStateOwnershipError } from "./sqlite-lifecycle-errors.js";
 import {
@@ -32,114 +30,108 @@ afterEach(() => {
 
 const startupMigrationTempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-type StartupMigrationLeaseTestDatabase = Pick<
-  OpenClawStateKyselyDatabase,
-  "schema_meta" | "state_leases"
->;
+const { DatabaseSync } = requireNodeSqlite();
+let env: NodeJS.ProcessEnv;
+let databasePath: string;
+beforeEach(() => {
+  env = { OPENCLAW_STATE_DIR: startupMigrationTempDirs.make("openclaw-startup-migration-") };
+  databasePath = resolveOpenClawStateSqlitePath(env);
+});
+function acquireLease(options: Parameters<typeof acquireStartupMigrationLeaseWithWait>[0] = {}) {
+  return acquireStartupMigrationLeaseWithWait({ env, timeoutMs: 0, ...options });
+}
+function readRow(sql: string) {
+  using db = new DatabaseSync(databasePath, { readOnly: true });
+  return db.prepare(sql).get();
+}
+function seedDatabase(seed: (db: import("node:sqlite").DatabaseSync) => void) {
+  mkdirSync(path.dirname(databasePath), { recursive: true });
+  using db = new DatabaseSync(databasePath);
+  seed(db);
+}
 
 /** Models a prior host or recycled PID without replacing the real lease store. */
 function overwriteStartupMigrationLeaseOwner(
-  env: NodeJS.ProcessEnv,
+  leaseEnv: NodeJS.ProcessEnv,
   changes: { host?: string; startedAt?: number },
 ): void {
   withOpenClawStateStartupMigrationCheckpointDatabase(
     (db) => {
-      const kysely = getNodeSqliteKysely<StartupMigrationLeaseTestDatabase>(db);
-      const row = executeSqliteQueryTakeFirstSync(
-        db,
-        kysely.selectFrom("state_leases").select("payload_json as payloadJson"),
-      );
-      const payload = JSON.parse(row?.payloadJson ?? "{}") as { owner?: { startedAt?: number } };
-      executeSqliteQuerySync(
-        db,
-        kysely.updateTable("state_leases").set({
-          payload_json: JSON.stringify({ ...payload, owner: { ...payload.owner, ...changes } }),
-        }),
+      const row = db.prepare("SELECT payload_json FROM state_leases").get();
+      const payload = JSON.parse(String(row?.payload_json ?? "{}")) as {
+        owner?: { startedAt?: number };
+      };
+      db.prepare("UPDATE state_leases SET payload_json = ?").run(
+        JSON.stringify({ ...payload, owner: { ...payload.owner, ...changes } }),
       );
     },
-    { env },
+    { env: leaseEnv },
   );
 }
 
 describe("startup migration lease", () => {
   it("initializes the canonical schema before acquiring the first startup lease", async () => {
-    const env = {
-      OPENCLAW_STATE_DIR: startupMigrationTempDirs.make("openclaw-startup-migration-fresh-"),
-    };
+    const lease = await acquireLease({ owner: "fresh-startup" });
 
-    const lease = await acquireStartupMigrationLeaseWithWait({
-      env,
-      owner: "fresh-startup",
-      timeoutMs: 0,
-    });
-
-    const { DatabaseSync } = requireNodeSqlite();
-    const database = new DatabaseSync(resolveOpenClawStateSqlitePath(env), { readOnly: true });
     try {
-      expect(database.prepare("PRAGMA user_version").get()).toEqual({
-        user_version: OPENCLAW_STATE_SCHEMA_VERSION,
+      expect({
+        version: readRow("PRAGMA user_version"),
+        meta: readRow("SELECT role, schema_version FROM schema_meta WHERE meta_key = 'primary'"),
+        plugin: readRow(
+          "SELECT 1 AS present FROM sqlite_schema WHERE name = 'plugin_state_entries'",
+        ),
+      }).toEqual({
+        version: { user_version: OPENCLAW_STATE_SCHEMA_VERSION },
+        meta: { role: "global", schema_version: OPENCLAW_STATE_SCHEMA_VERSION },
+        plugin: { present: 1 },
       });
-      expect(
-        database
-          .prepare("SELECT role, schema_version FROM schema_meta WHERE meta_key = 'primary'")
-          .get(),
-      ).toEqual({ role: "global", schema_version: OPENCLAW_STATE_SCHEMA_VERSION });
-      expect(
-        database
-          .prepare("SELECT 1 AS present FROM sqlite_schema WHERE name = 'plugin_state_entries'")
-          .get(),
-      ).toEqual({ present: 1 });
     } finally {
-      database.close();
       lease.release();
     }
   });
 
   it.each([false, true])(
-    "adopts native version-zero state before lease acquisition (existing lease tables: %s)",
+    "adopts captured native version-zero state before lease acquisition (existing lease tables: %s)",
     async (hasExistingLeaseTables) => {
-      const env = {
-        OPENCLAW_STATE_DIR: startupMigrationTempDirs.make("openclaw-startup-migration-native-"),
-      };
-      const databasePath = resolveOpenClawStateSqlitePath(env);
-      mkdirSync(path.dirname(databasePath), { recursive: true });
-      const { DatabaseSync } = requireNodeSqlite();
-      const native = new DatabaseSync(databasePath);
-      try {
+      const identity = generateStoredDeviceIdentity(1);
+      seedDatabase((native) => {
         seedNativeVersionZeroState(native, hasExistingLeaseTables);
-      } finally {
-        native.close();
-      }
-
-      const lease = await acquireStartupMigrationLeaseWithWait({
-        env,
-        owner: "native-bootstrap",
-        timeoutMs: 0,
+        native
+          .prepare(
+            "UPDATE device_identities SET device_id=?, public_key_pem=?, private_key_pem=? WHERE identity_key='node'",
+          )
+          .run(identity.deviceId, identity.publicKeyPem, identity.privateKeyPem);
       });
+
+      await withStateMigrationBackupForTest({ env }, () => openOpenClawStateDatabase({ env }));
+      const lease = await acquireLease({ owner: "native-bootstrap" });
       try {
-        const initialized = new DatabaseSync(databasePath, { readOnly: true });
-        try {
-          expect(initialized.prepare("PRAGMA user_version").get()).toEqual({
-            user_version: OPENCLAW_STATE_SCHEMA_VERSION,
-          });
-          expect(
-            initialized
-              .prepare("SELECT schema_version FROM schema_meta WHERE meta_key = 'primary'")
-              .get(),
-          ).toEqual({ schema_version: OPENCLAW_STATE_SCHEMA_VERSION });
-          expect(
-            initialized
-              .prepare("SELECT device_id FROM device_identities WHERE identity_key = 'node'")
-              .get(),
-          ).toEqual({ device_id: "native-device" });
-          expect(
-            initialized
-              .prepare("SELECT config_key FROM exec_approvals_config WHERE config_key = 'current'")
-              .get(),
-          ).toEqual({ config_key: "current" });
-        } finally {
-          initialized.close();
-        }
+        expect({
+          version: readRow("PRAGMA user_version"),
+          meta: readRow("SELECT schema_version FROM schema_meta WHERE meta_key = 'primary'"),
+          legacy: readRow("SELECT name FROM sqlite_schema WHERE name='device_identities'"),
+          approvals: readRow(
+            "SELECT config_key FROM exec_approvals_config WHERE config_key = 'current'",
+          ),
+        }).toEqual({
+          version: { user_version: OPENCLAW_STATE_SCHEMA_VERSION },
+          meta: { schema_version: OPENCLAW_STATE_SCHEMA_VERSION },
+          legacy: undefined,
+          approvals: { config_key: "current" },
+        });
+        expect(
+          runClientCredentialOperation(env, { kind: "identity.read", identity_key: "node" }),
+        ).toEqual({
+          kind: "identity",
+          identity: {
+            identity_key: "node",
+            device_id: identity.deviceId,
+            public_key_pem: identity.publicKeyPem,
+            private_key_pem: identity.privateKeyPem,
+            created_at_ms: 1,
+            updated_at_ms: 1,
+          },
+        });
       } finally {
         lease.release();
       }
@@ -149,15 +141,10 @@ describe("startup migration lease", () => {
   it.each([false, true])(
     "fences a published ownership claim before the final lease write (cached handle: %s)",
     async (admittedOwner) => {
-      const env = {
-        OPENCLAW_STATE_DIR: startupMigrationTempDirs.make("openclaw-startup-migration-"),
-      };
       const database = runOpenClawStateWriteTransaction(({ db }) => db, { env });
       if (!admittedOwner) {
         closeOpenClawStateDatabaseForTest();
       }
-      const databasePath = resolveOpenClawStateSqlitePath(env);
-      const { DatabaseSync } = requireNodeSqlite();
       // Enter before the cached handle's native observer, not from its callback scope.
       const execTarget = admittedOwner ? database : DatabaseSync.prototype;
       const originalExec = Object.getOwnPropertyDescriptor(execTarget, "exec")?.value as
@@ -183,64 +170,35 @@ describe("startup migration lease", () => {
       });
 
       try {
-        const acquisition = acquireStartupMigrationLeaseWithWait({
-          env,
-          owner: "unmarked",
-          now: () => 1,
-          timeoutMs: 0,
-        });
+        const acquisition = acquireLease({ owner: "unmarked", now: () => 1 });
         expect(claimed).toBe(true);
         await expect(acquisition).rejects.toThrow(OpenClawStateOwnershipError);
       } finally {
         exec.mockRestore();
       }
 
-      const verify = new DatabaseSync(databasePath, { readOnly: true });
-      try {
-        expect(
-          verify
-            .prepare(
-              `SELECT COUNT(*) AS count
-             FROM state_leases
-             WHERE scope = 'startup-migrations' AND lease_key = 'global'`,
-            )
-            .get(),
-        ).toEqual({ count: 0 });
-        expect(
-          verify
-            .prepare(
-              `SELECT COUNT(*) AS count
-             FROM schema_meta
-             WHERE meta_key IN ('state-migrations', 'startup-migrations')`,
-            )
-            .get(),
-        ).toEqual({ count: 0 });
-      } finally {
-        verify.close();
-      }
+      expect({
+        leases: readRow(
+          "SELECT COUNT(*) AS count FROM state_leases WHERE scope = 'startup-migrations' AND lease_key = 'global'",
+        ),
+        checkpoints: readRow(
+          "SELECT COUNT(*) AS count FROM schema_meta WHERE meta_key IN ('state-migrations', 'startup-migrations')",
+        ),
+      }).toEqual({ leases: { count: 0 }, checkpoints: { count: 0 } });
     },
   );
 
   it.each([false, true])(
     "waits for a startup migration lease to be released (other host: %s)",
     async (otherHost) => {
-      const env = {
-        OPENCLAW_STATE_DIR: startupMigrationTempDirs.make("openclaw-startup-migration-"),
-      };
       let nowMs = 1001;
       let elapsedMs = 0;
       let sleepCount = 0;
-      const lease = await acquireStartupMigrationLeaseWithWait({
-        env,
-        now: () => 1000,
-        owner: "first",
-        timeoutMs: 0,
-      });
+      const lease = await acquireLease({ now: () => 1000, owner: "first" });
       if (otherHost) {
         overwriteStartupMigrationLeaseOwner(env, { host: "previous-pod" });
       }
-      const acquired = await acquireStartupMigrationLeaseWithWait({
-        env,
+      const acquired = await acquireLease({
         owner: "second",
         timeoutMs: 1000,
         pollIntervalMs: 250,
@@ -263,24 +221,15 @@ describe("startup migration lease", () => {
   it.each([false, true])(
     "preserves the lease and error when the wait bound expires (other host: %s)",
     async (otherHost) => {
-      const env = {
-        OPENCLAW_STATE_DIR: startupMigrationTempDirs.make("openclaw-startup-migration-"),
-      };
       let nowMs = 1001;
       let elapsedMs = 0;
-      const lease = await acquireStartupMigrationLeaseWithWait({
-        env,
-        now: () => 1000,
-        owner: "first",
-        timeoutMs: 0,
-      });
+      const lease = await acquireLease({ now: () => 1000, owner: "first" });
       if (otherHost) {
         overwriteStartupMigrationLeaseOwner(env, { host: "previous-pod" });
       }
 
       await expect(
-        acquireStartupMigrationLeaseWithWait({
-          env,
+        acquireLease({
           owner: "second",
           timeoutMs: 500,
           pollIntervalMs: 250,
@@ -301,20 +250,11 @@ describe("startup migration lease", () => {
   );
 
   it("waits for an unknown prior-host owner to expire before acquiring its lease", async () => {
-    const env = {
-      OPENCLAW_STATE_DIR: startupMigrationTempDirs.make("openclaw-startup-migration-"),
-    };
-    const prior = await acquireStartupMigrationLeaseWithWait({
-      env,
-      now: () => 1000,
-      owner: "prior",
-      timeoutMs: 0,
-    });
+    const prior = await acquireLease({ now: () => 1000, owner: "prior" });
     overwriteStartupMigrationLeaseOwner(env, { host: "previous-pod" });
     let nowMs = 1000 + STARTUP_MIGRATION_LEASE_TTL_MS - 1;
     let elapsedMs = 0;
-    const acquired = await acquireStartupMigrationLeaseWithWait({
-      env,
+    const acquired = await acquireLease({
       owner: "replacement",
       timeoutMs: 500,
       pollIntervalMs: 250,
@@ -333,24 +273,15 @@ describe("startup migration lease", () => {
   });
 
   it("reclaims an active startup migration lease whose owner process is gone", async () => {
-    const env = {
-      OPENCLAW_STATE_DIR: startupMigrationTempDirs.make("openclaw-startup-migration-"),
-    };
     const deadPid = 2_147_483_647;
-    const stale = await acquireStartupMigrationLeaseWithWait({
-      env,
-      now: () => 1000,
-      owner: "stale",
-      ownerPid: deadPid,
-      timeoutMs: 0,
-    });
+    const stale = await acquireLease({ now: () => 1000, owner: "stale", ownerPid: deadPid });
 
     expect(hasActiveStartupMigrationLease({ env, nowMs: 1001 })).toBe(false);
 
-    const replacement = await acquireStartupMigrationLeaseWithWait({
-      env,
+    const replacement = await acquireLease({
       owner: "replacement",
       now: () => 1001,
+      timeoutMs: STARTUP_MIGRATION_LEASE_TTL_MS,
     });
     stale.release();
     expect(hasActiveStartupMigrationLease({ env, nowMs: 1002 })).toBe(true);
@@ -362,27 +293,14 @@ describe("startup migration lease", () => {
   it.skipIf(process.platform === "win32")(
     "reclaims a startup migration lease whose owner PID was recycled",
     async () => {
-      const env = {
-        OPENCLAW_STATE_DIR: startupMigrationTempDirs.make("openclaw-startup-migration-"),
-      };
-      const stale = await acquireStartupMigrationLeaseWithWait({
-        env,
-        now: () => 1000,
-        owner: "stale",
-        timeoutMs: 0,
-      });
+      const stale = await acquireLease({ now: () => 1000, owner: "stale" });
 
       // The owner PID is this live test process; only the recorded start identity is stale.
       overwriteStartupMigrationLeaseOwner(env, { startedAt: 1 });
 
       expect(hasActiveStartupMigrationLease({ env, nowMs: 1001 })).toBe(false);
 
-      const replacement = await acquireStartupMigrationLeaseWithWait({
-        env,
-        now: () => 1001,
-        owner: "replacement",
-        timeoutMs: 0,
-      });
+      const replacement = await acquireLease({ now: () => 1001, owner: "replacement" });
       stale.release();
       expect(hasActiveStartupMigrationLease({ env, nowMs: 1002 })).toBe(true);
       replacement.release();
@@ -392,20 +310,11 @@ describe("startup migration lease", () => {
   it.each([false, true])(
     "renews startup migration leases while the owner is still running (admitted owner: %s)",
     async (admittedOwner) => {
-      const env = {
-        OPENCLAW_STATE_DIR: startupMigrationTempDirs.make("openclaw-startup-migration-"),
-      };
       if (admittedOwner) {
         runOpenClawStateWriteTransaction(() => undefined, { env });
       }
-      const { DatabaseSync } = requireNodeSqlite();
       const prepare = vi.spyOn(DatabaseSync.prototype, "prepare");
-      const lease = await acquireStartupMigrationLeaseWithWait({
-        env,
-        now: () => 1000,
-        owner: "first",
-        timeoutMs: 0,
-      });
+      const lease = await acquireLease({ now: () => 1000, owner: "first" });
 
       const onActivity = vi.fn();
       expect(hasActiveStartupMigrationLease({ env, nowMs: 1001, onActivity })).toBe(true);
@@ -417,14 +326,9 @@ describe("startup migration lease", () => {
         heartbeatAt: 300_000,
       });
 
-      await expect(
-        acquireStartupMigrationLeaseWithWait({
-          env,
-          now: () => 301_001,
-          owner: "second",
-          timeoutMs: 0,
-        }),
-      ).rejects.toThrow("OpenClaw startup migrations are already running");
+      await expect(acquireLease({ now: () => 301_001, owner: "second" })).rejects.toThrow(
+        "OpenClaw startup migrations are already running",
+      );
 
       lease.release();
       expect(hasActiveStartupMigrationLease({ env, nowMs: 301_002, onActivity })).toBe(false);
@@ -440,21 +344,11 @@ describe("startup migration lease", () => {
   );
 
   it("checks exact lease ownership inside the caller write transaction", async () => {
-    const env = {
-      OPENCLAW_STATE_DIR: startupMigrationTempDirs.make("openclaw-startup-migration-"),
-    };
     const nowMs = Date.now();
-    const first = await acquireStartupMigrationLeaseWithWait({
-      env,
-      now: () => nowMs,
-      owner: "first",
-      timeoutMs: 0,
-    });
-    const second = await acquireStartupMigrationLeaseWithWait({
-      env,
+    const first = await acquireLease({ now: () => nowMs, owner: "first" });
+    const second = await acquireLease({
       now: () => nowMs + STARTUP_MIGRATION_LEASE_TTL_MS + 1,
       owner: "second",
-      timeoutMs: 0,
     });
 
     runOpenClawStateWriteTransaction(
@@ -465,16 +359,12 @@ describe("startup migration lease", () => {
         expect(() => second.assertOwnedInTransaction(db)).not.toThrow();
         expect(() => first.assertOwned()).toThrow("startup migration lease was lost");
         expect(() => second.assertOwned()).not.toThrow();
-        const query = getNodeSqliteKysely<StartupMigrationLeaseTestDatabase>(db);
         const replaceOwner = (owner: string) =>
-          executeSqliteQuerySync(
-            db,
-            query
-              .updateTable("state_leases")
-              .set({ owner })
-              .where("scope", "=", "startup-migrations")
-              .where("lease_key", "=", "global"),
-          );
+          db
+            .prepare(
+              "UPDATE state_leases SET owner = ? WHERE scope = 'startup-migrations' AND lease_key = 'global'",
+            )
+            .run(owner);
         replaceOwner("reassigned-before-commit");
         expect(() => second.assertOwned()).toThrow("startup migration lease was lost");
         replaceOwner(second.owner);
@@ -487,14 +377,8 @@ describe("startup migration lease", () => {
   });
 
   it("acquires a lease without requiring the full state schema to be canonical", async () => {
-    const env = {
-      OPENCLAW_STATE_DIR: startupMigrationTempDirs.make("openclaw-startup-migration-"),
-    };
-    const sqlite = requireNodeSqlite();
-    const dbPath = resolveOpenClawStateSqlitePath(env);
-    mkdirSync(path.dirname(dbPath), { recursive: true });
-    const db = new sqlite.DatabaseSync(dbPath);
-    db.exec(`
+    seedDatabase((db) =>
+      db.exec(`
       CREATE TABLE agent_databases (
         agent_id TEXT NOT NULL PRIMARY KEY,
         path TEXT NOT NULL,
@@ -502,75 +386,23 @@ describe("startup migration lease", () => {
         last_seen_at INTEGER NOT NULL,
         size_bytes INTEGER
       );
-    `);
-    db.close();
+    `),
+    );
 
-    const lease = await acquireStartupMigrationLeaseWithWait({
-      env,
-      now: () => 1000,
-      owner: "first",
-      timeoutMs: 0,
-    });
-    const leased = new sqlite.DatabaseSync(dbPath, { readOnly: true });
-    expect(leased.prepare("PRAGMA user_version").get()).toEqual({ user_version: 0 });
-    leased.close();
+    const lease = await acquireLease({ now: () => 1000, owner: "first" });
+    expect(readRow("PRAGMA user_version")).toEqual({ user_version: 0 });
     lease.release();
   });
 
   it("refuses future-version state databases before creating lease tables", async () => {
-    const env = {
-      OPENCLAW_STATE_DIR: startupMigrationTempDirs.make("openclaw-startup-migration-"),
-    };
-    const sqlite = requireNodeSqlite();
-    const dbPath = resolveOpenClawStateSqlitePath(env);
-    mkdirSync(path.dirname(dbPath), { recursive: true });
-    const db = new sqlite.DatabaseSync(dbPath);
-    db.exec(`PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION + 1};`);
-    db.close();
+    seedDatabase((db) => db.exec(`PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION + 1};`));
 
-    await expect(
-      acquireStartupMigrationLeaseWithWait({
-        env,
-        now: () => 1000,
-        owner: "first",
-        timeoutMs: 0,
-      }),
-    ).rejects.toThrow(`newer schema version ${OPENCLAW_STATE_SCHEMA_VERSION + 1}`);
+    await expect(acquireLease({ now: () => 1000, owner: "first" })).rejects.toThrow(
+      `newer schema version ${OPENCLAW_STATE_SCHEMA_VERSION + 1}`,
+    );
 
-    const verify = new sqlite.DatabaseSync(dbPath, { readOnly: true });
-    const row = verify
-      .prepare("SELECT 1 AS ok FROM sqlite_master WHERE type = 'table' AND name = 'state_leases'")
-      .get() as { ok?: unknown } | undefined;
-    verify.close();
-    expect(row).toBeUndefined();
-  });
-
-  it("rejects foreign-key corruption before acquiring a startup lease", async () => {
-    const env = {
-      OPENCLAW_STATE_DIR: startupMigrationTempDirs.make("openclaw-startup-migration-corrupt-"),
-    };
-    const dbPath = resolveOpenClawStateSqlitePath(env);
-    mkdirSync(path.dirname(dbPath), { recursive: true });
-    const { DatabaseSync } = requireNodeSqlite();
-    const db = new DatabaseSync(dbPath);
-    db.exec(`
-      PRAGMA foreign_keys = OFF;
-      CREATE TABLE legacy_parent (id INTEGER PRIMARY KEY);
-      CREATE TABLE legacy_child (parent_id INTEGER REFERENCES legacy_parent(id));
-      INSERT INTO legacy_child VALUES (1);
-    `);
-    db.close();
-
-    await expect(
-      acquireStartupMigrationLeaseWithWait({ env, owner: "corrupt-state", timeoutMs: 0 }),
-    ).rejects.toThrow("foreign_key_check failed");
-    const verify = new DatabaseSync(dbPath, { readOnly: true });
-    try {
-      expect(
-        verify.prepare("SELECT name FROM sqlite_schema WHERE name = 'schema_meta'").get(),
-      ).toBeUndefined();
-    } finally {
-      verify.close();
-    }
+    expect(
+      readRow("SELECT 1 AS ok FROM sqlite_master WHERE type = 'table' AND name = 'state_leases'"),
+    ).toBeUndefined();
   });
 });

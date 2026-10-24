@@ -20,6 +20,10 @@ import {
 import type { SessionRowReadView } from "../session-row-prepared-read.js";
 import { getSessionRowProjection } from "../session-row-projection-access.js";
 import { resolveSessionStoreKey } from "../session-store-key.js";
+import {
+  resolveSessionSubscriptionKey,
+  resolveSessionSubscriptionKeys,
+} from "../session-subscription-keys.js";
 import { resolveVisibleActiveSessionRunState } from "./session-active-runs.js";
 import type { GatewayRequestContext } from "./types.js";
 
@@ -35,10 +39,11 @@ type SessionChangedPayload = {
 type SessionChangeContext = Pick<
   GatewayRequestContext,
   | "broadcastToConnIds"
-  | "chatAbortControllers"
   | "getRuntimeConfig"
+  | "resolveGatewayContext"
   | "sessionRowProjectionOwner"
   | "getSessionEventSubscriberConnIds"
+  | "getSessionMessageSubscriberConnIds"
   | "workerSessionPlacementService"
   | "mentionInbox"
 >;
@@ -123,6 +128,28 @@ function snapshotTarget(payload: SessionChangedPayload, scope: SessionEventAgent
     : undefined;
 }
 
+function resolveSessionDrain(
+  context: SessionChangeContext,
+  payload: SessionChangedPayload,
+  scope: SessionEventAgentScope | null,
+  eventReceivers: ReadonlySet<string>,
+): { connIds: ReadonlySet<string>; subscriptionKey: string } | undefined {
+  if (!payload.sessionKey || !scope?.[1] || !["reset", "delete", "new"].includes(payload.reason)) {
+    return undefined;
+  }
+  const key = resolveSessionStoreKey({
+    cfg: context.getRuntimeConfig(),
+    sessionKey: payload.sessionKey,
+    storeAgentId: scope[1],
+  });
+  const subscriptionKey = resolveSessionSubscriptionKey(key, scope[1]);
+  const messageReceivers = context.getSessionMessageSubscriberConnIds?.(subscriptionKey);
+  return {
+    connIds: new Set([...eventReceivers, ...(messageReceivers ?? [])]),
+    subscriptionKey,
+  };
+}
+
 function broadcastSessionsChanged(
   context: SessionChangeContext,
   payload: SessionChangedPayload,
@@ -130,13 +157,10 @@ function broadcastSessionsChanged(
   includeSnapshot = true,
   read?: SessionRowReadView,
 ): void {
-  const connIds = context.getSessionEventSubscriberConnIds();
-  if (!hasSessionChangeReceivers(connIds)) {
-    return;
-  }
   if (scope === null) {
     return;
   }
+  const connIds = context.getSessionEventSubscriberConnIds();
   const [eventAgentId, routingAgentId, compatibilityOwnerAgentId] = scope;
   const routingOptions = {
     ...(routingAgentId ? { agentId: routingAgentId } : {}),
@@ -147,6 +171,23 @@ function broadcastSessionsChanged(
     ...(eventAgentId ? { agentId: eventAgentId } : {}),
     ts: Date.now(),
   };
+  const drain = resolveSessionDrain(context, payload, scope, connIds);
+  if (drain && drain.connIds.size > 0) {
+    // Publish in row order; a slow recipient must reconnect instead of missing eviction.
+    context.broadcastToConnIds(
+      "socket.drain",
+      { ...eventPayload, agentId: routingAgentId },
+      drain.connIds,
+      {
+        ...routingOptions,
+        sessionKeys: [drain.subscriptionKey],
+        dropIfSlow: false,
+      },
+    );
+  }
+  if (!hasSessionChangeReceivers(connIds)) {
+    return;
+  }
   if (!includeSnapshot) {
     // Native plugins need the keyed notice, but a keyed WebSocket payload would
     // ask recipient projection to read the unavailable row again.
@@ -186,6 +227,14 @@ function broadcastSessionsChanged(
   const projection = getSessionRowProjection(context);
   const broadcastOptions = {
     ...routingOptions,
+    sessionEventSubscriptionKeys:
+      payload.sessionKey && routingAgentId
+        ? resolveSessionSubscriptionKeys(
+            payload.sessionKey,
+            routingAgentId,
+            compatibilityOwnerAgentId,
+          )
+        : [],
     ...resolvePrivateSessionEventBroadcastScope(payload.sessionKey, scope),
     ...(read && projection
       ? { prepareSessionProjection: prepareSessionEventProjection(projection, read) }
@@ -197,22 +246,26 @@ function broadcastSessionsChanged(
     context.broadcastToConnIds("sessions.changed", eventPayload, connIds, broadcastOptions);
     return;
   }
-  const preparedRow = read?.describe(query);
-  const currentRow = read
-    ? preparedRow && read.present(preparedRow)
-    : projection?.snapshot(query).row;
+  const preparedRow = read ? read.describe(query) : projection?.describe(query);
+  const currentRow = preparedRow
+    ? read
+      ? read.present(preparedRow)
+      : projection?.present(preparedRow)
+    : undefined;
   const sessionRow =
     payload.sessionId && payload.sessionId !== currentRow?.sessionId ? null : currentRow;
   const activeRunState =
-    sessionRow && (sessionRow.key !== "global" || routingAgentId !== undefined)
+    sessionRow && preparedRow && (sessionRow.key !== "global" || routingAgentId !== undefined)
       ? resolveVisibleActiveSessionRunState({
-          context,
+          storePath: preparedRow.storeTarget.storePath,
+          resolveGatewayContext: context.resolveGatewayContext,
           requestedKey: payload.sessionKey ?? sessionRow.key,
           canonicalKey: sessionRow.key,
           sessionId: sessionRow.sessionId,
           agentId: routingAgentId,
           defaultAgentId: compatibilityOwnerAgentId,
           projectedAgentRunIndex: projection?.state.rowContext.projectedAgentRuns,
+          physicalPaths: read?.physicalPaths ?? projection?.physicalPaths,
         })
       : null;
   context.broadcastToConnIds(
@@ -223,9 +276,11 @@ function broadcastSessionsChanged(
         ? {
             ...buildGatewaySessionSnapshot({
               sessionRow,
-              includeSession: true,
               agentId: eventAgentId,
               activeRunState,
+              // A send publication is the producer's current running fact; a queued
+              // source must not downgrade it using an older preparation phase.
+              status: payload.reason === "send" ? "running" : undefined,
             }),
             ...(context.workerSessionPlacementService
               ? {
@@ -379,18 +434,25 @@ export function emitSessionsChanged(
   if (!catalogOnly && options.accessChanged !== false) {
     bumpGatewayAccessRevision();
   }
-  if (!catalogOnly) {
+  if (!catalogOnly && options.rowScope !== "runtime") {
     // Inbox subscriptions are independent of session-list subscriptions, including a closed sidebar.
     void context.mentionInbox?.invalidateAsync(payload.sessionKey);
   }
   const connIds = context.getSessionEventSubscriberConnIds();
-  if (!hasSessionChangeReceivers(connIds)) {
+  // Lightweight contexts without either kind of listener need no routing config.
+  if (!hasSessionChangeReceivers(connIds) && !context.getSessionMessageSubscriberConnIds) {
     return;
   }
   const cfg = context.getRuntimeConfig();
   const scope: SessionEventAgentScope | null = payload.sessionKey
     ? resolveSessionEventAgentScope(cfg, payload.sessionKey, payload.agentId)
     : [payload.agentId, payload.agentId, undefined];
+  if (
+    !hasSessionChangeReceivers(connIds) &&
+    !resolveSessionDrain(context, payload, scope, connIds)?.connIds.size
+  ) {
+    return;
+  }
   if (options.preparedPublication && payload.sessionKey) {
     return broadcastSessionsChanged(context, payload, scope, true, options.sessionRows);
   }
@@ -440,4 +502,24 @@ export function emitSessionsChanged(
   next.timer = setTimeout(() => finishPendingSessionChange(next), SESSIONS_CHANGED_DEBOUNCE_MS);
   next.timer.unref?.();
   startPendingSessionChange(next, { payload, scope });
+}
+
+/** Naming changes runtime presentation without changing access or stored session facts. */
+export function emitSessionTitleChanged(
+  context: SessionChangeContext,
+  target: { sessionKey: string; sessionId?: string; agentId: string },
+): void {
+  try {
+    emitSessionsChanged(
+      context,
+      { ...target, reason: "chat.title" },
+      { accessChanged: false, rowScope: "runtime" },
+    );
+    // Title completion follows a metadata commit even though naming state is runtime-only.
+    void context.mentionInbox?.invalidateAsync(target.sessionKey);
+  } catch (error) {
+    log.warn("Session title state publication failed", {
+      error: formatErrorMessageWithCode(error),
+    });
+  }
 }

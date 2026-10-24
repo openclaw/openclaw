@@ -25,10 +25,7 @@ import {
   resolveModelRefFromString,
 } from "../../agents/model-selection.js";
 import { createModelVisibilityPolicy } from "../../agents/model-visibility-policy.js";
-import {
-  openAIModelCatalogRoutePolicy,
-  resolveModelCatalogIdentityKey,
-} from "../../agents/openai-model-routes.js";
+import { resolveModelCatalogIdentityKey } from "../../agents/openai-model-routes.js";
 import * as preparedModelCatalog from "../../agents/prepared-model-catalog.js";
 import { getPreparedModelRuntimeAuthStore } from "../../agents/prepared-model-runtime-auth.js";
 import { resolveDefaultAgentWorkspaceDir } from "../../agents/workspace.js";
@@ -48,6 +45,7 @@ export type ModelsCommandSessionEntry = Partial<
     SessionEntry,
     | "authProfileOverride"
     | "authProfileOverrideSource"
+    | "authProfileOverrideCompactionCount"
     | "modelProvider"
     | "providerOverride"
     | "model"
@@ -234,7 +232,6 @@ export async function loadModelsProviderData(
     workspaceDir,
     view: options.view,
     policy: visibilityPolicy,
-    routePolicy: openAIModelCatalogRoutePolicy,
     routeVariants: snapshot.routeVariants,
     evaluateEntry: async (entry, routeVariants) => {
       const evaluation = evaluateEntry(entry, routeVariants);
@@ -245,7 +242,6 @@ export async function loadModelsProviderData(
       return resolveLogicalModelCatalogEntryState({
         evaluation,
         authBacked: options.view === "all" || evaluation.availability === true,
-        routePolicy: openAIModelCatalogRoutePolicy,
       });
     },
   });
@@ -356,7 +352,7 @@ export async function loadModelsProviderData(
   for (const modelConfig of [cfg.agents?.defaults?.model, cfg.agents?.defaults?.imageModel]) {
     if (typeof modelConfig === "string") {
       addRawModelRef(modelConfig);
-    } else if (modelConfig && typeof modelConfig === "object") {
+    } else if (modelConfig) {
       addRawModelRef(modelConfig.primary);
       for (const fallback of modelConfig.fallbacks ?? []) {
         addRawModelRef(fallback);

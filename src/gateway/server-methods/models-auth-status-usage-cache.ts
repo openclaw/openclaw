@@ -16,7 +16,7 @@ import {
 } from "./provider-usage-runtime.js";
 
 const log = createSubsystemLogger("provider-usage-cache");
-const USAGE_CACHE_TTL_MS = 60_000;
+const DEFAULT_USAGE_CACHE_TTL_MS = 60_000;
 
 export type ProviderUsageStatus = Pick<
   ProviderUsageSnapshot,
@@ -40,12 +40,21 @@ type ProviderUsageRefresh = ProviderUsageCacheIdentity & {
   promise: Promise<UsageSummary>;
 };
 
-const usageCacheByAgentId = new Map<string, ProviderUsageCacheEntry>();
-const usageRefreshByAgentId = new Map<string, ProviderUsageRefresh>();
-let cacheGeneration = 0;
+// models.authStatus polls refreshable credentials; usage.status polls every usage provider.
+// Both read on one page load, so each agent keeps one entry per provider set.
+const usageCacheByAgentId = new Map<string, Map<string, ProviderUsageCacheEntry>>();
+const usageRefreshByAgentId = new Map<string, Map<string, ProviderUsageRefresh>>();
+
+function agentEntries<T>(byAgentId: Map<string, Map<string, T>>, agentId: string) {
+  let entries = byAgentId.get(agentId);
+  if (!entries) {
+    entries = new Map();
+    byAgentId.set(agentId, entries);
+  }
+  return entries;
+}
 
 export function clearModelAuthStatusUsageCache(): void {
-  cacheGeneration += 1;
   usageCacheByAgentId.clear();
   usageRefreshByAgentId.clear();
   clearProviderUsageRuntimeSnapshot();
@@ -71,9 +80,16 @@ function scopeProviderUsageCredentialKey(
   });
 }
 
-function mapProviderUsage(usage: Awaited<ReturnType<typeof loadProviderUsageSummary>>) {
+function mapProviderUsage(usage: UsageSummary, previous?: Map<string, ProviderUsageStatus>) {
   const usageByProvider = new Map<string, ProviderUsageStatus>();
   for (const snap of usage.providers) {
+    // Auth status has no usage-error field. Keep its last quota while usage.status
+    // still receives the provider's error in the unmodified summary.
+    const retained = snap.error ? previous?.get(snap.provider) : undefined;
+    if (retained) {
+      usageByProvider.set(snap.provider, retained);
+      continue;
+    }
     usageByProvider.set(snap.provider, {
       windows: snap.windows,
       ...(snap.summary ? { summary: snap.summary } : {}),
@@ -116,10 +132,12 @@ function scheduleProviderUsageRefresh(
     agentId: string;
     authStore?: AuthProfileStore;
     providerIds: UsageProviderId[];
-    lastGood?: UsageSummary;
+    previous?: ProviderUsageCacheEntry;
   },
 ): Promise<UsageSummary> {
-  const active = usageRefreshByAgentId.get(params.agentId);
+  const isCurrent = () =>
+    usageRefreshByAgentId.get(params.agentId)?.get(params.providerKey) === refresh;
+  const active = usageRefreshByAgentId.get(params.agentId)?.get(params.providerKey);
   if (
     active?.agentDir === params.agentDir &&
     active.configRef === params.configRef &&
@@ -128,7 +146,6 @@ function scheduleProviderUsageRefresh(
   ) {
     return active.promise;
   }
-  const publishGeneration = cacheGeneration;
   // SWR replies and invalidation must retain publication and finalization ownership.
   const promise = trackAsyncWork(() =>
     loadProviderUsageSummary({
@@ -139,19 +156,16 @@ function scheduleProviderUsageRefresh(
       timeoutMs: PROVIDER_USAGE_TIMEOUT_MS,
     })
       .then((freshUsage) => {
-        const usage = retainLastGoodOnTimeout(freshUsage, params.lastGood);
-        if (
-          publishGeneration === cacheGeneration &&
-          usageRefreshByAgentId.get(params.agentId) === refresh
-        ) {
-          usageCacheByAgentId.set(params.agentId, {
+        const usage = retainLastGoodOnTimeout(freshUsage, params.previous?.summary);
+        if (isCurrent()) {
+          agentEntries(usageCacheByAgentId, params.agentId).set(params.providerKey, {
             agentDir: params.agentDir,
             configRef: params.configRef,
             credentialKey: params.credentialKey,
             providerKey: params.providerKey,
             refreshedAt: Date.now(),
             summary: usage,
-            usageByProvider: mapProviderUsage(usage),
+            usageByProvider: mapProviderUsage(usage, params.previous?.usageByProvider),
           });
         }
         return usage;
@@ -166,8 +180,8 @@ function scheduleProviderUsageRefresh(
         throw err;
       })
       .finally(() => {
-        if (usageRefreshByAgentId.get(params.agentId) === refresh) {
-          usageRefreshByAgentId.delete(params.agentId);
+        if (isCurrent()) {
+          usageRefreshByAgentId.get(params.agentId)?.delete(params.providerKey);
         }
       }),
   );
@@ -178,7 +192,7 @@ function scheduleProviderUsageRefresh(
     providerKey: params.providerKey,
     promise,
   };
-  usageRefreshByAgentId.set(params.agentId, refresh);
+  agentEntries(usageRefreshByAgentId, params.agentId).set(params.providerKey, refresh);
   return promise;
 }
 
@@ -198,18 +212,18 @@ function resolveProviderUsageCacheRead(params: ProviderUsageCacheParams) {
   const providerIds = params.providerIds.toSorted();
   const providerKey = providerIds.join("\0");
   const credentialKey = scopeProviderUsageCredentialKey(params.credentialKey, providerIds);
-  const cached = usageCacheByAgentId.get(params.agentId);
+  const cached = usageCacheByAgentId.get(params.agentId)?.get(providerKey);
   const matching =
     cached?.agentDir === params.agentDir &&
     cached.configRef === params.configRef &&
-    cached.credentialKey === credentialKey &&
-    cached.providerKey === providerKey
+    cached.credentialKey === credentialKey
       ? cached
       : undefined;
   const needsRefresh =
     params.forceRefresh === true ||
     !matching ||
-    params.now - matching.refreshedAt >= USAGE_CACHE_TTL_MS;
+    params.now - matching.refreshedAt >=
+      (params.configRef.models?.usage?.cacheTtlMs ?? DEFAULT_USAGE_CACHE_TTL_MS);
   return {
     matching,
     needsRefresh,
@@ -221,32 +235,48 @@ function resolveProviderUsageCacheRead(params: ProviderUsageCacheParams) {
       credentialKey,
       providerIds,
       providerKey,
-      lastGood: matching?.summary,
+      previous: matching,
     },
   };
 }
 
-export function readProviderUsageStaleWhileRevalidate(
-  params: ProviderUsageCacheParams,
-): Map<string, ProviderUsageStatus> {
+/** Ordinary reads stay nonblocking; post-run reads await only cold or stale usage. */
+export async function readProviderUsage(
+  params: ProviderUsageCacheParams & { awaitRefresh?: boolean },
+): Promise<{ usageByProvider: Map<string, ProviderUsageStatus>; refreshAt?: number }> {
   if (params.providerIds.length === 0) {
     usageCacheByAgentId.delete(params.agentId);
-    return new Map();
+    return { usageByProvider: new Map() };
   }
   const { matching, needsRefresh, refreshParams } = resolveProviderUsageCacheRead(params);
+  let published = matching;
   if (needsRefresh) {
-    // Never couple the RPC deadline to provider HTTP. A cold call returns auth
-    // without usage; stale calls return the last snapshot while one refresh runs.
-    void scheduleProviderUsageRefresh(refreshParams).catch(() => {});
+    const refresh = scheduleProviderUsageRefresh(refreshParams);
+    if (params.awaitRefresh) {
+      const usage = await refresh;
+      const failed = usage.providers.find((provider) => provider.error);
+      if (failed) {
+        throw new Error(`Provider usage refresh failed for ${failed.provider}. Try again later.`);
+      }
+      // Logout or credential replacement can retire an in-flight publication.
+      published = resolveProviderUsageCacheRead(params).matching;
+    } else {
+      void refresh.catch(() => {});
+    }
   }
-  return matching?.usageByProvider ?? new Map();
+  return {
+    usageByProvider: published?.usageByProvider ?? new Map(),
+    refreshAt: published
+      ? published.refreshedAt +
+        (params.configRef.models?.usage?.cacheTtlMs ?? DEFAULT_USAGE_CACHE_TTL_MS)
+      : params.now,
+  };
 }
 
 /** Shares the models.authStatus cache contract with the unscoped usage.status RPC. */
 export async function loadUsageStatusStaleWhileRevalidate(options: {
   config: OpenClawConfig;
   coldRead?: "refresh-marker";
-  now?: number;
 }): Promise<UsageSummary> {
   const snapshot = await getProviderUsageRuntimeSnapshot({ config: options.config });
   const params: ProviderUsageCacheParams = {
@@ -257,7 +287,7 @@ export async function loadUsageStatusStaleWhileRevalidate(options: {
     credentialKey: snapshot.credentialKey,
     providerIds: snapshot.providerIds,
     coldRead: options.coldRead,
-    now: options.now ?? Date.now(),
+    now: Date.now(),
   };
   if (params.providerIds.length === 0) {
     usageCacheByAgentId.delete(params.agentId);

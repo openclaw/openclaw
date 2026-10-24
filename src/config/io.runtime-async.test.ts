@@ -1,8 +1,10 @@
+import { once } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { Worker } from "node:worker_threads";
 import { afterEach, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { clearBundledDiscoveryModeMemo } from "../plugins/bundled-discovery-state.js";
 import { createPluginCache, withPluginCache } from "../plugins/plugin-cache.js";
@@ -108,20 +110,12 @@ it("preserves SDK config writes and load authority inside a native worker", asyn
     },
   );
   try {
-    const result = await new Promise<unknown>((resolve, reject) => {
-      let message: unknown;
-      worker.on("message", (value: unknown) => {
-        message = value;
-      });
-      worker.on("error", reject);
-      worker.on("exit", (code) => {
-        if (code === 0) {
-          resolve(message);
-        } else {
-          reject(new Error(`Config worker exited with code ${code}`));
-        }
-      });
+    let result: unknown;
+    worker.on("message", (value: unknown) => {
+      result = value;
     });
+    const [exitCode] = await once(worker, "exit");
+    expect(exitCode).toBe(0);
     expect(result).toEqual({
       isMainThread: false,
       wroteConfig: true,
@@ -179,35 +173,19 @@ it.each(["config environment", "dotenv selector"] as const)(
   },
 );
 
-it.each(["validation", "namespace"] as const)(
-  "rejects a cold load after %s failure without publishing config environment",
-  async (failure) => {
-    fixture(
-      failure === "validation"
-        ? {
-            gateway: { port: "invalid" },
-            env: { vars: { CONFIG_ASYNC_CONFIG: "rejected" } },
-          }
-        : undefined,
-    );
-    const read = captureRuntimeConfigAsyncReader();
-    if (failure === "namespace") {
-      vi.stubEnv("OPENCLAW_CONFIG_PATH", "/fixture/another-config.json");
-    }
-    const pending = withoutMainSql(() => withPluginCache(createPluginCache(), read));
-    if (failure === "validation") {
-      await expect(pending).rejects.toMatchObject({ code: "INVALID_CONFIG" });
-      expect(process.env.CONFIG_ASYNC_GLOBAL).toBe("global");
-    } else {
-      await expect(pending).rejects.toThrow("Runtime config source changed");
-    }
-    expect(process.env.CONFIG_ASYNC_WORKSPACE).toBe(
-      failure === "validation" ? "workspace" : undefined,
-    );
-    expect(process.env.CONFIG_ASYNC_CONFIG).toBeUndefined();
-    expect(getRuntimeConfigSnapshot()).toBeNull();
-  },
-);
+it("rejects an invalid cold load without publishing config environment", async () => {
+  fixture({
+    gateway: { port: "invalid" },
+    env: { vars: { CONFIG_ASYNC_CONFIG: "rejected" } },
+  });
+  const read = captureRuntimeConfigAsyncReader();
+  const pending = withoutMainSql(() => withPluginCache(createPluginCache(), read));
+  await expect(pending).rejects.toMatchObject({ code: "INVALID_CONFIG" });
+  expect(process.env.CONFIG_ASYNC_GLOBAL).toBe("global");
+  expect(process.env.CONFIG_ASYNC_WORKSPACE).toBe("workspace");
+  expect(process.env.CONFIG_ASYNC_CONFIG).toBeUndefined();
+  expect(getRuntimeConfigSnapshot()).toBeNull();
+});
 
 it("keeps a pinned runtime readable when the captured launch directory is unavailable", async () => {
   fixture();
@@ -310,16 +288,13 @@ it.each(["replacement", "disk-only", "cancellation"] as const)(
         },
       }),
     );
-    const settled = pending.then(
-      () => {
-        throw new Error("Config write settled before its asynchronous fallback read");
-      },
-      (error: unknown) => {
-        throw error;
-      },
+    const gated = awaitGateBeforeSettlement(
+      loading.promise,
+      pending,
+      "Config write settled before its asynchronous fallback read",
     );
     try {
-      await Promise.race([loading.promise, settled]);
+      await gated;
       expect(getRuntimeConfigSnapshot()).toBe(initial);
       expect(listener).not.toHaveBeenCalled();
       const healthDeps = { env: process.env, homedir: () => home, logger: console };
@@ -358,7 +333,7 @@ it.each(["replacement", "disk-only", "cancellation"] as const)(
       expect(readConfigHealthStateFromStore(healthDeps)).toEqual(healthBefore);
     } finally {
       release.resolve();
-      await Promise.allSettled([pending, settled]);
+      await Promise.allSettled([pending, gated]);
       unsubscribe();
     }
   },

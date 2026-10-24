@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
+import { sha256Hex } from "../infra/crypto-digest.js";
 import { resolveUpdateCaptureRoot } from "../infra/update-capture-paths.js";
 import { captureUpdateRecoveryBaseline } from "../infra/update-recovery-baseline-capture.js";
 import { buildUpdateRehearsalPathEnv } from "../infra/update-rehearsal-paths.js";
@@ -24,11 +25,15 @@ import { loadBundledPluginFacade } from "../test-utils/bundled-plugin-public-sur
 import { withEnvAsync } from "../test-utils/env.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { parseUpdateRecoveryBackupManifest } from "./backup-verify-manifest.js";
+import * as doctorAdmission from "./doctor-maintenance-admission.js";
 import { beginDoctorMaintenance } from "./doctor-maintenance.js";
 import { backupDoctorMigrationDatabases } from "./doctor-migration-backup.js";
 import { preserveDoctorOriginalState } from "./doctor-original-capture.js";
 
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+});
 
 it("keeps config and declared plugin resources while excluding disposable core images and aliases", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
@@ -45,6 +50,7 @@ it("keeps config and declared plugin resources while excluding disposable core i
       },
       async () => {
         const shared = resolveOpenClawStateSqlitePath();
+        const serviceIntent = path.join(stateDir, "control", "services.sqlite");
         const agent = resolveOpenClawAgentSqlitePath({ agentId: "main" });
         openOpenClawStateDatabase();
         openOpenClawAgentDatabase({ agentId: "main" });
@@ -135,9 +141,9 @@ it("keeps config and declared plugin resources while excluding disposable core i
         });
         expect(maintenance).toBeDefined();
         try {
-          await maintenance!.run(async () => {
+          const captureResult = await maintenance!.run(async () => {
             const scope = getOpenClawDatabaseMaintenanceScope()!;
-            await preserveDoctorOriginalState({
+            const result = await preserveDoctorOriginalState({
               root: process.cwd(),
               env: process.env,
               runtime,
@@ -149,14 +155,21 @@ it("keeps config and declared plugin resources while excluding disposable core i
               pendingDatabasePaths: [agent],
               databasePaths: [agent],
             });
+            return result;
           });
           const names = (await fs.readdir(captures)).filter((name) => name.startsWith("doctor-"));
           expect(names, messages.join("\n")).toHaveLength(1);
           const directory = path.join(captures, names[0]!);
-          const manifest = parseUpdateRecoveryBackupManifest(
-            await fs.readFile(path.join(directory, "manifest.json"), "utf8"),
-          );
+          const manifestPath = path.join(directory, "manifest.json");
+          const manifestBytes = await fs.readFile(manifestPath);
+          const manifest = parseUpdateRecoveryBackupManifest(manifestBytes.toString());
           expect(manifest.databases).toEqual([]);
+          expect(manifest.entries).toContainEqual({
+            kind: "missing",
+            sourcePath: serviceIntent,
+            sqlite: true,
+            directory: false,
+          });
           for (const file of [shared, agent, `${agent}-journal`, alias, companionAlias]) {
             expect(manifest.excludedRoots).toContain(file);
             expect(manifest.entries.some((entry) => entry.sourcePath === file)).toBe(false);
@@ -195,7 +208,18 @@ it("keeps config and declared plugin resources while excluding disposable core i
             pluginId: "synthetic-legacy",
             message: "Synthetic legacy resources are undeclared",
           });
-          expect(messages).toContain("Synthetic legacy resources are undeclared");
+          expect(captureResult.findings).toContainEqual(
+            expect.objectContaining({
+              category: "recommended",
+              errorCode: "undeclared-migration-resources",
+              message:
+                "synthetic-legacy migration recovery coverage is unknown because no backup inventory was declared.",
+              fixHint: expect.any(String),
+              docsUrl: expect.any(String),
+            }),
+          );
+          expect(captureResult.warnings).toContain("Synthetic legacy resources are undeclared");
+          expect(messages).not.toContain("Synthetic legacy resources are undeclared");
           for (const file of [shared, agent]) {
             expect(
               (await fs.readdir(path.dirname(file))).some(
@@ -203,6 +227,49 @@ it("keeps config and declared plugin resources while excluding disposable core i
               ),
             ).toBe(false);
           }
+          const laterWorkspace = state.path("later-declared-workspace");
+          const workspaceFile = path.join(laterWorkspace, "document.txt");
+          await fs.mkdir(laterWorkspace);
+          await fs.writeFile(workspaceFile, "workspace omitted from the original inventory");
+          expect(manifest.entries.some((entry) => entry.sourcePath === laterWorkspace)).toBe(false);
+          vi.mocked(pluginResources.preparePluginDoctorMigrationBackupResources).mockResolvedValue({
+            resources: [{ path: laterWorkspace, kind: "directory" }],
+            deferredPluginIds: new Set(),
+            notices: [],
+            assertCurrent() {},
+          });
+          vi.stubGlobal("SEALED_RUNTIME_BUILD", true);
+          await maintenance!.run(async () => {
+            const scope = getOpenClawDatabaseMaintenanceScope()!;
+            vi.spyOn(doctorAdmission, "resolveDoctorUpdateAdmission").mockReturnValue({
+              assertCurrent: scope.assertAdmission,
+              readContinuation: () => undefined,
+              recordContinuation() {},
+            });
+            await preserveDoctorOriginalState({
+              root: process.cwd(),
+              env: process.env,
+              runtime,
+              signal: maintenance!.signal,
+              assertCurrent: scope.assertAdmission,
+              writeAuthority: {
+                inputHash: "synthetic-config-hash",
+                assertCurrent: scope.assertAdmission,
+                originalRecoveryCapture: {
+                  runId: manifest.runId,
+                  installRoot: process.cwd(),
+                  ref: { directory, manifestPath, manifestSha256: sha256Hex(manifestBytes) },
+                },
+              },
+            });
+          });
+          expect((await fs.readdir(captures)).filter((name) => name.startsWith("doctor-"))).toEqual(
+            names,
+          );
+          expect(await fs.readFile(manifestPath)).toEqual(manifestBytes);
+          expect(await fs.readFile(workspaceFile, "utf8")).toBe(
+            "workspace omitted from the original inventory",
+          );
         } finally {
           await maintenance?.release();
           await fs.rm(captures, { recursive: true, force: true });

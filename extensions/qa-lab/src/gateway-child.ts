@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { writeSync } from "node:fs";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { closeQaRuntimeStores } from "openclaw/plugin-sdk/qa-runtime";
 import { runQaGatewayCliCommand } from "./gateway-child-command.js";
@@ -29,6 +30,8 @@ export type { QaGatewayStopResult, QaGatewayStopOptions } from "./gateway-child-
 export type { QaGatewayChildListeningContext } from "./gateway-child-setup.js";
 export type { QaCliBackendAuthMode } from "./providers/env.js";
 export type QaGatewayChild = Awaited<ReturnType<typeof startOwnedGatewayChild>>;
+
+const QA_GATEWAY_CHILD_LOG_MAX_PENDING_BYTES = 4 * 1024 * 1024;
 
 export function createQaGatewayChild() {
   const lifetime = new QaGatewayChildLifecycle();
@@ -101,6 +104,11 @@ async function startOwnedGatewayChild(
       ? await lifetime.controller.prepare({ args: gatewayArgs, cwd: gatewayCwd, env: launch.env })
       : null;
     lifetime.assertOpen();
+    try {
+      writeSync(2, '[qa-bootstrap] {"command":"gateway","event":"spawn"}\n');
+    } catch {
+      // A diagnostic sink failure must not prevent the owned Gateway spawn.
+    }
     const child = spawn(nodeExecPath, gatewayArgs, {
       cwd: gatewayCwd,
       env: prepared?.env ?? launch.env,
@@ -114,9 +122,18 @@ async function startOwnedGatewayChild(
       [child.stdout, "stdout", stdoutLog],
       [child.stderr, "stderr", stderrLog],
     ] as const) {
-      stream.on("data", (chunk) => {
-        const buffer = Buffer.from(chunk);
+      stream.on("data", (buffer: Buffer) => {
         output.push(label, buffer);
+        // A stalled file sink must not turn diagnostic output into an unbounded queue.
+        // Fail through the existing pipe-error owner; it stops the child and settles logs.
+        if (log.writableLength + buffer.byteLength > QA_GATEWAY_CHILD_LOG_MAX_PENDING_BYTES) {
+          stream.destroy(
+            new Error(
+              `${label} log backlog exceeded ${QA_GATEWAY_CHILD_LOG_MAX_PENDING_BYTES} bytes`,
+            ),
+          );
+          return;
+        }
         log.write(buffer);
       });
     }

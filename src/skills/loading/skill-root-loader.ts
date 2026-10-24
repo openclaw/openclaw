@@ -10,7 +10,6 @@ import {
   type LoadedLocalSkill,
   type LocalSkillLoadDiagnostic,
 } from "./local-loader.js";
-import type { PluginSkillRoot } from "./plugin-skill-root.js";
 import { createSkillEntry } from "./skill-entry-metadata.js";
 import { compactSkillPath } from "./skill-paths.js";
 import {
@@ -19,7 +18,6 @@ import {
   discoverSkillCandidates,
   resolveSkillDiscoveryLimits,
   type CandidateSkillDir,
-  type ResolvedSkillDiscoveryLimits,
 } from "./skill-root-discovery.js";
 import { resolveSkillTelemetrySourceValue } from "./source.js";
 import { resolveAllowedSkillSymlinkTargetRealPaths } from "./symlink-targets.js";
@@ -35,6 +33,26 @@ type LoadedSkillRecord = Pick<LoadedLocalSkill, "skill" | "frontmatter"> & {
   syncSourceDir?: string;
   syncDirName?: string;
 };
+
+/** Admitted entries shared only within one synchronous discovery pass and environment. */
+export type SkillSourceReadBatch = Map<string, WorkspaceSkillSources["entries"]>;
+
+function readSourceEntries(
+  batch: SkillSourceReadBatch | undefined,
+  input: readonly unknown[],
+  read: () => WorkspaceSkillSources["entries"],
+): WorkspaceSkillSources["entries"] {
+  if (!batch) {
+    return read();
+  }
+  const key = JSON.stringify(input);
+  let entries = batch.get(key);
+  if (!entries) {
+    entries = read();
+    batch.set(key, entries);
+  }
+  return entries;
+}
 
 export function warnInvalidSkill(source: string, diagnostic: LocalSkillLoadDiagnostic): void {
   skillsLogger.warn("Skipping invalid skill.", {
@@ -179,58 +197,60 @@ export function loadSkillRootRecords(params: {
   return loadedSkills;
 }
 
-function loadGeneratedPluginSkillRecords(params: {
-  pluginSkillsDir: string;
-  pluginSkillRoots: readonly PluginSkillRoot[];
-  source: string;
-  limits: ResolvedSkillDiscoveryLimits;
-}): LoadedSkillRecord[] {
-  const candidates = discoverPluginSkills(params);
-  const maxSkillsLoadedPerSource = Math.max(0, params.limits.maxSkillsLoadedPerSource);
-  const loadedSkills: LoadedSkillRecord[] = [];
-  for (const candidate of candidates) {
-    const record = loadContainedSkillRecord({
-      skillDir: candidate.skillDir,
-      rootRealPath: candidate.skillDirRealPath,
-      source: params.source,
-      maxBytes: params.limits.maxSkillFileBytes,
-      rejectHardlinks: candidate.rejectHardlinks,
-    });
-    if (record) {
-      record.skill.discoveryRoot = { path: path.resolve(params.pluginSkillsDir), worktree: false };
-      loadedSkills.push({
-        ...record,
-        syncSourceDir: candidate.skillDirRealPath,
-        syncDirName: path.basename(record.skill.baseDir),
-      });
-    }
-    if (loadedSkills.length >= maxSkillsLoadedPerSource) {
-      break;
-    }
-  }
-  return loadedSkills;
-}
-
 /** Scan selected roots on their owning host, retaining native precedence and file rules. */
 export function loadWorkspaceSkillSourceEntries(
   plan: WorkspaceSkillSourcePlan,
   config?: OpenClawConfig,
+  batch?: SkillSourceReadBatch,
 ): WorkspaceSkillSources["entries"] {
-  const grouped = new Map<string, Array<LoadedSkillRecord & { sourceOrder?: number }>>();
+  const grouped = new Map<string, WorkspaceSkillSources["entries"]>();
   for (const root of plan.roots) {
-    const records = grouped.get(root.tier) ?? [];
-    for (const record of loadSkillRootRecords({ ...root, config })) {
-      records.push({ ...record, sourceOrder: root.order });
+    const { tier, order, ...policy } = root;
+    const input = { ...policy, config };
+    const records = grouped.get(tier) ?? [];
+    for (const entry of readSourceEntries(batch, ["root", input], () =>
+      loadSkillRootRecords(input).map(createSkillEntry),
+    )) {
+      records.push(order === undefined ? entry : { ...entry, sourceOrder: order });
     }
-    grouped.set(root.tier, records);
+    grouped.set(tier, records);
   }
   const extra = grouped.get("extra") ?? [];
   if (plan.pluginSkillsDir) {
-    for (const record of loadGeneratedPluginSkillRecords({
+    const input = {
       pluginSkillsDir: plan.pluginSkillsDir,
       pluginSkillRoots: plan.pluginSkillRoots,
       source: "openclaw-extra",
       limits: resolveSkillDiscoveryLimits(config),
+    };
+    for (const record of readSourceEntries(batch, ["generated", input], () => {
+      const candidates = discoverPluginSkills(input);
+      const maxSkillsLoadedPerSource = Math.max(0, input.limits.maxSkillsLoadedPerSource);
+      const loadedSkills: LoadedSkillRecord[] = [];
+      for (const candidate of candidates) {
+        const loadedRecord = loadContainedSkillRecord({
+          skillDir: candidate.skillDir,
+          rootRealPath: candidate.skillDirRealPath,
+          source: input.source,
+          maxBytes: input.limits.maxSkillFileBytes,
+          rejectHardlinks: candidate.rejectHardlinks,
+        });
+        if (loadedRecord) {
+          loadedRecord.skill.discoveryRoot = {
+            path: path.resolve(input.pluginSkillsDir),
+            worktree: false,
+          };
+          loadedSkills.push({
+            ...loadedRecord,
+            syncSourceDir: candidate.skillDirRealPath,
+            syncDirName: path.basename(loadedRecord.skill.baseDir),
+          });
+        }
+        if (loadedSkills.length >= maxSkillsLoadedPerSource) {
+          break;
+        }
+      }
+      return loadedSkills.map(createSkillEntry);
     })) {
       extra.push({
         ...record,
@@ -249,16 +269,20 @@ export function loadWorkspaceSkillSourceEntries(
         left.skill.name.localeCompare(right.skill.name, "en") ||
         left.skill.source.localeCompare(right.skill.source, "en"),
     );
-  return ["extra", "bundled", "workshop", "managed", "personal", "workspace"]
-    .flatMap((tier) => grouped.get(tier) ?? [])
-    .map(createSkillEntry);
+  return ["extra", "bundled", "workshop", "managed", "personal", "workspace"].flatMap(
+    (tier) => grouped.get(tier) ?? [],
+  );
 }
 
 export function loadExecutionSkillEntries(
   executionWorkspaceDir: string,
   config?: OpenClawConfig,
+  batch?: SkillSourceReadBatch,
 ): SkillEntry[] {
-  return resolveWorkspaceSkillDirectories(executionWorkspaceDir)
-    .flatMap((root) => loadSkillRootRecords({ ...root, config }))
-    .map(createSkillEntry);
+  return resolveWorkspaceSkillDirectories(executionWorkspaceDir).flatMap((root) => {
+    const input = { ...root, config };
+    return readSourceEntries(batch, ["root", input], () =>
+      loadSkillRootRecords(input).map(createSkillEntry),
+    );
+  });
 }

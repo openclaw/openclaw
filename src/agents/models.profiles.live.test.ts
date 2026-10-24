@@ -7,6 +7,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { type Api, completeSimple, type Model } from "openclaw/plugin-sdk/llm";
 import { Type } from "typebox";
 import { describe, expect, it, vi } from "vitest";
+import { clearRuntimeConfigSnapshot, readRuntimeConfig } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { coerceSecretRef, type SecretInput } from "../config/types.secrets.js";
 import { parseLiveCsvFilter } from "../media-generation/live-test-helpers.js";
@@ -28,6 +29,7 @@ import {
   isLiveTestEnabled,
   readLiveTestConfig,
   resolveLiveCredentialPrecedence,
+  useLiveTestRuntimeConfig,
 } from "./live-test-helpers.js";
 import { shouldSkipLiveProviderDrift } from "./live-test-provider-drift.js";
 import {
@@ -47,6 +49,7 @@ import {
 import { normalizeDiscoveredAgentModel } from "./model-discovery-normalize.js";
 import { resolveBuiltInModelSuppressionFromManifest } from "./model-suppression.js";
 import { ensureOpenClawModelsJson } from "./models-config.js";
+import { createConfiguredProviderLocalServiceAcquirer } from "./provider-local-service.js";
 import type { StreamFn } from "./runtime/index.js";
 import {
   appendLiveModelCandidates,
@@ -126,6 +129,35 @@ type OllamaRuntimeApi = {
 };
 
 const describeLive = LIVE ? describe : describe.skip;
+
+/** Keep direct transport inputs and plugin runtime readers on the same sweep config. */
+function useLiveCompletionConfig(config: OpenClawConfig): Disposable {
+  const runtimeConfig = useLiveTestRuntimeConfig(config);
+  activeLiveCompletionConfig = config;
+  return {
+    [Symbol.dispose]() {
+      activeLiveCompletionConfig = undefined;
+      runtimeConfig[Symbol.dispose]();
+    },
+  };
+}
+
+describe("direct live runtime config", () => {
+  it("prepares plugin provider reads for the sweep and releases them afterward", async () => {
+    clearRuntimeConfigSnapshot();
+    const baseUrl = "https://ollama.example.invalid";
+    const acquireLocalService = createConfiguredProviderLocalServiceAcquirer(readRuntimeConfig);
+    const target = { providerId: "ollama-cloud", baseUrl };
+    {
+      using _ = useLiveCompletionConfig({
+        models: { providers: { "ollama-cloud": { baseUrl, models: [] } } },
+      });
+      await expect(acquireLocalService(target)).resolves.toBeUndefined();
+      expect(readRuntimeConfig().models?.providers?.["ollama-cloud"]?.baseUrl).toBe(baseUrl);
+    }
+    await expect(acquireLocalService(target)).rejects.toThrow("Runtime config is not prepared");
+  });
+});
 
 function parseCsvFilter(raw?: string): Set<string> | null {
   return parseLiveCsvFilter(raw, { lowercase: false });
@@ -232,7 +264,13 @@ async function ensureLiveProviderApisRegistered(params: {
   config: OpenClawConfig;
   providers: readonly string[] | undefined;
 }): Promise<void> {
-  if (!params.providers?.some((provider) => normalizeProviderId(provider) === "ollama")) {
+  // Ollama Cloud models share the plugin's "ollama" API transport.
+  if (
+    !params.providers?.some((provider) => {
+      const id = normalizeProviderId(provider);
+      return id === "ollama" || id === "ollama-cloud";
+    })
+  ) {
     return;
   }
   // Live Vitest setup installs a stub plugin registry for channel tests; direct
@@ -1041,7 +1079,16 @@ describe("explicit live model discovery scope", () => {
     }
   });
 
-  it("honors configured local Ollama credentials before the live local marker", async () => {
+  it.each([
+    {
+      name: "honors configured local Ollama credentials before the live local marker",
+      baseUrl: "http://127.0.0.1:11434",
+    },
+    {
+      name: "reuses configured local Ollama credentials across canonical base URL forms",
+      baseUrl: "http://127.0.0.1:11434/v1",
+    },
+  ])("$name", async ({ baseUrl }) => {
     const oldEnv = process.env.LOCAL_OLLAMA_API_KEY;
     process.env.LOCAL_OLLAMA_API_KEY = "secured-local-key";
     try {
@@ -1052,54 +1099,7 @@ describe("explicit live model discovery scope", () => {
             providers: {
               ollama: {
                 api: "ollama",
-                baseUrl: "http://127.0.0.1:11434",
-                apiKey: { source: "env", provider: "default", id: "LOCAL_OLLAMA_API_KEY" },
-                models: [],
-              },
-            },
-          },
-        },
-        providers: ["ollama"],
-        env: {},
-      });
-
-      await expect(
-        resolveLiveModelApiKeyInfo({
-          model: {
-            provider: "ollama",
-            id: "gemma3:4b",
-            api: "ollama",
-            baseUrl: "http://127.0.0.1:11434",
-          } as Model,
-          cfg,
-          requireProfileKeys: false,
-        }),
-      ).resolves.toEqual({
-        apiKey: "secured-local-key",
-        source: "env: LOCAL_OLLAMA_API_KEY (models.json secretref)",
-        mode: "api-key",
-      });
-    } finally {
-      if (oldEnv === undefined) {
-        delete process.env.LOCAL_OLLAMA_API_KEY;
-      } else {
-        process.env.LOCAL_OLLAMA_API_KEY = oldEnv;
-      }
-    }
-  });
-
-  it("reuses configured local Ollama credentials across canonical base URL forms", async () => {
-    const oldEnv = process.env.LOCAL_OLLAMA_API_KEY;
-    process.env.LOCAL_OLLAMA_API_KEY = "secured-local-key";
-    try {
-      const cfg = applyLiveProviderDiscoveryPluginCompat({
-        config: {
-          plugins: {},
-          models: {
-            providers: {
-              ollama: {
-                api: "ollama",
-                baseUrl: "http://127.0.0.1:11434/v1",
+                baseUrl,
                 apiKey: { source: "env", provider: "default", id: "LOCAL_OLLAMA_API_KEY" },
                 models: [],
               },
@@ -1557,11 +1557,11 @@ describeLive("live models (profile keys)", () => {
         providers: providerList,
         env: process.env,
       });
+      using _ = useLiveCompletionConfig(cfg);
       await ensureLiveProviderApisRegistered({
         config: cfg,
         providers: providerList,
       });
-      activeLiveCompletionConfig = cfg;
       logProgress("[live-models] preparing models.json");
       await withLiveStageTimeout(
         ensureOpenClawModelsJson(

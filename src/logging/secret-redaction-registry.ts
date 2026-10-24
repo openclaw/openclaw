@@ -1,4 +1,5 @@
 import { pruneMapToMaxSize } from "../infra/map-size.js";
+import { groupPluginRecords as groupRecords } from "../plugins/record-groups.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { escapeRegExp } from "../shared/regexp.js";
 
@@ -102,16 +103,10 @@ function createSecretValueRedactor(values: readonly string[]): SecretValueRedact
       return text;
     }
     if (!compiledMatcher) {
-      const buckets = new Map<string, string[]>();
-      for (const value of values.toSorted((left, right) => right.length - left.length)) {
-        const prefix = value.slice(0, MIN_SECRET_VALUE_LENGTH);
-        const bucket = buckets.get(prefix);
-        if (bucket) {
-          bucket.push(value);
-        } else {
-          buckets.set(prefix, [value]);
-        }
-      }
+      const buckets = groupRecords(
+        values.toSorted((left, right) => right.length - left.length),
+        (value) => value.slice(0, MIN_SECRET_VALUE_LENGTH),
+      );
       // Supported store values can exceed the regex engine's literal span limit.
       // Compile fixed-width prefixes; verify complete values against the text.
       compiledMatcher = {

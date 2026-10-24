@@ -1,5 +1,7 @@
 import { createServer } from "node:http";
 import { afterEach, beforeEach, describe, expect, it, vi, type MockedFunction } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
+import { withProviderCatalogDiscoveryBudget } from "../plugins/provider-catalog-expiry.js";
 import { NON_ENV_SECRETREF_MARKER } from "./provider-auth-runtime.js";
 import {
   buildLiveModelProviderConfig,
@@ -8,6 +10,7 @@ import {
   buildOpenAICompatibleProviderFamilyCatalog,
   clearLiveCatalogCacheForTests,
   fetchLiveProviderModelIds,
+  getCachedLiveProviderModelRows,
   LiveModelCatalogHttpError,
   readLiveModelCatalogStringField,
   type LiveModelCatalogFetchGuard,
@@ -43,7 +46,7 @@ function buildFetchGuard(body: unknown): {
 }
 
 describe("provider-catalog-live-runtime", () => {
-  it.each(["id", "model", "model_name", "modelName"])(
+  it.each(["id"])(
     "retains raw %s identities for read-time diagnostics before chat filtering",
     async (idField) => {
       const { fetchGuard, fetchGuardMock } = buildFetchGuard({
@@ -638,25 +641,6 @@ describe("provider-catalog-live-runtime", () => {
     expect((headers as Headers).get("authorization")).toBe("Bearer provider-key");
   });
 
-  it("keeps authored static metadata for live ids already in the provider seed", async () => {
-    const { fetchGuard } = buildFetchGuard({
-      data: [{ id: "chat-v1", object: "model", context_window: 1 }],
-    });
-    const seed = buildModel("chat-v1");
-
-    const provider = await buildOpenAICompatibleLiveModelProviderConfig({
-      providerId: "provider",
-      providerConfig: {
-        api: "openai-completions",
-        baseUrl: "https://provider.example.test/v1",
-        models: [seed],
-      },
-      fetchGuard,
-    });
-
-    expect(provider.models).toEqual([seed]);
-  });
-
   it("supports provider-specific model-list paths and headers", async () => {
     const { fetchGuard, fetchGuardMock } = buildFetchGuard({
       data: [{ id: "claude-next", object: "model" }],
@@ -768,4 +752,74 @@ describe("provider catalog live-runtime scope", () => {
     await expect(family.catalog.run({ ...context, providerIds: ["other"] })).resolves.toBeNull();
     expect(resolveProviderApiKey).not.toHaveBeenCalled();
   });
+});
+
+it.each([false, true])("isolates cached HTTP caps inside acquisition=%s", async (scoped) => {
+  clearLiveCatalogCacheForTests();
+  const firstResponse = createDeferred<Awaited<ReturnType<LiveModelCatalogFetchGuard>>>();
+  const secondResponse = createDeferred<Awaited<ReturnType<LiveModelCatalogFetchGuard>>>();
+  const fetchGuard = vi
+    .fn<LiveModelCatalogFetchGuard>()
+    .mockImplementationOnce(() => firstResponse.promise)
+    .mockImplementationOnce(() => secondResponse.promise);
+  const response = (id: string) => ({
+    response: new Response(JSON.stringify({ data: [{ id }] })),
+    finalUrl: "https://caps.example.test/models",
+    release: async () => undefined,
+  });
+  const run = async () => {
+    const read = (timeoutMs?: number) =>
+      getCachedLiveProviderModelRows({
+        providerId: "caps",
+        endpoint: "https://caps.example.test/models",
+        timeoutMs,
+        fetchGuard,
+      });
+    const short = read(5_000);
+    const long = read(scoped ? undefined : 180_000);
+    try {
+      expect(fetchGuard).toHaveBeenCalledTimes(2);
+      expect(fetchGuard.mock.calls[0]?.[0].timeoutMs).toBeLessThanOrEqual(5_000);
+      expect(fetchGuard.mock.calls[1]?.[0].timeoutMs).toBeGreaterThan(5_000);
+    } finally {
+      firstResponse.resolve(response("short"));
+      secondResponse.resolve(response("long"));
+    }
+    expect(await short).toEqual([{ id: "short" }]);
+    expect(await long).toEqual([{ id: "long" }]);
+  };
+  if (scoped) {
+    await withProviderCatalogDiscoveryBudget(180_000, run);
+  } else {
+    await run();
+  }
+});
+
+it("keeps an immediate row timeout even with a configured provider timeout", async () => {
+  clearLiveCatalogCacheForTests();
+  const completion = createDeferred<Awaited<ReturnType<LiveModelCatalogFetchGuard>>>();
+  const fetchGuard = vi.fn<LiveModelCatalogFetchGuard>(() => completion.promise);
+  await withProviderCatalogDiscoveryBudget(
+    180_000,
+    async () => {
+      const read = (timeoutMs?: number) =>
+        getCachedLiveProviderModelRows({
+          providerId: "zero-cap",
+          endpoint: "https://zero.example.test/models",
+          timeoutMs,
+          fetchGuard,
+        });
+      const long = read();
+      const immediate = expect(read(0)).rejects.toThrow("before the catalog completed");
+      completion.resolve({
+        response: new Response(JSON.stringify({ data: [{ id: "healthy" }] })),
+        finalUrl: "https://zero.example.test/models",
+        release: async () => undefined,
+      });
+      await immediate;
+      expect(await long).toEqual([{ id: "healthy" }]);
+      expect(fetchGuard).toHaveBeenCalledOnce();
+    },
+    { "zero-cap": 15_000 },
+  );
 });

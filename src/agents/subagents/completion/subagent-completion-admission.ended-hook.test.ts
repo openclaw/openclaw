@@ -10,6 +10,7 @@ import * as stateWorker from "../../../state/openclaw-state-worker-store.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import { createSubagentRegistryContextCleanup } from "../registry/subagent-registry-context-cleanup.js";
 import * as registryDeps from "../registry/subagent-registry-deps.js";
+import { subagentRegistryLog } from "../registry/subagent-registry-lifecycle-log.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
 import { loadSubagentRegistryFromSqlite } from "../registry/subagent-registry-state.fixture.test-support.js";
 import { isSameSubagentRunOwner } from "../registry/subagent-run-generation.js";
@@ -49,11 +50,10 @@ it.each(["transition", "complete"] as const)(
         hookReached.resolve();
         return hookRunner;
       });
-      const warn = vi.fn();
+      using warn = vi.spyOn(subagentRegistryLog, "warn").mockImplementation(() => {});
       const cleanup = createSubagentRegistryContextCleanup({
         isEndedHookOwnerCurrent: (entry) =>
           isSameSubagentRunOwner(subagentRuns.get(entry.runId), entry),
-        warn,
       });
       const acknowledged = createDeferred();
       const releaseAcknowledgement = createDeferred();

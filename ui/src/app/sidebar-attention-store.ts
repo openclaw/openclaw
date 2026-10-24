@@ -1,4 +1,4 @@
-import { registerListener } from "../../../src/shared/listeners.js";
+import { createChangeListeners } from "../../../src/shared/listeners.js";
 import {
   clearSidebarAttentionDismissal,
   resolveSidebarAttentionKey,
@@ -23,7 +23,7 @@ export type SidebarAttentionStoreSources = {
   connectionBootstrap?: ConnectionBootstrapCoordinator;
 };
 
-export type SidebarAttentionStoreController = {
+export type SidebarAttentionStoreOwner = {
   readonly entries: readonly SidebarInboxEntry[];
   readonly mentions: MentionsCapability;
   dismiss(dismissal: SidebarAttentionDismissal): void;
@@ -31,21 +31,16 @@ export type SidebarAttentionStoreController = {
   dispose(): void;
 };
 
-type SidebarAttentionStoreControllerConstructor = new (
+type SidebarAttentionStoreOwnerConstructor = new (
   sources: SidebarAttentionStoreSources,
   onChange: () => void,
-) => SidebarAttentionStoreController;
+) => SidebarAttentionStoreOwner;
 
 export type SidebarAttentionStore = ReturnType<typeof createSidebarAttentionStore>;
 
 export function createSidebarAttentionStore(sources: SidebarAttentionStoreSources) {
-  const listeners = new Set<() => void>();
-  let controller: SidebarAttentionStoreController | null = null;
-  const publish = () => {
-    for (const listener of listeners) {
-      listener();
-    }
-  };
+  const listeners = createChangeListeners();
+  let owner: SidebarAttentionStoreOwner | null = null;
   // Settings intentionally mounts no Inbox, so dismissal retirement belongs to this eager facade.
   const synchronizeScopeUpgradeDismissal = () => {
     const snapshot = sources.gateway.snapshot;
@@ -57,28 +52,28 @@ export function createSidebarAttentionStore(sources: SidebarAttentionStoreSource
     ) {
       clearSidebarAttentionDismissal(resolveSidebarAttentionKey(sources.gateway), "scopeUpgrade");
     }
-    controller?.syncDismissals();
+    owner?.syncDismissals();
   };
   const stopGateway = sources.gateway.subscribe(synchronizeScopeUpgradeDismissal);
   const stopScopeUpgrade = sources.scopeUpgrade.subscribe(synchronizeScopeUpgradeDismissal);
   synchronizeScopeUpgradeDismissal();
   return {
     get entries() {
-      return controller?.entries ?? [];
+      return owner?.entries ?? [];
     },
-    activate(Controller: SidebarAttentionStoreControllerConstructor) {
-      controller ??= new Controller(sources, publish);
-      return controller.mentions;
+    activate(Owner: SidebarAttentionStoreOwnerConstructor) {
+      owner ??= new Owner(sources, listeners.publish);
+      return owner.mentions;
     },
     dismiss(dismissal: SidebarAttentionDismissal) {
-      controller?.dismiss(dismissal);
+      owner?.dismiss(dismissal);
     },
-    subscribe: (listener: () => void) => registerListener(listeners, listener),
+    subscribe: listeners.subscribe,
     dispose() {
       stopGateway();
       stopScopeUpgrade();
-      controller?.dispose();
-      controller = null;
+      owner?.dispose();
+      owner = null;
       listeners.clear();
     },
   };

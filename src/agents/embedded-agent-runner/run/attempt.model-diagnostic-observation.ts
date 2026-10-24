@@ -1,7 +1,7 @@
 import type { ProviderAcceptance } from "@openclaw/ai/transports";
 import { asNonNegativeFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { isOwnedTranscriptPayload } from "../../../config/sessions/transcript-json.js";
 import type {
   DiagnosticEventInput,
   DiagnosticModelCallContent,
@@ -11,8 +11,11 @@ import {
   type DiagnosticModelContentCapturePolicy,
 } from "../../../infra/diagnostic-llm-content.js";
 import { emitCoreSemanticRunProgressDiagnosticEvent } from "../../../infra/diagnostic-semantic-run-progress.js";
-import { createModelCallStreamProgressReporter } from "../../../logging/diagnostic-model-stream-progress.js";
+import type { DiagnosticEmbeddedRunOwner } from "../../../logging/diagnostic-run-activity.js";
+import type { StreamFn } from "../../runtime/index.js";
 import { derivePromptTokens, normalizeUsage, type UsageLike } from "../../usage.js";
+
+type ModelCallRequestContext = Partial<Parameters<StreamFn>[1]>;
 
 export type ModelCallEventBase = Omit<
   Extract<DiagnosticEventInput, { type: "model.call.started" }>,
@@ -24,7 +27,7 @@ type ModelCallPromptStats = NonNullable<
 type ModelCallUsage = NonNullable<
   Extract<DiagnosticEventInput, { type: "model.call.completed" }>["usage"]
 >;
-export type ModelCallObservationState = {
+type ModelCallObservationState = {
   requestPayloadBytes?: number;
   providerAcceptanceKind?: ProviderAcceptance["kind"];
   responseStatus?: number;
@@ -34,6 +37,7 @@ export type ModelCallObservationState = {
   terminalReason?: "stop" | "length" | "toolUse" | "error" | "aborted";
   timeToFirstByteMs?: number;
   providerProcessingMs?: number;
+  reasoningSuppressed?: boolean;
   modelContent?: DiagnosticModelCallContent;
   outputMessages?: unknown[];
   usage?: ModelCallUsage;
@@ -48,7 +52,11 @@ export type ModelCallObservationState = {
 const MODEL_CALL_SEMANTIC_PROGRESS_REASON = "model_call:semantic_result";
 
 type PromptStringLengths = WeakMap<object, Map<string, { text: string; chars: number }>>;
-type PromptStringLengthPass = { previous: PromptStringLengths; current: PromptStringLengths };
+type PromptStringLengthPass = {
+  previous: PromptStringLengths;
+  current: PromptStringLengths;
+  owned: WeakMap<object, number>;
+};
 
 function jsonLength(
   value: unknown,
@@ -56,8 +64,24 @@ function jsonLength(
   promptStringLengths?: PromptStringLengthPass,
 ): number | undefined {
   try {
-    let stringLengths = 0;
+    let omittedChars = 0;
     const serialized = JSON.stringify(value, function (this: object, key, part: unknown) {
+      if (
+        !utf8 &&
+        promptStringLengths &&
+        part !== null &&
+        typeof part === "object" &&
+        isOwnedTranscriptPayload(part)
+      ) {
+        const chars = promptStringLengths.owned.get(part) ?? jsonLength(part, false);
+        if (chars !== undefined) {
+          promptStringLengths.owned.set(part, chars);
+          // Owned roots are deeply frozen JSON. Native serialization still owns
+          // the surrounding keys, separators and mutable envelope semantics.
+          omittedChars += chars - 2;
+          return "";
+        }
+      }
       if (typeof part !== "string" || part.length < 4096) {
         return part;
       }
@@ -71,15 +95,15 @@ function jsonLength(
       }
       if (!utf8 && promptStringLengths) {
         const fields = promptStringLengths.current.get(this) ?? new Map();
-        fields.set(key, { text: part, chars });
+        fields.set(key, cached?.text === part ? cached : { text: part, chars });
         promptStringLengths.current.set(this, fields);
       }
-      stringLengths += chars;
+      omittedChars += chars;
       return "";
     });
     return serialized === undefined
       ? undefined
-      : stringLengths + (utf8 ? Buffer.byteLength(serialized, "utf8") : serialized.length);
+      : omittedChars + (utf8 ? Buffer.byteLength(serialized, "utf8") : serialized.length);
   } catch {
     return undefined;
   }
@@ -111,19 +135,19 @@ function responseStreamChunkByteLength(chunk: unknown): number | undefined {
 
 function streamContextModelContentFields(
   policy: DiagnosticModelContentCapturePolicy | undefined,
-  streamContext: unknown,
+  streamContext: ModelCallRequestContext,
 ): DiagnosticModelCallContent | undefined {
-  if (!policy?.anyModelContent || !isRecord(streamContext)) {
+  if (!policy?.anyModelContent) {
     return undefined;
   }
   const content = {
-    ...(policy.inputMessages && Array.isArray(streamContext.messages)
+    ...(policy.inputMessages && streamContext.messages
       ? { inputMessages: cloneDiagnosticContentValue(streamContext.messages) }
       : {}),
-    ...(policy.systemPrompt && typeof streamContext.systemPrompt === "string"
+    ...(policy.systemPrompt && streamContext.systemPrompt !== undefined
       ? { systemPrompt: streamContext.systemPrompt }
       : {}),
-    ...(policy.toolDefinitions && Array.isArray(streamContext.tools)
+    ...(policy.toolDefinitions && streamContext.tools
       ? { toolDefinitions: cloneDiagnosticContentValue(streamContext.tools) }
       : {}),
   };
@@ -134,9 +158,10 @@ export function createModelPromptStats() {
   // The attempt owns this cache; each field's exact text is its revision. Keep
   // walking containers so compaction and in-place hook edits retain JSON semantics.
   let previous: PromptStringLengths = new WeakMap();
-  return (streamContext: unknown) => {
+  const owned = new WeakMap<object, number>();
+  return (streamContext: ModelCallRequestContext) => {
     const current: PromptStringLengths = new WeakMap();
-    const stats = streamContextModelPromptStats(streamContext, { previous, current });
+    const stats = streamContextModelPromptStats(streamContext, { previous, current, owned });
     // Drop deleted fields and compacted history even if their holders remain alive.
     previous = current;
     return stats;
@@ -144,16 +169,10 @@ export function createModelPromptStats() {
 }
 
 function streamContextModelPromptStats(
-  streamContext: unknown,
+  streamContext: ModelCallRequestContext,
   promptStringLengths?: PromptStringLengthPass,
 ): ModelCallPromptStats | undefined {
-  if (!isRecord(streamContext)) {
-    return undefined;
-  }
-  const messages = Array.isArray(streamContext.messages) ? streamContext.messages : undefined;
-  const tools = Array.isArray(streamContext.tools) ? streamContext.tools : undefined;
-  const systemPrompt =
-    typeof streamContext.systemPrompt === "string" ? streamContext.systemPrompt : undefined;
+  const { messages, tools, systemPrompt } = streamContext;
   const inputMessagesChars = messages
     ? jsonLength(messages, false, promptStringLengths)
     : undefined;
@@ -181,6 +200,12 @@ function observeModelCallTerminalMessage(state: ModelCallObservationState, value
   let rawUsage: unknown;
   try {
     rawUsage = value.usage;
+    state.reasoningSuppressed ||=
+      value.role === "assistant" &&
+      Array.isArray(value.diagnostics) &&
+      value.diagnostics.some(
+        (entry: unknown) => isRecord(entry) && entry.type === "reasoning_suppressed",
+      );
     const timing = Array.isArray(value.diagnostics)
       ? value.diagnostics.findLast(
           (entry: unknown) => isRecord(entry) && entry.type === "provider_timing",
@@ -311,8 +336,8 @@ function isSemanticModelCallResult(result: unknown): boolean {
 }
 
 export function createModelObserver(params: {
-  config?: OpenClawConfig;
-  streamContext: unknown;
+  diagnosticOwner?: DiagnosticEmbeddedRunOwner;
+  streamContext: ModelCallRequestContext;
   contentCapture?: DiagnosticModelContentCapturePolicy;
   suppressPluginHooks?: boolean;
   capturePromptStats: boolean;
@@ -328,7 +353,6 @@ export function createModelObserver(params: {
     contentCapture: params.contentCapture,
     suppressPluginHooks: params.suppressPluginHooks,
   };
-  const reportStreamProgress = createModelCallStreamProgressReporter({ config: params.config });
   return {
     state,
     promptStats,
@@ -348,19 +372,16 @@ export function createModelObserver(params: {
       // progress, and the next request retain their authoritative FIFO ordering.
       if (!state.semanticProgressEmitted && isSemanticModelCallResult(result)) {
         state.semanticProgressEmitted = true;
-        emitCoreSemanticRunProgressDiagnosticEvent({
-          runId: eventBase.runId,
-          ...(eventBase.sessionKey ? { sessionKey: eventBase.sessionKey } : {}),
-          ...(eventBase.sessionId ? { sessionId: eventBase.sessionId } : {}),
-          reason: MODEL_CALL_SEMANTIC_PROGRESS_REASON,
-        });
+        emitCoreSemanticRunProgressDiagnosticEvent(
+          {
+            runId: eventBase.runId,
+            ...(eventBase.sessionKey ? { sessionKey: eventBase.sessionKey } : {}),
+            ...(eventBase.sessionId ? { sessionId: eventBase.sessionId } : {}),
+            reason: MODEL_CALL_SEMANTIC_PROGRESS_REASON,
+          },
+          params.diagnosticOwner,
+        );
       }
-    },
-    maybeEmitStreamProgress(eventBase: ModelCallEventBase) {
-      reportStreamProgress({
-        ...eventBase,
-        callId: state.terminalEventEmitted ? undefined : eventBase.callId,
-      });
     },
     sizeTimingFields() {
       return {

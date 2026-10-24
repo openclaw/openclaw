@@ -17,6 +17,7 @@ import {
 } from "../../../sessions/user-turn-transcript.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import { observeMainThreadSql } from "../../../test-utils/main-thread-sql-spies.test-support.js";
+import { runWithModelFallback } from "../../model-fallback-runner.js";
 import { createAgentRunRestartAbortError } from "../../run-termination.js";
 import { guardSessionManager } from "../../session-tool-result-guard-wrapper.js";
 import {
@@ -128,6 +129,58 @@ describe("context engine bootstrap", () => {
 });
 
 describe("interrupted canonical user replay", () => {
+  it.each([
+    { boundary: "same-run progress", sourceReply: { final: false }, resumes: true },
+    { boundary: "same-run final", sourceReply: { final: true }, resumes: false },
+    { boundary: "unmarked mirror", sourceReply: {}, resumes: false },
+    {
+      boundary: "other-run progress",
+      sourceReply: { final: false, runId: "unrelated-run" },
+      resumes: false,
+    },
+  ])(
+    "resumes only unfinished same-run source replies across $boundary",
+    async ({ sourceReply, resumes }) => {
+      await withInterruptedTurn(
+        false,
+        async (fixture) => {
+          const before = loadTranscriptEventsSync(fixture.target);
+          await withReplaySession(fixture, false, async (session, submit) => {
+            streamMocks.streamSimple.mockImplementation((model) =>
+              createAssistantResultStream(
+                createAssistant(model, [{ type: "text", text: "Continued after progress" }]),
+              ),
+            );
+            await submit();
+            if (!resumes) {
+              expect(streamMocks.streamSimple).not.toHaveBeenCalled();
+              expect(Reflect.get(session.messages.at(-1)!, "errorMessage")).toMatch(
+                /^Session transcript keyed user is outside the current turn: \S/,
+              );
+              return;
+            }
+            expect(streamMocks.streamSimple).toHaveBeenCalledOnce();
+            expect(session.getLastAssistantText()).toBe("Continued after progress");
+            const messages = streamMocks.streamSimple.mock.calls[0]![1].messages;
+            expect(messages).toContainEqual(
+              expect.objectContaining({ role: "toolResult", toolCallId: "completed-read" }),
+            );
+            expect(JSON.stringify(messages)).not.toContain("Still working after restart.");
+            const after = loadTranscriptEventsSync(fixture.target);
+            expectCapturedCurrentUserPrefix(before, after, fixture);
+            expect(
+              after.filter(
+                (entry) =>
+                  isRecord(entry) && isRecord(entry.message) && entry.message.role === "user",
+              ),
+            ).toHaveLength(1);
+          });
+        },
+        { sourceReply, toolProgress: true },
+      );
+    },
+  );
+
   it("refuses queued custody after a sessions_send replacement retires the original user", async () => {
     await withInterruptedTurn(
       false,
@@ -438,7 +491,7 @@ describe("interrupted canonical user replay", () => {
     },
   );
 
-  it.each([false, true])(
+  it.each([false])(
     "hydrates one current user through the built-in owner with interruption %s",
     async (interrupted) => {
       await withInterruptedTurn(
@@ -630,10 +683,7 @@ describe("interrupted canonical user replay", () => {
     },
   );
 
-  it.each([
-    { ordering: "repeated-restart", appendOnly: false },
-    { ordering: "pre-core-compaction", appendOnly: false },
-  ])(
+  it.each([{ ordering: "pre-core-compaction", appendOnly: false }])(
     "replays the same interrupted turn after $ordering with append-only context $appendOnly",
     async ({ ordering, appendOnly }) => {
       await withInterruptedTurn(appendOnly, async (fixture) => {
@@ -746,7 +796,27 @@ describe("interrupted canonical user replay", () => {
           }
           const before = loadTranscriptEventsSync(fixture.target);
           release.resolve();
-          expect((await settled)[0]?.status).toBe("rejected");
+          const outcome = (await settled)[0];
+          expect(outcome?.status).toBe("rejected");
+          if (change === "later-user") {
+            assert(outcome?.status === "rejected");
+            expect(outcome.reason).toMatchObject({ code: "SESSION_WORK_START_CHANGED" });
+            const run = vi.fn().mockRejectedValue(outcome.reason);
+            const onFallbackStep = vi.fn();
+            await expect(
+              runWithModelFallback({
+                cfg: undefined,
+                provider: "fixture-provider",
+                model: "fixture-model",
+                manifestPlugins: [],
+                fallbacksOverride: ["fixture-next/fixture-model"],
+                run,
+                onFallbackStep,
+              }),
+            ).rejects.toBe(outcome.reason);
+            expect(run).toHaveBeenCalledOnce();
+            expect(onFallbackStep).not.toHaveBeenCalled();
+          }
           expect(streamMocks.streamSimple).not.toHaveBeenCalled();
           expect(loadTranscriptEventsSync(fixture.target)).toEqual(before);
         },

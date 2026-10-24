@@ -72,6 +72,34 @@ retain restart behavior under a broader no-op prefix.
 
 ## Reusable runtime utilities
 
+### Runtime execution profile
+
+`getRuntimeExecutionProfile()` from `openclaw/plugin-sdk/runtime-env` returns
+`dynamic-execution` for Node/Bun installations and JIT/bytecode standalone hosts,
+or `embedded-aot` for an AOT standalone. The artifact owns this process-stable
+fact; it is not a user setting or an authorization grant.
+
+Before intentionally evaluating host JavaScript, call
+`assertRuntimeSupportsDynamicExecution("Your feature name")` from the same
+entrypoint. In an embedded AOT host it throws an error naming the required
+runtime and the next step. Propagate that error instead of switching to another
+host evaluator. Fixed programs should be ordinary source functions; runtime
+schemas and syntax checks need codegen-free validators and parsers.
+
+Installing a plugin after compilation does not embed it, even if it ships
+JavaScript rather than TypeScript. Run fetched code in a dynamic-execution host
+or rebuild the complete artifact with the plugin. Metadata discovery does not
+execute its runtime. See [Runtime execution profiles](/concepts/runtime-profiles).
+
+### Process and network utilities
+
+`runInDetachedAsyncContext` from `openclaw/plugin-sdk/concurrency-runtime` starts
+work in the host's context-free async root. Use it at an independently admitted
+service request boundary when a long-lived listener can retain its startup
+caller's settled work scope or binding lease. Keep the service's lifetime,
+request authentication, and current source authority checks explicit; detaching
+does not grant authority or make an expired caller capability usable again.
+
 For libraries that accept a Node HTTP agent, use `createNodeProxyAgent` from
 `openclaw/plugin-sdk/fetch-runtime`. With `mode: "env"`, supply `targetUrl` for
 a fixed destination, or omit it when the library selects destinations itself
@@ -419,6 +447,41 @@ their payload for the listener. `include` and `exclude` apply to every event;
 the optional `includeTrusted` list further restricts only events marked trusted
 by the dispatcher. Omitting it preserves existing behavior, and an empty list
 accepts only untrusted events that pass `include`/`exclude`. Event payload fields
-cannot override the dispatcher's trust metadata. Accepted events retain their
-individual frozen copies; this filter does not change diagnostic collection or
-queue behavior.
+cannot override the dispatcher's trust metadata. Accepted plain event payloads
+share one frozen snapshot across listeners in a dispatch. Plain private listener
+data also shares a frozen snapshot among interested trusted listeners, with
+listener-specific host attribution in a frozen shallow copy. Payloads with mutable
+opaque values (such as Maps or Dates) retain individual copies. Absent private data
+uses a shared frozen empty payload, including for
+OTel listeners without host-plugin attribution. Listener mutations remain isolated
+from other listeners and producers; filtering does not change diagnostic collection
+or queue behavior.
+
+## Darwin process inspection
+
+Use `openclaw/plugin-sdk/process-runtime` for macOS process observations.
+This is a breaking Plugin SDK change: `DarwinProcess.uid` is replaced by
+`owner: "same" | "different" | "unknown"`. Replace comparisons such as
+`row.uid === process.getuid()` with `row.owner === "same"`; unknown ownership
+does not authorize cleanup.
+Core cleanup and plugins share this owner. `readDarwinProcessSnapshot(deadline, pids?)`
+returns PID, parent PID, process group, state, ownership (`same`, `different`, or
+`unknown` relative to the observer), and an opaque `startedAt`
+identity. Omitting `pids` requests all start identities and can fail for other users.
+Prefer `readDarwinProcessTree(deadline, roots)` for containment: it reads complete
+process topology, then start identities only for the roots, their descendants,
+and the observer. An inaccessible relevant process still fails inspection. Start identities preserve the
+normalized UTC `ps lstart` format across Node and Bun so retained registrations
+remain comparable after runtime switches. They have second granularity; use a
+command fingerprint when authorizing cleanup of a retained PID.
+`readDarwinProcessCommandLine(pid, deadline)` returns joined arguments and never reads
+process environment values. Deadlines use `performance.now()` milliseconds.
+
+Node and Bun use the pinned proc-safe native census and argument reader, so neither
+operation executes `ps`, including inside macOS Seatbelt sandboxes. Unreadable
+topology fails the census; unrelated unreadable birth identities do not prevent
+inspection of a selected tree. There is no fallback from failed native inspection to `ps`.
+A missing PID is omitted, while `DarwinProcessInspectionError.reason` distinguishes
+`permission`, `deadline`, and `unavailable`; its `code` is respectively `EPERM`,
+`ETIMEDOUT`, or `EIO`. Callers must not treat these errors as
+proof that a process or integration is absent.

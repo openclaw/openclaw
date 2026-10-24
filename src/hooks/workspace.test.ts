@@ -1,4 +1,3 @@
-// Hook workspace tests cover workspace hook discovery and path handling.
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -25,32 +24,6 @@ function makeHooksWorkspace() {
   const hooksRoot = path.join(root, "hooks");
   fs.mkdirSync(hooksRoot, { recursive: true });
   return { root, hooksRoot };
-}
-
-function setupHardlinkHookWorkspace(hookName: string): {
-  hooksRoot: string;
-  hookDir: string;
-  outsideDir: string;
-} {
-  const { root, hooksRoot } = makeHooksWorkspace();
-
-  const hookDir = path.join(hooksRoot, hookName);
-  const outsideDir = path.join(root, "outside");
-  fs.mkdirSync(hookDir, { recursive: true });
-  fs.mkdirSync(outsideDir, { recursive: true });
-  return { hooksRoot, hookDir, outsideDir };
-}
-
-function tryCreateHardlinkOrSkip(createLink: () => void): boolean {
-  try {
-    createLink();
-    return true;
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === "EXDEV") {
-      return false;
-    }
-    throw err;
-  }
 }
 
 function hookNames(entries: ReturnType<typeof loadWorkspaceHookEntries>): string[] {
@@ -90,31 +63,27 @@ function padToExactBytes(content: string, targetBytes: number): string {
   return padding > 0 ? content + " ".repeat(padding) : content;
 }
 
-function exactSizeHookPackageManifest(targetBytes: number): string {
-  const base = { name: "pkg", [MANIFEST_KEY]: { hooks: ["./nested"] }, pad: "" };
-  const baseBytes = Buffer.byteLength(JSON.stringify(base), "utf8");
-  return JSON.stringify({ ...base, pad: "x".repeat(targetBytes - baseBytes) });
-}
-
 describe("hooks workspace", () => {
-  beforeEach(() => {
-    warnMock.mockClear();
-  });
+  beforeEach(() => warnMock.mockClear());
 
-  it("rejects package traversal without scanning unlisted children", () => {
-    const { root, hooksRoot } = makeHooksWorkspace();
-
-    const pkgDir = path.join(hooksRoot, "pkg");
-    fs.mkdirSync(pkgDir, { recursive: true });
-
-    writePlainHook(root, "outside");
-    writePlainHook(pkgDir, "unlisted");
-
-    writeHookPackageManifest(pkgDir, ["../../outside"]);
-
-    const entries = loadWorkspaceEntriesFromHooksRoot(hooksRoot);
-    expect(hookNames(entries)).toEqual([]);
-  });
+  it.each(["traversal", "symlink"])(
+    "rejects package %s escapes without scanning unlisted children",
+    (escape) => {
+      const { root, hooksRoot } = makeHooksWorkspace();
+      const pkgDir = path.join(hooksRoot, "pkg");
+      const outsideDir = writePlainHook(root, "outside");
+      writePlainHook(pkgDir, "unlisted");
+      if (escape === "symlink") {
+        fs.symlinkSync(
+          outsideDir,
+          path.join(pkgDir, "linked"),
+          process.platform === "win32" ? "junction" : "dir",
+        );
+      }
+      writeHookPackageManifest(pkgDir, [escape === "symlink" ? "./linked" : "../../outside"]);
+      expect(hookNames(loadWorkspaceEntriesFromHooksRoot(hooksRoot))).toEqual([]);
+    },
+  );
 
   it("warns, skips oversized metadata, and continues discovering other hooks", () => {
     const { hooksRoot } = makeHooksWorkspace();
@@ -125,13 +94,12 @@ describe("hooks workspace", () => {
     fs.writeFileSync(manifestPath, "x".repeat(METADATA_MAX_BYTES + 1));
 
     const bigHookDir = writePlainHook(hooksRoot, "big-hook", "x".repeat(METADATA_MAX_BYTES + 1));
-    const bigHookMdPath = path.join(bigHookDir, "HOOK.md");
     writePlainHook(hooksRoot, "small-hook");
 
     const entries = loadWorkspaceEntriesFromHooksRoot(hooksRoot);
     expect(hookNames(entries)).toEqual(["small-hook"]);
     expect(oversizedMetadataWarnings(manifestPath)).toHaveLength(1);
-    expect(oversizedMetadataWarnings(bigHookMdPath)).toHaveLength(1);
+    expect(oversizedMetadataWarnings(path.join(bigHookDir, "HOOK.md"))).toHaveLength(1);
   });
 
   it("loads hooks whose metadata sits exactly at the byte limit", () => {
@@ -145,65 +113,58 @@ describe("hooks workspace", () => {
     );
     fs.writeFileSync(
       path.join(pkgDir, "package.json"),
-      exactSizeHookPackageManifest(METADATA_MAX_BYTES),
+      padToExactBytes(
+        JSON.stringify({ name: "pkg", [MANIFEST_KEY]: { hooks: ["./nested"] } }),
+        METADATA_MAX_BYTES,
+      ),
     );
 
-    const entries = loadWorkspaceEntriesFromHooksRoot(hooksRoot);
-    expect(hookNames(entries)).toContain("exact-limit");
+    expect(hookNames(loadWorkspaceEntriesFromHooksRoot(hooksRoot))).toContain("exact-limit");
     expect(warnMock).not.toHaveBeenCalled();
   });
 
-  it("rejects package symlink escapes without scanning unlisted children", () => {
+  it.each(["EIO", "EACCES"])("warns when hook metadata cannot be read (%s)", (code) => {
+    const { hooksRoot } = makeHooksWorkspace();
+    const hookDir = writePlainHook(hooksRoot, "unreadable-hook");
+    const hookMdPath = path.join(hookDir, "HOOK.md");
+    const metadataIdentity = fs.statSync(hookMdPath);
+    const readSync = fs.readSync;
+    const read = vi.spyOn(fs, "readSync").mockImplementation((...args) => {
+      const identity = fs.fstatSync(args[0]);
+      if (identity.dev === metadataIdentity.dev && identity.ino === metadataIdentity.ino) {
+        throw Object.assign(new Error("private metadata contents"), { code });
+      }
+      return readSync(...args);
+    });
+    try {
+      expect(loadWorkspaceEntriesFromHooksRoot(hooksRoot)).toEqual([]);
+      expect(warnMock).toHaveBeenCalledExactlyOnceWith(
+        `Failed to read hook metadata ${hookMdPath}; check file permissions and disk health.`,
+      );
+    } finally {
+      read.mockRestore();
+    }
+    expect(hookNames(loadWorkspaceEntriesFromHooksRoot(hooksRoot))).toEqual(["unreadable-hook"]);
+  });
+
+  it.each(["HOOK.md", "handler.js"])("ignores hooks with hardlinked %s aliases", (file) => {
+    if (process.platform === "win32") {
+      return;
+    }
     const { root, hooksRoot } = makeHooksWorkspace();
-
-    const pkgDir = path.join(hooksRoot, "pkg");
+    const hookDir = writePlainHook(hooksRoot, "hardlink-hook");
     const outsideDir = writePlainHook(root, "outside");
-    const linkedDir = path.join(pkgDir, "linked");
-    fs.mkdirSync(pkgDir, { recursive: true });
-    fs.symlinkSync(outsideDir, linkedDir, process.platform === "win32" ? "junction" : "dir");
-
-    writePlainHook(pkgDir, "unlisted");
-    writeHookPackageManifest(pkgDir, ["./linked"]);
-
-    const entries = loadWorkspaceEntriesFromHooksRoot(hooksRoot);
-    expect(hookNames(entries)).toEqual([]);
-  });
-
-  it("ignores hooks with hardlinked HOOK.md aliases", () => {
-    if (process.platform === "win32") {
-      return;
+    const linkedFile = path.join(hookDir, file);
+    fs.unlinkSync(linkedFile);
+    try {
+      fs.linkSync(path.join(outsideDir, file), linkedFile);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "EXDEV") {
+        return;
+      }
+      throw err;
     }
-
-    const { hooksRoot, hookDir, outsideDir } = setupHardlinkHookWorkspace("hardlink-hook");
-    fs.writeFileSync(path.join(hookDir, "handler.js"), "export default async () => {};\n");
-    const outsideHookMd = path.join(outsideDir, "HOOK.md");
-    const linkedHookMd = path.join(hookDir, "HOOK.md");
-    fs.writeFileSync(outsideHookMd, "---\nname: outside\n---\n");
-    if (!tryCreateHardlinkOrSkip(() => fs.linkSync(outsideHookMd, linkedHookMd))) {
-      return;
-    }
-
     writePlainHook(hookDir, "unlisted");
-    const entries = loadWorkspaceEntriesFromHooksRoot(hooksRoot);
-    expect(hookNames(entries)).toEqual([]);
-  });
-
-  it("ignores hooks with hardlinked handler aliases", () => {
-    if (process.platform === "win32") {
-      return;
-    }
-
-    const { hooksRoot, hookDir, outsideDir } = setupHardlinkHookWorkspace("hardlink-handler-hook");
-    fs.writeFileSync(path.join(hookDir, "HOOK.md"), "---\nname: hardlink-handler-hook\n---\n");
-    const outsideHandler = path.join(outsideDir, "handler.js");
-    const linkedHandler = path.join(hookDir, "handler.js");
-    fs.writeFileSync(outsideHandler, "export default async () => {};\n");
-    if (!tryCreateHardlinkOrSkip(() => fs.linkSync(outsideHandler, linkedHandler))) {
-      return;
-    }
-
-    writePlainHook(hookDir, "unlisted");
-    const entries = loadWorkspaceEntriesFromHooksRoot(hooksRoot);
-    expect(hookNames(entries)).toEqual([]);
+    expect(hookNames(loadWorkspaceEntriesFromHooksRoot(hooksRoot))).toEqual([]);
   });
 });

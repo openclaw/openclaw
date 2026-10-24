@@ -1,4 +1,3 @@
-// Continuation settlement tests cover status delivery and child-terminal handoff.
 // Register dispatch mocks before modules that consume them.
 // oxfmt-ignore
 import {
@@ -12,6 +11,7 @@ import {
 } from "./dispatch-from-config.shared.test-harness.js";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearAgentHarnesses } from "../../agents/harness/registry.js";
+import { resolveReplyCompletion } from "../../agents/reply-completion.js";
 import {
   OutboundDeliveryError,
   PlatformMessageNotDispatchedError,
@@ -21,16 +21,59 @@ import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-paylo
 import type { ReplyPayload } from "../types.js";
 import { appendUsageLine } from "./agent-runner-usage-line.js";
 import { markCommandSessionMetadataChanged } from "./command-session-metadata.js";
+import type { DispatchFromConfigParams } from "./dispatch-from-config.types.js";
 import {
   createDispatchMemorySession,
   dispatchMemorySessionScope,
 } from "./dispatch-memory-session.test-support.js";
 import { createReplyDispatcher } from "./reply-dispatcher.js";
+import { resolveReplyOperationRunState } from "./reply-operation-run-state.js";
 import { assertSessionWriterDeliveryAuthorized } from "./session-writer-delivery-authority.js";
 
 let dispatchReplyFromConfig: typeof import("./dispatch-from-config.js").dispatchReplyFromConfig;
 let resetInboundDedupe: typeof import("./inbound-dedupe.js").resetInboundDedupe;
-let resetReplyRunRegistry: typeof import("./reply-run-registry.test-support.js").testing.resetReplyRunRegistry;
+let resetSessionControllerForTest: typeof import("../../sessions/session-controller.test-support.js").testing.resetSessionControllerForTest;
+
+function dispatchSettled(
+  params: Omit<DispatchFromConfigParams, "ctx" | "cfg"> &
+    Partial<Pick<DispatchFromConfigParams, "ctx" | "cfg">>,
+) {
+  return withReplyDispatcher({
+    dispatcher: params.dispatcher,
+    run: () => dispatchReplyFromConfig({ ctx: createHookCtx(), cfg: emptyConfig, ...params }),
+  });
+}
+
+type ReplyResolver = NonNullable<DispatchFromConfigParams["replyResolver"]>;
+function statusResolver(
+  settle: (delivered: boolean) => Promise<void>,
+  payload: ReplyPayload | ReplyPayload[],
+): ReplyResolver {
+  return async (_ctx, opts) => {
+    opts?.onPendingContinuation?.({ settle });
+    return payload;
+  };
+}
+
+function statusReply(metadata: Parameters<typeof setReplyPayloadMetadata>[1] = {}) {
+  return setReplyPayloadMetadata({ text: "status" }, { continuationStatus: true, ...metadata });
+}
+
+function continuationPayload(metadata: Parameters<typeof setReplyPayloadMetadata>[1] = {}) {
+  const adopt = vi.fn(() => true);
+  return {
+    adopt,
+    payload: statusReply({
+      progressContinuation: {
+        adopt,
+        close: () => {
+          adopt.mockReturnValue(false);
+        },
+      },
+      ...metadata,
+    }),
+  };
+}
 
 const progressDraft = { push: () => undefined, retire: () => undefined };
 function pendingFinalDelivery(text: string, intentId = "intent-1") {
@@ -61,13 +104,13 @@ beforeAll(async () => {
   ({ dispatchReplyFromConfig } = await import("./dispatch-from-config.js"));
   ({ resetInboundDedupe } = await import("./inbound-dedupe.js"));
   ({
-    testing: { resetReplyRunRegistry },
-  } = await import("./reply-run-registry.test-support.js"));
+    testing: { resetSessionControllerForTest },
+  } = await import("../../sessions/session-controller.test-support.js"));
 });
 
 beforeEach(() => {
   clearAgentHarnesses();
-  resetReplyRunRegistry();
+  resetSessionControllerForTest();
   resetInboundDedupe();
   setDiscordTestRegistry();
   resetPluginTtsAndThreadMocks();
@@ -84,12 +127,20 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  resetReplyRunRegistry();
+  resetSessionControllerForTest();
   resetInboundDedupe();
   clearAgentHarnesses();
 });
 
 describe("accepted continuation status delivery", () => {
+  let settle: ReturnType<typeof vi.fn<(delivered: boolean) => Promise<void>>>;
+  let dispatcher: ReturnType<typeof createReplyDispatcher>;
+  beforeEach(() => {
+    settle = vi.fn<(delivered: boolean) => Promise<void>>(async () => {});
+    dispatcher = createReplyDispatcher({ deliver: vi.fn() });
+  });
+  const dispatchStatus = (payload = statusReply()) =>
+    dispatchSettled({ dispatcher, replyResolver: statusResolver(settle, payload) });
   it.each([
     { outcome: "ambiguous", initial: "prepared", expected: "unknown" },
     { outcome: "recovery-owned", initial: "prepared", expected: undefined },
@@ -119,21 +170,16 @@ describe("accepted continuation status delivery", () => {
         }
         return outcome === "ambiguous" ? { visibleReplySent: true, ambiguous: true } : undefined;
       });
-      const dispatcher = createReplyDispatcher({ deliver });
+      dispatcher = createReplyDispatcher({ deliver });
       await memory.run(() =>
-        withReplyDispatcher({
+        dispatchSettled({
+          ctx: { ...createHookCtx(), SessionKey: memory.scope.sessionKey },
           dispatcher,
-          run: () =>
-            dispatchReplyFromConfig({
-              ctx: { ...createHookCtx(), SessionKey: memory.scope.sessionKey },
-              cfg: emptyConfig,
-              dispatcher,
-              replyResolver: async (_ctx, opts) => {
-                await opts?.onBlockReply?.({ text: "durable answer" });
-                return pendingFinalReply("durable answer");
-              },
-              replyOptions: { onBlockReplyQueued: vi.fn() },
-            }),
+          replyResolver: async (_ctx, opts) => {
+            await opts?.onBlockReply?.({ text: "durable answer" });
+            return pendingFinalReply("durable answer");
+          },
+          replyOptions: { onBlockReplyQueued: vi.fn() },
         }),
       );
       expect(deliver).toHaveBeenCalledOnce();
@@ -148,24 +194,11 @@ describe("accepted continuation status delivery", () => {
     "settles an accepted continuation after delivery with usage footer %s",
     async (usageLine) => {
       const order: string[] = [];
-      let continuationOpen = true;
-      const adopt = vi.fn(() => continuationOpen);
-      const statusPayload = setReplyPayloadMetadata(
-        { text: "Continuing work; the result will follow." },
-        {
-          continuationStatus: true,
-          progressContinuation: {
-            adopt,
-            close: () => {
-              continuationOpen = false;
-            },
-          },
-        },
-      );
-      const settle = vi.fn(async (statusDelivered: boolean) => {
+      const { payload: statusPayload, adopt } = continuationPayload();
+      settle = vi.fn(async (statusDelivered: boolean) => {
         order.push(`settle:${statusDelivered}`);
       });
-      const dispatcher = createReplyDispatcher({
+      dispatcher = createReplyDispatcher({
         deliver: async (payload, info) => {
           order.push(`deliver:${payload.text}`);
           await Promise.resolve();
@@ -174,18 +207,12 @@ describe("accepted continuation status delivery", () => {
         },
       });
 
-      await withReplyDispatcher({
+      await dispatchSettled({
         dispatcher,
-        run: () =>
-          dispatchReplyFromConfig({
-            ctx: createHookCtx(),
-            cfg: emptyConfig,
-            dispatcher,
-            replyResolver: async (_ctx, opts) => {
-              opts?.onPendingContinuation?.({ settle });
-              return usageLine ? appendUsageLine([statusPayload], usageLine) : statusPayload;
-            },
-          }),
+        replyResolver: statusResolver(
+          settle,
+          usageLine ? appendUsageLine([statusPayload], usageLine) : statusPayload,
+        ),
       });
 
       expect(order).toEqual([
@@ -199,29 +226,18 @@ describe("accepted continuation status delivery", () => {
   it.each([true, false])(
     "settles a routed status from its delivered receipt (%s)",
     async (delivered) => {
-      const statusPayload = setReplyPayloadMetadata(
-        { text: "Continuing work; the result will follow." },
-        { continuationStatus: true },
-      );
-      const settle = vi.fn(async () => {});
       const deliver = vi.fn();
-      const dispatcher = createReplyDispatcher({ deliver });
-      const ctx = createHookCtx();
-      Object.assign(ctx, { OriginatingChannel: "discord", OriginatingTo: "user:1" });
+      dispatcher = createReplyDispatcher({ deliver });
+      const ctx = { ...createHookCtx(), OriginatingChannel: "discord", OriginatingTo: "user:1" };
       mocks.routeReply.mockResolvedValue({ ok: true, delivered, messageId: "routed-status" });
 
-      await withReplyDispatcher({
+      await dispatchSettled({
+        ctx,
         dispatcher,
-        run: () =>
-          dispatchReplyFromConfig({
-            ctx,
-            cfg: emptyConfig,
-            dispatcher,
-            replyResolver: async (_ctx, opts) => {
-              opts?.onPendingContinuation?.({ settle });
-              return appendUsageLine([statusPayload], "Usage: 100 in / 20 out");
-            },
-          }),
+        replyResolver: statusResolver(
+          settle,
+          appendUsageLine([statusReply()], "Usage: 100 in / 20 out"),
+        ),
       });
 
       expect(mocks.routeReply).toHaveBeenCalledOnce();
@@ -232,140 +248,57 @@ describe("accepted continuation status delivery", () => {
 
   it("releases child delivery when an acknowledged continuation status cannot settle its batch", async () => {
     const order: string[] = [];
-    const statusPayload = setReplyPayloadMetadata(
-      { text: "Continuing work; the result will follow." },
-      { continuationStatus: true },
-    );
-    const settle = vi.fn(async (statusDelivered: boolean) => {
+    settle = vi.fn(async (statusDelivered: boolean) => {
       order.push(`settle:${statusDelivered}`);
       if (statusDelivered) {
         throw new Error("continuation batch is unavailable");
       }
     });
-    const dispatcher = createReplyDispatcher({
+    dispatcher = createReplyDispatcher({
       deliver: async (payload) => {
         order.push(`deliver:${payload.text}`);
       },
     });
-
-    await withReplyDispatcher({
-      dispatcher,
-      run: () =>
-        dispatchReplyFromConfig({
-          ctx: createHookCtx(),
-          cfg: emptyConfig,
-          dispatcher,
-          replyResolver: async (_ctx, opts) => {
-            opts?.onPendingContinuation?.({ settle });
-            return statusPayload;
-          },
-        }),
-    });
-
-    expect(order).toEqual([
-      "deliver:Continuing work; the result will follow.",
-      "settle:true",
-      "settle:false",
-    ]);
+    await dispatchStatus();
+    expect(order).toEqual(["deliver:status", "settle:true", "settle:false"]);
   });
 
-  it("releases an accepted continuation when its waiting status is not delivered", async () => {
-    const statusPayload = setReplyPayloadMetadata(
-      { text: "Continuing work; the result will follow." },
-      { continuationStatus: true },
-    );
-    const settle = vi.fn(async () => {});
-    const dispatcher = createReplyDispatcher({
-      deliver: async () => {
-        throw Object.assign(new Error("offline"), { code: "ECONNREFUSED" });
-      },
-    });
-
-    await withReplyDispatcher({
-      dispatcher,
-      run: () =>
-        dispatchReplyFromConfig({
-          ctx: createHookCtx(),
-          cfg: emptyConfig,
-          dispatcher,
-          replyResolver: async (_ctx, opts) => {
-            opts?.onPendingContinuation?.({ settle });
-            return statusPayload;
-          },
-        }),
-    });
-
-    expect(settle).toHaveBeenCalledExactlyOnceWith(false);
-  });
-
-  it("releases a continuation before propagating a retryable no-send drain failure", async () => {
-    const failure = new PlatformMessageNotDispatchedError("offline before dispatch", {
-      cause: new Error("offline"),
-    });
-    const statusPayload = setReplyPayloadMetadata(
-      { text: "Continuing work; the result will follow." },
-      { continuationStatus: true },
-    );
-    const settle = vi.fn(async () => {});
-    const dispatcher = createReplyDispatcher({
-      deliver: async () => {
-        throw failure;
-      },
-      propagateRetryableNoSendFailure: true,
-    });
-
-    await expect(
-      withReplyDispatcher({
-        dispatcher,
-        run: () =>
-          dispatchReplyFromConfig({
-            ctx: createHookCtx(),
-            cfg: emptyConfig,
-            dispatcher,
-            replyResolver: async (_ctx, opts) => {
-              opts?.onPendingContinuation?.({ settle });
-              return statusPayload;
-            },
-          }),
-      }),
-    ).rejects.toBe(failure);
-
-    expect(settle).toHaveBeenCalledExactlyOnceWith(false);
-  });
+  it.each([false, true])(
+    "releases an undelivered status (retryable no-send=%s)",
+    async (retryable) => {
+      const failure = retryable
+        ? new PlatformMessageNotDispatchedError("offline before dispatch", {
+            cause: new Error("offline"),
+          })
+        : Object.assign(new Error("offline"), { code: "ECONNREFUSED" });
+      dispatcher = createReplyDispatcher({
+        deliver: async () => {
+          throw failure;
+        },
+        propagateRetryableNoSendFailure: retryable,
+      });
+      const pending = dispatchStatus();
+      if (retryable) {
+        await expect(pending).rejects.toBe(failure);
+      } else {
+        await pending;
+      }
+      expect(settle).toHaveBeenCalledExactlyOnceWith(false);
+    },
+  );
 
   it("releases an accepted continuation when finalization aborts before status dispatch", async () => {
     const abortController = new AbortController();
-    let continuationOpen = true;
-    const adopt = vi.fn(() => continuationOpen);
-    const statusPayload = setReplyPayloadMetadata(
-      { text: "Continuing work; the result will follow." },
-      {
-        continuationStatus: true,
-        progressContinuation: {
-          adopt,
-          close: () => {
-            continuationOpen = false;
-          },
-        },
-      },
-    );
-    const settle = vi.fn(async () => {});
-    const dispatcher = createReplyDispatcher({ deliver: vi.fn() });
+    const { payload: statusPayload, adopt } = continuationPayload();
 
-    await withReplyDispatcher({
+    await dispatchSettled({
       dispatcher,
-      run: () =>
-        dispatchReplyFromConfig({
-          ctx: createHookCtx(),
-          cfg: emptyConfig,
-          dispatcher,
-          replyOptions: { abortSignal: abortController.signal },
-          replyResolver: async (_ctx, opts) => {
-            opts?.onPendingContinuation?.({ settle });
-            abortController.abort();
-            return statusPayload;
-          },
-        }),
+      replyOptions: { abortSignal: abortController.signal },
+      replyResolver: async (_ctx, opts) => {
+        opts?.onPendingContinuation?.({ settle });
+        abortController.abort();
+        return statusPayload;
+      },
     });
 
     expect(settle).toHaveBeenCalledExactlyOnceWith(false);
@@ -375,22 +308,7 @@ describe("accepted continuation status delivery", () => {
   it.each(["before", "status", "after"] as const)(
     "settles an accepted continuation when dispatch fails %s the status",
     async (failurePosition) => {
-      let continuationOpen = true;
-      const adopt = vi.fn(() => continuationOpen);
-      const statusPayload = setReplyPayloadMetadata(
-        { text: "Continuing work; the result will follow." },
-        {
-          continuationStatus: true,
-          progressContinuation: {
-            adopt,
-            close: () => {
-              continuationOpen = false;
-            },
-          },
-        },
-      );
-      const settle = vi.fn(async () => {});
-      const dispatcher = createReplyDispatcher({ deliver: vi.fn() });
+      const { payload: statusPayload, adopt } = continuationPayload();
       const sendFinalReply = dispatcher.sendFinalReply.bind(dispatcher);
       vi.spyOn(dispatcher, "sendFinalReply").mockImplementation((payload) => {
         if (failurePosition === "status" || payload.isFallbackNotice) {
@@ -400,23 +318,17 @@ describe("accepted continuation status delivery", () => {
       });
 
       await expect(
-        withReplyDispatcher({
+        dispatchSettled({
           dispatcher,
-          run: () =>
-            dispatchReplyFromConfig({
-              ctx: createHookCtx(),
-              cfg: emptyConfig,
-              dispatcher,
-              replyResolver: async (_ctx, opts) => {
-                opts?.onPendingContinuation?.({ settle });
-                const notice = { text: "Model route changed.", isFallbackNotice: true };
-                return failurePosition === "before"
-                  ? [notice, statusPayload]
-                  : failurePosition === "after"
-                    ? [statusPayload, notice]
-                    : statusPayload;
-              },
-            }),
+          replyResolver: async (_ctx, opts) => {
+            opts?.onPendingContinuation?.({ settle });
+            const notice = { text: "Model route changed.", isFallbackNotice: true };
+            return failurePosition === "before"
+              ? [notice, statusPayload]
+              : failurePosition === "after"
+                ? [statusPayload, notice]
+                : statusPayload;
+          },
         }),
       ).rejects.toThrow("queue unavailable");
 
@@ -425,58 +337,67 @@ describe("accepted continuation status delivery", () => {
     },
   );
 
-  it("releases an accepted continuation when its status was removed from the batch", async () => {
-    const settle = vi.fn(async () => {});
-    const dispatcher = createReplyDispatcher({ deliver: vi.fn() });
+  it.each(["empty", "silent", "pending"] as const)(
+    "settles an accepted continuation after a %s final without a status",
+    async (outcome) => {
+      await dispatchSettled({
+        dispatcher,
+        replyResolver: async (_ctx, opts) => {
+          const runState = resolveReplyOperationRunState(opts);
+          if (!runState) {
+            throw new Error("expected reply operation run state");
+          }
+          runState.replyCompletion = resolveReplyCompletion("required", outcome);
+          opts?.onPendingContinuation?.({ settle });
+          return undefined;
+        },
+      });
 
-    await withReplyDispatcher({
-      dispatcher,
-      run: () =>
-        dispatchReplyFromConfig({
-          ctx: createHookCtx(),
-          cfg: emptyConfig,
-          dispatcher,
-          replyResolver: async (_ctx, opts) => {
-            opts?.onPendingContinuation?.({ settle });
-            return undefined;
-          },
-        }),
-    });
+      expect(settle).toHaveBeenCalledExactlyOnceWith(outcome !== "empty");
+    },
+  );
 
-    expect(settle).toHaveBeenCalledExactlyOnceWith(false);
-  });
-
-  it.each(["resolver", "session metadata"])(
+  it.each(["resolver", "session metadata", "buffered commentary"])(
     "releases an accepted continuation when %s fails before finalization",
     async (failurePosition) => {
-      const settle = vi.fn(async () => {});
-      const dispatcher = createReplyDispatcher({ deliver: vi.fn() });
       const failure = new Error("session owner unavailable");
-
+      const commentary = failurePosition === "buffered commentary";
+      if (commentary) {
+        sessionStoreMocks.currentEntry = { verboseLevel: "on" };
+        mocks.routeReply.mockRejectedValueOnce(failure);
+      }
       await expect(
-        withReplyDispatcher({
+        dispatchSettled({
           dispatcher,
-          run: () =>
-            dispatchReplyFromConfig({
-              ctx: createHookCtx(),
-              cfg: emptyConfig,
-              dispatcher,
-              onSessionMetadataChanges: () => {
-                throw failure;
-              },
-              replyResolver: async (ctx, opts) => {
-                opts?.onPendingContinuation?.({ settle });
-                if (failurePosition === "resolver") {
-                  throw failure;
-                }
-                markCommandSessionMetadataChanged({
-                  ctx,
-                  sessionKey: "agent:test:session",
-                  agentId: "test",
-                });
-                return undefined;
-              },
-            }),
+          ...(commentary
+            ? {
+                ctx: { ...createHookCtx(), OriginatingChannel: "discord", OriginatingTo: "user:1" },
+                replyOptions: { onItemEvent: vi.fn() },
+              }
+            : {}),
+          onSessionMetadataChanges: () => {
+            throw failure;
+          },
+          replyResolver: async (ctx, opts) => {
+            opts?.onPendingContinuation?.({ settle });
+            if (failurePosition === "resolver") {
+              throw failure;
+            }
+            if (commentary) {
+              await opts?.onItemEvent?.({
+                itemId: "commentary-1",
+                kind: "preamble",
+                progressText: "Working on the request.",
+              });
+              return statusReply();
+            }
+            markCommandSessionMetadataChanged({
+              ctx,
+              sessionKey: "agent:test:session",
+              agentId: "test",
+            });
+            return undefined;
+          },
         }),
       ).rejects.toThrow(failure);
 
@@ -484,94 +405,32 @@ describe("accepted continuation status delivery", () => {
     },
   );
 
-  it("releases an accepted continuation when buffered commentary routing rejects", async () => {
-    sessionStoreMocks.currentEntry = { verboseLevel: "on" };
-    const statusPayload = setReplyPayloadMetadata(
-      { text: "Continuing work; the result will follow." },
-      { continuationStatus: true },
-    );
-    const settle = vi.fn(async () => {});
-    const dispatcher = createReplyDispatcher({ deliver: vi.fn() });
-    const ctx = createHookCtx();
-    Object.assign(ctx, { OriginatingChannel: "discord", OriginatingTo: "user:1" });
-    mocks.routeReply.mockRejectedValueOnce(new Error("commentary delivery unavailable"));
-
-    await expect(
-      withReplyDispatcher({
-        dispatcher,
-        run: () =>
-          dispatchReplyFromConfig({
-            ctx,
-            cfg: emptyConfig,
-            dispatcher,
-            replyOptions: { onItemEvent: vi.fn() },
-            replyResolver: async (_ctx, opts) => {
-              opts?.onPendingContinuation?.({ settle });
-              await opts?.onItemEvent?.({
-                itemId: "commentary-1",
-                kind: "preamble",
-                progressText: "Working on the request.",
-              });
-              return statusPayload;
-            },
-          }),
-      }),
-    ).rejects.toThrow("commentary delivery unavailable");
-
-    expect(settle).toHaveBeenCalledExactlyOnceWith(false);
-  });
-
   it("releases an accepted continuation when session-writer delivery is revoked", async () => {
     const currentEntry = {
       sessionId: "session-1",
       lifecycleRevision: "revision-after-replacement",
       activeWriterRunId: "run-after-replacement",
     };
-    let continuationOpen = true;
-    const adopt = vi.fn(() => continuationOpen);
-    const statusPayload = setReplyPayloadMetadata(
-      { text: "Continuing work; the result will follow." },
-      {
-        continuationStatus: true,
-        progressContinuation: {
-          adopt,
-          close: () => {
-            continuationOpen = false;
-          },
-        },
-        sessionWriterDeliveryAuthority: {
-          readCurrentSession: () => currentEntry,
-          agentId: "main",
-          expectedLifecycleRevision: "revision-before-replacement",
-          expectedSessionId: "session-1",
-          expectedWriterRunId: "run-before-replacement",
-          sessionKey: "agent:test:session",
-          storePath: "/tmp/mock-sessions.json",
-        },
+    const { payload: statusPayload, adopt } = continuationPayload({
+      sessionWriterDeliveryAuthority: {
+        readCurrentSession: () => currentEntry,
+        agentId: "main",
+        expectedLifecycleRevision: "revision-before-replacement",
+        expectedSessionId: "session-1",
+        expectedWriterRunId: "run-before-replacement",
+        sessionKey: "agent:test:session",
+        storePath: "/tmp/mock-sessions.json",
       },
-    );
+    });
     sessionStoreMocks.currentEntry = currentEntry;
-    const settle = vi.fn(async () => {});
-    const dispatcher = createReplyDispatcher({
+    dispatcher = createReplyDispatcher({
       deliver: async (payload) =>
         assertSessionWriterDeliveryAuthorized(
           getReplyPayloadMetadata(payload)?.sessionWriterDeliveryAuthority,
         ),
     });
 
-    await withReplyDispatcher({
-      dispatcher,
-      run: () =>
-        dispatchReplyFromConfig({
-          ctx: createHookCtx(),
-          cfg: emptyConfig,
-          dispatcher,
-          replyResolver: async (_ctx, opts) => {
-            opts?.onPendingContinuation?.({ settle });
-            return statusPayload;
-          },
-        }),
-    });
+    await dispatchStatus(statusPayload);
 
     expect(settle).toHaveBeenCalledExactlyOnceWith(false);
     expect(adopt()).toBe(false);
@@ -585,7 +444,7 @@ describe("accepted continuation status delivery", () => {
     });
     const abortController = new AbortController();
     const deliver = vi.fn().mockResolvedValue(undefined);
-    const dispatcher = createReplyDispatcher({ deliver });
+    dispatcher = createReplyDispatcher({ deliver });
     const sendFinalReply = dispatcher.sendFinalReply.bind(dispatcher);
     vi.spyOn(dispatcher, "sendFinalReply").mockImplementation((payload) => {
       const queued = sendFinalReply(payload);
@@ -594,20 +453,14 @@ describe("accepted continuation status delivery", () => {
     });
 
     const result = await memory.run(() =>
-      withReplyDispatcher({
+      dispatchSettled({
+        ctx: { ...createHookCtx(), SessionKey: memory.scope.sessionKey },
         dispatcher,
-        run: () =>
-          dispatchReplyFromConfig({
-            ctx: { ...createHookCtx(), SessionKey: memory.scope.sessionKey },
-            cfg: emptyConfig,
-            dispatcher,
-            replyOptions: { abortSignal: abortController.signal },
-            replyResolver: async () => pendingFinalReply("durable reply", "intent-89115"),
-          }),
+        replyOptions: { abortSignal: abortController.signal },
+        replyResolver: async () => pendingFinalReply("durable reply", "intent-89115"),
       }),
     );
 
-    expect(dispatcher.sendFinalReply).toHaveBeenCalledOnce();
     expect(deliver).toHaveBeenCalledOnce();
     expect(result.queuedFinal).toBe(false);
     expect(memory.read()?.pendingFinalDelivery).toBeUndefined();

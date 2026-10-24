@@ -1,16 +1,12 @@
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import {
-  requestProviderUsage,
-  type ProviderUsageRequestResult,
-} from "../../lib/provider-usage-request.ts";
-import type { GatewayPageController } from "../../lit/gateway-page-controller.ts";
+import type { GatewayPageBinding } from "../../lib/gateway-page-binding.ts";
+import { requestProviderUsage } from "../../lib/provider-usage-request.ts";
 import { UsageRefreshPolicy } from "../usage/refresh-policy.ts";
-import { loadModelProviderCost, type ModelProvidersData } from "./load.ts";
-import type { ControllerHost } from "./page-controller.ts";
+import type { ModelProvidersData } from "./load.ts";
 
 type SupplementalOptions = {
   isCoreLoading: () => boolean;
-  getGateway: () => Pick<GatewayPageController, "connected" | "client" | "epoch" | "isCurrent">;
+  getGateway: () => Pick<GatewayPageBinding, "connected" | "client" | "epoch" | "isCurrent">;
   getData: () => ModelProvidersData | null;
   getDataClient: () => GatewayBrowserClient | null;
   setData: (data: ModelProvidersData) => void;
@@ -18,48 +14,38 @@ type SupplementalOptions = {
   refreshPolicy: UsageRefreshPolicy;
 };
 
-type SupplementalKind = "usage" | "cost";
-
-/** Loads usage and cost after the provider controls have their required data. */
+/** Loads provider usage after the provider controls have their required data. */
 export class ModelProviderSupplementalLoader {
-  private readonly requests = new Map<SupplementalKind, AbortController>();
+  private request: AbortController | null = null;
+  private forceReload = false;
 
   constructor(
-    private readonly host: ControllerHost,
+    private readonly notify: () => void,
     private readonly options: SupplementalOptions,
   ) {}
 
   get loading(): boolean {
-    return this.requests.size > 0;
+    return this.request !== null;
   }
 
-  get usageLoading(): boolean {
-    return this.requests.has("usage");
-  }
-
-  adoptCoreData(
-    client: GatewayBrowserClient | null,
-    data: ModelProvidersData,
-    options: { preserveCatalogDiagnostics?: boolean } = {},
-  ): void {
+  adoptCoreData(client: GatewayBrowserClient | null, data: ModelProvidersData): void {
     const previous = client === this.options.getDataClient() ? this.options.getData() : null;
     // Keep the last supplemental snapshot visible until its replacement finishes.
     this.options.setData({
       ...data,
-      // A newer Retry owns its feedback even when an older auth read finishes afterward.
-      ...(options.preserveCatalogDiagnostics && previous
-        ? {
-            providerOutcomes: previous.providerOutcomes,
-            catalogError: previous.catalogError,
-          }
-        : {}),
       providerUsage: previous?.providerUsage ?? data.providerUsage,
-      costByProvider: previous?.costByProvider ?? data.costByProvider,
+      providerUsageFailed: previous?.providerUsageFailed ?? data.providerUsageFailed,
     });
     this.options.setDataClient(client);
-    if (data.providerUsage !== null) {
+    if (data.providerUsageFailed) {
       this.options.refreshPolicy.markProviderUsage(
-        data.providerUsage,
+        { ok: false },
+        data.updatedAt,
+        this.options.getGateway().epoch,
+      );
+    } else if (data.providerUsage !== null) {
+      this.options.refreshPolicy.markProviderUsage(
+        { ok: true, value: data.providerUsage },
         data.updatedAt,
         this.options.getGateway().epoch,
       );
@@ -70,42 +56,44 @@ export class ModelProviderSupplementalLoader {
       client &&
       !this.options.isCoreLoading() &&
       !this.loading &&
+      (previous?.providerUsage == null || this.forceReload) &&
       data.providerUsage === null &&
-      data.costByProvider === null
+      !data.providerUsageFailed
     ) {
-      void this.loadRequests(client, true);
+      this.forceReload = false;
+      void this.loadUsage(client);
+    }
+  }
+
+  resume(): void {
+    const data = this.options.getData();
+    const client = this.options.getDataClient();
+    if (data?.providerUsage === null && !data.providerUsageFailed && client) {
+      this.adoptCoreData(client, data);
     }
   }
 
   invalidate(): void {
+    this.forceReload = true;
     this.options.refreshPolicy.interrupt();
     this.cancelGeneration();
   }
 
   beginCoreRefresh(force: boolean): void {
-    this.cancelGeneration();
     if (force) {
+      this.cancelGeneration();
+      this.forceReload = true;
       this.options.refreshPolicy.resetPayload();
     }
   }
 
   private cancelGeneration(): void {
-    const retired = [...this.requests.values()];
-    this.requests.clear();
-    for (const request of retired) {
-      request.abort();
-    }
-    this.host.requestUpdate();
+    this.request?.abort();
+    this.request = null;
+    this.notify();
   }
 
-  loadUsage(): Promise<void> {
-    return this.loadRequests(undefined, false);
-  }
-
-  private async loadRequests(
-    explicitClient: GatewayBrowserClient | undefined,
-    includeCost: boolean,
-  ): Promise<void> {
+  async loadUsage(explicitClient?: GatewayBrowserClient): Promise<void> {
     const gateway = this.options.getGateway();
     const client = explicitClient ?? gateway.client;
     if (!gateway.connected || !client) {
@@ -113,31 +101,14 @@ export class ModelProviderSupplementalLoader {
       return;
     }
     this.options.refreshPolicy.beginLoad();
-    const usage = this.loadSupplement("usage", client, gateway.epoch);
-    if (!includeCost) {
-      await usage;
-      return;
-    }
-    await Promise.all([usage, this.loadSupplement("cost", client, gateway.epoch)]);
-  }
-
-  private async loadSupplement(
-    kind: SupplementalKind,
-    client: GatewayBrowserClient,
-    epoch: number,
-  ): Promise<void> {
-    this.requests.get(kind)?.abort();
+    const epoch = gateway.epoch;
+    this.request?.abort();
     const request = new AbortController();
-    this.requests.set(kind, request);
-    this.host.requestUpdate();
+    this.request = request;
+    this.notify();
     try {
-      const patch:
-        | { providerUsage: ProviderUsageRequestResult }
-        | { costByProvider: Awaited<ReturnType<typeof loadModelProviderCost>> } =
-        kind === "usage"
-          ? { providerUsage: await requestProviderUsage(client, { signal: request.signal }) }
-          : { costByProvider: await loadModelProviderCost(client, request.signal) };
-      if (this.requests.get(kind) !== request) {
+      const providerUsage = await requestProviderUsage(client, { signal: request.signal });
+      if (this.request !== request) {
         return;
       }
       const current = this.options.getData();
@@ -146,18 +117,20 @@ export class ModelProviderSupplementalLoader {
         client === this.options.getDataClient() &&
         this.options.getGateway().isCurrent({ client, epoch })
       ) {
-        this.options.setData({ ...current, ...patch });
-        if ("providerUsage" in patch) {
-          this.options.refreshPolicy.markProviderUsage(patch.providerUsage, Date.now(), epoch);
-        }
+        this.options.setData({
+          ...current,
+          providerUsage: providerUsage.ok ? providerUsage.value : current.providerUsage,
+          providerUsageFailed: !providerUsage.ok,
+        });
+        this.options.refreshPolicy.markProviderUsage(providerUsage, Date.now(), epoch);
       }
     } catch {
       // Supplemental failures leave the previous snapshot visible.
     } finally {
-      if (this.requests.get(kind) === request) {
-        this.requests.delete(kind);
+      if (this.request === request) {
+        this.request = null;
         this.options.refreshPolicy.flushPending();
-        this.host.requestUpdate();
+        this.notify();
       }
     }
   }

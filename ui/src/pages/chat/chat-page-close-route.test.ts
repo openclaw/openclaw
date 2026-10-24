@@ -3,7 +3,7 @@
 
 import { expectDefined } from "@openclaw/normalization-core";
 import { createRouter } from "@openclaw/uirouter";
-import { createSignal, flush } from "solid-js";
+import { createComponent, createSignal, flush } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 
@@ -18,9 +18,8 @@ vi.mock("../../app/native-gateways.runtime.ts", () => ({
 
 import type { ApplicationContext } from "../../app/context.ts";
 import { loadSettings, patchSettings } from "../../app/settings.ts";
-import { UI_COMMAND_EVENT } from "../../components/panel-toggle-contract.ts";
+import { UI_COMMAND_EVENT, type UiCommandDetail } from "../../components/panel-toggle-contract.ts";
 import { sessionNavigationTarget } from "../../lib/sessions/route-navigation.ts";
-import { createLitContentRef } from "../../lit/solid-bridge.ts";
 import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { createSolidApplicationContextProvider } from "../../test-helpers/solid-application-context.tsx";
@@ -31,9 +30,9 @@ import {
   setNavigationContext,
   stubMatchMedia,
 } from "./chat-page.test-support.ts";
-import { ChatPage } from "./chat-page.ts";
+import "./chat-page.tsx";
 import type { ChatRouteData } from "./route-loader.ts";
-import { renderChatRoute } from "./route-view.tsx";
+import { ChatRouteView } from "./route-view.tsx";
 import type { SessionChatRouteData } from "./session-route-data.ts";
 
 type RenderedPane = HTMLElement & {
@@ -51,7 +50,16 @@ type RenderedPane = HTMLElement & {
   onOpenSplitView?: () => void;
 };
 
-async function showSession(page: ChatPage, sessionKey: string): Promise<void> {
+const panesIn = (page: HTMLElementTagNameMap["openclaw-chat-page"]) => [
+  ...page.querySelectorAll<RenderedPane>("openclaw-chat-pane"),
+];
+function command(detail: UiCommandDetail) {
+  window.dispatchEvent(new CustomEvent(UI_COMMAND_EVENT, { cancelable: true, detail }));
+}
+async function showSession(
+  page: HTMLElementTagNameMap["openclaw-chat-page"],
+  sessionKey: string,
+): Promise<void> {
   page.data = { sessionKey };
   await settleChatPage(page);
   await settleChatPage(page);
@@ -76,28 +84,33 @@ describe("chat page close navigation", () => {
     const { context } = createChatPageNavigationContext();
     const provider = createSolidApplicationContextProvider(context);
     const container = document.body.appendChild(createApplicationContextProvider(context));
-    const [route, setRoute] = createSignal<{ data: ChatRouteData; presented: boolean }>({
-      data: { kind: "session", sessionKey: firstKey, face: "chat" },
+    const [route, setRoute] = createSignal<{ data?: ChatRouteData; presented: boolean }>({
       presented: true,
     });
     const view = mountSolid(
-      () => {
-        const host = document.createElement("div");
-        createLitContentRef(() => renderChatRoute(route().data, false, route().presented))(host);
-        return host;
-      },
+      () =>
+        createComponent(ChatRouteView, {
+          get data() {
+            return route().data;
+          },
+          get presented() {
+            return route().presented;
+          },
+        }),
       { container, wrapper: provider.wrapper },
     );
+    setRoute({ data: { kind: "session", sessionKey: firstKey, face: "chat" }, presented: true });
     await Promise.resolve();
     flush();
     const page = expectDefined(
-      view.container.querySelector<ChatPage>("openclaw-chat-page"),
-      "mounted route page",
+      view.container.querySelector("openclaw-chat-page"),
+      "openclaw-chat-page",
     );
     await settleChatPage(page);
+    expect(panesIn(page).map((pane) => pane.sessionKey)).toEqual([firstKey]);
     const firstPane = expectDefined(
       page.querySelector<RenderedPane>("openclaw-chat-pane"),
-      "first route pane",
+      "openclaw-chat-pane",
     );
 
     for (const presented of [false, true]) {
@@ -112,9 +125,7 @@ describe("chat page close navigation", () => {
       expect(page.contains(firstPane)).toBe(true);
     }
     const nextPane = expectDefined(
-      [...page.querySelectorAll<RenderedPane>("openclaw-chat-pane")].find(
-        (pane) => pane.sessionKey === nextKey,
-      ),
+      panesIn(page).find((pane) => pane.sessionKey === nextKey),
       "replacement route pane",
     );
     expect(nextPane).toMatchObject({ presented: true, routeFace: "dashboard" });
@@ -122,7 +133,7 @@ describe("chat page close navigation", () => {
   });
 
   it("preserves a pending Home draft when its bound pane adopts the global wire key after collapsing", async () => {
-    const page = new ChatPage();
+    const page = document.createElement("openclaw-chat-page");
     const { context, navigate, replace } = setNavigationContext(page);
     context.agents.state.agentsList = {
       defaultId: "main",
@@ -135,14 +146,12 @@ describe("chat page close navigation", () => {
     await settleChatPage(page);
     const pane = expectDefined(
       page.querySelector<RenderedPane>("openclaw-chat-pane"),
-      "bound Home pane",
+      "openclaw-chat-pane",
     );
     pane.onOpenSplitView?.();
     await settleChatPage(page);
     const added = expectDefined(
-      [...page.querySelectorAll<RenderedPane>("openclaw-chat-pane")].find(
-        (candidate) => candidate !== pane,
-      ),
+      panesIn(page).find((candidate) => candidate !== pane),
       "second split pane",
     );
     added.onClosePane?.(added.paneId);
@@ -177,7 +186,7 @@ describe("chat page close navigation", () => {
             .pathname,
           "synthetic session path",
         );
-      const page = new ChatPage();
+      const page = document.createElement("openclaw-chat-page");
       const { context, replace } = setNavigationContext(page);
       const entered = createDeferred();
       const release = createDeferred<SessionChatRouteData>();
@@ -232,7 +241,7 @@ describe("chat page close navigation", () => {
           page.data = match.data;
         }
       });
-      const panes = () => [...page.querySelectorAll<RenderedPane>("openclaw-chat-pane")];
+      const panes = () => panesIn(page);
       try {
         await router.start(
           {
@@ -249,15 +258,10 @@ describe("chat page close navigation", () => {
         document.body.append(page);
         await settleChatPage(page);
         const survivor = expectDefined(panes()[0], "original survivor");
-        window.dispatchEvent(
-          new CustomEvent(UI_COMMAND_EVENT, {
-            cancelable: true,
-            detail: {
-              command: { kind: "split", direction: "right", sessionKey: keys[1] },
-              sessionKey: keys[0],
-            },
-          }),
-        );
+        command({
+          command: { kind: "split", direction: "right", sessionKey: keys[1] },
+          sessionKey: keys[0],
+        });
         await expectDefined(navigations.at(-1), "split navigation");
         await settleChatPage(page);
         const closing = expectDefined(
@@ -281,12 +285,7 @@ describe("chat page close navigation", () => {
         await settleChatPage(page);
         page.presented = true;
         await settleChatPage(page);
-        window.dispatchEvent(
-          new CustomEvent(UI_COMMAND_EVENT, {
-            cancelable: true,
-            detail: { command: { kind: "close-pane", sessionKey: keys[0] } },
-          }),
-        );
+        command({ command: { kind: "close-pane", sessionKey: keys[0] } });
         await settleChatPage(page);
         expect(panes()).toEqual([survivor]);
 
@@ -325,7 +324,7 @@ describe("chat page close navigation", () => {
   );
 
   it("keeps a saved singleton's pane identity after explicit route admission", async () => {
-    const page = new ChatPage();
+    const page = document.createElement("openclaw-chat-page");
     setNavigationContext(page);
     page.data = { sessionKey: "agent:main:previous" };
     patchSettings({
@@ -345,16 +344,11 @@ describe("chat page close navigation", () => {
     await settleChatPage(page);
     expect(page.querySelector('[data-unbound-pane-id="saved-pane"]')).not.toBeNull();
     const sessionKey = "agent:research:chosen";
-    window.dispatchEvent(
-      new CustomEvent(UI_COMMAND_EVENT, {
-        cancelable: true,
-        detail: { command: { kind: "navigate", sessionKey }, agentId: "research" },
-      }),
-    );
+    command({ command: { kind: "navigate", sessionKey }, agentId: "research" });
     await settleChatPage(page);
     const admitted = expectDefined(
       page.querySelector<RenderedPane>("openclaw-chat-pane"),
-      "admitted pane",
+      "openclaw-chat-pane",
     );
     expect(admitted.paneId).toBe("saved-pane");
     await showSession(page, sessionKey);

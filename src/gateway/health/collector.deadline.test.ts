@@ -1,7 +1,8 @@
 import "../../test-utils/prepare-compiled-subprocesses.js";
 import path from "node:path";
 import { setImmediate as flushImmediate } from "node:timers/promises";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import { createSessionStoreSummaryReaderStub } from "../../config/sessions/session-store-summary.test-support.js";
@@ -14,347 +15,269 @@ type DeadlineAccount = {
   enabled: boolean;
   configured: boolean;
 };
+type Probe = (account: DeadlineAccount) => Promise<Record<string, unknown>>;
 
 let testConfig: OpenClawConfig = {};
 let healthPluginsForTest: ChannelPlugin[] = [];
 const tempDirs = createTempDirTracker();
 let sessionStorePath: string;
-const readSessionStoreSummaryReadOnly = vi.fn(() => ({
-  count: 0,
-  recent: [],
-  byAgent: new Map(),
-}));
+const emptySummary = () => ({ count: 0, recent: [], byAgent: new Map() });
+const readSummary = vi.fn(emptySummary);
 let collectGatewayHealthSnapshot: typeof import("./collector.js").collectGatewayHealthSnapshot;
 let createChannelTestPluginBase: typeof import("../../test-utils/channel-plugins.js").createChannelTestPluginBase;
+const timeoutProbe = { timedOut: true, error: "health collection timed out after 7000ms" };
+const blockedAccounts = ["default", "blocked-1", "blocked-2", "blocked-3", "blocked-4"];
+let scope: AsyncWorkScope;
+const cleanup: Array<() => void> = [];
+let sessionPrepared = createDeferredCore();
 
-function createDeadlinePlugin(params: {
-  accountIds: string[];
-  probe: (account: DeadlineAccount) => Promise<Record<string, unknown>>;
-}): ChannelPlugin {
+function hold<T>(value: T) {
+  const deferred = createDeferredCore<T>();
+  cleanup.push(() => deferred.resolve(value));
+  return deferred;
+}
+
+function installProbe(accountIds: string[], probe: Probe, id = "deadline-test") {
+  const started: string[] = [];
+  const work = { started, active: 0, maxActive: 0 };
   const resolveAccount = (_cfg: OpenClawConfig, accountId?: string | null): DeadlineAccount => ({
     accountId: accountId?.trim() || "default",
     enabled: true,
     configured: true,
   });
-  return {
-    ...createChannelTestPluginBase({ id: "deadline-test", label: "Deadline Test" }),
+  const plugin: ChannelPlugin<DeadlineAccount> = {
+    ...createChannelTestPluginBase({ id, label: "Deadline Test" }),
     config: {
-      listAccountIds: () => params.accountIds,
+      listAccountIds: () => accountIds,
       resolveAccount,
       inspectAccount: resolveAccount,
-      isEnabled: (account) => (account as DeadlineAccount).enabled,
-      isConfigured: (account) => (account as DeadlineAccount).configured,
+      isEnabled: (account) => account.enabled,
+      isConfigured: (account) => account.configured,
     },
     status: {
-      probeAccount: async ({ account }) => await params.probe(account as DeadlineAccount),
+      probeAccount: async ({ account }) => {
+        started.push(account.accountId);
+        work.maxActive = Math.max(work.maxActive, ++work.active);
+        try {
+          return await probe(account);
+        } finally {
+          work.active -= 1;
+        }
+      },
       buildChannelSummary: ({ snapshot }) => ({ ...snapshot }),
     },
   };
+  healthPluginsForTest = [plugin];
+  return { work, plugin };
 }
 
-async function collectDeadlineSnapshot(params: {
-  timeoutMs: number;
-  audience?: "public" | "admin";
-}) {
-  return await collectGatewayHealthSnapshot({
-    audience: params.audience ?? "admin",
-    probe: true,
-    timeoutMs: params.timeoutMs,
-  });
+async function collectDeadlineSnapshot(audience: "public" | "admin" = "admin") {
+  sessionPrepared = createDeferredCore();
+  return await scope.track(() => collectGatewayHealthSnapshot({ audience, probe: true }));
 }
 
-async function flushHealthPreparation() {
+function installBlockedProbes(accountIds: string[]) {
+  const blocked = hold<Record<string, unknown>>({ ok: true });
+  const { work } = installProbe(accountIds, () => blocked.promise);
+  return { work, release: () => blocked.resolve({ ok: true }) };
+}
+
+async function flushHealthPreparation(collecting: Promise<unknown>) {
+  // Receipt reads use real I/O; fake time starts only after the controlled session read.
+  await awaitGateBeforeSettlement(
+    sessionPrepared.promise,
+    collecting,
+    "Health collection settled before session preparation",
+  );
   await vi.advanceTimersByTimeAsync(0);
   // The fake deadline clock does not drive the real yield after a session read.
   await flushImmediate();
 }
 
-describe("gateway health collection deadline", () => {
-  beforeAll(async () => {
-    vi.doMock("../../config/config.js", () => ({
-      getRuntimeConfig: () => testConfig,
-    }));
-    vi.doMock("../../config/sessions/paths.js", () => ({
-      resolveSessionStorePathCore: () => sessionStorePath,
-    }));
-    vi.doMock("../../config/sessions/session-entry-read-runtime.js", () => ({
-      withSessionStoreReaderInWorker: createSessionStoreSummaryReaderStub(
-        readSessionStoreSummaryReadOnly,
-      ),
-    }));
-    vi.doMock("../../channels/plugins/read-only.js", () => ({
-      listReadOnlyChannelPluginsForConfig: () => healthPluginsForTest,
-    }));
-    const [health, channelTestUtils] = await Promise.all([
-      import("./collector.js"),
-      import("../../test-utils/channel-plugins.js"),
-    ]);
-    collectGatewayHealthSnapshot = health.collectGatewayHealthSnapshot;
-    createChannelTestPluginBase = channelTestUtils.createChannelTestPluginBase;
-  });
-
-  beforeEach(async () => {
-    sessionStorePath = path.join(
-      tempDirs.make("openclaw-health-deadline-sessions-"),
-      "sessions.json",
-    );
-    readSessionStoreSummaryReadOnly.mockReset();
-    testConfig = {};
-    healthPluginsForTest = [];
-    await collectGatewayHealthSnapshot({ audience: "admin", probe: false, timeoutMs: 50 });
-  });
-
-  afterEach(() => {
-    vi.useRealTimers();
-    tempDirs.cleanup();
-  });
-
-  it("does not start probes when session preparation exhausts the aggregate deadline", async () => {
-    vi.useFakeTimers();
-    const probe = vi.fn(async () => ({ ok: true }));
-    healthPluginsForTest = [createDeadlinePlugin({ accountIds: ["default"], probe })];
-    readSessionStoreSummaryReadOnly.mockImplementationOnce(() => {
-      vi.advanceTimersByTime(50);
-      return { count: 0, recent: [], byAgent: new Map() };
-    });
-
-    const snap = await collectDeadlineSnapshot({ timeoutMs: 50 });
-    const channel = snap.channels["deadline-test"];
-
-    expect(snap.sessions.path).toBe(
-      path.join(path.dirname(sessionStorePath), "openclaw-agent.sqlite"),
-    );
-    expect(channel?.probe).toEqual({
-      timedOut: true,
-      error: "health collection timed out after 50ms",
-    });
-    expect(channel?.accounts?.default?.probe).toEqual({
-      timedOut: true,
-      error: "health collection timed out after 50ms",
-    });
-    expect(probe).not.toHaveBeenCalled();
-  }, 1_000);
-
-  it.each([
-    { audience: "public" as const, channelId: "imessage", retained: true },
-    { audience: "public" as const, channelId: "deadline-test", retained: false },
-  ])(
-    "retains an observed negative through a slow summary ($audience, $channelId)",
-    async ({ audience, channelId, retained }) => {
-      vi.useFakeTimers();
-      const scope = new AsyncWorkScope();
-      const enteredSummary = createDeferredCore();
-      const releaseSummary = createDeferredCore();
-      const error =
-        "imsg cannot access /Users/synthetic/Library/Messages/chat.db. Grant Full Disk Access.";
-      const plugin = createDeadlinePlugin({
-        accountIds: ["default"],
-        probe: async () => ({ ok: false, error }),
-      });
-      healthPluginsForTest = [
-        {
-          ...plugin,
-          id: channelId,
-          status: {
-            ...plugin.status,
-            buildChannelSummary: async ({ snapshot }) => {
-              enteredSummary.resolve();
-              await releaseSummary.promise;
-              return { ...snapshot };
-            },
-          },
-        },
-      ];
-      const collecting = scope.track(() => collectDeadlineSnapshot({ timeoutMs: 50, audience }));
-      try {
-        await flushHealthPreparation();
-        await enteredSummary.promise;
-        await vi.advanceTimersByTimeAsync(50);
-        const result = await collecting;
-        expect(result.channels[channelId]?.probe).toEqual(
-          retained
-            ? {
-                ok: false,
-                error:
-                  "imsg cannot access ~/Library/Messages/chat.db. Grant Full Disk Access to the Gateway/launcher process and restart Gateway.",
-              }
-            : { timedOut: true, error: "health collection timed out after 50ms" },
-        );
-        expect(JSON.stringify(result)).not.toContain("/Users/synthetic");
-      } finally {
-        releaseSummary.resolve();
-        await scope.drain();
-        await collecting;
-      }
-    },
-  );
-
-  it("preserves healthy accounts at the deadline and retains unfinished probe work", async () => {
-    vi.useFakeTimers();
-    const scope = new AsyncWorkScope();
-    const slowProbe = createDeferredCore<Record<string, unknown>>();
-    const accountIds = ["default", "fast-1", "fast-2", "fast-3", "fast-4", "fast-5"];
-    const started: string[] = [];
-    let active = 0;
-    let maxActive = 0;
-    let snapshotPromise: ReturnType<typeof collectDeadlineSnapshot> | undefined;
-    let draining: Promise<void> | undefined;
-    healthPluginsForTest = [
-      createDeadlinePlugin({
-        accountIds,
-        probe: async (account) => {
-          started.push(account.accountId);
-          active += 1;
-          maxActive = Math.max(maxActive, active);
-          if (account.accountId === "default") {
-            try {
-              return await slowProbe.promise;
-            } finally {
-              active -= 1;
-            }
-          }
-          await Promise.resolve();
-          active -= 1;
-          return { ok: true, accountId: account.accountId };
-        },
-      }),
-    ];
-
-    try {
-      snapshotPromise = scope.track(() => collectDeadlineSnapshot({ timeoutMs: 50 }));
-      await flushHealthPreparation();
-      await vi.advanceTimersByTimeAsync(50);
-      const snap = await snapshotPromise;
-      const channel = snap.channels["deadline-test"];
-
-      expect(started).toEqual(accountIds);
-      expect(maxActive).toBeLessThanOrEqual(5);
-      expect(channel?.probe).toEqual({
-        timedOut: true,
-        error: "health collection timed out after 50ms",
-      });
-      for (const accountId of accountIds.slice(1)) {
-        expect(channel?.accounts?.[accountId]?.probe).toMatchObject({ ok: true });
-      }
-      let drained = false;
-      draining = scope.drain().then(() => {
-        drained = true;
-      });
-      await vi.advanceTimersByTimeAsync(0);
-      expect(drained).toBe(false);
-      slowProbe.resolve({ ok: true });
-      await draining;
-      expect(active).toBe(0);
-    } finally {
-      slowProbe.resolve({ ok: true });
-      await Promise.allSettled([snapshotPromise, slowProbe.promise]);
-      await (draining ?? scope.drain());
-      await vi.advanceTimersByTimeAsync(0);
-    }
-  }, 1_000);
-
-  it("does not start queued probes after the aggregate deadline", async () => {
-    vi.useFakeTimers();
-    const accountIds = [
-      "default",
-      "blocked-1",
-      "blocked-2",
-      "blocked-3",
-      "blocked-4",
-      "queued-1",
-      "queued-2",
-    ];
-    const started: string[] = [];
-    const releaseProbes: Array<() => void> = [];
-    healthPluginsForTest = [
-      createDeadlinePlugin({
-        accountIds,
-        probe: async (account) => {
-          started.push(account.accountId);
-          return await new Promise<Record<string, unknown>>((resolve) => {
-            releaseProbes.push(() => resolve({ ok: true }));
-          });
-        },
-      }),
-    ];
-
-    const snapshotPromise = collectDeadlineSnapshot({ timeoutMs: 50, audience: "public" });
-    try {
-      await flushHealthPreparation();
-      expect(started).toEqual(accountIds.slice(0, 5));
-      await vi.advanceTimersByTimeAsync(50);
-      const snap = await snapshotPromise;
-      const channel = snap.channels["deadline-test"];
-
-      expect(started).toEqual(accountIds.slice(0, 5));
-      for (const accountId of accountIds) {
-        expect(channel?.accounts?.[accountId]?.probe).toEqual({
-          error: "health collection timed out after 50ms",
-          timedOut: true,
-        });
-      }
-    } finally {
-      for (const release of releaseProbes) {
-        release();
-      }
-      await vi.advanceTimersByTimeAsync(50);
-      await snapshotPromise;
-    }
-  }, 1_000);
-
-  it("retains timed-out permits across repeated health collections", async () => {
-    vi.useFakeTimers();
-    const accountIds = ["default", "blocked-1", "blocked-2", "blocked-3", "blocked-4"];
-    const started: string[] = [];
-    const releaseProbes: Array<() => void> = [];
-    let active = 0;
-    let maxActive = 0;
-    healthPluginsForTest = [
-      createDeadlinePlugin({
-        accountIds,
-        probe: async (account) => {
-          started.push(account.accountId);
-          active += 1;
-          maxActive = Math.max(maxActive, active);
-          return await new Promise<Record<string, unknown>>((resolve) => {
-            releaseProbes.push(() => {
-              active -= 1;
-              resolve({ ok: true });
-            });
-          });
-        },
-      }),
-    ];
-
-    const firstSnapshot = collectDeadlineSnapshot({ timeoutMs: 50 });
-    try {
-      await flushHealthPreparation();
-      expect(started).toEqual(accountIds);
-      await vi.advanceTimersByTimeAsync(50);
-      await firstSnapshot;
-
-      const secondSnapshot = collectDeadlineSnapshot({ timeoutMs: 50 });
-      await flushHealthPreparation();
-      expect(started).toEqual(accountIds);
-      await vi.advanceTimersByTimeAsync(50);
-      const second = await secondSnapshot;
-
-      expect(started).toEqual(accountIds);
-      expect(active).toBe(5);
-      expect(maxActive).toBe(5);
-      for (const accountId of accountIds) {
-        expect(second.channels["deadline-test"]?.accounts?.[accountId]?.probe).toEqual({
-          error: "health collection timed out after 50ms",
-          timedOut: true,
-        });
-      }
-    } finally {
-      for (const release of releaseProbes) {
-        release();
-      }
-      await vi.advanceTimersByTimeAsync(50);
-      await firstSnapshot;
-    }
-    expect(active).toBe(0);
-  }, 1_000);
+beforeAll(async () => {
+  vi.doMock("../../config/config.js", () => ({
+    getRuntimeConfig: () => testConfig,
+  }));
+  vi.doMock("../../config/sessions/paths.js", () => ({
+    resolveSessionStorePathCore: () => sessionStorePath,
+  }));
+  // mock-isolation: control worker-read completion independently of the health deadline clock.
+  vi.doMock("../../config/sessions/session-entry-read-runtime.js", () => ({
+    withSessionStoreReaderInWorker: createSessionStoreSummaryReaderStub(() => {
+      const summary = readSummary();
+      sessionPrepared.resolve();
+      return summary;
+    }),
+  }));
+  vi.doMock("../../channels/plugins/read-only.js", () => ({
+    listReadOnlyChannelPluginsForConfig: () => healthPluginsForTest,
+  }));
+  const [health, channelTestUtils] = await Promise.all([
+    import("./collector.js"),
+    import("../../test-utils/channel-plugins.js"),
+  ]);
+  collectGatewayHealthSnapshot = health.collectGatewayHealthSnapshot;
+  createChannelTestPluginBase = channelTestUtils.createChannelTestPluginBase;
 });
+
+beforeEach(async () => {
+  scope = new AsyncWorkScope();
+  sessionStorePath = path.join(
+    tempDirs.make("openclaw-health-deadline-sessions-"),
+    "sessions.json",
+  );
+  readSummary.mockReset();
+  testConfig = {};
+  healthPluginsForTest = [];
+  await collectGatewayHealthSnapshot({ audience: "admin", probe: false });
+});
+
+afterEach(async () => {
+  for (const release of cleanup.splice(0)) {
+    release();
+  }
+  if (vi.isFakeTimers()) {
+    await vi.advanceTimersByTimeAsync(7_000);
+  }
+  await scope.drain();
+  vi.useRealTimers();
+  tempDirs.cleanup();
+});
+
+it("does not start probes when session preparation exhausts the aggregate deadline", async () => {
+  vi.useFakeTimers();
+  const probe = vi.fn(async () => ({ ok: true }));
+  installProbe(["default"], probe);
+  readSummary.mockImplementationOnce(() => {
+    vi.advanceTimersByTime(7_000);
+    return emptySummary();
+  });
+
+  const snap = await collectDeadlineSnapshot();
+  const channel = snap.channels["deadline-test"];
+
+  const sqlitePath = path.join(path.dirname(sessionStorePath), "openclaw-agent.sqlite");
+  expect(snap.sessions.path).toBe(sqlitePath);
+  expect(channel?.probe).toEqual(timeoutProbe);
+  expect(channel?.accounts?.default?.probe).toEqual(timeoutProbe);
+  expect(probe).not.toHaveBeenCalled();
+}, 1_000);
+
+it.each(["imessage", "deadline-test"])(
+  "retains only safe public negatives through a slow %s summary",
+  async (channelId) => {
+    vi.useFakeTimers();
+    const enteredSummary = createDeferredCore();
+    const releaseSummary = hold(undefined);
+    const error =
+      "imsg cannot access /Users/synthetic/Library/Messages/chat.db. Grant Full Disk Access.";
+    const { plugin } = installProbe(["default"], async () => ({ ok: false, error }), channelId);
+    plugin.status = {
+      ...plugin.status,
+      buildChannelSummary: async ({ snapshot }) => {
+        enteredSummary.resolve();
+        await releaseSummary.promise;
+        return { ...snapshot };
+      },
+    };
+    const collecting = collectDeadlineSnapshot("public");
+    await flushHealthPreparation(collecting);
+    await enteredSummary.promise;
+    await vi.advanceTimersByTimeAsync(7_000);
+    const result = await collecting;
+    expect(result.channels[channelId]?.probe).toEqual(
+      channelId === "imessage"
+        ? {
+            ok: false,
+            error:
+              "imsg cannot access ~/Library/Messages/chat.db. Grant Full Disk Access to the Gateway/launcher process and restart Gateway.",
+          }
+        : timeoutProbe,
+    );
+    expect(JSON.stringify(result)).not.toContain("/Users/synthetic");
+  },
+);
+
+it("preserves healthy accounts at the deadline and retains unfinished probe work", async () => {
+  vi.useFakeTimers();
+  const slowProbe = hold<Record<string, unknown>>({ ok: true });
+  const accountIds = ["default", "fast-1", "fast-2", "fast-3", "fast-4", "fast-5"];
+  const { work } = installProbe(accountIds, async (account) => {
+    if (account.accountId === "default") {
+      return await slowProbe.promise;
+    }
+    await Promise.resolve();
+    return { ok: true, accountId: account.accountId };
+  });
+
+  const snapshotPromise = collectDeadlineSnapshot();
+  await flushHealthPreparation(snapshotPromise);
+  await vi.advanceTimersByTimeAsync(7_000);
+  const snap = await snapshotPromise;
+  const channel = snap.channels["deadline-test"];
+
+  expect(work.started).toEqual(accountIds);
+  expect(work.maxActive).toBeLessThanOrEqual(5);
+  expect(channel?.probe).toEqual(timeoutProbe);
+  for (const accountId of accountIds.slice(1)) {
+    expect(channel?.accounts?.[accountId]?.probe).toMatchObject({ ok: true });
+  }
+  let drained = false;
+  const draining = scope.drain().then(() => {
+    drained = true;
+  });
+  await vi.advanceTimersByTimeAsync(0);
+  expect(drained).toBe(false);
+  slowProbe.resolve({ ok: true });
+  await draining;
+  expect(work.active).toBe(0);
+}, 1_000);
+
+it.each([60_000, -60_000])(
+  "keeps the 7s budget when the wall clock steps %s ms",
+  async (stepMs) => {
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout", "performance"] });
+    const slowProbe = hold<Record<string, unknown>>({ ok: true });
+    installProbe(["default"], async () => (stepMs > 0 ? { ok: true } : await slowProbe.promise));
+    readSummary.mockImplementation(() => {
+      // setSystemTime moves only Date; performance.now() keeps monotonic time.
+      vi.setSystemTime(Date.now() + stepMs);
+      return emptySummary();
+    });
+
+    const snapshotPromise = collectDeadlineSnapshot();
+    await flushHealthPreparation(snapshotPromise);
+    await vi.advanceTimersByTimeAsync(7_000);
+    const snap = await snapshotPromise;
+    slowProbe.resolve({ ok: true });
+
+    expect(snap.channels["deadline-test"]?.accounts?.default?.probe).toEqual(
+      stepMs > 0 ? { ok: true } : timeoutProbe,
+    );
+  },
+  1_000,
+);
+
+it("expires queued probes without releasing occupied permits across collections", async () => {
+  vi.useFakeTimers();
+  const accountIds = [...blockedAccounts, "queued-1", "queued-2"];
+  const { work, release } = installBlockedProbes(accountIds);
+
+  for (let collection = 0; collection < 2; collection++) {
+    const pending = collectDeadlineSnapshot("public");
+    await flushHealthPreparation(pending);
+    expect(work.started).toEqual(blockedAccounts);
+    await vi.advanceTimersByTimeAsync(7_000);
+    const snapshot = await pending;
+    expect(work.started).toEqual(blockedAccounts);
+    expect(work).toMatchObject({ active: 5, maxActive: 5 });
+    for (const accountId of accountIds) {
+      expect(snapshot.channels["deadline-test"]?.accounts?.[accountId]?.probe).toEqual(
+        timeoutProbe,
+      );
+    }
+  }
+  release();
+  await vi.advanceTimersByTimeAsync(7_000);
+  expect(work.active).toBe(0);
+}, 1_000);

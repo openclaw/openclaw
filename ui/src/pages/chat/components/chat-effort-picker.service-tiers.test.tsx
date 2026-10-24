@@ -1,15 +1,25 @@
-import { createSignal } from "solid-js";
-import { expect, it, onTestFinished, vi } from "vitest";
+import { beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import type { ModelCatalogEntry } from "../../../api/types.ts";
 import { resolveChatFastModeSelectState } from "../../../lib/chat/model-select-state.ts";
 import { resolveChatThinkingSelectState } from "../../../lib/chat/thinking.ts";
-import { mountSolid } from "../../../test-helpers/mount-solid.ts";
-import { flush } from "../../../test-helpers/solid-settle.ts";
+import { mountSolid } from "../../../test-helpers/solid-render.tsx";
+import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { ChatEffortPicker } from "./chat-effort-picker.tsx";
 
 const host = document.createElement("div");
+const summary = () => host.querySelector<HTMLElement>("summary")!;
+beforeEach(() => {
+  document.body.append(host);
+  onTestFinished(() => host.remove());
+});
+async function openPicker() {
+  summary().click();
+  await waitForSolid(() =>
+    expect(host.querySelector(".chat-controls__effort-menu")).not.toBeNull(),
+  );
+}
 
-it("keeps Ultrafast selectable while showing and clearing a provider downgrade", () => {
+it("keeps Ultrafast selectable while showing and clearing a provider downgrade", async () => {
   const onFastModeSelect = vi.fn(async () => undefined);
   const model: ModelCatalogEntry = {
     id: "model",
@@ -22,7 +32,7 @@ it("keeps Ultrafast selectable while showing and clearing a provider downgrade",
   };
   const options = (
     fastMode: true | "ultrafast",
-    serviceTierObservation?: ModelCatalogEntry["serviceTierObservation"],
+    serviceTierObservations?: ModelCatalogEntry["serviceTierObservations"],
   ): Parameters<typeof ChatEffortPicker>[0] => ({
     disabled: false,
     thinkingDisabled: false,
@@ -33,60 +43,52 @@ it("keeps Ultrafast selectable while showing and clearing a provider downgrade",
       sessionsResult: null,
     }),
     fastMode: resolveChatFastModeSelectState({
-      activeRunId: null,
-      catalog: [{ ...model, serviceTierObservation }],
+      catalog: [{ ...model, serviceTierObservations }],
       connected: true,
       currentModelOverride: "openai/model",
       fastModeTarget: { model: "model", modelProvider: "openai", fastMode },
       gatewayAvailable: true,
       loading: false,
-      sending: false,
       sessionsResult: null,
-      stream: null,
     }),
     onFastModeSelect,
     onThinkingSelect: vi.fn(async () => undefined),
   });
-  let show!: (
+  const view = mountSolid(ChatEffortPicker, options("ultrafast"), host);
+  const show = (
     fastMode: true | "ultrafast",
-    observation?: ModelCatalogEntry["serviceTierObservation"],
-  ) => HTMLButtonElement;
-  mountSolid(
-    () => {
-      const [props, setProps] = createSignal(options("ultrafast"));
-      show = (mode, observation) => {
-        setProps(() => options(mode, observation));
-        flush();
-        return host.querySelector<HTMLButtonElement>('[data-chat-speed-option="ultrafast"]')!;
-      };
-      return <ChatEffortPicker {...props()} />;
-    },
-    { container: host },
-  );
+    observations?: ModelCatalogEntry["serviceTierObservations"],
+  ) => {
+    view.update(options(fastMode, observations));
+    return host.querySelector<HTMLButtonElement>('[data-chat-speed-option="ultrafast"]')!;
+  };
   const observation = { requestedTier: "ultrafast", responseTier: "priority" };
-  const ultrafast = show("ultrafast", observation);
-  expect(ultrafast.disabled).toBe(false);
-  expect(ultrafast.getAttribute("aria-checked")).toBe("true");
-  expect(host.querySelector("summary")!.title).toContain(
-    "Ultrafast requested, currently served as priority",
-  );
+  await openPicker();
+  const ultrafast = show("ultrafast", [observation]);
+  expect([ultrafast.disabled, ultrafast.getAttribute("aria-checked")]).toEqual([false, "true"]);
+  expect(summary().title).toContain("Ultrafast requested, currently served as priority");
 
-  show("ultrafast", { requestedTier: "ultrafast" });
-  expect(host.querySelector("summary")!.title).toContain(
-    "Ultrafast requested, currently unavailable",
-  );
+  show("ultrafast", [{ requestedTier: "ultrafast" }]);
+  expect(summary().title).toContain("Ultrafast requested, currently unavailable");
 
-  show(true, observation).click();
+  show(true, [observation]).click();
   expect(onFastModeSelect).toHaveBeenCalledWith("ultrafast", "tier-observation");
-  expect(host.querySelector("summary")!.title).not.toContain("requested");
+  expect(summary().title).not.toContain("requested");
+
+  const independent = [
+    { requestedTier: "priority", responseTier: "fast" },
+    { requestedTier: "ultrafast", responseTier: "fast" },
+  ];
+  show(true, independent);
+  expect(summary().title).toContain("Fast requested, currently served as fast");
+  show("ultrafast", independent);
+  expect(summary().title).toContain("Ultrafast requested, currently served as fast");
 
   expect(show("ultrafast").getAttribute("aria-checked")).toBe("true");
-  expect(host.querySelector("summary")!.title).toBe("Speed: Ultrafast");
+  expect(summary().title).toBe("Speed: Ultrafast");
 });
 
-it("keeps an uncommitted reasoning preview when other picker props refresh", () => {
-  document.body.append(host);
-  onTestFinished(() => host.remove());
+it("keeps an uncommitted reasoning preview when other picker props refresh", async () => {
   const onThinkingSelect = vi.fn(async () => undefined);
   const options = (active: boolean): Parameters<typeof ChatEffortPicker>[0] => ({
     disabled: false,
@@ -104,6 +106,7 @@ it("keeps an uncommitted reasoning preview when other picker props refresh", () 
     fastMode: {
       active,
       currentOverride: active ? "on" : "off",
+      persistedOverride: active ? "on" : "off",
       disabled: false,
       label: active ? "On" : "Off",
       nextValue: active ? "off" : "on",
@@ -112,28 +115,16 @@ it("keeps an uncommitted reasoning preview when other picker props refresh", () 
     onFastModeSelect: async () => undefined,
     onThinkingSelect,
   });
-  let paint!: (active: boolean) => void;
-  mountSolid(
-    () => {
-      const [props, setProps] = createSignal(options(false));
-      paint = (active) => {
-        setProps(() => options(active));
-        flush();
-      };
-      return <ChatEffortPicker {...props()} />;
-    },
-    { container: host },
-  );
-  paint(false);
+  const view = mountSolid(ChatEffortPicker, options(false), host);
+  await openPicker();
   const slider = host.querySelector<HTMLInputElement>("[data-chat-thinking-slider]")!;
   slider.value = "2";
   slider.dispatchEvent(new Event("input", { bubbles: true }));
   flush();
   expect(slider.getAttribute("aria-valuetext")).toBe("Ultra");
-  paint(true);
+  view.update(options(true));
   expect(host.querySelector("[data-chat-thinking-slider]")).toBe(slider);
-  expect(slider.value).toBe("2");
-  expect(slider.getAttribute("aria-valuetext")).toBe("Ultra");
+  expect([slider.value, slider.getAttribute("aria-valuetext")]).toEqual(["2", "Ultra"]);
   expect(onThinkingSelect).not.toHaveBeenCalled();
   slider.dispatchEvent(new Event("change", { bubbles: true }));
   expect(onThinkingSelect).toHaveBeenCalledExactlyOnceWith("ultra", "reasoning-preview");

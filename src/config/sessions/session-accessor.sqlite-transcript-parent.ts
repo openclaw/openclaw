@@ -11,6 +11,7 @@ import type {
   TranscriptEventAppendOptions,
   TranscriptMessageAppendOptions,
 } from "./session-accessor.sqlite-contract.js";
+import { selectActiveTranscriptEventRows } from "./session-accessor.sqlite-projection-read.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
 import { readSessionActorTransactionState } from "./session-actor-transaction.js";
 import { projectTranscriptNavigationSql } from "./session-model-context-projection.js";
@@ -75,7 +76,7 @@ export function canRebasePreparedAssistantInTransaction(
   const actor = readSessionActorTransactionState(database, { sessionId });
   const admittedIsNewer = admitted !== undefined && admitted.seq > (preparedParent?.seq ?? -1);
   if (
-    actor &&
+    actor?.transcript.complete &&
     ![...actor.transcript.identities.values()].some(
       (identity) => identity.event_type === "message" && identity.seq > (preparedParent?.seq ?? -1),
     )
@@ -246,10 +247,14 @@ function transcriptEntryIsAncestor(
       if (current.parent_id === candidateId) {
         return true;
       }
-      current =
-        current.parent_id === null ? undefined : actor.transcript.identities.get(current.parent_id);
+      if (current.parent_id === null) {
+        return false;
+      }
+      current = actor.transcript.identities.get(current.parent_id);
     }
-    return false;
+    if (current || actor.transcript.complete) {
+      return false;
+    }
   }
   const db = getSessionKysely(database.db);
   // Bound ancestry work even for malformed cycles or very deep metadata chains.
@@ -295,7 +300,7 @@ export function readTranscriptVisibleTailEntryIdInTransaction(
   messageId: string,
 ): string | null {
   const actor = readSessionActorTransactionState(database, { sessionId });
-  if (actor) {
+  if (actor?.transcript.complete) {
     const tree = scanSessionTranscriptTree(actor.transcript.navigation);
     return selectSessionTranscriptTreePathNodes(tree, tree.leafId).at(-1)?.id ?? null;
   }
@@ -307,13 +312,7 @@ export function readTranscriptVisibleTailEntryIdInTransaction(
   if (!sessionTranscriptIndexNeedsReconcile(database.db, sessionId)) {
     const tail = executeSqliteQueryTakeFirstSync(
       database.db,
-      db
-        .selectFrom("session_transcript_active_events as active")
-        .innerJoin("transcript_events as event", (join) =>
-          join
-            .onRef("event.session_id", "=", "active.session_id")
-            .onRef("event.seq", "=", "active.event_seq"),
-        )
+      selectActiveTranscriptEventRows(database)
         .select(
           projectTranscriptNavigationSql(
             database.db,
@@ -375,31 +374,37 @@ function readActiveTranscriptAppendParentId(
   sessionId: string,
 ): string | null {
   const actor = readSessionActorTransactionState(database, { sessionId });
-  if (actor) {
+  if (actor?.transcript.complete) {
     return scanSessionTranscriptTree(actor.transcript.navigation).appendParentId;
   }
   const db = getSessionKysely(database.db);
-  const latest = executeSqliteQueryTakeFirstSync(
-    database.db,
-    db
-      .selectFrom("transcript_event_identities as ti")
-      .innerJoin("transcript_events as te", (join) =>
-        join.onRef("te.session_id", "=", "ti.session_id").onRef("te.seq", "=", "ti.seq"),
-      )
-      .select([
-        "ti.event_type",
-        projectTranscriptNavigationSql(
-          database.db,
-          transcriptEventNavigationSql(database.db, "te"),
-        ).as("event_json"),
-      ])
-      .where("ti.session_id", "=", sessionId)
-      .orderBy("ti.seq", "desc")
-      .limit(1),
-  );
+  const retainedIdentity = actor && [...actor.transcript.identities.values()].at(-1);
+  const retainedNavigation =
+    retainedIdentity &&
+    actor?.transcript.navigation.findLast((event) => event.seq === retainedIdentity.seq);
+  const latest = retainedNavigation
+    ? undefined
+    : executeSqliteQueryTakeFirstSync(
+        database.db,
+        db
+          .selectFrom("transcript_event_identities as ti")
+          .innerJoin("transcript_events as te", (join) =>
+            join.onRef("te.session_id", "=", "ti.session_id").onRef("te.seq", "=", "ti.seq"),
+          )
+          .select([
+            "ti.event_type",
+            projectTranscriptNavigationSql(
+              database.db,
+              transcriptEventNavigationSql(database.db, "te"),
+            ).as("event_json"),
+          ])
+          .where("ti.session_id", "=", sessionId)
+          .orderBy("ti.seq", "desc")
+          .limit(1),
+      );
   const resolveFromNavigation = () =>
     scanSessionTranscriptTree(readTranscriptNavigationEvents(database, sessionId)).appendParentId;
-  if (!latest) {
+  if (!retainedNavigation && !latest) {
     // Exact imports captured the append cursor while rebuilding their projection,
     // even though they did not transfer identity or idempotency ownership.
     const current = executeSqliteQueryTakeFirstSync(
@@ -439,13 +444,18 @@ function readActiveTranscriptAppendParentId(
     return current ? current.leaf_event_id : resolveFromNavigation();
   }
   try {
-    const event = JSON.parse(latest.event_json) as unknown;
+    const event =
+      retainedNavigation ?? (latest ? (JSON.parse(latest.event_json) as unknown) : undefined);
     const treeEntry = parseSessionTranscriptTreeEntry(event);
     if (!treeEntry) {
       return resolveFromNavigation();
     }
-    if (latest.event_type !== "leaf") {
+    if ((retainedNavigation ? retainedIdentity?.event_type : latest?.event_type) !== "leaf") {
       return treeEntry.appendParentId;
+    }
+    if (actor) {
+      // A retained leaf can target older history that a reset normalized away.
+      return resolveFromNavigation();
     }
     const leafReferencesKnown =
       treeEntry.leafId !== undefined &&
@@ -465,7 +475,7 @@ function readTranscriptNavigationEvents(
   sessionId: string,
 ): unknown[] {
   const actor = readSessionActorTransactionState(database, { sessionId });
-  if (actor) {
+  if (actor?.transcript.complete) {
     return structuredClone(actor.transcript.navigation);
   }
   const db = getSessionKysely(database.db);
@@ -494,7 +504,9 @@ function readTranscriptIdentityInTransaction(
   const actor = readSessionActorTransactionState(database, { sessionId });
   if (actor) {
     const row = actor.transcript.identities.get(eventId);
-    return row ? { eventId: row.event_id, parentId: row.parent_id, seq: row.seq } : undefined;
+    if (row || actor.transcript.complete) {
+      return row ? { eventId: row.event_id, parentId: row.parent_id, seq: row.seq } : undefined;
+    }
   }
   const db = getSessionKysely(database.db);
   const row = executeSqliteQueryTakeFirstSync(

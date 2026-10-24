@@ -5,10 +5,8 @@ import { pathToFileURL } from "node:url";
 import { asRecord, isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
-  countSystemPromptChars,
   fetchQaFixtureJson,
   outputText,
-  outputToolNames,
   readPositiveIntEnv,
   subtractMentionCounts,
   type QaFixtureFetchJsonOptions,
@@ -31,9 +29,7 @@ type Lane = "normal" | "tools";
 type LaneResult = {
   lane: Lane;
   status: string;
-  providerRequestCount: number;
   providerRawBytes: number;
-  providerSystemPromptChars: number;
   providerInputSnippet: string;
   providerToolOutputSnippet: string;
   providerToolSearchResult?: unknown;
@@ -42,7 +38,6 @@ type LaneResult = {
   providerDeclaredToolNames: string[];
   providerDirectoryContainsTarget: boolean;
   providerPlannedTools: string[];
-  gatewayOutputToolNames: string[];
   gatewayOutputText: string;
   sessionLogToolMentions: Record<string, number>;
   targetToolIdentity: {
@@ -480,9 +475,7 @@ export async function runToolSearchGatewayLane(params: {
   return {
     lane,
     status: typeof responseStatus === "string" ? responseStatus : "",
-    providerRequestCount: laneRequests.length,
     providerRawBytes: typeof lastRequest.raw === "string" ? lastRequest.raw.length : 0,
-    providerSystemPromptChars: countSystemPromptChars(lastRequest.body),
     providerInputSnippet: truncateUtf16Safe(
       lastRequest.allInputText ?? lastRequest.prompt ?? "",
       500,
@@ -500,7 +493,6 @@ export async function runToolSearchGatewayLane(params: {
     providerPlannedTools: laneRequests
       .map((request) => request.plannedWireToolName ?? request.plannedToolName)
       .filter((name): name is string => typeof name === "string"),
-    gatewayOutputToolNames: outputToolNames(response),
     gatewayOutputText: outputText(response),
     sessionLogToolMentions: subtractMentionCounts(mentionCountsAfter, mentionCountsBefore),
     targetToolIdentity,

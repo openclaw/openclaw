@@ -80,24 +80,6 @@ export function resolveSearchProviderOptions(
     );
 }
 
-function defaultModelUsesCodexRuntime(config: OpenClawConfig): boolean {
-  const configuredPrimary = resolveAgentModelPrimaryValue(config.agents?.defaults?.model);
-  if (!configuredPrimary) {
-    return false;
-  }
-  const defaultModel = resolveDefaultModelForAgent({ cfg: config });
-  if (defaultModel.provider === CODEX_HOSTED_SEARCH_PROVIDER_ID) {
-    return true;
-  }
-  return (
-    resolveAgentHarnessPolicy({
-      provider: defaultModel.provider,
-      modelId: defaultModel.model,
-      config,
-    }).runtime === "codex"
-  );
-}
-
 function resolveSearchProviderEntry(
   config: OpenClawConfig,
   provider: SearchProvider,
@@ -132,20 +114,21 @@ function providerIsReady(
   return hasExistingKey(config, entry.id) || hasKeyInEnv(entry);
 }
 
-function rawKeyValue(config: OpenClawConfig, provider: SearchProvider): unknown {
-  const entry = resolveSearchProviderEntry(config, provider);
-  return entry?.getConfiguredCredentialValue?.(config);
-}
-
 export function resolveExistingKey(
   config: OpenClawConfig,
   provider: SearchProvider,
 ): string | undefined {
-  return normalizeSecretInputString(rawKeyValue(config, provider));
+  const entry = resolveSearchProviderEntry(config, provider);
+  return normalizeSecretInputString(entry?.getConfiguredCredentialValue?.(config));
 }
 
 export function hasExistingKey(config: OpenClawConfig, provider: SearchProvider): boolean {
-  return hasConfiguredSecretInput(rawKeyValue(config, provider));
+  const entry = resolveSearchProviderEntry(config, provider);
+  // Fallback credentials stay at their owner; setup must not copy them into search config.
+  return (
+    hasConfiguredSecretInput(entry?.getConfiguredCredentialValue?.(config)) ||
+    hasConfiguredSecretInput(entry?.getConfiguredCredentialFallback?.(config)?.value)
+  );
 }
 
 function buildSearchEnvRef(config: OpenClawConfig, provider: SearchProvider): SecretRef {
@@ -289,74 +272,6 @@ function completedSearchSetup(config: OpenClawConfig): SearchSetupResult {
   return { outcome: "completed", config };
 }
 
-async function finalizeSearchProviderSetup(params: {
-  originalConfig: OpenClawConfig;
-  nextConfig: OpenClawConfig;
-  entry: SearchProviderEntryWithInstall;
-  runtime: RuntimeEnv;
-  prompter: WizardPrompter;
-  opts?: SetupSearchOptions;
-}): Promise<SearchSetupResult> {
-  let next = params.nextConfig;
-  const installEntry = params.entry[SEARCH_INSTALL_CATALOG_ENTRY];
-  if (installEntry && next.tools?.web?.search?.enabled !== false) {
-    const { ensureOnboardingPluginInstalled } =
-      await import("../commands/onboarding-plugin-install.js");
-    const installed = await ensureOnboardingPluginInstalled({
-      cfg: next,
-      entry: {
-        pluginId: installEntry.pluginId,
-        label: installEntry.label,
-        install: installEntry.install,
-        ...(installEntry.trustedSourceLinkedOfficialInstall
-          ? { trustedSourceLinkedOfficialInstall: true }
-          : {}),
-      },
-      prompter: params.prompter,
-      runtime: params.runtime,
-      autoConfirmSingleSource: true,
-      ...(params.opts?.beforePersistentEffect
-        ? { beforePersistentEffect: params.opts.beforePersistentEffect }
-        : {}),
-    });
-    if (!installed.installed) {
-      if (installed.status === "skipped") {
-        return {
-          outcome: "kept-current",
-          config: params.originalConfig,
-          reason: "provider-install-skipped",
-          providerId: params.entry.id,
-        };
-      }
-      return {
-        outcome: "install-failed",
-        config: params.originalConfig,
-        providerId: params.entry.id,
-        reason: installed.status === "timed_out" ? "timed-out" : "failed",
-      };
-    }
-    next = installed.cfg;
-  }
-  if (params.opts?.preserveDisabledSearchState !== false) {
-    next = preserveDisabledState(params.originalConfig, next);
-  }
-  if (!params.entry.runSetup) {
-    return completedSearchSetup(next);
-  }
-  next = await params.entry.runSetup({
-    config: next,
-    runtime: params.runtime,
-    prompter: params.prompter,
-    quickstartDefaults: params.opts?.quickstartDefaults,
-    secretInputMode: params.opts?.secretInputMode,
-  });
-  return completedSearchSetup(
-    params.opts?.preserveDisabledSearchState === false
-      ? next
-      : preserveDisabledState(params.originalConfig, next),
-  );
-}
-
 export async function runSearchSetupFlow(
   config: OpenClawConfig,
   runtime: RuntimeEnv,
@@ -367,8 +282,16 @@ export async function runSearchSetupFlow(
     resolveDefaultAgentDir(config),
   );
   const availableProviderOptions = resolveSearchProviderOptions(config);
+  const configuredPrimary = resolveAgentModelPrimaryValue(config.agents?.defaults?.model);
+  const defaultModel = configuredPrimary ? resolveDefaultModelForAgent({ cfg: config }) : undefined;
   const codexRecommended =
-    defaultModelUsesCodexRuntime(config) &&
+    defaultModel !== undefined &&
+    (defaultModel.provider === CODEX_HOSTED_SEARCH_PROVIDER_ID ||
+      resolveAgentHarnessPolicy({
+        provider: defaultModel.provider,
+        modelId: defaultModel.model,
+        config,
+      }).runtime === "codex") &&
     availableProviderOptions.some((entry) => entry.id === CODEX_HOSTED_SEARCH_PROVIDER_ID);
   const preferred = codexRecommended
     ? availableProviderOptions.find((entry) => entry.id === CODEX_HOSTED_SEARCH_PROVIDER_ID)
@@ -475,7 +398,7 @@ export async function runSearchSetupFlow(
     return { outcome: "kept-current", config, reason: "user-skipped" };
   }
 
-  const entry =
+  const entry: SearchProviderEntryWithInstall | undefined =
     resolveSearchProviderEntry(config, choice) ?? providerOptions.find((e) => e.id === choice);
   if (!entry) {
     return { outcome: "kept-current", config, reason: "provider-unavailable", providerId: choice };
@@ -504,15 +427,64 @@ export async function runSearchSetupFlow(
       };
     }
   }
-  const finalizeSelection = (nextConfig: OpenClawConfig) =>
-    finalizeSearchProviderSetup({
-      originalConfig: config,
-      nextConfig,
-      entry,
+  const finalizeSelection = async (nextConfig: OpenClawConfig): Promise<SearchSetupResult> => {
+    let next = nextConfig;
+    const installEntry = entry[SEARCH_INSTALL_CATALOG_ENTRY];
+    if (installEntry && next.tools?.web?.search?.enabled !== false) {
+      const { ensureOnboardingPluginInstalled } =
+        await import("../commands/onboarding-plugin-install.js");
+      const installed = await ensureOnboardingPluginInstalled({
+        cfg: next,
+        entry: {
+          pluginId: installEntry.pluginId,
+          label: installEntry.label,
+          install: installEntry.install,
+          ...(installEntry.trustedSourceLinkedOfficialInstall
+            ? { trustedSourceLinkedOfficialInstall: true }
+            : {}),
+        },
+        prompter,
+        runtime,
+        autoConfirmSingleSource: true,
+        ...(opts?.beforePersistentEffect
+          ? { beforePersistentEffect: opts.beforePersistentEffect }
+          : {}),
+      });
+      if (!installed.installed) {
+        if (installed.status === "skipped") {
+          return {
+            outcome: "kept-current",
+            config,
+            reason: "provider-install-skipped",
+            providerId: entry.id,
+          };
+        }
+        return {
+          outcome: "install-failed",
+          config,
+          providerId: entry.id,
+          reason: installed.status === "timed_out" ? "timed-out" : "failed",
+        };
+      }
+      next = installed.cfg;
+    }
+    if (opts?.preserveDisabledSearchState !== false) {
+      next = preserveDisabledState(config, next);
+    }
+    if (!entry.runSetup) {
+      return completedSearchSetup(next);
+    }
+    next = await entry.runSetup({
+      config: next,
       runtime,
       prompter,
-      opts,
+      quickstartDefaults: opts?.quickstartDefaults,
+      secretInputMode: opts?.secretInputMode,
     });
+    return completedSearchSetup(
+      opts?.preserveDisabledSearchState === false ? next : preserveDisabledState(config, next),
+    );
+  };
   const credentialLabel =
     entry.requiresCredential === false
       ? `${entry.label} setup`

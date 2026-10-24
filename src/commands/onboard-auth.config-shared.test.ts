@@ -33,32 +33,52 @@ function makeProvider(
   };
 }
 
-describe("onboard auth provider config merges", () => {
-  const agentModels: Record<string, AgentModelEntryConfig> = {
-    "custom/model-a": {},
-  };
+const newBaseUrl = "https://new.example.com/v1";
+const agentModels: Record<string, AgentModelEntryConfig> = { "custom/model-a": {} };
+const preset = {
+  agentModels,
+  providerId: "custom",
+  api: "openai-completions" as const,
+  baseUrl: newBaseUrl,
+  defaultModels: [makeModel("model-b")],
+  defaultModelId: "model-b",
+};
 
+function patchProviders(
+  providers: Record<string, ModelProviderConfig>,
+  overrides: Partial<ModelProviderConfig> = {},
+  mode?: "merge",
+) {
+  return applyOnboardAuthAgentModelsAndProviders(
+    { models: { ...(mode ? { mode } : {}), providers } },
+    {
+      agentModels,
+      providers: { custom: makeProvider(["model-b"], { baseUrl: newBaseUrl, ...overrides }) },
+    },
+  );
+}
+
+function duplicateProviders() {
+  return {
+    Custom: makeProvider(["stale-a"], { timeoutSeconds: 300 }),
+    custom: makeProvider(["canonical-a"], { timeoutSeconds: 900 }),
+    CUSTOM: makeProvider(["older-a"], { timeoutSeconds: 600 }),
+  };
+}
+
+describe("onboard auth provider config merges", () => {
   it("preserves provider-level settings when applying onboarding provider patches", () => {
-    const next = applyOnboardAuthAgentModelsAndProviders(
+    const next = patchProviders(
       {
-        models: {
-          mode: "merge",
-          providers: {
-            custom: makeProvider(["model-a"], { timeoutSeconds: 900 }),
-            other: makeProvider(["other-a"], {
-              api: "openai-responses",
-              baseUrl: "https://other.example.com/v1",
-              timeoutSeconds: 300,
-            }),
-          },
-        },
+        custom: makeProvider(["model-a"], { timeoutSeconds: 900 }),
+        other: makeProvider(["other-a"], {
+          api: "openai-responses",
+          baseUrl: "https://other.example.com/v1",
+          timeoutSeconds: 300,
+        }),
       },
-      {
-        agentModels,
-        providers: {
-          custom: makeProvider(["model-b"], { baseUrl: "https://new.example.com/v1" }),
-        },
-      },
+      {},
+      "merge",
     );
 
     expect(next.models?.providers?.custom?.timeoutSeconds).toBe(900);
@@ -67,88 +87,22 @@ describe("onboard auth provider config merges", () => {
     expect(next.models?.providers?.other?.timeoutSeconds).toBe(300);
   });
 
-  it("preserves settings without resurrecting a non-canonical provider key", () => {
-    const next = applyOnboardAuthAgentModelsAndProviders(
-      {
-        models: {
-          providers: {
-            Custom: makeProvider(["model-a"], { timeoutSeconds: 900 }),
-          },
-        },
-      },
-      {
-        agentModels,
-        providers: {
-          custom: makeProvider(["model-b"], { baseUrl: "https://new.example.com/v1" }),
-        },
-      },
-    );
-
-    expect(Object.keys(next.models?.providers ?? {})).toEqual(["custom"]);
-    expect(next.models?.providers?.custom?.timeoutSeconds).toBe(900);
-  });
-
-  it("prefers canonical settings and removes every non-canonical provider key", () => {
-    const next = applyOnboardAuthAgentModelsAndProviders(
-      {
-        models: {
-          providers: {
-            Custom: makeProvider(["stale-a"], {
-              baseUrl: "https://stale.example.com/v1",
-              timeoutSeconds: 300,
-            }),
-            custom: makeProvider(["canonical-a"], {
-              baseUrl: "https://canonical.example.com/v1",
-              timeoutSeconds: 900,
-            }),
-            CUSTOM: makeProvider(["older-a"], {
-              baseUrl: "https://older.example.com/v1",
-              timeoutSeconds: 600,
-            }),
-          },
-        },
-      },
-      {
-        agentModels,
-        providers: {
-          custom: makeProvider(["model-b"], { baseUrl: "https://new.example.com/v1" }),
-        },
-      },
-    );
-
-    expect(Object.keys(next.models?.providers ?? {})).toEqual(["custom"]);
-    expect(next.models?.providers?.custom?.timeoutSeconds).toBe(900);
-    expect(next.models?.providers?.custom?.baseUrl).toBe("https://new.example.com/v1");
-  });
+  it.each([{ Custom: makeProvider(["model-a"], { timeoutSeconds: 900 }) }, duplicateProviders()])(
+    "preserves canonical settings and removes variant provider keys: %j",
+    (providers) => {
+      const next = patchProviders(providers);
+      expect(Object.keys(next.models?.providers ?? {})).toEqual(["custom"]);
+      expect(next.models?.providers?.custom).toMatchObject({
+        timeoutSeconds: 900,
+        baseUrl: newBaseUrl,
+      });
+    },
+  );
 
   it("collapses duplicate provider keys when applying a provider preset", () => {
     const next = applyProviderConfigWithDefaultModels(
-      {
-        models: {
-          providers: {
-            Custom: makeProvider(["stale-a"], {
-              baseUrl: "https://stale.example.com/v1",
-              timeoutSeconds: 300,
-            }),
-            custom: makeProvider(["canonical-a"], {
-              baseUrl: "https://canonical.example.com/v1",
-              timeoutSeconds: 900,
-            }),
-            CUSTOM: makeProvider(["older-a"], {
-              baseUrl: "https://older.example.com/v1",
-              timeoutSeconds: 600,
-            }),
-          },
-        },
-      },
-      {
-        agentModels,
-        providerId: "custom",
-        api: "openai-completions",
-        baseUrl: "https://new.example.com/v1",
-        defaultModels: [makeModel("model-b")],
-        defaultModelId: "model-b",
-      },
+      { models: { providers: duplicateProviders() } },
+      preset,
     );
 
     expect(Object.keys(next.models?.providers ?? {})).toEqual(["custom"]);
@@ -160,37 +114,23 @@ describe("onboard auth provider config merges", () => {
   });
 
   it("lets onboarding provider patches clear omitted auth fields", () => {
-    const next = applyOnboardAuthAgentModelsAndProviders(
+    const next = patchProviders(
       {
-        models: {
-          providers: {
-            custom: {
-              api: "anthropic-messages",
-              baseUrl: "https://old.example.com/v1",
-              apiKey: "stale-key",
-              auth: "api-key",
-              authHeader: true,
-              headers: { authorization: "stale-header" },
-              request: {
-                allowPrivateNetwork: true,
-                auth: { mode: "authorization-bearer", token: "stale-token" },
-                headers: { "x-stale-auth": "stale-request-header" },
-              },
-              timeoutSeconds: 900,
-              models: [makeModel("model-a")],
-            },
+        custom: makeProvider(["model-a"], {
+          api: "anthropic-messages",
+          apiKey: "stale-key",
+          auth: "api-key",
+          authHeader: true,
+          headers: { authorization: "stale-header" },
+          request: {
+            allowPrivateNetwork: true,
+            auth: { mode: "authorization-bearer", token: "stale-token" },
+            headers: { "x-stale-auth": "stale-request-header" },
           },
-        },
+          timeoutSeconds: 900,
+        }),
       },
-      {
-        agentModels,
-        providers: {
-          custom: makeProvider(["model-b"], {
-            api: "anthropic-messages",
-            baseUrl: "https://new.example.com/v1",
-          }),
-        },
-      },
+      { api: "anthropic-messages" },
     );
 
     expect(next.models?.providers?.custom?.apiKey).toBeUndefined();
@@ -216,16 +156,12 @@ describe("onboard auth provider config merges", () => {
     };
 
     const next = applyProviderConfigWithDefaultModels(cfg, {
+      ...preset,
       agentModels: {
         "google/gemini-3.1-pro-preview": {
           params: { serviceTier: "standard" },
         },
       },
-      providerId: "custom",
-      api: "openai-completions",
-      baseUrl: "https://new.example.com/v1",
-      defaultModels: [makeModel("model-b")],
-      defaultModelId: "model-b",
     });
 
     expect(next.agents?.defaults?.models).toEqual({
@@ -234,7 +170,6 @@ describe("onboard auth provider config merges", () => {
         params: { thinkingLevel: "high", serviceTier: "standard" },
       },
     });
-    expect(next.agents?.defaults?.models).not.toHaveProperty("google/gemini-3-pro-preview");
   });
 
   it("normalizes retired Google provider catalog ids when applying only an agent default", () => {

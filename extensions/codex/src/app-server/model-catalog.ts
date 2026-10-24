@@ -111,7 +111,7 @@ export function createCodexAppServerModelCatalog(runtime: string) {
       if (discovery?.enabled === false) {
         return { entries: [] };
       }
-      const options = resolveCodexAppServerRuntimeOptions({ pluginConfig });
+      const options = resolveCodexAppServerRuntimeOptions({ pluginConfig: configured });
       const ownsLocalProcess =
         options.start.transport === "stdio" && !isCodexAppServerProxyLaunch(options.start.args);
       const authProfileStore =
@@ -130,7 +130,9 @@ export function createCodexAppServerModelCatalog(runtime: string) {
         return { entries: [] };
       }
       const usesNativeHome = ownsLocalProcess && options.start.homeScope === "user";
-      const native = usesNativeHome ? await probeCodexNativeAuth({ pluginConfig }) : undefined;
+      const native = usesNativeHome
+        ? await probeCodexNativeAuth({ pluginConfig: configured })
+        : undefined;
       if ((usesNativeHome && !native) || disposed || observations.get(key) !== observation) {
         return { entries: [] };
       }
@@ -139,6 +141,7 @@ export function createCodexAppServerModelCatalog(runtime: string) {
       const result = await withCodexAppServerJsonClient(
         {
           startOptions: start,
+          pluginConfig: configured,
           config: params.config,
           agentDir: params.agentDir,
           timeoutMs,

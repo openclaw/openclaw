@@ -8,6 +8,7 @@ import {
 } from "./graph-thread.js";
 import {
   deleteGraphRequest,
+  fetchAllGraphPages,
   fetchGraphAbsoluteUrl,
   fetchGraphJson,
   mutateGraphJson,
@@ -71,9 +72,7 @@ export async function resolveGraphConversationId(
 export function resolveConversationPath(to: string): {
   kind: "chat" | "channel";
   basePath: string;
-  chatId?: string;
   teamId?: string;
-  channelId?: string;
 } {
   const cleaned = stripTargetPrefix(to);
   const separatorIndex = cleaned.indexOf("/");
@@ -84,7 +83,6 @@ export function resolveConversationPath(to: string): {
       kind: "channel",
       basePath: `/teams/${encodeURIComponent(teamId)}/channels/${encodeURIComponent(channelId)}`,
       teamId,
-      channelId,
     };
   }
   // Conversation IDs like 19:xxx@thread.tacv2 may represent either group chats
@@ -95,7 +93,6 @@ export function resolveConversationPath(to: string): {
   return {
     kind: "chat",
     basePath: `/chats/${encodeURIComponent(cleaned)}`,
-    chatId: cleaned,
   };
 }
 
@@ -176,61 +173,40 @@ export async function pinMessageMSTeams(
   return { ok: true, pinnedMessageId: result.id };
 }
 
-type UnpinMessageMSTeamsParams = {
+export async function unpinMessageMSTeams(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
   to: string;
   /** The pinned-message resource ID returned by pin or list-pins (not the message ID). */
   pinnedMessageId: string;
-};
-
-export async function unpinMessageMSTeams(
-  params: UnpinMessageMSTeamsParams,
-): Promise<{ ok: true }> {
+}): Promise<{ ok: true }> {
   const { token, basePath } = await resolveGraphPinContext(params, "modify");
   const path = `${basePath}/pinnedMessages/${encodeURIComponent(params.pinnedMessageId)}`;
   await deleteGraphRequest({ token, path });
   return { ok: true };
 }
 
-type ListPinsMSTeamsParams = {
+const LIST_PINS_MAX_PAGES = 10;
+
+export async function listPinsMSTeams(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
   to: string;
-};
-
-const LIST_PINS_MAX_PAGES = 10;
-
-export async function listPinsMSTeams(params: ListPinsMSTeamsParams) {
+}) {
   const { token, basePath } = await resolveGraphPinContext(params, "list");
-
-  const path = `${basePath}/pinnedMessages?$expand=message`;
-  const allPins: Array<{ id: string; pinnedMessageId: string; messageId?: string; text?: string }> =
-    [];
-
-  let res = await fetchGraphJson<GraphResponse<GraphPinnedMessage>>({ token, path });
-  let pages = 1;
-
-  while (true) {
-    for (const pin of res.value ?? []) {
-      allPins.push({
-        id: pin.id ?? "",
-        pinnedMessageId: pin.id ?? "",
-        messageId: pin.message?.id,
-        text: pin.message?.body?.content,
-      });
-    }
-
-    const nextLink = res["@odata.nextLink"];
-    if (!nextLink || pages >= LIST_PINS_MAX_PAGES) {
-      break;
-    }
-
-    res = await fetchGraphAbsoluteUrl<GraphResponse<GraphPinnedMessage>>({ token, url: nextLink });
-    pages++;
-  }
-
-  return { pins: allPins };
+  const { items } = await fetchAllGraphPages<GraphPinnedMessage>({
+    token,
+    path: `${basePath}/pinnedMessages?$expand=message`,
+    maxPages: LIST_PINS_MAX_PAGES,
+  });
+  return {
+    pins: items.map((pin) => ({
+      id: pin.id ?? "",
+      pinnedMessageId: pin.id ?? "",
+      messageId: pin.message?.id,
+      text: pin.message?.body?.content,
+    })),
+  };
 }
 
 type GraphReaction = {
@@ -251,7 +227,6 @@ type ReactionSummary = {
   reactionType: string;
   /** Display name for the reaction (matches reactionType for known types). */
   name: string;
-  /** Emoji representation when available. */
   emoji?: string;
   count: number;
   users: Array<{ id: string; displayName?: string }>;
@@ -325,15 +300,6 @@ export async function listReactionsMSTeams(params: MSTeamsMessageTarget) {
   return { reactions };
 }
 
-type SearchMessagesMSTeamsParams = {
-  cfg: OpenClawConfig;
-  accountId?: string | null;
-  to: string;
-  query: string;
-  from?: string;
-  limit?: number;
-};
-
 const SEARCH_DEFAULT_LIMIT = 25;
 const SEARCH_MAX_LIMIT = 50;
 const SEARCH_PAGE_SIZE = 50;
@@ -362,7 +328,14 @@ function matchesSearchSender(message: GraphMessage, from: string | undefined): b
  * Graph does not support collection `$search` here, so filter bounded pages
  * locally without widening the read to the account's global message index.
  */
-export async function searchMessagesMSTeams(params: SearchMessagesMSTeamsParams) {
+export async function searchMessagesMSTeams(params: {
+  cfg: OpenClawConfig;
+  accountId?: string | null;
+  to: string;
+  query: string;
+  from?: string;
+  limit?: number;
+}) {
   const { token, basePath } = await resolveGraphMessageContext(params);
 
   const rawLimit = params.limit ?? SEARCH_DEFAULT_LIMIT;

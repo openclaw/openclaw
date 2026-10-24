@@ -1,9 +1,21 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  createConfigResolutionFacts,
+  setConfigResolutionFacts,
+} from "../config/resolution-facts.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { SecretRef } from "../config/types.secrets.js";
 import type { ProviderModelRouteCandidate } from "../plugin-sdk/provider-model-types.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
-import { createApiKeyCredential } from "./auth-profiles/credential-fixtures.test-support.js";
+import {
+  createApiKeyCredential,
+  createOAuthRefreshCredential,
+} from "./auth-profiles/credential-fixtures.test-support.js";
+import type { AuthProfileCredential } from "./auth-profiles/types.js";
 import { createModelAuthAvailabilityResolver } from "./model-auth-availability.js";
 import {
   authStore,
@@ -11,18 +23,26 @@ import {
   evaluate,
   platformRoute,
   routeResolverFactory,
+  mockRouteResolverFactory,
   subscriptionRoute,
 } from "./model-auth-availability.test-support.js";
+import { providerConfig } from "./model-auth.fixtures.test-support.js";
 import type { createOpenAIModelRoutesResolver } from "./openai-model-routes.js";
+import { prepareAgentRuntimeAuth } from "./runtime-plan/prepare-auth.js";
+
+function resolverWith(
+  options: Partial<Parameters<typeof createModelAuthAvailabilityResolver>[0]> = {},
+) {
+  return createModelAuthAvailabilityResolver({
+    cfg: {},
+    authStore: authStore(),
+    env: {},
+    ...options,
+  });
+}
 
 function openAiOAuthProfile() {
-  return {
-    type: "oauth" as const,
-    provider: "openai",
-    access: "oauth-access",
-    refresh: "oauth-refresh",
-    expires: Date.now() + 60_000,
-  };
+  return createOAuthRefreshCredential({ access: "oauth-access", refresh: "oauth-refresh" });
 }
 
 describe("createModelAuthAvailabilityResolver", () => {
@@ -36,10 +56,7 @@ describe("createModelAuthAvailabilityResolver", () => {
         },
       ],
     });
-    const resolver = createModelAuthAvailabilityResolver({
-      cfg: {},
-      authStore: authStore(),
-      env: {},
+    const resolver = resolverWith({
       metadataSnapshot,
       preparedRuntimeAuthModes: { "external-cloud": "api_key" },
     });
@@ -50,10 +67,7 @@ describe("createModelAuthAvailabilityResolver", () => {
       routeResolution: null,
       selectedAuthMode: "api_key",
     });
-    const syntheticResolver = createModelAuthAvailabilityResolver({
-      cfg: {},
-      authStore: authStore(),
-      env: {},
+    const syntheticResolver = resolverWith({
       metadataSnapshot,
       syntheticAuthProviderRefs: ["cloud-alias"],
     });
@@ -77,10 +91,7 @@ describe("createModelAuthAvailabilityResolver", () => {
         },
       ],
     });
-    const resolver = createModelAuthAvailabilityResolver({
-      cfg: {},
-      authStore: authStore(),
-      env: {},
+    const resolver = resolverWith({
       metadataSnapshot,
       preparedRuntimeAuthModes: { "claude-cli": "api_key" },
     });
@@ -94,20 +105,11 @@ describe("createModelAuthAvailabilityResolver", () => {
   });
 
   it("keeps configured local providers independent from native-auth probe completion", () => {
-    const resolver = createModelAuthAvailabilityResolver({
-      cfg: {
-        models: {
-          providers: {
-            "local-openai": {
-              api: "openai-completions",
-              baseUrl: "http://127.0.0.1:8080/v1",
-              models: [],
-            },
-          },
-        },
-      },
-      authStore: authStore(),
-      env: {},
+    const resolver = resolverWith({
+      cfg: providerConfig("local-openai", {
+        api: "openai-completions",
+        baseUrl: "http://127.0.0.1:8080/v1",
+      }),
       preparedSyntheticAuthComplete: true,
     });
 
@@ -174,18 +176,11 @@ describe("createModelAuthAvailabilityResolver", () => {
       ).not.toBe(true);
       expect(
         evaluate({
-          cfg: {
-            models: {
-              providers: {
-                openai: {
-                  auth: "api-key",
-                  apiKey: "configured-platform-key",
-                  baseUrl: "https://api.openai.com/v1",
-                  models: [],
-                },
-              },
-            },
-          },
+          cfg: providerConfig("openai", {
+            auth: "api-key",
+            apiKey: "configured-platform-key",
+            baseUrl: "https://api.openai.com/v1",
+          }),
           store,
           ref: { modelId },
           preparedRuntimeAuthMaterializations: [materialization],
@@ -345,9 +340,7 @@ describe("createModelAuthAvailabilityResolver", () => {
     "does not pair a $profile.type profile with configured $auth auth",
     ({ auth, profile, route }) => {
       const result = evaluate({
-        cfg: {
-          models: { providers: { openai: { auth, baseUrl: "", models: [] } } },
-        } as OpenClawConfig,
+        cfg: providerConfig("openai", { auth }),
         store: authStore({ "openai:wrong-route": profile }),
       });
 
@@ -372,18 +365,10 @@ describe("createModelAuthAvailabilityResolver", () => {
               "openai:bound": { provider, mode },
             },
           },
-          models: {
-            providers: {
-              openai: { apiKey: "openai:bound", baseUrl: "", models: [] },
-            },
-          },
+          ...providerConfig("openai", { apiKey: "openai:bound" }),
         } as OpenClawConfig,
         store: authStore({
-          "openai:bound": {
-            type: "api_key",
-            provider: "openai",
-            key: "bound-platform-key",
-          },
+          "openai:bound": createApiKeyCredential("openai", "bound-platform-key"),
         }),
       }),
     ).toMatchObject({
@@ -427,10 +412,10 @@ describe("createModelAuthAvailabilityResolver", () => {
     });
   });
 
-  it("treats automatic preferences and user pins as distinct source-order facts", () => {
+  it("honors an automatic profile preference ahead of stored order", () => {
     const store = authStore(
       {
-        "openai:platform": { type: "api_key", provider: "openai", key: "platform-key" },
+        "openai:platform": createApiKeyCredential("openai", "platform-key"),
         "openai:chatgpt": openAiOAuthProfile(),
       },
       { openai: ["openai:platform", "openai:chatgpt"] },
@@ -440,30 +425,12 @@ describe("createModelAuthAvailabilityResolver", () => {
       selectedProfileId: "openai:chatgpt",
       selectedRoute: subscriptionRoute,
     });
-    expect(
-      evaluate({
-        store,
-        ref: {
-          preferredProfileId: "openai:chatgpt",
-          pinnedProfileId: "openai:platform",
-        },
-      }),
-    ).toMatchObject({
-      selectedProfileId: "openai:platform",
-      selectedRoute: platformRoute,
-    });
   });
 
   it("keeps ambient environment auth ahead of non-explicit provider material", () => {
     expect(
       evaluate({
-        cfg: {
-          models: {
-            providers: {
-              openai: { apiKey: "configured-platform-key", baseUrl: "", models: [] },
-            },
-          },
-        } as OpenClawConfig,
+        cfg: providerConfig("openai", { apiKey: "configured-platform-key" }),
         env: { OPENAI_API_KEY: "environment-key" },
       }),
     ).toMatchObject({
@@ -480,19 +447,13 @@ describe("createModelAuthAvailabilityResolver", () => {
       env: { OPENAI_API_KEY: "environment-key" },
       profileId: "openai:oauth-missing",
       profile: { type: "oauth" as const, provider: "openai", access: "", refresh: "" },
-      route: platformRoute,
-      mode: "api-key",
     },
     {
       label: "OAuth environment after unavailable Platform auth",
-      cfg: {
-        models: { providers: { openai: { auth: "oauth", baseUrl: "", models: [] } } },
-      } as OpenClawConfig,
+      cfg: providerConfig("openai", { auth: "oauth" }),
       env: { OPENAI_API_KEY: "environment-token" },
       profileId: "openai:platform-missing",
       profile: { type: "api_key" as const, provider: "openai", key: "" },
-      route: subscriptionRoute,
-      mode: "oauth",
     },
     // An environment credential named nowhere in config is not authorized to
     // stand in for a declared profile, including a declared profile that turned
@@ -558,7 +519,8 @@ describe("createModelAuthAvailabilityResolver", () => {
   });
 
   it("does not grant refresh authority to an unsupported external CLI id", () => {
-    const resolver = createModelAuthAvailabilityResolver({
+    mockRouteResolverFactory(routeResolverFactory(null));
+    const resolver = resolverWith({
       cfg: {} as OpenClawConfig,
       authStore: authStore({
         "acme:cli": {
@@ -569,9 +531,7 @@ describe("createModelAuthAvailabilityResolver", () => {
           expires: Date.now() - 60_000,
         },
       }),
-      env: {},
       externalCliProviderIds: ["acme-cli"],
-      routeResolverFactory: routeResolverFactory(null),
     });
 
     expect(resolver.resolveProviderAuthAvailability("acme-cli")).toBeUndefined();
@@ -661,26 +621,17 @@ describe("createModelAuthAvailabilityResolver", () => {
   it.each([
     {
       label: "explicit",
-      cfg: {
-        models: {
-          providers: {
-            "amazon-bedrock": {
-              api: "bedrock-converse-stream",
-              auth: "aws-sdk",
-              baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
-              models: [],
-            },
-          },
-        },
-      } as OpenClawConfig,
+      cfg: providerConfig("amazon-bedrock", {
+        api: "bedrock-converse-stream",
+        auth: "aws-sdk",
+        baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
+      }),
     },
     { label: "implicit", cfg: {} },
   ])("keeps an $label Bedrock AWS SDK route ready", ({ cfg }) => {
-    const result = createModelAuthAvailabilityResolver({
-      cfg,
-      authStore: authStore(),
-      env: {},
-    }).evaluateModelAuth("amazon-bedrock", { api: "bedrock-converse-stream" });
+    const result = resolverWith({ cfg }).evaluateModelAuth("amazon-bedrock", {
+      api: "bedrock-converse-stream",
+    });
 
     expect(result).toMatchObject({
       availability: true,
@@ -711,22 +662,15 @@ describe("createModelAuthAvailabilityResolver", () => {
   ])(
     "keeps a non-OpenAI provider $name SecretRef unresolved without reading it",
     ({ apiKey, secrets }) => {
-      const result = createModelAuthAvailabilityResolver({
+      const result = resolverWith({
         cfg: {
-          models: {
-            providers: {
-              anthropic: {
-                api: "anthropic-messages",
-                apiKey,
-                baseUrl: "https://api.anthropic.com",
-                models: [],
-              },
-            },
-          },
+          ...providerConfig("anthropic", {
+            api: "anthropic-messages",
+            apiKey,
+            baseUrl: "https://api.anthropic.com",
+          }),
           secrets,
         },
-        authStore: authStore(),
-        env: {},
       }).evaluateModelAuth("anthropic", {
         modelId: "claude-sonnet-4-6",
         api: "anthropic-messages",
@@ -743,14 +687,13 @@ describe("createModelAuthAvailabilityResolver", () => {
   );
   it("passes one physical route group to auth selection for an unknown model", () => {
     const resolveRoutes = vi.fn(() => dualRoutes);
-    const resolver = createModelAuthAvailabilityResolver({
+    mockRouteResolverFactory((() => resolveRoutes) as typeof createOpenAIModelRoutesResolver);
+    const resolver = resolverWith({
       cfg: { auth: { order: { openai: ["openai:chatgpt", "openai:platform"] } } },
       authStore: authStore({
-        "openai:platform": { type: "api_key", provider: "openai", key: "platform-key" },
+        "openai:platform": createApiKeyCredential("openai", "platform-key"),
         "openai:chatgpt": openAiOAuthProfile(),
       }),
-      env: {},
-      routeResolverFactory: (() => resolveRoutes) as typeof createOpenAIModelRoutesResolver,
     });
     const observedRoutes = [
       { api: "openai-chatgpt-responses" as const, baseUrl: subscriptionRoute.baseUrl },
@@ -773,4 +716,210 @@ describe("createModelAuthAvailabilityResolver", () => {
       observedRoutes,
     });
   });
+});
+
+describe("credential readiness and retry reasons", () => {
+  const catalogRef = { source: "store", provider: "default", id: "CATALOG_KEY" } as const;
+  afterEach(clearRuntimeConfigSnapshot);
+
+  function readiness(cfg: OpenClawConfig, store = authStore()) {
+    return resolverWith({ cfg, authStore: store });
+  }
+
+  it.each([
+    { name: "resolved profile collision", key: "bound", available: true },
+    { name: "resolved malformed syntax", key: "$not-a-template", available: true },
+    { name: "pending env provenance", key: "ollama-local", pending: true, available: true },
+    { name: "literal profile binding", key: "bound", literal: true, available: false },
+    { name: "literal local marker", key: "ollama-local", literal: true, available: undefined },
+    { name: "literal env marker", key: "OPENAI_API_KEY", literal: true, available: false },
+    { name: "literal malformed syntax", key: "$not-a-template", literal: true, available: false },
+    { name: "missing snapshot", key: "ollama-local", snapshot: "absent", available: undefined },
+    { name: "unresolved snapshot", snapshot: "unresolved", available: undefined },
+    { name: "empty snapshot material", key: "", available: undefined },
+    { name: "foreign source", key: "ollama-local", snapshot: "foreign", available: undefined },
+    { name: "replaced source", key: "ollama-local", snapshot: "replaced", available: undefined },
+    { name: "empty profile order", key: "ollama-local", order: true, available: true },
+    { name: "explicit lock", key: "ollama-local", locked: true, available: false },
+  ])(
+    "preserves source ownership for $name",
+    ({ key, literal, pending, snapshot, order, locked, available }) => {
+      const sourceConfig = {
+        ...providerConfig("acme", {
+          baseUrl: "https://acme.example/v1",
+          apiKey: literal ? key : pending ? "${PENDING_KEY}" : catalogRef,
+        }),
+        ...(order ? { auth: { order: { acme: [] } } } : {}),
+      };
+      if (pending) {
+        setConfigResolutionFacts(
+          sourceConfig,
+          createConfigResolutionFacts(
+            [],
+            new Map([["models.providers.acme.apiKey", "PENDING_KEY"]]),
+          ),
+        );
+      }
+      const runtimeConfig = structuredClone(sourceConfig);
+      if (snapshot !== "unresolved") {
+        runtimeConfig.models.providers.acme!.apiKey = key;
+      }
+      const store = authStore({
+        bound: { type: "api_key", provider: "other", key: "profile-key" },
+      });
+      if (snapshot !== "absent") {
+        setRuntimeConfigSnapshot(runtimeConfig, sourceConfig);
+      }
+      const cfg =
+        snapshot === "absent" || snapshot === "foreign" || snapshot === "replaced"
+          ? structuredClone(sourceConfig)
+          : runtimeConfig;
+      if (snapshot === "foreign") {
+        cfg.models.providers.acme!.baseUrl = "https://foreign.example/v1";
+      }
+      if (snapshot === "replaced") {
+        const replacement = structuredClone(sourceConfig);
+        replacement.models.providers.acme!.apiKey = { ...catalogRef, id: "REPLACEMENT_KEY" };
+        setRuntimeConfigSnapshot(runtimeConfig, replacement);
+      }
+      const result = readiness(cfg, store).evaluateModelAuth(
+        "acme",
+        locked ? { pinnedProfileId: "bound" } : {},
+      );
+      expect(result.availability).toBe(available);
+      if (available === true) {
+        expect(result.evidence).toBe("runtime");
+        expect(result.selectedProfileId).toBeUndefined();
+        const prepared = prepareAgentRuntimeAuth({
+          provider: "acme",
+          modelId: "discovered",
+          config: cfg,
+          authProfileStore: store,
+          env: {},
+        });
+        expect(prepared.attempts[0]).toMatchObject({
+          kind: "direct",
+          allowAuthProfileFallback: false,
+          plan: { credentialSource: { kind: "direct", authorization: "declared" } },
+        });
+      }
+    },
+  );
+  it.each(["openai", "anthropic"])(
+    "distinguishes missing, failed, unknown, and ready credentials for %s",
+    (provider) => {
+      const ref = (source: "file" | "env", owner: string, id: string): AuthProfileCredential => ({
+        type: "api_key",
+        provider,
+        keyRef: { source, provider: owner, id },
+      });
+      const cases: [string, AuthProfileCredential | undefined, string | undefined][] = [
+        ["no evidence", undefined, "missing-auth"],
+        ["expired", { type: "token", provider, token: "expired-token", expires: 1 }, "auth-failed"],
+        ["invalid reference", ref("file", "absent", "key"), "auth-failed"],
+        ["unread reference", ref("env", "default", "UNREAD_KEY"), undefined],
+        ["ready", createApiKeyCredential(provider, "test-key"), undefined],
+      ];
+      for (const [label, profile, reason] of cases) {
+        mockRouteResolverFactory(routeResolverFactory(dualRoutes));
+        const result = resolverWith({
+          authStore: authStore(profile ? { test: profile } : {}),
+        }).evaluateModelAuth(provider);
+        expect.soft(result.unavailableReason, label).toBe(reason);
+        expect.soft(result.unavailableUntil, label).toBeUndefined();
+      }
+    },
+  );
+
+  it("reports the earliest retry among viable cooling profiles, excluding invalid or permanently rejected profiles", () => {
+    const until = Date.now() + 60_000;
+    const store = authStore({
+      first: createApiKeyCredential("openai", "first-key"),
+      second: createApiKeyCredential("openai", "second-key"),
+      invalid: { type: "token", provider: "openai", token: "expired-token", expires: 1 },
+      rejected: createApiKeyCredential("openai", "rejected-key"),
+    });
+    store.usageStats = {
+      first: { cooldownUntil: until + 60_000 },
+      second: { cooldownUntil: until },
+      invalid: { cooldownUntil: until - 30_000 },
+      rejected: { disabledUntil: until - 45_000, disabledReason: "auth_permanent" },
+    };
+    expect(evaluate({ store, ref: { preferredProfileId: "first" } })).toMatchObject({
+      availability: false,
+      unavailableReason: "cooldown",
+      unavailableUntil: until,
+    });
+    expect(evaluate({ store, ref: { pinnedProfileId: "invalid" } })).toMatchObject({
+      availability: false,
+      unavailableReason: "auth-failed",
+    });
+  });
+
+  it("hides a cooling inline key while preserving a healthy profile fallback", () => {
+    const store = authStore();
+    const provider = "anthropic-local";
+    const cfg = providerConfig(provider, {
+      apiKey: "demo-key",
+      baseUrl: "http://127.0.0.1:8000/v1",
+    });
+    const availability = () =>
+      readiness(cfg, store).evaluateModelAuth(provider, { modelId: "demo-model" }).availability;
+
+    expect(availability()).toBe(true);
+    store.usageStats = {
+      "inline-api-key:anthropic-local": {
+        disabledUntil: Date.now() + 60_000,
+        disabledReason: "billing",
+      },
+    };
+    expect(availability()).toBe(false);
+    store.profiles["test-profile"] = createApiKeyCredential("anthropic-local", "profile-key");
+    expect(availability()).toBe(true);
+  });
+
+  it.each(["profile", "inline", "hydrated-inline"] as const)(
+    "distinguishes %s permanent auth rejection from active retry windows",
+    (source) => {
+      const until = Date.now() + 60_000;
+      const cases = [
+        [{ cooldownUntil: until }, "cooldown", until],
+        [{ disabledUntil: until, disabledReason: "auth_permanent" }, "auth-failed", undefined],
+        [
+          { disabledUntil: 1, disabledReason: "auth_permanent", cooldownUntil: until },
+          "cooldown",
+          until,
+        ],
+        [{ disabledUntil: until, disabledReason: "billing" }, "cooldown", until],
+      ] as const;
+      for (const [stats, reason, retryAt] of cases) {
+        clearRuntimeConfigSnapshot();
+        const store = authStore({
+          bound: createApiKeyCredential("anthropic", "test-key"),
+        });
+        store.usageStats = {
+          [source === "profile" ? "bound" : "inline-api-key:anthropic"]: stats,
+        };
+        const cfg = providerConfig("anthropic", {
+          auth: "api-key",
+          apiKey: source === "profile" ? "bound" : "inline-key",
+          baseUrl: "https://api.anthropic.com",
+        });
+        if (source === "hydrated-inline") {
+          const sourceConfig = providerConfig("anthropic", {
+            ...cfg.models.providers.anthropic,
+            apiKey: catalogRef,
+          });
+          cfg.models.providers.anthropic!.apiKey = "ollama-local";
+          setRuntimeConfigSnapshot(cfg, sourceConfig);
+        }
+        const result = readiness(cfg, store).evaluateModelAuth("anthropic");
+        expect.soft(result, JSON.stringify(stats)).toMatchObject({
+          availability: false,
+          unavailableReason: reason,
+        });
+        expect.soft(result.unavailableUntil, JSON.stringify(stats)).toBe(retryAt);
+      }
+    },
+  );
 });

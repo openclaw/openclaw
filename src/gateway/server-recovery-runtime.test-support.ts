@@ -8,6 +8,7 @@ export function createMockGatewayRecoveryRuntime(
     prepareRestartRecovery: vi.fn(() => undefined),
     dispatchSessionMethod: vi.fn(),
     dispatchAgent: vi.fn(),
+    resumeChatInput: vi.fn(),
     waitForAgent: vi.fn(),
     sendRecoveryNotice: vi.fn(),
     ...overrides,

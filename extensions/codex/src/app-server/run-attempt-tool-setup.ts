@@ -2,8 +2,6 @@ import {
   embeddedAgentLog,
   isHostScopedAgentToolActive,
   materializeRequesterScopedMcpToolsForHarnessRun,
-  resolveAgentDir,
-  supportsModelTools,
   type EmbeddedRunAttemptParams,
   type ExecApprovalDecision,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
@@ -28,10 +26,6 @@ import {
   createCodexDynamicToolBridge,
   projectCodexExecutableDynamicTools,
 } from "./dynamic-tools.js";
-import {
-  resolveInactiveCodexHeartbeatResponseDescriptor,
-  selectInactiveCodexHeartbeatResponseTool,
-} from "./heartbeat-tool-fallback.js";
 import { buildCodexHookRequester } from "./hook-requester.js";
 import type { NativePendingChild } from "./native-subagent-monitor-types.js";
 import { hasCodexNativeToolCatalog, loadCodexNativeToolCatalog } from "./native-tool-catalog.js";
@@ -47,7 +41,7 @@ import {
   captureScheduledCodexAppAuthority,
   resolveScheduledCodexAppCreatorCaptureDecision,
 } from "./scheduled-app-authority.js";
-import { releaseLeasedSharedCodexAppServerClient } from "./shared-client.js";
+import { releaseCodexProbeClient } from "./shared-client.js";
 
 export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
   const {
@@ -290,7 +284,7 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
         },
       });
     } finally {
-      releaseLeasedSharedCodexAppServerClient(client);
+      await releaseCodexProbeClient(client, connection.attemptClientFactory);
     }
   }
   let requireExplicitMessageTarget: boolean | undefined;
@@ -337,7 +331,6 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
       ? []
       : await buildDynamicTools({
           ...commonToolParams,
-          forceHeartbeatTool: true,
           ignoreDisableMessageTool: true,
           ignoreRuntimePlan: true,
         });
@@ -351,7 +344,7 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
       sessionId: params.sessionId,
       runId: params.runId,
       agentId: policyAgentId,
-      agentDir: agentDir ?? resolveAgentDir(params.config ?? {}, sessionAgentId),
+      agentDir,
       agentAccountId: params.agentAccountId,
       messageProvider: params.messageProvider ?? params.messageChannel,
       messageChannel: params.messageChannel,
@@ -381,6 +374,9 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
       cwd: effectiveCwd ?? effectiveWorkspace,
       sandboxToolPolicy: sandbox?.tools,
       conversationToolPolicy: params.conversationToolPolicy,
+      requesterOrigin: params.requesterOrigin,
+      operatorProfileId: params.operatorProfileId,
+      conversationId: params.conversationId,
       inputProvenance: params.inputProvenance,
       trustedInternalHandoff: params.trustedInternalHandoff,
       scheduledToolPolicy: params.scheduledToolPolicy,
@@ -507,6 +503,7 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
       replyToMode: params.replyToMode,
       hasRepliedRef: params.hasRepliedRef,
       sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
+      messageToolFinalByDefault: params.messageToolFinalByDefault,
       onToolOutcome: onCodexToolOutcome,
       allocateToolOutcomeOrdinal: allocateCodexToolOutcomeOrdinal,
       trigger: params.trigger,
@@ -519,33 +516,10 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
         ? { turnSourceThreadId: params.currentThreadTs }
         : {}),
     };
-    const heartbeatFallbackDescriptor = resolveInactiveCodexHeartbeatResponseDescriptor({
-      registeredTools: registeredWithScopedMcp,
-      ...(nativeSpecs ? { registeredSpecs: nativeSpecs } : {}),
-    });
-    const heartbeatFallbackTool =
-      heartbeatFallbackDescriptor && supportsModelTools(params.model)
-        ? selectInactiveCodexHeartbeatResponseTool({
-            descriptor: heartbeatFallbackDescriptor,
-            disableTools: params.disableTools,
-            toolsAllow: params.toolsAllow,
-            pluginConfig,
-          })
-        : undefined;
-    const registeredFallbackTools =
-      params.trigger === "heartbeat" ||
-      params.enableHeartbeatTool === true ||
-      params.forceHeartbeatTool === true ||
-      !heartbeatFallbackTool
-        ? undefined
-        : params.hostCapabilities.bindToolSurface([heartbeatFallbackTool], {
-            cwd: effectiveCwd ?? effectiveWorkspace,
-          });
     const toolBridge = createCodexDynamicToolBridge({
       assertCurrentAsync: runtime.nativeExecutionPolicy.assertCurrent,
       tools: toolsWithScopedMcp,
       registeredTools: registeredWithScopedMcp,
-      registeredFallbackTools,
       registeredSpecs: nativeSpecs,
       signal: runAbortController.signal,
       computerContextEpoch,
@@ -554,6 +528,7 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
         ? "direct"
         : resolveCodexDynamicToolsLoadingForRuntime(pluginConfig, effectiveRuntimeModelId, {
             connectionClass: connection.appServer.connectionClass,
+            nativeToolSurfaceEnabled,
           }),
       directToolNames: resolveCodexDynamicToolDirectNames(
         params,

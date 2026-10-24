@@ -5,7 +5,7 @@
  */
 import fs from "node:fs/promises";
 import path from "node:path";
-import { expect, it, vi } from "vitest";
+import { expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { SessionEntry } from "../../../config/sessions.js";
 import {
@@ -30,6 +30,132 @@ import type { createSubagentRegistryMockState } from "./subagent-registry.mock-s
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 type SessionStore = Record<string, Record<string, unknown>>;
+
+/** Policy-owner stub for delivery bookkeeping; security restoration has separate real-owner proof. */
+export async function prepareSubagentRecoveryFixture(
+  run: SubagentRunRecord,
+  fixture: { stateDir?: string; entries?: Record<string, SessionEntry>; storePath?: string },
+): Promise<void> {
+  const recovery = await import("../../../gateway/operator-run-recovery.js");
+  const { resolveSessionStorePathCore } = await import("../../../config/sessions.js");
+  const { createAdmittedRunOperatorAuthority } = await import("../../admitted-run-context.js");
+  const requester = fixture.entries?.[run.requesterSessionKey];
+  const sessionId = requester?.sessionId ?? "recovery-requester-session";
+  const lifecycleRevision = requester?.lifecycleRevision ?? "recovery-requester-revision";
+  const agentId = run.requesterAgentId ?? "main";
+  const storePath = fixture.stateDir
+    ? await writeSubagentSessionEntry({
+        stateDir: fixture.stateDir,
+        agentId,
+        sessionKey: run.requesterSessionKey,
+        defaultSessionId: sessionId,
+        lifecycleRevision,
+      })
+    : (fixture.storePath ?? resolveSessionStorePathCore(undefined, { agentId }));
+  if (fixture.entries) {
+    const entry: SessionEntry = {
+      ...requester,
+      sessionId,
+      lifecycleRevision,
+      updatedAt: Date.now(),
+    };
+    fixture.entries[run.requesterSessionKey] = entry;
+    if (fixture.storePath) {
+      await replaceSessionEntry({ storePath, sessionKey: run.requesterSessionKey }, entry);
+    }
+  }
+  const source: NonNullable<SubagentRunRecord["operatorRecoverySource"]> = {
+    version: 1,
+    agentId,
+    sessionKey: run.requesterSessionKey,
+    sessionId,
+    lifecycleRevision,
+    sourceRunId: run.requesterTurnRunId ?? "recovery-requester-turn",
+    snapshot: {
+      profileId: "registry-bookkeeping-operator",
+      scopes: ["operator.write"],
+      assignedRole: null,
+      githubLogin: null,
+      grant: null,
+      aliasBindingIds: [],
+      authPolicy: {
+        generation: "",
+        grantGeneration: "registry-bookkeeping-policy",
+        role: "operator",
+        authMethod: "token",
+      },
+      controlUiAdmin: false,
+      localOperator: false,
+      sourceIngress: "internal",
+    },
+  };
+  Object.assign(run, {
+    requesterAgentId: agentId,
+    requesterStorePath: storePath,
+    completionRequesterSessionId: sessionId,
+    completionRequesterLifecycleRevision: lifecycleRevision,
+    operatorRecoverySource: source,
+  });
+  const original = vi.isMockFunction(recovery.restoreGatewayOperatorSource)
+    ? vi.mocked(recovery.restoreGatewayOperatorSource).getMockImplementation()!
+    : recovery.restoreGatewayOperatorSource;
+  const lifetimes = new Set<AbortController>();
+  const restore = vi
+    .spyOn(recovery, "restoreGatewayOperatorSource")
+    .mockImplementation(async (params) => {
+      if (params.snapshot.profileId !== source.snapshot.profileId) {
+        return await original(params);
+      }
+      params.assertCurrent();
+      await params.prepareCurrent?.();
+      params.assertCurrent();
+      const lifetime = new AbortController();
+      lifetimes.add(lifetime);
+      let references = 0;
+      const assertCurrent = () => {
+        lifetime.signal.throwIfAborted();
+        params.assertCurrent();
+      };
+      const retain = () => {
+        assertCurrent();
+        references++;
+        let released = false;
+        return () => {
+          if (!released && --references === 0) {
+            lifetime.abort();
+          }
+          released = true;
+        };
+      };
+      return {
+        controlUiAdmin: false,
+        assertPolicyCurrent: assertCurrent,
+        authenticatedUserProfile: {
+          profileId: params.snapshot.profileId,
+          displayName: null,
+          avatarRevision: "1",
+          hasAvatar: false,
+          updatedAt: 1,
+        },
+        authority: createAdmittedRunOperatorAuthority({
+          profileId: params.snapshot.profileId,
+          scopes: params.snapshot.scopes,
+          recoverySnapshot: params.snapshot,
+          gatewayAccessGrant: null,
+          signal: lifetime.signal,
+          assertCurrent,
+          retain,
+        }),
+        release: retain(),
+      };
+    });
+  onTestFinished(() => {
+    for (const lifetime of lifetimes) {
+      lifetime.abort();
+    }
+    restore.mockRestore();
+  });
+}
 
 export function expectDeferredSubagentAnnouncement(
   entry: SubagentRunRecord | undefined,
@@ -354,7 +480,7 @@ export function registerSubagentRegistrationPersistenceTests({
       queued,
     });
 
-    expect(mocks.persistRegistryRows).toHaveBeenCalledTimes(queued ? 2 : 1);
+    expect(mocks.persistRegistryRows).toHaveBeenCalledOnce();
     expect(mocks.persistRegistryRows).toHaveBeenCalledWith(expect.any(Map), [runId]);
   });
 
@@ -474,35 +600,22 @@ export function registerSubagentRegistrationPersistenceTests({
   });
 }
 
-export function createRestoredRequesterWakeRuns(params: {
-  activationSettlement: boolean;
-  requesterYielded?: true;
-  endedAt: number;
-}): SubagentRunRecord[] {
-  const { activationSettlement, requesterYielded, endedAt } = params;
+export function createRestoredRequesterWakeRuns(endedAt: number): SubagentRunRecord[] {
   return Array.from({ length: 3 }, (_, index): SubagentRunRecord => {
     const runId = `run-restored-wake-${index}`;
-    return createDeliveredWake(
-      runId,
-      requesterYielded ? undefined : { status: "pending", attemptCount: 0 },
-      {
-        childSessionKey: `agent:main:subagent:restored-wake-${index}`,
-        childSessionIdentity: { sessionId: `sess-restored-wake-${index}` },
-        requesterSessionKey: `agent:main:requester-${index}`,
-        requesterDisplayKey: `requester-${index}`,
-        task: "resume a durable requester wake",
-        createdAt: endedAt - 1_000,
-        endedReason: "subagent-complete",
-        startedAt: endedAt - 500,
-        endedAt,
-        ...(activationSettlement
-          ? {
-              requesterTurnRunId: `requester-turn-${index}`,
-              requesterTurnYielded: requesterYielded ?? undefined,
-              taskRunId: runId,
-            }
-          : {}),
-      },
-    );
+    return createDeliveredWake(runId, undefined, {
+      childSessionKey: `agent:main:subagent:restored-wake-${index}`,
+      childSessionIdentity: { sessionId: `sess-restored-wake-${index}` },
+      requesterSessionKey: `agent:main:requester-${index}`,
+      requesterDisplayKey: `requester-${index}`,
+      task: "resume a durable requester wake",
+      createdAt: endedAt - 1_000,
+      endedReason: "subagent-complete",
+      startedAt: endedAt - 500,
+      endedAt,
+      requesterTurnRunId: `requester-turn-${index}`,
+      requesterTurnYielded: true,
+      taskRunId: runId,
+    });
   });
 }

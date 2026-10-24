@@ -55,8 +55,10 @@ The persisted `contextBudgetStatus` is a pre-prompt pressure estimate, not an ex
 
 Two additional guards run outside these paths:
 
-- **Preflight local compaction**: set `agents.defaults.compaction.maxActiveTranscriptBytes` to a positive byte threshold (bytes or a string like `"20mb"`) to trigger local compaction before opening the next run once the active transcript reaches that size. Normal semantic compaction still runs. For Codex app-server sessions, the same threshold caps native rollout transcripts and oversized native threads restart fresh. Unset or `0` disables the guard.
+- **Transcript byte guard**: `agents.defaults.compaction.maxActiveTranscriptBytes` accepts positive bytes or a size string such as `"20mb"`; unset or `0` disables it. It triggers built-in preflight compaction but only bounds [fresh-thread seeds for Codex app-server](/plugins/codex-harness-runtime/compaction).
 - **Mid-turn precheck**: set `agents.defaults.compaction.midTurnPrecheck.enabled: true` (default `false`) to add a tool-loop guard. After a tool result is appended and before the next model call, OpenClaw checks the actual provider-bound tool-result projection. It reuses the previous call’s reported prompt and completion occupancy, including opaque reasoning, when the request prefix, system prompt, tools, and model are unchanged. Matching assistant fragments are counted once; only new tool results and other appended content are estimated. Retained completion usage keeps opaque reasoning covered after context changes. Missing usage or changed context keeps the conservative estimate; the preflight budget and recovery thresholds remain unchanged. If context no longer fits, the guard does not compact inline - it raises a structured mid-turn precheck signal, stops the current prompt submission, and lets the outer run loop use the existing recovery path (truncate oversized tool results when that is enough, or trigger the configured compaction mode and retry). Works with both `default` and `safeguard` compaction modes, including provider-backed safeguard compaction. Independent of `maxActiveTranscriptBytes`: the byte-size guard runs before a turn opens, mid-turn precheck runs later, after new tool results are appended.
+
+  Messages steered into the active run after a tool result are included in this check. If that added context exceeds the budget, a settled tool batch can compact and continue without replaying the tool.
 
 ## Compaction settings
 
@@ -86,6 +88,12 @@ optional maintenance before acquiring the session lane. Restart and session
 replacement also cancel stale work. Accepted compaction commits remain accounted
 for, and an unlimited command timeout remains unlimited. One-shot local commands using OpenClaw's managed loop
 record an intentional skip without marking a memory flush successful.
+
+A newly created isolated sub-agent skips transcript-based compaction estimation
+before its first turn when its in-process launch carries the committed creation
+fact. Forked and resumed children keep normal preflight maintenance. Later turns
+use the child's current transcript and counters; the creation fact is not retained
+as an empty-transcript cache.
 
 Set `enabled: false` to disable threshold-driven auto-compaction inside the embedded agent runtime and direct-command post-turn maintenance. OpenClaw's reply preflight and overflow-recovery compaction paths remain available, and manual `/compact` continues to work.
 

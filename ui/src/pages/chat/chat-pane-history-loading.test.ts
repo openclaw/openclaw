@@ -1,13 +1,15 @@
 /* @vitest-environment jsdom */
 
-import { render } from "lit";
+import { createComponent, createSignal } from "solid-js";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { flush } from "../../test-helpers/solid-settle.ts";
 import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
 import { loadChatHistory } from "./chat-history.ts";
 import { createRefreshChatPane, nativeHistoryMessage } from "./chat-pane-history.test-support.ts";
 import { createGatewayBrowserClientFixture } from "./chat-pane.test-support.ts";
-import { renderChatHistoryBoundary } from "./components/chat-history-boundary.ts";
+import { ChatHistoryBoundary } from "./components/chat-history-boundary.tsx";
 
 describe("chat pane history loading", () => {
   it("keeps earlier history disabled while a cached transcript hydrates", async () => {
@@ -20,9 +22,32 @@ describe("chat pane history loading", () => {
     state.chatMessages = messages;
     state.chatHistoryPagination = { hasMore: true, nextOffset: 2, totalMessages: 4 };
     const container = document.createElement("div");
+    let refresh!: () => void;
+    pane.render();
+    mountSolid(
+      () => {
+        const [revision, setRevision] = createSignal(0);
+        refresh = () => setRevision((value) => value + 1);
+        const pagination = () => {
+          revision();
+          return pane.chatProps!.historyPagination!;
+        };
+        return createComponent(ChatHistoryBoundary, {
+          get hasMore() {
+            return pagination().hasMore;
+          },
+          get loading() {
+            return pagination().loading;
+          },
+          onShowEarlier: () => pagination().onShowEarlier(),
+        });
+      },
+      { container },
+    );
     const historyAction = () => {
       pane.render();
-      render(renderChatHistoryBoundary(pane.chatProps!.historyPagination!), container);
+      refresh();
+      flush();
       return container.querySelector<HTMLButtonElement>("button")!;
     };
     expect(historyAction().disabled).toBe(false);
@@ -31,7 +56,7 @@ describe("chat pane history loading", () => {
     const hydration = loadChatHistory(state);
     await vi.waitFor(() => expect(state.chatLoading).toBe(true));
     const loading = historyAction();
-    expect(loading.disabled).toBe(true);
+    expect(loading.getAttribute("aria-disabled")).toBe("true");
     expect(loading.textContent?.trim()).toBe("Loading earlier…");
     expect(loading.getAttribute("aria-label")).toBe("Loading earlier…");
     expect(loading.getAttribute("aria-busy")).toBe("true");

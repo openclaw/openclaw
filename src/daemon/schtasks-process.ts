@@ -14,7 +14,7 @@ import { parseTcpPort, parseTcpPortFromArgs } from "../infra/tcp-port.js";
 import { getWindowsSystem32ExePath } from "../infra/windows-install-roots.js";
 import { readWindowsProcessArgsSync } from "../infra/windows-port-pids.js";
 import { readWindowsProcessStartTimeSync } from "../infra/windows-process-start.js";
-import { hasCommandProcessCleanupError } from "../process/exec-result.js";
+import { ignoreNonCleanupCommandError } from "../process/exec-result.js";
 import { killProcessTree } from "../process/kill-tree.js";
 import { parseWindowsNativeCommandLine } from "../process/windows-command-line.js";
 import { isPidAlive } from "../shared/pid-alive.js";
@@ -312,12 +312,9 @@ export async function readBoundedScheduledTaskProcess(
           // Best-effort command reading only reads/parses the launcher file. Do
           // not race strict native queries or release their children unjoined.
           () =>
-            readScheduledTaskCommand(env, { timeoutMs: remaining() }).catch((error: unknown) => {
-              if (hasCommandProcessCleanupError(error)) {
-                throw error;
-              }
-              return null;
-            }),
+            readScheduledTaskCommand(env, { timeoutMs: remaining() }).catch(
+              ignoreNonCleanupCommandError,
+            ),
           deadlineMs,
           () => performance.now(),
         )
@@ -462,7 +459,6 @@ export async function terminateScheduledTaskNodeHost(
   }
   if (beforeMutation) {
     await beforeMutation();
-    assertCurrent?.();
   }
   await terminateGatewayProcessTree(pid, assertCurrent);
   return [pid];
@@ -711,19 +707,4 @@ export async function terminateGatewayProcessTree(
   if (!(await waitForProcessExit(pid, WINDOWS_FORCED_PROCESS_EXIT_TIMEOUT_MS))) {
     throw new Error(`gateway process ${pid} exit could not be confirmed after taskkill`);
   }
-}
-
-export async function waitForGatewayPortRelease(
-  port: number,
-  probeHosts: readonly string[],
-): Promise<boolean> {
-  const deadline = Date.now() + 5_000;
-  while (Date.now() < deadline) {
-    const diagnostics = await inspectPortUsage(port, { probeHosts }).catch(() => null);
-    if (diagnostics?.status === "free") {
-      return true;
-    }
-    await sleep(250);
-  }
-  return false;
 }

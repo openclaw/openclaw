@@ -225,7 +225,7 @@ describe("loadConfigForInstall", () => {
     },
   );
 
-  it.each(["@openclaw/discord@2026.5.22"])(
+  it.each(["npm:@openclaw/discord@2026.5.22"])(
     "allows versioned official reinstall recovery for %s",
     async (rawSpec) => {
       const snapshotCfg = {
@@ -442,7 +442,7 @@ describe("loadConfigForInstall", () => {
     );
 
     const request = resolvePluginInstallRequestContext({
-      rawSpec: "@openclaw/brave-plugin",
+      rawSpec: "brave",
     });
     if (!request.ok) {
       throw new Error(request.error);

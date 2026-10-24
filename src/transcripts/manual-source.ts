@@ -1,8 +1,6 @@
 import type { TranscriptSourceProvider } from "./provider-types.js";
 
 /**
- * Manual transcript import provider.
- *
  * This provider turns pasted text into final transcript utterances, optionally
  * splitting "Speaker: text" prefixes into speaker labels.
  */

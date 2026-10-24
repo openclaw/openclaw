@@ -1,15 +1,12 @@
 import { performance } from "node:perf_hooks";
-import { createDeferredCore } from "../../shared/deferred.js";
+import { createPermitPool } from "../../shared/permit-pool.js";
 
 export type SessionCatalogListTiming = {
   admittedAt?: number;
   settledAt?: number;
-  continuationWaitMs?: number;
   admittedStepMs?: number;
   stepCount?: number;
 };
-
-type QueuedProviderList = { start: () => void };
 
 type ProviderListStep<T> = { done: false } | { done: true; value: T };
 
@@ -23,13 +20,14 @@ class SessionCatalogListBusyError extends Error {
 }
 
 export class SessionCatalogListAdmission {
-  private active = 0;
-  private readonly queue: QueuedProviderList[] = [];
+  private readonly permits: ReturnType<typeof createPermitPool>;
 
   constructor(
     private readonly maxConcurrent: number,
     private readonly maxQueued: number,
-  ) {}
+  ) {
+    this.permits = createPermitPool(maxConcurrent);
+  }
 
   async run<T>(
     task: () => Promise<T>,
@@ -37,28 +35,17 @@ export class SessionCatalogListAdmission {
     timing?: SessionCatalogListTiming,
   ): Promise<T> {
     signal?.throwIfAborted();
-    if (this.active >= this.maxConcurrent) {
-      if (this.queue.length >= this.maxQueued) {
-        throw new SessionCatalogListBusyError(this.active, this.queue.length);
+    let release = this.permits.tryAcquire();
+    if (!release) {
+      const queued = this.permits.pendingCount;
+      if (queued >= this.maxQueued) {
+        throw new SessionCatalogListBusyError(this.maxConcurrent, queued);
       }
-      const ready = createDeferredCore();
-      const entry = { start: () => ready.resolve() };
-      const onAbort = () => {
-        const index = this.queue.indexOf(entry);
-        if (index >= 0) {
-          this.queue.splice(index, 1);
-          ready.reject(signal?.reason);
-        }
-      };
-      this.queue.push(entry);
-      signal?.addEventListener("abort", onAbort, { once: true });
-      try {
-        await ready.promise;
-      } finally {
-        signal?.removeEventListener("abort", onAbort);
+      release = await this.permits.acquire({ signal });
+      if (!release) {
+        // No deadline is supplied, so null means caller cancellation.
+        throw signal?.reason;
       }
-    } else {
-      this.active++;
     }
     const startedAt = performance.now();
     if (timing) {
@@ -73,12 +60,7 @@ export class SessionCatalogListAdmission {
         timing.stepCount ??= 1;
         timing.admittedStepMs ??= timing.settledAt - startedAt;
       }
-      const next = this.queue.shift();
-      if (next) {
-        next.start();
-      } else {
-        this.active--;
-      }
+      release();
     }
   }
 

@@ -65,6 +65,7 @@ describe("worker environment service", () => {
       start: vi.fn(),
       stop: vi.fn(async () => {}),
       stopAll: vi.fn(async () => await nodeShutdown.promise),
+      beginClose: vi.fn(),
     };
     const nodeDesktopCarrier = {
       bindRuntime: vi.fn(),
@@ -377,6 +378,7 @@ describe("worker environment service", () => {
         start,
         stop: vi.fn(async () => {}),
         stopAll: vi.fn(async () => {}),
+        beginClose: vi.fn(),
       };
       if (node) {
         support.testState.config.cloudWorkers!.profiles!.development!.provider = "device";

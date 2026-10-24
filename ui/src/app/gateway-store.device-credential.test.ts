@@ -57,7 +57,7 @@ describe("createApplicationGateway stored device credential", () => {
           password: "gate-password",
         });
         expect(gateway.connection.gatewayUrl).toBe(OTHER_GATEWAY);
-        expect(current().opts.token).toBe("page-shared-token");
+        expect(current().testOptions.token).toBe("page-shared-token");
       }
       const gatewayUrl = gateway.connection.gatewayUrl;
       const otherUrl = running ? firstUrl : OTHER_GATEWAY;
@@ -99,9 +99,9 @@ describe("createApplicationGateway stored device credential", () => {
       expect(gateway.hasStoredDeviceToken?.()).toBe(false);
       expect(clients.length).toBe(clientsBefore + Number(running));
       if (running) {
-        expect(current().opts.token).toBeUndefined();
-        expect(current().opts.bootstrapToken).toBeUndefined();
-        expect(current().opts.password).toBeUndefined();
+        expect(current().testOptions.token).toBeUndefined();
+        expect(current().testOptions.bootstrapToken).toBeUndefined();
+        expect(current().testOptions.password).toBeUndefined();
         expect(gateway.connection.token).toBe("");
       }
       gateway.stop();

@@ -27,6 +27,13 @@ function observeSettlement(promise: Promise<unknown>) {
   return observed;
 }
 
+function rejection(settlement: Settlement) {
+  if (settlement.state !== "rejected" || !(settlement.error instanceof Error)) {
+    throw new Error("Completion and caller cleanup must reject with an Error");
+  }
+  return settlement.error;
+}
+
 it.skipIf(process.platform === "win32").each([
   {
     label: "exits before READY",
@@ -142,28 +149,14 @@ process.stdout.write("completion primary failure\\n");
       // The real child is closed; only promise continuations remain.
       // Node drains those before setImmediate's check phase, regardless of chain depth.
       await setImmediate();
-      const primaryFailure = expect.objectContaining({
-        message: expect.stringContaining(message),
-      });
-      expect(first.value).toEqual({ state: "rejected", error: primaryFailure });
-      expect(second.value).toEqual(first.value);
-      expect(caller.value).toEqual(first.value);
+      const primaryFailure = rejection(first.value);
+      expect(primaryFailure).toMatchObject({ message: expect.stringContaining(message) });
       expect(children).toHaveLength(1);
-      if (
-        first.value.state !== "rejected" ||
-        second.value.state !== "rejected" ||
-        caller.value.state !== "rejected"
-      ) {
-        throw new Error("Completion and caller cleanup must reject");
+      for (const completion of [second, caller]) {
+        expect(rejection(completion.value)).toBe(primaryFailure);
       }
-      expect(second.value.error).toBe(first.value.error);
-      expect(caller.value.error).toBe(first.value.error);
       if (readinessTimeout) {
-        expect(first.value.error).toBeInstanceOf(Error);
-        if (!(first.value.error instanceof Error)) {
-          throw new Error("Readiness timeout must reject with an Error");
-        }
-        const diagnostic = JSON.parse(first.value.error.message.split("\nStartup: ")[1] ?? "null");
+        const diagnostic = JSON.parse(primaryFailure.message.split("\nStartup: ")[1] ?? "null");
         expect(diagnostic).toMatchObject({
           executable,
           elapsedMs: 15_000,
@@ -174,7 +167,7 @@ process.stdout.write("completion primary failure\\n");
           killed: false,
           stdoutTail: "x".repeat(4096 - "partial READY".length) + "partial READY",
         });
-        expect(first.value.error.message.length).toBeLessThan(6_000);
+        expect(primaryFailure.message.length).toBeLessThan(6_000);
       }
       if (outcome.signal) {
         expect(sentTermination).toBe(true);

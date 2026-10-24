@@ -3,25 +3,31 @@ import { randomUUID } from "node:crypto";
 import { on } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
-import type { DatabaseSync } from "node:sqlite";
 import { Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { MessagePort, parentPort, threadId, workerData } from "node:worker_threads";
 import zlib from "node:zlib";
+import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  installDatabaseEngineSelection,
+  type DatabaseEngineSelection,
+} from "../../infra/database-engine/context.js";
 import {
   executeSqliteQuerySync,
   getNodeSqliteKysely,
   iterateSqliteQuerySync,
 } from "../../infra/kysely-sync.js";
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import { withSqliteDatabaseAdmissionExchange } from "../../infra/sqlite-database-admission.js";
-import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
+import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
 import {
   bindSqliteDatabaseAdmissionUpstream,
   exchangeSqliteDatabaseAdmissions,
 } from "../../infra/sqlite-worker-database-admission-relay.js";
 import { assertDatabasePathIdentity } from "../../infra/sqlite-worker-identity.js";
 import { cancelWorkerIdleGc, scheduleWorkerIdleGc } from "../../infra/worker-idle-gc.js";
+import { encodeNativeWorkerFailure } from "../../infra/worker-native-error.js";
 import { routeLogsToStderr } from "../../logging/console.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import { withFreshOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly-open.js";
@@ -72,7 +78,7 @@ type TranscriptArchiveDatabase = Pick<
 const TRANSCRIPT_ARCHIVE_WRITE_BUFFER_BYTES = 64 * 1024;
 
 function stageTranscriptArchiveContent(
-  database: DatabaseSync,
+  database: EngineConnection,
   sessionId: string,
   stagedPath: string,
 ): number {
@@ -209,7 +215,7 @@ export async function materializeTranscriptArchiveInWorker(
   try {
     const opened = withFreshOpenClawAgentDatabaseReadOnly(
       (database) =>
-        runSqliteDeferredTransactionSync(
+        runSqliteReadSnapshotSync(
           database.db,
           () => {
             assertSource();
@@ -407,6 +413,13 @@ async function runArchiveSession(
 }
 
 if (isRecord(workerData) && workerData.type === "sqlite-transcript-archive-v2") {
+  // SAFETY: The paired archive owner captures this immutable private boot selection.
+  const { databaseEngineSelection } = workerData as {
+    databaseEngineSelection?: DatabaseEngineSelection;
+  };
+  if (databaseEngineSelection) {
+    installDatabaseEngineSelection(databaseEngineSelection);
+  }
   if (!parentPort) {
     throw new Error("SQLite transcript archive worker requires a parent port");
   }
@@ -436,13 +449,17 @@ if (isRecord(workerData) && workerData.type === "sqlite-transcript-archive-v2") 
             } satisfies SqliteCanonicalValidationTaskMessage,
             [],
           );
-          await runReclamationWorkerPort(task.port, task.databaseOptions, taskSequence);
+          const cleanup = await runReclamationWorkerPort(
+            task.port,
+            task.databaseOptions,
+            taskSequence,
+          );
           channel.consumeInput();
-          return { status: "closed" };
+          return { status: "closed", cleanup };
         } catch (error) {
           return {
             status: "failed",
-            error: error instanceof Error ? error.message : String(error),
+            error: encodeNativeWorkerFailure(toStringifiedError(error)),
           };
         } finally {
           task?.port?.close();

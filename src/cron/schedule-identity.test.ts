@@ -1,95 +1,63 @@
-// Schedule identity tests cover stable identity derivation for cron schedules.
 import { describe, expect, it } from "vitest";
 import { cronSchedulingInputsEqual, tryCronScheduleIdentity } from "./schedule-identity.js";
 
 describe("tryCronScheduleIdentity", () => {
   it("preserves meaningful whitespace in on-exit command identity", () => {
     const command = " printf %s hello\\ ";
-    const job = { schedule: { kind: "on-exit", command } };
+    const makeJob = (text: string) => ({ schedule: { kind: "on-exit", command: text } });
+    const job = makeJob(command);
     expect(tryCronScheduleIdentity(job)).toBeDefined();
     expect(cronSchedulingInputsEqual(job, structuredClone(job))).toBe(true);
     for (const changedCommand of [command.trimStart(), command.trimEnd()]) {
-      expect(
-        cronSchedulingInputsEqual(job, {
-          schedule: { kind: "on-exit", command: changedCommand },
-        }),
-      ).toBe(false);
+      expect(cronSchedulingInputsEqual(job, makeJob(changedCommand))).toBe(false);
     }
-    expect(
-      tryCronScheduleIdentity({ schedule: { kind: "on-exit", command: " \t " } }),
-    ).toBeUndefined();
+    expect(tryCronScheduleIdentity(makeJob(" \t "))).toBeUndefined();
   });
 
+  it.each(["on-exit", "stream"] as const)(
+    "treats cwd whitespace changes as a schedule input change for %s jobs",
+    (kind) => {
+      const baseSchedule =
+        kind === "on-exit"
+          ? { kind, command: "./watch.sh", cwd: "/repo/job" }
+          : { kind, command: ["node", "events.mjs"], cwd: "/repo/job" };
+      const edited = { ...baseSchedule, cwd: "/repo/job " };
+      expect(cronSchedulingInputsEqual({ schedule: baseSchedule }, { schedule: edited })).toBe(
+        false,
+      );
+    },
+  );
+
   it("normalizes numeric schedule strings like execution does", () => {
-    const numeric = tryCronScheduleIdentity({
+    const numeric = {
       enabled: true,
       schedule: { kind: "every", everyMs: 60_000, anchorMs: 123 },
-    });
-    const stringNumeric = tryCronScheduleIdentity({
+    };
+    const stringNumeric = {
       enabled: true,
       schedule: { kind: "every", everyMs: "60000", anchorMs: "123" },
-    });
-
-    expect(stringNumeric).toBe(numeric);
-    const stringNumericInput = {
-      schedule: { kind: "every", everyMs: "60000", anchorMs: "123" },
-    } as unknown as Parameters<typeof cronSchedulingInputsEqual>[1];
-
-    expect(
-      cronSchedulingInputsEqual(
-        { schedule: { kind: "every", everyMs: 60_000, anchorMs: 123 } },
-        stringNumericInput,
-      ),
-    ).toBe(true);
+    };
+    expect(tryCronScheduleIdentity(stringNumeric)).toBe(tryCronScheduleIdentity(numeric));
+    expect(cronSchedulingInputsEqual(numeric, stringNumeric)).toBe(true);
   });
 
   it("normalizes cron stagger identity like execution does", () => {
-    expect(
-      cronSchedulingInputsEqual(
-        { schedule: { kind: "cron", expr: "*/5 * * * *", staggerMs: 42 } },
-        { schedule: { kind: "cron", expr: "*/5 * * * *", staggerMs: 42.8 } },
-      ),
-    ).toBe(true);
-
-    expect(
-      cronSchedulingInputsEqual(
-        { schedule: { kind: "cron", expr: "*/5 * * * *", staggerMs: 0 } },
-        { schedule: { kind: "cron", expr: "*/5 * * * *", staggerMs: -10 } },
-      ),
-    ).toBe(true);
-
-    expect(
-      cronSchedulingInputsEqual(
-        { schedule: { kind: "cron", expr: "*/5 * * * *" } },
-        {
-          schedule: {
-            kind: "cron",
-            expr: "*/5 * * * *",
-            staggerMs: "1e3" as unknown as number,
-          },
-        },
-      ),
-    ).toBe(true);
+    const job = (staggerMs?: unknown) => ({
+      schedule: { kind: "cron", expr: "*/5 * * * *", staggerMs },
+    });
+    expect(cronSchedulingInputsEqual(job(42), job(42.8))).toBe(true);
+    expect(cronSchedulingInputsEqual(job(0), job(-10))).toBe(true);
+    expect(cronSchedulingInputsEqual(job(), job("1e3"))).toBe(true);
   });
 
   it("normalizes pacing bounds and treats changes as scheduling input changes", () => {
-    const schedule = { kind: "every" as const, everyMs: 60_000, anchorMs: 123 };
-
-    expect(
-      cronSchedulingInputsEqual(
-        { schedule, pacing: { min: "60m", max: "4h" } },
-        { schedule, pacing: { min: "1h", max: "240m" } },
-      ),
-    ).toBe(true);
-    expect(
-      cronSchedulingInputsEqual(
-        { schedule, pacing: { min: "1h" } },
-        { schedule, pacing: { min: "2h" } },
-      ),
-    ).toBe(false);
-    expect(cronSchedulingInputsEqual({ schedule, pacing: { min: "1h" } }, { schedule })).toBe(
-      false,
-    );
+    const job = (min?: string, max?: string) => ({
+      schedule: { kind: "every", everyMs: 60_000, anchorMs: 123 },
+      pacing: min ? { min, max } : undefined,
+    });
+    expect(cronSchedulingInputsEqual(job("60m", "4h"), job("1h", "240m"))).toBe(true);
+    expect(cronSchedulingInputsEqual(job("1h"), job("2h"))).toBe(false);
+    expect(cronSchedulingInputsEqual(job("1h"), job())).toBe(false);
   });
 
   it("tracks trigger presence without depending on trigger script text", () => {

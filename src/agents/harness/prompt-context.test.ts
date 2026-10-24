@@ -9,7 +9,7 @@ describe("harness runtime context inclusion", () => {
   it.each([
     { bootstrapContextMode: "lightweight", bootstrapContextRunKind: "cron", included: false },
     { bootstrapContextMode: "full", bootstrapContextRunKind: "cron", included: true },
-    { bootstrapContextMode: "lightweight", bootstrapContextRunKind: "heartbeat", included: true },
+    { bootstrapContextMode: "lightweight", bootstrapContextRunKind: "default", included: true },
   ] as const)("$bootstrapContextMode / $bootstrapContextRunKind", ({ included, ...params }) => {
     expect(shouldIncludeAgentHarnessRuntimeContext(params)).toBe(included);
   });

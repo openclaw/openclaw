@@ -1,33 +1,22 @@
-// Verifies exec shell snapshots capture safe startup state without leaking secrets.
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resolveStateDir } from "../config/paths.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { maybeWrapCommandWithShellSnapshot } from "./shell-snapshot.js";
 import { getBashShellConfig, getShellConfig } from "./shell-utils.js";
 
 const isWin = process.platform === "win32";
-const EXEC_SHELL_SNAPSHOT_ENV = "OPENCLAW_EXEC_SHELL_SNAPSHOT";
-
-function resolveShellSnapshotDirForTest(
-  env: Record<string, string | undefined> = process.env,
-): string {
+function resolveShellSnapshotDirForTest(env: NodeJS.ProcessEnv = process.env): string {
   return path.join(resolveStateDir(env as NodeJS.ProcessEnv), "cache", "shell-snapshots");
 }
 
-function getPosixShellArgs(shellPath: string): string[] {
-  return getShellConfig(shellPath).args;
-}
-
 function resolveBashForTest(): string | null {
-  if (isWin) {
-    return null;
-  }
-  return getBashShellConfig().shell;
+  return isWin ? null : getBashShellConfig().shell;
 }
 
 function resolveZshForTest(): string | null {
@@ -66,8 +55,61 @@ function setSnapshotStateForTest(
 }
 
 describe("exec shell snapshots", () => {
-  const tempDirs: string[] = [];
+  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
   let envSnapshot: ReturnType<typeof captureEnv>;
+  const makeDir = () => tempDirs.make("openclaw-snapshot-");
+  const setup = () => {
+    const home = makeDir(),
+      stateDir = makeDir(),
+      cwd = makeDir();
+    setSnapshotStateForTest(stateDir, { home });
+    return { home, stateDir, cwd };
+  };
+  const runtimeEnv = (home: string, stateDir: string, overrides: NodeJS.ProcessEnv = {}) => ({
+    ...process.env,
+    HOME: home,
+    OPENCLAW_STATE_DIR: stateDir,
+    ...overrides,
+  });
+  const writeRc = (home: string, source: string | string[], name = ".bashrc") =>
+    fs.writeFileSync(
+      path.join(home, name),
+      typeof source === "string" ? source : source.join("\n"),
+    );
+  async function wrap(shell: string, cwd: string, env: NodeJS.ProcessEnv, command: string) {
+    setTestEnvValue("SHELL", shell);
+    const shellArgs = getShellConfig().args;
+    const wrapped = await maybeWrapCommandWithShellSnapshot({
+      command,
+      shell,
+      shellArgs,
+      cwd,
+      env,
+    });
+    return { shellArgs, wrapped };
+  }
+  async function run(
+    shell: string,
+    cwd: string,
+    env: NodeJS.ProcessEnv,
+    command = 'printf "%s" "$PNPM_HOME"',
+  ) {
+    const { shellArgs, wrapped } = await wrap(shell, cwd, env, command);
+    const result = spawnSync(shell, [...shellArgs, wrapped], {
+      cwd,
+      env,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    expect(result.status).toBe(0);
+    return result.stdout;
+  }
+  function readSnapshot(env: NodeJS.ProcessEnv) {
+    const dir = resolveShellSnapshotDirForTest(env);
+    const files = fs.readdirSync(dir).filter((entry) => entry.endsWith(".sh"));
+    expect(files).toHaveLength(1);
+    return fs.readFileSync(path.join(dir, expectDefined(files[0], "snapshot file")), "utf8");
+  }
 
   beforeEach(() => {
     envSnapshot = captureEnv([
@@ -77,15 +119,13 @@ describe("exec shell snapshots", () => {
       "OPENCLAW_EXEC_SHELL_SNAPSHOT",
       "PNPM_HOME",
       "ZDOTDIR",
+      "SHELL",
     ]);
   });
 
   afterEach(() => {
     vi.restoreAllMocks();
     envSnapshot.restore();
-    for (const dir of tempDirs.splice(0)) {
-      fs.rmSync(dir, { recursive: true, force: true });
-    }
   });
 
   it("leaves commands unchanged for unsupported shells", async () => {
@@ -103,23 +143,13 @@ describe("exec shell snapshots", () => {
 
   it("does not honor per-call env for selecting the snapshot state dir", async () => {
     // Per-call env may be model/tool-controlled, so snapshot roots come from process env.
-    const trustedStateDir = fs.mkdtempSync(
-      path.join(os.tmpdir(), "openclaw-snapshot-trusted-state-"),
-    );
-    const untrustedStateDir = fs.mkdtempSync(
-      path.join(os.tmpdir(), "openclaw-snapshot-untrusted-state-"),
-    );
-    const home = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-snapshot-state-home-"));
-    const untrustedHome = fs.mkdtempSync(
-      path.join(os.tmpdir(), "openclaw-snapshot-untrusted-home-"),
-    );
+    const trustedStateDir = makeDir(),
+      untrustedStateDir = makeDir();
+    const home = makeDir(),
+      untrustedHome = makeDir();
     const sideEffectPath = path.join(untrustedHome, "side-effect");
-    tempDirs.push(trustedStateDir, untrustedStateDir, home, untrustedHome);
     setSnapshotStateForTest(trustedStateDir, { home });
-    fs.writeFileSync(
-      path.join(untrustedHome, ".bashrc"),
-      `touch ${JSON.stringify(sideEffectPath)}\n`,
-    );
+    writeRc(untrustedHome, `touch ${JSON.stringify(sideEffectPath)}\n`);
     const command = "echo unchanged";
     const wrapped = await maybeWrapCommandWithShellSnapshot({
       command,
@@ -129,7 +159,7 @@ describe("exec shell snapshots", () => {
       env: {
         ...process.env,
         HOME: untrustedHome,
-        [EXEC_SHELL_SNAPSHOT_ENV]: "0",
+        OPENCLAW_EXEC_SHELL_SNAPSHOT: "0",
         OPENCLAW_STATE_DIR: untrustedStateDir,
         SSH_CLIENT: "127.0.0.1 1000 22",
         SSH_CONNECTION: "127.0.0.1 1000 127.0.0.1 22",
@@ -152,68 +182,34 @@ describe("exec shell snapshots", () => {
       return;
     }
 
-    const home = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-snapshot-home-"));
-    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-snapshot-state-"));
-    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-snapshot-cwd-"));
-    tempDirs.push(home, stateDir, cwd);
-    setSnapshotStateForTest(stateDir, { home });
-    fs.writeFileSync(
-      path.join(home, ".bashrc"),
-      [
-        "case $- in *i*) ;; *) return;; esac",
-        "alias oc_snap_alias='printf alias-ok'",
-        'alias oc_snap_secret="printf $OPENAI_API_KEY"',
-        '[ "$OPENCLAW_SHELL" = exec ] && alias oc_snap_exec_alias="printf marker-ok"',
-        "oc_snap_fn() { printf fn-ok; }",
-        'export PATH="/snapshot/bin:$PATH"',
-        'export OPENAI_API_KEY="snapshot-secret"',
-        "",
-      ].join("\n"),
-    );
+    const { home, stateDir, cwd } = setup();
+    writeRc(home, [
+      "case $- in *i*) ;; *) return;; esac",
+      "alias oc_snap_alias='printf alias-ok'",
+      'alias oc_snap_secret="printf $OPENAI_API_KEY"',
+      '[ "$OPENCLAW_SHELL" = exec ] && alias oc_snap_exec_alias="printf marker-ok"',
+      "oc_snap_fn() { printf fn-ok; }",
+      'export PATH="/snapshot/bin:$PATH"',
+      'export OPENAI_API_KEY="snapshot-secret"',
+      "",
+    ]);
 
-    const env = {
-      ...process.env,
-      HOME: home,
-      OPENCLAW_STATE_DIR: stateDir,
+    const env = runtimeEnv(home, stateDir, {
       OPENCLAW_SHELL: "exec",
       OPENAI_API_KEY: "inherited-secret",
-    };
-    const shellArgs = getPosixShellArgs(bash);
-    const wrapped = await maybeWrapCommandWithShellSnapshot({
-      command:
+    });
+    expect(
+      await run(
+        bash,
+        cwd,
+        env,
         "oc_snap_fn; printf ' '; oc_snap_alias; printf ' '; oc_snap_exec_alias; printf ' '; case \":$PATH:\" in *:/snapshot/bin:*) printf path-ok;; *) printf path-missing;; esac",
-      shell: bash,
-      shellArgs,
-      cwd,
-      env,
-    });
-
-    const result = spawnSync(bash, [...shellArgs, wrapped], {
-      cwd,
-      env,
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-
-    expect(result.status).toBe(0);
-    expect(result.stdout).toBe("fn-ok alias-ok marker-ok path-ok");
-
-    const snapshotFiles = fs
-      .readdirSync(resolveShellSnapshotDirForTest(env))
-      .filter((entry) => entry.endsWith(".sh"));
-    expect(snapshotFiles).toHaveLength(1);
-    const snapshot = fs.readFileSync(
-      path.join(
-        resolveShellSnapshotDirForTest(env),
-        expectDefined(snapshotFiles[0], "snapshotFiles[0] test invariant"),
       ),
-      "utf8",
-    );
+    ).toBe("fn-ok alias-ok marker-ok path-ok");
+    const snapshot = readSnapshot(env);
     expect(snapshot).toContain("oc_snap_fn");
     expect(snapshot).toContain("oc_snap_alias");
-    expect(snapshot).not.toContain("snapshot-secret");
-    expect(snapshot).not.toContain("inherited-secret");
-    expect(snapshot).not.toContain("OPENAI_API_KEY");
+    expect(snapshot).not.toMatch(/snapshot-secret|inherited-secret|OPENAI_API_KEY/);
   });
 
   it("preserves per-call safe env overrides after trusted capture", async () => {
@@ -222,127 +218,46 @@ describe("exec shell snapshots", () => {
       return;
     }
 
-    const home = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-snapshot-env-home-"));
-    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-snapshot-env-state-"));
-    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-snapshot-env-cwd-"));
-    tempDirs.push(home, stateDir, cwd);
-    setSnapshotStateForTest(stateDir, { home });
+    const { home, stateDir, cwd } = setup();
     process.env.PNPM_HOME = "/trusted";
-    fs.writeFileSync(path.join(home, ".bashrc"), 'export PNPM_HOME="${PNPM_HOME}/from-rc"\n');
+    writeRc(home, 'export PNPM_HOME="${PNPM_HOME}/from-rc"\n');
 
-    const shellArgs = getPosixShellArgs(bash);
-    const runWithPnpmHome = async (pnpmHome: string): Promise<string> => {
-      const env = {
-        ...process.env,
-        HOME: home,
-        OPENCLAW_STATE_DIR: stateDir,
-        PNPM_HOME: pnpmHome,
-      };
-      const wrapped = await maybeWrapCommandWithShellSnapshot({
-        command: 'printf "%s" "$PNPM_HOME"',
-        shell: bash,
-        shellArgs,
-        cwd,
-        env,
-      });
-      const result = spawnSync(bash, [...shellArgs, wrapped], {
-        cwd,
-        env,
-        encoding: "utf8",
-        stdio: ["ignore", "pipe", "pipe"],
-      });
-      expect(result.status).toBe(0);
-      return result.stdout;
-    };
+    const runWithPnpmHome = (PNPM_HOME: string) =>
+      run(bash, cwd, runtimeEnv(home, stateDir, { PNPM_HOME }));
 
     await expect(runWithPnpmHome("/first")).resolves.toBe("/first");
     await expect(runWithPnpmHome("/second")).resolves.toBe("/second");
   });
 
-  it("treats a blank trusted HOME as unset when resolving the snapshot home", async () => {
-    const bash = resolveBashForTest();
-    if (!bash) {
-      return;
-    }
+  it.each(["USERPROFILE", "OS account"])(
+    "uses %s when trusted HOME is blank without trimming a valid path",
+    async (fallback) => {
+      const bash = resolveBashForTest();
+      if (!bash) {
+        return;
+      }
 
-    const homeRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-snapshot-blank-home-"));
-    const home = path.join(homeRoot, " trusted home ");
-    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-snapshot-blank-state-"));
-    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-snapshot-blank-cwd-"));
-    fs.mkdirSync(home);
-    tempDirs.push(homeRoot, stateDir, cwd);
-    setSnapshotStateForTest(stateDir, { home });
-    fs.writeFileSync(path.join(home, ".bashrc"), 'export PNPM_HOME="/rc-home"\n');
+      const homeRoot = makeDir();
+      const home = path.join(homeRoot, " trusted home ");
+      const stateDir = makeDir(),
+        cwd = makeDir();
+      fs.mkdirSync(home);
+      setSnapshotStateForTest(stateDir, { home });
+      writeRc(home, 'export PNPM_HOME="/rc-home"\n');
 
-    const shellArgs = getPosixShellArgs(bash);
-    const runWithCapturedPnpmHome = async (): Promise<string> => {
-      const env = {
-        ...process.env,
-        HOME: home,
-        OPENCLAW_STATE_DIR: stateDir,
-      };
-      const wrapped = await maybeWrapCommandWithShellSnapshot({
-        command: 'printf "%s" "$PNPM_HOME"',
-        shell: bash,
-        shellArgs,
-        cwd,
-        env,
-      });
-      const result = spawnSync(bash, [...shellArgs, wrapped], {
-        cwd,
-        env,
-        encoding: "utf8",
-        stdio: ["ignore", "pipe", "pipe"],
-      });
-      expect(result.status).toBe(0);
-      return result.stdout;
-    };
+      const runWithCapturedPnpmHome = () => run(bash, cwd, runtimeEnv(home, stateDir));
 
-    await expect(runWithCapturedPnpmHome()).resolves.toBe("/rc-home");
-
-    // A blank trusted HOME must fall back to USERPROFILE without trimming a
-    // valid path; resolving to "" changes the identity and drops the rc values.
-    setTestEnvValue("HOME", "");
-    setTestEnvValue("USERPROFILE", home);
-    await expect(runWithCapturedPnpmHome()).resolves.toBe("/rc-home");
-  });
-
-  it("uses the OS account home when trusted home variables are blank", async () => {
-    const bash = resolveBashForTest();
-    if (!bash) {
-      return;
-    }
-
-    const home = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-snapshot-account-home-"));
-    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-snapshot-account-state-"));
-    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-snapshot-account-cwd-"));
-    tempDirs.push(home, stateDir, cwd);
-    setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
-    setTestEnvValue("HOME", "");
-    setTestEnvValue("USERPROFILE", "   ");
-    const userInfo = os.userInfo();
-    vi.spyOn(os, "userInfo").mockReturnValue({ ...userInfo, homedir: home });
-    fs.writeFileSync(path.join(home, ".bashrc"), 'export PNPM_HOME="/account-home"\n');
-
-    const shellArgs = getPosixShellArgs(bash);
-    const env = { ...process.env, HOME: home, OPENCLAW_STATE_DIR: stateDir };
-    const wrapped = await maybeWrapCommandWithShellSnapshot({
-      command: 'printf "%s" "$PNPM_HOME"',
-      shell: bash,
-      shellArgs,
-      cwd,
-      env,
-    });
-    const result = spawnSync(bash, [...shellArgs, wrapped], {
-      cwd,
-      env,
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-
-    expect(result.status).toBe(0);
-    expect(result.stdout).toBe("/account-home");
-  });
+      if (fallback === "USERPROFILE") {
+        await expect(runWithCapturedPnpmHome()).resolves.toBe("/rc-home");
+        setTestEnvValue("USERPROFILE", home);
+      } else {
+        setTestEnvValue("USERPROFILE", "   ");
+        vi.spyOn(os, "userInfo").mockReturnValue({ ...os.userInfo(), homedir: home });
+      }
+      setTestEnvValue("HOME", "");
+      await expect(runWithCapturedPnpmHome()).resolves.toBe("/rc-home");
+    },
+  );
 
   it("does not let non-fingerprinted env change captured shell state", async () => {
     const bash = resolveBashForTest();
@@ -350,59 +265,20 @@ describe("exec shell snapshots", () => {
       return;
     }
 
-    const home = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-snapshot-branch-home-"));
-    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-snapshot-branch-state-"));
-    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-snapshot-branch-cwd-"));
-    tempDirs.push(home, stateDir, cwd);
-    setSnapshotStateForTest(stateDir, { home });
-    fs.writeFileSync(
-      path.join(home, ".bashrc"),
-      [
-        'if [ -n "$VIRTUAL_ENV" ]; then',
-        "  alias oc_env_branch='printf virtual'",
-        "else",
-        "  alias oc_env_branch='printf plain'",
-        "fi",
-        "",
-      ].join("\n"),
-    );
+    const { home, stateDir, cwd } = setup();
+    writeRc(home, [
+      'if [ -n "$VIRTUAL_ENV" ]; then',
+      "  alias oc_env_branch='printf virtual'",
+      "else",
+      "  alias oc_env_branch='printf plain'",
+      "fi",
+      "",
+    ]);
 
-    const env = {
-      ...process.env,
-      HOME: home,
-      OPENCLAW_STATE_DIR: stateDir,
-      VIRTUAL_ENV: "/tmp/venv",
-    };
-    const shellArgs = getPosixShellArgs(bash);
-    const wrapped = await maybeWrapCommandWithShellSnapshot({
-      command: "oc_env_branch",
-      shell: bash,
-      shellArgs,
-      cwd,
-      env,
-    });
-    const result = spawnSync(bash, [...shellArgs, wrapped], {
-      cwd,
-      env,
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-
-    expect(result.status).toBe(0);
-    expect(result.stdout).toBe("plain");
-    const snapshotFiles = fs
-      .readdirSync(resolveShellSnapshotDirForTest(env))
-      .filter((entry) => entry.endsWith(".sh"));
-    expect(snapshotFiles).toHaveLength(1);
-    const snapshot = fs.readFileSync(
-      path.join(
-        resolveShellSnapshotDirForTest(env),
-        expectDefined(snapshotFiles[0], "snapshotFiles[0] test invariant"),
-      ),
-      "utf8",
-    );
-    expect(snapshot).not.toContain("virtual");
-    expect(snapshot).not.toContain("VIRTUAL_ENV");
+    const env = runtimeEnv(home, stateDir, { VIRTUAL_ENV: "/tmp/venv" });
+    expect(await run(bash, cwd, env, "oc_env_branch")).toBe("plain");
+    const snapshot = readSnapshot(env);
+    expect(snapshot).not.toMatch(/virtual|VIRTUAL_ENV/);
   });
 
   it("refuses to persist aliases or functions with literal secret-looking values", async () => {
@@ -411,33 +287,16 @@ describe("exec shell snapshots", () => {
       return;
     }
 
-    const home = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-snapshot-secret-home-"));
-    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-snapshot-secret-state-"));
-    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-snapshot-secret-cwd-"));
-    tempDirs.push(home, stateDir, cwd);
-    setSnapshotStateForTest(stateDir, { home });
-    fs.writeFileSync(
-      path.join(home, ".bashrc"),
-      [
-        "alias oc_secret_alias='GITHUB_TOKEN=ghp_literal_secret gh'",
-        "alias oc_aws_secret_alias='AWS_SECRET_ACCESS_KEY=literal-secret aws sts get-caller-identity'",
-        "",
-      ].join("\n"),
-    );
+    const { home, stateDir, cwd } = setup();
+    writeRc(home, [
+      "alias oc_secret_alias='GITHUB_TOKEN=ghp_literal_secret gh'",
+      "alias oc_aws_secret_alias='AWS_SECRET_ACCESS_KEY=literal-secret aws sts get-caller-identity'",
+      "",
+    ]);
 
-    const env = {
-      ...process.env,
-      HOME: home,
-      OPENCLAW_STATE_DIR: stateDir,
-    };
+    const env = runtimeEnv(home, stateDir);
     const command = "echo fallback";
-    const wrapped = await maybeWrapCommandWithShellSnapshot({
-      command,
-      shell: bash,
-      shellArgs: getPosixShellArgs(bash),
-      cwd,
-      env,
-    });
+    const { wrapped } = await wrap(bash, cwd, env, command);
 
     expect(wrapped).toBe(command);
     const snapshotDir = resolveShellSnapshotDirForTest(env);
@@ -453,43 +312,24 @@ describe("exec shell snapshots", () => {
       return;
     }
 
-    const home = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-snapshot-zsh-home-"));
-    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-snapshot-zsh-state-"));
-    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-snapshot-zsh-cwd-"));
-    tempDirs.push(home, stateDir, cwd);
-    setSnapshotStateForTest(stateDir, { home });
-    fs.writeFileSync(
-      path.join(home, ".zshrc"),
+    const { home, stateDir, cwd } = setup();
+    writeRc(
+      home,
       [
         "alias oc_snap_zsh_alias='printf zsh-alias-ok'",
         "oc_snap_zsh_fn() { printf zsh-fn-ok; }",
         "",
-      ].join("\n"),
+      ],
+      ".zshrc",
     );
-
-    const env = {
-      ...process.env,
-      HOME: home,
-      OPENCLAW_STATE_DIR: stateDir,
-    };
-    const shellArgs = getPosixShellArgs(zsh);
-    const wrapped = await maybeWrapCommandWithShellSnapshot({
-      command: "oc_snap_zsh_fn; printf ' '; oc_snap_zsh_alias",
-      shell: zsh,
-      shellArgs,
-      cwd,
-      env,
-    });
-
-    const result = spawnSync(zsh, [...shellArgs, wrapped], {
-      cwd,
-      env,
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-
-    expect(result.status).toBe(0);
-    expect(result.stdout).toBe("zsh-fn-ok zsh-alias-ok");
+    expect(
+      await run(
+        zsh,
+        cwd,
+        runtimeEnv(home, stateDir),
+        "oc_snap_zsh_fn; printf ' '; oc_snap_zsh_alias",
+      ),
+    ).toBe("zsh-fn-ok zsh-alias-ok");
   });
 
   it("captures zsh startup state from ZDOTDIR", async () => {
@@ -498,43 +338,17 @@ describe("exec shell snapshots", () => {
       return;
     }
 
-    const home = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-snapshot-zdot-home-"));
-    const zdotdir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-snapshot-zdot-dir-"));
-    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-snapshot-zdot-state-"));
-    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-snapshot-zdot-cwd-"));
-    tempDirs.push(home, zdotdir, stateDir, cwd);
+    const { home, stateDir, cwd } = setup();
+    const zdotdir = makeDir();
     setSnapshotStateForTest(stateDir, { home, zdotdir });
-    fs.writeFileSync(path.join(home, ".zshrc"), "alias oc_snap_zdot_alias='printf wrong-home'\n");
-    fs.writeFileSync(
-      path.join(zdotdir, ".zshrc"),
-      ["[[ -o interactive ]] || return", "alias oc_snap_zdot_alias='printf zdotdir-ok'", ""].join(
-        "\n",
-      ),
+    writeRc(home, "alias oc_snap_zdot_alias='printf wrong-home'\n", ".zshrc");
+    writeRc(
+      zdotdir,
+      ["[[ -o interactive ]] || return", "alias oc_snap_zdot_alias='printf zdotdir-ok'", ""],
+      ".zshrc",
     );
-
-    const env = {
-      ...process.env,
-      HOME: home,
-      OPENCLAW_STATE_DIR: stateDir,
-      ZDOTDIR: zdotdir,
-    };
-    const shellArgs = getPosixShellArgs(zsh);
-    const wrapped = await maybeWrapCommandWithShellSnapshot({
-      command: "oc_snap_zdot_alias",
-      shell: zsh,
-      shellArgs,
-      cwd,
-      env,
-    });
-
-    const result = spawnSync(zsh, [...shellArgs, wrapped], {
-      cwd,
-      env,
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-
-    expect(result.status).toBe(0);
-    expect(result.stdout).toBe("zdotdir-ok");
+    expect(
+      await run(zsh, cwd, runtimeEnv(home, stateDir, { ZDOTDIR: zdotdir }), "oc_snap_zdot_alias"),
+    ).toBe("zdotdir-ok");
   });
 });

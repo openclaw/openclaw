@@ -29,14 +29,12 @@ type TrustedToolPolicyRegistry =
   | null
   | undefined;
 
-/** Diagnostic entry for an installed trusted tool policy. */
 type TrustedToolPolicyDiagnosticEntry = {
   id: string;
   pluginId: string;
   pluginName?: string;
 };
 
-/** True when the supplied or active plugin registry has trusted tool policies. */
 export function hasTrustedToolPolicies(
   registry: TrustedToolPolicyRegistry = getActivePluginRegistry(),
 ): boolean {
@@ -151,7 +149,6 @@ function trustedPolicyFailureResult(
   };
 }
 
-/** Lists trusted tool policies for status and diagnostics. */
 export function getTrustedToolPolicyDiagnosticEntries(
   registry: TrustedToolPolicyRegistry = getActivePluginRegistry(),
 ): TrustedToolPolicyDiagnosticEntry[] {

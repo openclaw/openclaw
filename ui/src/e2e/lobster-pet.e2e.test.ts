@@ -1,7 +1,7 @@
-// Control UI E2E tests cover real-browser lobster pet timing and pointer cancellation.
 import type { BrowserContext, Page } from "playwright";
 import { afterEach, beforeEach, expect, it } from "vitest";
 import { planLobsterPasser } from "../components/lobster-pet-plans.ts";
+import type { LobsterPetElement as BrowserLobsterPet } from "../components/lobster-pet.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { installMockGateway } from "./new-session-page.test-support.ts";
 
@@ -11,35 +11,25 @@ const suite = createControlUiE2eSuite({
   unavailableMessage: (executablePath) => `Playwright Chromium cannot start at ${executablePath}`,
 });
 
-type BrowserLobsterPet = HTMLElement & {
-  mode: "idle" | "busy" | "offline";
-  runOutcome: "ok" | "error" | "aborted";
-  seed: number;
-  updateComplete: Promise<unknown>;
-};
-
 let context: BrowserContext;
 let page: Page;
-async function configureComposerPet(params: {
-  mode: BrowserLobsterPet["mode"];
-  outcome: BrowserLobsterPet["runOutcome"];
-  seed: number;
-}) {
-  await page.evaluate(async (fixture) => {
-    const pet = document.querySelector(
-      ".new-session-page__composer openclaw-lobster-pet",
-    ) as BrowserLobsterPet;
-    if (!pet) {
-      throw new Error("New Session composer critter not mounted");
-    }
-    pet.seed = fixture.seed;
-    pet.mode = fixture.mode;
-    pet.runOutcome = fixture.outcome;
-    await pet.updateComplete;
-  }, params);
+async function configureComposerPet(
+  seed: number,
+  mode: BrowserLobsterPet["mode"] = "offline",
+  runOutcome: BrowserLobsterPet["runOutcome"] = "ok",
+) {
+  const composerPet = page.locator(".new-session-page__composer openclaw-lobster-pet");
+  await composerPet.evaluate(
+    async (element, fixture) => {
+      const pet = Object.assign(element as BrowserLobsterPet, fixture);
+      await pet.updateComplete;
+    },
+    { seed, mode, runOutcome },
+  );
 }
 
-async function settlePet() {
+async function advancePet(ms: number, fast = false) {
+  await page.clock[fast ? "fastForward" : "runFor"](ms);
   await page.evaluate(
     () => (document.querySelector("openclaw-lobster-pet") as BrowserLobsterPet).updateComplete,
   );
@@ -63,17 +53,14 @@ suite.define(() => {
     await page.clock.pauseAt(loadedAt + 1_000);
   });
 
-  afterEach(async () => {
-    await context.close();
-  });
+  afterEach(() => context.close());
 
   it("keeps a vigil-only failure present through droop and sweep before leaving", async () => {
-    await configureComposerPet({ mode: "busy", outcome: "error", seed: 0 });
+    await configureComposerPet(0, "busy", "error");
     const sprite = page.locator(".lobster-pet");
     await expect.poll(() => sprite.count()).toBe(0);
 
-    await page.clock.fastForward(600_500);
-    await settlePet();
+    await advancePet(600_500, true);
     expect(await page.locator(".lobster-pet--vigil").count()).toBe(1);
     await page.evaluate(async () => {
       const pet = document.querySelector("openclaw-lobster-pet") as BrowserLobsterPet;
@@ -81,21 +68,16 @@ suite.define(() => {
       await pet.updateComplete;
     });
 
-    const droop = page.locator(".lobster-pet--act-droop");
-    expect(await droop.count()).toBe(1);
-    await page.clock.runFor(1_599);
-    await settlePet();
-    expect(await droop.count()).toBe(1);
-    await page.clock.runFor(1);
-    await settlePet();
-
-    const sweep = page.locator(".lobster-pet--act-sweep");
-    expect(await sweep.count()).toBe(1);
-    await page.clock.runFor(1_799);
-    await settlePet();
-    expect(await sweep.count()).toBe(1);
-    await page.clock.runFor(1);
-    await settlePet();
+    for (const [act, duration] of [
+      ["droop", 1_599],
+      ["sweep", 1_799],
+    ] as const) {
+      const animation = page.locator(`.lobster-pet--act-${act}`);
+      expect(await animation.count()).toBe(1);
+      await advancePet(duration);
+      expect(await animation.count()).toBe(1);
+      await advancePet(1);
+    }
 
     expect(await page.locator(".lobster-pet--away").count()).toBe(1);
     await page.clock.runFor(350);
@@ -103,7 +85,7 @@ suite.define(() => {
   });
 
   it("does not pet after Chromium cancels a sub-threshold touch hold", async () => {
-    await configureComposerPet({ mode: "offline", outcome: "ok", seed: 42 });
+    await configureComposerPet(42);
     const sprite = page.locator(".lobster-pet");
     await sprite.waitFor();
 
@@ -117,7 +99,7 @@ suite.define(() => {
 
   it("keeps resting visitors proportionate and aligned with their perch", async () => {
     for (const seed of [0, 42, 77, 1234]) {
-      await configureComposerPet({ mode: "offline", outcome: "ok", seed });
+      await configureComposerPet(seed);
       await page.clock.runFor(1600);
       const shape = await page.locator("openclaw-lobster-pet").evaluate((pet) => {
         for (const animation of pet.getAnimations({ subtree: true })) {
@@ -141,17 +123,13 @@ suite.define(() => {
   });
 
   it("uses the composer ledge and floor, then clears the floor as soon as typing starts", async () => {
-    await configureComposerPet({ mode: "offline", outcome: "ok", seed: 108 });
+    await configureComposerPet(108);
     expect(await page.locator("openclaw-app-sidebar openclaw-lobster-pet").count()).toBe(0);
     const pet = page.locator(".new-session-page__composer openclaw-lobster-pet");
     await expect.poll(() => pet.getAttribute("data-scene-ready")).not.toBeNull();
     await page.clock.runFor(1500);
-    await page.screenshot({ path: suite.artifactDir + "/top-perch.png", animations: "disabled" });
-    // Seed 108 starts with two eligible hops: walk to the clear column if
-    // needed, then land on the floor. Advance its clock through the real owner.
     for (let frame = 0; frame < 30 && (await pet.getAttribute("data-spot")) !== "floor"; frame++) {
-      await page.clock.fastForward(500);
-      await settlePet();
+      await advancePet(500, true);
     }
     expect({
       spot: await pet.getAttribute("data-spot"),
@@ -185,20 +163,14 @@ suite.define(() => {
       expect(Math.abs(landing.footOffset)).toBeLessThan(0.2);
     }
     await page.clock.runFor(1300);
-    await page.screenshot({ path: suite.artifactDir + "/floor-visit.png", animations: "disabled" });
     const textarea = page.locator(".new-session-page__message");
     await textarea.fill("The prompt takes priority.");
     await expect.poll(() => pet.getAttribute("data-spot")).toBe("top");
     expect(await pet.getAttribute("data-floor-enabled")).toBeNull();
-    await page.screenshot({
-      path: suite.artifactDir + "/typing-priority.png",
-      animations: "disabled",
-    });
     await page.setViewportSize({ width: 390, height: 844 });
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(
       true,
     );
-    await page.screenshot({ path: suite.artifactDir + "/mobile.png", animations: "disabled" });
   });
 
   it.each(["crab", "snail", "duck", "jellyfish", "stranger"] as const)(
@@ -210,7 +182,7 @@ suite.define(() => {
       }
       const plan = planLobsterPasser(seed)!;
       expect(plan.kind).toBe(kind);
-      await configureComposerPet({ mode: "idle", outcome: "ok", seed });
+      await configureComposerPet(seed, "idle");
       await page.clock.runFor(plan.atMs + 100);
       const passer = page.locator(".new-session-page__composer .lobster-pet--passer");
       await expect.poll(() => passer.count()).toBe(1);
@@ -230,22 +202,20 @@ suite.define(() => {
       });
       expect(box.left).toBeGreaterThanOrEqual(box.composerLeft);
       expect(box.right).toBeLessThanOrEqual(box.composerRight);
-      await page.screenshot({ path: suite.artifactDir + "/visitor-" + kind + ".png" });
     },
   );
 
   it("keeps the composer visitors stationary with reduced motion", async () => {
     await page.emulateMedia({ reducedMotion: "reduce" });
-    await configureComposerPet({ mode: "offline", outcome: "ok", seed: 42 });
+    await configureComposerPet(42);
     await page.clock.runFor(1500);
-    const motion = await page
-      .locator("openclaw-lobster-pet")
-      .evaluate(
-        (element) =>
-          element
-            .getAnimations({ subtree: true })
-            .filter((animation) => animation.playState === "running").length,
-      );
+    const pet = page.locator("openclaw-lobster-pet");
+    const motion = await pet.evaluate(
+      (element) =>
+        element
+          .getAnimations({ subtree: true })
+          .filter((animation) => animation.playState === "running").length,
+    );
     expect(motion).toBe(0);
   });
 });

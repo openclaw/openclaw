@@ -14,7 +14,7 @@ import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { loadBundledPluginFacade } from "../test-utils/bundled-plugin-public-surface.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createGatewayMethodRegistry } from "./methods/registry.js";
-import { createControlUiHandlers } from "./server-methods/control-ui.js";
+import { controlUiHandlers } from "./server-methods/control-ui.js";
 import type { GatewayRequestHandlerOptions, RespondFn } from "./server-methods/types.js";
 import { createContext } from "./server-plugin-in-process-dispatch.test-support.js";
 import {
@@ -50,14 +50,17 @@ function fixture(method: "preview" | "detail") {
     config,
     id: "github",
     name: "GitHub",
-    contracts: { gatewayMethodDispatch: ["authenticated-request"] },
+    contracts: {
+      tools: ["github_read", "github_search"],
+      gatewayMethodDispatch: ["authenticated-request"],
+    },
     register: expectDefined(github.register, "GitHub registration"),
   });
   setTestPluginRegistry(registry.registry);
   const context = createContext();
   context.getRuntimeConfig = () => cfg;
   const hostMethod = method === "preview" ? "controlUi.githubPreview" : "controlUi.githubDetail";
-  const handler = expectDefined(createControlUiHandlers()[hostMethod], "GitHub host reader");
+  const handler = expectDefined(controlUiHandlers[hostMethod], "GitHub host reader");
   const readResponse = vi.fn<RespondFn>();
   const methods = createGatewayMethodRegistry(
     [
@@ -172,7 +175,7 @@ describe("registered GitHub readers", () => {
     expect(f.readResponse).toHaveBeenCalledExactlyOnceWith(false, undefined, {
       code: "UNAVAILABLE",
       message: "GitHub request is no longer active. Try again.",
-      retryable: true,
+      retryable: false,
     });
     expect(f.harness.send).not.toHaveBeenCalledWith(
       expect.objectContaining({ id: "github-read", ok: true }),

@@ -6,8 +6,11 @@ import type {
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import { withAgentDatabasePreparationContext } from "../../state/agent-database-preparation-context.js";
 import {
+  enterAgentInputRecoveryContext,
+  getAgentInputRecoveryContext,
+} from "../../state/agent-input-recovery-context.js";
+import {
   getPluginExecutionFrame,
-  pluginInstanceInvocation,
   runWithPluginExecutionFrame,
 } from "../plugin-instance-invocation.js";
 import type { PluginInstanceInvocation } from "../plugin-instance-invocation.types.js";
@@ -40,21 +43,24 @@ type PluginRuntimePluginScope = {
 function runWithPluginGatewayScope<T>(
   gatewayScope: PluginRuntimeGatewayRequestScope,
   run: () => T,
-  invocation = pluginInstanceInvocation.getStore(),
+  invocation?: PluginInstanceInvocation,
 ): T {
   const current = getPluginExecutionFrame();
+  const call = invocation ?? current?.invocation;
   const runtime = getPluginRuntimeExecutionFrame(current);
+  if (
+    runtime?.gatewayScope === gatewayScope &&
+    runtime.invocation === call &&
+    getAgentInputRecoveryContext() === gatewayScope
+  ) {
+    return run();
+  }
   return runWithPluginExecutionFrame(
-    runtime?.gatewayScope === gatewayScope && runtime.invocation === invocation
-      ? runtime
-      : new PluginRuntimeExecutionFrame(
-          // Reuse prepared frame facts; the mutable Gateway view remains call-local.
-          current ?? {},
-          gatewayScope,
-          runtime?.generationRegistry,
-          invocation,
-        ),
-    run,
+    new PluginRuntimeExecutionFrame(current ?? {}, gatewayScope, runtime?.generationRegistry, call),
+    () => {
+      enterAgentInputRecoveryContext(gatewayScope);
+      return run();
+    },
   );
 }
 
@@ -120,16 +126,11 @@ function copyGatewayScope(
   }
   // Copy enumerable values like spread, but do not read a registry that the caller replaces.
   for (const key of Reflect.ownKeys(current)) {
-    if (key !== "pluginRegistry" && Object.getOwnPropertyDescriptor(current, key)?.enumerable) {
-      Object.defineProperty(scoped, key, {
-        value: Reflect.get(current, key),
-        enumerable: true,
-        configurable: true,
-        writable: true,
-      });
+    if (key !== "pluginRegistry" && Object.prototype.propertyIsEnumerable.call(current, key)) {
+      Reflect.set(scoped, key, Reflect.get(current, key));
     }
   }
-  if (inheritRegistry && Object.getOwnPropertyDescriptor(current, "pluginRegistry")?.enumerable) {
+  if (inheritRegistry && Object.prototype.propertyIsEnumerable.call(current, "pluginRegistry")) {
     try {
       bindBorrowedRegistry(scoped, current.pluginRegistry);
     } catch (error) {
@@ -176,9 +177,30 @@ export function withPluginRuntimeGatewayContextResolver<T>(
   scoped.resolveGatewayContext = resolveGatewayContext;
   delete scoped.context;
   return withAgentDatabasePreparationContext(
-    () => resolveGatewayContext?.()?.agentDatabaseStartup,
+    resolveAgentDatabasePreparation(resolveGatewayContext),
     () => runWithPluginGatewayScope(scoped, run),
   );
+}
+
+const resolveUnboundAgentDatabasePreparation = () => undefined;
+const agentDatabasePreparationResolvers = new WeakMap<
+  GatewayContextResolver,
+  () => GatewayRequestContext["agentDatabaseStartup"]
+>();
+
+// One owner callback per resolver lets nested work reuse the preparation async frame.
+function resolveAgentDatabasePreparation(
+  resolveGatewayContext: GatewayContextResolver | undefined,
+) {
+  if (!resolveGatewayContext) {
+    return resolveUnboundAgentDatabasePreparation;
+  }
+  let resolve = agentDatabasePreparationResolvers.get(resolveGatewayContext);
+  if (!resolve) {
+    resolve = () => resolveGatewayContext()?.agentDatabaseStartup;
+    agentDatabasePreparationResolvers.set(resolveGatewayContext, resolve);
+  }
+  return resolve;
 }
 
 /** Runs work against an owned registry handle while preserving any gateway request facts. */

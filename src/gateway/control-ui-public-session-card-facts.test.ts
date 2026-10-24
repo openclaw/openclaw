@@ -80,6 +80,34 @@ function cachedOwner(snapshot?: ControlUiSessionPullRequestSnapshot) {
   return { owner, refreshes: () => refreshes };
 }
 
+function makeSnapshot(branch = BRANCH): ControlUiSessionPullRequestSnapshot {
+  return {
+    status: "ready",
+    rateLimited: false,
+    branch: {
+      owner: "example",
+      repo: "project",
+      branch,
+      additions: 24,
+      deletions: 8,
+      changedFiles: 3,
+    },
+    pullRequests: [
+      {
+        owner: "example",
+        repo: "project",
+        number: 42,
+        branch,
+        title: "A private PR title",
+        author: { login: "private-author" },
+        url: "https://github.com/example/project/pull/42",
+        state: "merged",
+        checks: { state: "passing", passed: 8, failed: 0, running: 0, skipped: 1 },
+      },
+    ],
+  };
+}
+
 describe("public session card facts", () => {
   it("preserves published names and branches despite diagnostic masking patterns", () => {
     const branch = "feature/internal-ticket-8315";
@@ -125,30 +153,8 @@ describe("public session card facts", () => {
 
   it("projects only the selected branch's recorded work and check summary", () => {
     const cached = cachedOwner({
-      status: "ready",
-      rateLimited: false,
+      ...makeSnapshot(),
       repository: { owner: "example", repo: "project" },
-      branch: {
-        owner: "example",
-        repo: "project",
-        branch: BRANCH,
-        additions: 24,
-        deletions: 8,
-        changedFiles: 3,
-      },
-      pullRequests: [
-        {
-          owner: "example",
-          repo: "project",
-          number: 42,
-          branch: BRANCH,
-          title: "A private PR title",
-          author: { login: "private-author" },
-          url: "https://github.com/example/project/pull/42",
-          state: "merged",
-          checks: { state: "passing", passed: 8, failed: 0, running: 0, skipped: 1 },
-        },
-      ],
     });
     expect(resolvePublicSessionCardFacts({ ...fixture(), pullRequests: cached.owner })).toEqual({
       agentName: "Build agent",
@@ -168,30 +174,7 @@ describe("public session card facts", () => {
   });
 
   it("does not attribute a sibling branch's work or pull request to this session", () => {
-    const cached = cachedOwner({
-      status: "ready",
-      rateLimited: false,
-      branch: {
-        owner: "other",
-        repo: "project",
-        branch: "other-branch",
-        additions: 99,
-        deletions: 2,
-        changedFiles: 7,
-      },
-      pullRequests: [
-        {
-          owner: "other",
-          repo: "project",
-          number: 43,
-          branch: "other-branch",
-          title: "Sibling work",
-          url: "https://github.com/other/project/pull/43",
-          state: "open",
-          checks: { state: "failing", passed: 0, failed: 2, running: 0, skipped: 0 },
-        },
-      ],
-    });
+    const cached = cachedOwner(makeSnapshot("other-branch"));
     const facts = resolvePublicSessionCardFacts({ ...fixture(), pullRequests: cached.owner });
     expect(facts.worktree).toEqual({ branch: BRANCH });
     expect(facts.repoSlug).toBeUndefined();

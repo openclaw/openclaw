@@ -26,11 +26,27 @@ import * as stateWorker from "../state/openclaw-state-worker-store.js";
 import { createGatewayMetadataCloseFixture } from "./server-close.metadata.test-support.js";
 
 const initializeRepository = useManagedWorktreeTestRepository();
+function registerHarness(
+  registry: Parameters<typeof withPluginRuntimeRegistryScope>[0],
+  id: string,
+  dispose: () => Promise<void> | void,
+) {
+  withPluginRuntimeRegistryScope(registry, () =>
+    registerAgentHarness({
+      id,
+      label: "Synthetic worktree execution",
+      supports: () => ({ supported: true }),
+      runAttempt: async () => {
+        throw new Error("The shutdown fixture does not call a model");
+      },
+      dispose,
+    }),
+  );
+}
 
-for (const withSibling of [false, true]) {
-  it(`disposes run execution before joining its held worktree lease (sibling=${withSibling})`, async ({
-    signal,
-  }) => {
+it.for([false, true])(
+  "disposes run execution before joining its held worktree lease (sibling=%s)",
+  async (withSibling, { signal }) => {
     const fixture = await createGatewayMetadataCloseFixture("gateway-worktree-execution-close");
     const disposed = createDeferred();
     const order: string[] = [];
@@ -48,21 +64,11 @@ for (const withSibling of [false, true]) {
           order.push("gateway_stop");
         },
       });
-      withPluginRuntimeRegistryScope(kernel.pluginRuntime.registry, () =>
-        registerAgentHarness({
-          id: "worktree-shutdown-fixture",
-          label: "Synthetic worktree run",
-          supports: () => ({ supported: true }),
-          runAttempt: async () => {
-            throw new Error("The shutdown fixture does not call a model");
-          },
-          async dispose() {
-            order.push("dispose");
-            disposed.resolve();
-            await lease?.release();
-          },
-        }),
-      );
+      registerHarness(kernel.pluginRuntime.registry, "worktree-shutdown-fixture", async () => {
+        order.push("dispose");
+        disposed.resolve();
+        await lease?.release();
+      });
       const disposeSibling = vi.fn();
       let sibling: Awaited<ReturnType<typeof fixture.start>> | undefined;
       if (withSibling) {
@@ -74,16 +80,10 @@ for (const withSibling of [false, true]) {
           "Sibling Gateway kernel",
         );
         expect(siblingKernel.pluginRuntime.registry).not.toBe(kernel.pluginRuntime.registry);
-        withPluginRuntimeRegistryScope(siblingKernel.pluginRuntime.registry, () =>
-          registerAgentHarness({
-            id: "sibling-worktree-shutdown-fixture",
-            label: "Synthetic sibling execution",
-            supports: () => ({ supported: true }),
-            runAttempt: async () => {
-              throw new Error("The shutdown fixture does not call a model");
-            },
-            dispose: disposeSibling,
-          }),
+        registerHarness(
+          siblingKernel.pluginRuntime.registry,
+          "sibling-worktree-shutdown-fixture",
+          disposeSibling,
         );
       }
       const repoRoot = await initializeRepository(fixture.state.statePath("execution-source"));
@@ -109,25 +109,21 @@ for (const withSibling of [false, true]) {
         await withinTest(sibling.close({ reason: "sibling shutdown" }), signal);
         expect(disposeSibling).toHaveBeenCalledOnce();
       }
-      const database = new DatabaseSync(resolveOpenClawStateSqlitePath(fixture.state.env), {
+      using database = new DatabaseSync(resolveOpenClawStateSqlitePath(fixture.state.env), {
         readOnly: true,
       });
-      try {
-        expect(
-          database
-            .prepare("SELECT COUNT(*) AS count FROM state_leases WHERE scope LIKE 'worktree-run:%'")
-            .get(),
-        ).toEqual({ count: 0 });
-      } finally {
-        database.close();
-      }
+      expect(
+        database
+          .prepare("SELECT COUNT(*) AS count FROM state_leases WHERE scope LIKE 'worktree-run:%'")
+          .get(),
+      ).toEqual({ count: 0 });
     } finally {
       await lease?.release();
       await closing;
       await fixture.cleanup();
     }
-  });
-}
+  },
+);
 
 // mock-isolation: Keep upstream polling and its agent runtime out of this close-order fixture.
 vi.mock("../sessions/session-upstream-monitor.js", () => ({
@@ -138,6 +134,8 @@ it("joins accepted worktree removals across scheduler cancellation before closin
   signal,
 }) => {
   const fixture = await createGatewayMetadataCloseFixture("gateway-worktree-run-end-close");
+  const waitForGate = (gate: PromiseLike<unknown>, work: PromiseLike<unknown>, message: string) =>
+    withinTest(awaitGateBeforeSettlement(gate, work, message), signal);
   const entered = createDeferred();
   const release = createDeferred();
   const parentClosed = createDeferred();
@@ -202,13 +200,10 @@ it("joins accepted worktree removals across scheduler cancellation before closin
     });
     await vi.advanceTimersByTimeAsync(0);
     vi.useRealTimers();
-    await withinTest(
-      awaitGateBeforeSettlement(
-        entered.promise,
-        expectDefined(removing, "Accepted removals"),
-        "Worktree removal settled before its worker command",
-      ),
-      signal,
+    await waitForGate(
+      entered.promise,
+      expectDefined(removing, "Accepted removals"),
+      "Worktree removal settled before its worker command",
     );
     expect(acceptedSignal?.aborted).toBe(false);
     kernel.scheduler.signal.addEventListener("abort", () => parentClosed.resolve(), { once: true });
@@ -219,13 +214,10 @@ it("joins accepted worktree removals across scheduler cancellation before closin
     });
     void acceptedChild.catch(() => {});
     closing = server.close({ reason: "worktree settlement close regression" });
-    await withinTest(
-      awaitGateBeforeSettlement(
-        parentClosed.promise,
-        closing,
-        "Gateway closed before scheduler cancellation",
-      ),
-      signal,
+    await waitForGate(
+      parentClosed.promise,
+      closing,
+      "Gateway closed before scheduler cancellation",
     );
     expect(acceptedSignal?.aborted).toBe(false);
     expect(shared.isOpen).toBe(true);
@@ -239,13 +231,10 @@ it("joins accepted worktree removals across scheduler cancellation before closin
     await withinTest(acceptedChild, signal);
     holdRunLeaseRelease = true;
     releasing = runLease.release();
-    await withinTest(
-      awaitGateBeforeSettlement(
-        releaseEntered.promise,
-        releasing,
-        "Accepted run lease cleanup did not reach its writer",
-      ),
-      signal,
+    await waitForGate(
+      releaseEntered.promise,
+      releasing,
+      "Accepted run lease cleanup did not reach its writer",
     );
     release.resolve();
     await withinTest(expectDefined(removing, "Accepted removals"), signal);
@@ -253,24 +242,20 @@ it("joins accepted worktree removals across scheduler cancellation before closin
     releaseLease.resolve();
     await withinTest(Promise.all([releasing, closing]), signal);
     expect(shared.isOpen).toBe(false);
-    const database = new DatabaseSync(resolveOpenClawStateSqlitePath(fixture.state.env), {
+    using database = new DatabaseSync(resolveOpenClawStateSqlitePath(fixture.state.env), {
       readOnly: true,
     });
-    try {
-      expect(database.prepare("SELECT id, removed_at FROM worktrees ORDER BY id").all()).toEqual(
-        records.map((record) => ({
-          id: record.id,
-          removed_at: record.id === running.id ? null : expect.any(Number),
-        })),
-      );
-      expect(
-        database
-          .prepare("SELECT COUNT(*) AS count FROM state_leases WHERE scope LIKE 'worktree-run:%'")
-          .get(),
-      ).toEqual({ count: 0 });
-    } finally {
-      database.close();
-    }
+    expect(database.prepare("SELECT id, removed_at FROM worktrees ORDER BY id").all()).toEqual(
+      records.map((record) => ({
+        id: record.id,
+        removed_at: record.id === running.id ? null : expect.any(Number),
+      })),
+    );
+    expect(
+      database
+        .prepare("SELECT COUNT(*) AS count FROM state_leases WHERE scope LIKE 'worktree-run:%'")
+        .get(),
+    ).toEqual({ count: 0 });
   } finally {
     vi.useRealTimers();
     release.resolve();

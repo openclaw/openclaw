@@ -1,10 +1,8 @@
-import { writeFile } from "node:fs/promises";
-import path from "node:path";
 import { expect, it } from "vitest";
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
+import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 import {
-  captureUiProofEnabled,
   controlUiSessionUrl,
   createSessionManagementE2eSuite,
   installMockGateway,
@@ -47,22 +45,16 @@ suite.define(() => {
       const oldChildren = children.map((child, index) =>
         index === 8 ? { ...child, hasActiveRun: false, activeRunIds: [], status: "done" } : child,
       );
-      const cachedRoot = {
+      const rootSnapshot = (rows: typeof children, offset: number) => ({
         ...sessionsListResponse(
-          [parent, selected, ...oldChildren].map((row) =>
-            Object.assign({}, row, { snapshotAt: baseTime + 150 }),
+          [parent, selected, ...rows].map((row) =>
+            Object.assign({}, row, { snapshotAt: baseTime + offset }),
           ),
         ),
-        ts: baseTime + 150,
-      };
-      const initialRoot = {
-        ...sessionsListResponse(
-          [parent, selected, ...(initialPrimary === "stale" ? oldChildren : children)].map((row) =>
-            Object.assign({}, row, { snapshotAt: baseTime + 100 }),
-          ),
-        ),
-        ts: baseTime + 100,
-      };
+        ts: baseTime + offset,
+      });
+      const cachedRoot = rootSnapshot(oldChildren, 150);
+      const initialRoot = rootSnapshot(initialPrimary === "stale" ? oldChildren : children, 100);
       const freshChildren = { ...sessionsListResponse(children), ts: baseTime + 200 };
       const childMatch = { spawnedBy: parentKey };
       const responses = (root: typeof cachedRoot) => ({
@@ -76,14 +68,7 @@ suite.define(() => {
         ],
       });
       await suite.withPage(
-        {
-          locale: "en-US",
-          serviceWorkers: "block",
-          viewport: { width: 1280, height: 1000 },
-          recordVideo: captureUiProofEnabled
-            ? { dir: suite.artifactDir, size: { width: 1280, height: 1000 } }
-            : undefined,
-        },
+        { ...createControlUiE2eContextOptions(), viewport: { width: 1280, height: 1000 } },
         async ({ page }) => {
           const gateway = await installMockGateway(page, {
             sessions: [parent, selected, ...children],
@@ -126,86 +111,15 @@ suite.define(() => {
               ),
             )
             .toEqual({ count: 12, ts: freshChildren.ts });
-          if (captureUiProofEnabled) {
-            // This proof annotation stays outside the sidebar and reports real DOM geometry.
-            await page.evaluate(
-              (proof) => {
-                const note = document.createElement("aside");
-                note.id = "sidebar-replay-proof";
-                note.dataset.stage = "Newer child page published; before cached root replay";
-                note.style.cssText =
-                  "position:fixed;left:450px;top:80px;z-index:10000;background:#18212b;color:white;padding:20px;font:18px/1.6 monospace;white-space:pre;pointer-events:none";
-                document.body.append(note);
-                const update = () => {
-                  const list = document.querySelector(
-                    `[data-session-tree="${proof.parentKey}"] > .sidebar-session-tree__children > .sidebar-session-tree__list`,
-                  );
-                  const lower = document.querySelector(`[data-session-key="${proof.selectedKey}"]`);
-                  const count = list?.querySelectorAll(":scope > [data-session-tree]").length ?? 0;
-                  note.textContent = `SYNTHETIC GATEWAY PROOF — initial ${proof.initialPrimary}\n${note.dataset.stage}\nVisible children: ${count} / expected 9\nLower row Y: ${lower?.getBoundingClientRect().y.toFixed(3)} px`;
-                  requestAnimationFrame(update);
-                };
-                update();
-              },
-              { parentKey, selectedKey, initialPrimary },
-            );
-          }
-          let initialPublicationError: Error | undefined;
-          try {
-            await expect
-              .poll(() => childList.locator(":scope > [data-session-tree]").count())
-              .toBe(9);
-          } catch (error) {
-            // Retain this assertion failure while completing the replay diagnostics.
-            initialPublicationError = error instanceof Error ? error : new Error(String(error));
-          } finally {
-            const initialRows = await evaluateControlUiContext(
-              page,
-              ({ sessions }, key) => {
-                const root = sessions.state.result;
-                const target = "agent:main:dashboard:jitter-8";
-                return {
-                  rootTs: root?.ts,
-                  rootRow: root?.sessions.find((row) => row.key === target),
-                  childRow: sessions
-                    .listSnapshot({
-                      spawnedBy: key,
-                      limit: 100,
-                      includeGlobal: false,
-                      includeUnknown: false,
-                      configuredAgentsOnly: true,
-                    })
-                    .result?.sessions.find((row) => row.key === target),
-                };
-              },
-              parentKey,
-            );
-            await writeFile(
-              path.join(suite.artifactDir, `${initialPrimary}-initial-publication.json`),
-              JSON.stringify({ ...initialRows, visibleKeys: await keys() }, null, 2),
-            );
-            if (captureUiProofEnabled || initialPublicationError) {
-              await page.screenshot({
-                path: path.join(suite.artifactDir, `${initialPrimary}-after-child-publication.png`),
-              });
-            }
-          }
-          // Geometry readiness must not depend on screenshots implicitly waiting for fonts.
+          await expect
+            .poll(() => childList.locator(":scope > [data-session-tree]").count())
+            .toBe(9);
           await page.evaluate(async () => {
             await document.fonts.ready;
           });
-          if (captureUiProofEnabled) {
-            // Owner publication was asserted above; the dwell makes the recording readable.
-            await page.waitForTimeout(2000);
-          }
           const initialKeys = await keys();
           const lower = page.locator(`[data-session-key="${selectedKey}"]`);
           const initialBounds = await lower.boundingBox();
-          if (captureUiProofEnabled) {
-            await page.screenshot({
-              path: path.join(suite.artifactDir, `${initialPrimary}-fresh-child-list.png`),
-            });
-          }
           const rootMatch = { agentId: "main" };
           const rootRequests = (await gateway.getRequests("sessions.list", rootMatch)).length;
           await gateway.setMethodResponse("sessions.list", responses(cachedRoot));
@@ -217,13 +131,11 @@ suite.define(() => {
               throw new Error("Expected mounted sidebar");
             }
             const counts: number[] = [];
-            let sampleCount = 0;
             const sample = () => {
               const list = sidebar.querySelector(
                 `[data-session-tree="${key}"] > .sidebar-session-tree__children > .sidebar-session-tree__list`,
               );
               const count = list?.querySelectorAll(":scope > [data-session-tree]").length ?? 0;
-              sampleCount += 1;
               if (counts.at(-1) !== count) {
                 counts.push(count);
               }
@@ -242,18 +154,10 @@ suite.define(() => {
                 observer.disconnect();
                 cancelAnimationFrame(frameId);
                 sample();
-                return { counts, sampleCount };
+                return counts;
               },
             };
           }, parentKey);
-          if (captureUiProofEnabled) {
-            await page.evaluate(() => {
-              const note = document.getElementById("sidebar-replay-proof");
-              if (note) {
-                note.dataset.stage = "Requesting cached root replay (snapshot 150 < child 200)";
-              }
-            });
-          }
           // This unrelated row invalidates the root query, not the observed child query.
           await gateway.emitGatewayEvent("sessions.changed", {
             key: selectedKey,
@@ -263,60 +167,21 @@ suite.define(() => {
             updatedAt: baseTime + 300,
           });
           await gateway.waitForRequest("sessions.list", { after: rootRequests, match: rootMatch });
-          // A sent request does not prove publication. Wait for the canonical owner
-          // to admit the exact cached page before awaiting the resulting paint.
+          // Wait for owner publication, not just the request, before checking paint.
           await expect
             .poll(() => evaluateControlUiContext(page, ({ sessions }) => sessions.state.result?.ts))
             .toBe(cachedRoot.ts);
           await page.evaluate(
             () =>
-              new Promise<void>((resolve) => {
-                requestAnimationFrame(() => {
-                  requestAnimationFrame(() => resolve());
-                });
+              new Promise<number>((resolve) => {
+                requestAnimationFrame(() => requestAnimationFrame(resolve));
               }),
           );
-          if (captureUiProofEnabled) {
-            await page.evaluate(() => {
-              const note = document.getElementById("sidebar-replay-proof");
-              if (note) {
-                note.dataset.stage = "Cached root 150 published — inspect count and lower row";
-              }
-            });
-            await page.waitForTimeout(2500);
-            await page.screenshot({
-              path: path.join(suite.artifactDir, `${initialPrimary}-after-cached-root-refresh.png`),
-            });
-          }
           const finalKeys = await keys();
           const finalBounds = await lower.boundingBox();
           const observed = await rowObservation.evaluate((observation) => observation.stop());
           await rowObservation.dispose();
-          await writeFile(
-            path.join(suite.artifactDir, `${initialPrimary}-cached-list-proof.json`),
-            JSON.stringify(
-              {
-                initialPrimary,
-                initialPublicationPassed: initialPublicationError === undefined,
-                initialPublicationError:
-                  initialPublicationError instanceof Error
-                    ? initialPublicationError.message
-                    : undefined,
-                initialKeys,
-                finalKeys,
-                initialY: initialBounds?.y,
-                finalY: finalBounds?.y,
-                publishedTs: cachedRoot.ts,
-                observed,
-              },
-              null,
-              2,
-            ),
-          );
-          if (initialPublicationError !== undefined) {
-            throw initialPublicationError;
-          }
-          expect(observed.counts).toEqual([9]);
+          expect(observed).toEqual([9]);
           expect(finalKeys).toEqual(initialKeys);
           expect(finalBounds?.y).toBe(initialBounds?.y);
           expect(

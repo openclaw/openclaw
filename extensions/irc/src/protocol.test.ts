@@ -1,17 +1,11 @@
 // Irc tests cover protocol plugin behavior.
 import { describe, expect, it } from "vitest";
-import {
-  parseIrcLine,
-  parseIrcPrefix,
-  sanitizeIrcOutboundText,
-  sanitizeIrcTarget,
-} from "./protocol.js";
+import { parseIrcLine, parseIrcPrefix, sanitizeIrcTarget } from "./protocol.js";
 
 describe("irc protocol", () => {
   it("parses PRIVMSG lines with prefix and trailing", () => {
     const parsed = parseIrcLine(":alice!u@host PRIVMSG #room :hello world");
     expect(parsed).toEqual({
-      raw: ":alice!u@host PRIVMSG #room :hello world",
       prefix: "alice!u@host",
       command: "PRIVMSG",
       params: ["#room"],
@@ -23,16 +17,7 @@ describe("irc protocol", () => {
       user: "u",
       host: "host",
     });
-  });
-
-  it("sanitizes outbound text to prevent command injection", () => {
-    expect(sanitizeIrcOutboundText("hello\r\nJOIN #oops")).toBe("hello JOIN #oops");
-    expect(sanitizeIrcOutboundText("\u0001test\u0000")).toBe("test");
-  });
-
-  it("keeps literal backslash sequences as message text", () => {
-    const text = String.raw`Run C:\tools\new.exe, printf("%d\n"), match \x41 or caf\u00e9`;
-    expect(sanitizeIrcOutboundText(text)).toBe(text);
+    expect(parseIrcPrefix("irc.example.test").nick).toBeUndefined();
   });
 
   it("validates targets and rejects control characters", () => {

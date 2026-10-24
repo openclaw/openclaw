@@ -10,6 +10,8 @@ How an authorized session reaches a cloud destination, what the Control UI requi
 
 Administrators can run an authorized session on a configured cloud profile, including a fresh workspace without a repository. Session ownership and participation checks are revalidated before placement lifecycle changes commit.
 
+Fresh workspaces can be created and dispatched concurrently. Creating another session's workspace does not invalidate a dispatch already in preparation; changes to the selected session's own workspace binding or archive status still prevent stale dispatch.
+
 If the session already has an active turn, `sessions.dispatch` returns a busy error without interrupting the turn or starting worker provisioning. Wait for the turn to finish and retry dispatch.
 
 In the Control UI, open **New Session** and choose a **Cloud** destination. A cloud destination is available when these eligibility gates pass:

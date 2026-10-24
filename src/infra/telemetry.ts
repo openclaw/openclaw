@@ -60,23 +60,13 @@ type TelemetryStatusReason =
   | "never-asked"
   | "update-disabled";
 
-type TelemetryUpdateOptions = {
-  surface: TelemetrySurface;
-  fetchImpl?: (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
-  nowMs?: number;
-};
-
 const TelemetryResponseSchema = z.object({
   version: z.string().trim().min(1),
   note: z.string().optional(),
 });
 
 let lastFailedAttempt: { at: number; endpoint: string; stateDirectory?: string } | undefined;
-type TelemetryCheckOutcome = {
-  update: TelemetryUpdate | null;
-  networkAttempted: boolean;
-};
-let inFlightUpdate: Promise<TelemetryCheckOutcome> | undefined;
+let inFlightUpdate: Promise<TelemetryUpdate | null> | undefined;
 const pendingSuccesses = new Map<string, SuccessfulTelemetryState>();
 
 type TelemetryStorage = { databasePath: string; worker?: OpenClawStateWorkerContext };
@@ -136,6 +126,7 @@ async function readTelemetry<Type extends "telemetry.readState" | "telemetry.cou
       )) ?? fallback
     );
   } catch {
+    // Optional local telemetry storage must not prevent the update check.
     return fallback;
   }
 }
@@ -144,8 +135,8 @@ function resolveTelemetryEndpoint(): string {
   return process.env.OPENCLAW_TELEMETRY_ENDPOINT?.trim() || DEFAULT_TELEMETRY_ENDPOINT;
 }
 
-export function buildTelemetryUserAgent(surface: TelemetrySurface): string {
-  return `openclaw/${VERSION} (${process.platform}; node/${process.versions.node}; ${process.arch}; ${surface})`;
+export function buildTelemetryUserAgent(): string {
+  return `openclaw/${VERSION} (${process.platform}; node/${process.versions.node}; ${process.arch}; gateway)`;
 }
 
 function readTelemetryState(context: TelemetryStorage): Promise<TelemetryState> {
@@ -282,22 +273,21 @@ async function prepareTelemetryPayload(
 
 export async function checkTelemetryUpdate(
   getConfig: () => OpenClawConfig,
-  options: TelemetryUpdateOptions,
 ): Promise<TelemetryUpdate | null> {
   const config = getConfig();
   if (isUpdateCheckDisabled(config)) {
     return null;
   }
 
-  const precedingCheck = inFlightUpdate;
+  if (inFlightUpdate) {
+    return inFlightUpdate;
+  }
   const endpoint = resolveTelemetryEndpoint();
   const context = captureTelemetryStorage();
   const pendingKey = JSON.stringify([endpoint, context.databasePath]);
-  const nowMs = options.nowMs ?? Date.now();
+  const nowMs = Date.now();
   const stateDirectory = process.env.OPENCLAW_STATE_DIR;
-  const check = async (
-    preceding: Promise<TelemetryCheckOutcome> | undefined,
-  ): Promise<TelemetryCheckOutcome> => {
+  const check = async (): Promise<TelemetryUpdate | null> => {
     let state = await readTelemetryState(context);
     const pending = pendingSuccesses.get(pendingKey);
     if (pending) {
@@ -314,32 +304,20 @@ export async function checkTelemetryUpdate(
       (state.lastPingAt !== undefined &&
         nowMs >= state.lastPingAt &&
         nowMs - state.lastPingAt < TELEMETRY_CHECK_INTERVAL_MS) ||
-      (!options.fetchImpl &&
-        (process.env.VITEST !== undefined || process.env.NODE_ENV === "test")) ||
+      process.env.VITEST !== undefined ||
+      process.env.NODE_ENV === "test" ||
       (lastFailedAttempt?.endpoint === endpoint &&
         lastFailedAttempt.stateDirectory === stateDirectory &&
         nowMs >= lastFailedAttempt.at &&
         nowMs - lastFailedAttempt.at < TELEMETRY_FAILURE_BACKOFF_MS)
     ) {
-      return { update: cached, networkAttempted: false };
+      return cached;
     }
-    if (preceding) {
-      const outcome = await preceding;
-      if (outcome.networkAttempted) {
-        return outcome;
-      }
-      const current = inFlightUpdate;
-      if (!current) {
-        inFlightUpdate = pendingCheck;
-      }
-      return await check(current);
-    }
-    let networkAttempted = false;
 
     try {
       const featureStatsEnabled = config.telemetry?.enabled === true && !isDoNotTrackEnabled();
       const headers: Record<string, string> = {
-        "User-Agent": buildTelemetryUserAgent(options.surface),
+        "User-Agent": buildTelemetryUserAgent(),
       };
       const init: RequestInit = {
         method: featureStatsEnabled ? "POST" : "GET",
@@ -348,12 +326,12 @@ export async function checkTelemetryUpdate(
       if (featureStatsEnabled) {
         headers["Content-Type"] = "application/json";
         init.body = JSON.stringify(
-          await prepareTelemetryPayload(config, { surface: options.surface }, context),
+          await prepareTelemetryPayload(config, { surface: "gateway" }, context),
         );
       }
       const currentConfig = getConfig();
       if (isUpdateCheckDisabled(currentConfig)) {
-        return { update: cached, networkAttempted };
+        return cached;
       }
       if (
         featureStatsEnabled &&
@@ -364,8 +342,7 @@ export async function checkTelemetryUpdate(
         delete init.body;
       }
       init.signal = AbortSignal.timeout(TELEMETRY_TIMEOUT_MS);
-      networkAttempted = true;
-      const response = await (options.fetchImpl ?? fetch)(endpoint, init);
+      const response = await fetch(endpoint, init);
       if (response.status === 200) {
         const parsed = TelemetryResponseSchema.parse(
           await readProviderJsonResponse(response, "Telemetry update response"),
@@ -382,28 +359,20 @@ export async function checkTelemetryUpdate(
         );
         lastFailedAttempt = undefined;
         return {
-          update: {
-            version: persisted.latestVersion,
-            ...(persisted.note ? { note: persisted.note } : {}),
-          },
-          networkAttempted,
+          version: persisted.latestVersion,
+          ...(persisted.note ? { note: persisted.note } : {}),
         };
       }
     } catch {
       // A failed check keeps the previous accepted update.
     }
     lastFailedAttempt = { at: nowMs, endpoint, stateDirectory };
-    return { update: cached, networkAttempted };
+    return cached;
   };
 
-  // Publish completion only after the owning slot is released; a cached result is not a request.
-  const pendingCheck = check(precedingCheck).finally(() => {
-    if (inFlightUpdate === pendingCheck) {
-      inFlightUpdate = undefined;
-    }
+  // Concurrent callers share one check, including its cached result.
+  inFlightUpdate = check().finally(() => {
+    inFlightUpdate = undefined;
   });
-  if (!precedingCheck) {
-    inFlightUpdate = pendingCheck;
-  }
-  return (await pendingCheck).update;
+  return inFlightUpdate;
 }

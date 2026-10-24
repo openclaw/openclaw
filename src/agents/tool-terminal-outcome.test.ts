@@ -5,9 +5,10 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import type { Message, Model } from "../llm/types.js";
 import { createAssistantMessageEventStream } from "../llm/utils/event-stream.js";
 import {
-  adjustedParamsByToolCallId,
   buildAdjustedParamsKey,
+  peekAdjustedParamsForToolCall,
   preExecutionBlockedToolCallIds,
+  recordAdjustedParamsForToolCall,
   recordToolExecutionStarted,
   recordToolExecutionTracked,
   resetAdjustedParamsByToolCallIdForTests,
@@ -33,6 +34,78 @@ const steeringModel: Model = {
 
 describe("tool terminal outcome observer", () => {
   afterEach(() => resetAdjustedParamsByToolCallIdForTests());
+
+  it.each([
+    {
+      rejection: "invalid arguments",
+      blocked: false,
+      expected: "⚠️ Browser failed: invalid arguments",
+    },
+    { rejection: "policy denial", blocked: true, expected: "⚠️ Browser blocked" },
+  ])(
+    "describes $rejection through the agent subscription and final reply",
+    async ({ blocked, expected }) => {
+      const execute = vi.fn(async () => ({ content: [], details: {} }));
+      const { emit, subscription } = createSubscribedSessionHarness({
+        runId: "validation-warning",
+      });
+      let requests = 0;
+      const agent = new Agent({
+        initialState: {
+          model: steeringModel,
+          tools: [
+            {
+              name: "browser",
+              label: "browser",
+              description: "Opens a target.",
+              parameters: Type.Object({ target: Type.String() }),
+              execute,
+            },
+          ],
+        },
+        streamFn: () => {
+          const first = requests++ === 0;
+          const message = makeAgentAssistantMessage({
+            content: first
+              ? [
+                  {
+                    type: "toolCall",
+                    id: "call-validation",
+                    name: "browser",
+                    arguments: blocked
+                      ? { target: "PRIVATE_TARGET" }
+                      : { query: "PRIVATE_ARGUMENT" },
+                  },
+                ]
+              : [],
+            stopReason: first ? "toolUse" : "stop",
+          });
+          const stream = createAssistantMessageEventStream();
+          stream.push({ type: "done", reason: first ? "toolUse" : "stop", message });
+          stream.end();
+          return stream;
+        },
+        beforeToolCall: async () =>
+          blocked ? { block: true, reason: "PRIVATE_POLICY_REASON" } : undefined,
+      });
+      const unsubscribe = agent.subscribe(emit);
+      try {
+        await agent.prompt("Open the target.");
+        await subscription.waitForPendingEvents();
+        expect(execute).not.toHaveBeenCalled();
+        const payloads = buildPayloads({
+          assistantTexts: subscription.assistantTexts,
+          lastAssistant: subscription.getCurrentAttemptAssistant(),
+          lastToolError: subscription.getLastToolError(),
+        });
+        expect(payloads).toEqual([expect.objectContaining({ text: expected, isError: true })]);
+        expect(JSON.stringify(payloads)).not.toContain("PRIVATE_");
+      } finally {
+        unsubscribe();
+        subscription.unsubscribe();
+      }
+    },
+  );
 
   it.each([
     { firstOutcome: "success", error: undefined, warnings: [] },
@@ -236,10 +309,7 @@ describe("tool terminal outcome observer", () => {
     const runId = "run-2";
     const toolCallId = "call-1";
     recordToolExecutionTracked(toolCallId, runId);
-    adjustedParamsByToolCallId.set(buildAdjustedParamsKey({ runId, toolCallId }), {
-      action: "send",
-      to: "channel:adjusted",
-    });
+    recordAdjustedParamsForToolCall(toolCallId, { action: "send", to: "channel:adjusted" }, runId);
 
     const resolution = createToolTerminalObserver(runId)({
       toolCallId,
@@ -256,7 +326,7 @@ describe("tool terminal outcome observer", () => {
       sideEffectEvidence: false,
       lastToolError: { mutatingAction: false },
     });
-    expect(adjustedParamsByToolCallId.get(buildAdjustedParamsKey({ runId, toolCallId }))).toEqual({
+    expect(peekAdjustedParamsForToolCall(toolCallId, runId)).toEqual({
       action: "send",
       to: "channel:adjusted",
     });
@@ -266,10 +336,7 @@ describe("tool terminal outcome observer", () => {
     const runId = "run-racing-timeout";
     const toolCallId = "call-racing-timeout";
     recordToolExecutionStarted(toolCallId, runId);
-    adjustedParamsByToolCallId.set(buildAdjustedParamsKey({ runId, toolCallId }), {
-      action: "send",
-      to: "channel:adjusted",
-    });
+    recordAdjustedParamsForToolCall(toolCallId, { action: "send", to: "channel:adjusted" }, runId);
 
     const resolution = createToolTerminalObserver(runId)({
       toolCallId,
@@ -385,6 +452,16 @@ describe("tool terminal outcome observer", () => {
     expect(createToolTerminalObserver("run-effect-receipt")(input).effectReceipt).toEqual({
       state,
     });
+  });
+
+  it("clears a failure after the same normalized tool succeeds", () => {
+    const observe = createToolTerminalObserver("run-normalized-recovery");
+    observe({
+      toolName: " Write ",
+      outcome: "failure",
+      failure: { error: "write failed" },
+    });
+    expect(observe({ toolName: "WRITE", outcome: "success" }).lastToolError).toBeUndefined();
   });
 
   it("clears a failed sessions_spawn once a retry with adjusted arguments succeeds", () => {

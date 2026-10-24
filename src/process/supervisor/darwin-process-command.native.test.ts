@@ -3,56 +3,39 @@ import { once } from "node:events";
 import os from "node:os";
 import { Worker } from "node:worker_threads";
 import { expect, it } from "vitest";
+import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
 import { readDarwinProcessCommand } from "./darwin-process-command.js";
 
 it.runIf(process.platform === "darwin")(
   "inspects exact child arguments and selected environment on the main thread and a Worker",
   async ({ signal }) => {
     const args = ["/app with spaces/openclaw.mjs", "", '"quoted"', "工作"];
-    const child = spawn(
-      process.execPath,
-      [
-        "--eval",
-        "process.on('message', () => process.exit(0)); process.send('ready');",
-        "--",
-        ...args,
-      ],
-      {
-        env: {
-          ...process.env,
-          OPENCLAW_SERVICE_MARKER: "native-inspection-fixture",
-          UNRELATED_PRIVATE_VALUE: "must-not-escape",
-        },
-        stdio: ["ignore", "ignore", "pipe", "ipc"],
+    const script = "process.on('message', () => process.exit(0)); process.send('ready');";
+    const argv = [process.execPath, "--eval", script, "--", ...args];
+    const expected = { argv, executable: process.execPath, serviceMarker: "fixture" };
+    const child = spawn(process.execPath, argv.slice(1), {
+      env: {
+        ...process.env,
+        OPENCLAW_SERVICE_MARKER: "fixture",
+        UNRELATED_PRIVATE_VALUE: "must-not-escape",
       },
-    );
+      stdio: ["ignore", "ignore", "pipe", "ipc"],
+    });
     const closed = once(child, "close");
     void closed.catch(() => {});
     let worker: Worker | undefined;
     try {
-      await Promise.race([
+      await awaitGateBeforeSettlement(
         once(child, "message", { signal }),
-        closed.then(() => {
-          throw new Error("Inspection fixture exited before readiness");
-        }),
-      ]);
+        closed,
+        "Inspection fixture exited before readiness",
+      );
       const translated = process.arch === "x64" && os.cpus()[0]?.model.includes("Apple");
-      const inspect = () => readDarwinProcessCommand(child.pid!, process.getuid?.());
+      const inspect = () => readDarwinProcessCommand(child.pid!, "same");
       if (translated) {
         expect(inspect).toThrow(/under Rosetta/);
       } else {
-        const observed = inspect();
-        expect(observed).toEqual({
-          argv: [
-            process.execPath,
-            "--eval",
-            "process.on('message', () => process.exit(0)); process.send('ready');",
-            "--",
-            ...args,
-          ],
-          executable: process.execPath,
-          serviceMarker: "native-inspection-fixture",
-        });
+        expect(inspect()).toEqual(expected);
       }
       worker = new Worker(
         `
@@ -60,7 +43,7 @@ it.runIf(process.platform === "darwin")(
       (async () => {
         if (!process.versions.bun) { (await import(workerData.loader)).register(); }
         const { readDarwinProcessCommand } = await import(workerData.module);
-        try { parentPort.postMessage({ command: readDarwinProcessCommand(workerData.pid, workerData.uid) }); }
+        try { parentPort.postMessage({ command: readDarwinProcessCommand(workerData.pid, "same") }); }
         catch (error) { parentPort.postMessage({ error: error.message }); }
       })().catch(error => { throw error; });
     `,
@@ -71,7 +54,6 @@ it.runIf(process.platform === "darwin")(
             loader: import.meta.resolve("tsx/esm/api"),
             module: new URL("./darwin-process-command.ts", import.meta.url).href,
             pid: child.pid,
-            uid: process.getuid?.(),
           },
         },
       );
@@ -79,19 +61,7 @@ it.runIf(process.platform === "darwin")(
       if (translated) {
         expect(result).toEqual({ error: expect.stringMatching(/under Rosetta/) });
       } else {
-        expect(result).toEqual({
-          command: {
-            argv: [
-              process.execPath,
-              "--eval",
-              "process.on('message', () => process.exit(0)); process.send('ready');",
-              "--",
-              ...args,
-            ],
-            executable: process.execPath,
-            serviceMarker: "native-inspection-fixture",
-          },
-        });
+        expect(result).toEqual({ command: expected });
       }
       child.send("exit");
       expect(await closed).toEqual([0, null]);

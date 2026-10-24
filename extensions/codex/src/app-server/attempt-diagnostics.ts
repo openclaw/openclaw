@@ -1,11 +1,15 @@
-import { createHash } from "node:crypto";
 import {
   emitTrustedDiagnosticEventWithPrivateData,
   type DiagnosticModelCallContent,
 } from "openclaw/plugin-sdk/diagnostic-runtime";
-import type { CodexAppServerRuntimeOptions, resolveCodexPluginsPolicy } from "./config.js";
+import { sha256Hex } from "openclaw/plugin-sdk/node-crypto-runtime";
+import type { CodexUsageProjection } from "./event-projector-usage.js";
 
 type TrustedDiagnosticEventInput = Parameters<typeof emitTrustedDiagnosticEventWithPrivateData>[0];
+type ModelCallDiagnosticBase = Omit<
+  Extract<TrustedDiagnosticEventInput, { type: "model.call.started" }>,
+  "type"
+>;
 
 export function utf8JsonByteLength(value: unknown): number | undefined {
   try {
@@ -16,42 +20,7 @@ export function utf8JsonByteLength(value: unknown): number | undefined {
 }
 
 function fingerprintCodexLogValue(namespace: string, value: string): string {
-  const hash = createHash("sha256");
-  hash.update(namespace);
-  hash.update("\0");
-  hash.update(value);
-  return `sha256:${hash.digest("hex").slice(0, 16)}`;
-}
-
-export function buildCodexPluginThreadConfigEligibilityLogData(params: {
-  sessionId: string;
-  sessionKey: string;
-  pluginThreadConfigRequired: boolean;
-  resolvedPluginPolicy: ReturnType<typeof resolveCodexPluginsPolicy> | undefined;
-  enabledPluginConfigKeys: string[] | undefined;
-  pluginAppCacheKey: string;
-  startupAuthProfileId: string | undefined;
-  appServer: CodexAppServerRuntimeOptions;
-}): Record<string, unknown> {
-  return {
-    sessionId: params.sessionId,
-    sessionKey: params.sessionKey,
-    enabled: params.pluginThreadConfigRequired,
-    policyConfigured: params.resolvedPluginPolicy?.configured === true,
-    policyEnabled: params.resolvedPluginPolicy?.enabled === true,
-    allowAllPlugins: params.resolvedPluginPolicy?.allowAllPlugins === true,
-    pluginConfigKeys: params.resolvedPluginPolicy?.pluginPolicies
-      .map((plugin) => plugin.configKey)
-      .toSorted(),
-    enabledPluginConfigKeys: params.enabledPluginConfigKeys,
-    appCacheKeyFingerprint: fingerprintCodexLogValue(
-      "openclaw:codex:plugin-app-cache-key:v1",
-      params.pluginAppCacheKey,
-    ),
-    authProfileId: params.startupAuthProfileId,
-    appServerTransport: params.appServer.start.transport,
-    appServerCommandSource: params.appServer.start.commandSource,
-  };
+  return `sha256:${sha256Hex(`${namespace}\0${value}`).slice(0, 16)}`;
 }
 
 type CodexModelCallFailureKind = "aborted" | "timeout";
@@ -66,15 +35,13 @@ type CodexModelCallDiagnosticTool = {
 };
 
 export function createCodexModelCallDiagnosticEmitter(params: {
-  baseFields: Record<string, unknown>;
+  baseFields: ModelCallDiagnosticBase;
   capture: CodexModelCallDiagnosticCapture;
   tools: readonly CodexModelCallDiagnosticTool[];
   buildInputMessages: () => unknown;
   buildSystemPrompt: () => string | undefined;
-  now?: () => number;
   onErrorDiagnostic?: (error: unknown) => void;
 }) {
-  const now = params.now ?? (() => Date.now());
   const toolDefinitions = params.capture.toolDefinitions
     ? params.tools.map((tool) => ({
         name: tool.name,
@@ -82,7 +49,7 @@ export function createCodexModelCallDiagnosticEmitter(params: {
         parameters: tool.inputSchema ?? tool.parameters,
       }))
     : undefined;
-  let startedAt = now();
+  let startedAt = Date.now();
   let started = false;
   let terminalEmitted = false;
   let requestPayloadBytes: number | undefined;
@@ -107,14 +74,16 @@ export function createCodexModelCallDiagnosticEmitter(params: {
       return false;
     }
     terminalEmitted = true;
+    const event = {
+      ...params.baseFields,
+      durationMs: Math.max(0, Date.now() - startedAt),
+      ...fields,
+      ...(requestPayloadBytes !== undefined ? { requestPayloadBytes } : {}),
+    };
     emitTrustedDiagnosticEventWithPrivateData(
-      {
-        type,
-        ...params.baseFields,
-        durationMs: Math.max(0, now() - startedAt),
-        ...fields,
-        ...(requestPayloadBytes !== undefined ? { requestPayloadBytes } : {}),
-      } as TrustedDiagnosticEventInput,
+      type === "model.call.error"
+        ? { ...event, type, errorCategory: fields.errorCategory ?? "error" }
+        : { ...event, type },
       buildPrivateData({ outputMessages }),
     );
     return true;
@@ -125,13 +94,13 @@ export function createCodexModelCallDiagnosticEmitter(params: {
       requestPayloadBytes = bytes;
     },
     emitStarted(): void {
-      startedAt = now();
+      startedAt = Date.now();
       started = true;
       emitTrustedDiagnosticEventWithPrivateData(
         {
           type: "model.call.started",
           ...params.baseFields,
-        } as TrustedDiagnosticEventInput,
+        },
         buildPrivateData(),
       );
     },
@@ -140,6 +109,28 @@ export function createCodexModelCallDiagnosticEmitter(params: {
         "model.call.completed",
         result.lastAssistant ? [result.lastAssistant] : result.assistantTexts,
       );
+    },
+    emitResponseObserved(
+      this: void,
+      response: NonNullable<ReturnType<CodexUsageProjection["record"]>>,
+    ): void {
+      if (!started || terminalEmitted) {
+        return;
+      }
+      const { observationUnit: _unit, promptStats: _stats, ...baseFields } = params.baseFields;
+      const usage = response.usage;
+      emitTrustedDiagnosticEventWithPrivateData({
+        ...baseFields,
+        type: "model.response.observed",
+        timestampSource: "receipt",
+        usageSource: "native-normalized",
+        usageScope: "response",
+        upstreamRequestIdHash: fingerprintCodexLogValue(
+          "openclaw:codex:response-id:v1",
+          response.responseId,
+        ),
+        ...(usage ? { usage } : {}),
+      });
     },
     emitError(error: unknown, fields: { failureKind?: CodexModelCallFailureKind } = {}): void {
       if (

@@ -5,8 +5,7 @@ import {
   streamSimpleOpenAIResponses,
 } from "@openclaw/ai/internal/openai";
 import type { FirstStreamEventInternalOptions } from "@openclaw/ai/internal/runtime";
-import type { Model } from "@openclaw/llm-core";
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, describe, expect, it as baseIt, vi } from "vitest";
 import {
   awaitGateBeforeSettlement,
   createDeferred,
@@ -15,6 +14,7 @@ import {
 import { loadBundledPluginFacade } from "../../../test-utils/bundled-plugin-public-surface.js";
 import { reserveTestPortListener } from "../../../test-utils/port-claims.js";
 import type { StreamFn } from "../../runtime/index.js";
+import { makeProviderModelFixture } from "../../test-helpers/provider-model-fixture.js";
 import { recoverAfterTransportDrop } from "./attempt-recovery.test-support.js";
 import {
   resolveLlmFirstEventTimeoutMs,
@@ -51,29 +51,21 @@ beforeAll(async () => {
   });
 });
 
-afterEach(() => {
-  vi.useRealTimers();
-  server.listener.closeAllConnections();
-});
-
 afterAll(async () => {
   await server.releaseListener();
   await server.claim.release();
 });
 
 async function openRequest(api: Api, modelRequestTimeoutMs?: number, runTimeoutMs?: number) {
-  const model: Model<Api> = {
+  const model = makeProviderModelFixture<Api>({
     id: "local-model",
     name: "Local model",
     api,
     provider: "custom-local",
     baseUrl: `http://127.0.0.1:${server.claim.port}/v1`,
-    reasoning: false,
-    input: ["text"],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     contextWindow: 8192,
     maxTokens: 128,
-  };
+  });
   const request = createDeferred<ServerResponse>();
   const closed = createDeferred();
   receive = (response) => {
@@ -116,162 +108,142 @@ async function openRequest(api: Api, modelRequestTimeoutMs?: number, runTimeoutM
   return { request, closed, accepted, firstText, onTimeout, controller, completion };
 }
 
-describe("provider header deadline", () => {
-  it.for(Object.keys(providers) as Api[])(
-    "aborts a local %s request with no response headers at 300 seconds",
-    async (api, { signal }) => {
-      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-      const stream = await openRequest(api);
+type Request = Awaited<ReturnType<typeof openRequest>>;
+
+const it = baseIt.extend<{ open: typeof openRequest }>({
+  open: async ({ signal }, use) => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const requests: Request[] = [];
+    try {
+      await use(async (...args) => {
+        const request = await openRequest(...args);
+        requests.push(request);
+        return request;
+      });
+    } finally {
       try {
-        const response = await withinTest(
-          awaitGateBeforeSettlement(
-            stream.request.promise,
-            stream.completion,
-            "request never sent",
-          ),
-          signal,
-        );
-        expect(response.headersSent).toBe(false);
-        await vi.advanceTimersByTimeAsync(299_999);
-        expect(stream.onTimeout).not.toHaveBeenCalled();
-        await vi.advanceTimersByTimeAsync(1);
-        expect(stream.onTimeout).toHaveBeenCalledExactlyOnceWith(
-          expect.objectContaining({ message: "LLM idle timeout (300s): no response from model" }),
-        );
-        expect(await withinTest(stream.completion, signal)).toBe(
-          stream.onTimeout.mock.calls[0]?.[0],
-        );
-        await withinTest(stream.closed.promise, signal);
-        if (api === "openai-responses") {
-          const recovering = recoverAfterTransportDrop({
-            noTools: true,
-            diagnostics: [],
-            content: [],
-            replaySafe: true,
-            errorMessage: stream.onTimeout.mock.calls[0]?.[0].message,
-            terminal: { kind: "timeout", phase: "prompt", source: "idle", aborted: true },
-          });
-          await vi.advanceTimersByTimeAsync(10_000);
-          const recovery = await withinTest(recovering, signal);
-          expect(recovery.recovery).toMatchObject({
-            action: "retry",
-            lastRetryFailoverReason: "timeout",
-          });
-          expect(recovery.onAgentEvent).toHaveBeenCalledWith(
-            expect.objectContaining({
-              stream: "run_status",
-              data: expect.objectContaining({ phase: "retrying", retryAttempt: 1 }),
-            }),
-          );
+        for (const request of requests) {
+          request.controller.abort();
+          await withinTest(request.completion, signal);
         }
       } finally {
-        stream.controller.abort();
-        await withinTest(stream.completion, signal);
+        vi.useRealTimers();
+        server.listener.closeAllConnections();
       }
-    },
-  );
+    }
+  },
+});
 
-  it.for([
-    { providerMs: undefined, runMs: 900_000, expectedMs: 300_000 },
-    { providerMs: 900_000, runMs: undefined, expectedMs: 900_000 },
-  ])(
-    "keeps the header budget at $expectedMs ms",
-    async ({ providerMs, runMs, expectedMs }, { signal }) => {
-      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-      const stream = await openRequest("openai-responses", providerMs, runMs);
-      try {
-        await withinTest(
-          awaitGateBeforeSettlement(
-            stream.request.promise,
-            stream.completion,
-            "request never sent",
-          ),
-          signal,
+function received(stream: Request, signal: AbortSignal) {
+  return withinTest(
+    awaitGateBeforeSettlement(stream.request.promise, stream.completion, "request never sent"),
+    signal,
+  );
+}
+
+const headerCases: [Api, number | undefined, number | undefined, number][] = [
+  ["openai-responses", undefined, undefined, 300_000],
+  ["openai-completions", undefined, undefined, 300_000],
+  ["anthropic-messages", undefined, undefined, 300_000],
+  ["ollama", undefined, undefined, 300_000],
+  ["openai-responses", undefined, 900_000, 300_000],
+  ["openai-responses", 900_000, undefined, 900_000],
+];
+
+describe("provider header deadline", () => {
+  it.for(headerCases)(
+    "aborts %s before headers (provider %s; run %s; budget %s)",
+    async ([api, providerMs, runMs, expectedMs], { signal, open }) => {
+      const stream = await open(api, providerMs, runMs);
+      expect((await received(stream, signal)).headersSent).toBe(false);
+      await vi.advanceTimersByTimeAsync(expectedMs - 1);
+      expect(stream.onTimeout).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(stream.onTimeout).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          message: `LLM idle timeout (${expectedMs / 1000}s): no response from model`,
+        }),
+      );
+      expect(await withinTest(stream.completion, signal)).toBe(stream.onTimeout.mock.calls[0]?.[0]);
+      await withinTest(stream.closed.promise, signal);
+      if (api === "openai-responses" && providerMs === undefined && runMs === undefined) {
+        const recovering = recoverAfterTransportDrop({
+          noTools: true,
+          diagnostics: [],
+          content: [],
+          replaySafe: true,
+          errorMessage: stream.onTimeout.mock.calls[0]?.[0].message,
+          terminal: { kind: "timeout", phase: "prompt", source: "idle", aborted: true },
+        });
+        await vi.advanceTimersByTimeAsync(10_000);
+        const recovery = await withinTest(recovering, signal);
+        expect(recovery.recovery).toMatchObject({
+          action: "retry",
+          lastRetryFailoverReason: "timeout",
+        });
+        expect(recovery.onAgentEvent).toHaveBeenCalledWith(
+          expect.objectContaining({
+            stream: "run_status",
+            data: expect.objectContaining({ phase: "retrying", retryAttempt: 1 }),
+          }),
         );
-        await vi.advanceTimersByTimeAsync(expectedMs - 1);
-        expect(stream.onTimeout).not.toHaveBeenCalled();
-        await vi.advanceTimersByTimeAsync(1);
-        expect(stream.onTimeout).toHaveBeenCalledOnce();
-        expect(await withinTest(stream.completion, signal)).toBe(
-          stream.onTimeout.mock.calls[0]?.[0],
-        );
-      } finally {
-        stream.controller.abort();
-        await withinTest(stream.completion, signal);
       }
     },
   );
 
   it("allows a local completions stream to pause after its first event and deliver its reply", async ({
     signal,
+    open,
   }) => {
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    const stream = await openRequest("openai-completions");
-    try {
-      const response = await withinTest(stream.request.promise, signal);
-      response.writeHead(200, { "content-type": "text/event-stream" });
-      response.write(
-        'data: {"choices":[{"index":0,"delta":{"content":"O"},"finish_reason":null}]}\n\n',
-      );
-      await withinTest(stream.firstText.promise, signal);
-      await vi.advanceTimersByTimeAsync(600_000);
-      expect(stream.onTimeout).not.toHaveBeenCalled();
-      response.end(
-        'data: {"choices":[{"index":0,"delta":{"content":"K"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n',
-      );
-      expect(await withinTest(stream.completion, signal)).toMatchObject({
-        stopReason: "stop",
-        content: [{ type: "text", text: "OK" }],
-      });
-      await vi.advanceTimersByTimeAsync(600_000);
-      expect(stream.onTimeout).not.toHaveBeenCalled();
-    } finally {
-      stream.controller.abort();
-      await withinTest(stream.completion, signal);
-    }
+    const stream = await open("openai-completions");
+    const response = await withinTest(stream.request.promise, signal);
+    response.writeHead(200, { "content-type": "text/event-stream" });
+    response.write(
+      'data: {"choices":[{"index":0,"delta":{"content":"O"},"finish_reason":null}]}\n\n',
+    );
+    await withinTest(stream.firstText.promise, signal);
+    await vi.advanceTimersByTimeAsync(600_000);
+    expect(stream.onTimeout).not.toHaveBeenCalled();
+    response.end(
+      'data: {"choices":[{"index":0,"delta":{"content":"K"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n',
+    );
+    expect(await withinTest(stream.completion, signal)).toMatchObject({
+      stopReason: "stop",
+      content: [{ type: "text", text: "OK" }],
+    });
+    await vi.advanceTimersByTimeAsync(600_000);
+    expect(stream.onTimeout).not.toHaveBeenCalled();
   });
 
   it.for(["anthropic-messages", "ollama"] as const)(
     "allows local %s prompt evaluation after headers without an outward event",
-    async (api, { signal }) => {
-      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-      const stream = await openRequest(api);
-      try {
-        const response = await withinTest(stream.request.promise, signal);
-        response.writeHead(200, {
-          "content-type": api === "ollama" ? "application/x-ndjson" : "text/event-stream",
-        });
-        response.flushHeaders();
-        await withinTest(stream.accepted.promise, signal);
-        await vi.advanceTimersByTimeAsync(600_000);
-        expect(stream.onTimeout).not.toHaveBeenCalled();
-      } finally {
-        stream.controller.abort();
-        await withinTest(stream.completion, signal);
-      }
+    async (api, { signal, open }) => {
+      const stream = await open(api);
+      const response = await withinTest(stream.request.promise, signal);
+      response.writeHead(200, {
+        "content-type": api === "ollama" ? "application/x-ndjson" : "text/event-stream",
+      });
+      response.flushHeaders();
+      await withinTest(stream.accepted.promise, signal);
+      await vi.advanceTimersByTimeAsync(600_000);
+      expect(stream.onTimeout).not.toHaveBeenCalled();
     },
   );
 
-  it("preserves the OpenAI first-SSE deadline after headers", async ({ signal }) => {
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    const stream = await openRequest("openai-responses");
-    try {
-      const response = await withinTest(stream.request.promise, signal);
-      await vi.advanceTimersByTimeAsync(200_000);
-      response.writeHead(200, { "content-type": "text/event-stream" });
-      response.write('data: {"type":');
-      await withinTest(stream.accepted.promise, signal);
-      await vi.advanceTimersByTimeAsync(299_999);
-      expect(stream.onTimeout).not.toHaveBeenCalled();
-      await vi.advanceTimersByTimeAsync(1);
-      expect(stream.onTimeout).toHaveBeenCalledExactlyOnceWith(
-        expect.objectContaining({ message: expect.stringContaining("first-event timeout") }),
-      );
-      await withinTest(stream.completion, signal);
-      await withinTest(stream.closed.promise, signal);
-    } finally {
-      stream.controller.abort();
-      await withinTest(stream.completion, signal);
-    }
+  it("preserves the OpenAI first-SSE deadline after headers", async ({ signal, open }) => {
+    const stream = await open("openai-responses");
+    const response = await withinTest(stream.request.promise, signal);
+    await vi.advanceTimersByTimeAsync(200_000);
+    response.writeHead(200, { "content-type": "text/event-stream" });
+    response.write('data: {"type":');
+    await withinTest(stream.accepted.promise, signal);
+    await vi.advanceTimersByTimeAsync(299_999);
+    expect(stream.onTimeout).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(stream.onTimeout).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ message: expect.stringContaining("first-event timeout") }),
+    );
+    await withinTest(stream.completion, signal);
+    await withinTest(stream.closed.promise, signal);
   });
 });

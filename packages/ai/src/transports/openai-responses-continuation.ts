@@ -1,4 +1,6 @@
-import { stableStringify } from "@openclaw/normalization-core";
+import { isDeepStrictEqual } from "node:util";
+import { isProxy } from "node:util/types";
+import { sha256StableValue } from "@openclaw/normalization-core/node-crypto";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ResponseInput, ResponseOutputItem } from "openai/resources/responses/responses.js";
 import { getAiTransportHost, resolveAiTransportHeaderSentinels } from "../host.js";
@@ -50,12 +52,62 @@ export type ResponsesContinuationStatus =
   | "no_previous_response"
   | "request_changed";
 
+// Keep text by reference instead of encoding/parsing it solely for comparison.
+// Hook-provided opaque values still use native JSON, including the property's key.
+function projectJsonValue(value: unknown, key: string, ancestors: Set<object>): unknown {
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? value + 0 : null;
+  }
+  if (value === null || typeof value === "string" || typeof value === "boolean") {
+    return value;
+  }
+  if (value === undefined || typeof value === "symbol") {
+    return undefined;
+  }
+  if (
+    typeof value !== "object" ||
+    isProxy(value) ||
+    Object.getPrototypeOf(value) !== (Array.isArray(value) ? Array.prototype : Object.prototype) ||
+    "toJSON" in value ||
+    ancestors.has(value)
+  ) {
+    // oxlint-disable-next-line unicorn/prefer-structured-clone -- Preserve JSON/toJSON semantics, not object identity.
+    const projected: Record<string, unknown> = JSON.parse(
+      JSON.stringify({ __proto__: null, [key]: value }),
+    );
+    return Object.hasOwn(projected, key) ? projected[key] : undefined;
+  }
+  ancestors.add(value);
+  try {
+    if (Array.isArray(value)) {
+      const result: unknown[] = [];
+      const length = value.length;
+      for (let index = 0; index < length; index++) {
+        result.push(projectJsonValue(value[index], String(index), ancestors) ?? null);
+      }
+      return result;
+    }
+    const fields: [string, unknown][] = [];
+    for (const name of Object.keys(value)) {
+      const member = projectJsonValue(Reflect.get(value, name), name, ancestors);
+      if (member !== undefined) {
+        fields.push([name, member]);
+      }
+    }
+    return Object.fromEntries(fields);
+  } finally {
+    ancestors.delete(value);
+  }
+}
+
 function jsonValuesEqual(left: object, right: object): boolean {
-  // Normalize the left side first to preserve serialization errors and toJSON ordering.
-  const leftJson = JSON.stringify(left) as string;
-  const normalizedLeft = stableStringify(JSON.parse(leftJson));
-  const rightJson = JSON.stringify(right) as string;
-  return leftJson === rightJson || normalizedLeft === stableStringify(JSON.parse(rightJson));
+  const normalize = (value: object) => {
+    const projected = projectJsonValue(value, "", new Set());
+    // A root toJSON returning undefined was not a valid JSON comparison either.
+    return projected === undefined ? JSON.parse("undefined") : projected;
+  };
+  // Finish the left side before evaluating any right-side hook values.
+  return isDeepStrictEqual(normalize(left), normalize(right));
 }
 
 function requestWithoutInput(request: ResponsesContinuationRequest): ResponsesContinuationRequest {
@@ -185,7 +237,9 @@ export function recordResponsesContinuationState(
   return {
     lastRequest,
     lastResponseId: response.id,
-    lastResponseItems: response.output,
+    // Hosted search runs on the server and has no transcript block, so replay never
+    // sends it back. The server keeps it under previous_response_id.
+    lastResponseItems: response.output.filter((item) => item.type !== "web_search_call"),
     pendingToolCalls,
   };
 }
@@ -328,7 +382,7 @@ export function responsesContinuationRequestFingerprint(
   request: ResponsesContinuationRequest,
 ): string {
   const serialized = JSON.stringify(requestWithoutInput(request));
-  return sha256Hex(stableStringify(JSON.parse(serialized)));
+  return sha256StableValue(JSON.parse(serialized)).digest;
 }
 
 export function responsesContinuationPrefixFingerprint(
@@ -339,7 +393,7 @@ export function responsesContinuationPrefixFingerprint(
     ...normalizeAssistantReplayInput(input),
     ...normalizeAssistantReplayInput(output, true),
   ]);
-  return sha256Hex(stableStringify(JSON.parse(serialized)));
+  return sha256StableValue(JSON.parse(serialized)).digest;
 }
 
 // Restore accepted replay IDs in the delta to match the provider's cached call.
@@ -575,57 +629,52 @@ export function claimOpenAIResponsesHttpContinuation(
   if (previous) {
     deleteHttpContinuationIfOwned(key, previous);
   }
+  const request = previous ? params.request : (params.restoreRequest?.() ?? params.request);
+  const resolved = resolveResponsesContinuationRequest(previous?.state, request);
+  const fullRequest = resolved.fullRequest ?? request;
+  const continuationRequest = params.request.store === false ? fullRequest : resolved.request;
   const claimed = { kind: "claimed", sessionId: params.sessionId, owner } as const;
   httpContinuationEntries.set(key, claimed);
-  try {
-    const request = previous ? params.request : (params.restoreRequest?.() ?? params.request);
-    const resolved = resolveResponsesContinuationRequest(previous?.state, request);
-    const fullRequest = resolved.fullRequest ?? request;
-    return {
-      // Unstored HTTP responses cannot be referenced, but their prompt prefix can still be cached.
-      request: params.request.store === false ? fullRequest : resolved.request,
-      fullRequest,
-      commit: (
-        effectiveRequest: ResponsesContinuationRequest,
-        response: ContinuationResponse,
-        dispatchedPreviousResponseId?: string,
-      ) => {
-        if (httpContinuationEntries.get(key) !== claimed) {
-          return;
-        }
-        const state = recordResponsesContinuationState(
-          previous?.state,
-          effectiveRequest,
-          response,
-          previous !== undefined && dispatchedPreviousResponseId === previous.state.lastResponseId,
-        );
-        // Serialized-content budget, not JavaScript heap overhead.
-        const retainedBytes = Buffer.byteLength(JSON.stringify(state), "utf8");
-        if (retainedBytes > MAX_HTTP_CONTINUATION_RETAINED_BYTES) {
-          // Keep other sessions when this baseline cannot fit alone. Its next
-          // request sends full history; the completed response remains valid.
-          deleteHttpContinuationIfOwned(key, claimed);
-          return;
-        }
-        evictReadyEntriesForCapacity(retainedBytes);
-        const ready = {
-          ...claimed,
-          kind: "ready",
-          state,
-          idleTimer: owner.runInDetachedAsyncContext(() => createHttpContinuationTimer(key)),
-          retainedBytes,
-        } satisfies Extract<HttpContinuationEntry, { kind: "ready" }>;
-        httpContinuationRetainedBytes += retainedBytes;
-        httpContinuationEntries.set(key, ready);
-        readyHttpContinuationEntries.set(key, ready);
-      },
-      release: () => deleteHttpContinuationIfOwned(key, claimed),
-    };
-  } catch (error) {
-    // Preparation failed before the caller received a handle that could release this claim.
-    deleteHttpContinuationIfOwned(key, claimed);
-    throw error;
-  }
+  return {
+    // Unstored HTTP responses cannot be referenced, but their prompt prefix can still be cached.
+    request: continuationRequest,
+    fullRequest,
+    commit: (
+      effectiveRequest: ResponsesContinuationRequest,
+      response: ContinuationResponse,
+      dispatchedPreviousResponseId?: string,
+    ) => {
+      if (httpContinuationEntries.get(key) !== claimed) {
+        return;
+      }
+      const state = recordResponsesContinuationState(
+        previous?.state,
+        effectiveRequest,
+        response,
+        previous !== undefined && dispatchedPreviousResponseId === previous.state.lastResponseId,
+      );
+      // Serialized-content budget, not JavaScript heap overhead.
+      const retainedBytes = Buffer.byteLength(JSON.stringify(state), "utf8");
+      if (retainedBytes > MAX_HTTP_CONTINUATION_RETAINED_BYTES) {
+        // Keep other sessions when this baseline cannot fit alone. Its next
+        // request sends full history; the completed response remains valid.
+        deleteHttpContinuationIfOwned(key, claimed);
+        return;
+      }
+      evictReadyEntriesForCapacity(retainedBytes);
+      const ready = {
+        ...claimed,
+        kind: "ready",
+        state,
+        idleTimer: owner.runInDetachedAsyncContext(() => createHttpContinuationTimer(key)),
+        retainedBytes,
+      } satisfies Extract<HttpContinuationEntry, { kind: "ready" }>;
+      httpContinuationRetainedBytes += retainedBytes;
+      httpContinuationEntries.set(key, ready);
+      readyHttpContinuationEntries.set(key, ready);
+    },
+    release: () => deleteHttpContinuationIfOwned(key, claimed),
+  };
 }
 
 registerSessionResourceCleanup((sessionId, owner) => {

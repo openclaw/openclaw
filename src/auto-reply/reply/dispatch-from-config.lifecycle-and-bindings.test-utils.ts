@@ -2,17 +2,22 @@
 import { AsyncResource } from "node:async_hooks";
 import path from "node:path";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { waitForAbortSignal } from "../../infra/abort-signal.js";
 import { registerPluginCommand } from "../../plugins/commands.js";
 import type { PluginTargetedInboundClaimOutcome } from "../../plugins/hooks.test-fixtures.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import {
-  interruptSessionWorkAdmissions,
-  isSessionWorkAdmissionActive,
-  runExclusiveSessionLifecycleMutation,
-} from "../../sessions/session-lifecycle-admission.js";
+  hasSessionControllerQueuedWork,
+  interruptSessionControllerEffects,
+  isSessionControllerWorkActive,
+  runSessionMutation,
+} from "../../sessions/session-controller.lifecycle.js";
 import {
   createChannelTestPluginBase,
   createTestRegistry,
@@ -36,21 +41,16 @@ import {
   sessionStoreMocks,
   stageSandboxMediaMocks,
 } from "./dispatch-from-config.shared.test-harness.js";
+import * as dispatchHarness from "./dispatch-from-config.test-support.js";
 import {
   type ResolveInboundConversationParams,
   dispatchReplyFromConfig,
-  createReplyOperation,
-  replyRunRegistry,
-  admitReplyTurn,
   runWithReplyOperationLifecycleAdmission,
   setNoAbort,
   firstMockCall,
-  firstMockArg,
   firstFinalReplyPayload,
   installThreadingTestPlugin,
   messageAuditEvents,
-  globalBeforeAll0,
-  describe0BeforeEach0,
 } from "./dispatch-from-config.test-support.js";
 import { withDispatchProcessedOutcomeSink } from "./dispatch-processed-outcome.js";
 import { finalizeInboundContextForSdk } from "./inbound-context.js";
@@ -87,10 +87,10 @@ function mockPendingPluginClaim(params: {
   return (outcome: PluginTargetedInboundClaimOutcome) => resolveClaim?.(outcome);
 }
 
-beforeAll(globalBeforeAll0);
+beforeAll(dispatchHarness.globalBeforeAll0);
 
 describe("dispatchReplyFromConfig", () => {
-  beforeEach(describe0BeforeEach0);
+  beforeEach(dispatchHarness.describe0BeforeEach0);
 
   it("does not broadcast inbound claims without a core-owned plugin binding", async () => {
     setNoAbort();
@@ -590,10 +590,10 @@ describe("dispatchReplyFromConfig", () => {
     expect(diagnosticMocks.logMessageQueued).toHaveBeenCalledTimes(1);
     expect(diagnosticMocks.logSessionStateChange).toHaveBeenCalledWith({
       sessionKey: "agent:main:main",
-      state: "processing",
+      state: "waiting",
       reason: "message_start",
     });
-    const processedEvent = firstMockArg(
+    const processedEvent = dispatchHarness.firstMockArg(
       diagnosticMocks.logMessageProcessed,
       "message processed",
     ) as { channel?: unknown; outcome?: unknown; sessionKey?: unknown } | undefined;
@@ -630,7 +630,7 @@ describe("dispatchReplyFromConfig", () => {
     expect(diagnosticMocks.logSessionStateChange).toHaveBeenCalledWith({
       sessionId: "test-uuid-1234",
       sessionKey: "agent:main:main",
-      state: "processing",
+      state: "waiting",
       reason: "message_start",
     });
   });
@@ -995,9 +995,9 @@ describe("dispatchReplyFromConfig", () => {
     expect(replyResolver).not.toHaveBeenCalled();
   });
 
-  it.each(["fresh owner", "hook-only admission"] as const)(
+  it.for(["fresh owner", "source-owned preparation"] as const)(
     "retains cancelled plugin media staging until cleanup settles with %s",
-    async (ownership) => {
+    async (ownership, { signal }) => {
       setNoAbort();
       mockPluginBindingClaim(
         {
@@ -1020,16 +1020,29 @@ describe("dispatchReplyFromConfig", () => {
       const sessionKey = "agent:main:imessage:direct:staging-cancellation";
       const sessionId = "staging-cancellation-session";
       sessionStoreMocks.currentEntry = { sessionId, updatedAt: Date.now() };
-      const existingOperation =
-        ownership === "hook-only admission"
-          ? createReplyOperation({ sessionKey, sessionId, resetTriggered: false })
+      const existingAdmission =
+        ownership === "source-owned preparation"
+          ? await dispatchHarness.admitReplyTurn({
+              sessionKey,
+              sessionId,
+              expectedSessionId: sessionId,
+              storePath: "/tmp/mock-sessions.json",
+              kind: "visible",
+              resetTriggered: false,
+            })
           : undefined;
+      if (existingAdmission?.status === "skipped") {
+        throw new Error("expected active owner admission");
+      }
+      const existingOperation = existingAdmission?.operation;
       const abort = new AbortController();
       const cancellation = new Error("attachment request cancelled");
+      const stagingStarted = createDeferred();
       const cleanup = createDeferred();
       let cleanupStarted = false;
       let cleanupFinished = false;
       stageSandboxMediaMocks.stageSandboxMedia.mockImplementationOnce(async () => {
+        stagingStarted.resolve();
         await waitForAbortSignal(abort.signal);
         try {
           throw cancellation;
@@ -1068,30 +1081,35 @@ describe("dispatchReplyFromConfig", () => {
       let mutationPrepared = false;
       let mutationRan = false;
       try {
-        await vi.waitFor(() => {
-          expect(stageSandboxMediaMocks.stageSandboxMedia).toHaveBeenCalledOnce();
-        });
-        const operation = replyRunRegistry.get(sessionKey);
+        await withinTest(
+          awaitGateBeforeSettlement(
+            stagingStarted.promise,
+            dispatch,
+            "Dispatch settled before entering plugin media staging",
+          ),
+          signal,
+        );
+        expect(stageSandboxMediaMocks.stageSandboxMedia).toHaveBeenCalledOnce();
+        const operation = dispatchHarness.getSessionControllerOperation(sessionKey);
         expect(operation).toBeDefined();
         expect(
-          isSessionWorkAdmissionActive("/tmp/mock-sessions.json", [sessionKey, sessionId]),
+          isSessionControllerWorkActive("/tmp/mock-sessions.json", [sessionKey, sessionId]),
         ).toBe(true);
         if (existingOperation) {
           expect(operation).toBe(existingOperation);
           existingOperation.complete();
-          expect(replyRunRegistry.get(sessionKey)).toBeUndefined();
+          expect(dispatchHarness.getSessionControllerOperation(sessionKey)).toBeUndefined();
         }
         abort.abort(cancellation);
         mutation = externalLifecycleRequest.runInAsyncScope(async () =>
-          runExclusiveSessionLifecycleMutation("patch", {
+          runSessionMutation({
             scope: "/tmp/mock-sessions.json",
             identities: [sessionKey, sessionId],
+            kind: "reset",
+            policy: "preempt",
+            preempt: { activeRun: "abort", waitingInputs: "cancel" },
             prepare: async () => {
               mutationPrepared = true;
-              await interruptSessionWorkAdmissions({
-                scope: "/tmp/mock-sessions.json",
-                identities: [sessionKey, sessionId],
-              });
             },
             run: async () => {
               mutationRan = true;
@@ -1110,9 +1128,11 @@ describe("dispatchReplyFromConfig", () => {
         expect(cleanupFinished).toBe(false);
         expect(mutationRan).toBe(false);
         expect(
-          isSessionWorkAdmissionActive("/tmp/mock-sessions.json", [sessionKey, sessionId]),
+          hasSessionControllerQueuedWork("/tmp/mock-sessions.json", [sessionKey, sessionId]),
         ).toBe(true);
-        expect(replyRunRegistry.get(sessionKey)).toBe(existingOperation ? undefined : operation);
+        expect(dispatchHarness.getSessionControllerOperation(sessionKey)).toBe(
+          existingOperation ? undefined : operation,
+        );
         expect(hookMocks.runner.runInboundClaimForPluginOutcome).not.toHaveBeenCalled();
         expect(replyResolver).not.toHaveBeenCalled();
         expect(mocks.routeReply).not.toHaveBeenCalled();
@@ -1124,9 +1144,9 @@ describe("dispatchReplyFromConfig", () => {
         expect(cleanupFinished).toBe(true);
         expect(mutationRan).toBe(true);
         expect(
-          isSessionWorkAdmissionActive("/tmp/mock-sessions.json", [sessionKey, sessionId]),
+          isSessionControllerWorkActive("/tmp/mock-sessions.json", [sessionKey, sessionId]),
         ).toBe(false);
-        expect(replyRunRegistry.get(sessionKey)).toBeUndefined();
+        expect(dispatchHarness.getSessionControllerOperation(sessionKey)).toBeUndefined();
         expect(dispatchResult).toHaveBeenCalledOnce();
         expect(dispatchFailure).not.toHaveBeenCalled();
         expect(messageAuditMocks.emitTrustedMessageAuditEvent).toHaveBeenCalledOnce();
@@ -1176,19 +1196,19 @@ describe("dispatchReplyFromConfig", () => {
     await vi.waitFor(() => {
       expect(hookMocks.runner.runInboundClaimForPluginOutcome).toHaveBeenCalledOnce();
     });
-    expect(replyRunRegistry.get(sessionKey)).toBeDefined();
-    expect(isSessionWorkAdmissionActive("/tmp/mock-sessions.json", [sessionKey, sessionId])).toBe(
+    expect(dispatchHarness.getSessionControllerOperation(sessionKey)).toBeDefined();
+    expect(isSessionControllerWorkActive("/tmp/mock-sessions.json", [sessionKey, sessionId])).toBe(
       true,
     );
 
     let mutationRan = false;
     const mutation = externalLifecycleRequest.runInAsyncScope(
       async () =>
-        await runExclusiveSessionLifecycleMutation("patch", {
+        await runSessionMutation({
           scope: "/tmp/mock-sessions.json",
           identities: [sessionKey, sessionId],
           prepare: async () => {
-            await interruptSessionWorkAdmissions({
+            await interruptSessionControllerEffects({
               scope: "/tmp/mock-sessions.json",
               identities: [sessionKey, sessionId],
             });
@@ -1199,7 +1219,9 @@ describe("dispatchReplyFromConfig", () => {
         }),
     );
     await vi.waitFor(() => {
-      expect(replyRunRegistry.get(sessionKey)?.abortSignal.aborted).toBe(true);
+      expect(dispatchHarness.getSessionControllerOperation(sessionKey)?.abortSignal.aborted).toBe(
+        true,
+      );
     });
     expect(mutationRan).toBe(false);
 
@@ -1218,59 +1240,7 @@ describe("dispatchReplyFromConfig", () => {
     externalLifecycleRequest.emitDestroy();
   });
 
-  it("releases an idle borrowed lifecycle lease when the queued successor is aborted", async () => {
-    const sessionKey = "agent:main:discord:channel:cancelled-successor";
-    const sessionId = "cancelled-successor-session";
-    const storePath = "/tmp/mock-sessions.json";
-    const entry = { sessionId, updatedAt: Date.now() };
-    sessionStoreMocks.currentEntry = entry;
-    const existingOperation = createReplyOperation({
-      sessionKey,
-      sessionId,
-      resetTriggered: false,
-    });
-    const abort = new AbortController();
-    const { createDispatchReplyOperationCoordinator } =
-      await import("./dispatch-from-config.lifecycle.js");
-    const coordinator = createDispatchReplyOperationCoordinator({
-      allowActiveQueueResolution: true,
-      agentId: "main",
-      cfg: emptyConfig,
-      ctx: finalizeInboundContextForSdk(
-        buildTestCtx({
-          Provider: "discord",
-          Surface: "discord",
-          SessionKey: sessionKey,
-          Body: "cancel this queued successor",
-        }),
-      ),
-      dispatcher: createDispatcher(),
-      dispatchOperationSessionKey: sessionKey,
-      operationSessionStoreEntry: { entry, storePath },
-      replyOptions: { abortSignal: abort.signal },
-      resolveOperationExpectedSessionId: () => sessionId,
-    });
-
-    try {
-      await expect(coordinator.ensureDispatchReplyOperation("pre_dispatch")).resolves.toEqual({
-        status: "ready",
-      });
-      expect(isSessionWorkAdmissionActive(storePath, [sessionKey, sessionId])).toBe(true);
-
-      abort.abort(new Error("queued successor cancelled"));
-
-      await vi.waitFor(() => {
-        expect(isSessionWorkAdmissionActive(storePath, [sessionKey, sessionId])).toBe(false);
-      });
-      expect(replyRunRegistry.get(sessionKey)).toBe(existingOperation);
-      expect(existingOperation.abortSignal.aborted).toBe(false);
-    } finally {
-      await coordinator.releasePreDispatchLifecycleAdmission();
-      existingOperation.complete();
-    }
-  });
-
-  it("holds a lifecycle lease for an aborted plugin claim behind an active reply operation", async () => {
+  it("holds source custody for plugin claims behind an active reply operation", async () => {
     const resolveClaim = mockPendingPluginClaim({
       bindingId: "binding-active-lifecycle-race",
       targetSessionKey: "plugin-binding:test:active-race",
@@ -1279,11 +1249,18 @@ describe("dispatchReplyFromConfig", () => {
     const sessionKey = "agent:main:discord:channel:active-lifecycle-race";
     const sessionId = "plugin-active-lifecycle-session";
     sessionStoreMocks.currentEntry = { sessionId, updatedAt: Date.now() };
-    const existingOperation = createReplyOperation({
+    const existingAdmission = await dispatchHarness.admitReplyTurn({
       sessionKey,
       sessionId,
+      expectedSessionId: sessionId,
+      storePath: "/tmp/mock-sessions.json",
+      kind: "visible",
       resetTriggered: false,
     });
+    if (existingAdmission.status !== "owned") {
+      throw new Error("expected active owner admission");
+    }
+    const existingOperation = existingAdmission.operation;
     const dispatcher = createDispatcher();
     const abort = new AbortController();
     const externalLifecycleRequest = new AsyncResource("external-active-lifecycle-request");
@@ -1306,27 +1283,25 @@ describe("dispatchReplyFromConfig", () => {
     await vi.waitFor(() => {
       expect(hookMocks.runner.runInboundClaimForPluginOutcome).toHaveBeenCalledOnce();
     });
-    expect(isSessionWorkAdmissionActive("/tmp/mock-sessions.json", [sessionKey, sessionId])).toBe(
+    expect(isSessionControllerWorkActive("/tmp/mock-sessions.json", [sessionKey, sessionId])).toBe(
       true,
     );
 
     existingOperation.complete();
-    expect(replyRunRegistry.get(sessionKey)).toBeUndefined();
-    abort.abort(new Error("queued successor cancelled"));
+    expect(dispatchHarness.getSessionControllerOperation(sessionKey)).toBeUndefined();
 
     let mutationPrepared = false;
     let mutationRan = false;
     const mutation = externalLifecycleRequest.runInAsyncScope(
       async () =>
-        await runExclusiveSessionLifecycleMutation("patch", {
+        await runSessionMutation({
           scope: "/tmp/mock-sessions.json",
           identities: [sessionKey, sessionId],
+          kind: "reset",
+          policy: "preempt",
+          preempt: { activeRun: "abort", waitingInputs: "cancel" },
           prepare: async () => {
             mutationPrepared = true;
-            await interruptSessionWorkAdmissions({
-              scope: "/tmp/mock-sessions.json",
-              identities: [sessionKey, sessionId],
-            });
           },
           run: async () => {
             mutationRan = true;
@@ -1365,7 +1340,7 @@ describe("dispatchReplyFromConfig", () => {
     const sessionKey = "agent:main:discord:channel:owner-mutation-race";
     const sessionId = "owner-mutation-session";
     sessionStoreMocks.currentEntry = { sessionId, updatedAt: Date.now() };
-    const ownerAdmission = await admitReplyTurn({
+    const ownerAdmission = await dispatchHarness.admitReplyTurn({
       sessionKey,
       sessionId,
       expectedSessionId: sessionId,
@@ -1399,11 +1374,11 @@ describe("dispatchReplyFromConfig", () => {
 
     let mutationRan = false;
     const mutation = runWithReplyOperationLifecycleAdmission(ownerOperation, async () =>
-      runExclusiveSessionLifecycleMutation("patch", {
+      runSessionMutation({
         scope: "/tmp/mock-sessions.json",
         identities: [sessionKey, sessionId],
         prepare: async () => {
-          await interruptSessionWorkAdmissions({
+          await interruptSessionControllerEffects({
             scope: "/tmp/mock-sessions.json",
             identities: [sessionKey, sessionId],
           });
@@ -1426,7 +1401,7 @@ describe("dispatchReplyFromConfig", () => {
     expect(result.queuedFinal).toBe(false);
     expect(ownerOperation.abortSignal.aborted).toBe(false);
     expect(ownerOperation.result).toBeNull();
-    expect(replyRunRegistry.get(sessionKey)).toBe(ownerOperation);
+    expect(dispatchHarness.getSessionControllerOperation(sessionKey)).toBe(ownerOperation);
     expect(mutationRan).toBe(true);
     expect(replyResolver).not.toHaveBeenCalled();
     ownerOperation.complete();
@@ -1483,18 +1458,18 @@ describe("dispatchReplyFromConfig", () => {
     await vi.waitFor(() => {
       expect(mocks.routeReply).toHaveBeenCalledOnce();
     });
-    const operation = replyRunRegistry.get(sessionKey);
+    const operation = dispatchHarness.getSessionControllerOperation(sessionKey);
     expect(operation).toBeDefined();
 
     let mutationRan = false;
     const externalLifecycleRequest = new AsyncResource("interrupted-fallback-lifecycle");
     const mutation = externalLifecycleRequest.runInAsyncScope(
       async () =>
-        await runExclusiveSessionLifecycleMutation("patch", {
+        await runSessionMutation({
           scope: "/tmp/mock-sessions.json",
           identities: [sessionKey, sessionId],
           prepare: async () => {
-            await interruptSessionWorkAdmissions({
+            await interruptSessionControllerEffects({
               scope: "/tmp/mock-sessions.json",
               identities: [sessionKey, sessionId],
             });
@@ -1518,7 +1493,7 @@ describe("dispatchReplyFromConfig", () => {
       kind: "aborted",
       code: "aborted_by_user",
     });
-    expect(replyRunRegistry.isActive(sessionKey)).toBe(false);
+    expect(dispatchHarness.isSessionRunActiveForKey(sessionKey)).toBe(false);
     expect(mutationRan).toBe(true);
     expect(replyResolver).not.toHaveBeenCalled();
     expect(messageAuditMocks.emitTrustedMessageAuditEvent).toHaveBeenCalledOnce();

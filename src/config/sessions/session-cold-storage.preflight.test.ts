@@ -9,13 +9,15 @@ import {
   resolveIncognitoOpenClawAgentSqlitePath,
   resolveOpenClawAgentSqlitePath,
 } from "../../state/openclaw-agent-db.paths.js";
+import { upsertSessionEntryCore } from "./session-accessor.entry.js";
 import { memorySessionActorOwners } from "./session-actor-memory-owner.js";
-import { acquireSessionActorStorage } from "./session-actor-storage-binding.js";
-import { readSessionActorStorageResult } from "./session-actor-storage-result.js";
+import type { SessionColdReadPreparation } from "./session-cold-storage-read.js";
 import type { SessionColdArchive } from "./session-cold-storage-state.js";
-import { restoreSessionColdTranscript } from "./session-cold-storage.js";
+import { restoreSessionColdTranscript as restore } from "./session-cold-storage.js";
 import type { SessionHistoryWorkerDatabase } from "./session-transcript-worker.types.js";
 
+type Metadata = Awaited<ReturnType<SessionHistoryWorkerDatabase["readColdMetadata"]>>;
+type ColdReader = Pick<SessionHistoryWorkerDatabase, "assertCurrent" | "readColdMetadata">;
 const observed = vi.hoisted(() => ({
   nativeRead: vi.fn(),
   readMetadata: vi.fn<SessionHistoryWorkerDatabase["readColdMetadata"]>(),
@@ -28,12 +30,11 @@ vi.mock("../../state/openclaw-agent-db-readonly.js", async (importOriginal) => (
   ...(await importOriginal<typeof import("../../state/openclaw-agent-db-readonly.js")>()),
   withOpenClawAgentDatabaseReadOnly: observed.nativeRead,
 }));
+// mock-isolation: control queued metadata admission without native worker resources.
 vi.mock("./session-transcript-worker-runtime.js", () => ({
   withSessionHistoryWorkerDatabase: async (
     options: OpenClawAgentDatabaseOptions,
-    run: (
-      owner: Pick<SessionHistoryWorkerDatabase, "assertCurrent" | "readColdMetadata">,
-    ) => Promise<void>,
+    run: (owner: ColdReader) => Promise<void>,
   ) => {
     observed.options(options);
     try {
@@ -78,17 +79,31 @@ function scope() {
   return target;
 }
 
+function preparedRestore(
+  target: ReturnType<typeof scope>,
+  readMetadata: SessionColdReadPreparation["readMetadata"],
+  signal?: AbortSignal,
+) {
+  return restore(
+    target,
+    undefined,
+    { target: { ...target, path: resolveOpenClawAgentSqlitePath(target) }, readMetadata },
+    undefined,
+    signal,
+  );
+}
+
 it("retains the captured source through queued worker metadata", async () => {
   const target = scope();
   const originalStateDir = target.env.OPENCLAW_STATE_DIR;
-  const initial =
-    createDeferredCore<Awaited<ReturnType<SessionHistoryWorkerDatabase["readColdMetadata"]>>>();
+  const originalPath = resolveOpenClawAgentSqlitePath(target);
+  const initial = createDeferredCore<Metadata>();
   const entered = createDeferredCore();
   observed.readMetadata.mockImplementationOnce(() => {
     entered.resolve();
     return initial.promise;
   });
-  const pending = restoreSessionColdTranscript(target);
+  const pending = restore(target);
   try {
     await awaitGateBeforeSettlement(entered.promise, pending, "Metadata read was not dispatched");
     target.env.OPENCLAW_STATE_DIR = path.join(originalStateDir, "replacement");
@@ -101,12 +116,7 @@ it("retains the captured source through queued worker metadata", async () => {
   for (const [request] of observed.readMetadata.mock.calls) {
     expect(request.env.OPENCLAW_STATE_DIR).toBe(originalStateDir);
   }
-  expect(observed.options.mock.calls[0]?.[0].path).toBe(
-    resolveOpenClawAgentSqlitePath({
-      agentId: "main",
-      env: { OPENCLAW_STATE_DIR: originalStateDir },
-    }),
-  );
+  expect(observed.options.mock.calls[0]?.[0].path).toBe(originalPath);
   expect(observed.nativeRead).not.toHaveBeenCalled();
   expect(observed.release).toHaveBeenCalledOnce();
 });
@@ -140,7 +150,7 @@ it.each([
       return { kind: "cold-metadata", archive };
     });
   }
-  const pending = restoreSessionColdTranscript(target, assertCurrent);
+  const pending = restore(target, assertCurrent);
   if (phase === "preparation") {
     revoke();
   }
@@ -165,34 +175,18 @@ it("skips cold storage for an unbound memory session without recreating a closed
     agentId: target.agentId,
     path: resolveIncognitoOpenClawAgentSqlitePath(target),
   };
-  const authority = { assertCurrent() {}, authorize() {} };
   try {
-    const initial = await acquireSessionActorStorage(target, {
-      lifetime: { assertCurrent() {}, assertReadable() {} },
-      authority,
-      create: true,
-    });
-    if (!initial) {
-      throw new Error("Expected memory owner");
-    }
-    try {
-      readSessionActorStorageResult(
-        await initial.actor.storage.mutate(
-          {
-            type: "session.entry.create",
-            input: { entry: { sessionId: target.sessionId, updatedAt: 1, incognito: true } },
-          },
-          authority,
-        ),
-      );
-    } finally {
-      await initial.actor.release();
-    }
-    await expect(restoreSessionColdTranscript(target)).resolves.toBeUndefined();
-    memorySessionActorOwners.closeDatabase(namespace);
-    await expect(restoreSessionColdTranscript(target)).resolves.toBeUndefined();
     await expect(
-      restoreSessionColdTranscript({
+      upsertSessionEntryCore(
+        { ...target, storePath: namespace.path },
+        { sessionId: target.sessionId, updatedAt: 1, incognito: true },
+      ),
+    ).resolves.toMatchObject({ sessionId: target.sessionId });
+    await expect(restore(target)).resolves.toBeUndefined();
+    memorySessionActorOwners.closeDatabase(namespace);
+    await expect(restore(target)).resolves.toBeUndefined();
+    await expect(
+      restore({
         agentId: target.agentId,
         sessionId: target.sessionId,
         storePath: namespace.path,
@@ -208,18 +202,14 @@ it("skips cold storage for an unbound memory session without recreating a closed
 
 it("removes an aborted cold restoration from its store queue", async ({ signal }) => {
   const target = scope();
-  const preparedTarget = { ...target, path: resolveOpenClawAgentSqlitePath(target) };
   const entered = createDeferredCore();
   const release = createDeferredCore<undefined>();
-  const blocked = restoreSessionColdTranscript(target, undefined, {
-    target: preparedTarget,
-    readMetadata: async (phase) => {
-      if (phase === "initial") {
-        return archive;
-      }
-      entered.resolve();
-      return release.promise;
-    },
+  const blocked = preparedRestore(target, async (phase) => {
+    if (phase === "initial") {
+      return archive;
+    }
+    entered.resolve();
+    return release.promise;
   });
   const controller = new AbortController();
   const aborted = new Error("cold restoration task deadline");
@@ -234,13 +224,7 @@ it("removes an aborted cold restoration from its store queue", async ({ signal }
   let canceled: Promise<void> | undefined;
   try {
     await awaitGateBeforeSettlement(entered.promise, blocked, "First restore did not enter");
-    canceled = restoreSessionColdTranscript(
-      target,
-      undefined,
-      { target: preparedTarget, readMetadata },
-      undefined,
-      controller.signal,
-    );
+    canceled = preparedRestore(target, readMetadata, controller.signal);
     const rejected = expect(canceled).rejects.toBe(aborted);
     await initial.promise;
     controller.abort(aborted);
@@ -249,10 +233,7 @@ it("removes an aborted cold restoration from its store queue", async ({ signal }
     await Promise.all([blocked, rejected]);
     expect(readMetadata.mock.calls.map(([phase]) => phase)).toEqual(["initial"]);
     await expect(
-      restoreSessionColdTranscript(target, undefined, {
-        target: preparedTarget,
-        readMetadata: async (phase) => (phase === "initial" ? archive : undefined),
-      }),
+      preparedRestore(target, async (phase) => (phase === "initial" ? archive : undefined)),
     ).resolves.toBeUndefined();
   } finally {
     release.resolve(undefined);

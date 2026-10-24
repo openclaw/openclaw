@@ -1,12 +1,13 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { WizardSession } from "../wizard/session.js";
 import { createWizardSessionTracker } from "./server-wizard-sessions.js";
 
 describe("createWizardSessionTracker", () => {
   it("retains an uncollected terminal result before reaping it", async () => {
-    let now = 1_000;
-    const tracker = createWizardSessionTracker({ now: () => now });
+    vi.useFakeTimers({ now: 1_000, toFake: ["Date"] });
+    onTestFinished(() => void vi.useRealTimers());
+    const tracker = createWizardSessionTracker();
     const terminal = new WizardSession(async () => {});
     tracker.wizardSessions.set("finished", terminal);
     await terminal.next();
@@ -14,11 +15,11 @@ describe("createWizardSessionTracker", () => {
     expect(tracker.findRunningWizard()).toBeNull();
     expect(tracker.wizardSessions.has("finished")).toBe(true);
 
-    now += 5 * 60 * 1000 - 1;
+    vi.setSystemTime(Date.now() + 5 * 60 * 1000 - 1);
     expect(tracker.findRunningWizard()).toBeNull();
     expect(tracker.wizardSessions.has("finished")).toBe(true);
 
-    now += 1;
+    vi.setSystemTime(Date.now() + 1);
     expect(tracker.findRunningWizard()).toBeNull();
     expect(tracker.wizardSessions.has("finished")).toBe(false);
   });

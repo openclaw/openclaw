@@ -6,7 +6,6 @@ import { runWithOpenClawStateLeaseWorker } from "../state/openclaw-state-lease-w
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerOperations } from "../state/openclaw-state-worker-contract.js";
 import { runOpenClawStateWorkerOperation } from "../state/openclaw-state-worker-store.js";
-import { prepareTranscriptDateReader } from "./store-date-preparation.js";
 import type { TranscriptExportChunk, TranscriptExportCommand } from "./store-export-contract.js";
 import { TranscriptLibraryError } from "./store-read.js";
 import type { TranscriptReadRequests } from "./store-worker-contract.js";
@@ -32,14 +31,13 @@ export function createTranscriptStoreOperation(
       consume: (chunk: TranscriptExportChunk, signal: AbortSignal) => Promise<void>,
       signal?: AbortSignal,
     ) {
-      const input = structuredClone(command);
       // Existing canonical schema already includes meeting tables. Only an absent store needs creation.
       if (!context.admission.identity.key.startsWith("file:") && !readOnly) {
         await runOpenClawStateWorkerOperation(context, async () => undefined, { assertCurrent });
       }
       const reply = await executeExistingOpenClawStateRead(
         { path: context.admission.databasePath, env: context.environment },
-        input,
+        command,
         {
           context,
           signal,
@@ -67,7 +65,7 @@ export function createTranscriptStoreOperation(
       request: TranscriptWriteOperations[Key]["input"],
       lease: OpenClawStateLeaseContext,
     ): Promise<void> {
-      const input = { ...structuredClone(request), readOnly };
+      const input = { ...request, readOnly };
       assertCurrent();
       await runWithOpenClawStateLeaseWorker(lease, context, (scope, identity) =>
         scope.execute<Key>({ type, input: { ...input, lease: identity } }),
@@ -77,18 +75,13 @@ export function createTranscriptStoreOperation(
       type: Key,
       request: OpenClawStateWorkerOperations[Key]["input"],
     ): Promise<TranscriptReadRequests[Key]["output"]> {
-      const input = structuredClone(request);
-      input.readOnly = readOnly;
-      const preparation =
-        type === "transcripts.readEntries"
-          ? prepareTranscriptDateReader(assertCurrent, context.admission.databasePath)
-          : { assertCurrent };
+      const input = { ...request, readOnly };
       const result = await runOpenClawStateWorkerOperation(
         context,
         (scope) => scope.execute<Key>({ type, input }),
-        preparation,
+        { assertCurrent },
       );
-      preparation.assertCurrent();
+      assertCurrent();
       if (!result.ok) {
         throw new TranscriptLibraryError(
           result.error.type,
@@ -103,7 +96,7 @@ export function createTranscriptStoreOperation(
       request: TranscriptWriteOperations[Key]["input"],
       assertWriteOwner?: () => void,
     ): Promise<TranscriptWriteOperations[Key]["output"]> {
-      const input = { ...structuredClone(request), readOnly };
+      const input = { ...request, readOnly };
       const assertWriteCurrent = () => {
         assertCurrent();
         assertWriteOwner?.();

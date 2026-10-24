@@ -1,48 +1,89 @@
+import type { JSX } from "@solidjs/web";
 import {
-  createComponent,
-  createEffect,
+  createMemo,
   createSignal,
+  createStore,
+  Errored,
   For,
-  onCleanup,
+  Loading,
+  onSettled,
   Show,
-  untrack,
 } from "solid-js";
 import type { ApplicationContext } from "../../app/context.ts";
 import type { ApplicationGateway } from "../../app/gateway.ts";
 import { createGatewayConnectionLifecycle } from "../../lib/gateway-connection-lifecycle.ts";
-import { projectGateway, projectGatewayEventLog } from "../../lib/reactive/application.ts";
-import { useApplication } from "../../lib/reactive/context.ts";
+import { projectGatewayEventLog } from "../../lib/reactive/application.ts";
+import { useOptionalApplication } from "../../lib/reactive/context.ts";
 import { t } from "../../lib/reactive/i18n.ts";
+import { listen } from "../../lib/reactive/listener.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../../lib/solid-bridge.ts";
 import { canReadSystemInfo, SYSTEM_INFO_POLL_INTERVAL_MS } from "../../lib/system-info.ts";
-import { defineSolidBridge } from "../../lit/solid-bridge.ts";
 import "../../styles/debug-data.css";
 import { DebugOverlaySectionLoading } from "./debug-overlay-loading-view.tsx";
 import {
   DEBUG_OVERLAY_SECTIONS,
   DebugOverlayWidget,
+  type DebugOverlaySectionDescriptor,
   type DebugOverlayStatusSample,
   type DebugOverlayStatusSnapshot,
 } from "./debug-overlay-sections.tsx";
 
-type SectionState = { status: "loading" | "unavailable" } | { status: "ready"; value: unknown };
+type SectionRead = Promise<unknown> | null | undefined;
 
-function Content(props: { gateway: ApplicationGateway; minimized: boolean }) {
-  // The keyed parent gives each Gateway source its own request lifetime.
-  const source = untrack(() => props.gateway);
-  const gateway = projectGateway(source);
+const pollingSynchronizers = new WeakMap<HTMLElement, () => void>();
+
+function SectionFrame(props: {
+  section: DebugOverlaySectionDescriptor;
+  loading?: boolean;
+  children: JSX.Element;
+}) {
+  return (
+    <section class="debug-overlay__section" aria-busy={props.loading ? "true" : "false"}>
+      <h3>{t(props.section.titleKey)}</h3>
+      {props.children}
+    </section>
+  );
+}
+
+function SectionFallback(props: { section: DebugOverlaySectionDescriptor; loading?: boolean }) {
+  return (
+    <SectionFrame section={props.section} loading={props.loading}>
+      <Show
+        when={props.loading}
+        fallback={<div class="debug-overlay__empty">{t("debug.overlay.unavailable")}</div>}
+      >
+        <DebugOverlaySectionLoading id={props.section.id} />
+      </Show>
+    </SectionFrame>
+  );
+}
+
+function CompactFallback(props: { loading?: boolean }) {
+  return (
+    <div class="debug-overlay__compact-loading" role="status">
+      {t(props.loading ? "common.loading" : "debug.overlay.unavailable")}
+    </div>
+  );
+}
+
+function Content(
+  source: ApplicationGateway,
+  props: { minimized: boolean },
+  host: SolidBridgeElement<Props>,
+) {
   const lifecycle = createGatewayConnectionLifecycle(source.snapshot);
   const [visible, setVisible] = createSignal(document.visibilityState !== "hidden");
-  const [sections, setSections] = createSignal(new Map<string, SectionState>(), {
-    ownedWrite: true,
-  });
-  const [history, setHistory] = createSignal<readonly DebugOverlayStatusSample[]>([], {
-    ownedWrite: true,
-  });
+  // Polls retain settled samples; a new connection immediately hides them.
+  const [epoch, setEpoch] = createSignal(lifecycle.epoch);
+  const [sections, setSections] = createStore<Record<string, SectionRead>>({});
+  const [history, setHistory] = createStore<DebugOverlayStatusSample[]>([]);
   const requests = new Map<string, AbortController>();
   let timer: ReturnType<typeof setInterval> | undefined;
 
-  const updateSection = (id: string, state: SectionState) => {
-    setSections((previous) => new Map(previous).set(id, state));
+  const updateSection = (id: string, read: SectionRead) => {
+    setSections((draft) => {
+      draft[id] = read;
+    });
   };
   const stopPolling = () => {
     clearInterval(timer);
@@ -53,24 +94,26 @@ function Content(props: { gateway: ApplicationGateway; minimized: boolean }) {
       timer = setInterval(refresh, SYSTEM_INFO_POLL_INTERVAL_MS);
     }
   };
-  const reset = () => {
+  const abortRequests = () => {
     for (const controller of requests.values()) {
       controller.abort();
     }
     requests.clear();
-    setHistory([]);
-    setSections(
-      new Map(
-        DEBUG_OVERLAY_SECTIONS.map((section) => [
-          section.id,
-          {
-            status: lifecycle.capture() ? "loading" : "unavailable",
-          },
-        ]),
-      ),
-    );
   };
-  function refresh() {
+  const reset = () => {
+    abortRequests();
+    setEpoch(lifecycle.epoch);
+    setHistory((draft) => {
+      draft.length = 0;
+    });
+    setSections((draft) => {
+      for (const section of DEBUG_OVERLAY_SECTIONS) {
+        draft[section.id] = lifecycle.capture() ? undefined : null;
+      }
+    });
+  };
+
+  function refresh(minimized = host.minimized) {
     const scope = lifecycle.capture();
     if (!scope || document.visibilityState === "hidden") {
       return;
@@ -78,53 +121,52 @@ function Content(props: { gateway: ApplicationGateway; minimized: boolean }) {
     for (const section of DEBUG_OVERLAY_SECTIONS) {
       if (
         requests.has(section.id) ||
-        (section.id !== "status" && untrack(() => props.minimized)) ||
+        (section.id !== "status" && minimized) ||
         (section.id === "status" && !canReadSystemInfo(source.snapshot))
       ) {
         continue;
       }
       const controller = new AbortController();
       requests.set(section.id, controller);
-      void section
+      const read = section
         .load({ client: scope.client, gateway: source }, controller.signal)
-        .then(
-          (value) => {
-            if (controller.signal.aborted || !lifecycle.isCurrent(scope)) {
-              return;
-            }
-            if (section.id === "status") {
-              // SAFETY: The status descriptor is the only producer of this snapshot.
-              const sample = value as DebugOverlayStatusSnapshot;
-              setHistory((previous) =>
-                previous.at(-1)?.at === sample.sampledAt
-                  ? previous
-                  : [...previous.slice(-89), { at: sample.sampledAt, status: sample }],
-              );
-              // Measure the next status interval from the completed sample.
-              stopPolling();
-              if (document.visibilityState !== "hidden") {
-                startPolling();
+        .then((value) => {
+          if (controller.signal.aborted || !lifecycle.isCurrent(scope)) {
+            return undefined;
+          }
+          if (section.id === "status") {
+            // SAFETY: The status descriptor is the only producer of this snapshot.
+            const sample = value as DebugOverlayStatusSnapshot;
+            setHistory((draft) => {
+              if (draft.at(-1)?.at !== sample.sampledAt) {
+                draft.splice(0, Math.max(0, draft.length - 89));
+                draft.push({ at: sample.sampledAt, status: sample });
               }
+            });
+            // Measure the next status interval from the completed sample.
+            stopPolling();
+            if (document.visibilityState !== "hidden") {
+              startPolling();
             }
-            updateSection(section.id, { status: "ready", value });
-          },
-          () => {
-            if (!controller.signal.aborted && lifecycle.isCurrent(scope)) {
-              updateSection(section.id, { status: "unavailable" });
-            }
-          },
-        )
+          }
+          return value;
+        })
         .finally(() => {
           if (requests.get(section.id) === controller) {
             requests.delete(section.id);
           }
         });
+      // Hidden sections retain the rejection for their next Errored reader.
+      void read.catch(() => undefined);
+      updateSection(section.id, read);
     }
   }
-  const visibilityChanged = () => setVisible(document.visibilityState !== "hidden");
-  document.addEventListener("visibilitychange", visibilityChanged);
-  function syncPolling(initial = false) {
-    const snapshot = gateway.read().snapshot;
+  const visibilityChanged = () => {
+    setVisible(document.visibilityState !== "hidden");
+    syncPolling(host.minimized);
+  };
+  function syncPolling(minimized: boolean, initial = false) {
+    const snapshot = source.snapshot;
     const changed = lifecycle.transition(snapshot);
     if (initial || changed) {
       reset();
@@ -133,99 +175,98 @@ function Content(props: { gateway: ApplicationGateway; minimized: boolean }) {
     if (!statusAllowed) {
       requests.get("status")?.abort();
       requests.delete("status");
-      setHistory([]);
-      updateSection("status", { status: "unavailable" });
+      setHistory((draft) => {
+        draft.length = 0;
+      });
+      updateSection("status", null);
     }
     if (
       document.visibilityState === "hidden" ||
       !lifecycle.capture() ||
-      (props.minimized && !statusAllowed)
+      (minimized && !statusAllowed)
     ) {
       stopPolling();
     } else {
       const starting = timer === undefined;
       startPolling();
       if (starting || initial || changed) {
-        refresh();
+        refresh(minimized);
       }
     }
   }
-  const stopGateway = gateway.subscribe(() => untrack(syncPolling));
-  createEffect(
-    () => ({ minimized: props.minimized, visible: visible() }),
-    // Start after the previous keyed content has released shared requests.
-    (_current, previous) => untrack(() => syncPolling(previous === undefined)),
-  );
   const eventLog = projectGatewayEventLog(source);
   const eventRevision = () =>
     !props.minimized && visible() ? eventLog.read().revision : undefined;
-  onCleanup(() => {
-    stopPolling();
-    reset();
-    stopGateway();
-    lifecycle.dispose();
-    document.removeEventListener("visibilitychange", visibilityChanged);
+  // Keep settled reads across compact/expanded presentation changes.
+  const status = createMemo(() => sections.status);
+  const entries = DEBUG_OVERLAY_SECTIONS.map((section) => {
+    if (section.id === "status") {
+      return Object.assign({ read: status }, section);
+    }
+    const read = createMemo(() => sections[section.id]);
+    return Object.assign({ read }, section);
   });
-  const state = (id: string) => sections().get(id) ?? { status: "loading" as const };
-  const value = (id: string) => {
-    const current = state(id);
-    return current.status === "ready" ? current.value : undefined;
+  onSettled(() => {
+    // Gateway receipts abort retired diagnostics and synchronously revoke unauthorized status polling.
+    const synchronize = () => syncPolling(host.minimized);
+    const stopGateway = source.subscribe(synchronize);
+    const stopVisibility = listen(document, "visibilitychange", visibilityChanged);
+    pollingSynchronizers.set(host, synchronize);
+    // The previous gateway's keyed content has released its shared diagnostics first.
+    syncPolling(host.minimized, true);
+    return () => {
+      pollingSynchronizers.delete(host);
+      stopPolling();
+      abortRequests();
+      stopGateway();
+      lifecycle.dispose();
+      stopVisibility();
+    };
+  });
+  const value = (entry: (typeof entries)[number]) => {
+    if (entry.id === "events") {
+      eventRevision();
+    }
+    return entry.read();
   };
   return (
     <Show
       when={!props.minimized}
       fallback={
         <Show
-          when={state("status").status === "ready"}
-          fallback={
-            <div class="debug-overlay__compact-loading" role="status">
-              {t(
-                state("status").status === "loading"
-                  ? "common.loading"
-                  : "debug.overlay.unavailable",
-              )}
-            </div>
-          }
+          when={Boolean(sections.status)}
+          fallback={<CompactFallback loading={sections.status === undefined} />}
         >
-          <DebugOverlayWidget
-            status={
-              // SAFETY: A ready status entry contains the status descriptor's snapshot.
-              value("status") as DebugOverlayStatusSnapshot
-            }
-            history={history()}
-          />
+          <Errored fallback={<CompactFallback />}>
+            <Loading on={epoch()} fallback={<CompactFallback loading />}>
+              <DebugOverlayWidget
+                status={
+                  // SAFETY: Only the status descriptor produces this read's snapshot.
+                  status() as DebugOverlayStatusSnapshot
+                }
+                history={history}
+              />
+            </Loading>
+          </Errored>
         </Show>
       }
     >
-      <For each={DEBUG_OVERLAY_SECTIONS}>
+      <For each={entries}>
         {(entry) => (
-          <section
-            class="debug-overlay__section"
-            aria-busy={state(entry.id).status === "loading" ? "true" : "false"}
+          <Show
+            when={Boolean(sections[entry.id])}
+            fallback={
+              <SectionFallback section={entry} loading={sections[entry.id] === undefined} />
+            }
           >
-            <h3>{t(entry.titleKey)}</h3>
-            <Show
-              when={state(entry.id).status !== "loading"}
-              fallback={<DebugOverlaySectionLoading id={entry.id} />}
-            >
-              <Show
-                when={state(entry.id).status === "ready"}
-                fallback={<div class="debug-overlay__empty">{t("debug.overlay.unavailable")}</div>}
-              >
-                {createComponent(entry.render, {
-                  get value() {
-                    if (entry.id === "events") {
-                      eventRevision();
-                    }
-                    return value(entry.id);
-                  },
-                  get history() {
-                    return history();
-                  },
-                })}
-              </Show>
-            </Show>
-          </section>
+            <Errored fallback={<SectionFallback section={entry} />}>
+              <Loading on={epoch()} fallback={<SectionFallback section={entry} loading />}>
+                <SectionFrame section={entry}>
+                  <entry.render value={value(entry)} history={history} />
+                </SectionFrame>
+              </Loading>
+            </Errored>
+          </Show>
         )}
       </For>
     </Show>
@@ -236,15 +277,22 @@ type Props = { context: ApplicationContext | undefined; minimized: boolean };
 
 export const DebugOverlayContent = defineSolidBridge<Props>(
   "openclaw-debug-overlay-content",
-  (props) => {
-    const inherited = untrack(() => props.context) ? undefined : useApplication();
+  (props, host) => {
+    // A bridge's provider ancestry is fixed for this renderer lifetime.
+    const inherited = useOptionalApplication();
     return (
       <Show when={(props.context ?? inherited)?.gateway} keyed>
-        {(gateway) => <Content gateway={gateway} minimized={props.minimized} />}
+        {(gateway) => Content(gateway, props, host)}
       </Show>
     );
   },
   {
+    propertyChanged: (host, key) => {
+      if (key === "minimized") {
+        // A batched context replacement must retire the previous diagnostics before polling.
+        onSettled(() => pollingSynchronizers.get(host)?.());
+      }
+    },
     properties: {
       context: { default: undefined, attribute: false },
       minimized: { default: false, type: Boolean },

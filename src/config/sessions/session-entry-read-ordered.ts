@@ -176,7 +176,6 @@ export function createAdmittedSessionEntryCohortReader(params: {
                   assertNativeCurrent = undefined;
                 }
               },
-              true,
               signal,
             ),
         },
@@ -216,7 +215,15 @@ export function captureSessionEntryNativeMutationWitness(
 export async function withOrderedSessionEntriesInWorker<T>(
   inputs: readonly SessionEntryWorkerRead[],
   consume: (reads: readonly PreparedSessionEntryWorkerRead[]) => T,
-  { readStore, onReadAdmitted }: { readStore: ReadSessionStore; onReadAdmitted?: () => void },
+  {
+    readStore,
+    onReadAdmitted,
+    signal,
+  }: {
+    readStore: ReadSessionStore;
+    onReadAdmitted?: () => void;
+    signal?: AbortSignal;
+  },
 ): Promise<T> {
   const selected: Array<{
     input: SessionEntryWorkerRead;
@@ -288,6 +295,7 @@ export async function withOrderedSessionEntriesInWorker<T>(
         });
         let active = true;
         const assertCurrent = () => {
+          signal?.throwIfAborted();
           if (!active) {
             throw new Error("Session entry read consumer is no longer active");
           }
@@ -310,11 +318,14 @@ export async function withOrderedSessionEntriesInWorker<T>(
             const cached = readRetainedSessionEntryFacts(database, request);
             const result =
               cached ??
-              (await owner.readExactEntries({
-                ...request,
-                env: database.env,
-                continuation,
-              }));
+              (await owner.readExactEntries(
+                {
+                  ...request,
+                  env: database.env,
+                  continuation,
+                },
+                signal,
+              ));
             assertCurrent();
             if (!cached) {
               retainSessionEntryReadFacts(database, request, result, before);
@@ -332,7 +343,7 @@ export async function withOrderedSessionEntriesInWorker<T>(
           unsubscribe();
         }
       },
-      true,
+      signal,
     );
   };
   return enter(0);

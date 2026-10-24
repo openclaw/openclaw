@@ -4,6 +4,7 @@ import { formatContextJsonBlock } from "../../../auto-reply/reply/channel-prompt
 import { markInboundContextLabel } from "../../../auto-reply/reply/inbound-context-marker.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { ProviderRuntimeModel } from "../../../plugins/provider-runtime-model.types.js";
+import { groupPluginRecords as groupRecords } from "../../../plugins/record-groups.js";
 import {
   hasInterSessionUserProvenance,
   INTER_SESSION_PROMPT_PREFIX_BASE,
@@ -75,12 +76,7 @@ export function resolveUserTranscriptMessages(
     (): AgentMessage | undefined => undefined,
   );
   const unusedContexts = new Set(contexts);
-  const byRuntimeMessage = new Map<AgentMessage, UserTranscriptContext[]>();
-  for (const context of unusedContexts) {
-    const bucket = byRuntimeMessage.get(context.runtimeMessage) ?? [];
-    bucket.push(context);
-    byRuntimeMessage.set(context.runtimeMessage, bucket);
-  }
+  const byRuntimeMessage = groupRecords(unusedContexts, (context) => context.runtimeMessage);
   // Reserve object-identity matches before structural fallback so duplicate
   // timestamp/text turns cannot consume a later message's exact pairing.
   for (const [index, message] of messages.entries()) {

@@ -2,9 +2,17 @@ import { Icon } from "../../components/solid/icon.tsx";
 import "../../components/tooltip.ts";
 import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import type { NewSessionVisibilityControl } from "./incognito-control.ts";
+import type { NewSessionVisibility } from "./create-params.ts";
 
 registerNewSessionSetupEnglish();
+
+type NewSessionVisibilityControl = {
+  visibility: NewSessionVisibility;
+  submitting: boolean;
+  pendingPlacement: { sessionKey: string };
+  incognitoDisabledReason: () => string | undefined;
+  setVisibility: (visibility: NewSessionVisibility) => void;
+};
 
 function VisibilityToggle(props: {
   submission: NewSessionVisibilityControl;
@@ -48,7 +56,7 @@ function VisibilityToggle(props: {
       >
         <Icon name={draft() ? "pencil" : "incognito"} />
         {active() ? (
-          <span class={`new-session-page__${props.mode}-toggle-label`}>{label()}</span>
+          <span class={[`new-session-page__${props.mode}-toggle-label`]}>{label()}</span>
         ) : undefined}
       </button>
     </openclaw-tooltip>
@@ -69,9 +77,13 @@ export function NewSessionIncognitoControl(props: {
   );
 }
 
-export function NewSessionIncognitoNotice(props: { active: boolean }) {
+export function NewSessionIncognitoNotice(props: {
+  active: boolean;
+  ref?: (element: HTMLDivElement) => void;
+}) {
   return (
     <div
+      ref={(element) => props.ref?.(element)}
       class={[
         "new-session-page__incognito-notice",
         { "new-session-page__incognito-notice--visible": props.active },

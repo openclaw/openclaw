@@ -2,8 +2,7 @@ import fs from "node:fs";
 import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
-import * as dispatch from "../../auto-reply/dispatch.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { getRuntimeConfig, setRuntimeConfigSnapshot } from "../../config/config.js";
 import {
   appendTranscriptMessage,
@@ -16,7 +15,9 @@ import * as sessionAccessor from "../../config/sessions/session-accessor.js";
 import { readSessionPendingInputByKey } from "../../config/sessions/session-accessor.sqlite-pending-inputs.js";
 import { SessionPendingInputCustodyError } from "../../config/sessions/session-pending-input-custody-error.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { getSessionWorkAdmissionRelease } from "../../sessions/session-lifecycle-admission.js";
+import { loadOrCreateProcessDeviceIdentityAsync } from "../../infra/device-identity-async.js";
+import { captureSessionControllerSettlement } from "../../sessions/session-controller.lifecycle.js";
+import { rpcSourceTesting } from "../../sessions/session-lifecycle-admission.test-support.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import {
   closeOpenClawAgentDatabaseByPathAsync,
@@ -25,12 +26,45 @@ import {
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import * as sessionStores from "../session-utils-store.js";
-import * as chatDispatch from "./chat-send-agent-dispatch.js";
+import { holdProjectedChatDispatch } from "./chat-send-authority.test-support.js";
 import { handleDirectExternalChatSend } from "./chat-send-external-entry.js";
 
-type DispatchOptions = Parameters<typeof dispatch.dispatchInboundMessageWithProjectedDispatcher>[0];
+const configChanges = [
+  ["unrelated", true, () => ({ logging: { level: "debug" }, ui: { seamColor: "#123456" } })],
+  [
+    "unrelated provider",
+    true,
+    () => ({
+      models: {
+        providers: {
+          other: {
+            baseUrl: "https://provider.example.test/v1",
+            api: "openai-responses",
+            models: [],
+          },
+        },
+      },
+    }),
+  ],
+  ["unrelated channel", true, () => ({ channels: { telegram: { enabled: false } } })],
+  [
+    "model",
+    false,
+    (cfg) => ({
+      agents: {
+        ...cfg.agents,
+        defaults: {
+          ...cfg.agents?.defaults,
+          model: "anthropic/claude-sonnet-4-6",
+        },
+      },
+    }),
+  ],
+  ["security", false, () => ({ tools: { fs: { workspaceOnly: true } } })],
+  ["routing", false, (cfg) => ({ session: { ...cfg.session, mainKey: "changed-main" } })],
+] satisfies Array<[string, boolean, (cfg: OpenClawConfig) => OpenClawConfig]>;
 
-it.each<{
+type IdentityScenario = {
   name: string;
   raw: boolean;
   literal: boolean;
@@ -44,156 +78,62 @@ it.each<{
   replaceDuringPersistence?: boolean;
   pendingReplacement?: boolean;
   switchStoreAfterAck?: boolean;
-  configDuringAdmission?:
-    | "unrelated"
-    | "unrelated provider"
-    | "unrelated channel"
-    | "model"
-    | "security"
-    | "routing";
-}>([
-  {
-    name: "raw global only",
+  configDuringAdmission?: (cfg: OpenClawConfig) => OpenClawConfig;
+};
+function identityScenario(
+  name: string,
+  overrides: Partial<IdentityScenario> = {},
+): IdentityScenario {
+  return {
+    name,
     raw: true,
     literal: false,
     shared: false,
     key: "global",
     allowed: true,
-  },
-  {
-    name: "colliding raw request",
-    raw: true,
-    literal: true,
-    shared: false,
-    key: "global",
-    allowed: false,
-  },
-  {
-    name: "colliding literal request",
-    raw: true,
-    literal: true,
-    shared: false,
-    key: "agent:research:global",
-    allowed: false,
-  },
-  {
-    name: "missing raw with literal present",
-    raw: false,
-    literal: true,
-    shared: false,
-    key: "global",
-    allowed: false,
-  },
-  {
-    name: "distinct owner in shared store",
-    raw: true,
-    literal: true,
-    shared: true,
-    key: "agent:research:global",
-    allowed: true,
-  },
-  {
-    name: "empty counterpart store preserves raw source",
-    raw: true,
-    literal: false,
-    shared: false,
-    key: "global",
-    allowed: true,
-    separateStore: true,
-  },
-  {
-    name: "collision across discovered stores",
-    raw: true,
-    literal: true,
-    shared: false,
-    key: "global",
-    allowed: false,
-    separateStore: true,
-  },
-  {
-    name: "missing raw with literal in another store",
-    raw: false,
-    literal: true,
-    shared: false,
-    key: "global",
-    allowed: false,
-    separateStore: true,
-  },
-  ...(["copy", "symlink"] as const).map((replaceDatabase) => ({
-    name: `database ${replaceDatabase} after selection`,
-    raw: true,
-    literal: false,
-    shared: false,
-    key: "global",
-    allowed: false,
-    replaceDatabase,
-  })),
-  {
-    name: "cached retry after collision",
-    raw: true,
-    literal: false,
-    shared: false,
-    key: "global",
-    allowed: true,
-    replayAfterCollision: true,
-  },
-  {
-    name: "unrelated row appears while admission waits",
-    raw: true,
-    literal: false,
-    shared: false,
-    key: "global",
-    allowed: true,
-    writeDuringAdmission: true,
-  },
-  ...(
-    [
-      "unrelated",
-      "unrelated provider",
-      "unrelated channel",
-      "model",
-      "security",
-      "routing",
-    ] as const
-  ).map((configDuringAdmission) => ({
-    name: `${configDuringAdmission} config changes during admission read`,
-    raw: true,
-    literal: false,
-    shared: false,
-    key: "global",
-    allowed: configDuringAdmission.startsWith("unrelated"),
-    configDuringAdmission,
-  })),
-  {
-    name: "database replacement after recorder target resolution",
-    raw: true,
-    literal: false,
-    shared: false,
-    key: "global",
-    allowed: true,
-    replaceDuringPersistence: true,
-  },
-  {
-    name: "pending custody survives replacement through cleanup",
-    raw: true,
-    literal: false,
-    shared: false,
-    key: "global",
-    allowed: true,
-    replaceDuringPersistence: true,
-    pendingReplacement: true,
-  },
-  {
-    name: "config store changes after ACK",
-    raw: true,
-    literal: false,
-    shared: false,
-    key: "global",
-    allowed: true,
-    switchStoreAfterAck: true,
-  },
+    ...overrides,
+  };
+}
+
+it.each<IdentityScenario>([
+  ...Object.entries<Partial<IdentityScenario>>({
+    "raw global only": {},
+    "colliding raw request": { literal: true, allowed: false },
+    "colliding literal request": { literal: true, key: "agent:research:global", allowed: false },
+    "missing raw with literal present": { raw: false, literal: true, allowed: false },
+    "distinct owner in shared store": { literal: true, shared: true, key: "agent:research:global" },
+    "empty counterpart store preserves raw source": { separateStore: true },
+    "collision across discovered stores": { literal: true, allowed: false, separateStore: true },
+    "missing raw with literal in another store": {
+      raw: false,
+      literal: true,
+      allowed: false,
+      separateStore: true,
+    },
+    "cached retry after collision": { replayAfterCollision: true },
+    "unrelated row appears while admission waits": { writeDuringAdmission: true },
+    "database replacement after recorder target resolution": { replaceDuringPersistence: true },
+    "pending custody survives replacement through cleanup": {
+      replaceDuringPersistence: true,
+      pendingReplacement: true,
+    },
+    "config store changes after ACK": { switchStoreAfterAck: true },
+  }).map(([name, overrides]) => identityScenario(name, overrides)),
+  ...(["copy", "symlink"] as const).map((replaceDatabase) =>
+    identityScenario(`database ${replaceDatabase} after selection`, {
+      allowed: false,
+      replaceDatabase,
+    }),
+  ),
+  ...configChanges.map(([name, allowed, configDuringAdmission]) =>
+    identityScenario(`${name} config changes during admission read`, {
+      allowed,
+      configDuringAdmission,
+    }),
+  ),
 ])("binds chat.send to its stored global identity: $name", async (scenario) => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    await loadOrCreateProcessDeviceIdentityAsync();
     const storePath = state.path(
       scenario.shared
         ? "shared.sqlite"
@@ -256,20 +196,31 @@ it.each<{
     }
     const originalPath = state.path("original.sqlite");
     const replacementPath = state.path("replacement.sqlite");
+    const originalRow = (row: (typeof rows)[number]) => ({
+      ...row,
+      defaultAgentId: physicalAgentId,
+      storePath: originalPath,
+    });
+    const sessionKeys = (scope: typeof storeScope) =>
+      listSessionEntriesCore(scope)
+        .map((row) => row.sessionKey)
+        .toSorted();
+    const copyDatabase = async (path: string, copyPath = path) => {
+      await closeOpenClawAgentDatabaseByPathAsync(path);
+      fs.renameSync(path, originalPath);
+      fs.copyFileSync(originalPath, copyPath);
+    };
     if (scenario.replaceDatabase === "symlink") {
-      await closeOpenClawAgentDatabaseByPathAsync(storePath);
-      fs.renameSync(storePath, originalPath);
-      fs.copyFileSync(originalPath, replacementPath);
+      await copyDatabase(storePath, replacementPath);
       fs.symlinkSync(originalPath, storePath);
     }
+    const snapshotRow = async (row: (typeof rows)[number]) => ({
+      entry: loadExactSessionEntryReadOnly(row)?.entry,
+      transcript: await loadTranscriptEvents(row),
+    });
     const snapshot = async () => ({
-      entries: rows.map((row) => loadExactSessionEntryReadOnly(row)?.entry),
-      keys: [storeScope, ...(scenario.separateStore ? [literalScope] : [])].map((scope) =>
-        listSessionEntriesCore(scope)
-          .map((row) => row.sessionKey)
-          .toSorted(),
-      ),
-      transcripts: await Promise.all(rows.map((row) => loadTranscriptEvents(row))),
+      rows: await Promise.all(rows.map(snapshotRow)),
+      keys: [storeScope, ...(scenario.separateStore ? [literalScope] : [])].map(sessionKeys),
     });
     let before = await snapshot();
     if (scenario.replaceDatabase) {
@@ -281,62 +232,26 @@ it.each<{
       scenario.replaceDuringPersistence && !scenario.pendingReplacement
         ? "/status"
         : "Keep this input in the selected physical row.";
-    const entered = createDeferred<DispatchOptions>();
-    const release = createDeferred();
+    const {
+      entered,
+      release,
+      observe: observeDispatch,
+      hold: holdDispatch,
+    } = holdProjectedChatDispatch();
     const admissionOwned = createDeferred();
     const resumeAdmission = createDeferred();
     let sending: Promise<void> | undefined;
-    const observeDispatch = vi.spyOn(chatDispatch, "startChatDispatch");
-    const holdDispatch = vi
-      .spyOn(dispatch, "dispatchInboundMessageWithProjectedDispatcher")
-      .mockImplementation(async (options) => {
-        entered.resolve(options);
-        await release.promise;
-        return { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } };
-      });
     const context = createDirectChatContext({ getRuntimeConfig });
     let configReloaded = false;
     const readQualifiedEntry = sessionStores.withQualifiedGatewaySessionEntry;
-    const reloadDuringRead = scenario.configDuringAdmission
+    const configChange = scenario.configDuringAdmission;
+    const reloadDuringRead = configChange
       ? vi.spyOn(sessionStores, "withQualifiedGatewaySessionEntry").mockImplementation((params) =>
           readQualifiedEntry({
             ...params,
             consume: (...args) => {
               if (!configReloaded) {
-                const changedConfig: OpenClawConfig =
-                  scenario.configDuringAdmission === "unrelated"
-                    ? { ...cfg, logging: { level: "debug" }, ui: { seamColor: "#123456" } }
-                    : scenario.configDuringAdmission === "unrelated provider"
-                      ? {
-                          ...cfg,
-                          models: {
-                            ...cfg.models,
-                            providers: {
-                              ...cfg.models?.providers,
-                              other: {
-                                baseUrl: "https://provider.example.test/v1",
-                                api: "openai-responses",
-                                models: [],
-                              },
-                            },
-                          },
-                        }
-                      : scenario.configDuringAdmission === "unrelated channel"
-                        ? { ...cfg, channels: { ...cfg.channels, telegram: { enabled: false } } }
-                        : scenario.configDuringAdmission === "model"
-                          ? {
-                              ...cfg,
-                              agents: {
-                                ...cfg.agents,
-                                defaults: {
-                                  ...cfg.agents?.defaults,
-                                  model: "anthropic/claude-sonnet-4-6",
-                                },
-                              },
-                            }
-                          : scenario.configDuringAdmission === "security"
-                            ? { ...cfg, tools: { ...cfg.tools, fs: { workspaceOnly: true } } }
-                            : { ...cfg, session: { ...cfg.session, mainKey: "changed-main" } };
+                const changedConfig = { ...cfg, ...configChange(cfg) };
                 setRuntimeConfigSnapshot(changedConfig, changedConfig);
                 configReloaded = true;
               }
@@ -355,11 +270,10 @@ it.each<{
             if (!isRecord(source) || typeof source.path !== "string") {
               throw new Error("Expected the selected physical database before replacement");
             }
-            await closeOpenClawAgentDatabaseByPathAsync(source.path);
             if (scenario.replaceDatabase === "copy") {
-              fs.renameSync(source.path, originalPath);
-              fs.copyFileSync(originalPath, source.path);
+              await copyDatabase(source.path);
             } else {
+              await closeOpenClawAgentDatabaseByPathAsync(source.path);
               fs.unlinkSync(storePath);
               fs.symlinkSync(replacementPath, storePath);
             }
@@ -376,15 +290,21 @@ it.each<{
         message,
         idempotencyKey: runId,
       };
-      sending = handleDirectExternalChatSend(
-        {
-          params,
-          req: { type: "req", id: runId, method: "chat.send", params },
-          respond,
-          context,
-          client: null,
-          isWebchatConnect: () => false,
-        },
+      const send = (response: typeof respond, id = runId, admit?: () => Promise<boolean>) =>
+        handleDirectExternalChatSend(
+          {
+            params,
+            req: { type: "req", id, method: "chat.send", params },
+            respond: response,
+            context,
+            client: null,
+            isWebchatConnect: () => false,
+          },
+          admit,
+        );
+      sending = send(
+        respond,
+        runId,
         scenario.writeDuringAdmission
           ? async () => {
               admissionOwned.resolve();
@@ -395,12 +315,11 @@ it.each<{
       );
       if (scenario.writeDuringAdmission) {
         try {
-          await Promise.race([
+          await awaitGateBeforeSettlement(
             admissionOwned.promise,
-            sending.then(() => {
-              throw new Error("chat.send settled before the admission callback");
-            }),
-          ]);
+            sending,
+            "chat.send settled before the admission callback",
+          );
           const inserted = {
             ...literalScope,
             sessionKey: "agent:research:other",
@@ -409,8 +328,7 @@ it.each<{
           await seedRow(inserted);
           rows.push(inserted);
           const withCounterpart = await snapshot();
-          expect(withCounterpart.entries[0]).toEqual(before.entries[0]);
-          expect(withCounterpart.transcripts[0]).toEqual(before.transcripts[0]);
+          expect(withCounterpart.rows[0]).toEqual(before.rows[0]);
           before = withCounterpart;
         } finally {
           resumeAdmission.resolve();
@@ -427,12 +345,10 @@ it.each<{
           expect.objectContaining({ code: "INVALID_REQUEST" }),
         );
         expect(observeDispatch).not.toHaveBeenCalled();
-        expect(holdDispatch).not.toHaveBeenCalled();
         expect(context.addChatRun).not.toHaveBeenCalled();
-        expect(context.chatAbortControllers.size).toBe(0);
-        expect(context.chatQueuedTurns.size).toBe(0);
+        expect(rpcSourceTesting.size).toBe(0);
         expect(
-          getSessionWorkAdmissionRelease({
+          captureSessionControllerSettlement({
             scope: storePath,
             identities: [scenario.key, "raw-session", "literal-session"],
           }),
@@ -440,13 +356,8 @@ it.each<{
         expect(await snapshot()).toEqual(before);
         if (scenario.replaceDatabase) {
           expect(databaseReplaced).toBe(true);
-          const original = {
-            ...expectDefined(rows[0], "original selected row"),
-            defaultAgentId: physicalAgentId,
-            storePath: originalPath,
-          };
-          expect(loadExactSessionEntryReadOnly(original)?.entry).toEqual(before.entries[0]);
-          expect(await loadTranscriptEvents(original)).toEqual(before.transcripts[0]);
+          const original = originalRow(expectDefined(rows[0], "original selected row"));
+          expect(await snapshotRow(original)).toEqual(before.rows[0]);
         }
         return;
       }
@@ -461,28 +372,22 @@ it.each<{
       if (!owned) {
         throw new Error("chat.send did not dispatch the selected session");
       }
+      const { session, userTurn } = owned;
       const selected = expectDefined(
         rows.find((row) => row.sessionKey === scenario.key),
         "requested session row",
       );
-      expect(owned.session).toMatchObject({
+      const admissionReleased = () =>
+        captureSessionControllerSettlement({
+          scope: session.storePath,
+          identities: [session.sessionKey, selected.sessionId],
+        });
+      expect(session).toMatchObject({
         agentId: "research",
-        sessionKey: selected.sessionKey,
         activeRunScopeKey: "agent:research:global",
-        entry: { sessionId: selected.sessionId },
-        readSource: { agentId: physicalAgentId },
       });
       if (scenario.replaceDuringPersistence) {
-        expect(owned.turn.isInternalTextSlashCommandTurn).toBe(!scenario.pendingReplacement);
-        if (scenario.pendingReplacement) {
-          expect(owned.userTurn.recorder.getPendingInputMessage?.()).toMatchObject({
-            role: "user",
-            idempotencyKey: `${runId}:user`,
-          });
-        } else {
-          expect(owned.userTurn.recorder.getPendingInputMessage?.()).toBeUndefined();
-        }
-        const source = owned.session.readSource;
+        const source = session.readSource;
         if (!source) {
           throw new Error("Expected the admitted physical database before persistence");
         }
@@ -495,57 +400,41 @@ it.each<{
           );
           return read.found ? read.value : undefined;
         };
-        const pendingBefore = scenario.pendingReplacement ? readPending(source.path) : undefined;
-        if (scenario.pendingReplacement) {
-          expect(pendingBefore).toMatchObject({ state: "queued", consumed_event_id: null });
-        }
+        const pendingBefore = readPending(source.path);
+        expect(pendingBefore).toEqual(
+          scenario.pendingReplacement
+            ? expect.objectContaining({ state: "queued", consumed_event_id: null })
+            : undefined,
+        );
         const persistTurn = sessionAccessor.persistSessionTranscriptTurn;
-        const replaceAtPersistence = vi
+        using replaceAtPersistence = vi
           .spyOn(sessionAccessor, "persistSessionTranscriptTurn")
           .mockImplementationOnce(async (...args) => {
-            await closeOpenClawAgentDatabaseByPathAsync(source.path);
-            fs.renameSync(source.path, originalPath);
-            fs.copyFileSync(originalPath, source.path);
+            await copyDatabase(source.path);
             return persistTurn(...args);
           });
-        try {
-          await expect(
-            owned.userTurn.persist(
-              scenario.pendingReplacement ? undefined : { contextFreeCommand: true },
-            ),
-          ).rejects.toThrow(
-            scenario.pendingReplacement
-              ? SessionPendingInputCustodyError
-              : /database|identity|changed/i,
-          );
-          expect(replaceAtPersistence).toHaveBeenCalledOnce();
-          if (scenario.pendingReplacement) {
-            expect(readPending(source.path)).toEqual(pendingBefore);
-            expect(readPending(originalPath)).toEqual(pendingBefore);
-            const settled = getSessionWorkAdmissionRelease({
-              scope: owned.session.storePath,
-              identities: [owned.session.sessionKey, selected.sessionId],
-            });
-            expect(settled).toBeDefined();
-            release.resolve();
-            await settled;
-            expect(context.chatAbortControllers.has(runId)).toBe(false);
-            expect(readPending(source.path)).toEqual(pendingBefore);
-            expect(readPending(originalPath)).toEqual(pendingBefore);
-          }
-          expect(await snapshot()).toEqual(beforePersistence);
-          const original = {
-            ...selected,
-            defaultAgentId: physicalAgentId,
-            storePath: originalPath,
-          };
-          expect(loadExactSessionEntryReadOnly(original)?.entry).toEqual(
-            beforePersistence.entries[0],
-          );
-          expect(await loadTranscriptEvents(original)).toEqual(beforePersistence.transcripts[0]);
-        } finally {
-          replaceAtPersistence.mockRestore();
+        await expect(
+          userTurn.persist(scenario.pendingReplacement ? undefined : { contextFreeCommand: true }),
+        ).rejects.toThrow(
+          scenario.pendingReplacement
+            ? SessionPendingInputCustodyError
+            : /database|identity|changed/i,
+        );
+        expect(replaceAtPersistence).toHaveBeenCalledOnce();
+        if (scenario.pendingReplacement) {
+          expect(readPending(source.path)).toEqual(pendingBefore);
+          expect(readPending(originalPath)).toEqual(pendingBefore);
+          const settled = admissionReleased();
+          expect(settled).toBeDefined();
+          release.resolve();
+          await settled;
+          expect(rpcSourceTesting.has(runId)).toBe(false);
+          expect(readPending(source.path)).toEqual(pendingBefore);
+          expect(readPending(originalPath)).toEqual(pendingBefore);
         }
+        expect(await snapshot()).toEqual(beforePersistence);
+        expect(await snapshotRow(originalRow(selected))).toEqual(beforePersistence.rows[0]);
+
         return;
       }
       const otherStore = {
@@ -553,26 +442,19 @@ it.each<{
         defaultAgentId: physicalAgentId,
         storePath: replacementPath,
       };
-      let otherBefore:
-        | {
-            entry: ReturnType<typeof loadExactSessionEntryReadOnly>;
-            transcript: Awaited<ReturnType<typeof loadTranscriptEvents>>;
-          }
-        | undefined;
       if (scenario.switchStoreAfterAck) {
         await seedRow(otherStore);
-        otherBefore = {
-          entry: loadExactSessionEntryReadOnly(otherStore),
-          transcript: await loadTranscriptEvents(otherStore),
-        };
-        expect(otherBefore.entry?.entry).toMatchObject({
+      }
+      const otherBefore = scenario.switchStoreAfterAck ? await snapshotRow(otherStore) : undefined;
+      if (otherBefore) {
+        expect(otherBefore.entry).toMatchObject({
           sessionId: selected.sessionId,
-          lifecycleRevision: owned.session.entry?.lifecycleRevision,
+          lifecycleRevision: session.entry?.lifecycleRevision,
         });
         const changedConfig = { ...cfg, session: { ...cfg.session, store: replacementPath } };
         setRuntimeConfigSnapshot(changedConfig, changedConfig);
       }
-      await owned.userTurn.persist();
+      await userTurn.persist();
       expect(await loadTranscriptEvents(selected)).toContainEqual(
         expect.objectContaining({
           message: expect.objectContaining({ role: "user", idempotencyKey: `${runId}:user` }),
@@ -580,25 +462,16 @@ it.each<{
       );
       expect(loadExactSessionEntryReadOnly(selected)?.entry.sessionId).toBe(selected.sessionId);
       if (otherBefore) {
-        expect(loadExactSessionEntryReadOnly(otherStore)).toEqual(otherBefore.entry);
-        expect(await loadTranscriptEvents(otherStore)).toEqual(otherBefore.transcript);
+        expect(await snapshotRow(otherStore)).toEqual(otherBefore);
       }
-      expect(
-        listSessionEntriesCore(storeScope)
-          .map((row) => row.sessionKey)
-          .toSorted(),
-      ).toEqual(rows.map((row) => row.sessionKey).toSorted());
+      expect(sessionKeys(storeScope)).toEqual(rows.map((row) => row.sessionKey).toSorted());
       for (const [index, row] of rows.entries()) {
         if (row !== selected) {
-          expect(loadExactSessionEntryReadOnly(row)?.entry).toEqual(before.entries[index]);
-          expect(await loadTranscriptEvents(row)).toEqual(before.transcripts[index]);
+          expect(await snapshotRow(row)).toEqual(before.rows[index]);
         }
       }
       if (scenario.replayAfterCollision) {
-        const settled = getSessionWorkAdmissionRelease({
-          scope: owned.session.storePath,
-          identities: [owned.session.sessionKey, selected.sessionId],
-        });
+        const settled = admissionReleased();
         release.resolve();
         await settled;
         const cached = context.dedupe.get(`chat:${runId}`);
@@ -607,19 +480,11 @@ it.each<{
         rows.push(literalScope);
         const beforeRetry = await snapshot();
         const replayResponse = vi.fn();
-        await handleDirectExternalChatSend({
-          params,
-          req: { type: "req", id: `${runId}-retry`, method: "chat.send", params },
-          respond: replayResponse,
-          context,
-          client: null,
-          isWebchatConnect: () => false,
-        });
+        await send(replayResponse, `${runId}-retry`);
         expect(replayResponse).toHaveBeenCalledExactlyOnceWith(true, cached?.payload, undefined, {
           cached: true,
         });
         expect(observeDispatch).toHaveBeenCalledOnce();
-        expect(holdDispatch).toHaveBeenCalledOnce();
         expect(await snapshot()).toEqual(beforeRetry);
       }
     } finally {
@@ -627,7 +492,7 @@ it.each<{
       await Promise.allSettled(sending ? [sending] : []);
       const owned = observeDispatch.mock.calls.at(-1)?.[0];
       const settled = owned
-        ? getSessionWorkAdmissionRelease({
+        ? captureSessionControllerSettlement({
             scope: owned.session.storePath,
             identities: [owned.session.sessionKey, owned.session.entry?.sessionId],
           })

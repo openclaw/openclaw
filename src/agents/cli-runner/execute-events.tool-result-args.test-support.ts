@@ -45,6 +45,7 @@ export function buildContext(runId: string): PreparedCliRunContext {
 
 export function buildToolTracking(): CliToolTracking {
   return {
+    shouldSuppressAssistantOutput: vi.fn(() => false),
     handleCliToolUseStart: vi.fn(),
     handleCliToolResult: vi.fn(),
     resolveCliLoopbackTerminalOutcome: vi.fn(() => undefined),

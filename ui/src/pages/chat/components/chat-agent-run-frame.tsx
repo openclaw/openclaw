@@ -1,24 +1,21 @@
 import { insert, type JSX } from "@solidjs/web";
 import {
   createMemo,
-  createRenderEffect,
+  createEffect,
   createRoot,
   createSignal,
   For,
   getOwner,
   Match,
-  onCleanup,
   onSettled,
   runWithOwner,
   Show,
   Switch,
-  untrack,
   type Accessor,
 } from "solid-js";
 import type { MessageGroup as MessageGroupData } from "../../../lib/chat/chat-types.ts";
 import { extractChatSourcePreviews } from "../../../lib/chat/source-previews.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
-import { LitContent } from "../../../lit/solid-bridge.ts";
 import {
   agentRunFrameActiveStatusParts,
   chatItemGroups,
@@ -40,8 +37,9 @@ import {
   type StreamGroupPart,
 } from "./chat-message-stream-view.tsx";
 import { resolveGroupReplyLine } from "./chat-reply-attribution.ts";
-import { renderChatSourcePreviews } from "./chat-source-previews.ts";
-import { renderWorkGroupBrowserTabPreviews } from "./chat-tool-cards.ts";
+import { ChatSourcePreviews } from "./chat-source-previews.tsx";
+import { BrowserTabPreviews } from "./chat-tool-cards.solid.tsx";
+import { selectWorkGroupBrowserTabPreviews } from "./chat-tool-cards.ts";
 
 type AgentRunFrameOptions = {
   basePath?: string;
@@ -70,12 +68,14 @@ function FrameBody(props: {
   options: AgentRunFrameOptions;
   children: (input: Accessor<PartInput>) => JSX.Element;
 }): JSX.Element {
+  // Canvas widgets move between these foreign-DOM ranges without disconnecting.
+  // Mount new ranges under the frame's owner, not the transient reconciliation effect.
   const owner = getOwner();
   const anchor = document.createComment("frame-body");
   const [readParent, setParent] = createSignal<HTMLElement | null>(null, { ownedWrite: true });
   const ranges = new Map<string, PartRange>();
   const retire = (range: PartRange) => {
-    // Lit descendants must park their widgets while the range is still connected.
+    // Native descendants must park their widgets while the range is still connected.
     range.dispose();
     const after = range.end.nextSibling;
     for (let node: Node | null = range.start; node && node !== after;) {
@@ -84,22 +84,27 @@ function FrameBody(props: {
       node = following;
     }
   };
-  onCleanup(() => {
-    for (const range of ranges.values()) {
-      retire(range);
-    }
-    ranges.clear();
-  });
   onSettled(() => {
     const committedParent = anchor.parentElement;
     if (!committedParent) {
       throw new Error("Run frame body anchor was not committed");
     }
     setParent(committedParent);
+    return () => {
+      for (const range of ranges.values()) {
+        retire(range);
+      }
+      ranges.clear();
+    };
   });
-  createRenderEffect(
-    () => ({ parent: readParent(), parts: props.parts, options: props.options }),
-    ({ parent, parts, options }) => {
+  createEffect(
+    () => ({
+      parent: readParent(),
+      parts: props.parts,
+      options: props.options,
+      render: props.children,
+    }),
+    ({ parent, parts, options, render }) => {
       if (!parent) {
         return;
       }
@@ -126,11 +131,7 @@ function FrameBody(props: {
           createRoot((dispose): PartRange => {
             // The headline's connection scope must change with its activity.
             const [readInput, write] = createSignal({ part: value, options }, { ownedWrite: true });
-            insert(
-              parent,
-              untrack(() => props.children(readInput)),
-              end,
-            );
+            insert(parent, render(readInput), end);
             return { start, end, write, dispose };
           }),
         );
@@ -208,7 +209,7 @@ function prepareFrame(frame: AgentRunFrameRenderItem, opts: AgentRunFrameOptions
             : [],
       )
       .at(0) ?? null;
-  const workPreviews = renderWorkGroupBrowserTabPreviews(
+  const workPreviews = selectWorkGroupBrowserTabPreviews(
     frame.parts.flatMap((part) =>
       !opts.streamOptions.bubbleMode && part.kind === "work-group" && !opts.isWorkExpanded(part.key)
         ? [part]
@@ -217,17 +218,14 @@ function prepareFrame(frame: AgentRunFrameRenderItem, opts: AgentRunFrameOptions
     opts.renderGroupOptions(shell),
   );
   const sourcePreviews = actionOwner
-    ? renderChatSourcePreviews(
-        extractChatSourcePreviews({
-          groups,
-          answer: actionOwner.message,
-          runId: frame.runId,
-          basePath: opts.basePath,
-          sessionPublicOrigin: opts.sessionPublicOrigin,
-        }),
-        opts.streamOptions.fetchLinkFavicon,
-      )
-    : undefined;
+    ? extractChatSourcePreviews({
+        groups,
+        answer: actionOwner.message,
+        runId: frame.runId,
+        basePath: opts.basePath,
+        sessionPublicOrigin: opts.sessionPublicOrigin,
+      })
+    : [];
   return {
     shell,
     actionOwner,
@@ -250,6 +248,19 @@ export function AgentRunFrame(props: FrameProps) {
 
 function RunFrame(props: FrameProps) {
   const state = createMemo(() => prepareFrame(props.frame, props.options));
+  const timedWork = createMemo(() => {
+    const recap = props.options.turnRecap;
+    const work = props.frame.parts.find(
+      (part) => part.kind === "work-group" && part.replyRunId === props.frame.runId,
+    );
+    // The recap retains this run's terminal timing after the session moves on.
+    // Handoffs have no work summary: their request-wide timing stays in the recap.
+    if (!recap || work?.kind !== "work-group") {
+      return undefined;
+    }
+    const durationMs = work.durationMs ?? recap.runtimeMs;
+    return durationMs > 0 ? { ...work, durationMs } : undefined;
+  });
   const frameContent = [
     <FrameBody parts={state().bodyParts} options={props.options}>
       {(input) => {
@@ -297,7 +308,7 @@ function RunFrame(props: FrameProps) {
               {(work) => (
                 <>
                   <WorkGroupSummary
-                    item={work()}
+                    item={timedWork()?.key === work().key ? timedWork()! : work()}
                     options={{
                       expanded: options().isWorkExpanded(work().key),
                       bubbleMode: options().streamOptions.bubbleMode,
@@ -337,7 +348,7 @@ function RunFrame(props: FrameProps) {
               {(group) => (
                 <>
                   <MessageGroupContent group={group()} options={groupOptions(group())} />
-                  <LitContent render={() => state().workPreviews.get(group().key)} />
+                  <BrowserTabPreviews previews={state().workPreviews.get(group().key)} />
                 </>
               )}
             </Match>
@@ -345,7 +356,10 @@ function RunFrame(props: FrameProps) {
         );
       }}
     </FrameBody>,
-    <LitContent render={() => state().sourcePreviews} />,
+    <ChatSourcePreviews
+      sources={state().sourcePreviews}
+      fetchFavicon={props.options.streamOptions.fetchLinkFavicon}
+    />,
     <Show when={props.frame.outcome.kind === "interrupted"}>
       <div class="chat-tasks-status chat-turn-recap chat-turn-recap--continuation" role="status">
         {t("chat.composer.runInterrupted")}
@@ -361,6 +375,7 @@ function RunFrame(props: FrameProps) {
         frameReplyLine: state().frameReplyLine,
         frameActionOwner: state().actionOwner,
         turnRecap: props.options.turnRecap,
+        hideTurnRecapDuration: timedWork() !== undefined,
       }}
     />
   );

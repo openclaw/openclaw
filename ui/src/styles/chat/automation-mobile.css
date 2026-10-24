@@ -1,0 +1,137 @@
+.session-automation-mobile {
+  min-width: 0;
+  padding: 12px 14px 24px;
+  color: var(--text);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.session-automation-mobile__group {
+  min-width: 0;
+  overflow: hidden;
+  border-radius: 14px;
+  background: var(--mobile-list-surface, color-mix(in srgb, var(--popover) 95%, var(--text) 5%));
+}
+
+.session-automation-mobile__list-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 54px;
+  padding: 12px;
+  color: var(--text);
+  text-decoration: none;
+}
+
+.session-automation-mobile__list-row + .session-automation-mobile__list-row::before {
+  position: absolute;
+  inset: 0 12px auto;
+  height: 1px;
+  background: var(--mobile-list-separator, var(--border-strong));
+  content: "";
+}
+
+.session-automation-mobile__note {
+  margin: 0;
+  padding: 8px 12px;
+  color: var(--muted);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.session-automation-mobile__list-copy {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.session-automation-mobile__list-row > svg,
+.session-automation-mobile__list-icon > svg {
+  flex: none;
+  width: 16px;
+  height: 16px;
+}
+
+.session-automation-mobile__list-row > svg:last-child {
+  color: var(--muted);
+}
+
+.session-automation-mobile__list-row:hover {
+  background: var(--bg-hover);
+  text-decoration: none;
+}
+
+.session-automation-mobile__list-copy > strong {
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
+
+.session-automation-mobile__list-copy > small {
+  color: var(--muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.session-automation-mobile__more,
+.session-automation-mobile__message > button {
+  min-height: 36px;
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  font: inherit;
+  font-size: 13px;
+}
+
+.session-automation-mobile__more {
+  display: block;
+  margin: 8px auto 0;
+}
+
+.session-automation-mobile button:disabled {
+  opacity: 0.6;
+}
+
+.session-automation-mobile__empty {
+  display: grid;
+  justify-items: center;
+  gap: 10px;
+  padding: 36px 16px;
+  color: var(--muted);
+  text-align: center;
+}
+
+.session-automation-mobile__message {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.session-automation-mobile__list-icon {
+  position: relative;
+  display: flex;
+  flex: none;
+  color: var(--muted);
+}
+
+.session-automation-mobile__list-row:hover .chat-summary__automation-paused {
+  background: var(--bg-hover);
+}
+
+.session-automation-mobile__list-row:hover .chat-summary__automation-attention {
+  box-shadow: 0 0 0 2px var(--bg-hover);
+}
+
+.session-automation-mobile__empty.session-automation-mobile__message {
+  display: grid;
+  justify-content: normal;
+}
+
+.session-automation-mobile:has(> openclaw-panel-empty-state) {
+  padding: 0;
+}

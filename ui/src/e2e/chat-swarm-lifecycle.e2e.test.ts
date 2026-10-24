@@ -1,389 +1,193 @@
+import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { chatSessionListResponse } from "./chat-flow.test-support.ts";
-import {
-  logSwarmDiagnostic,
-  type SwarmDiagnosticPane,
-  type SwarmDiagnosticWindow,
-} from "./chat-swarm-lifecycle-diagnostic.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
-  name: "Control UI Swarm lifecycle",
+  name: "Inline delegated work",
   startServerBeforeBrowser: true,
 });
 const sessionKey = "agent:main:dashboard:11111111-2222-4333-8444-555555555555";
-const groupId = `swarm:${sessionKey}:11111111-2222-4333-8444-666666666666`;
+const groupId = "release-review";
+const labels = [
+  "Check release notes",
+  "Review API contracts",
+  "Verify desktop layout",
+  "Check keyboard navigation",
+  "Review accessibility",
+  "Verify mobile layout",
+];
+const launches = labels.map((label, index) => ({
+  runId: "child-" + index,
+  childSessionKey: "agent:main:subagent:review-" + index,
+  label,
+  groupId,
+  status: "accepted",
+}));
+const message = (id: string, role: string, content: string, runId: string) => ({
+  role,
+  content,
+  __openclaw: { id, runId },
+  timestamp: Number(id.replace(/\D/g, "")) || 1,
+});
+const launchMessage = (count: number) => ({
+  ...message("2", "assistant", "I’ll review the change before publishing it.", "review"),
+  activity: launches.slice(0, count).map((receipt, index) => ({
+    itemId: "tool:spawn-" + index,
+    toolCallId: "spawn-" + index,
+    name: "sessions_spawn",
+    kind: "tool",
+    title: receipt.label,
+    phase: "end",
+    status: "completed",
+    delegation: [receipt],
+  })),
+});
+const completionMessage = (count: number, failure: boolean) => ({
+  ...message("3", "assistant", "The checks are finished.", "review"),
+  activity: [
+    {
+      itemId: "tool:collect",
+      toolCallId: "collect",
+      name: "agents_wait",
+      kind: "tool",
+      title: "Collect review results",
+      phase: "end",
+      status: "completed",
+      delegation: launches.slice(0, count).map((receipt, index) => ({
+        runId: receipt.runId,
+        childSessionKey: receipt.childSessionKey,
+        status: failure && index === count - 1 ? "timeout" : "done",
+      })),
+    },
+  ],
+});
 
 suite.define(() => {
   it.each([
-    { name: "desktop", width: 1440, height: 900, count: 1 },
-    { name: "desktop-many", width: 1440, height: 900, count: 30 },
-    { name: "mobile", width: 390, height: 844, count: 1 },
-    { name: "mobile-many", width: 390, height: 844, count: 30 },
-  ])("collapses successful child runs without hiding their details on $name", async (viewport) => {
-    const proofDir = createControlUiE2eArtifactDir(`completed-swarm-${viewport.name}`);
-    await suite.withPage(
-      { viewport, hasTouch: viewport.name.startsWith("mobile") },
-      async ({ page }) => {
-        const children = Array.from({ length: viewport.count }, (_, index) => ({
-          key: `agent:main:subagent:completed-${index}`,
-          sessionId: `session:agent:main:subagent:completed-${index}`,
-          kind: "direct",
-          label: "Research worker visibility after reconnect",
-          parentSessionKey: sessionKey,
-          swarmGroupId: groupId,
-          status: "running",
-          updatedAt: 1,
-        }));
-        const group = {
-          groupId,
-          createdAt: 1,
-          queued: 0,
-          running: viewport.count,
-          done: 0,
-          failed: 0,
-          children: children.map((child) => ({ sessionKey: child.key, status: "running" })),
-        };
-        const parent = {
-          key: sessionKey,
-          sessionId: `session:${sessionKey}`,
-          kind: "direct",
-          label: "Research comparison",
-          updatedAt: 1,
-          swarm: { groups: [group], otherActiveGroups: 0 },
-        };
-        const gateway = await installMockGateway(page, {
-          sessionKey,
-          sessions: [parent, ...children],
-          historyMessages: [
-            {
-              role: "assistant",
-              content: [{ type: "text", text: "Research results are in the conversation." }],
-            },
-          ],
-          methodResponses: {
-            "sessions.list": chatSessionListResponse([parent, ...children]),
-            "sessions.describe": { session: parent },
-          },
-        });
-        await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
-        const widget = page.locator('[data-test-id="chat-swarm"]');
-        const disclosure = widget.locator("details");
-        const summary = disclosure.locator("summary");
-        await expect.poll(() => widget.locator(".chat-swarm__task").count()).toBe(viewport.count);
-        expect(await widget.locator(".chat-swarm__markers").isVisible()).toBe(true);
-        await page.screenshot({ path: path.join(proofDir, "active.png"), animations: "disabled" });
-
-        // The collector summary owns completion even while child rows are stale.
-        const completedParent = {
-          ...parent,
-          status: "running",
-          hasActiveRun: true,
-          updatedAt: 2,
-          swarm: {
-            groups: [
-              {
-                ...group,
-                running: 0,
-                done: viewport.count,
-                children: children.map((child) => ({ sessionKey: child.key, status: "done" })),
-              },
-            ],
-            otherActiveGroups: 0,
-          },
-        };
-        await gateway.setMethodResponse("sessions.describe", { session: completedParent });
-        await gateway.setMethodResponse(
-          "sessions.list",
-          chatSessionListResponse([completedParent, ...children]),
-        );
-        await gateway.emitGatewayEvent("sessions.changed", {
-          sessionKey,
-          agentId: "main",
-          reason: "swarm",
-        });
-        await expect
-          .poll(() => widget.locator(".chat-swarm__tasks .chat-swarm__task-icon--done").count())
-          .toBe(viewport.count);
-        await page.screenshot({
-          path: path.join(proofDir, "completed.png"),
-          animations: "disabled",
-        });
-        const box = await disclosure.boundingBox();
-        expect(box).not.toBeNull();
-        expect(box!.height).toBeLessThanOrEqual(64);
-        expect((await summary.boundingBox())!.height).toBeGreaterThanOrEqual(44);
-        expect(await summary.textContent()).toContain(`${viewport.count} completed`);
-        expect(await disclosure.getAttribute("open")).toBeNull();
-        expect(await widget.locator(".chat-swarm__tasks").isVisible()).toBe(false);
-        expect(await page.locator(".agent-chat__composer-combobox textarea").isVisible()).toBe(
-          true,
-        );
-        await summary.focus();
-        await page.keyboard.press("Enter");
-        await expect
-          .poll(() =>
-            widget
-              .getByText("Child runs finished. The parent is processing their results.")
-              .isVisible(),
-          )
-          .toBe(true);
-        const outcomeClearance = await summary.evaluate((element) => {
-          const pane = element.closest<SwarmDiagnosticPane>("openclaw-chat-pane");
-          (window as SwarmDiagnosticWindow).openclawSwarmDiagnostic = {
-            expandedDetails: element.parentElement,
-            expandedEpoch: pane?.state?.connectionEpoch,
-          };
-          const outcome = element.parentElement?.querySelector(".chat-swarm__outcome");
-          if (!outcome) {
-            throw new Error("Expanded Swarm outcome is missing");
-          }
-          const range = document.createRange();
-          range.selectNodeContents(outcome);
-          const firstLine = range.getClientRects()[0];
-          if (!firstLine) {
-            throw new Error("Expanded Swarm outcome has no rendered text");
-          }
-          const style = getComputedStyle(element);
-          const outlineWidth = Number.parseFloat(style.outlineWidth);
-          const outlineBottom =
-            element.getBoundingClientRect().bottom +
-            Number.parseFloat(style.outlineOffset) +
-            outlineWidth;
-          return {
-            focused: element.matches(":focus-visible"),
-            outlineWidth,
-            clearance: firstLine.top - outlineBottom,
-          };
-        });
-        expect(outcomeClearance.focused).toBe(true);
-        expect(outcomeClearance.outlineWidth).toBeGreaterThan(0);
-        expect(outcomeClearance.clearance).toBeGreaterThanOrEqual(0);
-        await page.screenshot({
-          path: path.join(proofDir, "completed-details.png"),
-          animations: "disabled",
-        });
-
-        // When the parent turn also settles, the card directs to the final response.
-        const settledParent = {
-          ...completedParent,
-          status: "done",
-          hasActiveRun: false,
-          updatedAt: 3,
-        };
-        await gateway.setMethodResponse("sessions.describe", { session: settledParent });
-        await gateway.setMethodResponse(
-          "sessions.list",
-          chatSessionListResponse([settledParent, ...children]),
-        );
-        await gateway.emitGatewayEvent("sessions.changed", {
-          sessionKey,
-          agentId: "main",
-          reason: "swarm",
-        });
-        try {
-          await expect
-            .poll(() =>
-              widget
-                .getByText("Child runs finished. Check the conversation for the final response.")
-                .isVisible(),
-            )
-            .toBe(true);
-        } finally {
-          await logSwarmDiagnostic(page, gateway, sessionKey).catch(() => {
-            console.info("[swarm-final-diagnostic] unavailable");
-          });
-        }
-        await page.screenshot({
-          path: path.join(proofDir, "settled-details.png"),
-          animations: "disabled",
-        });
-        await page.keyboard.press("Space");
-        await expect.poll(() => widget.locator(".chat-swarm__tasks").isVisible()).toBe(false);
-        await page.reload();
-        await expect
-          .poll(() => widget.locator(".chat-swarm__tasks .chat-swarm__task-icon--done").count())
-          .toBe(viewport.count);
-        expect((await disclosure.boundingBox())!.height).toBeLessThanOrEqual(64);
-        expect(await disclosure.getAttribute("open")).toBeNull();
-        await summary.click();
-        await expect.poll(() => widget.locator(".chat-swarm__tasks").isVisible()).toBe(true);
-      },
-    );
-  });
-  it.each([
-    { name: "desktop", width: 1440, height: 900, childAgent: "main" },
-    { name: "mobile", width: 390, height: 844, childAgent: "main" },
-    { name: "cross-agent", width: 1440, height: 900, childAgent: "worker" },
-  ])("keeps a thirty-child outcome visible after the parent fails on $name", async (viewport) => {
-    const proofDir = createControlUiE2eArtifactDir(`swarm-lifecycle-${viewport.name}`);
-    await suite.withPage({ viewport, hasTouch: viewport.name === "mobile" }, async ({ page }) => {
-      const now = Date.now();
-      const parent = {
-        key: sessionKey,
-        sessionId: `session:${sessionKey}`,
+    { name: "desktop", width: 1440, height: 900, count: 6, failure: false },
+    { name: "mobile", width: 390, height: 844, count: 1, failure: true },
+  ])("keeps delegated work inline through completion and reload on $name", async (viewport) => {
+    const proofDir = createControlUiE2eArtifactDir("inline-delegation-" + viewport.name);
+    await suite.withPage({ viewport }, async ({ page }) => {
+      const children = launches.slice(0, viewport.count).map((receipt, index) => ({
+        key: receipt.childSessionKey,
         kind: "direct",
-        label: "Research comparison",
-        status: "running",
-        hasActiveRun: true,
-        updatedAt: now,
-        swarm: {
-          groups: [
-            {
-              groupId,
-              createdAt: now,
-              children: Array.from({ length: 30 }, (_, index) => ({
-                sessionKey: `agent:${viewport.childAgent}:subagent:research-${index}`,
-                status: index < 8 ? "running" : "queued",
-              })),
-              queued: 22,
-              running: 8,
-              done: 0,
-              failed: 0,
-            },
-          ],
-          otherActiveGroups: 0,
-        },
-      };
-      const children = Array.from({ length: 30 }, (_, index) => ({
-        key: `agent:${viewport.childAgent}:subagent:research-${index}`,
-        sessionId: `session:agent:${viewport.childAgent}:subagent:research-${index}`,
-        kind: "direct",
-        label: `Research lane ${index + 1}`,
+        sessionId: receipt.runId,
+        label: receipt.label,
         parentSessionKey: sessionKey,
         spawnedBy: sessionKey,
         swarmGroupId: groupId,
-        status: index < 8 ? "running" : "queued",
-        hasActiveRun: true,
-        updatedAt: now,
-        ...(index < 8 ? { startedAt: now - 1_000 } : {}),
+        status: index < 4 ? "done" : "running",
+        runtimeMs: 42000,
+        updatedAt: 1,
       }));
-      // Keep children outside the sidebar page so only real child hydration can
-      // populate the chart. A whole-session fixture would hide a broken fetch.
-      const listResponse = (rows: typeof children, parentRow = parent) => ({
-        cases: [
-          { match: { spawnedBy: sessionKey }, response: chatSessionListResponse(rows) },
-          { match: {}, response: chatSessionListResponse([parentRow]) },
-        ],
-      });
+      const parent = {
+        updatedAt: 1,
+        key: sessionKey,
+        kind: "direct",
+        label: "Review and publish",
+        sessionId: "parent",
+        swarm: {
+          otherActiveGroups: 0,
+          groups: [
+            {
+              groupId,
+              createdAt: 1,
+              queued: 0,
+              running: Math.max(0, viewport.count - 4),
+              done: Math.min(viewport.count, 4),
+              failed: 0,
+              children: children.map((row) => ({ sessionKey: row.key, status: row.status })),
+            },
+          ],
+        },
+      };
+      const initial = [
+        message("1", "user", "Review the change and publish the PR.", "review"),
+        launchMessage(viewport.count),
+      ];
       const gateway = await installMockGateway(page, {
         sessionKey,
         sessions: [parent, ...children],
-        historyMessages: [
-          { role: "assistant", content: [{ type: "text", text: "Research is running." }] },
-        ],
+        historyMessages: initial,
         methodResponses: {
-          "sessions.list": listResponse(children),
+          "sessions.list": chatSessionListResponse([parent, ...children]),
           "sessions.describe": { session: parent },
         },
       });
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
-      await gateway.waitForRequest("sessions.list", { match: { spawnedBy: sessionKey } });
-      const widget = page.locator('[data-test-id="chat-swarm"]');
-      await widget.waitFor();
-      await expect.poll(() => widget.locator(".chat-swarm__task").count()).toBe(30);
+      const activity = page.locator('[data-test-id="chat-delegation"]');
+      const summary = activity.locator(".chat-delegation__summary");
+      await activity.waitFor();
+      expect(await page.locator(".chat-footer [data-test-id=chat-delegation]").count()).toBe(0);
       await expect
-        .poll(() => widget.locator(".chat-swarm__header").textContent())
-        .toContain("0 of 30");
-      expect(
-        await widget.evaluate((element) => {
-          const box = element.getBoundingClientRect();
-          return box.width > 0 && box.height > 0 && box.top >= 0 && box.bottom <= innerHeight;
-        }),
-      ).toBe(true);
-      await page.screenshot({ path: path.join(proofDir, "active.png"), animations: "disabled" });
-      const group = widget.locator("[data-swarm-group]");
-      if (viewport.name === "mobile") {
-        await group.locator("summary").tap();
-      } else {
-        await group.locator("summary").click();
+        .poll(() => summary.getAttribute("aria-expanded"))
+        .toBe(viewport.count > 5 ? "true" : "false");
+      if (viewport.count > 5) {
+        await expect
+          .poll(() => activity.locator("[role=progressbar]").getAttribute("aria-valuenow"))
+          .toBe("4");
+        await expect.poll(() => activity.locator(".chat-delegation__task").count()).toBe(6);
       }
-      await expect.poll(() => widget.locator(".chat-swarm__tasks").isVisible()).toBe(true);
-      const finalChild = widget.getByRole("listitem").filter({ hasText: "Research lane 30" });
-      await expect
-        .poll(() => finalChild.getByRole("img", { name: "Queued", exact: true }).isVisible())
-        .toBe(true);
-      await page.screenshot({
-        path: path.join(proofDir, "active-details.png"),
-        animations: "disabled",
-      });
-
-      const endedAt = now + 60_000;
-      const completed = children.map((row, index) =>
-        Object.assign(row, {
-          status: index < 25 ? "done" : "failed",
-          hasActiveRun: false,
-          updatedAt: endedAt,
-          startedAt: now,
-          endedAt,
-        }),
-      );
-      const failedParent = {
-        ...parent,
-        status: "failed",
-        hasActiveRun: false,
-        updatedAt: endedAt,
-        swarm: {
-          groups: [
-            {
-              groupId,
-              createdAt: now,
-              children: Array.from({ length: 30 }, (_, index) => ({
-                sessionKey: `agent:${viewport.childAgent}:subagent:research-${index}`,
-                status: index < 25 ? "done" : "failed",
-              })),
-              queued: 0,
-              running: 0,
-              done: 25,
-              failed: 5,
-            },
-          ],
-          otherActiveGroups: 0,
-        },
+      const capture = async (name: string) => {
+        const frame = await takeControlUiScreenshotFrame(page, activity, [summary], {
+          scrollTo: activity,
+          animations: "disabled",
+        });
+        await fs.writeFile(path.join(proofDir, name + ".png"), frame.png);
       };
-      await gateway.setSessionsListResponse(
-        chatSessionListResponse([failedParent, ...completed.slice(18)]),
-      );
-      await gateway.setMethodResponse(
-        "sessions.list",
-        listResponse(completed.slice(18), failedParent),
-      );
-      await gateway.setMethodResponse("sessions.describe", { session: failedParent });
-      const reads = (await gateway.getRequests("sessions.list", { spawnedBy: sessionKey })).length;
-      await gateway.emitGatewayEvent("sessions.changed", {
-        sessionKey,
-        agentId: "main",
-        reason: "swarm",
-      });
-      await gateway.waitForRequest("sessions.list", {
-        after: reads,
-        match: { spawnedBy: sessionKey },
-      });
-      await expect.poll(() => widget.count()).toBe(1);
-      await expect
-        .poll(() => widget.locator(".chat-swarm__header").textContent())
-        .toContain("30 of 30");
-      expect(await widget.locator(".chat-swarm__marker--failed").count()).toBe(5);
-      expect(await widget.locator(".chat-swarm__marker--done").count()).toBe(25);
-      await expect
-        .poll(() =>
-          finalChild.getByRole("img", { name: "Failed or stopped", exact: true }).isVisible(),
-        )
-        .toBe(true);
-      await page.screenshot({ path: path.join(proofDir, "terminal.png"), animations: "disabled" });
+      await capture("active");
+      const completed = [
+        ...initial,
+        completionMessage(viewport.count, viewport.failure),
+        message(
+          "4",
+          "assistant",
+          "Review complete. The result is attached to this turn.",
+          "review",
+        ),
+        message("5", "user", "Now look at the next change.", "next"),
+      ];
+      // Reload with only durable history. Registry summaries and child sessions have expired.
+      const retiredParent = {
+        updatedAt: 1,
+        key: sessionKey,
+        kind: "direct",
+        label: "Review and publish",
+        sessionId: "parent",
+      };
+      await gateway.setMethodResponse("chat.history", { messages: completed, sessionId: "parent" });
+      await gateway.setMethodResponse("sessions.describe", { session: retiredParent });
+      await gateway.setMethodResponse("sessions.list", chatSessionListResponse([retiredParent]));
       await page.reload();
-      await widget.waitFor();
-      await expect.poll(() => widget.count()).toBe(1);
       await expect
-        .poll(() => widget.locator(".chat-swarm__header").textContent())
-        .toContain("30 of 30");
-      await page.screenshot({
-        path: path.join(proofDir, "terminal-reloaded.png"),
-        animations: "disabled",
+        .poll(() => summary.textContent())
+        .toContain(viewport.failure ? "1 needing attention" : "Completed");
+      await expect.poll(() => summary.getAttribute("aria-expanded")).toBe("false");
+      expect(await activity.count()).toBe(1);
+      const next = page.getByText("Now look at the next change.", { exact: true });
+      expect(await activity.evaluate((element) => !element.closest(".chat-footer"))).toBe(true);
+      await next.waitFor();
+      const beforeNext = await next.evaluate((target) => {
+        const element = document.querySelector('[data-test-id="chat-delegation"]');
+        return element
+          ? Boolean(element.compareDocumentPosition(target) & Node.DOCUMENT_POSITION_FOLLOWING)
+          : false;
       });
+      expect(beforeNext).toBe(true);
+      await capture("completed");
+      await summary.click();
+      await expect
+        .poll(() => activity.locator(".chat-delegation__task").count())
+        .toBe(viewport.count);
+      expect(await activity.getByRole("button", { name: labels[0], exact: true }).count()).toBe(0);
+      await capture("details");
+      console.info("Inline delegation proof: " + proofDir);
     });
   });
 });

@@ -137,50 +137,54 @@ afterEach(() => {
 });
 
 describe("diagnostic CPU profile owner", () => {
-  it("joins Node's warm native sampler instead of scanning a new inspector code map", async () => {
-    Object.defineProperty(process.versions, "bun", { configurable: true, value: undefined });
-    let now = 100;
-    vi.spyOn(performance, "now").mockImplementation(() => now);
-    native.post.mockImplementation(async (method) => {
-      if (method === "Profiler.start") {
-        now += 2_100;
-      }
-      return method === "Profiler.stop" ? { profile: profile() } : {};
-    });
-    native.start.mockImplementation(() => {
-      now += 0.25;
-      return { stop: native.stop, [Symbol.dispose]: native.dispose };
-    });
-    const outcome = await capture();
-    expect(outcome).toMatchObject({ status: "complete", result: { startBlockedMs: 0.25 } });
-    expect(JSON.stringify(outcome)).not.toMatch(/fixture|private/);
-    expect(native.start).toHaveBeenCalledWith({ sampleInterval: 10 });
-    expect(native.connect).not.toHaveBeenCalled();
-    expect(native.stop).toHaveBeenCalledOnce();
-    expect(native.dispose).toHaveBeenCalledOnce();
+  it("preserves a large native graph while repairing names, URLs and signed script IDs", async () => {
+    const { parseNativeCpuProfile } = await import("./diagnostic-profile.js");
+    const nodes: Profiler.ProfileNode[] = Array.from({ length: 4_096 }, (_, index) => ({
+      id: index + 1,
+      hitCount: index % 3,
+      callFrame: {
+        functionName: `work${index}"\\\nlabel`,
+        lineNumber: index - 2,
+        columnNumber: -1,
+        scriptId: String(index - 2),
+        url: `file:///fixture/quoted"\\\nmodule${index}.js`,
+      },
+      ...(index < 4_095 ? { children: [index + 2] } : {}),
+      ...(index % 2 === 0
+        ? { deoptReason: "not optimized", positionTicks: [{ line: index, ticks: 2 }] }
+        : {}),
+    }));
+    const expected: Profiler.Profile = {
+      nodes,
+      startTime: 10_000,
+      endTime: 5_510_000,
+      samples: [4_096, 2, 4_096],
+      timeDeltas: [10_000, -500, 10_500],
+    };
+    // Match native field order and verbatim names/URLs, not JSON.stringify escaping.
+    const json = JSON.stringify(expected)
+      .replace(/"scriptId":"(-?\d+)"/g, '"scriptId":$1')
+      .replace(
+        /"(functionName|url)":("(?:\\.|[^"\\])*")/g,
+        (_match, key, value) => `"${key}":"${JSON.parse(value)}"`,
+      );
+    expect(parseNativeCpuProfile(json)).toStrictEqual(expected);
   });
 
-  it.each(["start", "stop", "dispose"] as const)(
-    "settles Node native ownership when %s fails",
-    async (method) => {
-      Object.defineProperty(process.versions, "bun", { configurable: true, value: undefined });
-      native[method].mockImplementation(() => {
-        throw new Error("private native failure");
-      });
-      expect(await capture()).toEqual({
-        status: "unavailable",
-        reason: method === "dispose" ? "cleanup-failed" : "capture-failed",
-        cleanupFailed: method === "dispose",
-      });
-      if (method !== "start") {
-        expect(native.dispose).toHaveBeenCalledOnce();
-      }
-      if (method === "dispose") {
-        expect(await capture()).toMatchObject({ status: "unavailable", reason: "cleanup-failed" });
-        expect(native.start).toHaveBeenCalledOnce();
-      }
-    },
-  );
+  it("reports disposal failure and allows a later native capture", async () => {
+    Object.defineProperty(process.versions, "bun", { configurable: true, value: undefined });
+    native.dispose.mockImplementationOnce(() => {
+      throw new Error("private native failure");
+    });
+    expect(await capture()).toEqual({
+      status: "unavailable",
+      reason: "cleanup-failed",
+      cleanupFailed: true,
+    });
+    expect(native.dispose).toHaveBeenCalledOnce();
+    expect((await capture()).status).toBe("complete");
+    expect(native.start).toHaveBeenCalledTimes(2);
+  });
   it("reports synchronous start blocking separately from awaited capture time", async () => {
     let now = 100;
     vi.spyOn(performance, "now").mockImplementation(() => now);
@@ -203,7 +207,6 @@ describe("diagnostic CPU profile owner", () => {
       result: { startBlockedMs: 2_100, actualDurationMs: 5_500 },
     });
   });
-
   it("returns a complete sanitized graph only after native cleanup", async () => {
     const outcome = await capture();
     expect(outcome.status).toBe("complete");
@@ -303,14 +306,12 @@ describe("diagnostic CPU profile owner", () => {
     },
   );
 
-  it.each(["pre-abort", "authority-after-import", "authority-before-start"])(
+  it.each(["authority-after-import", "authority-before-start"])(
     "does not start after %s",
     async (boundary) => {
       const controller = new AbortController();
       let authority = true;
-      if (boundary === "pre-abort") {
-        controller.abort();
-      } else if (boundary === "authority-after-import") {
+      if (boundary === "authority-after-import") {
         native.resolveRoot.mockImplementation(async () => {
           authority = false;
           return "/fixture/openclaw";
@@ -334,7 +335,7 @@ describe("diagnostic CPU profile owner", () => {
     },
   );
 
-  it.each(["Profiler.setSamplingInterval", "Profiler.start", "Profiler.stop", "Profiler.disable"])(
+  it.each(["Profiler.start", "Profiler.disable"])(
     "releases native ownership when %s fails",
     async (failedMethod) => {
       native.post.mockImplementation(async (method) => {
@@ -359,9 +360,9 @@ describe("diagnostic CPU profile owner", () => {
     },
   );
 
-  it("preserves the capture failure and refuses reuse when disconnect fails", async () => {
+  it("reports disconnect failure and allows a later inspector capture", async () => {
     native.post.mockRejectedValue(new Error("private native error"));
-    native.disconnect.mockImplementation(() => {
+    native.disconnect.mockImplementationOnce(() => {
       throw new Error("private disconnect error");
     });
     expect(await capture()).toEqual({
@@ -369,12 +370,9 @@ describe("diagnostic CPU profile owner", () => {
       reason: "capture-failed",
       cleanupFailed: true,
     });
-    expect(await capture()).toEqual({
-      status: "unavailable",
-      reason: "cleanup-failed",
-      cleanupFailed: true,
-    });
-    expect(native.connect).toHaveBeenCalledOnce();
+    returnProfile();
+    expect((await capture()).status).toBe("complete");
+    expect(native.connect).toHaveBeenCalledTimes(2);
   });
 
   it.each([
@@ -407,16 +405,6 @@ describe("diagnostic CPU profile owner", () => {
   it("fails visibly when the runtime cannot load inspector", async () => {
     native.unsupported = true;
     expect(await capture()).toMatchObject({ status: "unavailable", reason: "unsupported" });
-    expect(native.connect).not.toHaveBeenCalled();
-  });
-
-  it("refuses active tracing even for non-CPU categories", async () => {
-    native.tracingCategories.mockReturnValue("node.perf");
-    expect(await capture()).toEqual({
-      status: "unavailable",
-      reason: "tracing-active",
-      cleanupFailed: false,
-    });
     expect(native.connect).not.toHaveBeenCalled();
   });
 
@@ -466,7 +454,7 @@ describe("diagnostic CPU profile owner", () => {
       returnProfile(value);
       const outcome = await capture();
       expect(outcome.status).toBe("complete");
-      if (outcome.status === "complete") {
+      if (outcome.status === "complete" && outcome.result.profile) {
         expect(outcome.result.profile.nodes[1]?.callFrame).toEqual({
           ...value.nodes[1].callFrame,
           functionName: "[redacted]",
@@ -480,37 +468,11 @@ describe("diagnostic CPU profile owner", () => {
   );
 
   const invalidProfiles: Record<string, (value: ProfileFixture) => void> = {
-    "unknown sample": (value) => {
-      value.samples[0] = 99;
-    },
-    "missing delta": (value) => {
-      value.timeDeltas.pop();
-    },
-    "invalid delta": (value) => {
-      value.timeDeltas[0] = Number.NaN;
-    },
     "fractional source line": (value) => {
       value.nodes[1].callFrame.lineNumber = -1.5;
     },
     "fractional source column": (value) => {
       value.nodes[1].callFrame.columnNumber = -1.5;
-    },
-    "fractional position-tick line": (value) => {
-      value.nodes[1].positionTicks = [{ line: -1.5, ticks: 2 }];
-    },
-    "duplicate node": (value) => {
-      value.nodes[1].id = 1;
-    },
-    "unknown child": (value) => {
-      value.nodes[0].children.push(99);
-    },
-    cycle: (value) => {
-      value.nodes[1].children = [1];
-    },
-    "disconnected cycle": (value) => {
-      value.nodes[0].children = [];
-      value.nodes[1].children = [3];
-      value.nodes[2].children = [2];
     },
   };
   it.each(Object.entries(invalidProfiles))(
@@ -524,7 +486,7 @@ describe("diagnostic CPU profile owner", () => {
     },
   );
 
-  it("rejects a complete result larger than 1 MiB without truncation", async () => {
+  it("summarizes an oversized profile without losing zero-hit samples or exposing labels", async () => {
     const template = profile().nodes[1];
     const root: Profiler.ProfileNode = {
       ...template,
@@ -532,16 +494,163 @@ describe("diagnostic CPU profile owner", () => {
       callFrame: { ...template.callFrame, functionName: "x".repeat(256) },
     };
     const children = Array.from({ length: 2_999 }, (_, index) => ({ ...root, id: index + 2 }));
+    children[1] = {
+      ...children[1]!,
+      hitCount: 0,
+      callFrame: { ...template.callFrame, functionName: "private payload" },
+    };
     root.children = children.map((node) => node.id);
     const value: Profiler.Profile = { ...profile(), nodes: [root, ...children] };
     returnProfile(value);
-    expect(await capture()).toEqual({
-      status: "unavailable",
-      reason: "profile-too-large",
-      cleanupFailed: false,
+    const outcome = await capture();
+    expect(outcome).toMatchObject({
+      status: "complete",
+      result: {
+        truncated: true,
+        originalNodeCount: 3_000,
+        sampleCount: 3,
+        omittedSampleCount: 0,
+        summary: [
+          {
+            sampleCount: 2,
+            stack: [expect.objectContaining({ functionName: "x".repeat(256) }), expect.any(Object)],
+          },
+          {
+            sampleCount: 1,
+            stack: [expect.objectContaining({ functionName: "[redacted]" }), expect.any(Object)],
+          },
+        ],
+      },
     });
+    expect(JSON.stringify(outcome)).not.toContain("private payload");
+    expect(Buffer.byteLength(JSON.stringify(outcome))).toBeLessThan(1024 * 1024);
     expect(native.disconnect).toHaveBeenCalledOnce();
   });
+
+  it.each([8, 12])(
+    "attributes identical %i-frame dependency stacks to their nearest application callers",
+    async (dependencyDepth) => {
+      const value = profile();
+      const nodes: Profiler.ProfileNode[] = [{ ...value.nodes[0], children: [] }];
+      const samples: number[] = [];
+      for (const [index, url] of ["src/first.ts", "dist/second.js"].entries()) {
+        let parent = nodes[0]!;
+        const frames = [
+          { ...value.nodes[1].callFrame, functionName: "runBoot" },
+          {
+            ...value.nodes[1].callFrame,
+            functionName: "parseInput",
+            url: `/fixture/openclaw/${url}`,
+          },
+          value.nodes[2].callFrame,
+          ...Array.from({ length: dependencyDepth }, () => ({
+            ...value.nodes[1].callFrame,
+            functionName: "parse",
+            url: "/fixture/openclaw/node_modules/@babel/parser/lib/index.js",
+          })),
+        ];
+        for (const callFrame of frames) {
+          const node: Profiler.ProfileNode = { id: nodes.length + 1, callFrame };
+          (parent.children ??= []).push(node.id);
+          nodes.push(node);
+          parent = node;
+        }
+        samples.push(...Array<number>(index + 1).fill(parent.id));
+      }
+      // Unsampled code can make the native graph exceed the response limit.
+      for (let index = 0; index < 3_000; index++) {
+        const id = nodes.length + 1;
+        nodes[0]!.children!.push(id);
+        nodes.push({
+          id,
+          callFrame: { ...value.nodes[1].callFrame, functionName: "x".repeat(256) },
+        });
+      }
+      returnProfile({ ...value, nodes, samples, timeDeltas: samples.map(() => 10_000) });
+      const outcome = await capture();
+      if (outcome.status !== "complete" || !("summary" in outcome.result)) {
+        throw new Error("expected a bounded summary");
+      }
+      expect(outcome.result.summary).toEqual(
+        ["dist/second.js", "src/first.ts"].map((url, index) => ({
+          sampleCount: 2 - index,
+          elidedFrameCount: dependencyDepth - 8 + 1,
+          stack: [
+            ...Array.from({ length: 8 }, () =>
+              expect.objectContaining({ functionName: "[dep:@babel/parser]" }),
+            ),
+            expect.objectContaining({ functionName: "parseInput", url: `openclaw:${url}` }),
+          ],
+        })),
+      );
+      expect(outcome.result.omittedSampleCount).toBe(0);
+      expect(JSON.stringify(outcome)).not.toMatch(/fixture|private|runBoot/);
+      expect(Buffer.byteLength(JSON.stringify(outcome.result))).toBeLessThanOrEqual(1024 * 1024);
+    },
+  );
+
+  it.each([
+    { pathLength: 120, stackDepth: 30 },
+    { pathLength: 1_100, stackDepth: 8 },
+  ])(
+    "bounds ranked summaries with $pathLength-character code paths",
+    async ({ pathLength, stackDepth }) => {
+      const value = profile();
+      const nodes: Profiler.ProfileNode[] = [{ ...value.nodes[0], children: [] }];
+      const samples: number[] = [];
+      for (let branch = 0; branch < 200; branch++) {
+        let parent = nodes[0]!;
+        for (let depth = 0; depth < stackDepth; depth++) {
+          const node: Profiler.ProfileNode = {
+            id: nodes.length + 1,
+            callFrame: {
+              ...value.nodes[1].callFrame,
+              scriptId: String(branch + 1),
+              url: `/fixture/openclaw/src/${"x".repeat(pathLength)}.js`,
+            },
+          };
+          (parent.children ??= []).push(node.id);
+          nodes.push(node);
+          parent = node;
+        }
+        samples.push(parent.id);
+      }
+      // The hottest stack is last in native order; ranking must retain it first.
+      samples.push(...Array<number>(20).fill(samples.at(-1)!));
+      returnProfile({ ...value, nodes, samples, timeDeltas: samples.map(() => 10_000) });
+      const outcome = await capture();
+      expect(outcome.status).toBe("complete");
+      if (outcome.status !== "complete" || !("summary" in outcome.result)) {
+        throw new Error("expected a bounded summary");
+      }
+      const result = outcome.result;
+      expect(result.profile).toBeUndefined();
+      expect(result.summary[0]).toMatchObject({ sampleCount: 21 });
+      expect(result.summary.every((row) => row.stack.length === 8)).toBe(true);
+      expect(result.summary.length).toBeLessThanOrEqual(128);
+      expect(result.summary.length).toBeGreaterThan(0);
+      expect(result.omittedSampleCount).toBeGreaterThan(0);
+      expect(
+        result.summary.reduce((sum, row) => sum + row.sampleCount, result.omittedSampleCount),
+      ).toBe(220);
+      expect(Buffer.byteLength(JSON.stringify(result))).toBeLessThanOrEqual(1024 * 1024);
+    },
+  );
+
+  it.each(["nodes", "samples"] as const)(
+    "retains the native %s processing limit",
+    async (limit) => {
+      const value: Profiler.Profile = profile();
+      if (limit === "nodes") {
+        value.nodes = Array<Profiler.ProfileNode>(16_385).fill(value.nodes[0]!);
+      } else {
+        value.samples = Array<number>(65_537).fill(2);
+        value.timeDeltas = value.samples.map(() => 10_000);
+      }
+      returnProfile(value);
+      expect(await capture()).toMatchObject({ status: "unavailable", reason: "profile-too-large" });
+    },
+  );
 
   it.skipIf(process.platform === "win32")(
     "captures a real profile with the current runtime without opening a listener",

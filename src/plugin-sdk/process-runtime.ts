@@ -1,7 +1,6 @@
-// Public process helpers for plugins that spawn or probe local commands.
-
 export { SUPERVISOR_HINT_ENV_VARS } from "../infra/supervisor-markers.js";
 export { resolveNodeRuntimeExecutable } from "../infra/node-runtime-executable.js";
+export { resolveLaunchableNodePath } from "../infra/stable-node-path.js";
 export { splitCommandArgs } from "../utils/shell-argv.js";
 export {
   type CommandOptions,
@@ -46,3 +45,11 @@ export {
   type OwnedStdioProcess,
   type OwnedStdioProcessOptions,
 } from "../process/owned-stdio.js";
+
+export {
+  DarwinProcessInspectionError,
+  readDarwinProcessSnapshot,
+  readDarwinProcessTree,
+  readDarwinProcessCommandLine,
+  type DarwinProcess,
+} from "../process/darwin-process-inspection.js";

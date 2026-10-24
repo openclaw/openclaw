@@ -2,9 +2,15 @@ import fs from "node:fs/promises";
 import { FsSafeError, root as openFsSafeRoot } from "../../infra/fs-safe.js";
 import { stagedInputDirectoriesFromEntries } from "../../media/staged-inputs.js";
 import { activeWorkspaceHashContext, withWorkspaceHashMemo } from "./workspace-hash-memo.js";
-import { hasPathAncestor, manifestNodes, sameEntry } from "./workspace-manifest-comparison.js";
+import {
+  hasPathAncestor,
+  manifestNodes,
+  prepareWorkspaceReconciliation,
+  sameEntry,
+} from "./workspace-manifest-comparison.js";
 import {
   captureWorkspaceManifest,
+  captureWorkspaceManifestReference,
   preflightWorkspaceApply,
   readWorkspaceNodes,
 } from "./workspace-manifest-worker.js";
@@ -12,6 +18,7 @@ import type {
   WorkerWorkspaceManifest,
   WorkerWorkspaceManifestEntry,
 } from "./workspace-manifest.js";
+import { workspacePathAncestors } from "./workspace-path-ancestors.js";
 import { reconciliationDirectories } from "./workspace-reconcile-derived-paths.js";
 import { removeEmptyWorkspaceDirectory } from "./workspace-reconcile-fs.js";
 export { preflightWorkspaceApply } from "./workspace-manifest-worker.js";
@@ -68,25 +75,33 @@ export async function inspectAcceptedWorkerWorkspace(params: {
     reconciliationDirectories(
       params.current.directories,
       stagedInputDirectoriesFromEntries(params.current.entries),
+      params.current.buildCacheInputs,
     ),
   );
   const includePaths = params.current.baseCommit
     ? new Set([...manifestNodes(params.base).keys(), ...manifestNodes(params.current).keys()])
     : undefined;
   params.additionalPaths?.forEach((entryPath) => includePaths?.add(entryPath));
+  const buildCacheInputs =
+    params.base.buildCacheInputs === undefined && params.current.buildCacheInputs === undefined
+      ? undefined
+      : new Set([
+          ...(params.base.buildCacheInputs ?? []),
+          ...(params.current.buildCacheInputs ?? []),
+        ]);
   const actual = await captureWorkspaceManifest({
     root,
     baseCommit: params.current.baseCommit,
     preserveDirectories,
     includePaths,
+    buildCacheInputs,
   });
   if (actual.manifestRef !== params.expectedManifestRef && !params.allowAdvancedLocalState) {
     return undefined;
   }
   const preflight = await preflightWorkspaceApply({
     root,
-    base: params.base,
-    current: params.current,
+    ...prepareWorkspaceReconciliation(params.base, params.current).preflight,
   });
   const conflictPaths = params.allowAdvancedLocalState
     ? retainedConflictPaths(preflight)
@@ -100,6 +115,7 @@ export async function inspectAcceptedWorkerWorkspace(params: {
       baseCommit: actual.manifest.baseCommit,
       preserveDirectories,
       includePaths,
+      buildCacheInputs,
     }),
   };
 }
@@ -110,9 +126,10 @@ export async function assertActualWorkspaceManifest(params: {
   baseCommit: string | null;
   preserveDirectories?: ReadonlySet<string>;
   includePaths?: ReadonlySet<string>;
+  buildCacheInputs?: ReadonlySet<string>;
 }): Promise<void> {
-  const actual = await captureWorkspaceManifest(params);
-  if (actual.manifestRef !== params.expectedRef) {
+  const actual = await captureWorkspaceManifestReference(params);
+  if (actual !== params.expectedRef) {
     throw new ConcurrentWorkspacePathError("Gateway workspace changed after cloud reconciliation");
   }
 }
@@ -127,8 +144,8 @@ export function createWorkspaceManifestVerifier(
 
 export async function applyWorkspaceDirectoryChanges(params: {
   root: string;
-  base: WorkerWorkspaceManifest;
-  current: WorkerWorkspaceManifest;
+  baseNodes: ReturnType<typeof manifestNodes>;
+  currentNodes: ReturnType<typeof manifestNodes>;
   applyPaths: ReadonlySet<string>;
   assertCurrent?: () => void;
 }): Promise<void> {
@@ -136,14 +153,23 @@ export async function applyWorkspaceDirectoryChanges(params: {
     mode: 0o700,
     assertBeforeMutation: params.assertCurrent,
   });
-  const baseNodes = manifestNodes(params.base);
-  const currentNodes = manifestNodes(params.current);
+  const { baseNodes, currentNodes } = params;
   const directoryPaths = [...params.applyPaths].filter(
     (entryPath) =>
       baseNodes.get(entryPath)?.type === "directory" ||
       currentNodes.get(entryPath)?.type === "directory",
   );
-  for (const entryPath of directoryPaths.toSorted()) {
+  const retainedDirectories = new Set(directoryPaths);
+  // Git prunes empty ancestors when deleting their last leaf. Recreate only
+  // ancestors of admitted changes that the worker still retains as directories.
+  for (const entryPath of params.applyPaths) {
+    for (const ancestor of workspacePathAncestors(entryPath)) {
+      if (currentNodes.get(ancestor)?.type === "directory") {
+        retainedDirectories.add(ancestor);
+      }
+    }
+  }
+  for (const entryPath of [...retainedDirectories].toSorted()) {
     const currentDirectory = currentNodes.get(entryPath);
     if (currentDirectory?.type === "directory") {
       await workspaceRoot.mkdir(entryPath);

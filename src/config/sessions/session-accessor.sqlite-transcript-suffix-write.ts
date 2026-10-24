@@ -65,8 +65,6 @@ export function replaceTranscriptSuffixEventsSync(
       if (
         captureVersionInTransaction &&
         !stageSqliteTransactionState(database.db, {
-          stage: () => {},
-          rollback: () => {},
           commit: () => captureVersionInTransaction(committedVersion),
         })
       ) {

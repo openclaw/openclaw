@@ -11,8 +11,9 @@ const credentialMocks = vi.hoisted(() => ({
   resolveAgentCredentialMapFromStore: vi.fn(() => ({})),
 }));
 
-const discoveryCoreMocks = vi.hoisted(() => ({
-  addEnvBackedAgentCredentials: vi.fn((credentials: unknown) => credentials),
+const envAuthMocks = vi.hoisted(() => ({
+  lookup: vi.fn<typeof import("./model-auth-env-vars.js").resolveProviderEnvAuthLookupMaps>(),
+  resolveEnvApiKey: vi.fn<typeof import("./model-auth-env.js").resolveEnvApiKey>(),
 }));
 
 const syntheticAuthMocks = vi.hoisted(() => ({
@@ -25,7 +26,14 @@ vi.mock("./auth-profiles/store-runtime.js", () => storeMocks);
 
 vi.mock("./agent-auth-credentials.js", () => credentialMocks);
 
-vi.mock("./agent-auth-discovery-core.js", () => discoveryCoreMocks);
+vi.mock("./model-auth-env-vars.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./model-auth-env-vars.js")>()),
+  resolveProviderEnvAuthLookupMaps: envAuthMocks.lookup,
+}));
+vi.mock("./model-auth-env.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./model-auth-env.js")>()),
+  resolveEnvApiKey: envAuthMocks.resolveEnvApiKey,
+}));
 
 vi.mock("../plugins/synthetic-auth.runtime.js", () => ({
   resolveRuntimeSyntheticAuthProviderRefs:
@@ -48,6 +56,13 @@ describe("resolveAgentDiscoveryAuthFacts external CLI scoping", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     credentialMocks.resolveAgentCredentialMapFromStore.mockReturnValue({});
+    envAuthMocks.lookup.mockReturnValue({
+      aliasMap: {},
+      envCandidateMap: {},
+      authEvidenceMap: {},
+      setupProviderFallbackRefs: [],
+    });
+    envAuthMocks.resolveEnvApiKey.mockReset();
   });
 
   it("threads scoped external CLI discovery into writable auth store loading", async () => {
@@ -88,7 +103,7 @@ describe("resolveAgentDiscoveryAuthFacts external CLI scoping", () => {
       fireworks: { type: "api_key", key: "agent-key" },
       "claude-cli": { type: "api_key", key: "synthetic-key" },
     });
-    expect(discoveryCoreMocks.addEnvBackedAgentCredentials).not.toHaveBeenCalled();
+    expect(envAuthMocks.lookup).not.toHaveBeenCalled();
     expect(syntheticAuthMocks.resolveRuntimeSyntheticAuthProviderRefs).not.toHaveBeenCalled();
     expect(syntheticAuthMocks.resolveProviderSyntheticAuthWithPlugin).not.toHaveBeenCalled();
   });
@@ -124,8 +139,15 @@ describe("resolveAgentDiscoveryAuthFacts external CLI scoping", () => {
   it.each(["read", "prepare"])(
     "keeps authoritative native auth separate from provider aliases during %s",
     async (mode) => {
-      discoveryCoreMocks.addEnvBackedAgentCredentials.mockReturnValueOnce({
-        "claude-cli": { type: "api_key", key: "provider-key" },
+      envAuthMocks.lookup.mockReturnValueOnce({
+        aliasMap: {},
+        envCandidateMap: { "claude-cli": ["ANTHROPIC_API_KEY"] },
+        authEvidenceMap: {},
+        setupProviderFallbackRefs: [],
+      });
+      envAuthMocks.resolveEnvApiKey.mockReturnValueOnce({
+        apiKey: "provider-key",
+        source: "env: ANTHROPIC_API_KEY",
       });
       const resolveSyntheticAuth = vi.fn((_provider: string) => undefined);
 

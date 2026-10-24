@@ -1,4 +1,3 @@
-import { getReplyOperationSessionReader } from "../../../auto-reply/reply/reply-run-registry.state.js";
 import { captureSessionEntryNativeMutationWitness } from "../../../config/sessions/session-entry-read-ordered.js";
 import {
   withSessionEntriesFromStoreInWorker,
@@ -10,6 +9,7 @@ import { readDatabasePathIdentitySync } from "../../../infra/sqlite-worker-ident
 import type { ProviderModelRouteSource } from "../../../plugin-sdk/provider-model-types.js";
 import { requireActivePluginRegistry } from "../../../plugins/runtime.js";
 import { resolveSessionPinnedHarnessId } from "../../../sessions/agent-harness-session-key.js";
+import { getReplyOperationSessionReader } from "../../../sessions/session-controller.session-reader.js";
 import { sessionChanges } from "../../../sessions/session-row-changes.js";
 import {
   prepareSessionRowPublicationScope,
@@ -42,7 +42,6 @@ import {
 import type { ModelCatalogEntry } from "../../model-catalog.types.js";
 import { resolveModelCandidateChain } from "../../model-fallback-candidates.js";
 import type { ModelRef } from "../../model-selection.js";
-import { resolveSelectedOpenAIRuntimeProvider } from "../../openai-routing.js";
 import {
   getPreparedModelRuntimeBorrowedSnapshot,
   getPreparedModelRuntimePluginGeneration,
@@ -427,20 +426,10 @@ export async function resolveEmbeddedRunModelSetup(params: {
       });
     observedRoutes = routeVariants ? listModelCatalogObservedRoutes(routeVariants) : undefined;
   } else {
-    const selectedRuntimeProvider = resolveSelectedOpenAIRuntimeProvider({
-      provider,
-      harnessRuntime: agentHarness.id,
-      agentHarnessId: agentHarness.id,
-      authProfileProvider: runParams.authProfileId?.split(":", 1)[0],
-      authProfileId: runParams.authProfileId,
-      config: runParams.config,
-      workspaceDir: params.workspaceDir,
-    });
     const tieredResolution = await resolveTieredModel({
       abortSignal: runParams.abortSignal,
       assertCurrent: params.assertCurrent,
-      provider: selectedRuntimeProvider,
-      ...(selectedRuntimeProvider !== provider ? { fallbackProvider: provider } : {}),
+      provider,
       modelId,
       agentDir: params.agentDir,
       requestedRouteResolution: modelSelectionChangedByHook

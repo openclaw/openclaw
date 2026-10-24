@@ -14,6 +14,36 @@ const context = {
 const action = readWorkflow(".github/actions/detect-scheduled-changes/action.yml");
 const script = action.runs.steps[0].with.script;
 
+function acceptsPaths(patterns: string[], files: readonly string[]) {
+  return files.some((file) =>
+    patterns.reduce(
+      (selected, pattern) =>
+        pattern.startsWith("!")
+          ? selected && !matchesGlob(file, pattern.slice(1))
+          : selected || matchesGlob(file, pattern),
+      false,
+    ),
+  );
+}
+
+describe("native locale refresh event scope", () => {
+  it.each([
+    [["apps/ios/README.md"], false],
+    [["apps/ios/AGENTS.md"], false],
+    [["apps/ios/README.md", "apps/ios/AGENTS.md"], false],
+    [["apps/ios/README.md", "apps/ios/Sources/App.swift"], true],
+    [["apps/ios/Info.plist"], true],
+    [["apps/ios/Localizable.xcstrings"], true],
+    [["apps/.i18n/native-source.json"], true],
+    [["scripts/native-app-i18n.ts"], true],
+    [[".github/workflows/native-app-locale-refresh.yml"], true],
+  ] as const)("routes %j", (files, expected) => {
+    const workflow = readWorkflow(".github/workflows/native-app-locale-refresh.yml");
+    expect(acceptsPaths(workflow.on.push.paths, files)).toBe(expected);
+    expect(workflow.on.workflow_dispatch).toBeDefined();
+  });
+});
+
 describe("plugin scaffold event scope", () => {
   it.each([
     [["src/plugin-sdk/AGENTS.md"], false],
@@ -25,16 +55,7 @@ describe("plugin scaffold event scope", () => {
     const workflow = readWorkflow(".github/workflows/plugin-init-scaffold-validation.yml");
     expect(workflow.on.push.paths).toEqual(workflow.on.pull_request.paths);
     for (const event of ["push", "pull_request"]) {
-      const accepts = files.some((file) =>
-        workflow.on[event].paths.reduce(
-          (selected: boolean, pattern: string) =>
-            pattern.startsWith("!")
-              ? selected && !matchesGlob(file, pattern.slice(1))
-              : selected || matchesGlob(file, pattern),
-          false,
-        ),
-      );
-      expect(accepts).toBe(expected);
+      expect(acceptsPaths(workflow.on[event].paths, files)).toBe(expected);
     }
     expect(workflow.on.workflow_dispatch).toBeDefined();
     expect(workflow.on.schedule).toBeDefined();
@@ -199,6 +220,10 @@ describe("bounded scheduled proof reuse", () => {
 
 describe("node runtime event scope", () => {
   it.each([
+    [["patches/README.md"], false],
+    [["patches/vitest@5.0.1.patch"], true],
+    [["patches/README.md", "patches/vitest@5.0.1.patch"], true],
+    [["patches/runtime-fixture.md"], true],
     [["crates/openclaw-node-host/SIDECAR_PROTOCOL.md"], false],
     [
       ["crates/openclaw-node-host/SIDECAR_PROTOCOL.md", "crates/openclaw-node-host/src/main.rs"],
@@ -210,16 +235,7 @@ describe("node runtime event scope", () => {
   ] as const)("routes %j", (files, expected) => {
     const workflow = readWorkflow(".github/workflows/node-runtime-conformance.yml");
     for (const event of ["push", "pull_request"]) {
-      const accepts = files.some((file) =>
-        workflow.on[event].paths.reduce(
-          (selected: boolean, pattern: string) =>
-            pattern.startsWith("!")
-              ? selected && !matchesGlob(file, pattern.slice(1))
-              : selected || matchesGlob(file, pattern),
-          false,
-        ),
-      );
-      expect(accepts).toBe(expected);
+      expect(acceptsPaths(workflow.on[event].paths, files)).toBe(expected);
     }
     expect(workflow.on.workflow_dispatch).toBeDefined();
     expect(workflow.on.schedule).toBeDefined();
@@ -231,14 +247,7 @@ describe("workflow cost admission", () => {
     "keeps %s scoped to its hydration inputs",
     (name) => {
       const workflow = readWorkflow(`.github/workflows/${name}.yml`);
-      const accepts = (path: string) =>
-        workflow.on.pull_request.paths.reduce(
-          (selected: boolean, pattern: string) =>
-            pattern.startsWith("!")
-              ? selected && !matchesGlob(path, pattern.slice(1))
-              : selected || matchesGlob(path, pattern),
-          false,
-        );
+      const accepts = (file: string) => acceptsPaths(workflow.on.pull_request.paths, [file]);
       expect(accepts(".github/workflows/docs.yml")).toBe(false);
       for (const path of ["scripts/README.md", "scripts/AGENTS.md", "patches/README.md"]) {
         expect(accepts(path), path).toBe(false);

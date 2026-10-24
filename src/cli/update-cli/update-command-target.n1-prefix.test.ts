@@ -7,6 +7,7 @@ import {
 } from "../../daemon/runtime-paths.js";
 import { pkgQueryResult } from "../../infra/update-freebsd-pkg-ownership.test-support.js";
 import { withMockedPlatform } from "../../test-utils/vitest-spies.js";
+import { activationFixture, runtimeFixture } from "./update-command-fixtures.test-support.js";
 import { preparePackageUpdateRuntime } from "./update-command-node-runtime.js";
 
 const state = vi.hoisted(() => ({
@@ -60,8 +61,9 @@ vi.mock("../../infra/update-check.js", async (original) => ({
   ...(await original<typeof import("../../infra/update-check.js")>()),
   resolveNpmChannelTag: async () => ({ tag: "latest", version: "2027.1.0" }),
 }));
-vi.mock("../../infra/update-check-package-target.js", () => ({
-  fetchNpmPackageTargetStatus: async () => ({ version: "2027.1.0", nodeEngine: ">=26.1.0" }),
+vi.mock("../../infra/update-check-package-target.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../infra/update-check-package-target.js")>()),
+  fetchNpmPackageTargetStatus: async () => ({ version: "2027.1.0", nodeEngine: ">=26.12.1" }),
 }));
 vi.mock("../../../node-sqlite.mjs", async (original) => ({
   ...(await original<typeof import("../../../node-sqlite.mjs")>()),
@@ -96,15 +98,7 @@ beforeEach(() => {
   state.manager = "npm";
   state.sqliteText = true;
   vi.mocked(resolveNodeRuntimeInfo).mockReset();
-  vi.mocked(resolveBunRuntimeInfo)
-    .mockReset()
-    .mockResolvedValue({
-      status: "supported",
-      version: "1.4.3",
-      sqliteVersion: "3.53.4",
-      nodeSharedSqlite: false,
-      sqliteProbe: { available: true, version: "3.53.4", text: true, blob: true, json: true },
-    });
+  vi.mocked(resolveBunRuntimeInfo).mockReset().mockResolvedValue(runtimeFixture("1.4.3", "3.53.4"));
 });
 afterEach(() => vi.unstubAllGlobals());
 const rootB = path.resolve(".n1-fixture/B/node_modules/openclaw");
@@ -114,7 +108,6 @@ async function resolve(servicePlan: {
   serviceRoot?: string;
   nodeRunner?: string;
 }) {
-  // Dry-run target resolution uses synthetic registry metadata and never mutates an install.
   const prepared = {
     discoveredRoot: rootB,
     installKind: "package",
@@ -163,110 +156,93 @@ it.each(["writable rebind", "protected redirect", "unowned project"] as const)(
     }
   },
 );
-it("rejects a Bun-driven split-root update when the recorded service Node cannot run the target", async () => {
-  vi.stubGlobal("process", {
-    ...process,
-    execPath: "/fixture/bun",
-    versions: { ...process.versions, bun: "1.4.3" },
-  });
-  vi.mocked(resolveNodeRuntimeInfo).mockResolvedValue({
-    status: "supported",
-    version: "24.16.0",
-    sqliteVersion: "3.51.3",
-    nodeSharedSqlite: false,
-    sqliteProbe: { available: true, version: "3.51.3", text: true, blob: true, json: true },
-  });
-  const target = await resolve({ rootRedirect: null, serviceRoot: rootA, nodeRunner: "/old/node" });
-  const result = await preparePackageUpdateRuntime({
-    ...target,
-    shouldRestart: true,
-    opts: { json: true },
-    executor: { enter: async () => ({ assertCurrent: vi.fn() }) },
-    timeoutMs: 1000,
-    managedService: {
-      stopped: false,
-      inspected: true,
-      runtimeInspected: true,
-      running: true,
-      serviceNodeRunner: "/old/node",
-      serviceUpdateVerdict: {
-        kind: "owned",
-        root: rootA,
-        fingerprint: "fixture",
-        refreshDefinition: true,
-        requiresInstallRootRefresh: true,
-      },
-    },
-  });
-  expect(result).toMatchObject({
-    ok: false,
-    error: expect.stringContaining(
-      "Required: openclaw@2027.1.0 Node >=26.1.0; detected: Node 24.16.0 at /old/node",
-    ),
-    failureFacts: [{ check: "node-runtime", code: "node-runtime-preflight" }],
-  });
-  expect(vi.mocked(resolveNodeRuntimeInfo).mock.calls.map(([runner]) => runner)).toEqual([
-    "/old/node",
-  ]);
-});
 it.each([
-  { node: "24.16.0", sqliteText: true, admitted: false },
-  { node: "26.1.0", sqliteText: false, admitted: false },
-  { node: "26.1.0", sqliteText: true, admitted: true },
+  { service: "Node", node: "24.22.1", sqliteText: true, admitted: false },
+  { service: "Bun", node: "24.22.1", sqliteText: true, admitted: false },
+  { service: "Bun", node: "26.12.1", sqliteText: false, admitted: false },
+  { service: "Bun", node: "26.12.1", sqliteText: true, admitted: true },
 ])(
-  "checks updater Node $node (SQLite text=$sqliteText) before a Bun service-root update",
-  async ({ node, sqliteText, admitted }) => {
-    vi.stubGlobal(
-      "process",
-      Object.create(process, {
-        execPath: { value: "/current/node" },
-        versions: { value: { ...process.versions, node, bun: undefined } },
-      }),
-    );
+  "checks $service service runtime from updater Node $node (SQLite text=$sqliteText)",
+  async ({ service, node, sqliteText, admitted }) => {
+    const nodeService = service === "Node";
+    if (nodeService) {
+      vi.stubGlobal("process", {
+        ...process,
+        execPath: "/fixture/bun",
+        versions: { ...process.versions, bun: "1.4.3" },
+      });
+      vi.mocked(resolveNodeRuntimeInfo).mockResolvedValue(runtimeFixture("24.22.1"));
+    } else {
+      vi.stubGlobal(
+        "process",
+        Object.create(process, {
+          execPath: { value: "/current/node" },
+          versions: { value: { ...process.versions, node, bun: undefined } },
+        }),
+      );
+      state.manager = "bun";
+    }
     state.sqliteText = sqliteText;
-    state.manager = "bun";
-    const serviceRoot = path.resolve(".n1-fixture/service/install/global/node_modules/openclaw");
-    const bun = "/service/bin/bun";
-    const target = await resolve({
-      rootRedirect: { root: serviceRoot, previousRoot: rootB },
-      nodeRunner: bun,
-    });
-    expect(target.root).toBe(serviceRoot);
-    expect(target.packageUpdateNodeRunner).toBe(bun);
-    expect(target.packageInstallTarget).toMatchObject({
-      manager: "bun",
-      command: bun,
-      packageRoot: serviceRoot,
-    });
+    const serviceRoot = nodeService
+      ? rootA
+      : path.resolve(".n1-fixture/service/install/global/node_modules/openclaw");
+    const runner = nodeService ? "/old/node" : "/service/bin/bun";
+    const target = await resolve(
+      nodeService
+        ? { rootRedirect: null, serviceRoot, nodeRunner: runner }
+        : { rootRedirect: { root: serviceRoot, previousRoot: rootB }, nodeRunner: runner },
+    );
+    if (!nodeService) {
+      expect(target).toMatchObject({
+        root: serviceRoot,
+        packageUpdateNodeRunner: runner,
+        packageInstallTarget: { manager: "bun", command: runner, packageRoot: serviceRoot },
+      });
+    }
     const result = await preparePackageUpdateRuntime({
       ...target,
       shouldRestart: true,
       opts: { json: true },
-      executor: { enter: async () => ({ assertCurrent: vi.fn() }) },
       timeoutMs: 1000,
+      executor: { enter: async () => ({ assertCurrent: vi.fn() }) },
+      ...(nodeService
+        ? {
+            managedService: {
+              stopped: false,
+              inspected: true,
+              runtimeInspected: true,
+              running: true,
+              serviceNodeRunner: runner,
+              serviceUpdateVerdict: {
+                kind: "owned" as const,
+                root: rootA,
+                fingerprint: "fixture",
+                refreshDefinition: true,
+                requiresInstallRootRefresh: true,
+              },
+            },
+          }
+        : {}),
     });
     expect(result).toMatchObject(
       admitted
         ? {
             ok: true,
-            value: {
-              nodeRunner: bun,
-              activationRuntime: { kind: "bun", path: bun, identity: `fixture:${bun}` },
-            },
+            value: { nodeRunner: runner, activationRuntime: activationFixture("bun", runner) },
           }
         : {
             ok: false,
             error: expect.stringContaining(
-              `Required: openclaw@2027.1.0 Node >=26.1.0; detected: Node ${node}`,
+              `Required: openclaw@2027.1.0 Node >=26.12.1; detected: Node ${node}${nodeService ? " at /old/node" : ""}`,
             ),
             failureFacts: [{ check: "node-runtime", code: "node-runtime-preflight" }],
           },
     );
-    expect(resolveBunRuntimeInfo).toHaveBeenCalledWith(
-      bun,
-      undefined,
-      buildRuntimeProbeEnv(process.env),
+    expect(vi.mocked(resolveNodeRuntimeInfo).mock.calls.map(([executable]) => executable)).toEqual(
+      nodeService ? ["/old/node"] : [],
     );
-    expect(resolveNodeRuntimeInfo).not.toHaveBeenCalled();
+    if (!nodeService) {
+      expect(resolveBunRuntimeInfo).toHaveBeenCalledWith(runner, buildRuntimeProbeEnv(process.env));
+    }
   },
 );

@@ -7,13 +7,21 @@ import { withAgentRosterFactsBatch } from "../agents/agent-scope-config.js";
 import { listAgentIds, resolveAgentConfig } from "../agents/agent-scope.js";
 import {
   inspectGitHubOAuthRecord,
+  parseGitHubOAuthRecord,
+  writeGitHubOAuthRecord,
   listGitHubDeviceAuthorizationRecords,
   listGitHubOAuthRecords,
   type GitHubDeviceAuthorizationRecord,
   type GitHubIdentityScope,
   type GitHubOAuthRecord,
 } from "../agents/github-oauth-records.js";
-import { resolveConfiguredGitHubToolIdentity } from "../agents/github-tool-identity.js";
+import type { GitHubToolAccount } from "../agents/github-tool-account.js";
+import {
+  GitHubAccountMismatchError,
+  refreshManagedGitHubProfile,
+  resolveConfiguredGitHubToolIdentity,
+  resolveManagedGitHubProfileDir,
+} from "../agents/github-tool-identity.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GitHubToolIdentityConfig } from "../config/types.tools.js";
 import { subscribeSecretStoreChanges } from "../secrets/store/secret-store-changes.js";
@@ -92,6 +100,18 @@ export type ConfiguredOAuthIdentity = {
   agentId: string;
   identity: GitHubToolIdentityConfig & { kind: "oauth" };
 };
+
+/** Device authorization snapshots must never persist an App signing key. */
+export function captureGitHubOAuthAuthorizationIdentity(
+  config: OpenClawConfig,
+  location: { scope: GitHubIdentityScope; agentId: string },
+) {
+  const selected = resolveConfiguredGitHubToolIdentity({ config, ...location });
+  if (selected?.kind === "app-installation") {
+    throw new Error("Remove the selected GitHub App identity before connecting an OAuth identity.");
+  }
+  return structuredClone(selected ?? null);
+}
 
 export function identityStillSelected(
   config: OpenClawConfig,
@@ -201,5 +221,77 @@ export async function pendingInitialOAuthIdentitySelected(
     (binding !== undefined && (await matchesAgentLifecycleBindingAsync(() => config, binding)));
   return (
     agentBindingMatches && identity?.profileId === record.profileId && identity.kind === "oauth"
+  );
+}
+
+export async function settleGitHubOAuthRefreshRecord(
+  next: GitHubOAuthRecord,
+  expected: GitHubOAuthRecord,
+): Promise<void> {
+  try {
+    await writeGitHubOAuthRecord(next, expected);
+  } catch (error) {
+    // A lost commit reply is reconciled by exact postimage, never another provider request.
+    const observed = await inspectGitHubOAuthRecord(next.profileId);
+    if (
+      observed.state !== "valid" ||
+      !isDeepStrictEqual(
+        observed.record,
+        parseGitHubOAuthRecord(JSON.stringify(next), next.profileId),
+      )
+    ) {
+      throw error;
+    }
+  }
+}
+export function assertGitHubOAuthIdentitySelected(
+  getConfig: () => OpenClawConfig,
+  record: GitHubOAuthRecord,
+): void {
+  const identity = resolveConfiguredGitHubToolIdentity({ config: getConfig(), ...record });
+  if (identity?.kind !== "oauth" || identity.profileId !== record.profileId) {
+    throw new Error("GitHub OAuth identity changed");
+  }
+}
+export async function applyPendingGitHubOAuthRefresh(
+  getConfig: () => OpenClawConfig,
+  record: GitHubOAuthRecord & { pendingRefresh: true },
+  accessToken: string,
+): Promise<void> {
+  const profileDir = resolveManagedGitHubProfileDir({
+    agentId: record.agentId,
+    scope: record.scope,
+    profileId: record.profileId,
+  });
+  let account: GitHubToolAccount;
+  try {
+    account = await refreshManagedGitHubProfile({
+      profileDir,
+      token: accessToken,
+      expectedAccountId: record.accountId,
+      assertCurrent: () => assertGitHubOAuthIdentitySelected(getConfig, record),
+    });
+  } catch (error) {
+    if (error instanceof GitHubAccountMismatchError) {
+      await settleGitHubOAuthRefreshRecord(
+        {
+          ...record,
+          pendingRefresh: undefined,
+          refreshFailure: "expired",
+        },
+        record,
+      );
+    }
+    return;
+  }
+  assertGitHubOAuthIdentitySelected(getConfig, record);
+  await settleGitHubOAuthRefreshRecord(
+    {
+      ...record,
+      login: account.login,
+      pendingRefresh: undefined,
+      refreshFailure: undefined,
+    },
+    record,
   );
 }

@@ -1,6 +1,3 @@
-/**
- * Public SDK subpath for native command specs, parsing, and authorization helpers.
- */
 export {
   buildCommandTextFromArgs,
   canResolveCommandArgMenu,

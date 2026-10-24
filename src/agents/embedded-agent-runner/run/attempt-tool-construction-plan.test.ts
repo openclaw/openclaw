@@ -22,35 +22,39 @@ function expectConstructionPlan(
     coding?: Partial<EmbeddedAttemptToolConstructionPlan["codingToolConstructionPlan"]>;
   },
 ) {
-  // Plans are intentionally wide; tests assert only the decision bits relevant
-  // to the scenario under review.
-  if ("constructTools" in expected) {
-    expect(plan.constructTools).toBe(expected.constructTools);
-  }
-  if ("includeCoreTools" in expected) {
-    expect(plan.includeCoreTools).toBe(expected.includeCoreTools);
-  }
+  const { coding, runtimeToolAllowlist, ...decisions } = expected;
   if ("runtimeToolAllowlist" in expected) {
-    expect(plan.runtimeToolAllowlist).toEqual(expected.runtimeToolAllowlist);
+    expect(plan.runtimeToolAllowlist).toEqual(runtimeToolAllowlist);
   }
-  if (expected.coding) {
-    for (const [key, value] of Object.entries(expected.coding)) {
-      expect(plan.codingToolConstructionPlan[key as keyof typeof expected.coding]).toBe(value);
-    }
-  }
+  expect(plan).toMatchObject({
+    ...decisions,
+    ...(coding ? { codingToolConstructionPlan: coding } : {}),
+  });
 }
+
+function filteredNames(
+  tools: { name: string }[],
+  allow?: string[],
+  options?: Parameters<typeof applyEmbeddedAttemptToolsAllow>[2],
+) {
+  return applyEmbeddedAttemptToolsAllow(tools, allow, options).map((tool) => tool.name);
+}
+
+const namedTools = (...names: string[]) => names.map((name) => ({ name }));
+const mcp = (toolsAllow?: string[]) =>
+  shouldCreateBundleMcpRuntimeForAttempt({ toolsEnabled: true, toolsAllow });
+const lsp = (toolsAllow?: string[]) =>
+  shouldCreateBundleLspRuntimeForAttempt({ toolsEnabled: true, toolsAllow });
 
 describe("applyEmbeddedAttemptToolsAllow", () => {
   it("materializes host-required collector output through empty runtime allowlists", () => {
-    const tools = [{ name: "structured_output" }, { name: "read" }];
+    const tools = namedTools("structured_output", "read");
     const toolsAllow = mergeForcedEmbeddedAttemptToolsAllow([], {
       forceToolNames: ["structured_output"],
     });
 
     expect(toolsAllow).toEqual(["structured_output"]);
-    expect(applyEmbeddedAttemptToolsAllow(tools, toolsAllow).map((tool) => tool.name)).toEqual([
-      "structured_output",
-    ]);
+    expect(filteredNames(tools, toolsAllow)).toEqual(["structured_output"]);
     expect(resolveEmbeddedAttemptToolConstructionPlan({ toolsAllow })).toMatchObject({
       constructTools: true,
       includeCoreTools: true,
@@ -59,50 +63,31 @@ describe("applyEmbeddedAttemptToolsAllow", () => {
   });
 
   it("keeps forced tools through preserved hook intersections", () => {
-    const tools = [{ name: "web_search" }, { name: "message" }, { name: "read" }];
+    const tools = namedTools("web_search", "message", "read");
     const toolsAllow = mergeForcedEmbeddedAttemptToolsAllow(
       attachToolAllowlistIntersection([], [["web_*"], ["*_search"]]),
       { forceMessageTool: true },
     );
 
-    expect(applyEmbeddedAttemptToolsAllow(tools, toolsAllow).map((tool) => tool.name)).toEqual([
-      "web_search",
-      "message",
-    ]);
+    expect(filteredNames(tools, toolsAllow)).toEqual(["web_search", "message"]);
   });
 
   it("honors wildcard and group allowlists in the final filter", () => {
-    const tools = [{ name: "exec" }, { name: "read" }, { name: "message" }];
+    const tools = namedTools("exec", "read", "message");
 
-    expect(applyEmbeddedAttemptToolsAllow(tools, ["*"]).map((tool) => tool.name)).toEqual([
-      "exec",
-      "read",
-      "message",
-    ]);
-    expect(applyEmbeddedAttemptToolsAllow(tools, ["exec*"]).map((tool) => tool.name)).toEqual([
-      "exec",
-    ]);
-    expect(applyEmbeddedAttemptToolsAllow(tools, ["group:fs"]).map((tool) => tool.name)).toEqual([
-      "read",
-    ]);
+    expect(filteredNames(tools, ["*"])).toEqual(["exec", "read", "message"]);
+    expect(filteredNames(tools, ["exec*"])).toEqual(["exec"]);
+    expect(filteredNames(tools, ["group:fs"])).toEqual(["read"]);
   });
 
   it("preserves runtime write compatibility in the final filter", () => {
-    const tools = [{ name: "write" }, { name: "apply_patch" }, { name: "exec" }];
+    const tools = namedTools("write", "apply_patch", "exec");
 
-    expect(applyEmbeddedAttemptToolsAllow(tools, ["write"]).map((tool) => tool.name)).toEqual([
-      "write",
-      "apply_patch",
-    ]);
+    expect(filteredNames(tools, ["write"])).toEqual(["write", "apply_patch"]);
   });
 
   it("expands plugin group and plugin-id allowlists before the final filter", () => {
-    const tools = [
-      { name: "exec" },
-      { name: "memory_search" },
-      { name: "memory_get" },
-      { name: "browser" },
-    ];
+    const tools = namedTools("exec", "memory_search", "memory_get", "browser");
     const toolMeta = (tool: { name: string }) => {
       if (tool.name.startsWith("memory_")) {
         return { pluginId: "active-memory" };
@@ -113,27 +98,26 @@ describe("applyEmbeddedAttemptToolsAllow", () => {
       return undefined;
     };
 
-    expect(
-      applyEmbeddedAttemptToolsAllow(tools, ["group:plugins"], { toolMeta }).map(
-        (tool) => tool.name,
-      ),
-    ).toEqual(["memory_search", "memory_get", "browser"]);
-    expect(
-      applyEmbeddedAttemptToolsAllow(tools, ["active-memory"], { toolMeta }).map(
-        (tool) => tool.name,
-      ),
-    ).toEqual(["memory_search", "memory_get"]);
+    expect(filteredNames(tools, ["group:plugins"], { toolMeta })).toEqual([
+      "memory_search",
+      "memory_get",
+      "browser",
+    ]);
+    expect(filteredNames(tools, ["active-memory"], { toolMeta })).toEqual([
+      "memory_search",
+      "memory_get",
+    ]);
   });
 
   it("filters bundled runtime tools by explicit tool name and bundled plugin id", () => {
     // Bundled MCP/LSP tools are plugin-owned tools, so allowlists can target
     // either exact tool names or bundled plugin ids.
-    const tools = [
-      { name: "strict__strict_probe" },
-      { name: "loose__extra_probe" },
-      { name: "lsp_hover_typescript" },
-      { name: "lsp_definition_typescript" },
-    ];
+    const tools = namedTools(
+      "strict__strict_probe",
+      "loose__extra_probe",
+      "lsp_hover_typescript",
+      "lsp_definition_typescript",
+    );
     const toolMeta = (tool: { name: string }) => {
       if (tool.name.includes("__")) {
         return { pluginId: "bundle-mcp" };
@@ -144,25 +128,22 @@ describe("applyEmbeddedAttemptToolsAllow", () => {
       return undefined;
     };
 
-    expect(
-      applyEmbeddedAttemptToolsAllow(tools, ["strict__strict_probe"], { toolMeta }).map(
-        (tool) => tool.name,
-      ),
-    ).toEqual(["strict__strict_probe"]);
-    expect(
-      applyEmbeddedAttemptToolsAllow(tools, ["lsp_hover_typescript"], { toolMeta }).map(
-        (tool) => tool.name,
-      ),
-    ).toEqual(["lsp_hover_typescript"]);
-    expect(
-      applyEmbeddedAttemptToolsAllow(tools, ["bundle-mcp"], { toolMeta }).map((tool) => tool.name),
-    ).toEqual(["strict__strict_probe", "loose__extra_probe"]);
+    expect(filteredNames(tools, ["strict__strict_probe"], { toolMeta })).toEqual([
+      "strict__strict_probe",
+    ]);
+    expect(filteredNames(tools, ["lsp_hover_typescript"], { toolMeta })).toEqual([
+      "lsp_hover_typescript",
+    ]);
+    expect(filteredNames(tools, ["bundle-mcp"], { toolMeta })).toEqual([
+      "strict__strict_probe",
+      "loose__extra_probe",
+    ]);
   });
 
   it("treats an explicit empty toolsAllow as no tools", () => {
-    const tools = [{ name: "exec" }, { name: "read" }, { name: "message" }];
+    const tools = namedTools("exec", "read", "message");
 
-    expect(applyEmbeddedAttemptToolsAllow(tools, []).map((tool) => tool.name)).toStrictEqual([]);
+    expect(filteredNames(tools, [])).toStrictEqual([]);
     expect(resolveEmbeddedAttemptToolConstructionPlan({ toolsAllow: [] })).toHaveProperty(
       "includeCoreTools",
       false,
@@ -285,60 +266,22 @@ describe("shouldCreateBundleMcpRuntimeForAttempt", () => {
   });
 
   it("creates bundle MCP only when the allowlist can reach bundle MCP tool names", () => {
-    expect(shouldCreateBundleMcpRuntimeForAttempt({ toolsEnabled: true })).toBe(true);
-    expect(shouldCreateBundleMcpRuntimeForAttempt({ toolsEnabled: true, toolsAllow: ["*"] })).toBe(
-      true,
-    );
-    expect(shouldCreateBundleMcpRuntimeForAttempt({ toolsEnabled: true, toolsAllow: [] })).toBe(
-      false,
-    );
-    expect(
-      shouldCreateBundleMcpRuntimeForAttempt({
-        toolsEnabled: true,
-        toolsAllow: ["memory_search", "memory_get"],
-      }),
-    ).toBe(false);
-    expect(
-      shouldCreateBundleMcpRuntimeForAttempt({
-        toolsEnabled: true,
-        toolsAllow: ["group:plugins"],
-      }),
-    ).toBe(true);
-    expect(
-      shouldCreateBundleMcpRuntimeForAttempt({
-        toolsEnabled: true,
-        toolsAllow: ["bundle-mcp"],
-      }),
-    ).toBe(true);
-    expect(
-      shouldCreateBundleMcpRuntimeForAttempt({
-        toolsEnabled: true,
-        toolsAllow: ["strict__strict_probe"],
-      }),
-    ).toBe(true);
+    expect(mcp()).toBe(true);
+    expect(mcp(["*"])).toBe(true);
+    expect(mcp([])).toBe(false);
+    expect(mcp(["memory_search", "memory_get"])).toBe(false);
+    expect(mcp(["group:plugins"])).toBe(true);
+    expect(mcp(["bundle-mcp"])).toBe(true);
+    expect(mcp(["strict__strict_probe"])).toBe(true);
   });
 });
 
 describe("shouldCreateBundleLspRuntimeForAttempt", () => {
   it("skips bundle LSP startup when runtime allowlists cannot reach LSP tools", () => {
-    expect(shouldCreateBundleLspRuntimeForAttempt({ toolsEnabled: true })).toBe(true);
-    expect(shouldCreateBundleLspRuntimeForAttempt({ toolsEnabled: true, toolsAllow: ["*"] })).toBe(
-      true,
-    );
-    expect(shouldCreateBundleLspRuntimeForAttempt({ toolsEnabled: true, toolsAllow: [] })).toBe(
-      false,
-    );
-    expect(
-      shouldCreateBundleLspRuntimeForAttempt({
-        toolsEnabled: true,
-        toolsAllow: ["memory_search"],
-      }),
-    ).toBe(false);
-    expect(
-      shouldCreateBundleLspRuntimeForAttempt({
-        toolsEnabled: true,
-        toolsAllow: ["lsp_hover_typescript"],
-      }),
-    ).toBe(true);
+    expect(lsp()).toBe(true);
+    expect(lsp(["*"])).toBe(true);
+    expect(lsp([])).toBe(false);
+    expect(lsp(["memory_search"])).toBe(false);
+    expect(lsp(["lsp_hover_typescript"])).toBe(true);
   });
 });

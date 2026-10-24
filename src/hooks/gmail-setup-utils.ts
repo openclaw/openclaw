@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resolveExecutable } from "../infra/executable-path.js";
+import { canAccessSync } from "../infra/path-existence.js";
 import { formatCommandOutput, formatCommandResult } from "../process/command-error.js";
 import { runCommandWithTimeout, type SpawnResult } from "../process/exec.js";
 import { hasBinary } from "../skills/loading/config.js";
@@ -27,12 +28,9 @@ function findExecutablesOnPath(bins: string[]): string[] {
       if (seen.has(candidate)) {
         continue;
       }
-      try {
-        fs.accessSync(candidate, fs.constants.X_OK);
+      if (canAccessSync(candidate, fs.constants.X_OK)) {
         matches.push(candidate);
         seen.add(candidate);
-      } catch {
-        // keep scanning
       }
     }
   }
@@ -50,16 +48,13 @@ function ensureGcloudOnPath(): boolean {
     "/usr/local/Caskroom/google-cloud-sdk/latest/google-cloud-sdk/bin/gcloud",
   ];
   for (const candidate of candidates) {
-    try {
-      fs.accessSync(candidate, fs.constants.X_OK);
+    if (canAccessSync(candidate, fs.constants.X_OK)) {
       const dirPath = path.dirname(candidate);
       const parts = (process.env.PATH ?? "").split(path.delimiter).filter(Boolean);
       if (!parts.includes(dirPath)) {
         process.env.PATH = [...parts, dirPath].join(path.delimiter);
       }
       return true;
-    } catch {
-      // keep scanning
     }
   }
   return false;
@@ -108,12 +103,9 @@ async function resolvePythonExecutablePath(): Promise<string | undefined> {
       // so a compatible interpreter later on PATH is selected instead.
       continue;
     }
-    try {
-      fs.accessSync(resolved, fs.constants.X_OK);
+    if (canAccessSync(resolved, fs.constants.X_OK)) {
       cachedPythonPath = resolved;
       return resolved;
-    } catch {
-      // keep scanning
     }
   }
   cachedPythonPath = null;

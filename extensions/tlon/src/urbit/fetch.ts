@@ -1,26 +1,18 @@
-import {
-  fetchWithSsrFGuard,
-  type LookupFn,
-  type SsrFPolicy,
-} from "openclaw/plugin-sdk/ssrf-runtime";
+import { fetchWithSsrFGuard, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 import { validateUrbitBaseUrl } from "./base-url.js";
 import { UrbitUrlError } from "./errors.js";
 
-type UrbitFetchOptions = {
+export async function urbitFetch(params: {
   baseUrl: string;
   path: string;
   init?: RequestInit;
   ssrfPolicy?: SsrFPolicy;
-  lookupFn?: LookupFn;
-  fetchImpl?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
   beforeRequest?: () => void;
   timeoutMs?: number;
   maxRedirects?: number;
   signal?: AbortSignal;
   auditContext?: string;
-};
-
-export async function urbitFetch(params: UrbitFetchOptions) {
+}) {
   const validated = validateUrbitBaseUrl(params.baseUrl);
   if (!validated.ok) {
     throw new UrbitUrlError(validated.error);
@@ -29,14 +21,12 @@ export async function urbitFetch(params: UrbitFetchOptions) {
   const url = new URL(params.path, validated.baseUrl).toString();
   const guarded = await fetchWithSsrFGuard({
     url,
-    fetchImpl: params.fetchImpl,
     beforeRequest: params.beforeRequest,
     init: params.init,
     timeoutMs: params.timeoutMs,
     maxRedirects: params.maxRedirects,
     signal: params.signal,
     policy: params.ssrfPolicy,
-    lookupFn: params.lookupFn,
     auditContext: params.auditContext,
   });
 

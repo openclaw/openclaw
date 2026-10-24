@@ -4,10 +4,13 @@ import path from "node:path";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { extensionForMime, normalizeMimeType } from "@openclaw/media-core/mime";
-import { parseStrictFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import {
+  parseStrictFiniteNumber,
+  parseStrictPositiveInteger,
+} from "@openclaw/normalization-core/number-coercion";
 import type { Command } from "commander";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createEnumOptionParser } from "../../shared/enum-option.js";
+import { positiveDurationError } from "../../shared/positive-duration.js";
 import { registerMediaUnderstandingCommand } from "./media-understanding-command.js";
 import type { CapabilityEnvelope } from "./metadata.js";
 import { formatEnvelopeForText } from "./output.js";
@@ -17,55 +20,6 @@ const GENERATED_VIDEO_DOWNLOAD_TIMEOUT_MS = 120_000;
 
 const parseVideoOption = createEnumOptionParser();
 const VIDEO_RESOLUTIONS = ["360P", "480P", "540P", "720P", "768P", "1080P"] as const;
-
-async function fetchGeneratedVideoDownload(params: {
-  cfg: OpenClawConfig;
-  provider: string;
-  url: string;
-}) {
-  const { assertOkOrThrowHttpError, assertProviderBinaryResponseContent } =
-    await import("../../agents/provider-http-errors.js");
-  const {
-    fetchWithTimeoutGuarded,
-    resolveProviderHttpRequestConfig,
-    sanitizeConfiguredModelProviderRequest,
-  } = await import("../../plugin-sdk/provider-http.js");
-  const providerConfig = params.cfg.models?.providers?.[params.provider];
-  const { allowPrivateNetwork, dispatcherPolicy } = resolveProviderHttpRequestConfig({
-    baseUrl: params.url,
-    defaultBaseUrl: params.url,
-    request: sanitizeConfiguredModelProviderRequest(providerConfig?.request),
-    provider: params.provider,
-    capability: "video",
-    transport: "http",
-  });
-  const result = await fetchWithTimeoutGuarded(
-    params.url,
-    { method: "GET" },
-    GENERATED_VIDEO_DOWNLOAD_TIMEOUT_MS,
-    fetch,
-    {
-      ...(allowPrivateNetwork ? { ssrfPolicy: { allowPrivateNetwork: true } } : {}),
-      ...(dispatcherPolicy ? { dispatcherPolicy } : {}),
-      auditContext: `${params.provider}-generated-video-download`,
-    },
-  );
-  try {
-    await assertOkOrThrowHttpError(
-      result.response,
-      `${params.provider} generated video download failed`,
-    );
-    assertProviderBinaryResponseContent(
-      result.response,
-      `${params.provider} generated video download`,
-      "video",
-    );
-    return result;
-  } catch (error) {
-    await result.release();
-    throw error;
-  }
-}
 
 export function registerVideoCapabilityCommands(capability: Command): void {
   const videoCommand = capability
@@ -105,8 +59,12 @@ export function registerVideoCapabilityCommands(capability: Command): void {
         const output = opts.output as string | undefined;
         const resolution = parseVideoOption(opts.resolution, VIDEO_RESOLUTIONS, "video resolution");
         const durationSeconds = parseStrictFiniteNumber(opts.duration);
-        if (opts.duration !== undefined && durationSeconds === undefined) {
-          throw new Error("--duration must be a finite number");
+        if (
+          opts.duration !== undefined &&
+          (durationSeconds === undefined ||
+            parseStrictPositiveInteger(Math.round(durationSeconds)) === undefined)
+        ) {
+          throw positiveDurationError("--duration", "s");
         }
         const timeoutMs = parseOptionalTimeoutMs(opts.timeoutMs);
         const { getModelsCommandSecretTargetIds } = await import("../command-secret-targets.js");
@@ -143,13 +101,46 @@ export function registerVideoCapabilityCommands(capability: Command): void {
 
             let videoBuffer = video.buffer;
             if (!videoBuffer && video.url) {
-              const download = await fetchGeneratedVideoDownload({
-                cfg,
-                provider: result.provider,
-                url: video.url,
+              const downloadProvider = result.provider;
+              const downloadUrl = video.url;
+              const { assertOkOrThrowHttpError, assertProviderBinaryResponseContent } =
+                await import("../../agents/provider-http-errors.js");
+              const {
+                fetchWithTimeoutGuarded,
+                resolveProviderHttpRequestConfig,
+                sanitizeConfiguredModelProviderRequest,
+              } = await import("../../plugin-sdk/provider-http.js");
+              const providerConfig = cfg.models?.providers?.[downloadProvider];
+              const { allowPrivateNetwork, dispatcherPolicy } = resolveProviderHttpRequestConfig({
+                baseUrl: downloadUrl,
+                defaultBaseUrl: downloadUrl,
+                request: sanitizeConfiguredModelProviderRequest(providerConfig?.request),
+                provider: downloadProvider,
+                capability: "video",
+                transport: "http",
               });
-              const response = download.response;
+              const download = await fetchWithTimeoutGuarded(
+                downloadUrl,
+                { method: "GET" },
+                GENERATED_VIDEO_DOWNLOAD_TIMEOUT_MS,
+                fetch,
+                {
+                  ...(allowPrivateNetwork ? { ssrfPolicy: { allowPrivateNetwork: true } } : {}),
+                  ...(dispatcherPolicy ? { dispatcherPolicy } : {}),
+                  auditContext: `${downloadProvider}-generated-video-download`,
+                },
+              );
               try {
+                await assertOkOrThrowHttpError(
+                  download.response,
+                  `${downloadProvider} generated video download failed`,
+                );
+                assertProviderBinaryResponseContent(
+                  download.response,
+                  `${downloadProvider} generated video download`,
+                  "video",
+                );
+                const response = download.response;
                 if (output && response.body) {
                   const mimeType = normalizeMimeType(video.mimeType);
                   const ext =

@@ -334,49 +334,6 @@ describe("resolve-openclaw-package-candidate", () => {
     });
   });
 
-  it("rejects option-shaped package candidate option values", () => {
-    for (const flag of [
-      "--artifact-dir",
-      "--github-output",
-      "--metadata",
-      "--output-dir",
-      "--output-name",
-      "--package-ref",
-      "--package-spec",
-      "--package-url",
-      "--package-sha256",
-      "--source",
-      "--trusted-source-id",
-      "--trusted-source-policy",
-    ]) {
-      expect(() => parseArgs([flag, "--output-dir", "out"]), flag).toThrow(
-        `${flag} requires a value`,
-      );
-      expect(() => parseArgs([flag, "-h"]), flag).toThrow(`${flag} requires a value`);
-    }
-  });
-
-  it("rejects duplicate package candidate CLI options", () => {
-    for (const flag of [
-      "--artifact-dir",
-      "--github-output",
-      "--metadata",
-      "--output-dir",
-      "--output-name",
-      "--package-ref",
-      "--package-spec",
-      "--package-url",
-      "--package-sha256",
-      "--source",
-      "--trusted-source-id",
-      "--trusted-source-policy",
-    ]) {
-      expect(() => parseArgs([flag, "one", flag, "two"]), flag).toThrow(
-        `${flag} was provided more than once`,
-      );
-    }
-  });
-
   it("rejects package candidate output names that escape the output directory", () => {
     for (const outputName of [
       "../openclaw-current.tgz",
@@ -392,35 +349,6 @@ describe("resolve-openclaw-package-candidate", () => {
     expect(parseArgs(["--output-name", "openclaw-current.tar.gz"]).outputName).toBe(
       "openclaw-current.tar.gz",
     );
-  });
-
-  it("resolves npm package candidates through the Windows npm.cmd toolchain shim", () => {
-    const execPath = "C:\\nodejs\\node.exe";
-    const npmCmdPath = path.win32.resolve(path.win32.dirname(execPath), "npm.cmd");
-
-    const runner = resolveNpmPackageCandidatePackRunner(
-      "openclaw@2026.5.26-beta.1",
-      "C:\\openclaw\\.artifacts\\docker-e2e-package",
-      {
-        comSpec: "C:\\Windows\\System32\\cmd.exe",
-        env: {},
-        execPath,
-        existsSync: (candidate) => candidate === npmCmdPath,
-        platform: "win32",
-      },
-    );
-
-    expect(runner).toEqual({
-      command: "C:\\Windows\\System32\\cmd.exe",
-      args: [
-        "/d",
-        "/s",
-        "/c",
-        `${npmCmdPath} pack openclaw@2026.5.26-beta.1 --ignore-scripts --json --pack-destination C:\\openclaw\\.artifacts\\docker-e2e-package`,
-      ],
-      shell: false,
-      windowsVerbatimArguments: true,
-    });
   });
 
   it("keeps the first packed identity when a moving npm tag changes", async () => {

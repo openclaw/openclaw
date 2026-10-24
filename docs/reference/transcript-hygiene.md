@@ -188,7 +188,7 @@ result is moved only when exactly one unresolved occurrence can own it; ambiguou
 extras are dropped and missing occurrences receive synthetic error results.
 
 Synthetic missing results tell the model that the outcome is unknown: retry only
-read-only or idempotent operations, and verify current state before repeating an
+read-only operations or operations safe to repeat, and verify current state before repeating an
 operation that may have had side effects. Responses-family transports retain
 their `aborted` placeholder. Neither placeholder proves that the tool did not run.
 
@@ -261,19 +261,28 @@ inter-session user turns that only have provenance metadata.
 - SDK Responses replay uses the storage privacy shape and a fixed field order:
   summaries are empty, cleartext reasoning content is omitted, and completed
   ciphertext remains unchanged across live continuation and transcript reload.
+  A provider's empty `content: []` reasoning container is preserved across
+  transcript reload so reopening a session does not change its cached prefix;
+  an absent container stays absent.
   Native ChatGPT Responses retains its upstream Codex payload semantics.
-- SDK Responses streams canonicalize fresh reasoning signatures before returning the
+- SDK Responses streams normalize fresh reasoning signatures before returning the
   completed assistant message, so live continuation and transcript storage use
-  the same signature bytes. Encrypted reasoning bytes, executable tool arguments,
-  and previously approved history remain unchanged.
+  the same terminal response item's signature bytes, even if `output_item.done`
+  carried different ciphertext. Async tool prefixes wait for terminal reasoning
+  settlement before persistence. If the stream errors, aborts, or ends without a
+  terminal response, already-completed async calls are still delivered, using the
+  `output_item.done` reasoning snapshot when no terminal snapshot was received.
+  Encrypted reasoning bytes, executable tool arguments, and previously approved
+  history remain unchanged.
 - Successful SDK Responses completions omit absent error fields. The session
-  owner attaches run metadata to fresh assistant history before persistence, so
-  the next tool step and transcript reload retain the same run envelope.
+  owner attaches run metadata to fresh assistant and tool-result history before
+  persistence, so the next tool step and transcript reload retain the same run
+  envelope. This internal metadata is not sent in Responses tool outputs.
 - Native ChatGPT Codex Responses follows Codex wire parity by replaying
   prior Responses reasoning/message/function payloads without prior item
   IDs while preserving session `prompt_cache_key`.
-- OpenAI Responses-family replay preserves canonical `call_*|fc_*`
-  tool-call pairs, but deterministically normalizes malformed or
+- OpenAI Responses-family replay preserves valid `call_*|fc_*`
+  tool-call pairs, but uses fixed rules to normalize malformed or
   overlong `call_id`/function-call item ids before pi-ai payload conversion.
   When an assistant turn lacks preceding reasoning with an `rs_*` ID, the transport
   omits its `fc_*` item IDs from the outbound payload without changing the
@@ -284,6 +293,11 @@ inter-session user turns that only have provenance metadata.
 
 **OpenAI-compatible Chat Completions**
 
+- Historical calls to tools absent from the outgoing catalog, including tools whose
+  schemas were rejected, replay as assistant text together with their results.
+  The model still sees errors such as `Tool session_status not found`. Declared
+  calls retain native tool protocol, with their results kept together in mixed
+  batches. This deterministic request projection leaves stored history unchanged.
 - Historical assistant thinking/reasoning blocks are stripped before replay
   so local and proxy-style OpenAI-compatible servers do not receive
   prior-turn reasoning fields such as `reasoning` or `reasoning_content`.

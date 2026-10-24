@@ -10,6 +10,8 @@ import path from "node:path";
 import process from "node:process";
 import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
+import { isForegroundGatewayRunArgv } from "../gateway-run-argv.mjs";
+import { GATEWAY_SERVICE_STOP_TIMEOUT_MS } from "../gateway-shutdown-budget.mjs";
 import { applyCliProfileEnv, parseCliProfileArgs } from "../src/cli/profile.ts";
 import {
   getCommandArgsWithRootOptions,
@@ -28,6 +30,7 @@ import {
 } from "./lib/local-build-metadata.mts";
 import { hasUnjoinedWork } from "./lib/managed-child-process.mts";
 import { acquireManagedCleanup } from "./lib/managed-cleanup-handoff.mts";
+import { pinnedBunEnv, requirePinnedBun } from "./lib/pinned-bun.mts";
 import { resolveQaCodexApiKeyEnvPatch } from "./lib/qa-codex-auth-env.mts";
 import {
   collectRunNodeBundledPluginBuildEntries,
@@ -1048,11 +1051,12 @@ const waitForSpawnedProcess = async (
   childProcess: ChildProcess,
   deps: RunNodeDeps,
   acceptShutdownGrace = false,
+  initialShutdownGraceMs = RUN_NODE_DEFAULT_SHUTDOWN_GRACE_MS,
 ) => {
   let forwardedSignal: NodeJS.Signals | null = null;
   let forceKillTimer: NodeJS.Timeout | null = null;
   let cleanedForwardedSignalGroup = false;
-  let shutdownGraceMs = RUN_NODE_DEFAULT_SHUTDOWN_GRACE_MS;
+  let shutdownGraceMs = initialShutdownGraceMs;
   const useProcessGroup = shouldUseRunNodeChildProcessGroup(deps);
 
   const onMessage = (message: unknown) => {
@@ -1139,6 +1143,11 @@ const getInterruptedSpawnOutcome = (
 const runNodeChild = async (deps: RunNodeDeps, args: string[], execPath = deps.execPath) => {
   deps.cancellation.signal.throwIfAborted();
   const useProcessGroup = shouldUseRunNodeChildProcessGroup(deps);
+  // The source launcher must leave the Gateway time to drain and close under
+  // the same stop policy as an installed service. Other commands keep 5s.
+  const shutdownGraceMs = isForegroundGatewayRunArgv([deps.execPath, "openclaw.mjs", ...deps.args])
+    ? GATEWAY_SERVICE_STOP_TIMEOUT_MS
+    : RUN_NODE_DEFAULT_SHUTDOWN_GRACE_MS;
   // The parent route grants lifecycle IPC; generic children must not extend
   // the launcher's five-second force-kill boundary with a shaped message.
   const acceptShutdownGrace =
@@ -1159,7 +1168,7 @@ const runNodeChild = async (deps: RunNodeDeps, args: string[], execPath = deps.e
         : "inherit",
   });
   pipeSpawnedOutput(nodeProcess, deps);
-  const res = await waitForSpawnedProcess(nodeProcess, deps, acceptShutdownGrace);
+  const res = await waitForSpawnedProcess(nodeProcess, deps, acceptShutdownGrace, shutdownGraceMs);
   const interrupted = getInterruptedSpawnOutcome(res, deps.platform);
   if (interrupted !== null) {
     return interrupted;
@@ -1167,12 +1176,14 @@ const runNodeChild = async (deps: RunNodeDeps, args: string[], execPath = deps.e
   return res.exitCode ?? 1;
 };
 
-const runOpenClaw = (deps: RunNodeDeps) =>
-  runNodeChild(
-    deps,
+const runOpenClaw = (deps: RunNodeDeps) => {
+  const bun = resolveTestRuntime(deps.env) === "bun" ? requirePinnedBun(deps.env) : undefined;
+  return runNodeChild(
+    bun ? { ...deps, env: { ...deps.env, ...pinnedBunEnv(bun, deps.env) } } : deps,
     [...resolveRunNodeDiagnosticArgs(deps), "openclaw.mjs", ...deps.args],
-    resolveTestRuntime(deps.env) === "bun" ? "bun" : deps.execPath,
+    bun ?? deps.execPath,
   );
+};
 
 const pipeSpawnedOutput = (
   childProcess: ChildProcess,
@@ -1435,8 +1446,14 @@ const withRunNodeRuntimePublication = async <T,>(deps: RunNodeDeps, publish: () 
 };
 
 const syncRuntimeArtifacts = async (deps: RunNodeDeps) => {
+  // Metadata sync prunes plugins outside its selection, and this refresh cannot
+  // recompile them. Keep the private QA plugins a private QA build compiled.
+  const privateQaBuild = deps.privateQaRequiredDistEntries.every(
+    (entry) => statMtime(entry, deps.fs) != null,
+  );
+  const env = privateQaBuild ? { ...deps.env, OPENCLAW_BUILD_PRIVATE_QA: "1" } : deps.env;
   try {
-    await deps.runRuntimePostBuild({ cwd: deps.cwd, env: deps.env });
+    await deps.runRuntimePostBuild({ cwd: deps.cwd, env });
   } catch (error) {
     logRunner(`Failed to write runtime build artifacts: ${getErrorMessage(error)}`, deps);
     return false;

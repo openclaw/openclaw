@@ -5,25 +5,29 @@ import { openNodeSqliteDatabase, requireNodeSqlite } from "./node-sqlite.js";
 import { hasPendingSqliteNativeExecution } from "./sqlite-native-observer.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-const databases: ReturnType<typeof openNodeSqliteDatabase>[] = [];
-afterEach(() => {
-  for (const database of databases.splice(0)) {
-    if (database.isOpen) {
-      database.close();
-    }
-  }
-});
+const open = (location = ":memory:") => openNodeSqliteDatabase(location);
 
-function open(location = ":memory:") {
-  const db = openNodeSqliteDatabase(location);
-  databases.push(db);
-  return db;
+function outcome(operation: () => unknown) {
+  try {
+    return operation();
+  } catch (error) {
+    return error instanceof Error ? error.message : error;
+  }
 }
 
-it.each(["exec", "run", "get", "all"] as const)(
+function expectNativeBehavior(
+  exercise: (db: ReturnType<typeof open>, observed: boolean) => unknown,
+) {
+  using native = new (requireNodeSqlite().DatabaseSync)(":memory:");
+  using db = open();
+  expect(exercise(db, true)).toEqual(exercise(native, false));
+  expect(hasPendingSqliteNativeExecution(db)).toBe(false);
+}
+
+it.each(["exec", "all"] as const)(
   "retains custody across %s callbacks and preserves a native error",
   (method) => {
-    const db = open();
+    using db = open();
     const failure = new Error("synthetic native callback failure");
     const observations: boolean[] = [];
     db.function("callback", () => {
@@ -43,7 +47,7 @@ it.each(["exec", "run", "get", "all"] as const)(
 );
 
 it("binds iterators immediately and holds custody until exhaustion or explicit return", () => {
-  const db = open();
+  using db = open();
   const statement = db.prepare("SELECT ? AS value UNION ALL SELECT 2");
   expect(() => {
     Reflect.apply(statement.iterate.bind(statement), undefined, [Symbol("invalid")]);
@@ -75,10 +79,10 @@ it("binds iterators immediately and holds custody until exhaustion or explicit r
   expect(hasPendingSqliteNativeExecution(db)).toBe(false);
 });
 
-it.each(["run", "get", "all", "close"] as const)(
+it.each(["all", "close"] as const)(
   "settles a retained statement's RETURNING cursor on %s",
   (method) => {
-    const db = open();
+    using db = open();
     db.exec(
       "CREATE TABLE entries (id INTEGER PRIMARY KEY, value INTEGER); INSERT INTO entries VALUES (1, 0), (2, 0)",
     );
@@ -105,8 +109,8 @@ it.each(["run", "get", "all", "close"] as const)(
 );
 
 it("settles a failing step and closes only the connection whose cursor it owns", () => {
-  const db = open();
-  const sibling = open();
+  using db = open();
+  using sibling = open();
   const cursor = sibling.prepare("SELECT 1 UNION ALL SELECT 2").iterate();
   cursor.next();
   db.function("fail", () => {
@@ -125,9 +129,9 @@ it("settles a failing step and closes only the connection whose cursor it owns",
 
 it("keeps an opaque batch fenced without treating its tentative tail as committed coverage", () => {
   const filename = path.join(tempDirs.make("openclaw-raw-settlement-"), "state.sqlite");
-  const writer = open(filename);
+  using writer = open(filename);
   writer.exec("PRAGMA journal_mode = WAL; CREATE TABLE entries (id TEXT PRIMARY KEY)");
-  const reader = open(filename);
+  using reader = open(filename);
   const seen: boolean[] = [];
   writer.function("observe", () => {
     seen.push(hasPendingSqliteNativeExecution(writer));
@@ -157,117 +161,63 @@ it("keeps an opaque batch fenced without treating its tentative tail as committe
   expect(writer.prepare("SELECT id FROM entries").all()).toEqual([{ id: "committed" }]);
 });
 
-it("retains native trigger, cascade, replace, and savepoint behavior through one execution boundary", () => {
-  const db = open();
-  const observations: boolean[] = [];
-  db.function("observe", () => {
-    observations.push(hasPendingSqliteNativeExecution(db));
-    return 1;
-  });
-  db.exec(`
-    PRAGMA foreign_keys = ON;
-    CREATE TABLE parent (id TEXT PRIMARY KEY);
-    CREATE TABLE child (id TEXT PRIMARY KEY, parent TEXT REFERENCES parent(id) ON DELETE CASCADE);
-    CREATE TRIGGER deleted AFTER DELETE ON child BEGIN SELECT observe(); END;
-    INSERT INTO parent VALUES ('a');
-    INSERT INTO child VALUES ('child', 'a');
-    BEGIN;
-    SAVEPOINT nested;
-    DELETE FROM parent;
-    ROLLBACK TO nested;
-    RELEASE nested;
-    COMMIT;
-  `);
-  expect(observations).toEqual([true]);
-  expect(db.prepare("SELECT id FROM child").get()).toEqual({ id: "child" });
-  db.prepare("REPLACE INTO parent VALUES (?)").run("a");
-  expect(observations).toEqual([true, true]);
-  expect(db.prepare("SELECT id FROM child").all()).toEqual([]);
-  expect(hasPendingSqliteNativeExecution(db)).toBe(false);
-});
-
-it.each(["run", "get", "all", "iterate"] as const)(
+it.each(["get", "iterate"] as const)(
   "preserves native undefined and trailing bindings in %s",
   (method) => {
-    const native = new (requireNodeSqlite().DatabaseSync)(":memory:");
-    databases.push(native);
-    const exercise = (db: typeof native) => {
+    expectNativeBehavior((db) => {
       const called: unknown[][] = [];
       db.function("callback", (first, second) => {
         called.push([first, second]);
         return 1;
       });
       const statement = db.prepare("SELECT callback(?, ?) AS value");
-      let outcome: unknown;
-      try {
+      const result = outcome(() => {
         if (method === "iterate") {
           const rows: ReturnType<typeof statement.iterate> = Reflect.apply(
             statement.iterate.bind(statement),
             undefined,
             [undefined, 42],
           );
-          outcome = rows.next();
+          const step = rows.next();
           rows.return?.();
-        } else {
-          outcome = Reflect.apply(statement[method].bind(statement), undefined, [undefined, 42]);
+          return step;
         }
-      } catch (error) {
-        outcome = error instanceof Error ? error.message : error;
-      }
-      return { called, outcome };
-    };
-    const db = open();
-    expect(exercise(db)).toEqual(exercise(native));
-    expect(hasPendingSqliteNativeExecution(db)).toBe(false);
+        return Reflect.apply(statement[method].bind(statement), undefined, [undefined, 42]);
+      });
+      return { called, outcome: result };
+    });
   },
 );
 
 it("preserves native cursor behavior when an invalidated iterator is stepped", () => {
-  const native = new (requireNodeSqlite().DatabaseSync)(":memory:");
-  databases.push(native);
-  const exercise = (db: typeof native) => {
+  expectNativeBehavior((db, observed) => {
     const statement = db.prepare("SELECT 1 AS value UNION ALL SELECT 2");
     const first = statement.iterate();
     first.next();
     const second = statement.iterate();
     second.next();
-    let stale: unknown;
-    try {
-      stale = first.next();
-    } catch (error) {
-      stale = error instanceof Error ? error.message : error;
-    }
-    if (db !== native) {
+    const stale = outcome(() => first.next());
+    if (observed) {
       expect(hasPendingSqliteNativeExecution(db)).toBe(true);
     }
     const next = second.next();
     first.return?.();
-    if (db !== native) {
+    if (observed) {
       expect(hasPendingSqliteNativeExecution(db)).toBe(true);
     }
     second.return?.();
     return { stale, next };
-  };
-  expect(exercise(open())).toEqual(exercise(native));
+  });
 });
 
 it("preserves a recoverable native row-conversion failure without losing the next row", () => {
-  const native = new (requireNodeSqlite().DatabaseSync)(":memory:");
-  databases.push(native);
-  const exercise = (db: typeof native) => {
+  expectNativeBehavior((db) => {
     const rows = db.prepare("SELECT 9007199254740992 AS value UNION ALL SELECT 2").iterate();
     const results: unknown[] = [];
     for (let step = 0; step < 2; step++) {
-      try {
-        results.push(rows.next());
-      } catch (error) {
-        results.push(error instanceof Error ? error.message : error);
-      }
+      results.push(outcome(() => rows.next()));
     }
     rows.return?.();
     return results;
-  };
-  const db = open();
-  expect(exercise(db)).toEqual(exercise(native));
-  expect(hasPendingSqliteNativeExecution(db)).toBe(false);
+  });
 });

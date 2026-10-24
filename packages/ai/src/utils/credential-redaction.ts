@@ -99,7 +99,7 @@ function hasSensitiveProseContent(value: string): boolean {
     ) {
       return true;
     }
-    mediaContext ||= isDiagnosticMediaPayload({ [key]: { value: assigned } });
+    mediaContext ||= isDiagnosticMediaPayload((field) => (field === key ? assigned : undefined));
     contextualPayload ||= Boolean(extractDiagnosticMediaField(key, normalized, undefined, true));
     if (mediaContext && contextualPayload) {
       return true;
@@ -108,8 +108,20 @@ function hasSensitiveProseContent(value: string): boolean {
   return false;
 }
 
+// Projection normalizes every key of every node; payload key vocabularies repeat heavily.
+const normalizedDiagnosticFieldNames = new Map<string, string>();
+const NORMALIZED_DIAGNOSTIC_FIELD_NAMES_MAX_ENTRIES = 4_096;
+
 function normalizeDiagnosticFieldName(value: string): string {
-  return value.toLowerCase().replaceAll(DIAGNOSTIC_FIELD_SEPARATOR_RE, "");
+  let normalized = normalizedDiagnosticFieldNames.get(value);
+  if (normalized === undefined) {
+    normalized = value.toLowerCase().replaceAll(DIAGNOSTIC_FIELD_SEPARATOR_RE, "");
+    if (normalizedDiagnosticFieldNames.size >= NORMALIZED_DIAGNOSTIC_FIELD_NAMES_MAX_ENTRIES) {
+      normalizedDiagnosticFieldNames.clear();
+    }
+    normalizedDiagnosticFieldNames.set(value, normalized);
+  }
+  return normalized;
 }
 
 /** Classifies credential-bearing fields, including case-insensitive HTTP header names. */
@@ -148,13 +160,13 @@ function diagnosticBytes(value: unknown, numericArrays = false): Uint8Array | un
         : undefined;
 }
 
-function isDiagnosticMediaPayload(descriptors: PropertyDescriptorMap): boolean {
-  const type = descriptors.type?.value;
+function isDiagnosticMediaPayload(field: (key: string) => unknown): boolean {
+  const type = field("type");
   if (typeof type === "string" && MEDIA_TYPE_RE.test(normalizeDiagnosticFieldName(type))) {
     return true;
   }
   for (const key of MEDIA_MIME_FIELDS) {
-    const mime = descriptors[key]?.value;
+    const mime = field(key);
     if (typeof mime === "string" && MEDIA_MIME_RE.test(mime)) {
       return true;
     }
@@ -170,6 +182,8 @@ type DiagnosticMediaField =
       source?: string | Uint8Array;
     };
 export type DiagnosticProjectionPolicy = {
+  maxNodes?: number;
+  maxKeys?: number;
   redactCredentials?: boolean;
   omitField?: (key: string) => boolean;
   propertyScope?: "enumerable" | "error";
@@ -217,12 +231,19 @@ export function createDiagnosticRecord(): Record<string, unknown> {
   return record;
 }
 
+/** Producer-filled arrays hold only assigned elements, like diagnostic records. */
+export function createDiagnosticArray(): unknown[] {
+  const array: unknown[] = [];
+  diagnosticRecords.add(array);
+  return array;
+}
+
 export function projectDiagnosticValue(
   value: unknown,
   policy: DiagnosticProjectionPolicy = {},
   seen = new WeakSet<object>(),
   mediaPayload = false,
-  state = { changed: false, nodesRemaining: 64 },
+  state = { changed: false, nodesRemaining: policy.maxNodes ?? 64 },
 ): unknown {
   try {
     if (typeof value === "string") {
@@ -253,7 +274,10 @@ export function projectDiagnosticValue(
       state.changed = true;
       return "[Truncated]";
     }
-    if (!diagnosticRecords.has(value) || Object.getPrototypeOf(value) !== Object.prototype) {
+    if (
+      !Array.isArray(value) &&
+      (!diagnosticRecords.has(value) || Object.getPrototypeOf(value) !== Object.prototype)
+    ) {
       try {
         // Brand-check without provider getters; retain only numeric retry timing.
         Headers.prototype.has.call(value, "retry-after");
@@ -265,41 +289,65 @@ export function projectDiagnosticValue(
       }
     }
     const keys = Reflect.ownKeys(value);
-    // Snapshot descriptors before recursion; the map restores numeric key order from proxies.
-    const descriptors: PropertyDescriptorMap = Object.create(null);
-    for (let index = 0; index < Math.min(keys.length, 64); index += 1) {
-      const key = keys[index];
-      if (typeof key !== "string") {
-        continue;
+    const maxKeys = policy.maxKeys ?? 64;
+    // Branded producer output holds only own enumerable data properties in native key order,
+    // so reading it directly matches the descriptor snapshot without allocating one per key.
+    const trusted =
+      keys.length <= maxKeys &&
+      diagnosticRecords.has(value) &&
+      Object.getPrototypeOf(value) === (Array.isArray(value) ? Array.prototype : Object.prototype);
+    let descriptors: PropertyDescriptorMap | undefined;
+    if (!trusted) {
+      // Snapshot descriptors before recursion; the map restores numeric key order from proxies.
+      const snapshot: PropertyDescriptorMap = Object.create(null);
+      for (let index = 0; index < Math.min(keys.length, maxKeys); index += 1) {
+        const key = keys[index];
+        if (typeof key !== "string") {
+          continue;
+        }
+        const descriptor = Object.getOwnPropertyDescriptor(value, key);
+        if (descriptor) {
+          snapshot[key] = descriptor;
+        }
       }
-      const descriptor = Object.getOwnPropertyDescriptor(value, key);
-      if (descriptor) {
-        descriptors[key] = descriptor;
-      }
+      descriptors = snapshot;
     }
-    state.changed ||= keys.length > 64;
+    const field = (key: string): unknown =>
+      descriptors
+        ? descriptors[key]?.value
+        : Object.hasOwn(value, key)
+          ? Reflect.get(value, key)
+          : undefined;
+    state.changed ||= keys.length > maxKeys;
     seen.add(value);
     const out = (Array.isArray(value) ? [] : {}) as Record<string, unknown>;
-    const rawName =
-      typeof descriptors.name?.value === "string" ? descriptors.name.value : descriptors.key?.value;
+    const name = field("name");
+    const rawName = typeof name === "string" ? name : field("key");
     const redactValueField =
       policy.redactCredentials !== false &&
-      (keys.length > 64 ||
+      (keys.length > maxKeys ||
         (typeof rawName === "string" &&
           isCredentialFieldName(normalizeDiagnosticFieldName(rawName))));
-    const redactMedia = mediaPayload || keys.length > 64 || isDiagnosticMediaPayload(descriptors);
-    for (const key in descriptors) {
-      const descriptor = expectDefined(descriptors[key], "diagnostic descriptor");
-      if (
-        !("value" in descriptor) ||
-        (!descriptor.enumerable &&
-          (policy.propertyScope === "enumerable" ||
-            !["cause", "errors", "message", "name", "stack"].includes(key))) ||
-        key === "length"
-      ) {
+    const redactMedia = mediaPayload || keys.length > maxKeys || isDiagnosticMediaPayload(field);
+    for (const key of descriptors ? Object.keys(descriptors) : keys) {
+      if (typeof key !== "string" || key === "length") {
         continue;
       }
-      const child = descriptor.value;
+      let child: unknown;
+      if (descriptors) {
+        const descriptor = expectDefined(descriptors[key], "diagnostic descriptor");
+        if (
+          !("value" in descriptor) ||
+          (!descriptor.enumerable &&
+            (policy.propertyScope === "enumerable" ||
+              !["cause", "errors", "message", "name", "stack"].includes(key)))
+        ) {
+          continue;
+        }
+        child = descriptor.value;
+      } else {
+        child = Reflect.get(value, key);
+      }
       const normalized = policy.omitField?.(key) ? undefined : normalizeDiagnosticFieldName(key);
       if (
         normalized === undefined ||

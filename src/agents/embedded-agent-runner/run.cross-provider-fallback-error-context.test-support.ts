@@ -316,6 +316,7 @@ describe("runEmbeddedAgent cross-provider fallback error handling", () => {
     expect(mockedIsFailoverAssistantError).toHaveBeenCalledWith(undefined);
     expect(getLastFormattedAssistant()).toBeUndefined();
     expect(result.meta.finalAssistantVisibleText).toBeUndefined();
+    expect(result.meta.terminalReply).toEqual({ disposition: "empty" });
     expect(result.meta.agentMeta).toMatchObject({
       provider: "deepseek",
       model: "deepseek-chat",
@@ -356,8 +357,10 @@ describe("runEmbeddedAgent cross-provider fallback error handling", () => {
   });
 
   it("does not retry successful replies for stale unsupported-thinking errors", async () => {
-    const helpers = await import("../embedded-agent-helpers.js");
-    const thinking = await import("../embedded-agent-helpers/thinking.js");
+    const helpers = await import("../embedded-agent-helpers/thinking.js");
+    const thinking = await vi.importActual<typeof import("../embedded-agent-helpers/thinking.js")>(
+      "../embedded-agent-helpers/thinking.js",
+    );
     const thinkingMock = vi.mocked(helpers.pickFallbackThinkingLevel);
     const previousThinking = thinkingMock.getMockImplementation();
     thinkingMock.mockImplementation(thinking.pickFallbackThinkingLevel);

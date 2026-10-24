@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { describe, expect, it } from "vitest";
+import type { BoardProvider } from "../../lib/board/provider.ts";
 import { collectGarbageForTest } from "../../test-helpers/garbage-collection.ts";
 import { createRefreshChatPane } from "./chat-pane-history.test-support.ts";
 import { createSidebarFullMessageLoader } from "./chat-pane-sidebar-layout.ts";
@@ -69,4 +70,25 @@ describe("chat pane retained full messages", () => {
       expect(requests).toBe(2);
     },
   );
+});
+
+describe("chat pane empty boards", () => {
+  it("releases replaced session providers while keeping the current fallback", async () => {
+    const { pane: base, state } = createRefreshChatPane();
+    // SAFETY: The existing runtime fixture forwards protected board operations.
+    const pane = base as typeof base & { resolveBoardProvider(): BoardProvider };
+    const retired = ["first", "second"].map((session) => {
+      state.sessionKey = `agent:main:retired-board-${session}`;
+      return new WeakRef(pane.resolveBoardProvider());
+    });
+    state.sessionKey = "agent:main:current-board";
+    const current = new WeakRef(pane.resolveBoardProvider());
+    const collectionControl = new WeakRef({ unowned: true });
+
+    await collectGarbageForTest();
+
+    expect(collectionControl.deref()).toBeUndefined();
+    expect(retired.map((reference) => reference.deref())).toEqual([undefined, undefined]);
+    expect(current.deref()).toBe(pane.resolveBoardProvider());
+  });
 });

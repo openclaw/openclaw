@@ -234,7 +234,7 @@ export function resolveAcpxPluginConfig(params: {
   });
   const agents = Object.fromEntries(
     Object.entries(normalized.agents ?? {}).map(([name, entry]) => {
-      const cmd = entry.command.trim();
+      const cmd = entry.command;
       // Only explicit absolute paths bypass parsing; workspace files must not
       // reinterpret a configured command prefix as a different executable.
       const command = path.isAbsolute(cmd) && fs.existsSync(cmd) ? [cmd] : splitCommandParts(cmd);

@@ -6,7 +6,6 @@ type CronCompletionDeliveryStatus = "delivered" | "not-delivered" | "unknown" | 
 
 type CronCompletionJob = {
   delivery?: {
-    mode?: "none" | "announce" | "webhook";
     bestEffort?: boolean;
   };
 };

@@ -5,17 +5,13 @@ import {
 } from "../../../packages/gateway-protocol/src/schema/presence.js";
 import { bindActiveOperatorTurnAuthority } from "../cron-creator-authority-context.js";
 import { jsonResult, type AnyAgentTool } from "./common.js";
-import {
-  bindAgentToolGatewayRequest,
-  type AgentToolGatewayRequestCaller,
-} from "./in-process-gateway.js";
+import { bindAgentToolGatewayRequest } from "./in-process-gateway.js";
 import { capturePresenceToolAuthority } from "./presence-tool-authority.js";
 import { PRESENCE_QUERY_TIMEOUT_MS, PRESENCE_TOOL_DESCRIPTION } from "./presence-tool-contract.js";
 
 export function createPresenceTool(options?: {
   runId?: string;
   assertSourceCurrent?: () => void;
-  callGateway?: AgentToolGatewayRequestCaller;
 }): AnyAgentTool {
   const ownerAuthority = bindActiveOperatorTurnAuthority(options?.runId);
   return {
@@ -29,7 +25,7 @@ export function createPresenceTool(options?: {
         options?.assertSourceCurrent ??
         capturePresenceToolAuthority({ runId: options?.runId, ownerAuthority });
       assertSourceCurrent();
-      const request = options?.callGateway ?? bindAgentToolGatewayRequest({ hostedOnly: true });
+      const request = bindAgentToolGatewayRequest({ hostedOnly: true });
       const result = await request<PresenceQueryResult>({
         method: "presence.query",
         params,

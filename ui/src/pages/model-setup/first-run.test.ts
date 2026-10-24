@@ -8,15 +8,11 @@ import { isDefaultChatLanding, startModelSetupFirstRunRedirectAfterLocation } fr
 
 const defaultLanding = { pathname: "/chat/main", search: "", hash: "" };
 
-async function startRedirect(
-  context: ApplicationContext,
-  currentLocation = defaultLanding,
-  onInitialDecision?: () => void,
-): Promise<() => void> {
+function startRedirect(context: ApplicationContext, onInitialDecision?: () => void) {
   return startModelSetupFirstRunRedirectAfterLocation({
     context,
     enabled: true,
-    history: { location: () => currentLocation, replace: () => undefined },
+    history: { location: () => defaultLanding, replace: () => undefined },
     initialLocationReady: Promise.resolve(defaultLanding),
     onInitialDecision,
   });
@@ -25,32 +21,32 @@ async function startRedirect(
 function createConnectedContext(
   options: {
     selectedId?: string | null;
-    defaultAgentId?: string;
     modelConfigured?: boolean;
-    includeModelConfigured?: boolean;
     admin?: boolean;
-    advertised?: boolean;
+    stopped?: boolean;
   } = {},
 ) {
   const request = vi.fn();
   const replace = vi.fn();
-  const sessionDefaults = {
-    defaultAgentId: options.defaultAgentId ?? "main",
-    ...(options.includeModelConfigured === false
-      ? {}
-      : { modelConfigured: options.modelConfigured ?? false }),
-  };
+  const subscribe = vi.fn(() => () => undefined);
   const snapshot = {
-    phase: "connected" as const,
-    client: { request },
-    hello: {
-      auth: {
-        role: "operator",
-        scopes: [options.admin === false ? "operator.read" : "operator.admin"],
-      },
-      features: { methods: options.advertised === false ? [] : ["openclaw.setup.detect"] },
-      snapshot: { sessionDefaults },
-    },
+    phase: options.stopped ? "stopped" : "connected",
+    client: options.stopped ? null : { request },
+    hello: options.stopped
+      ? null
+      : {
+          auth: {
+            role: "operator",
+            scopes: [options.admin === false ? "operator.read" : "operator.admin"],
+          },
+          features: { methods: ["openclaw.setup.detect"] },
+          snapshot: {
+            sessionDefaults: {
+              defaultAgentId: "main",
+              modelConfigured: options.modelConfigured ?? false,
+            },
+          },
+        },
   };
   const context = {
     gateway: {
@@ -61,14 +57,14 @@ function createConnectedContext(
         password: "",
         bootstrapToken: "",
       },
-      subscribe: () => () => undefined,
+      subscribe,
     },
     agentSelection: {
       state: { selectedId: options.selectedId === undefined ? "main" : options.selectedId },
     },
     replace,
   } as unknown as ApplicationContext;
-  return { context, replace, request };
+  return { context, replace, request, subscribe };
 }
 
 describe("model setup first-run redirect", () => {
@@ -93,6 +89,7 @@ describe("model setup first-run redirect", () => {
       ["/chat/main", "", "", "", true],
       ["/chat/main/", "", "", "", true],
       ["/openclaw/chat/main", "", "", "/openclaw", true],
+      ["/openclaw/chat/main/", "", "", "/openclaw", true],
       ["/chat/research", "", "", "", false],
       ["/chat/main/existing-session", "", "", "", false],
       ["/dashboard/main", "", "", "", false],
@@ -111,21 +108,12 @@ describe("model setup first-run redirect", () => {
       search: "?session=agent%3Aresearch%3Atelegram%3A12345",
       hash: "",
     };
-    const canonicalLocation = {
-      pathname: "/chat/research/telegram/12345",
-      search: "",
-      hash: "",
-    };
+    const canonicalLocation = { ...defaultLanding, pathname: "/chat/research/telegram/12345" };
     let currentLocation = releasedLocation;
     const replaceLocation = vi.fn((location: typeof releasedLocation) => {
       currentLocation = location;
     });
-    const subscribe = vi.fn(() => () => undefined);
-    const replaceRoute = vi.fn();
-    const context = {
-      gateway: { snapshot: {}, subscribe },
-      replace: replaceRoute,
-    } as unknown as ApplicationContext;
+    const { context, replace: replaceRoute, subscribe } = createConnectedContext();
 
     await startModelSetupFirstRunRedirectAfterLocation({
       context,
@@ -140,22 +128,17 @@ describe("model setup first-run redirect", () => {
   });
 
   it.each([
-    {
-      name: "agent selection is unset",
-      options: { selectedId: null },
-      shouldRedirect: true,
-    },
-    {
-      name: "the operator lacks admin access",
-      options: { admin: false },
-      shouldRedirect: false,
-    },
-  ])("decides synchronously when $name", async ({ options, shouldRedirect }) => {
+    ["agent selection is unset", { selectedId: null }, true],
+    ["the operator lacks admin access", { admin: false }, false],
+    ["the initial connection stopped", { stopped: true }, false],
+  ] as const)("decides synchronously when %s", async (_name, options, shouldRedirect) => {
     const { context, replace, request } = createConnectedContext(options);
 
-    const dispose = await startRedirect(context);
+    const onInitialDecision = vi.fn();
+    const dispose = await startRedirect(context, onInitialDecision);
 
     expect(request).not.toHaveBeenCalled();
+    expect(onInitialDecision).toHaveBeenCalledOnce();
     expect(replace).toHaveBeenCalledTimes(shouldRedirect ? 1 : 0);
     if (shouldRedirect) {
       expect(replace).toHaveBeenCalledWith("model-setup", { search: "?firstRun=1" });
@@ -171,34 +154,10 @@ describe("model setup first-run redirect", () => {
     });
 
     const decision = createDeferred();
-    const dispose = await startRedirect(context, defaultLanding, decision.resolve);
+    const dispose = await startRedirect(context, decision.resolve);
 
     await decision.promise;
     expect(replace).toHaveBeenCalledWith("model-setup", { search: "?firstRun=1" });
-    dispose();
-  });
-
-  it("settles the initial decision on a terminal stopped snapshot", async () => {
-    const phase = "stopped";
-    const onInitialDecision = vi.fn();
-    const context = {
-      gateway: {
-        snapshot: { phase, client: null, hello: null },
-        subscribe: () => () => undefined,
-      },
-      agentSelection: { state: { selectedId: "main" } },
-      replace: vi.fn(),
-    } as unknown as ApplicationContext;
-
-    const dispose = await startModelSetupFirstRunRedirectAfterLocation({
-      context,
-      enabled: true,
-      history: { location: () => defaultLanding, replace: () => undefined },
-      initialLocationReady: Promise.resolve(defaultLanding),
-      onInitialDecision,
-    });
-
-    expect(onInitialDecision).toHaveBeenCalledOnce();
     dispose();
   });
 });

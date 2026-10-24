@@ -6,6 +6,7 @@ import {
   type MessageGroup,
 } from "../../lib/chat/chat-types.ts";
 import { stripHeartbeatTokenForDisplay } from "../../lib/chat/heartbeat-display.ts";
+import { readChatThreadMessageIdentity } from "../../lib/chat/history-message-identity.ts";
 import { isStandaloneToolMessageForDisplay } from "../../lib/chat/message-normalizer.ts";
 import { senderIdentityKey } from "../../lib/chat/sender-label.ts";
 import { extractToolCardsCached } from "../../lib/chat/tool-cards.ts";
@@ -18,17 +19,8 @@ import { resetWorkingProgress } from "./chat-progress.ts";
 import { activeChatReasoning } from "./chat-reasoning.ts";
 import { buildChatItems, type BuildChatItemsProps } from "./chat-thread-build.ts";
 import type { ChatInputOrderState } from "./chat-thread-inputs.ts";
-import { readChatThreadMessageIdentity, sanitizeStreamText } from "./chat-thread-items.ts";
+import { sanitizeStreamText } from "./chat-thread-items.ts";
 import { getOrCreateSessionCacheValue, setSessionCacheValue } from "./session-cache.ts";
-
-export { persistedMessageEntryId, readPendingSendStatus } from "./chat-thread-items.ts";
-export {
-  assistantGroupCanOwnActiveRunStatus,
-  coalesceActivityRuns,
-  coalesceStreamRuns,
-  collapseCompletedTurnWork,
-} from "./chat-thread-grouping.ts";
-export { coalesceAgentRunFrames } from "./chat-agent-run-grouping.ts";
 
 type CachedChatItems = {
   generation: number;
@@ -47,6 +39,7 @@ type ToolCardExpansionState = {
   expanded: Map<string, boolean>;
   // Group disclosures share the map but must stay outside tool-only auto-expand and pruning.
   initialized: Set<string>;
+  explicit: Set<string>;
   /** The tool call behind each disclosure of the last complete projection. */
   calls?: Map<string, string>;
   lastSync?: {
@@ -69,6 +62,8 @@ const chatItemsGenerations = new WeakMap<readonly RenderChatItem[], number>();
 const toolCardStateBySession = new Map<string, ToolCardExpansionState>();
 const expandedUserMessagesBySession = new Map<string, Map<string, boolean>>();
 const expansionMapVersions = new WeakMap<ReadonlyMap<string, unknown>, number>();
+const expansionListeners = new WeakMap<ReadonlyMap<string, unknown>, Set<() => void>>();
+const explicitToolExpansions = new WeakMap<ReadonlyMap<string, unknown>, Set<string>>();
 
 export function resetChatThreadState(paneId?: string): void {
   if (paneId) {
@@ -122,8 +117,24 @@ function sameMessageGroup(previous: MessageGroup, next: MessageGroup): boolean {
 
 const CHAT_ITEM_FIELDS = {
   message: ["message", "duplicateCount"],
-  notice: ["text", "label", "handoffBoundary", "startsTurn", "boundaryId", "timestamp"],
-  divider: ["compaction", "compactionId", "label", "metric", "description", "timestamp"],
+  notice: [
+    "text",
+    "label",
+    "handoffBoundary",
+    "startsTurn",
+    "boundaryId",
+    "timestamp",
+    "systemEvent",
+  ],
+  divider: [
+    "compaction",
+    "compactionId",
+    "label",
+    "metric",
+    "description",
+    "timestamp",
+    "systemEvent",
+  ],
   question: ["questionId", "startedAt"],
   senderSession: ["sessionKey", "agentId", "label"],
 } as const;
@@ -320,6 +331,7 @@ function sameChatItemsStructuralInput(
     previous.showToolCalls === next.showToolCalls &&
     previous.persistCommentary === next.persistCommentary &&
     previous.runWorking === next.runWorking &&
+    previous.runFinalizing === next.runFinalizing &&
     previous.runActive === next.runActive &&
     previous.subagentWait?.startedAt === next.subagentWait?.startedAt &&
     previous.subagentWait?.runId === next.subagentWait?.runId &&
@@ -439,12 +451,34 @@ export function getExpansionStateVersion(values: ReadonlyMap<string, unknown>): 
   return expansionMapVersions.get(values) ?? 0;
 }
 
-export function setExpansionState<T>(values: Map<string, T>, key: string, value: T): void {
+export function subscribeExpansionState(
+  values: ReadonlyMap<string, unknown>,
+  notify: () => void,
+): () => void {
+  const listeners = expansionListeners.get(values) ?? new Set<() => void>();
+  expansionListeners.set(values, listeners);
+  listeners.add(notify);
+  return () => {
+    listeners.delete(notify);
+  };
+}
+
+function writeExpansionState<T>(values: Map<string, T>, key: string, value: T): boolean {
   if (values.has(key) && values.get(key) === value) {
-    return;
+    return false;
   }
   values.set(key, value);
   expansionMapVersions.set(values, getExpansionStateVersion(values) + 1);
+  return true;
+}
+
+export function setExpansionState<T>(values: Map<string, T>, key: string, value: T): void {
+  explicitToolExpansions.get(values)?.add(key);
+  if (writeExpansionState(values, key, value)) {
+    for (const notify of expansionListeners.get(values) ?? []) {
+      notify();
+    }
+  }
 }
 
 function deleteExpansionState<T>(values: Map<string, T>, key: string): void {
@@ -475,10 +509,12 @@ export function pruneAssistantMessageExpansions(
 
 function getToolCardExpansionState(sessionKey: string): ToolCardExpansionState {
   // Expansion choices, initialization, and memoization share one eviction boundary.
-  return getOrCreateSessionCacheValue(toolCardStateBySession, sessionKey, () => ({
-    expanded: new Map(),
-    initialized: new Set(),
-  }));
+  return getOrCreateSessionCacheValue(toolCardStateBySession, sessionKey, () => {
+    const expanded = new Map<string, boolean>();
+    const explicit = new Set<string>();
+    explicitToolExpansions.set(expanded, explicit);
+    return { expanded, initialized: new Set(), explicit };
+  });
 }
 
 export function getExpandedToolCards(sessionKey: string): Map<string, boolean> {
@@ -505,13 +541,14 @@ export function getExpandedUserMessages(sessionKey: string): Map<string, boolean
  * and only where one disclosure names that call on each side.
  */
 function carryMovedDisclosures(
-  expanded: Map<string, boolean>,
+  state: ToolCardExpansionState,
   previous: ReadonlyMap<string, string> | undefined,
   current: ReadonlyMap<string, string>,
 ): void {
   if (!previous) {
     return;
   }
+  const { expanded, explicit } = state;
   const single = (calls: ReadonlyMap<string, string>) => {
     const ids = new Map<string, string | null>();
     for (const [id, call] of calls) {
@@ -523,13 +560,12 @@ function carryMovedDisclosures(
   for (const [call, source] of single(previous)) {
     const target = targets.get(call);
     const open = source ? expanded.get(source) : undefined;
-    if (!source || !target || current.has(source) || open === undefined) {
+    if (!source || !target || current.has(source) || explicit.has(target) || open === undefined) {
       continue;
     }
-    setExpansionState(expanded, target, open);
-    if (source.startsWith("activity:")) {
-      // Group choices are not pruned with their tool rows.
-      deleteExpansionState(expanded, source);
+    writeExpansionState(expanded, target, open);
+    if (explicit.has(source)) {
+      explicit.add(target);
     }
   }
 }
@@ -541,7 +577,7 @@ export function syncToolCardExpansionState(
   isFilteredProjection = false,
 ): void {
   const state = getToolCardExpansionState(sessionKey);
-  const { expanded, initialized, lastSync } = state;
+  const { expanded, initialized, explicit, lastSync } = state;
   if (
     lastSync?.items.deref() === items &&
     lastSync.isFilteredProjection === isFilteredProjection &&
@@ -557,7 +593,9 @@ export function syncToolCardExpansionState(
       calls.set(id, `${kind}:${callId}`);
     }
     if (!initialized.has(id)) {
-      setExpansionState(expanded, id, autoExpandToolCalls);
+      if (!explicit.has(id)) {
+        writeExpansionState(expanded, id, autoExpandToolCalls);
+      }
       initialized.add(id);
     }
   };
@@ -582,19 +620,20 @@ export function syncToolCardExpansionState(
     }
   }
   if (!isFilteredProjection) {
-    carryMovedDisclosures(expanded, state.calls, calls);
+    carryMovedDisclosures(state, state.calls, calls);
     state.calls = calls;
   }
   if (autoExpandToolCalls && !lastSync?.autoExpandToolCalls) {
     for (const toolCardId of initialized) {
-      setExpansionState(expanded, toolCardId, true);
+      writeExpansionState(expanded, toolCardId, true);
     }
   }
-  // Search hides existing cards temporarily; pruning that projection would
-  // discard the user's disclosure choice before the full transcript returns.
+  // A render reconciles its own history without notifying sibling panes. Their
+  // history windows can differ; explicit choices survive until session eviction.
+  // Search also hides defaults temporarily, so it cannot prune them.
   if (!isFilteredProjection) {
     for (const disclosureId of initialized) {
-      if (!currentToolCardIds.has(disclosureId)) {
+      if (!currentToolCardIds.has(disclosureId) && !explicit.has(disclosureId)) {
         initialized.delete(disclosureId);
         deleteExpansionState(expanded, disclosureId);
       }

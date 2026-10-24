@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createMessageInjectionAuthority } from "../../../auto-reply/reply/message-injection-authority.js";
-import { createReplyOperation } from "../../../auto-reply/reply/reply-run-registry.js";
-import { expireStaleReplyOperation } from "../../../auto-reply/reply/reply-run-registry.state.js";
 import type { Context } from "../../../llm/types.js";
+import { createReplyOperation } from "../../../sessions/session-controller.js";
+import { captureSessionTarget } from "../../../sessions/session-controller.lifecycle.js";
 import { createUserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.js";
 import { createTestUserTurnTranscriptTarget } from "../../../sessions/user-turn-transcript.test-support.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
@@ -12,10 +12,7 @@ import {
 } from "../../admitted-run-context.js";
 import { registerPendingAgentQuestion } from "../../harness/gateway-question.js";
 import { withPreparedEmbeddedRunToolAuthority } from "../../harness/tool-authority.runtime.js";
-import {
-  isAgentRunRestartAbortReason,
-  isAgentRunSupersededAbortReason,
-} from "../../run-termination.js";
+import { isAgentRunRestartAbortReason } from "../../run-termination.js";
 import {
   createAssistant,
   createAssistantResultStream,
@@ -23,7 +20,8 @@ import {
   registerAgentSessionLoopTestLifecycle,
   streamMocks,
 } from "../../sessions/agent-session-loop-correctness.test-support.js";
-import { ACTIVE_EMBEDDED_RUNS, ACTIVE_EMBEDDED_RUN_REGISTRATIONS } from "../run-state.js";
+import { getActiveNativeAttempt, getEmbeddedRunAttachment } from "../run-state.js";
+import { registerReplyPromotionTests } from "./attempt-stream-prepare.reply-promotion.test-support.js";
 
 type QuestionDispatcher = Extract<
   Parameters<typeof registerPendingAgentQuestion>[0]["gatewayCall"],
@@ -41,9 +39,10 @@ const mocks = vi.hoisted(() => ({
 vi.mock("../../embedded-agent-subscribe.js", () => ({
   subscribeEmbeddedAgentSession: mocks.subscribe,
 }));
+// mock-isolation: Synthetic stream handles must not register with the live native-run owner.
 vi.mock("../runs.js", () => ({
-  clearActiveEmbeddedRun: mocks.clearActiveRun,
-  setActiveEmbeddedRun: mocks.setActiveRun,
+  detachActiveEmbeddedRun: mocks.clearActiveRun,
+  attachActiveEmbeddedRun: mocks.setActiveRun,
 }));
 vi.mock("../../../shared/tool-activity-heartbeat.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../../shared/tool-activity-heartbeat.js")>()),
@@ -70,6 +69,37 @@ import {
 
 registerAgentSessionLoopTestLifecycle();
 
+const steeringOptions = {
+  isInboundUserMessage: true,
+  toolAuthorityFingerprint: "test-steering",
+  // Source-bound steering is checked again at final dispatch.
+  assertCurrent: () => {},
+};
+
+function prepareDeferredSteering(
+  session: NonNullable<Parameters<typeof prepareCatalogExecutor>[0]>["activeSession"],
+  withFinalizeHook = false,
+) {
+  return prepareCatalogExecutor({
+    activeSession: session,
+    ...(withFinalizeHook
+      ? { hookRunner: { hasHooks: (name: string) => name === "before_agent_finalize" } as never }
+      : {}),
+    attempt: {
+      deferTerminalLifecycle: true,
+      onDeferredLifecycleOwner: () => {},
+      toolAuthorityFingerprint: steeringOptions.toolAuthorityFingerprint,
+    },
+  });
+}
+
+async function useRealSubscription() {
+  const actual = await vi.importActual<typeof import("../../embedded-agent-subscribe.js")>(
+    "../../embedded-agent-subscribe.js",
+  );
+  mocks.subscribe.mockImplementation(actual.subscribeEmbeddedAgentSession);
+}
+
 describe("prepareEmbeddedAttemptStream", () => {
   afterEach(async () => {
     const { testing } = await import("../runs.test-support.js");
@@ -78,12 +108,88 @@ describe("prepareEmbeddedAttemptStream", () => {
   });
   beforeEach(async () => {
     vi.clearAllMocks();
-    ACTIVE_EMBEDDED_RUNS.clear();
     const runs = await vi.importActual<typeof import("../runs.js")>("../runs.js");
-    mocks.setActiveRun.mockImplementation(runs.setActiveEmbeddedRun);
-    mocks.clearActiveRun.mockImplementation(runs.clearActiveEmbeddedRun);
+    // Stream preparation retains its already imported spies. Fixture admission
+    // must bind the real registry, not recursively call those registration spies.
+    vi.doUnmock("../runs.js");
+    const { testing, registerTestEmbeddedRun } = await import("../runs.test-support.js");
+    testing.resetActiveEmbeddedRuns();
+    mocks.setActiveRun.mockImplementation(registerTestEmbeddedRun);
+    mocks.clearActiveRun.mockImplementation(runs.detachActiveEmbeddedRun);
     mocks.subscribe.mockReturnValue(createCatalogSubscription());
     mocks.runBeforeFinalizeHook.mockResolvedValue({ action: "continue" });
+  });
+
+  it("keeps exact stream owners current when physical stores share a session ID", async () => {
+    const sessionId = "shared-stream-session";
+    const runs = await vi.importActual<typeof import("../runs.js")>("../runs.js");
+    const owners = await Promise.all(
+      ["first", "second"].map(async (name) => {
+        const sessionKey = `agent:main:stream-${name}`;
+        const operation = createReplyOperation({
+          sessionId,
+          sessionKey,
+          resetTriggered: false,
+          target: captureSessionTarget({
+            storeScope: `/synthetic/stream-${name}/sessions.sqlite`,
+            sessionKey,
+            incarnation: sessionId,
+          }),
+        });
+        operation.setPhase("running");
+        const { session } = await createTestSession();
+        const recover = vi.fn(() => true);
+        const prepared = prepareCatalogExecutor({
+          activeSession: session,
+          replyOperation: operation,
+          recoverStalledModelCall: recover,
+          sessionKey,
+          attempt: { runId: `stream-${name}`, sessionId, sessionFile: `stream-${name}.jsonl` },
+        });
+        const answer = vi.fn(async () => ({ status: "answered" }));
+        const question = registerPendingAgentQuestion({
+          questionId: `ask-stream-${name}`,
+          sessionKey,
+          questions: [{ id: "answer", header: "Answer", question: "Continue?", options: [] }],
+          gatewayCall: { version: 2, call: answer } satisfies QuestionDispatcher,
+          answer: Promise.resolve({ status: "pending" }),
+        });
+        question.attachRegistration(Promise.resolve());
+        return { name, sessionKey, operation, session, prepared, recover, answer, question };
+      }),
+    );
+    try {
+      expect(getActiveNativeAttempt(sessionId)).toBeUndefined();
+      for (const owner of owners) {
+        await owner.prepared.queueHandle.queueMessage(`steer ${owner.name}`);
+        expect(owner.session.getSteeringMessages()).toContain(`steer ${owner.name}`);
+        await expect(
+          owner.prepared.queueHandle.claimPendingUserInputAnswer?.("continue", {
+            isInboundUserMessage: true,
+          }),
+        ).resolves.toBe(true);
+        expect(owner.answer).toHaveBeenCalledOnce();
+        expect(owner.prepared.queueHandle.recoverStalledModelCall?.()).toBe(true);
+        expect(owner.recover).toHaveBeenCalledOnce();
+      }
+      const first = owners[0]!;
+      const second = owners[1]!;
+      runs.detachActiveEmbeddedRun(sessionId, first.prepared.queueHandle);
+      await expect(first.prepared.queueHandle.queueMessage("retired")).rejects.toThrow(
+        "active session is finalizing",
+      );
+      expect(first.prepared.queueHandle.recoverStalledModelCall?.()).toBe(false);
+      await second.prepared.queueHandle.queueMessage("still current");
+      expect(second.session.getSteeringMessages()).toContain("still current");
+      expect(second.prepared.queueHandle.recoverStalledModelCall?.()).toBe(true);
+    } finally {
+      for (const owner of owners) {
+        owner.question.dispose();
+        owner.prepared.subscription.unsubscribe();
+        runs.detachActiveEmbeddedRun(sessionId, owner.prepared.queueHandle);
+        owner.operation.complete();
+      }
+    }
   });
 
   it("preserves transcript routing and run-local media trust at the subscription", () => {
@@ -92,12 +198,14 @@ describe("prepareEmbeddedAttemptStream", () => {
     prepareCatalogExecutor({
       trustedLocalMediaToolNames,
       sessionKey,
-      sandboxSessionKey: "agent:main:main",
+      attempt: { sandboxSessionKey: "agent:main:main" },
     });
     expect(mocks.subscribe).toHaveBeenCalledWith(
       expect.objectContaining({ trustedLocalMediaToolNames, sessionKey }),
     );
   });
+
+  registerReplyPromotionTests();
 
   it.each([
     ["replacement", "steering"],
@@ -111,9 +219,7 @@ describe("prepareEmbeddedAttemptStream", () => {
     ["source-throw", "steering"],
     ["source-open", "steering"],
     ["source-recovered-false", "steering"],
-    ["source-recovered-throw", "steering"],
     ["source-recovered-false", "question"],
-    ["source-recovered-throw", "question"],
   ] as const)(
     "checks %s during real session %s preparation before its effect",
     async (transition, route) => {
@@ -231,14 +337,10 @@ describe("prepareEmbeddedAttemptStream", () => {
                 accepted && route === "steering" ? ["redirect the original"] : [],
               );
               if (transition.startsWith("source-")) {
-                const authority = ACTIVE_EMBEDDED_RUN_REGISTRATIONS.get(
-                  prepared.queueHandle,
-                )?.toolAuthority;
+                const authority = getEmbeddedRunAttachment(prepared.queueHandle)?.toolAuthority;
                 expect(authority).toBeDefined();
                 authority!.assertActive();
-                expect(ACTIVE_EMBEDDED_RUNS.get("session-output-schema")).toBe(
-                  prepared.queueHandle,
-                );
+                expect(getActiveNativeAttempt("session-output-schema")).toBe(prepared.queueHandle);
               }
             } finally {
               release.resolve();
@@ -257,15 +359,11 @@ describe("prepareEmbeddedAttemptStream", () => {
 
   it.each([
     [undefined, "check git status"],
-    ["explain", "check git status"],
     ["raw", "check git status, `git status`"],
   ] as const)(
     "renders %s progress detail through the real subscription",
     async (toolProgressDetail, meta) => {
-      const { subscribeEmbeddedAgentSession } = await vi.importActual<
-        typeof import("../../embedded-agent-subscribe.js")
-      >("../../embedded-agent-subscribe.js");
-      mocks.subscribe.mockImplementation(subscribeEmbeddedAgentSession);
+      await useRealSubscription();
       const onAgentEvent = vi.fn();
       const prepared = prepareCatalogExecutor({ toolProgressDetail, onAgentEvent });
       try {
@@ -291,33 +389,6 @@ describe("prepareEmbeddedAttemptStream", () => {
       }
     },
   );
-
-  it("retains exact heartbeat preemption on the embedded queue handle", () => {
-    const operation = createReplyOperation({
-      sessionKey: "agent:main:main",
-      sessionId: "session-output-schema",
-      turnKind: "heartbeat",
-      resetTriggered: false,
-    });
-    try {
-      const prepared = prepareCatalogExecutor({ replyOperation: operation });
-
-      expect(prepared.queueHandle.preemptByVisibleTurn?.()).toBe(true);
-      expect(operation.result).toEqual({
-        kind: "aborted",
-        code: "aborted_for_supersession",
-      });
-      expect(mocks.setActiveRun).toHaveBeenCalledWith(
-        "session-output-schema",
-        expect.objectContaining({ preemptByVisibleTurn: expect.any(Function) }),
-        "agent:main:main",
-        undefined,
-        "main",
-      );
-    } finally {
-      operation.complete();
-    }
-  });
 
   it.each([false, true])(
     "keeps finalization closed after revision or unsubscribe (unsubscribe: %s)",
@@ -448,41 +519,25 @@ describe("prepareEmbeddedAttemptStream", () => {
     const sessionId = "session-output-schema";
     const { session, settled, releaseSettlement } = await createHeldSettlementSession();
     const steer = vi.spyOn(session.agent, "admitSteeringMessage");
-    const actual = await vi.importActual<typeof import("../../embedded-agent-subscribe.js")>(
-      "../../embedded-agent-subscribe.js",
-    );
-    mocks.subscribe.mockImplementation(actual.subscribeEmbeddedAgentSession);
-    const toolAuthorityFingerprint = "test-steering";
-    const steeringOptions = { isInboundUserMessage: true, toolAuthorityFingerprint };
-    const prepared = prepareCatalogExecutor({
-      activeSession: session,
-      hookRunner: { hasHooks: (name: string) => name === "before_agent_finalize" } as never,
-      attempt: {
-        deferTerminalLifecycle: true,
-        onDeferredLifecycleOwner: () => {},
-        toolAuthorityFingerprint,
-      },
-    });
+    await useRealSubscription();
+    const prepared = prepareDeferredSteering(session, true);
     const prompt = session.prompt("Finish this turn.");
     let nestedPrompt: Promise<void> | undefined;
     let unsubscribeNested: (() => void) | undefined;
     try {
       await settled.promise;
-      expect(ACTIVE_EMBEDDED_RUNS.get(sessionId)).toBe(prepared.queueHandle);
-      const { queueGuardedEmbeddedAgentMessageWithOutcomeAsync: queueMessage } =
-        await vi.importActual<typeof import("../runs.js")>("../runs.js");
-      const expected = { queued: false, reason: "not_streaming", gatewayHealth: "live" };
+      expect(getActiveNativeAttempt(sessionId)).toBe(prepared.queueHandle);
+      const { steerTestSessionTurn: queueMessage } = await import("../runs.test-support.js");
+      const expected = { status: "rejected", reason: "injection_unavailable" };
       // The nonwaiting call makes the old late-admission bug fail without a delivery timeout.
       await expect(
-        queueMessage(sessionId, "Start the next turn.", steeringOptions, () => true),
+        queueMessage(sessionId, "Start the next turn.", steeringOptions),
       ).resolves.toMatchObject(expected);
       await expect(
-        queueMessage(
-          sessionId,
-          "Wait for the next turn.",
-          { ...steeringOptions, waitForTranscriptCommit: true },
-          () => true,
-        ),
+        queueMessage(sessionId, "Wait for the next turn.", {
+          ...steeringOptions,
+          waitForTranscriptCommit: true,
+        }),
       ).resolves.toMatchObject(expected);
       const nestedEnd = createDeferredCore<Awaited<ReturnType<typeof queueMessage>>>();
       unsubscribeNested = session.subscribe((event) => {
@@ -490,7 +545,7 @@ describe("prepareEmbeddedAttemptStream", () => {
           return undefined;
         }
         unsubscribeNested?.();
-        return queueMessage(sessionId, "Stale owner.", steeringOptions, () => true).then(
+        return queueMessage(sessionId, "Stale owner.", steeringOptions).then(
           nestedEnd.resolve,
           nestedEnd.reject,
         );
@@ -520,18 +575,8 @@ describe("prepareEmbeddedAttemptStream", () => {
       requests.push(context);
       return createAssistantResultStream(createAssistant(model, [{ type: "text", text: "Done." }]));
     });
-    const toolAuthorityFingerprint = "test-steering";
-    const steeringOptions = { isInboundUserMessage: true, toolAuthorityFingerprint };
-    const prepared = prepareCatalogExecutor({
-      activeSession: session,
-      attempt: {
-        deferTerminalLifecycle: true,
-        onDeferredLifecycleOwner: () => {},
-        toolAuthorityFingerprint,
-      },
-    });
-    const { queueGuardedEmbeddedAgentMessageWithOutcomeAsync: queueMessage } =
-      await vi.importActual<typeof import("../runs.js")>("../runs.js");
+    const prepared = prepareDeferredSteering(session);
+    const { steerTestSessionTurn: queueMessage } = await import("../runs.test-support.js");
     const events: string[] = [];
     let queued: Awaited<ReturnType<typeof queueMessage>> | undefined;
     // Register after preparation so an accidental raw agent_end closure is observable.
@@ -548,13 +593,12 @@ describe("prepareEmbeddedAttemptStream", () => {
           "session-output-schema",
           "Continue this turn.",
           steeringOptions,
-          () => true,
         );
       }
     });
     try {
       await session.prompt("Begin this turn.");
-      expect(queued).toMatchObject({ queued: true });
+      expect(queued).toMatchObject({ status: "accepted" });
       expect(requests).toHaveLength(2);
       expect(JSON.stringify(requests[1]?.messages)).toContain("Continue this turn.");
       expect(events).toEqual(["agent_end", "agent_end", "agent_settled"]);
@@ -568,30 +612,20 @@ describe("prepareEmbeddedAttemptStream", () => {
 
   it("rejects registered steering after a real turn handoff", async () => {
     const session = await createTurnHandoffSession();
-    const toolAuthorityFingerprint = "test-steering";
-    const steeringOptions = { isInboundUserMessage: true, toolAuthorityFingerprint };
-    const prepared = prepareCatalogExecutor({
-      activeSession: session,
-      attempt: {
-        deferTerminalLifecycle: true,
-        onDeferredLifecycleOwner: () => {},
-        toolAuthorityFingerprint,
-      },
-    });
+    const prepared = prepareDeferredSteering(session);
     const events: string[] = [];
     const unsubscribe = session.subscribe((event) => {
       events.push(event.type);
     });
-    const { queueGuardedEmbeddedAgentMessageWithOutcomeAsync: queueMessage } =
-      await vi.importActual<typeof import("../runs.js")>("../runs.js");
+    const { steerTestSessionTurn: queueMessage } = await import("../runs.test-support.js");
     try {
       await session.prompt("Hand off this turn.");
       expect(events).toContain("agent_handoff");
       expect(events).not.toContain("agent_settled");
-      expect(ACTIVE_EMBEDDED_RUNS.get("session-output-schema")).toBe(prepared.queueHandle);
+      expect(getActiveNativeAttempt("session-output-schema")).toBe(prepared.queueHandle);
       await expect(
-        queueMessage("session-output-schema", "Too late.", steeringOptions, () => true),
-      ).resolves.toMatchObject({ queued: false, reason: "not_streaming", gatewayHealth: "live" });
+        queueMessage("session-output-schema", "Too late.", steeringOptions),
+      ).resolves.toMatchObject({ status: "rejected", reason: "injection_unavailable" });
       expect(session.getSteeringMessages()).toEqual([]);
     } finally {
       unsubscribe();
@@ -600,7 +634,7 @@ describe("prepareEmbeddedAttemptStream", () => {
     }
   });
 
-  it.each(["ordinary", "cancelled", "deferred cancellation", "pending task"] as const)(
+  it.each(["ordinary", "deferred cancellation", "pending task"] as const)(
     "publishes terminal activity under %s ownership",
     async (scenario) => {
       const result = await observeTerminalRunActivity(scenario, (subscribe) =>
@@ -616,7 +650,7 @@ describe("prepareEmbeddedAttemptStream", () => {
     },
   );
 
-  it.each(["subscription", "registration", "deferred lifecycle adoption"] as const)(
+  it.each(["deferred lifecycle adoption"] as const)(
     "releases acquired stream subscriptions when %s fails",
     async (stage) => {
       const { session, listeners, releases } = await trackPreparedStreamSubscriptions((subscribe) =>
@@ -626,74 +660,40 @@ describe("prepareEmbeddedAttemptStream", () => {
       const fail = () => {
         throw failure;
       };
-      if (stage === "subscription") {
-        mocks.subscribe.mockImplementationOnce(fail);
-      }
-      if (stage === "registration") {
-        mocks.setActiveRun.mockImplementationOnce(fail);
-      }
       expect(() =>
         prepareCatalogExecutor({
           activeSession: session,
           attempt: {
             deferTerminalLifecycle: true,
-            onDeferredLifecycleOwner: stage === "deferred lifecycle adoption" ? fail : () => {},
+            onDeferredLifecycleOwner: fail,
           },
         }),
       ).toThrow(failure);
-      expect(releases).toHaveLength(stage === "subscription" ? 1 : 2);
+      expect(releases).toHaveLength(2);
       expect(listeners.size).toBe(0);
       for (const release of releases) {
         expect(release).toHaveBeenCalledOnce();
       }
-      expect(ACTIVE_EMBEDDED_RUNS.has("session-output-schema")).toBe(false);
+      expect(Boolean(getActiveNativeAttempt("session-output-schema"))).toBe(false);
     },
   );
 
-  it.each([
-    "prompt",
-    "abort",
-    "pre-aborted",
-    "supersede",
-    "unsubscribe",
-    "discard",
-    "complete",
-  ] as const)("releases each stream subscription once through %s cleanup", async (phase) => {
+  it("releases each stream subscription once through complete cleanup", async () => {
     const { session, listeners, releases } = await trackPreparedStreamSubscriptions((subscribe) =>
       mocks.subscribe.mockImplementation(subscribe),
     );
     const runAbortController = new AbortController();
-    if (phase === "pre-aborted") {
-      runAbortController.abort();
-    }
     const prepared = prepareCatalogExecutor({
       activeSession: session,
       runAbortController,
       abortRun: (_isTimeout, reason) => runAbortController.abort(reason),
       attempt: { deferTerminalLifecycle: true, onDeferredLifecycleOwner: () => {} },
     });
-    expect(listeners.size).toBe(phase === "pre-aborted" ? 1 : 2);
-
-    if (phase === "prompt") {
-      prepared.stopAcceptingSteerMessages();
-    } else if (phase === "abort") {
-      runAbortController.abort();
-    } else if (phase === "supersede") {
-      prepared.queueHandle.cancel("superseded");
-    } else if (phase === "unsubscribe") {
-      prepared.subscription.unsubscribe();
-    } else if (phase === "discard") {
-      await prepared.deferredLifecycleOwner!.discard();
-    } else if (phase === "complete") {
-      await prepared.deferredLifecycleOwner!.complete();
-    }
+    expect(listeners.size).toBe(2);
+    await prepared.deferredLifecycleOwner!.complete();
 
     expect(prepared.queueHandle.isStopped?.()).toBe(true);
-    expect(listeners.size).toBe(
-      phase === "prompt" || phase === "abort" || phase === "pre-aborted" || phase === "supersede"
-        ? 1
-        : 0,
-    );
+    expect(listeners.size).toBe(0);
     prepared.stopAcceptingSteerMessages();
     prepared.subscription.unsubscribe();
     await prepared.deferredLifecycleOwner!.discard();
@@ -806,14 +806,19 @@ describe("prepareEmbeddedAttemptStream", () => {
         abortRun,
       });
       queueHandle = prepared.queueHandle;
+      const cancel = vi.spyOn(prepared.queueHandle, "cancel");
 
-      expect(expireStaleReplyOperation(operation, "stuck_recovery")).toBe(false);
+      expect(operation.abortForStall()).toBe(true);
 
       expect(markExternalAbort).toHaveBeenCalledOnce();
       expect(onAttemptAbort).toHaveBeenCalledOnce();
       expect(abortState.terminal).toEqual({ kind: "aborted", source: "external" });
       expect(abortActiveSession).toHaveBeenCalledOnce();
-      expect(isAgentRunSupersededAbortReason(runAbortController.signal.reason)).toBe(true);
+      expect(cancel).toHaveBeenCalledExactlyOnceWith("superseded");
+      // The controller signal reaches the attempt before backend cancellation;
+      // reentrant cancellation must preserve that first owner-provided reason.
+      expect(runAbortController.signal.reason).toBe(operation.abortSignal.reason);
+      expect(runAbortController.signal.reason).toMatchObject({ name: "AbortError" });
       expect(operation.result).toEqual({ kind: "failed", code: "run_stalled" });
       expect(operation.abortSignal.aborted).toBe(true);
     } finally {

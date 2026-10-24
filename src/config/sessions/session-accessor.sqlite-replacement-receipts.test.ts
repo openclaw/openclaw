@@ -1,4 +1,5 @@
 import { DatabaseSync } from "node:sqlite";
+import { isDeepStrictEqual } from "node:util";
 import "./session-accessor.sqlite-replacement-publication.test-support.js";
 import { expect, it } from "vitest";
 import { createSessionMembershipProjection } from "../../gateway/session-membership-projection.js";
@@ -89,6 +90,10 @@ it("sheds aggregate optional snapshots while committing every required receipt r
     expect(result.replacement.source?.writeToken).toBeUndefined();
     expect([...result.replacement.current.keys()]).toEqual(keys);
     expect(result.metadata).toHaveLength(keys.length);
+    const identity = readOpenClawAgentDatabaseIdentity(database).identity;
+    if (typeof identity !== "string") {
+      throw new Error("Expected durable snapshot fixture");
+    }
     for (const [index, key] of keys.entries()) {
       expect(readExactSessionEntryRow(database, key, "list")?.entry.label).toBe(key);
       const metadata = result.metadata[index]!;
@@ -101,6 +106,121 @@ it("sheds aggregate optional snapshots while committing every required receipt r
       expect(metadata.source.writeToken).toBeUndefined();
       expect(result.replacement.current.get(key)).toMatchObject({ label: key });
       expect(result.replacement.current.get(key)?.skillsSnapshot).toBeUndefined();
+      const predicate = retainPreparedSessionEntryPredicate({
+        databaseIdentity: `file:${identity}`,
+        sessionKey: key,
+        entry: readExactSessionEntryRow(database, key, "full")!.entry,
+        projection: ["skillsSnapshot"],
+        matches: (before, after) =>
+          isDeepStrictEqual(before?.skillsSnapshot, after?.skillsSnapshot),
+      });
+      const publication = retainSessionEntryWorkerPublication({
+        agentId: "main",
+        storePath: database.path,
+        databaseIdentity: identity,
+      });
+      try {
+        publication.beginChanges([key]);
+        publication.settleMetadata([metadata], [], () => {});
+        expect(predicate.isCurrent()).toBe(false);
+        expect(predicate.canRefresh()).toBe(true);
+      } finally {
+        publication.settle(undefined, false);
+        predicate.release();
+      }
+    }
+  });
+});
+
+it("preserves retained snapshot authority through title writes and revokes library changes", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const database = openOpenClawAgentDatabase({ agentId: "main" });
+    const scope = {
+      agentId: "main",
+      storePath: database.path,
+      sessionKey: "agent:main:snapshot-authority",
+    };
+    const entry: SessionEntry = {
+      sessionId: "snapshot-authority",
+      updatedAt: 1,
+      skillsSnapshot: {
+        prompt: "",
+        skills: [],
+        librarySelections: [
+          {
+            skillId: "11111111-1111-4111-8111-111111111111",
+            revision: "a".repeat(64),
+            name: "notes",
+            ownerProfileId: "snapshot-owner",
+          },
+        ],
+      },
+    };
+    replaceSessionEntrySync(scope, entry);
+    const identity = readOpenClawAgentDatabaseIdentity(database).identity;
+    if (typeof identity !== "string") {
+      throw new Error("Expected durable snapshot fixture");
+    }
+    const retained = { databaseIdentity: `file:${identity}`, sessionKey: scope.sessionKey };
+    const snapshot = retainPreparedSessionEntryPredicate({
+      ...retained,
+      entry,
+      projection: ["skillsSnapshot"],
+      matches: (before, after) =>
+        before?.sessionId === after?.sessionId &&
+        isDeepStrictEqual(
+          before?.skillsSnapshot?.librarySelections,
+          after?.skillsSnapshot?.librarySelections,
+        ),
+    });
+    const list = retainPreparedSessionEntryPredicate({
+      ...retained,
+      entry: readExactSessionEntryRow(database, scope.sessionKey, "list")!.entry,
+      projection: "list",
+      matches: (before, after) =>
+        before?.sessionId === after?.sessionId && after?.skillsSnapshot === undefined,
+    });
+    try {
+      replaceSessionEntrySync(scope, { ...entry, displayName: "Native title" });
+      expect(snapshot.isCurrent()).toBe(true);
+      expect(list.isCurrent()).toBe(true);
+      await upsertSessionEntryCore(scope, { displayName: "Worker title" });
+      expect(snapshot.isCurrent()).toBe(true);
+      let pendingCurrent: boolean | undefined;
+      delivery.afterResult = () => {
+        pendingCurrent = snapshot.isCurrent();
+      };
+      await applySessionEntryExactReplacements({
+        storePath: database.path,
+        sessionKeys: [scope.sessionKey],
+        update: ([row]) => ({
+          result: undefined,
+          replacements: [
+            {
+              sessionKey: scope.sessionKey,
+              entry: { ...row!.entry, displayName: "Replacement title" },
+            },
+          ],
+        }),
+      });
+      expect(pendingCurrent).toBe(true);
+      expect(snapshot.isCurrent()).toBe(true);
+      expect(snapshot.readRetainedEntry()?.skillsSnapshot).toEqual(entry.skillsSnapshot);
+      await recordSessionParticipantInWorker(scope, {
+        identity: { type: "agent", id: "other" },
+        promptedAt: 1,
+      });
+      expect(snapshot.isCurrent()).toBe(true);
+      await upsertSessionEntryCore(scope, {
+        skillsSnapshot: { prompt: "", skills: [], librarySelections: [] },
+      });
+      expect(snapshot.isCurrent()).toBe(false);
+      expect(snapshot.canRefresh()).toBe(false);
+      expect(list.isCurrent()).toBe(true);
+    } finally {
+      delivery.afterResult = undefined;
+      snapshot.release();
+      list.release();
     }
   });
 });
@@ -387,12 +507,15 @@ it("keeps unrelated predicates current through participant publication", async (
 });
 
 it.each([
-  { successor: "metadata", authorityChanged: false },
-  { successor: "metadata", authorityChanged: true },
-  { successor: "member", authorityChanged: true },
+  { successor: "metadata", authorityChanged: false, acquiring: false },
+  { successor: "metadata", authorityChanged: true, acquiring: false },
+  { successor: "member", authorityChanged: true, acquiring: false },
+  { successor: "metadata", authorityChanged: false, acquiring: true },
+  { successor: "metadata", authorityChanged: true, acquiring: true },
+  { successor: "member", authorityChanged: true, acquiring: true },
 ] as const)(
-  "keeps newer $successor facts when an older replacement settles (authority changed=$authorityChanged)",
-  async ({ successor, authorityChanged }) => {
+  "keeps newer $successor facts when an older replacement settles (authority changed=$authorityChanged, acquiring=$acquiring)",
+  async ({ successor, authorityChanged, acquiring }) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const database = openOpenClawAgentDatabase({ agentId: "main" });
       const scope = {
@@ -419,9 +542,11 @@ it.each([
       };
       const predicate = retainPreparedSessionEntryPredicate({
         ...retained,
+        acquiring,
         matches: (before, after) =>
           before?.sessionId === after?.sessionId && before?.sandboxMode === after?.sandboxMode,
       });
+      const revision = predicate.captureRevision();
       const generation = retainPreparedSessionGenerationFacts(retained);
       const sharing = retainPreparedSessionSharingFacts({
         ...retained,
@@ -459,10 +584,13 @@ it.each([
         expect(readExactSessionEntryRow(database, scope.sessionKey)?.entry.label).toBe(
           successor === "member" ? "older commit" : "newer commit",
         );
-        expect(predicate.isCurrent()).toBe(!authorityChanged);
         if (!authorityChanged) {
-          expect(predicate.readCurrent()?.entry?.label).toBe("newer commit");
+          expect(predicate.readRetainedEntry()?.label).toBe("newer commit");
         }
+        if (acquiring) {
+          expect(predicate.acknowledge(entry, revision)).toBe(!authorityChanged);
+        }
+        expect(predicate.isCurrent()).toBe(!authorityChanged);
         expect(generation.readCurrent()).toMatchObject({ sessionId: entry.sessionId });
         expect(sharing.readCurrent()).toMatchObject({
           entry: { sessionId: entry.sessionId, category: "shared" },

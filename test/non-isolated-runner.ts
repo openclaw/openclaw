@@ -14,6 +14,7 @@ import {
   vi,
 } from "vitest";
 import type { SessionMcpRuntimeManager } from "../src/agents/agent-bundle-mcp-types.js";
+import type { SharedAuthStoreOwnership } from "../src/agents/auth-profiles/types.js";
 import { resetAgentEventsForTest } from "../src/infra/agent-events.js";
 import { loggingState } from "../src/logging/state.js";
 import { clearNamedPluginRuntimeStoresForTest } from "../src/plugin-sdk/runtime-store-registry.js";
@@ -22,6 +23,8 @@ import {
   markGatewayRestartDraining,
   resetGatewayWorkAdmission,
 } from "../src/process/gateway-work-admission.js";
+import { resetSessionControllerStorageForTest } from "../src/sessions/session-controller-storage-reset.test-support.js";
+import { readGlobalSingleton } from "../src/shared/global-singleton.js";
 import { hasOpenClawAgentDatabaseAsyncResources } from "../src/state/openclaw-agent-db-resources.js";
 import { cleanupSolid } from "../ui/src/test-helpers/solid-cleanup.ts";
 import { clearJsdomViewportFocus } from "./jsdom-compat.mjs";
@@ -30,6 +33,7 @@ import {
   dropRepoOwnedCustomElements,
   trackCustomElementRegistry,
 } from "./jsdom-custom-elements.ts";
+import { type JsdomResourceTracking, trackJsdomResources } from "./jsdom-resources.ts";
 import { repositoryTestApiPublications } from "./repository-test-api-publications.ts";
 import {
   drainSqliteTestAgentOwner,
@@ -69,8 +73,8 @@ type TestRunnerInternals = {
 
 const SHARED_TEST_SETUP = Symbol.for("openclaw.sharedTestSetup");
 const RETIRED_TEST_API_EXECUTIONS = Symbol.for("openclaw.retiredTestApiExecutions");
-const EMBEDDED_RUN_STATE = Symbol.for("openclaw.embeddedRunState");
-const REPLY_RUN_REGISTRY = Symbol.for("openclaw.replyRunRegistry");
+const EMBEDDED_RUNS_TEST_API = Symbol.for("openclaw.embeddedRunsTestApi");
+const SESSION_CONTROLLER_TEST_API = Symbol.for("openclaw.sessionControllerTestApi");
 const DIAGNOSTIC_EVENTS_STATE = Symbol.for("openclaw.diagnosticEvents.state.v1");
 const DIAGNOSTIC_EVENT_LISTENER_PRESENCE = Symbol.for(
   "openclaw.diagnosticEventListenerPresence.v1",
@@ -80,8 +84,10 @@ const SECRET_REDACTION_TEST_API = Symbol.for("openclaw.secretRedactionRegistryTe
 const SESSION_MCP_RUNTIME_MANAGER = Symbol.for("openclaw.sessionMcpRuntimeManager");
 const RETAINED_MCP_MANAGERS = Symbol.for("openclaw.nonIsolatedRetainedMcpManagers");
 const SUBAGENT_REGISTRY_TEST_API = Symbol.for("openclaw.subagentRegistryTestApi");
+const SHARED_AUTH_STORE_OWNERSHIP = Symbol.for("openclaw.sharedAuthStoreOwnershipByDatabasePath");
 // Shared-worker scoped: the registry lives on the worker global, not in the module graph.
 const CUSTOM_ELEMENT_TRACKING = Symbol.for("openclaw.nonIsolatedCustomElementTracking");
+const DOM_RESOURCE_TRACKING = Symbol.for("openclaw.nonIsolatedDomResourceTracking");
 const nativeConsoleMethods = {
   log: console.log,
   info: console.info,
@@ -151,17 +157,19 @@ function resetEvaluatedModules(
     // Vitest's evaluator records each execution independently (including native ones),
     // using the unprefixed id for automocks. Module resets preserve those records.
     const key = repositoryTestApiPublications.get(node.file);
-    const sqliteKey = sqliteTestSingletonPublications.get(node.file);
+    const sqliteKeys = sqliteTestSingletonPublications.get(node.file) ?? [];
     const execution = retirableModuleExecution(node, modules, executions);
-    if ((key || (sqliteKey && !retainedSqlite)) && execution) {
+    if ((key || (sqliteKeys.length > 0 && !retainedSqlite)) && execution) {
       retiredExecutions.add(execution);
       const publication =
         key === undefined ? undefined : Object.getOwnPropertyDescriptor(globalThis, key);
       if (key && publication?.configurable && "value" in publication) {
         Reflect.deleteProperty(globalThis, key);
       }
-      if (sqliteKey && !retainedSqlite) {
-        retireSqliteTestSingleton(sqliteKey, testFiles);
+      if (!retainedSqlite) {
+        for (const sqliteKey of sqliteKeys) {
+          retireSqliteTestSingleton(sqliteKey, testFiles);
+        }
       }
     }
     // Mock metadata owns factories and cached exports after the registry resets.
@@ -200,6 +208,7 @@ function restoreSharedTestHomeAfterEnvUnstub(testHomeRaw: string | undefined): v
 function customElementTrackingStore(): Record<PropertyKey, unknown> & {
   customElements?: CustomElementRegistry;
   [CUSTOM_ELEMENT_TRACKING]?: CustomElementTracking;
+  [DOM_RESOURCE_TRACKING]?: JsdomResourceTracking;
 } {
   return globalThis;
 }
@@ -213,6 +222,13 @@ function installCustomElementTracking(): void {
     return;
   }
   globalStore[CUSTOM_ELEMENT_TRACKING] = trackCustomElementRegistry(registry);
+}
+
+function installDomResourceTracking(): void {
+  const store = customElementTrackingStore();
+  if (typeof document !== "undefined" && store[DOM_RESOURCE_TRACKING]?.document !== document) {
+    store[DOM_RESOURCE_TRACKING] = trackJsdomResources();
+  }
 }
 
 function dropTrackedRepoOwnedCustomElements(): void {
@@ -271,39 +287,13 @@ function restoreConsoleRoutingState(): void {
 
 type CleanupAction = () => void;
 
-type EmbeddedRunHandle = {
-  abort?: () => void;
-  cancel?: (reason?: "user_abort" | "restart" | "superseded") => void;
+type EmbeddedRunsTestApi = {
+  drainActiveEmbeddedRuns?: () => Promise<void>;
+  resetActiveEmbeddedRuns?: () => void;
 };
 
-type EmbeddedRunWaiter = {
-  timer?: NodeJS.Timeout;
-  resolve?: (ended: boolean) => void;
-};
-
-type EmbeddedRunStateForTest = {
-  activeRuns?: Map<unknown, EmbeddedRunHandle>;
-  snapshots?: Map<unknown, unknown>;
-  sessionIdsByKey?: Map<unknown, unknown>;
-  sessionIdsByFile?: Map<unknown, unknown>;
-  abandonedRunsBySessionId?: Map<unknown, unknown>;
-  abandonedRunSessionIdsByKey?: Map<unknown, unknown>;
-  abandonedRunSessionIdsByFile?: Map<unknown, unknown>;
-  waiters?: Map<unknown, Set<EmbeddedRunWaiter>>;
-  modelSwitchRequests?: Map<unknown, unknown>;
-};
-
-type ReplyRunWaiter = (ended: boolean) => void;
-
-type ReplyRunOperation = {
-  abortForRestart?: () => void;
-};
-
-type ReplyRunStateForTest = {
-  activeRunsByKey?: Map<unknown, ReplyRunOperation>;
-  activeKeysBySessionId?: Map<unknown, unknown>;
-  waitKeysBySessionId?: Map<unknown, unknown>;
-  waitersByKey?: Map<unknown, Set<ReplyRunWaiter>>;
+type SessionControllerTestApi = {
+  drainSessionControllerOwnersForTest?: () => Promise<void>;
 };
 
 type DiagnosticEventsStateForTest = {
@@ -333,42 +323,30 @@ function runCleanupActions(actions: CleanupAction[]): unknown {
   return firstError;
 }
 
-function resetOpenClawGlobalRunState(): void {
+async function resetOpenClawGlobalRunState(): Promise<void> {
   const cleanupActions: CleanupAction[] = [];
   const globalStore = globalThis as Record<PropertyKey, unknown>;
-  const embeddedRunState = globalStore[EMBEDDED_RUN_STATE] as EmbeddedRunStateForTest | undefined;
-  for (const handle of embeddedRunState?.activeRuns?.values() ?? []) {
-    cleanupActions.push(() => {
-      if (handle.cancel) {
-        handle.cancel("restart");
-        return;
-      }
-      handle.abort?.();
-    });
-  }
-  for (const waiters of embeddedRunState?.waiters?.values() ?? []) {
-    for (const waiter of waiters) {
-      cleanupActions.push(() => {
-        if (waiter.timer) {
-          clearTimeout(waiter.timer);
-        }
-        waiter.resolve?.(true);
-      });
-    }
+  const embeddedRuns = globalStore[EMBEDDED_RUNS_TEST_API] as EmbeddedRunsTestApi | undefined;
+  const sessionController = globalStore[SESSION_CONTROLLER_TEST_API] as
+    | SessionControllerTestApi
+    | undefined;
+  const resetActiveEmbeddedRuns = embeddedRuns?.resetActiveEmbeddedRuns;
+  if (resetActiveEmbeddedRuns) {
+    cleanupActions.push(resetActiveEmbeddedRuns);
   }
 
-  const replyRunState = globalStore[REPLY_RUN_REGISTRY] as ReplyRunStateForTest | undefined;
-  for (const operation of replyRunState?.activeRunsByKey?.values() ?? []) {
-    cleanupActions.push(() => {
-      operation.abortForRestart?.();
-    });
-  }
-  for (const waiters of replyRunState?.waitersByKey?.values() ?? []) {
-    for (const waiter of waiters) {
-      cleanupActions.push(() => {
-        waiter(false);
-      });
-    }
+  cleanupActions.push(resetSessionControllerStorageForTest);
+
+  const drainActions = [
+    embeddedRuns?.drainActiveEmbeddedRuns,
+    sessionController?.drainSessionControllerOwnersForTest,
+  ].filter((action): action is () => Promise<void> => action !== undefined);
+  const drainResults = await Promise.allSettled(drainActions.map((action) => action()));
+  const drainFailures = drainResults.flatMap((result) =>
+    result.status === "rejected" ? [result.reason] : [],
+  );
+  if (drainFailures.length > 0) {
+    throw new AggregateError(drainFailures, "Run owner cleanup failed");
   }
 
   const cleanupError = runCleanupActions(cleanupActions);
@@ -376,21 +354,6 @@ function resetOpenClawGlobalRunState(): void {
     // oxlint-disable-next-line typescript/only-throw-error -- cleanup hooks may throw their original non-Error value; preserve that test-runner behavior.
     throw cleanupError;
   }
-
-  embeddedRunState?.activeRuns?.clear();
-  embeddedRunState?.snapshots?.clear();
-  embeddedRunState?.sessionIdsByKey?.clear();
-  embeddedRunState?.sessionIdsByFile?.clear();
-  embeddedRunState?.abandonedRunsBySessionId?.clear();
-  embeddedRunState?.abandonedRunSessionIdsByKey?.clear();
-  embeddedRunState?.abandonedRunSessionIdsByFile?.clear();
-  embeddedRunState?.waiters?.clear();
-  embeddedRunState?.modelSwitchRequests?.clear();
-
-  replyRunState?.activeRunsByKey?.clear();
-  replyRunState?.activeKeysBySessionId?.clear();
-  replyRunState?.waitKeysBySessionId?.clear();
-  replyRunState?.waitersByKey?.clear();
 }
 
 function resetOpenClawGlobalDiagnosticState(): void {
@@ -426,6 +389,18 @@ function resetOpenClawSecretRedactionState(): void {
   const globalStore = globalThis as Record<PropertyKey, unknown>;
   const api = globalStore[SECRET_REDACTION_TEST_API] as SecretRedactionTestApi | undefined;
   api?.resetSecretRedactionRegistryForTest?.();
+}
+
+function resetSharedAuthStoreOwnership(): void {
+  if (hasRetainedSqliteTestCustody()) {
+    return;
+  }
+  // Runtime and storage drains have joined before this file boundary. Keep the
+  // Map itself: externalized/native auth modules still consume that same owner.
+  const ownership = readGlobalSingleton(SHARED_AUTH_STORE_OWNERSHIP) as
+    | Map<string, SharedAuthStoreOwnership>
+    | undefined;
+  ownership?.clear();
 }
 
 async function retireSessionMcpRuntimeManager(): Promise<void> {
@@ -486,6 +461,7 @@ export default class OpenClawNonIsolatedRunner extends TestRunner {
     super.onCollectStart(file);
     if (!this.config.isolate) {
       installCustomElementTracking();
+      installDomResourceTracking();
     }
     restoreRealTimers();
     restoreNativeTimerGlobals();
@@ -605,7 +581,7 @@ export default class OpenClawNonIsolatedRunner extends TestRunner {
         markGatewayRestartDraining();
       }
     });
-    if (!clean("run state", resetOpenClawGlobalRunState)) {
+    if (!(await drain("run state", resetOpenClawGlobalRunState))) {
       // Failed cancellation retains the run's runtime, storage and module generation.
       retainSqliteTestCustody();
       await publishFailures();
@@ -659,7 +635,7 @@ export default class OpenClawNonIsolatedRunner extends TestRunner {
       : (key: symbol) =>
           Array.from(modules.idToModuleMap.values()).some(
             (node) =>
-              sqliteTestSingletonPublications.get(node.file) === key &&
+              sqliteTestSingletonPublications.get(node.file)?.includes(key) &&
               retirableModuleExecution(node, modules, executions) !== undefined,
           );
     if (
@@ -673,7 +649,9 @@ export default class OpenClawNonIsolatedRunner extends TestRunner {
     if (!this.config.isolate) {
       for (const [phase, run] of [
         ["plugin runtimes", clearNamedPluginRuntimeStoresForTest],
+        ["shared auth ownership", resetSharedAuthStoreOwnership],
         ["custom elements", dropTrackedRepoOwnedCustomElements],
+        ["DOM resources", () => customElementTrackingStore()[DOM_RESOURCE_TRACKING]?.retire()],
         ["document body", resetSharedDocumentBody],
         ["Gateway admission", resetGatewayWorkAdmission],
         ["module mocks", () => internals.moduleRunner?.mocker?.reset?.()],

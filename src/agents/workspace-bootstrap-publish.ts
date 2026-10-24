@@ -1,13 +1,13 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isHardlinkFallbackError } from "../infra/directory-durability.js";
-import { hasErrnoCode } from "../infra/errno.js";
 import { FsSafeError, root as fsRoot } from "../infra/fs-safe.js";
+import { lstatIfExists } from "../infra/path-existence.js";
 import { readWorkspaceFileWithGuards } from "./workspace-file-read.js";
 
 export class WorkspaceBootstrapSeedConflictError extends Error {
-  constructor(message: string, options?: ErrorOptions) {
-    super(message, options);
+  constructor(message: string) {
+    super(message);
     this.name = "WorkspaceBootstrapSeedConflictError";
   }
 }
@@ -21,11 +21,7 @@ export async function publishBootstrapFile(
   const targetPath = path.join(dir, path.basename(filePath));
   // Existing entries, including dangling symlinks, need no staging writes.
   // Preserve the exclusive-create no-op on read-only established workspaces.
-  const existing = await fs.lstat(targetPath).catch((error: unknown) => {
-    if (!hasErrnoCode(error, "ENOENT")) {
-      throw error;
-    }
-  });
+  const existing = await lstatIfExists(targetPath, "ENOENT");
   beforePersistentApply?.();
   if (existing) {
     return false;

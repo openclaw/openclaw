@@ -6,8 +6,8 @@ import {
   disposeConfigFormFixture,
 } from "../test-helpers/config-form-fixtures.tsx";
 import { flush } from "../test-helpers/solid-settle.ts";
+import { analyzeConfigSchema } from "./config-form.analyze.ts";
 import type { JsonSchema } from "./config-form.shared.ts";
-import { analyzeConfigSchema } from "./config-form.ts";
 import baseStyles from "../styles/base.css?inline";
 
 function mountForm(
@@ -246,15 +246,15 @@ describe.runIf("__vitest_browser__" in globalThis)("config collection removal fo
         ?.closest(".settings-row")
         ?.querySelector<HTMLInputElement>("input[aria-label^='Key: ']")?.value;
     try {
-      await focusRemoveControl(container, removeControls(container, "Remove entry")[1]);
+      await focusRemoveControl(container, removeControls(container, "Remove entry: beta")[0]);
       await userEvent.keyboard("{Enter}");
       expect(state.configForm).toEqual({ settings: { values: { alpha: "a", gamma: "c" } } });
-      expect(document.activeElement?.getAttribute("aria-label")).toBe("Remove entry");
+      expect(document.activeElement?.getAttribute("aria-label")).toBe("Remove entry: gamma");
       expect(focusedKey()).toBe("gamma");
 
       await userEvent.keyboard("{Enter}");
       expect(state.configForm).toEqual({ settings: { values: { alpha: "a" } } });
-      expect(document.activeElement?.getAttribute("aria-label")).toBe("Remove entry");
+      expect(document.activeElement?.getAttribute("aria-label")).toBe("Remove entry: alpha");
       expect(focusedKey()).toBe("alpha");
 
       await userEvent.keyboard("{Enter}");
@@ -308,7 +308,7 @@ describe.runIf("__vitest_browser__" in globalThis)("config collection removal fo
       "map",
       { type: "object", additionalProperties: { type: "string" } },
       { alpha: "a" },
-      "Remove entry",
+      "Remove entry: alpha",
     ],
   ] as const)(
     "keeps focus on the %s Remove control when its owner rejects the removal",

@@ -3,10 +3,11 @@ import { createMemo, createEffect, onCleanup, For, Show } from "solid-js";
 import { AgentAvatar } from "../../components/host-components.tsx";
 import { icons } from "../../components/icons.tsx";
 import { t } from "../../i18n/index.ts";
+import { createElementRefs } from "../../lib/element-refs.ts";
 import { formatUiExternalText } from "../../lib/format-error.ts";
 import { formatDurationCompact } from "../../lib/format.ts";
 import { selectCardAlert, type CardAlert } from "../../lib/workboard/card-alerts.ts";
-import type { WorkboardCard, WorkboardLifecycle } from "../../lib/workboard/index.ts";
+import type { WorkboardCard, WorkboardLifecycle } from "../../lib/workboard/types.ts";
 import { cardAgentLabel } from "./agent-filter.ts";
 import { RelativeTime } from "./view-card-time.tsx";
 import {
@@ -56,7 +57,7 @@ export function CardAlertView(input: { alerts: CardAlert[]; descriptionId: strin
       {(activeAlert) => (
         <>
           <div
-            class={`workboard-card__alert workboard-card__alert--${activeAlert().severity}`}
+            class={["workboard-card__alert", `workboard-card__alert--${activeAlert().severity}`]}
             title={fullText()}
           >
             <span class="workboard-truncate">{alertLabel(activeAlert())}</span>
@@ -126,7 +127,11 @@ function flushLabelMeasurements() {
     update();
   }
 }
-function labelOverflowRef(labels: () => readonly string[]) {
+function labelOverflowRef(
+  labels: () => readonly string[],
+  chipsForLabels: () => HTMLElement[],
+  overflowElement: () => HTMLElement | undefined,
+) {
   let dispose = () => {};
   let refresh: (() => void) | undefined;
   onCleanup(() => dispose());
@@ -142,8 +147,8 @@ function labelOverflowRef(labels: () => readonly string[]) {
     let measuredWidth = -1;
     const update = () => {
       pendingLabelMeasurements.set(element, () => {
-        const chips = [...element.querySelectorAll<HTMLElement>(".workboard-card__label")];
-        const overflow = element.querySelector<HTMLElement>(".workboard-card__label-overflow");
+        const chips = chipsForLabels();
+        const overflow = overflowElement();
         if (!overflow) {
           return undefined;
         }
@@ -213,23 +218,44 @@ function labelOverflowRef(labels: () => readonly string[]) {
   };
 }
 export function CardMeta(input: { card: WorkboardCard; archived: boolean }) {
+  const chips = createElementRefs<HTMLElement>();
+  let overflow: HTMLElement | undefined;
+  const orderedChips = () =>
+    input.card.labels.flatMap((label) => {
+      const chip = chips.get(label);
+      return chip ? [chip] : [];
+    });
   return (
     <>
       {!input.card.labels.length && !input.archived ? null : (
         <div class="workboard-card__meta">
           {input.card.labels.length ? (
-            <div class="workboard-card__labels" ref={labelOverflowRef(() => input.card.labels)}>
+            <div
+              class="workboard-card__labels"
+              ref={labelOverflowRef(
+                () => input.card.labels,
+                orderedChips,
+                () => overflow,
+              )}
+            >
               <For each={input.card.labels} keyed={(label) => label}>
                 {(label) => (
                   <span
                     class="workboard-chip workboard-truncate workboard-card__label"
                     title={label()}
+                    ref={chips.ref(() => label())}
                   >
                     {label()}
                   </span>
                 )}
               </For>
-              <span class="workboard-chip workboard-card__label-overflow" hidden />
+              <span
+                class="workboard-chip workboard-card__label-overflow"
+                hidden
+                ref={(element) => {
+                  overflow = element;
+                }}
+              />
             </div>
           ) : null}
           {input.archived ? (
@@ -336,7 +362,7 @@ export function CardSession(input: {
       : cardAgentLabel(input.card, input.workboard.agentsList),
   );
   return (
-    <div class={`workboard-card__session workboard-card__session--${input.status.tone}`}>
+    <div class={["workboard-card__session", `workboard-card__session--${input.status.tone}`]}>
       <AgentChip workboard={input.workboard} card={input.card} />
       <span class="workboard-card__session-name workboard-truncate" title={sessionName()}>
         {sessionName()}

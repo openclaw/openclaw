@@ -96,6 +96,21 @@ export function applyUpdateRunStep(
   record: UpdateRunRecord,
   { reason, ...step }: UpdateRunStep & { reason?: string },
 ): void {
+  // Post-success retirement is advisory; it may add diagnostics, never change the terminal outcome.
+  if (
+    record.finishedAtMs !== null &&
+    (record.status === "succeeded" ||
+      (record.status === "skipped" && record.reason === "already-current")) &&
+    step.status === "completed" &&
+    [
+      "recovery-artifact-cleanup",
+      "warning:recovery-artifact-cleanup",
+      "diagnostic:recovery-artifact-cleanup",
+    ].includes(step.step)
+  ) {
+    upsertStep(record, step);
+    return;
+  }
   if (record.status === "running") {
     upsertStep(record, step);
     if (reason !== undefined) {
@@ -110,6 +125,15 @@ export function persistRun(
   options: UpdateRunLedgerOptions,
 ): UpdateRunRecord {
   record.updatedAtMs = Math.max(Date.now(), record.updatedAtMs + 1);
+  const recovery = record.verification.recovery;
+  record.steps = record.steps.filter((step) => step.step !== "finalize:data-at-risk");
+  if (recovery?.serviceRestartSafe === false && recovery.dataAtRisk) {
+    upsertStep(record, {
+      step: "finalize:data-at-risk",
+      status: "completed",
+      failureFacts: [{ check: "update-recovery", code: recovery.dataAtRisk }],
+    });
+  }
   const row = encodeRun(record, options);
   executeSqliteQuerySync(
     db,
@@ -240,7 +264,13 @@ export function applyUpdateRunDiagnostics(
   }
   const constraint = record.verification.recovery;
   const recovery =
-    verification && constraint?.serviceRestartSafe === false ? constraint : observedRecovery;
+    verification && constraint?.serviceRestartSafe === false
+      ? !constraint.dataAtRisk &&
+        observedRecovery?.serviceRestartSafe === false &&
+        observedRecovery.dataAtRisk
+        ? observedRecovery
+        : constraint
+      : observedRecovery;
   if (recovery || observedRollback || verification) {
     recordUpdateRunVerificationRecord(record, {
       ...verification,
@@ -259,15 +289,7 @@ export function recordUpdateRunDiagnostics(
   options: UpdateRunLedgerOptions = {},
 ): UpdateRunRecord | undefined {
   try {
-    if (
-      typeof diagnostics !== "function" &&
-      !(
-        diagnostics.failure ||
-        diagnostics.recovery ||
-        diagnostics.rollbackOutcome ||
-        diagnostics.verification
-      )
-    ) {
+    if (typeof diagnostics !== "function" && !hasUpdateRunDiagnostics(diagnostics)) {
       return undefined;
     }
     return mutateRun(runId, (record) => applyUpdateRunDiagnostics(record, diagnostics), options);
@@ -323,4 +345,13 @@ export function applyFinishUpdateRun(record: UpdateRunRecord, result: FinishUpda
       }
     }
   }
+}
+
+export function hasUpdateRunDiagnostics(diagnostics: UpdateRunDiagnostics): boolean {
+  return Boolean(
+    diagnostics.failure ||
+    diagnostics.recovery ||
+    diagnostics.rollbackOutcome ||
+    diagnostics.verification,
+  );
 }

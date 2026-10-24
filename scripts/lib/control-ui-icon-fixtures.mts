@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { JSDOM } from "jsdom";
-import * as ts from "typescript/unstable/ast";
+import * as ts from "typescript/ast";
 import { getChangedPathFacts, isTestSupportFileTarget } from "./changed-path-facts.mjs";
 import { createNativeTypeScriptParser, type NativeTypeScriptSource } from "./native-typescript.mts";
 import { getPropertyNameText, unwrapExpression } from "./ts-guard-utils.mts";

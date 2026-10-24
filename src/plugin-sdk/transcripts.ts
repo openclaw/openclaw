@@ -1,6 +1,3 @@
-/**
- * Public SDK subpath for transcript source provider types and registry lookup.
- */
 export type {
   TranscriptImportRequest,
   TranscriptOccupancyWatchRequest,

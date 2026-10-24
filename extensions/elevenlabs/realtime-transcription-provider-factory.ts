@@ -112,6 +112,9 @@ export function buildElevenLabsRealtimeTranscriptionProvider({
   PluginCapabilityCatalogContext,
   "createRealtimeTranscriptionWebSocketSession"
 >): RealtimeTranscriptionProviderPlugin {
+  const isConfigured: NonNullable<RealtimeTranscriptionProviderPlugin["isConfigured"]> = ({
+    providerConfig,
+  }) => Boolean(resolveElevenLabsRealtimeApiKey(normalizeProviderConfig(providerConfig)));
   return {
     id: "elevenlabs",
     label: "ElevenLabs Realtime Transcription",
@@ -119,8 +122,9 @@ export function buildElevenLabsRealtimeTranscriptionProvider({
     defaultModel: ELEVENLABS_REALTIME_DEFAULT_MODEL,
     autoSelectOrder: 40,
     resolveConfig: ({ rawConfig }) => normalizeProviderConfig(rawConfig),
-    isConfigured: ({ providerConfig }) =>
-      Boolean(resolveElevenLabsRealtimeApiKey(normalizeProviderConfig(providerConfig))),
+    // Retained for synchronous SDK consumers through 2026-12-31.
+    isConfigured,
+    isConfiguredAsync: async (ctx) => isConfigured(ctx),
     createSession: (req) => {
       const config = normalizeProviderConfig(req.providerConfig);
       const apiKey = resolveElevenLabsRealtimeApiKey(config);
@@ -130,16 +134,13 @@ export function buildElevenLabsRealtimeTranscriptionProvider({
       const baseUrl = normalizeElevenLabsRealtimeBaseUrl(config.baseUrl);
       const sampleRate = config.sampleRate ?? ELEVENLABS_REALTIME_DEFAULT_SAMPLE_RATE;
       const commitStrategy = config.commitStrategy ?? ELEVENLABS_REALTIME_DEFAULT_COMMIT_STRATEGY;
-      const callbacks = { ...req };
       let pendingTimestampEcho: string | undefined;
 
       return createRealtimeTranscriptionWebSocketSession<ElevenLabsRealtimeTranscriptionEvent>({
         providerId: "elevenlabs",
-        callbacks,
+        callbacks: req,
         url: () => {
-          const url = new URL(
-            `${normalizeElevenLabsRealtimeBaseUrl(baseUrl)}/v1/speech-to-text/realtime`,
-          );
+          const url = new URL(`${baseUrl}/v1/speech-to-text/realtime`);
           url.searchParams.set("model_id", config.modelId ?? ELEVENLABS_REALTIME_DEFAULT_MODEL);
           url.searchParams.set(
             "audio_format",
@@ -201,7 +202,7 @@ export function buildElevenLabsRealtimeTranscriptionProvider({
           switch (event.message_type) {
             case "partial_transcript":
               if (event.text) {
-                callbacks.onPartial?.(event.text);
+                req.onPartial?.(event.text);
               }
               return;
             case "committed_transcript":
@@ -212,13 +213,13 @@ export function buildElevenLabsRealtimeTranscriptionProvider({
                 const isEcho = hasTimestamps && pendingTimestampEcho === event.text;
                 pendingTimestampEcho = hasTimestamps ? undefined : event.text;
                 if (!isEcho) {
-                  callbacks.onTranscript?.(event.text);
+                  req.onTranscript?.(event.text);
                 }
               }
               return;
             default:
               if (isError) {
-                callbacks.onError?.(new Error(readErrorDetail(event)));
+                req.onError?.(new Error(readErrorDetail(event)));
               }
           }
         },

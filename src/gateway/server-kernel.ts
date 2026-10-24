@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
 import { closePreparedModelRuntimeSnapshots } from "../agents/prepared-model-runtime.lifecycle.js";
+import { measureGatewayBootstrapStep } from "../cli/startup-trace.js";
 import { isNixMode, resolveIsConfigReadOnly } from "../config/paths.js";
 import { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { clearGatewayAgentCliShim } from "../infra/openclaw-cli-shim.js";
@@ -18,6 +19,7 @@ import { clearSecretsRuntimeSnapshotState } from "../secrets/runtime-state.js";
 import { createLazyRuntimeMethodBinder, createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { getAgentDatabaseStartupAdmission } from "../state/agent-database-startup.js";
 import { startGatewayCoreRuntime } from "./server-core-runtime.js";
+import { installGatewayDatabaseEngine } from "./server-database-engine.js";
 import { prepareGatewayKernelRequestRuntime } from "./server-kernel-request-runtime.js";
 import { prepareGatewayLifecycle } from "./server-lifecycle.js";
 import { registerGatewayModelCatalogPrivateAccess } from "./server-model-catalog-auth.js";
@@ -112,6 +114,10 @@ export async function createGatewayKernel(
   opts: GatewayServerOptions = {},
   options: GatewayKernelOptions = {},
 ) {
+  await installGatewayDatabaseEngine(
+    opts.startupConfigSnapshotRead?.snapshot,
+    opts.startupConfigSnapshotRead?.databaseEngineSelection,
+  );
   const scheduler = new GatewayScheduler();
   const sdkResourceHost = options.sdkResourceHost ?? new LegacyPluginSdkResourceHost();
   sdkResourceHost.bindScheduler(scheduler);
@@ -138,8 +144,13 @@ async function createGatewayKernelWithSdkHost(
   const bootId = suppliedBootId ?? randomUUID();
   // Join catalog publication and retained cancellation code before bootstrap owns resources.
   const [, { cancelPreparedModelRuntimeRefresh }] = await Promise.all([
-    prepareRemoteModelCatalogStartupSnapshot(),
-    import("../agents/prepared-model-runtime.js"),
+    measureGatewayBootstrapStep("gateway.catalog-startup-snapshot", () =>
+      prepareRemoteModelCatalogStartupSnapshot(),
+    ),
+    measureGatewayBootstrapStep(
+      "gateway.model-runtime-import",
+      () => import("../agents/prepared-model-runtime.js"),
+    ),
   ]);
   ensureOpenClawCliOnPath();
   const pluginMetadata = retainGatewayPluginMetadata(scheduler, async () => {

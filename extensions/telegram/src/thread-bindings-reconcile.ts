@@ -5,12 +5,13 @@ import {
   type PreparedAcpSessionEntryRead,
 } from "openclaw/plugin-sdk/acp-runtime";
 import { isAcpSessionKey } from "openclaw/plugin-sdk/routing";
-import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
+import type { TelegramRuntime } from "./runtime.types.js";
 import { persistBindingMutation } from "./thread-bindings-persistence.js";
 import { resolveBindingKey } from "./thread-bindings-session.js";
 import { getThreadBindingsState, listBindingsForAccount } from "./thread-bindings-state.js";
 
 type TelegramAcpBindingReconciliationParams = {
+  runtime: TelegramRuntime;
   accountId: string;
   persist: boolean;
   prepareSession?: AcpSessionEntryPreparer;
@@ -21,7 +22,7 @@ export async function reconcileTelegramAcpBindingsOnStartup(
 ): Promise<void> {
   const preparations = new Map<string, PreparedAcpSessionEntryRead>();
   try {
-    const { accountId, persist } = params;
+    const { runtime, accountId, persist } = params;
     const acpSessionKeys = new Set<string>();
     for (const binding of getThreadBindingsState().bindingsByAccountConversation.values()) {
       if (binding.targetKind !== "acp") {
@@ -72,6 +73,7 @@ export async function reconcileTelegramAcpBindingsOnStartup(
         };
         assertCurrent();
         await persistBindingMutation({
+          runtime,
           accountId,
           persist,
           binding,
@@ -82,11 +84,6 @@ export async function reconcileTelegramAcpBindingsOnStartup(
         if (getThreadBindingsState().bindingsByAccountConversation.get(key) === binding) {
           getThreadBindingsState().bindingsByAccountConversation.delete(key);
         }
-      }
-      if (bindingsToRemove.length > 0) {
-        logVerbose(
-          `telegram thread binding: cleaned up ${bindingsToRemove.length} stale binding(s) for session ${sessionKey}`,
-        );
       }
     }
   } finally {

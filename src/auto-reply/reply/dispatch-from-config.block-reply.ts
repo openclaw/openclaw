@@ -39,10 +39,6 @@ export function createDispatchBlockReplyHandler(state: PrepareDispatchExecutionR
   const dispatchBlockReply = (operation: ReplyDispatchOperation, context?: BlockReplyContext) => {
     const inputPayload = operation.kind === "prepared" ? operation.plan.payload : operation.payload;
     setBlockReplyDelivery(Promise.resolve({ outcome: "cancelled" }));
-    // A monitor decides notify only after its structured final result.
-    if (state.replyOperationRunState.heartbeat) {
-      return Promise.resolve();
-    }
     markProgress();
     const run = async () => {
       if (isDispatchOperationAborted()) {
@@ -95,7 +91,6 @@ export function createDispatchBlockReplyHandler(state: PrepareDispatchExecutionR
           state.progressState.accumulatedBlockTtsText += "\n";
         }
         state.progressState.accumulatedBlockTtsText += payload.text;
-        state.progressState.blockCount++;
       }
       let source: BlockReplySource | undefined;
       let cleanedPayload = payload;
@@ -185,6 +180,7 @@ export function createDispatchBlockReplyHandler(state: PrepareDispatchExecutionR
         } else {
           markInboundDedupeReplayUnsafe();
           const delivery = state.sendTrackedBlockReply(deliveryOperation);
+          state.observeDeliveryProgress(delivery.outcome, "reply:block_delivered");
           if (delivery.queued) {
             // This block's receipt owns its settlement. A turn-wide no-send
             // verdict is premature while a recovery final can still arrive.

@@ -31,10 +31,7 @@ import {
   composePackagePlugins,
   type DistributionPackageManifest,
 } from "../../infra/package-plugin-composition.js";
-import {
-  DEFAULT_WORKER_BUNDLE_ARCHIVE_LIMITS,
-  readWorkerBundleArchiveManifest,
-} from "../../shared/worker-bundle-archive.js";
+import { DEFAULT_WORKER_BUNDLE_ARCHIVE_LIMITS } from "../../shared/worker-bundle-archive.js";
 import {
   compareWorkerBundlePaths,
   hashWorkerBundleManifest,
@@ -59,7 +56,9 @@ const BOOTSTRAP_LAUNCHER_FILES = [
   "node-sqlite.mjs",
   "node-runtime-update.mjs",
   "node-runtime-recovery.mjs",
+  "cli-parent-lifetime.mjs",
   "node-runtime-env.mjs",
+  "cli-invocation.mjs",
   "cli-root-options.mjs",
   "gateway-run-argv.mjs",
   "gateway-shutdown-budget.mjs",
@@ -354,6 +353,7 @@ export async function prepareNodeBootstrapArtifact(
     [...BOOTSTRAP_LAUNCHER_FILES, ...publicFiles, ...scripts].filter(
       (relative) => relative !== LEGACY_PACKAGE_INSTALL_GUARD_RELATIVE_PATH,
     ),
+    packageJson.files ?? [],
   );
   if (!files.includes("dist/entry.js") && !files.includes("dist/entry.mjs")) {
     throw new Error(
@@ -578,27 +578,23 @@ export async function prepareNodeBootstrapArtifact(
   if (tarballBytes > MAX_WORKER_BUNDLE_ARCHIVE_BYTES) {
     throw new Error("Node bootstrap archive exceeds the transfer limit");
   }
-  const archiveManifest =
-    prebuiltManifest ??
-    (await readWorkerBundleArchiveManifest(tarballPath, DEFAULT_WORKER_BUNDLE_ARCHIVE_LIMITS));
   manifest.sort((left, right) => compareWorkerBundlePaths(left.path, right.path));
-  if (hashWorkerBundleManifest(manifest) !== hashWorkerBundleManifest(archiveManifest)) {
-    if (prebuiltManifest) {
+  if (prebuiltManifest) {
+    if (hashWorkerBundleManifest(manifest) !== hashWorkerBundleManifest(prebuiltManifest)) {
       // Different builds or execution modes can select different plugin bytes. Re-enter the
       // canonical builder once with fresh source checks; never trust an adjacent checksum.
       await fs.rm(tarballPath);
       return await prepareNodeBootstrapArtifact(options, temporaryRoot, false);
     }
-    throw new Error("Node bootstrap archive does not match the verified distribution");
   }
   await using handle = await fs.open(tarballPath, "r");
   const { digest: tarballSha256 } = await sha256File(handle);
-  return Object.freeze({
+  return {
     tarballPath,
     tarballSha256,
     tarballBytes,
     openclawVersion: packageJson.version,
     buildId,
-    enabledPluginIds: Object.freeze(plugins.map(({ id }) => id).toSorted()),
-  });
+    enabledPluginIds: plugins.map(({ id }) => id).toSorted(),
+  };
 }

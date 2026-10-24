@@ -1,8 +1,17 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { EventEmitter } from "node:events";
-import type { MessagePort, Transferable, Worker } from "node:worker_threads";
+import {
+  receiveMessageOnPort,
+  type MessagePort,
+  type Transferable,
+  type Worker,
+} from "node:worker_threads";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { createRetainedOperation } from "@openclaw/worker-runtime/lifecycle";
+import {
+  BrokerNativeResourceCloseError,
+  type BrokerResourceResponse,
+} from "../process/spawn-broker/resource-protocol.js";
 import { runWithMainThreadTask } from "./main-thread-stall.js";
 import { trackNativeWorkerForCpu } from "./worker-cpu.js";
 import { decodeNativeWorkerFailure } from "./worker-native-error.js";
@@ -15,7 +24,6 @@ import type {
   NativeWorkerResourceDescriptor,
   RetainedNativeWorker,
 } from "./worker-native-lifecycle.types.js";
-import { bindNativeWorkerResource } from "./worker-native-resource.js";
 import { NativeWorkerTaskPort } from "./worker-native-task-port.js";
 import { workerRequestKind } from "./worker-request-kind.js";
 
@@ -27,11 +35,12 @@ export class NativeWorker extends EventEmitter<NativeWorkerEvents> implements Re
   threadId = 0;
   started = false;
   executionStopped = false;
+  private executionExitCode: number | undefined;
   private referenced = true;
   private stopping = false;
   private joined = false;
   private servicingResource = false;
-  private resourceBinding?: ReturnType<typeof bindNativeWorkerResource>;
+  private resourceBinding?: ReturnType<NativeWorker["bindResource"]>;
   private resourceClosed = false;
   private supervisorJoined = false;
   private resourceRecovery?: Promise<void>;
@@ -131,23 +140,100 @@ export class NativeWorker extends EventEmitter<NativeWorkerEvents> implements Re
   }
 
   attachResource(descriptor: NativeWorkerResourceDescriptor) {
-    this.resourceBinding = bindNativeWorkerResource({
-      broker: this.runtime.resourceBroker(),
-      descriptor,
-      connection: this.resourceConnection,
-      supervisorAvailable: () => !this.runtime.failure,
-      postOwnerMessage: (value, sequence) =>
-        this.runtime.post({ type: "resource-owner", id: this.id, sequence, value }),
-      closed: () =>
-        this.runInContext(() => {
-          this.resourceClosed = true;
-          if (this.supervisorJoined) {
-            this.finishJoined(undefined);
-          }
-        }),
-      failed: (error) => this.resourceFailed(error),
-    });
+    this.resourceBinding = this.bindResource(descriptor);
     return { workerDataKey: descriptor.workerDataKey, attachment: this.resourceBinding.attachment };
+  }
+
+  /** Binds the host's original cleanup port to the same surviving spawn-owner claim. */
+  private bindResource(descriptor: NativeWorkerResourceDescriptor) {
+    const broker = this.runtime.resourceBroker();
+    const connection = this.resourceConnection;
+    let disposed = false;
+    const lease = broker.captureNativeResource(
+      { moduleUrl: descriptor.moduleUrl, input: descriptor.input, ownerPort: Boolean(connection) },
+      {
+        message: (response) => {
+          if (response.type === "resource-owner") {
+            connection?.port.postMessage(response.value, []);
+          } else if (response.type === "resource-closed") {
+            this.runInContext(() => {
+              this.resourceClosed = true;
+              if (this.supervisorJoined || this.executionStopped) {
+                this.finishJoined(this.executionExitCode);
+              }
+            });
+          }
+        },
+        failed: (error) => this.resourceFailed(error),
+      },
+    );
+    const forward = (value: unknown) => {
+      if (disposed) {
+        return;
+      }
+      try {
+        // The surviving claim retains the original reply even if the primary relay dies.
+        const delivery = lease.ownerMessage(value);
+        if (!this.runtime.failure) {
+          this.runtime.post({
+            type: "resource-owner",
+            id: this.id,
+            sequence: delivery.sequence,
+            value,
+          });
+        }
+      } catch (error) {
+        this.resourceFailed(toErrorObject(error, "Native resource owner delivery failed"));
+      }
+    };
+    connection?.port.on("message", forward);
+    const dispose = () => {
+      if (disposed) {
+        return;
+      }
+      disposed = true;
+      connection?.port.off("message", forward);
+      connection?.port.close();
+      connection?.dispose();
+    };
+    return {
+      attachment: lease.attachment,
+      receive(response: BrokerResourceResponse) {
+        lease.receive(response);
+      },
+      service() {
+        if (disposed || !connection) {
+          return;
+        }
+        connection.service();
+        for (;;) {
+          const next = receiveMessageOnPort(connection.port);
+          if (!next) {
+            break;
+          }
+          forward(next.message);
+        }
+      },
+      async closeAfterSupervisor() {
+        try {
+          await broker.sealNativeResources();
+          await lease.close();
+        } catch (error) {
+          if (error instanceof BrokerNativeResourceCloseError && connection?.decodeCloseError) {
+            throw connection.decodeCloseError(error.payload);
+          }
+          throw error;
+        }
+      },
+      release() {
+        lease.release();
+        dispose();
+      },
+      abandonUnattached() {
+        lease.abandonUnattached();
+        dispose();
+      },
+    };
   }
 
   abandonResource(): void {
@@ -367,7 +453,11 @@ export class NativeWorker extends EventEmitter<NativeWorkerEvents> implements Re
     if (!this.executionStopped) {
       this.taskPort?.close();
       this.executionStopped = true;
+      this.executionExitCode = code;
       this.emit("execution-exit", code);
+    }
+    if (this.resourceClosed && !this.joined) {
+      this.finishJoined(code);
     }
   }
 

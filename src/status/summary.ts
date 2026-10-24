@@ -1,17 +1,17 @@
-import { expectDefined } from "@openclaw/normalization-core";
 import type { SystemInfoResult } from "../../packages/gateway-protocol/src/schema/system-info.js";
 import { withAgentRosterFactsBatch } from "../agents/agent-scope-config.js";
-import { resolveAgentConfig } from "../agents/agent-scope.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { readStartupRecoveryWarning } from "../agents/main-session-recovery/main-session-restart-recovery-diagnostics.js";
 import { areRuntimeModelRefsEquivalent } from "../agents/model-runtime-aliases.js";
 import { captureRuntimeConfigAsyncReader } from "../config/config.js";
 import { resolveProjectedSessionContextTokens } from "../config/sessions/context-token-provenance.js";
 import { resolveCanonicalMainSessionKey } from "../config/sessions/main-session-key.js";
+import { resolveAgentMainSessionKey } from "../config/sessions/main-session.js";
 import {
   hasSessionActiveAutoModelFallback,
   hasUserPinnedModelSelection,
 } from "../config/sessions/model-override-provenance.js";
+import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import type { SessionEntrySummary } from "../config/sessions/session-accessor.js";
 import { withSessionEntriesFromStoresInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import {
@@ -20,15 +20,20 @@ import {
   type SessionEntry,
 } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.js";
+import { resolveCronDeliverySessionKey } from "../cron/session-target.js";
 import { listGatewayAgentsBasic } from "../gateway/agent-list.js";
+import type { GatewayPluginReloadStatus } from "../gateway/server-plugin-reload-status.types.js";
 import type { SessionRowProjection } from "../gateway/session-row-projection.js";
 import { getGatewayInstallationReplacement } from "../gateway/stale-install.js";
-import { resolveHeartbeatSessionKey } from "../infra/heartbeat-runner-session.js";
-import { resolveHeartbeatSummariesForAgents } from "../infra/heartbeat-summary-projection.js";
-import { hasResolvableHeartbeatOwnerRoute } from "../infra/outbound/targets.js";
+import {
+  projectHeartbeatSummary,
+  readHeartbeatSummarySnapshot,
+} from "../infra/heartbeat-summary-snapshot.js";
+import { hasResolvableProactiveOwnerRoute } from "../infra/outbound/targets.js";
 import { readStartupMigrationWarning } from "../infra/state-migrations.messages.js";
 import { resolveSystemEventQueueKey } from "../infra/system-event-ownership.js";
 import { peekSystemEvents } from "../infra/system-events.js";
+import { readModelReasoningWarning } from "../logging/diagnostic-session-state.js";
 import {
   listActiveDegradedPlugins,
   toPublicPluginVerificationDiagnostic,
@@ -45,13 +50,14 @@ import { sortAndLimitBy } from "../shared/sort-and-limit.js";
 import { readOpenClawStateWalHealth } from "../state/openclaw-state-db-cache.js";
 import { deliveryContextFromSession } from "../utils/delivery-context.read.js";
 import { resolveRuntimeServiceVersion } from "../version.js";
-import { buildStatusCliProjection } from "./cli-projection.js";
+import { resolveMemoryPluginStatus } from "./memory-plugin.js";
 import {
-  readStatusSessionStores,
+  prepareStatusSessionStores,
   STATUS_RECENT_SESSION_LIMIT,
-  type StatusSessionStores,
+  type PreparedStatusSessionStores,
 } from "./session-stores.js";
 import type { HeartbeatStatus, SessionStatus } from "./types.js";
+import { collectUtilityModelWarnings } from "./utility-model-warnings.js";
 
 const channelSummaryModuleLoader = createLazyImportLoader(
   () => import("../infra/channel-summary.js"),
@@ -70,39 +76,23 @@ const buildFlags = (entry?: SessionEntry): string[] => {
   if (!entry) {
     return [];
   }
-  const flags: string[] = [];
-  const think = entry?.thinkingLevel;
-  if (typeof think === "string" && think.length > 0) {
-    flags.push(`think:${think}`);
+  const stringFlag = (label: string, value?: string) => (value ? `${label}:${value}` : undefined);
+  let fastFlag: string | undefined;
+  if (entry.fastMode === "auto" || entry.fastMode === "ultrafast") {
+    fastFlag = `fast:${entry.fastMode}`;
+  } else if (entry.fastMode !== undefined) {
+    fastFlag = entry.fastMode ? "fast" : "fast:off";
   }
-  const verbose = entry?.verboseLevel;
-  if (typeof verbose === "string" && verbose.length > 0) {
-    flags.push(`verbose:${verbose}`);
-  }
-  if (entry?.fastMode === "auto" || entry?.fastMode === "ultrafast") {
-    flags.push(`fast:${entry.fastMode}`);
-  } else if (typeof entry?.fastMode === "boolean") {
-    flags.push(entry.fastMode ? "fast" : "fast:off");
-  }
-  const reasoning = entry?.reasoningLevel;
-  if (typeof reasoning === "string" && reasoning.length > 0) {
-    flags.push(`reasoning:${reasoning}`);
-  }
-  const elevated = entry?.elevatedLevel;
-  if (typeof elevated === "string" && elevated.length > 0) {
-    flags.push(`elevated:${elevated}`);
-  }
-  if (entry?.systemSent) {
-    flags.push("system");
-  }
-  if (entry?.abortedLastRun) {
-    flags.push("aborted");
-  }
-  const sessionId = entry.sessionId;
-  if (typeof sessionId === "string" && sessionId.length > 0) {
-    flags.push(`id:${sessionId}`);
-  }
-  return flags;
+  return [
+    stringFlag("think", entry.thinkingLevel),
+    stringFlag("verbose", entry.verboseLevel),
+    fastFlag,
+    stringFlag("reasoning", entry.reasoningLevel),
+    stringFlag("elevated", entry.elevatedLevel),
+    entry.systemSent ? "system" : undefined,
+    entry.abortedLastRun ? "aborted" : undefined,
+    stringFlag("id", entry.sessionId),
+  ].filter((flag): flag is string => flag !== undefined);
 };
 
 function compareSessionCandidatesByUpdatedAt(
@@ -125,15 +115,11 @@ async function prepareSessionStatusDetails(
     resolveSessionRuntime,
     readSessionRuntimeMetadata,
     resolveSessionModelRef,
-    resolveStatusModelComparisonLabel,
     resolveStatusModelLookupRef,
     createStatusModelContextResolver,
   } = await loadStatusSummaryRuntimeModule();
   // Read runtime metadata once for every displayed row, including overlapping windows.
   const metadata = await readSessionRuntimeMetadata(cfg, candidates);
-  const metadataByCandidate = new Map(
-    candidates.map((candidate, index) => [candidate, metadata[index] ?? null]),
-  );
   const resolveModelContext = await createStatusModelContextResolver(cfg);
 
   const resolved = resolveConfiguredStatusModelRef({
@@ -158,164 +144,165 @@ async function prepareSessionStatusDetails(
       allowCacheLookup: false,
     }) ?? null;
 
-  // Aggregate rows reuse this request's completed agent projection, with independent DTOs.
+  // Project each candidate once; agent and aggregate windows only select these facts.
   const sessionRows = new Map<SessionEntrySummary, SessionStatus>();
-  const buildSessionRows = async (rows: SessionEntrySummary[]) =>
-    Promise.all(
-      rows.map(async (candidate) => {
-        const cached = sessionRows.get(candidate);
-        if (cached) {
-          return { ...cached, flags: [...cached.flags] };
-        }
-        const { sessionKey: key, entry } = candidate;
-        const agentId = parseAgentSessionKey(key)?.agentId;
-        const updatedAt = entry.updatedAt ?? null;
-        const age = updatedAt ? now - updatedAt : null;
-        const configuredForSession = resolveConfiguredStatusModelRef({
-          cfg,
-          defaultProvider: DEFAULT_PROVIDER,
-          defaultModel: DEFAULT_MODEL,
-          agentId,
-        });
-        const configuredSessionModel = configuredForSession.model ?? DEFAULT_MODEL;
-        const configuredSessionModelLabel = `${configuredForSession.provider ?? DEFAULT_PROVIDER}/${configuredSessionModel}`;
-        const resolvedModel = resolveSessionModelRef(configuredForSession, entry);
-        const model = resolvedModel.model ?? configuredSessionModel;
-        const lookupModel =
-          resolveStatusModelLookupRef({
-            provider: resolvedModel.provider,
-            model,
-            defaultProvider: configuredForSession.provider ?? DEFAULT_PROVIDER,
-          }) ?? resolvedModel;
-        const lookupModelId = lookupModel.model ?? model;
-        const selectedModelLabel =
-          resolvedModel.provider && model ? `${resolvedModel.provider}/${model}` : model;
-        const configuredSessionModelComparisonLabel = resolveStatusModelComparisonLabel({
-          provider: configuredForSession.provider ?? DEFAULT_PROVIDER,
-          model: configuredSessionModel,
-          defaultProvider: DEFAULT_PROVIDER,
-        });
-        const selectedModelComparisonLabel = resolveStatusModelComparisonLabel({
-          provider: resolvedModel.provider,
-          model,
-          defaultProvider: configuredForSession.provider ?? DEFAULT_PROVIDER,
-        });
-        const runtimeMatchesConfiguredModel =
-          selectedModelComparisonLabel != null &&
-          configuredSessionModelComparisonLabel != null &&
-          areRuntimeModelRefsEquivalent(
-            selectedModelComparisonLabel,
-            configuredSessionModelComparisonLabel,
-            { config: cfg },
-          );
-        const contextModelProvider = runtimeMatchesConfiguredModel
-          ? configuredForSession.provider
-          : lookupModel.provider;
-        const modelSelectionDiffers =
-          selectedModelComparisonLabel != null &&
-          configuredSessionModelComparisonLabel != null &&
-          selectedModelComparisonLabel !== configuredSessionModelComparisonLabel &&
-          !runtimeMatchesConfiguredModel &&
-          (hasUserPinnedModelSelection(entry) || hasSessionActiveAutoModelFallback(entry));
-        // Session rows show the live selected model and warn for user-pinned
-        // differences as well as runtime fallback selections (#96126).
-        const runtime = resolveSessionRuntime({
-          cfg,
-          entry,
-          provider: lookupModel.provider,
-          model: lookupModelId ?? "",
-          agentId,
-          sessionKey: key,
-          acpMeta: metadataByCandidate.get(candidate) ?? null,
-        });
-        const modelContext = await resolveModelContext(
-          lookupModel.provider,
-          lookupModelId ?? undefined,
-          agentId,
-          runtime.id,
-          entry,
+  await Promise.all(
+    candidates.map(async (candidate, index) => {
+      const { sessionKey: key, entry } = candidate;
+      const agentId = parseAgentSessionKey(key)?.agentId;
+      const updatedAt = entry.updatedAt ?? null;
+      const age = updatedAt ? now - updatedAt : null;
+      const configuredForSession = resolveConfiguredStatusModelRef({
+        cfg,
+        defaultProvider: DEFAULT_PROVIDER,
+        defaultModel: DEFAULT_MODEL,
+        agentId,
+      });
+      const configuredSessionModel = configuredForSession.model ?? DEFAULT_MODEL;
+      const configuredSessionModelLabel = `${configuredForSession.provider ?? DEFAULT_PROVIDER}/${configuredSessionModel}`;
+      const resolvedModel = resolveSessionModelRef(configuredForSession, entry);
+      const model = resolvedModel.model ?? configuredSessionModel;
+      const selectedLookupModel = resolveStatusModelLookupRef({
+        provider: resolvedModel.provider,
+        model,
+        defaultProvider: configuredForSession.provider ?? DEFAULT_PROVIDER,
+      });
+      const lookupModel = selectedLookupModel ?? resolvedModel;
+      const lookupModelId = lookupModel.model ?? model;
+      const selectedModelLabel =
+        resolvedModel.provider && model ? `${resolvedModel.provider}/${model}` : model;
+      const configuredLookupModel = resolveStatusModelLookupRef({
+        provider: configuredForSession.provider ?? DEFAULT_PROVIDER,
+        model: configuredSessionModel,
+        defaultProvider: DEFAULT_PROVIDER,
+      });
+      const configuredSessionModelComparisonLabel = configuredLookupModel
+        ? `${configuredLookupModel.provider}/${configuredLookupModel.model}`
+        : null;
+      const selectedModelComparisonLabel = selectedLookupModel
+        ? `${selectedLookupModel.provider}/${selectedLookupModel.model}`
+        : null;
+      const runtimeMatchesConfiguredModel =
+        selectedModelComparisonLabel != null &&
+        configuredSessionModelComparisonLabel != null &&
+        areRuntimeModelRefsEquivalent(
+          selectedModelComparisonLabel,
+          configuredSessionModelComparisonLabel,
+          { config: cfg },
         );
-        const resolvedContextTokens = resolveContextTokensForModel({
-          cfg,
+      const contextModelProvider = runtimeMatchesConfiguredModel
+        ? configuredForSession.provider
+        : lookupModel.provider;
+      const modelSelectionDiffers =
+        selectedModelComparisonLabel != null &&
+        configuredSessionModelComparisonLabel != null &&
+        selectedModelComparisonLabel !== configuredSessionModelComparisonLabel &&
+        !runtimeMatchesConfiguredModel &&
+        (hasUserPinnedModelSelection(entry) || hasSessionActiveAutoModelFallback(entry));
+      // Session rows show the live selected model and warn for user-pinned
+      // differences as well as runtime fallback selections (#96126).
+      const runtime = resolveSessionRuntime({
+        cfg,
+        entry,
+        provider: lookupModel.provider,
+        model: lookupModelId,
+        agentId,
+        sessionKey: key,
+        acpMeta: metadata[index] ?? null,
+      });
+      const modelContext = await resolveModelContext(
+        lookupModel.provider,
+        lookupModelId,
+        agentId,
+        runtime.id,
+        entry,
+      );
+      const resolvedContextTokens = resolveContextTokensForModel({
+        cfg,
+        provider: lookupModel.provider,
+        model: lookupModelId,
+        ...modelContext,
+        allowAsyncLoad: false,
+        allowCacheLookup: false,
+      });
+      const contextTokens =
+        resolveProjectedSessionContextTokens({
+          entry,
           provider: lookupModel.provider,
           model: lookupModelId,
-          ...modelContext,
-          allowAsyncLoad: false,
-          allowCacheLookup: false,
-        });
-        const contextTokens =
-          resolveProjectedSessionContextTokens({
-            entry,
+          agentHarnessId: runtime.id,
+          resolvedContextTokens,
+          authoredContextTokens: resolveAuthoredModelContextTokens({
+            cfg,
             provider: lookupModel.provider,
+            modelProvider: contextModelProvider,
             model: lookupModelId,
-            agentHarnessId: runtime.id,
-            resolvedContextTokens,
-            authoredContextTokens: resolveAuthoredModelContextTokens({
-              cfg,
-              provider: lookupModel.provider,
-              modelProvider: contextModelProvider,
-              model: lookupModelId,
-            }),
-          }) ?? null;
-        const total = resolveSessionTotalTokens(entry);
-        const freshTotal = resolveFreshSessionTotalTokens(entry);
-        const totalTokensFresh = freshTotal !== undefined;
-        const remaining =
-          contextTokens != null && freshTotal !== undefined
-            ? Math.max(0, contextTokens - freshTotal)
-            : null;
-        const pct =
-          contextTokens && contextTokens > 0 && freshTotal !== undefined
-            ? Math.min(999, Math.round((freshTotal / contextTokens) * 100))
-            : null;
-        const row = {
-          agentId,
-          key,
-          kind: classifySessionKey(key, entry),
-          sessionId: entry?.sessionId,
-          updatedAt,
-          age,
-          thinkingLevel: entry?.thinkingLevel,
-          fastMode: entry?.fastMode,
-          verboseLevel: entry?.verboseLevel,
-          traceLevel: entry?.traceLevel,
-          reasoningLevel: entry?.reasoningLevel,
-          elevatedLevel: entry?.elevatedLevel,
-          systemSent: entry?.systemSent,
-          abortedLastRun: entry?.abortedLastRun,
-          inputTokens: entry?.inputTokens,
-          outputTokens: entry?.outputTokens,
-          cacheRead: entry?.cacheRead,
-          cacheWrite: entry?.cacheWrite,
-          totalTokens: total ?? null,
-          totalTokensFresh,
-          remainingTokens: remaining,
-          percentUsed: pct,
-          model,
-          configuredModel: configuredSessionModelLabel,
-          selectedModel: selectedModelLabel,
-          modelSelectionReason: modelSelectionDiffers
-            ? hasUserPinnedModelSelection(entry)
-              ? "session override"
-              : "fallback selected"
-            : null,
-          runtime: runtime.label,
-          contextTokens,
-          flags: buildFlags(entry),
-        } satisfies SessionStatus;
-        sessionRows.set(candidate, row);
-        return row;
-      }),
-    );
+          }),
+        }) ?? null;
+      const total = resolveSessionTotalTokens(entry);
+      const freshTotal = resolveFreshSessionTotalTokens(entry);
+      const totalTokensFresh = freshTotal !== undefined;
+      const remaining =
+        contextTokens != null && freshTotal !== undefined
+          ? Math.max(0, contextTokens - freshTotal)
+          : null;
+      const pct =
+        contextTokens && contextTokens > 0 && freshTotal !== undefined
+          ? Math.min(999, Math.round((freshTotal / contextTokens) * 100))
+          : null;
+      const row = {
+        agentId,
+        key,
+        kind: classifySessionKey(key, entry),
+        sessionId: entry?.sessionId,
+        updatedAt,
+        age,
+        thinkingLevel: entry?.thinkingLevel,
+        fastMode: entry?.fastMode,
+        verboseLevel: entry?.verboseLevel,
+        traceLevel: entry?.traceLevel,
+        reasoningLevel: entry?.reasoningLevel,
+        elevatedLevel: entry?.elevatedLevel,
+        systemSent: entry?.systemSent,
+        abortedLastRun: entry?.abortedLastRun,
+        inputTokens: entry?.inputTokens,
+        outputTokens: entry?.outputTokens,
+        cacheRead: entry?.cacheRead,
+        cacheWrite: entry?.cacheWrite,
+        totalTokens: total ?? null,
+        totalTokensFresh,
+        remainingTokens: remaining,
+        percentUsed: pct,
+        model,
+        configuredModel: configuredSessionModelLabel,
+        selectedModel: selectedModelLabel,
+        modelSelectionReason: modelSelectionDiffers
+          ? hasUserPinnedModelSelection(entry)
+            ? "session override"
+            : "fallback selected"
+          : null,
+        runtime: runtime.label,
+        contextTokens,
+        flags: buildFlags(entry),
+      } satisfies SessionStatus;
+      sessionRows.set(candidate, row);
+    }),
+  );
 
   return {
     defaults: { model: configModel, contextTokens: configContextTokens },
-    buildSessionRows,
+    buildSessionRows: (rows: readonly SessionEntrySummary[]) =>
+      rows.map((candidate) => sessionRows.get(candidate)!),
   };
 }
 
-/** Builds the aggregate status summary for agents, sessions, heartbeat, and channels. */
-export async function getStatusSummary(
+/** Builds the aggregate status summary at its final synchronous publication boundary. */
+export async function getStatusSummary(options: Parameters<typeof prepareStatusSummary>[0] = {}) {
+  return (await prepareStatusSummary(options)).publish().summary;
+}
+
+/** Composing CLI owners retain this preparation until their remaining work settles. */
+export async function prepareStatusSummary(
   options: {
     includeSensitive?: boolean;
     includeChannelSummary?: boolean;
@@ -323,7 +310,7 @@ export async function getStatusSummary(
     config?: OpenClawConfig;
     sourceConfig?: OpenClawConfig;
     hostDesktopStatus?: import("../gateway/desktop/host-source.js").HostDesktopStatus;
-    sessionStores?: StatusSessionStores;
+    sessionStores?: PreparedStatusSessionStores;
     sessionRowProjection?: SessionRowProjection;
   } = {},
 ) {
@@ -348,22 +335,21 @@ export async function getStatusSummary(
         )
     : null;
   const agentList = await listGatewayAgentsBasic(cfg);
-  // One roster-facts batch spans enrollment and the per-agent route inputs:
-  // outside it every resolveAgentConfig re-walks the roster and
-  // a large fleet stalls the loop for the whole projection (#137570).
+  // Receipts list the primary job first; retain it when converted siblings share an agent.
+  const heartbeatJobs = new Map(
+    (await readHeartbeatSummarySnapshot(cfg)).toReversed().map((job) => [job.agentId, job]),
+  );
+  // Share the remaining per-agent main-session resolution across the fleet.
   const heartbeatInputs = withAgentRosterFactsBatch(cfg, () => {
-    const heartbeatSummaries = resolveHeartbeatSummariesForAgents(
-      cfg,
-      agentList.agents.map((agent) => agent.id),
-    );
-    return agentList.agents.map((agent, index) => {
-      const summary = expectDefined(heartbeatSummaries[index], "heartbeat summary");
+    return agentList.agents.map((agent) => {
+      const job = heartbeatJobs.get(agent.id);
+      const summary = projectHeartbeatSummary(job);
       let routeTarget:
         | {
             storePath: string;
             sessionKey: string;
             target: "last" | "owner";
-            heartbeat: Parameters<typeof hasResolvableHeartbeatOwnerRoute>[0]["heartbeat"];
+            policy: Parameters<typeof hasResolvableProactiveOwnerRoute>[0]["policy"];
           }
         | undefined;
       if (
@@ -371,21 +357,17 @@ export async function getStatusSummary(
         !agent.admissionRefusal &&
         (summary.target === "last" || summary.target === "owner")
       ) {
-        const heartbeatSession = resolveHeartbeatSessionKey(
-          cfg,
-          agent.id,
-          summary.session === undefined ? undefined : { session: summary.session },
-        );
-        // Only these enabled targets consume the session route. Keep the probe
-        // read-only so status cannot create, register, or migrate an absent store.
+        // A literal global row belongs to the job's selected agent store.
+        const sessionKey =
+          (job && resolveCronDeliverySessionKey(job)) ??
+          (cfg.session?.scope === "global"
+            ? "global"
+            : resolveAgentMainSessionKey({ cfg, agentId: agent.id }));
         routeTarget = {
-          storePath: heartbeatSession.storePath,
-          sessionKey: heartbeatSession.sessionKey,
+          storePath: resolveSessionStorePathCore(cfg.session?.store, { agentId: agent.id }),
+          sessionKey,
           target: summary.target,
-          heartbeat: {
-            ...cfg.agents?.defaults?.heartbeat,
-            ...resolveAgentConfig(cfg, agent.id)?.heartbeat,
-          },
+          policy: job?.delivery,
         };
       }
       const status: HeartbeatStatus = {
@@ -445,11 +427,11 @@ export async function getStatusSummary(
         const route = deliveryContextFromSession(entry);
         status.waitingForRoute = !(route?.channel && route.to);
       } else {
-        status.waitingForRoute = !(await hasResolvableHeartbeatOwnerRoute({
+        status.waitingForRoute = !(await hasResolvableProactiveOwnerRoute({
           cfg,
           agentId: status.agentId,
           entry,
-          heartbeat: routeTarget.heartbeat,
+          policy: routeTarget.policy,
         }));
       }
     }
@@ -464,51 +446,19 @@ export async function getStatusSummary(
         }),
       )
     : [];
-  const queuedSystemEvents = agentList.agents.flatMap(({ id: agentId }) =>
-    peekSystemEvents(
-      resolveSystemEventQueueKey(
-        resolveCanonicalMainSessionKey({
-          agentId,
-          mainKey: cfg.session?.mainKey,
-          sessionScope: cfg.session?.scope,
-        }),
-        agentId,
-      ),
-    ),
-  );
   const now = Date.now();
 
   const sessionStores =
     options.sessionStores ??
-    (await readStatusSessionStores(
+    (await prepareStatusSessionStores(
       cfg,
       agentList.agents,
       includeSensitive ? STATUS_RECENT_SESSION_LIMIT : 0,
-      options.sessionRowProjection,
+      { projection: options.sessionRowProjection },
     ));
-  const recentCandidates = sortAndLimitBy(
-    sessionStores.recent,
-    STATUS_RECENT_SESSION_LIMIT,
-    compareSessionCandidatesByUpdatedAt,
-  );
   const sessionDetails = includeSensitive
-    ? await prepareSessionStatusDetails(cfg, now, [
-        ...new Set([...recentCandidates, ...sessionStores.byAgent.flatMap(({ recent }) => recent)]),
-      ])
+    ? await prepareSessionStatusDetails(cfg, now, sessionStores.candidates)
     : undefined;
-  const byAgent = await Promise.all(
-    sessionStores.byAgent.map(async ({ agent, path, count, recent }) => ({
-      agentId: agent.id,
-      ...(agent.status ? { status: agent.status } : {}),
-      ...(includeSensitive && agent.admissionRefusal
-        ? { admissionRefusal: agent.admissionRefusal }
-        : {}),
-      path: includeSensitive ? path : "[redacted]",
-      count,
-      recent: sessionDetails ? await sessionDetails.buildSessionRows(recent) : [],
-    })),
-  );
-  const recent = sessionDetails ? await sessionDetails.buildSessionRows(recentCandidates) : [];
   const hostDesktopStatus =
     options.hostDesktopStatus ??
     (
@@ -516,53 +466,142 @@ export async function getStatusSummary(
         await import("../gateway/desktop/host-source.js")
       ).inspectHostDesktop({ config: cfg.desktop?.host })
     ).status;
-  const sqliteWal = readOpenClawStateWalHealth();
+  const secretEgressProxy = await getSecretEgressCertificateStatus();
+  const databaseStores = options.includeCliProjection
+    ? (
+        await import("../infra/database-engine/admitted-diagnostics.js")
+      ).describeAdmittedDatabaseStores(cfg)
+    : undefined;
+  const utilityModelWarnings = collectUtilityModelWarnings(cfg);
   return {
-    runtimeVersion: resolveRuntimeServiceVersion(process.env),
-    ...(options.includeCliProjection
-      ? { cliProjection: buildStatusCliProjection(cfg, agentList) }
-      : {}),
-    sqliteWal: sqliteWal && !includeSensitive ? { ...sqliteWal, error: undefined } : sqliteWal,
-    hostDesktop: hostDesktopStatus,
-    linkChannel: linkContext
-      ? {
-          id: linkContext.plugin.id,
-          label: linkContext.plugin.meta.label ?? "Channel",
-          linked: linkContext.linked,
-          authAgeMs: linkContext.authAgeMs,
-        }
-      : undefined,
-    heartbeat: {
-      defaultAgentId: agentList.defaultId,
-      agents: heartbeatAgents,
-    },
-    channelSummary,
-    queuedSystemEvents,
-    startupMigrationWarning: readStartupMigrationWarning(includeSensitive),
-    startupRecoveryWarning: readStartupRecoveryWarning(includeSensitive),
-    installationReplacementWarning: getGatewayInstallationReplacement()?.message,
-    secretEgressProxy: await getSecretEgressCertificateStatus(),
-    degradedSecretOwners: listActiveDegradedSecretOwners().map(
-      ({ ownerKind, ownerId, state, degradationState, paths, reason }) => ({
-        ownerKind,
-        ownerId,
-        state,
-        degradationState: degradationState ?? "cold",
-        paths,
-        reason: redactSecretDegradationReason(reason),
-      }),
-    ),
-    degradedPlugins: listActiveDegradedPlugins().map(({ pluginId, state, diagnostic }) => ({
-      pluginId,
-      state,
-      diagnostic: toPublicPluginVerificationDiagnostic(diagnostic),
-    })),
-    sessions: {
-      paths: includeSensitive ? sessionStores.paths : [],
-      count: sessionStores.count,
-      defaults: sessionDetails?.defaults ?? { model: null, contextTokens: null },
-      recent,
-      byAgent,
+    publish() {
+      const publishedStores = sessionStores.publish();
+      const survivingIds = new Set(publishedStores.byAgent.map(({ agent }) => agent.id));
+      const survivingAgents = agentList.agents.filter(({ id }) => survivingIds.has(id));
+      const publishedAgentList = {
+        ...agentList,
+        defaultId: survivingIds.has(agentList.defaultId)
+          ? agentList.defaultId
+          : survivingAgents[0]?.id,
+        agents: survivingAgents,
+      };
+      const recentCandidates = sortAndLimitBy(
+        publishedStores.recent,
+        STATUS_RECENT_SESSION_LIMIT,
+        compareSessionCandidatesByUpdatedAt,
+      );
+      const byAgent = publishedStores.byAgent.map(({ agent, path, count, recent }) => ({
+        agentId: agent.id,
+        ...(agent.status ? { status: agent.status } : {}),
+        ...(includeSensitive && agent.admissionRefusal
+          ? { admissionRefusal: agent.admissionRefusal }
+          : {}),
+        path: includeSensitive ? path : "[redacted]",
+        count,
+        recent: sessionDetails ? sessionDetails.buildSessionRows(recent) : [],
+      }));
+      const recent = sessionDetails ? sessionDetails.buildSessionRows(recentCandidates) : [];
+      const queuedSystemEvents = publishedAgentList.agents.flatMap(({ id: agentId }) =>
+        peekSystemEvents(
+          resolveSystemEventQueueKey(
+            resolveCanonicalMainSessionKey({
+              agentId,
+              mainKey: cfg.session?.mainKey,
+              sessionScope: cfg.session?.scope,
+            }),
+            agentId,
+          ),
+        ),
+      );
+      const sqliteWal = readOpenClawStateWalHealth();
+      return {
+        sessionStores: publishedStores,
+        summary: {
+          runtimeVersion: resolveRuntimeServiceVersion(process.env),
+          ...(databaseStores
+            ? {
+                databaseStores: includeSensitive
+                  ? databaseStores
+                  : databaseStores.map((store) => Object.assign({}, store, { path: null })),
+              }
+            : {}),
+          ...(options.includeCliProjection
+            ? {
+                cliProjection: {
+                  agents: {
+                    defaultId: publishedAgentList.selectionRequired
+                      ? null
+                      : (publishedAgentList.defaultId ?? null),
+                    ownership: publishedAgentList.ownership,
+                    selectionRequired: publishedAgentList.selectionRequired,
+                    rows: publishedAgentList.agents.map(({ id, name }) =>
+                      name ? { id, name } : { id },
+                    ),
+                  },
+                  updateChannel: cfg.update?.channel ?? null,
+                  memoryPlugin: resolveMemoryPluginStatus(cfg),
+                },
+              }
+            : {}),
+          sqliteWal:
+            sqliteWal && !includeSensitive ? { ...sqliteWal, error: undefined } : sqliteWal,
+          hostDesktop: hostDesktopStatus,
+          linkChannel: linkContext
+            ? {
+                id: linkContext.plugin.id,
+                label: linkContext.plugin.meta.label ?? "Channel",
+                linked: linkContext.linked,
+                authAgeMs: linkContext.authAgeMs,
+              }
+            : undefined,
+          heartbeat: {
+            defaultAgentId: publishedAgentList.defaultId,
+            agents: heartbeatAgents.filter(({ agentId }) => survivingIds.has(agentId)),
+          },
+          channelSummary,
+          queuedSystemEvents,
+          startupMigrationWarning: readStartupMigrationWarning(includeSensitive),
+          startupRecoveryWarning: readStartupRecoveryWarning(includeSensitive),
+          modelReasoningWarning: readModelReasoningWarning(includeSensitive),
+          installationReplacementWarning: getGatewayInstallationReplacement()?.message,
+          ...(utilityModelWarnings.length
+            ? {
+                utilityModelWarnings: includeSensitive
+                  ? utilityModelWarnings
+                  : [
+                      {
+                        path: "utilityModel",
+                        message:
+                          "A configured utility model cannot enforce tool-free utility work. Choose a capable utility model or add capable utilityModel fallbacks.",
+                      },
+                    ],
+              }
+            : {}),
+          secretEgressProxy,
+          degradedSecretOwners: listActiveDegradedSecretOwners().map(
+            ({ ownerKind, ownerId, state, degradationState, paths, reason }) => ({
+              ownerKind,
+              ownerId,
+              state,
+              degradationState: degradationState ?? "cold",
+              paths,
+              reason: redactSecretDegradationReason(reason),
+            }),
+          ),
+          degradedPlugins: listActiveDegradedPlugins().map(({ pluginId, state, diagnostic }) => ({
+            pluginId,
+            state,
+            diagnostic: toPublicPluginVerificationDiagnostic(diagnostic),
+          })),
+          sessions: {
+            paths: includeSensitive ? publishedStores.paths : [],
+            count: publishedStores.count,
+            defaults: sessionDetails?.defaults ?? { model: null, contextTokens: null },
+            recent,
+            byAgent,
+          },
+        },
+      };
     },
   };
 }
@@ -585,6 +624,7 @@ export type StatusSummary = Omit<
     };
     eventLoop?: NonNullable<SystemInfoResult["eventLoop"]>;
     processMemory?: NonNullable<SystemInfoResult["processMemory"]>;
+    pluginReload?: GatewayPluginReloadStatus;
     degradedSecretOwners?: Array<
       Omit<
         NonNullable<GatheredStatusSummary["degradedSecretOwners"]>[number],

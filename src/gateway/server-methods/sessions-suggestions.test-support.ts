@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, vi } from "vitest";
+import { setRuntimeConfigSnapshot } from "../../config/config.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
+import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import {
   identifiedClient,
   initializeSessionReadContext,
@@ -10,15 +12,30 @@ import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js
 
 export const sessionKey = "agent:main:main";
 
-const defaultSuggestionSession = {
-  sessionId: "session-main",
-  updatedAt: 1,
-  createdActor: { type: "human", source: "profile", id: "owner" },
-  visibility: "suggest",
-} as const;
+export function upsertDefaultSuggestionSession(
+  patch: Parameters<typeof upsertSessionEntryCore>[1] = {},
+  key = sessionKey,
+) {
+  return upsertSessionEntryCore(
+    { agentId: "main", sessionKey: key },
+    {
+      sessionId: "session-main",
+      updatedAt: 1,
+      createdActor: { type: "human", source: "profile", id: "owner" },
+      visibility: "suggest",
+      ...patch,
+    },
+  );
+}
 
-export function upsertDefaultSuggestionSession() {
-  return upsertSessionEntryCore({ agentId: "main", sessionKey }, defaultSuggestionSession);
+export function withSuggestionState(
+  run: Parameters<typeof withOpenClawTestState>[1],
+  options: { prepareProfileCatalog?: boolean } = {},
+) {
+  return withOpenClawTestState({ scenario: "minimal", ...options }, async (state) => {
+    setRuntimeConfigSnapshot({});
+    await run(state);
+  });
 }
 
 export function client(profileId: string, displayName: string, admin = false): GatewayClient {
@@ -39,17 +56,12 @@ export function context(
     getRuntimeConfig: () => runtimeConfig,
     broadcast,
     broadcastToConnIds: vi.fn(),
-    chatAbortControllers: new Map(),
     logGateway: { warn: vi.fn() },
   } as unknown as GatewayRequestContext;
 }
 
 export async function call(
-  method:
-    | "session.suggestions.add"
-    | "session.suggestions.list"
-    | "session.suggestions.resolve"
-    | "session.typing",
+  method: `session.suggestions.${"add" | "list" | "resolve"}` | "session.typing",
   params: Record<string, unknown>,
   requestClient: GatewayClient | null,
   requestContext = context(),
@@ -67,6 +79,16 @@ export async function call(
   return { responses, context: requestContext };
 }
 
+export function requests(
+  key: string,
+  requester: Parameters<typeof call>[2],
+  requestContext = context(),
+  scope: Record<string, unknown> = {},
+) {
+  return (method: Parameters<typeof call>[0], params: Record<string, unknown> = {}) =>
+    call(method, { sessionKey: key, ...scope, ...params }, requester, requestContext);
+}
+
 export function responseSuggestionId(result: Awaited<ReturnType<typeof call>>): string {
   const payload = result.responses[0]?.[1] as { suggestion?: { id?: string } } | undefined;
   if (!payload?.suggestion?.id) {
@@ -81,8 +103,7 @@ export function registerSessionSuggestionTestLifecycle(mocks: {
   presence: unknown[];
 }): void {
   beforeEach(() => {
-    mocks.handleChatSend.mockReset();
-    mocks.handleChatSend.mockImplementation(({ respond }: { respond: RespondFn }) => {
+    mocks.handleChatSend.mockReset().mockImplementation(({ respond }: { respond: RespondFn }) => {
       respond(true, { runId: "suggestion-run", status: "started" });
     });
     mocks.suggestionMutationFailure = undefined;

@@ -1,9 +1,12 @@
-import { describe, expect, it, onTestFinished, vi } from "vitest";
-import type { CronJob } from "../../../cron/types.js";
+import { expect, it, onTestFinished, vi } from "vitest";
+import { makeCronJob } from "../../../cron/delivery.test-helpers.js";
 import type { AgentRuntimeIdentity } from "../../../gateway/agent-runtime-identity-token.js";
-import { createRequesterInitialTransferFixture } from "../registry/subagent-registry-requester-yield.test-support.js";
+import type { SessionControllerInput } from "../../../sessions/session-controller.mailbox.js";
+import {
+  createRequesterInitialTransferFixture,
+  markRequesterTurnYieldedWithAuthority,
+} from "../registry/subagent-registry-requester-yield.test-support.js";
 import { copySubagentRunRuntimeOwner } from "../registry/subagent-run-generation.js";
-import { prepareRequesterCronAuthority } from "../requester-cron-authority.js";
 import {
   registryRuntimeMock,
   wakeParams,
@@ -46,123 +49,103 @@ vi.mock("../../../gateway/session-sharing-preparation.js", () => ({
 const { maybeWakeRequesterAfterAllChildrenSettled } =
   await import("./subagent-announce.requester-settle-wake.js");
 
-describe("requester continuation automation management", () => {
-  it("keeps automations manageable after yield retires the batch", async () => {
-    const { withCronManagementGrant } =
-      await import("../../../gateway/cron-creator-authority-grant.js");
-    const { cronJobMatchesCallerScope, readCronCallerScope } =
-      await import("../../../gateway/server-methods/cron-caller-scope.js");
-    const { resolveGatewayCronCreatorAuthorityAdmission } =
-      await import("../../../gateway/server-methods/cron-creator-authority-admission.js");
-    const { createSyntheticPluginRuntimeClient } =
-      await import("../../../gateway/server-plugin-runtime-client.js");
-    const {
-      claimAgentRunDelegatedAuthority,
-      registerAgentRunContext,
-      releaseAgentRunDelegatedAuthority,
-    } = await import("../../../infra/agent-run-registry.js");
-    const { createTestAdmittedRunContext } =
-      await import("../../admitted-run-context.test-support.js");
-    const {
-      bindCronManagementGrant,
-      createCronCreatorAuthorityCapability,
-      runWithCronCreatorAuthorityCapability,
-    } = await import("../../cron-creator-authority-context.js");
-    const { withGatewayToolCallerIdentity } = await import("../../tools/gateway-caller-context.js");
-    const { markRequesterTurnYieldedInRuns, settleRequesterTurnAfterSessionSpawns } =
-      await import("../registry/subagent-registry-requester-yield.js");
-    const sourceRunId = "admin-requester";
-    let child = makeSettledChild({
-      runId: "run-b",
-      requesterAgentId: "main",
-      requesterTurnRunId: sourceRunId,
-      completion: { required: true },
-      requesterSettleWake: undefined,
-    });
-    const runs = new Map([[child.runId, child]]);
-    const transfer = createRequesterInitialTransferFixture(runs, () => {});
-    registryRuntimeMock.listSubagentRunsForRequester.mockReturnValue([child]);
-    const original = createTestAdmittedRunContext(sourceRunId).operationalRunInstance;
-    const originalAuthority = claimAgentRunDelegatedAuthority(original);
-    registerAgentRunContext(sourceRunId, {
-      sessionKey: REQUESTER,
-      sessionId: "sess-main",
-      agentId: "main",
-    });
-    onTestFinished(() => {
-      releaseAgentRunDelegatedAuthority(originalAuthority);
-    });
-    const originalCapability = createCronCreatorAuthorityCapability(
-      sourceRunId,
-      { kind: "unknown" },
-      { source: "control-ui-admin" },
-    )!;
-    await runWithCronCreatorAuthorityCapability(originalCapability, () =>
-      withGatewayToolCallerIdentity(
-        { agentId: "main", sessionKey: REQUESTER, approvalAuthority: originalAuthority },
-        async () => {
-          const requester = {
-            requesterSessionKey: REQUESTER,
-            requesterAgentId: "main",
-            requesterTurnRunId: sourceRunId,
-          };
-          const preparedAuthority = prepareRequesterCronAuthority(requester);
-          try {
-            expect(
-              await markRequesterTurnYieldedInRuns({
-                ...requester,
-                preparedAuthority: preparedAuthority ?? null,
-                runs,
-                transfer,
-              }),
-            ).toBe(1);
-          } finally {
-            await preparedAuthority?.release();
-          }
-          expect(
-            await settleRequesterTurnAfterSessionSpawns({
-              requesterSessionKey: REQUESTER,
-              requesterAgentId: "main",
-              requesterTurnRunId: sourceRunId,
-              requesterYielded: true,
-              acceptedSessionSpawns: [
-                {
-                  runId: child.runId,
-                  childSessionKey: child.childSessionKey,
-                  expectsCompletionMessage: true,
-                },
-              ],
-              runs,
-              transfer,
-              schedule: () => {},
-            }),
-          ).toBe(true);
-        },
-      ),
-    );
-    const published = runs.get(child.runId)!;
-    child = copySubagentRunRuntimeOwner(published, { ...published });
-    registryRuntimeMock.listSubagentRunsForRequester.mockReturnValue([child]);
+it("keeps bound automation management after the old cohort is explicitly removed", async () => {
+  const { withCronManagementGrant } =
+    await import("../../../gateway/cron-creator-authority-grant.js");
+  const { cronJobMatchesCallerScope, readCronCallerScope } =
+    await import("../../../gateway/server-methods/cron-caller-scope.js");
+  const { resolveGatewayCronCreatorAuthorityAdmission } =
+    await import("../../../gateway/server-methods/cron-creator-authority-admission.js");
+  const { createSyntheticPluginRuntimeClient } =
+    await import("../../../gateway/server-plugin-runtime-client.js");
+  const {
+    claimAgentRunDelegatedAuthority,
+    registerAgentRunContext,
+    releaseAgentRunDelegatedAuthority,
+  } = await import("../../../infra/agent-run-registry.js");
+  const { createTestAdmittedRunContext } =
+    await import("../../admitted-run-context.test-support.js");
+  const {
+    bindCronManagementGrant,
+    createCronCreatorAuthorityCapability,
+    runWithCronCreatorAuthorityCapability,
+  } = await import("../../cron-creator-authority-context.js");
+  const { withGatewayToolCallerIdentity } = await import("../../tools/gateway-caller-context.js");
+  const { settleRequesterTurnAfterSessionSpawns } =
+    await import("../registry/subagent-registry-requester-yield.js");
+  const sourceRunId = "admin-requester";
+  let child = makeSettledChild({
+    runId: "run-b",
+    requesterAgentId: "main",
+    requesterTurnRunId: sourceRunId,
+    completion: { required: true },
+    requesterSettleWake: undefined,
+  });
+  const runs = new Map([[child.runId, child]]);
+  const transfer = createRequesterInitialTransferFixture(runs, () => {});
+  registryRuntimeMock.listSubagentRunsForRequester.mockReturnValue([child]);
+  const original = createTestAdmittedRunContext(sourceRunId).operationalRunInstance;
+  const originalAuthority = claimAgentRunDelegatedAuthority(original);
+  registerAgentRunContext(sourceRunId, {
+    sessionKey: REQUESTER,
+    sessionId: "sess-main",
+    agentId: "main",
+  });
+  onTestFinished(() => {
     releaseAgentRunDelegatedAuthority(originalAuthority);
-    expect(originalCapability.active).toBe(false);
+  });
+  const originalCapability = createCronCreatorAuthorityCapability(
+    sourceRunId,
+    { kind: "unknown" },
+    { source: "control-ui-admin" },
+  )!;
+  await runWithCronCreatorAuthorityCapability(originalCapability, () =>
+    withGatewayToolCallerIdentity(
+      { agentId: "main", sessionKey: REQUESTER, approvalAuthority: originalAuthority },
+      async () => {
+        const requester = {
+          requesterSessionKey: REQUESTER,
+          requesterAgentId: "main",
+          requesterTurnRunId: sourceRunId,
+        };
+        expect(await markRequesterTurnYieldedWithAuthority({ ...requester, runs, transfer })).toBe(
+          1,
+        );
+        expect(
+          await settleRequesterTurnAfterSessionSpawns({
+            ...requester,
+            requesterYielded: true,
+            acceptedSessionSpawns: [
+              {
+                runId: child.runId,
+                childSessionKey: child.childSessionKey,
+                expectsCompletionMessage: true,
+              },
+            ],
+            runs,
+            transfer,
+            schedule: () => {},
+          }),
+        ).toBe(true);
+      },
+    ),
+  );
+  const published = runs.get(child.runId)!;
+  child = copySubagentRunRuntimeOwner(published, { ...published });
+  registryRuntimeMock.listSubagentRunsForRequester.mockReturnValue([child]);
+  releaseAgentRunDelegatedAuthority(originalAuthority);
+  expect(originalCapability.active).toBe(false);
 
-    const job: CronJob = {
-      id: "existing-maintenance-job",
-      name: "Maintenance",
-      enabled: false,
-      createdAtMs: 1,
-      updatedAtMs: 1,
-      schedule: { kind: "every", everyMs: 1_800_000 },
-      sessionTarget: "main",
-      agentId: "main",
-      sessionKey: REQUESTER,
-      wakeMode: "next-heartbeat",
-      payload: { kind: "agentTurn", message: "Check service health" },
-      scheduledToolPolicy: { version: 1, mode: "trusted" },
-      state: {},
-    };
-    let canManage = false;
-    deliverSpy.mockImplementationOnce(async (params) => {
+  const job = makeCronJob({
+    id: "existing-maintenance-job",
+    agentId: "main",
+    sessionKey: REQUESTER,
+    sessionTarget: "main",
+    scheduledToolPolicy: { version: 1, mode: "trusted" },
+  });
+  let canManage = false;
+  deliverSpy.mockImplementationOnce(async (params) => {
+    const dispatch = async () => {
       const runId = String(params.directIdempotencyKey);
       const admission = resolveGatewayCronCreatorAuthorityAdmission({
         runId,
@@ -228,9 +211,12 @@ describe("requester continuation automation management", () => {
           releaseAgentRunDelegatedAuthority(authority);
         }
       }
-      return { delivered: true, path: "direct" };
-    });
-    expect(await maybeWakeRequesterAfterAllChildrenSettled(wakeParams())).toBe(true);
-    expect(canManage).toBe(true);
+      return { delivered: true as const, path: "direct" as const };
+    };
+    const caller = (params as { controllerInput?: SessionControllerInput }).controllerInput
+      ?.continuationCaller;
+    return caller ? caller.run(dispatch) : dispatch();
   });
+  expect(await maybeWakeRequesterAfterAllChildrenSettled(wakeParams())).toBe(true);
+  expect(canManage).toBe(true);
 });

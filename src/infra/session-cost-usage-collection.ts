@@ -11,11 +11,11 @@ import {
 } from "../config/sessions/legacy-sqlite-marker.js";
 import { resolveSessionArtifactDirectory } from "../config/sessions/paths.js";
 import type { SessionTranscriptStats } from "../config/sessions/session-accessor.sqlite-contract.js";
-import { resolveSessionStorePathForScope } from "../config/sessions/session-store-path.js";
+import { SESSION_ARCHIVE_ZSTD_SUFFIX } from "../config/sessions/transcript-file-names.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 import { resolveRealpathOrAbsolute } from "./boundary-path.js";
-import { hasErrnoCode } from "./errno.js";
+import { ignoreMissingPath } from "./errno.js";
 import type { UsageCostTranscriptFile } from "./session-cost-usage.types.js";
 
 const USAGE_COST_TRANSCRIPT_STAT_CONCURRENCY = 32;
@@ -91,10 +91,7 @@ async function listUsageCountedTranscriptFileSources(
   try {
     entries = await fs.promises.readdir(sessionsDir, { withFileTypes: true });
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return [];
-    }
-    throw error;
+    return ignoreMissingPath(error) ?? [];
   }
   const transcripts = entries.filter(
     (entry) => entry.isFile() && isUsageCountedSessionTranscriptFileName(entry.name),
@@ -132,10 +129,7 @@ async function listUsageCountedTranscriptFileSources(
           stats,
         };
       } catch (error) {
-        if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-          return undefined;
-        }
-        throw error;
+        return ignoreMissingPath(error);
       }
     });
   const { firstError, hasError, results } = await runTasksWithConcurrency({
@@ -180,17 +174,11 @@ export async function listUsageCountedTranscriptSources(
   params: {
     minMtimeMs?: number;
     sessionsDir?: string;
-    storePath?: string;
+    storePath: string;
   } & UsageCostCollectionAccess,
 ): Promise<UsageCostTranscriptSource[]> {
   const logicalAgentId = normalizeAgentId(agentId);
-  const storePath = resolveSessionStorePathForScope({
-    agentId,
-    env: params.env,
-    storePath:
-      params.storePath ??
-      (params.sessionsDir ? path.join(params.sessionsDir, "sessions.json") : undefined),
-  });
+  const { storePath } = params;
   const sessionsDir = params.sessionsDir ?? resolveSessionArtifactDirectory(storePath);
   const fileBacked = await listUsageCountedTranscriptFileSources(logicalAgentId, {
     ...params,
@@ -222,7 +210,7 @@ export async function listUsageCountedTranscriptStats(
   params: {
     minMtimeMs?: number;
     sessionsDir?: string;
-    storePath?: string;
+    storePath: string;
   } & UsageCostCollectionAccess,
 ): Promise<UsageCostTranscriptFile[]> {
   const sources = await listUsageCountedTranscriptSources(agentId, params);
@@ -232,10 +220,7 @@ export async function listUsageCountedTranscriptStats(
       try {
         return await materializeUsageCostTranscriptSource(source, params);
       } catch (error) {
-        if (hasErrnoCode(error, "ENOENT")) {
-          return undefined;
-        }
-        throw error;
+        return ignoreMissingPath(error);
       }
     }),
     limit: USAGE_COST_TRANSCRIPT_STAT_CONCURRENCY,
@@ -330,6 +315,7 @@ export async function resolveUsageCostTranscriptFiles(
 export async function resolveUsageCostTranscriptPaths(
   sessionFiles: readonly string[],
   access: UsageCostCollectionAccess,
+  options: { materializeArchives?: boolean } = {},
 ): Promise<Array<string | undefined>> {
   const { results, hasError, firstError } = await runTasksWithConcurrency({
     tasks: sessionFiles.map((sessionFile) => async () => {
@@ -337,6 +323,12 @@ export async function resolveUsageCostTranscriptPaths(
       if (marker) {
         const storePath = access.resolveSqliteStorePath(marker.agentId, marker.storePath);
         return formatSqliteSessionFileMarker({ ...marker, storePath });
+      }
+      if (
+        options.materializeArchives === false &&
+        sessionFile.endsWith(SESSION_ARCHIVE_ZSTD_SUFFIX)
+      ) {
+        return undefined;
       }
       try {
         return await access.materializeArchive(sessionFile);

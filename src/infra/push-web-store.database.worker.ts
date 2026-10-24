@@ -1,6 +1,6 @@
 import type { WebPushDevicePreferences } from "../../packages/gateway-protocol/src/schema/push.js";
 import { updateConfigMachineState } from "../state/config-machine-state-write.js";
-import { readConfigMachineState } from "../state/config-machine-state.js";
+import { ensureStatePostgresFragment } from "../state/openclaw-state-db-engine.js";
 import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabase,
@@ -33,6 +33,7 @@ import {
 import { ensureWebPushSubscriptionBindingColumns } from "./push-web-store.schema.js";
 // Canonical shared-SQLite store for Web Push subscriptions and VAPID identity.
 import type { EngineConnection } from "./sql-connection.js";
+import { isPostgresSqlConnection } from "./sql-connection.js";
 import {
   getSqliteDatabaseAdmission,
   publishSqliteDatabaseAdmission,
@@ -57,6 +58,10 @@ function webPushDatabaseOptions(database: OpenClawStateDatabase): OpenClawStateD
 }
 
 function ensureWebPushSubscriptionBindingSchema(database: OpenClawStateDatabase): void {
+  if (isPostgresSqlConnection(database.db)) {
+    ensureStatePostgresFragment(database.db, "web_push_subscriptions");
+    return;
+  }
   const schema = getAdmittedSqliteSchemaFacts(database.db);
   if (schema) {
     if (webPushBindingSchemas.has(schema)) {
@@ -583,12 +588,6 @@ export function deleteWebPushSubscriptionIfCurrentInDatabase(params: {
     }
     return deleted;
   }, webPushDatabaseOptions(params.database));
-}
-
-export function readPersistedVapidKeyPairInDatabase(
-  options: OpenClawStateDatabaseOptions,
-): VapidKeyPair | null {
-  return readConfigMachineState<VapidKeyPair>(WEB_PUSH_VAPID_STATE_KEY, options) ?? null;
 }
 
 /** First committed keypair wins so concurrent gateway bootstraps share one signing identity. */

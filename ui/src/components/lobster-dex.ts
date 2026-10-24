@@ -4,6 +4,7 @@
 // its human. Purely client-side; string-keyed so this stays a leaf module
 // (the pet imports us; importing pet types back would create an import
 // cycle).
+import { listen } from "../lib/reactive/listener.ts";
 import { getSafeLocalStorage } from "../local-storage.ts";
 
 const LOBSTERDEX_KEY = "openclaw.control.lobsterdex.v1";
@@ -86,11 +87,11 @@ export function subscribeLobsterdex(callback: () => void): () => void {
       callback();
     }
   };
-  window.addEventListener(LOBSTERDEX_CHANGED_EVENT, onChange);
-  window.addEventListener("storage", onStorage);
+  const stopChange = listen(window, LOBSTERDEX_CHANGED_EVENT, onChange);
+  const stopStorage = listen(window, "storage", onStorage);
   return () => {
-    window.removeEventListener(LOBSTERDEX_CHANGED_EVENT, onChange);
-    window.removeEventListener("storage", onStorage);
+    stopChange();
+    stopStorage();
   };
 }
 

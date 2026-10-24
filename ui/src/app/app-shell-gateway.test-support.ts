@@ -1,7 +1,7 @@
 import { expect, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
-import { createChatPageSessions } from "../pages/chat/chat-page.test-support.ts";
+import { createChatPageSessions } from "../pages/chat/chat-page-sessions.test-support.ts";
 import { createShellConfigFixture } from "./app-host.test-support.ts";
 import { ShellGatewayOwner, type ShellGatewayHost } from "./app-shell-gateway.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "./context.ts";
@@ -34,7 +34,7 @@ export function createProfileAppearanceGateway(profileId: string | null) {
     hello: { auth: { role: "operator", scopes: ["operator.write"] } },
   } as ApplicationGatewaySnapshot;
   const refreshTheme = vi.fn();
-  const requestUpdate = vi.fn();
+  const invalidate = vi.fn();
   const connectionBootstrap = {
     reset: vi.fn(),
     run: (_key: string, task: () => Promise<unknown>) => task(),
@@ -65,8 +65,8 @@ export function createProfileAppearanceGateway(profileId: string | null) {
     activeSessionKey: "",
     lastLocalePrefSignature: null,
     outboxStoreImport: { load: vi.fn(async () => undefined) },
-    recoverDeletedActiveSession: vi.fn(),
-    requestUpdate,
+    shellNavigation: { recoverDeletedActiveSession: vi.fn() },
+    invalidate,
     routeState: {},
   } as unknown as ShellGatewayHost;
   const owner = new ShellGatewayOwner(host);
@@ -91,7 +91,7 @@ export function createProfileAppearanceGateway(profileId: string | null) {
     host,
     owner,
     refreshTheme,
-    requestUpdate,
+    invalidate,
     request,
     snapshot,
   };

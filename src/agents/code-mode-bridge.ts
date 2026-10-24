@@ -38,6 +38,9 @@ const loadSwarmHandlers = createLazyRuntimeNamedExport(
   "codeModeSwarmHandlers",
 );
 
+const CODE_MODE_INSTRUCTIONS_HINT =
+  "Call handle.describe() before invocation to load the complete server instructions.";
+
 export const CODE_MODE_NODES_TOOL_ID = "openclaw:core:nodes";
 
 function projectCodeModeNode(node: NodeListNode) {
@@ -323,6 +326,8 @@ export async function runBridgeRequest(params: {
                 name: entry.mcp?.toolName ?? entry.name,
                 source: "mcp",
                 description: truncateUtf16Safe(entry.description, 512),
+                instructions: entry.mcp?.instructions,
+                instructionsHint: entry.instructionsHint ? CODE_MODE_INSTRUCTIONS_HINT : undefined,
               };
             });
         break;
@@ -456,7 +461,7 @@ export async function runBridgeRequest(params: {
           .slice(offset, offset + 20)
           .map(({ name, description, location }) => ({
             name,
-            description: description.slice(0, 512),
+            description: truncateUtf16Safe(description, 512),
             location,
           }));
         break;
@@ -510,6 +515,17 @@ export async function runBridgeRequest(params: {
     }
     params.reply.settle(true, value);
   } catch (error) {
+    const classified =
+      getBeforeToolCallFailureDisposition(error) !== undefined && error instanceof Error
+        ? (error.cause ?? error)
+        : error;
+    const code =
+      sessionStoreRequest && error instanceof RangeError
+        ? "store_range"
+        : sessionStoreRequest && error instanceof TypeError
+          ? "store_type"
+          : (getToolContractFailureCode(classified) ??
+            (isTrustedToolInputError(classified) ? "invalid_input" : "tool_error"));
     logCodeModeFailure(error, {
       sessionId: params.ctx.sessionId,
       sessionKey: params.ctx.sessionKey,
@@ -518,23 +534,14 @@ export async function runBridgeRequest(params: {
       codeModeRunId: params.activeRunId,
       workerId: params.workerId,
       failurePhase: "bridge",
+      failureCode: code,
       bridgeDispatchStarted: true,
       bridgeRequestId: params.request.id,
       bridgeMethod: params.request.method,
     });
-    const classified =
-      getBeforeToolCallFailureDisposition(error) !== undefined && error instanceof Error
-        ? (error.cause ?? error)
-        : error;
     params.reply.settle(false, {
       message: redactCodeModeCatalogIds(formatErrorMessage(error), catalogProjection.bindings),
-      code:
-        sessionStoreRequest && error instanceof RangeError
-          ? "store_range"
-          : sessionStoreRequest && error instanceof TypeError
-            ? "store_type"
-            : (getToolContractFailureCode(classified) ??
-              (isTrustedToolInputError(classified) ? "invalid_input" : "tool_error")),
+      code,
       effectStatus: "unknown",
     });
   }

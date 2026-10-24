@@ -1,6 +1,10 @@
 // Covers root CLI option token parsing.
 import { describe, expect, it } from "vitest";
 import {
+  resolveGatewayCommandPath,
+  resolveGatewayRunPreBootstrapOptions,
+} from "../cli/gateway-run-argv.js";
+import {
   getCommandArgsWithRootOptions,
   getCommandPositionalsWithRootOptions,
   isValueToken,
@@ -71,5 +75,33 @@ describe("literal command discovery", () => {
         commandPath: ["config", "get"],
       }),
     ).toBeNull();
+  });
+});
+
+describe("Gateway argv boundaries", () => {
+  const cliArgs = (...args: string[]) => ["node", "openclaw", ...args];
+
+  it("resolves destructive flags after root options without consuming option values", () => {
+    expect(
+      resolveGatewayRunPreBootstrapOptions(
+        cliArgs("--log-level", "debug", "gateway", "run", "--force", "--reset"),
+      ),
+    ).toEqual({ force: true, reset: true });
+    expect(resolveGatewayRunPreBootstrapOptions(cliArgs("gateway", "--token", "--force"))).toEqual({
+      force: false,
+      reset: false,
+    });
+  });
+
+  it.each([
+    { args: ["--", "gateway", "--force"], commandPath: ["gateway", "--force"] },
+    { args: ["gateway", "--", "run", "--force"], commandPath: ["gateway", "run"] },
+    { args: ["gateway", "run", "--", "--reset"], commandPath: ["gateway", "run"] },
+  ])("preserves literal commands without destructive flags: $args", ({ args, commandPath }) => {
+    const argv = cliArgs(...args);
+    expect(resolveGatewayCommandPath(argv)).toEqual(commandPath);
+    const options = resolveGatewayRunPreBootstrapOptions(argv);
+    expect(options?.force).not.toBe(true);
+    expect(options?.reset).not.toBe(true);
   });
 });

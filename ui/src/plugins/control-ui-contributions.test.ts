@@ -14,9 +14,14 @@ import {
   sessionsResult,
 } from "../lib/sessions/session-capability.test-support.ts";
 import { createApplicationContextProvider } from "../test-helpers/application-context.ts";
+import { mountSolid } from "../test-helpers/mount-solid.ts";
+import {
+  createApplicationGateway,
+  createSolidApplicationContextProvider,
+} from "../test-helpers/solid-application-context.tsx";
 import { createControlUiPluginHost } from "./control-ui-host.ts";
+import { PluginManager } from "./control-ui-manager.solid.tsx";
 import type { ControlUiPluginOwner, ControlUiPluginRuntime } from "./control-ui-runtime.ts";
-import "./control-ui-manager.solid.tsx";
 import "./control-ui-view.solid.tsx";
 import "./control-ui-contributions.solid.tsx";
 
@@ -24,7 +29,7 @@ type ContributionsElement = HTMLElementTagNameMap["openclaw-plugin-contributions
 const sessionKey = "agent:main:main";
 const cleanups: (() => void)[] = [];
 
-it("renders customization inline and retains pending reload state", async () => {
+it("renders customization inline and recovers reload controls after failure or success", async () => {
   const listeners = new Set<() => void>();
   const replacement = {
     key: "fixture/composer",
@@ -33,6 +38,7 @@ it("renders customization inline and retains pending reload state", async () => 
   };
   let selected: typeof replacement | undefined;
   const pendingReload = createDeferred();
+  const retryReload = createDeferred();
   const diagnostics: PluginControlUiDiagnostic[] = [
     {
       pluginId: "custom-review",
@@ -59,13 +65,13 @@ it("renders customization inline and retains pending reload state", async () => 
   };
   const navigate = vi.fn();
   // SAFETY: this fixture supplies the application services consumed by the manager.
-  const provider = createApplicationContextProvider({
+  const provider = createSolidApplicationContextProvider({
     plugins,
+    gateway: createApplicationGateway().gateway,
     basePath: "/console",
     navigate,
   } as unknown as ApplicationContext);
-  // The compatibility entry registers the Solid-backed custom element.
-  const manager = document.createElement("openclaw-plugin-manager");
+  const { container: manager } = mountSolid(PluginManager, { wrapper: provider.wrapper });
   const button = (label: string) => {
     const found = [...manager.querySelectorAll("button")].find(
       (element) => element.textContent?.trim() === label,
@@ -75,10 +81,7 @@ it("renders customization inline and retains pending reload state", async () => 
     }
     return found;
   };
-  provider.append(manager);
-  document.body.append(provider);
   try {
-    await manager.updateComplete;
     expect(manager.querySelector("openclaw-modal-dialog")).toBeNull();
     await vi.waitFor(() => expect(manager.querySelector("select")).not.toBeNull());
     expect(manager.querySelector('[role="alert"]')).toBeNull();
@@ -131,11 +134,22 @@ it("renders customization inline and retains pending reload state", async () => 
       ),
     );
     expect(button(t("pluginUi.reload")).disabled).toBe(false);
+    expect(manager.querySelector("select")).toBe(select);
+
+    plugins.reload.mockReturnValueOnce(retryReload.promise);
+    button(t("pluginUi.reload")).click();
+    await vi.waitFor(() => expect(button(t("pluginUi.reload")).disabled).toBe(true));
+    expect(manager.querySelector('[role="alert"]')).toBeNull();
+    retryReload.resolve();
+    await vi.waitFor(() => expect(button(t("pluginUi.reload")).disabled).toBe(false));
+    expect(manager.querySelector('[role="alert"]')).toBeNull();
+
     button(t("common.retry")).click();
     expect(plugins.refresh).toHaveBeenCalledOnce();
     expect(manager.querySelector("openclaw-modal-dialog")).toBeNull();
   } finally {
     pendingReload.resolve();
+    retryReload.resolve();
   }
 });
 
@@ -258,6 +272,78 @@ async function mountActions(
 }
 
 describe("native plugin session actions", () => {
+  it("shows a concurrent action failure after a later invocation succeeds", async () => {
+    const { element, run } = await mountActions();
+    const failed = createDeferred();
+    const succeeded = createDeferred();
+    const button = element.querySelector<HTMLButtonElement>("button")!;
+    try {
+      run.mockReturnValueOnce(failed.promise).mockReturnValueOnce(succeeded.promise);
+      button.click();
+      button.click();
+      succeeded.resolve();
+      await succeeded.promise;
+      failed.reject(new Error("Synthetic concurrent action failure"));
+      await vi.waitFor(() =>
+        expect(element.querySelector('[role="alert"]')?.textContent).toBe(
+          "Synthetic concurrent action failure",
+        ),
+      );
+      expect(element.querySelector("button")).toBe(button);
+    } finally {
+      failed.resolve();
+      succeeded.resolve();
+    }
+  });
+
+  it("clears action failures on retry without replacing its controls", async () => {
+    const { element, run } = await mountActions();
+    const failed = createDeferred();
+    const retry = createDeferred();
+    const button = element.querySelector<HTMLButtonElement>("button")!;
+    try {
+      run.mockReturnValueOnce(failed.promise);
+      button.click();
+      failed.reject(new Error("Synthetic action failure"));
+      await vi.waitFor(() =>
+        expect(element.querySelector('[role="alert"]')?.textContent).toBe(
+          "Synthetic action failure",
+        ),
+      );
+      expect(element.querySelector("button")).toBe(button);
+
+      run.mockReturnValueOnce(retry.promise);
+      button.click();
+      await vi.waitFor(() => expect(element.querySelector('[role="alert"]')).toBeNull());
+      expect(element.querySelector("button")).toBe(button);
+      retry.resolve();
+      await retry.promise;
+      await element.updateComplete;
+      expect(element.querySelector('[role="alert"]')).toBeNull();
+      expect(element.querySelector("button")).toBe(button);
+    } finally {
+      failed.resolve();
+      retry.resolve();
+    }
+  });
+
+  it("replaces placement subscriptions and resumes current session presentation", async () => {
+    const { element, sessions } = await mountActions();
+    expect(element.querySelector("button")?.textContent).toBe("Review Ready");
+
+    element.kind = "composer";
+    await element.updateComplete;
+    expect(element.querySelector("button")).toBeNull();
+    sessions.patchRowLocal(sessionKey, { label: "Updated while hidden" });
+
+    element.kind = "header";
+    await element.updateComplete;
+    expect(element.querySelector("button")?.textContent).toBe("Review Updated while hidden");
+    sessions.patchRowLocal(sessionKey, { label: "Live again" });
+    await element.updateComplete;
+    expect(element.querySelector("button")?.textContent).toBe("Review Live again");
+  });
+
   it("keeps header metadata scoped to its pane agent when the global key is shared", async () => {
     const { element, sessions, run, resolve, request } = await mountActions({
       placement: "header",

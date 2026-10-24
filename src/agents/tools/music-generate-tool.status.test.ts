@@ -8,8 +8,7 @@ vi.mock("../media-generation-activity.js", async (importOriginal) => {
 // Music generation status tests cover duplicate guards and explicit status
 // actions for background music tasks.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import * as musicGenerationRuntime from "../../music-generation/runtime.js";
-import { recordRecentMediaGenerationTaskStartForSession } from "../media-generation-task-status-shared.js";
+import * as musicGenerationRegistry from "../../media-generation/registry.js";
 import { resetRecentMediaGenerationDuplicateGuardsForTests } from "../media-generation-task-status-shared.test-support.js";
 import { MUSIC_GENERATION_TASK_KIND } from "../media-generation-task-status.js";
 import {
@@ -30,7 +29,7 @@ const mediaActivityMocks = vi.hoisted(() => {
 
 function resetMusicStatusMocks() {
   vi.restoreAllMocks();
-  vi.spyOn(musicGenerationRuntime, "listRuntimeMusicGenerationProviders").mockReturnValue([]);
+  vi.spyOn(musicGenerationRegistry, "listMusicGenerationProviders").mockReturnValue([]);
   mediaActivityMocks.listOperations.mockReset();
   mediaActivityMocks.listOperations.mockReturnValue([]);
   mediaActivityMocks.listMediaGenerationOperations.mockReset();
@@ -130,21 +129,10 @@ describe("createMusicGenerateTool status actions", () => {
 
   it("returns recent succeeded music status instead of starting a duplicate generation", async () => {
     const now = Date.now();
-    recordRecentMediaGenerationTaskStartForSession({
-      sessionKey: "agent:main:discord:direct:123",
-      taskKind: MUSIC_GENERATION_TASK_KIND,
-      sourcePrefix: "music_generate",
-      taskId: "task-recent-music",
-      runId: "tool:music_generate:recent",
-      taskLabel: "night-drive synthwave",
-      requestKey: "music-request:night-drive",
-      providerId: "google",
-      progressSummary: "Generating music",
-      nowMs: now - 20_000,
-    });
     mediaActivityMocks.listOperations.mockReturnValue([
       {
         taskId: "task-recent-music",
+        requestKey: "music-request:night-drive",
         runtime: "cli",
         taskKind: MUSIC_GENERATION_TASK_KIND,
         sourceId: "music_generate:google",

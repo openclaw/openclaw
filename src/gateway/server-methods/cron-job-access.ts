@@ -4,6 +4,7 @@ import {
   errorShape,
   GatewayErrorDetailCodes,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { cronJobUsesToolRuntime } from "../../cron/tools-allow.js";
 import type { CronJob, CronJobPatch } from "../../cron/types.js";
 import {
   createAgentDatabaseAdmissionErrorShape,
@@ -15,27 +16,17 @@ import {
   readCronCallerScope,
   type CronCallerScope,
 } from "./cron-caller-scope.js";
-import {
-  createCronSessionVisibility,
-  cronJobIsVisible,
-  cronJobVisibilityTarget,
-} from "./cron-visibility.js";
+import { requiresExplicitAgentRuntimeToolsAllow } from "./cron-input-validation.js";
+import { createCronSessionVisibility, cronJobIsVisible } from "./cron-visibility.js";
 import type { GatewayRequestHandler, GatewayRequestHandlerOptions, RespondFn } from "./types.js";
 import { defineValidatedGatewayHandler, type Validator } from "./validation.js";
 
 type CronJobIdParams = { id?: string; jobId?: string };
 
-export function isLegacyCreatorPromptUpdate(
-  job: CronJob,
-  patch: CronJobPatch,
-  callerScope: CronCallerScope | undefined,
-): boolean {
+function isLegacyCreatorPromptUpdate(job: CronJob, patch: CronJobPatch): boolean {
   // A prompt edit keeps the legacy execution policy; it cannot establish new
   // authority or transfer management to another session/account.
   return (
-    callerScope?.sessionKey !== undefined &&
-    job.owner?.sessionKey === callerScope.sessionKey &&
-    job.owner?.accountId === callerScope.accountId &&
     job.scheduledToolPolicy === undefined &&
     job.payload.kind === "agentTurn" &&
     patch.payload !== undefined &&
@@ -43,6 +34,37 @@ export function isLegacyCreatorPromptUpdate(
     Object.keys(patch).every((key) => key === "payload") &&
     Object.keys(patch.payload).every((key) => key === "kind" || key === "message")
   );
+}
+
+/** Plain refusal a scoped model caller can act on when a tool-runtime edit needs ownership. */
+export function resolveCronScopedToolEditRefusal(params: {
+  job: CronJob;
+  nextJob: CronJob;
+  patch: CronJobPatch;
+  callerScope: CronCallerScope | undefined;
+}): string | undefined {
+  const { job, nextJob, patch, callerScope } = params;
+  if (!callerScope || callerScope.manageAll || !cronJobUsesToolRuntime(nextJob)) {
+    return undefined;
+  }
+  const ownedByCaller =
+    callerScope.sessionKey !== undefined &&
+    job.owner?.sessionKey === callerScope.sessionKey &&
+    job.owner?.accountId === callerScope.accountId;
+  // A payload or trigger edit runs with the job's tool authority, so only the
+  // recorded owner may make it; other jobs need a Gateway owner or operator.
+  if (!ownedByCaller) {
+    return job.owner?.sessionKey
+      ? "This automation belongs to another conversation or account. Only its owner, a Gateway " +
+          "owner or an operator can change its prompt or tools; you can create a new automation here instead."
+      : "This automation has no recorded owner, so only a Gateway owner or an operator can change " +
+          "its prompt or tools (for example on the Automations page). You can still enable, " +
+          "disable, reschedule or remove it, or create a new automation here.";
+  }
+  return requiresExplicitAgentRuntimeToolsAllow({ job: nextJob, callerScope }) &&
+    !isLegacyCreatorPromptUpdate(job, patch)
+    ? "Include payload.toolsAllow listing the tools this automation needs (use [] for none)."
+    : undefined;
 }
 
 export function respondRefusedCronAgent(agentId: string | undefined, respond: RespondFn): boolean {
@@ -134,40 +156,33 @@ export function scopedCronJobHandler<P extends CronJobIdParams>(
       respondMissingCronJobId(respond, method);
       return;
     }
-    const visibilityRead = createCronSessionVisibility(client, () => context.getRuntimeConfig());
-    try {
-      const loaded = await context.cron.readJob(jobId);
-      const prepareVisibility = scope.checkVisibility && visibilityRead.resolve() !== undefined;
-      if (scope.checkVisibility) {
-        assertCronReadCurrent(options);
-      }
-      if (prepareVisibility) {
-        await visibilityRead.prepare([
-          cronJobVisibilityTarget(loaded, context.cron.getDefaultAgentId()),
-        ]);
-        assertCronReadCurrent(options);
-      }
-      const callerScope = readCronCallerScope(client);
-      const job = prepareVisibility ? context.cron.getJob(jobId) : loaded;
-      const visibility = scope.checkVisibility ? visibilityRead.resolve() : undefined;
-      if (
-        !job ||
-        (scope.checkVisibility &&
-          !cronJobIsVisible(job, visibility, context.cron.getDefaultAgentId())) ||
-        !cronJobMatchesCallerScope({
-          job,
-          callerScope,
-          defaultAgentId: context.cron.getDefaultAgentId(),
-          allowCurrentJob: scope.allowCurrentJob,
-        })
-      ) {
-        respondCronJobNotFound(respond, jobId, scope);
-        return;
-      }
-      // Consume authorized reads in this frame; mutations retain their lock-time commit guards.
-      return await run(options, { jobId, callerScope, job });
-    } finally {
-      visibilityRead.release();
+    const visibilityRead = createCronSessionVisibility(client, context);
+    const loaded = await context.cron.readJob(jobId);
+    const prepareVisibility = scope.checkVisibility && visibilityRead.resolve() !== undefined;
+    if (prepareVisibility) {
+      await visibilityRead.prepare();
     }
+    if (scope.checkVisibility) {
+      assertCronReadCurrent(options);
+    }
+    const callerScope = readCronCallerScope(client);
+    const job = prepareVisibility ? context.cron.getJob(jobId) : loaded;
+    const visibility = scope.checkVisibility ? visibilityRead.resolve() : undefined;
+    if (
+      !job ||
+      (scope.checkVisibility &&
+        !cronJobIsVisible(job, visibility, context.cron.getDefaultAgentId())) ||
+      !cronJobMatchesCallerScope({
+        job,
+        callerScope,
+        defaultAgentId: context.cron.getDefaultAgentId(),
+        allowCurrentJob: scope.allowCurrentJob,
+      })
+    ) {
+      respondCronJobNotFound(respond, jobId, scope);
+      return;
+    }
+    // Consume authorized reads in this frame; mutations retain their lock-time commit guards.
+    return await run(options, { jobId, callerScope, job });
   });
 }

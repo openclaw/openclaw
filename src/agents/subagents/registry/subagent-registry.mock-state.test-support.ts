@@ -25,6 +25,7 @@ import type { restoreSubagentRunsFromDisk } from "./subagent-registry-persistenc
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 const noop = () => {};
+const snapshotRuns = (runs: Map<string, SubagentRunRecord>) => new Map(runs);
 
 export function createSubagentRegistryMockState() {
   const sessionIdentityMutationListeners = new Set<SessionIdentityMutationListener>();
@@ -107,9 +108,9 @@ export function createSubagentRegistryMockState() {
         return next;
       },
     ),
-    resolveAgentIdFromSessionKey: vi.fn((sessionKey: string) => {
-      return sessionKey.match(/^agent:([^:]+)/)?.[1] ?? "main";
-    }),
+    resolveAgentIdFromSessionKey: vi.fn(
+      (sessionKey: string) => sessionKey.match(/^agent:([^:]+)/)?.[1] ?? "main",
+    ),
     resolveStorePath: vi.fn(() => "/tmp/test-session-store.json"),
     emitSessionLifecycleEvent: vi.fn(),
     onSessionIdentityMutation: vi.fn((listener: SessionIdentityMutationListener) =>
@@ -120,14 +121,8 @@ export function createSubagentRegistryMockState() {
     ),
     persistRegistryRows: vi.fn<MockSubagentRegistryRows>(),
     restoreSubagentRunsFromDisk: vi.fn<typeof restoreSubagentRunsFromDisk>(async () => 0),
-    getSubagentRunsSnapshotForRead: vi.fn(
-      (runs: Map<string, import("./subagent-registry.types.js").SubagentRunRecord>) =>
-        new Map(runs),
-    ),
-    getSubagentRunsSnapshotForChildSession: vi.fn(
-      (runs: Map<string, import("./subagent-registry.types.js").SubagentRunRecord>) =>
-        new Map(runs),
-    ),
+    getSubagentRunsSnapshotForRead: vi.fn(snapshotRuns),
+    getSubagentRunsSnapshotForChildSession: vi.fn(snapshotRuns),
     captureSubagentCompletionReply: vi.fn(async () => "final completion reply"),
     cleanupBrowserSessionsForLifecycleEnd: vi.fn(async () => {}),
     runSubagentAnnounceFlow: vi.fn(async (): Promise<"delivered" | "retryable"> => "delivered"),
@@ -185,11 +180,8 @@ export function createSubagentRegistryMockState() {
         assertCurrent,
         readSessionSettings: () => {
           assertCurrent();
-          const entry = mocks.entries[input.sessionKey];
-          return {
-            permissionMode: entry?.permissionMode,
-            toolOverrides: entry?.toolOverrides,
-          };
+          const { permissionMode, toolOverrides } = mocks.entries[input.sessionKey] ?? {};
+          return { permissionMode, toolOverrides };
         },
         bindCreation: () => {
           throw new Error("Registry fixtures do not supply committed session creation receipts.");

@@ -226,7 +226,7 @@ it("retains quiet admitted execution in listing, admission count, and requester 
         ).active.map((row) => ({ runId: row.runId, execution: row.execution.state })),
       )
       .toEqual([{ runId: entry.runId, execution: "running" }]);
-    // A persisted completed sibling already owns an unfrozen settle outbox.
+    // This sibling owes a continuation; fire-and-forget wakes retire independently.
     await addSubagentRunForTests({
       runId: "settled-sibling",
       childSessionKey: "agent:main:subagent:settled-sibling",
@@ -240,21 +240,23 @@ it("retains quiet admitted execution in listing, admission count, and requester 
       endedAt: start + 1,
       outcome: { status: "ok" },
       cleanupCompletedAt: start + 2,
-      expectsCompletionMessage: false,
+      expectsCompletionMessage: true,
+      completion: { required: true },
+      delivery: { status: "pending" },
       requesterSettleWake: { status: "pending", attemptCount: 0 },
     });
     const sibling = subagentRuns.get("settled-sibling")!;
     const completeBatch = vi.fn();
-    const transitionBatch = vi.fn();
     await maybeWakeRequesterAfterAllChildrenSettled({
       isSourceCurrent: () => true,
       requesterSessionKey: parent,
       settledEntry: sibling,
+      transitionBatch: () => {
+        throw new Error("A live sibling cannot transition requester delivery");
+      },
       completeBatch,
-      transitionBatch,
     });
     expect.soft(completeBatch).not.toHaveBeenCalled();
-    expect.soft(transitionBatch).not.toHaveBeenCalled();
   } finally {
     finish.resolve();
     await task;

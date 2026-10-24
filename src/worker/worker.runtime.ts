@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import type { WorkerHelloOk } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { WORKER_GATEWAY_TOOLS_PROTOCOL_FEATURE } from "../../packages/gateway-protocol/src/schema/worker-gateway-tool.js";
+import { WORKER_TURN_ADMISSION_PROTOCOL_FEATURE } from "../../packages/gateway-protocol/src/schema/worker-turn-admission.js";
 import { waitForExecScope } from "../agents/bash-process-registry.js";
 import type { ComputerContextEpoch } from "../agents/tools/computer-tool.js";
 import { isPathInside } from "../infra/path-guards.js";
@@ -19,6 +20,7 @@ import {
 import type { NativeRuntime, NativeRuntimeResolved } from "./native-runtime.js";
 import { WorkerAdmissionDeadlineExceededError } from "./worker-connection-contract.js";
 import { createWorkerConnection, type WorkerConnectionState } from "./worker-connection.js";
+import { createWorkerExecApprovalTransport } from "./worker-exec-approval.js";
 import { WorkerNodeLostError } from "./worker-node-loss.js";
 import type { WorkerRuntimeResult } from "./worker-process-protocol.js";
 import { WorkerInferenceProxyClient } from "./worker-rpc-inference-client.js";
@@ -26,6 +28,7 @@ import { WorkerLiveEventClient } from "./worker-rpc-live-event-client.js";
 import { WorkerTranscriptCommitClient } from "./worker-rpc-transcript-client.js";
 
 const WORKER_REMOTE_CANCEL_GRACE_MS = 1_000;
+const WORKER_TURN_ADMISSION_TIMEOUT_MS = 10 * 60_000;
 declare const WORKER_DEPLOY_BUILD: boolean;
 
 function toWorkerRuntimeError(value: unknown, fallback: string): Error {
@@ -171,9 +174,45 @@ export async function runWorkerDescriptor(
   let turnStarted = false;
   let resultFenceAcked = false;
   let forcedStopTimer: NodeJS.Timeout | undefined;
+  let githubGeneration: number | undefined;
+  let githubRefresh: Awaited<
+    ReturnType<typeof import("./github-binding.runtime.js").prepareWorkerGitHubEnvironment>
+  >;
   const connection = createWorkerConnection({
     endpoint: descriptor.connectionEndpoint,
     connectParams: buildWorkerConnectParams(descriptor),
+    heartbeatParams: () => (githubGeneration === undefined ? {} : { githubGeneration }),
+    onHeartbeat: async (result, assertCurrent) => {
+      if (
+        resultFenceAcked ||
+        !result.github ||
+        !githubRefresh ||
+        result.github.generation <= (githubGeneration ?? 0)
+      ) {
+        return;
+      }
+      const retired = new Error("Worker GitHub refresh retired after terminal acknowledgment");
+      const assertRefreshCurrent = () => {
+        assertCurrent();
+        if (resultFenceAcked) {
+          throw retired;
+        }
+      };
+      try {
+        await githubRefresh.refresh(result.github, assertRefreshCurrent);
+      } catch (error) {
+        // Terminal retirement stops credential publication without failing accepted work.
+        assertCurrent();
+        if (error === retired) {
+          return;
+        }
+        throw error;
+      }
+      assertCurrent();
+      if (!resultFenceAcked) {
+        githubGeneration = result.github.generation;
+      }
+    },
     onConnectionFailure: (error) => {
       options.onConnectionFailure?.(error?.message);
     },
@@ -266,6 +305,7 @@ export async function runWorkerDescriptor(
             turnId: descriptor.assignment.turnId,
             modelRef: descriptor.assignment.modelRef,
             computerContextEpoch,
+            onCancelled: (reason) => abortController.abort(reason),
           });
     options.assertWorkspaceCurrent?.();
     const github = descriptor.assignment.github
@@ -280,6 +320,10 @@ export async function runWorkerDescriptor(
           });
         })
       : undefined;
+    githubRefresh = github;
+    if (github) {
+      githubGeneration = 0;
+    }
     try {
       turnStarted = true;
       const {
@@ -317,19 +361,38 @@ export async function runWorkerDescriptor(
             : {}),
           ...(options.browserRuntime ? { browserRuntime: options.browserRuntime } : {}),
           inference: { stream },
-          transcript: {
-            commit: async (messages) => {
-              await transcript.commit(messages);
-            },
-          },
+          admitTurn: hello.protocolFeatures.includes(WORKER_TURN_ADMISSION_PROTOCOL_FEATURE)
+            ? async (event) => {
+                const response = await connection.rpc.request(
+                  "turn-admission",
+                  { ...event, runEpoch: descriptor.admission.ownerEpoch },
+                  undefined,
+                  // Hooks run sequentially with their own Gateway-enforced deadlines (15 s each),
+                  // so several plugins can exceed the 30 s RPC default; the Gateway always answers.
+                  WORKER_TURN_ADMISSION_TIMEOUT_MS,
+                );
+                if (!response.ok) {
+                  throw new Error("Gateway rejected worker turn admission");
+                }
+                if (response.payload.outcome === "block") {
+                  return false;
+                }
+                transcript.admitInput(response.payload.baseLeafId);
+                return true;
+              }
+            : undefined,
+          transcript,
           live: {
             enqueuePreview: (event) => live.enqueuePreview(descriptor.assignment.runId, event),
             emitTerminal: async (event) => {
               await live.emitTerminal(descriptor.assignment.runId, event);
               resultFenceAcked = true;
+              githubGeneration = undefined;
             },
           },
           gatewayTools: connection,
+          createApprovalTransport: (toolCallId, signal) =>
+            createWorkerExecApprovalTransport(connection, toolCallId, signal),
           signal: abortController.signal,
         });
       };
@@ -396,11 +459,14 @@ export async function runWorkerDescriptor(
     if (forcedStopTimer) {
       clearTimeout(forcedStopTimer);
     }
+    githubRefresh = undefined;
     unsubscribeState();
     options.signal?.removeEventListener("abort", abortFromCaller);
     nativeRuntime?.close();
     inference.dispose();
     live.dispose();
+    // The environment/command owner removes profiles after admitted background
+    // commands settle; stop joins credential writes before handing cleanup back.
     await connection.stop();
     await environment?.close();
   }

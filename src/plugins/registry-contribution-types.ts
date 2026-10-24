@@ -1,4 +1,5 @@
 /** Acyclic contracts for capabilities stored in the installed plugin registry. */
+import type { SessionDiscussionInfo } from "../../packages/gateway-protocol/src/schema/session-discussion.js";
 import type { EmbeddingInput } from "../../packages/memory-host-sdk/src/engine-embeddings.js";
 import type { ConversationRecallContext } from "../agents/conversation-recall.types.js";
 import type { MemoryCitationsMode } from "../config/types.memory.js";
@@ -114,9 +115,14 @@ export type MemoryPromptSectionParams = {
   agentId?: string;
   agentSessionKey?: string;
   sandboxed?: boolean;
+  /** Host-resolved repository identity for this run; the plugin owns any memory-format guidance. */
+  projectKey?: string;
 };
 
 export type MemoryPromptSectionBuilder = (params: MemoryPromptSectionParams) => string[];
+
+/** Provider-owned /learn guidance for the tools tool policy leaves this turn; [] when it cannot learn. */
+export type MemoryLearnGuidanceBuilder = (params: { availableTools: Set<string> }) => string[];
 
 export type MemoryPromptSectionPreparer = (
   params: MemoryPromptSectionParams,
@@ -129,6 +135,7 @@ export type PreparedMemoryPromptSection = Readonly<{
     agentId?: string;
     agentSessionKey?: string;
     sandboxed: boolean;
+    projectKey?: string;
   }>;
   lines: readonly string[];
 }>;
@@ -362,6 +369,10 @@ export type MemoryPluginCapability = {
   deterministicRecallToolName?: string;
   /** Whether recall may read protected same-agent private session transcripts. */
   supportsPrivateTranscriptRecall?: boolean;
+  /** Tools a /learn turn may use to persist lessons; the host checks them against tool policy. */
+  learnToolNames?: readonly string[];
+  /** Guidance appended to /learn when some learnToolNames are available. */
+  learnGuidanceBuilder?: MemoryLearnGuidanceBuilder;
 };
 
 export type MemoryPluginCapabilityRegistration = {
@@ -375,12 +386,10 @@ export type MemoryPluginCapabilityRegistration = {
   memorySlotSelected?: boolean;
 };
 
-export type SessionDiscussionState = "none" | "available" | "open";
-export type SessionDiscussionInfo = {
-  state: SessionDiscussionState;
-  embedUrl?: string;
-  openUrl?: string;
-};
+export type {
+  SessionDiscussionInfo,
+  SessionDiscussionState,
+} from "../../packages/gateway-protocol/src/schema/session-discussion.js";
 
 export type SessionDiscussionProvider = {
   id: string;

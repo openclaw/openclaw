@@ -6,6 +6,54 @@ import Testing
 @Suite(.serialized)
 @MainActor
 struct CLIInstallerTests {
+    @Test(arguments: [
+        (#"{"status":"ok","warnings":["Plugin repair remains pending"]}"#, 0, true),
+        (
+            #"{"status":"advisory","advisory":{"kind":"package-post-install-doctor","reason":"deferred-configured-plugin-repair","message":"Deferred","details":["Plugin repair remains pending"]}}"#,
+            86,
+            true),
+        (
+            #"{"status":"error","failureFacts":[{"check":"openclaw doctor","code":"required-migration","message":"Required migration failed"}]}"#,
+            1,
+            false),
+        (#"{"status":"ok","maintenanceRefusal":{"kind":"deferred","reason":"agent-database-in-use"}}"#, 0, false),
+        (
+            #"{"status":"ok","configWriteRefusal":{"reason":"authority-changed","message":"Required write refused","keys":["plugins"]}}"#,
+            0,
+            false),
+        (
+            #"{"status":"ok","failureFacts":[{"check":"doctor","code":"required-migration","message":"Required migration failed"}]}"#,
+            0,
+            false),
+        (#"{"status":"ok"}"#, 1, false),
+        (#"{"status":"advisory"}"#, 86, false),
+        ("invalid JSON", 0, false),
+    ])
+    func `bundled repair consumes classified Doctor outcomes after child settlement`(
+        payload: String, exitCode: Int, succeeds: Bool) throws
+    {
+        let response = ShellExecutor.ShellResult(
+            stdout: "Human inspection output\nOPENCLAW_UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH=\(payload)\nDoctor complete.\n",
+            stderr: "", exitCode: exitCode, timedOut: false, success: exitCode == 0,
+            errorMessage: exitCode == 0 ? nil : "exit \(exitCode)", preflightError: nil)
+        if succeeds {
+            #expect(try CLIInstaller.bundledDoctorDiagnostics(response).contains("Plugin repair remains pending"))
+        } else {
+            #expect(throws: (any Error).self) { try CLIInstaller.bundledDoctorDiagnostics(response) }
+        }
+        var unsettled = response
+        unsettled.exitCode = nil
+        unsettled.timedOut = true
+        #expect(throws: CLIInstaller.DoctorProcessesUnsettled.self) {
+            try CLIInstaller.bundledDoctorDiagnostics(unsettled)
+        }
+        var missing = response
+        missing.stdout = payload
+        #expect(throws: CLIInstaller.DoctorProcessesUnsettled.self) {
+            try CLIInstaller.bundledDoctorDiagnostics(missing)
+        }
+    }
+
     @Test func `managed install locations follow the app profile`() {
         let home = URL(fileURLWithPath: "/Users/Test User", isDirectory: true)
         let cases = [
@@ -295,6 +343,81 @@ struct CLIInstallerTests {
         #expect(summary.steps?.first?.stderrTail == "registry unavailable")
     }
 
+    @Test(arguments: [
+        (
+            #"{"status":"warning","coreUpdate":"completed","warnings":["Optional device-pair plugin is disabled"]}"#,
+            0,
+            true),
+        (#"{"status":"ok","coreUpdate":"completed"}"#, 0, true),
+        (#"{"status":"warning","coreUpdate":"pending"}"#, 0, false),
+        (#"{"status":"error","coreUpdate":"completed"}"#, 1, false),
+        (#"{"status":"warning","coreUpdate":"completed"}"#, 1, false),
+        (#"{"status":"ok"}"#, 0, false),
+        (#"{"status":"ok","coreUpdate":"unknown"}"#, 0, false),
+    ])
+    func `managed repair settles only proven core completion across relaunch`(
+        payload: String, exitCode: Int, completes: Bool) async throws
+    {
+        let root = temporaryDirectoryForTests().appendingPathComponent(
+            "openclaw-repair-completion-\(UUID().uuidString)")
+        defer { try? FileManager().removeItem(at: root) }
+        try FileManager().createDirectory(at: root, withIntermediateDirectories: true)
+        let executable = root.appendingPathComponent("openclaw")
+        try """
+        #!/bin/sh
+        if [ "$1" = "--version" ]; then
+          echo 'OpenClaw 2026.10.2'
+          exit 0
+        fi
+        echo '\(payload)'
+        exit \(exitCode)
+        """.write(to: executable, atomically: false, encoding: .utf8)
+        try FileManager().setAttributes([.posixPermissions: 0o755], ofItemAtPath: executable.path)
+        let config = root.appendingPathComponent("openclaw.json")
+        try "{}".write(to: config, atomically: false, encoding: .utf8)
+        let suite = "CLIInstallerTests.repair-completion.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+
+        try await TestIsolation.withIsolatedState(
+            env: ["OPENCLAW_STATE_DIR": root.path, "OPENCLAW_CONFIG_PATH": config.path],
+            defaults: [cliInstallPolicyKey: "exact"])
+        {
+            let absent = root.appendingPathComponent("absent-service")
+            let authority = GatewayLaunchAgentManager.ServiceAuthority(
+                plist: absent,
+                environment: absent,
+                wrapper: absent,
+                definition: .init(plist: nil, environment: nil, wrapper: nil),
+                isLocalGateway: false,
+                updateSelection: CLIInstallPolicy.managedUpdateSelection())
+            let receipt = PostAppUpdateReceiptStore.recordSetupRecovery(
+                fromVersion: "2026.9.8", toVersion: "2026.10.2", defaults: defaults)
+            let outcome = await CLIInstaller.updateManaged(
+                targetVersion: "2026.10.2",
+                restartGateway: false,
+                repair: true,
+                installedCLI: .init(
+                    prefix: [executable.path], sqliteLibrary: nil, serviceAuthority: authority),
+                statusHandler: { _ in })
+
+            switch outcome {
+            case .success:
+                #expect(completes)
+                PostAppUpdateReceiptStore.completeCoreRepair(
+                    receipt: receipt, owner: .gateway, defaults: defaults)
+            case .failure:
+                #expect(!completes)
+            }
+            let relaunched = try #require(PostAppUpdateReceiptStore.pendingForLaunch(
+                currentVersion: "2026.10.2", onboardingSeen: true, defaults: defaults))
+            #expect(relaunched.coreUpdatePending == !completes)
+            #expect(PostUpdateController.coreRepairAction(
+                receipt: relaunched, migrationFailed: false, explicitRetry: true) ==
+                (completes ? .none : .repair))
+        }
+    }
+
     @Test func `release builds install exact while unreleased builds choose a channel`() {
         #expect(CLIInstaller.automaticInstallTarget(
             appVersion: "2026.7.2",
@@ -462,7 +585,7 @@ struct CLIInstallerTests {
             to: executable,
             atomically: true,
             encoding: .utf8)
-        try "#!/bin/sh\necho 'v24.16.0'\n".write(
+        try "#!/bin/sh\necho 'v24.22.1'\n".write(
             to: node,
             atomically: true,
             encoding: .utf8)

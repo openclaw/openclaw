@@ -24,7 +24,7 @@ type DebugProxyCaptureDatabase = Pick<
 >;
 type NodeSqliteDatabase = EngineConnection;
 
-/** @deprecated Use AsyncDebugProxyCaptureReader and await its read operations. */
+/** @deprecated Use AsyncDebugProxyCaptureReader and await its read operations. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
 export type DebugProxyCaptureReader = {
   getSessionEvents(sessionId: string, limit?: number): Array<Record<string, unknown>>;
   readBlob(blobId: string): string | null;
@@ -322,7 +322,7 @@ export function readDebugProxyCaptureBlob(db: NodeSqliteDatabase, blobId: string
   return (row.encoding === "gzip" ? gunzipSync(data) : data).toString("utf8");
 }
 
-/** @deprecated Use createDebugProxyCaptureReaderAsync for worker-backed, noncreating reads. */
+/** @deprecated Use createDebugProxyCaptureReaderAsync for worker-backed, noncreating reads. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
 export function createDebugProxyCaptureReader(params: {
   env: NodeJS.ProcessEnv;
 }): DebugProxyCaptureReader {

@@ -19,8 +19,8 @@ import {
   readDiscordMessage,
   readRetryAfter,
 } from "./internal/rest-errors.js";
+import { DISCORD_REST_TIMEOUT_MS } from "./internal/rest.js";
 import { prepareDiscordOutboundText } from "./outbound-text.js";
-import { DISCORD_REST_TIMEOUT_MS } from "./proxy-request-client.js";
 import {
   createReusableDiscordReplyReference,
   resolveDiscordReplyMessageId,
@@ -80,7 +80,7 @@ async function throwWebhookResponseError(
   if (response.status === 429) {
     throw new RateLimitError(response, {
       message: readDiscordMessage(parsed, "Rate limited"),
-      retry_after: readRetryAfter(parsed, response, 1),
+      retry_after: readRetryAfter(parsed, response),
       code: readDiscordCode(parsed),
       global:
         parsed && typeof parsed === "object" && "global" in parsed ? Boolean(parsed.global) : false,

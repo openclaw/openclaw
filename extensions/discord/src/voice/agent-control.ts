@@ -95,9 +95,11 @@ export function logDiscordVoiceAgentControlResult(
   entry: VoiceSessionEntry,
   result: RealtimeVoiceAgentControlResult,
 ): void {
-  logger.info(
-    `discord voice: realtime active-run control handled mode=${result.mode} ok=${result.ok} active=${result.active} reason=${result.reason ?? "none"} voiceSession=${entry.voiceSessionKey} supervisorSession=${entry.route.sessionKey} agent=${entry.route.agentId}`,
-  );
+  if (result.active && !result.ok) {
+    logger.warn(
+      `discord voice: realtime active-run control failed mode=${result.mode} reason=${result.reason ?? "none"} voiceSession=${entry.voiceSessionKey} supervisorSession=${entry.route.sessionKey} agent=${entry.route.agentId}`,
+    );
+  }
 }
 
 export async function handleDiscordVoiceAgentControlToolCall(params: {

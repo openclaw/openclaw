@@ -13,6 +13,8 @@ export type DedupeEntry = {
   ok: boolean;
   /** Optional effectful-request fingerprint for methods with caller-supplied operation ids. */
   requestIdentity?: string;
+  /** The request crossed its effect owner's acceptance boundary. */
+  effectAccepted?: true;
   /** Retain source privacy for diagnostic replay after the live session binding is gone. */
   incognito?: true;
   payload?: unknown;

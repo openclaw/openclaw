@@ -1,15 +1,14 @@
 import { resolve } from "node:path";
 import type { CopilotSession, SessionConfig } from "@github/copilot-sdk";
 import type { AgentHarness } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { asNonArrayRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
 import { tokenFingerprint } from "./auth-bridge.js";
 import { createCopilotByokProxy } from "./byok-proxy.js";
+import { buildAssistantMessage } from "./event-bridge-transcript.js";
 import { createCopilotAbortError } from "./prompt-error.js";
 import { resolveCopilotProvider } from "./provider-bridge.js";
 import type { CopilotClientPool, PooledClient } from "./runtime.js";
 import { createCopilotIsolatedSessionRestrictions } from "./session-restrictions.js";
-import { buildCopilotAssistantUsage } from "./usage-bridge.js";
 
 type AgentHarnessIsolatedCompletion = NonNullable<AgentHarness["runIsolatedCompletionV2"]>;
 type AgentHarnessIsolatedCompletionParams = Parameters<AgentHarnessIsolatedCompletion>[0];
@@ -59,7 +58,7 @@ async function awaitWithinCompletionBoundary<T>(params: {
   if (signal?.aborted) {
     throw createCopilotAbortError(signal.reason);
   }
-  const remainingMs = params.boundary.deadlineMs - Date.now();
+  const remainingMs = params.boundary.deadlineMs - performance.now();
   if (remainingMs <= 0) {
     throw createTimeoutError(params.boundary.timeoutMs);
   }
@@ -125,7 +124,7 @@ export async function runCopilotIsolatedCompletion(
   const boundary: CompletionBoundary = {
     abortSignal: params.abortSignal,
     assertCurrent: params.assertCurrent,
-    deadlineMs: Date.now() + params.timeoutMs,
+    deadlineMs: performance.now() + params.timeoutMs,
     timeoutMs: params.timeoutMs,
   };
   if (params.authorization.owner !== "host") {
@@ -231,32 +230,13 @@ export async function runCopilotIsolatedCompletion(
     if (event?.type !== "assistant.message" || event.agentId !== undefined) {
       throw new Error("[copilot] isolated completion did not return a root assistant message");
     }
-    const content: AgentHarnessIsolatedCompletionResult["assistant"]["content"] = [];
-    if (event.data.reasoningText) {
-      content.push({ type: "thinking", thinking: event.data.reasoningText });
-    }
-    if (event.data.content) {
-      content.push({ type: "text", text: event.data.content });
-    }
-    for (const toolRequest of event.data.toolRequests ?? []) {
-      content.push({
-        type: "toolCall",
-        id: toolRequest.toolCallId,
-        name: toolRequest.name,
-        arguments: { ...asNonArrayRecord(toolRequest.arguments) },
-      });
-    }
     return {
-      assistant: {
-        role: "assistant",
-        content,
-        api: model.api,
-        provider: model.provider,
-        model: event.data.model ?? model.id,
-        stopReason: event.data.toolRequests?.length ? "toolUse" : "stop",
-        timestamp: Date.now(),
-        usage: buildCopilotAssistantUsage({ fallbackOutputTokens: event.data.outputTokens }),
-      },
+      assistant: buildAssistantMessage({
+        assistantTexts: [],
+        event,
+        modelRef: model,
+        now: Date.now,
+      }),
     };
   } finally {
     // Teardown starts independently and remains strongly referenced, but never

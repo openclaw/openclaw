@@ -30,7 +30,6 @@ export function isTerminalInteractiveRespawnArgv(argv: string[]): boolean {
   return invocation.primary === null || INTERACTIVE_TTY_COMMANDS.has(invocation.primary);
 }
 
-/** Returns whether CLI startup should avoid the general respawn wrapper for this argv. */
 export function shouldSkipRespawnForArgv(
   argv: string[],
   platform: NodeJS.Platform = process.platform,

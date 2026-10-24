@@ -77,7 +77,10 @@ allowlists and DM/group policies, publish without a channel restart or drain
 wait. Writes that also contain restart-required settings remain one deferred
 transaction. If
 the file watcher takes over the same unapplied write during that wait, the RPC stays pending
-through replay; persistence alone is not an application acknowledgment. Shutdown,
+through replay; persistence alone is not an application acknowledgment. If the watcher
+already applied the exact saved source before the managed notification arrives, the
+RPC acknowledges that completed application without resolving secrets or scanning
+skills again. Shutdown,
 supersession by different content, or failed application returns `UNAVAILABLE`
 with recovery guidance. `config.set` acknowledges persistence only.
 
@@ -113,6 +116,11 @@ use `[]`, such as `models.providers.custom.models[].input`. Parent paths and `*`
 wildcards do not authorize descendant arrays. This prevents truncated
 `config.get` snapshots from silently clobbering routing or allowlist arrays. Use
 `config.apply` when you intend to replace the full config.
+
+For keyed agent rosters, setting an existing `agents.entries.<agentId>` entry to
+`null` in a revision-checked patch authorizes removing that entry. Multiple entries
+can be removed together; omitted siblings stay unchanged.
+Arrays inside removed entries still require their exact `replacePaths` acknowledgments.
 
 Arrays of objects with stable `id` fields merge by ID unless their path appears
 in `replacePaths`. These updates preserve authored fields in untouched entries;

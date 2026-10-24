@@ -16,6 +16,11 @@ This page covers playback in OpenClaw clients. Channel delivery, inbound media
 understanding, and live voice conversations use separate paths; see
 [Image and media support](/nodes/images),
 [Media understanding](/nodes/media-understanding), and [Talk mode](/nodes/talk).
+For oversized videos selected in the Control UI composer, see
+[pre-upload video preparation](/web/control-ui/chat#video-preparation-compatibility).
+Its browser codec requirements and qualification gaps are separate from the
+Gateway playback policy below; a playback rendition cannot fix a file that was
+refused before upload.
 
 ## Client support
 
@@ -66,6 +71,11 @@ Transcoding accepts sources up to 20 minutes and never raises the normal audio
 or video byte cap. Cached playback renditions use a fixed seven-day retention
 that Gateway maintenance enforces at startup and hourly, independently of
 `attachments.ttlHours`.
+
+Filesystem errors while scanning or evicting cached renditions are reported in
+Gateway logs. Missing cache entries are harmless; other errors do not count as
+successful cleanup. Check the media directory's permissions and storage health
+when cleanup fails.
 
 ## Managed attachments and access
 

@@ -10,23 +10,25 @@ export type { CodeModeNamespaceDescriptor } from "./code-mode-namespaces.js";
 export const MAX_CODE_MODE_PENDING_TOOL_CALLS = 128;
 export const CODE_MODE_WORKER_WATCHDOG_GRACE_MS = 2_000;
 
-type CodeModeBridgeMethod =
-  | "search"
-  | "describe"
-  | "callValue"
-  | "resultSave"
-  | "resultLoad"
-  | "resultDelete"
-  | "nodes"
-  | "yield"
-  | "namespace"
-  | "agentSpawn"
-  | "agentWait"
-  | "skillsList"
-  | "skillsSearch"
-  | "skillsRead"
-  | "sleep"
-  | "swarmNote";
+export const CODE_MODE_BRIDGE_METHODS = [
+  "search",
+  "describe",
+  "callValue",
+  "resultSave",
+  "resultLoad",
+  "resultDelete",
+  "nodes",
+  "yield",
+  "namespace",
+  "agentSpawn",
+  "agentWait",
+  "skillsList",
+  "skillsSearch",
+  "skillsRead",
+  "sleep",
+  "swarmNote",
+] as const;
+type CodeModeBridgeMethod = (typeof CODE_MODE_BRIDGE_METHODS)[number];
 
 export type CodeModeConfig = {
   timeoutMs: number;
@@ -75,7 +77,11 @@ export type CodeModeNodeInput = (
       "catalog" | "namespaces" | "apiFiles" | "swarmEnabled"
     > & { initialization: SharedArrayBuffer })
   | Omit<Extract<CodeModeWorkerPayload<never>, { kind: "resume" }>, "continuation">
-) & { progress: SharedArrayBuffer; inlineHost: boolean };
+) & {
+  progress: SharedArrayBuffer;
+  inlineHost: boolean;
+  gcAttribution?: { workerId: string; runId?: string; sessionKeyHash?: string };
+};
 
 export type CodeModeSettlementMode =
   | { kind: "awaiting" }
@@ -127,7 +133,7 @@ type CodeModeWorkerOutcome<Output, Value, State> = { networkContentObserved?: tr
         | "timeout"
         | "snapshot_limit_exceeded"
         | "internal_error";
-      failurePhase: Extract<CodeModeFailurePhase, "input" | "guest" | "bridge">;
+      failurePhase: CodeModeFailurePhase;
       bridgeDispatchStarted: false;
       output: Output;
     }

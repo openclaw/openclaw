@@ -24,6 +24,24 @@ struct ChatGatewayRequestTests {
         #expect(Set(request.params.keys) == (expectedOwner == nil ? ["sessionKey"] : ["sessionKey", "agentId"]))
     }
 
+    @Test func `clearing and refreshing a progress card send the target and one extra field`() {
+        let clear = OpenClawChatGatewayRequests.progressCardClear(
+            sessionKey: "agent:main:main",
+            agentID: "main",
+            expectedRevision: 7)
+        #expect(clear.method == "progressCard.put")
+        #expect(clear.params["expectedRevision"]?.value as? Int == 7)
+        #expect(Set(clear.params.keys) == ["sessionKey", "expectedRevision"])
+
+        let refresh = OpenClawChatGatewayRequests.progressCardRefresh(
+            sessionKey: "agent:main:main",
+            agentID: "main",
+            idempotencyKey: "tap-1")
+        #expect(refresh.method == "progressCard.refresh")
+        #expect(refresh.params["idempotencyKey"]?.value as? String == "tap-1")
+        #expect(Set(refresh.params.keys) == ["sessionKey", "idempotencyKey"])
+    }
+
     @Test func `progress payloads validate the captured agent without replacing null`() throws {
         let valid = Data(
             #"{"card":{"sessionKey":"agent:research:global","revision":1,"updatedAt":10,"markdown":"Research","steps":[]}}"#
@@ -786,6 +804,22 @@ struct ChatGatewayRequestTests {
         let encoded = try JSONEncoder().encode(request.params["attachments"])
         let json = try #require(String(bytes: encoded, encoding: .utf8))
         #expect(json.contains("a.png"))
+    }
+
+    @Test func `audio send waits for admission while explicit request deadlines remain caller owned`() {
+        for timeout in [nil, 1200] as [Int?] {
+            let request = OpenClawChatGatewayRequests.sendMessage(
+                sessionKey: "main",
+                agentID: nil,
+                expectedSessionRoutingContract: nil,
+                message: "caption",
+                thinking: nil,
+                idempotencyKey: "audio-send",
+                attachments: [.init(type: "file", mimeType: "audio/wav", fileName: "voice.wav", content: "abc")],
+                requestTimeoutMs: timeout)
+            #expect(request.timeoutMs == Double(timeout ?? 0))
+            #expect(request.params["timeoutMs"] == nil)
+        }
     }
 
     @Test func `send request omits inherited thinking override`() {

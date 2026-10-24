@@ -1,4 +1,3 @@
-// Detects safe executable names or paths without shell evaluation.
 import path from "node:path";
 import { resolveUserPath } from "../utils.js";
 import { isSafeExecutableValue } from "./exec-safety.js";

@@ -1,52 +1,23 @@
 import { Command } from "commander";
-// Pending and resolve CLI tests stay separate from policy-management coverage.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { registerExecApprovalsCli } from "./exec-approvals-cli.js";
 
-const mocks = vi.hoisted(() => {
-  const runtimeErrors: string[] = [];
-  const stringifyArgs = (args: unknown[]) => args.map((value) => String(value)).join(" ");
-  const defaultRuntime = {
-    log: vi.fn(),
-    error: vi.fn((...args: unknown[]) => {
-      runtimeErrors.push(stringifyArgs(args));
-    }),
-    writeStdout: vi.fn((value: string) => {
-      defaultRuntime.log(value.endsWith("\n") ? value.slice(0, -1) : value);
-    }),
-    writeJson: vi.fn((value: unknown, space = 2) => {
-      defaultRuntime.log(JSON.stringify(value, null, space > 0 ? space : undefined));
-    }),
-    exit: vi.fn((code: number) => {
-      throw new Error(`__exit__:${code}`);
-    }),
-  };
-  return {
-    callGatewayFromCli: vi.fn(),
-    defaultRuntime,
-    runtimeErrors,
-  };
+const mocks = await vi.hoisted(async () => {
+  const { createCliRuntimeMock } = await import("./test-runtime-mock.js");
+  return { callGatewayFromCli: vi.fn(), ...createCliRuntimeMock(vi) };
 });
 
-const { callGatewayFromCli, defaultRuntime, runtimeErrors } = mocks;
+const { callGatewayFromCli, defaultRuntime, runtimeErrors, runtimeLogs } = mocks;
 
 const requireRecord = createRequireRecord("record", "expected-label-capitalized");
 
-function firstMockArg(mock: { mock: { calls: ReadonlyArray<ReadonlyArray<unknown>> } }): unknown {
-  const call = mock.mock.calls[0];
-  if (!call) {
-    throw new Error("Expected mock to have at least one call");
-  }
-  return call[0];
-}
-
 function writtenJson(): Record<string, unknown> {
-  return requireRecord(firstMockArg(vi.mocked(defaultRuntime.writeJson)), "written json");
+  return requireRecord(defaultRuntime.writeJson.mock.calls[0]?.[0], "written json");
 }
 
 function runtimeOutput(): string {
-  return defaultRuntime.log.mock.calls.map(([line]) => String(line ?? "")).join("\n");
+  return runtimeLogs.join("\n");
 }
 
 function approvalDisplayId(id: string): string {
@@ -92,21 +63,12 @@ function terminalApprovalSnapshot(params: {
   decision: "allow-once" | "allow-always" | "deny";
   resolverId?: string;
 }) {
-  const allowed = params.decision !== "deny";
   return {
-    id: params.id,
-    status: allowed ? "allowed" : "denied",
+    ...pendingApprovalSnapshot({ id: params.id }).approval,
+    status: params.decision !== "deny" ? "allowed" : "denied",
     decision: params.decision,
     reason: "user",
-    urlPath: `/approve/${params.id}`,
-    createdAtMs: Date.now() - 1_000,
-    expiresAtMs: Date.now() + 60_000,
     resolvedAtMs: Date.now(),
-    presentation: {
-      kind: "exec",
-      commandText: "echo ready",
-      allowedDecisions: ["allow-once", "allow-always", "deny"],
-    },
     resolver: { kind: "device", id: params.resolverId ?? "device-1" },
   };
 }
@@ -120,20 +82,29 @@ vi.mock("../runtime.js", () => ({
   defaultRuntime: mocks.defaultRuntime,
 }));
 
+function mockResolution(
+  id: string,
+  decision: "allow-once" | "allow-always" | "deny",
+  applied = true,
+  resolverId?: string,
+) {
+  callGatewayFromCli.mockImplementation(async (method: string) =>
+    method === "approval.get"
+      ? pendingApprovalSnapshot({ id })
+      : { applied, approval: terminalApprovalSnapshot({ id, decision, resolverId }) },
+  );
+}
+
 describe("exec approvals pending and resolve CLI", () => {
-  const createProgram = () => {
+  const runApprovalsCommand = async (args: string[]) => {
     const program = new Command();
     program.exitOverride();
     registerExecApprovalsCli(program);
-    return program;
-  };
-
-  const runApprovalsCommand = async (args: string[]) => {
-    const program = createProgram();
     await program.parseAsync(args, { from: "user" });
   };
 
   beforeEach(() => {
+    runtimeLogs.length = 0;
     runtimeErrors.length = 0;
     callGatewayFromCli.mockClear();
     defaultRuntime.log.mockClear();
@@ -167,17 +138,7 @@ describe("exec approvals pending and resolve CLI", () => {
   it.each(["10junk", "3651"])(
     "rejects an invalid grant lifetime without resolving the approval (%s)",
     async (expiresInDays) => {
-      callGatewayFromCli.mockImplementation(async (method: string) =>
-        method === "approval.get"
-          ? pendingApprovalSnapshot({ id: "lifetime-invalid" })
-          : {
-              applied: true,
-              approval: terminalApprovalSnapshot({
-                id: "lifetime-invalid",
-                decision: "allow-always",
-              }),
-            },
-      );
+      mockResolution("lifetime-invalid", "allow-always");
 
       await expect(
         runApprovalsCommand([
@@ -198,17 +159,7 @@ describe("exec approvals pending and resolve CLI", () => {
   );
 
   it.each(["3650"])("preserves the maximum grant lifetime (%s)", async (expiresInDays) => {
-    callGatewayFromCli.mockImplementation(async (method: string) =>
-      method === "approval.get"
-        ? pendingApprovalSnapshot({ id: "lifetime-valid" })
-        : {
-            applied: true,
-            approval: terminalApprovalSnapshot({
-              id: "lifetime-valid",
-              decision: "allow-always",
-            }),
-          },
-    );
+    mockResolution("lifetime-valid", "allow-always");
 
     await runApprovalsCommand([
       "approvals",
@@ -417,19 +368,7 @@ describe("exec approvals pending and resolve CLI", () => {
 
   it("treats an already-resolved same decision as idempotent success", async () => {
     const approvalId = "job\\u{41}";
-    callGatewayFromCli.mockImplementation(async (method: string) => {
-      if (method === "approval.get") {
-        return pendingApprovalSnapshot({ id: approvalId });
-      }
-      return {
-        applied: false,
-        approval: terminalApprovalSnapshot({
-          id: approvalId,
-          decision: "deny",
-          resolverId: "other-device",
-        }),
-      };
-    });
+    mockResolution(approvalId, "deny", false, "other-device");
 
     await runApprovalsCommand(["approvals", "resolve", approvalId, "deny"]);
 
@@ -463,15 +402,7 @@ describe("exec approvals pending and resolve CLI", () => {
   });
 
   it("exits non-zero when an approval already has a different decision", async () => {
-    callGatewayFromCli.mockImplementation(async (method: string) => {
-      if (method === "approval.get") {
-        return pendingApprovalSnapshot({ id: "approval-3" });
-      }
-      return {
-        applied: false,
-        approval: terminalApprovalSnapshot({ id: "approval-3", decision: "deny" }),
-      };
-    });
+    mockResolution("approval-3", "deny", false);
 
     await expect(
       runApprovalsCommand(["approvals", "resolve", "approval-3", "allow-once"]),
@@ -481,14 +412,15 @@ describe("exec approvals pending and resolve CLI", () => {
     expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
   });
 
-  it("exits non-zero when an approval is not found", async () => {
-    callGatewayFromCli.mockRejectedValue(new Error("approval not found"));
+  it("exits non-zero with a bounded, well-formed error when an approval is not found", async () => {
+    const prefix = `approval not found: ${"x".repeat(279)}`;
+    callGatewayFromCli.mockRejectedValue(new Error(`${prefix}\u{1F680}tail\nignored`));
 
     await expect(runApprovalsCommand(["approvals", "resolve", "missing", "deny"])).rejects.toThrow(
       "__exit__:1",
     );
 
-    expect(runtimeErrors[0]).toBe("approval not found");
+    expect(runtimeErrors).toEqual([`${prefix}...`]);
     expect(callGatewayFromCli).toHaveBeenCalledTimes(1);
   });
 

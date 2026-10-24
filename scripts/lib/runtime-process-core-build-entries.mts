@@ -33,9 +33,11 @@ export const runtimeProcessCoreEntrypoints = [
 // Keep small helper processes out of the shared runtime bundle.
 export const standaloneRuntimeProcessBuildEntries = createRuntimeProcessBuildEntries([
   managedMemoryEntrypoint,
+  runtimeProcessEntrypoints.pluginGenerationPreparation,
   runtimeProcessEntrypoints.sqliteReadOnly,
   runtimeProcessEntrypoints.sqliteSourceRevision,
   runtimeProcessEntrypoints.stateRead,
+  runtimeProcessEntrypoints.sessionTranscript,
   runtimeProcessEntrypoints.nativeHookRelayClient,
   runtimeProcessEntrypoints.spawnBroker,
   runtimeProcessEntrypoints.stateLeaseHeartbeat,
@@ -45,17 +47,27 @@ export const standaloneRuntimeProcessBuildEntries = createRuntimeProcessBuildEnt
 ]);
 
 export function getStandaloneRuntimeProcessOutputOptions(name: string) {
+  const pluginPreparationEntry =
+    runtimeProcessEntrypoints.pluginGenerationPreparation.distWorkerPath.replace(/\.js$/u, "");
   const stateReadEntry = runtimeProcessEntrypoints.stateRead.distWorkerPath.replace(/\.js$/u, "");
   const sqliteReadEntry = runtimeProcessEntrypoints.sqliteReadOnly.distWorkerPath.replace(
     /\.js$/u,
     "",
   );
+  if (name === pluginPreparationEntry) {
+    // Each retained plugin has its own worker. Shared gateway chunks multiply
+    // their resident cost; keep diagnostics lazy inside this private graph.
+    return { codeSplitting: true, chunkFileNames: "plugins/plugin-preparation-[name]-[hash].mjs" };
+  }
   // Keep optional read handlers lazy without sharing the main runtime graph.
   if (name === stateReadEntry) {
     return { codeSplitting: true, chunkFileNames: "state/openclaw-state-read-[name]-[hash].mjs" };
   }
   if (name === sqliteReadEntry) {
     return { codeSplitting: true, chunkFileNames: "infra/sqlite-readonly-[name]-[hash].mjs" };
+  }
+  if (name === runtimeProcessEntrypoints.sessionTranscript.distWorkerPath.replace(/\.js$/u, "")) {
+    return { codeSplitting: true, chunkFileNames: "config/sessions/transcript-[name]-[hash].mjs" };
   }
   return { codeSplitting: false };
 }

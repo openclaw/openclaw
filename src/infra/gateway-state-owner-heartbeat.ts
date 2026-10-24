@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import { MessageChannel } from "node:worker_threads";
 import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
+import { requestCliParentTermination } from "../../cli-parent-lifetime.mjs";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { GATEWAY_OWNER_HEARTBEAT_MS } from "./gateway-lock-payload.js";
 import {
@@ -11,6 +12,7 @@ import { resolveRuntimeProcessEntrypointUrl } from "./runtime-process-url.js";
 import { captureRuntimeWorkerSource } from "./runtime-worker-generation.js";
 import { resolveRuntimeWorkerThreadExecArgv } from "./runtime-worker-url.js";
 import { createCpuTrackedWorker } from "./worker-cpu.js";
+import { recordWorkerMessage } from "./worker-message-metrics.js";
 
 const now = Date.now.bind(Date);
 
@@ -53,7 +55,12 @@ export function startGatewayStateOwnerHeartbeat(
     });
     worker.unref();
     // Parent expiration checks verify physical custody directly.
-    port1.on("message", () => undefined);
+    port1.on("message", (message) => {
+      recordWorkerMessage("lifecycle", "from_worker");
+      if (message === "parent-lost") {
+        requestCliParentTermination();
+      }
+    });
     port1.unref();
     worker.on("error", (err) => onLost(new Error(`${coerceErrorMessage(err)}; restart Gateway.`)));
     const inspect = () => {

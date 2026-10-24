@@ -258,6 +258,8 @@ The bundled `minimax` plugin registers MiniMax T2A v2 as a speech provider for `
 
 The bundled MiniMax plugin registers music generation through the shared `music_generate` tool for both `minimax` and `minimax-portal`.
 
+Music and video generation use the origin of the selected provider's `baseUrl`, dropping chat path suffixes such as `/anthropic`. An omitted or blank URL uses `https://api.minimax.io`; an invalid nonempty URL fails before a request is sent instead of silently switching hosts.
+
 - Default music model: `minimax/music-2.6` (OAuth: `minimax-portal/music-2.6`)
 - Also supports `music-2.6-free`, `music-cover`, and `music-cover-free`
 - Prompt controls: `lyrics`, `instrumental`

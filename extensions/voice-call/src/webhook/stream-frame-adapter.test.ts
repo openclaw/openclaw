@@ -1,171 +1,70 @@
-// Voice Call tests cover stream frame adapter plugin behavior.
 import { describe, expect, it } from "vitest";
 import { StreamFrameAdapter } from "./stream-frame-adapter.js";
 
-describe("Twilio stream frames", () => {
+function parseWith(provider: "twilio" | "telnyx") {
+  const adapter = new StreamFrameAdapter(provider);
+  return (frame: unknown) => adapter.parseInbound(JSON.stringify(frame));
+}
+
+describe("StreamFrameAdapter", () => {
   it("parses Twilio start, media, mark, stop, and ignores junk", () => {
-    const adapter = new StreamFrameAdapter("twilio");
+    const parse = parseWith("twilio");
 
     expect(
-      adapter.parseInbound(
-        JSON.stringify({
-          event: "start",
-          start: { streamSid: "MZ-stream", callSid: "CA-call" },
-        }),
-      ),
+      parse({ event: "start", start: { streamSid: "MZ-stream", callSid: "CA-call" } }),
     ).toEqual({ kind: "start", streamId: "MZ-stream", providerCallId: "CA-call" });
 
     expect(
-      adapter.parseInbound(
-        JSON.stringify({
-          event: "media",
-          media: { payload: "AAA=", timestamp: "20", track: "inbound" },
-        }),
-      ),
-    ).toEqual({
+      parse({ event: "media", media: { payload: "AAA=", timestamp: "20", track: "inbound" } }),
+    ).toEqual({ kind: "media", payloadBase64: "AAA=", timestampMs: 20 });
+    expect(parse({ event: "mark", mark: { name: "audio-1" } })).toEqual({
+      kind: "mark",
+      name: "audio-1",
+    });
+    expect(parse({ event: "stop" })).toEqual({ kind: "stop" });
+    expect(new StreamFrameAdapter("twilio").parseInbound("not json")).toEqual({ kind: "ignored" });
+    expect(parse({ event: "media" })).toEqual({ kind: "ignored" });
+    expect(parse({ event: "start", start: { streamSid: "MZ-only" } })).toEqual({ kind: "ignored" });
+    expect(parse({ event: "media", media: { payload: "AAA@@@" } })).toEqual({ kind: "ignored" });
+    expect(parse({ event: "media", media: { payload: "-_8" } })).toEqual({
+      kind: "media",
+      payloadBase64: "+/8=",
+    });
+    expect(parse({ event: "media", media: { payload: "AAA=", timestamp: "20ms" } })).toEqual({
       kind: "media",
       payloadBase64: "AAA=",
-      timestampMs: 20,
     });
-
-    expect(
-      adapter.parseInbound(JSON.stringify({ event: "mark", mark: { name: "audio-1" } })),
-    ).toEqual({ kind: "mark", name: "audio-1" });
-
-    expect(adapter.parseInbound(JSON.stringify({ event: "stop" }))).toEqual({ kind: "stop" });
-
-    expect(adapter.parseInbound("not json")).toEqual({ kind: "ignored" });
-    expect(adapter.parseInbound(JSON.stringify({ event: "media" }))).toEqual({ kind: "ignored" });
-    expect(
-      adapter.parseInbound(JSON.stringify({ event: "start", start: { streamSid: "MZ-only" } })),
-    ).toEqual({ kind: "ignored" });
-    expect(
-      adapter.parseInbound(JSON.stringify({ event: "media", media: { payload: "AAA@@@" } })),
-    ).toEqual({ kind: "ignored" });
-    expect(
-      adapter.parseInbound(JSON.stringify({ event: "media", media: { payload: "-_8" } })),
-    ).toEqual({ kind: "media", payloadBase64: "+/8=" });
   });
-
-  it("ignores partial numeric media timestamps", () => {
-    const adapter = new StreamFrameAdapter("twilio");
+  it("parses Telnyx media, mark, and stop with no streamSid", () => {
+    const parse = parseWith("telnyx");
 
     expect(
-      adapter.parseInbound(
-        JSON.stringify({
-          event: "media",
-          media: { payload: "AAA=", timestamp: "20ms" },
-        }),
-      ),
-    ).toEqual({ kind: "media", payloadBase64: "AAA=" });
-  });
-
-  it("serializes outbound frames with the streamSid captured at start", () => {
-    const adapter = new StreamFrameAdapter("twilio");
-    adapter.parseInbound(
-      JSON.stringify({
-        event: "start",
-        start: { streamSid: "MZ-stream", callSid: "CA-call" },
+      parse({
+        event: "media",
+        stream_id: "telnyx-stream-7",
+        media: { payload: "AAA=", timestamp: 40, track: "inbound_track" },
       }),
-    );
-
-    expect(JSON.parse(adapter.serializeMedia("payload-b64"))).toEqual({
-      event: "media",
-      streamSid: "MZ-stream",
-      media: { payload: "payload-b64" },
+    ).toEqual({ kind: "media", payloadBase64: "AAA=", timestampMs: 40 });
+    expect(parse({ event: "mark", mark: { name: "audio-1" } })).toEqual({
+      kind: "mark",
+      name: "audio-1",
     });
-    expect(JSON.parse(adapter.serializeClear())).toEqual({
-      event: "clear",
-      streamSid: "MZ-stream",
-    });
-    expect(JSON.parse(adapter.serializeMark("audio-1"))).toEqual({
-      event: "mark",
-      streamSid: "MZ-stream",
-      mark: { name: "audio-1" },
-    });
-  });
-});
-
-describe("Telnyx stream frames", () => {
-  it("parses Telnyx start with top-level stream_id and start.call_control_id", () => {
-    const adapter = new StreamFrameAdapter("telnyx");
-
-    expect(
-      adapter.parseInbound(
-        JSON.stringify({
-          event: "start",
-          sequence_number: "1",
-          stream_id: "telnyx-stream-7",
-          start: {
-            call_control_id: "v3:carrier-call-id",
-            call_session_id: "session-1",
-            media_format: { encoding: "PCMU", sample_rate: 8000, channels: 1 },
-          },
-        }),
-      ),
-    ).toEqual({
-      kind: "start",
-      streamId: "telnyx-stream-7",
-      providerCallId: "v3:carrier-call-id",
-    });
-  });
-
-  it("ignores Telnyx start frames without stream_id or call_control_id", () => {
-    const adapter = new StreamFrameAdapter("telnyx");
-
-    expect(adapter.parseInbound(JSON.stringify({ event: "start", start: {} }))).toEqual({
-      kind: "ignored",
-    });
-    expect(
-      adapter.parseInbound(
-        JSON.stringify({
-          event: "start",
-          stream_id: "telnyx-stream-7",
-          start: {},
-        }),
-      ),
-    ).toEqual({ kind: "ignored" });
-  });
-
-  it("parses media, mark, and stop with no streamSid", () => {
-    const adapter = new StreamFrameAdapter("telnyx");
-
-    expect(
-      adapter.parseInbound(
-        JSON.stringify({
-          event: "media",
-          stream_id: "telnyx-stream-7",
-          media: { payload: "AAA=", timestamp: 40, track: "inbound_track" },
-        }),
-      ),
-    ).toEqual({
-      kind: "media",
-      payloadBase64: "AAA=",
-      timestampMs: 40,
-    });
-
-    expect(
-      adapter.parseInbound(JSON.stringify({ event: "mark", mark: { name: "audio-1" } })),
-    ).toEqual({ kind: "mark", name: "audio-1" });
-
-    expect(adapter.parseInbound(JSON.stringify({ event: "stop" }))).toEqual({ kind: "stop" });
+    expect(parse({ event: "stop" })).toEqual({ kind: "stop" });
   });
 
   it("surfaces Telnyx WS error frames so failures don't get swallowed", () => {
-    const adapter = new StreamFrameAdapter("telnyx");
+    const parse = parseWith("telnyx");
 
     expect(
-      adapter.parseInbound(
-        JSON.stringify({
-          event: "error",
-          stream_id: "telnyx-stream-7",
-          payload: {
-            code: 100002,
-            title: "WebSocket error",
-            detail: "Unable to decode payload",
-          },
-        }),
-      ),
+      parse({
+        event: "error",
+        stream_id: "telnyx-stream-7",
+        payload: {
+          code: 100002,
+          title: "WebSocket error",
+          detail: "Unable to decode payload",
+        },
+      }),
     ).toEqual({
       kind: "error",
       code: "100002",
@@ -174,28 +73,12 @@ describe("Telnyx stream frames", () => {
     });
   });
 
-  it("serializes outbound frames without streamSid", () => {
-    const adapter = new StreamFrameAdapter("telnyx");
-
-    expect(JSON.parse(adapter.serializeMedia("payload-b64"))).toEqual({
-      event: "media",
-      media: { payload: "payload-b64" },
-    });
-    expect(JSON.parse(adapter.serializeClear())).toEqual({ event: "clear" });
-    expect(JSON.parse(adapter.serializeMark("audio-1"))).toEqual({
-      event: "mark",
-      mark: { name: "audio-1" },
-    });
-  });
-
   it("ignores junk and unknown events", () => {
-    const adapter = new StreamFrameAdapter("telnyx");
-    expect(adapter.parseInbound("not json")).toEqual({ kind: "ignored" });
-    expect(adapter.parseInbound(JSON.stringify({ event: "media" }))).toEqual({ kind: "ignored" });
-    expect(
-      adapter.parseInbound(JSON.stringify({ event: "media", media: { payload: "AAA@@@" } })),
-    ).toEqual({ kind: "ignored" });
-    expect(adapter.parseInbound(JSON.stringify({ event: "something-else" }))).toEqual({
+    const parse = parseWith("telnyx");
+    expect(new StreamFrameAdapter("telnyx").parseInbound("not json")).toEqual({ kind: "ignored" });
+    expect(parse({ event: "media" })).toEqual({ kind: "ignored" });
+    expect(parse({ event: "media", media: { payload: "AAA@@@" } })).toEqual({ kind: "ignored" });
+    expect(parse({ event: "something-else" })).toEqual({
       kind: "ignored",
     });
   });

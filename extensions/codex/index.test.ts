@@ -61,12 +61,12 @@ const modelAuth = {
 };
 
 function createCodexTestRuntime(
-  current?: () => unknown,
+  current: () => unknown = () => ({}),
   stateStore = createCodexTestBindingStateStore(),
 ) {
   return {
     modelAuth,
-    ...(current ? { config: { current } } : {}),
+    config: { current },
     state: {
       openSyncKeyedStore: () => stateStore,
       openKeyedStoreV2: (
@@ -88,14 +88,17 @@ vi.mock("./src/app-server/side-question.js", () => ({
 }));
 
 function createCodexTestApi(overrides: Parameters<typeof createTestPluginApi>[0] = {}) {
+  const config = overrides.config ?? {
+    plugins: { entries: { codex: { config: overrides.pluginConfig } } },
+  };
   return createTestPluginApi({
     id: "codex",
     name: "Codex",
     source: "test",
-    config: {},
+    config,
     pluginConfig: {},
     ...overrides,
-    runtime: overrides.runtime ?? createCodexTestRuntime(),
+    runtime: overrides.runtime ?? createCodexTestRuntime(() => config),
   });
 }
 
@@ -246,6 +249,7 @@ describe("codex plugin", () => {
 
   it("registers request-scoped surfaces with explicit multi-agent ownership", () => {
     const registerAgentHarness = vi.fn();
+    const registerGatewayMethod = vi.fn();
     const registerNodeHostCommand = vi.fn();
     const registerNodeInvokePolicy = vi.fn();
     const registerSessionCatalog = vi.fn();
@@ -256,6 +260,7 @@ describe("codex plugin", () => {
           config: explicitAgentConfig,
           runtime: createCodexTestRuntime(() => explicitAgentConfig),
           registerAgentHarness,
+          registerGatewayMethod,
           registerNodeHostCommand,
           registerNodeInvokePolicy,
           registerSessionCatalog,
@@ -264,6 +269,9 @@ describe("codex plugin", () => {
     ).not.toThrow();
 
     expect(registerAgentHarness).toHaveBeenCalledOnce();
+    expect(registerGatewayMethod).toHaveBeenCalledWith("codex.accountUsage", expect.any(Function), {
+      scope: "operator.admin",
+    });
     expect(registerSessionCatalog).toHaveBeenCalledOnce();
     expect(registerNodeHostCommand.mock.calls.map(([command]) => command.command)).toEqual(
       expect.arrayContaining([

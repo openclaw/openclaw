@@ -1,5 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { throwSqliteLifecycleErrors } from "../../infra/sqlite-lifecycle-errors.js";
+import { runWithAsyncStore } from "../../shared/async-store.js";
+import type { SessionAdmissionTransition } from "./session-admission-transition.types.js";
 import type { CapturedSessionEntryReadSource } from "./session-entry-read-source.types.js";
 import type { SessionPendingInputAuthorityFacts } from "./session-pending-input-authority.js";
 import type { SessionTranscriptContextVersion } from "./session-transcript-context-version.types.js";
@@ -94,6 +96,11 @@ export type PreparedSessionSourceAuthority = {
 export type SessionSourceAssertion = (() => void) & {
   nativeSource?: boolean;
   opaqueCommitGuard?: boolean;
+  /** Host commit notification only; never a substitute for the normal source checks. */
+  onSessionCompactionCommitted?: (
+    transition: SessionAdmissionTransition,
+    entry: SessionEntry,
+  ) => void;
   /** Keep the source owner alive through accepted work that outlasts its request. */
   retain?: () => () => void;
   /** Checks the scope owner without invoking storage-dependent source predicates. */
@@ -227,7 +234,7 @@ export async function runWithSessionSourceScope<T>(
   scopes.set(assertion, prepared);
   const errors: unknown[] = [];
   try {
-    return await sessionSourceScopes.run(scopes, async () => {
+    return await runWithAsyncStore(sessionSourceScopes, scopes, async () => {
       (prepared.assertPreparedCurrent ?? prepared.assertCurrent)();
       const result = await run();
       if (options.checkAfter !== false) {
@@ -267,6 +274,8 @@ export function createDynamicSessionSourceAssertion(
       return scoped ? scoped.assertCurrent() : select()?.();
     },
     {
+      onSessionCompactionCommitted: (transition: SessionAdmissionTransition, entry: SessionEntry) =>
+        select()?.onSessionCompactionCommitted?.(transition, entry),
       prepareSessionSource: () => prepareSelected(prepareSessionSourceAuthority),
       prepareSessionSourceScope: () => prepareSelected(prepareSessionSourceScope),
     },
@@ -292,6 +301,11 @@ export function composeSessionSourceAssertion(
     const prepared: PreparedSessionSourceAuthority[] = [];
     const scopedSources = new Map<SessionSourceAssertion, PreparedSessionSourceAuthority>();
     const release = () => releaseSessionSourceAuthorities(prepared);
+    const assertCurrentSources = () => {
+      for (const source of prepared) {
+        source.assertCurrent();
+      }
+    };
     const assertPreparedSources = () => {
       for (const source of prepared) {
         assertPreparedSessionSourceCurrent(source);
@@ -325,7 +339,7 @@ export function composeSessionSourceAssertion(
         nativeSource: prepared.some((source) => source.nativeSource),
         opaqueCommitGuard: prepared.some((source) => source.opaqueCommitGuard),
         hasOpaqueCheck: options?.hasOpaqueCheck || prepared.some((source) => source.hasOpaqueCheck),
-        assertCurrent: () => check(() => prepared.forEach((source) => source.assertCurrent())),
+        assertCurrent: () => check(assertCurrentSources),
         assertPreparedCurrent: () => (options?.preparedCheck ?? check)(assertPreparedSources),
         ...(scoped ? { scopedSources } : {}),
         checks: prepared.flatMap((source, index) =>
@@ -349,7 +363,7 @@ export function composeSessionSourceAssertion(
           if (scoped) {
             assertPreparedSources();
           } else {
-            prepared.forEach((source) => source.assertCurrent());
+            assertCurrentSources();
           }
           throw error;
         });
@@ -360,12 +374,25 @@ export function composeSessionSourceAssertion(
       throw failure;
     }
   }
+  const assertSources = () => {
+    for (const source of sources) {
+      source?.();
+    }
+  };
   const assertion: PreparedSessionSourceAssertion = Object.assign(
     () => {
       const scoped = sessionSourceScopes.getStore()?.get(assertion);
-      return scoped ? scoped.assertCurrent() : check(() => sources.forEach((source) => source?.()));
+      return scoped ? scoped.assertCurrent() : check(assertSources);
     },
     {
+      onSessionCompactionCommitted: (
+        transition: SessionAdmissionTransition,
+        entry: SessionEntry,
+      ) => {
+        for (const source of new Set(sources)) {
+          source?.onSessionCompactionCommitted?.(transition, entry);
+        }
+      },
       prepareSessionSource: () => prepare(),
       prepareSessionSourceScope: () => prepare(true),
     },

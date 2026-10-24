@@ -21,8 +21,11 @@ import type { waitForTransportReady } from "openclaw/plugin-sdk/transport-ready-
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { imessagePlugin } from "./channel.js";
 import type { createIMessageRpcClient } from "./client.js";
-import { createIMessageConversationBindingManager } from "./conversation-bindings.js";
-import { monitorIMessageProvider } from "./monitor.js";
+import {
+  createIMessageConversationBindingManager,
+  createIMessageConversationBindingManagerV2,
+} from "./conversation-bindings.js";
+import { monitorIMessageProvider } from "./monitor/monitor-provider.js";
 import { setCachedIMessagePrivateApiStatus } from "./private-api-status.js";
 import { getIMessageRuntime } from "./runtime.js";
 import { installIMessageStateRuntimeForTest } from "./test-support/runtime.js";
@@ -93,6 +96,25 @@ describe("iMessage plugin payload attachments", () => {
     resetGlobalHookRunner();
     resetPluginRuntimeStateForTest();
     vi.restoreAllMocks();
+  });
+
+  it("warns once for the legacy binding factory and leaves V2 silent", () => {
+    const warning = vi.spyOn(process, "emitWarning").mockImplementation(() => {});
+    const params = { accountId: "factory-warning", cfg: {} };
+    const bindings = createIMessageConversationBindingManagerV2(params);
+    try {
+      expect(warning).not.toHaveBeenCalled();
+      createIMessageConversationBindingManager(params);
+      createIMessageConversationBindingManager(params);
+      const factoryWarnings = warning.mock.calls.filter(([message]) =>
+        String(message).includes("createIMessageConversationBindingManager is deprecated"),
+      );
+      expect(factoryWarnings).toHaveLength(1);
+      expect(factoryWarnings[0]?.[0]).toContain("createIMessageConversationBindingManagerV2");
+      expect(factoryWarnings[0]?.[0]).toContain("first January 2027 stable release");
+    } finally {
+      bindings.stop();
+    }
   });
 
   it("does not count Apple rich-link plugin payloads as user media", async () => {
@@ -168,7 +190,7 @@ describe("iMessage plugin payload attachments", () => {
       ]);
       setActivePluginRegistry(registry);
       const owner = createPluginRegistryOwner(registry);
-      const bindings = createIMessageConversationBindingManager({ cfg: {} });
+      const bindings = createIMessageConversationBindingManagerV2({ cfg: {} });
       addTestHook({
         registry,
         pluginId: "imessage-monitor-proof",

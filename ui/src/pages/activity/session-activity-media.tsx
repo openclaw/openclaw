@@ -1,4 +1,15 @@
-import { createEffect, createSignal, onCleanup, onSettled, untrack } from "solid-js";
+import {
+  createDeferred,
+  createEffect,
+  createMemo,
+  createSignal,
+  Errored,
+  isPending,
+  latest,
+  Loading,
+  onSettled,
+  Show,
+} from "solid-js";
 import type { ArtifactsListResult } from "../../../../packages/gateway-protocol/src/index.ts";
 import { resolveArtifactDownloadSource } from "../../api/artifact-download.ts";
 import type { GatewayBrowserClient, GatewayHelloOk } from "../../api/gateway.ts";
@@ -9,12 +20,11 @@ import type { ImageLightboxItem } from "../../components/image-lightbox.types.ts
 import { registerActivityEnglish } from "../../i18n/locales/en-activity.ts";
 import { projectGateway } from "../../lib/reactive/application.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
-import { defineSolidBridge, LitContent, type SolidBridgeElement } from "../../lit/solid-bridge.ts";
-import { renderChatImageLightbox } from "../chat/components/chat-image-lightbox.ts";
-import { renderMessageImages } from "../chat/components/chat-message-images.ts";
+import { ChatImageLightbox } from "../chat/components/chat-image-lightbox-view.tsx";
+import { MessageImages } from "../chat/components/chat-message-deferred.tsx";
 import {
   assistantMediaPolicyKey,
-  releaseChatMediaResourceSubscriber,
+  releaseChatMediaResourceOwner,
   type ImageBlock,
 } from "../chat/components/chat-message-media.ts";
 import "./session-activity-media.css";
@@ -25,6 +35,7 @@ type ImageEntry = {
   images: ImageBlock[];
   loaded: boolean;
   pending?: Promise<void>;
+  read?: { promise: Promise<void> };
   cursor?: string;
   error?: boolean;
   omitted?: boolean;
@@ -93,10 +104,20 @@ export type ActivitySessionMediaProps = {
   session?: GatewaySessionRow;
 };
 
-function ActivitySessionMediaContent(
+export function ActivitySessionMedia(props: ActivitySessionMediaProps) {
+  return (
+    <Show when={props.context.gateway} keyed>
+      {(gateway) => SessionMedia(gateway, props)}
+    </Show>
+  );
+}
+
+function SessionMedia(
+  sourceGateway: ApplicationContext["gateway"],
   props: ActivitySessionMediaProps,
-  host: SolidBridgeElement<ActivitySessionMediaProps>,
 ) {
+  let host!: HTMLElement;
+  const mediaOwner = {};
   const [revision, setRevision] = createSignal(0);
   let visible = false;
   let observer: IntersectionObserver | undefined;
@@ -119,29 +140,6 @@ function ActivitySessionMediaContent(
       setRevision((value) => value + 1);
     }
   };
-
-  function connect() {
-    // Visibility is required before transcript discovery; never fall back to an eager scan.
-    if (typeof IntersectionObserver === "undefined") {
-      return;
-    }
-    observer = new IntersectionObserver(
-      (entries) => {
-        visible = entries.some((observation) => observation.isIntersecting);
-        refresh();
-      },
-      { rootMargin: "200px" },
-    );
-    observer.observe(host);
-  }
-
-  function dispose() {
-    disposed = true;
-    observer?.disconnect();
-    visible = false;
-    closeImage(false);
-    releaseChatMediaResourceSubscriber(refresh);
-  }
 
   const closeImage = (notify = true) => {
     imageRequest++;
@@ -170,7 +168,7 @@ function ActivitySessionMediaContent(
       settledEntry = undefined;
       displayedImages = [];
       closeImage(false);
-      releaseChatMediaResourceSubscriber(refresh);
+      releaseChatMediaResourceOwner(mediaOwner);
       boundImageIdentity = identity;
     }
     if (nextOwner !== owner || nextKey !== key) {
@@ -292,10 +290,20 @@ function ActivitySessionMediaContent(
         target.pending = undefined;
         refresh();
       });
+    target.read = {
+      promise: target.pending.then(() => {
+        if (target.error) {
+          throw new Error(t("activity.images.failed"));
+        }
+      }),
+    };
+    // The shared cache can outlive a visible reader.
+    void target.read.promise.catch(() => undefined);
     refresh();
   };
 
   function imageOptions() {
+    revision();
     const imageOwner = owner!;
     const gateway = props.context.gateway;
     const { client, hello } = gateway.snapshot;
@@ -316,7 +324,7 @@ function ActivitySessionMediaContent(
         settings: { token: gateway.connection.token },
         password: gateway.connection.password,
       }),
-      onRequestUpdate: refresh,
+      mediaOwner,
       onRequestOpenImage: () => ++imageRequest,
       onOpenImage: (item: ImageLightboxItem, version?: number) => {
         if (
@@ -352,12 +360,8 @@ function ActivitySessionMediaContent(
         ),
     };
   }
-  // The projection is seeded once; its source follows the tracked effect below.
-  const gatewayProjection = projectGateway(untrack(() => props.context.gateway));
-  createEffect(
-    () => props.context.gateway,
-    (source) => gatewayProjection.replaceSource(source),
-  );
+  const gatewayProjection = projectGateway(sourceGateway);
+  // Synchronize the viewport-gated artifact requests with their Gateway/session scope.
   createEffect(
     () => [
       gatewayProjection.read(),
@@ -366,14 +370,36 @@ function ActivitySessionMediaContent(
       props.revision,
       props.session,
     ],
-    () => untrack(refresh),
+    refresh,
   );
-  onSettled(connect);
-  onCleanup(dispose);
+  onSettled(() => {
+    // Visibility is required before transcript discovery; never fall back to an eager scan.
+    if (typeof IntersectionObserver !== "undefined") {
+      observer = new IntersectionObserver(
+        (entries) => {
+          visible = entries.some((observation) => observation.isIntersecting);
+          refresh();
+        },
+        { rootMargin: "200px" },
+      );
+      observer.observe(host);
+    }
+    return () => {
+      disposed = true;
+      observer?.disconnect();
+      visible = false;
+      closeImage(false);
+      releaseChatMediaResourceOwner(mediaOwner);
+    };
+  });
   const displayEntry = () => {
     revision();
     return owner && props.context.gateway.snapshot.client ? (settledEntry ?? entry) : undefined;
   };
+  const request = createMemo(() => displayEntry()?.read);
+  // Gallery/cache changes stay live while pagination readiness deliberately lags.
+  const read = createDeferred(() => request()?.promise);
+  const failed = createMemo(() => Boolean(displayEntry()?.error));
   const hasImages = () => {
     revision();
     return displayedImages.length > 0;
@@ -387,63 +413,75 @@ function ActivitySessionMediaContent(
     return Boolean(value?.error || value?.omitted || (!hasImages() && value?.cursor));
   };
   const loadDisplayed = () => load(displayEntry());
-  const loadLabel = () => t(displayEntry()?.pending ? "common.loading" : "activity.images.older");
-  const olderButton = (
-    <button
-      class="activity-feed__note-action"
-      disabled={Boolean(displayEntry()?.pending)}
-      onClick={loadDisplayed}
-    >
-      {loadLabel()}
-    </button>
-  );
-  const gallery = () => {
+  function OlderButton() {
+    return (
+      <Loading
+        on={failed()}
+        fallback={
+          <button class="activity-feed__note-action" disabled onClick={loadDisplayed}>
+            {t("common.loading")}
+          </button>
+        }
+      >
+        <Errored
+          fallback={
+            <button class="activity-feed__note-action" onClick={loadDisplayed}>
+              {t("common.retry")}
+            </button>
+          }
+        >
+          {(latest(read), null)}
+          <button
+            class="activity-feed__note-action"
+            disabled={isPending(read)}
+            onClick={loadDisplayed}
+          >
+            {t(isPending(read) ? "common.loading" : "activity.images.older")}
+          </button>
+        </Errored>
+      </Loading>
+    );
+  }
+  const olderButton = <OlderButton />;
+  const galleryImages = () => {
     revision();
-    // The unported chat gallery owns these children and its resource directives.
-    const previews = older() ? [olderButton] : [];
-    return renderMessageImages(displayedImages, imageOptions(), previews);
+    return displayedImages;
   };
-  const lightboxContent = () => {
+  const lightboxItem = () => {
     revision();
-    return renderChatImageLightbox(lightbox, () => closeImage());
+    return lightbox;
   };
   return (
-    <>
+    <openclaw-activity-session-media ref={(element) => (host = element)}>
       {(hasImages() || showNote()) && (
         <div class="activity-feed__media">
-          {hasImages() && <LitContent render={gallery} />}
+          {hasImages() && (
+            <MessageImages
+              images={galleryImages()}
+              options={imageOptions()}
+              previews={older() ? [olderButton] : []}
+            />
+          )}
           {showNote() && (
             <div class="activity-feed__note">
               {displayEntry()?.omitted && <span>{t("activity.images.incomplete")}</span>}
-              {displayEntry()?.error && <span role="status">{t("activity.images.failed")}</span>}
-              {(displayEntry()?.error || (!hasImages() && older())) && (
-                <button
-                  class="activity-feed__note-action"
-                  disabled={Boolean(displayEntry()?.pending)}
-                  onClick={loadDisplayed}
-                >
-                  {displayEntry()?.error ? t("common.retry") : loadLabel()}
-                </button>
-              )}
+              <Errored fallback={<span role="status">{t("activity.images.failed")}</span>}>
+                <Loading>{(latest(read), null)}</Loading>
+              </Errored>
+              {(displayEntry()?.error || (!hasImages() && older())) && <OlderButton />}
             </div>
           )}
         </div>
       )}
-      <LitContent render={lightboxContent} />
-    </>
+      <ChatImageLightbox item={lightboxItem()} onClose={closeImage} />
+    </openclaw-activity-session-media>
   );
 }
 
-export const ActivitySessionMedia = defineSolidBridge<ActivitySessionMediaProps>(
-  "openclaw-activity-session-media",
-  ActivitySessionMediaContent,
-  {
-    properties: {
-      context: { default: undefined!, attribute: false },
-      sessionKey: { default: "" },
-      agentId: { default: "" },
-      revision: { default: 0, type: Number },
-      session: { default: undefined, attribute: false },
-    },
-  },
-);
+declare module "@solidjs/web" {
+  namespace JSX {
+    interface IntrinsicElements {
+      "openclaw-activity-session-media": HTMLAttributes<HTMLElement>;
+    }
+  }
+}

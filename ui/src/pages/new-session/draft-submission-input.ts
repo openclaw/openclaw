@@ -1,5 +1,6 @@
 import type { ApplicationContext } from "../../app/context.ts";
 import type { ChatAttachment, HumanMention } from "../../lib/chat/chat-types.ts";
+import { resolveCurrentUserIdentity } from "../../lib/chat/current-user-identity.ts";
 import { trimHumanMentions } from "../../lib/chat/human-mentions.ts";
 import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
 import { showToast } from "../../lib/toast.ts";
@@ -67,7 +68,15 @@ export function prepareDraftSubmission(
     (pendingPlacement
       ? pending.createParams
       : buildSelectedSessionCreateParams(place, { message, visibility: draft.visibility }));
+  const { hello, selfUser } = context.gateway.snapshot;
   return {
+    turn: {
+      text: message,
+      mentions,
+      attachments,
+      createdAt: startup?.startedAt ?? Date.now(),
+      sender: resolveCurrentUserIdentity(hello, client.instanceId, selfUser) ?? undefined,
+    },
     consumeWorktreeName:
       submittedPlacement &&
       place.captureSubmittedWorktreeName(

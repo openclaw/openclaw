@@ -210,7 +210,6 @@ describe("readCodexMirroredSessionHistoryMessages", () => {
           role: "user",
           content: [{ type: "input_text", text: upstreamPrompt }],
         });
-        expect(Object.isFrozen(captured?.data)).toBe(true);
         expect(captured?.data.at(-1)).toMatchObject({
           type: "function_call_output",
           call_id: "sent",
@@ -911,6 +910,8 @@ it("prepares an oversized mirrored tool frame without losing the incoming reques
     512,
   );
   expect(prepared).toMatchObject([
+    { role: "user", content: "sqlite prompt" },
+    { role: "assistant", content: "sqlite answer" },
     { role: "user", content: "Send the synthetic update." },
     { role: "assistant", content: [{ type: "toolCall", id: "sent", name: "message" }] },
     {

@@ -5,12 +5,17 @@ import {
   resolveMessageRole,
 } from "../../../lib/chat/message-normalizer.ts";
 import { readToolApprovalReviews } from "../../../lib/chat/tool-approval-reviews.ts";
+import { hasVisiblePreparedActivity } from "../../../lib/chat/tool-call-grouping.ts";
 import { extractToolCardsCached } from "../../../lib/chat/tool-cards.ts";
 import { gatewayClientKind } from "../../../lib/gateway-client-kind.ts";
 import { resolveIdentityHue } from "../../../lib/identity-avatar.ts";
 import { DEFAULT_AGENT_ID } from "../../../lib/sessions/session-key.ts";
-import { resolveAssistantReplyPhase } from "../chat-assistant-reply.ts";
-import { readPendingSendStatus } from "../chat-thread.ts";
+import {
+  assistantMessageCanOwnTurnActions,
+  isProviderVoiceTranscript,
+  resolveAssistantReplyPhase,
+} from "../chat-assistant-reply.ts";
+import { readPendingSendStatus } from "../chat-thread-items.ts";
 import { hasForwardedSource } from "../chat-turn-boundary.ts";
 import { workspaceResultConflictFromTranscript } from "../workspace-conflict.ts";
 import type { RenderMessageGroupOptions } from "./chat-message-group-options.ts";
@@ -40,16 +45,20 @@ export function prepareGroupMessage(
   opts: NativeMessageGroupOptions,
 ) {
   const source = prepareChatMessageRender(item.message);
+  // Run frames give actions to their answer only; unframed groups apply the same rule per message.
+  const ownsActions =
+    normalizeRoleForGrouping(group.role) !== "assistant" ||
+    assistantMessageCanOwnTurnActions(item.message);
   const details = resolveMessageActionDetails(source, {
     ...opts,
+    onReply: ownsActions ? opts.onReply : undefined,
     messageId: item.key,
     canFetchFullMessage: Boolean(opts.loadFullAssistantMessage && opts.sessionKey),
     senderLabel: resolveMessageGroupSenderLabel(group, opts),
   });
-  const messageId = details?.fullMessage?.messageId;
-  if (messageId) {
-    // Projected rows can share a source ID; a preceding row may have started its load.
-    const expansion = opts.getAssistantMessageExpansion?.(messageId);
+  const fullMessage = details?.fullMessage;
+  if (fullMessage) {
+    const { messageId, state: expansion } = fullMessage;
     // Retry transient failures on later renders, bounded so a dead loader cannot hot-loop.
     if (
       !expansion ||
@@ -58,7 +67,7 @@ export function prepareGroupMessage(
       opts.onToggleAssistantMessageExpanded?.(messageId);
     }
   }
-  return { item, source, actions: details };
+  return { item, source, actions: details, ownsActions };
 }
 
 export function isActivityMessageGroup(group: MessageGroupData, bubbleMode = false): boolean {
@@ -78,6 +87,8 @@ export function isActivityMessageGroup(group: MessageGroupData, bubbleMode = fal
     bubbleMode ||
     group.messages.length > 1 ||
     cards.length > 1 ||
+    (cards.length === 0 &&
+      group.messages.some(({ message }) => hasVisiblePreparedActivity(message))) ||
     cards.some((card) => readToolApprovalReviews(card.details).length > 0)
   );
 }
@@ -168,6 +179,7 @@ export function prepareMessageGroupFrame(
   // no identity, footer or actions of their own, only the run-block gap.
   const isTurnBlock =
     normalizedRole === "tool" ||
+    group.messages.every(({ message }) => isProviderVoiceTranscript(message)) ||
     (normalizedRole === "assistant" &&
       !opts.searchResult &&
       !ownsRunFrame &&
@@ -180,6 +192,7 @@ export function prepareMessageGroupFrame(
     : group.messages;
   const preparedMessages = actionOwners.map((item) => prepareGroupMessage(group, item, opts));
   const lastMessageIndex = group.messages.length - 1;
+  // Footer copy stays available (e.g. a commentary search hit); reply was already dropped for non-owners.
   const footerActionDetails = preparedMessages.at(-1)?.actions ?? null;
   const footerActionMessageKey = actionOwners.at(-1)?.key;
   const hasUserFooterActions =

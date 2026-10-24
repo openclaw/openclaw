@@ -9,7 +9,6 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import type { CliSessionBinding, SessionEntry } from "../config/sessions.js";
 import { normalizeCliSessionReseedReceipt } from "../config/sessions/cli-session-binding.js";
 import { readErrorName } from "../infra/errors.js";
-import { readInterSessionPromptEnvelope } from "../sessions/input-provenance.js";
 import { isFailoverError } from "./failover-error.js";
 import type { FailoverReason } from "./failover/signal.js";
 export {
@@ -173,9 +172,13 @@ export function resolveCliSessionClearReason(error: unknown): string {
   return isFailoverError(error) ? error.reason : (readErrorName(error) ?? "error");
 }
 
-type CliSessionInvalidatedReason = "auth-profile" | "auth-epoch" | "message-policy" | "cwd" | "mcp";
-
-type CliSessionContentDriftReason = "system-prompt" | "prompt-tools";
+type CliSessionInvalidatedReason =
+  | "auth-profile"
+  | "auth-epoch"
+  | "message-policy"
+  | "cwd"
+  | "mcp"
+  | "prompt-tools";
 
 export type CliSessionReuseResult =
   | { mode: "none" }
@@ -183,36 +186,9 @@ export type CliSessionReuseResult =
   | {
       mode: "reuse-with-drift";
       sessionId: string;
-      drift: { reasons: CliSessionContentDriftReason[] };
+      drift: { reasons: "system-prompt"[] };
     }
   | { mode: "invalidate"; invalidatedReason: CliSessionInvalidatedReason };
-
-const CLI_SESSION_DRIFT_NOTE_PREFIX =
-  "OpenClaw resumed this CLI session after prompt content changed.";
-
-export function buildCliSessionDriftNote(reasons: readonly CliSessionContentDriftReason[]): string {
-  return `${CLI_SESSION_DRIFT_NOTE_PREFIX} Follow the current turn's instructions; changed=${reasons.join(",")}.`;
-}
-
-const CLI_SESSION_DRIFT_NOTES = [
-  buildCliSessionDriftNote(["system-prompt"]),
-  buildCliSessionDriftNote(["prompt-tools"]),
-  buildCliSessionDriftNote(["system-prompt", "prompt-tools"]),
-];
-
-// Match only complete notes the producer emits; similar native user text is not context.
-// Inter-session prompts move their envelope above the note, joined by single newlines.
-export function stripCliSessionDriftNote(text: string): string {
-  const envelopeLength = readInterSessionPromptEnvelope(text)?.length ?? 0;
-  const separator = envelopeLength > 0 ? "\n" : "\n\n";
-  for (const note of CLI_SESSION_DRIFT_NOTES) {
-    const prefix = `${note}${separator}`;
-    if (text.startsWith(prefix, envelopeLength)) {
-      return text.slice(0, envelopeLength) + text.slice(envelopeLength + prefix.length);
-    }
-  }
-  return text;
-}
 
 const DEFAULT_MESSAGE_TOOL_POLICY_HASH = hashCliSessionText(
   JSON.stringify({ sourceReplyDeliveryMode: "automatic", requireExplicitMessageTarget: false }),
@@ -267,10 +243,8 @@ export function resolveCliSessionReuse(params: {
     storedAuthEpoch !== undefined &&
     currentAuthEpoch !== undefined &&
     storedAuthEpoch === currentAuthEpoch;
-  if (storedAuthProfileId !== currentAuthProfileId) {
-    if (!hasMatchingVersionedAuthEpoch) {
-      return { mode: "invalidate", invalidatedReason: "auth-profile" };
-    }
+  if (storedAuthProfileId !== currentAuthProfileId && !hasMatchingVersionedAuthEpoch) {
+    return { mode: "invalidate", invalidatedReason: "auth-profile" };
   }
   if (
     binding?.authEpochVersion === params.authEpochVersion &&
@@ -302,19 +276,14 @@ export function resolveCliSessionReuse(params: {
     }
   }
 
-  const driftReasons: CliSessionContentDriftReason[] = [];
-  const storedExtraSystemPromptHash = normalizeOptionalString(binding?.extraSystemPromptHash);
-  if (storedExtraSystemPromptHash !== currentExtraSystemPromptHash) {
-    driftReasons.push("system-prompt");
-  }
   const storedPromptToolNamesHash = normalizeOptionalString(binding?.promptToolNamesHash);
   if (storedPromptToolNamesHash !== currentPromptToolNamesHash) {
-    driftReasons.push("prompt-tools");
+    // The loopback bridge cannot notify a resumed CLI to refresh its cached tool catalog.
+    return { mode: "invalidate", invalidatedReason: "prompt-tools" };
   }
-  if (driftReasons.length > 0) {
-    // Content drift resumes by contract (#99729): the transcript remains usable.
-    // Deleting this binding here makes queued turns spawn without session history.
-    return { mode: "reuse-with-drift", sessionId, drift: { reasons: driftReasons } };
+  const storedExtraSystemPromptHash = normalizeOptionalString(binding?.extraSystemPromptHash);
+  if (storedExtraSystemPromptHash !== currentExtraSystemPromptHash) {
+    return { mode: "reuse-with-drift", sessionId, drift: { reasons: ["system-prompt"] } };
   }
   return { mode: "reuse", sessionId };
 }

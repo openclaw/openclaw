@@ -1,4 +1,4 @@
-import { onCleanup, onSettled } from "solid-js";
+import { onSettled } from "solid-js";
 
 export function closeWorkboardPopoverOnAction(event: Event) {
   if (!(event.target instanceof Element) || !event.target.closest("button")) {
@@ -10,9 +10,7 @@ export function closeWorkboardPopoverOnAction(event: Event) {
 }
 
 export function workboardPopoverRef(align: "start" | "end" = "start", hover = false) {
-  let dispose = () => {};
   let panel!: HTMLElement;
-  onCleanup(() => dispose());
   onSettled(() => {
     const element = panel;
     // Conditional Solid fragments have no sibling anchor until their DOM is committed.
@@ -110,7 +108,7 @@ export function workboardPopoverRef(align: "start" | "end" = "start", hover = fa
       frame = requestAnimationFrame(position);
     };
     element.addEventListener("beforetoggle", beforeToggle);
-    dispose = () => {
+    return () => {
       clearTimeout(hoverTimer);
       if (hover) {
         trigger?.removeEventListener("pointerenter", enter);

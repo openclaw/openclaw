@@ -18,7 +18,8 @@ openclaw-lobster-pet .lobster-pet {
 
 .lobster-pet__motion {
   position: absolute;
-  inset: 0;
+  /* Sprites use pixel coordinates; a full-size moving box overflows the composer. */
+  inset: 0 auto auto 0;
   pointer-events: none;
 }
 

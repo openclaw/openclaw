@@ -24,6 +24,7 @@ export type WorkerTranscriptCommitApplication = (params: {
   request: WorkerTranscriptCommitParams;
   sessionTarget: BoundAgentRunSessionTarget;
   assertCurrent: () => undefined;
+  onCommitted?: (outcome: WorkerTranscriptCommitOutcome) => Promise<void>;
 }) => Promise<WorkerTranscriptCommitOutcome>;
 
 export type WorkerTranscriptCommitterOptions = {

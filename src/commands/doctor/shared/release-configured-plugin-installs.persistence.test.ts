@@ -4,7 +4,7 @@ import { readConfigFileSnapshot } from "../../../config/config.js";
 import { hashConfigRaw } from "../../../config/io.read-helpers.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { runWriteConfigHealth } from "../../../flows/doctor-health-contribution-runners.config.js";
-import { runReleaseConfiguredPluginInstallsHealth } from "../../../flows/doctor-health-contribution-runners.state.js";
+import { initialDoctorHealthContribution } from "../../../flows/doctor-health-contributions-selection.test-support.js";
 import { createDoctorHealthFlowContext } from "../../../flows/doctor-health-contributions.test-support.js";
 import { readConfigMachineState } from "../../../state/config-machine-state.js";
 import {
@@ -81,7 +81,7 @@ it.each(["absent", "2026.9.4"])(
         const timestamp = readConfigMachineState<string>("config.lastTouchedAt");
         const ctx = await createContext(state, cfg);
 
-        await runReleaseConfiguredPluginInstallsHealth(ctx);
+        await initialDoctorHealthContribution("doctor:release-configured-plugin-installs").run(ctx);
         await expect(runWriteConfigHealth(ctx, { runPostWriteRepairs: false })).resolves.toBe(true);
 
         expect.soft(ctx.cfg).toEqual(cfg);
@@ -128,7 +128,7 @@ it.each(configuredCases)(
         const ctx = await createContext(state, cfg);
         ctx.configResult.shouldWriteConfig = kind === "repair";
 
-        await runReleaseConfiguredPluginInstallsHealth(ctx);
+        await initialDoctorHealthContribution("doctor:release-configured-plugin-installs").run(ctx);
         await expect(runWriteConfigHealth(ctx, { runPostWriteRepairs: false })).resolves.toBe(true);
 
         const persisted = JSON.parse(await fs.readFile(state.configPath, "utf8"));

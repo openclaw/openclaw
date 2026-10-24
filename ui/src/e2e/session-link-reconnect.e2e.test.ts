@@ -13,6 +13,9 @@ const sourceKey = "agent:main:main";
 const destinationKey = "agent:main:dashboard:12345678-1111-4222-8333-abcdefabcdef";
 const destinationText = "The linked conversation recovered after reconnect.";
 const destinationPath = "/chat/main/linked-conversation-12345678";
+const resolutionMatch = { shortId: "12345678", agentId: "main" };
+const destinationMatch = { sessionKey: destinationKey };
+const transcript = (content: string) => ({ messages: [{ role: "assistant", content }] });
 
 suite.define(() => {
   it.each([false, true])(
@@ -23,21 +26,14 @@ suite.define(() => {
           sessionKey: sourceKey,
           sessions: [createControlUiSessionRow(sourceKey, "Source conversation", 1)],
           sessionTranscripts: {
-            [sourceKey]: {
-              // URL chips need Gateway identity resolution; raw keys can already load literally.
-              messages: [
-                { role: "assistant", content: `Open [Linked conversation](${destinationPath}).` },
-              ],
-            },
-            [destinationKey]: {
-              messages: [{ role: "assistant", content: destinationText }],
-            },
+            [sourceKey]: transcript(`Open [Linked conversation](${destinationPath}).`),
+            [destinationKey]: transcript(destinationText),
           },
           methodResponses: {
             "sessions.resolve": {
               cases: [
                 {
-                  match: { shortId: "12345678", agentId: "main" },
+                  match: resolutionMatch,
                   response: {
                     ok: true,
                     key: destinationKey,
@@ -50,31 +46,36 @@ suite.define(() => {
             },
           },
         });
+        const requests = gateway.getRequests;
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, sourceKey));
         const link = page.locator(
           `.chat-thread a.markdown-session-link[href="${destinationPath}"]`,
         );
-        await link.waitFor({ state: "visible" });
-        await page.locator('openclaw-app-sidebar [data-navigation-view="pages"]').click();
-        await page
-          .locator('openclaw-app-sidebar a[href="/activity"]')
+        // Settle title decoration before deferring the separate navigation lookup.
+        await link
+          .and(page.locator(`[data-session-key="${destinationKey}"]`))
           .waitFor({ state: "visible" });
+        await page.locator('openclaw-app-sidebar [data-navigation-view="pages"]').click();
+        const activity = page.locator('openclaw-app-sidebar a[href="/activity"]');
+        await activity.waitFor({ state: "visible" });
         const initialHistoryLength = await page.evaluate(() => history.length);
-        const resolutionMatch = { shortId: "12345678", agentId: "main" };
+        const initialTitleResolutions = (await requests("sessions.resolve", resolutionMatch))
+          .length;
         await gateway.deferNext("sessions.resolve", resolutionMatch);
         await link.click();
-        await gateway.waitForRequest("sessions.resolve", { match: resolutionMatch });
-        expect(await gateway.getRequests("chat.startup", { sessionKey: destinationKey })).toEqual(
-          [],
-        );
+        await gateway.waitForRequest("sessions.resolve", {
+          match: resolutionMatch,
+          after: initialTitleResolutions,
+        });
+        expect(await requests("chat.startup", destinationMatch)).toEqual([]);
 
         // Hold the new hello so navigation can change while the old route is interrupted.
         await gateway.deferNext("connect");
-        const previousConnects = (await gateway.getRequests("connect")).length;
+        const previousConnects = (await requests("connect")).length;
         await gateway.closeLatest(4000, "session subscription recovery failed");
         await gateway.waitForRequest("connect", { after: previousConnects });
         if (navigateAway) {
-          await page.locator('openclaw-app-sidebar a[href="/activity"]').click();
+          await activity.click();
           await expect.poll(() => new URL(page.url()).pathname).toBe("/activity");
         }
         await gateway.resolveDeferred("connect");
@@ -90,18 +91,20 @@ suite.define(() => {
             .getByText(destinationText, { exact: true })
             .waitFor({ state: "visible" });
         }
-        await expectRequestCountStable(gateway, "chat.startup", navigateAway ? 0 : 1, 500, {
-          sessionKey: destinationKey,
-        });
-        expect(await gateway.getRequests("chat.history", { sessionKey: destinationKey })).toEqual(
-          [],
+        await expectRequestCountStable(
+          gateway,
+          "chat.startup",
+          navigateAway ? 0 : 1,
+          500,
+          destinationMatch,
         );
+        expect(await requests("chat.history", destinationMatch)).toEqual([]);
         expect(new URL(page.url()).pathname).toBe(navigateAway ? "/activity" : destinationPath);
         expect(await page.evaluate(() => history.length)).toBe(
           initialHistoryLength + (navigateAway ? 2 : 1),
         );
-        expect(await gateway.getRequests("sessions.resolve", resolutionMatch)).toHaveLength(
-          navigateAway ? 1 : 2,
+        expect(await requests("sessions.resolve", resolutionMatch)).toHaveLength(
+          initialTitleResolutions + (navigateAway ? 1 : 2),
         );
         expect(await page.locator(".lazy-view-error").count()).toBe(0);
       });

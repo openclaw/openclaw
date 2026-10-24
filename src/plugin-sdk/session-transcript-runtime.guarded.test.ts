@@ -46,11 +46,9 @@ import {
   readSessionTranscriptEvents as readEvents,
   readVisibleSessionTranscriptMessageEntries as readEntries,
   type SessionTranscriptReadParams,
-  appendSessionTranscriptMessageByIdentity,
+  appendSessionTranscriptMessageByIdentity as appendMessage,
   readLatestAssistantTextByIdentity,
-  readSessionTranscriptEvents,
   readSessionTranscriptRawDelta,
-  readVisibleSessionTranscriptMessageEntries,
 } from "./session-transcript-runtime.js";
 
 describe("guarded session transcript runtime SDK", () => {
@@ -112,19 +110,14 @@ describe("guarded session transcript runtime SDK", () => {
   it("appends and replays an ordered incognito group with explicit env", async () => {
     const { scope, persistedScope } = await seed("incognito");
     const messages = [
-      {
-        eventId: "batch-assistant",
-        idempotencyLookup: "scan" as const,
-        message: { role: "assistant", content: "checking", idempotencyKey: "batch:assistant" },
-        now: 1_000,
-      },
-      {
-        eventId: "batch-result",
-        idempotencyLookup: "scan" as const,
-        message: { role: "toolResult", content: "done", idempotencyKey: "batch:result" },
-        now: 2_000,
-      },
-    ];
+      ["assistant", "checking", "assistant"],
+      ["toolResult", "done", "result"],
+    ].map(([role, content, key], index) => ({
+      eventId: `batch-${key}`,
+      idempotencyLookup: "scan" as const,
+      message: { role, content, idempotencyKey: `batch:${key}` },
+      now: (index + 1) * 1_000,
+    }));
     const appended = await appendGroup({ ...scope, messages });
     const replayed = await appendGroup({ ...scope, messages });
     expect(appended.map((result) => result.appended)).toEqual([true, true]);
@@ -208,20 +201,15 @@ describe("guarded session transcript runtime SDK", () => {
       expect.objectContaining({ type: "session" }),
       expect.objectContaining({ type: "message", message }),
     ]);
-    await expect(superseded(() => appendStrict({ ...scope, message }))).resolves.toEqual({
-      kind: "rejected",
-      reason: "session-rebound",
-    });
+    const rebound = { kind: "rejected", reason: "session-rebound" };
+    await expect(superseded(() => appendStrict({ ...scope, message }))).resolves.toEqual(rebound);
     await upsertSessionEntryCore(persistedScope, {
       sessionId: "replacement-session",
       updatedAt: 20,
     });
     await expect(
-      appendStrict({
-        ...scope,
-        message: { role: "assistant", content: "stale" },
-      }),
-    ).resolves.toEqual({ kind: "rejected", reason: "session-rebound" });
+      appendStrict({ ...scope, message: { role: "assistant", content: "stale" } }),
+    ).resolves.toEqual(rebound);
     await expect(readEvents(persistedScope)).resolves.toEqual(events);
     await expect(
       readEvents({ ...persistedScope, sessionId: "replacement-session" }),
@@ -253,7 +241,7 @@ describe("session transcript runtime read fence", () => {
     const rows = [];
     for (const [index, content] of ["prompt", "prior", "prompt", "current"].entries()) {
       const now = (index + 1) * 1_000;
-      const row = await appendSessionTranscriptMessageByIdentity({
+      const row = await appendMessage({
         ...scope,
         message: { role: index % 2 ? "assistant" : "user", content, timestamp: now },
         now,
@@ -271,35 +259,32 @@ describe("session transcript runtime read fence", () => {
     };
   }
 
+  const rawDelta = (cursor?: string) =>
+    readSessionTranscriptRawDelta({ ...scope, cursor, maxBytes: 100_000, maxEvents: 100 });
+
   it("fences full and raw reads before the exact admitted row and resumes from its cursor", async () => {
     const { priorUser, priorAssistant, admitted, receipt } = await seedHistory();
     const page = await runWithSessionTranscriptReadFence(receipt, async () => {
-      const events = await readSessionTranscriptEvents(scope);
+      const events = await readEvents(scope);
       expect(loadTranscriptEventsSync(scope)).toEqual(events);
       expect(events).toEqual([
         expect.objectContaining({ type: "session" }),
         expect.objectContaining({ id: priorUser.messageId }),
         expect.objectContaining({ id: priorAssistant.messageId }),
       ]);
-      expect(
-        (await readVisibleSessionTranscriptMessageEntries(scope)).map((entry) => entry.entryId),
-      ).toEqual([priorUser.messageId, priorAssistant.messageId]);
+      expect((await readEntries(scope)).map((entry) => entry.entryId)).toEqual([
+        priorUser.messageId,
+        priorAssistant.messageId,
+      ]);
       await expect(readLatestAssistantTextByIdentity(scope)).resolves.toMatchObject({
         id: priorAssistant.messageId,
         text: "prior",
       });
-      return readSessionTranscriptRawDelta({ ...scope, maxBytes: 100_000, maxEvents: 100 });
+      return rawDelta();
     });
     assert(page.kind === "page");
     expect(page.hasMore).toBe(false);
-    await expect(
-      readSessionTranscriptRawDelta({
-        ...scope,
-        cursor: page.cursor,
-        maxBytes: 100_000,
-        maxEvents: 100,
-      }),
-    ).resolves.toMatchObject({
+    await expect(rawDelta(page.cursor)).resolves.toMatchObject({
       kind: "page",
       events: [
         { event: { id: admitted.messageId, message: { content: "prompt" } } },
@@ -380,7 +365,7 @@ describe("session transcript runtime read fence", () => {
       ).toThrow(SessionTranscriptReadFenceError);
       await expect(
         runWithSessionTranscriptReadFence(invalid as unknown as typeof receipt, () =>
-          readSessionTranscriptEvents(scope),
+          readEvents(scope),
         ),
       ).rejects.toBeInstanceOf(SessionTranscriptReadFenceError);
     }

@@ -355,6 +355,9 @@ export async function applyShortTermPromotions(
           existingMemory,
           candidates: toAppend,
           ...(options.consolidation.model ? { model: options.consolidation.model } : {}),
+          ...(typeof options.consolidation.timeoutMs === "number"
+            ? { timeoutMs: options.consolidation.timeoutMs }
+            : {}),
           maxPriorEntryLossFraction,
           memoryFileMaxChars: budgetChars,
           ...(typeof options.maxPromotedSnippetTokens === "number"

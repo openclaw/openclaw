@@ -12,13 +12,12 @@ import type {
 } from "./fs-bridge-path-safety.js";
 import type { SandboxResolvedFsPath } from "./fs-paths.js";
 
-// Plans carry path-safety checks alongside the command so rechecks and execution stay coupled.
+// Plans carry path-safety checks alongside the command so checks and execution stay coupled.
 export type SandboxFsCommandPlan = {
   checks: PathSafetyCheck[];
   script: string;
   args?: string[];
   stdin?: Buffer | string;
-  recheckBeforeCommand?: boolean;
   allowFailure?: boolean;
 };
 
@@ -151,7 +150,6 @@ export function buildPinnedMutationPlan(operation: CheckedPinnedOperation): Sand
   const args = buildPinnedMutationArgs(operation);
   return {
     checks,
-    recheckBeforeCommand: true,
     // -c executes reliably on older Python builds while stdin carries payload bytes.
     script: [
       "set -eu",

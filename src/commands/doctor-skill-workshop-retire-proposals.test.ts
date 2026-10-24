@@ -26,13 +26,9 @@ const RETIRED_TABLES = `
     FOREIGN KEY (proposal_id) REFERENCES skill_workshop_proposals(proposal_id) ON DELETE CASCADE
   ) STRICT;
   CREATE TABLE skill_workshop_proposal_rollbacks (
-    proposal_id TEXT NOT NULL PRIMARY KEY,
-    written_at TEXT NOT NULL,
-    target_skill_file TEXT NOT NULL,
+    proposal_id TEXT NOT NULL PRIMARY KEY, written_at TEXT NOT NULL, target_skill_file TEXT NOT NULL,
     action TEXT NOT NULL CHECK (action IN ('create', 'update')),
-    previous_content_hash TEXT,
-    previous_content TEXT,
-    support_files_json TEXT,
+    previous_content_hash TEXT, previous_content TEXT, support_files_json TEXT,
     FOREIGN KEY (proposal_id) REFERENCES skill_workshop_proposals(proposal_id) ON DELETE CASCADE
   ) STRICT;
   CREATE TABLE skill_workshop_collection_reviews (
@@ -47,6 +43,78 @@ function write(filePath: string, content: string) {
   fs.writeFileSync(filePath, content);
 }
 
+function writeFiles(dir: string, files: Record<string, string>) {
+  for (const [file, content] of Object.entries(files)) {
+    write(path.join(dir, file), content);
+  }
+}
+
+const read = (...parts: string[]) => fs.readFileSync(path.join(...parts), "utf8");
+const retiredTablesMessage = "Retired the Skill Workshop proposal tables.";
+
+function fixture(options: { opsOnly?: boolean; workspace?: boolean } = {}) {
+  const root = tempDirs.make("openclaw-retire-");
+  const stateDir = path.join(root, "state");
+  const env = { HOME: root, OPENCLAW_STATE_DIR: stateDir };
+  const mainDir = path.join(root, "main-agent");
+  const opsDir = path.join(root, "ops-agent");
+  const opsWorkspace = path.join(root, "ops-workspace");
+  const entries: NonNullable<OpenClawConfig["agents"]>["entries"] = {
+    ...(!options.opsOnly ? { main: { agentDir: mainDir } } : {}),
+    ops: { agentDir: opsDir, ...(options.workspace ? { workspace: opsWorkspace } : {}) },
+  };
+  const config: OpenClawConfig = { agents: { entries } };
+  const proposalsDir = path.join(stateDir, "skill-workshop", "proposals");
+  const exportsFor = (agentDir: string) =>
+    path.join(agentDir, "workshop-skills", ".archive", ".retired-proposals");
+  const skillDir = path.join(opsWorkspace, "skills", "deploy");
+  return {
+    env,
+    mainDir,
+    opsWorkspace,
+    config,
+    proposalsDir,
+    mainExports: exportsFor(mainDir),
+    opsExports: exportsFor(opsDir),
+    skillDir,
+    skillFile: path.join(skillDir, "SKILL.md"),
+  };
+}
+
+function rollbackFixture(
+  files: Array<[path: string, proposed: string, previous: string | null]>,
+  action: "create" | "update" = "update",
+  previousHash: string | null = null,
+  draftFile?: string,
+) {
+  const setup = fixture({ opsOnly: true });
+  const { env, skillDir, skillFile } = setup;
+  const record = {
+    draftFile,
+    target: { skillDir, skillFile },
+    supportFiles: files.map(([file, proposed]) => ({ path: file, hash: sha256Hex(proposed) })),
+  };
+  const supportFiles = files.map(([file, , previousContent]) => ({
+    path: file,
+    existed: previousContent !== null,
+    previousContent,
+  }));
+  const db = openOpenClawStateDatabase({ env }).db;
+  db.exec(RETIRED_TABLES);
+  db.prepare(
+    "INSERT INTO skill_workshop_proposals VALUES ('deploy-procedure-1', ?, 'ops', 'pending')",
+  ).run(JSON.stringify(record));
+  db.prepare(`INSERT INTO skill_workshop_proposal_rollbacks VALUES
+    ('deploy-procedure-1', '2026-01-01T00:00:00.000Z', ?, ?, ?, ?, ?)`).run(
+    skillFile,
+    action,
+    previousHash,
+    action === "create" ? null : "# Before\n",
+    JSON.stringify(supportFiles),
+  );
+  return setup;
+}
+
 function retiredTableNames(env: NodeJS.ProcessEnv) {
   return openOpenClawStateDatabase({ env })
     .db.prepare(
@@ -57,17 +125,7 @@ function retiredTableNames(env: NodeJS.ProcessEnv) {
 }
 
 it("exports pending drafts from retired tables and legacy files, then drops the tables once", async () => {
-  const root = tempDirs.make("openclaw-retire-proposals-");
-  const stateDir = path.join(root, "state");
-  const env = { HOME: root, OPENCLAW_STATE_DIR: stateDir };
-  const mainDir = path.join(root, "main-agent");
-  const opsDir = path.join(root, "ops-agent");
-  const config: OpenClawConfig = {
-    agents: { entries: { main: { agentDir: mainDir }, ops: { agentDir: opsDir } } },
-  };
-  const proposalsDir = path.join(stateDir, "skill-workshop", "proposals");
-  const mainExports = path.join(mainDir, "workshop-skills", ".archive", ".retired-proposals");
-  const opsExports = path.join(opsDir, "workshop-skills", ".archive", ".retired-proposals");
+  const { env, config, proposalsDir, mainExports, opsExports } = fixture();
 
   openOpenClawStateDatabase({ env }).db.exec(`
     ${RETIRED_TABLES}
@@ -78,18 +136,15 @@ it("exports pending drafts from retired tables and legacy files, then drops the 
     INSERT INTO skill_workshop_proposal_events (proposal_id) VALUES ('pending-procedure-1');
     INSERT INTO skill_workshop_collection_reviews VALUES ('review', 'main', 1);
   `);
-  write(path.join(proposalsDir, "pending-procedure-1", GENERATION, "PROPOSAL.md"), "# Pending\n");
-  write(
-    path.join(proposalsDir, "pending-procedure-1", GENERATION, "references", "notes.md"),
-    "notes\n",
-  );
-  write(path.join(proposalsDir, "quarantined-procedure-1", "PROPOSAL.md"), "# Quarantined\n");
-  write(path.join(proposalsDir, "applied-procedure-1", "PROPOSAL.md"), "# Applied\n");
-  write(
-    path.join(proposalsDir, "legacy-procedure-1", "proposal.json"),
-    '{"status":"pending","draftFile":"PROPOSAL.md","origin":{"sessionKey":"agent:main:main"}}',
-  );
-  write(path.join(proposalsDir, "legacy-procedure-1", "PROPOSAL.md"), "# Legacy\n");
+  writeFiles(proposalsDir, {
+    [`pending-procedure-1/${GENERATION}/PROPOSAL.md`]: "# Pending\n",
+    [`pending-procedure-1/${GENERATION}/references/notes.md`]: "notes\n",
+    "quarantined-procedure-1/PROPOSAL.md": "# Quarantined\n",
+    "applied-procedure-1/PROPOSAL.md": "# Applied\n",
+    "legacy-procedure-1/proposal.json":
+      '{"status":"pending","draftFile":"PROPOSAL.md","origin":{"sessionKey":"agent:main:main"}}',
+    "legacy-procedure-1/PROPOSAL.md": "# Legacy\n",
+  });
   // An earlier export is never overwritten.
   write(path.join(mainExports, "quarantined-procedure-1", "SKILL.md"), "# Kept export\n");
 
@@ -97,13 +152,12 @@ it("exports pending drafts from retired tables and legacy files, then drops the 
     changes: [
       `Exported 1 pending Skill Workshop proposal draft to ${opsExports}${path.sep}.`,
       `Exported 1 pending Skill Workshop proposal draft to ${mainExports}${path.sep}.`,
-      "Retired the Skill Workshop proposal tables.",
+      retiredTablesMessage,
       `Removed retired Skill Workshop proposal files from ${proposalsDir}.`,
     ],
     warnings: [],
   });
 
-  const read = (...parts: string[]) => fs.readFileSync(path.join(...parts), "utf8");
   expect(read(opsExports, "pending-procedure-1", "SKILL.md")).toBe("# Pending\n");
   expect(read(opsExports, "pending-procedure-1", "references", "notes.md")).toBe("notes\n");
   expect(read(mainExports, "quarantined-procedure-1", "SKILL.md")).toBe("# Kept export\n");
@@ -121,45 +175,70 @@ it("exports pending drafts from retired tables and legacy files, then drops the 
   });
 });
 
-it("keeps legacy bundles without a provable owner, record, or draft until every bundle is exported", async () => {
-  const root = tempDirs.make("openclaw-retire-legacy-proposals-");
-  const stateDir = path.join(root, "state");
-  const env = { HOME: root, OPENCLAW_STATE_DIR: stateDir };
-  const opsDir = path.join(root, "ops-agent");
-  const opsWorkspace = path.join(root, "ops-workspace");
-  const config: OpenClawConfig = {
-    agents: {
-      entries: {
-        main: { agentDir: path.join(root, "main-agent") },
-        ops: { agentDir: opsDir, workspace: opsWorkspace },
+it.each(["proposal", "rollback"])(
+  "keeps malformed UTF-8 %s bytes out of workspace recovery",
+  async (damaged) => {
+    const { env, config, proposalsDir, skillDir, skillFile, opsExports } = fixture({
+      workspace: true,
+    });
+    const bundle = path.join(proposalsDir, "deploy-procedure-1");
+    const records = {
+      proposal: {
+        status: "pending",
+        origin: { agentId: "ops" },
+        target: { skillDir, skillFile },
+        supportFiles: [{ path: "references/notes.md", hash: sha256Hex("proposed\n") }],
+        note: "damaged",
       },
-    },
-  };
-  const proposalsDir = path.join(stateDir, "skill-workshop", "proposals");
-  const opsExports = path.join(opsDir, "workshop-skills", ".archive", ".retired-proposals");
+      rollback: {
+        targetSkillFile: skillFile,
+        previousContent: "before\n",
+        supportFiles: [
+          { path: "references/notes.md", existed: true, previousContent: "damaged\n" },
+        ],
+      },
+    };
+    writeFiles(bundle, {
+      "PROPOSAL.md": "# Deploy\n",
+      "proposal.json": JSON.stringify(records.proposal),
+      "rollback.json": JSON.stringify(records.rollback),
+    });
+    const source = path.join(bundle, `${damaged}.json`);
+    const bytes = fs.readFileSync(source);
+    bytes[bytes.indexOf("damaged")] = 0xff;
+    fs.writeFileSync(source, bytes);
+    writeFiles(skillDir, { "SKILL.md": "before\n", "references/notes.md": "proposed\n" });
+
+    const result = await retireSkillWorkshopProposals({ config, env });
+
+    expect(result).toMatchObject({ changes: [], warningDisposition: "recoverable" });
+    expect(result.warnings.join("\n")).toContain("must be valid UTF-8");
+    expect(read(skillFile)).toBe("before\n");
+    expect(read(skillDir, "references/notes.md")).toBe("proposed\n");
+    expect(fs.readFileSync(source)).toEqual(bytes);
+    expect(fs.existsSync(opsExports)).toBe(false);
+  },
+);
+
+it("keeps legacy bundles without a provable owner, record, or draft until every bundle is exported", async () => {
+  const { env, config, proposalsDir, opsWorkspace, opsExports } = fixture({ workspace: true });
   const bundle = (id: string, record?: object) => {
     write(path.join(proposalsDir, id, "PROPOSAL.md"), `# ${id}\n`);
     if (record) {
       write(path.join(proposalsDir, id, "proposal.json"), JSON.stringify(record));
     }
   };
-  // The legacy target skill sits in ops' workspace, which names its owner.
   bundle("workspace-procedure-1", {
     status: "pending",
     target: { skillDir: path.join(opsWorkspace, "skills", "deploy") },
   });
   bundle("unowned-procedure-1", { status: "quarantined" });
   bundle("orphan-procedure-1");
-  // A lost draft must not take its remaining support files down with the bundle.
-  write(
-    path.join(proposalsDir, "draftless-procedure-1", "proposal.json"),
-    JSON.stringify({
-      status: "pending",
-      origin: { agentId: "ops" },
-      supportFiles: [{ path: "references/notes.md" }],
-    }),
-  );
-  write(path.join(proposalsDir, "draftless-procedure-1", "references", "notes.md"), "notes\n");
+  writeFiles(path.join(proposalsDir, "draftless-procedure-1"), {
+    "proposal.json":
+      '{"status":"pending","origin":{"agentId":"ops"},"supportFiles":[{"path":"references/notes.md"}]}',
+    "references/notes.md": "notes\n",
+  });
 
   const first = await retireSkillWorkshopProposals({ config, env });
   expect(first.changes).toEqual([
@@ -171,9 +250,7 @@ it("keeps legacy bundles without a provable owner, record, or draft until every 
     expect.stringMatching(/^Skill Workshop proposal draftless-procedure-1 has no draft; kept /),
     expect.stringMatching(/^Skill Workshop proposal orphan-procedure-1 has no record;/),
   ]);
-  expect(fs.readFileSync(path.join(opsExports, "workspace-procedure-1", "SKILL.md"), "utf8")).toBe(
-    "# workspace-procedure-1\n",
-  );
+  expect(read(opsExports, "workspace-procedure-1", "SKILL.md")).toBe("# workspace-procedure-1\n");
   expect(fs.readdirSync(proposalsDir).toSorted()).toEqual([
     "draftless-procedure-1",
     "orphan-procedure-1",
@@ -182,9 +259,9 @@ it("keeps legacy bundles without a provable owner, record, or draft until every 
   ]);
 
   // After the operator resolves the flagged bundles, the legacy tree is retired.
-  fs.rmSync(path.join(proposalsDir, "draftless-procedure-1"), { recursive: true });
-  fs.rmSync(path.join(proposalsDir, "orphan-procedure-1"), { recursive: true });
-  fs.rmSync(path.join(proposalsDir, "unowned-procedure-1"), { recursive: true });
+  for (const id of ["draftless-procedure-1", "orphan-procedure-1", "unowned-procedure-1"]) {
+    fs.rmSync(path.join(proposalsDir, id), { recursive: true });
+  }
   await expect(retireSkillWorkshopProposals({ config, env })).resolves.toEqual({
     changes: [`Removed retired Skill Workshop proposal files from ${proposalsDir}.`],
     warnings: [],
@@ -235,132 +312,51 @@ it.each([
   expect(retiredTableNames(env)).toEqual([]);
 });
 
-it("undoes an apply that stopped before SKILL.md, then retires its rollback", async () => {
-  const root = tempDirs.make("openclaw-retire-unfinished-apply-");
-  const stateDir = path.join(root, "state");
-  const env = { HOME: root, OPENCLAW_STATE_DIR: stateDir };
-  const opsDir = path.join(root, "ops-agent");
-  const config: OpenClawConfig = { agents: { entries: { ops: { agentDir: opsDir } } } };
-  const skillDir = path.join(root, "ops-workspace", "skills", "deploy");
-  const skillFile = path.join(skillDir, "SKILL.md");
-  const record = {
-    draftFile: "PROPOSAL.md",
-    target: { skillDir, skillFile },
-    supportFiles: [
-      { path: "references/replaced.md", hash: sha256Hex("new replaced\n") },
-      { path: "references/added.md", hash: sha256Hex("new added\n") },
-    ],
-  };
-  const rollbackSupport = [
-    { path: "references/replaced.md", existed: true, previousContent: "old replaced\n" },
-    { path: "references/added.md", existed: false },
-  ];
-  const database = openOpenClawStateDatabase({ env }).db;
-  database.exec(RETIRED_TABLES);
-  database
-    .prepare(
-      "INSERT INTO skill_workshop_proposals VALUES ('deploy-procedure-1', ?, 'ops', 'pending')",
-    )
-    .run(JSON.stringify(record));
-  database
-    .prepare(
-      `INSERT INTO skill_workshop_proposal_rollbacks VALUES
-        ('deploy-procedure-1', '2026-01-01T00:00:00.000Z', ?, 'update', ?, '# Before\n', ?)`,
-    )
-    .run(skillFile, sha256Hex("# Before\n"), JSON.stringify(rollbackSupport));
-  const bundleDir = path.join(stateDir, "skill-workshop", "proposals", "deploy-procedure-1");
-  write(path.join(bundleDir, "PROPOSAL.md"), "# Draft\n");
-  write(path.join(bundleDir, "references", "replaced.md"), "new replaced\n");
-  write(path.join(bundleDir, "references", "added.md"), "new added\n");
-  // The apply wrote both support files, then stopped before its last write, SKILL.md.
-  write(skillFile, "# Before\n");
-  write(path.join(skillDir, "references", "replaced.md"), "new replaced\n");
-  write(path.join(skillDir, "references", "added.md"), "new added\n");
-
-  const result = await retireSkillWorkshopProposals({ config, env });
-
-  expect(result.warnings).toEqual([]);
-  expect(result.changes).toContain(
-    `Restored ${skillDir} from the unfinished apply of Skill Workshop proposal deploy-procedure-1.`,
-  );
-  expect(result.changes).toContain("Retired the Skill Workshop proposal tables.");
-  expect(fs.readFileSync(skillFile, "utf8")).toBe("# Before\n");
-  expect(fs.readFileSync(path.join(skillDir, "references", "replaced.md"), "utf8")).toBe(
-    "old replaced\n",
-  );
-  expect(fs.existsSync(path.join(skillDir, "references", "added.md"))).toBe(false);
-  expect(retiredTableNames(env)).toEqual([]);
-});
-
-it("frees the skill name when it undoes a create that stopped before SKILL.md", async () => {
-  const root = tempDirs.make("openclaw-retire-unfinished-create-");
-  const stateDir = path.join(root, "state");
-  const env = { HOME: root, OPENCLAW_STATE_DIR: stateDir };
-  const config: OpenClawConfig = {
-    agents: { entries: { ops: { agentDir: path.join(root, "ops-agent") } } },
-  };
-  const skillDir = path.join(root, "ops-workspace", "skills", "deploy");
-  const skillFile = path.join(skillDir, "SKILL.md");
-  const record = {
-    target: { skillDir, skillFile },
-    supportFiles: [{ path: "references/notes.md", hash: sha256Hex("proposed\n") }],
-  };
-  const database = openOpenClawStateDatabase({ env }).db;
-  database.exec(RETIRED_TABLES);
-  database
-    .prepare(
-      "INSERT INTO skill_workshop_proposals VALUES ('deploy-procedure-1', ?, 'ops', 'pending')",
-    )
-    .run(JSON.stringify(record));
-  database
-    .prepare(
-      `INSERT INTO skill_workshop_proposal_rollbacks VALUES
-        ('deploy-procedure-1', '2026-01-01T00:00:00.000Z', ?, 'create', NULL, NULL, ?)`,
-    )
-    .run(skillFile, JSON.stringify([{ path: "references/notes.md", existed: false }]));
-  write(path.join(skillDir, "references", "notes.md"), "proposed\n");
-
-  const result = await retireSkillWorkshopProposals({ config, env });
-
-  expect(result.changes).toContain("Retired the Skill Workshop proposal tables.");
-  expect(fs.existsSync(skillDir)).toBe(false);
-});
-
-async function retireUnfinishedApply(live: { skill: string; support: string }) {
-  const root = tempDirs.make("openclaw-retire-unfinished-apply-");
-  const stateDir = path.join(root, "state");
-  const env = { HOME: root, OPENCLAW_STATE_DIR: stateDir };
-  const config: OpenClawConfig = {
-    agents: { entries: { ops: { agentDir: path.join(root, "ops-agent") } } },
-  };
-  const skillDir = path.join(root, "ops-workspace", "skills", "deploy");
-  const skillFile = path.join(skillDir, "SKILL.md");
-  const supportFile = path.join(skillDir, "references", "notes.md");
-  const record = {
-    target: { skillDir, skillFile },
-    supportFiles: [{ path: "references/notes.md", hash: sha256Hex("proposed\n") }],
-  };
-  const database = openOpenClawStateDatabase({ env }).db;
-  database.exec(RETIRED_TABLES);
-  database
-    .prepare(
-      "INSERT INTO skill_workshop_proposals VALUES ('deploy-procedure-1', ?, 'ops', 'pending')",
-    )
-    .run(JSON.stringify(record));
-  database
-    .prepare(
-      `INSERT INTO skill_workshop_proposal_rollbacks VALUES
-        ('deploy-procedure-1', '2026-01-01T00:00:00.000Z', ?, 'update', NULL, '# Before\n', ?)`,
-    )
-    .run(
-      skillFile,
-      JSON.stringify([{ path: "references/notes.md", existed: true, previousContent: "before\n" }]),
+it.each<"update" | "create">(["update", "create"])(
+  "undoes a %s stopped before SKILL.md",
+  async (action) => {
+    const updating = action === "update";
+    const files: Parameters<typeof rollbackFixture>[0] = updating
+      ? [
+          ["references/replaced.md", "new replaced\n", "old replaced\n"],
+          ["references/added.md", "new added\n", null],
+        ]
+      : [["references/notes.md", "proposed\n", null]];
+    const { env, config, proposalsDir, skillDir, skillFile } = rollbackFixture(
+      files,
+      action,
+      updating ? sha256Hex("# Before\n") : null,
+      updating ? "PROPOSAL.md" : undefined,
     );
-  write(skillFile, live.skill);
-  write(supportFile, live.support);
-  const result = await retireSkillWorkshopProposals({ config, env });
-  return { result, env, skillDir, skillFile, supportFile };
-}
+    const proposed = Object.fromEntries(files.map(([file, content]) => [file, content]));
+    if (updating) {
+      writeFiles(path.join(proposalsDir, "deploy-procedure-1"), {
+        "PROPOSAL.md": "# Draft\n",
+        ...proposed,
+      });
+      write(skillFile, "# Before\n");
+    }
+    // The apply wrote support files, then stopped before its last write, SKILL.md.
+    writeFiles(skillDir, proposed);
+
+    const result = await retireSkillWorkshopProposals({ config, env });
+    expect(result.changes).toContain(retiredTablesMessage);
+    expect(retiredTableNames(env)).toEqual([]);
+    if (updating) {
+      expect(result.warnings).toEqual([]);
+      expect(result.changes).toContain(
+        `Restored ${skillDir} from the unfinished apply of Skill Workshop proposal deploy-procedure-1.`,
+      );
+      expect([read(skillFile), read(skillDir, "references", "replaced.md")]).toEqual([
+        "# Before\n",
+        "old replaced\n",
+      ]);
+      expect(fs.existsSync(path.join(skillDir, "references", "added.md"))).toBe(false);
+    } else {
+      expect(fs.existsSync(skillDir)).toBe(false);
+    }
+  },
+);
 
 it.each([
   {
@@ -374,30 +370,32 @@ it.each([
     live: { skill: "# Proposed\n", support: "before\n" },
     cause: () => "SKILL.md is past its pre-apply content but its support files are not",
   },
-])("keeps the rollback when $state", async ({ live, cause }) => {
-  const { result, env, skillDir, skillFile, supportFile } = await retireUnfinishedApply(live);
-
-  expect(result.changes).toEqual([]);
-  expect(result.warningDisposition).toBe("recoverable");
-  expect(result.warnings).toContainEqual(
-    expect.stringContaining(
-      `Could not undo the unfinished apply of Skill Workshop proposal deploy-procedure-1 in ${skillDir}: Error: ${cause(supportFile)}.`,
-    ),
-  );
-  expect(fs.readFileSync(skillFile, "utf8")).toBe(live.skill);
-  expect(fs.readFileSync(supportFile, "utf8")).toBe(live.support);
-  expect(retiredTableNames(env)).not.toEqual([]);
-});
-
-it("retires the rollback of an apply that finished before its status commit", async () => {
-  const live = { skill: "# Proposed\n", support: "proposed\n" };
-  const { result, env, skillFile, supportFile } = await retireUnfinishedApply(live);
-
-  expect(result.warnings).toEqual([
-    "Skill Workshop proposal deploy-procedure-1 has no draft left to export; retired its record.",
+  {
+    state: "the apply finished before its status commit",
+    live: { skill: "# Proposed\n", support: "proposed\n" },
+    cause: undefined,
+  },
+])("preserves live files when $state", async ({ live, cause }) => {
+  const { env, config, skillDir, skillFile } = rollbackFixture([
+    ["references/notes.md", "proposed\n", "before\n"],
   ]);
-  expect(result.changes).toContain("Retired the Skill Workshop proposal tables.");
-  expect(fs.readFileSync(skillFile, "utf8")).toBe(live.skill);
-  expect(fs.readFileSync(supportFile, "utf8")).toBe(live.support);
-  expect(retiredTableNames(env)).toEqual([]);
+  const supportFile = path.join(skillDir, "references", "notes.md");
+  writeFiles(skillDir, { "SKILL.md": live.skill, "references/notes.md": live.support });
+  const result = await retireSkillWorkshopProposals({ config, env });
+
+  if (cause) {
+    expect(result).toMatchObject({ changes: [], warningDisposition: "recoverable" });
+    expect(result.warnings).toContainEqual(
+      expect.stringContaining(
+        `Could not undo the unfinished apply of Skill Workshop proposal deploy-procedure-1 in ${skillDir}: Error: ${cause(supportFile)}.`,
+      ),
+    );
+  } else {
+    expect(result.warnings).toEqual([
+      "Skill Workshop proposal deploy-procedure-1 has no draft left to export; retired its record.",
+    ]);
+    expect(result.changes).toContain(retiredTablesMessage);
+  }
+  expect([read(skillFile), read(supportFile)]).toEqual([live.skill, live.support]);
+  expect(retiredTableNames(env).length > 0).toBe(Boolean(cause));
 });

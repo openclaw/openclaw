@@ -1,12 +1,15 @@
+import { listen } from "./reactive/listener.ts";
+
 export function createIdleImport<T>(importModule: () => Promise<T>, onLoaded?: (value: T) => void) {
   let moduleLoad: Promise<T> | null = null;
   let active = false;
   let onlineRetryAttempted = false;
+  let stopOnline: (() => void) | undefined;
 
   const run = (): Promise<T> => {
     moduleLoad ??= importModule()
       .then((value) => {
-        window.removeEventListener("online", start);
+        stopOnline?.();
         onLoaded?.(value);
         return value;
       })
@@ -16,7 +19,7 @@ export function createIdleImport<T>(importModule: () => Promise<T>, onLoaded?: (
         if (!active) {
           throw error;
         }
-        window.addEventListener("online", start, { once: true });
+        stopOnline = listen(window, "online", start, { once: true });
         if (navigator.onLine && !onlineRetryAttempted) {
           onlineRetryAttempted = true;
           scheduleIdle();
@@ -46,7 +49,7 @@ export function createIdleImport<T>(importModule: () => Promise<T>, onLoaded?: (
 
   const dispose = () => {
     active = false;
-    window.removeEventListener("online", start);
+    stopOnline?.();
   };
 
   return {

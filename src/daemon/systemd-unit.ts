@@ -112,7 +112,7 @@ function assertNoSystemdLineBreaks(value: string, label: string): void {
 
 function systemdEscapeArg(value: string): string {
   assertNoSystemdLineBreaks(value, "Systemd unit values");
-  if (!/[\s"'\\]/.test(value)) {
+  if (value.length > 0 && !/[\s"'\\]/.test(value)) {
     return value;
   }
   // systemd ExecStart/Environment parsing consumes one backslash before the next

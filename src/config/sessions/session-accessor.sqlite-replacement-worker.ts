@@ -59,7 +59,6 @@ export type SessionEntryWorkerPreparation = (
 ) => {
   prepare: () => Promise<void>;
   beforeWrite: () => void;
-  release: () => Promise<void>;
 };
 
 export async function withSessionEntryWorker<T>(
@@ -89,6 +88,7 @@ export async function withSessionEntryWorker<T>(
   releaseSource?: () => void | Promise<void>,
   operationMode: "write" | "prepared-read" = "write",
   expectedCreationIdentity?: DatabasePathIdentity,
+  concurrentBoardReads?: "transcript-only",
 ): Promise<T> {
   let execution: OpenClawAgentDatabaseExecution;
   let env: SessionEntryCommitContext["env"];
@@ -257,7 +257,6 @@ export async function withSessionEntryWorker<T>(
         : await runOpenClawAgentWorkerWrite(
             options,
             () => {
-              preparation?.beforeWrite();
               const writingExecution: OpenClawAgentDatabaseExecution = {
                 ...execution,
                 get fileIdentity() {
@@ -267,7 +266,10 @@ export async function withSessionEntryWorker<T>(
                   // Lend the existing scope so a failed read unwinds before native cleanup.
                   return execution.runExisting(
                     readSource,
-                    (worker) => withWriterReads(worker, () => operation(worker)),
+                    (worker) => {
+                      preparation?.beforeWrite();
+                      return withWriterReads(worker, () => operation(worker));
+                    },
                     readOptions,
                   );
                 },
@@ -276,6 +278,9 @@ export async function withSessionEntryWorker<T>(
             },
             undefined,
             signal,
+            undefined,
+            undefined,
+            concurrentBoardReads,
           );
     if (operationMode === "prepared-read") {
       assertHeld();
@@ -285,13 +290,10 @@ export async function withSessionEntryWorker<T>(
     outcome = { ok: false, error };
   }
   const cleanupErrors: unknown[] = [];
-  for (const cleanup of [
-    () => releaseSource?.(),
-    () => preparation?.release(),
-    () => (retainedExecution ? undefined : execution.release()),
-  ]) {
+  const releaseExecution = retainedExecution ? undefined : () => execution.release();
+  for (const cleanup of [releaseSource, releaseExecution]) {
     try {
-      await cleanup();
+      await cleanup?.();
     } catch (error) {
       cleanupErrors.push(error);
     }
@@ -543,15 +545,11 @@ export async function runSessionEntryWorkerMutation<T>(
             storePath: execution.path,
             databaseIdentity: identity,
           });
-          const outcome = await run(worker).then(
-            (value) => ({ ok: true as const, value }),
-            (error: unknown) => ({ ok: false as const, error }),
-          );
+          const outcome = await run(worker).then(ok, err<never, unknown>);
           if (outcome.ok) {
             completed = outcome.value;
           }
-          // Keep the executing scope and FIFO writer through native publication settlement.
-          // Close joins this callback; a delayed result cannot borrow a successor owner.
+          // Close joins publication and FIFO scope; late results cannot borrow a successor.
           if (await settle(publication, identity)) {
             throwSessionWorkerOutcomeUnknown(
               unknownMessage,
@@ -601,6 +599,8 @@ export async function runSessionEntryWorkerMutation<T>(
             ([key]) => !committed.unavailableParticipantKeys?.includes(key),
           ),
         ),
+        committed.conversationPublication,
+        committed.fullEntries,
       );
     },
     executionOptions.retainedExecution,

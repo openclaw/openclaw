@@ -3,7 +3,7 @@ import {
   throwSqliteLifecycleErrors,
 } from "../../infra/sqlite-lifecycle-errors.js";
 import { runSqliteReadOperationSync } from "../../infra/sqlite-schema-facts.js";
-import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
+import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
 import {
   assertExistingDatabaseIdentity,
   readDatabasePathIdentitySync,
@@ -116,7 +116,7 @@ export function prepareSessionColdSourceGuard(
       const readPredicate = () =>
         readSessionSourceValidation(reader, [predicate], undefined, foreign ? undefined : entries);
       const current = foreign
-        ? runSqliteDeferredTransactionSync(reader.db, () =>
+        ? runSqliteReadSnapshotSync(reader.db, () =>
             runSqliteReadOperationSync(reader.db, readPredicate),
           )
         : readPredicate();

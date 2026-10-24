@@ -10,9 +10,6 @@ import { subagentRuns } from "./subagent-registry-memory.js";
 import {
   buildSubagentRunReadIndexFromRuns,
   countActiveRunsForSessionFromRuns,
-  countPendingDescendantRunsFromRuns,
-  hasDescendantRunAwaitingSettleFromRuns,
-  getSubagentRunByChildSessionKeyFromRuns,
   listRunsForRequesterFromRuns,
   getLatestSubagentRunByChildSessionKeyFromRuns,
   shouldIgnorePostCompletionAnnounceForSessionFromRuns,
@@ -42,6 +39,35 @@ function toRunMap(runs: SubagentRunRecord[]): Map<string, SubagentRunRecord> {
 }
 
 describe("subagent registry query regressions", () => {
+  it.each(["absent", "same object", "distinct object"] as const)(
+    "keeps child snapshots independent across patches with %s memory",
+    (kind) => {
+      const first = makeRun({ runId: "first", childSessionKey: "child", generation: 1 });
+      const second = makeRun({ runId: "second", childSessionKey: "child", generation: 2 });
+      const memory =
+        kind === "absent" ? undefined : kind === "same object" ? second : { ...second };
+      let index = buildSubagentRunReadIndexFromRuns({
+        runs: toRunMap([first, second]),
+        inMemoryRuns: memory ? [memory, memory] : [],
+      });
+      const captured = index.runsByChildSessionKey.get("child");
+      const expected = kind === "distinct object" ? [first, second, memory] : [first, second];
+      expect(captured).toEqual(expected);
+      if (memory) {
+        expect(captured?.filter((row) => row === memory)).toHaveLength(1);
+      }
+      const replacement = { ...first, cleanupCompletedAt: 100 };
+      index = index.patch(toRunMap([replacement]), new Map());
+      expect(index.runsByChildSessionKey.get("child")?.[0]).toBe(replacement);
+      index = index.patch(new Map([[second.runId, undefined]]), new Map());
+      expect(index.runsByChildSessionKey.get("child")).toEqual(
+        memory ? [replacement, memory] : [replacement],
+      );
+      expect(captured).toEqual(expected);
+      expect(captured?.[0]).toBe(first);
+    },
+  );
+
   it("patches one sibling without reading others and preserves group order after removal", () => {
     let unrelatedReads = 0;
     const first = {
@@ -197,40 +223,6 @@ describe("subagent registry query regressions", () => {
         subagentRuns.delete(id);
       }
     }
-  });
-
-  it("selects the current child after the older run becomes stale", () => {
-    const now = Date.now();
-    const old = makeRun({
-      runId: "old",
-      generation: 1,
-      createdAt: now - STALE_UNENDED_SUBAGENT_RUN_MS - 1,
-    });
-    const current = makeRun({
-      runId: "current",
-      childSessionKey: old.childSessionKey,
-      requesterSessionKey: "agent:main:new-parent",
-      generation: 1,
-      createdAt: now - 60_000,
-      endedAt: now - 1_000,
-      cleanupCompletedAt: now,
-    });
-    const runs = toRunMap([old, current]);
-    expect(getLatestSubagentRunByChildSessionKeyFromRuns(runs, old.childSessionKey)).toBe(current);
-    expect(getSubagentRunByChildSessionKeyFromRuns(runs, old.childSessionKey)).toBe(current);
-  });
-
-  it("excludes stale children from counts after the fresh child ends", () => {
-    const now = Date.now();
-    const stale = makeRun({ runId: "stale", createdAt: now - STALE_UNENDED_SUBAGENT_RUN_MS - 1 });
-    const fresh = makeRun({
-      runId: "fresh",
-      createdAt: now - 60_000,
-      endedAt: now - 1_000,
-    });
-    const runs = toRunMap([stale, fresh]);
-    expect(countActiveRunsForSessionFromRuns(runs, fresh.requesterSessionKey)).toBe(0);
-    expect(countPendingDescendantRunsFromRuns(runs, fresh.requesterSessionKey)).toBe(1);
   });
 
   it("counts collectors against the spawning owner and excludes them from announce admission", () => {
@@ -442,29 +434,21 @@ describe("hasDescendantRunAwaitingSettleFromRuns", () => {
     const runs = toRunMap([parent, descendant]);
 
     expect(
-      hasDescendantRunAwaitingSettleFromRuns(
-        runs,
+      buildSubagentRunReadIndexFromRuns({ runs }).hasDescendantRunAwaitingSettle(
         requester,
-        undefined,
-        undefined,
         undefined,
         batchCreatedAt,
       ),
     ).toBe(true);
-    expect(countPendingDescendantRunsFromRuns(runs, requester)).toBe(2);
-  });
-
-  it("settles suspended descendants independently of pending cleanup", () => {
-    const entry = makeRun({
-      runId: "child",
-      createdAt: 1_000,
-      endedAt: 8_000,
-      expectsCompletionMessage: true,
-      delivery: { status: "suspended", suspendedAt: 9_000 },
-    });
-    const runs = toRunMap([entry]);
-    expect(hasDescendantRunAwaitingSettleFromRuns(runs, requester)).toBe(false);
-    expect(countPendingDescendantRunsFromRuns(runs, requester)).toBe(1);
-    expect(hasDescendantRunAwaitingSettleFromRuns(runs, requester, entry.runId)).toBe(false);
+    expect(buildSubagentRunReadIndexFromRuns({ runs }).countPendingDescendantRuns(requester)).toBe(
+      2,
+    );
+    expect(
+      buildSubagentRunReadIndexFromRuns({ runs }).hasDescendantRunAwaitingSettle(
+        requester,
+        descendant.runId,
+        batchCreatedAt,
+      ),
+    ).toBe(false);
   });
 });

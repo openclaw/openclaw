@@ -1,12 +1,10 @@
-import { Command } from "commander";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { isPidAlive, runUtf8CommandWithTimeout } from "openclaw/plugin-sdk/process-runtime";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import type { MemoryDB } from "./lancedb-store.js";
-import { registerMemoryCli } from "./memory-cli.js";
+import { afterEach, assert, expect, it, vi } from "vitest";
+import { createMemoryCliHarness } from "./memory-cli.test-support.js";
 import { readMemoryStats } from "./memory-stats.js";
 
+const readStats = (dbPath: string) => readMemoryStats({ dbPath }, "main");
 const transport = vi.hoisted(() => ({
   moduleUrl: "",
   onOutput: undefined as ((chunk: Buffer) => void) | undefined,
@@ -18,30 +16,23 @@ vi.mock("openclaw/plugin-sdk/process-runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/process-runtime")>();
   return {
     ...actual,
-    runUtf8CommandWithTimeout: vi.fn(
-      (argv: string[], options: Parameters<typeof actual.runUtf8CommandWithTimeout>[1]) => {
-        if (typeof options === "number") {
-          throw new Error("Expected the stats reader's process options");
-        }
-        const pending = actual.runUtf8CommandWithTimeout(argv, {
-          ...options,
-          input: JSON.stringify({
-            ...JSON.parse(String(options.input)),
-            moduleUrl: transport.moduleUrl,
-          }),
-          onOutputChunk: (chunk) => transport.onOutput?.(chunk),
-          signal: transport.controller.signal,
-        });
-        transport.pending.add(pending);
-        void pending.finally(() => transport.pending.delete(pending)).catch(() => {});
-        return pending;
-      },
-    ),
+    runUtf8CommandWithTimeout: vi.fn<typeof actual.runUtf8CommandWithTimeout>((argv, options) => {
+      assert(typeof options !== "number", "Expected the stats reader's process options");
+      const input = { ...JSON.parse(String(options.input)), moduleUrl: transport.moduleUrl };
+      const pending = actual.runUtf8CommandWithTimeout(argv, {
+        ...options,
+        input: JSON.stringify(input),
+        onOutputChunk: (chunk) => transport.onOutput?.(chunk),
+        signal: transport.controller.signal,
+      });
+      transport.pending.add(pending);
+      void pending.finally(() => transport.pending.delete(pending)).catch(() => {});
+      return pending;
+    }),
   };
 });
 
-// Substitute only the native dependency; the registered command, child program,
-// deadline, process termination, output decoding, and schema checks remain real.
+// Only the native dependency is fake; the stats command and child lifecycle remain real.
 transport.moduleUrl = `data:text/javascript,${encodeURIComponent(`
 import { writeSync } from "node:fs";
 function hold() {
@@ -79,93 +70,66 @@ afterEach(async () => {
   vi.restoreAllMocks();
 });
 
-describe("memory-lancedb statistics", () => {
-  it("runs the registered stats command outside the shared database and keeps agent scope", async () => {
-    const program = new Command();
-    const embed = vi.fn();
-    const registerCli = vi.fn();
-    const log = vi.spyOn(console, "log").mockImplementation(() => {});
-    registerMemoryCli(
-      { registerCli } as unknown as OpenClawPluginApi,
-      {
-        count: () => {
-          throw new Error("in-process native count must not run");
-        },
-      } as unknown as MemoryDB,
-      { embed, close: async () => {} },
-      (agent) => String(agent),
-      () => ({
-        embedding: { provider: "openai", model: "text-embedding-3-small" },
-        captureMaxChars: 500,
-        recallMaxChars: 1000,
-      }),
-      { dbPath: "populated", storageOptions: { fixture: "stdin-only" } },
+it("runs the registered stats command outside the shared database and keeps agent scope", async () => {
+  const log = vi.spyOn(console, "log").mockImplementation(() => {});
+  const { run, embed } = createMemoryCliHarness({
+    statsSource: { dbPath: "populated", storageOptions: { fixture: "stdin-only" } },
+  });
+  await run("stats", "--agent", "main's");
+
+  expect(log).toHaveBeenCalledWith("Total memories: 7");
+  expect(embed).not.toHaveBeenCalled();
+});
+
+it("reports an empty database without creating a table", async () => {
+  await expect(readStats("empty")).resolves.toBe(0);
+});
+
+it.each([
+  ["legacy", "openclaw doctor --fix"],
+  ["failed", "fixture database unavailable"],
+])("preserves the %s database diagnostic", async (dbPath, message) => {
+  await expect(readStats(dbPath)).rejects.toThrow(message);
+});
+
+it.each(["connect-stall", "count-stall"])(
+  "terminates %s before reporting timeout",
+  async (dbPath) => {
+    const timers = vi.spyOn(globalThis, "setTimeout");
+    const ready = createDeferred<number>();
+    let output = "";
+    transport.onOutput = (chunk) => {
+      output += chunk.toString();
+      const match = /ready:(\d+)\n/.exec(output);
+      if (match) {
+        ready.resolve(Number(match[1]));
+      }
+    };
+    const rejected = expect(readStats(dbPath)).rejects.toThrow(
+      "statistics timed out after 60 seconds",
     );
-    const registrar = registerCli.mock.calls[0]?.[0] as
-      | ((context: { program: Command }) => void)
-      | undefined;
-    if (!registrar) {
-      throw new Error("Expected the memory CLI registrar");
-    }
-    registrar({ program });
+    const pid = await ready.promise;
+    expect(isPidAlive(pid)).toBe(true);
 
-    await program.parseAsync(["node", "openclaw", "ltm", "stats", "--agent", "main's"]);
+    const deadline = timers.mock.calls.find(([, delay]) => delay === 60_000);
+    expect(deadline).toBeDefined();
+    // Advance only the command deadline. OS teardown still uses its real exit events.
+    const [fire, , ...args] = deadline!;
+    fire(...args);
+    await rejected;
+    expect(isPidAlive(pid)).toBe(false);
+  },
+);
 
-    expect(log).toHaveBeenCalledWith("Total memories: 7");
-    expect(embed).not.toHaveBeenCalled();
+it("does not claim cancellation succeeded when process cleanup is uncertain", async () => {
+  vi.mocked(runUtf8CommandWithTimeout).mockResolvedValueOnce({
+    stdout: "",
+    stderr: "",
+    code: null,
+    signal: null,
+    killed: true,
+    termination: "timeout",
+    cleanup: "uncertain",
   });
-
-  it("reports an empty database without creating a table", async () => {
-    await expect(readMemoryStats({ dbPath: "empty" }, "main")).resolves.toBe(0);
-  });
-
-  it.each([
-    ["legacy", "openclaw doctor --fix"],
-    ["failed", "fixture database unavailable"],
-  ])("preserves the %s database diagnostic", async (dbPath, message) => {
-    await expect(readMemoryStats({ dbPath }, "main")).rejects.toThrow(message);
-  });
-
-  it.each(["connect-stall", "count-stall"])(
-    "stops a reader blocked in %s before reporting the deadline",
-    async (dbPath) => {
-      const timers = vi.spyOn(globalThis, "setTimeout");
-      const ready = createDeferred<number>();
-      let output = "";
-      transport.onOutput = (chunk) => {
-        output += chunk.toString();
-        const match = /ready:(\d+)\n/.exec(output);
-        if (match) {
-          ready.resolve(Number(match[1]));
-        }
-      };
-      const running = readMemoryStats({ dbPath }, "main");
-      const rejected = expect(running).rejects.toThrow("statistics timed out after 60 seconds");
-      const pid = await ready.promise;
-      expect(isPidAlive(pid)).toBe(true);
-
-      const deadline = timers.mock.calls.find(([, delay]) => delay === 60_000);
-      expect(deadline).toBeDefined();
-      // Advance only the command deadline. OS teardown still uses its real exit events.
-      const [fire, , ...args] = deadline!;
-      fire(...args);
-      await rejected;
-      expect(isPidAlive(pid)).toBe(false);
-    },
-  );
-
-  it("does not claim cancellation succeeded when process cleanup is uncertain", async () => {
-    vi.mocked(runUtf8CommandWithTimeout).mockResolvedValueOnce({
-      stdout: "",
-      stderr: "",
-      code: null,
-      signal: null,
-      killed: true,
-      termination: "timeout",
-      cleanup: "uncertain",
-    });
-    await expect(readMemoryStats({ dbPath: "unavailable" }, "main")).rejects.toThrow(
-      "process cleanup could not be confirmed",
-    );
-  });
+  await expect(readStats("unavailable")).rejects.toThrow("process cleanup could not be confirmed");
 });

@@ -32,12 +32,14 @@ export function inferenceError(
   reason: Extract<WorkerInferenceTerminalOutcome, { type: "error" }>["reason"],
   usage?: Usage,
   message: string = ERROR_MESSAGES[reason],
+  retryAfterMs?: number | null,
 ): WorkerInferenceTerminalOutcome {
   return {
     type: "error",
     reason,
     message,
     ...(usage ? { usage: structuredClone(usage) } : {}),
+    ...(retryAfterMs === undefined ? {} : { retryAfterMs }),
   };
 }
 

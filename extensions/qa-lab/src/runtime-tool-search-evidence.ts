@@ -14,8 +14,6 @@ type QaToolSearchDiscoveryReceipt = {
   searchCallStatus?: string;
   searchOutputExecution: string;
   searchOutputStatus: string;
-  discoveredNamespace: string;
-  discoveredTool: string;
   targetCallId: string;
   targetNamespace: string;
   targetTool: string;
@@ -80,8 +78,6 @@ function readToolSearchDiscoveryReceipt(
     ...(searchCallStatus ? { searchCallStatus } : {}),
     searchOutputExecution,
     searchOutputStatus,
-    discoveredNamespace: targetNamespace,
-    discoveredTool: targetTool,
     targetCallId,
     targetNamespace,
     targetTool,
@@ -98,7 +94,7 @@ export function formatToolSearchDiscoveryReceipt(
     `search=${receipt.searchCallId}`,
     `search-call=${receipt.searchCallExecution}${receipt.searchCallStatus ? `/${receipt.searchCallStatus}` : ""}`,
     `search-output=${receipt.searchOutputExecution}/${receipt.searchOutputStatus}`,
-    `discovered=${receipt.discoveredNamespace}.${receipt.discoveredTool}`,
+    `discovered=${receipt.targetNamespace}.${receipt.targetTool}`,
     `target=${receipt.targetNamespace}.${receipt.targetTool}#${receipt.targetCallId}`,
     `success=${receipt.targetSuccess}`,
   ].join(" ");

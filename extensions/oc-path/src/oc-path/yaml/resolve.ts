@@ -5,6 +5,7 @@ import {
   parseArrayIndexSegment,
   resolvePositionalSeg,
   splitOcPathSlots,
+  unquoteSeg,
 } from "../oc-path.js";
 import type { YamlAst } from "./ast.js";
 
@@ -14,7 +15,7 @@ type YamlOcPathMatch =
       | { readonly kind: "scalar"; readonly value: unknown }
       | { readonly kind: "map" }
       | { readonly kind: "seq" }
-      | { readonly kind: "pair"; readonly key: string; readonly value: unknown }
+      | { readonly kind: "pair"; readonly value: unknown }
     ));
 
 export function resolveYamlOcPath(ast: YamlAst, path: OcPath): YamlOcPathMatch | null {
@@ -36,9 +37,9 @@ function walkNode(
   if (node === null) {
     return null;
   }
-  let seg = segments[i];
+  const rawSeg = segments[i];
 
-  if (seg === undefined) {
+  if (rawSeg === undefined) {
     if (isMap(node)) {
       return { kind: "map", node, path: walked };
     }
@@ -50,12 +51,13 @@ function walkNode(
     }
     return null;
   }
-  if (seg.length === 0) {
+  let seg = unquoteSeg(rawSeg);
+  if (rawSeg.length === 0) {
     return null;
   }
 
-  if (isPositionalSeg(seg)) {
-    const concrete = resolveYamlPositionalSegment(node, seg);
+  if (isPositionalSeg(rawSeg)) {
+    const concrete = resolveYamlPositionalSegment(node, rawSeg);
     if (concrete !== null) {
       seg = concrete;
     }
@@ -75,7 +77,6 @@ function walkNode(
       return {
         kind: "pair",
         node: pair.value,
-        key: seg,
         value: pair.value.value,
         path: childWalked,
       };

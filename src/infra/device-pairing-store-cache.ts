@@ -1,9 +1,8 @@
-import { createHash } from "node:crypto";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
-import type { DevicePairingStoreState, PairedDevice } from "./device-pairing.types.js";
+import type { DevicePairingStoreState } from "./device-pairing.types.js";
 import type { EngineConnection } from "./sql-connection.js";
 import { readSqliteDatabaseWriteRevision } from "./sqlite-database-admission.js";
-import { runSqliteDeferredTransactionSync } from "./sqlite-transaction.js";
+import { runSqliteReadSnapshotSync } from "./sqlite-transaction.js";
 
 type DevicePairingStoreCache = {
   connection: EngineConnection;
@@ -11,6 +10,7 @@ type DevicePairingStoreCache = {
   state: DevicePairingStoreState;
   writeRevision: number;
   revision: string;
+  deviceId?: string;
 };
 
 // Writer settlement invalidates snapshots across connections and worker isolates.
@@ -28,28 +28,15 @@ export function invalidateDevicePairingStoreCache(database: {
   }
 }
 
-/** A content revision is comparable across reader and writer connections. */
-export function resolveDevicePairingStoreRevision(paired: Record<string, PairedDevice>): string {
-  return createHash("sha256")
-    .update(
-      JSON.stringify(
-        Object.values(paired).toSorted((a, b) =>
-          a.deviceId < b.deviceId ? -1 : a.deviceId > b.deviceId ? 1 : 0,
-        ),
-      ),
-    )
-    .digest("hex");
-}
-
 /** Borrowed worker facts; projections must not mutate this revision's cached rows. */
 export function readCachedDevicePairingStoreSnapshot(
   db: EngineConnection,
   path: string,
-  read: () => DevicePairingStoreState,
+  read: () => Pick<DevicePairingStoreCache, "state" | "revision">,
+  deviceId?: string,
 ): Pick<DevicePairingStoreCache, "state" | "revision"> {
   if (db.isTransaction) {
-    const state = read();
-    return { state, revision: resolveDevicePairingStoreRevision(state.pairedByDeviceId) };
+    return read();
   }
   const writeRevision = readSqliteDatabaseWriteRevision(db);
   const cached = cache.value;
@@ -57,17 +44,20 @@ export function readCachedDevicePairingStoreSnapshot(
     writeRevision !== undefined &&
     cached?.connection === db &&
     cached.path === path &&
-    cached.writeRevision === writeRevision
+    cached.writeRevision === writeRevision &&
+    (cached.deviceId === undefined || cached.deviceId === deviceId)
   ) {
     return cached;
   }
-  const state = runSqliteDeferredTransactionSync(db, read, {
-    operationLabel: "devicePairing.snapshot",
-  });
-  const revision = resolveDevicePairingStoreRevision(state.pairedByDeviceId);
-  const snapshot = { state, revision };
-  if (writeRevision !== undefined && readSqliteDatabaseWriteRevision(db) === writeRevision) {
-    cache.value = { connection: db, path, ...snapshot, writeRevision };
+  const snapshot =
+    deviceId === undefined
+      ? runSqliteReadSnapshotSync(db, read, {
+          operationLabel: "devicePairing.snapshot",
+        })
+      : read();
+  if (writeRevision !== undefined) {
+    // A commit during the read retires this captured revision on the next lookup.
+    cache.value = { connection: db, path, ...snapshot, writeRevision, deviceId };
   }
   return snapshot;
 }

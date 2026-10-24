@@ -1,150 +1,134 @@
 import { describe, expect, it, vi } from "vitest";
 import type { QuestionWaitAnswerResult } from "../../../packages/gateway-protocol/src/index.js";
-import { createDeferred, withTestTimeout } from "../../../test/helpers/promise.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+  withTestTimeout,
+} from "../../../test/helpers/promise.js";
 import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import {
   claimEmbeddedPendingUserInputAnswer,
   steerActiveSessionWithOptionalDeliveryWait,
 } from "../../agents/embedded-agent-runner/run/attempt-queue-message.js";
-import type { AgentQuestionDispatcher } from "../../agents/harness/gateway-question-dispatch.js";
+import { expectPendingQuestionAnswerClaimable } from "../../agents/harness/gateway-question-claim.test-support.js";
+import {
+  QuestionAnswerUnconfirmedError,
+  type AgentQuestionDispatcher,
+} from "../../agents/harness/gateway-question-dispatch.js";
 import { registerPendingAgentQuestion } from "../../agents/harness/gateway-question.js";
 import {
   callGatewayTool,
   withQuestionGateway,
 } from "../../agents/harness/gateway-question.test-support.js";
-import type { GatewayQuestionCall } from "../../agents/tools/gateway-question-lifecycle.js";
-import {
-  updateSessionEntry,
-  upsertSessionEntryCore,
-} from "../../config/sessions/session-accessor.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-run-registry.js";
-import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
+import type { ReplyBackendQueueMessageResult } from "../../sessions/session-controller.contracts.js";
+import { getSessionControllerOperation } from "../../sessions/session-controller.js";
+import { captureSessionControllerSourceSettlement } from "../../sessions/session-controller.mailbox.js";
 import { runReplyQuestionInput } from "./agent-runner-question-input.js";
-import { runReplyAgent } from "./agent-runner-run.js";
 import { runActiveReplySteer } from "./agent-runner-steer-adoption.js";
-import { MessageInjectionTargetUnavailableError } from "./message-injection-authority.js";
+import {
+  attachSteerBackend,
+  createSteerParams,
+} from "./agent-runner-steer-adoption.test-support.js";
 import { enqueueFollowupRun, type FollowupRun } from "./queue.js";
-import { createQueueTestRun } from "./queue.test-helpers.js";
-import { clearFollowupDrainCallback } from "./queue/drain.js";
-import { clearFollowupQueue, getExistingFollowupQueue } from "./queue/state.js";
+import { clearSessionQueues } from "./queue/cleanup.js";
+import { getExistingFollowupQueue } from "./queue/state.js";
 import {
   REPLY_OPERATION_RUN_STATE,
   type ReplyOperationRunState,
 } from "./reply-operation-run-state.js";
 import { withQuestionCreator } from "./reply-run-question.test-support.js";
-import type { ReplyBackendQueueMessageResult } from "./reply-run-registry.contracts.js";
-import { replyRunRegistry } from "./reply-run-registry.js";
-import { prepareSteeringDelivery } from "./steering-delivery-preparation.js";
-import { createMockTypingController } from "./test-helpers.js";
-import { createTypingSignaler } from "./typing-mode.js";
+import { createQueueTestRun } from "./reply-tool-authority.test-support.js";
 
 const text = "candidate committed answer";
 type QueueOptions = Parameters<typeof steerActiveSessionWithOptionalDeliveryWait>[2];
+type SteerParams = Parameters<typeof runActiveReplySteer>[0];
 
-// A V1 translator built against v2026.8.2's closed request schemas. The real
-// transport/manager still commits and answers; only new receipt fields are absent.
-const legacyGateway: GatewayQuestionCall = (method, options, params, extra) => {
-  const input = params as Record<string, unknown>;
-  const forwarded =
-    method === "question.resolve"
-      ? { id: input.id, answers: input.answers, resolvedBy: input.resolvedBy }
-      : method === "question.waitAnswer"
-        ? { id: input.id, timeoutMs: input.timeoutMs }
-        : params;
-  return callGatewayTool(method, options, forwarded, extra);
-};
+function expectNotCalled(...mocks: ReturnType<typeof vi.fn>[]) {
+  for (const mock of mocks) {
+    expect(mock).not.toHaveBeenCalled();
+  }
+}
 
-// Old wire schemas do not remove the modern host's final-dispatch obligation.
-const legacyDispatcher: AgentQuestionDispatcher = {
-  version: 2,
-  call: ({ method, options, params, signal, authority }) =>
-    legacyGateway(method, options, params, {
-      signal,
-      ...(authority.kind === "source-bound"
-        ? { dispatchAuthority: { version: 2, ...authority } }
-        : {}),
+function startSteer(
+  key: string,
+  run: FollowupRun,
+  operation: SteerParams["providedReplyOperation"],
+  followup: SteerParams["runFollowup"],
+  state?: ReplyOperationRunState,
+) {
+  return runActiveReplySteer(
+    createSteerParams(key, run, operation, {
+      replyOperationRunState: state,
+      restartRecoverySourceTurnId: run.messageId,
+      runFollowup: followup,
     }),
-};
+  );
+}
 
 describe("question response custody through reply adoption", () => {
-  it("leaves unmatched hidden-run input in visible FIFO followups", async () => {
+  it("leaves unmatched hidden-run input in visible FIFO followups", async ({ signal }) => {
     const key = "agent:main:hidden-followup";
     const first = createQueueTestRun({ prompt: "first input", messageId: "hidden-first" });
-    await withQuestionCreator(key, first, async (operation, fingerprint) => {
-      const queueMessage = vi.fn(async () => {});
-      const firstEntered = createDeferred();
-      const releaseFirst = createDeferred();
-      const followup = vi.fn(async (run: FollowupRun) => {
-        if (run.messageId === first.messageId) {
-          firstEntered.resolve();
-          await releaseFirst.promise;
-        }
-      });
-      operation.attachBackend({
-        kind: "embedded",
-        runId: "accepted-backing-work",
-        toolAuthorityFingerprint: fingerprint,
-        cancel: vi.fn(),
-        messageInjectionV2: {
-          version: 2,
-          isAvailable: () => true,
+    const firstEntered = createDeferred();
+    const secondEntered = createDeferred();
+    const releaseFirst = createDeferred();
+    const followup = vi.fn(async (run: FollowupRun) => {
+      if (run.messageId === first.messageId) {
+        firstEntered.resolve();
+        await releaseFirst.promise;
+      } else {
+        secondEntered.resolve();
+      }
+    });
+    try {
+      await withQuestionCreator(key, first, async (operation, fingerprint) => {
+        const queueMessage = vi.fn(async () => {});
+        attachSteerBackend(operation, fingerprint, {
+          runId: "accepted-backing-work",
           queueMessage,
           claimPendingUserInputAnswer: (message, options, assertCurrent, kind) =>
             claimEmbeddedPendingUserInputAnswer(message, options, key, undefined, {
               kind,
               assertCurrent,
             }),
-        },
-      });
-      operation.setPhase("running");
-      registerAgentRunContext("accepted-backing-work", {
-        isControlUiVisible: false,
-        projectSessionMessages: false,
-      });
-      try {
+        });
+        registerAgentRunContext("accepted-backing-work", {
+          isControlUiVisible: false,
+          projectSessionMessages: false,
+        });
         for (const run of [
           first,
           { ...first, prompt: "second input", messageId: "hidden-second" },
         ]) {
           const state: ReplyOperationRunState = {};
-          const typing = createMockTypingController();
-          await runActiveReplySteer({
-            followupRun: run,
-            opts: undefined,
-            providedReplyOperation: operation,
-            queueKey: key,
-            releaseAdmissionTicket: () => {},
-            replyOperationRunState: state,
-            resolvedQueue: { mode: "steer", debounceMs: 0 },
-            restartRecoverySourceTurnId: run.messageId,
-            runFollowup: followup,
-            sessionCtx: {},
-            sessionKey: key,
-            touchActiveSessionEntry: async () => {},
-            typing,
-            typingSignals: createTypingSignaler({ typing, mode: "never", isHeartbeat: false }),
+          await startSteer(key, run, operation, followup, state);
+          expect(state.admission).toEqual({
+            status: "accepted",
+            mode: "followup",
+            reason: "steering-unavailable",
           });
-          expect(state.admission).toEqual({ status: "accepted", mode: "followup" });
         }
         expect(queueMessage).not.toHaveBeenCalled();
         operation.complete();
-        await withTestTimeout(firstEntered.promise, 1_000, "first followup was not dispatched");
-        expect(followup).toHaveBeenCalledOnce();
-        expect(followup.mock.calls[0]?.[0].prompt).toBe("first input");
-        releaseFirst.resolve();
-        await vi.waitFor(() => expect(followup).toHaveBeenCalledTimes(2));
-        expect(followup.mock.calls.map(([run]) => run.prompt)).toEqual([
-          "first input",
-          "second input",
-        ]);
-      } finally {
-        releaseFirst.resolve();
-        await Promise.allSettled(followup.mock.results.map((result) => result.value));
-        clearAgentRunContext("accepted-backing-work");
-        clearFollowupQueue(key);
-        clearFollowupDrainCallback(key);
-      }
-    });
+      });
+      // The creator callback retains real execution custody until it returns.
+      await withinTest(firstEntered.promise, signal);
+      expect(followup).toHaveBeenCalledOnce();
+      expect(followup.mock.calls[0]?.[0].prompt).toBe("first input");
+      releaseFirst.resolve();
+      await withinTest(secondEntered.promise, signal);
+      expect(followup.mock.calls.map(([run]) => run.prompt)).toEqual([
+        "first input",
+        "second input",
+      ]);
+    } finally {
+      releaseFirst.resolve();
+      await Promise.allSettled(followup.mock.results.map((result) => result.value));
+      clearAgentRunContext("accepted-backing-work");
+      clearSessionQueues([key]);
+    }
   });
 
   it("cancels a waiting steer without waiting for its predecessor's acceptance", async () => {
@@ -179,43 +163,19 @@ describe("question response custody through reply adoption", () => {
         // No acceptance callback yet: the next parked input must wait for this outcome.
         return firstOutcome.promise;
       });
-      operation.attachBackend({
-        kind: "embedded",
+      attachSteerBackend(operation, fingerprint, {
         runId: "accepted-backing-work",
-        toolAuthorityFingerprint: fingerprint,
-        cancel: vi.fn(),
-        messageInjectionV2: { version: 2, isAvailable: () => true, queueMessage },
+        queueMessage,
       });
-      operation.setPhase("running");
-      const startSteer = (run: FollowupRun) => {
-        const typing = createMockTypingController();
-        return runActiveReplySteer({
-          followupRun: run,
-          opts: undefined,
-          providedReplyOperation: operation,
-          queueKey: key,
-          releaseAdmissionTicket: () => {},
-          replyOperationRunState: undefined,
-          resolvedQueue: { mode: "steer", debounceMs: 0 },
-          restartRecoverySourceTurnId: run.messageId,
-          runFollowup: followup,
-          sessionCtx: {},
-          sessionKey: key,
-          touchActiveSessionEntry: async () => {},
-          typing,
-          typingSignals: createTypingSignaler({ typing, mode: "never", isHeartbeat: false }),
-        });
-      };
-      const firstSteer = startSteer(first);
+      const firstSteer = startSteer(key, first, operation, followup);
       let waitingSteer: ReturnType<typeof startSteer> | undefined;
       try {
-        await Promise.race([
+        await awaitGateBeforeSettlement(
           backendEntered.promise,
-          firstSteer.then(() => {
-            throw new Error("first steer did not reach backend injection");
-          }),
-        ]);
-        waitingSteer = startSteer(second);
+          firstSteer,
+          "first steer did not reach backend injection",
+        );
+        waitingSteer = startSteer(key, second, operation, followup);
         await secondDeferred.promise;
         source.abort(new Error("cancel source waiting for predecessor acceptance"));
         await expect(
@@ -223,9 +183,7 @@ describe("question response custody through reply adoption", () => {
         ).resolves.toBe("handled");
         expect(abandoned).toHaveBeenCalledOnce();
         expect(settled).toHaveBeenCalledOnce();
-        expect(adopted).not.toHaveBeenCalled();
-        expect(firstAdopted).not.toHaveBeenCalled();
-        expect(firstAbandoned).not.toHaveBeenCalled();
+        expectNotCalled(adopted, firstAdopted, firstAbandoned);
         expect(queueMessage.mock.calls.map(([message]) => message)).toEqual(["first input"]);
         expect(
           enqueueFollowupRun(
@@ -240,8 +198,7 @@ describe("question response custody through reply adoption", () => {
       } finally {
         firstOutcome.resolve();
         await Promise.allSettled([firstSteer, waitingSteer]);
-        clearFollowupQueue(key);
-        clearFollowupDrainCallback(key);
+        clearSessionQueues([key]);
       }
     });
   });
@@ -266,71 +223,49 @@ describe("question response custody through reply adoption", () => {
           onAbandoned: abandoned,
           onSettled: settled,
         };
-        operation.attachBackend({
-          kind: "embedded",
+        attachSteerBackend(operation, fingerprint, {
           runId: "accepted-backing-work",
-          toolAuthorityFingerprint: fingerprint,
           cancel,
-          messageInjectionV2: {
-            version: 2,
-            isAvailable: () => true,
-            queueMessage: (_message, options, assertCurrent) => {
-              assertCurrent();
-              options?.onQueueAccepted?.(true);
-              accepted.resolve();
-              return delivery.promise;
-            },
+          queueMessage: (_message, options, assertCurrent) => {
+            assertCurrent();
+            options?.onQueueAccepted?.(true);
+            accepted.resolve();
+            return delivery.promise;
           },
         });
-        operation.setPhase("running");
         const state: ReplyOperationRunState = {};
-        const typing = createMockTypingController();
-        const adoption = runActiveReplySteer({
-          followupRun: run,
-          opts: undefined,
-          providedReplyOperation: operation,
-          queueKey: key,
-          releaseAdmissionTicket: () => {},
-          replyOperationRunState: state,
-          resolvedQueue: { mode: "steer", debounceMs: 0 },
-          restartRecoverySourceTurnId: run.messageId,
-          runFollowup: followup,
-          sessionCtx: {},
-          sessionKey: key,
-          touchActiveSessionEntry: async () => {},
-          typing,
-          typingSignals: createTypingSignaler({ typing, mode: "never", isHeartbeat: false }),
-        });
+        const adoption = startSteer(key, run, operation, followup, state);
         void adoption.catch(() => undefined);
         const tryDuplicate = () =>
           enqueueFollowupRun(
             key,
-            createQueueTestRun({ prompt: text, messageId: run.messageId }),
+            {
+              ...createQueueTestRun({ prompt: text, messageId: run.messageId }),
+              run: { ...run.run },
+            },
             { mode: "followup", debounceMs: 0 },
             "message-id",
             followup,
             false,
           );
         try {
-          await Promise.race([
+          await awaitGateBeforeSettlement(
             accepted.promise,
-            adoption.then(() => {
-              throw new Error("steering finished before backend acceptance");
-            }),
-          ]);
+            adoption,
+            "steering finished before backend acceptance",
+          );
           if (confirmation !== "backend-error") {
             source.abort(new Error("source released while accepted input awaits confirmation"));
           }
           // The injection owner still holds this input; cancellation must not make it replayable.
-          expect(abandoned).not.toHaveBeenCalled();
-          expect(settled).not.toHaveBeenCalled();
-          expect(adopted).not.toHaveBeenCalled();
+          expectNotCalled(abandoned, settled, adopted);
           expect(tryDuplicate()).toBe(false);
           expect(followup).not.toHaveBeenCalled();
           const siblingSource = new AbortController();
           const siblingSettled = vi.fn();
           const siblingCleanup = vi.fn(async (_run: FollowupRun) => {});
           const sibling = createQueueTestRun({ prompt: "cancel sibling", messageId: "sibling" });
+          sibling.run = { ...run.run };
           sibling.abortSignal = siblingSource.signal;
           sibling.turnAdoptionLifecycle = { onAdopted: async () => {}, onSettled: siblingSettled };
           expect(
@@ -345,10 +280,10 @@ describe("question response custody through reply adoption", () => {
           ).toBe(true);
           // An ordinary source's sweep must also respect the parked injection owner.
           siblingSource.abort();
+          await captureSessionControllerSourceSettlement(sibling.controllerInput!);
           expect(siblingSettled).toHaveBeenCalledOnce();
           expect(siblingCleanup).toHaveBeenCalledExactlyOnceWith(sibling);
-          expect(abandoned).not.toHaveBeenCalled();
-          expect(settled).not.toHaveBeenCalled();
+          expectNotCalled(abandoned, settled);
           expect(tryDuplicate()).toBe(false);
           if (confirmation === "confirmed") {
             delivery.resolve();
@@ -376,16 +311,97 @@ describe("question response custody through reply adoption", () => {
           }
           expect(adopted).toHaveBeenCalledOnce();
           expect(settled).toHaveBeenCalledOnce();
-          expect(abandoned).not.toHaveBeenCalled();
+          expectNotCalled(abandoned, followup, cancel);
           expect(tryDuplicate()).toBe(false);
-          expect(followup).not.toHaveBeenCalled();
-          expect(cancel).not.toHaveBeenCalled();
           expect(operation.abortSignal.aborted).toBe(false);
         } finally {
           delivery.resolve();
           await adoption.catch(() => undefined);
-          clearFollowupQueue(key);
-          clearFollowupDrainCallback(key);
+          clearSessionQueues([key]);
+        }
+      });
+    },
+  );
+
+  it.for(["accepted", "rejected", "indeterminate"] as const)(
+    "injects the next native steer after an early ACK and keeps the first ahead through a %s outcome",
+    async (outcome, { signal }) => {
+      const key = "agent:main:steer-outcome-" + outcome;
+      const first = createQueueTestRun({ prompt: "first", messageId: "first" });
+      const wait = (gate: PromiseLike<unknown>, work: PromiseLike<unknown>, message: string) =>
+        withinTest(awaitGateBeforeSettlement(gate, work, message), signal);
+      await withQuestionCreator(key, first, async (operation, fingerprint) => {
+        // Construct before either call binds its immutable controller input.
+        const second: FollowupRun = { ...first, prompt: "second", messageId: "second" };
+        const accepted = createDeferred();
+        const nativeOutcome = createDeferred<void | ReplyBackendQueueMessageResult>();
+        const secondParked = createDeferred();
+        const secondQueued = createDeferred();
+        second.turnAdoptionLifecycle = {
+          onDeferred: () => secondParked.resolve(),
+          onAdopted: async () => {},
+        };
+        const abandoned = vi.fn();
+        first.turnAdoptionLifecycle = { onAdopted: async () => {}, onAbandoned: abandoned };
+        const followup = vi.fn(async (_run: FollowupRun) => {});
+        const queueMessage = vi.fn((message: string, options: QueueOptions) => {
+          if (message === "first") {
+            options?.onQueueAccepted?.(true);
+            accepted.resolve();
+            return nativeOutcome.promise;
+          }
+          secondQueued.resolve();
+          return Promise.resolve();
+        });
+        attachSteerBackend(operation, fingerprint, {
+          runId: "accepted-backing-work",
+          queueMessage,
+        });
+        const firstSteer = startSteer(key, first, operation, followup);
+        let secondSteer: ReturnType<typeof startSteer> | undefined;
+        try {
+          await wait(accepted.promise, firstSteer, "first steer ended before native acceptance");
+          secondSteer = startSteer(key, second, operation, followup);
+          await wait(
+            secondParked.promise,
+            secondSteer,
+            "second steer ended before source admission",
+          );
+          await wait(
+            secondQueued.promise,
+            secondSteer,
+            "second steer ended before backend injection",
+          );
+          // A native ACK is final FIFO placement: the owner holds the first input ahead
+          // of the next and never replays it. Its commit can depend on later input.
+          expect(queueMessage.mock.calls.map(([message]) => message)).toEqual(["first", "second"]);
+          expect(first.controllerInput?.injection?.accepted).toBe(true);
+          expect(first.controllerInput?.phase).toBe("injecting");
+          await expect(secondSteer).resolves.toBe("handled");
+          expect(first.controllerInput?.phase).toBe("injecting");
+          if (outcome === "accepted") {
+            nativeOutcome.resolve();
+          } else {
+            nativeOutcome.reject(
+              outcome === "indeterminate"
+                ? new QuestionAnswerUnconfirmedError("native input outcome unknown")
+                : new Error("native queue rejected after acceptance"),
+            );
+          }
+          await Promise.all([firstSteer, secondSteer]);
+          await Promise.all(
+            [first, second].map((run) =>
+              captureSessionControllerSourceSettlement(run.controllerInput!),
+            ),
+          );
+          expect(queueMessage.mock.calls.map(([message]) => message)).toEqual(["first", "second"]);
+          expectNotCalled(followup, abandoned);
+          expect(first.controllerInput?.phase).toBe("consumed");
+          expect(second.controllerInput?.phase).toBe("consumed");
+        } finally {
+          nativeOutcome.resolve();
+          await Promise.allSettled([firstSteer, secondSteer]);
+          clearSessionQueues([key]);
         }
       });
     },
@@ -472,7 +488,7 @@ describe("question response custody through reply adoption", () => {
             commandBody: text,
             followupRun: incoming,
             sessionKey: key,
-            sessionCtx: { Provider: "webchat" },
+            sessionCtx: { Provider: "webchat", SenderId: run.run.senderId },
             sessionEntry:
               change === "permission"
                 ? { sessionId: run.run.sessionId, updatedAt: 0, permissionMode: "guarded" }
@@ -482,11 +498,9 @@ describe("question response custody through reply adoption", () => {
           expect(operation.result).toBeNull();
           if (change === "legacy-dispatcher") {
             expect(result).toEqual({ handled: false });
-            expect(legacyCall).not.toHaveBeenCalled();
-            expect(adopted).not.toHaveBeenCalled();
-            expect(settled).not.toHaveBeenCalled();
+            expectNotCalled(legacyCall, adopted, settled);
             expect(state.admission).toBeUndefined();
-            expect(claim.isResolving()).toBe(false);
+            await expectPendingQuestionAnswerClaimable(key, true);
           } else if (change === "next-model") {
             expect(result).toEqual({ handled: true, payload: undefined });
             expect(committed).toHaveBeenCalledOnce();
@@ -498,10 +512,8 @@ describe("question response custody through reply adoption", () => {
               status: "skipped",
               reason: "question-response-refused",
             });
-            expect(committed).not.toHaveBeenCalled();
-            expect(adopted).not.toHaveBeenCalled();
-            expect(settled).not.toHaveBeenCalled();
-            expect(claim.isResolving()).toBe(false);
+            expectNotCalled(committed, adopted, settled);
+            await expectPendingQuestionAnswerClaimable(key, true);
           }
         } finally {
           claim.dispose();
@@ -510,363 +522,112 @@ describe("question response custody through reply adoption", () => {
     },
   );
 
-  it.each(
-    [
-      "delayed-receipt",
-      "failed-waiter",
-      "legacy-receipt",
-      "v1-negative",
-      "closed-adoption",
-      "confirmed-closed-adoption",
-      "late-receipt",
-    ].flatMap((mode) =>
-      (["steer", "reply"] as const)
-        .filter(
-          (entrypoint) => !["v1-negative", "late-receipt"].includes(mode) || entrypoint === "steer",
-        )
-        .flatMap((entrypoint) =>
-          (entrypoint === "steer" &&
-          ["failed-waiter", "legacy-receipt", "confirmed-closed-adoption"].includes(mode)
-            ? [false, true]
-            : [false]
-          ).map((hidden) => ({ entrypoint, mode, hidden })),
-        ),
-    ),
-  )(
-    "does not replay or abort independent work after $entrypoint/$mode (hidden=$hidden)",
-    async ({ entrypoint, mode, hidden }) => {
-      const key = `agent:main:question-recovery-${entrypoint}-${mode}-${hidden}`;
-      const id = `ask_recovery_${entrypoint}_${mode}_${hidden}`;
-      const run = createQueueTestRun({
-        prompt: text,
-        messageId: `recovery-${entrypoint}-${mode}-${hidden}`,
-      });
-      await withQuestionGateway(async (fixture) =>
-        withQuestionCreator(key, run, async (operation, fingerprint) => {
-          const receiptScope =
-            mode === "late-receipt"
-              ? {
-                  agentId: "main",
-                  sessionKey: key,
-                  storePath: resolveOpenClawAgentSqlitePath({ agentId: "main" }),
-                }
-              : undefined;
-          if (receiptScope) {
-            run.abortSignal = operation.abortSignal;
-            await upsertSessionEntryCore(receiptScope, {
-              sessionId: run.run.sessionId,
-              updatedAt: 1,
-            });
-          }
-          const hold = fixture.holdWaitAnswerResponse();
-          const call = mode === "legacy-receipt" ? legacyGateway : callGatewayTool;
-          const questions = [
-            { id: "answer", header: "Answer", question: "Continue?", isOther: true, options: [] },
-          ];
-          const claim = registerPendingAgentQuestion({
+  it("keeps source-bound input in visible FIFO when a V1 backend cannot answer a pending question", async ({
+    signal,
+  }) => {
+    const key = "agent:main:question-v1-fallback";
+    const id = "ask_v1_fallback";
+    const first = createQueueTestRun({ prompt: text, messageId: "v1-first" });
+    const firstEntered = createDeferred();
+    const secondEntered = createDeferred();
+    const releaseFirst = createDeferred();
+    const followup = vi.fn(async (run: FollowupRun) => {
+      if (run.messageId === first.messageId) {
+        firstEntered.resolve();
+        await releaseFirst.promise;
+      } else {
+        secondEntered.resolve();
+      }
+    });
+    await withQuestionGateway(async (fixture) => {
+      let claim: ReturnType<typeof registerPendingAgentQuestion> | undefined;
+      let answerOutcome: Promise<unknown> | undefined;
+      try {
+        await withQuestionCreator(key, first, async (operation, fingerprint) => {
+          // Construct both sources before either is bound to its controller input.
+          const second: FollowupRun = { ...first, prompt: "next input", messageId: "v1-second" };
+          const question = { header: "Answer", question: "Continue?", isOther: true, options: [] };
+          claim = registerPendingAgentQuestion({
             questionId: id,
             sessionKey: key,
-            questions,
-            gatewayCall: mode === "legacy-receipt" ? legacyDispatcher : undefined,
+            questions: [{ id: "answer", ...question }],
           });
-          const registration = call(
+          const registration = callGatewayTool(
             "question.request",
             {},
             {
               id,
               sessionKey: key,
               timeoutMs: 60_000,
-              questions: questions.map((question) => ({
-                questionId: question.id,
-                header: question.header,
-                question: question.question,
-                isOther: question.isOther,
-                options: question.options,
-              })),
+              questions: [{ questionId: "answer", ...question }],
             },
           );
           claim.attachRegistration(registration);
-          await registration;
-          const answer = call(
+          await withinTest(registration, signal);
+          const answer = callGatewayTool(
             "question.waitAnswer",
             { timeoutMs: 70_000 },
             { id, timeoutMs: 60_000, includeResolutionId: true },
           ) as Promise<QuestionWaitAnswerResult>;
-          const answerOutcome = answer.catch(() => undefined);
+          answerOutcome = answer.catch(() => undefined);
           claim.setAnswer(answer);
-          await fixture.waitStarted;
-          const abandoned = vi.fn();
-          const settled = vi.fn();
-          const adopted = vi.fn(async () => {
-            if (mode === "closed-adoption" || mode === "confirmed-closed-adoption") {
-              throw new Error("source adoption closed after dispatch");
-            }
-          });
-          run.turnAdoptionLifecycle = {
-            onAdopted: adopted,
-            onAbandoned: abandoned,
-            onSettled: settled,
-          };
+          await withinTest(fixture.waitStarted, signal);
           const cancel = vi.fn(() => fixture.backingRun.abort());
-          const nativeSteer = vi.fn(async () => {
-            throw new Error("unexpected ordinary steering of an answered question");
+          const queueMessage = vi.fn(async () => {
+            throw new Error("V1 backend must not receive source-bound question input");
           });
-          const subscribe = vi.fn(() => () => {});
-          const queue = async (
-            message: string,
-            options: QueueOptions,
-            assertCurrent: () => void,
-            kind: "run" | "source-bound",
-          ) => {
-            try {
-              if (receiptScope) {
-                assertCurrent();
-                await updateSessionEntry(receiptScope, () => ({
-                  restartRecoveryDeliveryReceiptState: "terminal-pending",
-                }));
-              }
-              return await steerActiveSessionWithOptionalDeliveryWait(
-                { steer: nativeSteer, subscribe },
-                message,
-                options,
-                key,
-                () => {
-                  assertCurrent();
-                  return true;
-                },
-                { kind, assertCurrent: () => assertCurrent() },
-              );
-            } catch (error) {
-              if (mode === "v1-negative") {
-                options?.onQueueAccepted?.(false);
-              }
-              throw error;
-            }
-          };
-          const assertCurrent = () => {
-            expect(replyRunRegistry.get(key)).toBe(operation);
-            operation.abortSignal.throwIfAborted();
-          };
           operation.attachBackend({
-            kind: entrypoint === "reply" ? "cli" : "embedded",
+            kind: "embedded",
             runId: "accepted-backing-work",
             toolAuthorityFingerprint: fingerprint,
+            supportsTranscriptCommitWait: true,
             cancel,
-            ...(entrypoint === "reply"
-              ? {}
-              : mode === "v1-negative"
-                ? {
-                    messageInjection: {
-                      isAvailable: () => true,
-                      queueMessage: (message, options) =>
-                        queue(message, options, assertCurrent, "run"),
-                    },
-                  }
-                : {
-                    messageInjectionV2: {
-                      version: 2 as const,
-                      isAvailable: () => true,
-                      queueMessage: queue,
-                      claimPendingUserInputAnswer: (message, options, current, kind) =>
-                        claimEmbeddedPendingUserInputAnswer(
-                          message,
-                          options,
-                          key,
-                          () => {
-                            current();
-                            return true;
-                          },
-                          { kind, assertCurrent: current },
-                        ),
-                    },
-                  }),
+            messageInjection: { isAvailable: () => true, queueMessage },
           });
           operation.setPhase("running");
-          if (hidden) {
-            registerAgentRunContext("accepted-backing-work", {
-              isControlUiVisible: false,
-              projectSessionMessages: false,
+          for (const run of [first, second]) {
+            const state: ReplyOperationRunState = {};
+            await withinTest(startSteer(key, run, operation, followup, state), signal);
+            expect(state.admission).toEqual({
+              status: "accepted",
+              mode: "followup",
+              reason: "steering-unavailable",
             });
           }
-          const confirmed = [
-            "delayed-receipt",
-            "confirmed-closed-adoption",
-            "late-receipt",
-          ].includes(mode);
-          if (mode !== "confirmed-closed-adoption" && mode !== "late-receipt") {
-            fixture.dropNextResolveResponse();
-          }
-          const state: ReplyOperationRunState = {};
-          const followup = vi.fn(async (_run: FollowupRun) => {});
-          const typing = createMockTypingController();
-          let done = false;
-          const adoption = (
-            entrypoint === "reply"
-              ? runReplyAgent({
-                  commandBody: text,
-                  transcriptCommandBody: text,
-                  followupRun: run,
-                  opts: {
-                    [REPLY_OPERATION_RUN_STATE]: state,
-                    turnAdoptionLifecycle: run.turnAdoptionLifecycle,
-                  },
-                  queueKey: key,
-                  resolvedQueue: { mode: "steer", debounceMs: 0 },
-                  shouldSteer: true,
-                  shouldFollowup: false,
-                  isActive: true,
-                  typing,
-                  sessionCtx: {},
-                  sessionKey: key,
-                  defaultModel: "openai/gpt-test",
-                  resolvedVerboseLevel: "off",
-                  isNewSession: false,
-                  blockStreamingEnabled: false,
-                  resolvedBlockStreamingBreak: "text_end",
-                  shouldInjectGroupIntro: false,
-                  typingMode: "never",
-                })
-              : runActiveReplySteer({
-                  followupRun: run,
-                  opts: undefined,
-                  providedReplyOperation: operation,
-                  queueKey: key,
-                  releaseAdmissionTicket: () => {},
-                  replyOperationRunState: state,
-                  resolvedQueue: { mode: "steer", debounceMs: 0 },
-                  restartRecoverySourceTurnId: run.messageId,
-                  runFollowup: followup,
-                  sessionCtx: {},
-                  sessionKey: key,
-                  storePath: receiptScope?.storePath,
-                  touchActiveSessionEntry: async () => {},
-                  typing,
-                  typingSignals: createTypingSignaler({
-                    typing,
-                    mode: "never",
-                    isHeartbeat: false,
-                  }),
-                })
-          ).finally(() => {
-            done = true;
-          });
-          void adoption.catch(() => undefined);
-          try {
-            await Promise.race([
-              hold.entered,
-              adoption.then(() => {
-                throw new Error("adoption completed before the committed waiter gate");
-              }),
-            ]);
-            const resolves = fixture.requests.filter(
-              (request) => request.method === "question.resolve",
-            );
-            const wait = fixture.requests.find(
-              (request) => request.method === "question.waitAnswer",
-            );
-            expect(resolves).toHaveLength(1);
-            const receipt = await fixture.manager.waitAnswer(id, undefined, true);
-            expect(receipt).toMatchObject({
-              status: "answered",
-              answers: { answers: { answer: [text] } },
-            });
-            if (mode === "legacy-receipt") {
-              expect(resolves[0]?.params).not.toHaveProperty("resolutionId");
-              expect(wait?.params).not.toHaveProperty("includeResolutionId");
-              expect(receipt).not.toHaveProperty("resolutionId");
-            } else {
-              const resolveParams = resolves[0]?.params as { resolutionId?: string } | undefined;
-              const resolutionId = resolveParams?.resolutionId;
-              expect(resolutionId).toMatch(/^[a-f0-9]{32}$/);
-              expect(receipt).toMatchObject({ resolutionId });
-              expect(wait?.params).toMatchObject({ includeResolutionId: true });
-            }
-            expect(operation.phase).toBe("running");
-            expect(operation.result).toBeNull();
-            expect(cancel).not.toHaveBeenCalled();
-            if (mode === "delayed-receipt") {
-              await new Promise<void>((resolve) => {
-                setTimeout(resolve, 1_200);
-              });
-              expect(done).toBe(false);
-              expect(claim.isResolving()).toBe(true);
-              expect(followup).not.toHaveBeenCalled();
-              expect(cancel).not.toHaveBeenCalled();
-            }
-            if (confirmed || mode === "legacy-receipt") {
-              hold.release();
-            } else {
-              hold.fail();
-            }
-            const result = await adoption;
-            await answerOutcome;
-            // Observe drainage without waiting for the replay a correct owner forbids.
-            await vi.waitFor(() => expect(getExistingFollowupQueue(key)).toBeUndefined());
-            expect.soft(followup).not.toHaveBeenCalled();
-            expect.soft(cancel).not.toHaveBeenCalled();
-            expect.soft(operation.abortSignal.aborted).toBe(false);
-            expect.soft(fixture.backingRun.signal.aborted).toBe(false);
-            expect.soft(abandoned).not.toHaveBeenCalled();
-            expect.soft(adopted).toHaveBeenCalledOnce();
-            expect.soft(settled).toHaveBeenCalledOnce();
-            expect(nativeSteer).not.toHaveBeenCalled();
-            if (receiptScope) {
-              const delivery = prepareSteeringDelivery({
-                ...receiptScope,
-                sessionId: run.run.sessionId,
-                assertCurrent,
-              });
-              try {
-                await expect(delivery.prepareCurrent()).rejects.toBeInstanceOf(
-                  MessageInjectionTargetUnavailableError,
-                );
-              } finally {
-                delivery.release();
-              }
-              expect(nativeSteer).not.toHaveBeenCalled();
-            }
-            if (confirmed) {
-              expect(result).toBe(entrypoint === "reply" ? undefined : "handled");
-              expect(state.admission).toEqual({ status: "accepted", mode: "steer" });
-            } else {
-              expect.soft(result).toMatchObject({
-                isError: true,
-                text: expect.stringContaining("confirmation was lost"),
-              });
-              expect
-                .soft(state.admission)
-                .toEqual({ status: "skipped", reason: "question-response-indeterminate" });
-            }
-            if (entrypoint === "steer") {
-              expect
-                .soft(
-                  enqueueFollowupRun(
-                    key,
-                    { ...run },
-                    { mode: "followup", debounceMs: 0 },
-                    "message-id",
-                  ),
-                )
-                .toBe(false);
-            }
-          } finally {
-            hold.release();
-            if (fixture.manager.get(id)?.status === "pending") {
-              fixture.manager.cancel(id, "test-cleanup");
-            }
-            await answerOutcome;
-            await adoption.catch(() => undefined);
-            claim.dispose();
-            clearFollowupQueue(key);
-            clearFollowupDrainCallback(key);
-            if (hidden) {
-              clearAgentRunContext("accepted-backing-work");
-            }
-          }
-        }),
-      );
-      expect(replyRunRegistry.get(key)).toBeUndefined();
-      expect(getExistingFollowupQueue(key)).toBeUndefined();
-    },
-  );
+          expect(getExistingFollowupQueue(key)?.items.map((run) => run.prompt)).toEqual([
+            text,
+            "next input",
+          ]);
+          expectNotCalled(followup, queueMessage, cancel);
+          expect(operation.abortSignal.aborted).toBe(false);
+          expect(fixture.backingRun.signal.aborted).toBe(false);
+          expect(
+            fixture.requests.filter((request) => request.method === "question.resolve"),
+          ).toEqual([]);
+          expect(getSessionControllerOperation(key)).toBe(operation);
+          expect(fixture.manager.get(id)?.status).toBe("pending");
+          await expectPendingQuestionAnswerClaimable(key, true);
+          operation.complete();
+        });
+        await withinTest(firstEntered.promise, signal);
+        expect(followup).toHaveBeenCalledOnce();
+        expect(followup.mock.calls[0]?.[0].prompt).toBe(text);
+        releaseFirst.resolve();
+        await withinTest(secondEntered.promise, signal);
+        expect(followup.mock.calls.map(([run]) => run.prompt)).toEqual([text, "next input"]);
+        expect(fixture.manager.get(id)?.status).toBe("pending");
+      } finally {
+        releaseFirst.resolve();
+        if (fixture.manager.get(id)?.status === "pending") {
+          fixture.manager.cancel(id, "test-cleanup");
+        }
+        await answerOutcome;
+        claim?.dispose();
+        await Promise.allSettled(followup.mock.results.map((result) => result.value));
+        clearSessionQueues([key]);
+      }
+    });
+    expect(getSessionControllerOperation(key)).toBeUndefined();
+    expect(getExistingFollowupQueue(key)).toBeUndefined();
+  });
 });

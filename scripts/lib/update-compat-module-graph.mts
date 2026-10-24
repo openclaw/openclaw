@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import * as ts from "typescript/unstable/ast";
+import * as ts from "typescript/ast";
 import type { NativeTypeScriptParser } from "./native-typescript.mts";
 import { isUpdateConfigRuntimeAlias } from "./update-config-runtime-compat.mts";
 

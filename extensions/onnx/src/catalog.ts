@@ -9,6 +9,21 @@ export type ModelPreset = {
     | { kind: "local-export"; repository: string; revision: string };
 };
 
+const gliner25TokenizerFiles: ModelFile[] = [
+  {
+    name: "tokenizer.json",
+    path: "tokenizer.json",
+    bytes: 8341713,
+    sha256: "cbc8ae6037812709c9c26f2a160f8dc48b0440bcb79c8141804259ae2d6adac3",
+  },
+  {
+    name: "tokenizer_config.json",
+    path: "tokenizer_config.json",
+    bytes: 646,
+    sha256: "fd4a31dc2f1f17e31638c5f0e783b81cdb2fbe6bddd116a8d9e5d50d78148cf1",
+  },
+];
+
 export const MODELS: readonly ModelPreset[] = [
   {
     id: "gliclass-edge-v3.0",
@@ -76,18 +91,7 @@ export const MODELS: readonly ModelPreset[] = [
           bytes: 288521577,
           sha256: "12dda5cf4b0e9ed3af17596cef1cdbd22185a32fcc230af4f476353b5e4ade1f",
         },
-        {
-          name: "tokenizer.json",
-          path: "tokenizer.json",
-          bytes: 8341713,
-          sha256: "cbc8ae6037812709c9c26f2a160f8dc48b0440bcb79c8141804259ae2d6adac3",
-        },
-        {
-          name: "tokenizer_config.json",
-          path: "tokenizer_config.json",
-          bytes: 646,
-          sha256: "fd4a31dc2f1f17e31638c5f0e783b81cdb2fbe6bddd116a8d9e5d50d78148cf1",
-        },
+        ...gliner25TokenizerFiles,
       ],
     },
   },
@@ -107,18 +111,7 @@ export const MODELS: readonly ModelPreset[] = [
           bytes: 746400205,
           sha256: "db56fe723c14e856ab5618a5bceb66b55a1e8d2cf5f3026202c45e6ff4b86f42",
         },
-        {
-          name: "tokenizer.json",
-          path: "tokenizer.json",
-          bytes: 8341713,
-          sha256: "cbc8ae6037812709c9c26f2a160f8dc48b0440bcb79c8141804259ae2d6adac3",
-        },
-        {
-          name: "tokenizer_config.json",
-          path: "tokenizer_config.json",
-          bytes: 646,
-          sha256: "fd4a31dc2f1f17e31638c5f0e783b81cdb2fbe6bddd116a8d9e5d50d78148cf1",
-        },
+        ...gliner25TokenizerFiles,
       ],
     },
   },

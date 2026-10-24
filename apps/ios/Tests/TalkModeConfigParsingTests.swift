@@ -366,7 +366,7 @@ struct TalkModeManagerTests {
 
                 #expect(manager.gatewayTalkConfigLoaded)
                 #expect(manager._test_runtimeRoute() == .realtimeWebRTC)
-                await manager.prefetchRealtimeSessionIfReady(reason: "config-test")
+                await manager.prefetchRealtimeSessionIfReady()
                 let frame = try #require(await requests.next())
                 let request = try #require(JSONSerialization.jsonObject(with: frame) as? [String: Any])
                 let params = try #require(request["params"] as? [String: Any])
@@ -475,6 +475,20 @@ struct TalkModeManagerTests {
         manager._test_handleRealtimeRelayStatus("Reconnecting")
         #expect(manager.phase == .connecting)
         #expect(manager.watchPresentation == .phase)
+    }
+
+    @Test func `realtime input loss notices keep the call listening`() {
+        let manager = TalkModeManager(allowSimulatorCapture: true)
+
+        manager._test_handleRealtimeRelayStatus("Realtime audio input fell behind; repeat the last part")
+        #expect(manager.phase == .listening)
+        #expect(manager.isListening)
+        #expect(manager.watchPresentation == .localized("Realtime audio input fell behind; repeat the last part"))
+
+        manager._test_handleRealtimeRelayStatus("Microphone input recovered; repeat the last part")
+        #expect(manager.phase == .listening)
+        #expect(manager.isListening)
+        #expect(manager.watchPresentation == .localized("Microphone input recovered; repeat the last part"))
     }
 
     @Test func `WebRTC progress remains semantic on the watch`() {

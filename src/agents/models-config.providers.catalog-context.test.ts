@@ -16,7 +16,7 @@ import { registerResolvedAgentDir, unregisterResolvedAgentDir } from "./agent-di
 import {
   createApiKeyCredential,
   createAuthProfileStoreFixture,
-  oauthCred,
+  createOAuthRefreshCredential,
 } from "./auth-profiles/credential-fixtures.test-support.js";
 import { OAuthRefreshFailureError } from "./auth-profiles/oauth-refresh-failure.js";
 import { resolveApiKeyForProfile } from "./auth-profiles/oauth.js";
@@ -29,6 +29,18 @@ import type { ProviderAuthResolver } from "./models-config.providers.secret-help
 vi.mock("./auth-profiles/oauth.js", () => ({ resolveApiKeyForProfile: vi.fn() }));
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const oauth = [
+  { id: "oauth", label: "OAuth", kind: "oauth", run: async () => ({ profiles: [] }) },
+] satisfies ProviderPlugin["auth"];
+const catalogProvider = (
+  id: string,
+  label: string,
+  run: NonNullable<ProviderPlugin["catalog"]>["run"],
+  auth = oauth,
+): ProviderPlugin => ({ id, label, auth, catalog: { run } });
+type PrepareParams = Parameters<typeof prepareProviderCatalogRun>[0];
+const prepare = (params: Omit<PrepareParams, "config" | "env" | "isActive">) =>
+  prepareProviderCatalogRun({ config: {}, env: {}, isActive: () => true, ...params });
 
 afterEach(async () => {
   await loggerTestApi.flushFileLogQueueForTests();
@@ -53,25 +65,23 @@ it("revalidates selected-account authority before consuming an awaited discovery
     { provider: "fixture", profileId: "fixture:selected", status: "ready" as const },
   ]);
   const request = loadSelectedProviderAccountCatalog({
-    provider: {
-      id: "fixture",
-      label: "Fixture",
-      auth: [],
-      catalog: {
-        run: async (context) => {
-          entered.resolve();
-          await release.promise;
-          context.resolveProviderAuth();
-          context.resolveProviderApiKey();
-          return {
-            provider: { baseUrl: "https://fixture.example.test/v1", models: [] },
-            get outcomes() {
-              return readOutcomes();
-            },
-          };
-        },
+    provider: catalogProvider(
+      "fixture",
+      "Fixture",
+      async (context) => {
+        entered.resolve();
+        await release.promise;
+        context.resolveProviderAuth();
+        context.resolveProviderApiKey();
+        return {
+          provider: { baseUrl: "https://fixture.example.test/v1", models: [] },
+          get outcomes() {
+            return readOutcomes();
+          },
+        };
       },
-    },
+      [],
+    ),
     providerId: "fixture",
     profileId: "fixture:selected",
     authStore,
@@ -107,78 +117,60 @@ it("revalidates selected-account authority before consuming an awaited discovery
   }
 });
 
-it.each([undefined])(
-  "passes refreshed OAuth grant metadata to the catalog (authFlow: %s)",
-  async (authFlow) => {
-    const agentDir = tempDirs.make("catalog-oauth-grant-");
-    const profileId = "openai:sharing";
-    const credential = {
-      ...oauthCred({
-        provider: "openai",
-        access: "expired-sharing-access",
-        refresh: "sharing-refresh",
-        expires: 1,
-      }),
-      authFlow: "chatgpt-token-sharing",
-    };
-    const store = createAuthProfileStoreFixture({ [profileId]: credential });
-    const refreshed = {
-      ...credential,
-      access: "refreshed-access",
-      expires: Date.now() + 600_000,
-      authFlow,
-    };
-    vi.mocked(resolveApiKeyForProfile).mockResolvedValue({
-      apiKey: refreshed.access,
-      provider: credential.provider,
+it("passes refreshed OAuth grant metadata to the catalog", async () => {
+  const agentDir = tempDirs.make("catalog-oauth-grant-");
+  const profileId = "openai:sharing";
+  const credential = createOAuthRefreshCredential({
+    expires: 1,
+    authFlow: "chatgpt-token-sharing",
+  });
+  const store = createAuthProfileStoreFixture({ [profileId]: credential });
+  const refreshed = {
+    ...credential,
+    access: "refreshed-access",
+    expires: Date.now() + 600_000,
+    authFlow: undefined,
+  };
+  vi.mocked(resolveApiKeyForProfile).mockResolvedValue({
+    apiKey: refreshed.access,
+    provider: credential.provider,
+    profileId,
+    profileType: "oauth",
+    credential: refreshed,
+    readCurrentCredential: null,
+  });
+  const observedAuth: Array<ReturnType<ProviderAuthResolver>> = [];
+  const provider = catalogProvider("openai", "OpenAI", async (ctx) => {
+    observedAuth.push(ctx.resolveProviderAuth(undefined, { oauthMarker: "oauth-marker" }));
+    return null;
+  });
+  const prepared = await prepare({
+    provider,
+    agentDir,
+    authStore: store,
+    resolveProviderAuth: (_providerId, options) => ({
+      apiKey: options?.oauthMarker,
+      discoveryApiKey: credential.access,
+      authFlow: credential.authFlow,
       profileId,
-      profileType: "oauth",
-      credential: refreshed,
-      readCurrentCredential: null,
-    });
-    const observedAuth: Array<ReturnType<ProviderAuthResolver>> = [];
-    const provider: ProviderPlugin = {
-      id: "openai",
-      label: "OpenAI",
-      auth: [{ id: "oauth", label: "OAuth", kind: "oauth", run: async () => ({ profiles: [] }) }],
-      catalog: {
-        run: async (ctx) => {
-          observedAuth.push(ctx.resolveProviderAuth(undefined, { oauthMarker: "oauth-marker" }));
-          return null;
-        },
-      },
-    };
-    const prepared = await prepareProviderCatalogRun({
-      provider,
-      config: {},
-      agentDir,
-      authStore: store,
-      env: {},
-      isActive: () => true,
-      resolveProviderAuth: (_providerId, options) => ({
-        apiKey: options?.oauthMarker,
-        discoveryApiKey: credential.access,
-        authFlow: credential.authFlow,
-        profileId,
-        mode: "oauth",
-        source: "profile",
-      }),
-      resolveProviderApiKey: () => ({ apiKey: undefined }),
-    });
-    await runProviderCatalog(prepared);
+      mode: "oauth",
+      source: "profile",
+    }),
+    resolveProviderApiKey: () => ({ apiKey: undefined }),
+  });
+  await runProviderCatalog(prepared);
 
-    expect(observedAuth).toEqual([
-      {
-        apiKey: "oauth-marker",
-        discoveryApiKey: refreshed.access,
-        authFlow,
-        profileId,
-        mode: "oauth",
-        source: "profile",
-      },
-    ]);
-  },
-);
+  expect(observedAuth).toEqual([
+    {
+      apiKey: "oauth-marker",
+      discoveryApiKey: refreshed.access,
+      authFlow: undefined,
+      profileId,
+      mode: "oauth",
+      source: "profile",
+    },
+  ]);
+});
 
 it.each([true, false])(
   "reports failed OAuth preparation with the resulting catalog (API-key fallback: %s)",
@@ -188,34 +180,26 @@ it.each([true, false])(
     const profileId = "fixture:owner";
     const refresh = "synthetic-refresh-secret-that-must-not-be-logged";
     const store = createAuthProfileStoreFixture({
-      [profileId]: oauthCred({
+      [profileId]: createOAuthRefreshCredential({
         provider: "fixture",
-        access: "expired-access",
         refresh,
         expires: 1,
       }),
     });
     const selectedCredentials: Array<string | undefined> = [];
-    const provider: ProviderPlugin = {
-      id: "fixture",
-      label: "Fixture",
-      auth: [{ id: "oauth", label: "OAuth", kind: "oauth", run: async () => ({ profiles: [] }) }],
-      catalog: {
-        run: async (ctx) => {
-          const auth = ctx.resolveProviderAuth();
-          if (auth.preparationFailed) {
-            return null;
-          }
-          selectedCredentials.push(auth.discoveryApiKey);
-          return {
-            provider: {
-              baseUrl: `https://catalog.example.test/v1?api_key=${refresh}`,
-              models: [],
-            },
-          };
+    const provider = catalogProvider("fixture", "Fixture", async (ctx) => {
+      const auth = ctx.resolveProviderAuth();
+      if (auth.preparationFailed) {
+        return null;
+      }
+      selectedCredentials.push(auth.discoveryApiKey);
+      return {
+        provider: {
+          baseUrl: `https://catalog.example.test/v1?api_key=${refresh}`,
+          models: [],
         },
-      },
-    };
+      };
+    });
     vi.mocked(resolveApiKeyForProfile).mockRejectedValue(
       new OAuthRefreshFailureError({
         provider: "fixture",
@@ -238,13 +222,10 @@ it.each([true, false])(
     const directoryOwner = { agentId: withApiKey ? "worker" : "main", agentDir };
     registerResolvedAgentDir(directoryOwner);
     try {
-      const prepared = await prepareProviderCatalogRun({
+      const prepared = await prepare({
         provider,
-        config: {},
         agentDir,
         authStore: store,
-        env: {},
-        isActive: () => true,
         resolveProviderAuth: (providerId, options) =>
           resolveAuth(providerId ?? provider.id, options),
         resolveProviderApiKey: () => ({ apiKey: withApiKey ? "fallback-api-key" : undefined }),

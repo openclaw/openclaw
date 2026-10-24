@@ -17,8 +17,10 @@ import { normalizeToolPolicyName } from "./tool-policy.js";
 import { isToolResultError, readToolResultDetails } from "./tool-result-error.js";
 
 const EXPLICIT_MESSAGE_ROUTE_KEYS = ["channel", "target", "to", "channelId", "provider"];
-export function resolveMessageToolSourceReplyFinal(args: unknown): boolean {
-  return (asOptionalRecord(args) ?? {}).final !== false;
+/** Resolves whether a delivered source send ends the turn; an omitted `final` takes the run's default. */
+export function resolveMessageToolSourceReplyFinal(args: unknown, finalByDefault = true): boolean {
+  const final = (asOptionalRecord(args) ?? {}).final;
+  return final === undefined ? finalByDefault : final !== false;
 }
 
 function resultConfirmsCurrentSourceRoute(value: unknown): boolean {

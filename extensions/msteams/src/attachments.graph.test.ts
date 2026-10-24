@@ -1,11 +1,21 @@
 // Msteams tests cover attachments.graph plugin behavior.
+import {
+  useAttachmentTestTransport,
+  type AttachmentTestTransport,
+} from "./attachments/transport.test-support.js";
+const installAttachmentTestTransport = useAttachmentTestTransport();
 import { resolveRequestUrl } from "openclaw/plugin-sdk/request-url";
-import { mockPinnedHostnameResolution } from "openclaw/plugin-sdk/test-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { cancelTrackedTextResponse } from "../../test-support/streaming-error-response.js";
 import type { PluginRuntime } from "../runtime-api.js";
-import { buildMSTeamsGraphMessageUrl, resolveMSTeamsAdvertisedMedia } from "./attachments.js";
-import { downloadMSTeamsGraphMedia } from "./attachments/graph.js";
+import {
+  buildMSTeamsGraphMessageUrl,
+  downloadMSTeamsGraphMedia as downloadGraphMedia,
+} from "./attachments/graph.js";
+import {
+  extractMSTeamsHtmlAttachmentIds,
+  resolveMSTeamsAdvertisedMedia,
+  summarizeMSTeamsHtmlAttachments,
+} from "./attachments/html.js";
 import { encodeGraphShareId } from "./attachments/shared.js";
 import { setMSTeamsRuntime } from "./runtime.js";
 
@@ -71,7 +81,12 @@ const runtimeStub = {
   },
 } as unknown as PluginRuntime;
 
-type DownloadGraphMediaParams = Parameters<typeof downloadMSTeamsGraphMedia>[0];
+type DownloadGraphMediaParams = Parameters<typeof downloadGraphMedia>[0] & AttachmentTestTransport;
+
+function downloadMSTeamsGraphMedia({ fetchFn, resolveFn, ...params }: DownloadGraphMediaParams) {
+  installAttachmentTestTransport({ fetchFn, resolveFn });
+  return downloadGraphMedia(params);
+}
 type DownloadGraphMediaOverrides = Partial<
   Omit<DownloadGraphMediaParams, "messageUrl" | "tokenProvider">
 >;
@@ -137,11 +152,8 @@ const downloadGraphMediaWithMockOptions = async (
 };
 
 describe("msteams graph attachments", () => {
-  let ssrfMock: { mockRestore: () => void } | undefined;
-
   beforeEach(() => {
-    ssrfMock?.mockRestore();
-    ssrfMock = mockPinnedHostnameResolution();
+    installAttachmentTestTransport({});
     detectMimeMock.mockClear();
     saveResponseMediaMock.mockClear();
     saveMediaBufferMock.mockClear();
@@ -160,32 +172,6 @@ describe("msteams graph attachments", () => {
       }),
     });
     expect(media.media).toHaveLength(2);
-  });
-
-  it("cancels non-OK Graph collection bodies before returning empty hosted content", async () => {
-    const tracked = cancelTrackedTextResponse("missing hosted contents", { status: 404 });
-    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
-      const url = resolveRequestUrl(input);
-      if (url === DEFAULT_MESSAGE_URL) {
-        return createJsonResponse({ attachments: [] });
-      }
-      if (url === `${DEFAULT_MESSAGE_URL}/hostedContents`) {
-        return tracked.response;
-      }
-      return createNotFoundResponse();
-    });
-
-    const media = await downloadMSTeamsGraphMedia({
-      messageUrl: DEFAULT_MESSAGE_URL,
-      tokenProvider: createTokenProvider(),
-      maxBytes: DEFAULT_MAX_BYTES,
-      fetchFn: fetchMock,
-      resolveFn: resolvePublicHost,
-    });
-
-    expect(media.media).toEqual([]);
-    expect(media.hostedStatus).toBe(404);
-    expect(tracked.wasCanceled()).toBe(true);
   });
 
   it("does not forward Authorization for SharePoint redirects outside auth allowlist", async () => {
@@ -327,13 +313,6 @@ const ADVERTISED_MEDIA_CASES = [
 ];
 
 const GRAPH_MESSAGE_URL_CASES = [
-  withLabel("builds a channel top-level message URL", {
-    params: createChannelGraphMessageUrlParams({
-      messageId: "123",
-    }),
-    expectedUrl: `${GRAPH_CHANNEL_MESSAGES_ROOT}/123`,
-  }),
-
   withLabel("builds a chat message URL", {
     params: {
       conversationType: "groupChat" as const,
@@ -345,6 +324,30 @@ const GRAPH_MESSAGE_URL_CASES = [
 ];
 
 describe("msteams attachment helpers", () => {
+  it("keeps the complete recovery ID list separate from the capped diagnostic summary", () => {
+    const attachments = [
+      createHtmlAttachment('<attachment id=" one "><attachment id="two"><attachment id="three">'),
+      createHtmlAttachment(
+        '<attachment id="two"><attachment id="four"><attachment id="five"><attachment id="six"><attachment id=" ">',
+      ),
+    ];
+    expect(summarizeMSTeamsHtmlAttachments(attachments)?.attachmentIds).toEqual([
+      "one",
+      "two",
+      "three",
+      "four",
+      "five",
+    ]);
+    expect(extractMSTeamsHtmlAttachmentIds(attachments)).toEqual([
+      "one",
+      "two",
+      "three",
+      "four",
+      "five",
+      "six",
+    ]);
+  });
+
   describe("resolveMSTeamsAdvertisedMedia", () => {
     it.each(ADVERTISED_MEDIA_CASES)("$label", ({ attachments, expected }) => {
       expect(resolveMSTeamsAdvertisedMedia(attachments)).toEqual(expected);

@@ -1,5 +1,5 @@
-import { createHash } from "node:crypto";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { sha256Hex } from "openclaw/plugin-sdk/node-crypto-runtime";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { readCodexAsyncQuestions } from "./async-questions.js";
 import type { AttemptSettlementWarning } from "./attempt-terminal.js";
@@ -24,7 +24,7 @@ export function buildCodexMirrorDedupeIdentity(message: MirroredAgentMessage): s
   // Untagged callers dedupe role/content within their idempotency scope.
   // Volatile metadata must not change that identity on a reordered retry.
   const payload = JSON.stringify({ role: message.role, content: message.content });
-  return `${message.role}:${createHash("sha256").update(payload).digest("hex").slice(0, 16)}`;
+  return `${message.role}:${sha256Hex(payload).slice(0, 16)}`;
 }
 
 export function buildCodexMirrorIdempotencyKey(scope: string, identity: string): string {
@@ -121,8 +121,5 @@ export function serializeCodexMirrorSourceEvidence(message: AgentMessage): strin
 }
 
 export function fingerprintCodexMirrorSourceMessage(message: MirroredAgentMessage): string {
-  return createHash("sha256")
-    .update(serializeCodexMirrorSourceEvidence(message))
-    .digest("hex")
-    .slice(0, 32);
+  return sha256Hex(serializeCodexMirrorSourceEvidence(message)).slice(0, 32);
 }

@@ -1,7 +1,7 @@
-// Video generation runtime coordinates provider auth, fallbacks, and job polling.
 import { resolveAgentModelTimeoutMsValue } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { resolveMediaGeometryOverrides } from "../media-generation/geometry-normalization.js";
 import { createMediaProviderLookup } from "../media-generation/provider-registry.js";
 import {
   getVideoGenerationProvider,
@@ -16,13 +16,19 @@ import { withAcquiredPluginCapabilityProviders } from "../plugins/capability-pro
 import { getProviderEnvVarsCore } from "../secrets/provider-env-vars.js";
 import { resolveVideoGenerationModeCapabilities } from "./capabilities.js";
 import {
-  buildVideoGenerationCapabilityFailure,
-  resolveProviderWithModelCapabilities,
-} from "./capability-overlays.js";
-import { resolveVideoGenerationSupportedDurations } from "./duration-support.js";
-import { resolveVideoGenerationOverrides } from "./normalization.js";
+  normalizeVideoGenerationDuration,
+  resolveVideoGenerationSupportedDurations,
+  selectSupportedVideoDuration,
+} from "./duration-support.js";
 import type { GenerateVideoParams, GenerateVideoRuntimeResult } from "./runtime-types.js";
-import type { VideoGenerationProviderOptionType, VideoGenerationResult } from "./types.js";
+import type {
+  VideoGenerationIgnoredOverride,
+  VideoGenerationModeCapabilities,
+  VideoGenerationNormalization,
+  VideoGenerationProviderCapabilities,
+  VideoGenerationResult,
+  VideoGenerationTransformCapabilities,
+} from "./types.js";
 
 const log = createSubsystemLogger("video-generation");
 const MODEL_CAPABILITY_LOOKUP_TIMEOUT_MS = 5_000;
@@ -38,44 +44,53 @@ type VideoGenerationRuntimeDeps = {
 
 export type { GenerateVideoParams, GenerateVideoRuntimeResult } from "./runtime-types.js";
 
-/**
- * Missing declarations preserve legacy providerOptions passthrough; an empty
- * declaration rejects options. Declared keys require their specified types.
- */
-function validateProviderOptionsAgainstDeclaration(params: {
-  providerId: string;
-  model: string;
-  providerOptions: Record<string, unknown>;
-  declaration: Readonly<Record<string, VideoGenerationProviderOptionType>> | undefined;
-}): string | undefined {
-  const { providerId, model, providerOptions, declaration } = params;
-  const keys = Object.keys(providerOptions);
-  if (keys.length === 0 || declaration === undefined) {
-    return undefined;
+function mergeVideoGenerationCapabilities<T extends VideoGenerationModeCapabilities>(
+  base: T,
+  overlay: T,
+): T {
+  const overlayOptions = overlay.providerOptions;
+  // Explicit empty providerOptions means "clear inherited options"; undefined
+  // means "inherit base declaration".
+  const mergedProviderOptions =
+    Object.hasOwn(overlay, "providerOptions") &&
+    overlayOptions &&
+    Object.keys(overlayOptions).length === 0
+      ? overlayOptions
+      : base.providerOptions || overlayOptions
+        ? {
+            ...base.providerOptions,
+            ...overlayOptions,
+          }
+        : undefined;
+  return {
+    ...base,
+    ...overlay,
+    ...(mergedProviderOptions ? { providerOptions: mergedProviderOptions } : {}),
+  };
+}
+
+function mergeVideoGenerationModeCapabilities<
+  T extends VideoGenerationModeCapabilities | VideoGenerationTransformCapabilities | undefined,
+>(base: T, overlay: T): T {
+  if (!overlay) {
+    return base;
   }
-  if (Object.keys(declaration).length === 0) {
-    return `${providerId}/${model} does not accept providerOptions (caller supplied: ${keys.join(", ")}); skipping`;
+  if (!base) {
+    return overlay;
   }
-  const unknown = keys.filter((key) => !Object.hasOwn(declaration, key));
-  if (unknown.length > 0) {
-    const accepted = Object.keys(declaration).join(", ");
-    return `${providerId}/${model} does not accept providerOptions keys: ${unknown.join(", ")} (accepted: ${accepted}); skipping`;
-  }
-  for (const key of keys) {
-    const expected = declaration[key];
-    const value = providerOptions[key];
-    const actual = typeof value;
-    if (expected === "number" && (actual !== "number" || !Number.isFinite(value as number))) {
-      return `${providerId}/${model} expects providerOptions.${key} to be a finite number, got ${actual}; skipping`;
-    }
-    if (expected === "boolean" && actual !== "boolean") {
-      return `${providerId}/${model} expects providerOptions.${key} to be a boolean, got ${actual}; skipping`;
-    }
-    if (expected === "string" && actual !== "string") {
-      return `${providerId}/${model} expects providerOptions.${key} to be a string, got ${actual}; skipping`;
-    }
-  }
-  return undefined;
+  return mergeVideoGenerationCapabilities(base, overlay);
+}
+
+function mergeVideoGenerationProviderCapabilities(
+  base: VideoGenerationProviderCapabilities,
+  overlay: VideoGenerationProviderCapabilities,
+): VideoGenerationProviderCapabilities {
+  return {
+    ...mergeVideoGenerationCapabilities(base, overlay),
+    generate: mergeVideoGenerationModeCapabilities(base.generate, overlay.generate),
+    imageToVideo: mergeVideoGenerationModeCapabilities(base.imageToVideo, overlay.imageToVideo),
+    videoToVideo: mergeVideoGenerationModeCapabilities(base.videoToVideo, overlay.videoToVideo),
+  };
 }
 
 export function listRuntimeVideoGenerationProviders(
@@ -118,7 +133,7 @@ async function runVideoGeneration(
 
   let skipWarnEmitted = false;
   const warnOnFirstSkip = (reason: string) => {
-    // Only the first skipped candidate warrants a warning; callers log the rest at debug.
+    // Warn once; the coordinator retains every skipped candidate in attempts.
     if (!skipWarnEmitted) {
       skipWarnEmitted = true;
       logger.warn(`video-generation candidate skipped: ${reason}`);
@@ -141,35 +156,91 @@ async function runVideoGeneration(
         timeoutMs: requestedTimeoutMs,
         providerDefaultTimeoutMs: provider.defaultTimeoutMs,
       });
-      const activeProvider = await resolveProviderWithModelCapabilities({
-        provider,
-        providerId: candidate.provider,
-        model: candidate.model,
-        cfg: params.cfg,
-        agentDir: params.agentDir,
-        authStore: params.authStore,
-        timeoutMs: MODEL_CAPABILITY_LOOKUP_TIMEOUT_MS,
-        log: logger,
-      });
+      const resolveActiveProvider = async () => {
+        if (!provider.resolveModelCapabilities) {
+          return provider;
+        }
+        try {
+          const modelCapabilities = await provider.resolveModelCapabilities({
+            provider: candidate.provider,
+            model: candidate.model,
+            cfg: params.cfg,
+            agentDir: params.agentDir,
+            authStore: params.authStore,
+            timeoutMs: MODEL_CAPABILITY_LOOKUP_TIMEOUT_MS,
+          });
+          if (!modelCapabilities) {
+            return provider;
+          }
+          // Keep dynamic model capabilities local to this request/candidate.
+          return {
+            ...provider,
+            capabilities: mergeVideoGenerationProviderCapabilities(
+              provider.capabilities,
+              modelCapabilities,
+            ),
+          };
+        } catch (err) {
+          logger.debug(
+            `video-generation model capability lookup failed for ${candidate.provider}/${candidate.model}: ${err instanceof Error ? err.message : String(err)}`,
+          );
+          return provider;
+        }
+      };
+      const activeProvider = await resolveActiveProvider();
 
       // Guard: catalog modes and reference counts are authoritative before I/O,
       // so fallback cannot select a model that will reject or drop the request.
       const inputImageCount = params.inputImages?.length ?? 0;
       const inputVideoCount = params.inputVideos?.length ?? 0;
       const inputAudioCount = params.inputAudios?.length ?? 0;
-      const capabilityMismatch = buildVideoGenerationCapabilityFailure({
-        providerId: candidate.provider,
-        model: candidate.model,
-        provider: activeProvider,
-        inputImageCount,
-        inputVideoCount,
-        inputAudioCount,
-      });
+      const buildCapabilityFailure = (): string | undefined => {
+        const label = `${candidate.provider}/${candidate.model}`;
+        const { mode, capabilities } = resolveVideoGenerationModeCapabilities({
+          provider: activeProvider,
+          model: candidate.model,
+          inputImageCount,
+          inputVideoCount,
+        });
+        const catalogModes = activeProvider.catalogByModel?.[candidate.model]?.modes;
+        if (mode && catalogModes && !catalogModes.includes(mode)) {
+          const modeLabel =
+            mode === "generate"
+              ? "text-to-video generation"
+              : mode === "imageToVideo"
+                ? "image-to-video generation"
+                : "video-to-video generation";
+          return `${label} does not support ${modeLabel}; skipping`;
+        }
+        if (inputImageCount > 0 || inputVideoCount > 0) {
+          // Reference inputs must be explicitly supported; never silently drop assets.
+          const visualLabel =
+            inputImageCount > 0 && inputVideoCount > 0
+              ? "combined image/video reference inputs"
+              : inputImageCount > 0
+                ? "reference image inputs"
+                : "reference video inputs";
+          if (!capabilities || !("enabled" in capabilities) || !capabilities.enabled) {
+            return `${label} does not support ${visualLabel}; skipping to avoid silent reference drop`;
+          }
+        }
+        for (const [kind, count, limitKey] of [
+          ["image", inputImageCount, "maxInputImages"],
+          ["video", inputVideoCount, "maxInputVideos"],
+          ["audio", inputAudioCount, "maxInputAudios"],
+        ] as const) {
+          const limit = capabilities?.[limitKey] ?? activeProvider.capabilities[limitKey] ?? 0;
+          if (count > 0 && count > limit) {
+            return limit === 0
+              ? `${label} does not support reference ${kind} inputs; skipping to avoid silent ${kind} drop`
+              : `${label} supports at most ${limit} reference ${kind}(s), ${count} requested; skipping`;
+          }
+        }
+        return undefined;
+      };
+      const capabilityMismatch = buildCapabilityFailure();
       if (capabilityMismatch) {
         warnOnFirstSkip(capabilityMismatch);
-        logger.debug(
-          `video-generation candidate skipped (mode or reference capability): ${candidate.provider}/${candidate.model}`,
-        );
         return capabilityMismatch;
       }
 
@@ -182,17 +253,41 @@ async function runVideoGeneration(
       if (params.providerOptions) {
         const declaredOptions =
           modeCapabilities?.providerOptions ?? activeProvider.capabilities.providerOptions;
-        const mismatch = validateProviderOptionsAgainstDeclaration({
-          providerId: candidate.provider,
-          model: candidate.model,
-          providerOptions: params.providerOptions,
-          declaration: declaredOptions,
-        });
+        const providerOptions = params.providerOptions;
+        // Missing declarations preserve passthrough; an empty declaration rejects options.
+        const validateProviderOptions = (): string | undefined => {
+          const label = `${candidate.provider}/${candidate.model}`;
+          const keys = Object.keys(providerOptions);
+          if (keys.length === 0 || declaredOptions === undefined) {
+            return undefined;
+          }
+          if (Object.keys(declaredOptions).length === 0) {
+            return `${label} does not accept providerOptions (caller supplied: ${keys.join(", ")}); skipping`;
+          }
+          const unknown = keys.filter((key) => !Object.hasOwn(declaredOptions, key));
+          if (unknown.length > 0) {
+            const accepted = Object.keys(declaredOptions).join(", ");
+            return `${label} does not accept providerOptions keys: ${unknown.join(", ")} (accepted: ${accepted}); skipping`;
+          }
+          for (const key of keys) {
+            const expected = declaredOptions[key];
+            const value = providerOptions[key];
+            const actual = typeof value;
+            if (expected === "number" && (typeof value !== "number" || !Number.isFinite(value))) {
+              return `${label} expects providerOptions.${key} to be a finite number, got ${actual}; skipping`;
+            }
+            if (expected === "boolean" && actual !== "boolean") {
+              return `${label} expects providerOptions.${key} to be a boolean, got ${actual}; skipping`;
+            }
+            if (expected === "string" && actual !== "string") {
+              return `${label} expects providerOptions.${key} to be a string, got ${actual}; skipping`;
+            }
+          }
+          return undefined;
+        };
+        const mismatch = validateProviderOptions();
         if (mismatch) {
           warnOnFirstSkip(mismatch);
-          logger.debug(
-            `video-generation candidate skipped (providerOptions): ${candidate.provider}/${candidate.model}`,
-          );
           return mismatch;
         }
       }
@@ -212,32 +307,59 @@ async function runVideoGeneration(
           !supportedDurations &&
           typeof maxDuration === "number" &&
           // Compare the normalized (rounded) duration, not the raw float, since
-          // resolveVideoGenerationOverrides applies Math.round before sending to the provider.
+          // Normalization applies Math.round before sending to the provider.
           // A request for 4.4s against maxDurationSeconds=4 rounds to 4 and is valid.
           Math.round(requestedDuration) > maxDuration
         ) {
           const error = `${candidate.provider}/${candidate.model} supports at most ${maxDuration}s per video, ${requestedDuration}s requested; skipping`;
           warnOnFirstSkip(error);
-          logger.debug(
-            `video-generation candidate skipped (duration capability): ${candidate.provider}/${candidate.model}`,
-          );
           return error;
         }
       }
 
       return async (attempts): Promise<GenerateVideoRuntimeResult> => {
-        const sanitized = resolveVideoGenerationOverrides({
-          provider: activeProvider,
-          model: candidate.model,
+        const sanitized = resolveMediaGeometryOverrides({
           size: params.size,
           aspectRatio: params.aspectRatio,
           resolution: params.resolution,
-          durationSeconds: params.durationSeconds,
-          audio: params.audio,
-          watermark: params.watermark,
-          inputImageCount,
-          inputVideoCount,
+          capabilities: modeCapabilities,
+          reportUnrecognizedOverrides: true,
+          useAspectRatioForRequestedSize: true,
         });
+        const ignoredOverrides: VideoGenerationIgnoredOverride[] = sanitized.ignoredOverrides;
+        const normalization: VideoGenerationNormalization = sanitized.normalization;
+        let { audio, watermark } = params;
+        if (modeCapabilities && typeof audio === "boolean" && !modeCapabilities.supportsAudio) {
+          ignoredOverrides.push({ key: "audio", value: audio });
+          audio = undefined;
+        }
+        if (
+          modeCapabilities &&
+          typeof watermark === "boolean" &&
+          !modeCapabilities.supportsWatermark
+        ) {
+          ignoredOverrides.push({ key: "watermark", value: watermark });
+          watermark = undefined;
+        }
+        const requestedDurationSeconds = normalizeVideoGenerationDuration({
+          durationSeconds: params.durationSeconds,
+        });
+        const durationSeconds =
+          requestedDurationSeconds !== undefined && supportedDurations
+            ? selectSupportedVideoDuration(requestedDurationSeconds, supportedDurations)
+            : requestedDurationSeconds;
+        if (
+          typeof requestedDurationSeconds === "number" &&
+          typeof durationSeconds === "number" &&
+          requestedDurationSeconds !== durationSeconds
+        ) {
+          normalization.durationSeconds = {
+            requested: requestedDurationSeconds,
+            applied: durationSeconds,
+            ...(supportedDurations?.length ? { supportedValues: supportedDurations } : {}),
+          };
+        }
+        const appliedNormalization = Object.keys(normalization).length ? normalization : undefined;
         const generationRequest: Parameters<typeof provider.generateVideo>[0] & {
           [SUPPORTED_DURATIONS_HINT]?: readonly number[];
         } = {
@@ -250,9 +372,9 @@ async function runVideoGeneration(
           size: sanitized.size,
           aspectRatio: sanitized.aspectRatio,
           resolution: sanitized.resolution,
-          durationSeconds: sanitized.durationSeconds,
-          audio: sanitized.audio,
-          watermark: sanitized.watermark,
+          durationSeconds,
+          audio,
+          watermark,
           inputImages: params.inputImages,
           inputVideos: params.inputVideos,
           inputAudios: params.inputAudios,
@@ -290,12 +412,12 @@ async function runVideoGeneration(
           provider: candidate.provider,
           model: result.model ?? candidate.model,
           attempts,
-          normalization: sanitized.normalization,
-          ignoredOverrides: sanitized.ignoredOverrides,
+          normalization: appliedNormalization,
+          ignoredOverrides,
           metadata: {
             ...result.metadata,
             ...buildMediaGenerationNormalizationMetadata({
-              normalization: sanitized.normalization,
+              normalization: appliedNormalization,
               requestedSizeForDerivedAspectRatio: params.size,
               includeSupportedDurationSeconds: true,
             }),

@@ -111,7 +111,7 @@ not overwrite the existing skill.
   still requires password mode. The mode selects the configured secret;
   clients can send it in either `auth.token` or `auth.password`.
 - `--flow import`: runs a detected migration provider (for example Hermes via `--import-from hermes`) against a fresh setup. After confirmation, onboarding stages config, credentials, workspace files, memory, and skills under private temporary targets; imported inference must pass a live completion before workspace and agent state are promoted and configuration is committed. Failure or cancellation before promotion leaves the live target untouched. External activation steps that cannot be rolled back, such as Codex plugin installation, run afterward and remain retryable from the migration report. Migration import options (`--flow import`, `--import-from`, `--import-source`, and `--import-secrets`) cannot be combined with `--reset`; run the import without `--reset`. Use [`openclaw migrate`](/cli/migrate) for dry-run plans, overwrite mode, verified backups, reports, and exact mappings.
-- `--remote-url`, `--remote-token`, and `--remote-password`: prefill the classic remote Gateway step and override stored remote values for this run. Pass either a token or a password, not both. Changing the URL does not reuse stored credentials unless you also provide a new token or password. The interactive step asks for one **Gateway secret**, whether the remote Gateway calls it a token or password, and stores it as `gateway.remote.token`. Credentials stay masked and follow the plaintext or SecretRef storage choice. Leave the secret blank and confirm to keep an existing credential. To connect without a shared secret, leave it blank, decline keeping an existing credential if offered, then explicitly confirm **Continue without a Gateway secret?**. Reference storage offers the same confirmation before asking for the reference.
+- `--remote-url`, `--remote-token`, and `--remote-password`: prefill the classic remote Gateway step and override stored remote values for this run. Pass either a token or a password, not both. Equivalent URL spellings, such as a trailing slash or an explicit default port, preserve saved credentials and transport settings. Changing the host, path, or query selects a different credential target. A newly discovered SSH tunnel also selects a new target, even with the same loopback URL. The interactive step asks for one **Gateway secret**, whether the remote Gateway calls it a token or password, and stores it as `gateway.remote.token`. Credentials stay masked and follow the plaintext or SecretRef storage choice. Leave the secret blank and confirm to keep an existing credential. To connect without a shared secret, leave it blank, decline keeping an existing credential if offered, then explicitly confirm **Continue without a Gateway secret?**. Reference storage offers the same confirmation before asking for the reference.
 - `--modern` is a compatibility alias for the OpenClaw conversational setup
   assistant. It uses the same live-inference gate as `openclaw setup` and
   accepts only `--workspace`, `--agent-name`, `--accept-risk`,
@@ -267,7 +267,13 @@ acknowledgement, so invoking `--reset` can move state to Trash before you can
 decline that prompt. After reset, the command runs guided, classic, or
 non-interactive onboarding according to the other flags.
 
-Session reset permanently removes stored SQLite history and its owned archive
+Onboarding reset requires readable configuration and SQLite storage. With
+PostgreSQL configured, rerun onboarding without `--reset`, or use
+`openclaw database port --to sqlite` before resetting. Reset keeps database
+state, so discarding PostgreSQL routing would leave that state inaccessible.
+For a file-only reset without starting onboarding, use `openclaw reset --scope config`.
+
+Session reset permanently removes stored history from the configured database and its owned archive
 files through the same cleanup as [`openclaw reset`](/cli/reset). It preserves
 auth profiles and unrelated database state. Stop any running Gateway first;
 onboarding refuses session cleanup while another process owns the state directory.
@@ -297,6 +303,13 @@ OPENCLAW_LOCALE=en openclaw onboard # Explicit English override
 ## Non-interactive setup
 
 `--non-interactive` requires `--accept-risk` (acknowledges that agents are powerful and full system access is risky). `--mode` defaults to `local`.
+
+Replacing an existing provider credential saves it inactive and prints a
+`models auth activate` command; setup does not automatically switch your working
+connection or continue to daemon installation. Temporary credential staging files
+are removed after their databases close. If removal remains blocked, setup warns
+with the leftover directory path without hiding the provider result or activation
+instructions. Remove that directory manually once the lock clears.
 
 ### Required external plugins
 
@@ -338,7 +351,11 @@ openclaw onboard --non-interactive --accept-risk --skip-health \
   --custom-image-input
 ```
 
-`--custom-api-key` is optional; if omitted, onboarding checks `CUSTOM_API_KEY` in env. OpenClaw marks common vision model IDs (GPT-4o/4.1/5.x, Claude 3/4, Gemini, Qwen-VL, LLaVA, Pixtral, and similar) as image-capable automatically. Pass `--custom-image-input` for unknown custom vision IDs, or `--custom-text-input` to force text-only metadata. Use `--custom-compatibility openai-responses` for OpenAI-compatible endpoints that support `/v1/responses` but not `/v1/chat/completions`; valid values are `openai` (default), `openai-responses`, `anthropic`.
+`--custom-api-key` is optional; if omitted, onboarding checks `CUSTOM_API_KEY` in env. For an endpoint that does not enforce authentication, pass `--custom-no-auth` instead. This persists `auth: "none"` and skips credential lookup, including `CUSTOM_API_KEY`. Do not combine it with `--custom-api-key`. Explicit no-auth requires the effective `openai-completions` adapter; Responses and Azure OpenAI routes are rejected before reset or persistence. OpenClaw marks common vision model IDs (GPT-4o/4.1/5.x, Claude 3/4, Gemini, Qwen-VL, LLaVA, Pixtral, and similar) as image-capable automatically. Pass `--custom-image-input` for unknown custom vision IDs, or `--custom-text-input` to force text-only metadata. Use `--custom-compatibility openai-responses` for OpenAI-compatible endpoints that support `/v1/responses` but not `/v1/chat/completions`; valid values are `openai` (default), `openai-responses`, `anthropic`.
+
+For `openai` and `openai-responses`, omit `--custom-model-id` to discover models from the base URL's `/models` endpoint (for example, `/v1/models`). Onboarding saves all discovered models and uses the first as the default. An explicit `--custom-model-id` skips discovery and configures that model. Discovery sends the supplied API key and times out after five seconds. If the endpoint is unavailable, returns invalid data, or lists no models, rerun with `--custom-model-id`. Anthropic-compatible setup always requires that flag.
+
+When combining discovery with `--reset`, a credential stored only in the configuration being reset cannot be reused. Supply the key for the new setup through `--custom-api-key` or `CUSTOM_API_KEY`, or rerun without `--reset`. Onboarding rejects the request before resetting if the discovered provider would lose its credential.
 
 LM Studio also has a provider-specific key flag:
 
@@ -359,7 +376,7 @@ openclaw onboard --non-interactive --accept-risk --skip-health \
   --custom-model-id "qwen3.5:27b"
 ```
 
-`--custom-base-url` defaults to `http://127.0.0.1:11434`. `--custom-model-id` is optional; if omitted, onboarding uses Ollama's suggested defaults. Cloud model IDs such as `kimi-k2.5:cloud` also work here.
+`--custom-base-url` defaults to `http://127.0.0.1:11434`. `--custom-model-id` is optional; if omitted, onboarding uses Ollama's suggested defaults. Cloud model IDs such as `kimi-k2.6:cloud` also work here.
 
 Non-interactive llama.cpp against an existing `llama-server`:
 
@@ -475,7 +492,7 @@ Token-based model auth (used with `--auth-choice token`):
 
 Cloudflare AI Gateway: `--cloudflare-ai-gateway-account-id <id>`, `--cloudflare-ai-gateway-gateway-id <id>`.
 
-Daemon install control: `--no-install-daemon` / `--skip-daemon` (aliases; skip gateway service install), `--daemon-runtime <node|bun>` (default: `node`). Bun 1.4+ with WAL-reset-safe `node:sqlite` is an explicit opt-in; Node remains recommended.
+Daemon install control: `--no-install-daemon` / `--skip-daemon` (aliases; skip gateway service install), `--daemon-runtime <node|bun>` (default: `node`). Bun 1.4.3+ with WAL-reset-safe `node:sqlite` is an explicit opt-in; Node remains recommended.
 
 Skills: `--node-manager <npm|pnpm|bun>` (default `npm`), `--skip-skills`.
 

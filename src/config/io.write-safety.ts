@@ -7,6 +7,7 @@ import {
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { resolvePathViaExistingAncestorSync } from "../infra/boundary-path.js";
 import { isMissingPathError } from "../infra/errors.js";
+import { readExistingStateRootMode } from "../infra/private-dir-mode.js";
 import { isPathInside } from "../security/scan-paths.js";
 import { isRecord } from "../utils.js";
 import { hashConfigIncludeRaw } from "./includes.js";
@@ -277,7 +278,7 @@ export function createConfigFileWriteGuard(
       assertOwner();
       publication?.targetPathProof?.assertCurrent();
     };
-    assertRollbackOwner();
+    assertOwner();
     assertPublishedIdentity();
     if (publishedIdentity === undefined) {
       throw new ConfigMutationConflictError("config write has no publication to roll back", {
@@ -463,7 +464,13 @@ export async function rollbackConfigFileWriteIfUnchanged(params: {
       replaceFileAtomicSync({
         filePath: params.configPath,
         content: previousRaw,
-        dirMode: 0o700,
+        dirMode: params.stateDirectory
+          ? (readExistingStateRootMode(
+              path.dirname(params.configPath),
+              params.stateDirectory.path,
+              params.fsModule,
+            ) ?? 0o700)
+          : 0o700,
         mode: 0o600,
         copyFallbackOnPermissionError: true,
         syncTempFile: params.durable,
@@ -568,7 +575,6 @@ export function formatConfigArtifactTimestamp(ts: string): string {
 
 export function resolveConfigSizeBaselineBytes(params: {
   raw: string | null;
-  json5: { parse: (value: string) => unknown };
   lastTouchedVersionOverride?: string;
   env?: NodeJS.ProcessEnv;
 }): number | null {
@@ -576,7 +582,7 @@ export function resolveConfigSizeBaselineBytes(params: {
     return null;
   }
   const rawBytes = Buffer.byteLength(params.raw, "utf-8");
-  const parsed = parseConfigJson5(params.raw, params.json5);
+  const parsed = parseConfigJson5(params.raw);
   if (!parsed.ok || !isRecord(parsed.parsed)) {
     return rawBytes;
   }

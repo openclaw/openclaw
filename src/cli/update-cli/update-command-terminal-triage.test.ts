@@ -4,11 +4,10 @@ import { once } from "node:events";
 import { readFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
 import { collectNestedErrorCandidates } from "../../infra/error-graph-internal.js";
-import * as temporaryRoot from "../../infra/tmp-openclaw-dir.js";
+import { withDatabase } from "../../infra/package-update-activation-fixtures.test-support.js";
 import { CONTROL_PLANE_UPDATE_SENTINEL_META_ENV } from "../../infra/update-control-plane-sentinel.js";
 import {
   captureManagedUpdateLeaseDatabaseIdentity,
@@ -19,30 +18,30 @@ import { MANAGED_HANDOFF_RUNTIME_ENTRY } from "../../infra/update-managed-servic
 import { stageManagedHandoffRuntime } from "../../infra/update-managed-service-handoff-runtime.js";
 import { createUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js";
 import { renderUpdateRunReport } from "../../infra/update-run-report.js";
-import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import { defaultRuntime, ExitError } from "../../runtime.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import type { UpdateCommandOptions } from "./shared.js";
-import { withUpdateCommandExecutor } from "./update-command-executor.js";
-import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
+import { withUpdateCommandExecutor as withExecutor } from "./update-command-executor.js";
+import { useExecutorFixture } from "./update-command-executor.test-support.js";
+import { resultFixture } from "./update-command-fixtures.test-support.js";
+import { UpdateCommandRecoveryPendingError as RecoveryPendingError } from "./update-command-recovery-error.js";
 import {
-  UpdateCommandFailure,
-  UpdateCommandPendingRecoveryFailure,
+  UpdateCommandFailure as UpdateFailure,
+  UpdateCommandPendingRecoveryFailure as PendingRecoveryFailure,
 } from "./update-command-result.js";
 import {
-  deferUpdateCommandTerminalResult,
-  publishUpdateCommandTerminalResult,
-  resolveSettledUpdateCommandResult,
-  withUpdateCommandTerminalResult,
+  deferUpdateCommandTerminalResult as deferResult,
+  resolveSettledUpdateCommandResult as settleResult,
+  withUpdateCommandTerminalResult as withTerminal,
 } from "./update-command-terminal.js";
-import { withUpdateFailureTriage } from "./update-command-triage.js";
-import { withUpdateCommandRecoveryUnwind } from "./update-command-unwind.js";
+import { publishUpdateCommandTerminalResultForTest as publishResult } from "./update-command-terminal.test-support.js";
+import { withUpdateFailureTriage as withTriage } from "./update-command-triage.js";
+import { withUpdateCommandRecoveryUnwind as withRecovery } from "./update-command-unwind.js";
 
-const dirs = useAutoCleanupTempDirTracker(afterEach);
+const fixture = useExecutorFixture("update-terminal-triage-", { restoreEnv: true });
+
 afterEach(() => {
   closeOpenClawStateDatabaseForTest();
-  vi.restoreAllMocks();
-  vi.unstubAllEnvs();
 });
 
 it.each([
@@ -50,14 +49,9 @@ it.each([
   { name: "authorized-failure", revoked: false, releaseDenied: false, json: true },
   { name: "release-denied", revoked: false, releaseDenied: true, json: false },
 ])("preserves settled managed failure disposition: $name", async (trial) => {
-  const root = await fs.realpath(dirs.make("update-terminal-triage-"));
-  const temporary = path.join(root, "private-tmp");
+  const { root, control: temporary } = fixture();
   const diagnosticDir = path.join(root, "diagnostics");
-  await fs.mkdir(temporary, { mode: 0o700 });
   await fs.mkdir(diagnosticDir, { mode: 0o700 });
-  // Only choose disposable state. Executor admission, process identities, ledger,
-  // publication, outer triage and the atomic diagnostic writer remain real.
-  vi.spyOn(temporaryRoot, "resolvePreferredOpenClawTmpDir").mockReturnValue(temporary);
   vi.stubEnv("OPENCLAW_STATE_DIR", path.join(root, "state"));
   vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(root, "state", "openclaw.json"));
   vi.stubEnv("OPENCLAW_UPDATE_RUN_HANDOFF", "1");
@@ -91,14 +85,7 @@ it.each([
     serviceManagerEnv: { PATH: process.env.PATH, SystemRoot: process.env.SystemRoot },
     existingIdentity,
   };
-  // The helper really acquires and assigns the lease; no borrowed-owner method is mocked.
-  const helper = trial.releaseDenied
-    ? undefined
-    : spawn(
-        process.execPath,
-        [
-          "-e",
-          `
+  const helperCode = `
       const {createManagedHandoffLeaseStore}=require(${JSON.stringify(runtimeEntry)});
       const store=createManagedHandoffLeaseStore(${JSON.stringify(leaseOptions)});
       const acquired=store.acquire(${JSON.stringify(root)},${JSON.stringify(owner)},{kind:"update"});
@@ -111,10 +98,13 @@ it.each([
         process.disconnect();
       });
       process.send("assigned");
-      `,
-        ],
-        { stdio: ["ignore", "ignore", "pipe", "ipc"] },
-      );
+      `;
+  // The helper really acquires and assigns the lease; no borrowed-owner method is mocked.
+  const helper = trial.releaseDenied
+    ? undefined
+    : spawn(process.execPath, ["-e", helperCode], {
+        stdio: ["ignore", "ignore", "pipe", "ipc"],
+      });
   const exited = helper ? once(helper, "exit") : undefined;
   let stderr = "";
   helper?.stderr?.on("data", (data) => {
@@ -122,12 +112,11 @@ it.each([
   });
   try {
     if (helper && exited) {
-      const ready = await Promise.race([
-        once(helper, "message").then(([message]) => message),
-        exited.then(() => {
-          throw new Error(`helper exited before assignment: ${stderr}`);
-        }),
-      ]);
+      const [ready] = await awaitGateBeforeSettlement(
+        once(helper, "message"),
+        exited,
+        "helper exited before assignment",
+      );
       expect(ready).toBe("assigned");
     }
     const store = createManagedHandoffLeaseStore();
@@ -149,74 +138,57 @@ it.each([
     // These spies call through to the real filesystem, including atomic temp creation.
     const opened = vi.spyOn(fs, "open");
     const renamed = vi.spyOn(fs, "rename");
-    const result: UpdateRunResult = {
+    const result = resultFixture(undefined, {
       status: "error",
-      mode: "npm",
       root,
       reason: "global-install-failed",
-      steps: [],
       durationMs: 1,
-    };
+    });
     const opts = { json: trial.json, yes: true, run };
     const target = { root, env };
     let statusAtPublication: string | undefined;
     let pendingAtPublication = false;
     let releasePendingAtPublication = false;
     let failureCauses: string[] = [];
-    let exit: unknown;
-    await withUpdateFailureTriage(opts, target, () =>
-      withUpdateCommandTerminalResult((registerRun) => {
+    const exit = await withTriage(opts, target, () =>
+      withTerminal((registerRun) => {
         registerRun(run);
-        return withUpdateCommandExecutor(run.runId, async (executor) => {
+        return withExecutor(run.runId, async (executor) => {
           run.executorFence = await executor.enter(root);
-          await withUpdateCommandRecoveryUnwind(opts, { triageTarget: target }, async () => {
+          await withRecovery(opts, { triageTarget: target }, async () => {
             expect(
-              deferUpdateCommandTerminalResult(run, async (failure) => {
+              deferResult(run, async (failure) => {
                 statusAtPublication = getUpdateRun(run.runId, { env })?.status;
-                pendingAtPublication = failure instanceof UpdateCommandPendingRecoveryFailure;
-                releasePendingAtPublication = failure instanceof UpdateCommandRecoveryPendingError;
+                pendingAtPublication = failure instanceof PendingRecoveryFailure;
+                releasePendingAtPublication = failure instanceof RecoveryPendingError;
                 failureCauses = collectNestedErrorCandidates(failure)
                   .filter((candidate): candidate is Error => candidate instanceof Error)
                   .map((candidate) => candidate.message);
-                const settled = await resolveSettledUpdateCommandResult(
-                  { opts, root },
-                  result,
-                  failure,
-                );
-                return publishUpdateCommandTerminalResult({ opts }, settled.result, {
-                  rolledBack: false,
-                });
+                const settled = await settleResult({ opts, root }, result, failure);
+                return publishResult({ opts }, settled.result, { rolledBack: false });
               }),
             ).toBe(true);
             run.executorFence!.assertCurrent();
             if (trial.revoked) {
-              const db = new DatabaseSync(databasePath);
-              try {
-                db.prepare(
-                  "UPDATE managed_update_handoffs SET owner = ? WHERE install_root = ?",
-                ).run("replacement-owner", root);
-              } finally {
-                db.close();
-              }
+              withDatabase(databasePath, (db) =>
+                db
+                  .prepare("UPDATE managed_update_handoffs SET owner = ? WHERE install_root = ?")
+                  .run("replacement-owner", root),
+              );
             }
             if (trial.releaseDenied) {
               // Only final lease deletion is denied; admission and inner unwind stay real.
-              const db = new DatabaseSync(databasePath);
-              try {
+              withDatabase(databasePath, (db) =>
                 db.exec(
                   "CREATE TRIGGER deny_terminal_release BEFORE DELETE ON managed_update_handoffs BEGIN SELECT RAISE(FAIL, 'fixture final lease delete denied'); END",
-                );
-              } finally {
-                db.close();
-              }
+                ),
+              );
             }
-            throw new UpdateCommandFailure(result, 7, "fixture package failure");
+            throw new UpdateFailure(result, 7, "fixture package failure");
           });
         });
       }),
-    ).catch((error: unknown) => {
-      exit = error;
-    });
+    ).catch((error: unknown) => error);
     const after = await fs.readFile(artifact, "utf8");
     const afterStat = await fs.stat(artifact);
     const artifactOpens = opened.mock.calls.filter(
@@ -260,15 +232,12 @@ it.each([
         ? { helper: { pid: process.pid }, executor: { pid: process.pid } }
         : { owner: trial.revoked ? "replacement-owner" : owner },
     });
+    expect(artifactOpens).toBe(unsettled ? 0 : 1);
+    expect(artifactRenames).toBe(unsettled ? 0 : 1);
     if (unsettled) {
-      expect(artifactOpens).toBe(0);
-      expect(artifactRenames).toBe(0);
       expect(after).toBe(previous);
-      expect(afterStat.ino).toBe(priorStat.ino);
-      expect(afterStat.mtimeMs).toBe(priorStat.mtimeMs);
+      expect(afterStat).toMatchObject({ ino: priorStat.ino, mtimeMs: priorStat.mtimeMs });
     } else {
-      expect(artifactOpens).toBe(1);
-      expect(artifactRenames).toBe(1);
       expect(JSON.parse(after)).toMatchObject({
         result: { status: "error", reason: result.reason },
       });
@@ -282,12 +251,7 @@ it.each([
       expect(code, stderr).toBe(0);
     }
     if (trial.releaseDenied) {
-      const db = new DatabaseSync(databasePath);
-      try {
-        db.exec("DROP TRIGGER IF EXISTS deny_terminal_release");
-      } finally {
-        db.close();
-      }
+      withDatabase(databasePath, (db) => db.exec("DROP TRIGGER IF EXISTS deny_terminal_release"));
       const store = createManagedHandoffLeaseStore();
       const retained = store.read(root);
       if (retained.kind === "current") {

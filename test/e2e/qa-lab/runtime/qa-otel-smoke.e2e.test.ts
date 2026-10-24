@@ -1,9 +1,7 @@
-// QA OTEL Smoke tests cover QA Lab telemetry evidence.
 import { spawnSync } from "node:child_process";
-import { EventEmitter } from "node:events";
-import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { EventEmitter, once } from "node:events";
+import { existsSync, mkdirSync } from "node:fs";
 import { createConnection as createNetConnection } from "node:net";
-import os from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { gzipSync } from "node:zlib";
@@ -12,82 +10,93 @@ import {
   resolveRuntimeWorkerArgv,
   resolveRuntimeWorkerUrl,
 } from "../../../../src/infra/runtime-worker-url.js";
+import { useAutoCleanupTempDirTracker } from "../../../helpers/temp-dir.js";
 import { qaOtelSmokeEntrypoint } from "./qa-otel-smoke-entrypoint.test-support.js";
 import { testing } from "./qa-otel-smoke-runtime.js";
 
 const runtimeUrl = resolveRuntimeWorkerUrl(qaOtelSmokeEntrypoint);
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const collectorId = "00000000-0000-4000-8000-000000000000";
 
-afterEach(() => {
-  vi.unstubAllEnvs();
-  vi.restoreAllMocks();
-});
+function makeCollectorFixture() {
+  const collectorDir = path.join(tempDirs.make("openclaw-qa-otel-collector-"), "collector");
+  const child = Object.assign(new EventEmitter(), {
+    stderr: new EventEmitter(),
+    stdout: new EventEmitter(),
+  });
+  const ports = [4318, 45679];
+  const stopDockerContainer = vi.fn(async () => {});
+  const deps = {
+    mkdtemp: async () => {
+      mkdirSync(collectorDir);
+      return collectorDir;
+    },
+    randomUUID: (): typeof collectorId => collectorId,
+    reserveLocalPort: async () => ports.shift() ?? 49999,
+    spawn: vi.fn(() => child) as never,
+    stopDockerContainer,
+  };
+  return { collectorDir, child, deps, stopDockerContainer };
+}
+
+async function expectCloses(promise: Promise<unknown>, label: string) {
+  await Promise.race([
+    promise,
+    delay(1_000, undefined, { ref: false }).then(() => {
+      throw new Error(`${label} close timed out`);
+    }),
+  ]);
+}
 
 describe("qa-otel-smoke receiver bounds", () => {
-  function makePassingSmokeAssertionInput(): Parameters<typeof testing.assertSmoke>[0] {
-    return {
-      bodyText: {
-        logs: ["diagnostics-otel: logs exporter enabled"],
+  function makeLeakingSmokeAssertionInput(
+    logsExporter: "otlp" | "stdout",
+  ): Parameters<typeof testing.assertSmoke>[0] {
+    const log = "diagnostics-otel: log payload contains OTEL-QA-SECRET";
+    const stdoutLogRecords = [
+      {
+        ts: "2026-06-18T00:00:00.000Z",
+        signal: "openclaw.diagnostic.log" as const,
+        "service.name": "openclaw-qa-lab-otel-smoke",
+        severityText: "INFO",
+        severityNumber: 9,
+        body: "log",
+        attributes: {},
       },
+    ].filter(() => logsExporter === "stdout");
+    return {
+      bodyText: logsExporter === "otlp" ? { logs: [log] } : {},
       childExitCode: 0,
       disallowedBodyNeedles: ["OTEL-QA-SECRET"],
-      logsExporter: "otlp",
+      logsExporter,
       logRecords: [
         {
           body: "diagnostics-otel: logs exporter enabled",
           traceId: "trace",
           spanId: "span",
         },
-      ],
+      ].filter(() => logsExporter === "otlp"),
       metrics: [{ name: "openclaw.harness.duration_ms" }],
-      requests: [
-        {
-          path: "/v1/traces",
-          signal: "traces",
+      requests: (["traces", "metrics", "logs"] as const)
+        .filter((signal) => logsExporter === "otlp" || signal !== "logs")
+        .map((signal) => ({
+          path: `/v1/${signal}`,
+          signal,
           bytes: 16,
           contentEncoding: undefined,
           status: 200,
-          spanCount: 5,
-          metricCount: 0,
-          logCount: 0,
-        },
-        {
-          path: "/v1/metrics",
-          signal: "metrics",
-          bytes: 16,
-          contentEncoding: undefined,
-          status: 200,
-          spanCount: 0,
-          metricCount: 1,
-          logCount: 0,
-        },
-        {
-          path: "/v1/logs",
-          signal: "logs",
-          bytes: 16,
-          contentEncoding: undefined,
-          status: 200,
-          spanCount: 0,
-          metricCount: 0,
-          logCount: 1,
-        },
-      ],
-      stdoutLogLines: [],
-      stdoutLogRecords: [],
+          spanCount: signal === "traces" ? 5 : 0,
+          metricCount: signal === "metrics" ? 1 : 0,
+          logCount: signal === "logs" ? 1 : 0,
+        })),
+      stdoutLogLines: stdoutLogRecords.map((record) => JSON.stringify({ ...record, body: log })),
+      stdoutLogRecords,
       spans: [
-        {
-          name: "openclaw.run",
-          parent: false,
-          attributes: {
-            "openclaw.error": "QA OTEL provider stream failed OPENAI_API_KEY=***",
-          },
-        },
-        {
-          name: "openclaw.harness.run",
-          parent: true,
-          attributes: {
-            "openclaw.error": "QA OTEL provider stream failed OPENAI_API_KEY=***",
-          },
-        },
+        ...["openclaw.run", "openclaw.harness.run"].map((name) => ({
+          name,
+          parent: name !== "openclaw.run",
+          attributes: { "openclaw.error": "QA OTEL provider stream failed OPENAI_API_KEY=***" },
+        })),
         { name: "openclaw.context.assembled", parent: true, attributes: {} },
         { name: "openclaw.message.delivery", parent: true, attributes: {} },
         {
@@ -129,44 +138,33 @@ describe("qa-otel-smoke receiver bounds", () => {
   });
 
   it("ignores inherited OTEL exporter endpoints during direct producer execution", () => {
-    const tempRoot = mkdtempSync(path.join(os.tmpdir(), "openclaw-qa-otel-env-isolation-"));
-    try {
-      const result = spawnSync(
-        process.execPath,
-        [...resolveRuntimeWorkerArgv(runtimeUrl), "--output-dir", tempRoot],
-        {
-          cwd: process.cwd(),
-          encoding: "utf8",
-          env: {
-            ...process.env,
-            OTEL_EXPORTER_OTLP_ENDPOINT: "http://127.0.0.1:1",
-            OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: "http://127.0.0.1:2/v1/traces",
-            OTEL_EXPORTER_OTLP_METRICS_ENDPOINT: "http://127.0.0.1:3/v1/metrics",
-            OTEL_EXPORTER_OTLP_LOGS_ENDPOINT: "http://127.0.0.1:4/v1/logs",
-          },
-          timeout: 30_000,
+    const tempRoot = tempDirs.make("openclaw-qa-otel-env-isolation-");
+    const result = spawnSync(
+      process.execPath,
+      [...resolveRuntimeWorkerArgv(runtimeUrl), "--output-dir", tempRoot],
+      {
+        cwd: process.cwd(),
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          OTEL_EXPORTER_OTLP_ENDPOINT: "http://127.0.0.1:1",
+          OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: "http://127.0.0.1:2/v1/traces",
+          OTEL_EXPORTER_OTLP_METRICS_ENDPOINT: "http://127.0.0.1:3/v1/metrics",
+          OTEL_EXPORTER_OTLP_LOGS_ENDPOINT: "http://127.0.0.1:4/v1/logs",
         },
-      );
+        timeout: 30_000,
+      },
+    );
 
-      expect(result.status, result.stderr).toBe(0);
-      expect(result.stdout).toContain("qa-otel-smoke: passed");
-    } finally {
-      rmSync(tempRoot, { force: true, recursive: true });
-    }
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toContain("qa-otel-smoke: passed");
   });
 
-  it("rejects identity OTLP bodies above the decoded byte ceiling", () => {
-    expect(() => testing.decodeRequestBody(Buffer.alloc(65), undefined, 64)).toThrow(
-      "OTLP request body exceeded 64 bytes: 65 bytes",
-    );
-  });
-
-  it("rejects gzip OTLP bodies above the decoded byte ceiling", () => {
-    const compressed = gzipSync(Buffer.alloc(256, "a"));
-
-    expect(() => testing.decodeRequestBody(compressed, "gzip", 64)).toThrow(
-      "decoded OTLP request body exceeded 64 bytes",
-    );
+  it.each([
+    [undefined, Buffer.alloc(65), "OTLP request body exceeded 64 bytes: 65 bytes"],
+    ["gzip", gzipSync(Buffer.alloc(256, "a")), "decoded OTLP request body exceeded 64 bytes"],
+  ] as const)("rejects %s OTLP bodies above the decoded byte ceiling", (encoding, body, error) => {
+    expect(() => testing.decodeRequestBody(body, encoding, 64)).toThrow(error);
   });
 
   it("returns a bounded failure for malformed local OTLP protobuf", async () => {
@@ -212,10 +210,7 @@ describe("qa-otel-smoke receiver bounds", () => {
     });
 
     try {
-      await new Promise<void>((resolve, reject) => {
-        socket.once("connect", resolve);
-        socket.once("error", reject);
-      });
+      await once(socket, "connect");
       socket.write(
         [
           "POST /v1/traces HTTP/1.1",
@@ -227,108 +222,45 @@ describe("qa-otel-smoke receiver bounds", () => {
         ].join("\r\n"),
       );
 
-      await Promise.race([
-        receiver.close(),
-        delay(1_000, undefined, { ref: false }).then(() => {
-          throw new Error("receiver close timed out");
-        }),
-      ]);
-      await Promise.race([
-        socketClosed,
-        delay(1_000, undefined, { ref: false }).then(() => {
-          throw new Error("socket close timed out");
-        }),
-      ]);
+      await expectCloses(receiver.close(), "receiver");
+      await expectCloses(socketClosed, "socket");
     } finally {
       socket.destroy();
       await receiver.close().catch(() => {});
     }
   });
 
-  it("still fails when OTLP log payload text leaks scenario content", () => {
-    const input = makePassingSmokeAssertionInput();
-    input.bodyText = {
-      logs: ["diagnostics-otel: log payload contains OTEL-QA-SECRET"],
-    };
-
-    const assertion = testing.assertSmoke(input);
-
-    expect(assertion.passed).toBe(false);
-    expect(assertion.failures).toContain("OTLP logs payload leaked content: OTEL-QA-SECRET");
-    expect(assertion.leakContexts.logs?.[0]).toContain("[needle]");
-  });
-
-  it("still fails when stdout diagnostic log payload text leaks scenario content", () => {
-    const input = makePassingSmokeAssertionInput();
-    input.logsExporter = "stdout";
-    input.bodyText = {};
-    input.logRecords = [];
-    input.requests = input.requests.filter((request) => request.signal !== "logs");
-    input.stdoutLogRecords = [
-      {
-        ts: "2026-06-18T00:00:00.000Z",
-        signal: "openclaw.diagnostic.log",
-        "service.name": "openclaw-qa-lab-otel-smoke",
-        severityText: "INFO",
-        severityNumber: 9,
-        body: "log",
-        attributes: {},
-      },
-    ];
-    input.stdoutLogLines = [
-      JSON.stringify({
-        ...input.stdoutLogRecords[0],
-        body: "diagnostics-otel: log payload contains OTEL-QA-SECRET",
-      }),
-    ];
-
-    const assertion = testing.assertSmoke(input);
-
-    expect(assertion.passed).toBe(false);
-    expect(assertion.failures).toContain(
-      "stdout diagnostic log payload leaked content: OTEL-QA-SECRET",
-    );
-    expect(assertion.leakContexts.logs?.[0]).toContain("[needle]");
+  it.each([
+    ["otlp", "OTLP logs"],
+    ["stdout", "stdout diagnostic log"],
+  ] as const)("still fails when %s log payload text leaks scenario content", (exporter, label) => {
+    expect(testing.assertSmoke(makeLeakingSmokeAssertionInput(exporter))).toMatchObject({
+      passed: false,
+      failures: expect.arrayContaining([`${label} payload leaked content: OTEL-QA-SECRET`]),
+      leakContexts: { logs: [expect.stringContaining("[needle]")] },
+    });
   });
 
   it("preserves leak markers even when later body text is truncated", () => {
     const captured: { traces?: string[] } = {};
-
-    testing.appendCapturedBodyText(
-      captured,
-      "traces",
-      Buffer.from(`prefix OTEL-QA-SECRET ${"a".repeat(20)}`),
-      16,
-      ["OTEL-QA-SECRET"],
-    );
-    testing.appendCapturedBodyText(captured, "traces", Buffer.from("b".repeat(128)), 16, [
-      "OTEL-QA-SECRET",
-    ]);
-
+    const append = (body: string) =>
+      testing.appendCapturedBodyText(captured, "traces", Buffer.from(body), 16, ["OTEL-QA-SECRET"]);
+    append(`prefix OTEL-QA-SECRET ${"a".repeat(20)}`);
+    append("b".repeat(128));
     expect(captured.traces?.join("\n")).toContain("OTEL-QA-SECRET");
     expect(captured.traces?.join("\n")).toContain("[captured body text truncated");
   });
 
   it("disables unused Docker collector telemetry instead of binding a host port", async () => {
-    const child = new EventEmitter() as EventEmitter & {
-      stderr: EventEmitter;
-      stdout: EventEmitter;
-    };
-    child.stderr = new EventEmitter();
-    child.stdout = new EventEmitter();
+    const { deps, stopDockerContainer } = makeCollectorFixture();
     let writtenConfig = "";
-    const stopDockerContainer = vi.fn(async () => {});
     const removePath = vi.fn(async () => {});
-    const ports = [4318];
 
     const collector = await testing.startDockerOtelCollector(4317, {
+      ...deps,
       mkdtemp: async () => "/tmp/openclaw-otel-collector-test",
       platform: "linux",
-      randomUUID: () => "00000000-0000-4000-8000-000000000000",
-      reserveLocalPort: async () => ports.shift() ?? 49999,
       rm: removePath as never,
-      spawn: vi.fn(() => child) as never,
-      stopDockerContainer,
       waitForLocalPort: async () => {},
       writeFile: async (_path, config) => {
         writtenConfig =
@@ -342,9 +274,7 @@ describe("qa-otel-smoke receiver bounds", () => {
     expect(writtenConfig).not.toContain("address:");
 
     await collector.close();
-    expect(stopDockerContainer).toHaveBeenCalledWith(
-      "openclaw-otel-smoke-00000000-0000-4000-8000-000000000000",
-    );
+    expect(stopDockerContainer).toHaveBeenCalledWith(`openclaw-otel-smoke-${collectorId}`);
     expect(removePath).toHaveBeenCalledWith("/tmp/openclaw-otel-collector-test", {
       force: true,
       recursive: true,
@@ -352,85 +282,40 @@ describe("qa-otel-smoke receiver bounds", () => {
   });
 
   it("cleans Docker collector containers and temp config after readiness failures", async () => {
-    const tempRoot = mkdtempSync(path.join(os.tmpdir(), "openclaw-qa-otel-collector-"));
-    const collectorDir = path.join(tempRoot, "collector");
-    const child = new EventEmitter() as EventEmitter & {
-      stderr: EventEmitter;
-      stdout: EventEmitter;
-    };
-    child.stderr = new EventEmitter();
-    child.stdout = new EventEmitter();
-    const stopDockerContainer = vi.fn(async () => {});
-    const ports = [4318, 45679];
+    const { collectorDir, deps, stopDockerContainer } = makeCollectorFixture();
+    await expect(
+      testing.startDockerOtelCollector(4317, {
+        ...deps,
+        waitForLocalPort: async () => {
+          throw new Error("collector never became ready");
+        },
+      }),
+    ).rejects.toThrow("collector never became ready");
 
-    try {
-      await expect(
-        testing.startDockerOtelCollector(4317, {
-          mkdtemp: async () => {
-            mkdirSync(collectorDir);
-            return collectorDir;
-          },
-          randomUUID: () => "00000000-0000-4000-8000-000000000000",
-          reserveLocalPort: async () => ports.shift() ?? 49999,
-          spawn: vi.fn(() => child) as never,
-          stopDockerContainer,
-          waitForLocalPort: async () => {
-            throw new Error("collector never became ready");
-          },
-        }),
-      ).rejects.toThrow("collector never became ready");
-
-      expect(stopDockerContainer).toHaveBeenCalledWith(
-        "openclaw-otel-smoke-00000000-0000-4000-8000-000000000000",
-      );
-      expect(existsSync(collectorDir)).toBe(false);
-    } finally {
-      rmSync(tempRoot, { force: true, recursive: true });
-    }
+    expect(stopDockerContainer).toHaveBeenCalledWith(`openclaw-otel-smoke-${collectorId}`);
+    expect(existsSync(collectorDir)).toBe(false);
   });
   it("reports bounded Docker collector output when readiness exits", async () => {
-    const tempRoot = mkdtempSync(path.join(os.tmpdir(), "openclaw-qa-otel-collector-output-"));
-    const collectorDir = path.join(tempRoot, "collector");
-    const child = new EventEmitter() as EventEmitter & {
-      stderr: EventEmitter;
-      stdout: EventEmitter;
-    };
-    child.stderr = new EventEmitter();
-    child.stdout = new EventEmitter();
-    const ports = [4318, 45679];
-
-    try {
-      let thrown: unknown;
-      await testing
-        .startDockerOtelCollector(4317, {
-          mkdtemp: async () => {
-            mkdirSync(collectorDir);
-            return collectorDir;
-          },
-          randomUUID: () => "00000000-0000-4000-8000-000000000000",
-          reserveLocalPort: async () => ports.shift() ?? 49999,
-          spawn: vi.fn(() => child) as never,
-          stopDockerContainer: vi.fn(async () => {}),
-          waitForLocalPort: async (_port, _timeout, readFailure) => {
-            child.stdout.emit("data", "DO_NOT_DUMP_COLLECTOR_PREFIX\n");
-            child.stderr.emit("data", Buffer.alloc(64 * 1024, "x"));
-            child.stderr.emit("data", "\nCOLLECTOR_TAIL_MARKER\n");
-            child.emit("close", 1);
-            await delay(0);
-            throw new Error(readFailure());
-          },
-        })
-        .catch((error: unknown) => {
-          thrown = error;
-        });
-
-      expect(thrown).toBeInstanceOf(Error);
-      const message = thrown instanceof Error ? thrown.message : String(thrown);
-      expect(message).toContain("COLLECTOR_TAIL_MARKER");
-      expect(message).not.toContain("DO_NOT_DUMP_COLLECTOR_PREFIX");
-      expect(message.length).toBeLessThan(24 * 1024);
-    } finally {
-      rmSync(tempRoot, { force: true, recursive: true });
-    }
+    const { child, deps } = makeCollectorFixture();
+    let message = "";
+    await testing
+      .startDockerOtelCollector(4317, {
+        ...deps,
+        waitForLocalPort: async (_port, _timeout, readFailure) => {
+          child.stdout.emit("data", "DO_NOT_DUMP_COLLECTOR_PREFIX\n");
+          child.stderr.emit("data", Buffer.alloc(64 * 1024, "x"));
+          child.stderr.emit("data", "\nCOLLECTOR_TAIL_MARKER\n");
+          child.emit("close", 1);
+          await delay(0);
+          throw new Error(readFailure());
+        },
+      })
+      .catch((error: unknown) => {
+        expect(error).toBeInstanceOf(Error);
+        message = error instanceof Error ? error.message : String(error);
+      });
+    expect(message).toContain("COLLECTOR_TAIL_MARKER");
+    expect(message).not.toContain("DO_NOT_DUMP_COLLECTOR_PREFIX");
+    expect(message.length).toBeLessThan(24 * 1024);
   });
 });

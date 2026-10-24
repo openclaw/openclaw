@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { Show, createSignal, onCleanup } from "solid-js";
+import { Show, createSignal, onSettled } from "solid-js";
 import { observeChatAttachmentViewport } from "./chat-attachment-viewport.ts";
 import type { AttachmentAdmission } from "./chat-message-attachment-admission-model.ts";
 import type { AttachmentItem, ImageRenderOptions } from "./chat-message-media.ts";
@@ -31,7 +31,8 @@ export function ChatAttachmentAdmission(props: AttachmentAdmissionProps): JSX.El
 function AdmissionContent(props: Pick<AttachmentAdmissionProps, "render">): JSX.Element {
   let didAdmit = typeof IntersectionObserver !== "function";
   const [admitted, setAdmitted] = createSignal(didAdmit);
-  let active = true;
+  let active = false;
+  let currentElement: Element | undefined;
   let stopObserving: (() => void) | undefined;
   const admit = () => {
     if (!active || didAdmit) {
@@ -43,15 +44,20 @@ function AdmissionContent(props: Pick<AttachmentAdmissionProps, "render">): JSX.
     setAdmitted(true);
   };
   const observeElement = (element: Element | undefined) => {
+    currentElement = element;
     stopObserving?.();
     stopObserving = undefined;
     if (element && active && !didAdmit) {
       stopObserving = observeChatAttachmentViewport(element, admit);
     }
   };
-  onCleanup(() => {
-    active = false;
-    stopObserving?.();
+  onSettled(() => {
+    active = true;
+    observeElement(currentElement);
+    return () => {
+      active = false;
+      stopObserving?.();
+    };
   });
   return (
     <>

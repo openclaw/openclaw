@@ -1,13 +1,6 @@
 import { afterEach, assert, beforeEach, expect, it, vi } from "vitest";
-import { createInfoWarnErrorLogger } from "../../test/helpers/mock-logger.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { bindOperatorModelExecution } from "../agents/admitted-run-context.js";
-import {
-  getRuntimeAuthProfileStoreCredentialsRevision,
-  getRuntimeAuthProfileStoreSnapshotsRevision,
-  prepareRuntimeAuthProfileStoreSnapshots,
-} from "../agents/auth-profiles/runtime-snapshots.js";
-import * as activeRunProjections from "../agents/embedded-agent-runner/active-run-projections.js";
 import * as preparedModelRuntime from "../agents/prepared-model-runtime.js";
 import {
   clearRuntimeConfigSnapshot,
@@ -25,9 +18,10 @@ import {
   setActivePluginRegistry,
 } from "../plugins/runtime.js";
 import { resetGatewayWorkAdmission } from "../process/gateway-work-admission.js";
-import { createEmptyRuntimeWebToolsMetadata } from "../secrets/runtime-fast-path.js";
 import { clearSecretsRuntimeSnapshot } from "../secrets/runtime.js";
+import * as sessionQueries from "../sessions/session-controller.queries.js";
 import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
+import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import {
   createGatewaySchedulerClock,
@@ -35,19 +29,22 @@ import {
 } from "../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { captureGatewayAuthPolicy } from "./auth-policy.js";
+import { installWatcherMock } from "./config-reload.watcher.test-support.js";
 import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
+import type { OperatorScope } from "./operator-scopes.js";
 import { createChannelManager } from "./server-channels.js";
 import { createContext as createGatewayTestContext } from "./server-plugin-in-process-dispatch.test-support.js";
 import {
-  createDefaultGatewayReloadState,
+  createManagedReloadTestParams,
   createDirectConfigWriteFixture,
   createConfigWriteNotification,
-  createTestConfigRevisionProjector,
   publishConfigWrite,
 } from "./server-reload-handlers.config.test-support.js";
 import { startManagedGatewayConfigReloader } from "./server-reload-managed.js";
-import { SharedGatewaySessionGenerationState } from "./server-shared-auth-generation.js";
-import { createTestRuntimeSecretsActivator } from "./server-startup-config.test-support.js";
+import {
+  createTestRuntimeSecretsActivator,
+  makePreparedSecretsSnapshot,
+} from "./server-startup-config.test-support.js";
 import {
   createDispatchTestHarness,
   createOperatorWsClient,
@@ -57,6 +54,7 @@ import { disconnectDisallowedGatewayPolicyClients } from "./server/ws-origin-pol
 let registrySnapshot: ReturnType<typeof captureActivePluginRegistrySnapshot>;
 const registry = createEmptyPluginRegistry();
 beforeEach(() => {
+  installWatcherMock();
   registrySnapshot = captureActivePluginRegistrySnapshot();
   setActivePluginRegistry(registry);
   resetGatewayRestartStateForInProcessRestart();
@@ -71,18 +69,6 @@ afterEach(() => {
   setGatewayRestartPolicy({ allowExternal: false });
   resetGatewayWorkAdmission();
 });
-
-function makePreparedSecretsSnapshot(config: OpenClawConfig) {
-  return {
-    sourceConfig: config,
-    config,
-    authStoreCredentialsRevision: getRuntimeAuthProfileStoreCredentialsRevision(),
-    authStoreSnapshotsRevision: getRuntimeAuthProfileStoreSnapshotsRevision(),
-    warnings: [],
-    webTools: createEmptyRuntimeWebToolsMetadata(),
-    authStores: prepareRuntimeAuthProfileStoreSnapshots([]),
-  };
-}
 
 it("commits model-only role changes without retiring permitted models or original source work", async () => {
   const profileState = { scenario: "minimal", prepareProfileCatalog: true } as const;
@@ -136,7 +122,6 @@ it("commits model-only role changes without retiring permitted models or origina
     const advance = vi.spyOn(preparedModelRuntime, "advancePreparedModelRuntimeConfig");
     const invalidate = vi.spyOn(preparedModelRuntime, "markPreparedModelRuntimeSnapshotsStale");
     const rebuild = vi.spyOn(preparedModelRuntime, "refreshPreparedModelRuntimeSnapshots");
-    let state = createDefaultGatewayReloadState();
     const channelManager = createChannelManager({
       scheduler: createTestGatewayScheduler(),
       getRuntimeConfig: () => initialConfig,
@@ -144,65 +129,34 @@ it("commits model-only role changes without retiring permitted models or origina
       channelLogs: {},
       channelRuntimeEnvs: {},
     });
-    const log = createInfoWarnErrorLogger();
-    const reloader = startManagedGatewayConfigReloader({
-      scheduler: createTestGatewayScheduler(clock.clock),
-      getPluginRegistry: () => registry,
-      configRevisionProjector: createTestConfigRevisionProjector(),
-      minimalTestGateway: false,
-      initialConfig,
-      initialCompareConfig: initialConfig,
-      initialSnapshotRawHash: null,
-      initialAuthoredConfig: {},
-      initialSnapshotValid: true,
-      initialSnapshotIssues: [],
-      initialPluginInstallRecords: {},
-      watchPath: "/tmp/openclaw.json",
-      promoteSnapshot: async () => true,
-      deps: {},
-      broadcast: vi.fn(),
-      getState: () => state,
-      setState: (next) => {
-        state = next;
-      },
-      channelManager,
-      startChannel: channelManager.startChannel,
-      stopChannel: channelManager.stopChannel,
-      reloadPlugins: async () => {
-        throw new Error("Unexpected plugin reload for model policy");
-      },
-      logHooks: log,
-      logChannels: log,
-      logCron: log,
-      logReload: log,
-      cronReconciliation: {
-        arm: () => ({ complete: async () => {} }),
-        invalidate: vi.fn(),
-      },
-      resolveSharedGatewaySessionGenerationForConfig: () => undefined,
-      sharedGatewaySessionGenerationState: new SharedGatewaySessionGenerationState({
-        current: undefined,
-        required: null,
+    const reloader = startManagedGatewayConfigReloader(
+      createManagedReloadTestParams({
+        scheduler: createTestGatewayScheduler(clock.clock),
+        getPluginRegistry: () => registry,
+        initialConfig,
+        channelManager,
+        startChannel: channelManager.startChannel,
+        stopChannel: channelManager.stopChannel,
+        reloadPlugins: async () => {
+          throw new Error("Unexpected plugin reload for model policy");
+        },
+        clients: [client],
+        reconcileRuntimePolicy: (config) =>
+          disconnectDisallowedGatewayPolicyClients([client], config),
+        readSnapshot: fixture.readSnapshot,
+        subscribeToWrites: fixture.subscribeToWrites,
+        resolveGatewayContext: () => context,
+        activateRuntimeSecrets: createTestRuntimeSecretsActivator(async ({ config }) => {
+          entered.resolve();
+          await releasePreparation.promise;
+          if (rejectCandidate) {
+            throw new Error("candidate preparation rejected");
+          }
+          return makePreparedSecretsSnapshot(config);
+        }),
+        requestRecoveryRestart,
       }),
-      clients: [client],
-      prepareTerminalConfig: vi.fn(),
-      reconcileRuntimePolicy: (config) =>
-        disconnectDisallowedGatewayPolicyClients([client], config),
-      commitRuntimePolicy: vi.fn(),
-      acceptTerminalConfig: vi.fn(),
-      readSnapshot: fixture.readSnapshot,
-      subscribeToWrites: fixture.subscribeToWrites,
-      resolveGatewayContext: () => context,
-      activateRuntimeSecrets: createTestRuntimeSecretsActivator(async ({ config }) => {
-        entered.resolve();
-        await releasePreparation.promise;
-        if (rejectCandidate) {
-          throw new Error("candidate preparation rejected");
-        }
-        return makePreparedSecretsSnapshot(config);
-      }),
-      requestRecoveryRestart,
-    });
+    );
     let original: Awaited<ReturnType<typeof captureGatewayOperatorRunAuthority>>;
     let modelA: ReturnType<typeof bindOperatorModelExecution>;
     let modelB: ReturnType<typeof bindOperatorModelExecution>;
@@ -243,7 +197,7 @@ it("commits model-only role changes without retiring permitted models or origina
         model: "b",
       });
       assert(modelA && modelB);
-      vi.spyOn(activeRunProjections, "getActiveEmbeddedRunCount").mockReturnValue(2);
+      vi.spyOn(sessionQueries, "getActiveSessionRunCount").mockReturnValue(2);
       const listener = fixture.ref.current;
       assert(listener);
       const write = (revision: number) =>
@@ -307,3 +261,188 @@ it("commits model-only role changes without retiring permitted models or origina
     }
   });
 });
+
+it.each(["scopes", "access policy"] as const)(
+  "reloads roles without retiring unaffected work when %s change",
+  async (revocation) => {
+    await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
+      const clock = createGatewaySchedulerClock(Date.now());
+      const initialConfig: OpenClawConfig = {
+        agents: { entries: { main: {} } },
+        gateway: {
+          roles: {
+            default: "contributor",
+            definitions: {
+              contributor: {
+                agents: "*",
+                scopes: ["operator.write", "operator.approvals"],
+                sessions: { others: "none" },
+              },
+              maintainer: {
+                agents: "*",
+                scopes: ["operator.admin"],
+                sessions: { others: "none" },
+              },
+            },
+          },
+        },
+      };
+      const maintainer = ensureProfileForEmail("role-maintainer@example.test");
+      const contributor = ensureProfileForEmail("role-contributor@example.test");
+      setUserProfileRole(maintainer.id, "maintainer");
+      using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
+      setRuntimeConfigSnapshot(initialConfig);
+      const context = createGatewayTestContext();
+      const clients = [
+        { profile: maintainer, scopes: ["operator.admin"] },
+        { profile: contributor, scopes: ["operator.write"] },
+      ].map(({ profile, scopes }, index) => {
+        const connection = new AbortController();
+        return Object.assign(
+          createOperatorWsClient({
+            connId: `role-reload-${index}`,
+            scopes,
+            socket: { close: vi.fn(() => connection.abort()) },
+          }),
+          {
+            authenticatedUserProfile: {
+              profileId: profile.id,
+              displayName: null,
+              hasAvatar: false,
+              avatarRevision: "1",
+              updatedAt: 1,
+            },
+            authPolicy: captureGatewayAuthPolicy(initialConfig, { role: "operator" }),
+            connectionSignal: connection.signal,
+          },
+        );
+      });
+      const fixture = createDirectConfigWriteFixture(initialConfig);
+      const channelManager = createChannelManager({
+        scheduler: createTestGatewayScheduler(),
+        getRuntimeConfig: () => initialConfig,
+        getPluginRegistry: () => registry,
+        channelLogs: {},
+        channelRuntimeEnvs: {},
+      });
+      const reloader = startManagedGatewayConfigReloader(
+        createManagedReloadTestParams({
+          scheduler: createTestGatewayScheduler(clock.clock),
+          getPluginRegistry: () => registry,
+          initialConfig,
+          channelManager,
+          startChannel: channelManager.startChannel,
+          stopChannel: channelManager.stopChannel,
+          reloadPlugins: async () => {
+            throw new Error("Unexpected plugin reload for role scopes");
+          },
+          clients,
+          reconcileRuntimePolicy: (config, phase) => {
+            if (phase === "committed") {
+              disconnectDisallowedGatewayPolicyClients(clients, config);
+            }
+          },
+          readSnapshot: fixture.readSnapshot,
+          subscribeToWrites: fixture.subscribeToWrites,
+          resolveGatewayContext: () => context,
+          activateRuntimeSecrets: createTestRuntimeSecretsActivator(async ({ config }) =>
+            makePreparedSecretsSnapshot(config),
+          ),
+        }),
+      );
+      const accepted: NonNullable<
+        Awaited<ReturnType<typeof captureGatewayOperatorRunAuthority>>
+      >[] = [];
+      try {
+        await reloader.ready;
+        const getConfig = reloader.getCommittedRuntimeConfig;
+        assert(getConfig);
+        context.getCommittedRuntimeConfig = getConfig;
+        context.getRuntimeConfig = getConfig;
+        const dispatchers = clients.map((client) =>
+          createDispatchTestHarness({
+            connId: client.connId,
+            buildRequestContext: () => context,
+            extraHandlers: {
+              wake: async (options) => {
+                const source = await captureGatewayOperatorRunAuthority({
+                  client: options.client,
+                  context,
+                  hasCurrentClientAuthority: options.hasCurrentClientAuthority,
+                });
+                assert(source);
+                accepted.push(source);
+                options.respond(true, { accepted: true });
+              },
+            },
+          }),
+        );
+        for (const [index, client] of clients.entries()) {
+          const dispatch = dispatchers[index]!;
+          await dispatch.dispatcher.dispatch(
+            { type: "req", id: "accepted", method: "wake", params: {} },
+            client,
+          );
+          expect(dispatch.send).toHaveBeenLastCalledWith(expect.objectContaining({ ok: true }));
+        }
+        expect(accepted).toHaveLength(2);
+        const writeScopes = async (
+          scopes: OperatorScope[],
+          revision: number,
+          accessPolicyPlugin?: string,
+        ) => {
+          const candidate = structuredClone(initialConfig);
+          candidate.gateway!.roles!.definitions.contributor!.scopes = scopes;
+          candidate.gateway!.roles!.definitions.contributor!.accessPolicyPlugin =
+            accessPolicyPlugin;
+          const listener = fixture.ref.current;
+          assert(listener);
+          const applied = publishConfigWrite(
+            listener,
+            createConfigWriteNotification(
+              candidate,
+              `role-${revision}`,
+              revision,
+              `runtime-${revision}`,
+              `source-${revision}`,
+            ),
+          );
+          await clock.wake();
+          await expect(applied).resolves.toBe("applied");
+        };
+        await writeScopes(["operator.admin"], 1);
+        // A wider role must neither grant new scopes to accepted work nor retire it.
+        for (const [index, source] of accepted.entries()) {
+          expect.soft(clients[index]!.connectionSignal.aborted).toBe(false);
+          expect.soft(source.authority.signal?.aborted).toBe(false);
+          expect.soft(source.authority.assertCurrent).not.toThrow();
+          expect(source.authority.scopes).toEqual(clients[index]!.connect.scopes);
+        }
+        await writeScopes(
+          revocation === "scopes" ? ["operator.sessions.write"] : ["operator.write"],
+          2,
+          revocation === "access policy" ? "test-access-policy" : undefined,
+        );
+        expect(clients[0]!.connectionSignal.aborted).toBe(false);
+        expect(accepted[0]!.authority.assertCurrent).not.toThrow();
+        expect(accepted[0]!.authority.signal?.aborted).toBe(false);
+        expect(clients[1]!.connectionSignal.aborted).toBe(true);
+        expect(accepted[1]!.authority.signal?.aborted).toBe(true);
+        expect(accepted[1]!.authority.assertCurrent).toThrow();
+        await dispatchers[1]!.dispatcher.dispatch(
+          { type: "req", id: "revoked", method: "wake", params: {} },
+          clients[1]!,
+        );
+        expect(accepted).toHaveLength(2);
+        await writeScopes(["operator.write", "operator.approvals"], 3);
+        expect(accepted[1]!.authority.signal?.aborted).toBe(true);
+        expect(accepted[1]!.authority.assertCurrent).toThrow();
+      } finally {
+        await reloader.stop();
+        for (const source of accepted) {
+          source.release();
+        }
+      }
+    });
+  },
+);

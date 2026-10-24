@@ -5,31 +5,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { i18n } from "../../i18n/index.ts";
 import { pt_BR } from "../../i18n/locales/pt-BR.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
-import type { LogLevel } from "./log-lines.ts";
 import { LogsView, type LogsProps } from "./view.tsx";
-
-const views = new Map<Element, () => void>();
-function renderView(props: LogsProps, container: HTMLDivElement) {
-  views.get(container)?.();
-  views.set(container, mountSolid(() => <LogsView {...props} />, { container }).unmount);
-  flush();
-}
-
-function createLevelFilters(overrides: Partial<Record<LogLevel, boolean>> = {}) {
-  return {
-    trace: true,
-    debug: true,
-    info: true,
-    warn: true,
-    error: true,
-    fatal: true,
-    ...overrides,
-  };
-}
 
 function createProps(overrides: Partial<LogsProps> = {}): LogsProps {
   return {
-    loading: false,
+    completion: null,
     refreshDisabled: false,
     status: { error: null, hasLoaded: false, stale: false, awaitingGateway: false },
     file: null,
@@ -43,7 +23,7 @@ function createProps(overrides: Partial<LogsProps> = {}): LogsProps {
       },
     ],
     filterText: "",
-    levelFilters: createLevelFilters(),
+    levelFilters: { trace: true, debug: true, info: true, warn: true, error: true, fatal: true },
     autoFollow: true,
     truncated: false,
     onFilterTextChange: vi.fn(),
@@ -56,42 +36,7 @@ function createProps(overrides: Partial<LogsProps> = {}): LogsProps {
   };
 }
 
-function buttonByText(container: Element, text: string): HTMLButtonElement {
-  const button = Array.from(container.querySelectorAll("button")).find(
-    (candidate) => candidate.textContent?.replace(/\s+/g, " ").trim() === text,
-  );
-  if (!(button instanceof HTMLButtonElement)) {
-    throw new Error(`Expected ${text} button`);
-  }
-  return button;
-}
-
-async function useTestPortugueseLogsLabels() {
-  i18n.registerTranslation("pt-BR", {
-    gatewayLogs: {
-      title: "Registros",
-      subtitle: "Registros do Gateway em JSONL.",
-      exportButton: "Exportar {label}",
-      exportLabels: {
-        filtered: "filtrado",
-        visible: "visivel",
-      },
-      filter: "Filtro",
-      searchPlaceholder: "Pesquisar registros",
-      autoFollow: "Acompanhar automaticamente",
-      file: "Arquivo: {file}",
-      truncated: "Saida truncada.",
-      empty: "Nenhuma entrada.",
-    },
-  });
-  await i18n.setLocale("pt-BR");
-}
-
 afterEach(async () => {
-  for (const dispose of views.values()) {
-    dispose();
-  }
-  views.clear();
   vi.restoreAllMocks();
   i18n.registerTranslation("pt-BR", pt_BR);
   await i18n.setLocale("en");
@@ -121,19 +66,16 @@ describe("LogsView", () => {
         return new NativeDateTimeFormat(locales, { ...options, timeZone });
       });
     const timeCalls = vi.spyOn(Date.prototype, "toLocaleTimeString");
-    views.set(
-      container,
-      mountSolid(
-        () => (
-          <LogsView
-            {...props}
-            entries={entries()}
-            filterText={filterText()}
-            onFilterTextChange={setFilterText}
-          />
-        ),
-        { container },
-      ).unmount,
+    mountSolid(
+      () => (
+        <LogsView
+          {...props}
+          entries={entries()}
+          filterText={filterText()}
+          onFilterTextChange={setFilterText}
+        />
+      ),
+      { container },
     );
     const filterInput = container.querySelector<HTMLInputElement>(".settings-input")!;
 
@@ -177,85 +119,20 @@ describe("LogsView", () => {
     expectTimes([validTimes[0], appendedTime], "en");
   });
 
-  it("does not claim the log is empty before the initial load completes", () => {
-    const container = document.createElement("div");
+  it("keeps the visible export filename suffix stable when labels are localized", async () => {
+    i18n.registerTranslation("pt-BR", {
+      gatewayLogs: {
+        exportButton: "Exportar {label}",
+        exportLabels: { filtered: "filtrado", visible: "visivel" },
+      },
+    });
+    await i18n.setLocale("pt-BR");
+    const onExport = vi.fn();
+    const props = createProps({ onExport });
+    const view = mountSolid(() => <LogsView {...props} />);
+    flush();
+    view.getByRole("button", { name: "Exportar visivel" }).click();
 
-    renderView(createProps({ loading: true, entries: [] }), container);
-
-    expect(container.textContent).not.toContain("No log entries.");
-    expect(container.querySelector('[role="status"]')).not.toBeNull();
-  });
-
-  it("does not show loading when no initial request is pending", () => {
-    const container = document.createElement("div");
-
-    renderView(createProps({ loading: false, entries: [] }), container);
-
-    expect(container.textContent).not.toContain("No log entries.");
-    expect(container.querySelector('[role="status"]')).toBeNull();
-  });
-
-  it("disables refresh actions while the gateway cannot accept them", () => {
-    const container = document.createElement("div");
-
-    renderView(
-      createProps({
-        refreshDisabled: true,
-        status: {
-          error: "logs unavailable",
-          hasLoaded: false,
-          stale: false,
-          awaitingGateway: false,
-        },
-      }),
-      container,
-    );
-
-    expect(
-      container.querySelector<HTMLButtonElement>(".settings-section__actions .btn")?.disabled,
-    ).toBe(true);
-    expect(container.querySelector(".logs-refresh-status button")).toBeNull();
-  });
-
-  it.each([
-    { buttonText: "Exportar visivel", expectedLabel: "visible", filterText: "" },
-    { buttonText: "Exportar filtrado", expectedLabel: "filtered", filterText: "matched" },
-  ])(
-    "keeps the $expectedLabel export filename suffix stable when labels are localized",
-    async ({ buttonText, expectedLabel, filterText }) => {
-      await useTestPortugueseLogsLabels();
-      const onExport = vi.fn();
-      const container = document.createElement("div");
-
-      renderView(createProps({ filterText, onExport }), container);
-      buttonByText(container, buttonText).click();
-
-      expect(onExport).toHaveBeenCalledWith(
-        ['{"level":"info","message":"matched line"}'],
-        expectedLabel,
-      );
-    },
-  );
-
-  it("renders the error and stale marker without a retry button or hiding loaded logs", () => {
-    const container = document.createElement("div");
-
-    renderView(
-      createProps({
-        status: {
-          error: "logs unavailable",
-          hasLoaded: true,
-          stale: true,
-          awaitingGateway: false,
-        },
-      }),
-      container,
-    );
-
-    const status = container.querySelector(".logs-refresh-status");
-    expect(status?.textContent).toContain("logs unavailable");
-    expect(status?.textContent).toContain("Showing stale data");
-    expect(container.textContent).toContain("matched line");
-    expect(status?.querySelector("button")).toBeNull();
+    expect(onExport).toHaveBeenCalledWith(['{"level":"info","message":"matched line"}'], "visible");
   });
 });

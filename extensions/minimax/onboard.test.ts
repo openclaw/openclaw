@@ -5,15 +5,33 @@ import {
 } from "openclaw/plugin-sdk/provider-test-contracts";
 import { describe, expect, it } from "vitest";
 import { buildMinimaxApiModelDefinition } from "./model-definitions.js";
-import { applyMinimaxApiConfig, applyMinimaxApiProviderConfig } from "./onboard.js";
+import {
+  applyMinimaxApiConfig,
+  applyMinimaxApiConfigCn,
+  applyMinimaxApiProviderConfig,
+  applyMinimaxApiProviderConfigCn,
+} from "./onboard.js";
 
-describe("minimax onboard", () => {
+describe.each([
+  [
+    "global",
+    applyMinimaxApiConfig,
+    applyMinimaxApiProviderConfig,
+    "https://api.minimax.io/anthropic",
+  ],
+  [
+    "cn",
+    applyMinimaxApiConfigCn,
+    applyMinimaxApiProviderConfigCn,
+    "https://api.minimaxi.com/anthropic",
+  ],
+])("minimax onboard (%s)", (_region, applyConfig, applyProviderConfig, baseUrl) => {
   it("merges existing minimax provider models", () => {
     const provider = expectProviderOnboardMergedLegacyConfig({
-      applyProviderConfig: applyMinimaxApiConfig,
+      applyProviderConfig: applyConfig,
       providerId: "minimax",
       providerApi: "anthropic-messages",
-      baseUrl: "https://api.minimax.io/anthropic",
+      baseUrl,
       legacyApi: "openai-completions",
     });
     expect(provider?.authHeader).toBe(true);
@@ -21,7 +39,7 @@ describe("minimax onboard", () => {
   });
 
   it("drops placeholder apiKey while preserving provider timeout", () => {
-    const cfg = applyMinimaxApiConfig({
+    const cfg = applyConfig({
       models: {
         providers: {
           minimax: {
@@ -45,7 +63,7 @@ describe("minimax onboard", () => {
 
   it("does not overwrite existing primary model in provider-only mode", () => {
     expectProviderOnboardPreservesPrimary({
-      applyProviderConfig: applyMinimaxApiProviderConfig,
+      applyProviderConfig,
       primaryModelRef: "anthropic/claude-opus-4-5",
     });
   });

@@ -1,32 +1,57 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { z } from "zod";
 
-const ordinal = z.number().int().nonnegative();
-const positionSchema = z
-  .object({
-    source: z.string().min(1).max(128),
-    rawSeq: ordinal,
-    activity: z
-      .object({
-        afterRawSeq: ordinal.nullable(),
-        scopeId: z.string().min(1).max(1024),
-        startOrder: ordinal,
-      })
-      .optional(),
-  })
-  .refine(
-    ({ rawSeq, activity }) =>
-      !activity || activity.afterRawSeq === null || activity.afterRawSeq < rawSeq,
+export type TranscriptDisplayPosition = {
+  source: string;
+  rawSeq: number;
+  activity?: { afterRawSeq: number | null; scopeId: string; startOrder: number };
+};
+
+function isOrdinal(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+}
+
+function isIdentifier(value: unknown, limit: number): value is string {
+  return (
+    typeof value === "string" &&
+    value.length > 0 &&
+    (value.length <= limit || Array.from(value).length <= limit)
   );
-
-export type TranscriptDisplayPosition = z.infer<typeof positionSchema>;
+}
 
 /** Public placement metadata is bounded and never supplies execution authority. */
 export function readTranscriptDisplayPosition(
   value: unknown,
 ): TranscriptDisplayPosition | undefined {
-  const parsed = positionSchema.safeParse(value);
-  return parsed.success ? parsed.data : undefined;
+  const record = asOptionalRecord(value);
+  if (!record || !isIdentifier(record.source, 128) || !isOrdinal(record.rawSeq)) {
+    return undefined;
+  }
+  if (record.activity === undefined) {
+    return {
+      source: record.source,
+      rawSeq: record.rawSeq,
+      ...("activity" in record ? { activity: undefined } : {}),
+    };
+  }
+  const activity = asOptionalRecord(record.activity);
+  if (
+    !activity ||
+    (activity.afterRawSeq !== null &&
+      (!isOrdinal(activity.afterRawSeq) || activity.afterRawSeq >= record.rawSeq)) ||
+    !isIdentifier(activity.scopeId, 1024) ||
+    !isOrdinal(activity.startOrder)
+  ) {
+    return undefined;
+  }
+  return {
+    source: record.source,
+    rawSeq: record.rawSeq,
+    activity: {
+      afterRawSeq: activity.afterRawSeq,
+      scopeId: activity.scopeId,
+      startOrder: activity.startOrder,
+    },
+  };
 }
 
 /** Recompose presentation after pages/events merge, without changing physical cursor order. */

@@ -2,8 +2,8 @@ import "../styles/gateway-vitals.css";
 import { createMemo, createSignal, For, Show } from "solid-js";
 import { formatDurationCompact } from "../lib/format-duration.ts";
 import { i18nRevision } from "../lib/reactive/i18n.ts";
+import { defineSolidBridge } from "../lib/solid-bridge.ts";
 import type { SparklineSample } from "../lib/sparkline-types.ts";
-import { defineSolidBridge } from "../lit/solid-bridge.ts";
 
 export type { SparklineSample } from "../lib/sparkline-types.ts";
 
@@ -160,7 +160,10 @@ function SparklineContent(props: SparklineProps) {
             <div class="sparkline-tile__hairline" style={{ left: `${hoverLeft()}%` }} />
           </Show>
           <div
-            class={`sparkline-tile__dot sparkline-tile__dot--${hover() ? "hover" : "now"}`}
+            class={[
+              "sparkline-tile__dot",
+              hover() ? "sparkline-tile__dot--hover" : "sparkline-tile__dot--now",
+            ]}
             style={{
               left: hover() ? `${hoverLeft()}%` : "calc(100% - 3px)",
               top: `${(toY(shown()!.value) / CHART_HEIGHT) * 100}%`,

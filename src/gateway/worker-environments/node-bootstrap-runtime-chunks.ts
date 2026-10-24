@@ -5,14 +5,26 @@ import {
   collectPackageDistImports,
   type PackageDistImport,
 } from "../../../scripts/lib/package-dist-imports.mjs";
+import { collectRootPackageExcludedExtensionDirs } from "../../../scripts/lib/root-package-bundled-plugin-excludes.mjs";
 import { root as openFsRoot } from "../../infra/fs-safe.js";
 import { collectPackageRootImports } from "../../infra/package-root-imports.js";
 import { readRuntimeDependencyOwnership } from "../../infra/runtime-dependency-ownership.js";
 import { NON_PACKAGED_BUNDLED_PLUGIN_DIRS } from "../../shared/non-packaged-plugin-dirs.js";
 import { DEFAULT_WORKER_BUNDLE_ARCHIVE_LIMITS } from "../../shared/worker-bundle-archive.js";
 
-export async function resolveNodeBootstrapRuntimeChunks(packageRoot: string, files: string[]) {
+export async function resolveNodeBootstrapRuntimeChunks(
+  packageRoot: string,
+  files: string[],
+  packageFiles: readonly string[],
+  omittedPluginDirs?: ReadonlySet<string>,
+) {
   const ownership = readRuntimeDependencyOwnership(packageRoot);
+  const omittedPlugins =
+    omittedPluginDirs ??
+    new Set([
+      ...NON_PACKAGED_BUNDLED_PLUGIN_DIRS,
+      ...collectRootPackageExcludedExtensionDirs({ files: packageFiles }),
+    ]);
   const privateChunks = new Map(
     files.flatMap((file) => {
       if (
@@ -23,7 +35,7 @@ export async function resolveNodeBootstrapRuntimeChunks(packageRoot: string, fil
         return [];
       }
       const owner = ownership?.chunks[file.slice("dist/".length)];
-      return owner?.extensions.every((id) => NON_PACKAGED_BUNDLED_PLUGIN_DIRS.has(id))
+      return owner?.extensions.every((id) => omittedPlugins.has(id))
         ? [[file, owner] as const]
         : [];
     }),

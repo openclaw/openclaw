@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { page, userEvent } from "vitest/browser";
 import "../test-helpers/load-styles.ts";
 import "./agent-select-registration.ts";
-import type { AgentSelectOption } from "./agent-select.ts";
+import type { AgentSelectOption } from "./agent-select-types.ts";
 
 afterEach(() => {
   document.body.replaceChildren();
@@ -13,17 +13,14 @@ async function fixture(
     { value: "main", label: "Main" },
     { value: "research", label: "Research" },
   ],
-  onCreateAgent: (() => void) | null = null,
 ) {
   const select = document.createElement("openclaw-agent-select");
-  Object.assign(select, { value, options, onCreateAgent });
+  Object.assign(select, { value, options });
   document.body.append(select);
   await select.updateComplete;
   const trigger = select.querySelector<HTMLButtonElement>(".agent-select__trigger")!;
   const menu = select.querySelector<HTMLElement>('[role="menu"]')!;
-  const items = [
-    ...select.querySelectorAll<HTMLButtonElement>('[role="menuitemradio"], [data-create-agent]'),
-  ];
+  const items = [...select.querySelectorAll<HTMLButtonElement>('[role="menuitemradio"]')];
   const outside = document.createElement("button");
   outside.textContent = "Outside";
   outside.style.cssText = "position:fixed;right:10px;bottom:10px";
@@ -73,19 +70,13 @@ describe("Agent select native menu", () => {
       expect(document.activeElement).toBe(f.trigger);
     },
   );
-  it.each(["disabled", "create"])("focuses first enabled %s row", async (kind) => {
-    const f = await fixture(
-      "main",
-      kind === "create"
-        ? []
-        : [
-            { value: "main", label: "Main", disabled: true },
-            { value: "research", label: "Research" },
-          ],
-      kind === "create" ? () => {} : null,
-    );
+  it("focuses the first enabled row when the selected row is disabled", async () => {
+    const f = await fixture("main", [
+      { value: "main", label: "Main", disabled: true },
+      { value: "research", label: "Research" },
+    ]);
     await f.open();
-    expect(document.activeElement).toBe(f.items[kind === "create" ? 0 : 1]);
+    expect(document.activeElement).toBe(f.items[1]);
   });
   it("keeps the selected row focused after Enter opens and lets Home move to the first row", async () => {
     const f = await fixture();
@@ -154,12 +145,4 @@ it("selects a different agent, ignores the current value, and preserves empty va
   await f.open();
   await page.elementLocator(f.items[0]!).click();
   expect(onSelect).toHaveBeenCalledExactlyOnceWith("");
-});
-
-it("opens the new-agent flow from its footer item", async () => {
-  const onCreate = vi.fn();
-  const f = await fixture("research", undefined, onCreate);
-  await f.open();
-  await page.elementLocator(f.items.at(-1)!).click();
-  expect(onCreate).toHaveBeenCalledOnce();
 });

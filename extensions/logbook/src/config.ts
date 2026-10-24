@@ -6,7 +6,6 @@ export type LogbookConfig = Omit<ProducedLogbookConfig, OptionalLogbookFields> &
   Partial<Pick<ProducedLogbookConfig, OptionalLogbookFields>>;
 
 const DEFAULTS = {
-  captureEnabled: true,
   captureIntervalSeconds: 30,
   analysisIntervalMinutes: 15,
   screenIndex: 0,

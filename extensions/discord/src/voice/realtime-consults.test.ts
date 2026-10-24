@@ -11,6 +11,7 @@ defineDiscordVoiceTests(
     resolveAgentRouteMock,
     agentCommandMock,
     loggerWarnMock,
+    controlRealtimeVoiceAgentRunMock,
     resolveRealtimeVoiceAgentContextInstructionsMock,
     realtimeSessionMock,
     beginSpeakerTurn,
@@ -382,7 +383,7 @@ defineDiscordVoiceTests(
       { name: "Error", delivery: "forced-suppressed" },
       { name: "TimeoutError", delivery: "forced-unsuppressed" },
     ])(
-      "preserves $name failure reporting through $delivery consult delivery",
+      "preserves $name failure delivery through $delivery without logging tool-result content",
       async ({ name, delivery }) => {
         const hostTurn = createDeferred<{ payloads: Array<{ text: string }> }>();
         agentCommandMock.mockReturnValueOnce(hostTurn.promise);
@@ -412,7 +413,16 @@ defineDiscordVoiceTests(
           });
 
           expect(agentCommandMock).toHaveBeenCalledTimes(1);
-          expect(loggerWarnMock).toHaveBeenCalledWith(expect.stringContaining("consult failed"));
+          expect(loggerWarnMock.mock.calls.flat().join("\n")).not.toContain("agent broke");
+          expect(loggerWarnMock).toHaveBeenCalledWith(
+            delivery === "native"
+              ? "discord voice: realtime consult failed call=call-late"
+              : expect.stringMatching(
+                  /^discord voice: realtime forced agent consult failed elapsedMs=-?\d+$/,
+                ),
+          );
+          expect(entry.realtimeLifecycle.status).toBe("active");
+          expect(realtimeSessionMock.close).not.toHaveBeenCalled();
           expect(realtimeSessionMock.submitToolResult.mock.calls).toEqual([
             delivery === "forced-suppressed"
               ? [
@@ -557,6 +567,44 @@ defineDiscordVoiceTests(
       expectUserMessageIncludes("guest answer");
       expect(lastAgentCommandArgs().senderIsOwner).toBe(false);
     });
+
+    it.each([true, false])(
+      "submits active control results and only warns for failure (ok=%s)",
+      async (ok) => {
+        const { bridgeParams, entry } = await createJoinedBidiFixture();
+        beginSpeakerTurn(entry);
+        const result = {
+          ok,
+          active: true,
+          mode: "cancel" as const,
+          sessionKey: entry.route.sessionKey,
+          message: "z22-private-control-result",
+          speak: true,
+          show: true,
+          suppress: false,
+          ...(ok ? {} : { reason: "abort_rejected" }),
+        };
+        controlRealtimeVoiceAgentRunMock.mockResolvedValueOnce(result);
+        await bridgeParams?.onToolCall?.(
+          {
+            itemId: "control-result",
+            callId: "control-result",
+            name: "openclaw_agent_control",
+            args: { text: "cancel that", mode: "cancel" },
+          },
+          realtimeSessionMock,
+        );
+
+        expect(realtimeSessionMock.submitToolResult).toHaveBeenCalledWith("control-result", result);
+        const warning = expect.stringContaining("realtime active-run control failed");
+        if (ok) {
+          expect(loggerWarnMock).not.toHaveBeenCalledWith(warning);
+        } else {
+          expect(loggerWarnMock).toHaveBeenCalledWith(warning);
+        }
+        expect(loggerWarnMock.mock.calls.flat().join(" ")).not.toContain(result.message);
+      },
+    );
 
     it("starts Discord realtime voice in bidi mode with the consult tool", async () => {
       agentCommandMock.mockResolvedValueOnce({ payloads: [{ text: "consult answer" }] });

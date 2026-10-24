@@ -11,6 +11,7 @@ import {
   stampDesktopRuntimePlugins,
 } from "../../../scripts/lib/desktop-runtime-plugins.mjs";
 import { resolveNpmRunner } from "../../../scripts/npm-runner.mts";
+import { pruneDesktopRuntime } from "../../../scripts/lib/desktop-runtime-prune.mjs";
 
 const readJson = (file) => JSON.parse(fs.readFileSync(file, "utf8"));
 
@@ -22,6 +23,7 @@ export function resourceBytes(executable) {
 
 export function stageInstalledPackage(installed, work, target, plan) {
   const core = path.join(installed, "node_modules/openclaw");
+  assert.equal(readJson(path.join(core, "package.json")).name, "openclaw", "Expected the OpenClaw package");
   const require = createRequire(path.join(core, "package.json"));
   const platform = target.platform === "windows" ? "win32" : target.platform;
   assert.ok(require.resolve(`@openai/codex-${platform}-${target.arch}/package.json`),
@@ -39,6 +41,7 @@ export function stageInstalledPackage(installed, work, target, plan) {
   fs.cpSync(path.join(installed, "node_modules"), path.join(destination, "node_modules"),
     { recursive: true, dereference: true,
       filter: (source) => ![".bin", ".package-lock.json"].includes(path.basename(source)) });
+  pruneDesktopRuntime(path.join(destination, "node_modules"));
   const manifestPath = path.join(work, "manifest.json");
   const previousManifest = fs.readFileSync(manifestPath);
   const manifest = JSON.parse(previousManifest);
@@ -60,7 +63,10 @@ export function stageInstalledPackage(installed, work, target, plan) {
           createHash("sha256").update(content).digest("hex");
         const resource = target.platform === "linux" ? resourceBytes(content) : content;
         resourceSize += resource.length;
-        fs.writeFileSync(file, resource);
+        // Windows already has the copied bytes; only Linux needs the resource envelope.
+        if (target.platform === "linux") {
+          fs.writeFileSync(file, resource);
+        }
       }
     }
   };
@@ -90,14 +96,21 @@ export function stagePackage(root, work, target) {
     fs.mkdirSync(home);
     fs.writeFileSync(path.join(installed, "package.json"),
       JSON.stringify({ private: true, allowScripts: { [archive]: true } }));
+    // Reuse only npm download bytes; the install and user configuration stay isolated.
+    let npmCache;
+    for (const [key, value] of Object.entries(process.env)) {
+      if (key.toLowerCase() === "npm_config_cache" && value) npmCache = value;
+    }
     const env = {
       PATH: process.env.PATH, SystemRoot: process.env.SystemRoot, HOME: home,
       USERPROFILE: home, TMPDIR: scratch, TEMP: scratch, TMP: scratch,
+      npm_config_cache: npmCache,
     };
     const npm = resolveNpmRunner({ env, npmArgs: ["install", "--prefix", installed,
       "--omit=dev", "--include=optional", "--no-audit", "--no-fund",
       `--os=${target.platform === "windows" ? "win32" : target.platform}`, `--cpu=${target.arch}`,
-      archive] });
+      // Naming the archive avoids npm unpacking it just to discover its package name.
+      `openclaw@file:${archive}`] });
     execFileSync(npm.command, npm.args, { cwd: scratch, stdio: "inherit", env: npm.env ?? env,
       windowsVerbatimArguments: npm.windowsVerbatimArguments });
     stageInstalledPackage(installed, work, target, plan);

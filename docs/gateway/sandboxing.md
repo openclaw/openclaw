@@ -76,6 +76,8 @@ Debugging:
 
 Each agent can override sandbox + tools: `agents.entries.*.sandbox` and `agents.entries.*.tools` (plus `agents.entries.*.tools.sandbox.tools` for sandbox tool policy). See [Multi-Agent Sandbox & Tools](/tools/multi-agent-sandbox-tools) for precedence.
 
+Core Goal controls (`get_goal`, `create_goal`, and `update_goal`) are included in the default sandbox tool allowlist. They operate on the current session’s OpenClaw Goal; explicit denies and custom allowlists still apply.
+
 ### Managed GitHub identity
 
 Publication-eligible managed sessions can use `github_publish` under the default sandbox tool policy to publish their own session branch through the Gateway. Publication credentials stay on the Gateway; the credential opt-in below is unnecessary for this route. Explicit tool denies and restrictive custom allowlists still apply. See [GitHub publication](/gateway/config-tools/github-identity).

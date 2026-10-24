@@ -1,39 +1,39 @@
 import type { AdmittedRunContext } from "../../agents/admitted-run-context.js";
 import type { ExecutionIdentityAdmissionFacts } from "../../audit/execution-identity-admission.js";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
-import type { NormalizeReplySkipReason } from "../../auto-reply/reply/normalize-reply-skip-reason.js";
+import type { SessionEventTarget } from "../../auto-reply/reply/session-event-contract.js";
+import type { SessionEntryCurrentCheck } from "../../config/sessions/session-entry-current.types.js";
 import type { SessionCreatedActor } from "../../config/sessions/session-entry-provenance.js";
 import type { CronConfig } from "../../config/types.cron.js";
 import type { GatewayScheduler, GatewaySchedulerScope } from "../../infra/gateway-scheduler.js";
-import type { HeartbeatRunResult, HeartbeatWakeRequest } from "../../infra/heartbeat-wake.js";
-import type { SessionEventWakeWaitOptions } from "../../infra/session-event-wake.js";
 import { LEGACY_IMPLICIT_AGENT_ID } from "../../routing/session-key.js";
+import type { ReplyOperationObservation } from "../../sessions/reply-operation-state.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import type { CronAgentAvailability } from "../agent-availability.js";
 import type { CronCompletionDeliveryFence } from "../delivery-attempt-fence.js";
+import type { PluginCommandScheduleHost } from "../plugin-command-schedule.types.js";
 import { toPublicCronJob } from "../public-job.js";
 import type { CronRuntimeAuthority } from "../runtime-authority.js";
+import type { ScheduledOccurrence } from "../scheduled-occurrence.js";
 import type { CronScheduledToolPolicy } from "../scheduled-tool-policy.js";
+import type { CronJobScratchState } from "../scratch-contract.js";
+import type { CronStreamExecApproval, CronStreamExecPolicy } from "../stream-exec-authority.js";
 import type { QuarantinedCronConfigJob } from "../types-shared.js";
 import type {
-  CronCompletionStatus,
   CronWebhookDeliveryOutcome,
   CronTriggerEvaluationResult,
   CronAgentExecutionPhaseUpdate,
   CronAgentExecutionStarted,
   CronFailureNotificationDelivery,
   CronFailureNotificationDetail,
-  CronDeliveryStatus,
-  CronDeliveryTrace,
+  CronEvent,
   CronJob,
   CronNextCheckProposal,
   CronJobCreate,
   CronJobPatch,
-  CronRunDiagnostics,
   CronRunDeliveryResult,
   CronMessageChannel,
   CronRunOutcome,
-  CronRunStatus,
   CronRunTelemetry,
   CronStoredJob,
   CronStoreFile,
@@ -47,31 +47,6 @@ import type {
   CronNotificationRouting,
   ResolvedFailureAlert,
 } from "./notification-intents.js";
-
-export type CronEvent = {
-  jobId: string;
-  action: "added" | "updated" | "removed" | "started" | "finished" | "scheduled";
-  /** Snapshot of the job at the time of the event. Present for all actions where the job is accessible. */
-  job?: CronJob;
-  runAtMs?: number;
-  durationMs?: number;
-  status?: CronRunStatus;
-  completionStatus?: CronCompletionStatus;
-  error?: string;
-  summary?: string;
-  diagnostics?: CronRunDiagnostics;
-  delivered?: boolean;
-  deliveryStatus?: CronDeliveryStatus;
-  deliveryError?: string;
-  deliverySuppressionReason?: NormalizeReplySkipReason;
-  failureNotificationDelivery?: CronFailureNotificationDelivery;
-  delivery?: CronDeliveryTrace;
-  sessionId?: string;
-  sessionKey?: string;
-  runId?: string;
-  nextRunAtMs?: number;
-  triggerFired?: boolean;
-} & CronRunTelemetry;
 
 /** Transient internal context delivered beside, but never projected into, a CronEvent. */
 type CronEventContext = {
@@ -91,18 +66,38 @@ export type Logger = {
   error: (obj: unknown, msg?: string) => void;
 };
 
-export type CronSystemEventEnqueueResult =
+type CronSystemEventEnqueueResult =
   | boolean
   | void
   | {
       accepted?: boolean;
       remove?: () => boolean | void;
+      adopted?: Promise<boolean>;
     };
 
 /** Notifications queued by cron mutations until their state is durable. */
 export type DeferredCronNotifications = CronNotificationIntent[];
 
+/** One captured notice selection and scratch read retained through its scheduled turn. */
+export type CronSessionRunPreparation = {
+  agentId: string;
+  sessionKey: string;
+  notices: Awaited<
+    ReturnType<typeof import("../../infra/system-events.js").prepareAutomationSystemEvents>
+  >;
+  scratch?: CronJobScratchState;
+};
+
+export type CronIdleAdmissionWait = (
+  ownSessionKey?: string,
+  signal?: AbortSignal,
+  ownReplyOperation?: ReplyOperationObservation,
+) => Promise<void>;
+export type CronIdleAdmissionSource = { signal: AbortSignal; assertCurrent: () => void };
+
 export type CronServiceDeps = {
+  /** Shares the Gateway's state-directory selection across admission checks. */
+  env?: NodeJS.ProcessEnv;
   nowMs?: () => number;
   scheduler: GatewayScheduler;
   log: Logger;
@@ -110,9 +105,32 @@ export type CronServiceDeps = {
   cronEnabled: boolean;
   /** CronConfig for session retention settings. */
   cronConfig?: CronConfig;
+  /** Host-owned, read-only diagnostics before startup recovery can dispatch loaded jobs. */
+  describeJobLoadWarning?: (job: CronStoredJob) => string | undefined;
+  /** Disallow automation jobs that run commands or scripts on the host. */
+  hostExecutionDisabled?: boolean;
+  resolveUserTimezone?: () => string | undefined;
+  /** Resident admission facts; normal reply admission owns recovery barriers. */
+  isExecutionIdle?: (
+    job: CronJob,
+    ownSessionKey?: string,
+    ownReplyOperation?: ReplyOperationObservation,
+  ) => boolean;
+  /**
+   * Loaded plugin instances that can serve requester-command schedules. The claim re-arms a
+   * restartable schedule from an earlier Gateway process onto a matching one; without it, such
+   * schedules retire at their next occurrence.
+   */
+  resolvePluginCommandScheduleHosts?: () => PluginCommandScheduleHost[];
   /** List enabled, configured channel ids without exposing channel machinery to cron core. */
   listConfiguredChannels?: () => readonly string[] | Promise<readonly string[]>;
+  /**
+   * Admits one occurrence before any trigger or payload work. When unset (local
+   * harnesses), every run's context is a `fail` result.
+   */
+  admitScheduledOccurrence?: (params: { job: CronStoredJob }) => Promise<ScheduledOccurrence>;
   evaluateCronTrigger?: (params: {
+    occurrence: ScheduledOccurrence;
     deliveryAttemptFence: CronCompletionDeliveryFence | null;
     job: CronStoredJob;
     script: string;
@@ -171,17 +189,40 @@ export type CronServiceDeps = {
   }) => DeliveryContext | undefined | Promise<DeliveryContext | undefined>;
   /** Binds the Gateway for complete scheduled operations, including admission and settlement. */
   runSchedulerOwned?: <T>(run: () => Promise<T>) => Promise<T>;
-  requestHeartbeat: (opts: HeartbeatWakeRequest) => void;
-  /** Waits for the terminal result of a cron-owned coalesced heartbeat wake. */
-  requestHeartbeatAndWait?: (
-    opts: HeartbeatWakeRequest,
-    lifecycle: SessionEventWakeWaitOptions,
-  ) => Promise<HeartbeatRunResult>;
-  /** Resolves the outer watchdog for an awaited heartbeat handoff. */
-  resolveHeartbeatTimeoutMs?: (
-    opts: HeartbeatWakeRequest & { agentId: string },
-  ) => number | undefined;
+  /** Producer events enter ordinary session admission even when scheduling is disabled. */
+  enqueueSessionEvent?: (
+    text: string,
+    opts?: {
+      agentId?: string;
+      sessionKey?: string;
+      contextKey?: string;
+      deliveryContext?: DeliveryContext;
+      expectedTarget?: SessionEventTarget;
+      createIfMissing?: true;
+      assertAcceptanceCurrent?: () => void;
+    },
+  ) => void | Promise<{ ok: true } | { ok: false; error: string }>;
+  deferSessionEvent?: (
+    text: string,
+    job: CronJob,
+    expectedTarget: SessionEventTarget | undefined,
+    assertCurrent: () => void,
+    notBeforeRunAtMs: number,
+    coalescing?: {
+      revision: string;
+      assertCurrent: () => void;
+      onOutcome: (outcome: "queued" | "coalesced") => void;
+    },
+    createIfMissing?: true,
+  ) => void | Promise<void>;
+  captureSessionEventTarget?: (job: CronJob) => Promise<SessionEventTarget | undefined>;
+  resolveSessionEventTarget?: (opts?: { agentId?: string; sessionKey?: string }) => {
+    agentId?: string;
+    sessionKey?: string;
+  };
   runIsolatedAgentJob: (params: {
+    occurrence: ScheduledOccurrence;
+    waitForIdle?: CronIdleAdmissionWait;
     deliveryAttemptFence: CronCompletionDeliveryFence | null;
     job: CronJob;
     admissionSource?: AdmittedRunContext["admissionSource"];
@@ -200,12 +241,37 @@ export type CronServiceDeps = {
         nextCheck?: CronNextCheckProposal;
       }
   >;
+  /** Shared-conversation work settles through the session controller's ordinary turn owner. */
+  runSessionEvent?: (params: {
+    occurrence: ScheduledOccurrence;
+    waitForIdle?: CronIdleAdmissionWait;
+    sessionPreparation?: CronSessionRunPreparation;
+    deliveryContext?: DeliveryContext;
+    admissionSource: NonNullable<AdmittedRunContext["admissionSource"]>;
+    deliveryAttemptFence: CronCompletionDeliveryFence | null;
+    onExecutionStarted?: (info?: CronAgentExecutionStarted) => void;
+    onExecutionPhase?: (info: CronAgentExecutionPhaseUpdate) => void;
+    onLaneWait?: (info?: { waiting?: boolean }) => void;
+    executionIdentity?: CronExecutionIdentityAdmission;
+    job: CronStoredJob;
+    text: string;
+    abortSignal?: AbortSignal;
+    prepare?: () => Promise<void>;
+    assertCurrent: () => void;
+  }) => Promise<
+    CronRunOutcome &
+      CronRunTelemetry &
+      CronRunDeliveryResult & { nextCheck?: CronNextCheckProposal }
+  >;
   runCommandJob?: (params: {
+    /** Consumed by the occurrence; command runs are not agent runs and mint no context. */
+    occurrence: ScheduledOccurrence;
     deliveryAttemptFence: CronCompletionDeliveryFence | null;
     job: CronJob;
     abortSignal?: AbortSignal;
   }) => Promise<CronRunOutcome & CronRunDeliveryResult>;
   runScriptJob?: (params: {
+    occurrence: ScheduledOccurrence;
     deliveryAttemptFence: CronCompletionDeliveryFence | null;
     job: CronStoredJob;
     streamBatch?: string;
@@ -261,6 +327,7 @@ export type CronServiceDeps = {
    */
   runCronFailureRepair?: (request: CronFailureRepairRequest) => Promise<void>;
   onEvent?: (evt: CronEvent, context?: CronEventContext) => void;
+  onProvisionedJobsReloaded?: () => Promise<void>;
 };
 
 /** The scheduler's repair request for one failure incident of an owned job. */
@@ -279,7 +346,8 @@ export type CronExecutionIdentityAdmission = {
   onPostAdmission?: (context: AdmittedRunContext) => void | Promise<void>;
 };
 
-type CronServiceDepsInternal = Omit<CronServiceDeps, "nowMs"> & {
+type CronServiceDepsInternal = Omit<CronServiceDeps, "env" | "nowMs"> & {
+  env: NodeJS.ProcessEnv;
   nowMs: () => number;
 };
 
@@ -336,13 +404,46 @@ export type CronServiceState = {
   storeLoadedAtMs: number | null;
 };
 
+export const CRON_HOST_EXECUTION_DISABLED_MESSAGE =
+  "Automation jobs that execute on the Gateway host are disabled by OPENCLAW_DISABLE_CRON_HOST_EXECUTION; contact the Gateway deployment administrator to enable them.";
+
+/** Triggers and process-backed schedules can start host work independently of the job payload. */
+export function describeCronHostExecutionRestriction(
+  job: CronStoredJob,
+  hostExecutionDisabled: boolean | undefined,
+): string | undefined {
+  if (
+    hostExecutionDisabled &&
+    (job.payload.kind === "command" ||
+      job.payload.kind === "script" ||
+      job.schedule.kind === "on-exit" ||
+      (job.schedule.kind === "stream" && !job.streamSandbox) ||
+      job.trigger)
+  ) {
+    return CRON_HOST_EXECUTION_DISABLED_MESSAGE;
+  }
+  return undefined;
+}
+
+export function assertCronHostExecutionAllowed(state: CronServiceState, job: CronStoredJob): void {
+  const reason = describeCronHostExecutionRestriction(job, state.deps.hostExecutionDisabled);
+  if (reason) {
+    throw new TypeError(reason);
+  }
+}
+
 export function createCronServiceState(deps: CronServiceDeps): CronServiceState {
   // The public CronService constructor shipped before roster-aware callers.
   // Preserve its implicit owner unless a static or dynamic configured default exists.
   const defaultAgentId =
     deps.defaultAgentId ?? (deps.resolveDefaultAgentId ? undefined : LEGACY_IMPLICIT_AGENT_ID);
   return {
-    deps: { ...deps, defaultAgentId, nowMs: deps.nowMs ?? (() => deps.scheduler.now()) },
+    deps: {
+      ...deps,
+      env: deps.env ?? process.env,
+      defaultAgentId,
+      nowMs: deps.nowMs ?? (() => deps.scheduler.now()),
+    },
     store: null,
     durableNextRunAtMsByJobId: new Map<string, number | undefined>(),
     schedulerScope: deps.scheduler.scope(),
@@ -432,12 +533,21 @@ export type CronListResult = CronJob[];
 export type CronAddInput = CronJobCreate;
 /** Caller-specific declaration-key visibility and explicit enablement metadata. */
 export type CronAddOptions = {
+  /** Validated host invocation facts; immutable after fresh command-job creation. */
+  pluginCommand?: CronStoredJob["pluginCommand"];
+  /** Captured source digest of the admitting plugin instance; enables restart continuity. */
+  pluginCommandSourceDigest?: string;
+  operatorSource?: NonNullable<CronStoredJob["operatorSource"]>["source"];
+  operatorSourceExecutionRevision?: string;
+  inferenceBinding?: CronStoredJob["inferenceBinding"];
   sourceConversation?: CronStoredJob["sourceConversation"];
+  /** Logical sandbox target captured from the admitted creator, never public input. */
+  streamSandbox?: CronStoredJob["streamSandbox"];
   /** Selected revisions captured from a validated caller session, never public input. */
   skillLibrarySelections?: CronStoredJob["skillLibrarySelections"];
   matchesExisting?: (job: CronJob) => boolean;
   enabledExplicit?: boolean;
-  /** Gateway/doctor-owned heartbeat jobs require this opt-in at service creation. */
+  /** Reserved declaration namespaces require trusted ownership at creation. */
   systemOwned?: boolean;
   /** Trusted creator provenance persisted with new jobs; never accepted from public input. */
   createdActor?: SessionCreatedActor;
@@ -449,6 +559,11 @@ export type CronAddOptions = {
   toolsAllowExecTarget?: CronToolsAllowExecTarget;
   /** Synchronous Gateway-owned liveness check repeated at mutation admission and commit. */
   commitGuard?: () => void;
+  /** Prepared caller policy; host floors use the committing transaction's approvals. */
+  execPolicy?: CronStreamExecPolicy;
+  streamExecApproval?: CronStreamExecApproval;
+  /** Creator-session facts refreshed by the worker at each native admission. */
+  sessionEntryCurrent?: SessionEntryCurrentCheck;
   /** One-use fresh capture; callback presence means fresh even when it returns undefined. */
   captureRuntimeAuthority?: () => CronRuntimeAuthority | undefined;
 };
@@ -456,7 +571,17 @@ export type CronUpdateInput = CronJobPatch;
 /** Authenticated caller provenance used only when a tool policy is explicitly adopted. */
 export type CronUpdateOptions = Pick<
   CronAddOptions,
-  "toolsAllowProvenance" | "toolsAllowExecTarget" | "commitGuard" | "captureRuntimeAuthority"
+  | "operatorSource"
+  | "operatorSourceExecutionRevision"
+  | "toolsAllowProvenance"
+  | "toolsAllowExecTarget"
+  | "commitGuard"
+  | "captureRuntimeAuthority"
+  | "inferenceBinding"
+  | "execPolicy"
+  | "streamExecApproval"
+  | "streamSandbox"
+  | "sessionEntryCurrent"
 > & {
   /** Null forbids policy adoption; undefined retains in-process operator defaults. */
   scheduledToolPolicy?: CronScheduledToolPolicy | null;
@@ -465,6 +590,11 @@ export type CronUpdateOptions = Pick<
 export type CronCommitGuardOptions = {
   /** Synchronous Gateway-owned liveness check repeated at mutation admission and commit. */
   commitGuard?: () => void;
+};
+export type CronRemoveOptions = CronCommitGuardOptions & {
+  systemOwned?: boolean;
+  /** The reviewed definition must still match at the store lock and durable commit. */
+  expectedConfigRevision?: string;
 };
 /** Cron-store-locked guard evaluated against the current job before an update applies. */
 export type CronUpdatePrecondition = (job: CronJob, nowMs: number) => void | Promise<void>;

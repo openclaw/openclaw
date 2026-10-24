@@ -1,6 +1,6 @@
 ---
 doc-schema-version: 1
-summary: "Extended-stable validation dispatch, changelog-only Release SHA reuse, coverage policies, and Telegram deferrals and waivers"
+summary: "Extended-stable validation dispatch, changelog-only Release SHA reuse, coverage policies, and beta Telegram deferrals"
 title: "Extended-stable and changelog-only validation"
 read_when:
   - Validating an extended-stable candidate
@@ -12,7 +12,7 @@ read_when:
 
 Extended-stable validation uses the same candidate-owned helper: the exact
 source candidate C also owns qualification Q=C. Independently trusted P admits
-and verifies that request. Keep those roles and the canonical release context
+and verifies that request. Keep those roles and the selected release context
 separate; deliberately backport missing qualification contracts before freezing C.
 
 ```bash
@@ -36,7 +36,7 @@ pnpm ci:full-release \
 
 After independent admission, the helper creates `release-ci/<Q-prefix>-<unique-id>`
 at Q=C and dispatches from that immutable named branch. It passes the exact
-candidate as `ref` and `expected_sha`, with the canonical branch in
+candidate as `ref` and `expected_sha`, with the release branch in
 `target_context_ref`. GitHub workflow dispatch `--ref` accepts a branch or tag,
 not a raw SHA. The release branch supplies context, not qualification authority.
 Never create the transport ref manually or substitute a moving-main harness.
@@ -79,7 +79,7 @@ The conceptual phases map to current inputs:
   `run_release_soak=true` or explicit focused groups
 - `stable-publish`: `release_profile=stable`
 
-For an actual beta package on its matching canonical release branch or beta
+For an actual beta package on its matching release branch or beta
 tag, `all` with `release_profile=beta` and no soak records
 `coveragePolicy=npm-beta-v1`. It retains Linux, macOS, and Windows Node checks,
 Control UI, plugins, package integrity, install/update acceptance, Linux/Windows/macOS cross-OS
@@ -147,10 +147,12 @@ Codex `final`, reads randomized workspace inputs, writes their exact artifact,
 and sends explicit completion. This catches the v2026.7.1 regression where an
 ordinary progress send terminated the turn.
 
-Selected source Telegram QA and standalone npm Telegram tests must pass before
-normal release validation can pass. Selected Package Acceptance Telegram must also pass in every profile. Missing credentials,
-an exhausted pool, and failed attempts do not count as successful proof. Exact
-candidate identity, credential isolation, and lease cleanup remain required.
+Selected source Telegram QA, standalone npm Telegram, and Package Acceptance
+Telegram tests still run. A failed leaf blocks validation unless the pinned
+[release-tooling policy](/reference/full-release-validation/evidence#release-tooling-waivers)
+grants that exact failure. Missing credentials or an exhausted pool do not count
+as successful proof. Exact candidate identity, credential isolation, and lease
+cleanup remain required.
 
 Package Acceptance Telegram E2E is automatically deferred for every beta-profile
 `all` run without soak, including beta-profile checks of `main`.
@@ -161,31 +163,8 @@ keep Telegram selected by default. The existing
 deferral; it is rejected for `stable` and `full` and does not disable the focused
 `rerun_group=npm-telegram` workflow.
 
-Selected-test requirements are separate from explicit omissions. The reviewed
-Telegram-only exceptions are `2026.8.1-owner-approved` and
-`2026.9.1-owner-approved`. The reviewed Telegram and Matrix QA-live exceptions
-are `2026.9.5-owner-approved`, `2026.9.7-owner-approved`,
-`2026.9.8-owner-approved`, and `2026.9.9-owner-approved`. Pass the selected value
-with `-f telegram_waiver=<value>`.
-Any future exception requires a reviewed code change; a matching
-`<target-version>-owner-approved` string alone is not authorization. The value
-must name the validated target's actual
-`package.json` version, the sealed candidate version must match, and the profile
-must be `stable` or `full`. Beta, prerelease, and unlisted targets are rejected.
-Package-spec overrides must be exactly `openclaw@<target-version>`; blank specs
-select the sealed candidate.
-It omits source Telegram QA, Package Acceptance Telegram E2E, and the
-published-package Telegram E2E; their evidence states **waived / not run**,
-never passed. Telegram unit tests and every other selected gate remain active,
-including stable soak and performance checks. An explicit Telegram rerun or
-suite filter, including an aggregate such as `qa-live` or `qa-live-non-slack`
-that selects Telegram, conflicts with the waiver and is rejected. The declaration and
-target version bind the immutable execution plan, manifest, and reuse identity;
-the publisher carries the waiver into release verification notes. The beta-only
-package deferral above remains unchanged.
-
 Source Telegram QA uses the release checks' shared context check: an exact candidate
-SHA must remain an ancestor of its canonical branch, or equal its release tag.
+SHA must remain an ancestor of its release branch, or equal its release tag.
 Both build and execution admission independently repeat that check and retain
 candidate-version, signature/merge-attribution, and live maintainer checks.
 Advancing a release branch does not select a new candidate or invalidate the old one.

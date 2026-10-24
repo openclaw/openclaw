@@ -6,7 +6,8 @@ import type {
   NodeBootstrapArtifact,
   NodeBootstrapArtifactOptions,
 } from "./node-bootstrap-artifact-contract.js";
-import { prepareNodeBootstrapArtifactInWorker } from "./node-bootstrap-artifact-worker.js";
+import { prepareNodeArtifactInWorker } from "./node-bootstrap-artifact-worker.js";
+import { prepareNodeBootstrapInstallLock } from "./node-bootstrap-install-lock.js";
 
 /** Owns one immutable deployment artifact for this Gateway process, never the live installation. */
 export function createNodeBootstrapArtifactProvider(options: NodeBootstrapArtifactOptions) {
@@ -25,14 +26,11 @@ export function createNodeBootstrapArtifactProvider(options: NodeBootstrapArtifa
           temporaryRoot = await fs.mkdtemp(
             path.join(resolvePreferredOpenClawTmpDir(), "openclaw-node-runtime-"),
           );
-          if (closed) {
-            throw new Error("Node bootstrap artifact provider is closed");
-          }
-          const artifact = await prepareNodeBootstrapArtifactInWorker(options, temporaryRoot);
-          if (closed) {
-            throw new Error("Node bootstrap artifact provider is closed");
-          }
-          return artifact;
+          const artifact = await prepareNodeArtifactInWorker("bootstrap", {
+            options,
+            temporaryRoot,
+          });
+          return { ...artifact, installLock: await prepareNodeBootstrapInstallLock(artifact) };
         } catch (error) {
           if (temporaryRoot) {
             await fs.rm(temporaryRoot, { recursive: true, force: true });
@@ -43,12 +41,7 @@ export function createNodeBootstrapArtifactProvider(options: NodeBootstrapArtifa
         }
       });
       // Cancellation releases this consumer; process shutdown still drains the shared producer.
-      const artifact = await racePromiseWithAbortSignal(prepared, signal);
-      signal?.throwIfAborted();
-      if (closed) {
-        throw new Error("Node bootstrap artifact provider is closed");
-      }
-      return artifact;
+      return racePromiseWithAbortSignal(prepared, signal);
     },
     async close(): Promise<void> {
       closed = true;

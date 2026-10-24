@@ -190,8 +190,9 @@ Open the **Codex** group in the normal sessions sidebar. It lists the same sessi
 grouped by host. **Load more sessions** appends the next page from each host that
 has older rows, and those appended rows survive the sidebar's periodic refresh.
 Each host appears as soon as its resident catalog is ready. The visible page
-reconciles after node-connectivity changes, when it regains focus, and at most
-every 30 seconds. A changed result gets a faster follow-up pass. Sessions created
+reconciles when the tab becomes visible again or reconnects, and every two minutes
+while visible. Hidden tabs pause discovery; explicit refreshes and catalog actions
+do not wait for the periodic refresh. Sessions created
 in Codex Desktop, the CLI, or another native client appear after the host's
 background directory reconciliation. Native events update threads driven by that
 Gateway without waiting for the periodic scan. Searches and pagination use the
@@ -666,8 +667,8 @@ For every supervision config field, see
 ## Troubleshooting
 
 **No sessions appear:** verify that `@openclaw/codex` is installed, both the
-plugin and `supervision.enabled` are true, the current plugin allowlist permits
-`codex`, and the sessions are not archived. Gateway activation changes hot-apply;
+plugin and native conversation discovery are enabled, the current plugin allowlist
+permits `codex`, and the sessions are not archived. Gateway activation changes hot-apply;
 refresh the catalog after they finish. Restart a node if its local activation
 change has not refreshed its advertised capabilities.
 
@@ -675,6 +676,9 @@ change has not refreshed its advertised capabilities.
 ineligible state, its host is offline, or another action is pending. For a
 paired-node row, also verify `operator.admin` and that all three continuation
 commands are advertised and permitted. Terminal access alone is insufficient.
+For a Gateway-local row, Continue also requires `supervision.enabled: true`;
+with it off the transcript stays readable and Chat links to the Codex plugin
+settings.
 Send from a Gateway-local stored or idle session viewer to create a separate
 branch. Continuing a source that already has a supervised Chat opens that Chat.
 

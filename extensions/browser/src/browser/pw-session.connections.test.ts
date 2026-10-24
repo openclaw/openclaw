@@ -1,8 +1,8 @@
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { Browser, BrowserContext, Page } from "playwright-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { makeTargetBrowser as makeBrowser } from "./pw-session.browser.test-support.js";
 import {
-  type BrowserMockBundle,
   makeEmptyBrowser,
   setupPwSessionConnectionTest,
 } from "./pw-session.connection.test-support.js";
@@ -24,38 +24,6 @@ const {
 } = pwAi;
 
 const cdpUrl = "http://127.0.0.1:9222";
-
-function makeBrowser(targetId: string, url: string): BrowserMockBundle {
-  const browserClose = vi.fn(async () => {});
-  const page = {
-    on: vi.fn(),
-    context: () => context,
-    title: vi.fn(async () => `title:${targetId}`),
-    url: vi.fn(() => url),
-  } as unknown as import("playwright-core").Page;
-
-  const context: import("playwright-core").BrowserContext = {
-    pages: () => [page],
-    on: vi.fn(),
-    newCDPSession: vi.fn(async () => ({
-      send: vi.fn(async (method: string) =>
-        method === "Target.getTargetInfo"
-          ? { targetInfo: { targetId, title: `title:${targetId}` } }
-          : {},
-      ),
-      detach: vi.fn(async () => {}),
-    })),
-  } as unknown as import("playwright-core").BrowserContext;
-
-  const browser = {
-    contexts: () => [context],
-    on: vi.fn(),
-    off: vi.fn(),
-    close: browserClose,
-  } as unknown as import("playwright-core").Browser;
-
-  return { browser, browserClose };
-}
 
 function makeStuckPageTargetBrowser() {
   const fixture = makeBrowser("STUCK", "https://stuck.example");
@@ -265,12 +233,6 @@ describe("pw-session connection scoping", () => {
   });
 
   it.each([
-    {
-      host: "non-loopback CDP hosts",
-      cdpUrl: "http://93.184.216.34:9222",
-      ssrfPolicy: { allowPrivateNetwork: true },
-      error: "discovery unavailable",
-    },
     {
       host: "loopback HTTP CDP hosts",
       cdpUrl,

@@ -1,4 +1,3 @@
-// Gateway service lifecycle command core: install, uninstall, start, stop, restart.
 import { readBestEffortConfig } from "../../config/config.js";
 import { resolveIsNixMode } from "../../config/paths.js";
 import { checkTokenDrift } from "../../daemon/service-audit.js";
@@ -143,6 +142,7 @@ function warnServiceConfig(
 export async function runServiceUninstall(params: {
   serviceNoun: string;
   service: GatewayService;
+  renderFailureHints: () => string[];
   opts?: ServiceLifecycleOptions;
   stopBeforeUninstall: boolean;
   assertNotLoadedAfterUninstall: boolean;
@@ -171,7 +171,7 @@ export async function runServiceUninstall(params: {
   try {
     await params.service.uninstall({ env: process.env, stdout });
   } catch (err) {
-    fail(`${params.serviceNoun} uninstall failed: ${String(err)}`);
+    fail(`${params.serviceNoun} uninstall failed: ${String(err)}`, params.renderFailureHints());
     return;
   }
   loaded = await resolveServiceLoadedOrFail(params, fail, {
@@ -181,7 +181,10 @@ export async function runServiceUninstall(params: {
     return;
   }
   if (loaded && params.assertNotLoadedAfterUninstall) {
-    fail(`${params.serviceNoun} service still loaded after uninstall.`);
+    fail(
+      `${params.serviceNoun} service still loaded after uninstall.`,
+      params.renderFailureHints(),
+    );
     return;
   }
   warnServiceConfig(await getServiceActionPreflightFailure("uninstall"), { json, warnings });
@@ -366,6 +369,7 @@ export async function runServiceStart(params: {
 export async function runServiceStop(params: {
   serviceNoun: string;
   service: GatewayService;
+  renderFailureHints: () => string[];
   opts?: ServiceLifecycleOptions;
   onNotLoaded?: (ctx: ServiceRecoveryContext) => Promise<ServiceRecoveryResult<"stopped"> | null>;
   stopWhenNotLoaded?: boolean;
@@ -402,7 +406,7 @@ export async function runServiceStop(params: {
       if (err instanceof ExitError) {
         throw err;
       }
-      fail(`${params.serviceNoun} stop failed: ${String(err)}`);
+      fail(`${params.serviceNoun} stop failed: ${String(err)}`, params.renderFailureHints());
       return;
     }
     warnServiceConfig(await getServiceActionPreflightFailure("stop"), { json, warnings });
@@ -422,7 +426,7 @@ export async function runServiceStop(params: {
       onMutation: gatewayStopAudit,
     });
   } catch (err) {
-    fail(`${params.serviceNoun} stop failed: ${String(err)}`);
+    fail(`${params.serviceNoun} stop failed: ${String(err)}`, params.renderFailureHints());
     return;
   }
 

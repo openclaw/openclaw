@@ -1,5 +1,3 @@
-import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
-// Directory CLI for chat-channel identity lookup: self, peers, groups, and group members.
 import {
   normalizeOptionalString,
   normalizeStringifiedOptionalString,
@@ -27,6 +25,7 @@ import { defaultRuntime } from "../runtime.js";
 import { resolveCommandConfigWithSecrets } from "./command-config-resolution.js";
 import { getScopedChannelsCommandSecretTargets } from "./command-secret-targets.js";
 import { formatDocsHelp, formatHelpExamples } from "./help-format.js";
+import { parseOptionalPositiveInteger } from "./parse-positive-integer.js";
 
 const DIRECTORY_LIST_LABELS = {
   listPeers: ["Peers", "No peers found", "directory peers"],
@@ -55,21 +54,6 @@ function formatDirectoryScope(channelId: string, accountId: string): string {
   const channel = JSON.stringify(sanitizeTerminalText(channelId));
   const account = JSON.stringify(sanitizeTerminalText(accountId));
   return `channel ${channel}, account ${account}`;
-}
-
-function printDirectoryList(params: {
-  title: string;
-  emptyMessage: string;
-  entries: Array<{ id: string; name?: string | undefined }>;
-}): void {
-  if (params.entries.length === 0) {
-    defaultRuntime.log(theme.muted(params.emptyMessage));
-    return;
-  }
-
-  const tableWidth = getTerminalTableWidth();
-  defaultRuntime.log(`${theme.heading(params.title)} ${theme.muted(`(${params.entries.length})`)}`);
-  defaultRuntime.log(formatDirectoryTable(params.entries, tableWidth));
 }
 
 /** Register directory lookup commands and shared channel/account resolution. */
@@ -186,13 +170,7 @@ export function registerDirectoryCli(program: Command) {
     action: keyof typeof DIRECTORY_LIST_LABELS,
   ) => {
     const [title, emptyMessage, unsupported] = DIRECTORY_LIST_LABELS[action];
-    const limit =
-      opts.limit === undefined || opts.limit === null
-        ? null
-        : parseStrictPositiveInteger(opts.limit);
-    if (limit === undefined) {
-      throw new Error("--limit must be a positive integer.");
-    }
+    const limit = parseOptionalPositiveInteger(opts.limit ?? undefined, "--limit", ".") ?? null;
     const groupId = normalizeStringifiedOptionalString(opts.groupId) ?? "";
     if (action === "listGroupMembers" && !groupId) {
       throw new Error("Missing --group-id");
@@ -218,15 +196,18 @@ export function registerDirectoryCli(program: Command) {
       defaultRuntime.writeJson(result);
       return;
     }
-    printDirectoryList({
-      title,
-      emptyMessage: `${emptyMessage} for ${
-        action === "listGroupMembers"
-          ? `group ${JSON.stringify(sanitizeTerminalText(groupId))}, `
-          : ""
-      }${formatDirectoryScope(channelId, accountId)}.`,
-      entries: result,
-    });
+    const scopedEmptyMessage = `${emptyMessage} for ${
+      action === "listGroupMembers"
+        ? `group ${JSON.stringify(sanitizeTerminalText(groupId))}, `
+        : ""
+    }${formatDirectoryScope(channelId, accountId)}.`;
+    if (result.length === 0) {
+      defaultRuntime.log(theme.muted(scopedEmptyMessage));
+      return;
+    }
+    const tableWidth = getTerminalTableWidth();
+    defaultRuntime.log(`${theme.heading(title)} ${theme.muted(`(${result.length})`)}`);
+    defaultRuntime.log(formatDirectoryTable(result, tableWidth));
   };
 
   const runDirectoryAction = async (opts: { json?: unknown }, action: () => Promise<void>) => {

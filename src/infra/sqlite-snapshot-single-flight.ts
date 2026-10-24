@@ -33,7 +33,6 @@ type SnapshotFlight = {
   closeProducer(): RetainedOperation<void>;
 };
 type SnapshotLifecycle = {
-  trackProducer?: (producer: Promise<PreparedSqliteReadOnlyLocation>) => void;
   /** Shared bytes must belong to the same source lifetime. */
   scope?: object;
 };
@@ -177,6 +176,7 @@ function leaseFlight(flight: SnapshotFlight, base: PreparedSnapshot): PreparedSn
   return {
     location: base.location,
     cleanupRoot: base.cleanupRoot,
+    privateFamily: base.privateFamily,
     cleanup() {
       if (released) {
         const outcome = cleanup?.read();
@@ -222,7 +222,6 @@ function startSnapshotFlight(
   }
   const selected = flight;
   selected.references++;
-  lifecycle?.trackProducer?.(selected.settled.result);
   let closed = false;
   let withdrew = false;
   let closing: RetainedOperation<void> | undefined;
@@ -240,11 +239,9 @@ function startSnapshotFlight(
         if (flights.get(key) === selected) {
           flights.delete(key);
         }
-        if (!lifecycle?.trackProducer) {
-          selected.settled.service();
-          if (selected.settled.read().status === "pending") {
-            return;
-          }
+        selected.settled.service();
+        if (selected.settled.read().status === "pending") {
+          return;
         }
       }
       retained.reject(signal?.reason ?? new Error("SQLite snapshot preparation closed"));

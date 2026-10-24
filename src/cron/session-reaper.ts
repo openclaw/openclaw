@@ -16,8 +16,8 @@ import { resolveMaintenanceConfig } from "../config/sessions/store-maintenance-r
 import type { CronConfig } from "../config/types.cron.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
+import { isCompetingSessionControllerWorkActive } from "../sessions/session-controller.lifecycle.js";
 import { isCronRunSessionKey } from "../sessions/session-key-utils.js";
-import { isCompetingSessionWorkAdmissionActive } from "../sessions/session-lifecycle-admission.js";
 import {
   sessionChanges,
   sessionChangeScopeAffectsStoredRows,
@@ -253,7 +253,7 @@ export async function sweepCronRunSessions(params: {
       // The shared deletion guard still closes the race between selection and commit.
       if (
         entry.sessionId &&
-        isCompetingSessionWorkAdmissionActive(storePath, [sessionKey, entry.sessionId])
+        isCompetingSessionControllerWorkActive(storePath, [sessionKey, entry.sessionId])
       ) {
         continue;
       }

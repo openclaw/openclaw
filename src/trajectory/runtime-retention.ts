@@ -24,6 +24,7 @@ import {
   trajectoryRuntimeRetentionDue,
   trajectoryRuntimeRetentionState,
 } from "./runtime-retention.sqlite.js";
+import { invalidateTrajectoryRuntimeWindowFacts } from "./runtime-window-facts.js";
 
 const log = createSubsystemLogger("trajectory");
 
@@ -92,11 +93,8 @@ export function scheduleSqliteTrajectoryRuntimeRetention(params: {
     });
     const root = captureOpenClawStateReadContext(resolveOpenClawStateSqlitePath(options.env));
     unregisterRoot = registerOpenClawStateDatabaseAsyncResource({
-      close: async (closed) => {
-        if (!closed || closed.key === root.admission.identity.key) {
-          await close();
-        }
-      },
+      admission: root.admission,
+      close,
     });
     reader = retainSessionHistoryWorkerDatabase(options, maintenanceLane);
   } catch (error) {
@@ -165,12 +163,13 @@ export function scheduleSqliteTrajectoryRuntimeRetention(params: {
         );
       for (;;) {
         assertCurrent();
-        const result = await execute((worker) =>
-          worker.execute({
+        const result = await execute((worker) => {
+          invalidateTrajectoryRuntimeWindowFacts(identity);
+          return worker.execute({
             type: "trajectory.retention.delete",
             input: { sweepId, snapshot },
-          }),
-        );
+          });
+        });
         snapshot = undefined;
         if (result.complete || result.refresh) {
           break;

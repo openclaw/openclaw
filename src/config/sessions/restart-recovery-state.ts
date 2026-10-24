@@ -11,7 +11,10 @@ import {
   normalizeDeliveryContext,
   type DeliveryContext,
 } from "../../utils/delivery-context.shared.js";
-import { isDeliverableMessageChannel } from "../../utils/message-channel.js";
+import {
+  isDeliverableMessageChannel,
+  normalizeMessageChannel,
+} from "../../utils/message-channel.js";
 import type {
   HarnessCompletionRecovery,
   RestartRecoveryTerminalDeliveryEvidence,
@@ -58,6 +61,22 @@ export function isMainRestartRecoveryCandidate(
     !isCronSessionKey(sessionKey) &&
     !isAcpSessionKey(sessionKey)
   );
+}
+
+/** A final intent can acknowledge only its admitted source on the same captured route. */
+export function getRestartRecoveryPendingFinalSourceRunId(
+  entry: SessionEntry,
+  context: DeliveryContext | undefined,
+): string | undefined {
+  const sourceRunId = normalizeRunId(entry.restartRecoveryDeliverySourceRunId);
+  const original = normalizeDeliveryContext(entry.restartRecoveryDeliveryContext);
+  return normalizeRunId(entry.restartRecoveryDeliveryRunId) &&
+    sourceRunId &&
+    original?.channel &&
+    original.to &&
+    isDeepStrictEqual(original, normalizeDeliveryContext(context))
+    ? sourceRunId
+    : undefined;
 }
 
 type RestartRecoveryChannelAuthority = {
@@ -332,7 +351,12 @@ function normalizeRestartRecoveryTerminalDeliveryEvidence(
       continue;
     }
     const previousIndex = evidence.findIndex((entry) => entry.runId === runId);
+    // Queue receipts are immutable facts. Later terminal cleanup can carry an
+    // older capture, but cannot erase a send or reassign it to another route.
     if (previousIndex >= 0) {
+      if (evidence[previousIndex]?.durableFinalReceipt) {
+        continue;
+      }
       evidence.splice(previousIndex, 1);
     }
     const transcriptRunId = normalizeRunId(item.transcriptRunId);
@@ -357,8 +381,14 @@ function normalizeRestartRecoveryTerminalDeliveryEvidence(
       runId,
       ...result,
       ...(transcriptRunId ? { transcriptRunId } : {}),
-      ...(harnessCompletion?.sourceRunId === runId ? { harnessCompletion, deliveryContext } : {}),
-      ...(harnessCompletion?.sourceRunId === runId && intentId && deliveryId && platformMessageId
+      ...(harnessCompletion?.sourceRunId === runId ? { harnessCompletion } : {}),
+      ...(deliveryContext ? { deliveryContext } : {}),
+      ...((item.harnessCompletion === undefined || harnessCompletion?.sourceRunId === runId) &&
+      deliveryContext?.channel &&
+      deliveryContext.to &&
+      intentId &&
+      deliveryId &&
+      platformMessageId
         ? { durableFinalReceipt: { intentId, deliveryId, platformMessageId } }
         : {}),
     });
@@ -473,6 +503,12 @@ export function normalizeRestartRecoveryEntryFields(
       : undefined,
   );
   assign(
+    "restartRecoverySourceMessageChannel",
+    entry.restartRecoverySourceMessageChannel === null
+      ? null
+      : normalizeMessageChannel(entry.restartRecoverySourceMessageChannel),
+  );
+  assign(
     "restartRecoverySourceReplyDeliveryMode",
     entry.restartRecoverySourceReplyDeliveryMode === "automatic" ||
       entry.restartRecoverySourceReplyDeliveryMode === "message_tool_only"
@@ -573,6 +609,48 @@ export function hasMainSessionRecoveryClaim(entry: InternalSessionEntry | undefi
   );
 }
 
+export function hasOrphanedMainSessionWork(
+  entry: InternalSessionEntry,
+  sessionKey: string,
+): boolean {
+  const settledInterruption =
+    entry.abortedLastRun === false &&
+    !entry.lifecycleRunId &&
+    !entry.activeWriterRunId &&
+    entry.lastRunId !== undefined &&
+    hasRestartRecoveryTerminalRun(entry, entry.lastRunId);
+  return (
+    entry.archivedAt === undefined &&
+    isMainRestartRecoveryCandidate(entry, sessionKey) &&
+    (hasMainSessionRecoveryClaim(entry) ||
+      entry.abortedLastRun === true ||
+      (entry.status === "interrupted" && !settledInterruption))
+  );
+}
+
+/** A new turn may retire an aborted claim only when restart recovery will not resume it. */
+export function canReplaceAbortedRestartRecoveryClaim(
+  entry: SessionEntry,
+  sessionKey: string,
+  admissionRunId: string | undefined,
+): boolean {
+  const activeClaimRunId = normalizeRunId(entry.restartRecoveryDeliveryRunId);
+  return Boolean(
+    admissionRunId &&
+    activeClaimRunId &&
+    admissionRunId !== activeClaimRunId &&
+    entry.abortedLastRun === true &&
+    (entry.status === undefined || entry.status === "interrupted") &&
+    entry.pendingFinalDelivery === undefined &&
+    entry.restartRecoveryBeforeAgentReplyState === undefined &&
+    entry.restartRecoveryDeliveryReceiptState === undefined &&
+    // Main-session recovery resumes other claims before new input. It never owns child,
+    // cron, or ACP sessions, so their interrupted claim would otherwise reject every turn.
+    (entry.restartRecoverySourceIngress === "control-ui" ||
+      !isMainRestartRecoveryCandidate(entry, sessionKey)),
+  );
+}
+
 /** Matches durable source ownership regardless of the surrounding run status. */
 export function hasRestartRecoverySourceClaim(
   entry: SessionEntry | null | undefined,
@@ -637,11 +715,13 @@ export function buildRestartRecoveryClaimCleanupPatch(params: {
     restartRecoveryDeliveryRunId: undefined,
     restartRecoveryDeliverySourceRunId: undefined,
     restartRecoveryOperatorSource: undefined,
+    restartRecoveryRequesterSource: undefined,
     restartRecoveryHarnessCompletion: undefined,
     restartRecoveryRequesterAccountId: undefined,
     restartRecoveryRequesterSenderId: undefined,
     restartRecoverySameChannelThreadRequired: undefined,
     restartRecoverySourceIngress: undefined,
+    restartRecoverySourceMessageChannel: undefined,
     restartRecoverySourceReplyDeliveryMode: undefined,
     restartRecoveryForceSafeTools: undefined,
     ...(terminalDeliveryEvidence

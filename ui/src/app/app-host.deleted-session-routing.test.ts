@@ -32,7 +32,7 @@ it("recovers a deleted Chat through the shell's router subscription without recu
       path: "/chat/main",
       aliases: ["/chat/main/deleted-thread"],
       loaderDeps: chatPages[0].loaderDeps,
-      component: () => ({ render: () => null }),
+      component: () => ({ renderSolid: () => null }),
       loader: (_context, options) => ({
         kind: "session",
         sessionKey: options.location.pathname === "/chat/main" ? mainKey : deletedKey,
@@ -63,7 +63,7 @@ it("recovers a deleted Chat through the shell's router subscription without recu
     expect(shell.activeSessionKey).toBe(deletedKey);
 
     deletion.mockImplementation((key) => (key === deletedKey ? "confirmed" : undefined));
-    shell.recoverDeletedActiveSession();
+    shell.shellNavigation.recoverDeletedActiveSession();
     await recovery;
 
     expect(errors).toEqual([]);
