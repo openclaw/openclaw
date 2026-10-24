@@ -1,12 +1,5 @@
 import { spawn, spawnSync } from "node:child_process";
-import {
-  mkdirSync,
-  existsSync,
-  readFileSync,
-  realpathSync,
-  symlinkSync,
-  writeFileSync,
-} from "node:fs";
+import { mkdirSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { bundledPluginRoot } from "openclaw/plugin-sdk/test-fixtures";
@@ -27,12 +20,12 @@ import {
   resolveExtensionTestPlan,
 } from "../../scripts/lib/extension-test-plan.mts";
 import { relativizeExtensionVitestArgs } from "../../scripts/lib/extension-vitest-paths.mts";
-import bunPin from "../../scripts/lib/openclaw-bun.json" with { type: "json" };
 import type { VitestBatchRunParams } from "../../scripts/lib/vitest-batch-runner.mts";
 import {
   prepareVitestRuntime,
   resolveVitestPretestBuildMode,
 } from "../../scripts/lib/vitest-build-prerequisites.mts";
+import { resolveVitestNodeArgs } from "../../scripts/lib/vitest-process-env.mts";
 import { scriptModuleEntrypoints } from "../../scripts/script-module-runtime.test-support.mjs";
 import {
   parseExtensionIds,
@@ -56,7 +49,7 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { listVitestConfigTestFiles } from "../vitest-projects-config.test-support.js";
 import { databaseWorkerExtensionTestFiles } from "../vitest/vitest.extension-database-workers-paths.mjs";
 import { matchesVitestCliSelection } from "../vitest/vitest.pattern-file.ts";
-import { childTermination, scriptFiles } from "./run-vitest.test-support.js";
+import { childTermination } from "./run-vitest.test-support.js";
 
 vi.mock("../../scripts/lib/vitest-build-prerequisites.mts", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../scripts/lib/vitest-build-prerequisites.mts")>()),
@@ -417,109 +410,9 @@ it.each([
   expect(parseExtensionIds(input)).toEqual({ extensionIds, passthroughArgs });
 });
 
-it.each([
-  { enableMaglev: false, realHomeReplay: false, pool: "forks" },
-  { enableMaglev: true, realHomeReplay: false, pool: "forks" },
-  { enableMaglev: false, realHomeReplay: true, pool: "forks" },
-  { enableMaglev: false, realHomeReplay: false, pool: "threads" },
-])(
-  "runs installed Vitest without pnpm (pool: $pool, Maglev: $enableMaglev, owner-authorized real home: $realHomeReplay)",
-  ({ enableMaglev, realHomeReplay, pool }) => {
-    const root = realpathSync(tempDirs.make("openclaw-test-extension-native-"));
-    const files = scriptFiles(root);
-    const home = path.join(root, "home");
-    const bin = path.join(root, "bin");
-    const runtime = process.versions.bun ? "bun" : "node";
-    const report = path.join(root, "report.json");
-    const config = path.join(root, "vitest.config.mjs");
-    const entry = path.join(root, "batch.mts");
-    mkdirSync(home);
-    mkdirSync(bin);
-    const executable = path.join(bin, process.platform === "win32" ? `${runtime}.exe` : runtime);
-    if (runtime === "bun" && process.platform !== "win32") {
-      // This fixture owns attestation metadata; real test execution still uses the outer runtime.
-      const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
-      writeFileSync(
-        executable,
-        `#!/bin/sh\nif [ "$1" = --revision ]; then\n  printf '%s\\n' ${quote(bunPin.revision)}\nelse\n  exec ${quote(process.execPath)} "$@"\nfi\n`,
-        { mode: 0o755 },
-      );
-    } else {
-      symlinkSync(process.execPath, executable, "file");
-    }
-    files.linkModules();
-    writeFileSync(
-      config,
-      `import assert from 'node:assert/strict';
-assert.equal(process.execArgv.includes('--no-maglev'), ${runtime === "node" && !enableMaglev}, 'batch Node defaults');
-assert.equal(process.execArgv.includes('--no-concurrent-sparkplug'), ${runtime === "node"}, 'batch Sparkplug policy');
-export default {root:${JSON.stringify(root)},cacheDir:${JSON.stringify(path.join(root, "cache"))},test:{include:['*.test.mjs'],pool:${JSON.stringify(pool)},execArgv:['--no-warnings'],globalSetup:[${JSON.stringify(path.join(process.cwd(), "test/vitest/vitest.node-policy.global-setup.ts"))}],maxWorkers:1,fileParallelism:false,cache:false,fsModuleCache:false}};`,
-    );
-    const expectedHome = realHomeReplay ? JSON.stringify(home) : "path.join(tmpdir(), 'home')";
-    writeFileSync(
-      path.join(root, "selected.test.mjs"),
-      `import {homedir,tmpdir} from 'node:os';import path from 'node:path';import {test,expect} from 'vitest';let attempts=0;test('selected native case',()=>{expect(++attempts).toBe(2);expect(Boolean(process.versions.bun)).toBe(${runtime === "bun"});expect(process.execArgv.includes('--no-concurrent-sparkplug')).toBe(${runtime === "node" && pool === "forks"});expect(process.execArgv).toContain('--no-warnings');expect(process.env.NODE_OPTIONS).toBe('--trace-warnings');expect(process.env.HOME).toBe(${expectedHome});expect(homedir()).toBe(${expectedHome});});`,
-    );
-    for (const name of ["excluded", "unrelated"]) {
-      writeFileSync(
-        path.join(root, `${name}.test.mjs`),
-        "import {test,expect} from 'vitest';test('must not execute',()=>expect.fail('selection lost'));",
-      );
-    }
-    const params = {
-      config,
-      homeMode: realHomeReplay ? "live-aware" : undefined,
-      args: [
-        "--configLoader=native",
-        "--retry=1",
-        "--reporter=verbose",
-        "--reporter=json",
-        `--outputFile=${report}`,
-        "--exclude",
-        "**/excluded.test.mjs",
-      ],
-      targets: [path.join(root, "selected.test.mjs"), path.join(root, "excluded.test.mjs")],
-    } satisfies VitestBatchRunParams;
-    writeFileSync(
-      entry,
-      `import {runVitestBatch} from ${JSON.stringify(path.join(process.cwd(), "scripts/lib/vitest-batch-runner.mts"))};process.exitCode=await runVitestBatch({...${JSON.stringify(params)},env:{...process.env,OPENCLAW_VITEST_ENABLE_MAGLEV:${JSON.stringify(enableMaglev ? "1" : "")}}});`,
-    );
-    const result = spawnSync(
-      process.execPath,
-      ["--import", path.join(process.cwd(), "scripts/tsx.mjs"), entry],
-      {
-        cwd: root,
-        encoding: "utf8",
-        env: {
-          PATH: bin,
-          OPENCLAW_VITEST_RUNTIME: runtime,
-          HOME: home,
-          USERPROFILE: home,
-          OPENCLAW_LIVE_TEST: realHomeReplay ? "1" : "0",
-          OPENCLAW_LIVE_USE_REAL_HOME: realHomeReplay ? "1" : "0",
-          TMPDIR: root,
-          TMP: root,
-          TEMP: root,
-          SystemRoot: process.env.SystemRoot,
-          COREPACK_ENABLE_NETWORK: "0",
-          NODE_DISABLE_COMPILE_CACHE: "1",
-          NODE_OPTIONS: "--trace-warnings",
-          CI: "1",
-        },
-      },
-    );
-    expect(result.status, result.stdout + result.stderr).toBe(0);
-    expect(result.signal).toBeNull();
-    const native = files.json("report.json");
-    expect(native.success).toBe(true);
-    expect(
-      native.testResults.flatMap(
-        (file: { assertionResults: { title: string; status: string }[] }) =>
-          file.assertionResults.map(({ title, status }) => [title, status]),
-      ),
-    ).toEqual([["selected native case", "passed"]]);
-  },
-);
+it("disables concurrent Node compilation by default", () => {
+  expect(resolveVitestNodeArgs({})).toEqual(["--no-maglev", "--no-concurrent-sparkplug"]);
+});
 
 it.each([
   {

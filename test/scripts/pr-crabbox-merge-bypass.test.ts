@@ -268,25 +268,6 @@ describe("Crabbox admin merge bypass verifier", () => {
     expect(() => validateCrabboxMergeBypass(evidence)).toThrow(error);
   });
 
-  it("accepts explicit protected-main workflow paths", () => {
-    const value = input();
-    value.publisherRun.path = ".github/workflows/pr-crabbox-gate-publisher.yml@refs/heads/main";
-    value.workflowRun.path = ".github/workflows/ci.yml@refs/heads/main";
-    expect(validateCrabboxMergeBypass(value)).toMatchObject({
-      actor: "maintainer",
-      crabboxCheckId: 21,
-      ciGateCheckId: 20,
-      ciRunId,
-      infrastructureJobs: [
-        { backend: "blacksmith", conclusion: "failure", id: failedJobId, name: "check" },
-      ],
-      mainSha,
-      planDigest,
-      targetCount: 8,
-      workflowSha,
-    });
-  });
-
   it("rejects a gate summary with a different retained preparation base", () => {
     const value = input();
     value.expectedBaseSha = "d".repeat(40);
@@ -298,7 +279,6 @@ describe("Crabbox admin merge bypass verifier", () => {
     value.requiredChecks.push({ bucket: "fail", name: "security", state: "FAILURE" });
     expect(() => validateCrabboxMergeBypass(value)).toThrow(/only unsatisfied required check/u);
   });
-
   it("accepts a GitHub-classified workflow startup failure", () => {
     const value = input();
     value.workflowRun.conclusion = "startup_failure";
@@ -354,9 +334,9 @@ function runProtectedShell(
     state = "active",
     denied = "",
     override = false,
-    revoke = false,
     longPreview = false,
     advanceMain = false,
+    protectedPaths = false,
     nonForwardMain = false,
     nonAncestralPublisher = false,
     strictDrift = false,
@@ -418,6 +398,10 @@ function runProtectedShell(
   }
   if (advanceMain) {
     evidence.finalMainRef.object.sha = advancedMainSha;
+  }
+  if (protectedPaths) {
+    evidence.publisherRun.path = ".github/workflows/pr-crabbox-gate-publisher.yml@refs/heads/main";
+    evidence.workflowRun.path = ".github/workflows/ci.yml@refs/heads/main";
   }
   writeFileSync(join(root, "input.json"), JSON.stringify(evidence));
   const gh = join(bin, "gh");
@@ -519,8 +503,6 @@ else if (endpoint === "graphql" && args.some(arg => arg.includes("repository(own
   else if (endpoint === prefix + "actions/runs/7001") out(value.workflowRun);
   else if (endpoint === prefix + "actions/runs/7001/jobs?filter=latest&per_page=100") out(value.jobs.jobs.map(job => ({jobs:[job]})));
   else if (endpoint === "orgs/openclaw/memberships/maintainer") {
-    value.membershipReads = (value.membershipReads || 0) + 1;
-    if (process.env.FAKE_REVOKE && value.membershipReads === 2) value.membership.role = "member";
     save(); out(value.membership);
   }
   else if (endpoint === "orgs/openclaw/memberships/relay-reader") out({role:"admin",state:"active",user:{login:"relay-reader"}});
@@ -620,7 +602,6 @@ else if (endpoint === "graphql" && args.some(arg => arg.includes("repository(own
           OPENCLAW_PR_STRICT_DRIFT: strictDrift ? "1" : "",
           FAKE_DENIED: denied,
           FAKE_DISPATCH: command.includes("finalize_remote_crabbox_aws_gate") ? "1" : "",
-          FAKE_REVOKE: revoke ? "1" : "",
           FAKE_REQUALIFICATION: requalification,
           FAKE_REVOKE_DURING: revokeDuringRequalification ? requalification : "",
           FIXTURE_PROTECTED_GH: selected,
@@ -662,9 +643,10 @@ else if (endpoint === "graphql" && args.some(arg => arg.includes("repository(own
 }
 
 describe("Crabbox protected gh request producers", () => {
-  it("accepts a forward final main advance with both ancestry proofs and preserves the first anchor", () => {
+  it("accepts protected-main workflow paths and a forward advance, preserving the first anchor", () => {
     const result = runProtectedShell(`verify_crabbox_admin_merge_bypass 131091 ${headSha}`, {
       advanceMain: true,
+      protectedPaths: true,
     });
     expect(result.status, result.stdout + result.stderr).toBe(0);
     expect(result.proof).toMatchObject({
@@ -804,28 +786,54 @@ finalize_remote_crabbox_aws_gate 131091 ${headSha}`,
     }
   });
 
+  it("refuses an initially unauthorized merge before recording intent or dispatching", () => {
+    const result = runProtectedShell(mergeAuthorizationCommand, { role: "member" });
+    expect(result.status, result.stdout + result.stderr).toBe(1);
+    expect(result.stderr).toContain("maintainer is not an active openclaw organization admin");
+    expect(result.calls.filter((args) => args.includes("user"))).toEqual([
+      ["api", "user", "--include"],
+    ]);
+    expect(
+      result.calls.filter((args) => args.includes("orgs/openclaw/memberships/maintainer")),
+    ).toHaveLength(1);
+    expect(result.calls.filter((args) => args[0] === "pr" && args[1] === "merge")).toEqual([]);
+    expect(result.calls.some((args) => args[0] === "workflow")).toBe(false);
+    expect(result.intent).toBeUndefined();
+  });
+
   it.each([
-    { role: "member", revoke: false, reads: 1, merges: 0, longPreview: false },
-    { role: "admin", revoke: false, reads: 2, merges: 1, longPreview: true },
-    { role: "admin", revoke: true, reads: 2, merges: 0, longPreview: false },
+    { requalification: "materialization", revokeDuringRequalification: false },
+    { requalification: "materialization", revokeDuringRequalification: true },
+    { requalification: "settlement", revokeDuringRequalification: false },
+    { requalification: "settlement", revokeDuringRequalification: true },
   ])(
-    "gates admin merge on $role membership (revoked=$revoke, long preview=$longPreview)",
-    ({ role, revoke, reads, merges, longPreview }) => {
-      const result = runProtectedShell(mergeAuthorizationCommand, { role, revoke, longPreview });
+    "rechecks live Crabbox authority after $requalification (revoked=$revokeDuringRequalification)",
+    ({ requalification, revokeDuringRequalification }) => {
+      const result = runProtectedShell(mergeAuthorizationCommand, {
+        requalification,
+        revokeDuringRequalification,
+        longPreview: requalification === "materialization" && !revokeDuringRequalification,
+      });
       const output = result.stdout + result.stderr;
-      expect(result.status, output).toBe(1);
-      const writers = result.calls.filter((args) => args.includes("user"));
-      const memberships = result.calls.filter((args) =>
+      const boundary = result.calls.findIndex((args) =>
+        requalification === "materialization"
+          ? args[0] === "fixture-git" && args[1] === "fetch"
+          : args[0] === "fixture-sleep",
+      );
+      const finalMembership = result.calls.findLastIndex((args) =>
         args.includes("orgs/openclaw/memberships/maintainer"),
       );
       const requests = result.calls.filter((args) => args[0] === "pr" && args[1] === "merge");
-      expect(writers, output).toEqual(
-        Array.from({ length: reads }, () => ["api", "user", "--include"]),
-      );
-      expect(memberships).toHaveLength(reads);
-      expect(requests).toHaveLength(merges);
+      expect(boundary, output).toBeGreaterThan(-1);
+      expect(finalMembership, output).toBeGreaterThan(boundary);
+      expect(result.status, output).toBe(1);
       expect(result.calls.some((args) => args[0] === "workflow")).toBe(false);
-      if (merges) {
+      if (revokeDuringRequalification) {
+        expect(requests, output).toHaveLength(0);
+        expect(result.intent).toBeUndefined();
+        expect(output).toContain("maintainer is not an active openclaw organization admin");
+      } else {
+        expect(requests, output).toHaveLength(1);
         expect(requests[0]).toEqual([
           "pr",
           "merge",
@@ -841,54 +849,6 @@ finalize_remote_crabbox_aws_gate 131091 ${headSha}`,
           "--subject",
           "Fixture merge headline",
         ]);
-        expect(result.calls.indexOf(requests[0]!)).toBeGreaterThan(
-          result.calls.indexOf(memberships[1]!),
-        );
-        expect(result.intent).toMatchObject({ route: "admin", head: headSha, accepted: true });
-        // The fake accepts the request without claiming a real merge receipt.
-        expect(output).toContain("prior dispatch unresolved");
-      } else {
-        expect(output).toContain("maintainer is not an active openclaw organization admin");
-        expect(result.intent).toBeUndefined();
-      }
-      if (revoke) {
-        expect(output).toContain("merge-verify passed for PR #131091");
-      }
-    },
-  );
-
-  it.each([
-    { requalification: "materialization", revokeDuringRequalification: false },
-    { requalification: "materialization", revokeDuringRequalification: true },
-    { requalification: "settlement", revokeDuringRequalification: false },
-    { requalification: "settlement", revokeDuringRequalification: true },
-  ])(
-    "rechecks live Crabbox authority after $requalification (revoked=$revokeDuringRequalification)",
-    ({ requalification, revokeDuringRequalification }) => {
-      const result = runProtectedShell(mergeAuthorizationCommand, {
-        requalification,
-        revokeDuringRequalification,
-      });
-      const output = result.stdout + result.stderr;
-      const boundary = result.calls.findIndex((args) =>
-        requalification === "materialization"
-          ? args[0] === "fixture-git" && args[1] === "fetch"
-          : args[0] === "fixture-sleep",
-      );
-      const finalMembership = result.calls.findLastIndex((args) =>
-        args.includes("orgs/openclaw/memberships/maintainer"),
-      );
-      const requests = result.calls.filter((args) => args[0] === "pr" && args[1] === "merge");
-      expect(boundary, output).toBeGreaterThan(-1);
-      expect(finalMembership, output).toBeGreaterThan(boundary);
-      expect(result.status, output).toBe(1);
-      if (revokeDuringRequalification) {
-        expect(requests, output).toHaveLength(0);
-        expect(result.intent).toBeUndefined();
-        expect(output).toContain("maintainer is not an active openclaw organization admin");
-      } else {
-        expect(requests, output).toHaveLength(1);
-        expect(requests[0]).toContain("--admin");
         expect(result.calls.indexOf(requests[0]!)).toBeGreaterThan(finalMembership);
         expect(result.intent).toMatchObject({
           route: "admin",

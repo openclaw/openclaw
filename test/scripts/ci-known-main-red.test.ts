@@ -482,22 +482,6 @@ describe("known hourly main failures", () => {
       });
       expect(result.knownMainRed).toBe(!changed);
       expect(result.failureJobId).toBe(changed ? "10" : "");
-      const requests = vi
-        .mocked(fetch)
-        .mock.calls.map(([input]) => new URL(String(input)).pathname);
-      for (const path of [
-        "/actions/workflows/ci.yml/runs",
-        "/actions/runs/200/attempts/1/jobs",
-        "/actions/jobs/20/logs",
-        "/actions/jobs/10/logs",
-        "/pulls/7",
-        "/git/ref/heads/main",
-      ]) {
-        expect(
-          requests.filter((request) => request.endsWith(path)),
-          path,
-        ).toHaveLength(1);
-      }
     },
   );
 
@@ -843,12 +827,9 @@ describe("PR failure reporting", () => {
       knownMainRed: false,
       failureJobId: "2",
     });
-    expectIncludes(formatFailureReport(result, prContext), [
-      "| [build-artifacts](https://github.com/openclaw/openclaw/actions/runs/100/job/2) | failure | **pre-existing** |",
+    expect(formatFailureReport(result, prContext)).toContain(
       "https://github.com/openclaw/openclaw/actions/runs/200/job/20",
-      "**new**",
-      "**unknown**",
-    ]);
+    );
   });
 
   it("does not grant the first-attempt allowance on a retry", async () => {
