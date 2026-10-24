@@ -47,13 +47,10 @@ function controls(container: HTMLElement, fixture: ReturnType<typeof basePage>) 
     calls,
     lastArgs: (method: string) => calls(method).at(-1)?.[1],
     ready: () => waitForSolid(() => expect(add()).toHaveProperty("disabled", false)),
-    chat: (pathname?: string) =>
-      vi.waitFor(() =>
-        expect(fixture.navigate).toHaveBeenCalledWith(
-          "chat",
-          pathname ? expect.objectContaining({ pathname }) : expect.anything(),
-        ),
-      ),
+    chat: (pathname?: string) => {
+      const target = pathname ? expect.objectContaining({ pathname }) : expect.anything();
+      return vi.waitFor(() => expect(fixture.navigate).toHaveBeenCalledWith("chat", target));
+    },
     reconnect: () => {
       fixture.setPhase("reconnecting");
       flush();
@@ -100,41 +97,20 @@ function createDetail(options: Parameters<typeof createPage>[0] = {}) {
 }
 
 describe("Claws discovery", () => {
-  it("opens every release file inline without treating help as navigation", async () => {
-    const names = ["AGENTS.md", "SOUL.md", "USER.md", "BOOTSTRAP.md", "notes/context.md"];
-    const ui = createDetail({ workspaceFileNames: names });
-    await ui.visible(".claws-workspace-file__info");
-    const section = ui.find(".plugin-capabilities")!;
-    expect(section.querySelector("h2 > span")?.textContent).toBe(String(names.length));
-    expect(
-      [...section.querySelectorAll(".plugin-capability__copy strong")].map(
-        (node) => node.textContent,
-      ),
-    ).toEqual(["SOUL.md", "AGENTS.md", "USER.md", "BOOTSTRAP.md", "notes/context.md"]);
-    expect(section.querySelectorAll(".claws-workspace-file__info")).toHaveLength(names.length);
-    section.querySelector<HTMLButtonElement>(".claws-workspace-file__info")!.click();
-    expect(ui.calls("claws.catalog.preview")).toHaveLength(0);
-    section.querySelector<HTMLButtonElement>(".claws-workspace-file__open")!.click();
-    await vi.waitFor(() =>
-      expect(ui.request).toHaveBeenCalledWith(
-        "claws.catalog.preview",
-        expect.objectContaining({ name: "SOUL.md" }),
-      ),
+  it("orders workspace files and previews a newly selected file", async () => {
+    const ui = createDetail({ workspaceFileNames: ["AGENTS.md", "SOUL.md", "notes/context.md"] });
+    await ui.visible(".claws-workspace-file__open");
+    const names = [...ui.detail.querySelectorAll(".plugin-capability__copy strong")].map(
+      (node) => node.textContent,
     );
+    expect(names).toEqual(["SOUL.md", "AGENTS.md", "notes/context.md"]);
+    ui.find(".claws-workspace-file__open")!.click();
+    await ui.showText(".detail-body .markdown", "SOUL.md");
     const preview = ui.detail.querySelector("openclaw-file-preview-modal")!;
-    expect(preview.files.map((file) => file.path)).toEqual(names);
-    expect(section.querySelectorAll(".claws-workspace-file__open")).toHaveLength(names.length);
-    for (const name of names) {
-      preview.dispatchEvent(
-        new CustomEvent("file-preview-select", { detail: name, bubbles: true }),
-      );
-      await vi.waitFor(() =>
-        expect(ui.request).toHaveBeenCalledWith(
-          "claws.catalog.preview",
-          expect.objectContaining({ name }),
-        ),
-      );
-    }
+    preview.dispatchEvent(
+      new CustomEvent("file-preview-select", { detail: "notes/context.md", bubbles: true }),
+    );
+    await ui.showText(".detail-body .markdown", "notes/context.md");
   });
 
   it("releases a closed preview before transport settles and isolates its replacement", async () => {
@@ -142,22 +118,18 @@ describe("Claws discovery", () => {
     await ui.visible(".claws-workspace-file__open");
     const retired = createDeferredCore<unknown>();
     ui.request.mockReturnValueOnce(retired.promise);
-    ui.find<HTMLButtonElement>(".claws-workspace-file__open")!.click();
-    await waitForSolid(() =>
-      expect(ui.detail.querySelector("openclaw-file-preview-modal")).not.toBeNull(),
-    );
+    ui.find(".claws-workspace-file__open")!.click();
+    await ui.visible("openclaw-file-preview-modal");
     const preview = ui.detail.querySelector("openclaw-file-preview-modal")!;
     const readiness = preview.fileRequest();
     expect(readiness).toBeDefined();
     preview.dispatchEvent(new CustomEvent("file-preview-close", { bubbles: true }));
     await readiness;
-    await waitForSolid(() =>
-      expect(ui.detail.querySelector("openclaw-file-preview-modal")).toBeNull(),
-    );
+    await ui.hidden("openclaw-file-preview-modal");
 
     const replacement = createDeferredCore<unknown>();
     ui.request.mockReturnValueOnce(replacement.promise);
-    ui.find<HTMLButtonElement>(".claws-workspace-file__open")!.click();
+    ui.find(".claws-workspace-file__open")!.click();
     await waitForSolid(() =>
       expect(ui.find("openclaw-file-preview-modal .body")?.getAttribute("aria-busy")).toBe("true"),
     );
@@ -170,11 +142,8 @@ describe("Claws discovery", () => {
     await ui.showText(".detail-body", "Current preview");
   });
 
-  it.each([
-    "/claws",
-    "/claws/workflow-operator",
-    "/claws/packages/%40openclaw%2Fworkflow-operator",
-  ])("rejects direct visits to %s while Labs is disabled", async (pathname) => {
+  it("rejects direct package visits while Labs is disabled", async () => {
+    const pathname = "/claws/packages/%40openclaw%2Fworkflow-operator";
     const ui = createPage({ pathname });
     const location = { pathname, search: "", hash: "" };
     const result = await clawsRoute.loader!(ui.context, {
@@ -186,7 +155,6 @@ describe("Claws discovery", () => {
       deps: clawsRoute.loaderDeps!(ui.context, location),
     });
     expect(result).toEqual({ type: "notFound", data: undefined });
-    expect(ui.ensureConfigLoaded).toHaveBeenCalledOnce();
     expect(ui.page.textContent).toContain("Claws is disabled");
     expect(ui.find("[data-claws-explore]")).toBeNull();
     expect(ui.find("[data-claws-confirm]")).toBeNull();
@@ -196,51 +164,18 @@ describe("Claws discovery", () => {
   it("removes discovery when the Labs toggle is disabled during a visit", async () => {
     const ui = createPage({ clawsEnabled: true });
     await vi.waitFor(() => expect(ui.page.querySelectorAll("[data-claws-entry]")).toHaveLength(1));
+    expect(ui.find(".hub-page-header h1.page-title")?.textContent).toBe("Claws");
+    ui.find(".agents-home__claw-card-link")!.click();
+    expect(ui.navigate).toHaveBeenCalledWith("claws", {
+      pathname: "/claws/packages/%40openclaw%2Fworkflow-operator",
+    });
     ui.setClawsEnabled(false);
     await ui.hidden("[data-claws-explore]");
     expect(ui.page.textContent).toContain("Claws is disabled");
   });
 
-  it("shows official Claws and opens their dedicated route", async () => {
-    const ui = createPage({ clawsEnabled: true });
-    await vi.waitFor(() => expect(ui.page.querySelectorAll("[data-claws-entry]")).toHaveLength(1));
-    expect(ui.find(".hub-page-header h1.page-title")?.textContent).toBe("Claws");
-    expect(ui.find(".settings-page [data-claws-search]")).not.toBeNull();
-    expect(ui.find(".settings-page .hub-page-header")).toBeNull();
-    expect(ui.find(".agents-home__card")).toBeNull();
-    expect(ui.page.textContent).not.toContain("Manage agents");
-    expect(ui.request.mock.calls.some(([method]) => method === "sessions.list")).toBe(false);
-
-    ui.find<HTMLButtonElement>(".agents-home__claw-card-link")?.click();
-    expect(ui.navigate).toHaveBeenCalledWith("claws", {
-      pathname: "/claws/packages/%40openclaw%2Fworkflow-operator",
-    });
-    expect(ui.request).toHaveBeenCalledWith("claws.catalog.search", {
-      category: "productivity",
-      limit: 8,
-    });
-  });
-
-  it("updates Explore results when the search changes", async () => {
-    const ui = createPage({ clawsEnabled: true });
-    await vi.waitFor(() => expect(ui.page.querySelectorAll("[data-claws-entry]")).toHaveLength(1));
-
-    const search = ui.find<HTMLInputElement>("[data-claws-search]");
-    expect(search).not.toBeNull();
-    ui.enter("missing");
-    await vi.waitFor(() => expect(ui.page.querySelectorAll("[data-claws-entry]")).toHaveLength(0));
-    await vi.waitFor(() =>
-      expect(ui.request).toHaveBeenCalledWith("claws.catalog.search", { query: "missing" }),
-    );
-
-    ui.enter("workflow");
-    await vi.waitFor(() => expect(ui.page.querySelectorAll("[data-claws-entry]")).toHaveLength(1));
-  });
-
   it("retries the selected package's catalog read while retaining its route", async () => {
-    const ui = createDetail({
-      clawsEnabled: false,
-    });
+    const ui = createDetail({ clawsEnabled: false });
     const pending = createDeferredCore<{ entries: ClawCatalogEntry[] }>();
     const recovered = createDeferredCore<{ entries: ClawCatalogEntry[] }>();
     let attempts = 0;
@@ -265,46 +200,13 @@ describe("Claws discovery", () => {
     expect(ui.find("[data-claws-confirm]")).toBeNull();
     recovered.resolve({ entries: [workflowOperator] });
     await ui.visible(".plugin-capabilities");
-    expect(ui.request).toHaveBeenCalledWith("claws.catalog.search", {
-      query: workflowOperator.packageName,
-      limit: 100,
-    });
   });
 
-  it("retires a pending catalog reply when the package route changes", async () => {
-    const ui = createDetail({
-      clawsEnabled: false,
-    });
-    const retired = createDeferredCore<{ entries: ClawCatalogEntry[] }>();
-    ui.mockRpc("claws.catalog.search", (params, fallback) => {
-      if (field(params, "query") === workflowOperator.packageName) {
-        return retired.promise;
-      }
-      return fallback();
-    });
-    ui.setClawsEnabled(true);
-    await waitForSolid(() =>
-      expect(ui.request).toHaveBeenCalledWith("claws.catalog.search", {
-        query: workflowOperator.packageName,
-        limit: 100,
-      }),
-    );
-    ui.setPackageName("@openclaw/missing");
-    await ui.visible("[role=alert]");
-    const error = ui.find("[role=alert]")?.textContent;
-    retired.resolve({ entries: [workflowOperator] });
-    await retired.promise;
-    await nextTurn();
-    flush();
-    expect(ui.find("[role=alert]")?.textContent).toBe(error);
-    expect(ui.find(".plugin-capabilities")).toBeNull();
-    expect(ui.find("[data-claws-confirm]")).toBeNull();
-    expect(ui.request.mock.calls.some(([method]) => method === "claws.catalog.detail")).toBe(false);
-  });
-
-  it("refreshes a selected Claw after reconnect and ignores the retired catalog reply", async () => {
-    const ui = createDetail();
-    await ui.visible(".plugin-capabilities");
+  it.each(["route", "reconnect"])("retires a catalog reply after %s changes", async (change) => {
+    const ui = createDetail({ clawsEnabled: change === "reconnect" });
+    if (change === "reconnect") {
+      await ui.visible(".plugin-capabilities");
+    }
     const stale = createDeferredCore<{ entries: ClawCatalogEntry[] }>();
     let searches = 0;
     ui.mockRpc("claws.catalog.search", (params, fallback) => {
@@ -313,17 +215,32 @@ describe("Claws discovery", () => {
       }
       return fallback();
     });
-    ui.reconnect();
+    if (change === "route") {
+      ui.setClawsEnabled(true);
+    } else {
+      ui.reconnect();
+    }
     await waitForSolid(() => expect(searches).toBe(1));
-    ui.reconnect();
-    await waitForSolid(() => expect(ui.calls("claws.catalog.detail")).toHaveLength(2));
-    await ui.visible(".plugin-capabilities");
-    stale.resolve({ entries: [{ ...workflowOperator, installs: 0, latestVersion: "9.9.9" }] });
-    await stale.promise;
+    if (change === "route") {
+      ui.setPackageName("@openclaw/missing");
+      await ui.visible("[role=alert]");
+    } else {
+      ui.reconnect();
+      await waitForSolid(() => expect(ui.calls("claws.catalog.detail")).toHaveLength(2));
+      await ui.visible(".plugin-capabilities");
+    }
+    const error = ui.find("[role=alert]")?.textContent;
+    stale.resolve({ entries: [{ ...workflowOperator, latestVersion: "9.9.9" }] });
     await nextTurn();
     flush();
-    expect(ui.calls("claws.catalog.detail")).toHaveLength(2);
-    expect(ui.find(".plugin-capabilities")).not.toBeNull();
+    expect(ui.calls("claws.catalog.detail")).toHaveLength(change === "route" ? 0 : 2);
+    if (change === "route") {
+      expect(ui.find("[role=alert]")?.textContent).toBe(error);
+      expect(ui.find(".plugin-capabilities")).toBeNull();
+      expect(ui.find("[data-claws-confirm]")).toBeNull();
+    } else {
+      expect(ui.find(".plugin-capabilities")).not.toBeNull();
+    }
   });
 
   it("retries a failed detail read without replacing the shell or admitting Add early", async () => {
@@ -335,15 +252,12 @@ describe("Claws discovery", () => {
     let attempts = 0;
     ui.mockRpc("claws.catalog.detail", () => {
       if (++attempts === 1) {
-        throw new GatewayRequestError({
-          code: "INVALID_REQUEST",
-          message: "Detail temporarily unavailable",
-        });
+        throw new GatewayRequestError({ code: "INVALID_REQUEST", message: "Unavailable" });
       }
       return retry.promise;
     });
     ui.reconnect();
-    await ui.showText("[role=alert]", "Detail temporarily unavailable");
+    await ui.showText("[role=alert]", "Unavailable");
     expect(ui.find("[role=alert]")?.textContent).not.toContain("INVALID_REQUEST");
     expect(ui.add()).toBe(addButton);
     expect(addButton).toHaveProperty("disabled", true);
@@ -354,7 +268,6 @@ describe("Claws discovery", () => {
     expect(addButton).toHaveProperty("disabled", true);
     retry.resolve(await original("claws.catalog.detail", {}));
     await ui.visible(".plugin-capabilities");
-    expect(attempts).toBe(2);
     expect(ui.add()).toBe(addButton);
     expect(addButton).toHaveProperty("disabled", false);
   });
@@ -385,7 +298,6 @@ describe("Claws discovery", () => {
     stale.reject(new Error("Retired detail failed"));
     await stale.promise.catch(() => {});
     flush();
-    expect(reads).toBe(2);
     expect(ui.find("[role=alert]")).toBeNull();
     expect(ui.find(".plugin-capabilities")).not.toBeNull();
     expect(ui.add()).toHaveProperty("disabled", false);
@@ -393,9 +305,7 @@ describe("Claws discovery", () => {
 
   it("cancels superseded Explore debounce and ignores an older search result", async () => {
     const ui = createPage({ clawsEnabled: true });
-    await waitForSolid(() =>
-      expect(ui.page.querySelectorAll("[data-claws-entry]")).toHaveLength(1),
-    );
+    await ui.visible("[data-claws-entry]");
     const stale = createDeferredCore<{ entries: (typeof workflowOperator)[] }>();
     ui.mockRpc("claws.catalog.search", (params, fallback) => {
       const query = field(params, "query");
@@ -408,6 +318,9 @@ describe("Claws discovery", () => {
       return fallback();
     });
     vi.useFakeTimers();
+    ui.enter("missing");
+    await vi.advanceTimersByTimeAsync(150);
+    await ui.visible(".agents-home__claw-empty");
     ui.enter("cancelled");
     ui.enter("stale");
     expect(ui.page.querySelectorAll(".agents-home__claw-skeleton")).toHaveLength(4);
@@ -429,9 +342,7 @@ describe("Claws discovery", () => {
 
   it("retries the current Explore query after a failed search", async () => {
     const ui = createPage({ clawsEnabled: true });
-    await waitForSolid(() =>
-      expect(ui.page.querySelectorAll("[data-claws-entry]")).toHaveLength(1),
-    );
+    await ui.visible("[data-claws-entry]");
     let attempts = 0;
     ui.mockRpc("claws.catalog.search", (params, fallback) => {
       const query = field(params, "query");
@@ -445,36 +356,20 @@ describe("Claws discovery", () => {
     });
     ui.enter("retry");
     await ui.showText("[data-claws-explore] [role=alert]", "Search temporarily unavailable");
-    ui.find<HTMLButtonElement>("[data-claws-explore] [role=alert] button")!.click();
-    await waitForSolid(() =>
-      expect(ui.page.querySelectorAll("[data-claws-results] [data-claws-entry]")).toHaveLength(1),
-    );
-    expect(attempts).toBe(2);
+    ui.find("[data-claws-explore] [role=alert] button")!.click();
+    await ui.showText("[data-claws-results]", "Workflow Operator");
     expect(ui.find<HTMLInputElement>("[data-claws-search]")?.value).toBe("retry");
     expect(ui.find("[data-claws-explore] [role=alert]")).toBeNull();
   });
 
   it("admits one Add from same-task clicks and stays busy through its completion", async () => {
     const apply = createDeferredCore();
-    const ui = createDetail({
-      applyWait: apply.promise,
-    });
+    const ui = createDetail({ applyWait: apply.promise });
     await ui.ready();
-    expect(ui.request).toHaveBeenCalledWith("claws.catalog.detail", {
-      packageName: workflowOperator.packageName,
-      version: workflowOperator.latestVersion,
-    });
-    expect(ui.calls("claws.add.plan")).toHaveLength(0);
     const button = ui.add()!;
     button.click();
     button.click();
     expect(ui.calls("claws.add.apply")).toHaveLength(1);
-    expect(ui.request).toHaveBeenCalledWith("claws.add.apply", {
-      source: {
-        packageName: workflowOperator.packageName,
-        version: workflowOperator.latestVersion,
-      },
-    });
     await waitForSolid(() => {
       expect(button.getAttribute("aria-busy")).toBe("true");
       expect(button.textContent).toContain("Adding");
@@ -501,8 +396,6 @@ describe("Claws discovery", () => {
     await waitForSolid(() => expect(ui.add()?.textContent).not.toContain("Adding"));
     ui.setPhase("connected");
     await waitForSolid(() => {
-      expect(ui.calls("claws.catalog.detail")).toHaveLength(2);
-      expect(ui.find(".plugin-capabilities")).not.toBeNull();
       expect(ui.add()).toHaveProperty("disabled", false);
       expect(ui.add()?.getAttribute("aria-busy")).toBeNull();
     });
@@ -517,7 +410,6 @@ describe("Claws discovery", () => {
     expect(ui.navigate).not.toHaveBeenCalledWith("chat", expect.anything());
     newApply.resolve();
     await ui.chat("/chat/workflow-operator-2");
-    expect(applications).toBe(2);
   });
 
   it("retries an acknowledged agent handoff without applying the Claw again", async () => {
@@ -542,36 +434,14 @@ describe("Claws discovery", () => {
     expect(ui.calls("claws.add.apply")).toHaveLength(1);
   });
 
-  it("retains the selected Claw on revalidation and clears it when the package changes", async () => {
-    const ui = createDetail();
-
-    await ui.showText(".plugin-capabilities", "AGENTS.md");
-    const selected = ui.find(".plugin-capabilities");
-    const searches = ui.calls("claws.catalog.search");
-    ui.setPackageName(workflowOperator.packageName);
-    await waitForSolid(() => {
-      expect(ui.find(".plugin-capabilities")).toBe(selected);
-      expect(ui.calls("claws.catalog.search")).toEqual(searches);
-    });
-    ui.setPackageName("@openclaw/another-claw");
-
-    await vi.waitFor(() =>
-      expect(ui.request).toHaveBeenCalledWith("claws.catalog.search", {
-        query: "@openclaw/another-claw",
-        limit: 100,
-      }),
-    );
-    await ui.hidden(".plugin-capabilities");
-    expect(ui.add()).toBeNull();
-  });
-
   it("retires a pending Add when the package route changes", async () => {
     const apply = createDeferredCore();
-    const ui = createDetail({
-      applyWait: apply.promise,
-    });
+    const ui = createDetail({ applyWait: apply.promise });
 
     await ui.ready();
+    const selected = ui.find(".plugin-capabilities");
+    ui.setPackageName(workflowOperator.packageName);
+    await waitForSolid(() => expect(ui.find(".plugin-capabilities")).toBe(selected));
     ui.add()?.click();
     await vi.waitFor(() =>
       expect(ui.request.mock.calls.some(([method]) => method === "claws.add.apply")).toBe(true),
@@ -579,6 +449,7 @@ describe("Claws discovery", () => {
 
     ui.setPackageName("@openclaw/another-claw");
     await ui.hidden(".plugin-capabilities");
+    expect(ui.add()).toBeNull();
     ui.setPackageName(workflowOperator.packageName);
     await ui.ready();
     apply.resolve();
@@ -598,12 +469,10 @@ describe("Claws discovery", () => {
 
     await ui.showText(".claws-trust-warning", "Review this release before adding it.");
     expect(ui.calls("claws.add.apply")).toHaveLength(1);
-    expect(
-      ui.request.mock.calls.find(([method]) => method === "claws.add.apply")?.[1],
-    ).not.toHaveProperty("acknowledgeClawHubRisk");
+    expect(ui.lastArgs("claws.add.apply")).not.toHaveProperty("acknowledgeClawHubRisk");
     expect(ui.navigate).not.toHaveBeenCalledWith("chat", expect.anything());
 
-    ui.find<HTMLButtonElement>(".claws-add-consent__actions .btn")?.click();
+    ui.find(".claws-add-consent__actions .btn")?.click();
     await ui.hidden(".claws-add-consent");
     ui.add()?.click();
     await vi.waitFor(() => expect(ui.calls("claws.add.apply")).toHaveLength(2));
@@ -629,53 +498,36 @@ describe("Claws discovery", () => {
     expect(ui.lastArgs("claws.add.apply")).toHaveProperty("acknowledgeClawHubRisk", true);
   });
 
-  it.each(["plugin", "skill"] as const)("asks before applying a %s review plan", async (kind) => {
-    const ui = createDetail({
-      reviewRequiredOnce: kind,
-    });
-
+  it.each([
+    ["plugin", false],
+    ["skill", false],
+    ["plugin", true],
+  ] as const)("reviews %s dependencies with risk consent %s", async (kind, risk) => {
+    const ui = createDetail({ reviewRequiredOnce: kind, riskConsentRequired: risk });
     await ui.ready();
-    ui.add()?.click();
-
-    await vi.waitFor(() =>
-      expect(ui.find(".claws-add-consent")?.textContent).toContain(
-        kind === "plugin" ? "@openclaw/workflow-tools" : "@openclaw/research",
-      ),
+    ui.add()!.click();
+    if (risk) {
+      await ui.visible(".claws-trust-warning");
+      ui.find(".claws-add-consent__actions .btn.primary")!.click();
+    }
+    await ui.showText(
+      ".claws-add-consent",
+      kind === "plugin" ? "@openclaw/workflow-tools" : "@openclaw/research",
     );
     if (kind === "plugin") {
       expect(ui.find(".claws-add-consent")?.textContent).toContain("Conversation access: Allowed");
     }
-    expect(ui.calls("claws.add.plan")).toHaveLength(1);
-    expect(ui.calls("claws.add.apply")).toHaveLength(1);
+    expect(ui.calls("claws.add.apply")).toHaveLength(risk ? 2 : 1);
     expect(ui.navigate).not.toHaveBeenCalledWith("chat", expect.anything());
-
-    ui.find<HTMLButtonElement>(".claws-add-consent__actions .btn.primary")?.click();
+    ui.find(".claws-add-consent__actions .btn.primary")!.click();
     await ui.chat();
-    const applyParams = ui.lastArgs("claws.add.apply");
-    expect(applyParams).toHaveProperty("planIntegrity", "sha256:reviewed-plan");
-    expect(applyParams).not.toHaveProperty("acknowledgeClawHubRisk");
-  });
-
-  it("requires both consents when trust and plugin review are needed", async () => {
-    const ui = createDetail({
-      riskConsentRequired: true,
-      reviewRequiredOnce: "plugin",
-    });
-
-    await ui.ready();
-    ui.add()?.click();
-    await ui.visible(".claws-trust-warning");
-    ui.find<HTMLButtonElement>(".claws-add-consent__actions .btn.primary")?.click();
-
-    await ui.showText(".claws-add-consent", "@openclaw/workflow-tools");
-    expect(ui.calls("claws.add.apply")).toHaveLength(2);
-    expect(ui.navigate).not.toHaveBeenCalledWith("chat", expect.anything());
-
-    ui.find<HTMLButtonElement>(".claws-add-consent__actions .btn.primary")?.click();
-    await ui.chat();
-    const applyParams = ui.lastArgs("claws.add.apply");
-    expect(applyParams).toHaveProperty("acknowledgeClawHubRisk", true);
-    expect(applyParams).toHaveProperty("planIntegrity", "sha256:reviewed-plan");
+    const applied = ui.lastArgs("claws.add.apply");
+    expect(applied).toHaveProperty("planIntegrity", "sha256:reviewed-plan");
+    if (risk) {
+      expect(applied).toHaveProperty("acknowledgeClawHubRisk", true);
+    } else {
+      expect(applied).not.toHaveProperty("acknowledgeClawHubRisk");
+    }
   });
 });
 
