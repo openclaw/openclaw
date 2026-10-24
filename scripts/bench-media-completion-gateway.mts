@@ -62,7 +62,7 @@ const evidence: Array<{
 let phase = "boot";
 let imageRequests = 0;
 let modelRequests = 0;
-let imageInFlight = 0;
+let generationRequested = false;
 let imageResponseFinishedAt: number | undefined;
 let detachedResultsBeforeImageCompletion = 0;
 let gatewayClient: ReturnType<typeof createGatewayWsClient> | undefined;
@@ -89,7 +89,6 @@ const proxy = createServer((req, res) => {
   void (async () => {
     if (req.url === "/v1/images/generations") {
       imageRequests++;
-      imageInFlight++;
       await delay(imageDelayMs);
     }
     let body: Buffer | undefined;
@@ -103,12 +102,8 @@ const proxy = createServer((req, res) => {
         model: string;
         messages: Array<{ role: string; content: unknown }>;
       };
-      // A completion wake is a new user turn. It must not generate another image.
-      const lastUser = request.messages.findLast((message) => message.role === "user");
-      const originalTurn = JSON.stringify(lastUser?.content ?? "").includes(requestMarker);
       if (
-        originalTurn &&
-        imageInFlight > 0 &&
+        imageResponseFinishedAt === undefined &&
         request.messages.some(
           (message) =>
             message.role === "tool" &&
@@ -119,7 +114,12 @@ const proxy = createServer((req, res) => {
       ) {
         detachedResultsBeforeImageCompletion++;
       }
-      request.model = originalTurn ? "synthetic-media-generation" : "synthetic-media-completion";
+      // Runtime context can follow the user prompt. Script one tool call per cron run
+      // independently of those provider-visible context messages.
+      request.model = generationRequested
+        ? "synthetic-media-completion"
+        : "synthetic-media-generation";
+      generationRequested = true;
       body = Buffer.from(JSON.stringify(request));
     }
     const headers = { ...req.headers };
@@ -139,9 +139,6 @@ const proxy = createServer((req, res) => {
         if (req.url === "/v1/images/generations") {
           res.once("finish", () => {
             imageResponseFinishedAt = performance.now();
-          });
-          reply.once("end", () => {
-            imageInFlight--;
           });
         }
         res.writeHead(reply.statusCode ?? 502, reply.headers);
@@ -172,8 +169,11 @@ try {
         "synthetic-media-generation": {
           text: marker,
           toolCall: {
-            name: "image_generate",
-            arguments: { prompt: "Synthetic single blue pixel", model: "openai/gpt-image-1" },
+            name: "dispatch_action",
+            arguments: {
+              id: "image_generate",
+              args: { prompt: "Synthetic single blue pixel", model: "openai/gpt-image-1" },
+            },
           },
         },
         "synthetic-media-completion": { text: marker },
@@ -359,6 +359,7 @@ try {
     setPhase(sample === 0 ? "cold" : `warm-${sample}`);
     const before = { imageRequests, modelRequests, detachedResultsBeforeImageCompletion };
     imageResponseFinishedAt = undefined;
+    generationRequested = false;
     const startedAt = performance.now();
     const result = await rpc<{ run?: { status?: string; error?: string; summary?: string } }>(
       "cron.run",
