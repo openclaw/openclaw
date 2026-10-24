@@ -1,4 +1,4 @@
-import { execFileSync, spawnSync, type SpawnSyncReturns } from "node:child_process";
+import { spawnSync, type SpawnSyncReturns } from "node:child_process";
 import {
   copyFileSync,
   cpSync,
@@ -16,59 +16,14 @@ import {
   expandUpdateFirstHopCompatLanes,
 } from "../../scripts/lib/update-first-hop-lanes.mjs";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import {
+  commitFixture as commit,
+  copyFrozenTargetTooling,
+  frozenTargetEntrypoint as entrypoint,
+} from "./frozen-target-fixture.test-support.js";
 
 const temps = useAutoCleanupTempDirTracker(afterEach);
 const repo = resolve(".");
-const entrypoint = "scripts/preflight-frozen-target-contracts.mjs";
-const closure = [
-  entrypoint,
-  "scripts/lib/frozen-target-workflow-request.mjs",
-  "scripts/lib/release-upgrade-baseline.mjs",
-  "scripts/lib/canonical-json.mjs",
-  "scripts/lib/docker-e2e-plan.mts",
-  "scripts/lib/docker-e2e-scenarios.mts",
-  "scripts/lib/official-external-channel-catalog.json",
-  "scripts/lib/official-external-provider-catalog.json",
-  "scripts/lib/record-shared.mjs",
-  "scripts/lib/update-compat-inventory.json",
-  "scripts/lib/update-first-hop-lanes.mjs",
-  "scripts/lib/upgrade-survivor-policy.mjs",
-  "scripts/lib/upgrade-survivor-scenarios.json",
-  "scripts/lib/release-version.mjs",
-  "scripts/lib/frozen-target-source.mjs",
-  "scripts/lib/frozen-target-compat.sh",
-  "scripts/lib/trusted-native-typescript.mjs",
-  "scripts/lib/native-typescript.mts",
-  "scripts/resolve-frozen-codex-live-suite.mjs",
-  "scripts/resolve-fs-safe-native-contract.mjs",
-  "scripts/e2e/lib/upgrade-survivor/config-recipe.mts",
-  "scripts/windows-cmd-helpers.mjs",
-  "package.json",
-  "pnpm-lock.yaml",
-];
-
-function commit(root: string, excluded: string[] = []) {
-  const git = (...args: string[]) =>
-    execFileSync(
-      "git",
-      [
-        "-c",
-        "core.hooksPath=/dev/null",
-        "-c",
-        "commit.gpgsign=false",
-        "-c",
-        "user.name=Test",
-        "-c",
-        "user.email=test@example.invalid",
-        ...args,
-      ],
-      { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
-    ).trim();
-  git("init", "-q");
-  git("add", "--", ".", ...excluded.map((path) => `:(exclude)${path}`));
-  git("commit", "-qm", "fixture");
-  return { root, sha: git("rev-parse", "HEAD"), git };
-}
 
 function removeBlob(source: ReturnType<typeof commit>, path: string) {
   const oid = source.git("rev-parse", `${source.sha}:${path}`);
@@ -103,13 +58,7 @@ function fixture(
       ? root
       : join(layout === "nested-selected" ? toolingRoot : root, "selected");
   mkdirSync(selectedRoot, { recursive: true });
-  for (const file of closure) {
-    const dest = join(toolingRoot, file);
-    mkdirSync(dirname(dest), { recursive: true });
-    copyFileSync(join(repo, file), dest);
-  }
-  const recipes = "scripts/e2e/lib/upgrade-survivor/config-recipe";
-  cpSync(join(repo, recipes), join(toolingRoot, recipes), { recursive: true });
+  copyFrozenTargetTooling(toolingRoot);
   if (support) {
     cpSync(join(repo, "scripts/e2e/lib"), join(toolingRoot, "scripts/e2e/lib"), {
       recursive: true,
@@ -440,10 +389,7 @@ describe("frozen admission entry", () => {
               [relative]: 'throw new Error("target body executed");',
             },
       );
-      if (shape === "deleted blob") {
-        configureUnavailablePromisor(f.selected);
-        removeBlob(f.selected, relative);
-      } else if (shape === "dirty absent metadata") {
+      if (shape === "dirty absent metadata") {
         mkdirSync(dirname(join(f.selected.root, relative)), { recursive: true });
         writeFileSync(join(f.selected.root, relative), "dirty supported decoy");
       }

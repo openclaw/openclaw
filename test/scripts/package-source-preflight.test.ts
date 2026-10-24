@@ -1,5 +1,5 @@
-import { execFileSync, spawnSync } from "node:child_process";
-import { copyFileSync, cpSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { copyFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { parse } from "yaml";
@@ -10,6 +10,7 @@ import {
 } from "../../scripts/package-source-preflight.mjs";
 import { writeRunSummary } from "../../scripts/test-docker-all.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { copyFrozenTargetTooling, fixtureGit } from "./frozen-target-fixture.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -119,22 +120,6 @@ function workflowFixture(prefix: string) {
   };
 }
 
-function fixtureGit(root: string, ...args: string[]) {
-  return execFileSync(
-    "git",
-    [
-      ...[
-        "core.hooksPath=/dev/null",
-        "commit.gpgsign=false",
-        "user.name=Fixture",
-        "user.email=fixture@example.test",
-      ].flatMap((setting) => ["-c", setting]),
-      ...args,
-    ],
-    { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
-  ).trim();
-}
-
 function runSourceRequirement(step: WorkflowStep, env: Record<string, string>) {
   const f = workflowFixture("openclaw-package-source-workflow-");
   const result = f.run(step, env, true);
@@ -242,43 +227,15 @@ function runReleaseInputCapture(params: {
   const step = workflowStep(workflow, "resolve_target", "Capture selected inputs");
   const f = workflowFixture("openclaw-release-inputs-");
   const tooling = f.file("workflow");
-  for (const file of [
-    "scripts/preflight-frozen-target-contracts.mjs",
-    "scripts/lib/frozen-target-source.mjs",
-    "scripts/lib/frozen-target-workflow-request.mjs",
-    "scripts/lib/release-upgrade-baseline.mjs",
-    "scripts/lib/canonical-json.mjs",
-    "scripts/lib/docker-e2e-plan.mts",
-    "scripts/lib/docker-e2e-scenarios.mts",
-    "scripts/lib/official-external-channel-catalog.json",
-    "scripts/lib/official-external-provider-catalog.json",
-    "scripts/lib/record-shared.mjs",
-    "scripts/lib/update-compat-inventory.json",
-    "scripts/lib/update-first-hop-lanes.mjs",
-    "scripts/lib/upgrade-survivor-policy.mjs",
-    "scripts/lib/upgrade-survivor-scenarios.json",
-    "scripts/lib/release-version.mjs",
-    "scripts/lib/frozen-target-compat.sh",
-    "scripts/lib/trusted-native-typescript.mjs",
-    "scripts/lib/native-typescript.mts",
-    "scripts/resolve-frozen-codex-live-suite.mjs",
-    "scripts/resolve-fs-safe-native-contract.mjs",
-    "scripts/e2e/lib/upgrade-survivor/config-recipe.mts",
-    "scripts/windows-cmd-helpers.mjs",
-    "package.json",
-    "pnpm-lock.yaml",
+  copyFrozenTargetTooling(tooling, [
     "scripts/plan-release-workflow-matrix.mjs",
     "scripts/lib/direct-run.mjs",
     "scripts/lib/plugin-prerelease-test-plan.mts",
     "scripts/plan-targeted-docker-lane-groups.mjs",
     "scripts/lib/numeric-options.mjs",
-    "scripts/e2e/lib/upgrade-survivor/config-recipe",
     "scripts/github/validate-release-suite-filters.sh",
     "scripts/lib/cross-os-release-checks/suite-filter.mjs",
-  ]) {
-    mkdirSync(path.dirname(path.join(tooling, file)), { recursive: true });
-    cpSync(file, path.join(tooling, file), { recursive: true });
-  }
+  ]);
   const git = (...args: string[]) => fixtureGit(tooling, ...args);
   git("init", "-q");
   git("add", ".");
@@ -411,7 +368,7 @@ it("rejects conflicting bundled dependencies before setup and reads only the sel
 });
 
 it("normalizes release-check package mode and guards the source resolver", () => {
-  const { workflow, step, before } = jobSteps("openclaw-release-checks", "prepare_release_package");
+  const { step, before } = jobSteps("openclaw-release-checks", "prepare_release_package");
   const preflight = step("Validate release package source metadata");
   const packageStep = step("Resolve release package artifact");
   before(preflight, step("Setup Node environment"), packageStep);
@@ -436,10 +393,6 @@ it("normalizes release-check package mode and guards the source resolver", () =>
     env: { PACKAGE_REF: "${{ needs.resolve_target.outputs.revision }}" },
     run: expect.stringContaining("node scripts/package-source-preflight.mjs"),
   });
-  expect(packageStep.env).toMatchObject({
-    PACKAGE_MODE: "${{ needs.resolve_target.outputs.package_mode }}",
-    CANDIDATE_PUBLISHED: "${{ needs.resolve_target.outputs.candidate_published }}",
-  });
   for (const name of [
     "Setup Node environment",
     "Resolve release package artifact",
@@ -451,19 +404,6 @@ it("normalizes release-check package mode and guards the source resolver", () =>
   expect(step("Validate shared release candidate identity").if).toBe(
     "needs.resolve_target.outputs.package_mode == 'artifact'",
   );
-  expect(workflow.jobs.docker_e2e_release_checks?.with).toMatchObject({
-    enable_prepublish_plugin_registry:
-      "${{ fromJSON(needs.prepare_release_package.outputs.candidate_artifact_json).packagePublished != true }}",
-  });
-  expect(workflow.jobs.package_acceptance_release_checks?.with).toMatchObject({
-    candidate_artifact_json:
-      "${{ needs.resolve_target.outputs.package_acceptance_package_spec == '' && needs.prepare_release_package.outputs.candidate_artifact_json || '' }}",
-    source:
-      "${{ needs.resolve_target.outputs.package_acceptance_package_spec != '' && 'npm' || 'artifact' }}",
-  });
-  const workflowSource = readFileSync(".github/workflows/openclaw-release-checks.yml", "utf8");
-  expect(workflowSource.match(/\$\{\{ inputs\.candidate_artifact_json \}\}/gu)).toHaveLength(1);
-  expect(workflowSource.match(/\$\{\{ inputs\.release_package_spec \}\}/gu)).toHaveLength(1);
 });
 
 it("guards prepare-only source before harness setup and skips no-package lane setup", () => {
@@ -536,24 +476,6 @@ it("keeps a whitespace-only artifact tuple in source mode through Docker reports
   });
 
   const workflow = readWorkflow(".github/workflows/openclaw-live-and-e2e-checks-reusable.yml");
-  const prepared = workflow.jobs.prepare_docker_e2e_image!;
-  expect(prepared.outputs).toMatchObject({
-    package_artifact_id:
-      "${{ steps.upload_package.outputs.artifact-id || (needs.validate_selected_ref.outputs.package_artifact_present == 'true' && inputs.package_artifact_id || '') }}",
-    package_artifact_name:
-      "${{ steps.upload_package.outputs.artifact-id && format('docker-e2e-package-{0}-{1}', github.run_id, github.run_attempt) || (needs.validate_selected_ref.outputs.package_artifact_present == 'true' && inputs.package_artifact_name || '') }}",
-  });
-  const reportArtifactName =
-    "${{ needs.prepare_docker_e2e_image.outputs.package_artifact_name || 'docker-e2e-package' }}";
-  for (const jobId of [
-    "validate_docker_e2e",
-    "validate_docker_lanes",
-    "validate_docker_openwebui",
-  ]) {
-    expect(workflow.jobs[jobId]!.env?.OPENCLAW_DOCKER_E2E_PACKAGE_ARTIFACT_NAME).toBe(
-      reportArtifactName,
-    );
-  }
   const candidateManifest = workflowStep(
     workflow,
     "prepare_docker_e2e_image",

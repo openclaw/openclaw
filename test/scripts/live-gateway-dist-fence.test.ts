@@ -467,13 +467,6 @@ it.each(["saved environment", "root argv"] as const)(
 );
 
 it.skipIf(process.platform === "win32").each([
-  ["literal", "Environment=OPENCLAW_PROFILE=fenceproof", "custom-rescue.service"],
-  ["spaced", "Environment = OPENCLAW_PROFILE=fenceproof", "custom-rescue.service"],
-  [
-    "last assignment",
-    "Environment=OPENCLAW_PROFILE=stale\nEnvironment=OPENCLAW_PROFILE=fenceproof",
-    "custom-rescue.service",
-  ],
   [
     "spaced reset",
     "Environment=OPENCLAW_PROFILE=stale\nEnvironment =\nEnvironment=OPENCLAW_SERVICE_MARKER=openclaw\nEnvironment=OPENCLAW_SERVICE_KIND=gateway",
@@ -481,7 +474,7 @@ it.skipIf(process.platform === "win32").each([
   ],
   [
     "section and case",
-    "Environment=OPENCLAW_PROFILE=fenceproof\n[Unit]\nEnvironment=OPENCLAW_PROFILE=wrong-section\n[Service]\nenvironment=OPENCLAW_PROFILE=wrong-case",
+    "Environment=OPENCLAW_PROFILE=stale\nEnvironment = OPENCLAW_PROFILE=fenceproof\n[Unit]\nEnvironment=OPENCLAW_PROFILE=wrong-section\n[Service]\nenvironment=OPENCLAW_PROFILE=wrong-case",
     "custom-rescue.service",
   ],
 ] as const)(

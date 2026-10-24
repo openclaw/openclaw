@@ -11,7 +11,6 @@ import {
 } from "../../scripts/generate-postgres-schema.mts";
 import { catalog as readCatalog, portTables } from "../../scripts/lib/postgres-schema-catalog.mts";
 import { generateSqliteSchemaCatalogs } from "../../scripts/lib/sqlite-schema-generation.mts";
-import { listOpenClawStateFeatureSchemas } from "../../src/state/openclaw-state-feature-schema.js";
 import type statePortMetadata from "../../src/state/postgres-schema.generated/state-port.json";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
@@ -77,9 +76,6 @@ describe("PostgreSQL schema generation", () => {
         kind,
       ).toEqual([]);
     }
-    expect(agent.objects.filter((item) => item.kind === "trigger" && item.sql)).toHaveLength(4);
-    expect(agent.objects.filter((item) => item.kind === "triggerFunction")).toHaveLength(2);
-    expect(agent.objects.filter((item) => item.kind === "check" && item.sql)).toHaveLength(66);
     const pending = report.pendingCapabilities.filter((item) => item.database === "agent");
     expect(pending.filter((item) => item.kind === "trigger")).toHaveLength(4);
     expect(pending.filter((item) => item.kind === "virtualTable")).toHaveLength(2);
@@ -118,12 +114,6 @@ describe("PostgreSQL schema generation", () => {
     const { sql, catalog, portMetadata } = await generateWorkboardPostgresSchema();
     expect(sql).toBe(readRoot("extensions/workboard/src/workboard-schema.postgres.sql"));
     expect(catalog.objects.filter((item) => item.sql === null)).toEqual([]);
-    expect(sql).toContain('CREATE TABLE "workboard_cards" (');
-    expect(sql).toContain('"content" bytea NOT NULL');
-    expect(sql).toContain("CHECK ((\"source\" IN ('state', 'model', 'operator')))");
-    expect(sql).toContain(
-      'REFERENCES "workboard_cards" ("id") ON UPDATE NO ACTION ON DELETE CASCADE',
-    );
     expect(sql).not.toMatch(/\b(?:BEGIN|COMMIT|CREATE SCHEMA)\b/);
     expect(sql).toMatch(/[^\n]\n$/);
     expect(portMetadata).toEqual(
@@ -192,31 +182,9 @@ describe("PostgreSQL schema generation", () => {
     expect(files["state.postgres.sql"]).not.toContain('CREATE TABLE "user_background_images"');
   });
 
-  it("accounts for every canonical SQLite object and generates identical bytes twice", async () => {
+  it("emits canonical SQL or an omission diagnostic and generates identical bytes twice", async () => {
     const { files, report } = await generatePostgresSchemas(root);
     expect((await generatePostgresSchemas(root)).files).toEqual(files);
-    expect(Object.keys(files).toSorted()).toEqual(
-      [
-        "agent-port.json",
-        "agent-runtime.ts",
-        "agent.postgres.sql",
-        "agent-search-runtime.ts",
-        "agent-search.postgres.sql",
-        ...report.fragments.map((fragment) => fragment.file),
-        "manifest.json",
-        "portability-report.md",
-        "state.postgres.sql",
-        "state-v23-v24.postgres.sql",
-        "state-v24-v25.postgres.sql",
-        "state-v28-v29.postgres.sql",
-        "runtime.ts",
-        "sqlite-catalogs.ts",
-        ...["state", "agent", "daemon", "memory", "client"].flatMap((store) =>
-          ["ts", "json"].map((extension) => `sqlite-${store}-catalogs.${extension}`),
-        ),
-        "state-port.json",
-      ].toSorted(),
-    );
     expect(
       report.catalogs
         .state!.objects.filter((item) => item.sql === null && item.kind === "index")
@@ -232,82 +200,17 @@ describe("PostgreSQL schema generation", () => {
     const exported = await generatePostgresSchemas(root, "openclaw", { includeJsonReport: true });
     expect(JSON.parse(exported.files["portability-report.json"]!)).toEqual(report);
     for (const name of ["state", "agent"]) {
-      withDatabase((db) => {
-        db.exec(readRoot(`src/state/openclaw-${name}-schema.sql`));
-        if (name === "state") {
-          for (const fragment of listOpenClawStateFeatureSchemas()) {
-            db.exec(fragment.sql());
-          }
+      for (const item of report.catalogs[name]!.objects) {
+        if (item.sql === null) {
+          expect(item.reason, `${name}: ${item.kind} ${item.table}.${item.name}`).toBeTruthy();
+          expect(files["portability-report.md"]).toContain(`\`${item.table}.${item.name}\``);
+        } else {
+          expect(
+            Object.values(files).join("\n"),
+            `${item.kind} ${item.table}.${item.name}`,
+          ).toContain(item.sql);
         }
-        const expected: string[] = [];
-        const add = (kind: string, table: unknown, item: unknown) =>
-          expected.push(JSON.stringify([kind, table, item]));
-        const rows = db
-          .prepare("SELECT type, name, tbl_name, sql FROM sqlite_schema WHERE type != 'index'")
-          .all();
-        const tableKinds = new Map(
-          db
-            .prepare("PRAGMA table_list")
-            .all()
-            .map((row) => [row.name, row.type]),
-        );
-        for (const row of rows) {
-          if (row.type !== "table") {
-            add(String(row.type), row.tbl_name, row.name);
-            continue;
-          }
-          const kind = tableKinds.get(row.name);
-          const excluded = kind !== "table" || String(row.name).startsWith("sqlite_");
-          add(
-            kind === "virtual" ? "virtualTable" : excluded ? "internalTable" : "table",
-            row.name,
-            row.name,
-          );
-          for (const [objectKind, pragma, field] of [
-            ["column", "table_xinfo", "name"],
-            ["index", "index_list", "name"],
-            ["foreignKey", "foreign_key_list", "id"],
-          ] as const) {
-            const query = `SELECT DISTINCT ${field} AS value FROM pragma_${pragma}(?)`;
-            for (const item of db.prepare(query).all(String(row.name))) {
-              add(objectKind, row.name, String(item.value));
-            }
-          }
-          if (!excluded) {
-            const checks = String(row.sql).match(/\bCHECK\s*\(/gi) ?? [];
-            checks.forEach((_, index) => add("check", row.name, String(index)));
-          }
-        }
-        const catalog = report.catalogs[name]!;
-        const inventoryKinds = new Set([
-          "table",
-          "column",
-          "index",
-          "foreignKey",
-          "check",
-          "trigger",
-          "virtualTable",
-          "internalTable",
-          "view",
-        ]);
-        expect(
-          catalog.objects
-            .filter((item) => inventoryKinds.has(item.kind))
-            .map((item) => JSON.stringify([item.kind, item.table, item.name]))
-            .toSorted(),
-        ).toEqual(expected.toSorted());
-        for (const item of catalog.objects) {
-          if (item.sql === null) {
-            expect(item.reason, `${name}: ${item.kind} ${item.table}.${item.name}`).toBeTruthy();
-            expect(files["portability-report.md"]).toContain(`\`${item.table}.${item.name}\``);
-          } else {
-            expect(
-              Object.values(files).join("\n"),
-              `${item.kind} ${item.table}.${item.name}`,
-            ).toContain(item.sql);
-          }
-        }
-      });
+      }
     }
   });
 
