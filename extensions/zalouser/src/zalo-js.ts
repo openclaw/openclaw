@@ -919,9 +919,14 @@ export async function startZaloQrLogin(params: {
       let capturedCredentials: ZaloCredentialPayload | null = null;
       try {
         const zalo = await createZalo();
+        // QR preparation can outlive its caller while the SDK module loads.
+        if (activeQrLogins.get(profile)?.id !== login.id) {
+          return;
+        }
         const api = await zalo.loginQR(undefined, (event: LoginQRCallbackEvent) => {
           const current = activeQrLogins.get(profile);
           if (!current || current.id !== login.id) {
+            event.actions?.abort?.();
             return;
           }
 
@@ -964,11 +969,6 @@ export async function startZaloQrLogin(params: {
           }
         });
 
-        const current = activeQrLogins.get(profile);
-        if (!current || current.id !== login.id) {
-          return;
-        }
-
         if (!capturedCredentials) {
           const ctx = api.getContext();
           const cookieJar = api.getCookie();
@@ -994,7 +994,7 @@ export async function startZaloQrLogin(params: {
         assertCurrent();
         invalidateApi(profile, state);
         apiByProfile.set(profile, api);
-        current.connected = true;
+        login.connected = true;
       } catch (error) {
         const current = activeQrLogins.get(profile);
         if (current && current.id === login.id) {

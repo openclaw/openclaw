@@ -10,8 +10,21 @@ import { expect, it, vi } from "vitest";
 import setupEntry from "../setup-entry.js";
 import { zalouserPlugin } from "./channel.js";
 import { getZalouserRuntime, setZalouserRuntime } from "./runtime.js";
+import type { LoginQRCallbackEvent } from "./zca-client.js";
 
 const createZaloMock = vi.hoisted(() => vi.fn());
+const saveCredentialsMock = vi.hoisted(() =>
+  vi.fn(
+    async (
+      _profile: string,
+      _credentials: unknown,
+      _env?: NodeJS.ProcessEnv,
+      assertCurrent?: () => void,
+    ) => {
+      assertCurrent?.();
+    },
+  ),
+);
 // Only authentication/storage I/O is replaced. Registration, scoped runtime slots,
 // channel call admission, cache reads, and instance retirement are production code.
 vi.mock("./zca-client.js", () => ({ createZalo: createZaloMock }));
@@ -25,13 +38,19 @@ vi.mock("./session-state.js", async (importOriginal) => ({
     createdAt: "2026-10-01T00:00:00.000Z",
   }),
   clearStoredZaloCredentials: async () => true,
+  saveStoredZaloCredentials: saveCredentialsMock,
   refreshStoredZaloCredentials: async (profile: string, credentials: object) => ({
     profile,
     ...credentials,
     createdAt: "2026-10-01T00:00:00.000Z",
   }),
 }));
-import { getZaloUserInfo, logoutZaloProfile, resolveZaloGroupContext } from "./zalo-js.js";
+import {
+  getZaloUserInfo,
+  logoutZaloProfile,
+  resolveZaloGroupContext,
+  startZaloQrLogin,
+} from "./zalo-js.js";
 
 function register(version: string) {
   const builder = createPluginRegistry({
@@ -159,3 +178,95 @@ it("does not retire standalone session reuse with a managed registration", async
     await logoutZaloProfile();
   }
 });
+
+it.each(["factory", "event"] as const)(
+  "does not resume retired QR work after a delayed SDK %s",
+  async (phase) => {
+    vi.useFakeTimers();
+    const first = register("qr-retiring");
+    const entered = createDeferred<void>();
+    const oldResult = createDeferred<ReturnType<typeof session>>();
+    let oldCallback: ((event: LoginQRCallbackEvent) => unknown) | undefined;
+    const oldLoginQR = vi.fn((_options: unknown, callback?: typeof oldCallback) => {
+      oldCallback = callback;
+      return oldResult.promise;
+    });
+    const factory = { loginQR: oldLoginQR };
+    const created = createDeferred<typeof factory>();
+    const oldAbort = vi.fn();
+    const qrEvent = (abort: () => void): LoginQRCallbackEvent => ({
+      type: 0,
+      data: { code: "fixture-qr", image: "data:image/png;base64,ZmFrZQ==" },
+      actions: { abort, retry() {}, saveToFile: async () => undefined },
+    });
+    const savedOwners: string[] = [];
+    saveCredentialsMock.mockClear();
+    saveCredentialsMock.mockImplementation(async (_profile, _credentials, _env, assertCurrent) => {
+      assertCurrent?.();
+      savedOwners.push(getZalouserRuntime().version);
+    });
+    createZaloMock.mockReset().mockImplementationOnce(() => {
+      entered.resolve();
+      return phase === "factory" ? created.promise : Promise.resolve(factory);
+    });
+    let current: ReturnType<typeof register> | undefined;
+    let start: ReturnType<typeof startZaloQrLogin> | undefined;
+    try {
+      start = first.run(() => startZaloQrLogin({ force: true, timeoutMs: 3000 }));
+      await entered.promise;
+      await vi.advanceTimersByTimeAsync(3000);
+      expect((await start).message).toBe(
+        "Still preparing QR. Call wait to continue checking login status.",
+      );
+      await first.close();
+
+      // A fresh managed replacement and a standalone caller must still be able
+      // to complete QR login while the old SDK work is suspended.
+      const owner = phase === "factory" ? "qr-replacement" : "qr-standalone";
+      if (phase === "factory") {
+        current = register(owner);
+      } else {
+        setZalouserRuntime(createPluginRuntimeMock({ version: owner }));
+      }
+      createZaloMock.mockResolvedValue({
+        loginQR: async (_options: unknown, callback?: (event: LoginQRCallbackEvent) => unknown) => {
+          callback?.(qrEvent(vi.fn()));
+          return session(owner);
+        },
+      });
+      const next = current
+        ? current.run(() => startZaloQrLogin({ force: true, timeoutMs: 3000 }))
+        : startZaloQrLogin({ force: true, timeoutMs: 3000 });
+      await vi.advanceTimersByTimeAsync(150);
+      await next;
+
+      if (phase === "factory") {
+        created.resolve(factory);
+      } else {
+        expect(oldCallback).toBeTypeOf("function");
+        oldCallback?.(qrEvent(oldAbort));
+      }
+      oldResult.resolve(session("qr-retired"));
+      await vi.advanceTimersByTimeAsync(0);
+      if (phase === "factory") {
+        expect.soft(oldLoginQR).not.toHaveBeenCalled();
+      } else {
+        expect.soft(oldAbort).toHaveBeenCalledOnce();
+      }
+      expect(savedOwners).toEqual([owner]);
+      const info = current ? await current.self() : await getZaloUserInfo();
+      expect(info).toMatchObject(current ? { id: owner } : { userId: owner });
+    } finally {
+      created.resolve(factory);
+      oldResult.resolve(session("qr-retired"));
+      await vi.advanceTimersByTimeAsync(3000);
+      await start;
+      await first.close();
+      await current?.close();
+      if (phase === "event") {
+        await logoutZaloProfile();
+      }
+      vi.useRealTimers();
+    }
+  },
+);
