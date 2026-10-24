@@ -73,6 +73,7 @@ export type FrvConcreteClient = FrvClient & {
       | "rerunFailed"
       | "rerunJob"
       | "rerunParent"
+      | "rerunRun"
       | "listRuns"
       | "verify"
       | "verifySeal"
