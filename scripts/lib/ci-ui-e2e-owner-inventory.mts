@@ -495,7 +495,6 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
     ],
   ),
   pageWatch("ui/src/e2e/chat-error-details.e2e.test.ts", ["chat"]),
-  pageWatch("ui/src/e2e/chat-external-pending-input.e2e.test.ts", ["chat", "profile"]),
   pageWatch(
     "ui/src/e2e/chat-file-editor-recovery.e2e.test.ts",
     ["chat"],
@@ -593,7 +592,6 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
   pageWatch("ui/src/e2e/chat-image-loading.e2e.test.ts", ["chat"]),
   pageWatch("ui/src/e2e/chat-image-virtual-remount.e2e.test.ts", ["chat"]),
   pageWatch("ui/src/e2e/chat-interrupted-reply.e2e.test.ts", ["chat"]),
-  pageWatch("ui/src/e2e/chat-live-final-order.e2e.test.ts", ["chat"]),
   pageWatch("ui/src/e2e/chat-markdown-alignment.e2e.test.ts", ["chat"]),
   pageWatch("ui/src/e2e/chat-mention-cache.e2e.test.ts", ["chat", "profile"]),
   pageWatch("ui/src/e2e/chat-mention-popover.e2e.test.ts", ["chat", "new-session", "profile"]),
@@ -916,7 +914,6 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
     ],
   ),
   pageWatch("ui/src/e2e/chrome-extension-status.e2e.test.ts", ["config", "device"]),
-  pageWatch("ui/src/e2e/cloud-reconciliation-followup.e2e.test.ts", ["chat"]),
   {
     testFile: "ui/src/e2e/cloud-session-placement-identity.e2e.test.ts",
     ownerRoots: [

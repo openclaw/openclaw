@@ -1,10 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 import { CodexAppInventoryCache } from "./app-inventory-cache.js";
 import { codexAppInventoryResponse } from "./app-inventory.test-helpers.js";
-import { CODEX_PLUGINS_MARKETPLACE_NAME } from "./config.js";
 import {
   appInfo,
   appSummary,
+  codexPluginConfig,
+  curatedPlugin,
   pluginDetail,
   pluginInstalled,
   pluginSummary,
@@ -74,19 +75,14 @@ describe("scheduled read-only authority", () => {
       });
       const build = (stored?: Awaited<ReturnType<typeof captureScheduledCodexAppAuthority>>) =>
         preparePluginThreadConfigForTest(
-          {
-            codexPlugins: {
-              enabled: true,
-              plugins: {
-                calendar: {
-                  marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
-                  pluginName: "calendar",
-                  read_only: readOnly,
-                  allow_destructive_actions: true,
-                },
-              },
+          codexPluginConfig({
+            plugins: {
+              calendar: curatedPlugin("calendar", {
+                read_only: readOnly,
+                allow_destructive_actions: true,
+              }),
             },
-          },
+          }),
           "creator-read-only",
           stored,
         )({

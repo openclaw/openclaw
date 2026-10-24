@@ -124,6 +124,7 @@ it.each([
     db.prepare("SELECT * FROM session_transcript_index_state WHERE session_id = ?").get(sessionId);
   const before = readIndex();
   await readOnly(async () => {
+    expect(await readSessionSubmittedInput(scope(), "new-input:user")).toBeUndefined();
     await expect(readSessionSubmittedInput(scope(), "stale-source:user")).rejects.toBeInstanceOf(
       SessionTranscriptProjectionUnavailableError,
     );

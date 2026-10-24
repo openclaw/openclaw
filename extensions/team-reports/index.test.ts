@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import type {
@@ -133,7 +134,19 @@ it.each([
   ["plugins/team-reports/dist", "js"],
   ["dist/extensions/team-reports", "js"],
 ] as const)("locates the %s runtime worker", async (root, extension) => {
-  const runtimeSource = path.resolve(root, `index.${extension}`);
+  const fixtureRoot = tempDirs.make("team-reports-worker-layout-");
+  const runtimeSource = path.resolve(fixtureRoot, root, `index.${extension}`);
+  if (extension === "js") {
+    const localPackage = root.startsWith("plugins/");
+    const packageRoot = localPackage
+      ? path.resolve(fixtureRoot, "plugins/team-reports")
+      : fixtureRoot;
+    fs.mkdirSync(packageRoot, { recursive: true });
+    fs.writeFileSync(
+      path.join(packageRoot, "package.json"),
+      JSON.stringify({ name: localPackage ? "@openclaw/team-reports" : "openclaw" }),
+    );
+  }
   const { service, methods, context } = captureReports(runtimeSource);
   const stopBeforeOpening = new Error("worker location captured");
   vi.mocked(createTeamReportsStore).mockRejectedValueOnce(stopBeforeOpening);
@@ -141,7 +154,9 @@ it.each([
   expectUnavailable(await requestReports(methods), { message: stopBeforeOpening.message });
   expect(createTeamReportsStore).toHaveBeenCalledWith({
     stateDir: "unused",
-    workerModuleUrl: pathToFileURL(path.resolve(root, `src/store.worker.${extension}`)),
+    workerModuleUrl: pathToFileURL(
+      path.resolve(fixtureRoot, root, `src/store.worker.${extension}`),
+    ),
   });
 });
 

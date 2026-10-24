@@ -121,8 +121,9 @@ openclaw sandbox explain --agent work
 openclaw sandbox explain --json
 ```
 
-Unlike `recreate --session`, this accepts short session names (for example `main`) and expands them against the resolved agent.
+Unlike `recreate --session`, this accepts short session names (for example `main`) and channel-prefixed aliases (for example `telegram:slash:123`) and expands them against the resolved agent. The `main` alias uses the configured `session.mainKey`.
 An explicit `--agent` is sufficient for multi-agent fleets with no implicit owner; sandbox explanation does not require or guess a default first.
+Channel inference describes the applicable elevated-tool configuration; it does not establish sender authorization.
 
 ## Why recreate is needed
 

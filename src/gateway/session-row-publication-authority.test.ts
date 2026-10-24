@@ -13,6 +13,7 @@ import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-cloc
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { prepareGatewayRecipientProfile } from "./expected-profile.js";
 import { createGatewayConnectionState } from "./server-connection-state.js";
+import { dispatchProfile } from "./server/client-fixtures.test-support.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 import { prepareSessionEventProjection } from "./session-event-projection.js";
 import { withReadySessionRows } from "./session-row-prepared-read.js";
@@ -107,13 +108,10 @@ it.each(["child and swarm links", "sharing role", "incognito"] as const)(
           }),
           connId: `publication-${index}`,
           usesSharedGatewayAuth: false,
-          authenticatedUserProfile: {
-            profileId: profile.id,
+          authenticatedUserProfile: dispatchProfile(profile.id, {
             displayName: profile.displayName,
-            avatarRevision: "1",
-            hasAvatar: false,
             updatedAt: now,
-          },
+          }),
           socket: {
             readyState: 1,
             bufferedAmount: 0,

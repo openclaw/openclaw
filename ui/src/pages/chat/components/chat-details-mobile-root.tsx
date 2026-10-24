@@ -40,7 +40,6 @@ type ChatDetailsMobileCollection<T> = {
 
 type ChatDetailsMobileRootDestination =
   | { kind: "people" }
-  | { kind: "context" }
   | { kind: "task-progress" }
   | { kind: "subagents" }
   | { kind: "subagent"; sessionKey: ChatSubagentActivity["key"] }
@@ -60,7 +59,6 @@ type ChatDetailsMobileRootOrigin = {
 export type ChatDetailsMobileRootProps = {
   /** The mobile host owns hidden/inert, mounting, scroll, focus and navigation retention. */
   presented: boolean;
-  sessionTitle?: string;
   labels: Record<
     | "people"
     | "taskProgress"
@@ -85,7 +83,6 @@ export type ChatDetailsMobileRootProps = {
   processes?: JSX.Element;
   /** The complete mobile Environment section, including its own heading and group. */
   environment?: JSX.Element;
-  context?: JSX.Element;
   pullRequests?: ChatPullRequestMobileCollectionProps & { summary: ChatDetailsMobileEntry };
   /** Native publication/recovery can exist without any attached PR. */
   publication?: JSX.Element;
@@ -188,9 +185,6 @@ export function ChatDetailsMobileRoot(props: ChatDetailsMobileRootProps) {
 
   return (
     <div class="chat-details-mobile-root">
-      <Show when={props.sessionTitle}>
-        <h2 class="chat-details-mobile-root__title">{props.sessionTitle}</h2>
-      </Show>
       <Show when={props.people || props.sharingOptions}>
         <RootGroup name="people" label={props.labels.people} heading={false}>
           <Show when={props.people}>
@@ -229,11 +223,6 @@ export function ChatDetailsMobileRoot(props: ChatDetailsMobileRootProps) {
         )}
       </Show>
       {props.environment}
-      <Show when={props.context}>
-        <RootGroup name="context" label={props.labels.context}>
-          {props.context}
-        </RootGroup>
-      </Show>
       <Show
         when={
           pullRequestsTotal() > 0 ||

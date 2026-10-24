@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform")!;
 const { createWorker } = vi.hoisted(() => ({
-  createWorker: vi.fn<(_source: string) => FakeWorker>(),
+  createWorker: vi.fn<(_source: string | URL) => FakeWorker>(),
 }));
 
 vi.mock("../infra/worker-cpu.js", async (importOriginal) => ({
@@ -52,9 +52,6 @@ describe("beginMacOSSystemCaWarmupOnce", () => {
     await warmup;
 
     expect(createWorker).toHaveBeenCalledOnce();
-    const workerSource = createWorker.mock.calls[0]?.[0];
-    expect(workerSource).toContain('getCACertificates("default")');
-    expect(workerSource).not.toContain('getCACertificates("system")');
     expect(worker.unref).toHaveBeenCalledOnce();
     expect(worker.terminate).not.toHaveBeenCalled();
     expect(beginMacOSSystemCaWarmupOnce()).toBe(warmup);

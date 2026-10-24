@@ -83,9 +83,6 @@ export function readPendingInputSourceInDatabase(
         }
       }
     } else if (!input.pendingOnly) {
-      if (sessionTranscriptIndexNeedsReconcile(database.db, input.sessionId)) {
-        throw new SessionTranscriptProjectionUnavailableError(input.sessionId);
-      }
       const transcript = executeSqliteQueryTakeFirstSync(
         database.db,
         db
@@ -111,6 +108,9 @@ export function readPendingInputSourceInDatabase(
         throw new Error("Submitted input exceeds the Gateway payload limit");
       }
       if (transcript) {
+        if (sessionTranscriptIndexNeedsReconcile(database.db, input.sessionId)) {
+          throw new SessionTranscriptProjectionUnavailableError(input.sessionId);
+        }
         const committed = readTranscriptMessageByScopedIdempotencyKey(
           database,
           { ...input, agentId: database.agentId, path: database.path },

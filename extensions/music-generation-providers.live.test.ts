@@ -3,7 +3,6 @@ import {
   resolveApiKeyForProvider,
   resolveDefaultAgentDir,
 } from "openclaw/plugin-sdk/agent-runtime";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   registerProviderPlugin,
   requireRegisteredProvider,
@@ -37,6 +36,7 @@ import openrouterPlugin from "./openrouter/index.js";
 import {
   createReferencePng,
   maybeLoadShellEnvForGenerationProviders,
+  withPluginsEnabled,
 } from "./test-support/generation-live-test-helpers.js";
 
 const LIVE = isLiveTestEnabled();
@@ -81,16 +81,6 @@ const CASES: LiveProviderCase[] = [
 ]
   .filter((entry) => (providerFilter ? providerFilter.has(entry.providerId) : true))
   .toSorted((left, right) => left.providerId.localeCompare(right.providerId));
-
-function withPluginsEnabled(cfg: OpenClawConfig): OpenClawConfig {
-  return {
-    ...cfg,
-    plugins: {
-      ...cfg.plugins,
-      enabled: true,
-    },
-  };
-}
 
 function createEditReferencePng(): Buffer {
   return createReferencePng(192, 192, (x, y) => {

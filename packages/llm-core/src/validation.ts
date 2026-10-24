@@ -179,49 +179,6 @@ function coercePrimitiveByType(value: unknown, type: string): unknown {
   }
 }
 
-function applySchemaObjectCoercion(
-  value: Record<string, unknown>,
-  schema: JsonSchemaObject,
-  root: JsonSchemaObject | undefined,
-): void {
-  const properties = schema.properties;
-  const propertyKeys = properties ? Object.keys(properties) : [];
-
-  if (properties) {
-    for (const [key, propertySchema] of Object.entries(properties)) {
-      if (key in value) {
-        value[key] = coerceWithJsonSchema(value[key], propertySchema, root);
-      }
-    }
-  }
-
-  if (schema.additionalProperties && isJsonSchemaObject(schema.additionalProperties)) {
-    const definedKeys = new Set<string>(propertyKeys);
-    for (const [key, propertyValue] of Object.entries(value)) {
-      if (!definedKeys.has(key)) {
-        value[key] = coerceWithJsonSchema(propertyValue, schema.additionalProperties, root);
-      }
-    }
-  }
-}
-
-function applySchemaArrayCoercion(
-  value: unknown[],
-  schema: JsonSchemaObject,
-  root: JsonSchemaObject | undefined,
-): void {
-  const items = schema.items;
-  if (!isJsonSchemaObject(items)) {
-    return;
-  }
-  for (let index = 0; index < value.length; index++) {
-    const itemSchema = Array.isArray(items) ? items[index] : items;
-    if (itemSchema) {
-      value[index] = coerceWithJsonSchema(value[index], itemSchema, root);
-    }
-  }
-}
-
 function coerceWithUnionSchema(
   value: unknown,
   schemas: JsonSchemaObject[],
@@ -308,11 +265,38 @@ function coerceWithJsonSchema(
     isObjectBackedRecord(nextValue) &&
     !Array.isArray(nextValue)
   ) {
-    applySchemaObjectCoercion(nextValue, schema, root);
+    const properties = schema.properties;
+    const propertyKeys = properties ? Object.keys(properties) : [];
+
+    if (properties) {
+      for (const [key, propertySchema] of Object.entries(properties)) {
+        if (key in nextValue) {
+          nextValue[key] = coerceWithJsonSchema(nextValue[key], propertySchema, root);
+        }
+      }
+    }
+
+    if (schema.additionalProperties && isJsonSchemaObject(schema.additionalProperties)) {
+      const definedKeys = new Set<string>(propertyKeys);
+      for (const [key, propertyValue] of Object.entries(nextValue)) {
+        if (!definedKeys.has(key)) {
+          nextValue[key] = coerceWithJsonSchema(propertyValue, schema.additionalProperties, root);
+        }
+      }
+    }
   }
 
   if (schemaTypes.includes("array") && Array.isArray(nextValue)) {
-    applySchemaArrayCoercion(nextValue, schema, root);
+    const items = schema.items;
+    if (!isJsonSchemaObject(items)) {
+      return nextValue;
+    }
+    for (let index = 0; index < nextValue.length; index++) {
+      const itemSchema = Array.isArray(items) ? items[index] : items;
+      if (itemSchema) {
+        nextValue[index] = coerceWithJsonSchema(nextValue[index], itemSchema, root);
+      }
+    }
   }
 
   return nextValue;

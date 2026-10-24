@@ -45,7 +45,7 @@ suite.define(() => {
     const titleSelector = desktop ? ".chat-pane__session-title-text" : ".mobile-header__title-text";
     const title = header.locator(titleSelector);
     await header.waitFor();
-    await header.locator(desktop ? ".workspace-icon" : ".mobile-header__title").waitFor();
+    await header.locator(desktop ? ".workspace-icon" : ".chat-pane__workspace-chip").waitFor();
 
     if (!desktop) {
       const gaps = await header.evaluate((root) => {
@@ -53,7 +53,7 @@ suite.define(() => {
         const identity = rect(".mobile-header__identity");
         return [
           identity.left - rect(".mobile-header__navigation").right,
-          rect(".mobile-header__actions").left - identity.right,
+          rect(".mobile-header__capsule").left - identity.right,
         ];
       });
       for (const gap of gaps) {

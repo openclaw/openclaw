@@ -6,6 +6,7 @@ import {
   openBrowserActions,
   type BrowserRequestEnvelope,
 } from "../../../components/browser/browser-panel-controller-test-support.ts";
+import { createApplicationGatewaySnapshot } from "../../../test-helpers/application-context-fixtures.ts";
 import {
   createApplicationContextProvider,
   createApplicationGateway,
@@ -62,17 +63,15 @@ function mount(
     },
     { sessionScoped: !scopes.includes("operator.admin") },
   );
-  const { gateway, publish, publishEvent } = createApplicationGateway({
-    phase: "connected",
-    client,
-    hello: gatewayHelloForMethods(advertised, scopes),
-    offlineStable: false,
-    canvasPluginSurfaceUrl: null,
-    assistantAgentId: "main",
-    sessionKey,
-    lastError: null,
-    lastErrorCode: null,
-  });
+  const { gateway, publish, publishEvent } = createApplicationGateway(
+    createApplicationGatewaySnapshot({
+      phase: "connected",
+      client,
+      hello: gatewayHelloForMethods(advertised, scopes),
+      assistantAgentId: "main",
+      sessionKey,
+    }),
+  );
   const provider = createApplicationContextProvider({
     resourceBasePath: "",
     gateway,

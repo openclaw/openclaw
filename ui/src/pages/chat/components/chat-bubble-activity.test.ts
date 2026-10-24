@@ -1,5 +1,5 @@
 /* @vitest-environment jsdom */
-import { afterEach, beforeEach, expect, it, onTestFinished } from "vitest";
+import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { projectAgentToolActivity } from "../../../../../src/infra/agent-activity-events.js";
 import { mountSolid } from "../../../test-helpers/solid-render.tsx";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
@@ -191,37 +191,20 @@ it("uses one live work bubble and restores dots when the operation settles", asy
   });
 });
 
-it("collapses parallel work behind one bubble without hiding task links", async () => {
-  const sessions = ["first", "second"].map((id) => ({
-    key: "agent:main:subagent:" + id,
-    kind: "direct" as const,
-    updatedAt: 1,
-  }));
+it("keeps the active parent's work bubble and child count without embedding child rows", () => {
+  const onOpenSubagents = vi.fn();
   const { container, dispose } = mountSolid(ChatWorkingIndicator, {
     part: { kind: "reading-indicator", key: "parallel", startedAt: 1 },
-    options: {
-      bubbleMode: true,
-      runningSubagents: 2,
-      subagentActivity: {
-        rows: sessions.map((session) => ({
-          session,
-          key: session.key,
-          label: session.key.endsWith("first") ? "Checking tests" : "Reviewing the fix",
-          status: "running" as const,
-          listed: true,
-        })),
-        onOpenSubagent: () => {},
-      },
-    },
+    options: { bubbleMode: true, runningSubagents: 2, onOpenSubagents },
   });
   onTestFinished(dispose);
-  await waitForSolid(() =>
-    expect(container.querySelectorAll("[data-subagent-session-key]")).toHaveLength(2),
-  );
-  expect(container.querySelector("summary")?.textContent).toContain("2 tasks");
   expect(container.querySelectorAll("summary .chat-bubble-dots--working")).toHaveLength(1);
-  expect(container.querySelector("summary svg")).toBeNull();
+  expect(container.querySelector("[data-subagent-session-key]")).toBeNull();
+  expect(container.querySelector("summary")?.textContent?.trim()).toBe("");
   container.querySelector("summary")!.click();
   expect(container.querySelector("details")?.open).toBe(true);
-  expect(container.querySelectorAll("[data-subagent-session-key] button")).toHaveLength(2);
+  const count = container.querySelector<HTMLButtonElement>(".chat-working-indicator__subagents");
+  expect(count?.textContent).toBe("2 subagents running");
+  count?.click();
+  expect(onOpenSubagents).toHaveBeenCalledOnce();
 });

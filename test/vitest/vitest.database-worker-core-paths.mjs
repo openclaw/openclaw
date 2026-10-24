@@ -468,6 +468,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/config/sessions/session-entry-readonly.worker.test.ts",
   "src/cli/daemon-cli/probe.reachability.test.ts",
   "src/cli/daemon-cli/restart-health-client.test.ts",
+  "src/cli/daemon-cli/restart-health-protocol.test.ts",
   "src/acp/control-plane/manager.test.ts",
   "src/acp/control-plane/manager.terminal-signals.test.ts",
   "src/acp/control-plane/manager.accepted-ownership.test.ts",

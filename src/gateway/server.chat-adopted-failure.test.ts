@@ -26,6 +26,7 @@ import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js"
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
 import { handleGatewayRequest } from "./server-methods.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./server-methods/types.js";
+import { gatewayConnect } from "./server/client-fixtures.test-support.js";
 import {
   agentDiscoveryMock,
   connectOk,
@@ -132,13 +133,7 @@ describe("chat.send quoted model profiles", () => {
   };
   const client: GatewayClient = {
     connId: "quoted-profile-ui",
-    connect: {
-      minProtocol: 1,
-      maxProtocol: 1,
-      role: "operator",
-      scopes: ["operator.read", "operator.write", "operator.admin"],
-      client: { id: "openclaw-control-ui", version: "test", platform: "test", mode: "webchat" },
-    },
+    connect: gatewayConnect(["operator.read", "operator.write", "operator.admin"]),
   };
   let context: GatewayRequestContext;
   let storePath: string;

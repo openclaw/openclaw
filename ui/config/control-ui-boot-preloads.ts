@@ -2,33 +2,38 @@ import type { IndexHtmlTransformContext, Plugin } from "vite";
 import { CONTROL_UI_ROUTE_PRELOAD_ATTRIBUTE } from "../../src/gateway/control-ui-route-preloads.ts";
 import { controlUiBootEntryRoute, controlUiBootManifestKey } from "./control-ui-chunking.ts";
 
+export function collectControlUiStaticAssets(
+  bundle: NonNullable<IndexHtmlTransformContext["bundle"]>,
+  file: string,
+  assets: Set<string>,
+): void {
+  if (assets.has(file)) {
+    return;
+  }
+  assets.add(file);
+  const chunk = bundle[file];
+  if (chunk?.type !== "chunk") {
+    return;
+  }
+  for (const dependency of chunk.imports) {
+    collectControlUiStaticAssets(bundle, dependency, assets);
+  }
+  for (const asset of [
+    ...(chunk.viteMetadata?.importedCss ?? []),
+    ...(chunk.viteMetadata?.importedAssets ?? []),
+  ]) {
+    assets.add(asset);
+  }
+}
+
 /** One dependency walk serves both route hints and the offline shell's critical assets. */
 export function collectControlUiBootAssets(
   bundle: NonNullable<IndexHtmlTransformContext["bundle"]>,
 ) {
   const chunks = Object.values(bundle).filter((output) => output.type === "chunk");
   const initial = new Set<string>();
-  const collect = (file: string, assets: Set<string>) => {
-    if (assets.has(file)) {
-      return;
-    }
-    assets.add(file);
-    const chunk = bundle[file];
-    if (chunk?.type !== "chunk") {
-      return;
-    }
-    for (const dependency of chunk.imports) {
-      collect(dependency, assets);
-    }
-    for (const css of chunk.viteMetadata?.importedCss ?? []) {
-      assets.add(css);
-    }
-    for (const asset of chunk.viteMetadata?.importedAssets ?? []) {
-      assets.add(asset);
-    }
-  };
   for (const chunk of chunks.filter((entry) => entry.isEntry)) {
-    collect(chunk.fileName, initial);
+    collectControlUiStaticAssets(bundle, chunk.fileName, initial);
   }
   const routes = { chat: new Set(initial), new: new Set(initial) };
   const login = new Set(initial);
@@ -42,7 +47,7 @@ export function collectControlUiBootAssets(
         (id) => controlUiBootManifestKey(id) === "ui/src/components/login-gate-solid.tsx",
       )
     ) {
-      collect(chunk.fileName, login);
+      collectControlUiStaticAssets(bundle, chunk.fileName, login);
     }
     for (const route of ["chat", "new"] as const) {
       if (
@@ -51,7 +56,7 @@ export function collectControlUiBootAssets(
           return owner === "shared" || owner === route;
         })
       ) {
-        collect(chunk.fileName, routes[route]);
+        collectControlUiStaticAssets(bundle, chunk.fileName, routes[route]);
       }
     }
   }
@@ -70,7 +75,7 @@ export function collectControlUiBootAssets(
           chunk.imports.length > 0 &&
           chunk.imports.every((file) => assets.has(file))
         ) {
-          collect(chunk.fileName, assets);
+          collectControlUiStaticAssets(bundle, chunk.fileName, assets);
           added = true;
         }
       }
@@ -104,7 +109,22 @@ export function controlUiBootPreloadsPlugin(): Plugin {
               tag: "link",
               attrs: file.endsWith(".css")
                 ? { rel: "preload", as: "style", crossorigin: "", href: `./${file}` }
-                : { rel: "modulepreload", crossorigin: "", href: `./${file}` },
+                : {
+                    rel: "modulepreload",
+                    crossorigin: "",
+                    // Keep signing and the composer ahead of other Chat content.
+                    ...(route === "chat" &&
+                    bundle[file]?.type === "chunk" &&
+                    bundle[file].name.startsWith("control-ui-boot-chat") &&
+                    Object.keys(bundle[file].modules).every(
+                      (id) =>
+                        controlUiBootManifestKey(id) !==
+                        "ui/src/pages/chat/components/chat-composer.tsx",
+                    )
+                      ? { fetchpriority: "low" }
+                      : {}),
+                    href: `./${file}`,
+                  },
             }));
           return {
             tag: "template",

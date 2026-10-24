@@ -59,6 +59,7 @@ See [Codex timeouts](/plugins/codex-harness-reference/timeouts).
 
 <ParamField path="pty" type="boolean" default="false">
 Run in a pseudo-terminal when available. Use for TTY-only CLIs, coding agents, and terminal UIs.
+Sandbox execution does not support PTYs. An explicit request runs without a PTY and returns a warning; use a noninteractive command in the sandbox.
 </ParamField>
 
 <ParamField path="host" type="'auto' | 'sandbox' | 'gateway' | 'node'" default="auto">

@@ -36,6 +36,10 @@ This confirms acceptance, not completion or automatic restart recovery. The
 guarantee lasts while the user row or input receipt remains in that session;
 it does not cross a deleted or replaced session. RPC methods other than
 `chat.send` retain their own retry contracts.
+A committed input interrupted before execution adopted it keeps its
+same-key retry custody. Retrying resumes that admitted turn without appending
+another user message. Structured Goal requests retain their own operation
+receipts and conflict checks, including retries after preparation fails.
 Retain the original `sessionId` when replaying a submission; a missing or different
 current physical session rejects that retry. The Control UI also keeps its
 transcript-root guard for non-steering sends.

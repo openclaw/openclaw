@@ -4,12 +4,19 @@ import {
   estimateStringChars,
 } from "@openclaw/normalization-core/cjk-chars";
 import { describe, expect, it, vi } from "vitest";
-import { makeProviderModel } from "../../../../ai/src/providers/provider-model.test-support.js";
-import { createAssistantMessageEventStream } from "../../llm.js";
+import { createZeroUsage } from "../../../../ai/src/usage.test-support.js";
 import type { AgentMessage } from "../../types.js";
 import { convertToLlm } from "../messages.js";
 import { SummaryOutputBudgetError } from "../types.js";
 import { generateSummary } from "./compaction.js";
+import { createCompactionModel } from "./compaction.test-support.js";
+import {
+  assistant,
+  responseStream,
+  toolCall,
+  toolResult,
+  user,
+} from "./shard-fixtures.test-support.js";
 import {
   MAX_SUMMARY_INPUT_CHARS,
   serializeConversation,
@@ -17,13 +24,7 @@ import {
 } from "./utils.js";
 
 function createModel(contextWindow: number, maxTokens = 32_000): Model {
-  return makeProviderModel("test-api", "test-provider", "summary-model", {
-    name: "Summary Model",
-    baseUrl: "https://example.test",
-    reasoning: false,
-    contextWindow,
-    maxTokens,
-  });
+  return createCompactionModel({ contextWindow, maxTokens });
 }
 
 /**
@@ -41,38 +42,16 @@ function createCapturingStream(overflowAbove?: (prompt: string) => boolean): {
     const prompt = Array.isArray(block) && block[0]?.type === "text" ? block[0].text : "";
     prompts.push(prompt);
     const overflow = overflowAbove?.(prompt) === true;
-    const stream = createAssistantMessageEventStream();
-    const message = {
-      role: "assistant" as const,
-      content: overflow ? [] : [{ type: "text" as const, text: "summary" }],
-      api: model.api,
-      provider: model.provider,
-      model: model.id,
-      usage: {
-        input: 1,
-        output: 1,
-        cacheRead: 0,
-        cacheWrite: 0,
-        totalTokens: 2,
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-      },
-      timestamp: 1,
-    };
-    if (overflow) {
-      stream.push({
-        type: "error",
-        reason: "error",
-        error: {
-          ...message,
-          stopReason: "error",
-          errorMessage: "prompt is too long: 40000 tokens > 32768 maximum",
-        },
-      });
-    } else {
-      stream.push({ type: "done", reason: "stop", message: { ...message, stopReason: "stop" } });
-    }
-    stream.end();
-    return stream;
+    return responseStream(
+      assistant(overflow ? [] : "summary", {
+        api: model.api,
+        provider: model.provider,
+        model: model.id,
+        usage: { ...createZeroUsage(), input: 1, output: 1, totalTokens: 2 },
+        stopReason: overflow ? "error" : "stop",
+        ...(overflow ? { errorMessage: "prompt is too long: 40000 tokens > 32768 maximum" } : {}),
+      }),
+    );
   };
   return { streamFn, prompts };
 }
@@ -81,78 +60,37 @@ function toolCallMessage(
   calls: Array<{ id: string; name: string; cmd: string }>,
   stopReason: "toolUse" | "aborted" = "toolUse",
 ): AgentMessage {
-  return {
-    role: "assistant",
-    content: calls.map(({ id, name, cmd }) => ({
-      type: "toolCall" as const,
-      id,
-      name,
-      arguments: { cmd },
-    })),
-    api: "test-api",
-    provider: "test-provider",
-    model: "summary-model",
-    usage: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-    },
-    stopReason,
-    timestamp: 1,
-  };
+  return assistant(
+    calls.map(({ id, name, cmd }) => toolCall(name, { cmd }, id)),
+    { model: "summary-model", stopReason },
+  );
 }
 
 function toolResultMessage(toolCallId: string, toolName: string, text: string): AgentMessage {
-  return {
-    role: "toolResult",
-    toolCallId,
-    toolName,
-    content: [{ type: "text", text }],
-    isError: false,
-    timestamp: 1,
-  };
+  return toolResult(text, { toolCallId, toolName });
 }
 
 /** A tool-heavy session; 1,250 turns serialize to about 5.5M characters (over 1M tokens). */
 function createLongSession(turns: number): AgentMessage[] {
   const messages: AgentMessage[] = [];
   for (let turn = 0; turn < turns; turn += 1) {
-    messages.push({
-      role: "user",
-      content: `ask-${turn} ${"context ".repeat(100)}`,
-      timestamp: turn,
-    });
-    messages.push({
-      role: "assistant",
-      content: [
-        { type: "text", text: `reply-${turn} ${"reasoning ".repeat(150)}` },
-        { type: "toolCall", id: `call-${turn}`, name: "exec", arguments: { cmd: `run ${turn}` } },
-      ],
-      api: "test-api",
-      provider: "test-provider",
-      model: "summary-model",
-      usage: {
-        input: 0,
-        output: 0,
-        cacheRead: 0,
-        cacheWrite: 0,
-        totalTokens: 0,
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-      },
-      stopReason: "toolUse",
-      timestamp: turn,
-    });
-    messages.push({
-      role: "toolResult",
-      toolCallId: `call-${turn}`,
-      toolName: "exec",
-      content: [{ type: "text", text: `result-${turn} ${"output ".repeat(1_500)}` }],
-      isError: false,
-      timestamp: turn,
-    });
+    messages.push(user(`ask-${turn} ${"context ".repeat(100)}`, turn));
+    messages.push(
+      assistant(
+        [
+          { type: "text", text: `reply-${turn} ${"reasoning ".repeat(150)}` },
+          toolCall("exec", { cmd: `run ${turn}` }, `call-${turn}`),
+        ],
+        { model: "summary-model", stopReason: "toolUse", timestamp: turn },
+      ),
+    );
+    messages.push(
+      toolResult(`result-${turn} ${"output ".repeat(1_500)}`, {
+        toolCallId: `call-${turn}`,
+        toolName: "exec",
+        timestamp: turn,
+      }),
+    );
   }
   return messages;
 }

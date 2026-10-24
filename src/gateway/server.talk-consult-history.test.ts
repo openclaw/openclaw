@@ -51,6 +51,7 @@ import { createDirectChatContext } from "./server-chat.agent-events.test-helpers
 import { handleGatewayRequest } from "./server-methods.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./server-methods/types.js";
 import { createTranscriptUpdateBroadcastHandler } from "./server-session-events.js";
+import { gatewayConnect, gatewayProfile } from "./server/client-fixtures.test-support.js";
 import * as lifecycleState from "./session-lifecycle-state.js";
 import { createPreparedLifecycleWriteTracker } from "./session-lifecycle-state.test-support.js";
 import {
@@ -154,19 +155,8 @@ beforeEach(async () => {
   const profile = ensureProfileForEmail("talk-history@example.test");
   client = {
     connId: connectionId,
-    connect: {
-      minProtocol: 1,
-      maxProtocol: 1,
-      role: "operator",
-      scopes: ["operator.read", "operator.write", "operator.admin"],
-      client: { id: "openclaw-control-ui", version: "test", platform: "test", mode: "webchat" },
-    },
-    authenticatedUserProfile: {
-      profileId: profile.id,
-      displayName: null,
-      hasAvatar: false,
-      updatedAt: 1,
-    },
+    connect: gatewayConnect(["operator.read", "operator.write", "operator.admin"]),
+    authenticatedUserProfile: gatewayProfile(profile.id),
   };
   // Admission, the recorder, and publication stay real; only model execution is held.
   gatewayReplyMock.mockImplementation(getReplyFromConfig);

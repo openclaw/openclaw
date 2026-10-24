@@ -37,15 +37,12 @@ function mountDetails() {
     progressCardInitialLoading: true,
   };
   const [details, setDetails] = createSignal(initial);
-  const [presented, setPresented] = createSignal(true);
   const view = mountSolid(() =>
     createComponent(ChatDetailsDesktopComposition, {
       get props() {
         return details();
       },
-      get presented() {
-        return presented();
-      },
+      presented: true,
     }),
   );
   flush();
@@ -63,10 +60,6 @@ function mountDetails() {
     initial,
     update(patch: Partial<ChatDetailsProps>) {
       setDetails((previous) => ({ ...previous, ...patch }));
-      flush();
-    },
-    present(value: boolean) {
-      setPresented(value);
       flush();
     },
     group: (name: string) => view.container.querySelector(`[data-details-group="${name}"]`),
@@ -107,56 +100,6 @@ it("keeps unknown and empty desktop Outputs and Progress quiet during slow reads
   });
   expect(view.group("outputs")?.textContent).toContain("Build report");
   expect(view.container.textContent).toContain("Review the layout");
-});
-
-it("delays the first Context arrival, preserves its deadline and disclosure, and retires a replaced session's pending entrance", async () => {
-  const view = mountDetails();
-  const usage = {
-    ...view.initial.selectedSession!,
-    contextTokens: 128_000,
-    totalTokens: 3_840,
-    totalTokensFresh: true,
-  };
-  view.update({ selectedSession: usage });
-  expect(view.group("context")).toBeNull();
-  await vi.advanceTimersByTimeAsync(1_000);
-  view.update({ selectedSession: { ...usage, totalTokens: 5_120 } });
-  view.present(false);
-  await vi.advanceTimersByTimeAsync(2_000);
-  expect(view.group("context")).toBeNull();
-  view.present(true);
-  await vi.advanceTimersByTimeAsync(1_000);
-  view.update({ selectedSession: { ...usage, totalTokens: 6_400 } });
-  await vi.advanceTimersByTimeAsync(999);
-  expect(view.group("context")).toBeNull();
-  await vi.advanceTimersByTimeAsync(1);
-  const context = view.group("context")!;
-  expect(context.textContent).toContain("5%");
-  context.querySelector("summary")!.click();
-  flush();
-  expect(context.querySelector("summary")?.getAttribute("aria-expanded")).toBe("true");
-  view.present(false);
-  view.present(true);
-  expect(view.group("context")).toBe(context);
-  expect(context.querySelector("summary")?.getAttribute("aria-expanded")).toBe("true");
-
-  view.update({
-    sessionKey: "agent:main:pending",
-    selectedSession: { key: "agent:main:pending", sessionId: "pending-1", kind: "direct" },
-  });
-  view.update({ selectedSession: { ...usage, key: "agent:main:pending", sessionId: "pending-1" } });
-  await vi.advanceTimersByTimeAsync(1_000);
-  view.update({
-    sessionKey: "agent:main:empty",
-    selectedSession: { key: "agent:main:empty", sessionId: "empty-1", kind: "direct" },
-  });
-  await vi.advanceTimersByTimeAsync(2_000);
-  expect(view.group("context")).toBeNull();
-  view.update({
-    sessionKey: "agent:main:cached",
-    selectedSession: { ...usage, key: "agent:main:cached", sessionId: "cached-1" },
-  });
-  expect(view.group("context")?.textContent).toContain("3%");
 });
 
 it("keeps an empty Environment absent while its owner reads, and admits each real content source", () => {

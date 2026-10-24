@@ -1,7 +1,6 @@
 import { expect, it } from "vitest";
 import type { GatewayAgentRow } from "../api/types.ts";
 import {
-  captureUiProof,
   controlUiSessionPath,
   createNewSessionPageE2eSuite,
   installMockGateway,
@@ -139,15 +138,6 @@ suite.define(() => {
         await page.locator(".new-session-page__message").fill("Inspect the worker workspace");
         const start = page.getByRole("button", { name: "Start session", exact: true });
         await expect.poll(() => start.isEnabled()).toBe(true);
-        // Policy-off is the comparison baseline, not a capture from an older binary.
-        // The suite owns a fresh per-test artifact directory; withPage exposes no artifact owner.
-        await captureUiProof(
-          suite,
-          page,
-          required
-            ? "after-required-readonly-before-submit.png"
-            : "before-policy-off-selected-profile.png",
-        );
         await start.click();
         const create = await gateway.waitForRequest("sessions.create");
         expect(create.params).toMatchObject({

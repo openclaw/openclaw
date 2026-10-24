@@ -44,7 +44,16 @@ async function installSessionSharing(
       sessionRow(key, title, updatedAt, {
         sharingRole: role,
         visibility,
-        ...(includePeople ? { createdActor: { type: "human", id: "owner", label: "Owner" } } : {}),
+        ...(includePeople
+          ? {
+              createdActor: {
+                type: "human",
+                id: "owner",
+                label: "Owner",
+                identity: { type: "profile", id: "owner" },
+              },
+            }
+          : {}),
       }),
     ]),
   };
@@ -70,6 +79,14 @@ async function installSessionSharing(
   }
   return installMockGateway(page, {
     sessionKey: key,
+    presenceUsers: includePeople
+      ? ["owner", "guest"].map((id) => ({
+          id,
+          identity: { type: "profile" as const, id },
+          name: id,
+          watchedSessions: [key],
+        }))
+      : [],
     featureMethods,
     methodResponses,
     operatorScopes: role === "owner" ? ["operator.read", "operator.write"] : ["operator.read"],
@@ -268,7 +285,7 @@ suite.define(() => {
           expect(
             await menu.getByRole("menuitem", { name: "Sharing options", exact: true }).count(),
           ).toBe(0);
-          await menu.getByRole("menuitem", { name: "People", exact: true }).waitFor();
+          await page.getByRole("button", { name: "People", exact: true }).waitFor();
         } else {
           await menu.getByRole("menuitem", { name: "Sharing options", exact: true }).waitFor();
         }
@@ -278,8 +295,7 @@ suite.define(() => {
         expect(peopleModule.requests()).toBe(0);
         expect(sharingModule?.requests() ?? failedRequests).toBe(0);
         if (colorScheme === "light") {
-          await trigger.click();
-          await menu.getByRole("menuitem", { name: "People", exact: true }).click();
+          await page.getByRole("button", { name: "People", exact: true }).click();
           await peopleModule.request;
           await host.getByRole("status", { name: "Loading…", exact: true }).waitFor();
           await captureUiProof(suite, page, "mobile-people-loading-light.png");
@@ -335,8 +351,7 @@ suite.define(() => {
           );
           expect(await sharing.isVisible()).toBe(false);
           // Full-document recovery preserves the session route; the operator reopens the sheet.
-          await trigger.click();
-          await menu.getByRole("menuitem", { name: "People", exact: true }).click();
+          await page.getByRole("button", { name: "People", exact: true }).click();
           await host.getByRole("button", { name: /^Sharing options/ }).click();
         }
         try {
@@ -378,11 +393,15 @@ suite.define(() => {
           .click();
         await host.waitFor({ state: "hidden" });
         await expect
-          .poll(() => trigger.evaluate((element) => element === document.activeElement))
+          .poll(() =>
+            (colorScheme === "light"
+              ? page.getByRole("button", { name: "People", exact: true })
+              : trigger
+            ).evaluate((element) => element === document.activeElement),
+          )
           .toBe(true);
         if (colorScheme === "light") {
-          await trigger.click();
-          await menu.getByRole("menuitem", { name: "People", exact: true }).click();
+          await page.getByRole("button", { name: "People", exact: true }).click();
           await host.getByRole("button", { name: /^Sharing options/ }).click();
         } else {
           await trigger.click();

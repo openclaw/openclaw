@@ -32,6 +32,7 @@ import { registerChatAbortController } from "./chat-abort.js";
 import { retainGatewayOperatorRun } from "./operator-run-cancellation.js";
 import { createChatRunState } from "./server-chat-state.js";
 import { createChatSendWorkAdmission } from "./server-methods/chat-send-work-admission.js";
+import { gatewayConnect } from "./server/client-fixtures.test-support.js";
 import { claimRpcSourceForTest } from "./test-helpers.rpc-source.js";
 
 async function withCancellationFixture(
@@ -142,13 +143,10 @@ async function createCancellationFixture(cfg: OpenClawConfig) {
       runId,
       entry,
       client: {
-        connect: {
-          minProtocol: 1,
-          maxProtocol: 1,
-          client: { id: "test", version: "test", platform: "test", mode: "test" },
-          role: "operator",
-          scopes: ["operator.sessions.write"],
-        },
+        connect: gatewayConnect(["operator.sessions.write"], {
+          id: "test",
+          mode: "test",
+        }),
         internal: { operatorRoleActor: { kind: "operator", profileId: profile.id } },
       },
       sourceAuthority: { signal, assertCurrent: () => signal.throwIfAborted() },

@@ -6,6 +6,7 @@ import { Command } from "commander";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { createTestConfigSnapshot } from "../commands/test-runtime-config-helpers.js";
 import { ConfigMutationConflictError } from "../config/mutation-conflict.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.js";
 import {
@@ -190,18 +191,9 @@ function buildSnapshot(params: {
   config: OpenClawConfig;
 }): ConfigFileSnapshot {
   return {
-    path: "/tmp/openclaw.json",
-    exists: true,
+    ...createTestConfigSnapshot(params.resolved, params.config),
     raw: JSON.stringify(params.resolved),
     parsed: params.resolved,
-    sourceConfig: params.resolved,
-    resolved: params.resolved,
-    valid: true,
-    runtimeConfig: params.config,
-    config: params.config,
-    issues: [],
-    warnings: [],
-    legacyIssues: [],
   };
 }
 

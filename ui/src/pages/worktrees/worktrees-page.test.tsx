@@ -8,6 +8,7 @@ import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import { i18n } from "../../i18n/index.ts";
 import { projectCallbackOwner } from "../../lib/reactive/callback-owner.ts";
 import { SESSION_FACE_PREFERENCE_PARAM } from "../../lib/sessions/route-navigation.ts";
+import { createApplicationGatewaySnapshot } from "../../test-helpers/application-context-fixtures.ts";
 import { cleanupSolid, mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { WorktreesModel } from "./worktrees-model.ts";
@@ -36,17 +37,11 @@ function worktree(id = "worktree-1", overrides: Partial<WorktreeRecord> = {}): W
 }
 
 function gatewayWithSnapshot(client: GatewayBrowserClient | null, connected: boolean) {
-  const snapshot: ApplicationGatewaySnapshot = {
+  const snapshot: ApplicationGatewaySnapshot = createApplicationGatewaySnapshot({
     client,
     phase: connected ? "connected" : "stopped",
-    offlineStable: false,
-    canvasPluginSurfaceUrl: null,
-    hello: null,
-    assistantAgentId: null,
     sessionKey: "main",
-    lastError: null,
-    lastErrorCode: null,
-  };
+  });
   return { snapshot, subscribe: () => () => undefined } as unknown as ApplicationContext["gateway"];
 }
 
