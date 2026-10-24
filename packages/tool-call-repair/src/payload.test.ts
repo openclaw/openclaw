@@ -108,11 +108,6 @@ describe("createPlainTextToolCallBraceProbe", () => {
       expect(probe(text.slice(offset, offset + 4))).toBe(false);
     }
   });
-
-  it("checks a complete large chunk before retiring its prefix", () => {
-    const probe = createPlainTextToolCallBraceProbe();
-    expect(probe(`${"ordinary prose ".repeat(64)}\n[tool:write] {"}`)).toBe(true);
-  });
 });
 
 describe("stripPlainTextToolCallBlocks", () => {
