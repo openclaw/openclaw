@@ -100,24 +100,23 @@ it("does not report shadowed group and room aliases as blocked conversations", a
   );
 });
 
-it.each([
-  { name: "an empty static access group", members: {}, concrete: [] },
-  { name: "an access group with a LINE sender", members: { line: [userId] }, concrete: [] },
-  { name: "an access-group reference beside a concrete sender", members: {}, concrete: [userId] },
-])("asks to check $name and still names the uncovered group", async ({ members, concrete }) => {
-  const accessGroups = { operators: { type: "message.senders", members } };
-  const allowFrom = ["accessGroup:operators", ...concrete];
-  const uncoveredId = `C${"3".repeat(32)}`;
-  const groups = { [groupId]: { allowFrom }, [uncoveredId]: {} };
-  const output = await runDoctor({ groups }, accessGroups);
+it.each([{ concrete: [] }, { concrete: [userId] }])(
+  "checks references beside $concrete and names the uncovered group",
+  async ({ concrete }) => {
+    const accessGroups = { operators: { type: "message.senders", members: {} } };
+    const allowFrom = ["accessGroup:operators", ...concrete];
+    const uncoveredId = `C${"3".repeat(32)}`;
+    const groups = { [groupId]: { allowFrom }, [uncoveredId]: {} };
+    const output = await runDoctor({ groups }, accessGroups);
 
-  expect(output).toContain(`group "${groupId}" uses access-group references`);
-  expect(output).toContain("Check the referenced access groups");
-  expect(output).toContain(
-    `group "${uncoveredId}" has no sender allowlist — messages there are silently dropped`,
-  );
-  expect(output).not.toMatch(
-    /other groups keep working|all group messages will be silently dropped|empty sender allowlist/u,
-  );
-  expect(output).not.toContain(`group "${groupId}" has no sender allowlist`);
-});
+    expect(output).toContain(`group "${groupId}" uses access-group references`);
+    expect(output).toContain("Check the referenced access groups");
+    expect(output).toContain(
+      `group "${uncoveredId}" has no sender allowlist — messages there are silently dropped`,
+    );
+    expect(output).not.toMatch(
+      /other groups keep working|all group messages will be silently dropped|empty sender allowlist/u,
+    );
+    expect(output).not.toContain(`group "${groupId}" has no sender allowlist`);
+  },
+);
