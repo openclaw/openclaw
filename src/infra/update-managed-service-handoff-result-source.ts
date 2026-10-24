@@ -86,7 +86,10 @@ async function finishManagedUpdateRun() {
   }
   // Failure triage may discover a corrupt sentinel after notification publication
   // was skipped. Capture that diagnostic before the terminal writer snapshots warnings.
-  if (triageFailure) captureFailedUpdateResult();
+  if (triageFailure) {
+    try { captureFailedUpdateResult(); }
+    catch (error) { appendLog("Failed update diagnostic capture could not complete: " + String(error)); }
+  }
   if (!runLedger || !runOutcome) return;
   if (foregroundParked && runOutcome.status === "succeeded") return;
   if (!ownsManagedUpdateLease()) throw new Error("managed update terminal writer lost its current claim");
