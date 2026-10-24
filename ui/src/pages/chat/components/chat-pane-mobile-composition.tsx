@@ -199,7 +199,14 @@ export function ChatPaneMobileComposition(props: {
     morePeople: (count: number) => t("chat.sessionHeader.morePeople", { count: String(count) }),
   };
   const adapter = createChatSessionSharingMobileAdapter(sharing, {
-    onOpenSharing: () => host()?.navigate(sharingPage, actionSource()),
+    onOpenSharing: () => {
+      const current = host();
+      // Sharing opened within People retains the People trigger as its return focus.
+      current?.navigate(
+        sharingPage,
+        current.open && current.destination === people ? undefined : actionSource(),
+      );
+    },
     onOpenAccess: () => host()?.navigate(accessPage),
     onApplied: () => host()?.navigate(sharingPage),
     accessTarget: () =>
