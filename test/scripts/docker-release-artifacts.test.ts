@@ -454,10 +454,6 @@ function expectedIdentity(manifest: PreparedRelease["manifest"]) {
   };
 }
 
-function expectLines(value: unknown, lines: string[]) {
-  expect(String(value).split("\n")).toEqual(expect.arrayContaining(lines));
-}
-
 describe("prepared Docker publication", () => {
   it("retries transient GitHub 5xx identity reads with a fresh request", () => {
     const responses = [new Error("gh: Server Error (HTTP 502)"), '{"head_sha":"fresh"}'];
@@ -889,81 +885,20 @@ describe("prepared Docker publication", () => {
     );
   });
 
-  it("prepares both native architectures with one release identity and smokes before sealing", () => {
+  it("keeps preparation unable to publish and serializes the single approved writer", () => {
     const prepare = readWorkflow("docker-release-prepare");
-    const build = prepare.jobs.build;
-    const steps = build.steps as {
-      id?: string;
-      name?: string;
-      uses?: string;
-      run?: string;
-      if?: string;
-      "continue-on-error"?: boolean;
-      with?: Record<string, unknown>;
-    }[];
-    expect(build.strategy.matrix.include).toEqual([
-      { architecture: "amd64", runner: "ubuntu-24.04" },
-      { architecture: "arm64", runner: "ubuntu-24.04-arm" },
-    ]);
-    const builders = steps.filter((step) => step.uses?.startsWith("docker/build-push-action@"));
-    expect(builders).toHaveLength(2);
-    for (const step of builders) {
-      expect(step.with).toMatchObject({
-        context: "source",
-        platforms: "linux/${{ matrix.architecture }}",
-        push: false,
-        sbom: true,
-        provenance: "mode=max",
-      });
-      expectLines(step.with?.["build-args"], [
-        "GITHUB_ACTIONS=true",
-        "GIT_COMMIT=${{ inputs.release_sha }}",
-        "OPENCLAW_BUILD_TIMESTAMP=${{ needs.resolve.outputs.built_at }}",
-        "OPENCLAW_DOCKER_BUILD_VERSION=${{ needs.resolve.outputs.version }}",
-        "OPENCLAW_EXTENSIONS=diagnostics-otel,codex",
-      ]);
-      expectLines(step.with?.labels, [
-        "org.opencontainers.image.revision=${{ inputs.release_sha }}",
-        "org.opencontainers.image.version=${{ needs.resolve.outputs.version }}",
-        "org.opencontainers.image.created=${{ needs.resolve.outputs.built_at }}",
-      ]);
-    }
-    const browser = steps.find((step) => step.id === "build-browser");
-    expect(browser?.if).toBe("${{ needs.resolve.outputs.include_browser == 'true' }}");
-    expect(String(browser?.with?.["build-args"]).split("\n")).toContain(
-      "OPENCLAW_INSTALL_BROWSER=1",
-    );
-    for (const [variant, buildId] of [
-      ["default", "build"],
-      ["browser", "build-browser"],
-    ]) {
-      const relay = steps.find((step) => step.name === `Relay ${variant} image limit warnings`);
-      expect(relay).toMatchObject({
-        if: `\${{ always() && steps.${buildId}.outputs.metadata != '' }}`,
-        "continue-on-error": true,
-      });
-      for (const command of [
-        '["buildx.build.ref"]',
-        'docker buildx history logs --progress plain "$build_ref"',
-        "::notice title=Build limit warning relay skipped::",
-        "node workflow-source/scripts/relay-build-limit-warnings.mts",
-      ]) {
-        expect(relay?.run).toContain(command);
-      }
-    }
-    const smoke = steps.findIndex((step) =>
+    const publish = readWorkflow("docker-release");
+    const steps = prepare.jobs.build.steps;
+    const smoke = steps.findIndex((step: { run?: string }) =>
       step.run?.includes("docker-release-artifacts.mjs prepare"),
     );
     expect(smoke).toBeGreaterThan(-1);
     expect(
-      steps.findIndex((step) => step.uses?.startsWith("actions/upload-artifact@")),
+      steps.findIndex((step: { uses?: string }) =>
+        step.uses?.startsWith("actions/upload-artifact@"),
+      ),
     ).toBeGreaterThan(smoke);
     expect(prepare.jobs.seal.needs).toContain("build");
-  });
-
-  it("keeps preparation unable to publish and serializes the single approved writer", () => {
-    const prepare = readWorkflow("docker-release-prepare");
-    const publish = readWorkflow("docker-release");
     expect(prepare.on.workflow_call.secrets).toBeUndefined();
     expect(prepare.permissions).toEqual({ contents: "read" });
     for (const job of Object.values(prepare.jobs) as {

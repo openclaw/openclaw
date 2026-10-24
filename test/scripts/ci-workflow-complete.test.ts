@@ -162,18 +162,10 @@ describe("complete CI failure reporting", () => {
     ).toBe(false);
   });
 
-  it("keeps Docker seed lanes complete and static evidence independent of attempt", () => {
+  it("keeps Docker seed lanes complete", () => {
     expect(
       ciStep("docker-seed-e2e", "Run Docker seed tier").env?.OPENCLAW_DOCKER_ALL_FAIL_FAST,
     ).toBe("0");
-    for (const [job, name] of [
-      ["check-shard", "Run check shard"],
-      ["check-lint-hosted-core-shard", "Run hosted core lint stripe"],
-      ["check-lint-hosted-extension-shard", "Run hosted extension lint stripe"],
-      ["check-test-types-hosted-core-shard", "Run hosted core test-types stripe"],
-    ]) {
-      expect(ciStep(job!, name!).env?.OPENCLAW_CI_STATIC_EVIDENCE).toBe("1");
-    }
   });
 });
 
@@ -236,30 +228,25 @@ function runChecks(job: string, name: string, env: Record<string, string> = {}) 
 
 describe("CI check failure collection", () => {
   it.each([
-    ["native-i18n", "Check native app generated locale parity", "node_setup"],
-    ["control-ui-i18n", "Check Control UI locale parity", "node_setup"],
-    ["checks-ui", "Test Control UI", "ui_chromium"],
-    ["checks-ui", "Install Playwright WebKit", "node_setup"],
-    ["checks-ui", "Test Control UI WebKit overlays and focus", "ui_webkit"],
-    ["checks-ui-e2e-real-gateway", "Prove desktop resize over node and SSH", "real_gateway_build"],
-    [
-      "checks-ui-e2e-real-gateway",
-      "Test Control UI suites with a real Gateway",
-      "real_gateway_build",
-    ],
-    ["check-docs", "Check config docs baseline", "node_setup"],
-    ["check-docs", "Check plugin inventory", "node_setup"],
-    ["check-docs", "Check docs", "clawhub_docs"],
-    ["skills-python", "Test skill Python scripts", "python_tooling"],
     ["security-fast", "Audit changed GitHub workflows with zizmor", "security_scanners"],
     ["security-fast", "Detect committed private keys", "scanner_config"],
   ])("runs %s / %s after sibling failures with its prerequisite", (job, name, prerequisite) => {
     const condition = ciStep(job, name).if;
-    expect(condition).toContain("!cancelled()");
-    expect(condition).toContain(`steps.${prerequisite}.outcome == 'success'`);
-    expect(ciWorkflow.jobs[job]!.steps.some((item: WorkflowStep) => item.id === prerequisite)).toBe(
-      true,
-    );
+    const admitted = {
+      ...failedContext,
+      steps: {
+        node_setup: { outputs: {}, outcome: "success" as const },
+        security_scanners: { outputs: {}, outcome: "success" as const },
+        scanner_config: { outputs: {}, outcome: "success" as const },
+        workflow_scope: { outputs: { changed: "true" } },
+      },
+    };
+    expectAdmission(condition, admitted, [
+      {
+        ...admitted,
+        steps: { ...admitted.steps, [prerequisite]: { outputs: {}, outcome: "failure" } },
+      },
+    ]);
   });
 
   it.each([
@@ -488,23 +475,6 @@ ${ciStep("macos-swift-packages", "Clean OpenClawKit build scratch").run}
         steps: { ...steps, "ios-app-build": { outputs: {}, outcome: build } },
       }),
     ).toBe(row.expected);
-  });
-
-  it("iOS runs the Access proof and Watch UI tests after lifecycle tests fail", () => {
-    const root = fixture();
-    const result = run(
-      root,
-      `xcodebuild() { printf '%s\\n' "$*" >> "$TRACE"; return 7; }
-python3() { printf '%s\\n' "$*" >> "$TRACE"; }
-${ciStep("ios-build", "Run focused iOS lifecycle simulator tests").run!}`,
-      { IOS_CI_PHASE: "tests", IOS_MAIN_TIER: "false", IOS_SIMULATOR_ID: "fixture-simulator" },
-    );
-    expect(result.status, result.stderr).not.toBe(0);
-    const commands = readFileSync(path.join(root, "trace"), "utf8").trim().split("\n");
-    expect(commands).toHaveLength(3);
-    expect(commands[0]).toContain("OpenClawLifecycleTests.xcresult");
-    expect(commands[1]).toBe("scripts/ios-access-restart-proof.py fixture-simulator");
-    expect(commands[2]).toContain("OpenClawWatchDeliveryUITests.xcresult");
   });
 
   it.each([

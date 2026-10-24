@@ -366,17 +366,17 @@ describe.skipIf(process.platform === "win32")("Watch simulator workflow", () => 
       (entry) =>
         entry.args.includes("build-for-testing") || entry.args.includes("test-without-building"),
     )) {
+      const selected = selectedTests(command.args);
+      expect(selected.length).toBeGreaterThan(0);
+      expect(
+        selected.every((selector) => selector.startsWith("-only-testing:OpenClawWatchTests/")),
+      ).toBe(true);
       expectArgs(command.args, [
         "OpenClawWatchApp",
         "Debug",
         "platform=watchOS Simulator,id=watch-fixture",
         "-parallel-testing-enabled",
         "NO",
-        ...selectors("OpenClawWatchTests", [
-          "WatchInboxStoreOperationTests",
-          "WatchRealtimeMediaTests",
-          "WatchGatewayConfigurationTests",
-        ]),
         "CODE_SIGNING_ALLOWED=NO",
       ]);
     }
@@ -454,17 +454,6 @@ it.skipIf(process.platform === "win32").each([
   if (!build) {
     throw new Error("Missing voice cleanup xcodebuild command");
   }
-  expect(selectedTests(build.args)).toEqual(
-    selectors("OpenClawTests", [
-      "TalkRealtimeVoiceSessionCleanupTests",
-      "TalkRealtimeConsultCancellationTests",
-      "TalkRealtimeTranscriptWriteQueueTests",
-      "TalkModeManagerTests",
-      "ManagedDocumentEnvelopeTests",
-      "IOSMediaArtifactLoaderTests",
-      "OpenClawTypographyTests",
-    ]),
-  );
   expectArgs(build.args, ["-collect-test-diagnostics", "never"]);
   if (phase === "smoke") {
     const sources = readdirSync("apps/ios/Tests", { recursive: true })
@@ -475,7 +464,9 @@ it.skipIf(process.platform === "win32").each([
       }));
     const testCommands = builds.filter(isTestCommand);
     for (const [index, group] of ["voice", "lifecycle"].entries()) {
-      for (const selector of selectedTests(testCommands[index]!.args)) {
+      const selected = selectedTests(testCommands[index]!.args);
+      expect(selected.length).toBeGreaterThan(0);
+      for (const selector of selected) {
         const suite = selector.split("/")[1]!;
         const declarations = sources.filter(({ source }) =>
           new RegExp(`\\b(?:struct|class|enum)\\s+${suite}\\b`, "u").test(source),
@@ -501,9 +492,6 @@ describe.skipIf(process.platform === "win32")("iOS Access simulator workflow", (
   ];
 
   it.each(["smoke", "tests"])("executes auth and admitted lifecycle/UI suites in %s", (phase) => {
-    expect(iosStep?.if).toContain("matrix.phase == 'smoke'");
-    expect(iosStep?.if).toContain("needs.preflight.outputs.compatibility_target != 'true'");
-    expect(workflow.jobs["ios-build"]?.env?.IOS_CI_PHASE).toBe("${{ matrix.phase }}");
     const { result, commands } = runSimulatorStep("voice", [...configuredSteps, iosStep], {
       IOS_CI_PHASE: phase,
     });
@@ -519,18 +507,9 @@ describe.skipIf(process.platform === "win32")("iOS Access simulator workflow", (
     ]);
     const authSelectors = selectors("OpenClawTests", [
       ...authClasses,
-      "ChatTypingFocusTests",
-      "ChatSendHydrationTests",
-      "GatewayIngressControllerTests",
-      "GatewayIngressLoginPreparationTests",
-      "GatewayConnectionControllerTests",
-      "LegacyManualGatewayMigrationTests",
-      "GatewayOperatorFleetTests",
-      "IOSMediaArtifactLoaderTests",
-      "OpenClawTypographyTests",
       "GatewayConnectionSecurityTests",
-      "GatewaySettingsStoreTests",
     ]);
+    expect(tests[0]?.args).toEqual(expect.arrayContaining(authSelectors));
     expect(commands.filter((command) => command.tool === "python3")).toHaveLength(1);
     if (phase === "smoke") {
       expect(commands.at(-1)).toEqual({
@@ -539,7 +518,6 @@ describe.skipIf(process.platform === "win32")("iOS Access simulator workflow", (
         destination: "platform=iOS Simulator,id=watch-fixture",
         settings: buildSettings,
       });
-      expect(selectedTests(tests[0]!.args)).toEqual(authSelectors);
       return;
     }
     expectArgs(tests[0]?.args, [

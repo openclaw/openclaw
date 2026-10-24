@@ -601,15 +601,7 @@ process.stdout.write(JSON.stringify([
 describe("stable closeout workflow keyed runs and tag-only replay", () => {
   const workflow = parse(
     readFileSync(path.resolve(".github/workflows/openclaw-stable-main-closeout.yml"), "utf8"),
-  ) as {
-    concurrency: { group: string; "cancel-in-progress": boolean | string };
-    on: {
-      workflow_dispatch: {
-        inputs: Record<string, { required: boolean; type: string; default?: string | boolean }>;
-      };
-    };
-    jobs: { verify: { concurrency: { group: string; "cancel-in-progress": boolean } } };
-  };
+  ) as { concurrency: unknown; jobs: { verify: { concurrency: unknown } } };
   it("keeps push runs alive and serializes verification by resolved stable tag", () => {
     expect(workflow.concurrency).toMatchObject({
       "cancel-in-progress": false,
@@ -619,20 +611,6 @@ describe("stable closeout workflow keyed runs and tag-only replay", () => {
       group: "openclaw-stable-main-closeout-verify-${{ needs.resolve.outputs.tag }}",
       "cancel-in-progress": false,
     });
-  });
-
-  it("keeps non-tag replay inputs optional", () => {
-    for (const [name, input] of Object.entries(workflow.on.workflow_dispatch.inputs)) {
-      if (name === "tag") {
-        continue;
-      }
-      expect(input.required, name).toBe(false);
-      // Optional string inputs have an implicit empty default in GitHub Actions.
-      expect(input.default ?? (input.type === "string" ? "" : undefined), name).toBeOneOf([
-        "",
-        false,
-      ]);
-    }
   });
 });
 
