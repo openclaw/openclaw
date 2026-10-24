@@ -25,7 +25,7 @@ import {
 } from "../../agents/failover/assistant-request-failure-copy.js";
 import {
   ContextPreparationTimeoutError,
-  findLocalWorkerTaskTimeout,
+  findLocalWorkerTaskFailure,
 } from "../../agents/failover/local-preparation-error.js";
 import { resolveExecutionApprovalFailureMessage } from "../../agents/failover/message-patterns.js";
 import { resolveReplyFailoverFacts } from "../../agents/failover/request-error-facts.js";
@@ -259,13 +259,15 @@ export function buildExternalRunFailureReply(
     }
     return buildUnclassifiedReply();
   }
-  const localTimeout = findLocalWorkerTaskTimeout(error);
-  if (localTimeout) {
+  const localFailure = findLocalWorkerTaskFailure(error);
+  if (localFailure) {
     return {
       text:
-        localTimeout instanceof ContextPreparationTimeoutError
-          ? localTimeout.message
-          : "A local worker task timed out. Please try again.",
+        localFailure.code === "overloaded"
+          ? "OpenClaw's local workers are at capacity. Check the conversation for completed work before trying again."
+          : localFailure instanceof ContextPreparationTimeoutError
+            ? localFailure.message
+            : "A local worker task timed out. Please try again.",
       isGenericRunnerFailure: false,
     };
   }
@@ -493,9 +495,9 @@ export function buildKnownAgentRunFailureReplyPayload(params: {
 }): ReplyPayload | undefined {
   // Preflight diagnostics are not provider failures. Only explicit public copy
   // can bypass the caller's diagnostic disclosure policy.
-  if (isAgentHarnessPreflightError(params.err)) {
+  if (isAgentHarnessPreflightError(params.err) || findLocalWorkerTaskFailure(params.err)) {
     const reply = buildExternalRunFailureReply({
-      message: params.err.message,
+      message: formatErrorMessage(params.err),
       error: params.err,
     });
     return reply.isGenericRunnerFailure

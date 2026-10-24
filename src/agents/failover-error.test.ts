@@ -21,7 +21,7 @@ import {
 } from "./failover-error.js";
 import { isLikelyContextOverflowError } from "./failover/classify.js";
 import { getFailoverErrorCode } from "./failover/error.js";
-import { findLocalWorkerTaskTimeout } from "./failover/local-preparation-error.js";
+import { findLocalWorkerTaskFailure } from "./failover/local-preparation-error.js";
 import type { FailoverReason } from "./failover/signal.js";
 import { AgentHarnessPreflightError } from "./harness/errors.js";
 import { PreparedModelRuntimePublicationSupersededError } from "./prepared-model-runtime.errors.js";
@@ -485,12 +485,12 @@ describe("failover diagnostic isolation", () => {
     }
   });
 
-  describe("findLocalWorkerTaskTimeout", () => {
+  describe("findLocalWorkerTaskFailure", () => {
     it("finds the typed timeout through a cause wrapper", () => {
       const wrapped = new Error("preparation failed", {
         cause: new WorkerTaskError("worker task timed out", "timeout"),
       });
-      expect(findLocalWorkerTaskTimeout(wrapped)).toBe(wrapped.cause);
+      expect(findLocalWorkerTaskFailure(wrapped)).toBe(wrapped.cause);
     });
 
     it("finds the typed timeout through an aggregate wrapper", () => {
@@ -498,15 +498,14 @@ describe("failover diagnostic isolation", () => {
         [new WorkerTaskError("worker task timed out", "timeout")],
         "run failed",
       );
-      expect(findLocalWorkerTaskTimeout(aggregate)).toBe(aggregate.errors[0]);
+      expect(findLocalWorkerTaskFailure(aggregate)).toBe(aggregate.errors[0]);
     });
 
     it.each([
       ["failed", new WorkerTaskError("worker task timed out", "failed")],
-      ["overloaded", new WorkerTaskError("worker task capacity reached", "overloaded")],
       ["unavailable", new WorkerTaskError("worker task closed", "unavailable")],
     ])("ignores local worker code %s", (_code, error) => {
-      expect(findLocalWorkerTaskTimeout(error)).toBeUndefined();
+      expect(findLocalWorkerTaskFailure(error)).toBeUndefined();
     });
 
     it("defers to an HTTP fact anywhere in the graph", () => {
@@ -516,9 +515,9 @@ describe("failover diagnostic isolation", () => {
         }),
         { status: 408 },
       );
-      expect(findLocalWorkerTaskTimeout(providerTimeoutWithLocalCause)).toBeUndefined();
+      expect(findLocalWorkerTaskFailure(providerTimeoutWithLocalCause)).toBeUndefined();
       expect(
-        findLocalWorkerTaskTimeout(
+        findLocalWorkerTaskFailure(
           Object.assign(new WorkerTaskError("timed out", "timeout"), { status: 504 }),
         ),
       ).toBeUndefined();
@@ -526,19 +525,22 @@ describe("failover diagnostic isolation", () => {
 
     it("ignores provider timeouts and untyped values", () => {
       const timeoutErr = Object.assign(new Error("operation timed out"), { name: "TimeoutError" });
-      expect(findLocalWorkerTaskTimeout(timeoutErr)).toBeUndefined();
-      expect(findLocalWorkerTaskTimeout(new Error("worker task timed out"))).toBeUndefined();
+      expect(findLocalWorkerTaskFailure(timeoutErr)).toBeUndefined();
+      expect(findLocalWorkerTaskFailure(new Error("worker task timed out"))).toBeUndefined();
       expect(
-        findLocalWorkerTaskTimeout({ name: "WorkerTaskError", code: "timeout" }),
+        findLocalWorkerTaskFailure({ name: "WorkerTaskError", code: "timeout" }),
       ).toBeUndefined();
-      expect(findLocalWorkerTaskTimeout(null)).toBeUndefined();
-      expect(findLocalWorkerTaskTimeout(undefined)).toBeUndefined();
+      expect(findLocalWorkerTaskFailure(null)).toBeUndefined();
+      expect(findLocalWorkerTaskFailure(undefined)).toBeUndefined();
     });
   });
 
-  describe("local worker task timeout attribution", () => {
+  describe.each(["timeout", "overloaded"] as const)("local worker task %s attribution", (code) => {
     it("keeps local deadlines out of provider classification through wrappers", () => {
-      const timeout = new WorkerTaskError("worker task timed out", "timeout");
+      const timeout = new WorkerTaskError(
+        code === "timeout" ? "worker task timed out" : "worker task capacity reached",
+        code,
+      );
       for (const error of [
         timeout,
         new Error("preparation failed", { cause: timeout }),
@@ -566,7 +568,7 @@ describe("failover diagnostic isolation", () => {
     it("keeps provider attribution when an HTTP timeout fact is present", () => {
       const providerTimeoutWithLocalCause = Object.assign(
         new Error("worker task timed out", {
-          cause: new WorkerTaskError("worker task timed out", "timeout"),
+          cause: new WorkerTaskError("worker task failed locally", code),
         }),
         { status: 408 },
       );
