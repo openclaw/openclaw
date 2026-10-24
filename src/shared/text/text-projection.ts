@@ -5,7 +5,12 @@ import {
   createProtectionScanState,
 } from "../../../packages/tool-call-repair/src/protection-fast-path.js";
 import { escapeRegExp } from "../regexp.js";
-import { canReuseMarkdownOwnership, findCodeOwnership, findCodeRegions } from "./code-regions.js";
+import {
+  canReuseMarkdownOwnership,
+  completesBlankLine,
+  findCodeOwnership,
+  findCodeRegions,
+} from "./code-regions.js";
 
 export type TextProjection = { text: string; delta: string | null };
 type TextProjector = (input: TextProjection) => TextProjection;
@@ -120,10 +125,12 @@ function createCheckpointTransform(
   let ownershipSource = "";
   let ownership: ReturnType<typeof findCodeOwnership> | undefined;
   const resolveOwnership = (text: string) => {
-    // Code ranges can stay unchanged while a completed list item advances settlement.
+    const appended = text.slice(ownershipSource.length);
+    // Completing a blank line closes the paragraph whose inline ownership the cached ranges
+    // describe.
     if (
       ownership &&
-      !text.includes("\n", ownershipSource.length) &&
+      !completesBlankLine(ownershipSource, appended) &&
       canReuseMarkdownOwnership(ownershipSource, text, ownership)
     ) {
       ownershipSource = text;

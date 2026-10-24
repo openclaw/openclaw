@@ -109,6 +109,27 @@ describe("toolCallXmlTextFilter streamed projection work", () => {
     }
   });
 
+  it("keeps settled XML output reusable across blank-line-separated prose", () => {
+    const paragraph = "Answer paragraph with ordinary prose.\n\n";
+    const source = `<tool_call>{}</tool_call>\n\n${paragraph.repeat(512)}Done.`;
+    const reuse = vi.spyOn(codeRegions, "canReuseMarkdownOwnership");
+    try {
+      const projection = createTextProjection([
+        toolCallXmlTextFilter({ stripFunctionResponseAfterPluralToolCalls: true }, true),
+      ]);
+      for (let offset = 0; offset < source.length; offset += CHUNK) {
+        projection.append(source.slice(offset, offset + CHUNK));
+      }
+      expect(projection.text).toBe(stripToolCallXmlTags(source));
+      const rejected = reuse.mock.results.filter(
+        (result) => result.type === "return" && !result.value,
+      ).length;
+      expect(rejected).toBeLessThan(16);
+    } finally {
+      reuse.mockRestore();
+    }
+  });
+
   it("matches canonical XML projection at every chunk boundary", () => {
     const call = '<tool_call>{"path":"a.ts"}</tool_call>';
     const sources = [
