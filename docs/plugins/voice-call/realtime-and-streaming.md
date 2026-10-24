@@ -97,8 +97,15 @@ Delegated work retains the call's agent, tool policy, and cancellation lifetime.
 GPT-Live rejects `realtime.consultPolicy: "always"`: it owns delegation and
 cannot enforce host-triggered transcript consults. Use `"auto"` or
 `"substantive"` guidance, or choose a model supporting host-controlled turns.
+`realtime.toolPolicy: "consult-no-tools"` keeps `openclaw_agent_consult`
+available while running the delegated OpenClaw agent with tools disabled;
+configured custom realtime tools are not exposed in this mode. The built-in
+end-call control remains available on function-tool providers. GPT-Live and
+other native-delegation providers reject `consult-no-tools` because their
+hang-up route requires the call-scoped delegated tool. Use `safe-read-only` or
+`owner` with native delegation, or select a function-tool provider.
 `realtime.toolPolicy: "none"` disables the agent consult for native delegation
-too.
+entirely.
 
 ### Per-call briefs and errands
 
@@ -231,11 +238,12 @@ close and the inactivity backstop remain independent of it.
 `realtime.toolPolicy` controls only the consult run. It never disables
 `openclaw_end_call` on models that support function tools:
 
-| Policy           | Behavior                                                                                                                                                            |
-| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `safe-read-only` | Expose the consult tool and limit the regular agent to `read`, `web_search`, `web_fetch`, `x_search`, `memory_search`, and `memory_get`.                            |
-| `owner`          | Expose the consult tool and let the regular agent use the normal agent tool policy.                                                                                 |
-| `none`           | Disable the consult tool and native agent delegation. On models supporting function tools, the built-in end-call tool and custom `realtime.tools` remain available. |
+| Policy             | Behavior                                                                                                                                                                                     |
+| ------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `safe-read-only`   | Expose the consult tool and limit the regular agent to `read`, `web_search`, `web_fetch`, `x_search`, `memory_search`, and `memory_get`.                                                     |
+| `owner`            | Expose the consult tool and let the regular agent use the normal agent tool policy.                                                                                                          |
+| `consult-no-tools` | Expose the consult tool with no regular-agent tools. Supported only by function-tool providers; native-delegation providers reject this mode so their hang-up route is not silently removed. |
+| `none`             | Disable the consult tool and native agent delegation. On models supporting function tools, the built-in end-call tool and custom `realtime.tools` remain available.                          |
 
 `realtime.consultPolicy` guides the realtime model. `always` also enables a
 host transcript fallback when the provider does not consult, and is unsupported

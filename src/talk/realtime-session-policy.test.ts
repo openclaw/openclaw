@@ -67,6 +67,22 @@ it.each([undefined, "always"] as const)(
   },
 );
 
+it("rejects consult-no-tools when native delegation needs the call-scoped hang-up tool", () => {
+  expect(() =>
+    resolve({
+      supportsActivationNameGating: undefined,
+      capabilities: {
+        transports: ["gateway-relay"],
+        inputAudioFormats: [],
+        outputAudioFormats: [],
+        handlesAgentConsult: true,
+      },
+      configuredToolPolicy: "consult-no-tools",
+      configuredConsultPolicy: "auto",
+    }),
+  ).toThrow("hang-up requires the call-scoped delegated tool");
+});
+
 it("preserves explicit wake-name overrides for capable agent-proxy sessions", () => {
   expect(resolve({ requireWakeName: true }).wakeNamePolicy).toBe("always");
   expect(resolve({ requireWakeName: false })).toMatchObject({

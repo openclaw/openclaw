@@ -15,6 +15,7 @@ export const REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME = "openclaw_agent_consult";
 export const REALTIME_VOICE_AGENT_CONSULT_TOOL_POLICIES = [
   "safe-read-only",
   "owner",
+  "consult-no-tools",
   "none",
 ] as const;
 export type RealtimeVoiceAgentConsultToolPolicy =
@@ -94,6 +95,12 @@ export function resolveRealtimeVoiceAgentConsultTools(
   const tools = new Map<string, RealtimeVoiceTool>();
   if (policy !== "none") {
     tools.set(REALTIME_VOICE_AGENT_CONSULT_TOOL.name, REALTIME_VOICE_AGENT_CONSULT_TOOL);
+  }
+  // A tool-free delegated agent must not gain alternate provider-facing tools
+  // through custom configuration. The consult tool is the only bridge into
+  // the isolated, tool-disabled agent run.
+  if (policy === "consult-no-tools") {
+    return [...tools.values()];
   }
   // Keep the built-in consult tool first and prevent custom tools from
   // replacing its provider-facing contract by name.

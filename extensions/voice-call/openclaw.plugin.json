@@ -818,7 +818,7 @@
           },
           "toolPolicy": {
             "type": "string",
-            "enum": ["safe-read-only", "owner", "none"]
+            "enum": ["safe-read-only", "owner", "consult-no-tools", "none"]
           },
           "consultPolicy": {
             "type": "string",
