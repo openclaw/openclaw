@@ -339,6 +339,8 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
     spawnedBy: sessionEntry?.spawnedBy,
     workspaceDir: sessionEntry?.spawnedWorkspaceDir,
     cwd: sessionEntry?.spawnedCwd,
+    execHost: sessionEntry?.execHost,
+    runtimeBackendId: thinkingRuntime,
   });
   if (opts?.scheduledAutomation) {
     opts.operatorAuthority?.assertCurrent();
@@ -356,7 +358,11 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
       sessionKey,
       admissionSource: opts.scheduledAutomation.admissionSource,
       ownerSessionKey: opts.scheduledAutomation.job.owner?.sessionKey,
-      hasWorkspaceBinding: Boolean(sessionWorkspaceOverride || sessionEntry?.worktree),
+      hasWorkspaceBinding: Boolean(
+        sessionWorkspaceOverride ||
+        normalizeOptionalString(sessionEntry?.spawnedCwd) ||
+        sessionEntry?.worktree,
+      ),
     });
     if (ownershipError) {
       throw new Error(ownershipError);
