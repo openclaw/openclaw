@@ -11,6 +11,7 @@ import type {
 import type {
   StagedWorkerWorkspaceInventory,
   StagedWorkerWorkspaceReadEntry,
+  WorkerWorkspaceGitHistory,
 } from "./workspace-result-inventory.js";
 
 export type WorkspaceComputationHashes = {
@@ -89,6 +90,7 @@ export type WorkspaceStageInput<Raw = Uint8Array<ArrayBuffer>> = WorkspaceStageI
   stagingRoot: string;
   stagedResultRef: string;
   buildCacheInputs?: string[];
+  gitHistory?: WorkerWorkspaceGitHistory;
 };
 
 export type WorkspaceManifestValueOutputs = {

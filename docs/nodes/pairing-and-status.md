@@ -85,16 +85,15 @@ omitted. See
 ## Version skew and upgrade order
 
 The Gateway WebSocket accepts authenticated node clients across an N-1 protocol window.
-The current v4 Gateway therefore accepts v3 nodes when the connection declares
+The current v5 Gateway therefore accepts v4 nodes when the connection declares
 both `role: "node"` and `client.mode: "node"`. Operator and UI sessions must
 still use the current protocol.
 
 For staged fleet upgrades, upgrade the Gateway first, then upgrade each node.
-An N-1 node remains visible and manageable while it is upgraded; the Gateway
-logs `legacy node protocol accepted` with an upgrade recommendation. Pairing,
+An N-1 node remains visible and manageable while it is upgraded, including its
+approved plugin capabilities, commands, and hosted surface URLs. Pairing,
 device authentication, command allowlists, and exec approvals still apply.
-Plugin-owned capabilities and commands stay hidden until the node upgrades to
-the current protocol. Nodes older than N-1 require an out-of-band upgrade before
+Nodes older than N-1 require an out-of-band upgrade before
 reconnecting.
 
 The direct watchOS HTTPS transport requires the current protocol version; update

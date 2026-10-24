@@ -116,6 +116,68 @@ describe("VisitorAccessService onboarding record", () => {
     });
   });
 
+  it("returns copyable invitation text and keeps the note in it on renewal", async () => {
+    const fixture = visitorFixture();
+    await fixture.service.initialize();
+    const signInUrl = "https://team.example.com";
+    const invitationText = (expiry: string) =>
+      [
+        "Josh invited you to OpenClaw.",
+        `Sign in at ${signInUrl} with the email ${EMAIL}.`,
+        `Your access expires on ${expiry}.`,
+        "",
+        "Note from Josh:",
+        "Start here: https://team.example.com/chat/welcome",
+      ].join("\n");
+
+    const invited = await fixture.service.invite(
+      { email: EMAIL, days: 7, note: "  Start here: https://team.example.com/chat/welcome\n" },
+      { ...fixture.authority, invitedBy: JOSH, signInUrl },
+    );
+    expect(invited.details).toMatchObject({
+      signInUrl,
+      noteStored: true,
+      invitationText: invitationText("2026-09-04 12:00 UTC"),
+    });
+    expect(invited.text).toContain("Inviter note stored.");
+    expect(invited.text.endsWith(`\n${invitationText("2026-09-04 12:00 UTC")}`)).toBe(true);
+    expect(invited.details.invitationText).not.toContain(invited.details.grantId);
+
+    vi.setSystemTime(NOW + DAY_MS);
+    const renewed = await fixture.service.invite(
+      { email: EMAIL, days: 7 },
+      { ...fixture.authority, signInUrl },
+    );
+    expect(renewed.details).toMatchObject({
+      outcome: "renewed",
+      noteStored: true,
+      invitationText: invitationText("2026-09-05 12:00 UTC"),
+    });
+    expect(renewed.text).toContain("Existing inviter note kept.");
+  });
+
+  it("degrades invitation text without a sign-in URL, inviter, or note", async () => {
+    const fixture = visitorFixture({ githubLogin: "octocat" });
+    await fixture.service.initialize();
+
+    const invited = await fixture.service.invite(
+      { github: "OctoCat", forever: true },
+      fixture.authority,
+    );
+
+    expect(invited.details).not.toHaveProperty("signInUrl");
+    expect(invited.details).toMatchObject({
+      noteStored: false,
+      invitationText: [
+        "You're invited to OpenClaw.",
+        "Ask the person who invited you for the OpenClaw sign-in address, then sign in with your GitHub account @octocat.",
+        "Your access does not expire.",
+      ].join("\n"),
+    });
+    expect(invited.text).toContain("No sign-in URL: set gateway.publicOrigin");
+    expect(invited.text).not.toContain("inviter note");
+  });
+
   it("lets exactly one concurrent caller advance the same onboarding snapshot", async () => {
     const fixture = visitorFixture();
     await fixture.service.initialize();

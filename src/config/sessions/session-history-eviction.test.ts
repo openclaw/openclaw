@@ -116,7 +116,7 @@ describe("SQLite historical session disk budget", () => {
         if (before) {
           effect();
         }
-        const candidates = await discover(input);
+        const candidates = await discover.call(readers, input);
         if (!before) {
           effect();
         }

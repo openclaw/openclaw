@@ -206,8 +206,6 @@ function emitBoardCommand(
 const WIDGET_CONTENT_UPDATE_PATHS = {
   html: "Use its HTML authoring capability; discover it in the tool catalog and update the same name.",
   plugin: "Use widget_put with the same name and pluginKind.",
-  registered:
-    "Use its registered-source authoring capability; discover it in the tool catalog and update the same source kind and name.",
   "mcp-app": "Update through the originating MCP app.",
 } as const;
 

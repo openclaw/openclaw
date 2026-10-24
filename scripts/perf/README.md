@@ -1545,6 +1545,35 @@ Initial projection creation happens before measurement: this measures reuse,
 not cold container provisioning or chat time to first model request. Use the
 Gateway chat workload separately for those end-to-end timings.
 
+## Measure history reader construction
+
+`session-history-reader-setup-measure.mjs` isolates the history reader factory
+and, optionally, its exact owner-construction expression from a pinned runtime
+source. It exercises two synthetic runners before measuring setup. It does not
+measure database admission, workers, history queries, or Gateway latency.
+
+```sh
+node --expose-gc --import ./scripts/tsx.mjs scripts/perf/session-history-reader-setup-measure.mjs \
+  --owner src/config/sessions/session-transcript-worker-readers.ts \
+  --runtime-owner src/config/sessions/session-transcript-worker-runtime.ts \
+  --operations 200000
+```
+
+Use `--allocations` in a separate pass for sampled allocation, including collected
+objects. Unprofiled setup timing, CPU, shared method counts, and retained bytes
+are reported separately. For an isolated source capsule, copy the reader and its
+`session-transcript-worker.types.ts` sibling and use `--capsule` without the source
+loader. The capsule replaces three unrelated imports with throwing sentinels;
+calling any of them fails the run. The report includes source hashes. Do not use
+capsule results as end-to-end history or GC evidence.
+
+Paired runners can share an initially absent `--start-file` with distinct
+`--side baseline` and `--side candidate`. Each writes a `.ready` marker after
+warmup; the coordinator then publishes a future epoch in milliseconds to the
+start file. Use matched instrumentation, exclusive host admission, and swapped
+CPU placement for comparisons. Keep allocation-profile timing separate from
+unprofiled timing.
+
 ## Measure history pages and checkout diffs
 
 Prepare a team-shape fixture offline, then add this workload's small synthetic
@@ -4069,3 +4098,54 @@ run a third pair when an inconclusive metric would gate. Every latency and loop
 tail includes its sample count. This simulation establishes persistence-path
 blocking behavior; it does not claim production throughput or macOS browser
 cookie-import latency.
+
+## Managed attachment cleanup
+
+`managed-attachment-cleanup-measure.mjs` exercises the actual managed-media
+cleanup owner with 5,000 unrelated 8 KiB transcript messages and two referenced
+managed originals. Prepare each side sequentially in a fresh synthetic directory;
+preparation uses the real media creator and transcript writer and is outside the
+capture. Each measured process warms cleanup once, then performs 30 cleanups
+paced over 30 seconds and verifies both originals remain registered.
+
+```sh
+node --import ./scripts/tsx.mjs scripts/perf/managed-attachment-cleanup-measure.mjs \
+  --state-dir /path/to/new-cleanup-state --output /path/to/prepare.json --prepare
+node --expose-gc --trace-gc-nvp --import ./scripts/tsx.mjs \
+  scripts/perf/managed-attachment-cleanup-measure.mjs \
+  --state-dir /path/to/new-cleanup-state --output /path/to/cleanup.json \
+  --allocations --start-at <shared-future-epoch-ms> --trace-log /path/to/cleanup.log \
+  > /path/to/cleanup.log 2>&1
+```
+
+`--messages`, `--message-bytes`, `--operations`, and `--seconds` select the workload.
+Use identical values, separate state/log/output paths, and the shared quiet-slot
+rules above. A missed `--start-at` rejects the run. Two concurrent pairs swap the
+interleaved CPU sets. The driver never starts or accesses a production Gateway.
+
+For one installed source tree, `--owner-dir /path/to/candidate-owners` replaces
+only these source files, preserved beneath that directory at their repository
+relative paths: `src/gateway/managed-image-attachments.ts`,
+`src/gateway/session-transcript-read.types.ts`,
+`src/gateway/session-transcript-archive-reader.ts`,
+`src/config/sessions/session-accessor.sqlite-history-source.ts`, and
+`src/config/sessions/session-actor-memory-history-projection.ts`.
+`--source-root` selects the installed source tree and defaults to the working
+directory. The generated preload also reaches workers through `NODE_OPTIONS`;
+`overriddenOwners` records the module paths and thread IDs actually replaced.
+An ordinary run uses the tree's unchanged sources. Do not change those sources
+or dependencies during a pair. For paired comparisons, also pass the unchanged
+source root as the baseline's `--owner-dir`, so both sides use the same esbuild
+preload and helper infrastructure.
+
+The report contains main-isolate sampled allocation and raw V8 frame names,
+process/thread CPU, before/after heap and RSS, worker-message counts and known
+payload bytes, per-collection GC percentiles and maximum pauses, total GC per
+cleanup, promotion from bounded main-isolate GC traces, and event-loop delay.
+GC and loop capture end before stopping allocation sampling, excluding its forced
+collection. Every tail carries a sample count; apply the shared v5.3 qualification
+and paired-delta rules. Worker byte counts are partial and retain their
+`unmeasuredMessages` counts; the observer never reserializes replies. Allocation
+sampling excludes worker heaps and external Buffer backing stores. RSS includes
+workers. This isolates the cleanup boundary; it is not a full Gateway throughput
+or retained-memory soak result.

@@ -153,7 +153,7 @@ it("requires the Gateway health RPC to report ok", () => {
   expect(() => assertGatewayHealth({})).toThrow(/health response invalid/);
 });
 
-it("uses shipped protocol ranges, challenge time, instance id, and auth.token", () => {
+it("spans published-driver and candidate protocols while preserving challenge time and auth.token", () => {
   const identity = createMobilePairingIdentity();
   const challengePayload = { nonce: " nonce-1 ", ts: 1_700_000_000_001 };
   const common = { challengePayload, client: MOBILE_PAIRING_CLIENT, identity };
@@ -174,9 +174,10 @@ it("uses shipped protocol ranges, challenge time, instance id, and auth.token", 
     auth: { token: "operator-token" },
   }).params;
   const payload = `v2|${identity.deviceId}|openclaw-ios|node|node||1700000000001|node-token|nonce-1`;
+  // The survivor retains the historical node floor while also accepting the v5 candidate.
   expect(nodeParams).toMatchObject({
     minProtocol: 3,
-    maxProtocol: 4,
+    maxProtocol: 5,
     client: { instanceId: MOBILE_PAIRING_CLIENT.instanceId },
     caps: MOBILE_PAIRING_NODE_CAPS,
     commands: MOBILE_PAIRING_NODE_COMMANDS,
@@ -188,7 +189,7 @@ it("uses shipped protocol ranges, challenge time, instance id, and auth.token", 
   });
   expect(operatorParams).toMatchObject({
     minProtocol: 4,
-    maxProtocol: 4,
+    maxProtocol: 5,
     caps: ["inline-widgets"],
     auth: { token: "operator-token" },
   });
