@@ -3,7 +3,7 @@ import type {
   ChannelsPairingApproveParams,
   ChannelsPairingDismissParams,
 } from "../../../../packages/gateway-protocol/src/schema/channel-pairing.js";
-import { registerListener } from "../../../../src/shared/listeners.js";
+import { createStateListeners, registerListener } from "../../../../src/shared/listeners.js";
 import { roleScopesAllow } from "../../../../src/shared/operator-scope-compat.ts";
 import type { GatewayEventListener } from "../../api/gateway.ts";
 import type {
@@ -408,7 +408,7 @@ export function createChannelCapability(gateway: {
     );
   }
 
-  const listeners = new Set<(state: ChannelsState) => void>();
+  const { listeners, publish } = createStateListeners(state, () => disposed);
   let currentChannelReadAccess = channelSnapshotAllowsScope(gateway.snapshot, "operator.read");
   let currentPairingAuthSignature = resolveChannelPairingAuthSignature(gateway.snapshot);
   let currentWhatsAppAdminAccess = channelSnapshotAllowsScope(gateway.snapshot, "operator.admin");
@@ -422,14 +422,6 @@ export function createChannelCapability(gateway: {
     state.channelsRead = null;
   }
 
-  const publish = () => {
-    if (disposed) {
-      return;
-    }
-    for (const listener of listeners) {
-      listener(state);
-    }
-  };
   const run = async <T>(task: () => Promise<T>): Promise<T | undefined> => {
     if (disposed) {
       return undefined;
