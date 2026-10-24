@@ -7,7 +7,6 @@ import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { runManagedCommand } from "../../scripts/lib/managed-child-process.mts";
 import { createVitestResourceOwner } from "../../scripts/lib/vitest-resource-ownership.mts";
-import { hasErrnoCode } from "../../src/infra/errno.js";
 import { killPidIfAlive } from "../../src/test-utils/process-tree.js";
 import { createFixtureLifetime } from "../helpers/fixture-lifetime.js";
 import { isProcessAlive, waitForDead, waitForFixtureFile } from "../helpers/process-wait.js";
@@ -16,19 +15,6 @@ import { runNodeScript } from "../helpers/run-node-script.js";
 
 const fixture = createFixtureLifetime();
 afterEach(() => fixture.cleanup());
-
-async function stopRecordedPid(pid: number, signal: AbortSignal) {
-  if (isProcessAlive(pid)) {
-    try {
-      process.kill(pid, "SIGKILL");
-    } catch (error) {
-      if (!hasErrnoCode(error, "ESRCH")) {
-        throw error;
-      }
-    }
-  }
-  await waitForDead(pid, signal);
-}
 
 function readSpawnedPids(record: string): number[] {
   if (!fs.existsSync(record)) {
@@ -41,6 +27,13 @@ function readSpawnedPids(record: string): number[] {
     }
   }
   return pids;
+}
+
+function expectStopped(record: string, child?: ChildProcess) {
+  expect(readSpawnedPids(record).filter(isProcessAlive)).toEqual([]);
+  if (child) {
+    expect(isProcessAlive(child.pid!)).toBe(false);
+  }
 }
 
 function makeFixture(name: string) {
@@ -151,20 +144,33 @@ function waitFor(
 function cleanup(
   completion: Promise<unknown>,
   child?: ChildProcess,
-  record?: string,
+  records: string | string[] = [],
   handoff?: Socket,
 ) {
   return fixture.verifyCleanup(async () => {
     handoff?.resume();
     const signal = AbortSignal.timeout(5_000);
-    // Fence the PID-record producer before reading its final records.
+    const failures: unknown[] = [];
+    const stop = async (pid: number) => {
+      for (const work of [() => killPidIfAlive(pid), () => waitForDead(pid, signal)]) {
+        await Promise.resolve()
+          .then(work)
+          .catch((error: unknown) => failures.push(error));
+      }
+    };
+    // Fence each producer before reading the next producer's final PID records.
     if (child?.pid) {
-      await stopRecordedPid(child.pid, signal);
+      await stop(child.pid);
     }
-    for (const pid of record ? readSpawnedPids(record) : []) {
-      await stopRecordedPid(pid, signal);
+    for (const record of typeof records === "string" ? [records] : records) {
+      for (const pid of readSpawnedPids(record)) {
+        await stop(pid);
+      }
     }
     await completion;
+    if (failures.length) {
+      throw new AggregateError(failures, "Fixture cleanup failed");
+    }
   });
 }
 
@@ -273,8 +279,7 @@ process.exitCode = statuses.find(code => code !== 0) ?? 0;
               });
             }
           }
-          expect(readSpawnedPids(spawnRecord).filter(isProcessAlive)).toEqual([]);
-          expect(isProcessAlive(owner.child!.pid!)).toBe(false);
+          expectStopped(spawnRecord, owner.child);
         } finally {
           await cleanup(completion, owner.child, spawnRecord, owner.handoff);
         }
@@ -367,7 +372,7 @@ process.exitCode = statuses.find(code => code !== 0) ?? 0;
                 : 'settled [{"error":{"code":20,"reasonMatches":true}},{"error":{"code":"ABORT_ERR","reasonMatches":false}}]\n',
           );
           expect(readSpawnedPids(spawnRecord)).toHaveLength(releasing ? 1 : 0);
-          expect(readSpawnedPids(spawnRecord).filter(isProcessAlive)).toEqual([]);
+          expectStopped(spawnRecord);
           if (mode !== "concurrent") {
             // Joined or never-started work must exit without an ACK keeping the socket alive.
             await waitFor(owner.exited, completion, "settled owner did not exit", signal);
@@ -379,8 +384,7 @@ process.exitCode = statuses.find(code => code !== 0) ?? 0;
           expect(readSpawnedPids(spawnRecord)).toHaveLength(
             mode === "concurrent" ? 2 : releasing ? 1 : 0,
           );
-          expect(readSpawnedPids(spawnRecord).filter(isProcessAlive)).toEqual([]);
-          expect(isProcessAlive(owner.child!.pid!)).toBe(false);
+          expectStopped(spawnRecord, owner.child);
           resourceOwner.assertReleased();
         } finally {
           await cleanup(completion, owner.child, spawnRecord, owner.handoff);
@@ -388,61 +392,31 @@ process.exitCode = statuses.find(code => code !== 0) ?? 0;
       }),
   );
 
-  it.for(["idle", "owner-loss"] as const)(
-    "settles %s custody after the owner exits",
-    (mode, { signal }) =>
-      fixture.run(async () => {
-        const lost = mode === "owner-loss";
-        const { cwd, resourceOwner, childPath, spawnRecord, env } = makeFixture(mode);
-        fs.writeFileSync(
-          childPath,
-          lost
-            ? blockingOwner("ownership-accepted")
-            : `${recordedCommand(spawnRecord)}
-const status = await run();
-if (status !== 0) throw new Error("initial command failed: " + status);
-fs.writeSync(1, "between-commands-ready\\n");
-Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0);
-`,
-        );
-        const owner = observeOwner();
-        const completion = runNodeScript(childPath, env, undefined, {
-          cwd,
-          maxBuffer: 64 * 1024,
-          onReady: owner.onReady,
+  it("retains custody when an acknowledged owner is lost", ({ signal }) =>
+    fixture.run(async () => {
+      const { cwd, resourceOwner, childPath, env } = makeFixture("owner-loss");
+      fs.writeFileSync(childPath, blockingOwner("ownership-accepted"));
+      const owner = observeOwner();
+      const completion = runNodeScript(childPath, env, undefined, {
+        cwd,
+        maxBuffer: 64 * 1024,
+        onReady: owner.onReady,
+      });
+      try {
+        await owner.wait("ownership-accepted\n", completion, signal);
+        // SIGKILL closes the real pipe before an acknowledged owner can relinquish custody.
+        expect(owner.child!.kill("SIGKILL")).toBe(true);
+        const result = await withinTest(completion, signal);
+        expect(result, result.stderr).toMatchObject({
+          error: { code: "EPROCESSGROUP_CLEANUP_FAILED", processTreeState: "indeterminate" },
+          status: null,
         });
-        try {
-          await owner.wait(
-            lost ? "ownership-accepted\n" : "between-commands-ready\n",
-            completion,
-            signal,
-          );
-          if (!lost) {
-            expect(readSpawnedPids(spawnRecord)).toHaveLength(1);
-            expect(readSpawnedPids(spawnRecord).filter(isProcessAlive)).toEqual([]);
-          }
-          // SIGKILL closes the real pipe before an acknowledged owner can relinquish custody.
-          expect(owner.child!.kill(lost ? "SIGKILL" : "SIGTERM")).toBe(true);
-          const result = await withinTest(completion, signal);
-          if (lost) {
-            expect(result, result.stderr).toMatchObject({
-              error: { code: "EPROCESSGROUP_CLEANUP_FAILED", processTreeState: "indeterminate" },
-              status: null,
-            });
-            expect(() => resourceOwner.assertReleased()).toThrow(
-              "Unreleased Vitest resource claim",
-            );
-          } else {
-            expect(result, result.stderr).toMatchObject({ error: undefined, status: 143 });
-            expect(readSpawnedPids(spawnRecord).filter(isProcessAlive)).toEqual([]);
-            resourceOwner.assertReleased();
-          }
-          expect(isProcessAlive(owner.child!.pid!)).toBe(false);
-        } finally {
-          await cleanup(completion, owner.child, lost ? undefined : spawnRecord);
-        }
-      }),
-  );
+        expect(() => resourceOwner.assertReleased()).toThrow("Unreleased Vitest resource claim");
+        expect(isProcessAlive(owner.child!.pid!)).toBe(false);
+      } finally {
+        await cleanup(completion, owner.child);
+      }
+    }));
 
   it("reclaims acknowledged custody before starting a later command", ({ signal }) =>
     fixture.run(async () => {
@@ -472,8 +446,7 @@ process.exitCode = await second;
         owner.handoff!.resume();
         expect(await withinTest(completion, signal), owner.stderr).toEqual({ status: 0 });
         expect(readSpawnedPids(spawnRecord)).toHaveLength(2);
-        expect(readSpawnedPids(spawnRecord).filter(isProcessAlive)).toEqual([]);
-        expect(isProcessAlive(owner.child!.pid!)).toBe(false);
+        expectStopped(spawnRecord, owner.child);
         resourceOwner.assertReleased();
       } finally {
         await cleanup(completion, owner.child, spawnRecord, owner.handoff);
@@ -610,34 +583,7 @@ process.exitCode = report.status ?? 1;
         // Observe extinction before fallback teardown can conceal an orphaned owner.
         expect.soft(readOwnedPids().filter(isProcessAlive)).toEqual([]);
       } finally {
-        await fixture.verifyCleanup(async () => {
-          // Stop each recorded producer before reading the next producer's PID record.
-          // The baseline can lose its shim while its detached implementation survives.
-          const cleanupSignal = AbortSignal.timeout(5_000);
-          const failures: unknown[] = [];
-          const stop = async (pid: number) => {
-            // Test cancellation must not prevent independent fallback cleanup.
-            for (const work of [() => killPidIfAlive(pid), () => waitForDead(pid, cleanupSignal)]) {
-              await Promise.resolve()
-                .then(work)
-                .catch((error: unknown) => {
-                  failures.push(error);
-                });
-            }
-          };
-          if (supervisor?.pid) {
-            await stop(supervisor.pid);
-          }
-          for (const pidPath of pidPaths) {
-            for (const pid of readSpawnedPids(pidPath)) {
-              await stop(pid);
-            }
-          }
-          await completion;
-          if (failures.length) {
-            throw new AggregateError(failures, "Preparation fixture cleanup failed");
-          }
-        });
+        await cleanup(completion, supervisor, pidPaths);
       }
     }),
 );

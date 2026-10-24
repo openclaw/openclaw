@@ -1931,6 +1931,7 @@ src/state/openclaw-agent-transcript-payload-migration.ts
 src/state/openclaw-agent-write-layout-migration.ts
 src/state/openclaw-agent-index-retirement-migration.ts
 src/state/openclaw-agent-vector-decoder-migration.ts
+src/state/openclaw-agent-vector-search-migration.ts
 src/state/openclaw-agent-write-admission.ts
 src/state/openclaw-agent-write-admission-state.ts
 src/state/openclaw-database-preflight-agent-scheduler.ts
@@ -2053,6 +2054,7 @@ src/state/openclaw-state-read-pool.ts
 src/state/openclaw-state-read-request.ts
 src/state/openclaw-state-read-scope.ts
 src/state/openclaw-state-read-snapshot-source.ts
+src/state/openclaw-state-read-stream.ts
 src/state/openclaw-state-read-worker.ts
 src/state/openclaw-state-read.worker.ts
 src/state/openclaw-state-schema-compatibility.ts

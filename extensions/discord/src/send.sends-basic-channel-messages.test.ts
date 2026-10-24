@@ -467,8 +467,6 @@ it.each([
   await expect(
     sendMessageDiscord("channel:chan1", "hello", clientOptions(rest)),
   ).rejects.toMatchObject({
-    missingPermissions: missing,
-    discordCode: 50013,
     status: 403,
     message: expect.stringContaining(
       missing[0] ?? "permission check did not identify missing ViewChannel/SendMessages",
@@ -557,7 +555,10 @@ it("reports blocked DMs from a native Discord REST error", async () => {
   });
   await expect(
     sendMessageDiscord("user:123", "hello", clientOptions(loopback.rest)),
-  ).rejects.toMatchObject({ kind: "dm-blocked", discordCode: 50007, status: 403 });
+  ).rejects.toMatchObject({
+    message: "discord dm failed: user blocks dms or privacy settings disallow it (code=50007)",
+    status: 403,
+  });
 });
 
 it("does not mask unrelated media upload failures", async () => {

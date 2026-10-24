@@ -1,7 +1,6 @@
 // Prove Feishu message parsing against the real SDK, auth exchange, and HTTP transport.
 import type { IncomingMessage } from "node:http";
 import { text as readText } from "node:stream/consumers";
-import * as Lark from "@larksuiteoapi/node-sdk";
 import { withServer } from "openclaw/plugin-sdk/test-env";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { expect, it, vi } from "vitest";
@@ -157,168 +156,154 @@ it("authenticates Feishu reads and sticker sends over the real SDK without expos
       });
     },
     async (loopbackOrigin) => {
-      // Preserve the real SDK domain; its path filler interprets custom :port
-      // values as route parameters. Redirect the original Axios transport only.
-      const loopbackInterceptor = Lark.defaultHttpInstance.interceptors.request.use(
-        (options) => {
-          const upstream = new URL(options.url ?? "");
-          if (upstream.hostname === "open.feishu.cn") {
-            options.url = new URL(
-              `${upstream.pathname}${upstream.search}`,
-              loopbackOrigin,
-            ).toString();
-          }
-          return options;
-        },
-        undefined,
-        { synchronous: true },
-      );
-
-      try {
-        mockLogVerbose.mockClear();
-        const feishu = {
-          enabled: true,
-          appId,
-          appSecret: "loopback-placeholder", // pragma: allowlist secret
-          domain: "feishu",
-          actions: { sticker: true },
-          stickerSets: { [appId]: { file_sticker_received: ["赞👍"] } },
-        };
-        const cfg: ClawdbotConfig = { channels: { feishu: FeishuConfigSchema.parse(feishu) } };
-        const action = (kind: "sticker" | "sticker-search", params: Record<string, unknown>) =>
-          feishuPlugin.actions!.handleAction!({
-            channel: "feishu",
-            action: kind,
-            cfg,
-            accountId: "default",
-            params,
-          });
-        const readMessage = (messageId: string, expected: object, config = cfg) =>
-          expect(getMessageFeishu({ cfg: config, messageId })).resolves.toMatchObject({
-            messageId,
-            ...expected,
-          });
-        const mergedContent = (sender: string) =>
-          "[Merged and Forwarded Messages]\n" +
-          `- [2024-03-09T16:00:00.000Z] ${sender}: forwarded context\n` +
-          "- [2024-03-09T16:00:01.000Z] ou_loopback_unknown: second context";
-
-        for (const [messageId, malformed] of sensitiveContentByMessageId) {
-          expect(() => JSON.parse(malformed.content)).toThrow(SyntaxError);
-          expect(() => JSON.parse(malformed.content)).toThrow(malformed.content);
-
-          await readMessage(messageId, {
-            chatId,
-            contentType: malformed.type,
-            content: malformed.content,
-          });
-          expect(mockLogVerbose).toHaveBeenCalledWith(
-            `feishu message content parse failed for ${malformed.type} message (id: ${messageId})`,
-          );
-        }
-
-        for (const [messageId, content] of [
-          ["om_loopback_valid_text", "safe message"],
-          ["om_loopback_empty_text", ""],
-        ] as const) {
-          await readMessage(messageId, { contentType: "text", content });
-        }
-
-        for (const resolveSenderNames of [undefined, false]) {
-          await readMessage(
-            mergeId,
-            {
-              contentType: "merge_forward",
-              content: mergedContent(resolveSenderNames === false ? senderId : "Alice"),
-            },
-            {
-              ...cfg,
-              channels: { feishu: FeishuConfigSchema.parse({ ...feishu, resolveSenderNames }) },
-            },
-          );
-        }
-
-        await expect(
-          getMessageFeishu({ cfg, messageId: "om_loopback_vendor_error" }),
-        ).resolves.toBeNull();
-
-        const loggedValues = mockLogVerbose.mock.calls.flat().map(String).join("\n");
-        for (const { content } of sensitiveContentByMessageId.values()) {
-          expect(loggedValues).not.toContain(content);
-        }
-        expect(loggedValues).not.toContain("loopback-placeholder");
-        expect(mockLogVerbose).toHaveBeenCalledTimes(sensitiveContentByMessageId.size);
-
-        const authRequests = requests.filter(({ path }) => path.includes("tenant_access_token"));
-        expect(authRequests).toEqual([{ method: "POST", path: authPath, appId }]);
-        const messageReads = requests.filter(
-          (request) => request.method === "GET" && request.path.startsWith("/open-apis/im/"),
-        );
-        expect(messageReads).toHaveLength(8);
-        const expectedRead = { authorization, cardMessageContentType: "user_card_content" };
-        for (const request of messageReads) {
-          expect(request).toMatchObject(expectedRead);
-        }
-
-        const requestCountBeforeSticker = requests.length;
-        await expect(
-          resolveFeishuMediaList({
-            cfg,
-            messageId: "om_received_sticker",
-            messageType: "sticker",
-            content: JSON.stringify({ file_key: "file_sticker_received" }),
-            maxBytes: 1024,
-          }),
-        ).resolves.toEqual([]);
-        expect(requests).toHaveLength(requestCountBeforeSticker);
-
-        const searchResult = await action("sticker-search", { query: "赞" });
-        expect(searchResult.details).toEqual({
-          stickers: [{ fileId: "file_sticker_received", keyword: "赞👍" }],
-          truncated: false,
+      mockLogVerbose.mockClear();
+      const feishu = {
+        enabled: true,
+        appId,
+        appSecret: "loopback-placeholder", // pragma: allowlist secret
+        domain: "feishu",
+        actions: { sticker: true },
+        stickerSets: { [appId]: { file_sticker_received: ["赞👍"] } },
+      };
+      const cfg: ClawdbotConfig = {
+        channels: { feishu: { ...FeishuConfigSchema.parse(feishu), domain: loopbackOrigin } },
+      };
+      const action = (kind: "sticker" | "sticker-search", params: Record<string, unknown>) =>
+        feishuPlugin.actions!.handleAction!({
+          channel: "feishu",
+          action: kind,
+          cfg,
+          accountId: "default",
+          params,
         });
-        expect(requests).toHaveLength(requestCountBeforeSticker);
-        const { stickers } = requireRecord(searchResult.details, "search details");
-        if (!Array.isArray(stickers)) {
-          throw new Error("Expected sticker search results");
-        }
-        const sticker = requireRecord(stickers[0], "sticker");
-        for (const replyInThread of [false, true]) {
-          const result = await action("sticker", {
-            ...sticker,
-            to: `chat:${chatId}`,
-            ...(replyInThread ? { threadId: "om_received_sticker" } : {}),
-          });
-          expect(result.details).toMatchObject({
-            messageId: replyInThread ? "om_sticker_reply" : "om_sticker_sent",
-            receipt: { parts: [expect.objectContaining({ kind: "media" })] },
-          });
-        }
-        const stickerRequest = {
-          method: "POST",
-          authorization,
+      const readMessage = (messageId: string, expected: object, config = cfg) =>
+        expect(getMessageFeishu({ cfg: config, messageId })).resolves.toMatchObject({
+          messageId,
+          ...expected,
+        });
+      const mergedContent = (sender: string) =>
+        "[Merged and Forwarded Messages]\n" +
+        `- [2024-03-09T16:00:00.000Z] ${sender}: forwarded context\n` +
+        "- [2024-03-09T16:00:01.000Z] ou_loopback_unknown: second context";
+
+      for (const [messageId, malformed] of sensitiveContentByMessageId) {
+        expect(() => JSON.parse(malformed.content)).toThrow(SyntaxError);
+        expect(() => JSON.parse(malformed.content)).toThrow(malformed.content);
+
+        await readMessage(messageId, {
+          chatId,
+          contentType: malformed.type,
+          content: malformed.content,
+        });
+        expect(mockLogVerbose).toHaveBeenCalledWith(
+          `feishu message content parse failed for ${malformed.type} message (id: ${messageId})`,
+        );
+      }
+
+      for (const [messageId, content] of [
+        ["om_loopback_valid_text", "safe message"],
+        ["om_loopback_empty_text", ""],
+      ] as const) {
+        await readMessage(messageId, { contentType: "text", content });
+      }
+
+      for (const resolveSenderNames of [undefined, false]) {
+        await readMessage(
+          mergeId,
+          {
+            contentType: "merge_forward",
+            content: mergedContent(resolveSenderNames === false ? senderId : "Alice"),
+          },
+          {
+            ...cfg,
+            channels: {
+              feishu: {
+                ...FeishuConfigSchema.parse({ ...feishu, resolveSenderNames }),
+                domain: loopbackOrigin,
+              },
+            },
+          },
+        );
+      }
+
+      await expect(
+        getMessageFeishu({ cfg, messageId: "om_loopback_vendor_error" }),
+      ).resolves.toBeNull();
+
+      const loggedValues = mockLogVerbose.mock.calls.flat().map(String).join("\n");
+      for (const { content } of sensitiveContentByMessageId.values()) {
+        expect(loggedValues).not.toContain(content);
+      }
+      expect(loggedValues).not.toContain("loopback-placeholder");
+      expect(mockLogVerbose).toHaveBeenCalledTimes(sensitiveContentByMessageId.size);
+
+      const authRequests = requests.filter(({ path }) => path.includes("tenant_access_token"));
+      expect(authRequests).toEqual([{ method: "POST", path: authPath, appId }]);
+      const messageReads = requests.filter(
+        (request) => request.method === "GET" && request.path.startsWith("/open-apis/im/"),
+      );
+      expect(messageReads).toHaveLength(8);
+      const expectedRead = { authorization, cardMessageContentType: "user_card_content" };
+      for (const request of messageReads) {
+        expect(request).toMatchObject(expectedRead);
+      }
+
+      const requestCountBeforeSticker = requests.length;
+      await expect(
+        resolveFeishuMediaList({
+          cfg,
+          messageId: "om_received_sticker",
           messageType: "sticker",
           content: JSON.stringify({ file_key: "file_sticker_received" }),
-        };
-        expect(requests.filter((request) => request.messageType === "sticker")).toEqual([
-          { ...stickerRequest, path: messagePath, receiveId: chatId },
-          { ...stickerRequest, path: stickerReplyPath, replyInThread: true },
-        ]);
-        const creates = () => requests.filter((request) => request.path === messagePath);
-        const createsBeforeWithdrawnReply = creates().length;
-        await expect(
-          sendStickerFeishu({
-            cfg,
-            to: `chat:${chatId}`,
-            fileKey: "file_sticker_received",
-            replyToMessageId: "om_withdrawn_sticker",
-            replyInThread: true,
-          }),
-        ).rejects.toThrow("cannot safely fall back to a top-level send");
-        expect(creates()).toHaveLength(createsBeforeWithdrawnReply);
-      } finally {
-        Lark.defaultHttpInstance.interceptors.request.eject(loopbackInterceptor);
+          maxBytes: 1024,
+        }),
+      ).resolves.toEqual([]);
+      expect(requests).toHaveLength(requestCountBeforeSticker);
+
+      const searchResult = await action("sticker-search", { query: "赞" });
+      expect(searchResult.details).toEqual({
+        stickers: [{ fileId: "file_sticker_received", keyword: "赞👍" }],
+        truncated: false,
+      });
+      expect(requests).toHaveLength(requestCountBeforeSticker);
+      const { stickers } = requireRecord(searchResult.details, "search details");
+      if (!Array.isArray(stickers)) {
+        throw new Error("Expected sticker search results");
       }
+      const sticker = requireRecord(stickers[0], "sticker");
+      for (const replyInThread of [false, true]) {
+        const result = await action("sticker", {
+          ...sticker,
+          to: `chat:${chatId}`,
+          ...(replyInThread ? { threadId: "om_received_sticker" } : {}),
+        });
+        expect(result.details).toMatchObject({
+          messageId: replyInThread ? "om_sticker_reply" : "om_sticker_sent",
+          receipt: { parts: [expect.objectContaining({ kind: "media" })] },
+        });
+      }
+      const stickerRequest = {
+        method: "POST",
+        authorization,
+        messageType: "sticker",
+        content: JSON.stringify({ file_key: "file_sticker_received" }),
+      };
+      expect(requests.filter((request) => request.messageType === "sticker")).toEqual([
+        { ...stickerRequest, path: messagePath, receiveId: chatId },
+        { ...stickerRequest, path: stickerReplyPath, replyInThread: true },
+      ]);
+      const creates = () => requests.filter((request) => request.path === messagePath);
+      const createsBeforeWithdrawnReply = creates().length;
+      await expect(
+        sendStickerFeishu({
+          cfg,
+          to: `chat:${chatId}`,
+          fileKey: "file_sticker_received",
+          replyToMessageId: "om_withdrawn_sticker",
+          replyInThread: true,
+        }),
+      ).rejects.toThrow("cannot safely fall back to a top-level send");
+      expect(creates()).toHaveLength(createsBeforeWithdrawnReply);
     },
   );
 });

@@ -10,6 +10,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   memoryTextSearchSchema,
   memoryStandingIntentSearchSchema,
+  memoryVectorSearchSchema,
 } from "../../../packages/memory-host-sdk/src/host/memory-search-schema.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { doctorDatabasePort } from "../../commands/doctor-database-port.js";
@@ -257,7 +258,7 @@ describe.skipIf(!connection)("agent database port", () => {
     );
   }, 120_000);
 
-  it.each([27, 28, 29, 30])(
+  it.each([27, 28, 29, 30, 32])(
     "round-trips version %s with its historical trajectory layout and revision triggers",
     async (version) => {
       const descriptor = await agentPortProvider.loadDescriptor(undefined, version);
@@ -311,7 +312,7 @@ describe.skipIf(!connection)("agent database port", () => {
       await client.query(`INSERT INTO "${namespace}".memory_index_sources (path, source, hash, mtime, size)
           VALUES ('retained.md', 'memory', 'hash', 1, 1);`);
       expect(await rows(`SELECT revision FROM "${namespace}".memory_index_state`)).toEqual([
-        { revision: "1" },
+        { revision: version < 31 ? "1" : "0" },
       ]);
       using restored = openNodeSqliteDatabase(":memory:");
       await port(pg(namespace), sqlite(restored), descriptor, storeId);
@@ -321,7 +322,7 @@ describe.skipIf(!connection)("agent database port", () => {
       restored.exec(`INSERT INTO memory_index_sources (path, source, hash, mtime, size)
           VALUES ('retained.md', 'memory', 'hash', 1, 1);`);
       expect(restored.prepare("SELECT revision FROM memory_index_state").get()).toEqual({
-        revision: 1,
+        revision: version < 31 ? 1 : 0,
       });
     },
   );
@@ -543,11 +544,15 @@ describe.skipIf(!connection)("agent database port", () => {
             admitStoreSearch(db, memoryStandingIntentSearchSchema, {
               extension: "memory.standing-intents",
             });
+            admitStoreSearch(db, memoryVectorSearchSchema(3), { extension: "memory.vector" });
+            const vector = Buffer.alloc(24);
+            vector.writeDoubleLE(1, 0);
+            vector.writeDoubleLE(-1, 16);
             db.runTransaction(() => {
               db.prepare(`INSERT INTO memory_index_chunks
             (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at)
             VALUES ('derived-chunk', 'memory/example.md', 'memory', 1, 1, 'hash', 'none', 'derived search sentinel', ?, 1)`).run(
-                Buffer.alloc(0),
+                vector,
               );
             });
             expect(
@@ -556,6 +561,9 @@ describe.skipIf(!connection)("agent database port", () => {
           WHERE openclaw_search @@ plainto_tsquery('"${namespace}".openclaw_simple_unaccent', 'sentinel')`)
                 .all(),
             ).toEqual([{ id: "derived-chunk" }]);
+            expect(
+              db.prepare("SELECT embedding_bits::text AS bits FROM memory_index_chunks_vec").get(),
+            ).toEqual({ bits: "100" });
           } finally {
             db.close();
           }
@@ -742,6 +750,47 @@ describe.skipIf(!connection)("agent database port", () => {
       expect(
         await rows(`SELECT count(*) AS count FROM "${restored.namespace}".memory_index_chunks`),
       ).toEqual([{ count: "0" }]);
+      // Memory indexes are omitted by the port and rebuilt by their current admitted owner.
+      expect(
+        await rows(
+          `SELECT to_regclass('"${restored.namespace}".memory_index_chunks_vec') AS projection`,
+        ),
+      ).toEqual([{ projection: null }]);
+      withDatabaseEngineSelection(
+        {
+          effectiveEngines: resolveDatabaseFamilyEngines(config),
+          postgres: { connection: connection!, schemaPrefix: "test" },
+        },
+        () =>
+          withEngineStoreAdmission(() => {
+            using restoredAnchor = openNodeSqliteDatabase(restoredPath);
+            const rebuilt = openAgentEngineStore(restoredAnchor, "main", restoredPath, true);
+            try {
+              if (!isPostgresSqlConnection(rebuilt)) {
+                throw new Error("Expected PostgreSQL");
+              }
+              admitStoreSearch(rebuilt, memoryVectorSearchSchema(3), {
+                extension: "memory.vector",
+              });
+              const bytes = Buffer.alloc(24);
+              bytes.writeDoubleLE(1);
+              rebuilt.runTransaction(() => {
+                rebuilt
+                  .prepare(`INSERT INTO memory_index_chunks
+              (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at)
+              VALUES ('rebuilt', 'memory/rebuilt.md', 'memory', 1, 1, 'hash', 'fixture', 'rebuilt', ?, 1)`)
+                  .run(bytes);
+              });
+              expect(
+                rebuilt
+                  .prepare("SELECT embedding_bits::text AS bits FROM memory_index_chunks_vec")
+                  .get(),
+              ).toEqual({ bits: "100" });
+            } finally {
+              rebuilt.close();
+            }
+          }),
+      );
       expect(
         await rows(`SELECT message_id FROM "${restored.namespace}".session_transcript_fts
         WHERE openclaw_search @@ plainto_tsquery('"${restored.namespace}".openclaw_simple_unaccent', 'sentinel')`),

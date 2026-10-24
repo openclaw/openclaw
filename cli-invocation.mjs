@@ -14,7 +14,99 @@ export function readStandaloneRuntimeManifestForRoot(runtimeRoot) {
   return readStandaloneManifest({ runtimeRoot });
 }
 
-function readStandaloneManifest({ executable, runtimeRoot }) {
+/** The executing image owns its build facts, even if its sidecar is replaced. */
+export function getStandaloneRuntimeBuild(executable = process.execPath) {
+  if (executable === process.execPath) {
+    // eslint-disable-next-line no-underscore-dangle -- Compiler-owned bootstrap contract.
+    const embedded = globalThis.__openclawStandaloneBuildInfo;
+    if (embedded !== undefined) {
+      return embedded;
+    }
+  }
+  return readStandaloneManifest({ executable, includeBuild: true });
+}
+
+function projectStandaloneBuildInfo(value) {
+  const nonBlank = (text) => typeof text === "string" && text.trim().length > 0;
+  const stringList = (items) => Array.isArray(items) && items.every(nonBlank);
+  const result = {
+    mode: value.mode,
+    openclaw: {
+      version: value.openclaw.version,
+      ...(nonBlank(value.openclaw.commit) ? { commit: value.openclaw.commit } : {}),
+    },
+    bun: { version: value.bun.version },
+  };
+  for (const key of ["revision", "commit", "executableSha256"]) {
+    if (nonBlank(value.bun[key])) {
+      result.bun[key] = value.bun[key];
+    }
+  }
+  if (value.build !== undefined) {
+    const { id, flavor, pluginSetSha256, moduleGraphSha256 } = value.build;
+    if (
+      !nonBlank(id) ||
+      !["standard", "support"].includes(flavor) ||
+      !/^[a-f0-9]{64}$/.test(pluginSetSha256) ||
+      !/^[a-f0-9]{64}$/.test(moduleGraphSha256)
+    ) {
+      throw new Error("Invalid standalone build provenance");
+    }
+    result.build = { id, flavor, pluginSetSha256, moduleGraphSha256 };
+    if (value.build.debugEntry !== undefined) {
+      const entry = value.build.debugEntry;
+      if (
+        typeof entry !== "string" ||
+        !entry.startsWith("debug/") ||
+        entry.includes("\\") ||
+        entry.split("/").some((part) => !part || part === "." || part === "..")
+      ) {
+        throw new Error("Invalid standalone debugger entry");
+      }
+      result.build.debugEntry = entry;
+    }
+  }
+  if (value.target !== undefined) {
+    if (!nonBlank(value.target.platform) || !nonBlank(value.target.arch)) {
+      throw new Error("Invalid standalone build target");
+    }
+    result.target = { platform: value.target.platform, arch: value.target.arch };
+  }
+  if (value.plugins !== undefined) {
+    if (!stringList(value.plugins.embedded) || !stringList(value.plugins.omitted)) {
+      throw new Error("Invalid standalone plugin inventory");
+    }
+    result.plugins = { embedded: [...value.plugins.embedded], omitted: [...value.plugins.omitted] };
+  }
+  if (value.nativeModules !== undefined) {
+    if (
+      !Array.isArray(value.nativeModules) ||
+      value.nativeModules.some(
+        (item) =>
+          !item ||
+          !nonBlank(item.name) ||
+          !nonBlank(item.version) ||
+          !stringList(item.artifacts) ||
+          item.qualification !== "unverified" ||
+          !nonBlank(item.backend),
+      )
+    ) {
+      throw new Error("Invalid standalone native inventory");
+    }
+    result.nativeModules = value.nativeModules.map(
+      ({ name, version, artifacts, qualification, backend }) => ({
+        name,
+        version,
+        artifacts: [...artifacts],
+        qualification,
+        backend,
+      }),
+    );
+  }
+  return result;
+}
+
+function readStandaloneManifest({ executable, runtimeRoot, includeBuild = false }) {
   const location = executable ?? runtimeRoot;
   if (!path.isAbsolute(location)) {
     return undefined;
@@ -79,6 +171,7 @@ function readStandaloneManifest({ executable, runtimeRoot }) {
       ...(nonBlank(manifest.openclaw.commit) ? { commit: manifest.openclaw.commit } : {}),
     },
     bun: { version: manifest.bun.version },
+    ...(includeBuild ? projectStandaloneBuildInfo(manifest) : {}),
   };
 }
 

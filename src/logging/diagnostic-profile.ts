@@ -82,9 +82,9 @@ export function parseNativeCpuProfile(json: string): Profiler.Profile {
   };
   // The native serializer owns this shape; inspector consumers require string IDs.
   const nodes: Profiler.ProfileNode[] = [];
-  for (const { callFrame, ...node } of profile.nodes) {
-    const { scriptId, ...frame } = callFrame;
-    nodes.push({ ...node, callFrame: { ...frame, scriptId: String(scriptId) } });
+  for (const node of profile.nodes) {
+    const frame = node.callFrame;
+    nodes.push({ ...node, callFrame: { ...frame, scriptId: String(frame.scriptId) } });
   }
   return { ...profile, nodes };
 }
