@@ -47,7 +47,6 @@ export const clawsHandlers: GatewayRequestHandlers = {
             ...(params.category ? { category: params.category } : {}),
             ...(params.featured ? { featured: true } : {}),
           });
-      assertClawsLabsEnabled(context.getRuntimeConfig());
       respond(true, { entries: entries.slice(0, params.limit ?? entries.length) });
     },
     mapClawHubError,
@@ -58,7 +57,6 @@ export const clawsHandlers: GatewayRequestHandlers = {
     async ({ params, respond, context }) => {
       assertClawsLabsEnabled(context.getRuntimeConfig());
       const detail = await readClawHubClawDetail(params);
-      assertClawsLabsEnabled(context.getRuntimeConfig());
       respond(true, { detail });
     },
     mapClawHubError,
@@ -69,7 +67,6 @@ export const clawsHandlers: GatewayRequestHandlers = {
     async ({ params, respond, context }) => {
       assertClawsLabsEnabled(context.getRuntimeConfig());
       const preview = await readClawHubClawPreview(params);
-      assertClawsLabsEnabled(context.getRuntimeConfig());
       respond(true, { preview });
     },
     mapClawHubError,

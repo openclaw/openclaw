@@ -12,6 +12,7 @@ import { clawOwnedAgentConfig } from "./agent-config-ownership.js";
 import {
   clawAddCapabilityChange,
   clawAgentCapabilityChange,
+  clawPreflightCapabilities,
   findClawExtensionPackageCollisions,
   planClawExtensions,
 } from "./application-plan.js";
@@ -432,13 +433,7 @@ export async function buildClawAddPlan(params: {
         ...pkg,
         ...(preflight.integrity ? { integrity: preflight.integrity } : {}),
         ...(preflight.installId ? { installId: preflight.installId } : {}),
-        ...(preflight.declaredCapabilities
-          ? { declaredCapabilities: preflight.declaredCapabilities }
-          : {}),
-        ...(preflight.capabilityGrants ? { capabilityGrants: preflight.capabilityGrants } : {}),
-        ...(preflight.capabilityGrantsByPluginId
-          ? { capabilityGrantsByPluginId: preflight.capabilityGrantsByPluginId }
-          : {}),
+        ...clawPreflightCapabilities(preflight),
         ...(preflight.warning ? { riskWarning: preflight.warning } : {}),
         ...(preflight.requirements ? { prerequisites: preflight.requirements } : {}),
         expectedState: diagnostic
@@ -475,13 +470,7 @@ export async function buildClawAddPlan(params: {
           version: pkg.version,
           integrity: preflight.integrity ?? "unresolved",
           ...(preflight.installId ? { installId: preflight.installId } : {}),
-          ...(preflight.declaredCapabilities
-            ? { declaredCapabilities: preflight.declaredCapabilities }
-            : {}),
-          ...(preflight.capabilityGrants ? { capabilityGrants: preflight.capabilityGrants } : {}),
-          ...(preflight.capabilityGrantsByPluginId
-            ? { capabilityGrantsByPluginId: preflight.capabilityGrantsByPluginId }
-            : {}),
+          ...clawPreflightCapabilities(preflight),
           ...(preflight.warning ? { riskWarning: preflight.warning } : {}),
         },
       }),
