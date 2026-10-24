@@ -529,7 +529,7 @@ export function projectChatTranscript(
       key,
       content: new GuardedTranscriptItem([content], content),
     });
-  contentRows.push(...projectRealtimeTalkContentRows(rows, props));
+  contentRows.push(...projectRealtimeTalkContentRows(rows, props, messageRowKeysById));
   if (turnRecap !== null && !recapAttached && !isEmpty && !showLoadingSkeleton) {
     appendContent("turn-recap", { kind: "recap", recap: turnRecap });
   }

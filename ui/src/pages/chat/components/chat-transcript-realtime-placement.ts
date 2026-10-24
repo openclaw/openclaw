@@ -15,10 +15,25 @@ type PlacedTranscriptContentRow = TranscriptContentRow & { slot: number };
 export function projectRealtimeTalkContentRows(
   rows: readonly TranscriptRow<SystemEventRenderItem>[],
   props: RealtimeTalkProps,
+  messageRowKeysById: ReadonlyMap<string, string>,
 ): PlacedTranscriptContentRow[] {
   const conversation = projectRealtimeTalkConversation(props);
   if (!conversation) {
     return [];
+  }
+  const slotFloorByEntryId = new Map<string, number>();
+  let providerSlotFloor = 0;
+  const rowIndexByKey = new Map(rows.map((row, index) => [row.key, index]));
+  for (const entry of props.realtimeTalkConversation ?? []) {
+    const rowKey = entry.transcriptId ? messageRowKeysById.get(entry.transcriptId) : undefined;
+    const rowIndex = rowKey === undefined ? undefined : rowIndexByKey.get(rowKey);
+    if (rowIndex !== undefined) {
+      // A saved caption disappears from the live list, but its history row still
+      // precedes later provider entries. Keep that row as a placement boundary.
+      providerSlotFloor = Math.max(providerSlotFloor, rowIndex + 1);
+    } else {
+      slotFloorByEntryId.set(entry.id, providerSlotFloor);
+    }
   }
   const segments: Array<{
     slot: number;
@@ -27,6 +42,7 @@ export function projectRealtimeTalkContentRows(
   }> = [];
   let previousSlot = 0;
   for (const entry of conversation.entries) {
+    previousSlot = Math.max(previousSlot, slotFloorByEntryId.get(entry.id) ?? 0);
     const timestamp =
       typeof entry.createdAtMs === "number" && Number.isFinite(entry.createdAtMs)
         ? entry.createdAtMs

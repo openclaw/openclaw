@@ -517,6 +517,47 @@ describe("voice reconciliation", () => {
     ).toEqual(["Typed in between", "Delayed spoken question", "Spoken answer"]);
   });
 
+  it("keeps an unmatched successor after its saved caption predecessor", () => {
+    const props = threadProps("voice-saved-predecessor", undefined, []);
+    props.realtimeTalkConversation = [
+      {
+        id: "rt-saved-question",
+        role: "user",
+        text: "Saved spoken question",
+        isStreaming: false,
+        createdAtMs: 1_000,
+        transcriptId: "voice:saved-question",
+      },
+      {
+        id: "rt-answer",
+        role: "assistant",
+        text: "Spoken answer",
+        isStreaming: false,
+        createdAtMs: 2_000,
+      },
+    ];
+
+    const view = drawThread(props);
+    view.draw();
+    expect(view.container.querySelectorAll(".agent-chat__voice-turn")).toHaveLength(2);
+
+    props.messages = [
+      {
+        role: "user",
+        content: "Saved spoken question",
+        timestamp: 4_000,
+        __openclaw: { id: "voice:saved-question" },
+      },
+    ];
+    view.draw();
+
+    expect(
+      [...view.container.querySelectorAll(".agent-chat__voice-turn-text, .chat-text")].map((node) =>
+        node.textContent?.trim(),
+      ),
+    ).toEqual(["Saved spoken question", "Spoken answer"]);
+  });
+
   it("uses one raw-history scan, preserving pending captions and refreshing replaced history", () => {
     const messages = [
       savedMessage("Hidden saved words", "voice:saved"),
