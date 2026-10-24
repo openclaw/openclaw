@@ -1,9 +1,11 @@
+import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import { collectNestedErrorCandidates } from "../infra/error-graph-internal.js";
 import { SqliteWorkerError } from "../infra/sqlite-worker-contract.js";
 import { cleanupStaleManagedServiceUpdateHandoffs } from "../infra/update-managed-service-handoff-cleanup.js";
+import * as baseline from "../infra/update-recovery-baseline-capture.js";
 import * as stepWrites from "../infra/update-run-write.async.js";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -28,6 +30,87 @@ await vi.hoisted(() => import("./update-cli-mocks.test-support.js"));
 
 describe("update-cli", () => {
   const f = createUpdateCliFixture();
+
+  it.each([false, true])(
+    "refuses a retained build owner before capture (switch to Git=%s)",
+    async (switchToGit) => {
+      const sourceRoot = switchToGit ? f.createCaseDir("selected-git-checkout") : process.cwd();
+      if (switchToGit) {
+        await fs.mkdir(path.join(sourceRoot, ".git"), { recursive: true });
+        await f.mockPackageInstallAtCaseDir();
+      }
+      const directory = path.join(sourceRoot, ".artifacts", "dist-artifacts.lock");
+      const ownerPath = path.join(directory, "owner.json");
+      const owner = JSON.stringify({ pid: 0x7fff_ffff, startedAt: "2026-10-22T00:00:00.000Z" });
+      await fs.mkdir(directory, { recursive: true });
+      await fs.writeFile(ownerPath, owner);
+      const capture = vi.spyOn(baseline, "captureUpdateRecoveryBaseline");
+
+      try {
+        await withEnvAsync({ OPENCLAW_GIT_DIR: sourceRoot }, async () => {
+          await expect(
+            update.updateCommand({
+              yes: true,
+              restart: false,
+              json: true,
+              ...(switchToGit ? { channel: "dev" } : {}),
+            }),
+          ).rejects.toEqual(new update.ExitError(1));
+        });
+
+        expect(lastWriteJsonCall()).toMatchObject({
+          status: "error",
+          reason: "source-artifact-ownership",
+        });
+        expect(capture.mock.calls.length).toBe(0);
+        await expect(fs.stat(`${f.profileStateDir()}.update-captures`)).rejects.toMatchObject({
+          code: "ENOENT",
+        });
+        expect(await fs.readFile(ownerPath, "utf8")).toBe(owner);
+        expectNoSideEffects(update.updateGitCheckout, mocks.serviceStop, mocks.retainUpdateRuntime);
+      } finally {
+        await fs.rm(directory, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it.each([false, true])(
+    "releases the early probe before capture and rechecks at execution (late owner=%s)",
+    async (lateOwner) => {
+      const directory = path.join(process.cwd(), ".artifacts", "dist-artifacts.lock");
+      const ownerPath = path.join(directory, "owner.json");
+      const capture = vi.mocked(baseline.captureUpdateRecoveryBaseline);
+      const captureBaseline = expectDefined(
+        capture.getMockImplementation(),
+        "native baseline capture",
+      );
+      capture.mockImplementationOnce(async (...args) => {
+        await expect(fs.stat(ownerPath)).rejects.toMatchObject({ code: "ENOENT" });
+        const captured = await captureBaseline(...args);
+        if (lateOwner) {
+          await fs.mkdir(directory, { recursive: true });
+          await fs.writeFile(ownerPath, JSON.stringify({ pid: 0x7fff_ffff }));
+        }
+        return captured;
+      });
+      try {
+        const result = update.updateCommand({ yes: true, restart: false, json: true });
+        if (lateOwner) {
+          await expect(result).rejects.toEqual(new update.ExitError(1));
+          expect(lastWriteJsonCall()).toMatchObject({ reason: "source-artifact-ownership" });
+          expect(update.updateGitCheckout).not.toHaveBeenCalled();
+        } else {
+          await result;
+          expect(lastWriteJsonCall()).toMatchObject({ status: "ok" });
+          expect(update.updateGitCheckout).toHaveBeenCalledOnce();
+          await expect(fs.stat(ownerPath)).rejects.toMatchObject({ code: "ENOENT" });
+        }
+        expect(capture.mock.calls.length).toBe(1);
+      } finally {
+        await fs.rm(directory, { recursive: true, force: true });
+      }
+    },
+  );
 
   it.each([
     { installKind: "package", installedVersion: "2026.9.3" },

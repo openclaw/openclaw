@@ -830,8 +830,11 @@ contention alone preserves automatic Gateway recovery; an actual data-at-risk
 refusal still blocks recovery. Doctor publishes its completion result only after
 its maintenance resources have been released.
 
-Source updates also admit build-artifact ownership and runtime staging access in
-the installed checkout before stopping the Gateway. A retained
+Source updates check build-artifact ownership before capturing original state,
+then acquire ownership and admit runtime staging access before stopping the
+Gateway. The early check releases ownership immediately; the execution-time
+acquisition still refuses a build that starts during capture. This ordering
+requires the installed updater to contain the fix. A retained
 `.artifacts/dist-artifacts.lock` refuses the update with the recorded owner,
 timestamp, and exact recovery command while the serving Gateway stays running.
 Verify that all associated build/check processes, including detached descendants,

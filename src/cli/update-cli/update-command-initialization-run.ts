@@ -1,4 +1,7 @@
 import { randomUUID } from "node:crypto";
+import fs from "node:fs";
+import path from "node:path";
+import { acquireDistArtifactOwnership } from "../../../scripts/lib/dist-artifact-lock.mts";
 import { resolveConfigPath, resolveStateDir } from "../../config/paths.js";
 import { resolvePathViaExistingAncestorSync } from "../../infra/boundary-path.js";
 import { formatDiskSpaceBytes } from "../../infra/disk-space.js";
@@ -16,6 +19,7 @@ import { OPENCLAW_STATE_SCHEMA_VERSION } from "../../state/openclaw-state-db-con
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { createUpdateProgress } from "./progress.js";
 import {
+  resolveGitInstallDir,
   UpdatePreMutationError,
   usesCandidateUpdateAdmission,
   type UpdateCommandOptions,
@@ -191,6 +195,22 @@ export async function initializeAndRunUpdate(
                     controlPlaneUpdateSentinelMeta: prepared.controlPlaneUpdateSentinelMeta,
                   });
                   initialization.downgradeConfirmed = true;
+                }
+                if (selectedTarget?.updateInstallKind === "git") {
+                  const sourceRoot = selectedTarget.switchToGit ? resolveGitInstallDir() : root;
+                  if (fs.existsSync(path.join(sourceRoot, ".git"))) {
+                    try {
+                      // Refuse known contention before capture without fencing the build
+                      // across it. Execution still acquires and retains its own ownership.
+                      const ownership = await acquireDistArtifactOwnership(sourceRoot);
+                      await ownership.release();
+                    } catch (cause) {
+                      return await selectedTarget.refuseUpdate(
+                        "source-artifact-ownership",
+                        formatErrorMessage(cause),
+                      );
+                    }
+                  }
                 }
                 const fence = await executor.enter(root, {
                   preflight: true,
