@@ -665,6 +665,17 @@ and waits for the row owner to settle before reading its order;
 `--unchanged` instead measures repeated calls at one revision. This is in-process
 handler evidence, without transport, model calls, or external provider IO.
 
+Add `--adopted` to exercise the real adopted-session helper over 10,000 sessions
+split equally between the agents. One synthetic provider exposes 32 native rows,
+with 16 plugin-owned adoption markers per agent. Every request explicitly selects
+`main`; assertions require exactly its 16 adoptions and leave the other agent's
+native rows unbound. This mode avoids per-agent summary materialization, reports
+adoption calls and source-marker reads, and includes a separate adopted-helper
+allocation subtree. `adoptedCallsPerMinute` is the driven benchmark rate, not a
+claim about an idle Gateway's polling cadence. Use `--adopted --unchanged` to
+isolate repeated adoption scans against an unchanged planning snapshot; omit
+`--unchanged` to retain the metadata-update workload.
+
 ```sh
 node --expose-gc --trace-gc-nvp --import ./scripts/tsx.mjs \
   scripts/perf/session-catalog-selection-measure.ts \
