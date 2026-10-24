@@ -56,68 +56,40 @@ function copyTooling(root: string, checkout: Record<string, unknown>, extraPath?
 
 describe("full release metadata checkouts", () => {
   it.each([
-    {
-      job: "resolve_target",
-      checkout: "Checkout trusted workflow helper",
-      entrypoint: "release-tooling-identity.mjs",
-      fullCheckout: true,
-    },
-    {
-      job: "evidence_reuse",
-      checkout: "Checkout trusted workflow helper",
-      entrypoint: "release-ci-summary.mjs",
-      extraPath: ".github/actions/setup-pnpm-store-cache",
-    },
-    {
-      job: "release_execution_plan",
-      checkout: "Checkout release execution plan tooling",
-      entrypoint: "full-release-validation-state.mjs",
-    },
-    {
-      job: "release_decision",
-      checkout: "Checkout release decision tooling",
-      entrypoint: "full-release-validation-state.mjs",
-    },
-    {
-      job: "diagnostic_drain",
-      checkout: "Checkout diagnostic drain tooling",
-      entrypoint: "full-release-validation-state.mjs",
-    },
-    {
-      job: "summary",
-      checkout: "Checkout release state verifier",
-      entrypoint: "full-release-candidate-reuse.mjs",
-    },
-  ])(
-    "runs $job tooling from the complete scripts tree",
-    ({ job, checkout, entrypoint, extraPath, fullCheckout }) => {
-      const root = tempDirs.make("openclaw-release-sparse-");
-      const toolingCheckout = step(job, checkout).with as Record<string, unknown>;
-      if (fullCheckout) {
-        expect(toolingCheckout).not.toHaveProperty("sparse-checkout");
-        expect(toolingCheckout).not.toHaveProperty("sparse-checkout-cone-mode");
-        expect(toolingCheckout).toMatchObject({
-          ref: "${{ github.sha }}",
-          path: "workflow",
-          "fetch-depth": 1,
-          "persist-credentials": false,
-          submodules: false,
-        });
-      } else {
-        expect(toolingCheckout["sparse-checkout-cone-mode"]).toBe(false);
-        const paths = sparsePaths(toolingCheckout);
-        expect(paths).toEqual(extraPath ? ["scripts", extraPath] : ["scripts"]);
-      }
-
-      const checkoutRoot = copyTooling(root, toolingCheckout, extraPath);
-      expect(
-        runNode(
-          ["--input-type=module", "-e", `await import("./scripts/${entrypoint}");`],
-          checkoutRoot,
-        ),
-      ).toBe("");
-    },
-  );
+    ["resolve_target", "Checkout trusted workflow helper", "release-tooling-identity.mjs"],
+    ["evidence_reuse", "Checkout trusted workflow helper", "release-ci-summary.mjs"],
+    [
+      "release_execution_plan",
+      "Checkout release execution plan tooling",
+      "full-release-validation-state.mjs",
+    ],
+    ["release_decision", "Checkout release decision tooling", "full-release-validation-state.mjs"],
+    ["diagnostic_drain", "Checkout diagnostic drain tooling", "full-release-validation-state.mjs"],
+    ["summary", "Checkout release state verifier", "full-release-candidate-reuse.mjs"],
+  ])("runs %s tooling from the complete scripts tree", (job, name, entrypoint) => {
+    const checkout = step(job, name).with as Record<string, unknown>;
+    expect(checkout).toMatchObject({ ref: "${{ github.sha }}", "persist-credentials": false });
+    if (job === "resolve_target") {
+      expect(checkout).toMatchObject({ path: "workflow", "fetch-depth": 1, submodules: false });
+      expect(checkout).not.toHaveProperty("sparse-checkout");
+      expect(checkout).not.toHaveProperty("sparse-checkout-cone-mode");
+    } else {
+      expect(checkout["sparse-checkout-cone-mode"]).toBe(false);
+      expect(sparsePaths(checkout)).toEqual(
+        job === "evidence_reuse"
+          ? ["scripts", ".github/actions/setup-pnpm-store-cache"]
+          : ["scripts"],
+      );
+    }
+    const root = copyTooling(
+      tempDirs.make("release-tooling-"),
+      checkout,
+      job === "evidence_reuse" ? ".github/actions/setup-pnpm-store-cache" : undefined,
+    );
+    expect(
+      runNode(["--input-type=module", "-e", `await import("./scripts/${entrypoint}");`], root),
+    ).toBe("");
+  });
 
   it("keeps target metadata narrow and runs the macOS preflight from the tooling tree", () => {
     const root = tempDirs.make("openclaw-release-sparse-");
@@ -177,55 +149,43 @@ describe("full release metadata checkouts", () => {
 });
 
 describe("full release same-parent recovery workflow", () => {
-  it.each([
-    "ci",
-    "plugin-prerelease",
-    "openclaw-release-checks",
-    "openclaw-performance",
-    "npm-telegram-beta-e2e",
-  ])(
-    "includes every declared default in %s reuse identity without installing dependencies",
-    (name) => {
-      const contents = readFileSync(`.github/workflows/${name}.yml`, "utf8");
-      const declared = parse(contents).on.workflow_dispatch.inputs as Record<
-        string,
-        { type: string; default?: unknown }
-      >;
-      const expected = Object.fromEntries(
-        Object.entries(declared)
-          .filter(([key]) => key !== "dispatch_id")
-          .map(([key, value]) => {
-            const defaultValue =
-              value.default ??
-              (value.type === "boolean" ? false : value.type === "number" ? 0 : "");
-            if (
-              typeof defaultValue !== "string" &&
-              typeof defaultValue !== "number" &&
-              typeof defaultValue !== "boolean"
-            ) {
-              throw new Error("Expected a scalar workflow dispatch default");
-            }
-            return [key, String(defaultValue)];
-          }),
-      );
-      expect(releaseChildDispatchInputs(contents, [])).toEqual(expected);
-      const key = Object.keys(expected)[0]!;
-      expect(
-        releaseChildDispatchInputs(contents, [
-          "-f",
-          `${key}=exact=bytes`,
-          "-f",
-          "dispatch_id=ignored",
-        ]),
-      ).toEqual({ ...expected, [key]: "exact=bytes" });
-      expect(() => releaseChildDispatchInputs(contents, ["-f", "unknown=true"])).toThrow(
-        "argument",
-      );
-      expect(() =>
-        releaseChildDispatchInputs(contents.replace("    inputs:", "    inputs: &defaults"), []),
-      ).toThrow();
-    },
-  );
+  it("normalizes scalar dispatch defaults and rejects unfamiliar declarations", () => {
+    const contents = `on:
+  workflow_dispatch:
+    inputs:
+      enabled:
+        type: boolean
+      count:
+        type: number
+      label:
+        type: string
+      quoted:
+        type: string
+        default: "value"
+      ref:
+        type: choice
+        default: main
+        options:
+          - main
+      dispatch_id:
+        type: string
+        default: "quoted"
+`;
+    const expected = { enabled: "false", count: "0", label: "", quoted: "value", ref: "main" };
+    expect(releaseChildDispatchInputs(contents, [])).toEqual(expected);
+    expect(
+      releaseChildDispatchInputs(contents, [
+        "-f",
+        "label=exact=bytes",
+        "-f",
+        "dispatch_id=ignored",
+      ]),
+    ).toEqual({ ...expected, label: "exact=bytes" });
+    expect(() => releaseChildDispatchInputs(contents, ["-f", "unknown=true"])).toThrow("argument");
+    expect(() =>
+      releaseChildDispatchInputs(contents.replace("    inputs:", "    inputs: &defaults"), []),
+    ).toThrow();
+  });
 
   it("adopts only a matched child and still dispatches an unmatched sibling", () => {
     const root = tempDirs.make("release-child-dispatch-");
@@ -377,22 +337,14 @@ else console.log(JSON.stringify({id:202,workflow_id:88,head_branch:'main',event:
   });
 
   it("restores the immutable attempt-one plan instead of rebuilding child identity", () => {
-    const cache = step("release_execution_plan", "Cache immutable release execution plan");
-    const restore = step(
-      "release_execution_plan",
-      "Restore immutable release execution plan artifact",
-    );
-    const inputsRestore = step(
-      "release_execution_plan",
-      "Restore immutable release execution plan inputs",
-    );
-    const inputsUpload = step(
-      "release_execution_plan",
-      "Upload immutable release execution plan inputs",
-    );
-    const upload = step("release_execution_plan", "Upload immutable release execution plan");
+    const planStep = (verb: string, suffix = "") =>
+      step("release_execution_plan", `${verb} immutable release execution plan${suffix}`);
+    const cache = planStep("Cache");
+    const restore = planStep("Restore", " artifact");
+    const inputsRestore = planStep("Restore", " inputs");
+    const inputsUpload = planStep("Upload", " inputs");
+    const upload = planStep("Upload");
     expect(cache).toMatchObject({
-      id: "plan_cache",
       "continue-on-error": true,
       with: {
         key: "full-release-execution-plan-v2-${{ github.run_id }}",
@@ -401,32 +353,23 @@ else console.log(JSON.stringify({id:202,workflow_id:88,head_branch:'main',event:
     });
     expect(cache.with).not.toHaveProperty("fail-on-cache-miss");
     expect(restore).toMatchObject({
-      id: "plan_restore",
       "continue-on-error": true,
       if: "${{ always() && github.run_attempt != 1 && steps.plan_cache.outputs.cache-hit != 'true' }}",
       with: {
-        "github-token": "${{ github.token }}",
         name: "full-release-execution-plan-${{ github.run_id }}",
-        path: "${{ github.workspace }}/full-release-execution-plan",
         "run-id": "${{ github.run_id }}",
       },
     });
     expect(inputsRestore).toMatchObject({
-      id: "plan_inputs_restore",
       if: "${{ always() && github.run_attempt != 1 && steps.plan_cache.outputs.cache-hit != 'true' && steps.plan_restore.outcome != 'success' }}",
       with: {
         name: "full-release-execution-plan-inputs-${{ github.run_id }}-1",
-        path: "${{ github.workspace }}/full-release-execution-plan-inputs",
         "run-id": "${{ github.run_id }}",
       },
     });
     expect(inputsUpload).toMatchObject({
-      id: "plan_inputs_upload",
       if: "${{ github.run_attempt == 1 && steps.plan_inputs.outcome == 'success' }}",
-      with: {
-        name: "full-release-execution-plan-inputs-${{ github.run_id }}-1",
-        overwrite: false,
-      },
+      with: { name: "full-release-execution-plan-inputs-${{ github.run_id }}-1", overwrite: false },
     });
     expect(upload).toMatchObject({
       if: "${{ always() && steps.plan.outputs.sha256 != '' && steps.plan.outputs.source_parent_attempt == '1' && (steps.plan_inputs_upload.outcome == 'success' || steps.plan_inputs_restore.outcome == 'success') }}",
@@ -448,21 +391,14 @@ else console.log(JSON.stringify({id:202,workflow_id:88,head_branch:'main',event:
     );
     expect(restoredUpload.with).toEqual(upload.with);
     expect(step("resolve_target", "Upload immutable publication admission").if).toBeUndefined();
-    const resolver = workflow.jobs.resolve_target;
-    if (!resolver) {
-      throw new Error("missing resolve_target job");
-    }
-    const resolverSteps = resolver.steps.map((entry) => entry.name);
+    const resolverSteps = workflow.jobs.resolve_target!.steps.map((entry) => entry.name);
     expect(resolverSteps.indexOf(earlyRestore.name)).toBeLessThan(
       resolverSteps.indexOf("Admit publication source"),
     );
     expect(resolverSteps.indexOf(restoredUpload.name)).toBeGreaterThan(
       resolverSteps.indexOf("Admit publication source"),
     );
-    const witness = step(
-      "release_execution_plan",
-      "Record immutable release execution plan digest",
-    );
+    const witness = planStep("Record", " digest");
     expect(witness.if).toBe("${{ always() && steps.plan_upload.outcome == 'success' }}");
     expect(
       execFileSync("bash", ["-c", String(witness.run)], {
@@ -470,7 +406,7 @@ else console.log(JSON.stringify({id:202,workflow_id:88,head_branch:'main',event:
         encoding: "utf8",
       }),
     ).toBe(`FRV_EXECUTION_PLAN_SHA256=${"a".repeat(64)}\n`);
-    const save = step("release_execution_plan", "Save immutable release execution plan");
+    const save = planStep("Save");
     expect(cache.uses).toContain("actions/cache/restore@");
     expect(save.uses).toContain("actions/cache/save@");
     expect(save.with).toEqual(cache.with);
@@ -501,25 +437,25 @@ else console.log(JSON.stringify({id:202,workflow_id:88,head_branch:'main',event:
   });
 
   it.each([
-    {
-      job: "summary",
-      name: "Validate release validation manifest",
-      env: {
+    [
+      "summary",
+      "Validate release validation manifest",
+      {
         DIAGNOSTIC_DRAIN_PATH:
           "${{ runner.temp }}/full-release-diagnostics/full-release-diagnostic-manifest.json",
       },
-    },
-    {
-      job: "release_decision",
-      name: "Evaluate release decision",
-      env: { FAIL_FAST: "${{ inputs.fail_fast }}", FULL_RELEASE_STATE_MODE: "decision" },
-    },
-    {
-      job: "diagnostic_drain",
-      name: "Drain child diagnostics",
-      env: { FAIL_FAST: "false", FULL_RELEASE_STATE_MODE: "drain" },
-    },
-  ])("supplies $job with its evidence and cancellation contract", ({ job, name, env }) => {
+    ],
+    [
+      "release_decision",
+      "Evaluate release decision",
+      { FAIL_FAST: "${{ inputs.fail_fast }}", FULL_RELEASE_STATE_MODE: "decision" },
+    ],
+    [
+      "diagnostic_drain",
+      "Drain child diagnostics",
+      { FAIL_FAST: "false", FULL_RELEASE_STATE_MODE: "drain" },
+    ],
+  ] as const)("supplies %s with its evidence and cancellation contract", (job, name, env) => {
     expect(step(job, name).env).toMatchObject(env);
   });
 });

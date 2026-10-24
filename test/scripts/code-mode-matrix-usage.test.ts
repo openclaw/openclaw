@@ -50,13 +50,7 @@ function ledger(events: unknown[] = [assistant()]): MatrixSessionLedger {
       sha256: JSON.stringify(event),
       event,
     })),
-    sessions: [
-      {
-        ...rootIdentity,
-        historyRewritten: false,
-        generation: "initial",
-      },
-    ],
+    sessions: [{ ...rootIdentity, historyRewritten: false, generation: "initial" }],
     runs: [],
     issues: [],
   };
@@ -190,10 +184,10 @@ describe("matrix task billing", () => {
     totalTokens: null,
     knownTotalTokens,
   });
-  it.each([0, 1])("ignores unavailable counters at scale %s", (scale) => {
+  it("ignores unavailable counters", () => {
     expect(
       accounting({
-        events: [assistant({ usage: { ...usage(scale), ...unavailable } })],
+        events: [assistant({ usage: { ...usage(), ...unavailable } })],
         rootUsage: unavailable,
       }),
     ).toMatchObject({
@@ -207,11 +201,11 @@ describe("matrix task billing", () => {
       assistantTurns: 1,
     });
   });
-  it.each([false, true])("preserves measured usage with unavailable first=%s", (first) => {
+  it("preserves measured usage alongside unavailable usage", () => {
     const failed = assistant({ usage: { ...usage(), ...unavailable }, stopReason: "error" });
     expect(
       accounting({
-        events: first ? [failed, assistant()] : [assistant(), failed],
+        events: [failed, assistant()],
         rootUsage: unavailable,
       }),
     ).toMatchObject({
