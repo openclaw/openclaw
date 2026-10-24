@@ -301,7 +301,6 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
     ["agents-home", "agents", "config"],
     ["ui/src/components/agent-select-registration.ts"],
   ),
-  pageWatch("ui/src/e2e/agent-selection-persistence.e2e.test.ts", ["chat"]),
   pageWatch("ui/src/e2e/agent-switch-roster.e2e.test.ts", ["chat"], sessionMenuOwnerRoots),
   pageWatch("ui/src/e2e/app-chrome-interaction.e2e.test.ts", ["chat", "config", "usage"]),
   pageWatch("ui/src/e2e/appearance-accent-selection.e2e.test.ts", ["config"]),
