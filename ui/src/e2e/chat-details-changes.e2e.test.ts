@@ -1,5 +1,6 @@
 import { expect, it } from "vitest";
 import { installMockGateway, pauseVirtualClock } from "../test-helpers/control-ui-e2e.ts";
+import { createControlUiSessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import { closeChatDetails, openChatDetails } from "./chat-details.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -23,34 +24,16 @@ suite.define(() => {
       operatorScopes: ["operator.read"],
       workspace: "/workspace/openclaw",
       workspaceGit: true,
-      models: [{ id: "gpt-4.1", name: "GPT-4.1", provider: "openai" }],
-      agentModel: "openai/gpt-4.1",
       sessions: [
-        {
-          key: "agent:main:main",
+        createControlUiSessionRow("agent:main:main", "Improve workspace navigation", 1, {
           sessionId: "details-summary-session",
-          kind: "direct",
-          label: "Improve workspace navigation",
-          participantCount: 0,
-          model: "gpt-4.1",
-          modelProvider: "openai",
-          createdActor: { type: "human", id: "ada", label: "Ada" },
           repository: {
             url: "https://github.com/example/workspace",
             branch: "feature/workspace-navigation",
           },
-        },
+        }),
       ],
       methodResponses: {
-        "cron.list": {
-          jobs: [],
-          total: 0,
-          offset: 0,
-          limit: 20,
-          hasMore: false,
-          nextOffset: null,
-          snapshotRevision: "1",
-        },
         "sessions.diff": {
           sessionKey: "main",
           branch: "feature/workspace-navigation",

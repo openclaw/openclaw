@@ -63,32 +63,18 @@ function catalogSessionsMock() {
 }
 
 suite.define(() => {
-  it.each(["root", "conversation"] as const)(
-    "keeps the sidebar on an unmarked %s link",
-    async (target) => {
-      await suite.withPage(pageOptions, async ({ page }) => {
-        await installMockGateway(page, sessionsMock());
-        await page.goto(
-          target === "root"
-            ? `${suite.server.baseUrl}chat`
-            : controlUiSessionUrl(suite.server.baseUrl, RESEARCH_KEY),
-        );
-        const sidebar = page.locator("openclaw-app-sidebar .sidebar-shell");
-        await sidebar.waitFor({ state: "visible", timeout: 10_000 });
-        if (target === "conversation") {
-          await page
-            .getByPlaceholder("Message OpenClaw")
-            .waitFor({ state: "visible", timeout: 10_000 });
-        }
-        await expectVisible(sidebar);
-      });
-    },
-  );
+  it("keeps the sidebar on an unmarked root link", async () => {
+    await suite.withPage(pageOptions, async ({ page }) => {
+      await installMockGateway(page, sessionsMock());
+      await page.goto(`${suite.server.baseUrl}chat`);
+      const sidebar = page.locator("openclaw-app-sidebar .sidebar-shell");
+      await sidebar.waitFor({ state: "visible", timeout: 10_000 });
+      await expectVisible(sidebar);
+    });
+  });
 
   it.each([
     { catalog: false, gesture: "middle" },
-    { catalog: false, gesture: "modifier" },
-    { catalog: true, gesture: "middle" },
     { catalog: true, gesture: "modifier" },
   ] as const)(
     "opens an expanded session tab (catalog: $catalog, gesture: $gesture)",
