@@ -46,7 +46,11 @@ import {
   getActiveAgentRingZeroTools,
   mergeAgentRingZeroTools,
 } from "./agent-tools.ring-zero-context.js";
-import { isSchedulerSystemTurn, resolveTurnToolSurface } from "./agent-tools.turn-authority.js";
+import {
+  isSchedulerSystemTurn,
+  resolveTurnNarrowing,
+  resolveTurnToolSurface,
+} from "./agent-tools.turn-authority.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
 import { registerOneShotExecScopeCleanup } from "./bash-process-control.js";
 import { resolveProcessToolScopeKey } from "./bash-process-scope.js";
@@ -556,6 +560,7 @@ function* assembleOpenClawCodingTools(
       ),
       options?.config,
     );
+  const narrowedBy = resolveTurnNarrowing(capabilityProfile.policy);
   const {
     tools: authorizedTools,
     turnAuthorized,
@@ -563,10 +568,10 @@ function* assembleOpenClawCodingTools(
     exportedTools,
   } = resolveTurnToolSurface({
     turnTools: completeTurnTools(messageInvocationPolicy.filter(capabilityProfile, onPolicyFilter)),
-    sessionTools:
-      capabilityProfile.policy.requesterPolicySource === "completion-handoff"
-        ? completeTurnTools(messageInvocationPolicy.filter(capabilityProfile, undefined, "session"))
-        : undefined,
+    sessionTools: narrowedBy
+      ? completeTurnTools(messageInvocationPolicy.filter(capabilityProfile, undefined, "session"))
+      : undefined,
+    narrowedBy,
     ownerOnlyDenied: new Set(ownerOnlyCoreToolDenylist),
     schedulerSystemTurn: isSchedulerSystemTurn(options ?? {}),
   });

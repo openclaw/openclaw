@@ -4,6 +4,7 @@ import {
   markAgentToolExecutionUnavailable,
 } from "./agent-tool-availability.js";
 import { copyAgentToolMetadata } from "./agent-tool-metadata.js";
+import { toolPolicyRestrictsTools, type ToolPolicyLike } from "./tool-policy.js";
 import { CRON_SCOPED_READ_ACTIONS, isAutomationsToolName } from "./tools/automations-tool-name.js";
 import { readToolStringParam, type AnyAgentTool } from "./tools/common.js";
 
@@ -24,17 +25,37 @@ export function isSchedulerSystemTurn(params: {
   );
 }
 
+type TurnNarrowing = "completion-handoff" | "sender";
+
+/**
+ * Names the per-turn policy that narrows the session's tool surface. Global and agent
+ * tools.toolsBySender follow the sender of each message; group-level toolsBySender stays
+ * inside the group policy and still filters.
+ */
+export function resolveTurnNarrowing(policy: {
+  requesterPolicySource: string;
+  senderPolicy?: ToolPolicyLike;
+}): TurnNarrowing | undefined {
+  if (policy.requesterPolicySource === "completion-handoff") {
+    return "completion-handoff";
+  }
+  return toolPolicyRestrictsTools(policy.senderPolicy) ? "sender" : undefined;
+}
+
 /**
  * Offers the session's tool surface on every turn, so the provider prompt prefix
  * stays cacheable, and gates the calls this turn's authority does not cover.
- * Owner-only tools and a completion handoff's replayed requester policy are
- * per-turn authority; they never hide a tool definition.
+ * Owner-only tools, a completion handoff's replayed requester policy and the
+ * sender's tools.toolsBySender entry are per-turn authority; they never hide a
+ * tool definition.
  */
 export function resolveTurnToolSurface(params: {
   /** Tools the full per-turn policy admits. */
   turnTools: AnyAgentTool[];
   /** The session surface, when per-turn policy narrows it; defaults to `turnTools`. */
   sessionTools?: AnyAgentTool[];
+  /** The per-turn policy that narrows `sessionTools`; names it in the refusal. */
+  narrowedBy?: TurnNarrowing;
   ownerOnlyDenied: ReadonlySet<string>;
   /**
    * The scheduler started this turn (see `isSchedulerSystemTurn`), not a sender.
@@ -73,7 +94,9 @@ export function resolveTurnToolSurface(params: {
         ? `On this automation-started turn, ${tool.name} runs only the ${CRON_SCOPED_READ_ACTIONS.join(", ")} actions. Other actions need the owner's authority, and this turn was not started by the owner. Do not retry them.`
         : ownerOnly
           ? `${tool.name} needs the owner's authority, and this turn was not started by the owner. Do not retry ${tool.name}.`
-          : `${tool.name} is outside the authority this completion turn carries from its requester. Do not retry ${tool.name}.`,
+          : params.narrowedBy === "sender"
+            ? `${tool.name} is not allowed for the sender of this message (tools.toolsBySender). Do not retry ${tool.name}.`
+            : `${tool.name} is outside the authority this completion turn carries from its requester. Do not retry ${tool.name}.`,
     );
     // Copying hook metadata also copies the availability binding; re-mark the denial
     // so dependent affordances (for example collector spawns) never treat it as callable.

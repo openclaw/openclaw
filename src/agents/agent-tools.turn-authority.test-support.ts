@@ -25,3 +25,9 @@ async function expectGated(tools: readonly GateableTool[], name: string, reason:
   expect(result.details).toMatchObject({ gated: true });
   expect(JSON.stringify(result.content)).toContain(reason);
 }
+
+export async function expectSenderGated(tools: readonly GateableTool[], ...names: string[]) {
+  for (const name of names) {
+    await expectGated(tools, name, `${name} is not allowed for the sender of this message`);
+  }
+}

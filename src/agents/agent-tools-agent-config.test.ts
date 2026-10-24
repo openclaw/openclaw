@@ -11,7 +11,7 @@ import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createSessionConversationTestRegistry } from "../test-utils/session-conversation-registry.js";
 import { createOpenClawCodingTools } from "./agent-tools.js";
 import { resolveEffectiveToolPolicy } from "./agent-tools.policy.js";
-import { expectOwnerGated } from "./agent-tools.turn-authority.test-support.js";
+import { expectOwnerGated, expectSenderGated } from "./agent-tools.turn-authority.test-support.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
 import type { SandboxDockerConfig } from "./sandbox/types.js";
 import { createRestrictedAgentSandboxConfig } from "./test-helpers/sandbox-agent-config-fixtures.js";
@@ -314,7 +314,7 @@ describe("Agent-specific tool filtering", () => {
     expect(groupPolicy(cfg, "family", "bob")).toEqual({ allow: ["read"] });
   });
 
-  it("should apply global per-sender tool policy to core tools", () => {
+  it("should apply global per-sender tool policy to core tools", async () => {
     const cfg: OpenClawConfig = {
       tools: { toolsBySender: { "id:guest": { deny: ["exec", "process"] } } },
     };
@@ -326,7 +326,9 @@ describe("Agent-specific tool filtering", () => {
     });
     const names = tools.map((tool) => tool.name);
 
-    expectToolNames(names, ["read"], ["exec", "process"]);
+    // Sender policy keeps the session's definitions for prompt-cache stability; calls are gated.
+    expectToolNames(names, ["read", "exec", "process"]);
+    await expectSenderGated(tools, "exec", "process");
   });
 
   it("keeps core tools for owner WebChat while restricting non-owners", async () => {
@@ -354,9 +356,10 @@ describe("Agent-specific tool filtering", () => {
     for (const name of ["exec", "process", ...ownerOnly]) {
       expect(ownerTools).toContain(name);
     }
-    for (const name of ["exec", "process"]) {
-      expect(nonOwnerTools.map((tool) => tool.name)).not.toContain(name);
-    }
+    expect(nonOwnerTools.map((tool) => tool.name)).toEqual(
+      expect.arrayContaining(["exec", "process"]),
+    );
+    await expectSenderGated(nonOwnerTools, "exec", "process");
     // Owner-only tools keep their definitions for prompt-cache stability; calls are gated.
     await expectOwnerGated(nonOwnerTools, ...ownerOnly);
   });
