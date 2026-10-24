@@ -1,6 +1,6 @@
-import { execFileSync, spawn } from "node:child_process";
+import { execFile, execFileSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
-import { createServer, request as httpRequest, type Server } from "node:http";
+import { createServer, type RequestListener, type Server } from "node:http";
 import { createServer as createHttpsServer } from "node:https";
 import * as net from "node:net";
 import { join } from "node:path";
@@ -19,21 +19,20 @@ const CHILD_PROCESS_TIMEOUT_MS = process.env.CI ? 45_000 : 15_000;
 const PROBE_TIMEOUT_MS = process.env.CI ? 15_000 : 5_000;
 const lifecycleUrl = resolveRuntimeWorkerUrl(externalProxyTestEntrypoints.lifecycle);
 const websocketUrl = resolveRuntimeWorkerUrl(externalProxyTestEntrypoints.websocket);
-const PROXY_TUNNEL_SOCKETS = new WeakMap<Server, Set<Duplex>>();
-type DiscordTlsFixture = {
-  caPath: string;
-  cert: string;
-  key: string;
-};
+const tunnelSockets = new Set<Duplex>();
 
-function createDiscordTlsFixture(dir: string): DiscordTlsFixture {
+function respond(status: number, body: string): RequestListener {
+  return (_req, res) => {
+    res.writeHead(status, { "content-type": "text/plain" });
+    res.end(body);
+  };
+}
+
+function createDiscordTlsFixture(dir: string) {
   const openssl = resolveSystemBin("openssl");
   if (!openssl) {
     throw new Error("openssl is required to generate proxy TLS test certificates");
   }
-  const caCertPath = join(dir, "ca-cert.pem");
-  const serverKeyPath = join(dir, "server-key.pem");
-  const serverCertPath = join(dir, "server-cert.pem");
   // Only fixed fixture filenames are split; the directory and subject stay separate arguments.
   const runOpenSsl = (args: string, subject?: string) =>
     execFileSync(openssl, [...args.split(" "), ...(subject ? ["-subj", subject] : [])], {
@@ -54,22 +53,10 @@ function createDiscordTlsFixture(dir: string): DiscordTlsFixture {
   );
 
   return {
-    caPath: caCertPath,
-    cert: readFileSync(serverCertPath, "utf8"),
-    key: readFileSync(serverKeyPath, "utf8"),
+    caPath: join(dir, "ca-cert.pem"),
+    cert: readFileSync(join(dir, "server-cert.pem"), "utf8"),
+    key: readFileSync(join(dir, "server-key.pem"), "utf8"),
   };
-}
-
-async function withDiscordTlsFixture<T>(
-  run: (fixture: DiscordTlsFixture) => Promise<T>,
-): Promise<T> {
-  return await withTestDir(
-    {
-      prefix: "openclaw-discord-tls-",
-      parentDir: resolvePreferredOpenClawTmpDir(),
-    },
-    async (dir) => run(createDiscordTlsFixture(dir)),
-  );
 }
 
 async function listenOnLoopback(server: Server, host = "127.0.0.1"): Promise<number> {
@@ -87,78 +74,26 @@ async function listenOnLoopback(server: Server, host = "127.0.0.1"): Promise<num
   });
 }
 
-async function closeServer(server: Server): Promise<void> {
-  if (!server.listening) {
-    return;
-  }
-  for (const socket of PROXY_TUNNEL_SOCKETS.get(server) ?? []) {
-    socket.destroy();
-  }
-  server.closeAllConnections?.();
-  await promisify(server.close.bind(server))();
-}
-
-type ConnectTargetOverride = {
-  hostname: string;
-  port: number;
-};
-
 function createTunnelProxy(
   seenConnectTargets: string[],
-  connectTargetOverrides: Record<string, ConnectTargetOverride> = {},
+  connectTargetOverrides: Record<string, { hostname: string; port: number }> = {},
 ): Server {
-  const tunnelSockets = new Set<Duplex>();
   function trackSocket(socket: Duplex) {
     tunnelSockets.add(socket);
     socket.once("close", () => tunnelSockets.delete(socket));
   }
   const proxy = createServer((req, res) => {
-    const target = req.url ?? "";
-    seenConnectTargets.push(target);
-
-    let targetUrl: URL;
-    try {
-      targetUrl = new URL(target);
-    } catch {
-      res.writeHead(400, { "content-type": "text/plain" });
-      res.end("absolute-form proxy URL required");
-      return;
-    }
-
-    const upstream = httpRequest(
-      {
-        hostname: targetUrl.hostname,
-        port: targetUrl.port,
-        path: `${targetUrl.pathname}${targetUrl.search}`,
-        method: req.method,
-        headers: { ...req.headers, host: targetUrl.host, connection: "close" },
-      },
-      (upstreamRes) => {
-        res.writeHead(upstreamRes.statusCode ?? 502, upstreamRes.headers);
-        upstreamRes.pipe(res);
-      },
-    );
-
-    upstream.on("error", () => {
-      res.writeHead(502, { "content-type": "text/plain" });
-      res.end("upstream error");
-    });
-    req.pipe(upstream);
+    // Both scenarios require HTTP to stay direct; only CONNECT may use this proxy.
+    seenConnectTargets.push(req.url ?? "");
+    res.writeHead(502);
+    res.end("unexpected HTTP proxy request");
   });
-  PROXY_TUNNEL_SOCKETS.set(proxy, tunnelSockets);
 
   proxy.on("connect", (req, clientSocket, head) => {
     const target = req.url ?? "";
     seenConnectTargets.push(target);
 
-    let targetUrl: URL;
-    try {
-      targetUrl = new URL(`http://${target}`);
-    } catch {
-      clientSocket.destroy();
-      return;
-    }
-
+    const targetUrl = new URL(`http://${target}`);
     const override = connectTargetOverrides[target];
     trackSocket(clientSocket);
     const upstream = net.connect(
@@ -190,11 +125,7 @@ function createTunnelProxy(
   return proxy;
 }
 
-async function runNodeModule(
-  source: string,
-  env: NodeJS.ProcessEnv,
-  imports = "",
-): Promise<{ code: number | null; stdout: string; stderr: string }> {
+async function runNodeModule(source: string, env: NodeJS.ProcessEnv, imports = "") {
   const script = `
         ${imports}
         import http from "node:http";
@@ -227,61 +158,30 @@ async function runNodeModule(
           await stopProxy(handle);
         }
   `;
-  const child = spawn(
+  return await promisify(execFile)(
     process.execPath,
     [...resolveRuntimeWorkerArgv(lifecycleUrl).slice(0, -1), ...createNodeEvalArgs(script)],
     {
       cwd: process.cwd(),
-      env,
-      stdio: ["ignore", "pipe", "pipe"],
+      env: { ...process.env, NO_PROXY: "127.0.0.1,localhost", no_proxy: "localhost", ...env },
+      timeout: CHILD_PROCESS_TIMEOUT_MS,
+      killSignal: "SIGKILL",
     },
   );
-
-  let stdout = "";
-  let stderr = "";
-  child.stdout.setEncoding("utf8");
-  child.stderr.setEncoding("utf8");
-  child.stdout.on("data", (chunk: string) => {
-    stdout += chunk;
-  });
-  child.stderr.on("data", (chunk: string) => {
-    stderr += chunk;
-  });
-
-  return new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => {
-      child.kill("SIGKILL");
-      reject(new Error(`child process timed out\nstdout:\n${stdout}\nstderr:\n${stderr}`));
-    }, CHILD_PROCESS_TIMEOUT_MS);
-
-    child.on("error", (err) => {
-      clearTimeout(timeout);
-      reject(err);
-    });
-    child.on("close", (code) => {
-      clearTimeout(timeout);
-      resolve({ code, stdout, stderr });
-    });
-  });
 }
 
 describe("SSRF external proxy routing", () => {
   const servers: Server[] = [];
   const webSockets: WebSocketServer[] = [];
-  function track(server: Server): Server {
+  async function listen(server: Server, host = "127.0.0.1"): Promise<number> {
     servers.push(server);
-    return server;
+    return listenOnLoopback(server, host);
   }
   function httpTarget(status: number, body: string): Server {
-    return track(
-      createServer((_req, res) => {
-        res.writeHead(status, { "content-type": "text/plain" });
-        res.end(body);
-      }),
-    );
+    return createServer(respond(status, body));
   }
   function wsTarget(): Server {
-    const server = track(createServer());
+    const server = createServer();
     const wss = new WebSocketServer({ server });
     webSockets.push(wss);
     wss.on("connection", (ws) => ws.close(1000, "done"));
@@ -289,28 +189,29 @@ describe("SSRF external proxy routing", () => {
   }
 
   afterEach(async () => {
+    for (const socket of tunnelSockets) {
+      socket.destroy();
+    }
+    tunnelSockets.clear();
     for (const wss of webSockets.splice(0)) {
       await new Promise<void>((resolve) => {
         wss.close(() => resolve());
       });
     }
     for (const server of servers.splice(0).toReversed()) {
-      await closeServer(server);
+      if (server.listening) {
+        server.closeAllConnections();
+        await promisify(server.close.bind(server))();
+      }
     }
   });
 
   it("keeps runtime loopback HTTP and WebSocket requests direct with managed proxy enabled", async () => {
-    const target = httpTarget(218, "from loopback target");
-    const globalFetchTarget = httpTarget(219, "from global fetch target");
-    const targetPort = await listenOnLoopback(target);
-    const globalFetchTargetPort = await listenOnLoopback(globalFetchTarget, "::1");
-    const wsTargetPort = await listenOnLoopback(wsTarget());
-    const gatewayBypassWsTargetPort = await listenOnLoopback(wsTarget());
-    const httpsLikeTarget = httpTarget(200, "plain target for https CONNECT proof");
-    const httpsLikeTargetPort = await listenOnLoopback(httpsLikeTarget);
+    const targetPort = await listen(httpTarget(218, "from loopback target"));
+    const globalFetchTargetPort = await listen(httpTarget(219, "from global fetch target"), "::1");
+    const wsTargetPort = await listen(wsTarget());
     const seenConnectTargets: string[] = [];
-    const proxy = track(createTunnelProxy(seenConnectTargets));
-    const proxyPort = await listenOnLoopback(proxy);
+    const proxyPort = await listen(createTunnelProxy(seenConnectTargets));
     const child = await runNodeModule(
       `
         async function expectFailure(label, run) {
@@ -365,17 +266,14 @@ describe("SSRF external proxy routing", () => {
           }));
       `,
       {
-        ...process.env,
         OPENCLAW_PROXY_URL: `http://127.0.0.1:${proxyPort}`,
         OPENCLAW_TEST_TARGET_URL: `http://127.0.0.1:${targetPort}/private-metadata`,
         OPENCLAW_TEST_GLOBAL_FETCH_TARGET_URL: `http://[::1]:${globalFetchTargetPort}/global-fetch-metadata`,
         OPENCLAW_TEST_NODE_HTTP_TARGET_URL: `http://localhost:${targetPort}/node-http-metadata`,
         OPENCLAW_TEST_EXPLICIT_AGENT_TARGET_URL: `http://127.0.0.1:${targetPort}/explicit-agent`,
-        OPENCLAW_TEST_NODE_HTTPS_TARGET_URL: `https://127.0.0.1:${httpsLikeTargetPort}/https-connect-proof`,
+        OPENCLAW_TEST_NODE_HTTPS_TARGET_URL: `https://127.0.0.1:${targetPort}/https-connect-proof`,
         OPENCLAW_TEST_WS_TARGET_URL: `ws://127.0.0.1:${wsTargetPort}/websocket-proxied`,
-        OPENCLAW_TEST_GATEWAY_BYPASS_WS_URL: `ws://127.0.0.1:${gatewayBypassWsTargetPort}/gateway-bypass`,
-        NO_PROXY: "127.0.0.1,localhost",
-        no_proxy: "localhost",
+        OPENCLAW_TEST_GATEWAY_BYPASS_WS_URL: `ws://127.0.0.1:${wsTargetPort}/gateway-bypass`,
       },
       `import { fetch as undiciFetch } from "undici";
         import { WebSocket } from ${JSON.stringify(websocketUrl.href)};
@@ -383,7 +281,6 @@ describe("SSRF external proxy routing", () => {
     );
 
     expect(child.stderr).toBe("");
-    expect(child.code).toBe(0);
     expect(child.stdout).toContain('"fetch":{"status":218');
     expect(child.stdout).toContain('"globalFetch":{"status":219');
     expect(child.stdout).toContain('"nodeHttp":{"status":218');
@@ -393,41 +290,36 @@ describe("SSRF external proxy routing", () => {
   });
 
   it("preserves the target TLS hostname for Node HTTPS requests through the managed proxy", async () => {
-    await withDiscordTlsFixture(async (tlsFixture) => {
-      const tlsTarget = track(
-        createHttpsServer({ key: tlsFixture.key, cert: tlsFixture.cert }, (_req, res) => {
-          res.writeHead(209, { "content-type": "text/plain" });
-          res.end("discord target tls ok");
-        }),
-      );
-      const tlsTargetPort = await listenOnLoopback(tlsTarget);
-      const seenConnectTargets: string[] = [];
-      const proxy = track(
-        createTunnelProxy(seenConnectTargets, {
-          [`discord.com:${tlsTargetPort}`]: { hostname: "127.0.0.1", port: tlsTargetPort },
-        }),
-      );
-      const proxyPort = await listenOnLoopback(proxy);
-      const child = await runNodeModule(
-        `
+    await withTestDir(
+      { prefix: "openclaw-discord-tls-", parentDir: resolvePreferredOpenClawTmpDir() },
+      async (dir) => {
+        const tlsFixture = createDiscordTlsFixture(dir);
+        const tlsTargetPort = await listen(
+          createHttpsServer(tlsFixture, respond(209, "discord target tls ok")),
+        );
+        const seenConnectTargets: string[] = [];
+        const proxyPort = await listen(
+          createTunnelProxy(seenConnectTargets, {
+            [`discord.com:${tlsTargetPort}`]: { hostname: "127.0.0.1", port: tlsTargetPort },
+          }),
+        );
+        const child = await runNodeModule(
+          `
           const response = await nodeGet(process.env.OPENCLAW_TEST_DISCORD_TLS_URL);
           console.log(JSON.stringify(response));
       `,
-        {
-          ...process.env,
-          NODE_EXTRA_CA_CERTS: tlsFixture.caPath,
-          OPENCLAW_PROXY_URL: `http://127.0.0.1:${proxyPort}`,
-          OPENCLAW_TEST_DISCORD_TLS_URL: `https://discord.com:${tlsTargetPort}/tls-proxy-proof`,
-          NO_PROXY: "127.0.0.1,localhost",
-          no_proxy: "localhost",
-        },
-      );
+          {
+            NODE_EXTRA_CA_CERTS: tlsFixture.caPath,
+            OPENCLAW_PROXY_URL: `http://127.0.0.1:${proxyPort}`,
+            OPENCLAW_TEST_DISCORD_TLS_URL: `https://discord.com:${tlsTargetPort}/tls-proxy-proof`,
+          },
+        );
 
-      expect(child.stderr).toBe("");
-      expect(child.code).toBe(0);
-      expect(child.stdout).toContain('"status":209');
-      expect(child.stdout).toContain('"body":"discord target tls ok"');
-      expect(seenConnectTargets).toContain(`discord.com:${tlsTargetPort}`);
-    });
+        expect(child.stderr).toBe("");
+        expect(child.stdout).toContain('"status":209');
+        expect(child.stdout).toContain('"body":"discord target tls ok"');
+        expect(seenConnectTargets).toContain(`discord.com:${tlsTargetPort}`);
+      },
+    );
   });
 });
