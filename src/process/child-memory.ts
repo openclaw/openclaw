@@ -109,29 +109,30 @@ async function sample(): Promise<void> {
   timer = undefined;
   sampling = true;
   // Trees admitted while reads are pending join the next tick.
-  const currentWatches = [...watches];
   try {
-    for (const watch of currentWatches) {
-      const stopped = () => !watches.has(watch);
-      if (stopped()) {
-        continue;
-      }
-      try {
-        const bytes = await readTreeMemory(watch.pid, watch.limitBytes, stopped);
-        if (!stopped() && bytes > watch.limitBytes) {
-          watches.delete(watch);
-          watch.onLimit(bytes);
-          watch.onDiagnostic(`\n${formatChildMemoryLimit(watch.limitBytes, bytes)}\n`);
+    await Promise.all(
+      Array.from(watches, async (watch) => {
+        const stopped = () => !watches.has(watch);
+        if (stopped()) {
+          return;
         }
-      } catch {
-        if (!stopped() && !watch.warned) {
-          watch.warned = true;
-          watch.onDiagnostic(
-            "\nWarning: OpenClaw could not read child memory usage; memory protection is degraded. Check procfs permissions.\n",
-          );
+        try {
+          const bytes = await readTreeMemory(watch.pid, watch.limitBytes, stopped);
+          if (!stopped() && bytes > watch.limitBytes) {
+            watches.delete(watch);
+            watch.onLimit(bytes);
+            watch.onDiagnostic(`\n${formatChildMemoryLimit(watch.limitBytes, bytes)}\n`);
+          }
+        } catch {
+          if (!stopped() && !watch.warned) {
+            watch.warned = true;
+            watch.onDiagnostic(
+              "\nWarning: OpenClaw could not read child memory usage; memory protection is degraded. Check procfs permissions.\n",
+            );
+          }
         }
-      }
-    }
+      }),
+    );
   } finally {
     sampling = false;
     if (watches.size > 0) {

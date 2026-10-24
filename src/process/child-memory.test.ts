@@ -19,9 +19,9 @@ function watch(pid = 100) {
   return { stop, onLimit, onDiagnostic };
 }
 
-function mockProc(files: Record<string, string>, beforeRead?: () => Promise<void>) {
+function mockProc(files: Record<string, string>, beforeRead?: (path: string) => Promise<void>) {
   procfs.readFile.mockImplementation(async (path) => {
-    await beforeRead?.();
+    await beforeRead?.(path);
     const contents = files[path];
     if (contents === undefined) {
       throw Object.assign(new Error("gone"), { code: "ENOENT" });
@@ -84,7 +84,7 @@ it("counts nonleader descendants and swapped memory without truncating long stat
   expect(procfs.readFile).toHaveBeenCalledTimes(reads);
 });
 
-it("cancels an awaited sample without cancelling other trees, then restarts after idle", async () => {
+it("protects other trees during a blocked read without overlapping ticks, then restarts after idle", async () => {
   vi.useFakeTimers();
   mockProcessPlatform("linux");
   const blocked = createDeferred();
@@ -94,28 +94,36 @@ it("cancels an awaited sample without cancelling other trees, then restarts afte
       "/proc/200/status": "VmRSS:\t64 kB\n",
       "/proc/300/status": "VmRSS:\t256 kB\n",
     },
-    () => blocked.promise,
+    async (path) => {
+      if (path === "/proc/100/status") {
+        await blocked.promise;
+      }
+    },
   );
   const first = watch();
   const second = watch(200);
+  const third = watch(300);
   expect(vi.getTimerCount()).toBe(1);
   await vi.advanceTimersByTimeAsync(1000);
+  expect(third.onLimit).toHaveBeenCalledExactlyOnceWith(256 * 1024);
   first.stop();
   await vi.advanceTimersByTimeAsync(5000);
-  expect(procfs.readFile).toHaveBeenCalledTimes(1);
+  expect(procfs.readFile).toHaveBeenCalledTimes(3);
   blocked.resolve();
   await vi.advanceTimersByTimeAsync(0);
   expect(first.onLimit).not.toHaveBeenCalled();
   expect(first.onDiagnostic).not.toHaveBeenCalled();
   expect(second.onLimit).not.toHaveBeenCalled();
   expect(second.onDiagnostic).not.toHaveBeenCalled();
-  expect(procfs.readFile).toHaveBeenCalledTimes(2);
+  expect(procfs.readFile).toHaveBeenCalledTimes(3);
   expect(vi.getTimerCount()).toBe(1);
+  await vi.advanceTimersByTimeAsync(1000);
+  expect(procfs.readFile).toHaveBeenCalledTimes(4);
   second.stop();
   expect(vi.getTimerCount()).toBe(0);
-  const third = watch(300);
+  const restarted = watch(300);
   await vi.advanceTimersByTimeAsync(1000);
-  expect(third.onLimit).toHaveBeenCalledExactlyOnceWith(256 * 1024);
+  expect(restarted.onLimit).toHaveBeenCalledExactlyOnceWith(256 * 1024);
   expect(vi.getTimerCount()).toBe(0);
 });
 
