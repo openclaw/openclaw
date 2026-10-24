@@ -3938,11 +3938,15 @@ td.data-table-key-col {
 
   .cmd-palette__input::-webkit-scrollbar-thumb {
     border-radius: var(--radius-sm);
-    background: var(--muted);
+    background: var(--scrollbar-thumb);
+  }
+
+  .cmd-palette__input::-webkit-scrollbar-thumb:hover {
+    background: var(--scrollbar-thumb-hover);
   }
 
   .cmd-palette__input::-webkit-scrollbar-track {
-    background: var(--bg-muted);
+    background: transparent;
   }
 }
 
