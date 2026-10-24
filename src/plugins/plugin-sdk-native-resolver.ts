@@ -62,6 +62,7 @@ const INTERNAL_CORE_PACKAGE_ALIASES = [
       ["types", "types.ts"],
       ["validation", "validation.ts"],
       ["internal/anthropic", path.join("internal", "anthropic.ts")],
+      ["internal/google", path.join("internal", "google.ts")],
       ["internal/google-model-family", path.join("internal", "google-model-family.ts")],
       ["internal/openai", path.join("internal", "openai.ts")],
       [

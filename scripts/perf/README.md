@@ -54,6 +54,31 @@ snapshot and run the streaming analyzer in aggregate-only mode with bounded host
 resources. It covers dominators, collections, duplicate strings, and session-key
 scaling without exporting snapshot payloads.
 
+### Main-isolate module census
+
+`scripts/gateway-heap-rig.mjs --module-census` records each loaded main-isolate
+script's URL, hash, UTF-8 source bytes, and V8 code statistics after seeding and
+after the mixed-turn workload. It uses the rig's private child IPC descriptor;
+workers are excluded and no inspector network listener is opened. Run the dist
+build on the authorized benchmark host with a fresh synthetic root, for example:
+
+```sh
+node --import ./scripts/tsx.mjs scripts/gateway-heap-rig.mjs \
+  --root /path/to/fresh-run --minutes 10 --sessions 500 --clients 4 \
+  --port 41673 --turn-interval-ms 20000 --snapshot-minutes 10 --module-census
+```
+
+Use `--coverage` in a separate attribution run to record exact function/range
+execution during the workload. Coverage can retain code and change optimization;
+its timings and code residency are not uninstrumented performance evidence.
+Use `--idle-minutes 5` without coverage to stop workload traffic while leaving
+normal Gateway maintenance active, sample code statistics each minute, and
+capture a final idle snapshot. Census inspectors disconnect after each capture.
+Source bytes and V8 code statistics are not dominator-retained bytes: use the
+heap snapshot analyzer for retained-size attribution. All fixtures and mock
+provider responses are synthetic; this workload does not reproduce a private
+production plugin configuration or measure provider-network latency.
+
 ## Released session authority
 
 ### Pending-input timer retention
