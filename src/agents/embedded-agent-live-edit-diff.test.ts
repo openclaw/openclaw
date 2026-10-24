@@ -35,7 +35,8 @@ it("bounds cumulative argument assembly before parsing across CLI and embedded c
   expect(readPartialJson).toHaveBeenCalledTimes(2);
   updateLiveEditDiffProgressFromInput(state, { ...input, partialJsonLength: 1024 * 1024 + 1 });
   expect(readPartialJson).toHaveBeenCalledTimes(2);
-  expect(state.size).toBe(0);
+  // Past the parse cap the call stays tracked so its input length keeps reporting.
+  expect(state.size).toBe(1);
   for (let index = 0; index < 64; index++) {
     updateLiveEditDiffProgressFromInput(state, { ...input, toolCallId: `call-${index}` });
   }
@@ -70,8 +71,8 @@ it("keeps streamed edit counts monotonic, throttled, and scoped to tool completi
   expect(state.size).toBe(0);
 });
 
-it("counts canonical write and patch arguments but ignores non-edit tools", () => {
-  const { state, update } = progressHarness();
+it("counts canonical write and patch arguments", () => {
+  const { update } = progressHarness();
   vi.setSystemTime(2_000);
 
   expect(update("write-1", "write", '{"path":"a","content":"one\\ntwo\\n')?.diff).toEqual({
@@ -87,8 +88,61 @@ it("counts canonical write and patch arguments but ignores non-edit tools", () =
       '{"input":"*** Begin Patch\\n*** Update File: a\\n@@\\n-old\\n+new\\n+next\\n',
     )?.diff,
   ).toEqual({ added: 2, removed: 1 });
+});
 
-  vi.setSystemTime(2_600);
-  expect(update("read-1", "read", '{"path":"a\\n')).toBeUndefined();
-  expect(state.has("read-1")).toBe(false);
+it("reports counts-only input progress for any tool, throttled and without content", () => {
+  const { state, update } = progressHarness();
+  vi.setSystemTime(3_000);
+  const secret = "SECRET-ARGUMENT-CONTENT";
+  const call = (partialJson: string) => update("draft-1", "Sites_Update_Draft", partialJson);
+
+  const first = call(`{"html":"${secret}`);
+  expect(first).toEqual({
+    toolCallId: "draft-1",
+    name: "sites_update_draft",
+    inputChars: `{"html":"${secret}`.length,
+  });
+  expect(JSON.stringify(first)).not.toContain(secret);
+
+  vi.setSystemTime(3_100);
+  expect(call(`{"html":"${secret}${secret}`)).toBeUndefined();
+
+  vi.setSystemTime(3_250);
+  const large = `{"html":"${"x".repeat(2 * 1024 * 1024)}`;
+  expect(call(large)).toEqual({
+    toolCallId: "draft-1",
+    name: "sites_update_draft",
+    inputChars: large.length,
+  });
+
+  vi.setSystemTime(3_500);
+  expect(call(large)).toBeUndefined();
+
+  updateLiveEditDiffProgress(state, { type: "toolcall_end", toolCall: { id: "draft-1" } });
+  expect(state.size).toBe(0);
+});
+
+it("keeps edit counts frozen past the parse cap while length keeps reporting", () => {
+  const { update } = progressHarness();
+  vi.setSystemTime(4_000);
+  const prefix = '{"path":"a","content":"one\\ntwo\\n';
+  expect(update("write-big", "write", prefix)?.diff).toEqual({ added: 2, removed: 0 });
+
+  vi.setSystemTime(4_250);
+  const oversized = `${prefix}${"three\\n".repeat(200_000)}`;
+  expect(update("write-big", "write", oversized)).toEqual({
+    toolCallId: "write-big",
+    name: "write",
+    inputChars: oversized.length,
+    diff: { added: 2, removed: 0 },
+  });
+});
+
+it("bounds tracked calls", () => {
+  const { state, update } = progressHarness();
+  for (let index = 0; index < 64; index += 1) {
+    update(`call-${index}`, "exec", "{");
+  }
+  expect(update("call-overflow", "exec", "{")).toBeUndefined();
+  expect(state.size).toBe(64);
 });
