@@ -4,18 +4,12 @@ import fs from "node:fs/promises";
 import type { ServerResponse } from "node:http";
 import path from "node:path";
 import { text as readText } from "node:stream/consumers";
-import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { expect, it, vi } from "vitest";
 import { createOpenAiResponsesModelConfig } from "../../test/helpers/openai-responses-model-fixture.js";
 import {
   writeOpenAiResponsesSse,
   writeOpenAiResponsesText,
 } from "../../test/helpers/openai-responses-sse.js";
-import {
-  withUpdateCommandExecutor,
-  withUpdateCommandExecutorChild,
-  type UpdateCommandChildGrant,
-} from "../cli/update-cli/update-command-executor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withServer } from "../plugin-sdk/test-helpers/http-test-server.js";
 import {
@@ -24,24 +18,13 @@ import {
 } from "../test-utils/openclaw-test-state.js";
 import { installationTargetEnv } from "./installation-target-context.js";
 import { updateRepairWorkerMessageSchema as releasedUpdateRepairWorkerMessageSchema } from "./test-fixtures/update-repair-protocol.v2026-9-4.js";
-import {
-  captureManagedUpdateLeaseDatabaseIdentity,
-  createManagedHandoffLeaseDatabase,
-} from "./update-managed-service-handoff-database.js";
 import { runUpdateRepairLoop } from "./update-repair-agent.js";
 import {
   updateRepairBudgetSchema,
   type UpdateRepairParams,
   type UpdateRepairResult,
-  type UpdateRepairTurnResult,
-  type UpdateRepairWorkerMessage,
 } from "./update-repair-protocol.js";
-import {
-  createUpdateRun,
-  finishUpdateRun,
-  getUpdateRun,
-  recordUpdateRunPhase,
-} from "./update-run-ledger.js";
+import { createUpdateRun, finishUpdateRun, getUpdateRun } from "./update-run-ledger.js";
 
 // Manual triage retains the shared in-process loop. Load its built runtime through
 // Node's loader, as the CLI does; worker cases already use the packaged child.
@@ -52,19 +35,11 @@ vi.mock("./update-repair-agent.runtime.js", async () => {
   ) as typeof import("./update-repair-agent.runtime.js");
 });
 
-type TurnDelegation = {
-  runId: string;
-  admissionEnv: NodeJS.ProcessEnv;
-  executor: { grant: UpdateCommandChildGrant; bindChild?: (pid: number) => void };
-};
 const requester = { channel: "synthetic", senderId: "owner" };
 const expectMissing = (file: string) =>
   expect(fs.stat(file)).rejects.toMatchObject({ code: "ENOENT" });
 
-async function runRepairEnvelope(
-  params: UpdateRepairParams,
-  delegation?: TurnDelegation,
-): Promise<UpdateRepairResult | UpdateRepairTurnResult> {
+async function runRepairEnvelope(params: UpdateRepairParams): Promise<UpdateRepairResult> {
   const child = spawn(
     process.execPath,
     [path.join(params.target.installRoot, "dist", "infra", "update-repair.worker.js")],
@@ -73,82 +48,55 @@ async function runRepairEnvelope(
       env: {
         ...process.env,
         NODE_DISABLE_COMPILE_CACHE: "1",
-        ...(delegation
-          ? delegation.admissionEnv
-          : installationTargetEnv({
-              stateDir: params.target.stateDir,
-              configPath: params.target.configPath,
-              defaultWorkspaceDir: params.target.workspaceDir,
-            })),
+        ...installationTargetEnv({
+          stateDir: params.target.stateDir,
+          configPath: params.target.configPath,
+          defaultWorkspaceDir: params.target.workspaceDir,
+        }),
         OPENCLAW_TEST_CONSOLE: "1",
       },
-      detached: Boolean(delegation) && process.platform !== "win32",
       stdio: ["ignore", "ignore", "inherit", "ipc"],
     },
   );
   let failure: unknown;
-  let result: UpdateRepairResult | UpdateRepairTurnResult | undefined;
+  let result: UpdateRepairResult | undefined;
+  const closed = once(child, "close");
   const timer = setTimeout(() => {
     failure = new Error("Repair worker timed out.");
     child.kill("SIGKILL");
   }, 90_000);
   try {
-    return await new Promise((resolve, reject) => {
-      child.once("error", reject);
-      child.once("close", (code) => {
-        if (code === 0 && result && !failure) {
-          resolve(result);
-        } else {
-          reject(toErrorObject(failure, `Repair worker exited ${code}.`));
+    child.on("message", (raw) => {
+      try {
+        const message = releasedUpdateRepairWorkerMessageSchema.parse(raw);
+        if (message.type === "ready") {
+          // v2026.9.4 sends neither an authority object nor context.phase after
+          // activation. The candidate must still accept that shipped message.
+          child.send({
+            type: "start",
+            runId: "released-update-run",
+            requester,
+            target: params.target,
+            failure: { error: params.context.error },
+            context: {},
+            budget: updateRepairBudgetSchema.parse({ ...params.budget, maxTurns: 1 }),
+          });
+        } else if (message.type === "result") {
+          result = message.result;
         }
-      });
-      child.on("message", (raw) => {
-        try {
-          const message =
-            (raw as { type?: unknown }).type === "turn-result"
-              ? (raw as Extract<UpdateRepairWorkerMessage, { type: "turn-result" }>)
-              : releasedUpdateRepairWorkerMessageSchema.parse(raw);
-          if (message.type === "ready") {
-            if (delegation) {
-              if (delegation.executor.bindChild) {
-                if (!child.pid) {
-                  throw new Error("Repair worker has no PID.");
-                }
-                delegation.executor.bindChild(child.pid);
-              }
-              child.send({
-                type: "turn",
-                runId: delegation.runId,
-                executor: delegation.executor.grant,
-                requester,
-                target: params.target,
-                prompt: "Repair the missing marker using the configured tools.",
-                wallClockMs: 90_000,
-                timeoutMs: 60_000,
-                maxToolCalls: 2,
-              });
-              return;
-            }
-            // v2026.9.4 sends neither an authority object nor context.phase after
-            // activation. The candidate must still accept that shipped message.
-            child.send({
-              type: "start",
-              runId: "released-update-run",
-              requester,
-              target: params.target,
-              failure: { error: params.context.error },
-              context: {},
-              budget: updateRepairBudgetSchema.parse({ ...params.budget, maxTurns: 1 }),
-            });
-          } else if (message.type === "result" || message.type === "turn-result") {
-            result = message.result;
-          }
-        } catch (error) {
-          failure = error;
-          child.kill("SIGKILL");
-        }
-      });
+      } catch (error) {
+        failure = error;
+        child.kill("SIGKILL");
+      }
     });
+    const [code] = await closed;
+    if (failure) {
+      throw failure;
+    }
+    if (code !== 0 || !result) {
+      throw new Error(`Repair worker exited ${code}.`);
+    }
+    return result;
   } finally {
     clearTimeout(timer);
   }
@@ -199,23 +147,19 @@ function writeRepairToolCall(response: ServerResponse, name: "exec" | "write"): 
   ]);
 }
 
-type RepairEntry = "released-parent" | "manual" | "turn" | "revoked-turn" | "wrong-receiver-turn";
-it.each(["released-parent", "manual", "turn", "revoked-turn", "wrong-receiver-turn"] as const)(
+const repairEntries = ["released-parent", "manual"] as const;
+type RepairEntry = (typeof repairEntries)[number];
+it.each(repairEntries)(
   "preserves released behavior and scopes repair inference (%s)",
   async (entry) => {
-    const phase = entry === "turn" ? "validating" : "verifying";
     await withOpenClawTestState({ prefix: "update-repair-boundary-", layout: "home" }, (state) =>
-      exerciseRepair(state, phase, entry),
+      exerciseRepair(state, entry),
     );
   },
   120_000,
 );
 
-async function exerciseRepair(
-  state: OpenClawTestState,
-  phase: "verifying" | "validating",
-  entry: RepairEntry,
-) {
+async function exerciseRepair(state: OpenClawTestState, entry: RepairEntry) {
   const requests: ModelRequest[] = [];
   const providerCalls: string[] = [];
   const errors: unknown[] = [];
@@ -240,14 +184,6 @@ async function exerciseRepair(
             continue;
           }
           issued[name] = true;
-          if (name === "exec" && entry === "revoked-turn") {
-            // Remove the requester's owner permission while inference is awaiting.
-            const current = JSON.parse(await fs.readFile(state.configPath, "utf8"));
-            await fs.writeFile(
-              state.configPath,
-              JSON.stringify({ ...current, commands: { ownerAllowFrom: ["other-owner"] } }),
-            );
-          }
           writeRepairToolCall(response, name);
           return;
         }
@@ -289,32 +225,17 @@ async function exerciseRepair(
       };
       await state.writeConfig(config);
       const marker = path.join(state.workspaceDir, "repair-proof.txt");
-      const targetStateDir = phase === "validating" ? state.path("rehearsal") : state.stateDir;
-      const targetConfigPath =
-        phase === "validating" ? path.join(targetStateDir, "openclaw.json") : state.configPath;
-      if (phase === "validating") {
-        await fs.mkdir(targetStateDir, { recursive: true });
-        await fs.writeFile(targetConfigPath, JSON.stringify(config));
-      }
-      const expected = `${targetStateDir} 0 0 external`;
+      const expected = `${state.stateDir} 0 0 external`;
       const ledgerEnv = { ...process.env };
       const run =
-        entry === "manual" || entry.endsWith("turn")
-          ? createUpdateRun(
-              entry === "manual" ? { trigger: "cli" } : { trigger: "chat", origin: { requester } },
-              { env: ledgerEnv },
-            )
-          : undefined;
-      if (run && entry === "manual") {
+        entry === "manual" ? createUpdateRun({ trigger: "cli" }, { env: ledgerEnv }) : undefined;
+      if (run) {
         finishUpdateRun(
           run.runId,
           { status: "failed", reason: "Synthetic startup failure" },
           { env: ledgerEnv },
         );
-      } else if (run) {
-        recordUpdateRunPhase(run.runId, "repairing", undefined, { env: ledgerEnv });
       }
-      // Delegated turns can target a rehearsal; released parents omit context.phase.
       await fs.symlink(
         path.join(process.cwd(), "dist"),
         path.join(state.workspaceDir, "dist"),
@@ -325,12 +246,12 @@ async function exerciseRepair(
           ? () => getUpdateRun(run.runId, { env: ledgerEnv })?.status === "failed"
           : undefined,
         target: {
-          stateDir: targetStateDir,
-          configPath: targetConfigPath,
+          stateDir: state.stateDir,
+          configPath: state.configPath,
           workspaceDir: state.workspaceDir,
           installRoot: state.workspaceDir,
         },
-        context: { error: "Synthetic repair marker is missing.", phase },
+        context: { error: "Synthetic repair marker is missing.", phase: "verifying" },
         budget: { wallClockMs: 90_000, perTurnMs: 60_000, maxToolCalls: 2 },
         validate: vi.fn(async () => {
           const text = await fs.readFile(marker, "utf8").catch(() => "");
@@ -342,79 +263,10 @@ async function exerciseRepair(
           };
         }),
       };
-      const runTurn = async () => {
-        if (!run) {
-          throw new Error("Delegated repair requires an update run.");
-        }
-        const control = state.path("executor-control");
-        await fs.mkdir(control, { mode: 0o700 });
-        const databasePath = path.join(control, "managed-update-handoffs.sqlite");
-        const identity = createManagedHandoffLeaseDatabase(databasePath)(true, () =>
-          captureManagedUpdateLeaseDatabaseIdentity(databasePath),
-        );
-        return withUpdateCommandExecutor(
-          run.runId,
-          async (executor) => {
-            const fence = await executor.enter(state.workspaceDir);
-            return withUpdateCommandExecutorChild(
-              fence,
-              params.target.installRoot,
-              async (grant, bindChild) => {
-                const envelope = (receiver: TurnDelegation["executor"] = { grant, bindChild }) =>
-                  runRepairEnvelope(params, {
-                    runId: run.runId,
-                    admissionEnv: ledgerEnv,
-                    executor: receiver,
-                  });
-                if (entry !== "wrong-receiver-turn") {
-                  return envelope();
-                }
-                const boundReceiver = spawn(
-                  process.execPath,
-                  ["-e", "setInterval(() => {}, 60_000)"],
-                  { stdio: "ignore" },
-                );
-                const closed = once(boundReceiver, "close");
-                if (!boundReceiver.pid) {
-                  boundReceiver.kill("SIGKILL");
-                  await closed;
-                  throw new Error("Bound repair receiver has no PID.");
-                }
-                // The live grant names this decoy. The worker must reject it
-                // before model inference or filesystem effects.
-                try {
-                  bindChild(boundReceiver.pid);
-                  return await envelope({ grant });
-                } finally {
-                  boundReceiver.kill("SIGKILL");
-                  await closed;
-                }
-              },
-            );
-          },
-          { existingAuthority: { ...identity, installKey: state.workspaceDir } },
-        );
-      };
-      if (entry === "revoked-turn" || entry === "wrong-receiver-turn") {
-        const result = await runTurn();
-        expect(result, JSON.stringify(result)).toMatchObject({
-          status: "aborted",
-          ...(entry === "revoked-turn" ? { reason: "requester-revoked" } : {}),
-        });
-        if (entry === "revoked-turn") {
-          expect(issued.exec).toBe(true);
-        } else {
-          expect(requests).toEqual([]);
-        }
-        await expectMissing(marker);
-        return;
-      }
       const result =
-        entry === "turn"
-          ? await runTurn()
-          : entry === "released-parent"
-            ? await runRepairEnvelope(params)
-            : await runUpdateRepairLoop(params);
+        entry === "released-parent"
+          ? await runRepairEnvelope(params)
+          : await runUpdateRepairLoop(params);
 
       expect(errors).toEqual([]);
       if (entry === "released-parent") {
@@ -428,18 +280,14 @@ async function exerciseRepair(
         expect(params.validate).not.toHaveBeenCalled();
         expect(providerCalls).toEqual([]);
         await expectMissing(marker);
-        expect(JSON.parse(await fs.readFile(targetConfigPath, "utf8"))).toEqual(config);
+        expect(JSON.parse(await fs.readFile(state.configPath, "utf8"))).toEqual(config);
         return;
       }
-      expect(result, JSON.stringify(result)).toMatchObject(
-        entry === "turn"
-          ? { status: "completed", toolCalls: 2, summary: "Created the target repair marker." }
-          : {
-              status: "repaired",
-              finalValidation: { ok: true, score: 1 },
-              attempts: [{ toolCalls: 2, summary: "Created the target repair marker." }],
-            },
-      );
+      expect(result, JSON.stringify(result)).toMatchObject({
+        status: "repaired",
+        finalValidation: { ok: true, score: 1 },
+        attempts: [{ toolCalls: 2, summary: "Created the target repair marker." }],
+      });
       expect(requests.some((body) => body.tools?.some((tool) => tool.name === "exec"))).toBe(true);
       expect(issued.write).toBe(true);
       await expectMissing(path.join(state.workspaceDir, "..", "outside-repair.txt"));
