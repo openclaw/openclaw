@@ -15,6 +15,8 @@ Read [ui/AGENTS.md](../../../ui/AGENTS.md) first; its state-ownership rules appl
 
 For async reads, mutations, keyed projections, lazy components, or coordinated loading, read the [async and action recipes](references/async-and-actions.md). Cron is the worked reference: plain owners admit requests and writes; Solid presents their readiness and optimistic transitions.
 
+For lists, derivations, copies, or anything on a hot path, read [performance](references/performance.md).
+
 1. **Domain owners stay plain TypeScript.** The Gateway store, capabilities, `lib/sessions/*`, caches, persistence, and mutation authority keep synchronous mutate-then-read semantics. Solid 2 writes become visible only after a microtask flush, so authoritative state never lives in a signal. → [state and ownership](references/state-and-ownership.md)
 2. **Components consume projections** from `ui/src/lib/reactive/` (one per owner and scope, never a second store) and `useApplication()` for the application context. Add a thin adapter only with its first production caller; subscribe to ordered events directly.
 3. **Host tags and classes survive.** A component renders its existing `openclaw-*` tag as a plain host element in light DOM; CSS and E2E select it. Never rename a tag or a class. → [components](references/components.md)
