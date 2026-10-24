@@ -19,6 +19,7 @@ import {
 import { runOpenClawAgentWorkerWrite } from "../../state/openclaw-agent-write-admission.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { SessionMutationAuthorizationChangedError } from "../session-sharing.js";
+import { fixedStoreOwnershipConfig } from "./sessions-fixed-store.test-support.js";
 import { initializeSessionReadContext } from "./sessions-read-cache.test-support.js";
 import { getSessionSuggestionTestMocks } from "./sessions-suggestions.test-mocks.js";
 import {
@@ -241,14 +242,9 @@ it("settles an accepted dispatch after caller revocation while its write waits",
 it("admits bare fixed-store keys only through their persisted owner", () =>
   withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const storePath = state.path("shared-sessions.sqlite");
-    const ownedConfig = {
-      session: { scope: "global", store: storePath },
-      agents: {
-        ownership: "explicit",
-        defaults: { sessionStore: { agentId: "ops" } },
-        entries: { ops: {}, research: {} },
-      },
-    } as ReturnType<GatewayRequestContext["getRuntimeConfig"]>;
+    const ownedConfig = fixedStoreOwnershipConfig(storePath) as ReturnType<
+      GatewayRequestContext["getRuntimeConfig"]
+    >;
     setRuntimeConfigSnapshot(ownedConfig);
     await upsertSessionEntryCore(
       { agentId: "ops", sessionKey: "global", storePath },

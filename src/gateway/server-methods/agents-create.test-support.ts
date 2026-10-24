@@ -1,5 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi, type Mock } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import type { RuntimeConfigWriteApplicationStatus } from "../../config/runtime-write-application.js";
 import { getActiveGatewayRootWorkCount } from "../../process/gateway-work-admission.js";
 import { runWithGatewayRootWorkAdmissionForTest } from "../../process/gateway-work-admission.test-helpers.js";
@@ -121,14 +122,8 @@ export function registerAgentCreateTests({
       },
     );
     it("retains the create request's Gateway work while onboarding starts after its receipt", async () => {
-      let releaseOnboarding!: () => void;
-      let onboardingStarted!: () => void;
-      const started = new Promise<void>((resolve) => {
-        onboardingStarted = resolve;
-      });
-      const onboarding = new Promise<void>((resolve) => {
-        releaseOnboarding = resolve;
-      });
+      const { promise: started, resolve: onboardingStarted } = createDeferred();
+      const { promise: onboarding, resolve: releaseOnboarding } = createDeferred();
       mocks.prepareAgentOnboarding.mockResolvedValueOnce({
         expectedConfigHash: "test-hash",
         assertCurrent: vi.fn(),
@@ -165,14 +160,8 @@ export function registerAgentCreateTests({
     it("captures operator authority before the create receipt and carries it into onboarding", async () => {
       const operatorAuthority = { assertCurrent: vi.fn(), retain: vi.fn(() => vi.fn()) };
       const releaseAuthority = vi.fn();
-      let releaseOnboarding!: () => void;
-      let onboardingStarted!: (options: unknown) => void;
-      const onboarding = new Promise<void>((resolve) => {
-        releaseOnboarding = resolve;
-      });
-      const started = new Promise<unknown>((resolve) => {
-        onboardingStarted = resolve;
-      });
+      const { promise: onboarding, resolve: releaseOnboarding } = createDeferred();
+      const { promise: started, resolve: onboardingStarted } = createDeferred<unknown>();
       const client = {
         connect: { role: "operator", scopes: ["operator.admin"], client: { id: "control-ui" } },
         internal: { authenticatedOperator: true },

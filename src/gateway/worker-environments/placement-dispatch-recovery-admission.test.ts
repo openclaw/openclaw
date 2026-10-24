@@ -15,6 +15,7 @@ import { createNodeWorkerBundleTestNode } from "./node-worker-bundle.test-suppor
 import { coordinateWorkerPlacementDispatch } from "./placement-dispatch-coordinator.js";
 import { REQUEST } from "./placement-dispatch-test-fixtures.js";
 import { createHarness } from "./placement-dispatch-test-harness.js";
+import { makeClaimInput } from "./placement-lifecycle.test-support.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
 import * as support from "./service.test-support.js";
 import {
@@ -296,16 +297,9 @@ describe("placement recovery session admission with persisted placements", () =>
       throw new Error("Move fixture was not active");
     }
     harness.markEnvironmentOwnerEpoch(2);
-    const claim = await placements.claimTurn({
-      ...REQUEST,
-      claimId: "move-wait-claim",
-      runId: "move-wait-run",
-      owner: {
-        kind: "worker",
-        environmentId: active.environmentId,
-        ownerEpoch: active.activeOwnerEpoch,
-      },
-    });
+    const claim = await placements.claimTurn(
+      makeClaimInput(active, "move-wait-claim", "move-wait-run"),
+    );
     const coordinated = coordinate(harness);
     const move = coordinated.move({
       ...REQUEST,

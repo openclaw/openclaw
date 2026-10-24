@@ -58,9 +58,6 @@ function open() {
     anchor,
     schema,
     input: { connection: input.connection, schemaPrefix: input.prefix },
-    openSqlite: () => {
-      throw new Error("Unexpected SQLite bootstrap");
-    },
   });
   if (!(db instanceof PostgresSyncConnection)) {
     throw new Error("Expected PostgreSQL");

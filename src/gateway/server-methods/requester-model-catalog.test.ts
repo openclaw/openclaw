@@ -3,7 +3,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { GATEWAY_CLIENT_CAPS } from "../../../packages/gateway-protocol/src/client-info.js";
 import type { ModelsListResult } from "../../../packages/gateway-protocol/src/index.js";
 import { ModelsListResultSchema } from "../../../packages/gateway-protocol/src/schema/model-catalog.js";
-import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import * as ownership from "../../agents/harness/session-runtime-ownership.js";
 import { resolveOpenClawPluginToolsForOptions } from "../../agents/openclaw-plugin-tools.js";
@@ -436,14 +436,8 @@ it("rejects an in-flight config change and retries against the new published con
       () => createPluginRequesterModels(requesters[0]!.readerParams)!,
     );
     const original = ownership.readSessionRuntimeOwnershipAsync;
-    let release!: () => void;
-    let entered!: () => void;
-    const gate = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    const started = new Promise<void>((resolve) => {
-      entered = resolve;
-    });
+    const { promise: gate, resolve: release } = createDeferred();
+    const { promise: started, resolve: entered } = createDeferred();
     vi.spyOn(ownership, "readSessionRuntimeOwnershipAsync").mockImplementationOnce(
       async (params) => {
         entered();
@@ -617,14 +611,8 @@ it.each(["reset", "revocation", "retirement", "account publication"])(
     await fixture(async ({ requesters, owner, accountCatalog, refreshAccount }) => {
       const requester = requesters[0]!;
       const original = ownership.readSessionRuntimeOwnershipAsync;
-      let release!: () => void;
-      let entered!: () => void;
-      const gate = new Promise<void>((resolve) => {
-        release = resolve;
-      });
-      const started = new Promise<void>((resolve) => {
-        entered = resolve;
-      });
+      const { promise: gate, resolve: release } = createDeferred();
+      const { promise: started, resolve: entered } = createDeferred();
       vi.spyOn(ownership, "readSessionRuntimeOwnershipAsync").mockImplementationOnce(
         async (params) => {
           entered();

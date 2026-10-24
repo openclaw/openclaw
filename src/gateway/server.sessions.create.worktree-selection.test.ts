@@ -38,6 +38,7 @@ import {
   testState,
   writeSessionStore,
 } from "./test-helpers.js";
+import { createClaudeCliRegistrationFixture } from "./test-helpers.plugin-registry.js";
 import { sessionStoreEntry, directSessionReq } from "./test/server-sessions.test-helpers.js";
 
 let gitWorkspaceTemplate: string;
@@ -157,16 +158,7 @@ test.for([
             read: vi.fn(async ({ hostId, threadId }) => ({ hostId, threadId, items: [] })),
           },
         });
-        registry.cliBackends.push({
-          pluginId: "anthropic",
-          source: "test",
-          backend: {
-            id: "claude-cli",
-            modelProvider: "anthropic",
-            config: { command: "claude" },
-            bundleMcp: false,
-          },
-        });
+        registry.cliBackends.push(createClaudeCliRegistrationFixture());
         setActivePluginRegistry(registry);
       }
       const { storePath } = await createSessionStoreDir();

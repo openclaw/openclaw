@@ -25,6 +25,7 @@ import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plug
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import { applyModelOverrideToSessionEntry } from "../sessions/model-overrides.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
+import { fixedStoreOwnershipConfig } from "./server-methods/sessions-fixed-store.test-support.js";
 import { listSessionFixture } from "./session-list.test-support.js";
 import { resolveSessionSelectedModelRef } from "./session-utils-model-selection.js";
 import {
@@ -370,14 +371,7 @@ describe("resolveGatewaySessionThinkingProjectionInternal", () => {
   });
 
   it("projects the prepared ACP runtime for a bare key under its resolved owner", () => {
-    const cfg: OpenClawConfig = {
-      session: { scope: "global", store: "/tmp/shared.sqlite" },
-      agents: {
-        ownership: "explicit",
-        defaults: { sessionStore: { agentId: "ops" } },
-        entries: { ops: {}, research: {} },
-      },
-    };
+    const cfg: OpenClawConfig = fixedStoreOwnershipConfig("/tmp/shared.sqlite");
 
     const projection = thinkingProjection({
       cfg,

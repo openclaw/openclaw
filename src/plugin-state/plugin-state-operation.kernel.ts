@@ -184,7 +184,7 @@ export function executePluginStateOperation(
                 Infinity,
               ),
               now,
-              sweepPending: true,
+              sweepPending: "unknown",
             }
           : readPluginStateRetention(store!.db, { ...scope, now });
       }

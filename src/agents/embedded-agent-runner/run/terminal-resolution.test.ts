@@ -29,6 +29,7 @@ import {
   assistantAttempt,
   expectComplete,
   emptyAssistant,
+  compactionAssistantFixture,
   makeTerminalInput,
   resolveTerminal,
 } from "./terminal-resolution.test-support.js";
@@ -702,19 +703,7 @@ describe("terminal resolution", () => {
   });
 
   it("activates the prompt owner for an OpenAI Responses compaction checkpoint", async () => {
-    const assistant = buildEmbeddedRunnerAssistant({
-      stopReason: "length",
-      providerReplay: {
-        v: 1,
-        type: "openai-responses-compaction",
-        id: "cmp-terminal-retry",
-        data: "opaque-compaction",
-        provider: "openai",
-        api: "openai-responses",
-        model: "gpt-5.6-luna",
-        baseUrlHash: "base-url-hash",
-      },
-    });
+    const assistant = compactionAssistantFixture("cmp-terminal-retry");
     const input = makeTerminalInput({
       assistant,
       attemptOverrides: {
