@@ -20,9 +20,15 @@ function expectMessagingDelivery(input: Parameters<typeof isDeliveredMessagingTo
 }
 
 function expectSourceReplyDelivery(
-  input: Parameters<typeof isDeliveredMessageToolOnlySourceReplyResult>[0],
+  input: Omit<Parameters<typeof isDeliveredMessageToolOnlySourceReplyResult>[0], "toolName">,
 ) {
-  return expect(isDeliveredMessageToolOnlySourceReplyResult(input));
+  return expect(
+    isDeliveredMessageToolOnlySourceReplyResult({
+      sourceReplyDeliveryMode: "message_tool_only",
+      toolName: "message",
+      ...input,
+    }),
+  );
 }
 
 beforeEach(() => {
@@ -55,26 +61,34 @@ describe("messaging delivery action classification", () => {
 
   it("keeps visible side effects broader than terminal reply sends", () => {
     expect(isMessagingToolSendAction("message", { action: "poll" })).toBe(false);
-    expect(isMessagingToolTargetEvidenceAction("message", { action: "poll" })).toBe(true);
-    expect(isMessagingToolTargetEvidenceAction("message", { action: "reply" })).toBe(true);
-    expect(isMessagingToolTargetEvidenceAction("message", { action: "sticker" })).toBe(true);
-    expect(isMessagingToolTargetEvidenceAction("message", { action: "thread-create" })).toBe(true);
-    expect(isMessagingToolTargetEvidenceAction("message", { action: "topic-create" })).toBe(true);
-    expect(isMessagingToolTargetEvidenceAction("message", { action: "threadCreate" })).toBe(true);
-    expect(isMessagingToolTargetEvidenceAction("message", { action: "createForumTopic" })).toBe(
-      true,
-    );
+    for (const action of [
+      "poll",
+      "reply",
+      "sticker",
+      "thread-create",
+      "topic-create",
+      "threadCreate",
+      "createForumTopic",
+    ]) {
+      expect(isMessagingToolTargetEvidenceAction("message", { action })).toBe(true);
+    }
     expect(isMessagingToolTargetEvidenceAction("message", { action: "edit" })).toBe(false);
-    expect(isMessagingToolDeliveryAction("message", { action: "poll" })).toBe(true);
-    expect(isMessagingToolDeliveryAction("message", { action: "broadcast" })).toBe(true);
-    expect(isMessagingToolDeliveryAction("message", { action: "thread-create" })).toBe(true);
-    expect(isMessagingToolDeliveryAction("message", { action: "topic-create" })).toBe(true);
-    expect(isMessagingToolDeliveryAction("message", { action: "createForumTopic" })).toBe(true);
-    expect(isMessagingToolDeliveryAction("message", { action: "channel-create" })).toBe(true);
-    expect(isMessagingToolDeliveryAction("message", { action: "event-create" })).toBe(true);
-    expect(isMessagingToolDeliveryAction("message", { action: "react" })).toBe(true);
-    expect(isMessagingToolDeliveryAction("message", { action: "read" })).toBe(false);
-    expect(isMessagingToolDeliveryAction("message", { action: "channel-list" })).toBe(false);
+    for (const action of [
+      "poll",
+      "broadcast",
+      "thread-create",
+      "topic-create",
+      "createForumTopic",
+      "channel-create",
+      "event-create",
+      "react",
+      "read",
+      "channel-list",
+    ]) {
+      expect(isMessagingToolDeliveryAction("message", { action })).toBe(
+        !["read", "channel-list"].includes(action),
+      );
+    }
   });
 
   it("uses provider-native mutation contracts", () => {
@@ -218,67 +232,53 @@ describe("isDeliveredMessagingToolResult", () => {
     },
   );
 
-  it("accepts confirmed delivery receipts from direct CLI text blocks", () => {
-    expectMessagingDelivery({
-      result: [{ type: "text", text: JSON.stringify({ result: { messageId: "msg-1" } }) }],
-    }).toBe(true);
-    expectMessagingDelivery({ result: { content: [{ text: "sent" }] } }).toBe(true);
-    expectMessagingDelivery({ result: { status: "sent" } }).toBe(true);
+  const textBlock = (value: unknown) => [{ type: "text", text: JSON.stringify(value) }];
+  const entry = (payload?: unknown, ok = true) => ({
+    channel: "googlechat",
+    to: "space-1",
+    ok,
+    ...(payload === undefined ? {} : { payload }),
   });
+  const receipt = { result: { messageId: "msg-1" } };
+  type DeliveryInput = Parameters<typeof isDeliveredMessagingToolResult>[0];
+  type DeliveryCase = [
+    string,
+    unknown,
+    boolean,
+    (string | Record<string, unknown>)?,
+    DeliveryInput?,
+  ];
 
-  it("accepts action-specific bare success delivery contracts", () => {
-    expectMessagingDelivery({
-      args: { action: "poll" },
-      result: { ok: true },
-    }).toBe(true);
-    expectMessagingDelivery({
-      args: { action: "sticker" },
-      result: [{ type: "text", text: JSON.stringify({ ok: true }) }],
-    }).toBe(true);
-    expectMessagingDelivery({
-      args: { action: "channel-create" },
-      result: { ok: true },
-    }).toBe(true);
-  });
-  it("rejects successful no-op mutation results", () => {
-    for (const result of [
-      { ok: true, removed: null },
-      { ok: true, removed: 0 },
-      { ok: true, removed: [] },
-      { ok: true, changed: false },
+  it.each([
+    ["CLI receipt", textBlock(receipt), true],
+    ["text receipt", { content: [{ text: "sent" }] }, true],
+    ["sent status", { status: "sent" }, true],
+    ["bare poll success", { ok: true }, true, "poll"],
+    ["sticker text success", textBlock({ ok: true }), true, "sticker"],
+    ["channel creation", { ok: true }, true, "channel-create"],
+    ["null removal", { ok: true, removed: null }, false, "react"],
+    ["zero removal", { ok: true, removed: 0 }, false, "react"],
+    ["empty removal", { ok: true, removed: [] }, false, "react"],
+    ["unchanged reaction", { ok: true, changed: false }, false, "react"],
+    [
+      "details override text",
       { content: [{ text: "sent" }], details: { sent: false } },
-    ]) {
-      expectMessagingDelivery({
-        args: { action: "react" },
-        result,
-      }).toBe(false);
-    }
-  });
-
-  it("accepts poll delivery identifiers", () => {
-    expectMessagingDelivery({ result: { pollId: "poll-1" } }).toBe(true);
-  });
-
-  it("accepts successful thread and topic creation receipts", () => {
-    expectMessagingDelivery({
-      args: { action: "thread-create" },
-      result: { ok: true, thread: { id: "thread-1" } },
-    }).toBe(true);
-    expectMessagingDelivery({
-      args: { action: "topic-create" },
-      result: { ok: true, topicId: 42 },
-    }).toBe(true);
-    expectMessagingDelivery({
-      args: { action: "topic-create" },
-      isError: true,
-      result: { topicId: 43, error: "post-create metadata update failed" },
-    }).toBe(true);
-  });
-
-  it("accepts only broadcast result entries with concrete delivery evidence", () => {
-    expectMessagingDelivery({
-      args: { action: "broadcast" },
-      result: {
+      false,
+      "react",
+    ],
+    ["poll identifier", { pollId: "poll-1" }, true],
+    ["thread receipt", { ok: true, thread: { id: "thread-1" } }, true, "thread-create"],
+    ["topic receipt", { ok: true, topicId: 42 }, true, "topic-create"],
+    [
+      "topic metadata error",
+      { topicId: 43, error: "post-create metadata update failed" },
+      true,
+      "topic-create",
+      { isError: true },
+    ],
+    [
+      "partial broadcast",
+      {
         results: [
           {
             channel: "telegram",
@@ -294,135 +294,92 @@ describe("isDeliveredMessagingToolResult", () => {
           },
         ],
       },
-    }).toBe(true);
-    expectMessagingDelivery({
-      args: { action: "broadcast" },
-      result: { results: [{ channel: "googlechat", to: "space-1", ok: true }] },
-    }).toBe(false);
-    expectMessagingDelivery({
-      args: { action: "broadcast" },
-      result: {
-        results: [
-          {
-            channel: "googlechat",
-            to: "space-1",
-            ok: true,
-            payload: { ok: true, to: "spaces/AAA" },
-          },
-        ],
-      },
-    }).toBe(true);
-  });
-
-  it.each([
-    ["suppressed", false],
-    ["dry_run", false],
-    ["failed", false],
-    ["sent", true],
-    ["partial_failed", true],
-  ] as const)("maps plugin deliveryStatus %s to delivered=%s", (deliveryStatus, delivered) => {
-    expectMessagingDelivery({
-      toolName: "message",
-      args: { action: "send", to: "channel-1" },
-      result: { ok: true, deliveryStatus },
-    }).toBe(delivered);
-  });
-
-  it("rejects non-delivery message id sentinels", () => {
-    expectMessagingDelivery({ result: { messageId: "skipped" } }).toBe(false);
-    expectMessagingDelivery({ result: { messageId: "suppressed" } }).toBe(false);
-  });
-
-  it("accepts successful sends with an unknown message id", () => {
-    expectMessagingDelivery({ result: { messageId: "unknown" } }).toBe(true);
-  });
-
-  it("rejects dry-run, suppressed, and errored results", () => {
-    expectMessagingDelivery({
-      args: { dryRun: true },
-      result: { result: { messageId: "msg-1" } },
-    }).toBe(false);
-    expectMessagingDelivery({ result: { status: "suppressed" } }).toBe(false);
-    expectMessagingDelivery({
-      isError: true,
-      result: { result: { messageId: "msg-1" } },
-    }).toBe(false);
-  });
-
-  it("accepts errored results that prove partial visible delivery", () => {
-    expectMessagingDelivery({
-      isError: true,
-      result: Object.assign(new Error("second chunk failed"), { sentBeforeError: true }),
-    }).toBe(true);
-  });
-
-  it("accepts a nested provider message id as delivery evidence", () => {
-    expectMessagingDelivery({
-      toolName: "message",
-      args: {
-        action: "send",
-        channel: "qa-channel",
-        target: "qa-a2a-requester",
-        message: "reply",
-      },
-      result: {
-        content: [{ type: "text", text: '{"message":{"id":"qa-message-242"}}' }],
+      true,
+      "broadcast",
+    ],
+    ["broadcast without evidence", { results: [entry()] }, false, "broadcast"],
+    [
+      "broadcast destination",
+      { results: [entry({ ok: true, to: "spaces/AAA" })] },
+      true,
+      "broadcast",
+    ],
+    ...(["suppressed", "dry_run", "failed", "sent", "partial_failed"] as const).map(
+      (deliveryStatus): DeliveryCase => [
+        `deliveryStatus ${deliveryStatus}`,
+        { ok: true, deliveryStatus },
+        deliveryStatus === "sent" || deliveryStatus === "partial_failed",
+        { action: "send", to: "channel-1" },
+        { toolName: "message" },
+      ],
+    ),
+    ["skipped identifier", { messageId: "skipped" }, false],
+    ["suppressed identifier", { messageId: "suppressed" }, false],
+    ["unknown identifier", { messageId: "unknown" }, true],
+    ["dry-run arguments", receipt, false, { dryRun: true }],
+    ["suppressed status", { status: "suppressed" }, false],
+    ["errored receipt", receipt, false, undefined, { isError: true }],
+    [
+      "partial delivery before error",
+      Object.assign(new Error("second chunk failed"), { sentBeforeError: true }),
+      true,
+      undefined,
+      { isError: true },
+    ],
+    [
+      "nested provider receipt",
+      {
+        content: textBlock({ message: { id: "qa-message-242" } }),
         details: { message: { id: "qa-message-242" } },
       },
-    }).toBe(true);
+      true,
+      { action: "send", channel: "qa-channel", target: "qa-a2a-requester", message: "reply" },
+      { toolName: "message" },
+    ],
+  ] satisfies DeliveryCase[])("%s", (_name, result, expected, routing, extra) => {
+    const args = typeof routing === "string" ? { action: routing } : routing;
+    expectMessagingDelivery({ result, args, ...extra }).toBe(expected);
   });
 });
 
 describe("isDeliveredMessageToolOnlySourceReplyResult", () => {
+  const poll = { action: "poll", pollQuestion: "Preferred default?", pollOption: ["a", "b"] };
+  const explicitReply = {
+    action: "reply",
+    channel: "imessage",
+    target: "+12069106512",
+    message: "reply",
+  };
+  const replyReceipt = { ok: true, messageId: "imessage-853" };
   it("accepts a confirmed adopted-thread reply outside message-tool-only mode", () => {
     expectSourceReplyDelivery({
       sourceReplyDeliveryMode: "automatic",
-      toolName: "message",
       args: { action: "thread-reply", threadId: "thread-1", message: "done" },
-      result: {
-        details: {
-          ok: true,
-          sourceReplyRoute: "current-source",
-        },
-      },
+      result: { details: { ok: true, sourceReplyRoute: "current-source" } },
     }).toBe(true);
   });
 
   it("accepts a confirmed current-source poll delivery", () => {
     expectSourceReplyDelivery({
-      sourceReplyDeliveryMode: "message_tool_only",
-      toolName: "message",
-      args: { action: "poll", pollQuestion: "Preferred default?", pollOption: ["a", "b"] },
-      result: {
-        details: {
-          ok: true,
-          pollId: "poll-1",
-          sourceReplyRoute: "current-source",
-        },
-      },
+      args: poll,
+      result: { details: { ok: true, pollId: "poll-1", sourceReplyRoute: "current-source" } },
     }).toBe(true);
   });
 
   it("rejects an unconfirmed poll delivery", () => {
     expectSourceReplyDelivery({
-      sourceReplyDeliveryMode: "message_tool_only",
-      toolName: "message",
-      args: { action: "poll", pollQuestion: "Preferred default?", pollOption: ["a", "b"] },
+      args: poll,
       result: { details: { ok: true, pollId: "poll-1" } },
     }).toBe(false);
   });
 
   it("accepts only confirmed implicit message sends", () => {
     expectSourceReplyDelivery({
-      sourceReplyDeliveryMode: "message_tool_only",
-      toolName: "message",
       args: { action: "send", message: "reply" },
       result: { deliveryStatus: "sent" },
       deliveryConfirmed: true,
     }).toBe(true);
     expectSourceReplyDelivery({
-      sourceReplyDeliveryMode: "message_tool_only",
-      toolName: "message",
       args: { action: "send", target: "elsewhere", message: "reply" },
       result: { deliveryStatus: "sent" },
       deliveryConfirmed: true,
@@ -434,35 +391,18 @@ describe("isDeliveredMessageToolOnlySourceReplyResult", () => {
     (sourceReplyDeliveryMode) => {
       expectSourceReplyDelivery({
         sourceReplyDeliveryMode,
-        toolName: "message",
-        args: {
-          action: "reply",
-          channel: "imessage",
-          target: "+12069106512",
-          message: "reply",
-        },
-        result: { ok: true, messageId: "imessage-853" },
+        args: explicitReply,
+        result: replyReceipt,
         allowExplicitSourceRoute: true,
       }).toBe(true);
       expectSourceReplyDelivery({
         sourceReplyDeliveryMode,
-        toolName: "message",
-        args: {
-          action: "reply",
-          channel: "imessage",
-          target: "+12069106512",
-          message: "reply",
-        },
-        result: { ok: true, messageId: "imessage-853" },
+        args: explicitReply,
+        result: replyReceipt,
       }).toBe(false);
       expectSourceReplyDelivery({
         sourceReplyDeliveryMode,
-        toolName: "message",
-        args: {
-          action: "react",
-          channel: "imessage",
-          target: "+12069106512",
-        },
+        args: { ...explicitReply, action: "react" },
         result: { ok: true },
         allowExplicitSourceRoute: true,
       }).toBe(false);
@@ -471,8 +411,6 @@ describe("isDeliveredMessageToolOnlySourceReplyResult", () => {
 
   it("accepts explicit sends with a structured current-source marker", () => {
     expectSourceReplyDelivery({
-      sourceReplyDeliveryMode: "message_tool_only",
-      toolName: "message",
       args: {
         action: "send",
         channel: "telegram",
@@ -492,8 +430,6 @@ describe("isDeliveredMessageToolOnlySourceReplyResult", () => {
 
   it("does not trust current-source markers echoed in result text", () => {
     expectSourceReplyDelivery({
-      sourceReplyDeliveryMode: "message_tool_only",
-      toolName: "message",
       args: {
         action: "send",
         target: "elsewhere",

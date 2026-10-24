@@ -35,6 +35,31 @@ import {
 } from "./prepared-model-runtime.js";
 import { resetPreparedModelRuntimeSnapshotsForTest } from "./prepared-model-runtime.test-support.js";
 import type { PreparedModelRuntimeInput } from "./prepared-model-runtime.types.js";
+import { observeSettlement } from "./promise-settlement.test-support.js";
+
+function fixtureProvider(name = "model", apiKey = "synthetic-test-key") {
+  return {
+    api: "openai-completions" as const,
+    apiKey,
+    baseUrl: "https://fixture.invalid/v1",
+    models: [{ ...makeModel("model"), name, contextWindow: 8192, maxTokens: 1024 }],
+  };
+}
+
+function runtimeFixture(
+  rootDir: string,
+  pluginId: string,
+  manifest: Record<string, unknown>,
+  providerId?: string,
+) {
+  fs.mkdirSync(rootDir);
+  return createColdPluginFixture({
+    rootDir,
+    pluginId,
+    providerId,
+    manifest: { channels: [], channelConfigs: {}, providerAuthChoices: [], ...manifest },
+  });
+}
 
 const selectedSource = vi.hoisted(() => {
   const state: {
@@ -77,16 +102,11 @@ it.each(publishedRuntimeResourceModes)(
       const pluginId = "published-runtime-provider";
       const pluginRoot = state.path("plugin");
       const emptyBundled = state.path("empty-bundled");
-      fs.mkdirSync(pluginRoot);
       fs.mkdirSync(emptyBundled);
-      const fixture = createColdPluginFixture({
-        rootDir: pluginRoot,
+      const fixture = runtimeFixture(
+        pluginRoot,
         pluginId,
-        providerId: pluginId,
-        manifest: {
-          channels: [],
-          channelConfigs: {},
-          providerAuthChoices: [],
+        {
           startup: { agentHarnesses: [pluginId] },
           modelCatalog: {
             providers: {
@@ -99,7 +119,8 @@ it.each(publishedRuntimeResourceModes)(
             },
           },
         },
-      });
+        pluginId,
+      );
       const key = `__published_runtime_resources_${path.basename(state.root)}`;
       const connections: Array<{ file: string; database: DatabaseSync; disposals: number }> = [];
       const requestSignal: { current?: AbortSignal } = {};
@@ -174,22 +195,7 @@ module.exports = {
         },
         models: {
           providers: {
-            [pluginId]: {
-              api: "openai-completions",
-              apiKey: "synthetic-btw-fixture",
-              baseUrl: "https://fixture.invalid/v1",
-              models: [
-                {
-                  id: "model",
-                  name: "Fixture model",
-                  reasoning: false,
-                  input: ["text"],
-                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                  contextWindow: 8192,
-                  maxTokens: 1024,
-                },
-              ],
-            },
+            [pluginId]: fixtureProvider("Fixture model", "synthetic-btw-fixture"),
           },
         },
         plugins: {
@@ -214,10 +220,8 @@ module.exports = {
         async () => {
           await resetPreparedModelRuntimeSnapshotsForTest();
           clearPluginMetadataLifecycleCaches();
-          let first: Awaited<ReturnType<typeof acquireReadOnlyPreparedModelRuntime>> | undefined;
-          let replacement:
-            | Awaited<ReturnType<typeof acquireReadOnlyPreparedModelRuntime>>
-            | undefined;
+          let first: PreparedModelRuntimeLease | undefined;
+          let replacement: PreparedModelRuntimeLease | undefined;
           const owner = new AsyncWorkScope();
           const acquisitionEntered = createDeferredCore();
           const acquisitionFinish = createDeferredCore();
@@ -351,16 +355,8 @@ async function withStaleResourceFixture(
     async (state) => {
       const pluginPaths = [engineId, providerId].map((id) => {
         const rootDir = state.path(id);
-        fs.mkdirSync(rootDir);
-        const fixture = createColdPluginFixture({
-          rootDir,
-          pluginId: id,
-          manifest: {
-            providers: id === providerId ? [providerId] : [],
-            channels: [],
-            channelConfigs: {},
-            providerAuthChoices: [],
-          },
+        const fixture = runtimeFixture(rootDir, id, {
+          providers: id === providerId ? [providerId] : [],
         });
         fs.writeFileSync(
           fixture.runtimeSource,
@@ -382,12 +378,6 @@ async function withStaleResourceFixture(
         );
         return rootDir;
       });
-      const provider = () => ({
-        api: "openai-completions" as const,
-        apiKey: "synthetic-test-key",
-        baseUrl: "https://fixture.invalid/v1",
-        models: [{ ...makeModel("model"), contextWindow: 8192, maxTokens: 1024 }],
-      });
       const config: OpenClawConfig = {
         agents: {
           entries: { main: {}, sibling: {} },
@@ -399,7 +389,7 @@ async function withStaleResourceFixture(
         },
         models: {
           mode: "replace",
-          providers: { base: provider(), [providerId]: provider() },
+          providers: { base: fixtureProvider(), [providerId]: fixtureProvider() },
         },
         plugins: {
           allow: [engineId, providerId],
@@ -498,13 +488,10 @@ it.each(["direct", "gateway"] as const)(
       markPreparedModelRuntimeSnapshotsStale("plugin replacement", { waitForReplacement: true });
       let draining: ReturnType<typeof donor.drain> | undefined;
       if (retention === "gateway") {
-        let drained = false;
-        draining = donor.drain({ includeConsumers: true }).then((result) => {
-          drained = true;
-          return result;
-        });
+        draining = donor.drain({ includeConsumers: true });
+        const drained = observeSettlement(draining);
         await nextTurn();
-        expect(drained).toBe(false);
+        expect(drained()).toBe(false);
         expect(donor.hasRetainedConsumers).toBe(true);
         await useEngine(lease);
         await lease[Symbol.asyncDispose]();

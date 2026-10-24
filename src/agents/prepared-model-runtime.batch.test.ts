@@ -32,6 +32,14 @@ import { makeProviderModelFixture } from "./test-helpers/provider-model-fixture.
 
 const fixture = usePreparedModelRuntimeHarness({ label: "prepared-fleet-batch" });
 const { mocks } = fixture;
+const refresh = (config: OpenClawConfig = {}, startup = false) =>
+  refreshPreparedModelRuntimeSnapshots(config, {
+    gatewayLifecycle: true,
+    catalogMode: "static",
+    ...(startup ? { startup } : {}),
+  });
+const readSnapshot = (agentId: string, config: OpenClawConfig = {}) =>
+  getPreparedModelRuntimeSnapshot({ config, agentId, agentDir: fixture.state.agentDir(agentId) });
 
 describe("prepared fleet batches", () => {
   beforeEach(() => {
@@ -97,33 +105,20 @@ describe("prepared fleet batches", () => {
         });
         expect(mocks.warn).toHaveBeenCalledWith(expect.stringContaining(`agent ${heldAgent}`));
         admission = loadPublishedGatewayReplyDispatchRuntime({ agentId: heldAgent });
-        let admissionSettled = false;
-        void admission
-          .finally(() => {
-            admissionSettled = true;
-          })
-          .catch(() => undefined);
-        if (heldIndex > 0) {
-          await expect(
-            loadPublishedGatewayReplyDispatchRuntime({ agentId: "fleet-0" }),
-          ).resolves.toMatchObject({ agentId: "fleet-0" });
-          if (!earlyAuth) {
-            mutateAuth();
-          }
-          await expect(
-            loadPublishedGatewayReplyDispatchRuntime({ agentId: "fleet-0" }),
-          ).resolves.toMatchObject({ agentId: "fleet-0" });
-          expect(
-            getPreparedModelRuntimeSnapshot({
-              config,
-              agentId: "fleet-0",
-              agentDir: fixture.state.agentDir("fleet-0"),
-            })
-              ?.createStores()
-              .authStorage.getAll(),
-          ).toEqual(credentials);
+        const admissionSettled = observeSettlement(admission);
+        await expect(
+          loadPublishedGatewayReplyDispatchRuntime({ agentId: "fleet-0" }),
+        ).resolves.toMatchObject({ agentId: "fleet-0" });
+        if (!earlyAuth) {
+          mutateAuth();
         }
-        expect(admissionSettled).toBe(false);
+        await expect(
+          loadPublishedGatewayReplyDispatchRuntime({ agentId: "fleet-0" }),
+        ).resolves.toMatchObject({ agentId: "fleet-0" });
+        expect(readSnapshot("fleet-0", config)?.createStores().authStorage.getAll()).toEqual(
+          credentials,
+        );
+        expect(admissionSettled()).toBe(false);
         acquired.resolve();
         await lastAcquiring.promise;
         await expect(admission).resolves.toMatchObject({ agentId: heldAgent });
@@ -136,13 +131,7 @@ describe("prepared fleet batches", () => {
         await expect(
           loadPublishedGatewayReplyDispatchRuntime({ agentId: heldAgent }),
         ).resolves.toMatchObject({ agentId: heldAgent });
-        expect(
-          getPreparedModelRuntimeSnapshot({
-            config,
-            agentId: heldAgent,
-            agentDir: fixture.state.agentDir(heldAgent),
-          }),
-        ).toBeDefined();
+        expect(readSnapshot(heldAgent, config)).toBeDefined();
       } finally {
         acquired.resolve();
         lastAcquired.resolve();
@@ -192,14 +181,7 @@ describe("prepared fleet batches", () => {
       }
     });
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    const publication = refreshPreparedModelRuntimeSnapshots(
-      {},
-      {
-        gatewayLifecycle: true,
-        startup: true,
-        catalogMode: "static",
-      },
-    );
+    const publication = refresh({}, true);
     let admission: ReturnType<typeof loadPublishedGatewayReplyDispatchRuntime> | undefined;
     try {
       await firstAuth.promise;
@@ -240,14 +222,7 @@ describe("prepared fleet batches", () => {
       }
     });
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    const publication = refreshPreparedModelRuntimeSnapshots(
-      {},
-      {
-        gatewayLifecycle: true,
-        startup: true,
-        catalogMode: "static",
-      },
-    );
+    const publication = refresh({}, true);
     try {
       await acquiring.promise;
       await vi.advanceTimersByTimeAsync(120_000);
@@ -287,13 +262,7 @@ describe("prepared fleet batches", () => {
       return mocks.authStorage;
     });
 
-    await refreshPreparedModelRuntimeSnapshots(
-      {},
-      {
-        gatewayLifecycle: true,
-        catalogMode: "static",
-      },
-    );
+    await refresh();
     await queued;
 
     expect(events.indexOf("first")).toBeLessThan(events.indexOf("event-loop"));
@@ -363,18 +332,9 @@ describe("prepared fleet batches", () => {
       };
     });
     const readSnapshots = () =>
-      mocks.configuredAgentIds.map((agentId) =>
-        getPreparedModelRuntimeSnapshot({
-          config,
-          agentId,
-          agentDir: fixture.state.agentDir(agentId),
-        }),
-      );
+      mocks.configuredAgentIds.map((agentId) => readSnapshot(agentId, config));
     try {
-      await refreshPreparedModelRuntimeSnapshots(config, {
-        gatewayLifecycle: true,
-        catalogMode: "static",
-      });
+      await refresh(config);
       expect(captures).toHaveLength(3);
       expect(new Set(captures).size).toBe(1);
       const first = captures[0]!;
@@ -413,10 +373,7 @@ describe("prepared fleet batches", () => {
       config.models!.providers!.fixture!.models[1]!.name = "updated";
       expect(first.agents?.defaults?.model).toBe("fixture/first");
       captures.length = 0;
-      await refreshPreparedModelRuntimeSnapshots(config, {
-        gatewayLifecycle: true,
-        catalogMode: "static",
-      });
+      await refresh(config);
       expect(captures).toHaveLength(3);
       expect(new Set(captures).size).toBe(1);
       expect(captures[0]).not.toBe(first);
@@ -450,10 +407,7 @@ describe("prepared fleet batches", () => {
       return previous;
     });
 
-    await refreshPreparedModelRuntimeSnapshots(config, {
-      gatewayLifecycle: true,
-      catalogMode: "static",
-    });
+    await refresh(config);
     const snapshot = getPreparedModelRuntimeSnapshot({
       ...fixture.agentInput("first", config),
       workspaceDir: "/tmp/workspace-first",
@@ -473,10 +427,7 @@ describe("prepared fleet batches", () => {
       return { entries: [] };
     });
     try {
-      await refreshPreparedModelRuntimeSnapshots(config, {
-        gatewayLifecycle: true,
-        catalogMode: "static",
-      });
+      await refresh(config);
       const snapshot = getPreparedModelRuntimeSnapshot({
         config,
         agentId: "first",
@@ -510,10 +461,7 @@ describe("prepared catalog source sharing", () => {
           },
         };
         digests.mockClear();
-        await refreshPreparedModelRuntimeSnapshots(config, {
-          gatewayLifecycle: true,
-          catalogMode: "static",
-        });
+        await refresh(config);
         counts.push(
           digests.mock.calls.filter(
             ([value]) => typeof value === "string" && value.includes(marker),
