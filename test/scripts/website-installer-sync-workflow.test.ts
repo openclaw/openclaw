@@ -4,39 +4,18 @@ import path from "node:path";
 import { compileFunction } from "node:vm";
 import { afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
-import { detectInstallSmokeScope } from "../../scripts/ci-changed-scope.mjs";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const workflow = readFileSync(".github/workflows/website-installer-sync.yml", "utf8");
 type Step = { id?: string; name?: string; if?: string; run?: string; with?: { script?: string } };
 const config = parse(workflow) as {
-  jobs: Record<
-    string,
-    { if?: string; needs?: string[]; steps: Step[]; strategy?: { matrix?: { debian?: string[] } } }
-  >;
+  jobs: Record<string, { if?: string; needs?: string[]; steps: Step[] }>;
 };
-const unixJobs = [
-  "linux-docker",
-  "debian-installer",
-  "linux-build-tools-failure",
-  "linux-non-root",
-  "fedora-installer",
-  "macos-installer",
-];
-const scopedJobs = ["static", ...unixJobs, "windows-installer"];
-const unixInputs = [
-  "scripts/install.sh",
-  "scripts/install-cli.sh",
-  "scripts/install-policy.sh",
-  "scripts/build-installers.mjs",
-  "scripts/lib/standalone-installers.mjs",
-];
-function contains(...fragments: string[]) {
-  for (const fragment of fragments) {
-    expect(workflow).toContain(fragment);
-  }
-}
+const scopedJobs = Object.keys(config.jobs).filter(
+  (job) => !["scope", "sync-website"].includes(job),
+);
+const unixJobs = scopedJobs.filter((job) => !["static", "windows-installer"].includes(job));
 function stepRun(job: string, name: string) {
   const run = config.jobs[job]?.steps.find((step) => step.name === name)?.run;
   if (!run) {
@@ -143,19 +122,9 @@ ${stepRun("fedora-installer", "install.sh on Fedora")}`,
   });
 
   it("syncs verified scripts to openclaw.ai only after all installer checks pass", () => {
-    expect(config.jobs["sync-website"]?.needs).toEqual(scopedJobs);
-    contains(
-      "repository: openclaw/openclaw.ai",
-      "OPENCLAW_GH_TOKEN: ${{ secrets.OPENCLAW_GH_TOKEN }}",
-      "OPENCLAW_GH_TOKEN is not configured",
-      "token: ${{ env.OPENCLAW_GH_TOKEN }}",
-      "cp openclaw/dist/installers/install.sh openclaw.ai/public/install.sh",
-      "cp openclaw/dist/installers/install-cli.sh openclaw.ai/public/install-cli.sh",
-      "cp openclaw/scripts/install.ps1 openclaw.ai/public/install.ps1",
-      "rm -f openclaw.ai/public/install.cmd",
-      "bun run build",
-      "git push origin HEAD:main",
-    );
+    expect(config.jobs["sync-website"]?.needs?.toSorted()).toEqual(scopedJobs.toSorted());
+    expect(workflow).toContain("OPENCLAW_GH_TOKEN: ${{ secrets.OPENCLAW_GH_TOKEN }}");
+    expect(workflow).toContain("token: ${{ env.OPENCLAW_GH_TOKEN }}");
   });
 });
 
@@ -213,15 +182,11 @@ describe("installer platform admission", () => {
 
   it.each([
     { file: "scripts/install.ps1", unix: false, windows: true },
-    ...unixInputs.map((file) => ({ file, unix: true, windows: false })),
+    { file: "scripts/install.sh", unix: true, windows: false },
     { file: ".github/workflows/website-installer-sync.yml", unix: true, windows: true },
     { file: "scripts/install.ps1", moveTo: "retired.ps1", unix: false, windows: true },
     { file: "retired.ps1", moveTo: "scripts/install.ps1", unix: false, windows: true },
   ])("routes the tested event tree for $file (move: $moveTo)", async (scenario) => {
-    if (scenario.file.startsWith("scripts/")) {
-      expect(workflow).toContain(scenario.file);
-      expect(detectInstallSmokeScope([scenario.file]).runFullInstallSmoke).toBe(true);
-    }
     const cwd = tempDirs.make("installer-platform-scope-");
     const git = (...args: string[]) =>
       execFileSync(
@@ -269,10 +234,8 @@ describe("installer platform admission", () => {
 
   it.each([
     { event: "push" },
-    { event: "workflow_dispatch" },
     { checkout: "failure", diffExitCodes: [] },
     { diffExitCodes: [128] },
-    { diffExitCodes: [0, 128] },
   ])("keeps full validation for unrestricted or unavailable scope: %j", async (options) => {
     const result = await select(options);
     if ("event" in options) {

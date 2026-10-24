@@ -213,14 +213,6 @@ describe("package fixture consent compatibility", () => {
       ]);
       expect(calls.find((args) => args[1] === "enable")).not.toContain(consent);
     });
-
-    it("consents to ClawHub install but not unchanged update", () => {
-      const calls = run(
-        clawhubScenario(true, "clawhub:@example/consent-fixture", "consent-fixture"),
-      );
-      expect(installsFor(calls)[0]?.includes(consent)).toBe(supported);
-      expect(calls.find((args) => args[1] === "update")).not.toContain(consent);
-    });
   });
 
   it("probes each command and preserves literal argv", () => {
@@ -259,6 +251,8 @@ ${fixtureCommand} plugins update fixture`,
     expect(result.status, result.stderr).toBe(0);
     const install = installsFor(result.calls)[0];
     expect(install?.[2]).toBe(expectedSpec);
+    expect(install).toContain(consent);
+    expect(result.calls.find((args) => args[1] === "update")).not.toContain(consent);
     expect(result.calls.filter((args) => args[1] === "inspect").map((args) => args[2])).toEqual([
       expectedId,
       expectedId,
