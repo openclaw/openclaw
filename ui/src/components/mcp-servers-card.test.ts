@@ -388,7 +388,7 @@ it.each([
   "renders %s without exposing credentials or unsafe shell commands",
   async (name, server, visible, hidden) => {
     const { card } = await mountCard({ servers: { [name]: server } });
-    const row = expectDefined(card.querySelector(`[data-mcp-name="${name}"]`));
+    const row = expectDefined(card.querySelector(`[data-mcp-name="${name}"]`), name);
     for (const text of visible) {
       expect(row.textContent).toContain(text);
     }
@@ -449,7 +449,7 @@ it("retries removal confirmation and removes arrays after queued writes settle",
   const patches: unknown[] = [];
   const request = vi.fn(async (method: string, params?: unknown) => {
     if (method === "config.get") {
-      return configSnapshot(expectDefined(configs[revision]), `hash-${revision}`);
+      return configSnapshot(expectDefined(configs[revision], "config"), `hash-${revision}`);
     }
     if (method !== "config.patch") {
       throw new Error(`Unexpected request ${method}`);
