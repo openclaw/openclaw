@@ -1,7 +1,6 @@
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { writeFileSync } from "node:fs";
 import path from "node:path";
-import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   findForbiddenChangelogThanks,
@@ -11,40 +10,18 @@ import {
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempRoots = useAutoCleanupTempDirTracker(afterEach);
-const scriptEnv = { OPENCLAW_PR_CHANGELOG_SH: path.resolve("scripts/pr-lib/changelog.sh") };
-
-function run(cwd: string, command: string, args: string[], env?: NodeJS.ProcessEnv): string {
-  return execFileSync(command, args, {
-    cwd,
-    encoding: "utf8",
-    env: env ? { ...process.env, ...env } : process.env,
-    stdio: ["ignore", "pipe", "pipe"],
-  }).trim();
-}
-
-function shell(repo: string, source: string, env: NodeJS.ProcessEnv = {}) {
-  return run(repo, "bash", ["-c", source], { ...scriptEnv, ...env });
-}
-
-function failureOutput(action: () => string): string {
-  try {
-    action();
-    return "";
-  } catch (error) {
-    const result = asOptionalRecord(error);
-    const stdout = result?.stdout ?? "";
-    const stderr = result?.stderr ?? "";
-    if (typeof stdout !== "string" || typeof stderr !== "string") {
-      throw error;
-    }
-    return stdout;
-  }
-}
-
 function createRepoWithPrChangelogDiff(entry: string): string {
   const repo = tempRoots.make("openclaw-changelog-credit-");
   const git = (args: string[]) =>
-    run(repo, "git", ["-c", "user.email=test@example.com", "-c", "user.name=Test User", ...args]);
+    execFileSync(
+      "git",
+      ["-c", "user.email=test@example.com", "-c", "user.name=Test User", ...args],
+      {
+        cwd: repo,
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "pipe"],
+      },
+    ).trim();
   git(["init", "-q", "--initial-branch=main"]);
   const header = "# Changelog\n\n## Unreleased\n\n### Fixes\n\n";
   writeFileSync(repo + "/CHANGELOG.md", header, "utf8");
@@ -105,8 +82,15 @@ describe("check-changelog-attributions", () => {
     const repo = createRepoWithPrChangelogDiff("- Bot repair (#123).");
     const script =
       'source "$OPENCLAW_PR_CHANGELOG_SH"; PR_MAIN_SHA=$(git rev-parse --verify refs/remotes/origin/main); validate_changelog_entry_for_pr 123 "dependabot[bot]"';
-    expect(failureOutput(() => shell(repo, script))).toContain(
-      "must include an explicit human Thanks @handle",
-    );
+    const result = spawnSync("bash", ["-c", script], {
+      cwd: repo,
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        OPENCLAW_PR_CHANGELOG_SH: path.resolve("scripts/pr-lib/changelog.sh"),
+      },
+    });
+    expect(result.status).not.toBe(0);
+    expect(result.stdout).toContain("must include an explicit human Thanks @handle");
   });
 });

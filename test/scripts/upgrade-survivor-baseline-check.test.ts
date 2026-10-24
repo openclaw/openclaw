@@ -83,16 +83,17 @@ it("checks each pinned recovery driver once before scheduling exact rows", () =>
 it.each(["version", "runtime"] as const)("skips unusable %s baselines with evidence", (failure) => {
   const fixture = runFixture(failure);
   expect(fixture.result.status, fixture.result.stderr).toBe(0);
-  const groups = JSON.parse(fixture.result.stdout);
-  expect(groups).toEqual([
-    ...scenarios.map((scenario, index) => ({
-      docker_lanes: "published-upgrade-survivor",
-      label: `published-upgrade-survivor-2026.8.34-scenarios-${index + 1}`,
-      published_upgrade_survivor_baselines: "openclaw@2026.8.34",
-      published_upgrade_survivor_scenarios: scenario,
-      timeout_minutes: 90,
-    })),
-    { docker_lanes: "onboard", label: "onboard" },
+  // Label and timeout policy belong to targeted-docker-lane-groups.test.ts.
+  const groups: Array<Record<string, unknown>> = JSON.parse(fixture.result.stdout);
+  expect(
+    groups.map((group) => [
+      group.docker_lanes,
+      group.published_upgrade_survivor_baselines,
+      group.published_upgrade_survivor_scenarios,
+    ]),
+  ).toEqual([
+    ...scenarios.map((scenario) => ["published-upgrade-survivor", "openclaw@2026.8.34", scenario]),
+    ["onboard", undefined, undefined],
   ]);
   expect(fixture.report.baselines).toHaveLength(2);
   expect(fixture.report.baselines).toEqual(

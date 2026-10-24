@@ -7,37 +7,19 @@ import { createScriptTestHarness } from "./test-helpers.js";
 const SCRIPT_PATH = "scripts/install.ps1";
 const source = readFileSync(SCRIPT_PATH, "utf8");
 const body = (name: string) => extractFunctionBody(source, name);
-const contracts: Record<string, Record<string, string>> = {
-  "pipes the SQLite probe to an application Node executable": {
-    "Check-Node": `Get-Command node -CommandType Application
-SELECT sqlite_version() AS version
-$sqliteProbe | & $nodePath -`,
-  },
-  "runs Windows command shims from a Windows-local cwd": {
-    "Invoke-CommandFromWindowsSafeDirectory": `Get-WindowsCommandSafeDirectory
-Push-Location -LiteralPath $safeDir
-Pop-Location`,
-  },
-  "rejects OpenClaw GitHub source targets for npm installs": {
-    "Test-OpenClawSourcePackageInstallSpec": `$normalizedTag -eq "main"
-^github:openclaw/openclaw`,
-    "Install-OpenClaw": `Test-OpenClawSourcePackageInstallSpec -RequestedTag $Tag
-npm installs do not support OpenClaw GitHub source targets
--InstallMethod git -Tag main`,
-  },
-  "preserves caller-relative local tarball install specs before safe-cwd npm calls": {
-    "Resolve-LocalNpmPackageInstallSpec": String.raw`$InstallSpec -match '^file:(?<path>.+)$'
-Resolve-LocalNpmPackagePath -PackagePath $filePath
-).AbsoluteUri`,
-  },
-};
-it.each(Object.entries(contracts))("install.ps1 %s", (_name, functions) => {
-  for (const [name, fragments] of Object.entries(functions)) {
-    fragments.split("\n").forEach((fragment) => expect(body(name)).toContain(fragment));
-  }
-  if ("Check-Node" in functions) {
-    expect(body("Check-Node")).not.toContain("& $nodePath -e");
-  }
+// Runtime, cwd and archive identity are exercised by install-ps1.release.test.ts.
+it("pipes the SQLite probe through stdin instead of Windows command-line quoting", () => {
+  expect(body("Check-Node")).toMatch(
+    /Get-Command node -CommandType Application[^]*\$sqliteProbe \| & \$nodePath -/,
+  );
+});
+it("rejects source targets before installing an npm package", () => {
+  expect(body("Test-OpenClawSourcePackageInstallSpec")).toMatch(
+    /\$normalizedTag -eq "main"[^]*\^github:openclaw\/openclaw/,
+  );
+  expect(body("Install-OpenClaw")).toMatch(
+    /if \(Test-OpenClawSourcePackageInstallSpec[^]*?return \$false[^]*?\$installSpec =/,
+  );
 });
 it("does not read project npmrc when choosing global install freshness args", () => {
   const rawKeyBody = body("Test-NpmConfigRawKey");
@@ -49,11 +31,7 @@ it("preserves the min-release-age probe status before raw npmrc detection", () =
   const rawKeyProbe = npmInstallBody.indexOf("Test-NpmConfigRawKey -Key");
   expect(probeStatusCapture).toBeGreaterThan(-1);
   expect(probeStatusCapture).toBeLessThan(rawKeyProbe);
-  [
-    "} elseif ($minReleaseAgeStatus -ne 0 -or -not $minReleaseAge",
-    'Invoke-NpmCommand -CommandPath $npmCommand -WorkingDirectory $npmCwd -Arguments @("config", "get", "min-release-age", "--global")',
-    'Invoke-NpmCommand -CommandPath $npmCommand -WorkingDirectory $npmCwd -Arguments @("config", "get", "before", "--global")',
-  ].forEach((fragment) => expect(npmInstallBody).toContain(fragment));
+  expect(npmInstallBody).toContain("} elseif ($minReleaseAgeStatus -ne 0 -or -not $minReleaseAge");
 });
 const harness = createScriptTestHarness();
 const powershell = process.platform === "win32" ? "powershell" : "pwsh";
