@@ -221,7 +221,7 @@ describe("ChannelsPage lifecycle", () => {
       plugin(ownerId, label, {
         origin: shared ? "global" : "bundled",
         enabled: late || shared,
-        state: shared ? "enabled" : late ? "loaded" : "disabled",
+        state: late || shared ? "enabled" : "disabled",
         description: `OpenClaw ${label} channel plugin.`,
         ...(shared ? { channelIds: [id, "agent-system-chat"] } : {}),
       }),
@@ -229,7 +229,11 @@ describe("ChannelsPage lifecycle", () => {
     if (kind === "exact") {
       plugins.unshift(plugin("slack-suite", "Suite", { channelIds: [id] }));
       plugins.push(
-        plugin("firecrawl", "FireCrawl", { installed: false, enabled: false, state: "available" }),
+        plugin("firecrawl", "FireCrawl", {
+          installed: false,
+          enabled: false,
+          state: "not-installed",
+        }),
       );
     }
     const description = "Legacy channel subtitle";
