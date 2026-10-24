@@ -564,8 +564,6 @@ try {
             .filter((asset) => !asset.finishedAt)
             .map((asset) => asset.url);
           const beforeRpc = boot ? {} : await rpcCounts(page);
-          const before = await metrics(cdp);
-          row.cdpStartedAt = before.Timestamp;
           const traceEvents: unknown[] = [];
           const collectTrace = ({ value }: { value: unknown[] }) => traceEvents.push(...value);
           let profiling = false;
@@ -597,12 +595,12 @@ try {
                       const snapshot = window.openclawControlUi?.snapshot();
                       const route = snapshot?.route;
                       if (
-                        element?.getClientRects().length &&
                         (!routeId ||
                           (snapshot?.routeReady &&
                             route?.status === "success" &&
                             route.matches[0]?.routeId === routeId &&
-                            route.pendingMatches.length === 0))
+                            route.pendingMatches.length === 0)) &&
+                        element?.getClientRects().length
                       ) {
                         requestAnimationFrame(() => {
                           state.readyAt = performance.now();
@@ -626,6 +624,8 @@ try {
                 },
               );
             }
+            const before = await metrics(cdp);
+            row.cdpStartedAt = before.Timestamp;
             await action();
             if (boot) {
               await page.waitForFunction(
