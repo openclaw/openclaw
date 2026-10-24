@@ -119,6 +119,12 @@ function harness(
 function text(root: ParentNode, selector: string) {
   return root.querySelector(selector)?.textContent;
 }
+function waitForContent(root: ParentNode, selector: string, expected: string) {
+  return waitForSolid(() => expect(text(root, selector)).toContain(expected));
+}
+function desktopConfig(enabled: boolean, hash = String(enabled)) {
+  return { config: { desktop: { host: { enabled } } }, hash, valid: true };
+}
 function points(root: ParentNode) {
   return root.querySelector(".sparkline-tile__chart polyline")?.getAttribute("points")?.split(" ");
 }
@@ -177,13 +183,9 @@ describe("Systems workspace", () => {
     expect(page.querySelectorAll(".systems-backups")).toHaveLength(1);
     expect(text(page, ".systems-backups")).toContain("Loading backups…");
     pending.reject(new Error("Backup history unavailable"));
-    await waitForSolid(() =>
-      expect(text(page, '.systems-backups [role="alert"]')).toContain("Backup history unavailable"),
-    );
+    await waitForContent(page, '.systems-backups [role="alert"]', "Backup history unavailable");
     await controller.refreshBackups();
-    await waitForSolid(() =>
-      expect(text(page, ".systems-backups")).toContain("No backups recorded —"),
-    );
+    await waitForContent(page, ".systems-backups", "No backups recorded —");
     expect(text(page, ".systems-backups code")).toBe("openclaw backup enable --to <location>");
     const backupReads = () => calls(request, "backup.status");
     expect(backupReads()).toHaveLength(2);
@@ -207,9 +209,7 @@ describe("Systems workspace", () => {
     expect(controller.state.inventory).toBe(original);
     pending.reject(new Error("Inventory unavailable"));
     await refresh;
-    await waitForSolid(() =>
-      expect(text(page, '[role="alert"]')).toContain("Inventory unavailable"),
-    );
+    await waitForContent(page, '[role="alert"]', "Inventory unavailable");
     expect(controller.state.inventory).toBe(original);
     expect(sidebar.querySelectorAll(".systems-machine")).toHaveLength(2);
     expect(calls(request, "environments.list")).toHaveLength(2);
@@ -464,10 +464,10 @@ describe("Systems workspace", () => {
     expect(enable.disabled).toBe(true);
     expect(enable.textContent).toContain("Enabling");
     pending.reject(new Error("Desktop configuration could not be saved"));
-    await waitForSolid(() =>
-      expect(text(mounted.container, '[role="alert"]')).toContain(
-        "Desktop configuration could not be saved",
-      ),
+    await waitForContent(
+      mounted.container,
+      '[role="alert"]',
+      "Desktop configuration could not be saved",
     );
     expect(enable.disabled).toBe(false);
   });
@@ -491,10 +491,10 @@ describe("Systems workspace", () => {
     await loaded.promise;
     await waitForSolid(() => expect(patch).not.toHaveBeenCalled());
     setPresented(true);
-    await waitForSolid(() =>
-      expect(text(mounted.container, ".systems-state button")).toContain(
-        "Enable desktop access in OpenClaw",
-      ),
+    await waitForContent(
+      mounted.container,
+      ".systems-state button",
+      "Enable desktop access in OpenClaw",
     );
   });
 
@@ -504,17 +504,13 @@ describe("Systems workspace", () => {
     vi.spyOn(context.runtimeConfig, "ensureLoaded").mockResolvedValue();
     const patch = vi.spyOn(context.runtimeConfig, "patch").mockImplementation(async () => {
       await pending.promise;
-      request.mockResolvedValueOnce({
-        config: { desktop: { host: { enabled: true } } },
-        hash: "enabled",
-        valid: true,
-      });
+      request.mockResolvedValueOnce(desktopConfig(true, "enabled"));
       await context.runtimeConfig.refresh();
       return true;
     });
     const { page } = await mount(controller);
     page.querySelector<HTMLButtonElement>(".systems-state button")!.click();
-    await waitForSolid(() => expect(text(page, ".systems-state button")).toContain("Enabling"));
+    await waitForContent(page, ".systems-state button", "Enabling");
     pending.resolve();
     await waitForSolid(() =>
       expect(text(page, ".systems-state h2")).toBe("Desktop access is enabled"),
@@ -529,11 +525,7 @@ describe("Systems workspace", () => {
     expect(text(page, ".systems-state button")).toContain("Enable desktop access in OpenClaw");
     const request = vi.spyOn(context.gateway.snapshot.client!, "request");
     for (const enabled of [true, false]) {
-      request.mockResolvedValueOnce({
-        config: { desktop: { host: { enabled } } },
-        hash: String(enabled),
-        valid: true,
-      });
+      request.mockResolvedValueOnce(desktopConfig(enabled));
       await context.runtimeConfig.refresh();
       if (enabled) {
         await waitForSolid(() =>
@@ -541,11 +533,7 @@ describe("Systems workspace", () => {
         );
         expect(page.querySelector(".systems-state button")).toBeNull();
       } else {
-        await waitForSolid(() =>
-          expect(text(page, ".systems-state button")).toContain(
-            "Enable desktop access in OpenClaw",
-          ),
-        );
+        await waitForContent(page, ".systems-state button", "Enable desktop access in OpenClaw");
       }
     }
   });
