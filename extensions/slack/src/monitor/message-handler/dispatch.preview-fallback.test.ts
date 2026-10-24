@@ -311,6 +311,7 @@ function createPreparedSlackMessage(params?: {
     },
     relayIdentity: params?.relayIdentity,
     turnAdoptionLifecycle: params?.turnAdoptionLifecycle,
+    allowImplicitThreadReplies: true,
     eventScope: params?.eventScope,
     message,
     route: {
@@ -1142,17 +1143,17 @@ it("tracks a first-mode root publisher without a status thread", async () => {
   expect(mockedStatusThreadTs).toBeUndefined();
   mockedReplyThreadTs = message.ts;
   mockedSlackIsThreadReply = false;
-  const prepared: Parameters<typeof dispatchPreparedSlackMessage>[0] = createPreparedSlackMessage({
+  const prepared: PreparedSlackMessage = createPreparedSlackMessage({
     message,
     replyToMode: "first",
   });
   mockedReplyOptionEvents = [
     checkpoint(async () => {
       expect(
-        getSlackSessionRuns(prepared.ctx, { channelId: message.channel, threadTs: message.ts }).map(
-          ({ route }) => route.sessionKey,
-        ),
-      ).toEqual([prepared.route.sessionKey]);
+        getSlackSessionRuns(prepared.ctx, { channelId: message.channel, threadTs: message.ts }),
+      ).toMatchObject([
+        { route: { sessionKey: prepared.route.sessionKey }, allowImplicitReplies: true },
+      ]);
     }),
   ];
   await dispatchPreparedSlackMessage(prepared);
@@ -1161,22 +1162,20 @@ it("tracks a first-mode root publisher without a status thread", async () => {
 it.each([false, true])(
   "retains queued publisher ownership until settlement (executed: %s)",
   async (executed) => {
-    const prepared: Parameters<typeof dispatchPreparedSlackMessage>[0] = createPreparedSlackMessage(
-      {
-        turnAdoptionLifecycle: {
-          admission: "exclusive",
-          onAdopted: async () => {},
-          onDeferred: () => {},
-          onAbandoned: () => {},
-        },
+    const prepared: PreparedSlackMessage = createPreparedSlackMessage({
+      turnAdoptionLifecycle: {
+        admission: "exclusive",
+        onAdopted: async () => {},
+        onDeferred: () => {},
+        onAbandoned: () => {},
       },
-    );
+    });
     const address = { channelId: "C123", threadTs: THREAD_TS };
     mockedReplyOptionEvents = [
       checkpoint(async () => {
-        expect(
-          getSlackSessionRuns(prepared.ctx, address).map(({ route }) => route.sessionKey),
-        ).toEqual([prepared.route.sessionKey]);
+        expect(getSlackSessionRuns(prepared.ctx, address)).toMatchObject([
+          { route: { sessionKey: prepared.route.sessionKey }, allowImplicitReplies: true },
+        ]);
         capturedReplyOptions?.turnAdoptionLifecycle?.onDeferred?.();
       }),
     ];
@@ -1190,8 +1189,7 @@ it.each([false, true])(
     await capturedReplyOptions?.turnAdoptionLifecycle?.onSettled?.();
     expect(getSlackSessionRuns(prepared.ctx, address)).toHaveLength(executed ? 1 : 0);
     expect(getSlackSessionRuns({ ...prepared.ctx }, address)).toHaveLength(executed ? 1 : 0);
-    const restarted: Parameters<typeof dispatchPreparedSlackMessage>[0] =
-      createPreparedSlackMessage();
+    const restarted: PreparedSlackMessage = createPreparedSlackMessage();
     expect(getSlackSessionRuns(restarted.ctx, address)).toEqual([]);
     endQueuedRun?.();
     expect(getSlackSessionRuns(prepared.ctx, address)).toEqual([]);
