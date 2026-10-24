@@ -253,11 +253,11 @@ class ChatController internal constructor(
     scope = scope,
     json = json,
     requestGateway = { method, paramsJson ->
-      check(isGatewayReady()) { "Agent discovery is not ready" }
+      if (!isGatewayReady()) throw GatewayRequestNotEnqueued("Agent discovery is not ready")
       session.request(method, paramsJson)
     },
     requestGatewayForGateway = { gatewayId, method, paramsJson ->
-      check(isGatewayReady()) { "Agent discovery is not ready" }
+      if (!isGatewayReady()) throw GatewayRequestNotEnqueued("Agent discovery is not ready")
       session.requestForEndpoint(gatewayId, method, paramsJson)
     },
     gatewayAdvertisesMethod = gatewayAdvertisesMethod,
