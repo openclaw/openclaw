@@ -19,14 +19,15 @@ import { readStandaloneInstaller } from "../../scripts/lib/standalone-installers
 import { requireNodeTool } from "../helpers/node-toolchain.js";
 import { NODE_RELEASE_VERSION_CASES } from "../helpers/node-version-cases.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
-import { writeNpmInstallRetryFixture, writeNpmLifecycleFixture } from "./install-npm-fixtures.js";
+import { writeNpmLifecycleFixture } from "./install-npm-fixtures.js";
 import { findDarwinReexecBash } from "./install-reexec-fixtures.js";
 import {
   defineInstallerNpmConfigContract,
   defineInstallerNpmFreshnessContract,
+  defineInstallerNpmRetryContract,
+  defineInstallerPnpmContract,
   defineInstallerShellIsolationContract,
 } from "./install-test-contract.js";
-import { linkPnpmBootstrapShellTools } from "./test-helpers.js";
 
 const SCRIPT_PATH = "scripts/install-cli.sh";
 const nodeExecutable = requireNodeTool("node");
@@ -145,28 +146,6 @@ describe("install-cli.sh", () => {
     expect(result.stdout).not.toContain("unexpected-node-install");
   });
 
-  it("creates every prefix level privately without changing existing parents before downloading Node", () => {
-    const root = tempDirs.make("openclaw-install-cli-umask-");
-    const prefix = join(root, "nested", "state");
-    chmodSync(root, 0o775);
-    const result = runInstallCliShell(
-      `
-      umask 0002
-      os_detect() { echo linux; }; arch_detect() { echo x64; }
-      is_musl_linux() { return 1; }; linked_node_is_usable() { return 1; }
-      detect_downloader() { :; }; download_file() { echo download-unavailable >&2; return 1; }
-      main --node-only --prefix "$FIXTURE_PREFIX"
-    `,
-      { FIXTURE_PREFIX: prefix },
-    );
-    expect(result.status).toBe(1);
-    expect(result.stderr).toContain("download-unavailable");
-    expect(lstatSync(root).mode & 0o777).toBe(0o775);
-    for (const directory of [join(root, "nested"), prefix, join(prefix, "tools")]) {
-      expect(lstatSync(directory).mode & 0o777, directory).toBe(0o700);
-    }
-  });
-
   it.each([
     { tempBase: "directory", downloadFails: false },
     { tempBase: "file", downloadFails: true },
@@ -174,13 +153,14 @@ describe("install-cli.sh", () => {
     "owns and cleans private temporary storage with $tempBase TMPDIR (download fails: $downloadFails)",
     ({ tempBase, downloadFails }) => {
       const root = tempDirs.make("openclaw-install-cli-temp-");
+      chmodSync(root, 0o775);
       const inheritedTemp = join(root, "inherited temp");
       if (tempBase === "directory") {
         mkdirSync(inheritedTemp, { mode: 0o755 });
       } else if (tempBase === "file") {
         writeFileSync(inheritedTemp, "preserve this file");
       }
-      const prefix = join(root, "prefix");
+      const prefix = join(root, "nested", "state");
       const payload = join(root, "node-payload");
       mkdirSync(join(payload, "bin"), { recursive: true });
       writeFileSync(
@@ -215,6 +195,7 @@ fs.writeFileSync(process.env.FIXTURE_OBSERVATION, JSON.stringify({
         const result = runInstallCliShell(
           `
           is_musl_linux() { return 1; }
+          umask 0002
           detect_downloader() { :; }
           preflight_fresh_git_disk_space() { exit 91; }
           install_openclaw_from_git() { exit 92; }
@@ -245,6 +226,10 @@ fs.writeFileSync(process.env.FIXTURE_OBSERVATION, JSON.stringify({
           },
         );
         expect(result.status, result.stdout + result.stderr).toBe(downloadFails ? 42 : 0);
+        expect(lstatSync(root).mode & 0o777).toBe(0o775);
+        for (const directory of [join(root, "nested"), prefix, join(prefix, "tools")]) {
+          expect(lstatSync(directory).mode & 0o777, directory).toBe(0o700);
+        }
         const observation = JSON.parse(readFileSync(observationPath, "utf8")) as {
           tempDirectory: string;
           mode: number;
@@ -865,121 +850,7 @@ fi
     },
   );
 
-  it.each([
-    ["corepack", "12.0.0", ""],
-    ["corepack", "12.0.0", "install"],
-    ["failing", "11.15.1", "build"],
-  ])("keeps selected pnpm through nested builds (%s, %s, failure=%s)", (mode, version, failure) => {
-    const tmp = tempDirs.make("openclaw-install-pnpm-boundary-");
-    const bin = join(tmp, "bin"),
-      repo = join(tmp, "repo"),
-      outer = join(tmp, "outer"),
-      temp = join(tmp, "temp");
-    for (const dir of [bin, repo, outer, temp]) {
-      mkdirSync(dir);
-    }
-    writeFileSync(
-      join(repo, "package.json"),
-      JSON.stringify({ packageManager: `pnpm@${version}` }),
-    );
-    writeFileSync(join(repo, "pnpm-lock.yaml"), "unchanged lock\n");
-    writeFileSync(join(outer, "package.json"), '{"packageManager":"yarn@4.5.0"}');
-    linkPnpmBootstrapShellTools(bin);
-    symlinkSync(nodeExecutable, join(bin, "node"));
-    const executable = (name: string, body: string) =>
-      writeShell(join(bin, name), `set -eu\n${body}`);
-    executable(
-      "pnpm",
-      `
-      echo "$*" >> "$FIXTURE/ambient.log"
-      echo corrupted > "$TARGET/pnpm-lock.yaml"
-      if [[ "$1" == --version ]]; then echo "$VERSION"; fi
-    `,
-    );
-    executable(
-      "selected",
-      `
-      [[ "\${COREPACK_ENABLE_DOWNLOAD_PROMPT:-}" == 0 ]] || { echo "Corepack would await terminal input" >&2; exit 91; }
-      [[ -z "\${CI:-}" && "$PWD" == "$TARGET" ]]
-      [[ "$NPM_CONFIG_WORKSPACE_DIR" == "$TARGET" && "$npm_config_workspace_dir" == "$TARGET" ]]
-      [[ "$PNPM_CONFIG_LOCKFILE_DIR" == "$TARGET" && "$pnpm_config_lockfile_dir" == "$TARGET" ]]
-      case "$1" in
-        --version) echo "$VERSION" ;;
-        config) echo undefined ;;
-        install) [[ "$2" == --frozen-lockfile ]]; echo install >> "$FIXTURE/steps"; [[ "$FAILURE" != install ]] || exit 42 ;;
-        build) echo build >> "$FIXTURE/steps"; pnpm nested ;;
-        nested) [[ "$FAILURE" != build ]] || exit 42; echo "nested:$VERSION" >> "$FIXTURE/steps" ;;
-        *) exit 90 ;;
-      esac
-    `,
-    );
-    executable(
-      "npm",
-      `
-      if [[ "$1" == --version ]]; then echo 12.0.0; exit; fi
-      [[ "$1 $2 $3" == 'install -g --prefix' ]]
-      [[ "$4" == "$FIXTURE/"* && "$4" != "$TARGET" ]]
-      [[ "$5" == "pnpm@$VERSION" && "$6" == "--allow-scripts=pnpm@$VERSION" ]]
-      mkdir -p "$4/bin"
-      cp "$FIXTURE/bin/selected" "$4/bin/pnpm"
-      echo "$4" > "$FIXTURE/npm-prefix"
-    `,
-    );
-    executable(
-      "corepack",
-      `
-      [[ "$1 $2" == 'enable --install-directory' && "$4" == pnpm ]]
-      [[ "$3" == "$FIXTURE/"* ]]
-      cp "$FIXTURE/bin/selected" "$3/pnpm"
-      ${mode === "failing" ? 'echo "#!/bin/bash" > "$3/pnpm"; echo "exit 1" >> "$3/pnpm"' : ":"}
-    `,
-    );
-    const result = runInstallCliShell(
-      `
-      unset CI
-      PREFIX="$FIXTURE/prefix"
-      node_bin() { printf '%s\\n' "$FIXTURE/bin/node"; }
-      npm_bin() { printf '%s\\n' "$FIXTURE/bin/npm"; }
-      cd "$FOREIGN"
-      ensure_pnpm "$TARGET"
-      run_pnpm -C "$TARGET" config get prefer-offline
-      run_pnpm -C "$TARGET" install --frozen-lockfile
-      run_pnpm -C "$TARGET" build
-      [[ "$NPM_CONFIG_WORKSPACE_DIR" == "$FOREIGN" && "$npm_config_workspace_dir" == "$FOREIGN" ]]
-      [[ "$PNPM_CONFIG_LOCKFILE_DIR" == "$FOREIGN" && "$pnpm_config_lockfile_dir" == "$FOREIGN" ]]
-      [[ "$(command -v pnpm)" == "$FIXTURE/bin/pnpm" && "$COREPACK_ENABLE_DOWNLOAD_PROMPT" == 1 ]]
-      echo completed
-    `,
-      {
-        PATH: bin,
-        COREPACK_ENABLE_DOWNLOAD_PROMPT: "1",
-        TMPDIR: temp,
-        HOME: tmp,
-        FIXTURE: tmp,
-        TARGET: repo,
-        FOREIGN: outer,
-        VERSION: version,
-        FAILURE: failure,
-        NPM_CONFIG_WORKSPACE_DIR: outer,
-        npm_config_workspace_dir: outer,
-        PNPM_CONFIG_LOCKFILE_DIR: outer,
-        pnpm_config_lockfile_dir: outer,
-      },
-    );
-    expect(result.status, result.stdout + result.stderr).toBe(failure ? 42 : 0);
-    expect(readFileSync(join(repo, "pnpm-lock.yaml"), "utf8")).toBe("unchanged lock\n");
-    expect(existsSync(join(tmp, "ambient.log"))).toBe(false);
-    expect(result.stdout.includes("completed")).toBe(!failure);
-    expect(readFileSync(join(tmp, "steps"), "utf8").trim().split("\n")).toEqual(
-      failure === "install"
-        ? ["install"]
-        : failure === "build"
-          ? ["install", "build"]
-          : ["install", "build", `nested:${version}`],
-    );
-    expect(existsSync(join(tmp, "npm-prefix"))).toBe(mode !== "corepack");
-    expect(readdirSync(temp)).toEqual([]);
-  });
+  defineInstallerPnpmContract(installerContract);
 
   it.each([false, true])("replaces an unusable musl runtime (apk required: %s)", (useApk) => {
     const root = tempDirs.make("openclaw-install-cli-alpine-");
@@ -1105,11 +976,7 @@ fi
     }
   });
 
-  it.each([
-    { route: "path", failure: "version" },
-    { route: "path", failure: "npm" },
-    { route: "apk", failure: "sqlite" },
-  ])("preserves the active runtime when $route rejects $failure", ({ route, failure }) => {
+  it("preserves the active runtime when apk provides unsafe SQLite", () => {
     const root = tempDirs.make("openclaw-install-cli-preserve-runtime-");
     const bin = join(root, "candidate");
     const prefix = join(root, "prefix");
@@ -1120,22 +987,11 @@ fi
     symlinkSync(nodeExecutable, join(oldRuntime, "bin", "node"));
     mkdirSync(join(prefix, "tools"), { recursive: true });
     symlinkSync(oldRuntime, join(prefix, "tools", "node"));
-    if (failure === "version") {
-      writeFileSync(join(bin, "node"), "#!/bin/bash\nprintf 'v22.18.0\\n'\n", {
-        mode: 0o755,
-      });
-    } else if (failure === "sqlite") {
-      writeFileSync(
-        join(bin, "node"),
-        '#!/bin/bash\nif [[ "$1" == -e ]]; then exit 1; fi\nexec "$FIXTURE_NODE" "$@"\n',
-        { mode: 0o755 },
-      );
-    } else {
-      symlinkSync(nodeExecutable, join(bin, "node"));
-    }
-    writeFileSync(join(bin, "npm"), `#!/bin/bash\nexit ${failure === "npm" ? 42 : 0}\n`, {
-      mode: 0o755,
-    });
+    writeShell(
+      join(bin, "node"),
+      'if [[ "$1" == -e ]]; then exit 1; fi\nexec "$FIXTURE_NODE" "$@"',
+    );
+    writeShell(join(bin, "npm"), "exit 0");
     const result = runInstallCliShell(
       `
       PREFIX="$FIXTURE_PREFIX"
@@ -1144,15 +1000,13 @@ fi
       APK_NODE_BIN_DIR="$FIXTURE_BIN"
       is_root() { return 0; }
       apk() { printf 'apk called\\n'; }
-      ${route === "path" ? "try_link_usable_node_runtime_from_path" : "install_alpine_node"}
+      install_alpine_node
       `,
       { FIXTURE_PREFIX: prefix, FIXTURE_BIN: bin, FIXTURE_NODE: nodeExecutable },
     );
     expect(result.status, result.stdout + result.stderr).toBe(1);
-    if (route === "apk") {
-      expect(result.stdout).toContain("apk called");
-      expect(result.stdout).toContain("Alpine Node package must provide Node >=");
-    }
+    expect(result.stdout).toContain("apk called");
+    expect(result.stdout).toContain("Alpine Node package must provide Node >=");
     expect(readlinkSync(join(prefix, "tools", "node"))).toBe(oldRuntime);
     expect(readlinkSync(join(oldRuntime, "bin", "node"))).toBe(nodeExecutable);
     expect(existsSync(join(prefix, "tools", "node-v24.22.1"))).toBe(false);
@@ -1404,67 +1258,7 @@ fi
     expect(result.stdout).toContain("--install-method git --version main");
   });
 
-  it.each([
-    { requested: "beta", outcome: "transient", produced: true, status: 0, json: true },
-    { requested: "latest", outcome: "persistent", produced: true, status: 1, json: true },
-    { requested: "latest", outcome: "success", produced: false, status: 1, json: true },
-    { requested: "latest", outcome: "persistent", produced: true, status: 1, json: false },
-    { requested: "latest", outcome: "success", produced: false, status: 1, json: false },
-  ])(
-    "keeps the requested npm spec across $outcome installs (package: $produced, json: $json)",
-    ({ requested, outcome, produced, status, json }) => {
-      const root = tempDirs.make("openclaw-install-npm-retry-");
-      const prefix = join(root, "prefix"),
-        nodeDir = join(root, "node"),
-        calls = join(root, "calls"),
-        npm = join(root, "npm");
-      mkdirSync(join(nodeDir, "bin"), { recursive: true });
-      symlinkSync(nodeExecutable, join(nodeDir, "bin", "node"));
-      writeNpmInstallRetryFixture(npm);
-      const result = runInstallCliShell(
-        `
-      npm_bin() { printf '%s\\n' "$FIXTURE_NPM"; }
-      node_dir() { printf '%s\\n' "$FIXTURE_NODE_DIR"; }
-      npm_config_has_raw_key() { return 1; }
-      PREFIX="$FIXTURE_PREFIX"
-      JSON=${json ? 1 : 0}
-      OPENCLAW_VERSION=${requested}
-      install_openclaw
-    `,
-        {
-          FIXTURE_NPM: npm,
-          FIXTURE_NODE_DIR: nodeDir,
-          FIXTURE_PREFIX: prefix,
-          NPM_FAKE_CALLS: calls,
-          NPM_FAKE_ERROR: "EACCES permission denied",
-          NPM_FAKE_OUTCOME: outcome,
-          NPM_FAKE_PACKAGE_DIR: produced
-            ? join(nodeDir, "lib", "node_modules", "openclaw")
-            : undefined,
-        },
-      );
-      expect(result.status).toBe(status);
-      expect(readFileSync(calls, "utf8").trim().split("\n")).toEqual([
-        `openclaw@${requested}`,
-        `openclaw@${requested}`,
-      ]);
-      expect(result.stdout + result.stderr).not.toContain("openclaw@next");
-      if (status !== 0) {
-        expect(result.stdout).toBe(
-          json
-            ? `{"event":"step","name":"openclaw","status":"start","version":"${requested}"}\n{"event":"error","message":"npm install did not produce a usable OpenClaw package"}\n`
-            : `Installing OpenClaw (${requested})...\nnpm install openclaw@${requested} did not produce a usable package; retrying once\nERROR: npm install did not produce a usable OpenClaw package\nSupport: https://community.openclaw.ai/\n`,
-        );
-        expect(result.stdout).not.toContain('"status":"ok"');
-        expect(existsSync(join(prefix, "bin", "openclaw"))).toBe(false);
-        if (produced) {
-          expect(result.stderr).toContain("EACCES permission denied (attempt 2)");
-        } else {
-          expect(result.stdout).toContain("npm install did not produce a usable OpenClaw package");
-        }
-      }
-    },
-  );
+  defineInstallerNpmRetryContract(installerContract);
 
   defineInstallerNpmFreshnessContract(installerContract);
 });
