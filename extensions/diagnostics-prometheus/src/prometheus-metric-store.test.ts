@@ -38,6 +38,11 @@ it("keeps earlier scrape bytes stable across value changes, gauge removal, and r
   expect(updated).toContain(
     'openclaw_run_duration_seconds_sum{a="first",le="replaced",z="雪\\"\\\\\\n"} 2.5\n',
   );
+  const largeLabel = "雪😀".repeat(1024);
+  store.gauge("openclaw_worker_queue_depth", "Depth.", { label: largeLabel }, 7);
+  expect(store.render().toString()).toContain(
+    `openclaw_worker_queue_depth{label="${largeLabel}"} 7\n`,
+  );
   store.clearGauges("openclaw_worker_queue_depth");
   expect(store.render().toString()).not.toContain("openclaw_worker_queue_depth");
   store.reset();
