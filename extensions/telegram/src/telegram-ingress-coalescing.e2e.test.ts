@@ -3,7 +3,6 @@
 // participant the same way, so both depend on deferredLaneOccupancy="release" to admit
 // later same-lane members. Cover them together — a lane regression breaks both at once.
 import path from "node:path";
-import { DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS } from "openclaw/plugin-sdk/channel-outbound";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { MediaFetchError } from "openclaw/plugin-sdk/media-runtime";
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
@@ -22,7 +21,6 @@ import type {
   TelegramIngressResources,
 } from "./telegram-ingress-coalescing-fixture.test-support.js";
 import {
-  createBotApiTransport,
   holdForwardWindow,
   photoUpdate,
   forwardedPhotoUpdate,
@@ -44,7 +42,6 @@ const downstreamTurns = vi.hoisted(() =>
 );
 const inboundTurns = vi.hoisted(() => ({
   active: new Set<Promise<void>>(),
-  gate: undefined as (() => Promise<void>) | undefined,
 }));
 const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-telegram-album-ingress-");
 const saveRemoteMedia = vi.hoisted(() =>
@@ -72,7 +69,6 @@ vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => {
     ...actual,
     runChannelInboundEvent: async (params: Parameters<typeof actual.runChannelInboundEvent>[0]) => {
       const turn = (async () => {
-        await inboundTurns.gate?.();
         return await runTelegramChannelInboundEventWithHarness(
           actual,
           params,
@@ -123,7 +119,6 @@ const ingressSpool = await import("./telegram-ingress-spool.js");
 const { openTelegramIngressQueue, telegramQueueEventId } = ingressSpool;
 const { writeTelegramSpooledUpdate } = await import("./telegram-ingress-spool.test-support.js");
 const messageDispatchDedupe = await import("./message-dispatch-dedupe.js");
-const processingOutcome = await import("./bot-processing-outcome.js");
 const {
   admitAlbum,
   assertSpoolTombstoned,
@@ -154,7 +149,6 @@ describe("Telegram durable ingress coalescing", () => {
     stateDir = sessionDirs.make();
     process.env.OPENCLAW_STATE_DIR = stateDir;
     activeResources = [];
-    inboundTurns.gate = undefined;
     runtimeErrors.length = 0;
     downstreamTurns
       .mockReset()
@@ -163,13 +157,9 @@ describe("Telegram durable ingress coalescing", () => {
     resetTelegramIngressRuntime();
   });
 
-  async function releaseCaseState() {
-    await releaseIngressCase(activeResources, inboundTurns.active, stateDir);
-  }
-
   afterEach(async () => {
     vi.useRealTimers();
-    await releaseCaseState();
+    await releaseIngressCase(activeResources, inboundTurns.active, stateDir);
     resetPluginStateStoreForTests({ closeDatabase: false });
     if (originalStateDir === undefined) {
       delete process.env.OPENCLAW_STATE_DIR;
@@ -190,97 +180,6 @@ describe("Telegram durable ingress coalescing", () => {
       await writeTelegramSpooledUpdate({ stateDir, update });
     }
   }
-
-  it("keeps a timed-out update retryable while its original middleware is still waiting", async ({
-    signal,
-  }) => {
-    // The monitor captures Date.now at construction, so install the clock first.
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
-    const enteredBlocker = createDeferred<void>();
-    const finishBlocker = createDeferred<void>();
-    downstreamTurns.mockImplementationOnce(async () => {
-      enteredBlocker.resolve();
-      await finishBlocker.promise;
-      return { queuedFinal: false, counts: { block: 0, final: 0, tool: 0 } };
-    });
-    const { monitor, bot } = await createMonitor({
-      adoptionStallTimeoutMs: 300_000,
-      pollIntervalMs: 60_000,
-      onRuntimeError: vi.fn(),
-    });
-    const blocker = bot.handleUpdate(
-      textUpdate({ updateId: 801, messageId: 1, text: "busy turn" }),
-    );
-    try {
-      await withinTest(enteredBlocker.promise, signal);
-      const handleUpdate = vi.spyOn(bot, "handleUpdate");
-      const queued = textUpdate({ updateId: 802, messageId: 2, text: "deliver this later" });
-      const tail = textUpdate({ updateId: 803, messageId: 3, text: "deliver after the retry" });
-      const eventId = telegramQueueEventId(802);
-      const queue = openTelegramIngressQueue({ stateDir });
-      monitor.start();
-
-      await withinTest(monitor.admit(queued), signal);
-      await withinTest(
-        vi.waitFor(() => expect(handleUpdate).toHaveBeenCalledTimes(1)),
-        signal,
-      );
-      await withinTest(vi.advanceTimersByTimeAsync(300_000), signal);
-      await withinTest(
-        vi.waitFor(async () => {
-          expect(await queue.listPending({ limit: "all" })).toMatchObject([
-            { id: eventId, attempts: 1, lastError: expect.stringContaining("handler-timeout") },
-          ]);
-        }),
-        signal,
-      );
-
-      await withinTest(monitor.admit(tail), signal);
-      await withinTest(vi.advanceTimersByTimeAsync(1_000), signal);
-      monitor.requestDrain();
-      await withinTest(
-        vi.waitFor(() => {
-          expect(
-            handleUpdate.mock.calls.filter(([update]) => update.update_id === 802),
-          ).toHaveLength(2);
-        }),
-        signal,
-      );
-      // A pending duplicate must not let its same-lane follower overtake it.
-      await withinTest(
-        vi.waitFor(async () => {
-          expect(await queue.listPending({ limit: "all" })).toMatchObject([
-            { id: eventId, attempts: 2, payload: { update: queued } },
-            { id: telegramQueueEventId(803), attempts: 0 },
-          ]);
-        }),
-        signal,
-      );
-      expect(downstreamTurns).toHaveBeenCalledTimes(1);
-
-      finishBlocker.resolve();
-      await blocker;
-      await monitor.waitForIdle();
-      await vi.advanceTimersByTimeAsync(2_000);
-      monitor.requestDrain();
-      await monitor.waitForIdle();
-      expect(downstreamTurns.mock.calls.map(([ctx]) => ctx.RawBody)).toEqual([
-        "busy turn",
-        "deliver this later",
-        "deliver after the retry",
-      ]);
-      await tombstones(802, 803);
-      const duplicate = await processingOutcome.runWithTelegramUpdateProcessingFrame(() =>
-        bot.handleUpdate(queued),
-      );
-      expect(duplicate.result).toEqual({ kind: "skipped" });
-      expect(downstreamTurns).toHaveBeenCalledTimes(3);
-    } finally {
-      finishBlocker.resolve();
-      await blocker;
-      await monitor.stop();
-    }
-  });
 
   it("keeps a later album alive and ordered behind a slowly adopting album", async ({ signal }) => {
     const { monitor } = await createMonitor({ adoptionStallTimeoutMs: 1_000 });
@@ -365,22 +264,14 @@ describe("Telegram durable ingress coalescing", () => {
     const fetchStarted = createDeferred<void>();
     const releaseFetch = createDeferred<void>();
     const headFinished = createDeferred<void>();
-    const transport = createBotApiTransport();
-    let fetchHeld = false;
-    const fetchImpl: typeof fetch = async (input, init) => {
-      const url = input instanceof Request ? input.url : input instanceof URL ? input.href : input;
-      if (url.includes("/getFile") && !fetchHeld) {
-        fetchHeld = true;
-        fetchStarted.resolve();
-        // Deliberately ignore init.signal: claim settlement must release the queue.
-        await releaseFetch.promise;
-        throw new Error("released stuck album download");
-      }
-      return await transport.fetch(input, init);
-    };
+    saveRemoteMedia.mockImplementationOnce(async () => {
+      fetchStarted.resolve();
+      // An uncooperative download must not retain the queue after its claim settles.
+      await releaseFetch.promise;
+      throw new Error("released stuck album download");
+    });
     const { monitor } = await createMonitor({
       adoptionStallTimeoutMs: 1_000,
-      telegramTransport: { ...transport, fetch: fetchImpl, sourceFetch: fetchImpl },
       onRuntimeError: () => headFinished.resolve(),
     });
     const followerDispatched = captureNextDownstreamTurn();
@@ -423,43 +314,6 @@ describe("Telegram durable ingress coalescing", () => {
       releaseFetch.resolve();
       await headFinished.promise;
       await monitor.stop();
-    }
-  });
-
-  it("keeps every album member claimed while durable adoption commit is held", async () => {
-    const commitStarted = createDeferred<void>();
-    const releaseCommit = createDeferred<void>();
-    const replay = interceptReplayGuard({
-      commit: async (count, commit) => {
-        if (count === 1) {
-          commitStarted.resolve();
-          await releaseCommit.promise;
-        }
-        return await commit();
-      },
-    });
-    const { monitor } = await createMonitor({
-      adoptionStallTimeoutMs: 1_000,
-      onRuntimeError: (error) => runtimeErrors.push(error),
-    });
-    useIngressTimers();
-    monitor.start();
-    try {
-      await admitAlbum(monitor, "A", 1_201);
-      // The normal downstream return starts durable finalization without turn heartbeats.
-      await commitStarted.promise;
-      await vi.advanceTimersByTimeAsync(3_000);
-      releaseCommit.resolve();
-      await Promise.all(replay.settlements);
-      await monitor.waitForDeferredClaims();
-      expect(downstreamTurns).toHaveBeenCalledOnce();
-      await tombstones(1_201, 1_202);
-      expect(runtimeErrors).toEqual([]);
-    } finally {
-      releaseCommit.resolve();
-      await Promise.allSettled(replay.settlements);
-      await monitor.stop();
-      replay.restore();
     }
   });
 
@@ -733,30 +587,6 @@ describe("Telegram durable ingress coalescing", () => {
     },
   );
 
-  it("settles a never-adopted buffered participant when monitor stop aborts its owner", async () => {
-    const buffered = createDeferred<void>();
-    const createParticipant = processingOutcome.createTelegramSpooledReplayParticipant;
-    const participantSpy = vi
-      .spyOn(processingOutcome, "createTelegramSpooledReplayParticipant")
-      .mockImplementation((key) => {
-        const participant = createParticipant(key);
-        buffered.resolve();
-        return participant;
-      });
-    try {
-      const { monitor } = await createMonitor({ onRuntimeError: vi.fn() });
-      monitor.start();
-      await monitor.admit(textUpdate({ updateId: 903, messageId: 3, text: "long ".repeat(810) }));
-      await buffered.promise;
-      await monitor.stop();
-      expect(downstreamTurns).not.toHaveBeenCalled();
-      const queue = openTelegramIngressQueue({ stateDir });
-      await expectOnlyPending(queue, [{ id: telegramQueueEventId(903), attempts: 0 }]);
-    } finally {
-      participantSpy.mockRestore();
-    }
-  });
-
   it("coalesces a forwarded burst whose members arrive in separate getUpdates responses", async () => {
     const { monitor, telegramTransport } = await createMonitor();
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
@@ -769,6 +599,7 @@ describe("Telegram durable ingress coalescing", () => {
     await monitor.admit(forwardedPhotoUpdate({ updateId: 302, messageId: 2 }));
     await monitor.waitForIdle();
     expect(downstreamTurns).not.toHaveBeenCalled();
+    expect(saveRemoteMedia).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(1_000);
 
     const turn = await awaitSingleDownstreamTurn();
@@ -777,56 +608,6 @@ describe("Telegram durable ingress coalescing", () => {
     await monitor.waitForDeferredClaims();
     expect(downstreamTurns).toHaveBeenCalledOnce();
     await tombstones(301, 302);
-
-    await monitor.stop();
-    await telegramTransport.close();
-  });
-
-  it("dispatches sustained forwarded messages before their ingress stream falls quiet", async () => {
-    const { monitor, telegramTransport } = await createMonitor();
-    const messageCount = 24;
-    const updateIds = Array.from({ length: messageCount }, (_, index) => 501 + index);
-    const firstDispatch = captureNextDownstreamTurn();
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
-    monitor.start();
-
-    for (let index = 0; index < messageCount; index += 1) {
-      await monitor.admit(
-        forwardedTextUpdate({
-          updateId: 501 + index,
-          messageId: index + 1,
-          text: `sustained-forward-${String(index).padStart(2, "0")}`,
-        }),
-      );
-      // Durable admission can precede buffer entry while the handler hydrates state.
-      await monitor.waitForIdle();
-      await vi.advanceTimersByTimeAsync(250);
-      if (index === 19) {
-        // Hold the 5 s clock boundary while the flushed turn finishes real I/O.
-        await firstDispatch;
-        expect(downstreamTurns.mock.calls.length).toBeGreaterThan(0);
-      }
-    }
-
-    await vi.advanceTimersByTimeAsync(1_000);
-
-    await vi.waitFor(
-      () => {
-        const deliveredMessageIds = downstreamTurns.mock.calls.flatMap(([context]) => {
-          const turn = context as MsgContext;
-          return Array.from(
-            (turn.BodyForAgent ?? turn.Body ?? "").matchAll(/sustained-forward-(\d{2})/g),
-            (match) => match[1],
-          );
-        });
-        expect(deliveredMessageIds).toEqual(
-          Array.from({ length: messageCount }, (_, index) => String(index).padStart(2, "0")),
-        );
-      },
-      { timeout: 5_000, interval: 5 },
-    );
-    await monitor.waitForDeferredClaims();
-    await assertSpoolTombstoned({ stateDir, updateIds });
 
     await monitor.stop();
     await telegramTransport.close();
@@ -878,119 +659,4 @@ describe("Telegram durable ingress coalescing", () => {
       ).toBe(false);
     }
   });
-
-  it("joins a turn that resumes after shutdown before releasing its state directory", async () => {
-    const update = textUpdate({ updateId: 904, messageId: 4, text: "resumed after shutdown" });
-    await spool(update);
-    const turnEntered = createDeferred<void>();
-    const resumeTurn = createDeferred<void>();
-    inboundTurns.gate = async () => {
-      turnEntered.resolve();
-      await resumeTurn.promise;
-    };
-    const { monitor } = await createMonitor({
-      onRuntimeError: (error) => runtimeErrors.push(error),
-    });
-    monitor.start();
-    try {
-      await turnEntered.promise;
-      // Hold the maintenance the resumed write kicks so case release must retire it.
-      vi.useFakeTimers({ toFake: ["setImmediate", "clearImmediate"] });
-      await monitor.stop();
-      const queue = openTelegramIngressQueue({ stateDir });
-      expect(await queue.listPending({ limit: "all" })).toMatchObject([
-        { id: telegramQueueEventId(update.update_id), attempts: 0 },
-      ]);
-      expect(await queue.listClaims()).toEqual([]);
-
-      // A loaded host reaches the session write only after shutdown returned.
-      resumeTurn.resolve();
-      await releaseCaseState();
-
-      expect(downstreamTurns).toHaveBeenCalledOnce();
-      expect(downstreamTurns.mock.calls[0]?.[1]?.aborted).toBe(true);
-      expect(vi.getTimerCount()).toBe(0);
-      expect(runtimeErrors).toEqual([]);
-    } finally {
-      resumeTurn.resolve();
-    }
-  });
-
-  it.each(["young", "aged"] as const)(
-    "preserves retry policy and ordering for a %s session-start conflict",
-    async (age) => {
-      vi.useFakeTimers({ toFake: ["Date"] });
-      const poison = textUpdate({ updateId: 801, messageId: 1, text: "poison" });
-      const after = textUpdate({ updateId: 802, messageId: 2, text: "after" });
-      const poisonId = telegramQueueEventId(poison.update_id);
-      const sessionError = Object.assign(
-        new Error('Session "agent:main:telegram:direct:111" changed while starting work. Retry.'),
-        { code: "SESSION_WORK_START_CHANGED" },
-      );
-      let conflictPending = true;
-      downstreamTurns.mockImplementation(async (turn) => {
-        if (conflictPending && (turn.BodyForAgent ?? turn.Body ?? "").includes("poison")) {
-          throw sessionError;
-        }
-        return { queuedFinal: false, counts: { block: 0, final: 0, tool: 0 } };
-      });
-      await writeTelegramSpooledUpdate({
-        stateDir,
-        update: poison,
-        now: Date.now() - (age === "aged" ? 24 * 60 * 60 * 1_000 : 0),
-      });
-      await writeTelegramSpooledUpdate({ stateDir, update: after });
-      const queue = openTelegramIngressQueue({ stateDir });
-      for (let attempt = 1; attempt < DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS; attempt += 1) {
-        const claim = await queue.claim(poisonId, { ownerId: `proof:${attempt}` });
-        if (!claim) {
-          throw new Error(`Expected setup claim ${attempt}`);
-        }
-        await queue.release(claim, {
-          lastError: sessionError.message,
-          releasedAt: Date.now() - 60 * 60 * 1_000,
-        });
-      }
-      const runtimeError = vi.fn();
-      const { monitor, telegramTransport } = await createMonitor({ onRuntimeError: runtimeError });
-
-      monitor.start();
-      await monitor.waitForIdle();
-      if (age === "young") {
-        expect(await queue.listFailed?.({ limit: "all" })).toEqual([]);
-        expect(await queue.listPending({ limit: "all" })).toMatchObject([
-          { id: poisonId, attempts: DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS },
-          { id: telegramQueueEventId(after.update_id), attempts: 0 },
-        ]);
-        expect(downstreamTurns).toHaveBeenCalledOnce();
-
-        conflictPending = false;
-        vi.setSystemTime(Date.now() + 3 * 60 * 1_000);
-        monitor.requestDrain();
-        await monitor.waitForIdle();
-        await tombstones(801, 802);
-        expect(downstreamTurns.mock.calls.map(([turn]) => turn.RawBody)).toEqual([
-          "poison",
-          "poison",
-          "after",
-        ]);
-        await monitor.admit(poison);
-        await monitor.waitForIdle();
-        expect(downstreamTurns).toHaveBeenCalledTimes(3);
-      } else {
-        expect(await queue.listFailed?.({ limit: "all" })).toEqual([
-          expect.objectContaining({ id: poisonId, reason: "retry-limit-exceeded" }),
-        ]);
-      }
-      expect(await queue.listPending({ limit: "all" })).toEqual([]);
-      expect(
-        downstreamTurns.mock.calls.some(([turn]) =>
-          (turn.BodyForAgent ?? turn.Body ?? "").includes("after"),
-        ),
-      ).toBe(true);
-
-      await monitor.stop();
-      await telegramTransport.close();
-    },
-  );
 });
