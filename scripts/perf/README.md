@@ -3256,10 +3256,14 @@ Other worker names are `plugin-generation-preparation`, `code-mode-node`, and
 `discovery`. Use one worker per concurrent baseline/candidate pair so `--start-at`
 synchronizes the measured windows after warmup and diagnostic collection. Missed
 start deadlines fail the run; `startedAt` records the actual request-window start.
-Allow enough preparation time for snapshots. Swap CPU placement in the second pair. `--baseline-dir` loads the original versions of the five import/admission
+Allow enough preparation time for snapshots. Swap CPU placement in the second pair. `--baseline-dir` loads the original versions of the import/admission
 owners listed in the worker helper, retaining candidate URLs for dependency
 resolution. Store those files at their repository-relative paths beneath that
 directory. `--snapshots` writes warm heap snapshots outside the timed window.
+
+For plugin-preparation retention comparisons, include `src/infra/sqlite-staging-token.ts`
+in the baseline directory. Its fixed lock commands use the native statement owner,
+so preparing plugin source does not import the Kysely query-builder graph.
 
 Git replies come from real host-side Git commands, and a newly created branch must
 appear in the worker's inventory. Plugin resolve calls must return the captured
