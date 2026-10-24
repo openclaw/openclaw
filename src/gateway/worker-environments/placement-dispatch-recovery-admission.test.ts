@@ -2,20 +2,16 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  GATEWAY_CLIENT_IDS,
-  GATEWAY_CLIENT_MODES,
-} from "../../../packages/gateway-protocol/src/client-info.js";
-import {
   onDiagnosticEvent,
   resetDiagnosticEventsForTest,
   setDiagnosticsEnabledForProcess,
 } from "../../infra/diagnostic-events.js";
-import { NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE } from "../../infra/node-runner-inventory.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import { tryBeginGatewayIndependentRootWorkAdmission } from "../../process/gateway-work-admission.js";
 import * as spawnDiagnostics from "../../process/spawn-diagnostics.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { bindDeviceWorkerAvailability } from "./device-provider.js";
+import { createNodeWorkerBundleTestNode } from "./node-worker-bundle.test-support.js";
 import { coordinateWorkerPlacementDispatch } from "./placement-dispatch-coordinator.js";
 import { REQUEST } from "./placement-dispatch-test-fixtures.js";
 import { createHarness } from "./placement-dispatch-test-harness.js";
@@ -665,22 +661,17 @@ describe("placement recovery session admission with persisted placements", () =>
     const dispatch = destroyEntered.promise.then(() => {
       bindDeviceWorkerAvailability(harness.environments, async () => ({
         available: true,
-        node: {
+        node: createNodeWorkerBundleTestNode({
           nodeId: "paired-local-device",
           connId: "device-connection",
           pairingIdentity: "device-pairing",
           pairingGeneration: "device-generation",
-          clientId: GATEWAY_CLIENT_IDS.NODE_HOST,
-          clientMode: GATEWAY_CLIENT_MODES.NODE,
-          protocolFeature: NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
           workerHost: {
-            enabled: true,
             capacity: { total: 1, available: 1 },
             capturedExecPolicy: true,
             promptContext: 1,
           },
-          commands: [],
-        },
+        }),
       }));
       return coordinated.dispatch({
         ...REQUEST,

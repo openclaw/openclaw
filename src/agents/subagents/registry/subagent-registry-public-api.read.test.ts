@@ -1,5 +1,4 @@
 import { describe, expect, it, vi } from "vitest";
-import { createDeferredCore } from "../../../shared/deferred.js";
 import * as stateReads from "../../../state/openclaw-state-db-readonly.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
@@ -12,6 +11,7 @@ import {
   clearSubagentRunsReadCacheForTest,
   prepareSubagentSessionListReadCache,
 } from "./subagent-registry-state.js";
+import { holdFirstCompactRead } from "./subagent-registry-state.read.test-support.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 function createRun(runId: string, overrides: Partial<SubagentRunRecord> = {}): SubagentRunRecord {
@@ -69,28 +69,14 @@ describe("subagent registry known-run reads", () => {
     await withPersistedReads(async () => {
       const original = createRun("original", { swarmRunId: "collector" });
       saveSubagentRegistryToSqlite(new Map([[original.runId, original]]));
-      const entered = createDeferredCore();
-      const release = createDeferredCore();
-      const execute = stateReads.executeExistingOpenClawStateRead;
-      let held = false;
-      const read = vi
-        .spyOn(stateReads, "executeExistingOpenClawStateRead")
-        .mockImplementation(async (...args) => {
-          const result = await execute(...args);
-          if (!held && args[1].type === "subagents.runs") {
-            held = true;
-            entered.resolve();
-            await release.promise;
-          }
-          return result;
-        });
+      const { entered, release, read } = holdFirstCompactRead("subagents.runs");
       const pending = createReadApi(subagentRuns).prepareSubagentRunsByRunIds([
         "collector",
         "original",
       ]);
       try {
         await Promise.race([
-          entered.promise,
+          entered,
           pending.then(() => {
             throw new Error("Expected pending payload hydration");
           }),
@@ -103,14 +89,14 @@ describe("subagent registry known-run reads", () => {
           original.runId,
           replacement.runId,
         ]);
-        release.resolve();
+        release();
         const prepared = await pending;
         expect(prepared.consume((runs) => [...runs])).toEqual({
           ready: true,
           value: [["collector", replacement]],
         });
       } finally {
-        release.resolve();
+        release();
         await pending.catch(() => {});
         read.mockRestore();
       }

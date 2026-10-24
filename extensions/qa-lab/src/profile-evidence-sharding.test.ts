@@ -17,6 +17,7 @@ import {
 import { readQaScenarioPack } from "./scenario-catalog.js";
 import type { QaScenarioExecutionCell } from "./scenario-lane.js";
 import * as taxonomyModule from "./scorecard-taxonomy.js";
+import { makeQaSuiteTestLaunch } from "./suite-test-helpers.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const { exclusiveLiveChannels, liveAdapterFactories } = vi.hoisted(() => {
@@ -151,14 +152,7 @@ it.each(["full", "slim"] as const)(
         retryOf: null,
         terminalStatus: "pass",
         assertions: null,
-        launch: {
-          source: { ref: null, integrity: null },
-          runtime: { id: null, version: null },
-          package: null,
-          protocol: null,
-          accountRef: null,
-          proofClass: null,
-        },
+        launch: makeQaSuiteTestLaunch(),
         receipts: [],
       };
       const artifact = summary.entries[0]?.execution?.artifacts[0];

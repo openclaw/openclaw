@@ -571,7 +571,7 @@ test("sessions.recover preserves device-folder affinity before launching its suc
   expect(fixture.source()?.deviceFolder).toEqual(deviceFolder);
 });
 
-test("sessions.recover rolls over one tombstone and returns its continuation outcome", async () => {
+test("concurrent sessions.recover requests share one successor and accepted continuation", async () => {
   testState.sessionConfig = { dmScope: "main", scope: "per-sender" };
   const inherited: Parameters<typeof sessionStoreEntry>[1] = {
     agentHarnessId: "codex",
@@ -626,7 +626,7 @@ test("sessions.recover rolls over one tombstone and returns its continuation out
     payload: {
       key: successorKey,
       sessionId: successorSessionId,
-      continuation: { status: "started" },
+      continuation: { status: "started", runId: recovered.payload?.continuation.runId },
     },
   };
   expect(concurrentRetry, JSON.stringify(concurrentRetry)).toMatchObject(expectedRetry);

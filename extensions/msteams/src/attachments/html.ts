@@ -34,9 +34,6 @@ export function extractMSTeamsHtmlAttachmentIds(
   attachments: MSTeamsAttachmentLike[] | undefined,
 ): string[] {
   const list = attachments ?? [];
-  if (list.length === 0) {
-    return [];
-  }
   const ids = new Set<string>();
   for (const att of list) {
     const html = extractHtmlFromAttachment(att);
@@ -52,9 +49,6 @@ export function summarizeMSTeamsHtmlAttachments(
   attachments: MSTeamsAttachmentLike[] | undefined,
 ): MSTeamsHtmlAttachmentSummary | undefined {
   const list = attachments ?? [];
-  if (list.length === 0) {
-    return undefined;
-  }
   let htmlAttachments = 0;
   let imgTags = 0;
   let dataImages = 0;
@@ -127,9 +121,6 @@ export function resolveMSTeamsAdvertisedMedia(
   attachments: MSTeamsAttachmentLike[] | undefined,
 ): MSTeamsInboundMedia[] {
   const list = attachments ?? [];
-  if (list.length === 0) {
-    return [];
-  }
   const fileAttachments = list.filter(isAdvertisedFileAttachment);
   const inlineMedia = extractInlineImageReferences(list).map((candidate) =>
     createAdvertisedMediaFact("image", candidate.sourceId),

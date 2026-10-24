@@ -85,6 +85,20 @@ function makeCrossProviderFallbackConfig() {
   ]);
 }
 
+function makeDeepseekFallbackRunParams(runId: string) {
+  return {
+    ...createOverflowRunParams(state),
+    runId,
+    config: makeCrossProviderFallbackConfig(),
+    agentHarnessRuntimeOverride: "openclaw",
+    provider: "deepseek",
+    model: "deepseek-chat",
+    authProfileId: "deepseek:test",
+    authProfileIdSource: "user",
+    modelFallbacksOverride: ["deepseek/deepseek-chat"],
+  } satisfies Parameters<typeof runEmbeddedAgent>[0];
+}
+
 function useCrossProviderAuthFixture() {
   const store = {
     version: 1 as const,
@@ -212,17 +226,9 @@ describe("runEmbeddedAgent cross-provider fallback error handling", () => {
       }),
     );
 
-    const promise = runEmbeddedAgent({
-      ...createOverflowRunParams(state),
-      runId: "run-cross-provider-fallback-error-context",
-      config: makeCrossProviderFallbackConfig(),
-      agentHarnessRuntimeOverride: "openclaw",
-      provider: "deepseek",
-      model: "deepseek-chat",
-      authProfileId: "deepseek:test",
-      authProfileIdSource: "user",
-      modelFallbacksOverride: ["deepseek/deepseek-chat"],
-    });
+    const promise = runEmbeddedAgent(
+      makeDeepseekFallbackRunParams("run-cross-provider-fallback-error-context"),
+    );
 
     await expectDeepseekFallbackError(promise);
   });
@@ -263,17 +269,9 @@ describe("runEmbeddedAgent cross-provider fallback error handling", () => {
       }),
     );
 
-    const promise = runEmbeddedAgent({
-      ...createOverflowRunParams(state),
-      runId: "run-stale-session-assistant-timeout",
-      config: makeCrossProviderFallbackConfig(),
-      agentHarnessRuntimeOverride: "openclaw",
-      provider: "deepseek",
-      model: "deepseek-chat",
-      authProfileId: "deepseek:test",
-      authProfileIdSource: "user",
-      modelFallbacksOverride: ["deepseek/deepseek-chat"],
-    });
+    const promise = runEmbeddedAgent(
+      makeDeepseekFallbackRunParams("run-stale-session-assistant-timeout"),
+    );
 
     await expect(promise).rejects.toBeInstanceOf(MockedFailoverError);
     await expect(promise).rejects.toThrow("LLM request timed out.");
@@ -301,17 +299,9 @@ describe("runEmbeddedAgent cross-provider fallback error handling", () => {
       }),
     );
 
-    const result = await runEmbeddedAgent({
-      ...createOverflowRunParams(state),
-      runId: "run-stale-session-assistant-non-timeout",
-      config: makeCrossProviderFallbackConfig(),
-      agentHarnessRuntimeOverride: "openclaw",
-      provider: "deepseek",
-      model: "deepseek-chat",
-      authProfileId: "deepseek:test",
-      authProfileIdSource: "user",
-      modelFallbacksOverride: ["deepseek/deepseek-chat"],
-    });
+    const result = await runEmbeddedAgent(
+      makeDeepseekFallbackRunParams("run-stale-session-assistant-non-timeout"),
+    );
 
     expect(mockedIsFailoverAssistantError).toHaveBeenCalledWith(undefined);
     expect(getLastFormattedAssistant()).toBeUndefined();
@@ -338,17 +328,9 @@ describe("runEmbeddedAgent cross-provider fallback error handling", () => {
       }),
     );
 
-    const promise = runEmbeddedAgent({
-      ...createOverflowRunParams(state),
-      runId: "run-successful-assistant-stale-error-timeout",
-      config: makeCrossProviderFallbackConfig(),
-      agentHarnessRuntimeOverride: "openclaw",
-      provider: "deepseek",
-      model: "deepseek-chat",
-      authProfileId: "deepseek:test",
-      authProfileIdSource: "user",
-      modelFallbacksOverride: ["deepseek/deepseek-chat"],
-    });
+    const promise = runEmbeddedAgent(
+      makeDeepseekFallbackRunParams("run-successful-assistant-stale-error-timeout"),
+    );
 
     await expect(promise).rejects.toBeInstanceOf(MockedFailoverError);
     await expect(promise).rejects.toThrow("LLM request timed out.");

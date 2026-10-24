@@ -117,7 +117,12 @@ openclaw-pending-session-create {
   height: 14px;
 }
 
-.chat-error__content[open] .chat-error__chevron {
+.chat-error__content[open] .chat-error__chevron,
+.chat-workspace-conflict-notice:not([open]) .chat-workspace-conflict-notice__chevron,
+.chat-pr__checks[open] .chat-pr__checks-chevron svg,
+.chat-ci__job[open] > summary .chat-ci__chevron,
+.chat-ci__skipped[open] > summary .chat-ci__chevron,
+.chat-pr__publication-status[open] .chat-pr__publication-chevron {
   transform: rotate(180deg);
 }
 
@@ -519,10 +524,6 @@ openclaw-pending-session-create {
   justify-content: center;
   color: var(--muted);
   transition: transform var(--duration-fast) var(--ease-out);
-}
-
-.chat-workspace-conflict-notice:not([open]) .chat-workspace-conflict-notice__chevron {
-  transform: rotate(180deg);
 }
 
 .chat-workspace-conflict-notice__content {
@@ -2149,10 +2150,6 @@ button.chat-pr__diff {
   display: flex;
 }
 
-.chat-pr__checks[open] .chat-pr__checks-chevron svg {
-  transform: rotate(180deg);
-}
-
 .chat-pr__checks-dot {
   width: 7px;
   height: 7px;
@@ -2399,11 +2396,6 @@ openclaw-chat-ci-details {
   white-space: nowrap;
 }
 
-.chat-ci__job[open] > summary .chat-ci__chevron,
-.chat-ci__skipped[open] > summary .chat-ci__chevron {
-  transform: rotate(180deg);
-}
-
 .chat-ci__job-detail {
   padding: 0 24px 10px;
 }
@@ -2566,10 +2558,6 @@ openclaw-chat-ci-details {
 
 .chat-pr__publication-chevron {
   display: inline-flex;
-}
-
-.chat-pr__publication-status[open] .chat-pr__publication-chevron {
-  transform: rotate(180deg);
 }
 
 .chat-pr__publication-more {

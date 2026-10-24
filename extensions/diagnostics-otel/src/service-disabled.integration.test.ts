@@ -1,5 +1,4 @@
 import { createServer, type ServerResponse } from "node:http";
-import type { AddressInfo } from "node:net";
 import { setImmediate as nextTurn, setTimeout as sleep } from "node:timers/promises";
 import { context, propagation, ROOT_CONTEXT, trace } from "@opentelemetry/api";
 import { AsyncLocalStorageContextManager } from "@opentelemetry/context-async-hooks";
@@ -12,6 +11,7 @@ import {
 } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { expect, test, vi } from "vitest";
 import { startLocalOtlpReceiver } from "../../../test/e2e/qa-lab/runtime/otel-test-support.js";
+import { listenOnLoopback } from "../../test-support/hanging-loopback-server.js";
 import { installRealOtelSdkTestHarness } from "./service.real-sdk.test-support.js";
 import {
   emitRealSdkSignals,
@@ -224,11 +224,7 @@ async function startExporterHealthReceiver(
     request.resume();
     handleRequest(response, requestCount);
   });
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  const { port } = server.address() as AddressInfo;
+  const port = await listenOnLoopback(server);
   return {
     endpoint: `http://127.0.0.1:${port}`,
     get requestCount() {
