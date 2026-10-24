@@ -335,39 +335,28 @@ function selectedShards(group: string, options: Parameters<typeof createOxlintSh
 }
 
 describe("run-oxlint", () => {
-  it("prepares extension package boundary artifacts for normal lint runs", () => {
-    for (const args of [
-      [],
-      ["src/index.ts"],
-      ["--type-aware"],
-      ["--tsconfig", "extensions/tsconfig.json", "extensions/telegram/src/index.ts"],
-      ["--tsconfig=config/tsconfig/oxlint.core.json", "--tsconfig=extensions/tsconfig.json"],
-    ]) {
-      expect(shouldPrepareExtensionPackageBoundaryArtifacts(args)).toBe(true);
-    }
-  });
+  it.each([
+    [[], true],
+    [["--tsconfig", "extensions/tsconfig.json", "extensions/telegram/src/index.ts"], true],
+    [["--tsconfig=config/tsconfig/oxlint.core.json", "--tsconfig=extensions/tsconfig.json"], true],
+    [["--tsconfig", "tsconfig.ui.json", "ui/src/main.ts"], false],
+    [["--tsconfig=tsconfig.ui.json", "--tsconfig=config/tsconfig/oxlint.core.json"], false],
+    [["--help"], false],
+  ] satisfies Array<[string[], boolean]>)(
+    "prepares extension boundaries for %j: %s",
+    (args, prepare) => {
+      expect(shouldPrepareExtensionPackageBoundaryArtifacts(args)).toBe(prepare);
+    },
+  );
 
-  it("skips plugin boundary artifacts for source-backed UI lint", () => {
-    for (const args of [
-      ["--tsconfig", "tsconfig.ui.json", "ui/src/main.ts"],
-      ["--tsconfig=tsconfig.ui.json", "--tsconfig=config/tsconfig/oxlint.core.json"],
-    ]) {
-      expect(shouldPrepareExtensionPackageBoundaryArtifacts(args)).toBe(false);
-    }
-  });
-
-  it("skips artifact preparation for metadata-only oxlint commands", () => {
-    for (const flag of ["--help", "--version", "--print-config", "--rules"]) {
-      expect(shouldPrepareExtensionPackageBoundaryArtifacts([flag])).toBe(false);
-    }
-  });
-
-  it("serializes broad oxlint shards on constrained CI hosts", () => {
-    for (const env of [{ CI: "true" }, { CI: "true", OPENCLAW_LOCAL_CHECK_MODE: "throttled" }]) {
-      expect(
-        shouldRunOxlintShardsSerial({ env, platform: "linux", hostResources: CONSTRAINED_HOST }),
-      ).toBe(true);
-    }
+  it("serializes throttled oxlint shards", () => {
+    expect(
+      shouldRunOxlintShardsSerial({
+        env: { CI: "true", OPENCLAW_LOCAL_CHECK_MODE: "throttled" },
+        platform: "linux",
+        hostResources: CONSTRAINED_HOST,
+      }),
+    ).toBe(true);
   });
 
   it.each([

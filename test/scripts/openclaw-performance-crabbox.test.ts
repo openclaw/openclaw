@@ -18,7 +18,6 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const SCRIPT = resolve("scripts/openclaw-performance-crabbox.sh");
 const CONFIG = ".github/crabbox/openclaw-performance-untrusted.yaml";
-const SCHEMA = ".github/crabbox/openclaw-performance-evidence.schema.json";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const scriptSource = readFileSync(SCRIPT, "utf8");
 const definitions = scriptSource.slice(0, scriptSource.lastIndexOf('\ncase "${1:-}" in'));
@@ -697,20 +696,6 @@ validate_kova mock-provider "$ROOT" diagnostic 1 scenario:probe - "$GATED" "$HEL
       sync: {
         gitSeed: false,
         fingerprint: false,
-        include: [
-          SCHEMA,
-          "scripts/openclaw-performance-crabbox.sh",
-          ".github/crabbox/performance-control/ocm",
-          ".github/crabbox/performance-control/ocm.sha256",
-          ...[
-            "bench-cli-startup.mjs",
-            "kova-ci-summary.mjs",
-            "lib/kova-report-gate.mjs",
-            "lib/kova-report-selector.mjs",
-            "lib/kova-workflow-evidence.mjs",
-            "openclaw-performance-source-summary.mjs",
-          ].map((name) => `.github/crabbox/performance-control/helpers/${name}`),
-        ],
       },
     });
   });

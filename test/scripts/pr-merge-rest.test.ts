@@ -541,19 +541,6 @@ describePosix("native merge with exhausted GraphQL quota", () => {
     expect(() => f.record()).toThrow();
   });
 
-  it("lands ordinary REST squash without classic-policy discovery", () => {
-    const f = restFixture({ restPolicy: "not-found" });
-    expectAdmission(f);
-    expect(f.state().restMergePayload).toMatchObject({
-      sha: f.head,
-      merge_method: "squash",
-      bypass_rules: false,
-    });
-    expect(
-      f.state().calls.some((call) => call.some((arg) => arg.endsWith("/branches/main/protection"))),
-    ).toBe(false);
-  });
-
   it("retains a provider protection refusal without replaying through another route", () => {
     const f = restFixture({
       restPolicy: "not-found",
@@ -580,6 +567,9 @@ describePosix("native merge with exhausted GraphQL quota", () => {
       restMergePayload: { sha: f.head, merge_method: "squash", bypass_rules: false },
     });
     expect(f.state().graphqlMergePayloads).toEqual([]);
+    expect(
+      f.state().calls.some((call) => call.some((arg) => arg.endsWith("/branches/main/protection"))),
+    ).toBe(false);
   });
 
   it.each(["missing", "queue", "unsupported", "no-write"])(
