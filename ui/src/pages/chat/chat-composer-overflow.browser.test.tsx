@@ -38,10 +38,8 @@ const afterLayout = () =>
 let container: HTMLDivElement;
 const [presented, setPresented] = createSignal(true);
 let attachmentsView: ReturnType<typeof mountSolidProps<ChatAttachmentControlsProps>> | undefined;
-const query = <T extends Element = HTMLElement>(
-  selector: string,
-  root: ParentNode = container,
-): T => root.querySelector<T>(selector)!;
+const query = (selector: string, root: ParentNode = container) =>
+  root.querySelector<HTMLElement>(selector)!;
 const rect = (selector: string, root: ParentNode = container) =>
   query(selector, root).getBoundingClientRect();
 const click = (selector: string) => page.elementLocator(query(selector)).click();
@@ -188,7 +186,7 @@ it.each([
     [".chat-reply-preview:not([role])", "reply"],
   ] as const;
   for (const [selector, context] of contexts) {
-    const button = query<HTMLButtonElement>(`${selector} button`);
+    const button = query(`${selector} button`);
     const box = button.getBoundingClientRect();
     expect(box.width).toBeGreaterThanOrEqual(24);
     expect(box.height).toBeGreaterThanOrEqual(24);
@@ -300,7 +298,9 @@ it.each([
     },
   });
   drawComposer(props);
-  const textarea = query<HTMLTextAreaElement>(".agent-chat__composer-combobox > textarea");
+  const textarea = container.querySelector<HTMLTextAreaElement>(
+    ".agent-chat__composer-combobox > textarea",
+  )!;
   const placeholder = query(".agent-chat__composer-placeholder");
   const control = page.elementLocator(textarea);
   await afterLayout();
@@ -421,7 +421,7 @@ it.each([
   });
   expect(Math.max(...centers) - Math.min(...centers)).toBeLessThanOrEqual(1);
   const cardBox = rect(".agent-chat__goal");
-  const clear = query<HTMLButtonElement>(".agent-chat__goal-clear", commands);
+  const clear = query(".agent-chat__goal-clear", commands);
   clear.focus();
   expect(document.activeElement).toBe(clear);
   // Option-Tab includes buttons under Safari's default macOS keyboard settings.

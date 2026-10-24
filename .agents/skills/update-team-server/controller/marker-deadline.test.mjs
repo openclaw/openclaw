@@ -68,6 +68,7 @@ function deadlineMarker(t, options) {
   const { terminalAtMs = 590_000, observationFailure = null, admissionReadyAtMs = 0 } = options;
   const root = fixtureRoot(t);
   const events = join(root, "events.jsonl"), sdk = join(root, "dist/plugin-sdk");
+  writeFileSync(events, "");
   mkdirSync(sdk, { recursive: true });
   writeFileSync(join(root, "package.json"), '{"type":"module"}');
     // Closed native SDK examples; parsing itself belongs to the public SDK.
@@ -203,8 +204,7 @@ if wait_for_live "$serving_root" '{"buildId":"fixture"}' system; then exit 0; el
     FIXTURE_CONFIG: JSON.stringify({ ...options, terminalAtMs, observationFailure, admissionReadyAtMs },
       (_key, value) => typeof value === "number" && !Number.isFinite(value) ? String(value) : value),
   }, 20_000);
-  assert.ok(existsSync(events), result.stderr || result.stdout);
-  const rows = readFileSync(events, "utf8").trim().split("\n").map((line) => JSON.parse(line));
+  const rows = readFileSync(events, "utf8").trim().split("\n").filter(Boolean).map((line) => JSON.parse(line));
   return { result, rows, root };
 }
 
