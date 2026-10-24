@@ -30,6 +30,12 @@ export function ConnectingSplash(props: { status?: string }) {
   return (
     <main
       class="connect-splash connect-splash--skeleton"
+      data-chat={
+        /\/chat(?:\/|$)/.test(location.pathname) &&
+        !new URLSearchParams(location.search).has("catalog")
+          ? ""
+          : undefined
+      }
       role="status"
       aria-live="polite"
       aria-label={props.status ?? t("common.loading")}
@@ -40,9 +46,11 @@ export function ConnectingSplash(props: { status?: string }) {
           <div class="skeleton connect-splash__new-session" />
           <Repeat count={6}>{() => <div class="skeleton skeleton-line" />}</Repeat>
         </aside>
-        <LoadingSkeleton />
+        <div class="connect-splash__main">
+          <LoadingSkeleton />
+          <span class="connect-splash__status">{props.status ?? t("common.loading")}</span>
+        </div>
       </div>
-      <span class="connect-splash__status">{props.status ?? t("common.loading")}</span>
     </main>
   );
 }

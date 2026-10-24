@@ -58,6 +58,11 @@
         }
         document.addEventListener("load", activateBootStyles, true);
         document.addEventListener("error", activateBootStyles, true);
+        document.documentElement.toggleAttribute(
+          "data-openclaw-boot-chat",
+          /\/chat(?:\/|$)/.test(location.pathname) &&
+            !new URLSearchParams(location.search).has("catalog"),
+        );
         var THEMES = {
           claw: 1,
           knot: 1,
@@ -302,6 +307,13 @@
         min-height: 0;
       }
 
+      .connect-splash__main {
+        position: relative;
+        container-type: inline-size;
+        min-width: 0;
+        height: 100%;
+      }
+
       .connect-splash__sidebar {
         position: relative;
         display: flex;
@@ -355,7 +367,7 @@
 
       .connect-splash--skeleton .connect-splash__status {
         position: absolute;
-        inset: auto 18px 50px calc(var(--openclaw-boot-nav-width, 258px) + 70px);
+        inset: auto 18px 50px;
         margin: 0;
         color: var(--boot-ink);
         font:
@@ -426,6 +438,25 @@
         margin: 8px auto 0;
         border: 1px solid var(--boot-line, var(--border));
         border-radius: 20px;
+      }
+
+      /* Chat Details automatically reserves 300px plus its 13px inset in a
+         frame at least 1200px wide. Match that first painted destination. */
+      @container (min-width: 1200px) {
+        html[data-openclaw-boot-chat] #openclaw-boot-shell .loading-skeleton,
+        .connect-splash[data-chat] .loading-skeleton {
+          padding-inline-end: 331px;
+        }
+
+        html[data-openclaw-boot-chat] #openclaw-boot-shell .loading-skeleton__header,
+        .connect-splash[data-chat] .loading-skeleton__header {
+          margin-inline-end: -331px;
+        }
+
+        html[data-openclaw-boot-chat] #openclaw-boot-shell .connect-splash__status,
+        .connect-splash[data-chat] .connect-splash__status {
+          inset-inline-end: 331px;
+        }
       }
 
       @media (max-width: 900px),
@@ -658,27 +689,29 @@
             <div class="skeleton skeleton-line"></div>
             <div class="skeleton skeleton-line"></div>
           </aside>
-          <div class="loading-skeleton" aria-hidden="true">
-            <div class="loading-skeleton__header">
-              <div class="skeleton loading-skeleton__avatar"></div>
-              <div class="skeleton skeleton-line loading-skeleton__title"></div>
-            </div>
-            <div class="loading-skeleton__messages">
-              <div class="loading-skeleton__message loading-skeleton__message--user">
-                <div class="skeleton skeleton-line"></div>
-                <div class="skeleton skeleton-line skeleton-line--medium"></div>
-              </div>
-              <div class="loading-skeleton__message">
+          <div class="connect-splash__main">
+            <div class="loading-skeleton" aria-hidden="true">
+              <div class="loading-skeleton__header">
                 <div class="skeleton loading-skeleton__avatar"></div>
-                <div class="skeleton skeleton-line"></div>
-                <div class="skeleton skeleton-line skeleton-line--long"></div>
-                <div class="skeleton skeleton-line skeleton-line--medium"></div>
+                <div class="skeleton skeleton-line loading-skeleton__title"></div>
               </div>
+              <div class="loading-skeleton__messages">
+                <div class="loading-skeleton__message loading-skeleton__message--user">
+                  <div class="skeleton skeleton-line"></div>
+                  <div class="skeleton skeleton-line skeleton-line--medium"></div>
+                </div>
+                <div class="loading-skeleton__message">
+                  <div class="skeleton loading-skeleton__avatar"></div>
+                  <div class="skeleton skeleton-line"></div>
+                  <div class="skeleton skeleton-line skeleton-line--long"></div>
+                  <div class="skeleton skeleton-line skeleton-line--medium"></div>
+                </div>
+              </div>
+              <div class="skeleton loading-skeleton__composer"></div>
             </div>
-            <div class="skeleton loading-skeleton__composer"></div>
+            <span class="connect-splash__status">Loading…</span>
           </div>
         </div>
-        <span class="connect-splash__status">Loading…</span>
       </main>
     </openclaw-app>
     <section
