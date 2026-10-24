@@ -13,6 +13,7 @@ export type { PreparedSessionFactsSource } from "./session-sharing-source.types.
 export async function prepareCapturedSessionSharingSource(params: {
   source: PreparedSessionFactsSource;
   assertCurrent: () => void;
+  followLifecycle?: boolean;
   retainedReads: ReadonlyMap<string, ReturnType<typeof retainPreparedSessionSharingFacts>>;
 }) {
   const source = { ...params.source };
@@ -80,7 +81,7 @@ export async function prepareCapturedSessionSharingSource(params: {
     if (
       !current?.entry ||
       current.entry.sessionId !== entry.sessionId ||
-      current.entry.lifecycleRevision !== entry.lifecycleRevision
+      (!params.followLifecycle && current.entry.lifecycleRevision !== entry.lifecycleRevision)
     ) {
       throw new SessionMutationFactsUnavailableError();
     }

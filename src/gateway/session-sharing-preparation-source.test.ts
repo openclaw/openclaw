@@ -1,13 +1,63 @@
 import fs from "node:fs";
 import { expect, it, vi } from "vitest";
 import { setRuntimeConfigSnapshot } from "../config/config.js";
-import { replaceSessionEntrySync } from "../config/sessions/session-accessor.js";
+import {
+  replaceSessionEntrySync,
+  resetSessionEntryLifecycle,
+} from "../config/sessions/session-accessor.js";
 import { addSessionMember, removeSessionMember } from "../config/sessions/session-sharing-store.js";
 import { readDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js";
 import { closeOpenClawAgentDatabaseByPathAsync } from "../state/openclaw-agent-db-lifecycle.js";
 import { registerOpenClawAgentDatabase } from "../state/openclaw-agent-db-registry.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { prepareSessionMutationFacts } from "./session-sharing-preparation.js";
+
+it("follows an allowed same-session reset in captured sharing facts while strict readers retire", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const original = state.statePath("original.sqlite");
+    const canonicalKey = "agent:main:test";
+    const scope = { agentId: "main", storePath: original, sessionKey: canonicalKey };
+    const entry = { sessionId: "original", lifecycleRevision: "before", updatedAt: 1 };
+    replaceSessionEntrySync(scope, entry);
+    const cfg = { agents: { entries: { main: {} } }, session: { store: original } };
+    await state.writeConfig(cfg);
+    setRuntimeConfigSnapshot(cfg);
+    const identity = readDatabasePathIdentitySync(original);
+    const params = {
+      cfg,
+      agentId: "main",
+      sessionKey: canonicalKey,
+      preparedSource: {
+        agentId: "main",
+        path: original,
+        storePath: original,
+        canonicalKey,
+        databaseIdentity: identity.key.slice("file:".length),
+        databaseBirthtime: identity.birthtime,
+        assertCurrent() {},
+      },
+    };
+    const strict = await prepareSessionMutationFacts(params);
+    const following = await prepareSessionMutationFacts({ ...params, followLifecycle: true });
+    try {
+      const next = { ...entry, lifecycleRevision: "after", updatedAt: 2 };
+      await resetSessionEntryLifecycle({
+        agentId: "main",
+        storePath: original,
+        target: { canonicalKey, storeKeys: [canonicalKey] },
+        resetBoundary: { context: "clear", reason: "reset", cwd: state.workspaceDir },
+        buildNextEntry: () => next,
+      });
+      expect(() => strict.readCurrent(cfg)).toThrow("Session access facts are unavailable");
+      expect(following.readCurrent(cfg).target.entry).toMatchObject(next);
+      replaceSessionEntrySync(scope, { ...next, sessionId: "replacement" });
+      expect(() => following.readCurrent(cfg)).toThrow("Session access facts are unavailable");
+    } finally {
+      following.release();
+      strict.release();
+    }
+  });
+});
 
 it("retains original-store sharing publications after configured routing changes and retires on native close", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
