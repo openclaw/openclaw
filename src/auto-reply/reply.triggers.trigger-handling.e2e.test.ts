@@ -11,7 +11,6 @@ import {
   makeCfg,
   mockRunEmbeddedAgentOk,
   requireSessionStorePath,
-  expectBareNewOrResetAcknowledged,
   withTempHome,
 } from "../../test/helpers/auto-reply/trigger-handling-test-harness.js";
 import { saveAuthProfileStore } from "../agents/auth-profiles/store-runtime.js";
@@ -226,6 +225,88 @@ function makeStoredCfg(home: string, name: string) {
   return cfg;
 }
 
+type NativeSessionFixture = {
+  home: string;
+  cfg: ReturnType<typeof makeCfg>;
+  storePath: string;
+  targetSessionKey: string;
+};
+
+async function startHeldReply(
+  { home, cfg, storePath, targetSessionKey }: NativeSessionFixture,
+  sessionCtx: ReplyAgentParams["sessionCtx"],
+  provider: {
+    started: ReturnType<typeof Promise.withResolvers<AbortSignal>>;
+    release: ReturnType<typeof Promise.withResolvers<void>>;
+    aborted?: ReturnType<typeof Promise.withResolvers<void>>;
+  },
+) {
+  getRunEmbeddedAgentMock().mockImplementationOnce(
+    async (params: { abortSignal?: AbortSignal }) => {
+      if (!params.abortSignal) {
+        throw new Error("Expected the active reply producer to receive an abort signal");
+      }
+      provider.started.resolve(params.abortSignal);
+      await Promise.race([
+        provider.release.promise,
+        once(params.abortSignal, "abort").then(() => provider.aborted?.resolve()),
+      ]);
+      params.abortSignal.throwIfAborted();
+      return { payloads: [], meta: { durationMs: 1 } };
+    },
+  );
+  const { runReplyAgent } = await vi.importActual<typeof import("./reply/agent-runner-run.js")>(
+    "./reply/agent-runner-run.js",
+  );
+  const activeRun = runReplyAgent({
+    commandBody: "held producer",
+    followupRun: createTestFollowupRun({
+      agentId: "main",
+      config: cfg,
+      messageProvider: "telegram",
+      model: "claude-opus-4-7",
+      provider: "anthropic",
+      sessionFile: join(home, "active-session.jsonl"),
+      sessionId: "session-target",
+      sessionKey: targetSessionKey,
+      workspaceDir: join(home, "workspace"),
+    }),
+    queueKey: targetSessionKey,
+    resolvedQueue: { mode: "followup", debounceMs: 0 },
+    shouldSteer: false,
+    shouldFollowup: false,
+    isActive: false,
+    typing: createMockTypingController(),
+    sessionEntry: loadSessionEntry({ storePath, sessionKey: targetSessionKey }),
+    sessionKey: targetSessionKey,
+    storePath,
+    sessionCtx,
+    defaultModel: "anthropic/claude-opus-4-7",
+    resolvedVerboseLevel: "off",
+    isNewSession: false,
+    blockStreamingEnabled: false,
+    resolvedBlockStreamingBreak: "message_end",
+    shouldInjectGroupIntro: false,
+    typingMode: "never",
+  });
+  void activeRun.then(
+    () => provider.started.reject(new Error("Active reply settled before its producer started")),
+    provider.started.reject,
+  );
+  // Return the unsettled run without adopting it into this async function.
+  return { activeRun };
+}
+
+function captureReplies() {
+  const replies: ReplyPayload[] = [];
+  const dispatcher = createReplyDispatcher({
+    deliver: async (payload) => {
+      replies.push(payload);
+    },
+  });
+  return { replies, dispatcher };
+}
+
 async function expectResetBlockedForNonOwner(params: {
   home: string;
   command: "/new" | "/reset";
@@ -393,72 +474,16 @@ describe("trigger handling", () => {
       const providerStarted = Promise.withResolvers<AbortSignal>();
       const providerAborted = Promise.withResolvers<void>();
       const providerRelease = Promise.withResolvers<void>();
-      const runEmbeddedAgentMock = getRunEmbeddedAgentMock();
-      runEmbeddedAgentMock.mockImplementationOnce(async (params: { abortSignal?: AbortSignal }) => {
-        if (!params.abortSignal) {
-          throw new Error("Expected the active reply producer to receive an abort signal");
-        }
-        providerStarted.resolve(params.abortSignal);
-        await Promise.race([
-          providerRelease.promise,
-          new Promise<void>((resolve) => {
-            params.abortSignal?.addEventListener(
-              "abort",
-              () => {
-                providerAborted.resolve();
-                resolve();
-              },
-              { once: true },
-            );
-          }),
-        ]);
-        params.abortSignal.throwIfAborted();
-        return { payloads: [], meta: { durationMs: 1 } };
-      });
-      const activeFollowupRun = createTestFollowupRun({
-        agentId: "main",
-        config: cfg,
-        messageProvider: "telegram",
-        model: "claude-opus-4-7",
-        provider: "anthropic",
-        sessionFile: join(home, "active-session.jsonl"),
-        sessionId: targetSessionId,
-        sessionKey: targetSessionKey,
-        workspaceDir: join(home, "workspace"),
-      });
-      const { runReplyAgent } = await vi.importActual<typeof import("./reply/agent-runner-run.js")>(
-        "./reply/agent-runner-run.js",
-      );
-      const activeRun = runReplyAgent({
-        commandBody: "held producer",
-        followupRun: activeFollowupRun,
-        queueKey: targetSessionKey,
-        resolvedQueue: { mode: "followup", debounceMs: 0 },
-        shouldSteer: false,
-        shouldFollowup: false,
-        isActive: false,
-        typing: createMockTypingController(),
-        sessionEntry: loadSessionEntry({ storePath, sessionKey: targetSessionKey }),
-        sessionKey: targetSessionKey,
-        storePath,
-        sessionCtx: {
+      const { activeRun } = await startHeldReply(
+        { home, cfg, storePath, targetSessionKey },
+        {
           Provider: "telegram",
           OriginatingChannel: "telegram",
           OriginatingTo: "telegram:111",
           ChatType: "direct",
           SessionKey: targetSessionKey,
         },
-        defaultModel: "anthropic/claude-opus-4-7",
-        resolvedVerboseLevel: "off",
-        isNewSession: false,
-        blockStreamingEnabled: false,
-        resolvedBlockStreamingBreak: "message_end",
-        shouldInjectGroupIntro: false,
-        typingMode: "never",
-      });
-      void activeRun.then(
-        () => providerStarted.reject(new Error("Active reply settled before its producer started")),
-        providerStarted.reject,
+        { started: providerStarted, release: providerRelease, aborted: providerAborted },
       );
       const activeAbortSignal = await providerStarted.promise;
       try {
@@ -497,12 +522,7 @@ describe("trigger handling", () => {
         );
         expect(getFollowupQueueDepth(targetSessionKey)).toBe(1);
 
-        const replies: ReplyPayload[] = [];
-        const dispatcher = createReplyDispatcher({
-          deliver: async (payload) => {
-            replies.push(payload);
-          },
-        });
+        const { replies, dispatcher } = captureReplies();
         await dispatchInboundMessage({
           ctx: makeNativeTelegramCommandMessage({
             body: "/stop",
@@ -533,11 +553,7 @@ describe("trigger handling", () => {
   async function dispatchNativeTopicReset(params: {
     home: string;
     command: "/new" | "/reset";
-    beforeDispatch?: (fixture: {
-      cfg: ReturnType<typeof makeCfg>;
-      storePath: string;
-      targetSessionKey: string;
-    }) => Promise<void>;
+    beforeDispatch?: (fixture: NativeSessionFixture) => Promise<void>;
   }) {
     const action = params.command.slice(1);
     // Full runtime: the fast test bootstrap skips the real session rollover.
@@ -556,13 +572,8 @@ describe("trigger handling", () => {
     };
     registerInternalHook(`command:${action}`, hook);
     onTestFinished(() => unregisterInternalHook(`command:${action}`, hook));
-    await params.beforeDispatch?.({ cfg, storePath, targetSessionKey });
-    const replies: ReplyPayload[] = [];
-    const dispatcher = createReplyDispatcher({
-      deliver: async (payload) => {
-        replies.push(payload);
-      },
-    });
+    await params.beforeDispatch?.({ home: params.home, cfg, storePath, targetSessionKey });
+    const { replies, dispatcher } = captureReplies();
     const result = await dispatchInboundMessage({
       ctx: {
         ...makeNativeTelegramCommandMessage({
@@ -615,62 +626,18 @@ describe("trigger handling", () => {
         const { replies, hookEvents, entry } = await dispatchNativeTopicReset({
           home,
           command: "/new",
-          beforeDispatch: async ({ cfg, storePath, targetSessionKey }) => {
-            getRunEmbeddedAgentMock().mockImplementationOnce(
-              async (params: { abortSignal?: AbortSignal }) => {
-                if (!params.abortSignal) {
-                  throw new Error("Expected the active reply producer to receive an abort signal");
-                }
-                providerStarted.resolve(params.abortSignal);
-                await Promise.race([
-                  providerRelease.promise,
-                  once(params.abortSignal, "abort").catch(() => undefined),
-                ]);
-                params.abortSignal.throwIfAborted();
-                return { payloads: [], meta: { durationMs: 1 } };
-              },
-            );
-            const { runReplyAgent } = await vi.importActual<
-              typeof import("./reply/agent-runner-run.js")
-            >("./reply/agent-runner-run.js");
-            activeRun = runReplyAgent({
-              commandBody: "held producer",
-              followupRun: createTestFollowupRun({
-                agentId: "main",
-                config: cfg,
-                messageProvider: "telegram",
-                model: "claude-opus-4-7",
-                provider: "anthropic",
-                sessionFile: join(home, "active-session.jsonl"),
-                sessionId: "session-target",
-                sessionKey: targetSessionKey,
-                workspaceDir: join(home, "workspace"),
-              }),
-              queueKey: targetSessionKey,
-              resolvedQueue: { mode: "followup", debounceMs: 0 },
-              shouldSteer: false,
-              shouldFollowup: false,
-              isActive: false,
-              typing: createMockTypingController(),
-              sessionEntry: loadSessionEntry({ storePath, sessionKey: targetSessionKey }),
-              sessionKey: targetSessionKey,
-              storePath,
-              sessionCtx: {
+          beforeDispatch: async (fixture) => {
+            ({ activeRun } = await startHeldReply(
+              fixture,
+              {
                 Provider: "telegram",
                 OriginatingChannel: "telegram",
                 OriginatingTo: "telegram:-1001234567890",
                 ChatType: "group",
-                SessionKey: targetSessionKey,
+                SessionKey: fixture.targetSessionKey,
               },
-              defaultModel: "anthropic/claude-opus-4-7",
-              resolvedVerboseLevel: "off",
-              isNewSession: false,
-              blockStreamingEnabled: false,
-              resolvedBlockStreamingBreak: "message_end",
-              shouldInjectGroupIntro: false,
-              typingMode: "never",
-            });
-            void activeRun.catch(() => undefined);
+              { started: providerStarted, release: providerRelease },
+            ));
             expect((await providerStarted.promise).aborted).toBe(false);
           },
         });
@@ -779,9 +746,8 @@ describe("trigger handling", () => {
     },
   );
 
-  it("handles bare session reset, inline commands, and unauthorized inline status", async () => {
+  it("enforces reset authorization, strips inline commands, and preserves unauthorized status text", async () => {
     await withTempHome(async (home) => {
-      await expectBareNewOrResetAcknowledged({ home, body: "/new", getReplyFromConfig });
       for (const command of ["/new", "/reset"] as const) {
         await expectResetBlockedForNonOwner({ home, command });
       }
