@@ -7,6 +7,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { readGatewayLockProcessNamespace } from "../../infra/gateway-lock-payload.js";
 import { acquireGatewayStateOwner } from "../../infra/gateway-state-owner.js";
+import * as processRespawn from "../../infra/process-respawn.js";
 import * as admissionTurn from "../../infra/sqlite-database-admission-turn.js";
 import * as admission from "../../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
@@ -374,11 +375,17 @@ it.each(["complete", "native-exit"] as const)(
   30_000,
 );
 
-it.each(["complete", "native-exit", "pool-timeout"] as const)(
+it.each(["complete", "native-exit", "pool-timeout", "task-timeout", "stalled-retirement"] as const)(
   "joins transcript lease settlement before closing an agent (%s)",
   async (ending) => {
     const { stateDir, env, options } = fixture("agent-close");
     const events: string[] = [];
+    using recovery = vi
+      .spyOn(processRespawn, "requestGatewayNativeWorkerRecovery")
+      .mockResolvedValue({
+        status: "report-only",
+        reason: "Synthetic test has no Gateway process lifecycle.",
+      });
     let gate: ReturnType<typeof planGate> | undefined;
     let reconciliation: Promise<PromiseSettledResult<unknown>[]> | undefined;
     let closing: Promise<boolean> | undefined;
@@ -405,6 +412,9 @@ it.each(["complete", "native-exit", "pool-timeout"] as const)(
         }
         return true;
       }, events);
+      if (ending === "task-timeout" || ending === "stalled-retirement") {
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      }
       reconciliation = Promise.allSettled([reconcile(options)]);
       await gate.ready;
       const close = database.db.close.bind(database.db);
@@ -431,6 +441,33 @@ it.each(["complete", "native-exit", "pool-timeout"] as const)(
         vi.useRealTimers();
         await poolClosing;
       }
+      if (ending === "task-timeout" || ending === "stalled-retirement") {
+        const native = gate.worker;
+        const nativeTerminate = native.terminate.bind(native);
+        const retirement = createDeferredCore<number>();
+        const terminate = vi.spyOn(native, "terminate");
+        if (ending === "stalled-retirement") {
+          terminate.mockReturnValue(retirement.promise);
+        }
+        expect(terminate).not.toHaveBeenCalled();
+        await vi.advanceTimersByTimeAsync(180_000);
+        expect(terminate).toHaveBeenCalledOnce();
+        expect(recovery).not.toHaveBeenCalled();
+        if (ending === "stalled-retirement") {
+          await vi.advanceTimersByTimeAsync(5_000);
+          await vi.dynamicImportSettled();
+          expect(recovery).toHaveBeenCalledOnce();
+          expect(recovery.mock.calls[0]![0].isCurrent()).toBe(true);
+          expect(native.threadId).toBeGreaterThan(0);
+          expect(readAgentDatabaseLeaseIds(database.path, env).length).toBeGreaterThan(
+            nativeLeases.length,
+          );
+          expect(events).not.toContain("release-task");
+          retirement.resolve(await nativeTerminate());
+        }
+        terminate.mockRestore();
+        vi.useRealTimers();
+      }
       closing = closeDatabase(database.path);
       if (ending === "native-exit") {
         await gate.terminate();
@@ -450,6 +487,11 @@ it.each(["complete", "native-exit", "pool-timeout"] as const)(
           : ["worker-release", "native-close"],
       );
       expect(database.db.isOpen).toBe(false);
+      if (ending === "stalled-retirement") {
+        expect(recovery.mock.calls[0]![0].isCurrent()).toBe(false);
+      } else {
+        expect(recovery).not.toHaveBeenCalled();
+      }
       expect(leasesAtNativeClose).toEqual(nativeLeases);
       expect(readAgentDatabaseLeaseIds(database.path, env)).toEqual([]);
       const reopened = openDatabase(options);
