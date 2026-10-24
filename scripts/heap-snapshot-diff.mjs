@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { closeSync, openSync, readSync } from "node:fs";
+import { closeSync, openSync, readFileSync, readSync } from "node:fs";
 import { StringDecoder } from "node:string_decoder";
 
 // Keep JSON text out of the heap: only the graph's numeric columns and used names survive parsing.
@@ -82,7 +82,54 @@ class Reader {
   }
 }
 
-function readGraph(file) {
+const publicLabels = new Set([
+  "",
+  "Object",
+  "Array",
+  "Map",
+  "Set",
+  "WeakMap",
+  "WeakSet",
+  "String",
+  "Number",
+  "Boolean",
+  "Date",
+  "RegExp",
+  "Promise",
+  "Function",
+  "Error",
+  "Buffer",
+  "ArrayBuffer",
+  "SharedArrayBuffer",
+  "Uint8Array",
+  "Uint16Array",
+  "Uint32Array",
+  "Int8Array",
+  "Int16Array",
+  "Int32Array",
+  "Float32Array",
+  "Float64Array",
+  "BigInt64Array",
+  "BigUint64Array",
+  "DataView",
+  "system / Context",
+  "system / NativeContext",
+  "system / JSArrayBufferData",
+  "(GC roots)",
+  "(Global handles)",
+  "(Stack roots)",
+  "(Strong roots)",
+  "(Builtins)",
+  "(Internalized strings)",
+  "(Read-only roots)",
+  "(Eternal handles)",
+  "(Bootstrapper)",
+  "table",
+  "context",
+  "prototype",
+]);
+
+function readGraph(file, safeLabels = null, stringLimit = 1024) {
   const reader = new Reader(file);
   try {
     const header = reader.find('"nodes"', true).replace(/,\s*$/u, "");
@@ -129,11 +176,19 @@ function readGraph(file) {
     const shortcut = meta.edge_types[edgeOffsets[0]].indexOf("shortcut");
     let edgeType = 0;
     let edgeTarget = 0;
+    const edgeNames = safeLabels ? new Uint32Array(edgeCount) : null;
+    const edgeKinds = safeLabels ? new Uint8Array(edgeCount) : null;
     reader.find('"edges"');
     const edges = reader.array((value, index) => {
       const field = index % edgeFields.length;
       if (field === edgeOffsets[0]) {
         edgeType = value;
+        if (edgeKinds) {
+          edgeKinds[Math.floor(index / edgeFields.length)] = value;
+        }
+      }
+      if (edgeNames && field === edgeOffsets[2]) {
+        edgeNames[Math.floor(index / edgeFields.length)] = value;
       }
       if (field === edgeOffsets[1]) {
         if (value % fields.length || value / fields.length >= count) {
@@ -159,7 +214,74 @@ function readGraph(file) {
     }
     reader.find('"strings"');
     const strings = new Map();
-    reader.array((value, index) => strings.set(index, value), true, usedNames);
+    let maxName = 0;
+    if (safeLabels) {
+      for (const name of names) {
+        maxName = Math.max(maxName, name);
+      }
+      const edgeTypeNames = meta.edge_types[edgeOffsets[0]];
+      for (let edge = 0; edge < edgeCount; edge++) {
+        if (!["element", "hidden"].includes(edgeTypeNames[edgeKinds[edge]])) {
+          maxName = Math.max(maxName, edgeNames[edge]);
+        }
+      }
+    }
+    const sessionStrings = safeLabels ? new Uint8Array(maxName + 1) : null;
+    const tableStrings = safeLabels ? new Uint8Array(maxName + 1) : null;
+    const truncatedStrings = safeLabels ? new Uint8Array(maxName + 1) : null;
+    reader.array(
+      (value, index) => {
+        if (sessionStrings) {
+          sessionStrings[index] = Number(/^agent:[^:]+:.+/u.test(value));
+          tableStrings[index] = Number(value === "table");
+          truncatedStrings[index] = Number(value.length >= stringLimit);
+        }
+        if (usedNames.has(index)) {
+          strings.set(index, !safeLabels || safeLabels.has(value) ? value : "(redacted)");
+        }
+      },
+      true,
+      safeLabels ? null : usedNames,
+    );
+    const stringNodes = safeLabels ? new Uint32Array(maxName + 1) : null;
+    const stringBytes = safeLabels ? new Float64Array(maxName + 1) : null;
+    const stringLargest = safeLabels ? new Float64Array(maxName + 1) : null;
+    const sessionNodes = safeLabels ? new Uint8Array(count) : null;
+    if (safeLabels) {
+      for (let node = 0; node < count; node++) {
+        if (typeNames[types[node]] === "string") {
+          const name = names[node];
+          stringNodes[name]++;
+          stringBytes[name] += sizes[node];
+          stringLargest[name] = Math.max(stringLargest[name], sizes[node]);
+          sessionNodes[node] = sessionStrings[name];
+        }
+      }
+    }
+    const duplicateStrings = {
+      groups: 0,
+      copies: 0,
+      shallowBytes: 0,
+      potentialSavingsBytes: 0,
+      excludedTruncatedGroups: 0,
+      excludedTruncatedShallowBytes: 0,
+      stringLimit,
+    };
+    if (safeLabels) {
+      for (let name = 0; name <= maxName; name++) {
+        if (stringNodes[name] > 1) {
+          if (truncatedStrings[name]) {
+            duplicateStrings.excludedTruncatedGroups++;
+            duplicateStrings.excludedTruncatedShallowBytes += stringBytes[name];
+            continue;
+          }
+          duplicateStrings.groups++;
+          duplicateStrings.copies += stringNodes[name] - 1;
+          duplicateStrings.shallowBytes += stringBytes[name];
+          duplicateStrings.potentialSavingsBytes += stringBytes[name] - stringLargest[name];
+        }
+      }
+    }
     const labels = [];
     const classes = new Map();
     for (let i = 0; i < count; i++) {
@@ -172,14 +294,30 @@ function readGraph(file) {
       }
       names[i] = classes.get(label);
     }
-    return { count, ids, sizes, starts, targets, names, labels, meta };
+    return {
+      count,
+      ids,
+      sizes,
+      starts,
+      targets,
+      names,
+      labels,
+      meta,
+      ...(safeLabels
+        ? { edgeNames, edgeKinds, sessionStrings, tableStrings, sessionNodes, duplicateStrings }
+        : {}),
+    };
   } finally {
     closeSync(reader.fd);
   }
 }
 
-function summarize(file, keepGraph = false) {
-  const { count, ids, sizes, starts, targets, names, labels, meta } = readGraph(file);
+function summarize(file, keepGraph = false, safeLabels = null, stringLimit = 1024) {
+  const { count, ids, sizes, starts, targets, names, labels, meta, ...summaryData } = readGraph(
+    file,
+    safeLabels,
+    stringLimit,
+  );
   const numbers = new Uint32Array(count);
   const vertices = new Uint32Array(count + 1);
   const parent = new Uint32Array(count + 1);
@@ -319,6 +457,8 @@ function summarize(file, keepGraph = false) {
     totals,
     visited,
     count,
+    sizes,
+    ...summaryData,
     ...(keepGraph ? { starts, targets, immediateDominators: parent, meta } : {}),
   };
 }
@@ -404,7 +544,7 @@ function compareDominators(before, after, top) {
   return dominators;
 }
 
-function readPathEdges(file, meta, wanted) {
+function readPathEdges(file, meta, wanted, safeLabels = null) {
   if (!wanted.size) {
     return new Map();
   }
@@ -444,7 +584,11 @@ function readPathEdges(file, meta, wanted) {
     for (const [index, edge] of edges) {
       edges.set(index, {
         type: edge.type,
-        name: edge.indexed ? edge.name : strings.get(edge.name),
+        name: edge.indexed
+          ? edge.name
+          : !safeLabels || safeLabels.has(strings.get(edge.name))
+            ? strings.get(edge.name)
+            : "(redacted)",
       });
     }
     return edges;
@@ -539,7 +683,7 @@ function retainingPaths(file, snapshot, selection, options) {
       }),
     );
   // A second streaming pass resolves only displayed edge names, avoiding strings from payloads.
-  const edges = readPathEdges(file, meta, wantedEdges);
+  const edges = readPathEdges(file, meta, wantedEdges, options.safeLabels);
   for (const row of result) {
     for (const node of row.rootPath?.nodes ?? []) {
       if (node.incomingEdge !== undefined) {
@@ -588,13 +732,131 @@ function summarizeIndependent(file, options) {
   };
 }
 
+function summarizeRetention(file, options) {
+  const safeLabels = new Set(publicLabels);
+  if (options.labels) {
+    for (const label of readFileSync(options.labels, "utf8").split(/\r?\n/u)) {
+      if (label) {
+        safeLabels.add(label);
+      }
+    }
+  }
+  const snapshot = summarize(file, true, safeLabels, options.stringLimit);
+  const {
+    count,
+    ids,
+    names,
+    labels,
+    retained,
+    starts,
+    targets,
+    edgeNames,
+    edgeKinds,
+    sessionNodes,
+    sessionStrings,
+    tableStrings,
+    meta,
+  } = snapshot;
+  const topNodes = [];
+  const collections = [];
+  const sessions = [];
+  function keep(rows, row) {
+    if (rows.length < options.top || row.retained > rows.at(-1).retained) {
+      rows.push(row);
+      rows.sort((a, b) => b.retained - a.retained);
+      if (rows.length > options.top) {
+        rows.pop();
+      }
+    }
+  }
+  const edgeTypeNames = meta.edge_types[meta.edge_fields.indexOf("type")];
+  for (let node = 0; node < count; node++) {
+    if (!retained[node]) {
+      continue;
+    }
+    const label = labels[names[node]];
+    const row = { id: ids[node], label, shallow: snapshot.sizes[node], retained: retained[node] };
+    keep(topNodes, row);
+    const collection = ["object: Map", "object: Set", "object: Array", "array"].includes(label);
+    if (collection) {
+      keep(collections, row);
+    }
+    let sessionKeyReferences = 0;
+    let backing = node;
+    if (label === "object: Map" || label === "object: Set") {
+      for (let edge = starts[node]; edge < starts[node + 1]; edge++) {
+        if (edgeTypeNames[edgeKinds[edge]] === "internal" && tableStrings[edgeNames[edge]]) {
+          backing = targets[edge] < count ? targets[edge] : node;
+          break;
+        }
+      }
+    }
+    for (let edge = starts[backing]; edge < starts[backing + 1]; edge++) {
+      const target = targets[edge];
+      if (target >= count) {
+        continue;
+      }
+      const kind = edgeTypeNames[edgeKinds[edge]];
+      if (
+        (kind === "property" && sessionStrings[edgeNames[edge]]) ||
+        ((collection || label === "object: Object") && sessionNodes[target])
+      ) {
+        sessionKeyReferences++;
+      }
+    }
+    if (sessionKeyReferences) {
+      keep(sessions, {
+        ...row,
+        sessionKeyReferences,
+        retainedBytesPerKeyReference: row.retained / sessionKeyReferences,
+      });
+    }
+  }
+  const classes = labels
+    .map((label, i) => Object.assign({ label }, snapshot.totals[i]))
+    .filter((row) => row.count)
+    .toSorted((a, b) => b.retained - a.retained)
+    .slice(0, options.top);
+  const retainers = retainingPaths(
+    file,
+    snapshot,
+    {
+      ids: [...new Set([...topNodes, ...collections, ...sessions].map((row) => row.id))],
+      classes: classes.map((row) => row.label),
+    },
+    { ...options, safeLabels },
+  );
+  return {
+    nodes: count,
+    reachable: snapshot.visited,
+    retainedBytes: retained[0],
+    classes,
+    dominators: topNodes,
+    collections,
+    sessionStructures: sessions,
+    duplicateStrings: snapshot.duplicateStrings,
+    retainers,
+    notes: [
+      "Only fixed built-in labels and the explicit reviewed-source label allowlist are emitted; other names are redacted. No string values or session keys are emitted.",
+      "Retained sizes exclude weak and shortcut edges; ephemerons follow V8 internal edges. Class totals overlap across classes; nested same-class subtrees count once.",
+      "Duplicate estimates cover flat string nodes sharing a V8 string-table entry, including unreachable nodes; names at or above stringLimit are excluded because V8 truncates them. Match --string-limit to the capturing runtime flag (Node default 1024). Sliced/concatenated strings and external backing are excluded. Savings retain the largest copy and are not a measured reclamation result.",
+      "Session scaling counts references to agent:<agent>:<session> keys, not unique sessions or Map.size; shared keys and backing tables can appear in multiple rows. Other key formats are not detected.",
+      "Root paths are shortest strong routes, not ownership proof. Dominator paths show exclusive graph retention, not direct edges. Owner/module attribution requires source inspection of approved class, closure, and property labels.",
+      "Snapshot sizes are shallow V8 sizes, not process RSS; external/native memory may be absent. One snapshot does not establish a leak or a before/after improvement.",
+    ],
+  };
+}
+
 const usage =
-  "Usage: node scripts/heap-snapshot-diff.mjs <before.heapsnapshot> <after.heapsnapshot> [--independent-ids] [--json] [--top N] [--node ID] [--max-depth N]";
+  "Single snapshot: node scripts/heap-snapshot-diff.mjs --summary <snapshot> [--labels reviewed-source-labels.txt] [--string-limit N] [--top N] [--max-depth N]\nUsage: node scripts/heap-snapshot-diff.mjs <before.heapsnapshot> <after.heapsnapshot> [--independent-ids] [--json] [--top N] [--node ID] [--max-depth N]";
 
 function parseArgs(args) {
   const options = {
     json: false,
     independentIds: false,
+    summary: false,
+    labels: null,
+    stringLimit: 1024,
     files: [],
     top: 30,
     nodes: [],
@@ -604,9 +866,16 @@ function parseArgs(args) {
     const arg = args[index];
     if (arg === "--json") {
       options.json = true;
+    } else if (arg === "--summary") {
+      options.summary = true;
+    } else if (arg === "--labels") {
+      options.labels = args[++index];
+      if (!options.labels || options.labels.startsWith("--")) {
+        throw new Error(usage);
+      }
     } else if (arg === "--independent-ids") {
       options.independentIds = true;
-    } else if (["--top", "--node", "--max-depth"].includes(arg)) {
+    } else if (["--top", "--node", "--max-depth", "--string-limit"].includes(arg)) {
       const value = Number(args[++index]);
       if (!Number.isSafeInteger(value) || value <= 0) {
         throw new Error(`${arg} requires a positive safe integer`);
@@ -614,7 +883,8 @@ function parseArgs(args) {
       if (arg === "--node") {
         options.nodes.push(value);
       } else {
-        options[arg === "--top" ? "top" : "maxDepth"] = value;
+        options[arg === "--top" ? "top" : arg === "--string-limit" ? "stringLimit" : "maxDepth"] =
+          value;
       }
     } else if (arg.startsWith("--")) {
       throw new Error(usage);
@@ -622,15 +892,23 @@ function parseArgs(args) {
       options.files.push(arg);
     }
   }
-  if (options.files.length !== 2) {
+  if (
+    options.files.length !== (options.summary ? 1 : 2) ||
+    (options.summary && options.independentIds) ||
+    (options.labels && !options.summary)
+  ) {
     throw new Error(usage);
   }
   return options;
 }
 
-try {
+function main() {
   const options = parseArgs(process.argv.slice(2));
   const { files, json } = options;
+  if (options.summary) {
+    console.log(JSON.stringify(summarizeRetention(files[0], options), null, 2));
+    return;
+  }
   let result;
   if (options.independentIds) {
     const before = summarizeIndependent(files[0], { ...options, nodes: [] });
@@ -715,6 +993,10 @@ try {
       console.log(`\n${note}`);
     }
   }
+}
+
+try {
+  main();
 } catch (error) {
   console.error(error.message);
   process.exitCode = 1;

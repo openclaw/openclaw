@@ -110,7 +110,7 @@ Gateway server timings.
 ```sh
 NODE_DISABLE_COMPILE_CACHE=1 node --import ./scripts/tsx.mjs scripts/bench-control-ui-cold-load.ts \
   --bundle-dir <built-control-ui> --first-load --runs 1 --face chat --untraced \
-  --critical-path --session-switch --latency-ms 0 --frame-gap-ms 0 \
+  --critical-path --session-switch --thread-cpu-time --latency-ms 0 --frame-gap-ms 0 \
   --output <proof-dir>
 ```
 
@@ -153,7 +153,9 @@ Readiness is the first animation frame with visible transcript and enabled
 composer (Chat), enabled composer (New Session), populated usable inventory
 (Sessions/Cron/Agents), or visible Appearance controls and Settings search.
 The record continues through 750 ms of RPC idle to retain secondary work; that
-drain contributes to CPU totals but never to the readiness time. These are
+drain contributes to CPU totals but never to the readiness time. Use
+`--thread-cpu-time` to exclude renderer descheduling from those totals on a loaded
+host. These are
 renderer-frame readiness measurements, not INP or proof that pixels reached a
 physical display. Each destination also saves a synthetic screenshot.
 

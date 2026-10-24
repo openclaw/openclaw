@@ -1,14 +1,8 @@
 // Control UI tests cover customizable sidebar navigation and persistence.
-import { mkdir, writeFile } from "node:fs/promises";
-import path from "node:path";
-import type { Locator, Page } from "playwright";
+import type { Locator } from "playwright";
 import { expect, it } from "vitest";
 import type { AppSidebarElement } from "../components/app-sidebar.tsx";
-import {
-  takeControlUiElementScreenshot,
-  takeControlUiViewportScreenshot,
-  waitForControlUiProofSurface,
-} from "../test-helpers/control-ui-e2e-screenshot.ts";
+import { waitForControlUiProofSurface } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   controlUiSessionPath,
   installMockGateway,
@@ -29,7 +23,6 @@ const suite = createControlUiE2eSuite({
     `Playwright Chromium is not installed or cannot start at ${executablePath}. Run \`pnpm --dir ui exec playwright install --with-deps chromium\`, or set OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM=1 only when intentionally skipping this lane.`,
 });
 
-const captureUiProofEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 const hiddenSessionCatalogsStorageKey = "openclaw:sidebar:sessions:hidden-catalogs";
 
 async function trimmedTextContents(locator: Locator): Promise<string[]> {
@@ -38,53 +31,6 @@ async function trimmedTextContents(locator: Locator): Promise<string[]> {
 
 async function roundedWidth(locator: Locator): Promise<number> {
   return Math.round((await locator.boundingBox())?.width ?? 0);
-}
-
-async function captureUiProof(page: Page, fileName: string, surface = page.locator(".shell")) {
-  if (!captureUiProofEnabled) {
-    return;
-  }
-  await mkdir(path.join(suite.artifactDir, "sidebar-customization"), { recursive: true });
-  if (page.video()) {
-    await writeFile(
-      path.join(suite.artifactDir, "sidebar-customization", fileName),
-      await takeControlUiViewportScreenshot(page, surface, [surface]),
-    );
-    return;
-  }
-  await page.screenshot({
-    animations: "disabled",
-    fullPage: true,
-    path: path.join(path.join(suite.artifactDir, "sidebar-customization"), fileName),
-  });
-}
-
-async function captureSettingsSidebarProof(sidebar: Locator, fileName: string) {
-  if (!captureUiProofEnabled) {
-    return;
-  }
-  await mkdir(path.join(suite.artifactDir, "sidebar-customization"), { recursive: true });
-  await writeFile(
-    path.join(suite.artifactDir, "sidebar-customization", fileName),
-    await takeControlUiElementScreenshot(sidebar.page(), sidebar, [sidebar.locator("input")]),
-  );
-}
-
-async function holdUiProof(page: Page, durationMs = 600) {
-  if (captureUiProofEnabled) {
-    await page.waitForTimeout(durationMs);
-  }
-}
-
-async function setThemeMode(page: Page, mode: "dark" | "light") {
-  await page.emulateMedia({ colorScheme: mode });
-  await page.evaluate((nextMode) => {
-    const root = document.documentElement;
-    root.dataset.themeMode = nextMode;
-    root.dataset.themeResolved = nextMode;
-    root.style.colorScheme = nextMode;
-  }, mode);
-  await expect.poll(() => page.locator("html").getAttribute("data-theme-mode")).toBe(mode);
 }
 
 suite.define(() => {
@@ -158,12 +104,6 @@ suite.define(() => {
               '[data-sidebar-entry="plugin:workboard/board-ops"]',
             );
             await operationsEntry.getByRole("link", { name: "Operations", exact: true }).waitFor();
-            if (captureUiProofEnabled && width === 1440) {
-              await writeFile(
-                path.join(suite.artifactDir, "workboard-pages.png"),
-                await takeControlUiElementScreenshot(page, pages, [operationsEntry]),
-              );
-            }
             // Pages owns a flat entry for every registration, including plugin children.
             expect(await pages.getByRole("link", { name: "Operations", exact: true }).count()).toBe(
               1,
@@ -200,7 +140,6 @@ suite.define(() => {
               expect(await operationsEntry.getByRole("link").count()).toBe(1);
             }
           }
-          await captureUiProof(page, "lead-" + label + "-" + width + ".png");
         },
       );
     },
@@ -248,28 +187,6 @@ suite.define(() => {
       await expect.poll(() => recovery.textContent()).toContain("offline-catalog");
       expect(await recovery.getByText("claude", { exact: true }).count()).toBe(0);
 
-      if (captureUiProofEnabled) {
-        await mkdir(path.join(suite.artifactDir, "sidebar-customization"), { recursive: true });
-        await recovery.scrollIntoViewIfNeeded();
-        for (const theme of ["light", "dark"] as const) {
-          await setThemeMode(page, theme);
-          await page.screenshot({
-            animations: "disabled",
-            path: path.join(
-              path.join(suite.artifactDir, "sidebar-customization"),
-              `after-${theme}-context.png`,
-            ),
-          });
-          await recovery.screenshot({
-            animations: "disabled",
-            path: path.join(
-              path.join(suite.artifactDir, "sidebar-customization"),
-              `after-${theme}-rows.png`,
-            ),
-          });
-        }
-      }
-
       await row.getByRole("button", { name: "Show" }).click();
       await expect.poll(() => row.count()).toBe(0);
       expect(
@@ -281,22 +198,12 @@ suite.define(() => {
   });
 
   it("pins and unpins routes and persists navigation state across reloads", async () => {
-    if (captureUiProofEnabled) {
-      await mkdir(path.join(suite.artifactDir, "sidebar-customization"), { recursive: true });
-    }
     const context = await suite.browser.newContext({
       locale: "en-US",
-      recordVideo: captureUiProofEnabled
-        ? {
-            dir: path.join(path.join(suite.artifactDir, "sidebar-customization"), "video"),
-            size: { height: 900, width: 1300 },
-          }
-        : undefined,
       serviceWorkers: "block",
       viewport: { height: 900, width: 1440 },
     });
     const page = await context.newPage();
-    const video = page.video();
     await installMockGateway(page, {
       controlUiTabs: [{ group: "control", id: "logbook", label: "Logbook", pluginId: "logbook" }],
       methodResponses: {
@@ -351,7 +258,6 @@ suite.define(() => {
       const sidebarResizer = page.getByRole("separator", { name: "Resize sidebar" });
       await expect.poll(() => roundedWidth(shellNav)).toBe(310);
       await expect.poll(() => sidebarResizer.getAttribute("aria-valuetext")).toBe("310 pixels");
-      await captureUiProof(page, "00-sidebar-default-width.png");
 
       const resizerBounds = await sidebarResizer.boundingBox();
       if (!resizerBounds) {
@@ -374,7 +280,6 @@ suite.define(() => {
       await page.mouse.up();
       await expect.poll(() => roundedWidth(shellNav)).toBe(410);
       await expect.poll(() => sidebarResizer.getAttribute("aria-valuetext")).toBe("410 pixels");
-      await captureUiProof(page, "00-sidebar-resized.png");
 
       await page.reload();
       await expect.poll(() => roundedWidth(shellNav)).toBe(410);
@@ -410,9 +315,6 @@ suite.define(() => {
             .getAttribute("aria-current"),
         )
         .toBe("page");
-      await captureUiProof(page, "01a-settings-takeover.png", settingsSidebar);
-      await captureSettingsSidebarProof(settingsSidebar, "01a-settings-search-initial.png");
-      await holdUiProof(page);
       const settingsLinks = settingsSidebar.locator(".settings-sidebar__item");
       const allSettingsLabels = await trimmedTextContents(settingsLinks);
       expect(allSettingsLabels).not.toContain("Agent Defaults");
@@ -451,8 +353,6 @@ suite.define(() => {
       await settingsSearch.fill("  ThEmE  ");
       await expect.poll(() => trimmedTextContents(settingsLinks)).toEqual(["Appearance"]);
       await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/mcp");
-      await captureSettingsSidebarProof(settingsSidebar, "01b-settings-search-filtered.png");
-      await holdUiProof(page);
       await settingsSearch.fill("system");
       await expect
         .poll(() => trimmedTextContents(settingsLinks))
@@ -471,8 +371,6 @@ suite.define(() => {
           "Notifications",
           "Gateway",
         ]);
-      await captureSettingsSidebarProof(settingsSidebar, "01c-settings-search-group.png");
-      await holdUiProof(page);
       await settingsSearch.fill("browser");
       const browserResult = settingsSidebar.getByRole("link", {
         name: "Browser",
@@ -486,8 +384,6 @@ suite.define(() => {
       await expect.poll(() => new URL(page.url()).search).toBe("?section=browser&advanced=1");
       await expect.poll(() => new URL(page.url()).hash).toBe("#config-section-browser");
       await expect.poll(() => page.locator("#config-section-browser").isVisible()).toBe(true);
-      await captureSettingsSidebarProof(settingsSidebar, "01c-settings-search-deep-link.png");
-      await holdUiProof(page);
 
       await settingsSearch.fill("session observer");
       const sidebarPreferencesResult = settingsSidebar.getByRole("link", {
@@ -532,21 +428,8 @@ suite.define(() => {
       await expect
         .poll(() => settingsSidebar.getByRole("status").textContent())
         .toContain("No matching settings.");
-      if (captureUiProofEnabled) {
-        await writeFile(
-          path.join(
-            path.join(suite.artifactDir, "sidebar-customization"),
-            "settings-search-accessibility.yml",
-          ),
-          await settingsSidebar.ariaSnapshot(),
-          "utf8",
-        );
-      }
-      await captureSettingsSidebarProof(settingsSidebar, "01d-settings-search-empty.png");
-      await holdUiProof(page);
       await settingsSidebar.getByRole("button", { name: "Clear settings search" }).click();
       await expect.poll(() => trimmedTextContents(settingsLinks)).toEqual(allSettingsLabels);
-      await holdUiProof(page, 300);
       await settingsSidebar.getByRole("link", { name: "Agents", exact: true }).click();
       await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/agents");
       const agentDefaultsRow = page.getByRole("button", {
@@ -570,27 +453,17 @@ suite.define(() => {
       await expect.poll(() => new URL(page.url()).search).toBe("?section=tools&advanced=1");
       await expect.poll(() => new URL(page.url()).hash).toBe("#config-section-tools");
       await settingsSearch.fill("channel");
-      await captureSettingsSidebarProof(settingsSidebar, "01e-settings-search-route.png");
-      await holdUiProof(page);
       const channelsResult = settingsSidebar.getByRole("link", { name: "Channels" }).first();
       await channelsResult.click();
       await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/channels");
       await expect.poll(() => settingsSearch.inputValue()).toBe("channel");
-      await captureSettingsSidebarProof(
-        settingsSidebar,
-        `settings-navigation-${process.env.OPENCLAW_UI_PROOF_LABEL ?? "current"}.png`,
-      );
       await expect.poll(() => channelsResult.getAttribute("aria-current")).toBe("page");
-      await captureSettingsSidebarProof(settingsSidebar, "01f-settings-search-navigated.png");
-      await holdUiProof(page);
       await page.keyboard.press("Escape");
       await expect.poll(() => new URL(page.url()).pathname).toBe(controlUiSessionPath("main"));
       await expect.poll(() => sidebar.isVisible()).toBe(true);
       await openSettingsFromIdentity();
       await expect.poll(() => settingsSidebar.isVisible()).toBe(true);
       await expect.poll(() => settingsSearch.inputValue()).toBe("");
-      await captureSettingsSidebarProof(settingsSidebar, "01g-settings-search-reset.png");
-      await holdUiProof(page);
       await settingsSidebar.getByRole("link", { name: "Ask OpenClaw" }).click();
       await expect.poll(() => new URL(page.url()).pathname).toBe("/custodian");
       await expect
@@ -604,7 +477,6 @@ suite.define(() => {
         .poll(() => page.getByRole("button", { name: "Exit setup" }).isVisible())
         .toBe(false);
       await page.goto(`${suite.server.baseUrl}chat`);
-      await captureUiProof(page, "01-default-clean.png");
 
       const pagesButton = sidebar.getByRole("button", { name: "Pages", exact: true });
       let pages = await openSidebarPages(page);
@@ -635,7 +507,6 @@ suite.define(() => {
       await expect
         .poll(() => usage.evaluate((entry) => getComputedStyle(entry).backgroundColor))
         .not.toBe("rgba(0, 0, 0, 0)");
-      await captureUiProof(page, "02-personal-pin.png");
       // Rail pins match the view buttons: same icon size, and the same fill for
       // hover and for the current page.
       const railUsage = pinnedItems.first();
@@ -662,7 +533,6 @@ suite.define(() => {
       await expect.poll(() => pagesButton.getAttribute("aria-pressed")).toBe("false");
       pages = await openSidebarPages(page);
       expect(await pages.getByRole("link", { name: "Usage", exact: true }).isVisible()).toBe(true);
-      await captureUiProof(page, "03-persisted-customization.png");
       const pinMenu = await openSidebarPinMenu(page, "route:usage");
       await pinMenu.getByRole("menuitem", { name: "Unpin", exact: true }).click();
       await expect.poll(() => trimmedTextContents(pinnedItems)).toEqual([]);
@@ -704,7 +574,6 @@ suite.define(() => {
       await expect.poll(() => sidebar.isVisible()).toBe(true);
       await expect.poll(() => roundedWidth(shellNav)).toBe(452);
       await expect.poll(() => sidebarResizer.getAttribute("aria-valuetext")).toBe("452 pixels");
-      await captureUiProof(page, "04-visibility-not-persisted.png");
       await collapseButton.click();
       await expect
         .poll(() => page.locator(".shell").getAttribute("class"))
@@ -733,7 +602,6 @@ suite.define(() => {
         .toBe(0);
       // Narrow Chat merges navigation controls into its title bar.
       await expect.poll(() => page.locator(".agent-chat__header--mobile").isVisible()).toBe(true);
-      await captureUiProof(page, "05-expanded-tablet-drawer.png");
 
       // Widening with the drawer open must not leave its stale state blocking
       // the desktop collapse control.
@@ -745,7 +613,6 @@ suite.define(() => {
       await expect
         .poll(() => page.locator(".shell").getAttribute("class"))
         .not.toContain("shell--nav-drawer-open");
-      await captureUiProof(page, "06-desktop-collapse-after-drawer.png");
 
       await page.setViewportSize({ height: 900, width: 900 });
       await drawerButton.click();
@@ -763,17 +630,8 @@ suite.define(() => {
           page.locator(".shell-nav").evaluate((element) => element.getBoundingClientRect().right),
         )
         .toBeLessThanOrEqual(0);
-      await captureUiProof(page, "06-mobile-brand.png");
     } finally {
       await context.close();
-      if (video) {
-        await video.saveAs(
-          path.join(
-            path.join(suite.artifactDir, "sidebar-customization"),
-            "settings-search-flow.webm",
-          ),
-        );
-      }
     }
   });
 
@@ -848,7 +706,6 @@ suite.define(() => {
             };
           })
           .toEqual({ activityShift: 0, centerDelta: 0, clearOfShortcut: true });
-        await captureUiProof(page, "07-home-activity-rail.png");
       },
     );
   });
@@ -926,7 +783,6 @@ suite.define(() => {
         await sidebar.locator(".sidebar-issues-button").click();
         await expect.poll(() => sidebarUpdate.count()).toBe(1);
         await expect.poll(() => sidebarAutomation.count()).toBe(1);
-        await captureUiProof(page, "08-desktop-attention-unchanged.png");
         await sidebar.locator(".sidebar-issues-button").click();
 
         await page.setViewportSize({ height: 852, width: 393 });
@@ -944,7 +800,6 @@ suite.define(() => {
           .evaluateAll((elements) =>
             elements.map((element) => element.getAttribute("data-attention-kind")),
           );
-        await captureUiProof(page, "09-mobile-attention-closed.png");
 
         await navigationDrawerToggle(page).click();
         await expect
@@ -953,7 +808,6 @@ suite.define(() => {
         await sidebar.locator(".sidebar-issues-button").click();
         await expect.poll(() => sidebarUpdate.isVisible()).toBe(true);
         await expect.poll(() => sidebarAutomation.isVisible()).toBe(true);
-        await captureUiProof(page, "10-mobile-attention-drawer.png");
 
         expect(floatingKinds).toEqual([]);
       },

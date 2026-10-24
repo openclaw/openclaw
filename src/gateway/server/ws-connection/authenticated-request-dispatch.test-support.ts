@@ -68,6 +68,7 @@ export function createDispatchTestHarness(
     buildRequestContext?: () => unknown;
     isClosed?: () => boolean;
     getRequiredSharedGatewaySessionGeneration?: () => string | undefined;
+    getMethodRegistry?: GatewayWsMessageHandlerParams["getMethodRegistry"];
   } = {},
 ) {
   const clients = new GatewayClientRegistry();
@@ -106,6 +107,7 @@ export function createDispatchTestHarness(
       close,
       isClosed: options.isClosed ?? (() => false),
       getRequiredSharedGatewaySessionGeneration: options.getRequiredSharedGatewaySessionGeneration,
+      getMethodRegistry: options.getMethodRegistry,
       setCloseCause,
       logGateway,
     } as unknown as GatewayWsMessageHandlerParams,
