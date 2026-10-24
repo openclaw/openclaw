@@ -1,4 +1,5 @@
 import { buildExecApprovalPendingReplyPayload } from "openclaw/plugin-sdk/approval-reply-runtime";
+import { createMessageReceiptFromOutboundResults } from "openclaw/plugin-sdk/channel-outbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   createPluginSetupWizardStatus,
@@ -308,7 +309,12 @@ describe("signal outbound", () => {
     const mediaUrl = "file:///tmp/signal-proof.png";
     const replyToId = "1700000000001";
     await registerSignalReplyContext({ to: groupTo, replyToId, author: phone, body: "original" });
-    const send = vi.fn().mockResolvedValue({ messageId: "signal-1" });
+    const receipt = createMessageReceiptFromOutboundResults({
+      results: [{ channel: "signal", messageId: "signal-1" }],
+      kind,
+    });
+    const sent = { messageId: "signal-1", receipt };
+    const send = vi.fn().mockResolvedValue(sent);
     const ctx = {
       cfg: aliasConfig,
       to: "signal:ops",
@@ -323,10 +329,10 @@ describe("signal outbound", () => {
             text: required(signalPlugin.message?.send?.text),
             media: required(signalPlugin.message?.send?.media),
           };
-    if (kind === "media") {
-      await methods.media({ ...ctx, mediaUrl });
-    } else {
-      await methods.text(ctx);
+    const result =
+      kind === "media" ? await methods.media({ ...ctx, mediaUrl }) : await methods.text(ctx);
+    if (mode === "durable") {
+      expect(result).toEqual(sent);
     }
     expect(send).toHaveBeenCalledWith(
       groupTo,
