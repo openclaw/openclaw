@@ -7,9 +7,10 @@ import {
   isRetryableDeliveryNotSentError,
   resolveDeliveryNotSentRetryability,
 } from "../../infra/delivery-recovery.shared.js";
-import { toErrorObject } from "../../infra/errors.js";
+import { formatErrorMessage, toErrorObject } from "../../infra/errors.js";
 import { createStructuredOutboundPayloadPlan } from "../../infra/outbound/payloads.js";
 import type { OutboundPayloadPlan } from "../../infra/outbound/reply-payload-parts.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import type { SilentReplyConversationType } from "../../shared/silent-reply-policy.js";
@@ -60,6 +61,8 @@ import type { TypingController } from "./typing.js";
 
 export type { ReplyDispatchDeliveryOutcome };
 
+const log = createSubsystemLogger("auto-reply/reply-dispatcher");
+
 type ReplyDispatchDeliveryOutcomeTracker = {
   promise: Promise<ReplyDispatchDeliveryOutcome>;
   resolve: (outcome: ReplyDispatchDeliveryOutcome) => void;
@@ -68,10 +71,14 @@ type ReplyDispatchDeliveryOutcomeTracker = {
   deliveredPayload?: ReplyPayload;
 };
 
+function reportObserverFailure(error: unknown): void {
+  log.warn(`reply dispatcher observer failed: ${formatErrorMessage(error)}`);
+}
+
 /** Invoke immediately without letting observer failures interrupt delivery bookkeeping. */
 function invokeReplyDispatcherObserver(
   observer: () => unknown,
-  onError: (error: unknown) => void = () => undefined,
+  onError: (error: unknown) => void = reportObserverFailure,
 ): Promise<unknown> {
   try {
     return Promise.resolve(observer()).catch(onError);
@@ -713,11 +720,28 @@ export function createReplyDispatcherWithTyping(
     ...dispatcherOptions,
     onIdle: async () => {
       typingController?.markDispatchIdle();
-      const idle = resolvedOnIdle?.();
-      if (idle) {
-        await Promise.resolve(idle);
+      let idleFailed = false;
+      let idleFailure: unknown;
+      try {
+        const idle = resolvedOnIdle?.();
+        if (idle) {
+          await Promise.resolve(idle);
+        }
+      } catch (error) {
+        idleFailed = true;
+        idleFailure = error;
       }
-      await onSettled?.();
+      try {
+        await onSettled?.();
+      } catch (error) {
+        if (!idleFailed) {
+          throw error;
+        }
+        reportObserverFailure(error);
+      }
+      if (idleFailed) {
+        throw idleFailure;
+      }
     },
   });
 

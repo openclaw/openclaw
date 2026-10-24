@@ -1,7 +1,12 @@
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { describe, expect, it, vi } from "vitest";
+import { createWarnLogCapture } from "../../logging/test-helpers/warn-log-capture.js";
 import { getTotalPendingReplies } from "./dispatcher-registry.js";
-import { captureReplyDispatchDeliveryOutcome, createReplyDispatcher } from "./reply-dispatcher.js";
+import {
+  captureReplyDispatchDeliveryOutcome,
+  createReplyDispatcher,
+  createReplyDispatcherWithTyping,
+} from "./reply-dispatcher.js";
 
 describe("reply settlement observer isolation", () => {
   it.each([
@@ -89,5 +94,56 @@ describe("reply settlement observer isolation", () => {
     expect(deliver).not.toHaveBeenCalled();
     expect(onError).toHaveBeenCalledExactlyOnceWith(observerFailure, { kind: "final" });
     expect(getTotalPendingReplies()).toBe(initialPending);
+  });
+
+  it("logs an idle observer failure and still runs settlement cleanup", async () => {
+    const warnings = createWarnLogCapture("reply-dispatcher-idle-observer");
+    try {
+      const observerFailure = new Error("idle observer failed");
+      const onSettled = vi.fn();
+      const { dispatcher } = createReplyDispatcherWithTyping({
+        deliver: async () => ({ visibleReplySent: true }),
+        onIdle: () => {
+          throw observerFailure;
+        },
+        onSettled,
+      });
+
+      dispatcher.sendFinalReply({ text: "Final reply" });
+      dispatcher.markComplete();
+
+      await expect(dispatcher.waitForIdle()).resolves.toMatchObject({
+        anyVisibleDelivered: true,
+        counts: { final: { delivered: 1 } },
+      });
+      await vi.waitFor(() => expect(onSettled).toHaveBeenCalledOnce());
+      await expect(warnings.findText(observerFailure.message)).resolves.toBeDefined();
+    } finally {
+      warnings.cleanup();
+    }
+  });
+
+  it("logs a failed error reporter instead of dropping the observer failure", async () => {
+    const warnings = createWarnLogCapture("reply-dispatcher-error-observer");
+    try {
+      const reporterFailure = new Error("error reporter failed");
+      const deliveryFailure = new Error("delivery failed");
+      const dispatcher = createReplyDispatcher({
+        deliver: async () => {
+          throw deliveryFailure;
+        },
+        onError: () => {
+          throw reporterFailure;
+        },
+      });
+
+      dispatcher.sendFinalReply({ text: "Final reply" });
+      dispatcher.markComplete();
+
+      await dispatcher.waitForIdle();
+      await expect(warnings.findText(reporterFailure.message)).resolves.toBeDefined();
+    } finally {
+      warnings.cleanup();
+    }
   });
 });
