@@ -21,6 +21,11 @@ import { acquireSqliteSnapshotReadToken } from "../infra/sqlite-snapshot-staging
 import { assertTransactionUsable } from "../infra/sqlite-transaction.js";
 import { registerSqliteCacheExitClose } from "../infra/sqlite-wal.js";
 import {
+  assertSqliteDatabaseAdmissionWaitActive,
+  readSqliteDatabaseAdmissionDeadline,
+  withSqliteDatabaseAdmissionWait,
+} from "../infra/sqlite-worker-database-admission-relay.js";
+import {
   assertExistingDatabaseIdentity,
   readDatabasePathIdentitySync,
   type DatabasePathIdentity,
@@ -311,12 +316,47 @@ export function readOpenClawStateReadOnlyLocation<T>(
         ) {
           throw error;
         }
-        // A sibling can publish schema after BEGIN. Refresh only after rollback,
-        // before caller work, and without replacing an imported MVCC snapshot.
-        if (!getPostgresPhysicalFacts(opened.database.db)) {
-          throw error;
-        }
-        value = readTransaction();
+        const database = opened.database.db;
+        const deadlineAtMs = Math.min(
+          Date.now() + 1000,
+          readSqliteDatabaseAdmissionDeadline() ?? Infinity,
+        );
+        const deadline = performance.now() + Math.max(0, deadlineAtMs - Date.now());
+        const pause = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT));
+        // Committed schema facts can still be in transit. Longer gaps fail visibly
+        // with the original error; cancellation and owner loss still win.
+        value = withSqliteDatabaseAdmissionWait({ deadlineAtMs }, () => {
+          for (let delayMs = 10; ; delayMs = Math.min(delayMs * 2, 100)) {
+            assertSqliteDatabaseAdmissionWaitActive();
+            const remaining = Math.min(deadline - performance.now(), deadlineAtMs - Date.now());
+            if (remaining <= 0) {
+              throw error;
+            }
+            Atomics.wait(pause, 0, 0, Math.min(delayMs, remaining));
+            assertSqliteDatabaseAdmissionWaitActive();
+            if (performance.now() >= deadline || Date.now() >= deadlineAtMs) {
+              throw error;
+            }
+            if (!database.isOpen || database.isTransaction) {
+              throw error;
+            }
+            if (!getPostgresPhysicalFacts(database, { refresh: true })) {
+              continue;
+            }
+            try {
+              return readTransaction();
+            } catch (retryError) {
+              if (
+                !(retryError instanceof PostgresSchemaAdmissionUnavailableError) ||
+                operationStarted ||
+                !database.isOpen ||
+                database.isTransaction
+              ) {
+                throw retryError;
+              }
+            }
+          }
+        });
       }
       result = { status: "available", value };
     } catch (error) {

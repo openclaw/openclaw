@@ -67,7 +67,7 @@ export function createSqliteDatabaseAdmissionReader(owner: {
   function getSqliteDatabaseAdmission<T>(
     database: DatabaseSync | PostgresSqlConnection,
     key: SqliteDatabaseFactKey<T>,
-    options: { existingOnly?: boolean } = {},
+    options: { existingOnly?: boolean; refresh?: boolean } = {},
   ): T | undefined {
     const anchor = sqlPublicationAnchor(database);
     if (!anchor.isOpen || state.suspended.has(anchor)) {
@@ -115,7 +115,7 @@ export function createSqliteDatabaseAdmissionReader(owner: {
       const revision = readSqliteDatabaseGeneration(record, "publicationRevision");
       const misses = state.misses.get(record) ?? new Map<string, number>();
       state.misses.set(record, misses);
-      if (!database.isTransaction && misses.get(key.name) !== revision) {
+      if (!database.isTransaction && (options.refresh || misses.get(key.name) !== revision)) {
         exchange(record);
         fact = record.facts.get(key.name);
         misses.set(key.name, readSqliteDatabaseGeneration(record, "publicationRevision"));
