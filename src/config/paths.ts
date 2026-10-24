@@ -260,6 +260,31 @@ export function pinRuntimePaths(env: NodeJS.ProcessEnv = process.env): {
   return { configPath: CONFIG_PATH, stateDir: STATE_DIR };
 }
 
+/** Lays out the skill copies that reusable sandbox containers mount read-only. */
+export function resolveSandboxSkillsRootForState(stateDir: string): string {
+  return path.join(stateDir, "sandbox", "skills-workspaces");
+}
+
+let SANDBOX_SKILLS_ROOT: string | undefined;
+
+/**
+ * Pins the host root that owns skill copies reused by retained sandbox containers.
+ *
+ * A caller that redirects session state to a temporary directory still needs one
+ * stable mount source for containers that outlive that directory. Returns the
+ * previous value so the caller can restore it during cleanup.
+ */
+export function pinSandboxSkillsRoot(root: string | undefined): string | undefined {
+  const previous = SANDBOX_SKILLS_ROOT;
+  SANDBOX_SKILLS_ROOT = root === undefined ? undefined : path.resolve(root);
+  return previous;
+}
+
+/** Returns the root skill copies must stay under to keep one mount-source identity. */
+export function resolveSandboxSkillsRoot(): string {
+  return SANDBOX_SKILLS_ROOT ?? resolveSandboxSkillsRootForState(STATE_DIR);
+}
+
 export function captureRuntimeStateEnvironment(): NodeJS.ProcessEnv {
   return {
     ...process.env,
