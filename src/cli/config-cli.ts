@@ -22,7 +22,7 @@ import type {
   ConfigPatchOptions,
   ConfigUnsetOptions,
 } from "./config-cli-input.js";
-import { getAtPath, isConfigSchemaPath, parseConfigSetPath } from "./config-cli-path.js";
+import { getAtPath, isConfigSchemaPath } from "./config-cli-path.js";
 import { isConfigMachineOutput, isConfigSetJsonParseOnly } from "./config-output-mode.js";
 import type { ConfigSetOptions } from "./config-set-input.js";
 import { formatCliJsonFailure } from "./failure-output.js";
@@ -174,39 +174,87 @@ export async function runConfigPatch(opts: {
   });
 }
 
+type ConfigCliReadPrepared = {
+  /** String segments for getAtPath / schema walk (array indices as decimal strings). */
+  parsedPath: string[];
+  /** Typed tokens that keep concrete array indices as numbers for fact-path formatting. */
+  pathTokens: import("../shared/dot-path.js").ConcreteConfigPathSegment[];
+  snapshot: import("../config/types.openclaw.js").ConfigFileSnapshot;
+  uiHints: import("../config/schema.hints.js").ConfigUiHints;
+  redactedConfig: unknown;
+  /** Present when plugin/channel/agent paths already built a runtime schema. */
+  runtimeSchema?: { schema: import("./config-cli-path.js").JsonSchemaRecord };
+};
+
+async function resolvePreparedConfigSchema(
+  prepared: ConfigCliReadPrepared,
+): Promise<import("./config-cli-path.js").JsonSchemaRecord> {
+  if (prepared.runtimeSchema?.schema) {
+    return prepared.runtimeSchema.schema;
+  }
+  return (await import("../config/schema.js")).buildConfigSchemaCore().schema;
+}
+
+/**
+ * Shared config-read preparation for `config get` and `config explain`.
+ * One owner for snapshot load, plugin-schema selection, validation, metadata
+ * refusal, UI-hint selection, and redaction so both commands keep the same
+ * sensitivity contract (AGENTS.md: one owner per responsibility).
+ */
+async function prepareConfigCliRead(opts: {
+  path: string;
+  json?: boolean;
+  runtime: RuntimeEnv;
+}): Promise<ConfigCliReadPrepared> {
+  const pathTokens = parseConcreteConfigPathTokens(opts.path);
+  const parsedPath = pathTokens.map(String);
+  const { readConfigFileSnapshotWithPluginMetadata } = await import("../config/config.js");
+  const { ensureValidConfigSnapshotForCli } = await import("./config-cli-validation.js");
+  // Plugins also extend provider model parameters within agent configuration.
+  const needsPluginSchema = ["plugins", "channels", "agents"].includes(parsedPath[0] ?? "");
+  const read = await readConfigFileSnapshotWithPluginMetadata({
+    observe: false,
+    completePluginMetadata: needsPluginSchema,
+  });
+  const { snapshot, pluginMetadataSnapshot } = read;
+  ensureValidConfigSnapshotForCli(snapshot, opts.runtime, { json: opts.json });
+  if (needsPluginSchema && !pluginMetadataSnapshot) {
+    throw new Error("Config plugin metadata unavailable; refusing to display config values.");
+  }
+  const { redactConfigObject } = await import("../config/redact-snapshot.js");
+  const runtimeSchema =
+    needsPluginSchema && pluginMetadataSnapshot
+      ? (await import("../config/runtime-schema.js")).buildRuntimeConfigSchemaFromRegistry(
+          pluginMetadataSnapshot.manifestRegistry,
+          snapshot.sourceConfig,
+        )
+      : undefined;
+  // Successful core reads need sensitivity hints only; defer buildConfigSchemaCore until
+  // explain validation or the missing-value diagnostic (PR #170685).
+  const uiHints =
+    runtimeSchema?.uiHints ?? (await import("../config/schema-base.js")).computeBaseConfigUiHints();
+  return {
+    parsedPath,
+    pathTokens,
+    snapshot,
+    uiHints,
+    redactedConfig: redactConfigObject(snapshot.config, uiHints),
+    ...(runtimeSchema ? { runtimeSchema: { schema: runtimeSchema.schema } } : {}),
+  };
+}
+
 export async function runConfigGet(opts: { path: string; json?: boolean; runtime?: RuntimeEnv }) {
   const runtime = opts.runtime ?? defaultRuntime;
   try {
-    const parsedPath = parseConfigSetPath(opts.path);
-    const { readConfigFileSnapshotWithPluginMetadata } = await import("../config/config.js");
-    const { ensureValidConfigSnapshotForCli } = await import("./config-cli-validation.js");
-    // Plugins also extend provider model parameters within agent configuration.
-    const needsPluginSchema = ["plugins", "channels", "agents"].includes(parsedPath[0] ?? "");
-    const read = await readConfigFileSnapshotWithPluginMetadata({
-      observe: false,
-      completePluginMetadata: needsPluginSchema,
+    const prepared = await prepareConfigCliRead({
+      path: opts.path,
+      json: opts.json,
+      runtime,
     });
-    const { snapshot, pluginMetadataSnapshot } = read;
-    ensureValidConfigSnapshotForCli(snapshot, runtime, { json: opts.json });
-    if (needsPluginSchema && !pluginMetadataSnapshot) {
-      throw new Error("Config plugin metadata unavailable; refusing to display config values.");
-    }
-    const { redactConfigObject } = await import("../config/redact-snapshot.js");
-    const runtimeSchema =
-      needsPluginSchema && pluginMetadataSnapshot
-        ? (await import("../config/runtime-schema.js")).buildRuntimeConfigSchemaFromRegistry(
-            pluginMetadataSnapshot.manifestRegistry,
-            snapshot.sourceConfig,
-          )
-        : undefined;
-    const uiHints =
-      runtimeSchema?.uiHints ??
-      (await import("../config/schema-base.js")).computeBaseConfigUiHints();
-    const res = getAtPath(redactConfigObject(snapshot.config, uiHints), parsedPath);
+    const { parsedPath, redactedConfig } = prepared;
+    const res = getAtPath(redactedConfig, parsedPath);
     if (!res.found || res.value === undefined) {
-      const schema =
-        runtimeSchema?.schema ??
-        (await import("../config/schema.js")).buildConfigSchemaCore().schema;
+      const schema = await resolvePreparedConfigSchema(prepared);
       const autoManaged = AUTO_MANAGED_CONFIG_META_PATHS.some(
         (managedPath) =>
           parsedPath.every((segment, index) => managedPath[index] === segment) ||
@@ -233,6 +281,56 @@ export async function runConfigGet(opts: { path: string; json?: boolean; runtime
       writeRuntimeStdout(runtime, `${String(res.value)}\n`);
     } else {
       writeRuntimeJson(runtime, res.value);
+    }
+  } catch (err) {
+    if (err instanceof ExitError) {
+      throw err;
+    }
+    if (opts.json) {
+      writeRuntimeJson(runtime, formatCliJsonFailure(err));
+      exitCliAfterOutput(runtime, 1);
+    }
+    runtime.error(danger(formatErrorMessage(err)));
+    exitCliAfterOutput(runtime, 1);
+  }
+}
+
+export async function runConfigExplain(opts: {
+  path: string;
+  json?: boolean;
+  runtime?: RuntimeEnv;
+}) {
+  const runtime = opts.runtime ?? defaultRuntime;
+  try {
+    const { buildConfigExplainResult, formatConfigExplainHuman } =
+      await import("./config-cli-explain.js");
+    const prepared = await prepareConfigCliRead({
+      path: opts.path,
+      json: opts.json,
+      runtime,
+    });
+    const { parsedPath, pathTokens, snapshot, redactedConfig } = prepared;
+    const runtimeLookup = getAtPath(redactedConfig, parsedPath);
+    const schema = await resolvePreparedConfigSchema(prepared);
+    if (!isConfigSchemaPath(schema, parsedPath)) {
+      const message = `Unknown config path: ${opts.path}. Run ${formatCliCommand("openclaw config schema")} to inspect valid paths.`;
+      if (opts.json) {
+        writeRuntimeJson(runtime, formatCliJsonFailure(message));
+        exitCliAfterOutput(runtime, 1);
+      }
+      runtime.error(danger(message));
+      exitCliAfterOutput(runtime, 1);
+    }
+    const result = buildConfigExplainResult({
+      path: opts.path,
+      pathTokens,
+      snapshot,
+      runtimeLookup,
+    });
+    if (opts.json) {
+      writeRuntimeJson(runtime, result);
+    } else {
+      writeRuntimeStdout(runtime, formatConfigExplainHuman(result));
     }
   } catch (err) {
     if (err instanceof ExitError) {
@@ -276,7 +374,7 @@ export function registerConfigCli(program: Command) {
   const cmd = program
     .command("config")
     .description(
-      "Non-interactive config helpers (get/set/patch/unset/file/schema/validate). Run without subcommand for guided setup.",
+      "Non-interactive config helpers (get/explain/set/patch/unset/file/schema/validate). Run without subcommand for guided setup.",
     )
     .addHelpText("after", () => formatDocsHelp("/cli/config"))
     .option(
@@ -298,6 +396,17 @@ export function registerConfigCli(program: Command) {
     .option("--json", "Output JSON", false)
     .action(async (path: string, opts) => {
       await runConfigGet({ path, json: Boolean(opts.json) });
+    });
+
+  cmd
+    .command("explain")
+    .description(
+      "Explain why a config path has its value (authored vs default, include ownership, SecretRef identity)",
+    )
+    .argument("<path>", "Config path (dot or bracket notation)")
+    .option("--json", "Output JSON", false)
+    .action(async (path: string, opts) => {
+      await runConfigExplain({ path, json: Boolean(opts.json) });
     });
 
   setCommandJsonMode(cmd.command("set"), "parse-only", ({ argv }) => isConfigSetJsonParseOnly(argv))

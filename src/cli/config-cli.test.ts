@@ -607,6 +607,55 @@ describe("config cli", () => {
     );
   });
 
+  describe("config explain", () => {
+    it("reports source=default for an unset schema path with a runtime value", async () => {
+      setSnapshotOnce({
+        ...buildSnapshot({
+          resolved: {},
+          config: { gateway: { port: 18789 } },
+        }),
+        authoredConfig: {},
+      });
+      await runConfigCommand(["config", "explain", "gateway.port", "--json"]);
+      expect(parseLastLogPayload()).toMatchObject({
+        path: "gateway.port",
+        source: "default",
+        authoredPresent: false,
+        runtimeValue: 18789,
+      });
+    });
+
+    it("reports source=authored after an authored value is present", async () => {
+      setSnapshotOnce({
+        ...buildSnapshot({
+          resolved: { gateway: { port: 19001 } },
+          config: { gateway: { port: 19001 } },
+        }),
+        authoredConfig: { gateway: { port: 19001 } },
+      });
+      await runConfigCommand(["config", "explain", "gateway.port", "--json"]);
+      expect(parseLastLogPayload()).toMatchObject({
+        path: "gateway.port",
+        source: "authored",
+        authoredPresent: true,
+        runtimeValue: 19001,
+      });
+    });
+
+    it("returns a JSON error for unknown schema paths", async () => {
+      await expect(
+        runConfigCommand(["config", "explain", "gateway.__proto__.token", "--json"]),
+      ).rejects.toThrow(ExitError);
+      expect(parseLastLogPayload()).toMatchObject({
+        ok: false,
+        error: {
+          type: "cli_error",
+          message: expect.stringContaining("Invalid path segment"),
+        },
+      });
+    });
+  });
+
   describe("config validate", () => {
     it("prints warnings while still reporting a valid config", async () => {
       setSnapshotOnce({

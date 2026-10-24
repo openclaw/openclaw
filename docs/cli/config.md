@@ -19,7 +19,7 @@ restriction, not an authentication failure. For online changes, use
 [Config RPC](/gateway/configuration/config-rpc).
 
 <Note>
-When `OPENCLAW_CONFIG_READONLY=1` or `OPENCLAW_NIX_MODE=1`, OpenClaw treats `openclaw.json` as immutable. Read-only commands (`config get`, `config file`, `config schema`, `config validate`) still work; config writers refuse.
+When `OPENCLAW_CONFIG_READONLY=1` or `OPENCLAW_NIX_MODE=1`, OpenClaw treats `openclaw.json` as immutable. Read-only commands (`config get`, `config explain`, `config file`, `config schema`, `config validate`) still work; config writers refuse.
 </Note>
 
 ## Externally managed config
@@ -80,6 +80,7 @@ openclaw config --section gateway --section daemon
 openclaw config schema
 openclaw config schema --json
 openclaw config get browser.executablePath
+openclaw config explain gateway.port --json
 openclaw config set browser.executablePath "/usr/bin/google-chrome"
 openclaw config set browser.profiles.work '{"cdpPort":18801,"executablePath":"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"}' --strict-json --merge
 openclaw config set agents.defaults.userTimezone "Europe/Vienna"
@@ -162,6 +163,32 @@ Explicit `null`, `false`, `0`, and empty strings remain readable values in both 
 ```bash
 openclaw config get browser.executablePath
 openclaw config get agents.defaults.model --json
+```
+
+### `config explain`
+
+Explains **why** a single config path has its current value: authored vs runtime default,
+`$include` ownership (when sole), or ambiguous include contribution, plus a SecretRef identity
+summary when resolution facts or a structured SecretRef exist.
+
+Unlike `config get`, schema-valid unset paths that still have a runtime default succeed and report
+`source=default`. Unknown schema paths fail like `config get`. SecretRef **ids are always
+redacted** (`__OPENCLAW_REDACTED__`); the command never resolves or prints secret material.
+
+`--json` prints a stable object with `path`, `runtimeValue` (when present, already redacted),
+`authoredPresent`, `source` (`authored` | `default` | `unset` | `include` | `ambiguous`), and
+optional `include` / `secretRef` / `note` fields. Human mode prints the same fields as labeled
+lines without requiring `jq`.
+
+Authored presence prefers `authoredConfig` over `sourceConfig` so implicit roster normalization
+is not mistaken for an operator-authored leaf. This is a local snapshot diagnostic — not a bulk
+authored-vs-runtime listing (`config diff`) and not a full redacted export (`config export`).
+
+```bash
+openclaw config explain gateway.port
+openclaw config explain agents.defaults.maxConcurrent --json
+openclaw config set agents.defaults.maxConcurrent 8
+openclaw config explain agents.defaults.maxConcurrent --json
 ```
 
 ### `config file`
