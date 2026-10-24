@@ -697,7 +697,8 @@
 .session-summary-meta,
 .usage-list-sub,
 .usage-error-sub,
-.cost-window-range-label {
+.cost-window-range-label,
+.usage-section-meta {
   font-size: 12px;
   color: var(--muted);
   font-variant-numeric: tabular-nums;
@@ -1193,12 +1194,6 @@
 .usage-trend-section .cost-breakdown {
   padding-top: 16px;
   border-top: 1px solid var(--border);
-}
-
-.usage-section-meta {
-  color: var(--muted);
-  font-size: 12px;
-  font-variant-numeric: tabular-nums;
 }
 
 .usage-summary-strip--windows {
