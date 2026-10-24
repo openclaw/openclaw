@@ -49,18 +49,10 @@ function authAssertion(profile: unknown, config: Record<string, unknown> = {}) {
   try {
     db.exec(`
       PRAGMA user_version = 13;
-      CREATE TABLE IF NOT EXISTS config_machine_state (
-        state_key TEXT NOT NULL PRIMARY KEY,
-        value_json TEXT NOT NULL,
-        updated_at_ms INTEGER NOT NULL
-      );
+      CREATE TABLE config_machine_state (
+        state_key TEXT NOT NULL PRIMARY KEY, value_json TEXT NOT NULL, updated_at_ms INTEGER NOT NULL);
     `);
-    db.prepare(
-      `
-        INSERT INTO config_machine_state (state_key, value_json, updated_at_ms)
-        VALUES (?, ?, ?)
-      `,
-    ).run(
+    db.prepare("INSERT INTO config_machine_state VALUES (?, ?, ?)").run(
       "authProfiles.store",
       JSON.stringify({ version: 1, profiles: { "openai:api-key": profile } }),
       Date.now(),
@@ -179,11 +171,15 @@ describe("release scenario assertions", () => {
 describe("marketplace lifecycle assertions", () => {
   let home: string;
   let installPathFile: string;
+  let stateDir: string;
+  let configPath: string;
   const pluginId = "release-marketplace-plugin";
 
   beforeEach(() => {
     home = directories.make("openclaw-marketplace-lifecycle-");
     installPathFile = path.join(home, "install-path.txt");
+    stateDir = path.join(home, ".openclaw");
+    configPath = path.join(stateDir, "openclaw.json");
   });
 
   function writeIndex(record: Record<string, unknown> | null, packageVersion = "") {
@@ -192,29 +188,23 @@ describe("marketplace lifecycle assertions", () => {
         installRecords: record ? { [pluginId]: record } : {},
         plugins: record ? [{ pluginId, packageVersion }] : [],
       },
-      { stateDir: path.join(home, ".openclaw") },
+      { stateDir },
     );
   }
 
   function runHelper(args: string[]) {
-    const stateDir = path.join(home, ".openclaw");
     return runAssertion(
       args,
-      {
-        HOME: home,
-        OPENCLAW_CONFIG_PATH: path.join(stateDir, "openclaw.json"),
-        OPENCLAW_STATE_DIR: stateDir,
-      },
+      { HOME: home, OPENCLAW_CONFIG_PATH: configPath, OPENCLAW_STATE_DIR: stateDir },
       "scripts/e2e/lib/release-plugin-marketplace/lifecycle-assertions.mjs",
     );
   }
 
   function writeMarketplaceState(version: string) {
-    const stateDir = path.join(home, ".openclaw");
     const installPath = path.join(stateDir, "extensions", pluginId);
     mkdirSync(installPath, { recursive: true });
     writeJson(path.join(installPath, "package.json"), { name: `@openclaw/${pluginId}`, version });
-    writeJson(path.join(stateDir, "openclaw.json"), {
+    writeJson(configPath, {
       plugins: { entries: { [pluginId]: { enabled: true } } },
     });
     writeIndex(
@@ -277,7 +267,6 @@ describe("marketplace lifecycle assertions", () => {
       uninstallHelper("seed-marketplace-uninstall-state", sentinelPluginId, sentinelPath),
     );
 
-    const configPath = path.join(home, ".openclaw", "openclaw.json");
     const config = JSON.parse(readFileSync(configPath, "utf8"));
     expect(config.plugins).toMatchObject({
       allow: [pluginId, sentinelPluginId],

@@ -43,7 +43,15 @@ function fixture(root = roots.make("compiler-input-snapshot-")) {
     });
   const signature = (input: CompilerInputSnapshot, outputRoot?: string) =>
     input.signature("tsconfig.json", ["fixture-compiler"], ["src/index.ts"], outputRoot);
-  return { root, write: put, snapshot, signature };
+  const record = (input: CompilerInputSnapshot, outputs: string[] = []) => ({
+    version: ARTIFACT_CACHE_VERSION,
+    signature: signature(input),
+    inputs: ["src/index.ts"],
+    outputs: Object.fromEntries(outputs.map((file) => [file, input.hash(file)])),
+  });
+  const matches = (saved: ReturnType<typeof record>, input = snapshot()) =>
+    input.matches(saved, "tsconfig.json", ["fixture-compiler"], Object.keys(saved.outputs));
+  return { root, write: put, snapshot, signature, record, matches };
 }
 
 it.each([
@@ -138,25 +146,16 @@ it("invalidates warm records when ancestor installs appear or disappear without 
   const directory = roots.make("compiler-input-snapshot-ancestor-");
   const f = fixture(path.join(directory, "checkout"));
   f.write("dist/index.d.ts", "export declare const value = 1;\n");
-  const record = (snapshot: CompilerInputSnapshot) => ({
-    version: ARTIFACT_CACHE_VERSION,
-    signature: f.signature(snapshot),
-    inputs: ["src/index.ts"],
-    outputs: { "dist/index.d.ts": snapshot.hash("dist/index.d.ts") },
-  });
-  const matches = (saved: ReturnType<typeof record>) =>
-    f.snapshot().matches(saved, "tsconfig.json", ["fixture-compiler"], ["dist/index.d.ts"]);
-  const before = f.snapshot();
-  const absent = record(before);
+  const record = (snapshot: CompilerInputSnapshot) => f.record(snapshot, ["dist/index.d.ts"]);
+  const { matches } = f;
+  const absent = record(f.snapshot());
   expect(matches(absent)).toBe(true);
 
   const install = path.join(directory, "node_modules");
   fs.mkdirSync(install);
   const after = f.snapshot();
   await after.prepare();
-  expect(after.matches(absent, "tsconfig.json", ["fixture-compiler"], ["dist/index.d.ts"])).toBe(
-    false,
-  );
+  expect(matches(absent, after)).toBe(false);
   const present = record(after);
   expect(matches(present)).toBe(true);
 
@@ -177,23 +176,16 @@ it.each(["dependency", "@scope/dependency"])(
     const f = fixture();
     const directory = path.join(f.root, "node_modules", name);
     fs.mkdirSync(path.dirname(directory), { recursive: true });
-    const record = (snapshot: CompilerInputSnapshot) => ({
-      version: ARTIFACT_CACHE_VERSION,
-      signature: f.signature(snapshot),
-      inputs: ["src/index.ts"],
-      outputs: {},
-    });
-    const before = f.snapshot();
-    const absent = record(before);
+    const absent = f.record(f.snapshot());
     fs.mkdirSync(directory);
     const after = f.snapshot();
-    const present = record(after);
-    expect(after.matches(absent, "tsconfig.json", ["fixture-compiler"], [])).toBe(false);
+    const present = f.record(after);
+    expect(f.matches(absent, after)).toBe(false);
 
     fs.rmdirSync(directory);
     const removed = f.snapshot();
-    expect(removed.matches(present, "tsconfig.json", ["fixture-compiler"], [])).toBe(false);
-    expect(removed.matches(absent, "tsconfig.json", ["fixture-compiler"], [])).toBe(true);
+    expect(f.matches(present, removed)).toBe(false);
+    expect(f.matches(absent, removed)).toBe(true);
   },
 );
 
