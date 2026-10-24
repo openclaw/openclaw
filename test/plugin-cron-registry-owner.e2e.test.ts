@@ -16,6 +16,7 @@ import { upsertSessionEntry } from "../src/plugin-sdk/session-store-runtime.js";
 import { closeOpenClawAgentDatabasesForTest } from "../src/plugin-sdk/sqlite-runtime-testing.js";
 import type { PluginSessionSchedulerJobHandle as ScheduledHandle } from "../src/plugins/host-hooks.js";
 import type { TestPortClaim } from "../src/test-utils/port-claims.js";
+import { writeRestartPlugin } from "./gateway-restart.test-support.js";
 import { startOpenAiResponsesModelServer } from "./helpers/openai-responses-model-fixture.js";
 import { writeOpenAiResponsesText } from "./helpers/openai-responses-sse.js";
 import {
@@ -84,10 +85,7 @@ async function startMockModelServer(rejectModel?: string): Promise<MockModelServ
 
 type FixtureManifest = Record<string, unknown> & { id: string };
 async function writePlugin(root: string, manifest: FixtureManifest, source: string) {
-  const pluginDir = path.join(root, manifest.id);
-  await mkdir(pluginDir, { recursive: true });
-  await writeFile(path.join(pluginDir, "openclaw.plugin.json"), JSON.stringify(manifest));
-  await writeFile(path.join(pluginDir, "index.js"), source);
+  await writeRestartPlugin(path.join(root, manifest.id), manifest, source, "index.js");
 }
 
 async function writeBundledSchedulerPlugin(bundledRoot: string): Promise<void> {
