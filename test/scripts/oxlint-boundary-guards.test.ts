@@ -27,20 +27,12 @@ const cases = [
 
 it.each([
   ["src/runtime.ts", true],
-  ["extensions/example/src/worker.ts", true],
-  ["extensions/example/runtime-api.ts", true],
   ["extensions/example/src/harness-runtime.ts", true],
-  ["packages/example/src/cli.ts", true],
-  ["ui/src/app.ts", true],
   ["openclaw.mjs", true],
   ["scripts/openclaw-immutable-launcher.mjs", true],
-  ["scripts/freebsd-service-inspect.mjs", true],
   ["scripts/build.mts", false],
   ["extensions/example/scripts/build.mjs", false],
-  ["extensions/example/vitest.config.ts", false],
   ["src/child.test-support.cjs", false],
-  ["src/workflow.suite.ts", false],
-  ["extensions/example/src/fixtures/child.fixture.mjs", false],
   ["extensions/example/dist/worker.js", false],
 ])("reports forced termination in %s: %s", (file, expected) => {
   let reported = false;

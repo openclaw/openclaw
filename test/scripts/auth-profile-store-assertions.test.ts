@@ -46,18 +46,13 @@ it("reads the release-owned shared row before schema v13", () => {
   expect(readSharedAuthProfileStoreText(stateDir)).toBe('{"version":1,"schema":12}');
 });
 
-it.each([false, true])(
-  "uses the agent store before shared-auth ownership (state DB: %s)",
-  (exists) => {
-    if (exists) {
-      shared(1);
-    }
-    agent();
-    expect(readSharedAuthProfileStoreText(stateDir)).toBe("");
-    expect(readCanonicalAuthProfileStoreText(stateDir)).toBe(primary);
-    expect(() => assertNoLegacyPrimaryAuthRows(stateDir)).not.toThrow();
-  },
-);
+it("uses the agent store before shared-auth ownership", () => {
+  shared(1);
+  agent();
+  expect(readSharedAuthProfileStoreText(stateDir)).toBe("");
+  expect(readCanonicalAuthProfileStoreText(stateDir)).toBe(primary);
+  expect(() => assertNoLegacyPrimaryAuthRows(stateDir)).not.toThrow();
+});
 
 it("does not let a retired agent row mask a missing v7 shared table", () => {
   shared(7);

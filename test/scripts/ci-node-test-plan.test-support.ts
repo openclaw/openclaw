@@ -2,10 +2,7 @@ import { globSync } from "node:fs";
 import { isAbsolute, relative, resolve } from "node:path";
 import { expect } from "vitest";
 import type { CompactNodeTestShard } from "../../scripts/lib/ci-node-test-plan.mts";
-import {
-  isReleaseOnlyRuntimeTestFile,
-  RELEASE_ONLY_RUNTIME_TEST_FILES,
-} from "../../scripts/lib/ci-proof-test-inventory.mts";
+import { isReleaseOnlyRuntimeTestFile } from "../../scripts/lib/ci-proof-test-inventory.mts";
 import { parseCompactSplitTimingKey } from "../../scripts/lib/vitest-shard-metadata.mts";
 import { listGitTrackedFiles, toRepoPath } from "../../src/test-utils/repo-files.js";
 import { createCliVitestConfig } from "../vitest/vitest.cli.config.ts";
@@ -77,15 +74,18 @@ export function expectRuntimeReleaseInventory({
     const parent = parseCompactSplitTimingKey(key)?.parentShardName;
     return [key, ...(parent ? timingLineage(parent) : [])];
   };
-  expect(beforeFiles.filter((file) => !afterFiles.includes(file)).toSorted()).toEqual(
-    RELEASE_ONLY_RUNTIME_TEST_FILES.filter(
-      // Bundled extensions retain their separate canonical extension plans.
-      (file) =>
-        !file.startsWith("extensions/") &&
-        (compactMode === "pull-request" || !file.startsWith("test/scripts/")),
-    ).toSorted(),
+  // Compare the actual multiset once: no lost runtime files, duplicate ownership,
+  // or new files. Extension and push-tooling plans have separate release owners.
+  expect(afterFiles.toSorted()).toEqual(
+    beforeFiles
+      .filter(
+        (file) =>
+          !isReleaseOnlyRuntimeTestFile(file) ||
+          file.startsWith("extensions/") ||
+          (compactMode === "push" && file.startsWith("test/scripts/")),
+      )
+      .toSorted(),
   );
-  expect(afterFiles.filter((file) => !beforeFiles.includes(file))).toEqual([]);
   for (const owner of reducedOwners) {
     const owns = (group: { shard_name: string }) =>
       group.shard_name === owner || group.shard_name.startsWith(`${owner}-hosted-`);
