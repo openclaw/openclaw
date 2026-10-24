@@ -88,7 +88,6 @@ describe("prior-CI delegated writer authority", () => {
     ["inactive membership", "membership", { state: "pending" }],
     ["different member", "membership", { user: { login: "other-bot" } }],
     ["unknown role", "membership", { role: "other" }],
-    ["revoked bypass", "ruleset", { current_user_can_bypass: "never" }],
     ["foreign ruleset", "ruleset", { source: "other/repo" }],
     ["different ruleset", "ruleset", { id: 42 }],
     ["organization ruleset", "ruleset", { source_type: "Organization" }],

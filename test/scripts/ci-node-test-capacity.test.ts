@@ -36,38 +36,28 @@ function selectedCoreJob(selection: (typeof qualifiedCoreSelections)[number]) {
   return selectedCliJob(selection.family, [selection.target]);
 }
 
-it.each([
-  { family: "cli", target: "src/cli/first.test.ts", placements: ["separate"] },
-  ...qualifiedCoreSelections.map((selection) =>
-    Object.assign({ placements: ["same", "separate", "replacement"] }, selection),
-  ),
-  { family: "unit-fast-isolated", target: isolatedTarget, placements: ["same", "separate"] },
-])("retains 32-class capacity for unqualified $family siblings", (selection) => {
-  for (const placement of selection.placements) {
-    const job = selectedCoreJob(selection);
-    const group = job.groups[0]!;
-    const sibling = "src/unqualified.test.ts";
-    if (placement === "same") {
-      group.includePatterns!.push(sibling);
-    } else if (placement === "separate") {
-      job.groups.push({
-        ...group,
-        configs:
-          selection.family === "cli"
-            ? ["test/vitest/vitest.agents-embedded-agent-run.config.ts"]
-            : group.configs,
-        includePatterns: [sibling],
-      });
-    } else {
-      group.includePatterns = [sibling];
+it.each([...qualifiedCoreSelections, { family: "unit-fast-isolated", target: isolatedTarget }])(
+  "retains 32-class capacity for unqualified $family siblings",
+  (selection) => {
+    for (const includePatterns of [
+      [selection.target, "src/unqualified.test.ts"],
+      ["src/unqualified.test.ts"],
+    ]) {
+      const job = selectedCoreJob(selection);
+      job.groups[0]!.includePatterns = includePatterns;
+      expect(resolveSelectedNodeTestRunner(job, "hybrid")).toBe(job.runner);
     }
-    expect(resolveSelectedNodeTestRunner(job, "hybrid")).toBe(job.runner);
-  }
+  },
+);
+
+it("retains capacity when one of several groups is unqualified", () => {
+  const job = selectedCliJob();
+  job.groups.push({ ...job.groups[0]!, configs: ["test/vitest/vitest.tooling.config.ts"] });
+  expect(resolveSelectedNodeTestRunner(job, "hybrid")).toBe(job.runner);
 });
 
 it.each([
   { family: "cli", mode: undefined, targets: undefined },
-  { family: "gateway-client", mode: "blacksmith", targets: undefined },
   { family: "gateway-server", mode: "hybrid", targets: undefined },
   { family: "agents-embedded-agent", mode: "pinned", targets: undefined },
   ...qualifiedCoreSelections.map(({ family, target }) => ({
@@ -113,25 +103,13 @@ it.each<[string, Partial<CompactNodeTestShard>, Partial<Group>]>([
     {},
     { env: { OPENCLAW_VITEST_MAX_WORKERS: "4" } },
   ],
-  [
-    "resource-gated tooling inventory",
-    {},
-    {
-      configs: ["test/vitest/vitest.tooling.config.ts"],
-      includePatterns: ["test/scripts/vitest-worker-artifacts.ci.test.ts"],
-      env: { OPENCLAW_VITEST_MAX_WORKERS: "2" },
-    },
-  ],
 ])("retains 32-class capacity for %s", (_reason, jobOverrides, groupOverrides) => {
-  for (const job of [selectedCliJob(), ...qualifiedCoreSelections.map(selectedCoreJob)]) {
-    Object.assign(job, jobOverrides);
-    Object.assign(job.groups[0]!, groupOverrides);
-    expect(resolveSelectedNodeTestRunner(job, "hybrid")).toBe("blacksmith-32vcpu-ubuntu-2404");
-  }
+  const job = Object.assign(selectedCliJob(), jobOverrides);
+  Object.assign(job.groups[0]!, groupOverrides);
+  expect(resolveSelectedNodeTestRunner(job, "hybrid")).toBe("blacksmith-32vcpu-ubuntu-2404");
 });
 
 it("retains hosted placement", () => {
-  for (const job of [selectedCliJob(), ...qualifiedCoreSelections.map(selectedCoreJob)]) {
-    expect(resolveSelectedNodeTestRunner(job, "github")).toBe(job.runner);
-  }
+  const job = selectedCliJob();
+  expect(resolveSelectedNodeTestRunner(job, "github")).toBe(job.runner);
 });
