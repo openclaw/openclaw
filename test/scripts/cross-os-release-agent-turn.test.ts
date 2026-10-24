@@ -44,11 +44,7 @@ function run(adapter: "packaged" | "installed" = "packaged") {
     : runAgentTurn({
         ...params,
         lane: makeReleaseLane(dir, {
-          name: "probe",
           prefixDir: join(dir, "prefix"),
-          stateDir: join(dir, "state"),
-          appDataDir: join(dir, "app-data"),
-          gatewayPort: 18_789,
         }),
       });
 }

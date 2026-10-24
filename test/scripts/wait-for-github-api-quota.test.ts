@@ -24,13 +24,16 @@ function quotaResponse({
 }
 
 describe("candidate acquisition GitHub API quota wait", () => {
-  it("waits for an exhausted installation quota and reports its reset identity", async () => {
+  it.each([
+    [0, 5_000],
+    [3, 6],
+  ])("waits with %i requests left and reports the reset identity", async (remaining, ready) => {
     let epoch = 2_000_000_000_000;
     const reset = epoch / 1_000 + 60;
     const fetchImpl = vi
       .fn()
-      .mockResolvedValueOnce(quotaResponse({ remaining: 0, reset, requestId: "EXHAUSTED" }))
-      .mockResolvedValueOnce(quotaResponse({ remaining: 5_000, reset, requestId: "READY" }));
+      .mockResolvedValueOnce(quotaResponse({ remaining, reset, requestId: "EXHAUSTED" }))
+      .mockResolvedValueOnce(quotaResponse({ remaining: ready, reset, requestId: "READY" }));
     const sleep = vi.fn(async (milliseconds: number) => {
       epoch += milliseconds;
     });
@@ -45,36 +48,12 @@ describe("candidate acquisition GitHub API quota wait", () => {
         log,
         maxWaitMs: 120_000,
       }),
-    ).resolves.toMatchObject({ remaining: 5_000, requestId: "READY" });
+    ).resolves.toMatchObject({ remaining: ready, requestId: "READY" });
 
     expect(sleep).toHaveBeenCalledWith(65_000);
     expect(log.mock.calls.flat().join("\n")).toContain(
-      "0/5000 remaining; request ID EXHAUSTED; reset 2033-05-18T03:34:20Z",
+      `${remaining}/5000 remaining; request ID EXHAUSTED; reset 2033-05-18T03:34:20Z`,
     );
-  });
-
-  it("waits when a positive quota cannot cover dispatch setup and identity reads", async () => {
-    let epoch = 2_000_000_000_000;
-    const reset = epoch / 1_000 + 60;
-    const fetchImpl = vi
-      .fn()
-      .mockResolvedValueOnce(quotaResponse({ remaining: 3, reset }))
-      .mockResolvedValueOnce(quotaResponse({ remaining: 6, reset }));
-    const sleep = vi.fn(async (milliseconds: number) => {
-      epoch += milliseconds;
-    });
-
-    await expect(
-      waitForGithubApiQuota({
-        token: "fixture-token",
-        fetchImpl,
-        now: () => epoch,
-        sleep,
-        log: vi.fn(),
-        maxWaitMs: 120_000,
-      }),
-    ).resolves.toMatchObject({ remaining: 6 });
-    expect(sleep).toHaveBeenCalledWith(65_000);
   });
 
   it("refuses a reset beyond the bounded acquisition wait", async () => {
