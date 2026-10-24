@@ -1,0 +1,8 @@
+# Plugin UI querySelector calls; shrink only.
+# Run pnpm check:control-ui-controllers --prune after removing calls.
+extensions/workboard/browser/pages/workboard/lazy-page.ts	1
+extensions/workboard/browser/pages/workboard/view-card-content.tsx	2
+extensions/workboard/browser/pages/workboard/view-card-details.tsx	4
+extensions/workboard/browser/pages/workboard/view-column.tsx	1
+extensions/workboard/browser/pages/workboard/view-filter-controls.tsx	3
+extensions/workboard/browser/pages/workboard/view-inline-properties.tsx	4
