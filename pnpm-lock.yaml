@@ -276,8 +276,8 @@ importers:
         specifier: 0.26.5
         version: 0.26.5
       '@openclaw/proc-safe':
-        specifier: 0.3.0
-        version: 0.3.0
+        specifier: 0.4.2
+        version: 0.4.2
       '@openclaw/proxyline':
         specifier: 0.4.0
         version: 0.4.0(undici@8.11.2)
@@ -4993,72 +4993,72 @@ packages:
       node-pty:
         optional: true
 
-  '@openclaw/proc-safe-darwin-arm64@0.3.0':
-    resolution: {integrity: sha512-TVtGmEG1AQRhxvwpF8zLJ6OfsdkYd+6/6IR87GDCZk8g/iLYtiz0R58h2Nfc14iRGXLjZQTWsLnLg1bJ8NIVfQ==}
+  '@openclaw/proc-safe-darwin-arm64@0.4.2':
+    resolution: {integrity: sha512-AYIYBUAvJv/p9dFNpluiannT49t7BkGb1MBioL7IG4sZlTHofk4/TsZQRxi0YpDOTdf9R6OGd/3oaF746erJJA==}
     engines: {node: '>=22'}
     cpu: [arm64]
     os: [darwin]
 
-  '@openclaw/proc-safe-darwin-x64@0.3.0':
-    resolution: {integrity: sha512-vJ/alVnsT5qnI+ycKv8+o7fyaC1ZZWNHebiw9j1idQC8NLnpgQUFrqO8Pi8k1aRsyjumk9oqzZ7MRsOu4L1XoA==}
+  '@openclaw/proc-safe-darwin-x64@0.4.2':
+    resolution: {integrity: sha512-nWvGO6Rf15JBI2MzyevSBT1NN4oUeUAqP7P5OqBzwm3xQBjpmkezYHuofKAEaB7LniWCRVufA4NpWhsoCRBTeg==}
     engines: {node: '>=22'}
     cpu: [x64]
     os: [darwin]
 
-  '@openclaw/proc-safe-freebsd-arm64@0.3.0':
-    resolution: {integrity: sha512-ENaMheUqb/UYr4o0HUHg5XpKfG7Okv4Gr9BbM4ZgT8XnJBWACN2YhjI7AvdeSGvBs267m7Th5OtK4PVp5ZH5eQ==}
+  '@openclaw/proc-safe-freebsd-arm64@0.4.2':
+    resolution: {integrity: sha512-+MYuLmQcobvboR0OCXbdc5OA9Zm6w3trazWxXCj+8wvFk31Dn+QxxkLfaPlT7Ukobf7jhr4hFkujPOjyy/RKQw==}
     engines: {node: '>=22'}
     cpu: [arm64]
     os: [freebsd]
 
-  '@openclaw/proc-safe-freebsd-x64@0.3.0':
-    resolution: {integrity: sha512-3kp4crGGSVPUjs58dqofZTUD86BnzrIFVrNbWsoO6e4YmAK4YvnpbwSttz60fE95RFMqGIskrs41CUVUR/PCCw==}
+  '@openclaw/proc-safe-freebsd-x64@0.4.2':
+    resolution: {integrity: sha512-yDyYmAb/HlLgJR0O1DWxQgc3mVbVW2KN5B4mzWeZXXNgRQCzsbO9n8OTHjC/TX65iiVvxYWzAECN4awKNz4/7w==}
     engines: {node: '>=22'}
     cpu: [x64]
     os: [freebsd]
 
-  '@openclaw/proc-safe-linux-arm64-gnu@0.3.0':
-    resolution: {integrity: sha512-qfVDRKyEDBN3aKvXkCG2yCY03OjSYB4voKEzp+NljcsPw50Kpr8zN/UA7r+RsRnCjqRuY2mH1wtCtzu6n/bqiw==}
+  '@openclaw/proc-safe-linux-arm64-gnu@0.4.2':
+    resolution: {integrity: sha512-SxBAYwvDhaBNfqcULabq4B7ejT+4HMHvAyg5EXaZ3AlTryT2563u/FKIHVxz+DsQ6HvkY79JcYdvt9e7076HlQ==}
     engines: {node: '>=22'}
     cpu: [arm64]
     os: [linux]
     libc: [glibc]
 
-  '@openclaw/proc-safe-linux-arm64-musl@0.3.0':
-    resolution: {integrity: sha512-7n1J2eifGKuFNkKv6UEKN3qdzez2I/8v/kMD1BrWppSaxFajSUOh63I1Ida+U6OOqn3QcaVwG1B5zOGIzdJz4w==}
+  '@openclaw/proc-safe-linux-arm64-musl@0.4.2':
+    resolution: {integrity: sha512-ubUMbCGV+KhIuRpxPypQygea44w3F/Xr56p8y2Xe/s5Scxngeum3vAS5iVMy4lF3K4vm+5lv7k1prz92skXakA==}
     engines: {node: '>=22'}
     cpu: [arm64]
     os: [linux]
     libc: [musl]
 
-  '@openclaw/proc-safe-linux-x64-gnu@0.3.0':
-    resolution: {integrity: sha512-yDf94c5xrCVc9w+Wae/e6R4POIW/jkHNZM0C4z8hX54BN4vk2E6CGdEiw1Osj+/7OkoRouRxMX44f2ZRb35v2A==}
+  '@openclaw/proc-safe-linux-x64-gnu@0.4.2':
+    resolution: {integrity: sha512-bQc6mqlccikVH1DIZ/iDJUW9hCkONmy5k6KvOKz2bxwUj928Rq1AtkNIqDLMitas7Nc7cJuFxYjHur2OL4uLjA==}
     engines: {node: '>=22'}
     cpu: [x64]
     os: [linux]
     libc: [glibc]
 
-  '@openclaw/proc-safe-linux-x64-musl@0.3.0':
-    resolution: {integrity: sha512-3UdFHfd/rS1TJFEweLfnI1TcNFT2ZprpXhl3JfLhRfOUeR0vFLrNikDztJxu5jLKjG19rLWNm+4MAdx/F3gQeQ==}
+  '@openclaw/proc-safe-linux-x64-musl@0.4.2':
+    resolution: {integrity: sha512-wkeClXbFDjI7DAfZKcU04s2m3UKssD0p5xf93r6KdPO05rZ80R9F5O1gIGxIrgCFUcj8tykiiBofxdmh50T4Ww==}
     engines: {node: '>=22'}
     cpu: [x64]
     os: [linux]
     libc: [musl]
 
-  '@openclaw/proc-safe-win32-arm64-msvc@0.3.0':
-    resolution: {integrity: sha512-jnv9wn7VyF/flpawaF0Bkq9Qn7e8tMyEL7ab+H2qj/qgMf2biunVgSDxg75hQMFj5WxpEXLjTtgQejoVLDO6KA==}
+  '@openclaw/proc-safe-win32-arm64-msvc@0.4.2':
+    resolution: {integrity: sha512-i2BDBcX5nbRAjCeLlj7Z+Z9XBo0ZFwe5oyoC5M6aJIWJnO8eyvFixSh6GQJIm47+THYdqSuKoGruEprJt3MaMw==}
     engines: {node: '>=22'}
     cpu: [arm64]
     os: [win32]
 
-  '@openclaw/proc-safe-win32-x64-msvc@0.3.0':
-    resolution: {integrity: sha512-Z8+UnVVFi39yxuO2reRyj0oiAASRsHATJxoTZtmhiO9YNEOUaqW1lelfZFnmpEQPDVAh5Xzkewkc+pCD95DtbA==}
+  '@openclaw/proc-safe-win32-x64-msvc@0.4.2':
+    resolution: {integrity: sha512-K9b/tXmWFl7LDyAnC9j2kldyFs1dH3ZTbMaotQXn3BmNlY7vnzUUl5RE+AvwwzXNQo4TfCznxfU8uYWvlgdZtw==}
     engines: {node: '>=22'}
     cpu: [x64]
     os: [win32]
 
-  '@openclaw/proc-safe@0.3.0':
-    resolution: {integrity: sha512-iwqCQ8ozdqD0DUMlCmgNnv3uat9Z7RM4+0lC0yQpqwB8Lt4b3oNHuvhHiEIcTBzjje2NG2Akz1xqiYI1eiVgnw==}
+  '@openclaw/proc-safe@0.4.2':
+    resolution: {integrity: sha512-Q2yXwYp7i5SlYhXOB62//EJCIGNwH4r8Sbs8QjAMugl7DXTW2/F6qHp9YpIorNLSi88bEKG5lLX48ktaYwwxFA==}
     engines: {node: '>=22'}
 
   '@openclaw/proxyline@0.4.0':
@@ -13417,48 +13417,48 @@ snapshots:
     dependencies:
       ghostty-web: 0.4.0(patch_hash=d4c6598b6840564dac4a469f3aa9b8df24fe6eab48a6744302707017e095a524)
 
-  '@openclaw/proc-safe-darwin-arm64@0.3.0':
+  '@openclaw/proc-safe-darwin-arm64@0.4.2':
     optional: true
 
-  '@openclaw/proc-safe-darwin-x64@0.3.0':
+  '@openclaw/proc-safe-darwin-x64@0.4.2':
     optional: true
 
-  '@openclaw/proc-safe-freebsd-arm64@0.3.0':
+  '@openclaw/proc-safe-freebsd-arm64@0.4.2':
     optional: true
 
-  '@openclaw/proc-safe-freebsd-x64@0.3.0':
+  '@openclaw/proc-safe-freebsd-x64@0.4.2':
     optional: true
 
-  '@openclaw/proc-safe-linux-arm64-gnu@0.3.0':
+  '@openclaw/proc-safe-linux-arm64-gnu@0.4.2':
     optional: true
 
-  '@openclaw/proc-safe-linux-arm64-musl@0.3.0':
+  '@openclaw/proc-safe-linux-arm64-musl@0.4.2':
     optional: true
 
-  '@openclaw/proc-safe-linux-x64-gnu@0.3.0':
+  '@openclaw/proc-safe-linux-x64-gnu@0.4.2':
     optional: true
 
-  '@openclaw/proc-safe-linux-x64-musl@0.3.0':
+  '@openclaw/proc-safe-linux-x64-musl@0.4.2':
     optional: true
 
-  '@openclaw/proc-safe-win32-arm64-msvc@0.3.0':
+  '@openclaw/proc-safe-win32-arm64-msvc@0.4.2':
     optional: true
 
-  '@openclaw/proc-safe-win32-x64-msvc@0.3.0':
+  '@openclaw/proc-safe-win32-x64-msvc@0.4.2':
     optional: true
 
-  '@openclaw/proc-safe@0.3.0':
+  '@openclaw/proc-safe@0.4.2':
     optionalDependencies:
-      '@openclaw/proc-safe-darwin-arm64': 0.3.0
-      '@openclaw/proc-safe-darwin-x64': 0.3.0
-      '@openclaw/proc-safe-freebsd-arm64': 0.3.0
-      '@openclaw/proc-safe-freebsd-x64': 0.3.0
-      '@openclaw/proc-safe-linux-arm64-gnu': 0.3.0
-      '@openclaw/proc-safe-linux-arm64-musl': 0.3.0
-      '@openclaw/proc-safe-linux-x64-gnu': 0.3.0
-      '@openclaw/proc-safe-linux-x64-musl': 0.3.0
-      '@openclaw/proc-safe-win32-arm64-msvc': 0.3.0
-      '@openclaw/proc-safe-win32-x64-msvc': 0.3.0
+      '@openclaw/proc-safe-darwin-arm64': 0.4.2
+      '@openclaw/proc-safe-darwin-x64': 0.4.2
+      '@openclaw/proc-safe-freebsd-arm64': 0.4.2
+      '@openclaw/proc-safe-freebsd-x64': 0.4.2
+      '@openclaw/proc-safe-linux-arm64-gnu': 0.4.2
+      '@openclaw/proc-safe-linux-arm64-musl': 0.4.2
+      '@openclaw/proc-safe-linux-x64-gnu': 0.4.2
+      '@openclaw/proc-safe-linux-x64-musl': 0.4.2
+      '@openclaw/proc-safe-win32-arm64-msvc': 0.4.2
+      '@openclaw/proc-safe-win32-x64-msvc': 0.4.2
 
   '@openclaw/proxyline@0.4.0(undici@8.11.2)':
     dependencies:
