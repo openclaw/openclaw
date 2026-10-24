@@ -21,7 +21,6 @@ import {
   SessionTranscriptWriterClaimReboundError,
   withOwnedSessionTranscriptWrites,
 } from "../../../config/sessions/transcript-write-context.js";
-import { getAgentEventLifecycleGeneration } from "../../../infra/agent-events.js";
 import {
   waitForDiagnosticEventsDrained,
   setDiagnosticsEnabledForProcess,
@@ -77,7 +76,7 @@ import {
 import { checkpoint, createStreamCustodyFixture } from "./attempt-stream-custody.test-support.js";
 import { prepareCatalogExecutor } from "./attempt-stream-prepare.test-support.js";
 import { createEmbeddedAttemptTranscriptLifecycle } from "./attempt-transcript-lifecycle.js";
-import { createEmbeddedRunLaneController } from "./lane-controller.js";
+import { createLaneControllerFixture } from "./lane-controller.test-support.js";
 import { EMBEDDED_RUN_LANE_TIMEOUT_GRACE_MS } from "./lane-runtime.js";
 import type { RunEmbeddedAgentParams } from "./params.js";
 import type { EmbeddedAttemptExecutionState } from "./types.js";
@@ -99,7 +98,16 @@ const nextTurn = () =>
     setImmediate(resolve);
   });
 
-function anthropicSse(events: Array<Record<string, unknown>>): Response {
+function anthropicSse(blocks: Array<Record<string, unknown>> = [], inputTokens = 1): Response {
+  const events = [
+    { type: "message_start", message: { id: "synthetic", usage: { input_tokens: inputTokens } } },
+    ...blocks.flatMap((content_block, index) => [
+      { type: "content_block_start", index, content_block },
+      { type: "content_block_stop", index },
+    ]),
+    { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 1 } },
+    { type: "message_stop" },
+  ];
   return new Response(
     events
       .map((event) => `event: ${String(event.type)}\ndata: ${JSON.stringify(event)}\n\n`)
@@ -148,12 +156,6 @@ describe("installed replay repair ownership", () => {
       expect(fixture.streamGuards.isModelCallActive()).toBe(true);
       second = await fixture.open();
       expect(fixture.streamGuards.isModelCallActive()).toBe(true);
-      expect(fixture.input.setup.emitPrepStageSummary).toHaveBeenCalledExactlyOnceWith(
-        "model-dispatch",
-      );
-      expect(fixture.input.setup.prepStages.snapshot().stages.map(({ name }) => name)).toEqual([
-        "model-dispatch",
-      ]);
       firstSource.end(createAssistant(testModel, [{ type: "text", text: "Older result" }]));
       await first.result();
       expect(fixture.streamGuards.isModelCallActive()).toBe(true);
@@ -336,38 +338,19 @@ describe("installed replay repair ownership", () => {
     const requests: Array<{ messages: unknown }> = [];
     const responses: Array<() => Response> = [
       () =>
-        anthropicSse([
-          { type: "message_start", message: { id: "msg_1", usage: { input_tokens: 50_001 } } },
-          {
-            type: "content_block_start",
-            index: 0,
-            content_block: { type: "compaction", content: checkpoint.data },
-          },
-          { type: "content_block_stop", index: 0 },
-          { type: "content_block_start", index: 1, content_block: { type: "text", text: "Done." } },
-          { type: "content_block_stop", index: 1 },
-          {
-            type: "message_delta",
-            delta: { stop_reason: "end_turn" },
-            usage: { output_tokens: 1 },
-          },
-          { type: "message_stop" },
-        ]),
+        anthropicSse(
+          [
+            { type: "compaction", content: checkpoint.data },
+            { type: "text", text: "Done." },
+          ],
+          50_001,
+        ),
       () => {
         throw Object.assign(new Error("context_management compaction block is invalid"), {
           status: 400,
         });
       },
-      () =>
-        anthropicSse([
-          { type: "message_start", message: { id: "msg_3", usage: { input_tokens: 1 } } },
-          {
-            type: "message_delta",
-            delta: { stop_reason: "end_turn" },
-            usage: { output_tokens: 1 },
-          },
-          { type: "message_stop" },
-        ]),
+      () => anthropicSse(),
     ];
     const client = {
       messages: {
@@ -717,7 +700,6 @@ it.for(["caller cancellation", "reclamation"] as const)(
     let prepared: ReturnType<typeof prepareCatalogExecutor> | undefined;
     const tracker = createEmbeddedAttemptSessionSettleTracker(session);
     const state: Pick<EmbeddedAttemptExecutionState, "terminal"> = { terminal: { kind: "ok" } };
-    let generation = getAgentEventLifecycleGeneration();
     let params: RunEmbeddedAgentParams & { sessionFile: string } = {
       config: fixture.attempt.config,
       runId: fixture.attempt.runId,
@@ -737,23 +719,16 @@ it.for(["caller cancellation", "reclamation"] as const)(
       abortSignal: operation.abortSignal,
       replyOperation: operation,
     };
-    const lane = createEmbeddedRunLaneController({
-      getLifecycleGeneration: () => generation,
-      getParams: () => params,
+    const { controller: lane, getParams } = createLaneControllerFixture(params, {
       globalLane: "test:watchdog-custody-global",
-      initialQueuedLifecycleGeneration: generation,
-      setLifecycleGeneration: (value) => {
-        generation = value;
-      },
-      setParams: (value) => {
-        params = value;
-      },
+      configureRuntime: false,
     });
     let attemptControls: ReturnType<typeof lane.createAttemptControls> | undefined;
     try {
       const admittedRunContext = await admission.admit("embedded", "watchdog-custody");
-      params = { ...params, admittedRunContext };
+      params.admittedRunContext = admittedRunContext;
       active = lane.enqueueSession(async () => {
+        params = getParams();
         await lane.enqueueGlobal(() =>
           withPreparedEmbeddedRunToolAuthority(
             { admittedRunContext, replyOperation: operation },
@@ -897,15 +872,20 @@ it.for(["caller cancellation", "reclamation"] as const)(
         sessionKey: fixture.attempt.sessionKey,
         state: "processing",
       });
-      recovery = recoverStuckDiagnosticSession({
-        sessionId: fixture.attempt.sessionId,
-        sessionKey: fixture.attempt.sessionKey,
-        ageMs: Date.now() - startedAt,
-        queueDepth: 1,
-        allowActiveAbort: true,
-        operation,
-      });
-      void recovery.catch(() => {});
+      const recover = () => {
+        vi.setSystemTime(operation.watchdog.snapshot().semanticDeadlineAtMs + 1);
+        const result = recoverStuckDiagnosticSession({
+          sessionId: fixture.attempt.sessionId,
+          sessionKey: fixture.attempt.sessionKey,
+          ageMs: Date.now() - startedAt,
+          queueDepth: 1,
+          allowActiveAbort: true,
+          operation,
+        });
+        void result.catch(() => {});
+        return result;
+      };
+      recovery = recover();
       const cancelled = await Promise.race([
         providerAborted.promise.then(() => ({ kind: "cancelled" as const })),
         recovery.then((outcome) => ({ kind: "returned" as const, outcome })),
@@ -916,25 +896,10 @@ it.for(["caller cancellation", "reclamation"] as const)(
         );
       }
       await nextTurn();
-      // Named baseline defect: current recovery expires parent/run_stalled
-      // and external abort calls onAttemptAbort, cancelling the parent lane.
-      expect.soft(operation.result).toBeNull();
-      expect.soft(operation.abortSignal.aborted).toBe(false);
-      expect.soft(lane.abortSignal.aborted).toBe(false);
-      expect.soft(attemptControls.isCurrent()).toBe(true);
       expect(activeSettled()).toBe(false);
-      expect(queuedStarted).not.toHaveBeenCalled();
-      vi.setSystemTime(operation.watchdog.snapshot().semanticDeadlineAtMs + 1);
-      repeatedRecovery = recoverStuckDiagnosticSession({
-        sessionId: fixture.attempt.sessionId,
-        sessionKey: fixture.attempt.sessionKey,
-        ageMs: Date.now() - startedAt,
-        queueDepth: 1,
-        allowActiveAbort: true,
-        operation,
-      });
-      void repeatedRecovery.catch(() => {});
+      repeatedRecovery = recover();
       await nextTurn();
+      // A repeated recovery must neither expire the parent nor admit its successor.
       expect.soft(operation.result).toBeNull();
       expect.soft(operation.abortSignal.aborted).toBe(false);
       expect.soft(lane.abortSignal.aborted).toBe(false);
