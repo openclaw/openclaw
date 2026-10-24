@@ -21,6 +21,7 @@ export function connectShellIdle(
     router: context.router,
     gateway: context.gateway,
     outlet: () => host.routeOutlet,
+    basePath: context.basePath,
     resourceBasePath: context.resourceBasePath,
     preloadRoute: context.preload,
     transcriptsReady: () => {

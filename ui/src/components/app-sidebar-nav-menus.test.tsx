@@ -1,6 +1,5 @@
 import { createRoot, createSignal } from "solid-js";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
-import type { NavigationRouteId } from "../app-navigation.ts";
 import { i18n } from "../i18n/index.ts";
 import { de } from "../i18n/locales/de.ts";
 import { createIdentityAvatars } from "../lib/identity-avatar-loader.ts";
@@ -110,30 +109,6 @@ it("keeps modified sidebar links native and handles ordinary navigation", () => 
   link.dispatchEvent(ordinary);
   expect(ordinary.defaultPrevented).toBe(true);
   expect(navigate).toHaveBeenCalledOnce();
-});
-
-it("exposes current preload eligibility without replacing a sidebar link", () => {
-  const SidebarNavLink = renderSidebarNavLink;
-  const [preloadRoute, setPreloadRoute] = createSignal<NavigationRouteId | undefined>(undefined);
-  const view = render(() => (
-    <SidebarNavLink
-      href="/sessions"
-      active={false}
-      icon={<span />}
-      label="Sessions"
-      onNavigate={vi.fn()}
-      preloadRoute={preloadRoute()}
-    />
-  ));
-  const link = view.getByRole("link", { name: "Sessions" });
-  expect(link.hasAttribute("data-openclaw-preload-route")).toBe(false);
-  setPreloadRoute("sessions");
-  flush();
-  expect(link.getAttribute("data-openclaw-preload-route")).toBe("sessions");
-  setPreloadRoute(undefined);
-  flush();
-  expect(link.hasAttribute("data-openclaw-preload-route")).toBe(false);
-  expect(view.getByRole("link", { name: "Sessions" })).toBe(link);
 });
 
 it("uses current section actions while retaining the header", () => {

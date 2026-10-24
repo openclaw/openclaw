@@ -644,12 +644,6 @@ export function createSidebarMenus(deps: {
           href={sessionTarget()?.href ?? pathForRoute(routeId, view.basePath)}
           active={isSidebarRouteActive(view.activeRouteId, routeId)}
           onNavigate={() => view.onNavigate?.(routeId, sessionTarget()?.options)}
-          preloadRoute={
-            !isSidebarRouteActive(view.activeRouteId, routeId) &&
-            (view.enabledRouteIds?.includes(routeId) ?? true)
-              ? routeId
-              : undefined
-          }
         />
       );
       return <Show when={view.enabledRouteIds?.includes(routeId) ?? true}>{link}</Show>;

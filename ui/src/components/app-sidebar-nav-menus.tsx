@@ -44,7 +44,6 @@ export function renderSidebarNavLink(params: {
   icon: JSX.Element;
   label: string;
   onNavigate: () => void;
-  preloadRoute?: NavigationRouteId;
 }): JSX.Element {
   return (
     <a
@@ -53,7 +52,6 @@ export function renderSidebarNavLink(params: {
       href={params.href}
       class={["nav-item", { "nav-item--active": params.active }]}
       aria-current={params.active ? "page" : undefined}
-      data-openclaw-preload-route={params.preloadRoute}
       onClick={(event: MouseEvent) => handleNavigationClick(event, () => params.onNavigate())}
     >
       <span class="nav-item__icon" aria-hidden="true">

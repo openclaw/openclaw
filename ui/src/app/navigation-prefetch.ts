@@ -1,4 +1,4 @@
-import { isRouteId, type RouteId } from "../app-route-paths.ts";
+import { routeIdFromPath, type RouteId } from "../app-route-paths.ts";
 import { listen } from "../lib/reactive/listener.ts";
 import type { ApplicationContext } from "./context.ts";
 import type { ControlUiReadinessOutlet } from "./control-ui-readiness.ts";
@@ -15,6 +15,7 @@ export function connectNavigationPrefetch(options: {
   router: Pick<ApplicationContext["router"], "getState" | "subscribe">;
   gateway: Pick<ApplicationContext["gateway"], "snapshot" | "subscribe">;
   outlet: () => Pick<ControlUiReadinessOutlet, "presentationSettled"> | undefined;
+  basePath: string;
   resourceBasePath: string;
   transcriptsReady: () => boolean;
   preloadRoute: (routeId: RouteId) => Promise<void>;
@@ -159,6 +160,8 @@ export function connectNavigationPrefetch(options: {
     intentTimers.delete(target);
     if (
       !target.isConnected ||
+      !target.hasAttribute("href") ||
+      target.matches('[aria-current="page"], [aria-disabled="true"]') ||
       !ready() ||
       options.router.getState().matches[0]?.routeId === routeId
     ) {
@@ -175,7 +178,13 @@ export function connectNavigationPrefetch(options: {
     if (!(event.target instanceof Element)) {
       return;
     }
-    const routeTarget = event.target.closest("[data-openclaw-preload-route]");
+    const anchor = event.target.closest<HTMLAnchorElement>("a[href]");
+    const routeId = anchor ? routeIdFromPath(anchor.pathname, options.basePath) : null;
+    const routeTarget =
+      anchor &&
+      (routeId === "new-session" || anchor.matches(".nav-item, .settings-sidebar__item"))
+        ? anchor
+        : null;
     const leaving = event.type === "pointerout" || event.type === "focusout";
     if (routeTarget) {
       const related =
@@ -188,8 +197,7 @@ export function connectNavigationPrefetch(options: {
         intentTimers.delete(routeTarget);
         return;
       }
-      const routeId = routeTarget.getAttribute("data-openclaw-preload-route");
-      if (routeId && isRouteId(routeId)) {
+      if (routeId) {
         if (event.type === "touchstart") {
           clearTimeout(intentTimers.get(routeTarget));
           void preloadRoute(routeTarget, routeId);

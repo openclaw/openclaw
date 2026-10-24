@@ -136,7 +136,6 @@ function SettingsNavigationItem(props: {
       href={pathForRoute(props.routeId, props.sidebar.basePath)}
       class={["settings-sidebar__item", { "settings-sidebar__item--active": active() }]}
       aria-current={active() ? "page" : undefined}
-      data-openclaw-preload-route={active() ? undefined : props.routeId}
       onClick={(event) =>
         handleNavigationClick(event, () => props.sidebar.onNavigate(props.routeId))
       }

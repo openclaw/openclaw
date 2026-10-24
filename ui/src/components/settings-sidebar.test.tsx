@@ -149,12 +149,6 @@ describe("settings sidebar search", () => {
     expect(active?.classList.contains("settings-sidebar__item--active")).toBe(true);
     expect(active?.getAttribute("aria-current")).toBe("page");
     expect(active?.textContent?.trim()).toBe("Models");
-    expect(active?.hasAttribute("data-openclaw-preload-route")).toBe(false);
-    expect(
-      container
-        .querySelector('.settings-sidebar__item[href="/settings/appearance"]')
-        ?.getAttribute("data-openclaw-preload-route"),
-    ).toBe("appearance");
   });
 
   it.each(["OpenClaw", "Moonbase"])(

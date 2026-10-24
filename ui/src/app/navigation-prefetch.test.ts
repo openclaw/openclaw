@@ -59,6 +59,7 @@ function setup() {
   const preloadRoute = vi.fn(async () => {});
   const stop = connectNavigationPrefetch({
     shell,
+    basePath: "/control",
     resourceBasePath: "/control",
     router: {
       getState: () => state,
@@ -178,32 +179,68 @@ it.each(["topbar-search", "sidebar-brand__search", "shell-chrome-controls__searc
     expect(hints().map((link) => link.href)).toContain(
       new URL("/control/assets/debug-1234abcd.js", location.origin).href,
     );
-
-    delete trigger.dataset.value;
-    trigger.dataset.openclawPreloadRoute = "sessions";
-    trigger.dispatchEvent(new Event("pointerover", { bubbles: true }));
-    connection.saveData = true;
-    await vi.advanceTimersByTimeAsync(50);
-    expect(fixture.preloadRoute).not.toHaveBeenCalled();
-
-    connection.saveData = false;
-    trigger.dispatchEvent(new Event("focusin", { bubbles: true }));
-    trigger.dispatchEvent(new Event("focusout", { bubbles: true }));
-    await vi.advanceTimersByTimeAsync(50);
-    expect(fixture.preloadRoute).not.toHaveBeenCalled();
-    trigger.dispatchEvent(new Event("focusin", { bubbles: true }));
-    await vi.advanceTimersByTimeAsync(50);
-    expect(fixture.preloadRoute).toHaveBeenCalledExactlyOnceWith("sessions");
-    fixture.state.status = "loading";
-    trigger.dispatchEvent(new Event("touchstart", { bubbles: true }));
-    await vi.advanceTimersByTimeAsync(0);
-    expect(fixture.preloadRoute).toHaveBeenCalledTimes(1);
-    fixture.state.status = "success";
-    trigger.dispatchEvent(new Event("touchstart", { bubbles: true }));
-    await vi.advanceTimersByTimeAsync(0);
-    expect(fixture.preloadRoute).toHaveBeenCalledTimes(2);
   },
 );
+
+it("uses navigation hrefs and rechecks readiness before applying delayed intent", async () => {
+  const fixture = setup();
+  fixture.outlet.presentationSettled = true;
+  fixture.transcript.ready = true;
+  const pin = fixture.shell.appendChild(document.createElement("div"));
+  pin.className = "sidebar-rail__pin";
+  const trigger = pin.appendChild(document.createElement("a"));
+  trigger.className = "nav-item";
+  trigger.href = "/control/sessions";
+  trigger.dispatchEvent(new Event("pointerover", { bubbles: true }));
+  connection.saveData = true;
+  await vi.advanceTimersByTimeAsync(50);
+  expect(fixture.preloadRoute).not.toHaveBeenCalled();
+
+  connection.saveData = false;
+  trigger.dispatchEvent(new Event("focusin", { bubbles: true }));
+  trigger.dispatchEvent(new Event("focusout", { bubbles: true }));
+  await vi.advanceTimersByTimeAsync(50);
+  expect(fixture.preloadRoute).not.toHaveBeenCalled();
+  trigger.dispatchEvent(new Event("focusin", { bubbles: true }));
+  await vi.advanceTimersByTimeAsync(50);
+  expect(fixture.preloadRoute).toHaveBeenCalledExactlyOnceWith("sessions");
+  fixture.state.status = "loading";
+  trigger.dispatchEvent(new Event("touchstart", { bubbles: true }));
+  await vi.advanceTimersByTimeAsync(0);
+  expect(fixture.preloadRoute).toHaveBeenCalledTimes(1);
+  fixture.state.status = "success";
+  trigger.dispatchEvent(new Event("touchstart", { bubbles: true }));
+  await vi.advanceTimersByTimeAsync(0);
+  expect(fixture.preloadRoute).toHaveBeenCalledTimes(2);
+});
+
+it("uses existing active and disabled state and recognizes New Session outside navigation", async () => {
+  const fixture = setup();
+  fixture.outlet.presentationSettled = true;
+  fixture.transcript.ready = true;
+  const trigger = fixture.shell.appendChild(document.createElement("a"));
+  trigger.className = "settings-sidebar__item";
+  trigger.href = "/control/settings/model-providers";
+  trigger.setAttribute("aria-current", "page");
+  trigger.dispatchEvent(new Event("focusin", { bubbles: true }));
+  await vi.advanceTimersByTimeAsync(50);
+  expect(fixture.preloadRoute).not.toHaveBeenCalled();
+  trigger.removeAttribute("aria-current");
+  trigger.dispatchEvent(new Event("focusin", { bubbles: true }));
+  trigger.setAttribute("aria-disabled", "true");
+  await vi.advanceTimersByTimeAsync(50);
+  expect(fixture.preloadRoute).not.toHaveBeenCalled();
+  trigger.removeAttribute("aria-disabled");
+  trigger.className = "";
+  trigger.href = "/control/new?agent=main";
+  trigger.dispatchEvent(new Event("focusin", { bubbles: true }));
+  await vi.advanceTimersByTimeAsync(50);
+  expect(fixture.preloadRoute).toHaveBeenCalledExactlyOnceWith("new-session");
+  trigger.href = "/control/sessions";
+  trigger.dispatchEvent(new Event("focusin", { bubbles: true }));
+  await vi.advanceTimersByTimeAsync(50);
+  expect(fixture.preloadRoute).toHaveBeenCalledTimes(1);
+});
 
 it("keeps native route intent in development without a built asset descriptor", async () => {
   document.getElementById("openclaw-navigation-preloads")?.remove();
@@ -211,7 +248,8 @@ it("keeps native route intent in development without a built asset descriptor", 
   fixture.outlet.presentationSettled = true;
   fixture.transcript.ready = true;
   const trigger = fixture.shell.appendChild(document.createElement("a"));
-  trigger.dataset.openclawPreloadRoute = "cron";
+  trigger.className = "settings-sidebar__item";
+  trigger.href = "/control/automations";
   trigger.dispatchEvent(new Event("focusin", { bubbles: true }));
   await vi.advanceTimersByTimeAsync(50);
   expect(fixture.preloadRoute).toHaveBeenCalledExactlyOnceWith("cron");
