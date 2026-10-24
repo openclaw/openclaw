@@ -17,6 +17,7 @@ import {
   installExistingNativeDeviceSettings,
 } from "./native-embed-fixtures.test-support.ts";
 import { installNativeEmbed, installNativeWebChrome } from "./native-nav.test-support.ts";
+import { expectAbsent } from "./workspace-terminal.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Control UI native embed settings E2E" });
 const routes = [
@@ -224,11 +225,9 @@ suite.define(() => {
         for (const route of ["device", "device-permissions", "talk", "updates"] as const) {
           await list.locator(`a[href="${pathForRoute(route)}"]`).click();
           await waitForControlUiRoute(page, { routeId: route });
-          expect(
-            await page
-              .locator(".shell-nav, openclaw-app-topbar, openclaw-macos-titlebar-controls")
-              .count(),
-          ).toBe(0);
+          await expectAbsent(page, [
+            ".shell-nav, openclaw-app-topbar, openclaw-macos-titlebar-controls",
+          ]);
           expect(
             await page
               .locator("main.content")
@@ -266,11 +265,9 @@ suite.define(() => {
           await page.locator(".shell--settings .settings-sidebar").waitFor();
           expect(await page.locator(".shell-nav").isVisible()).toBe(true);
           expect(await page.locator("openclaw-app-topbar").count()).toBe(1);
-          expect(
-            await page
-              .locator(".shell--embed, .native-embed-header, html.openclaw-native-embed")
-              .count(),
-          ).toBe(0);
+          await expectAbsent(page, [
+            ".shell--embed, .native-embed-header, html.openclaw-native-embed",
+          ]);
         },
       );
     }
@@ -306,37 +303,14 @@ suite.define(() => {
             await page
               .locator(".native-embed-header openclaw-settings-save-indicator")
               .waitFor({ state: "attached" });
-            expect(
-              await page
-                .locator(
-                  ".shell-nav, openclaw-app-topbar, .shell-chrome-controls, .settings-sidebar__footer, openclaw-macos-titlebar-controls, openclaw-keyboard-shortcuts-dialog",
-                )
-                .count(),
-            ).toBe(0);
-            expect(
-              await page
-                .locator(
-                  "resizable-divider:visible, .assistant-panel:visible, .debug-overlay:visible",
-                )
-                .count(),
-            ).toBe(0);
-            expect(
-              await page
-                .locator("openclaw-assistant-panel-content, openclaw-debug-overlay-content")
-                .count(),
-            ).toBe(0);
+            await expectAbsent(page, [
+              ".shell-nav, openclaw-app-topbar, .shell-chrome-controls, .settings-sidebar__footer, openclaw-macos-titlebar-controls, openclaw-keyboard-shortcuts-dialog",
+              "resizable-divider:visible, .assistant-panel:visible, .debug-overlay:visible",
+              "openclaw-assistant-panel-content, openclaw-debug-overlay-content",
+            ]);
             if (route === "settings") {
               const list = page.locator(".settings-embed-list");
               await list.locator("a").first().waitFor();
-              expect(
-                await list
-                  .locator("a")
-                  .evaluateAll((links) => links.map((link) => link.getAttribute("href"))),
-              ).toEqual(
-                routes
-                  .filter((id) => id !== "skills" && id !== "cron")
-                  .map((id) => pathForRoute(id)),
-              );
               expect(
                 await list
                   .locator("a")

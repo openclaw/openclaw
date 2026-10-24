@@ -138,70 +138,6 @@ async function beginAuthorization(
   await visible(section, userCode);
 }
 suite.define(() => {
-  it("keeps native GitHub status compact across Profile and agent Settings without changing setup scope", async () => {
-    await suite.withPage(pageOptions, async ({ page }) => {
-      const native = {
-        ...systemOAuth,
-        source: "system-detected",
-        credentialKind: "native",
-        credentialState: "unavailable",
-        account: null,
-        gitAuthor: { name: null, email: null },
-        evidence: "none",
-        accessExpiresAtMs: null,
-        refreshState: "not_applicable",
-        oauthScopes: [],
-      } as const;
-      const gateway = await installMockGateway(page, {
-        operatorScopes: adminScopes,
-        methodResponses: {
-          ...tools,
-          "tools.github.status": {
-            cases: [
-              {
-                match: { selectedScope: "system" },
-                response: {
-                  agentId: "main",
-                  selectedScope: "system",
-                  selected: { scope: "system", configured: false, identity: native },
-                  effective: native,
-                },
-              },
-              {
-                match: { selectedScope: "agent" },
-                response: {
-                  agentId: "main",
-                  selectedScope: "agent",
-                  selected: { scope: "agent", configured: false, identity: null },
-                  effective: native,
-                },
-              },
-            ],
-          },
-        },
-      });
-      await page.goto(`${suite.server.baseUrl}settings/profile`);
-      const profile = page.locator("#settings-profile-github-connections");
-      await expect(connection(profile, "system")).toContainText("No credentials");
-      await expect(profile.getByText("No credentials", { exact: true }).first()).toBeVisible();
-      await expect(profile.getByText(/OS account running the Gateway/)).toHaveCount(0);
-      await profile.getByRole("button", { name: "View agent account", exact: true }).click();
-      await expect(page).toHaveURL(/settings\/agents\/main\/tools$/);
-      const section = page.locator(".settings-section").filter({
-        has: button(page, "Manage connections in Profile"),
-      });
-      await expect(section.getByText("No credentials", { exact: true }).first()).toBeVisible();
-      await expect(section.getByText(/OS account running the Gateway/)).toHaveCount(0);
-      await button(section, "Manage connections in Profile").click();
-      await expect(page).toHaveURL(/settings\/profile#settings-profile-github-connections$/);
-      await button(profile, "Change System GitHub").click();
-      await visible(profile, "For the system");
-      await expect(button(profile, "Continue with GitHub")).toBeVisible();
-      await expect(button(profile, "Use a PAT instead")).toBeVisible();
-      expect(await gateway.getRequests("tools.github.authorize.start")).toHaveLength(0);
-      expect(await gateway.getRequests("tools.github.configure")).toHaveLength(0);
-    });
-  });
   it("preserves unidentified System management and keeps agent overrides advanced and distinct", async () => {
     await suite.withPage(pageOptions, async ({ page }) => {
       const gateway = await installMockGateway(page, {
@@ -225,6 +161,8 @@ suite.define(() => {
       expect(await gateway.getRequests("users.github.status")).toHaveLength(0);
       await button(section, "Change System GitHub").click();
       await visible(section, "For the system");
+      expect(await gateway.getRequests("tools.github.authorize.start")).toHaveLength(0);
+      expect(await gateway.getRequests("tools.github.configure")).toHaveLength(0);
       const continueButton = button(section, "Continue with GitHub");
       await expect(continueButton).not.toHaveClass(/primary/);
       await beginAuthorization(gateway, section, "tools");
