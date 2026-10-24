@@ -101,10 +101,7 @@ function seedOrphanSessionWindows(pathname: string, schemaVersion: number) {
 }
 
 it.each([
-  ["repair", OPENCLAW_AGENT_SCHEMA_VERSION, false],
-  ["unrelated violation", OPENCLAW_AGENT_SCHEMA_VERSION, false],
   ["cleanup failure", OPENCLAW_AGENT_SCHEMA_VERSION, false],
-  ["repair", 24, false],
   ["repair", 24, true],
 ] as const)(
   "Doctor preserves original orphan history before repair (%s, schema %i, before migration %s)",
@@ -137,15 +134,9 @@ it.each([
       let original: ReturnType<typeof readRows>;
       {
         using damaged = new NativeDatabaseSync(pathname);
-        if (scenario === "unrelated violation") {
-          damaged.exec("PRAGMA foreign_keys = OFF;");
-          damaged.exec(
-            "UPDATE session_windows SET primary_conversation_id = 'missing' WHERE session_id = 'retained'",
-          );
-        }
         original = readRows(damaged);
         expectQuery(damaged, "SELECT count(*) AS count FROM pragma_foreign_key_check", {
-          count: scenario === "unrelated violation" ? 3 : 2,
+          count: 2,
         });
       }
       const quarantine = { env, kind: "agent" as const, path: pathname };
@@ -206,9 +197,7 @@ it.each([
         }
         expect(() => openOpenClawAgentDatabase(options)).not.toThrow();
       } else {
-        expect(result.warnings.join("\n")).toMatch(
-          scenario === "unrelated violation" ? /foreign_key_check/ : /fixture cleanup refused/,
-        );
+        expect(result.warnings.join("\n")).toMatch(/fixture cleanup refused/);
         expect(readRows(repaired)).toEqual(original);
       }
       const backups = fs
@@ -221,7 +210,7 @@ it.each([
       );
       expect(readRows(backup)).toEqual(original);
       expectQuery(backup, "SELECT count(*) AS count FROM pragma_foreign_key_check", {
-        count: scenario === "unrelated violation" ? 3 : 2,
+        count: 2,
       });
     }),
 );

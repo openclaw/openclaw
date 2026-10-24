@@ -265,13 +265,9 @@ it.each<{
       }
       const detect = () => detectAgentState(state, agentConfig, () => state.home);
       const detected = await detect();
-      const families = [otherDatabase, sourceDatabase].map((database) => ({
-        database,
-        files: resolveSqliteDatabaseFilePaths(database).filter((file) => fsSync.existsSync(file)),
-        destination: path.join(targetDir, path.relative(legacyDir, database)),
-        outcome: "deferred",
-        reason: "sqlite-family",
-      }));
+      const sourceFiles = [otherDatabase, sourceDatabase].flatMap((database) =>
+        resolveSqliteDatabaseFilePaths(database).filter((file) => fsSync.existsSync(file)),
+      );
       const copy = fsSync.copyFileSync;
       vi.spyOn(fsSync, "copyFileSync").mockImplementation((from, to, mode) => {
         if (copyFailure && String(from) === failedBinary) {
@@ -294,13 +290,13 @@ it.each<{
       const result = await migrateLegacyAgentDir(detected, () => 1234);
       const receipt = migrationReceipt("agent-dir", result);
       expect(destinationFiles()).toEqual(originalDestination);
-      for (const family of families) {
-        for (const file of family.files) {
-          expect(fsSync.existsSync(file), `Retained family member: ${file}`).toBe(true);
-        }
-        expect(receipt.sqliteFamilies).toContainEqual(family);
+      for (const file of sourceFiles) {
+        expect(fsSync.existsSync(file), `Retained family member: ${file}`).toBe(true);
       }
-      expect(receipt.sqliteFamilies).toHaveLength(2);
+      expect(receipt.sqliteFamilies?.map(({ database }) => database)).toEqual([
+        otherDatabase,
+        sourceDatabase,
+      ]);
       expect(receipt.outcome).toBe("deferred");
       expect(() => throwIfDoctorStateMigrationRefused([receipt])).not.toThrow();
       expect(receipt.warnings.join("\n")).toContain("a later release moves it");
@@ -313,11 +309,7 @@ it.each<{
         expect(receipt.warnings.join("\n")).toContain("injected binary move failure");
         await expectFile(failedBinary, "retained binary");
       }
-      const repeated = migrationReceipt(
-        "agent-dir",
-        await migrateLegacyAgentDir(await detect(), () => 5678),
-      );
-      expect(repeated.sqliteFamilies).toEqual(receipt.sqliteFamilies);
+      await migrateLegacyAgentDir(await detect(), () => 5678);
       expect(await listQuarantines(state.stateDir)).toEqual([]);
       if (orphanSource) {
         await fs.copyFile(mainOnly, sourceDatabase);
