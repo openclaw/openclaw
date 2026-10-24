@@ -4432,6 +4432,8 @@ process.exit(73);
 
   it("keeps suspension capabilities under the invoking user", () => {
     const source = readFileSync(GATEWAY_NETWORK_DOCKER_E2E_PATH, "utf8");
+    expect(source).toMatch(/if \[\[ ! -O "\$CAPABILITIES_DIR" \]\]/u);
+    expect(source).toMatch(/if \[\[ ! -O "\$CAPABILITIES_PATH" \]\]/u);
     expect(source).not.toMatch(/--user 0:0|\bch(?:own|mod)\b/u);
     expect(source).not.toContain('rm -rf "$CAPABILITIES_DIR"');
   });
