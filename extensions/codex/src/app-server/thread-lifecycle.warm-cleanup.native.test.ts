@@ -23,10 +23,10 @@ import { createCodexSqliteTestBindingStateStore } from "./session-binding.sqlite
 import { createIsolatedCodexAppServerClient } from "./shared-client.js";
 import { startOrResumeThread } from "./thread-lifecycle-run.js";
 import {
-  createAppServerOptions,
   createParams,
   resetThreadLifecycleTestFixtures,
 } from "./thread-lifecycle.test-fixtures.js";
+import { nativeAppServerOptions, sendNativeResponse } from "./thread-native.test-support.js";
 import { CODEX_APP_SERVER_VERSION } from "./version.js";
 
 vi.unmock("node:child_process");
@@ -113,24 +113,8 @@ describe.skipIf(process.platform === "win32")("native Codex warm cleanup", () =>
                   id: `native-answer-${providerRequests}`,
                   content: [{ type: "output_text", text: "NATIVE_CONTINUATION_OK" }],
                 };
-            const events = [
-              { type: "response.created", response: { id: `native-response-${providerRequests}` } },
-              { type: "response.output_item.done", item },
-              {
-                type: "response.completed",
-                response: {
-                  id: `native-response-${providerRequests}`,
-                  usage: { input_tokens: 10, output_tokens: 2, total_tokens: 12 },
-                },
-              },
-            ];
             record("loopback-provider-response", { action: launch ? "exec_command" : "answer" });
-            response.writeHead(200, { "Content-Type": "text/event-stream" });
-            response.end(
-              events
-                .map((event) => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`)
-                .join(""),
-            );
+            sendNativeResponse(response, `native-response-${providerRequests}`, item);
           } catch (error) {
             providerFailures.push(error);
             response.writeHead(500).end();
@@ -183,24 +167,9 @@ describe.skipIf(process.platform === "win32")("native Codex warm cleanup", () =>
           "stream_max_retries=0",
         ].join("\n"),
       );
-      const childEnv = Object.fromEntries(
-        Object.entries(native.env).filter(
-          (entry): entry is [string, string] => entry[1] !== undefined,
-        ),
-      );
       const appServer = {
-        ...createAppServerOptions(),
+        ...nativeAppServerOptions(native),
         sandbox: "danger-full-access" as const,
-        start: {
-          transport: "stdio" as const,
-          command: native.command,
-          commandSource: "config" as const,
-          args: ["app-server"],
-          cwd: native.cwd,
-          headers: {},
-          env: childEnv,
-          clearEnv: Object.keys(process.env).filter((key) => !(key in childEnv)),
-        },
       };
       const agentDir = path.join(root, "agent");
       const client = await createIsolatedCodexAppServerClient({

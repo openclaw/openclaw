@@ -337,6 +337,29 @@ export function createClientHarness(
   };
 }
 
+export function createRequestClientHarness(
+  onRequest: (
+    method: string,
+    id: unknown,
+    requestParams: unknown,
+    send: (message: unknown) => void,
+  ) => void,
+) {
+  return createClientHarness({
+    onWrite(line, send) {
+      const message: unknown = JSON.parse(line);
+      if (
+        !isJsonObject(message) ||
+        typeof message.method !== "string" ||
+        message.id === undefined
+      ) {
+        return;
+      }
+      onRequest(message.method, message.id, message.params, send);
+    },
+  });
+}
+
 /** Stock read-only replies from an authenticated managed native app-server. */
 export function createCodexInferenceReadResponses() {
   return {
@@ -380,35 +403,25 @@ export async function withLeasedCodexTestClient<T>(params: {
   request: (method: string, params?: unknown) => Promise<unknown>;
   run: (client: CodexAppServerClient) => Promise<T>;
 }): Promise<T> {
-  const harness = createClientHarness({
-    onWrite: (line, send) => {
-      const message: unknown = JSON.parse(line);
-      if (
-        !isJsonObject(message) ||
-        typeof message.method !== "string" ||
-        message.id === undefined
-      ) {
-        return;
-      }
-      const result =
-        message.method === "initialize"
-          ? Promise.resolve({
-              userAgent: "codex-cli/0.151.0",
-              codexHome: resolveCodexAppServerHomeDir(params.agentDir),
-            })
-          : params.request(message.method, message.params);
-      void result.then(
-        (value) => send({ id: message.id, result: value }),
-        (error: unknown) =>
-          send({
-            id: message.id,
-            error: {
-              code: -32000,
-              message: error instanceof Error ? error.message : String(error),
-            },
-          }),
-      );
-    },
+  const harness = createRequestClientHarness((method, id, requestParams, send) => {
+    const result =
+      method === "initialize"
+        ? Promise.resolve({
+            userAgent: "codex-cli/0.151.0",
+            codexHome: resolveCodexAppServerHomeDir(params.agentDir),
+          })
+        : params.request(method, requestParams);
+    void result.then(
+      (value) => send({ id, result: value }),
+      (error: unknown) =>
+        send({
+          id,
+          error: {
+            code: -32000,
+            message: error instanceof Error ? error.message : String(error),
+          },
+        }),
+    );
   });
   const start = vi.spyOn(CodexAppServerClient, "start").mockResolvedValueOnce(harness.client);
   try {

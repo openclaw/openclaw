@@ -101,14 +101,6 @@ function createCtx(resolved = resolveBrowserConfig({})) {
   return { state, ctx, service: createBrowserProfilesService(ctx) };
 }
 
-function deferred() {
-  let resolve!: () => void;
-  const promise = new Promise<void>((done) => {
-    resolve = done;
-  });
-  return { promise, resolve };
-}
-
 function writtenBrowserConfig() {
   return expectDefined(writeConfigFile.mock.calls[0]?.[0].browser, "written browser config");
 }
@@ -139,7 +131,7 @@ async function pendingStart(
   runtime: ReturnType<typeof profileRuntime>,
   run: (signal: AbortSignal) => Promise<void>,
 ) {
-  const entered = deferred();
+  const entered = Promise.withResolvers<void>();
   const starting = enqueueProfileStart({
     state,
     runtime,
@@ -348,7 +340,7 @@ describe("BrowserProfilesService", () => {
     const { service, state } = createDeletionFixture();
     const runtime = profileRuntime(state);
     const userDataDir = localUserDataDir("openclaw-delete-race-");
-    const launch = deferred();
+    const launch = Promise.withResolvers<void>();
     const running = {
       pid: 42,
       exe: { kind: "chromium", path: "/usr/bin/chromium" },
@@ -388,7 +380,7 @@ describe("BrowserProfilesService", () => {
       resolveBrowserConfig({ profiles: { work: WORK_PROFILE } }),
     );
     const runtime = profileRuntime(state);
-    const release = deferred();
+    const release = Promise.withResolvers<void>();
     const { rejected } = await pendingStart(state, runtime, async (signal) => {
       await release.promise;
       signal.throwIfAborted();

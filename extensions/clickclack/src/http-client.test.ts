@@ -3,6 +3,7 @@ import { Readable } from "node:stream";
 import { createDeferred } from "openclaw/plugin-sdk/concurrency-runtime";
 import { describe, expect, it, vi } from "vitest";
 import { WebSocketServer } from "ws";
+import { waitForEffectPreparation } from "../../test-support/effect-preparation.test-support.js";
 import { listenOnLoopback as listenLoopbackServer } from "../../test-support/hanging-loopback-server.js";
 import { createClickClackClient, normalizeClickClackCorrelationId } from "./http-client.js";
 
@@ -608,12 +609,7 @@ it.each([false, true])(
       (error: unknown) => ({ error }),
     );
     try {
-      await Promise.race([
-        preparing.promise,
-        dispatched.promise.then(() => {
-          throw new Error("dispatched before preparation");
-        }),
-      ]);
+      await waitForEffectPreparation(preparing.promise, dispatched.promise);
       expect(fetch).not.toHaveBeenCalled();
       if (retired) {
         caller.abort(failure);
