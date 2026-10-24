@@ -852,6 +852,23 @@ openclaw-board-widget-cell {
   font-size: 24px;
 }
 
+.board-empty--website {
+  border-style: solid;
+  border-color: color-mix(in srgb, var(--border) 60%, transparent);
+  background: color-mix(in srgb, var(--panel) 94%, transparent);
+}
+
+.board-empty--website .board-empty__mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.board-empty--website .board-empty__mark svg {
+  width: 28px;
+  height: 28px;
+}
+
 .board-announcer {
   clip: rect(0 0 0 0);
   clip-path: inset(50%);
