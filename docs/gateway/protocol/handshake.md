@@ -37,8 +37,8 @@ Client replies with `connect`:
   "id": "…",
   "method": "connect",
   "params": {
-    "minProtocol": 5,
-    "maxProtocol": 5,
+    "minProtocol": 4,
+    "maxProtocol": 4,
     "client": {
       "id": "cli",
       "version": "1.2.3",
@@ -87,7 +87,7 @@ checks.
   "ok": true,
   "payload": {
     "type": "hello-ok",
-    "protocol": 5,
+    "protocol": 4,
     "server": { "version": "…", "connId": "…" },
     "features": { "methods": ["…"], "events": ["…"] },
     "snapshot": { "…": "…" },
@@ -315,8 +315,8 @@ Client capabilities describe the connected client, not authorization. Agent tool
   "id": "…",
   "method": "connect",
   "params": {
-    "minProtocol": 5,
-    "maxProtocol": 5,
+    "minProtocol": 4,
+    "maxProtocol": 4,
     "client": {
       "id": "ios-node",
       "version": "1.2.3",

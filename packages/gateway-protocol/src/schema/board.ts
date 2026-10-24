@@ -73,8 +73,10 @@ export const BoardWidgetSchema = closedObject({
   title: Type.Optional(Type.String({ minLength: 1, maxLength: 80 })),
   contentKind: Type.Union([Type.Literal("html"), Type.Literal("mcp-app"), Type.Literal("plugin")]),
   contentOwner: Type.Optional(
-    Type.Enum(["html", "mcp-app", "plugin"] as const, { type: "string" }),
+    Type.Enum(["html", "mcp-app", "plugin", "registered"] as const, { type: "string" }),
   ),
+  // Read-only v4 metadata from older Gateways; new stores never emit registered content.
+  registeredContentKind: Type.Optional(Type.String({ pattern: "^[a-z][a-z0-9-]{0,31}$" })),
   pluginKind: Type.Optional(BoardWidgetPluginKindSchema),
   props: Type.Optional(BoardWidgetPluginPropsSchema),
   presentation: Type.Optional(BoardWidgetPresentationSchema),
@@ -99,6 +101,7 @@ export const BoardWidgetSchema = closedObject({
   sandboxUrl: Type.Optional(Type.String()),
   sandboxPort: Type.Optional(Type.Integer({ minimum: 1, maximum: 65535 })),
   sandboxOrigin: Type.Optional(Type.String()),
+  kindLabel: Type.Optional(Type.String({ minLength: 1, maxLength: 80 })),
 });
 export type BoardWidget = Static<typeof BoardWidgetSchema>;
 
@@ -199,10 +202,18 @@ export const BoardWidgetPluginContentSchema = closedObject({
   pluginKind: BoardWidgetPluginKindSchema,
   props: Type.Optional(BoardWidgetPluginPropsSchema),
 });
+// Keep retired v4 content wire-valid for older clients and Gateways. The put
+// handler reports its removal; this is never materialized or rendered.
+export const BoardWidgetRegisteredContentSchema = closedObject({
+  kind: Type.Literal("registered"),
+  contentKind: Type.String({ pattern: "^[a-z][a-z0-9-]{0,31}$" }),
+  source: Type.String({ maxLength: 262_144 }),
+});
 export const BoardWidgetContentSchema = Type.Union([
   BoardWidgetHtmlContentSchema,
   BoardWidgetMcpAppContentSchema,
   BoardWidgetPluginContentSchema,
+  BoardWidgetRegisteredContentSchema,
 ]);
 export type BoardWidgetContent = Static<typeof BoardWidgetContentSchema>;
 export type BoardWidgetMaterializedContent =
@@ -219,6 +230,7 @@ export const BoardWidgetPutContentSchema = Type.Union([
   BoardWidgetHtmlContentSchema,
   BoardWidgetMcpAppPutContentSchema,
   BoardWidgetPluginContentSchema,
+  BoardWidgetRegisteredContentSchema,
   BoardCanvasDocumentSourceSchema,
 ]);
 export type BoardWidgetPutContent = Static<typeof BoardWidgetPutContentSchema>;

@@ -125,6 +125,26 @@ describe("board gateway methods", () => {
     return () => resetPluginRuntimeStateForTest();
   });
 
+  it("rejects retired v4 registered content without changing the board", async () => {
+    const { invoke, put, store } = widgetHarness();
+    await put("kept", html("<p>kept</p>"));
+    const before = await store.getSnapshot(mainTarget);
+    const response = await invoke("board.widget.put", {
+      ...mainTarget,
+      name: "retired",
+      content: { kind: "registered", contentKind: "a2ui", source: "{}" },
+    });
+    expect(response.mock.calls[0]).toMatchObject([
+      false,
+      undefined,
+      {
+        code: "INVALID_REQUEST",
+        message: "Registered board widgets were removed; use HTML widgets instead.",
+      },
+    ]);
+    expect(await store.getSnapshot(mainTarget)).toEqual(before);
+  });
+
   it("scopes bare boards by explicit owner and rejects ambiguous ownerless requests", async () => {
     const { invoke, store } = createHarness(undefined, undefined, undefined, {
       getRuntimeConfig: () => ({

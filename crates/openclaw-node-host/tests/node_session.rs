@@ -569,14 +569,14 @@ fn sidecar_offer(role: SidecarPeerRole) -> SidecarProtocolOffer {
 }
 
 #[tokio::test]
-async fn node_protocol_fallback_preserves_capabilities_and_recovers_to_v5() {
-    for server_protocol in [4, 5] {
+async fn node_protocol_fallback_uses_fresh_legacy_connect_material_and_recovers_to_v4() {
+    for server_protocol in [3, 4] {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let server = tokio::spawn(async move {
             let (mut current, current_connect) =
-                accept_node_connect(&listener, "nonce-v5", 1_700_000_000_123).await;
-            assert_current_connect(&current_connect, "nonce-v5");
+                accept_node_connect(&listener, "nonce-v4", 1_700_000_000_123).await;
+            assert_current_connect(&current_connect, "nonce-v4");
             send_json(
                 &mut current,
                 json!({
@@ -584,15 +584,15 @@ async fn node_protocol_fallback_preserves_capabilities_and_recovers_to_v5() {
                     "error":{
                         "code":"INVALID_REQUEST",
                         "message":"protocol mismatch",
-                        "details":{"expectedProtocol":4}
+                        "details":{"expectedProtocol":3}
                     }
                 }),
             )
             .await;
 
             let (mut previous, previous_connect) =
-                accept_node_connect(&listener, "nonce-v4", 1_700_000_000_456).await;
-            assert_previous_connect(&previous_connect, "nonce-v4");
+                accept_node_connect(&listener, "nonce-v3", 1_700_000_000_456).await;
+            assert_previous_connect(&previous_connect, "nonce-v3");
             assert_ne!(
                 current_connect["params"]["device"]["signature"],
                 previous_connect["params"]["device"]["signature"]
@@ -610,7 +610,7 @@ async fn node_protocol_fallback_preserves_capabilities_and_recovers_to_v5() {
                 json!({
                     "type":"event", "event":"node.invoke.request",
                     "payload":{
-                        "id":"invoke-v4",
+                        "id":"invoke-v3",
                         "nodeId":"node-1",
                         "command":"example.status",
                         "paramsJSON":"{\"verbose\":true}"
@@ -625,8 +625,8 @@ async fn node_protocol_fallback_preserves_capabilities_and_recovers_to_v5() {
             }
 
             let (mut upgraded, upgraded_connect) =
-                accept_node_connect(&listener, "nonce-v5-again", 1_700_000_000_789).await;
-            assert_current_connect(&upgraded_connect, "nonce-v5-again");
+                accept_node_connect(&listener, "nonce-v4-again", 1_700_000_000_789).await;
+            assert_current_connect(&upgraded_connect, "nonce-v4-again");
             send_json(
                 &mut upgraded,
                 json!({
@@ -652,7 +652,7 @@ async fn node_protocol_fallback_preserves_capabilities_and_recovers_to_v5() {
             )
         };
         let previous = connect().await.unwrap();
-        assert_eq!(previous.protocol(), NodeProtocolVersion::V4);
+        assert_eq!(previous.protocol(), NodeProtocolVersion::V3);
         assert_eq!(
             previous.next_invocation().await.unwrap().params,
             json!({"verbose":true})
@@ -660,7 +660,7 @@ async fn node_protocol_fallback_preserves_capabilities_and_recovers_to_v5() {
         previous.close().await;
 
         let current = connect().await.unwrap();
-        assert_eq!(current.protocol(), NodeProtocolVersion::V5);
+        assert_eq!(current.protocol(), NodeProtocolVersion::V4);
         current.close().await;
         server.await.unwrap();
     }
@@ -1063,8 +1063,8 @@ async fn accept_node_connect(
 }
 
 fn assert_current_connect(connect: &Value, nonce: &str) {
-    assert_eq!(connect["params"]["minProtocol"], 5);
-    assert_eq!(connect["params"]["maxProtocol"], 5);
+    assert_eq!(connect["params"]["minProtocol"], 4);
+    assert_eq!(connect["params"]["maxProtocol"], 4);
     assert_eq!(connect["params"]["client"]["platform"], "macos");
     assert_eq!(connect["params"]["client"]["deviceFamily"], "Mac");
     assert_eq!(connect["params"]["commands"], json!(["example.status"]));
@@ -1072,10 +1072,10 @@ fn assert_current_connect(connect: &Value, nonce: &str) {
 }
 
 fn assert_previous_connect(connect: &Value, nonce: &str) {
-    assert_eq!(connect["params"]["minProtocol"], 4);
-    assert_eq!(connect["params"]["maxProtocol"], 4);
-    assert_eq!(connect["params"]["client"]["platform"], "macos");
-    assert_eq!(connect["params"]["client"]["deviceFamily"], "Mac");
+    assert_eq!(connect["params"]["minProtocol"], 3);
+    assert_eq!(connect["params"]["maxProtocol"], 3);
+    assert_eq!(connect["params"]["client"]["platform"], "darwin");
+    assert!(connect["params"]["client"].get("deviceFamily").is_none());
     assert_eq!(connect["params"]["commands"], json!(["example.status"]));
     assert!(connect["params"]["client"].get("modelIdentifier").is_none());
     assert_eq!(connect["params"]["device"]["nonce"], nonce);
@@ -1103,7 +1103,7 @@ fn lifecycle_fixture() -> Value {
 
 #[tokio::test]
 async fn native_signed_connect_preserves_product_fields_and_rejects_invalid_node_manifests() {
-    let signed = json!({"minProtocol":5,"maxProtocol":5,"role":"node","scopes":[],
+    let signed = json!({"minProtocol":4,"maxProtocol":4,"role":"node","scopes":[],
         "client":{"id":"openclaw-macos","mode":"node","platform":"macOS","version":"test"},
         "commands":["system.notify","computer.act"],"computerUse":{"test":"native-authority"},
         "device":{"id":"native-device","signature":"unchanged-signature","nonce":"native-nonce"},
@@ -1129,26 +1129,26 @@ async fn native_signed_connect_preserves_product_fields_and_rejects_invalid_node
         );
         match invalid {
             Some("previous" | "previous-server") => {
-                params["minProtocol"] = json!(4);
-                params["maxProtocol"] = json!(4);
+                params["minProtocol"] = json!(3);
+                params["maxProtocol"] = json!(3);
             }
-            Some("range") => params["minProtocol"] = json!(4),
+            Some("range") => params["minProtocol"] = json!(3),
             Some("omitted") => {
                 params.as_object_mut().unwrap().remove("commands");
             }
             Some("empty") => params["commands"] = json!([]),
             Some("role") => params["role"] = json!("operator"),
             Some("mode") => params["client"]["mode"] = json!("operator"),
-            Some("retired-protocol") => params["minProtocol"] = json!(3),
-            Some("future-protocol") => params["maxProtocol"] = json!(6),
+            Some("retired-protocol") => params["minProtocol"] = json!(2),
+            Some("future-protocol") => params["maxProtocol"] = json!(5),
             Some("duplicate") => params["commands"] = json!(["system.notify", "system.notify"]),
             Some("command") => params["commands"] = json!(["system.notify "]),
             _ => {}
         }
         let server_protocol = if invalid == Some("previous-server") {
-            4
+            3
         } else {
-            5
+            4
         };
         let expected = params.clone();
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -1194,9 +1194,9 @@ async fn native_signed_connect_preserves_product_fields_and_rejects_invalid_node
             assert_eq!(
                 session.protocol(),
                 if matches!(invalid, Some("previous" | "previous-server")) {
-                    NodeProtocolVersion::V4
+                    NodeProtocolVersion::V3
                 } else {
-                    NodeProtocolVersion::V5
+                    NodeProtocolVersion::V4
                 }
             );
             let expected_commands = if matches!(
