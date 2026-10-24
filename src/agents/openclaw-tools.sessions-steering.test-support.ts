@@ -38,12 +38,16 @@ export function createSessionsSendTestCaller(sessionKey = "agent:re-portal:main"
   };
 }
 
+async function persistGuidance(options?: EmbeddedAgentQueueMessageOptions) {
+  const recorder = options?.userTurnTranscriptRecorder;
+  if (!recorder || !(await recorder.persistApproved())) {
+    throw new Error("Steering fixture did not commit the admitted guidance");
+  }
+}
+
 export function createDurableSessionsSendTestRun(runId: string, afterCommit?: () => Promise<void>) {
   const queueMessage = vi.fn<EmbeddedAgentQueueHandle["queueMessage"]>(async (_text, options) => {
-    const recorder = options?.userTurnTranscriptRecorder;
-    if (!recorder || !(await recorder.persistApproved())) {
-      throw new Error("Steering fixture did not commit the admitted guidance");
-    }
+    await persistGuidance(options);
     await afterCommit?.();
   });
   const handle = createEmbeddedRunHandle({
@@ -171,10 +175,7 @@ export async function activeRun(
     if (options.rejects) {
       throw new Error("active session ended before queued steering message was committed");
     }
-    const recorder = _options?.userTurnTranscriptRecorder;
-    if (!recorder || !(await recorder.persistApproved())) {
-      throw new Error("Steering fixture did not commit the admitted guidance");
-    }
+    await persistGuidance(_options);
   });
   await setSessionsSendTestActiveRun(
     options.sessionId ?? "caller-active-session",
@@ -242,6 +243,14 @@ export function registerSessionsSendActiveSteeringTests({
 }: SessionsSendActiveSteeringFixtures) {
   const getSessionTool: SessionsSendSteeringFixtures["getSessionTool"] = (name, options) =>
     withTestRequester(createSessionTool(name, options), options.agentSessionKey);
+  const gatewayCalls = (method: string) =>
+    callGatewayMock.mock.calls.filter(([request]) => request.method === method);
+  const requesterOrigin = {
+    channel: "telegram",
+    accountId: "synthetic-account",
+    to: "synthetic-chat",
+    threadId: "synthetic-thread",
+  };
 
   it.each([
     {
@@ -309,9 +318,7 @@ export function registerSessionsSendActiveSteeringTests({
       if (steered) {
         expect(queueMessage).toHaveBeenCalledOnce();
       }
-      const agentCalls = callGatewayMock.mock.calls.filter(
-        ([request]) => request.method === "agent",
-      );
+      const agentCalls = gatewayCalls("agent");
       expect(agentCalls).toHaveLength(steered ? 0 : 1);
       expect(prepare).toHaveBeenCalledTimes(steered ? 0 : 1);
       if (agentCalls.length) {
@@ -353,12 +360,7 @@ export function registerSessionsSendActiveSteeringTests({
     const tool = withTestRequester(
       createSessionsSendTool({
         agentSessionKey: key,
-        requesterOrigin: {
-          channel: "telegram",
-          accountId: "synthetic-account",
-          to: "synthetic-chat",
-          threadId: "synthetic-thread",
-        },
+        requesterOrigin,
         config: cloneTestConfig(),
       }),
       key,
@@ -373,12 +375,8 @@ export function registerSessionsSendActiveSteeringTests({
       status: "accepted",
       targetDisposition: mode ? "steered" : "queued",
     });
-    if (mode) {
-      expect(queueMessage).toHaveBeenCalledOnce();
-    } else {
-      expect(queueMessage).not.toHaveBeenCalled();
-    }
-    const admissions = callGatewayMock.mock.calls.filter(([request]) => request.method === "agent");
+    expect(queueMessage).toHaveBeenCalledTimes(mode ? 1 : 0);
+    const admissions = gatewayCalls("agent");
     expect(admissions).toHaveLength(mode ? 0 : 1);
     if (!mode) {
       expect(admissions[0]?.[0].params).toMatchObject({
@@ -427,14 +425,9 @@ export function registerSessionsSendActiveSteeringTests({
           : { status: "ok", reply: "synthetic idle reply" },
       );
       expect(
-        callGatewayMock.mock.calls.filter(
-          ([request]) => request.method === "agent" && request.params?.sessionKey === key,
-        ),
+        gatewayCalls("agent").filter(([request]) => request.params?.sessionKey === key),
       ).toHaveLength(1);
-      expect(
-        callGatewayMock.mock.calls.find(([request]) => request.method === "agent")?.[0].params
-          ?.inputProvenance,
-      ).toMatchObject({
+      expect(gatewayCalls("agent")[0]?.[0].params?.inputProvenance).toMatchObject({
         kind: "inter_session",
         sourceSessionKey: "agent:main:dashboard:mailbox-sender",
         sourceTool: "sessions_send",
@@ -442,15 +435,11 @@ export function registerSessionsSendActiveSteeringTests({
       if (busy) {
         expect(queueMessage).not.toHaveBeenCalled();
         // A zero-wait admission still has the existing detached reply waiter.
-        expect(
-          callGatewayMock.mock.calls.filter(([request]) => request.method === "agent.wait"),
-        ).toHaveLength(1);
+        expect(gatewayCalls("agent.wait")).toHaveLength(1);
       }
       await settleContinuations();
       if (busy) {
-        expect(
-          callGatewayMock.mock.calls.filter(([request]) => request.method === "agent"),
-        ).toHaveLength(1);
+        expect(gatewayCalls("agent")).toHaveLength(1);
       }
     },
   );
@@ -479,10 +468,7 @@ export function registerSessionsSendActiveSteeringTests({
           options?.onQueueAccepted?.(true);
           throw new Error("synthetic consumption confirmation unavailable after acceptance");
         }
-        const recorder = options?.userTurnTranscriptRecorder;
-        if (!recorder || !(await recorder.persistApproved())) {
-          throw new Error("Steering fixture did not commit the admitted guidance");
-        }
+        await persistGuidance(options);
       });
       callGatewayMock.mockImplementation(async (request) => {
         calls.push(request);

@@ -138,9 +138,7 @@ function expectMediaState(h: ReturnType<typeof setup>, pending: unknown, visible
 }
 
 function expectNoReplies(h: ReturnType<typeof setup>) {
-  expect(h.onBlockReply).not.toHaveBeenCalled();
-  expect(h.onPartialReply).not.toHaveBeenCalled();
-  expect(h.assistantEvents()).toEqual([]);
+  expect([h.replies(), h.partials(), h.assistantEvents()]).toEqual([[], [], []]);
 }
 
 function payloads(subscription: ReturnType<typeof setup>["subscription"]) {
@@ -384,14 +382,11 @@ it("preserves the undelivered prefix when a deferred answer extends it", async (
   await h.drain();
   expectNoReplies(h);
   await h.finish(messages);
-  expect(visibleTexts(h.replies())).toEqual(["Result:complete"]);
-  expect(visibleTexts(h.partials())).toEqual(["Result:complete"]);
-  expect(
-    h
-      .assistantEvents()
-      .map((event) => event.text)
-      .filter(Boolean),
-  ).toEqual(["Result:complete"]);
+  expect([h.replies(), h.partials(), h.assistantEvents()].map(visibleTexts)).toEqual([
+    ["Result:complete"],
+    ["Result:complete"],
+    ["Result:complete"],
+  ]);
   expect(h.lifecycleEnded()).toBe(true);
 });
 
