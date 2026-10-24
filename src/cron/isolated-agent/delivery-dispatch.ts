@@ -1,4 +1,4 @@
-/** Finalize one run result, confirm its notification, then commit its destination conversation. */
+/** Finalize one run result and delegate confirmed external conversation writes to outbound. */
 import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
 import type { NormalizeReplySkipReason } from "../../auto-reply/reply/normalize-reply-skip-reason.js";
 import { resolveControlUiSessionUrl } from "../../config/control-ui-link-base.js";
@@ -6,7 +6,6 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { toAgentStoreSessionKey } from "../../routing/session-key.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { resolveAdmittedCronCompletionStatus } from "../completion-status.js";
-import type { CronResultConversation } from "../conversation-result.js";
 import { createCronRunDiagnosticsFromError, mergeCronRunDiagnostics } from "../run-diagnostics.js";
 import { normalizeCronRunErrorText } from "../service/execution-errors.js";
 import type { CronResolvedDeliveryState } from "../types.js";
@@ -295,31 +294,11 @@ export async function dispatchCronDelivery(
     outputText = synthesizedText;
   }
 
-  const conversationRuntime = await conversationResult.load();
-  let conversationResolution: CronResultConversation = {};
   let conversationError: string | undefined;
-  const conversationParams = {
-    config: params.cfgWithAgentDefaults,
-    agentId: params.agentId,
-    delivery: params.resolvedDelivery,
-    source:
-      params.sourceSessionKey && params.sourceSessionGeneration
-        ? { sessionKey: params.sourceSessionKey, ...params.sourceSessionGeneration }
-        : undefined,
-    sourceSessionKey: params.runSessionKey,
-    deliveryAttemptFence: params.deliveryAttemptFence,
-  };
-  try {
-    conversationResolution =
-      await conversationRuntime.resolveCronResultConversation(conversationParams);
-  } catch (error) {
-    if (!params.resolvedDelivery.ok && !sentByTool) {
-      return failTarget(formatErrorMessage(error));
-    }
-    conversationError = formatErrorMessage(error);
-  }
-  let { conversation } = conversationResolution;
-  diagnostics = conversationResolution.diagnostics;
+  const conversation =
+    !params.resolvedDelivery.ok && params.sourceSessionKey && params.sourceSessionGeneration
+      ? { sessionKey: params.sourceSessionKey, ...params.sourceSessionGeneration }
+      : undefined;
   if (!conversation && !params.resolvedDelivery.ok && !sentByTool) {
     if (params.job.sessionTarget === "current") {
       return failTarget("current cron delivery is missing its source session binding");
@@ -341,6 +320,7 @@ export async function dispatchCronDelivery(
     let mayHaveReachedRecipient = false;
     try {
       const { sendCronAnnouncePayloadStrict } = await notification.load();
+      const sessionGeneration = resolveDirectCronDeliveryGeneration(params);
       const sent = await sendCronAnnouncePayloadStrict({
         deps: params.deps,
         cfg: params.cfgWithAgentDefaults,
@@ -348,11 +328,28 @@ export async function dispatchCronDelivery(
         jobId: params.job.id,
         target: {
           ...params.resolvedDelivery,
-          sessionKey: params.resolvedDelivery.sessionRoute?.sessionKey,
+          sessionKey: params.runSessionKey,
         },
         payload: deliveryPayloads,
         admittedReasoning: true,
-        sessionGeneration: resolveDirectCronDeliveryGeneration(params),
+        sessionGeneration,
+        transcriptRoute: params.resolvedDelivery.sessionRoute,
+        transcriptExpectedGeneration:
+          sessionGeneration &&
+          params.resolvedDelivery.sessionRoute?.sessionKey ===
+            toAgentStoreSessionKey({
+              agentId: params.agentId,
+              requestKey: sessionGeneration.sessionKey,
+              mainKey: params.cfgWithAgentDefaults.session?.mainKey,
+            })
+            ? params.sourceSessionGeneration
+            : undefined,
+        onTranscriptDiagnostic: (message) => {
+          diagnostics = mergeCronRunDiagnostics(
+            diagnostics,
+            createCronRunDiagnosticsFromError("delivery", message, { severity: "warn" }),
+          );
+        },
         tts: { auto: params.ttsAuto },
         inspectionUrl: resolveControlUiSessionUrl(params.cfgWithAgentDefaults, {
           sessionKey: params.runSessionKey,
@@ -409,15 +406,8 @@ export async function dispatchCronDelivery(
       return finish();
     }
   }
-  if (params.resolvedDelivery.ok) {
-    try {
-      const bound = await conversationRuntime.bindCronResultConversation(conversationParams);
-      conversation = bound.conversation;
-      conversationError = undefined;
-    } catch (error) {
-      conversation = undefined;
-      conversationError = formatErrorMessage(error);
-    }
+  if (params.resolvedDelivery.ok || sentByTool) {
+    return finish();
   }
   const executionOwnsResult =
     (params.undeliveredRunStatus === "error" || sentByTool) &&
@@ -438,14 +428,15 @@ export async function dispatchCronDelivery(
   if (conversation && !executionOwnsResult && deliveryPayloads.length > 0) {
     deliveryAttempted = true;
     try {
-      const committed = await conversationRuntime.commitCronConversationResult({
+      const committed = await (
+        await conversationResult.load()
+      ).commitCronConversationResult({
         config: params.cfgWithAgentDefaults,
         agentId: params.agentId,
         jobId: params.job.id,
         runStartedAt: params.runStartedAt,
         conversation,
         payloads: deliveryPayloads,
-        text: params.resolvedDelivery.ok || sentByTool ? undefined : synthesizedText,
         signal: params.abortSignal,
         deliveryAttemptFence: params.deliveryAttemptFence,
       });
@@ -459,18 +450,8 @@ export async function dispatchCronDelivery(
     }
   }
   if (conversationError) {
-    if (state.status !== "delivered") {
-      return failTarget(conversationError);
-    }
-    diagnostics = mergeCronRunDiagnostics(
-      diagnostics,
-      createCronRunDiagnosticsFromError(
-        "delivery",
-        `result was delivered but was not added to the conversation: ${conversationError}`,
-        { severity: "warn" },
-      ),
-    );
-  } else if (conversation && !params.resolvedDelivery.ok && !sentByTool) {
+    return failTarget(conversationError);
+  } else if (conversation) {
     record("delivered");
   }
   return finish();

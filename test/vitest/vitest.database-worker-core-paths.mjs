@@ -7,6 +7,7 @@ export const databaseWorkerCoreTestFiles = [
   "test/scripts/upgrade-survivor-acp-metadata.test.ts",
   "src/gateway/server-methods/chat-send-admission.reads.test.ts",
   "src/sessions/background-session-result.test.ts",
+  "src/sessions/confirmed-visible-message.integration.test.ts",
   "test/discord-live-policy.integration.test.ts",
   "src/commands/startup-config-preflight.fresh-profiles.test.ts",
   "src/channels/message-access/x-requester.test.ts",
