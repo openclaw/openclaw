@@ -78,6 +78,8 @@ type ChatViewInput = {
   bindTranscriptViewport: (element: HTMLDivElement) => () => void;
   getTranscriptElement: () => HTMLDivElement | null;
   getScrollToLatestElement: () => HTMLButtonElement | null;
+  /** Lifetime-bound composer recovery surface registration (disabled banner). */
+  bindComposerRecoverySurface?: (element: HTMLElement) => () => void;
 };
 
 function ChatTranscript(input: ChatViewInput) {
@@ -251,6 +253,7 @@ function ChatComposerView(input: ChatViewInput) {
       questions={input.questions}
       getTranscriptElement={input.getTranscriptElement}
       getScrollToLatestElement={input.getScrollToLatestElement}
+      onRecoverySurfaceRef={input.bindComposerRecoverySurface}
       progressCard={
         input.props.detailsEnabled || activities()?.progress ? null : input.props.progressCard
       }
@@ -410,6 +413,9 @@ function ChatContent(input: { props: ChatProps; questions: ComposerQuestions }) 
   const { bind: bindScrollToLatestButton, read: getScrollToLatestElement } =
     connectedElementRef<HTMLButtonElement>();
   const replacementComposer = connectedElementRef<HTMLElement>();
+  const recoverySurface = connectedElementRef<HTMLElement>();
+  const { bind: bindComposerFooter, read: getComposerFooter } =
+    connectedElementRef<HTMLDivElement>();
   const application = useOptionalApplication();
   const gateway = application && projectGateway(application.gateway);
   const skillFileHovercard = createSkillFileHovercard({
@@ -440,7 +446,21 @@ function ChatContent(input: { props: ChatProps; questions: ComposerQuestions }) 
         const replacementElement = replacement && replacementComposer.read();
         const target =
           replacementElement || getChatComposerState(input.props.paneId).composerTextarea;
-        target?.focus({ preventScroll: true });
+        if (target) {
+          target.focus({ preventScroll: true });
+          return;
+        }
+        // The composer is unavailable (e.g. an archived session replaces it with a
+        // banner): land on the lifetime-bound recovery surface — or the footer —
+        // so the bypass never becomes a no-op. Refs, not DOM searches: geometry
+        // and focus routing here must stay on exact owned elements.
+        const fallback = recoverySurface.read() ?? getComposerFooter();
+        if (fallback) {
+          // Programmatic-only target; the region stays out of the tab order and
+          // its actions remain the next tab stops.
+          fallback.setAttribute("tabindex", "-1");
+          fallback.focus({ preventScroll: true });
+        }
       },
       // This view mounts only while its pane's question source exists.
       input.questions.source()!.asyncQuestions,
@@ -455,6 +475,7 @@ function ChatContent(input: { props: ChatProps; questions: ComposerQuestions }) 
     bindTranscriptViewport,
     getTranscriptElement,
     getScrollToLatestElement,
+    bindComposerRecoverySurface: recoverySurface.bind,
   });
   const historyMessage = () => {
     const state = frame().historyLoadState;
@@ -567,6 +588,17 @@ function ChatContent(input: { props: ChatProps; questions: ComposerQuestions }) 
                       forwardChatWheelToTranscript(event, input.props.transcript.scrollElement)
                     }
                   >
+                    {/* Keyboard bypass: the transcript's focusable controls precede the
+                        composer in tab order, so expose a skip action before them. */}
+                    <Show when={!input.props.suggestionComposer}>
+                      <button
+                        type="button"
+                        class="chat-skip-link"
+                        onClick={() => frame().threadProps.onFocusComposer?.()}
+                      >
+                        {t("chat.composer.skipToComposer")}
+                      </button>
+                    </Show>
                     <Show when={frame().historyFailed && !frame().transcriptEmpty}>
                       {historyFailure(true)}
                     </Show>
@@ -629,7 +661,10 @@ function ChatContent(input: { props: ChatProps; questions: ComposerQuestions }) 
                         </Show>
                       </div>
                     </Show>
-                    <div class="chat-footer" ref={[elementRef(input.props.onFooterElementRef)]}>
+                    <div
+                      class="chat-footer"
+                      ref={[bindComposerFooter, elementRef(input.props.onFooterElementRef)]}
+                    >
                       <ChatSurface
                         binding={{
                           "prop:surface": "composer",

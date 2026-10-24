@@ -6,6 +6,7 @@ const catalog = {
     composer: {
       running: "running",
       composerInput: "Chat composer",
+      skipToComposer: "Skip to message composer",
       usePrediction: "Use suggestion",
       predictionShortcut: "Tab",
       dismissPrediction: "Dismiss suggestion",

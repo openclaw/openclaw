@@ -110,6 +110,9 @@ export type ChatComposerProps = ChatAttachmentControlsProps & {
   getScrollToLatestElement?: () => HTMLButtonElement | null;
   onComposerShellRef?: (element: HTMLElement) => void | (() => void);
   onComposerFloatRef?: (element: HTMLElement) => void | (() => void);
+  /** Lifetime-bound recovery surface (the disabled banner) for programmatic focus
+   * when the composer itself cannot receive focus. */
+  onRecoverySurfaceRef?: (element: HTMLElement) => void | (() => void);
   onActivityPillsLayout?: ChatActivityPillsProps["onLayout"];
   /** Native merged chrome, supplied by the pane owner; never inferred from pane width. */
   mobileComposer?: boolean;

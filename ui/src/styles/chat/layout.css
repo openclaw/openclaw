@@ -799,6 +799,29 @@ openclaw-pending-session-create {
   --chat-scroll-to-bottom-gap: 12px;
 }
 
+/* A keyboard-only bypass to the composer, placed before the transcript in tab
+   order. It stays out of the layout until focused, mirroring the shell skip
+   link affordance (.chat-main__conversation is the positioned ancestor). */
+.chat-skip-link {
+  position: absolute;
+  top: 8px;
+  left: 50%;
+  z-index: 30;
+  padding: 8px 12px;
+  border: none;
+  border-radius: var(--radius-md);
+  background: var(--panel);
+  color: var(--text);
+  box-shadow: var(--shadow-md), var(--focus-ring);
+  cursor: var(--cursor-action);
+  transform: translate(-50%, -160%);
+  transition: transform var(--duration-fast) var(--ease-out);
+}
+
+.chat-skip-link:focus {
+  transform: translate(-50%, 0);
+}
+
 /* The zero-height anchor keeps the affordance out of the flex flow so showing
    it never shrinks the transcript or moves the composer. */
 .chat-scroll-to-bottom-wrap {
