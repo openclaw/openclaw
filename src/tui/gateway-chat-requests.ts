@@ -14,10 +14,7 @@ const STARTUP_CHAT_HISTORY_RETRY_TIMEOUT_MS = 60_000;
 const STARTUP_CHAT_HISTORY_DEFAULT_RETRY_MS = 500;
 const STARTUP_CHAT_HISTORY_MAX_RETRY_MS = 5_000;
 
-function isRetryableStartupUnavailable(
-  err: unknown,
-  method: string,
-): err is GatewayClientRequestError {
+function isRetryableStartupUnavailable(err: unknown): err is GatewayClientRequestError {
   if (!(err instanceof GatewayClientRequestError)) {
     return false;
   }
@@ -29,7 +26,7 @@ function isRetryableStartupUnavailable(
     return true;
   }
   const detailMethod = "method" in details ? details.method : undefined;
-  return typeof detailMethod !== "string" || detailMethod === method;
+  return typeof detailMethod !== "string" || detailMethod === "chat.history";
 }
 
 function resolveStartupRetryDelayMs(err: GatewayClientRequestError): number {
@@ -142,7 +139,7 @@ export class GatewayChatRequests {
           limit: opts.limit,
         });
       } catch (err) {
-        if (Date.now() >= deadline || !isRetryableStartupUnavailable(err, "chat.history")) {
+        if (Date.now() >= deadline || !isRetryableStartupUnavailable(err)) {
           throw err;
         }
         await sleep(resolveStartupRetryDelayMs(err), this.signal);

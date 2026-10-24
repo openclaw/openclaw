@@ -1315,6 +1315,7 @@ src/infra/worker-native-lifecycle.worker.ts
 src/infra/worker-native-port.ts
 src/infra/worker-native-task-port.ts
 src/infra/worker-pool-sizing.ts
+src/infra/worker-postgres-bridge-census.ts
 src/infra/worker-request-diagnostics.ts
 src/infra/worker-request-kind.ts
 src/infra/worker-task-capacity.ts
@@ -2561,6 +2562,7 @@ packages/markdown-core/package.json
 src/state/openclaw-agent-db-worker-admission.ts
 src/config/sessions/legacy-compaction-history.ts
 src/config/sessions/session-accessor.sqlite-references.ts
+src/config/sessions/session-accessor.sqlite-reference-projection.ts
 src/config/sessions/session-actor-memory-conversation-owner.ts
 src/config/sessions/session-actor-memory-lifecycle-artifacts.ts
 src/config/sessions/session-actor-memory-message-rewrite.ts

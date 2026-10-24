@@ -39,6 +39,8 @@ describe("normalizeMessageActionInput", () => {
 
   type Input = Parameters<typeof normalizeMessageActionInput>[0];
   it.each<[Input, Record<string, unknown>, string[]]>([
+    [{ action: "send", args: { target: "  channel:C1  " } }, { to: "channel:C1" }, []],
+    [{ action: "channel-info", args: { target: "  C123  " } }, { channelId: "C123" }, []],
     [
       { action: "send", args: { target: "channel:C1", to: "legacy", channelId: "legacy-channel" } },
       { target: "channel:C1", to: "channel:C1" },
@@ -83,6 +85,7 @@ describe("normalizeMessageActionInput", () => {
     }
   });
   it.each<[string, Input]>([
+    ["blank target", { action: "send", args: { target: "   " } }],
     [
       "heartbeat sentinel",
       {
@@ -119,6 +122,19 @@ describe("normalizeMessageActionInput", () => {
     ],
   ])("rejects %s as a target", (_name, input) => {
     expect(() => normalizeMessageActionInput(input)).toThrow(/requires a target/);
+  });
+
+  it.each<[Input, string]>([
+    [
+      { action: "broadcast", args: { to: "legacy" } },
+      "Use `target` for actions that accept a destination.",
+    ],
+    [
+      { action: "broadcast", args: { target: "channel:C1" } },
+      "Action broadcast does not accept a target.",
+    ],
+  ])("rejects a destination for no-target action %j", (input, message) => {
+    expect(() => normalizeMessageActionInput(input)).toThrow(message);
   });
 
   it("rejects conflicting canonical and plugin delivery targets", () => {

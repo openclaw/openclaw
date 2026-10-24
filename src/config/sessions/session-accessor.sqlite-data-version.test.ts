@@ -36,8 +36,8 @@ import {
   readSessionEntryCache,
   readExactSessionEntryCandidatesInDatabase as readCandidates,
 } from "./session-accessor.sqlite-entry-cache.js";
-import { readReferencedSessionIds } from "./session-accessor.sqlite-lifecycle-state.js";
 import { recordSessionParticipant } from "./session-accessor.sqlite-participants.native.js";
+import { readReferencedSessionIds } from "./session-accessor.sqlite-references.js";
 import { resolveSqliteTranscriptScope } from "./session-accessor.sqlite-scope.js";
 import { ensureTranscriptSessionRoot } from "./session-accessor.sqlite-transcript-state.js";
 import { appendTranscriptEventsInTransaction as appendEvents } from "./session-accessor.sqlite-transcript-store.js";

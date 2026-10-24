@@ -1,9 +1,10 @@
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { expect, test, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { GatewayOperatorRoleDefinition } from "../../config/types.gateway.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { agentListHandler } from "./agents-list.js";
 import { callAgentHandler } from "./agents-mutate.test-support.js";
+import { agentsHandlers } from "./agents.js";
 import type { GatewayClient, GatewayRequestContext } from "./types.js";
 
 const roster = vi.hoisted(() => ({
@@ -67,7 +68,7 @@ async function listAgents(
   catalog: GatewayRequestContext["readPreparedGatewayModelCatalog"] = async () => ({ entries: [] }),
 ) {
   const respond = await callAgentHandler(
-    agentListHandler,
+    expectDefined(agentsHandlers["agents.list"], "agents.list handler"),
     "agents.list",
     {},
     {

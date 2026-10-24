@@ -987,7 +987,9 @@ script. These counts share the registry coverage limits above; they do not
 measure resident memory released by an exit.
 
 `openclaw gateway call diagnostics.lanes --json` also reports `workerCount`,
-`workerPoolCount`, and `workerPools`. Each pool entry contains a process-local
+`postgresBridgeCount`, `workerPoolCount`, and `workerPools`. The bridge count also
+includes bridges inside registered worker parents; direct bridges overlap
+`workerCount`, so the two counts must not be added. Each pool entry contains a process-local
 `poolId`, an allowlisted `script`, and its live `workerCount`. The response lists
 the 100 largest live pools; `workerPoolCount` includes all live pools. Counts
 include pending retirements until native exit and disappear when a pool has no

@@ -3,13 +3,17 @@ import {
   isToolCallContentType,
   isToolResultContentType,
   readToolErrorFlag,
-} from "../../chat/tool-content.js";
-import { readTranscriptDisplayPosition } from "../../chat/transcript-display-position.js";
-import type { AgentHistoryActivity } from "../../infra/agent-activity-events.js";
-import { jsonUtf8Bytes, jsonUtf8BytesOrInfinity } from "../../infra/json-utf8-bytes.js";
-import { logLargePayload } from "../../logging/diagnostic-payload.js";
-import type { InFlightRunSnapshot } from "../chat-inflight-snapshot.js";
-import { readChatHistoryMessageId } from "../session-history-tail.js";
+} from "../chat/tool-content.js";
+import { readTranscriptDisplayPosition } from "../chat/transcript-display-position.js";
+import type { AgentHistoryActivity } from "../infra/agent-activity-events.js";
+import { jsonUtf8Bytes, jsonUtf8BytesOrInfinity } from "../infra/json-utf8-bytes.js";
+import { logLargePayload } from "../logging/diagnostic-payload.js";
+import type { InFlightRunSnapshot } from "./chat-inflight-snapshot.js";
+import { readChatHistoryMessageId } from "./session-history-tail.js";
+
+const DEFAULT_MAX_CHAT_HISTORY_MESSAGES_BYTES = 6 * 1024 * 1024; // keep history responses comfortably under client WS limits
+
+export const getMaxChatHistoryMessagesBytes = () => DEFAULT_MAX_CHAT_HISTORY_MESSAGES_BYTES;
 
 export const CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES = 128 * 1024;
 const CHAT_HISTORY_OVERSIZED_PLACEHOLDER = "[chat.history omitted: message too large]";

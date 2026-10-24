@@ -72,8 +72,6 @@ type NameUnit =
   | { kind: "token"; literal: string }
   | { kind: "separator"; literal: string }
   | { kind: "decoration"; literal: string; spellings: string[]; spaced: boolean };
-type DecorationUnit = Extract<NameUnit, { kind: "decoration" }>;
-type SeparatorUnit = Extract<NameUnit, { kind: "separator" }>;
 
 function isEmojiPresentationGrapheme(grapheme: string): boolean {
   const characters = Array.from(grapheme);
@@ -136,7 +134,7 @@ function parseNameUnits(name: string): NameUnit[] {
 }
 
 // Preserve literal separators with flexible whitespace and optional raw-text joiners.
-function encodeSeparator(unit: SeparatorUnit): string {
+function encodeSeparator(unit: Extract<NameUnit, { kind: "separator" }>): string {
   return unit.literal
     .split(/(\s+|[\u200C\u200D]+)/u)
     .filter(Boolean)
@@ -164,7 +162,7 @@ function encodeEdgeDecorationLiteral(unit: NameUnit | undefined): string {
 }
 
 // Accept only the name's decoration, once, so stripping preserves unrelated punctuation.
-function encodeInteriorDecoration(unit: DecorationUnit): string {
+function encodeInteriorDecoration(unit: Extract<NameUnit, { kind: "decoration" }>): string {
   const spelled = unit.spellings.join(DECORATION_SPACING);
   if (!spelled) {
     // Joiners vanish during matching; whitespace survives and remains required

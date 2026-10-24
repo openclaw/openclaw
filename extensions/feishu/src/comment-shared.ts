@@ -181,12 +181,6 @@ type ParsedCommentDocumentRef = {
   fileToken?: string;
 };
 
-type ParsedCommentMention = {
-  userId: string;
-  displayText: string;
-  isBotMention: boolean;
-};
-
 type ParsedCommentLinkedDocumentKind =
   | CommentFileType
   | "wiki"
@@ -334,7 +328,11 @@ export function parseCommentContentElements(params: {
   const elements = Array.isArray(params.elements) ? params.elements : [];
   const plainTextParts: string[] = [];
   const semanticTextParts: string[] = [];
-  const mentions: ParsedCommentMention[] = [];
+  const mentions: {
+    userId: string;
+    displayText: string;
+    isBotMention: boolean;
+  }[] = [];
   const linkedDocuments: ParsedCommentLinkedDocument[] = [];
   const botIds = new Set(normalizeTrimmedStringList(Array.from(params.botOpenIds ?? [])));
   const linkedDocumentKeys = new Set<string>();

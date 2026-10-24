@@ -28,7 +28,7 @@ import type {
   SessionTranscriptTurnMutationResult,
 } from "./goals-operations.types.js";
 import type { SessionAccessScope } from "./session-accessor.sqlite-contract.js";
-import { readSessionEntryRow } from "./session-accessor.sqlite-entry-store.js";
+import { readSessionEntryRow } from "./session-accessor.sqlite-entry-read.js";
 import {
   captureLifecycleDatabaseScope,
   getSessionKysely,
