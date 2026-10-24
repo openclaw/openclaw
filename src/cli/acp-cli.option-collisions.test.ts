@@ -91,9 +91,9 @@ describe("acp cli option collisions", () => {
   it("forwards --agent to the ACP bridge", async () => {
     await parseAcp(["--agent", "ops"]);
 
-    expect(serveAcpGateway).toHaveBeenCalledTimes(1);
-    const gatewayOptions = mockCall(serveAcpGateway)[0] as { agentId?: string };
-    expect(gatewayOptions.agentId).toBe("ops");
+    expect(serveAcpGateway).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ agentId: "ops" }),
+    );
   });
 
   it("warns when inline secret flags are used", async () => {
