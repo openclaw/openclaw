@@ -1,4 +1,4 @@
-import { existsSync } from "node:fs";
+import { copyFileSync } from "node:fs";
 import { cp } from "node:fs/promises";
 import path from "node:path";
 import { expect, inject, it } from "vitest";
@@ -103,14 +103,19 @@ suite.define(() => {
         if (buildId) {
           await refreshProductionControlUiE2e(currentRoot, buildId);
         }
+        // Both deployments keep their hashed assets; only the served document changes.
+        await cp(path.join(currentRoot, "assets"), path.join(obsoleteRoot, "assets"), {
+          recursive: true,
+        });
         const port = await getFreePort();
         const baseUrl = `http://127.0.0.1:${port}`;
         await state.writeConfig({
           plugins: { enabled: false },
+          agents: { defaults: { model: { primary: "openai/gpt-4.1" } } },
           gateway: {
             port,
             auth: { mode: "none" },
-            controlUi: { root: currentRoot, allowedOrigins: [baseUrl] },
+            controlUi: { root: obsoleteRoot, allowedOrigins: [baseUrl] },
           },
         });
         state.applyEnv();
@@ -122,30 +127,12 @@ suite.define(() => {
           sidecarStartup: "defer",
         });
         await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
-          let obsolete = true;
           const documents: string[] = [];
           const connects: Array<{ minProtocol: number; maxProtocol: number }> = [];
           const outcomes: Array<{ ok: boolean; error?: { details?: unknown } }> = [];
-          // Model a cached deployment with actual compiled assets. Keep its hashed
-          // chunks available so a missing import cannot masquerade as protocol recovery.
-          await page.route(`${baseUrl}/**`, async (route) => {
-            const request = route.request();
-            const url = new URL(request.url());
-            if (request.resourceType() === "document") {
-              documents.push(url.href);
-            }
-            const asset = path.join(
-              obsoleteRoot,
-              request.resourceType() === "document" ? "index.html" : url.pathname,
-            );
-            if (
-              (obsolete || url.pathname.startsWith("/assets/")) &&
-              request.method() === "GET" &&
-              existsSync(asset)
-            ) {
-              await route.fulfill({ path: asset });
-            } else {
-              await route.continue();
+          page.on("request", (request) => {
+            if (request.isNavigationRequest() && request.frame() === page.mainFrame()) {
+              documents.push(request.url());
             }
           });
           await page.routeWebSocket(`ws://127.0.0.1:${port}/**`, (socket) => {
@@ -163,7 +150,14 @@ suite.define(() => {
               const frame = JSON.parse(String(message));
               if (frame.type === "res" && ids.has(frame.id)) {
                 outcomes.push(frame);
-                obsolete = false;
+                if (!frame.ok) {
+                  // Publish the complete current document before forwarding the real rejection.
+                  // The custom asset root revalidates files rather than caching bundled bytes.
+                  copyFileSync(
+                    path.join(currentRoot, "index.html"),
+                    path.join(obsoleteRoot, "index.html"),
+                  );
+                }
               }
               socket.send(message);
             });
