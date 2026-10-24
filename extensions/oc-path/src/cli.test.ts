@@ -371,7 +371,7 @@ describe("openclaw path CLI", () => {
       const filePath = join(workspaceDir, "AGENTS.md");
       writeFileSync(
         filePath,
-        "---\nnote: old\nother: original\n---\n\n## Tasks\n- Keep this item\n",
+        "---\nnote: old # keep\nother: original\n---\n\n## Tasks\n- Keep this item\n",
       );
       const options = { cwd: workspaceDir, json: true };
       const target = "oc://AGENTS.md/[frontmatter]/note";
@@ -392,6 +392,7 @@ describe("openclaw path CLI", () => {
       expect(reread.exitCode, stderrText(reread)).toBe(0);
       expect(JSON.parse(stdoutText(reread)).match.valueText).toBe(value);
       expect(readFileSync(filePath, "utf8")).toContain("## Tasks\n- Keep this item");
+      expect(readFileSync(filePath, "utf8")).toContain(" # keep\nother: updated");
     });
 
     it.each([
