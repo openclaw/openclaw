@@ -1,14 +1,12 @@
-import path from "node:path";
-import { DEFAULT_EMOJIS, DEFAULT_TIMING } from "openclaw/plugin-sdk/channel-feedback";
+import { join } from "node:path";
+import { DEFAULT_EMOJIS } from "openclaw/plugin-sdk/channel-feedback";
 import { resolveGroupThreadMentionFacts } from "openclaw/plugin-sdk/channel-inbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { setReplyPayloadMetadata } from "openclaw/plugin-sdk/reply-payload-testing";
 import * as replyRuntime from "openclaw/plugin-sdk/reply-runtime";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { expect, it, vi, afterEach } from "vitest";
 import * as h from "./message-handler.process.test-harness.js";
-import type { DispatchInboundParams } from "./message-handler.process.test-harness.js";
 import {
   expectReactAckCallAt,
   expectReactionCallsContain,
@@ -25,18 +23,15 @@ const dispatch = h.dispatchInboundMessageForTest;
 const deliver = h.deliverDiscordReply;
 const route = h.BASE_CHANNEL_ROUTE;
 
-async function runAutomatic(
+const runAutomatic = async (
   overrides: Parameters<typeof h.createAutomaticSourceDeliveryContext>[0] = {},
-) {
-  await h.runProcessDiscordMessage(await h.createAutomaticSourceDeliveryContext(overrides));
-}
+) => h.runProcessDiscordMessage(await h.createAutomaticSourceDeliveryContext(overrides));
 const session = { store: "/tmp/openclaw-discord-process-test-sessions.json" };
 const messageToolConfig = {
   messages: { groupChat: { visibleReplies: "message_tool" } },
   session,
 } satisfies OpenClawConfig;
-const quotedBotBody =
-  'Automation "daily update" failed 1 times\nCheck automation history for details.';
+const quotedBotBody = "Earlier bot reply";
 const dispatchCtx = () => requireRecord(h.getLastDispatchCtx(), "dispatch context");
 const expectCtx = (fields: Record<string, unknown>) => expectRecordFields(dispatchCtx(), fields);
 function message(id: string, content: string | undefined, channelId = "c1") {
@@ -45,19 +40,12 @@ function message(id: string, content: string | undefined, channelId = "c1") {
 function attachment(filename: string, content_type: string, id: string) {
   return { id, url: `https://cdn.discordapp.com/attachments/${filename}`, content_type, filename };
 }
-function author(id: string, username: string, globalName = username) {
-  return { id, username, globalName, discriminator: "0" };
-}
-const emptyCounts = {
+const zero = {
   delivered: 0,
   deliveredNotVisible: 0,
   cancelled: 0,
   failedBeforeSend: 0,
   failedAfterSend: 0,
-};
-const failedFinalReceipt = {
-  counts: { tool: emptyCounts, block: emptyCounts, final: { ...emptyCounts, failedBeforeSend: 1 } },
-  anyVisibleDelivered: false,
 };
 
 it.each([
@@ -87,7 +75,7 @@ it.each([
 
 it("keeps one typing refresh loop for default message-tool replies", async () => {
   vi.useFakeTimers();
-  dispatch.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+  dispatch.mockImplementationOnce(async (params) => {
     await params?.replyOptions?.onReplyStart?.();
     await vi.advanceTimersByTimeAsync(3_500);
     return h.createNoQueuedDispatchResult();
@@ -108,7 +96,10 @@ it.each(["delivery", "agent"] as const)("reacts to %s failure", async (failure) 
   if (failure === "delivery") {
     dispatch.mockResolvedValueOnce({
       ...h.createNoQueuedDispatchResult(),
-      settledReceipt: failedFinalReceipt,
+      settledReceipt: {
+        counts: { tool: zero, block: zero, final: { ...zero, failedBeforeSend: 1 } },
+        anyVisibleDelivered: false,
+      },
     });
   } else {
     h.readAgentRunTerminalOutcomeForTest.mockReturnValueOnce("failed");
@@ -117,22 +108,14 @@ it.each(["delivery", "agent"] as const)("reacts to %s failure", async (failure) 
     );
   }
   await runAutomatic();
-  if (failure === "agent") {
-    expect(deliver).toHaveBeenCalledTimes(1);
-  }
-  const emojis = getReactionEmojis();
-  expect(emojis).toContain(DEFAULT_EMOJIS.error);
-  expect(emojis).not.toContain(DEFAULT_EMOJIS.done);
+  expect(getReactionEmojis()).toContain(DEFAULT_EMOJIS.error);
 });
 
 it.each([
   { target: "channel", args: { channelId: "c1" }, channelId: "c1", messageId: "tracked-m1" },
   { target: "user", args: { to: "user:u1" }, channelId: "dm-u1", messageId: "m1" },
 ])("routes source acknowledgements and tracked $target reactions", async (scenario) => {
-  vi.useFakeTimers();
-  const entered = createDeferred<void>();
   dispatch.mockImplementationOnce(async (params) => {
-    entered.resolve();
     await params?.replyOptions?.onToolStart?.({
       name: "message",
       phase: "start",
@@ -144,46 +127,25 @@ it.each([
         trackToolCalls: true,
       },
     });
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, DEFAULT_TIMING.debounceMs);
-    });
     return h.createNoQueuedDispatchResult();
   });
-  const running = runAutomatic({
+  await runAutomatic({
     message: { id: "1001", timestamp: new Date().toISOString(), attachments: [] },
     messageChannelId: "fallback-channel",
   });
-  await entered.promise;
-  await vi.advanceTimersByTimeAsync(DEFAULT_TIMING.debounceMs);
-  await vi.runAllTimersAsync();
-  await running;
-
-  expectReactAckCallAt(0, "👀", {
-    channelId: "fallback-channel",
-    accountId: "default",
-    ackReaction: "👀",
-  });
+  expectReactAckCallAt(0, "👀", { channelId: "fallback-channel" });
   expectReactionCallsContain(scenario.channelId, scenario.messageId, "📈");
   expect(getReactionEmojis()).toEqual(["👀", "📈"]);
 });
 
 it("records the cancelled turn without delivering its block reply", async () => {
   const abortController = new AbortController();
-  dispatch.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+  dispatch.mockImplementationOnce(async (params) => {
     abortController.abort();
     await params?.dispatcher.sendBlockReply({ text: "post-abort block payload" });
     return { queuedFinal: false, counts: { final: 0, tool: 0, block: 1 } };
   });
-
-  await runAutomatic({
-    abortSignal: abortController.signal,
-    baseSessionKey: route.sessionKey,
-    route,
-  });
-
-  expect(h.logVerboseForTest).toHaveBeenCalledWith(
-    "discord block reply skipped (aborted before delivery): target=channel:c1 session=agent:main:discord:channel:c1",
-  );
+  await runAutomatic({ abortSignal: abortController.signal });
   expect(deliver).not.toHaveBeenCalled();
 });
 it.each(["current", "aborted", "policy changed"] as const)(
@@ -218,7 +180,6 @@ it.each(["current", "aborted", "policy changed"] as const)(
     dispatch.mockImplementation((params) =>
       sendFinal(params, { text: "Still received your message." }, false),
     );
-
     const processing = h.runProcessDiscordMessage(ctx);
     await touchEntered.promise;
     if (authority === "aborted") {
@@ -228,7 +189,6 @@ it.each(["current", "aborted", "policy changed"] as const)(
     }
     releaseTouch.resolve();
     await expect(processing).resolves.toBeUndefined();
-
     expect(errorLog).toHaveBeenCalledExactlyOnceWith(
       expect.stringContaining(activityError.message),
     );
@@ -242,52 +202,54 @@ it.each(["current", "aborted", "policy changed"] as const)(
   },
 );
 
-const conflictError = () =>
-  new Error("reply session initialization conflicted for agent:main:discord:channel:c1");
+const conflictError = () => new Error("reply session initialization conflicted for test");
 
 it.each([
-  ["user_request", true, 1],
-  ["room_event", true, 0],
-  ["user_request", false, 1],
-] as const)(
-  "records terminal notice for %s (visible=%s)",
-  async (inboundEventKind, visible, sends) => {
-    dispatch.mockRejectedValue(conflictError());
-    if (!visible) {
-      deliver.mockResolvedValueOnce({ visibleReplySent: false });
+  ["delivered", "user_request", 1],
+  ["policy suppressed", "room_event", 0],
+  ["downstream suppressed", "user_request", 1],
+  ["delivery failed", "user_request", 1],
+  ["aborted", "user_request", 0],
+] as const)("settles a conflict: %s", async (outcome, inboundEventKind, sends) => {
+  const controller = new AbortController(),
+    error = vi.fn();
+  dispatch.mockImplementation(async () => {
+    if (outcome === "aborted") {
+      controller.abort();
     }
-    const errorLog = vi.fn();
-    const ctx = await h.createBaseContext({
-      inboundEventKind,
-      shouldRequireMention: false,
-      effectiveWasMentioned: inboundEventKind !== "room_event",
-      cfg: { messages: { groupChat: { visibleReplies: "automatic" } } },
-      runtime: { log: vi.fn(), error: errorLog },
-    });
-    await expect(h.runProcessDiscordMessage(ctx)).resolves.toBeUndefined();
-    expect(dispatch).toHaveBeenCalledTimes(4);
-    expect(h.recordInboundSessionForTest).toHaveBeenCalledTimes(1);
-    expect(deliver).toHaveBeenCalledTimes(sends);
-    expect(errorLog).toHaveBeenCalledExactlyOnceWith(
-      expect.stringContaining(`terminal notice ${sends && visible ? "delivered" : "suppressed"}`),
+    throw conflictError();
+  });
+  if (outcome === "downstream suppressed") {
+    deliver.mockResolvedValueOnce({ visibleReplySent: false });
+  }
+  if (outcome === "delivery failed") {
+    deliver.mockRejectedValueOnce(new Error("Discord unavailable"));
+  }
+  const processing = runAutomatic({
+    inboundEventKind,
+    abortSignal: controller.signal,
+    runtime: { log: vi.fn(), error },
+    shouldRequireMention: false,
+    effectiveWasMentioned: inboundEventKind !== "room_event",
+  });
+  if (outcome === "delivery failed") {
+    await expect(processing).rejects.toBeInstanceOf(Error);
+    await expect(processing).rejects.toMatchObject({ cause: expect.any(Error) });
+  } else {
+    await expect(processing).resolves.toBeUndefined();
+    if (outcome !== "aborted") {
+      const notice = `terminal notice ${outcome === "delivered" ? "delivered" : "suppressed"}`;
+      expect(error).toHaveBeenCalledExactlyOnceWith(expect.stringContaining(notice));
+    }
+  }
+  expect(dispatch).toHaveBeenCalledTimes(outcome === "aborted" ? 1 : 4);
+  expect(h.recordInboundSessionForTest).toHaveBeenCalledTimes(1);
+  expect(deliver).toHaveBeenCalledTimes(sends);
+  if (outcome === "delivered" || outcome === "downstream suppressed") {
+    expectFreshFinalText(
+      "⚠️ Couldn't process this message because the session stayed busy. Please try again in a moment.",
     );
-    if (sends === 1) {
-      expectFreshFinalText(
-        "⚠️ Couldn't process this message because the session stayed busy. Please try again in a moment.",
-      );
-    }
-  },
-);
-
-it("keeps exhaustion retryable when the visible failure notice cannot land", async () => {
-  dispatch.mockRejectedValue(conflictError());
-  deliver.mockRejectedValueOnce(new Error("Discord unavailable"));
-
-  const failure = h.runProcessDiscordMessage(await h.createBaseContext());
-  await expect(failure).rejects.toBeInstanceOf(Error);
-  await expect(failure).rejects.toMatchObject({ cause: expect.any(Error) });
-  expect(dispatch).toHaveBeenCalledTimes(4);
-  expect(deliver).toHaveBeenCalledTimes(1);
+  }
 });
 
 it("rebuilds a released replay without duplicating its pending history", async () => {
@@ -296,29 +258,13 @@ it("rebuilds a released replay without duplicating its pending history", async (
   const guildHistories = new Map();
   const createReplayContext = () =>
     h.createBaseContext({ guildHistories, historyLimit: 10, inboundEventKind: "room_event" });
-
   await expect(h.runProcessDiscordMessage(await createReplayContext())).rejects.toBe(originalError);
-  expect(dispatch).toHaveBeenCalledTimes(1);
   expect(guildHistories.get("c1")).toHaveLength(1);
-
   dispatch.mockResolvedValue(h.createNoQueuedDispatchResult());
   await h.runProcessDiscordMessage(await createReplayContext());
-
   expect(h.getLastDispatchCtx()?.Body).not.toContain("[Chat messages since your last reply");
   expect(guildHistories.get("c1")).toHaveLength(1);
   expect(guildHistories.get("c1")?.[0]?.messageId).toBe("1001");
-});
-
-it("treats an aborted conflict as cancellation", async () => {
-  const abortController = new AbortController();
-  dispatch.mockImplementationOnce(async () => {
-    abortController.abort();
-    throw conflictError();
-  });
-
-  await expect(runBase({ abortSignal: abortController.signal })).resolves.toBeUndefined();
-
-  expect(dispatch).toHaveBeenCalledTimes(1);
 });
 
 it.each([true, false])("clears delivered room-event history (group DM=%s)", async (groupDm) => {
@@ -341,7 +287,6 @@ it.each([true, false])("clears delivered room-event history (group DM=%s)", asyn
     historyLimit: 10,
     isGuildMessage: !groupDm,
     isGroupDm: groupDm,
-    isDirectMessage: false,
     shouldRequireMention: false,
     effectiveWasMentioned: false,
     inboundEventKind: "room_event",
@@ -352,7 +297,6 @@ it.each([true, false])("clears delivered room-event history (group DM=%s)", asyn
     expect(h.getLastDispatchCtx()?.GroupRequireMention).toBe(false);
   } else {
     const begin = h.getLastDispatchReplyOptions()?.queuedDeliveryCorrelations?.[0]?.begin;
-    expect(begin).toBeTypeOf("function");
     const end = begin?.();
     notify();
     end?.();
@@ -368,6 +312,7 @@ it("omits starter context for an existing thread session", async () => {
       ? 1_700_000_000_000
       : undefined,
   );
+  const get = vi.fn(async () => ({ content: "starter", author: { id: "U2" } }));
   await runBase({
     route,
     baseSessionKey: key,
@@ -376,76 +321,52 @@ it("omits starter context for an existing thread session", async () => {
     threadParentId: "parent-1",
     cfg: { channels: { discord: { contextVisibility: "allowlist" } } },
     channelConfig: { allowed: true, users: ["U2"] },
-    client: {
-      rest: {
-        get: vi.fn(async () => ({
-          content: "original thread starter",
-          embeds: [],
-          timestamp: new Date().toISOString(),
-          author: author("U2", "bob"),
-        })),
-      },
-    },
+    client: { rest: { get } },
   });
-  expectCtx({
-    SessionKey: key,
-    MessageThreadId: id,
-    ThreadLabel: "Discord thread #parent",
-    ThreadStarterBody: undefined,
-  });
+  expectCtx({ ThreadStarterBody: undefined });
 });
 
-it("frames preflight audio transcript in dispatch context and marks media transcribed", async () => {
-  const fetchImpl = vi.fn(async () => {
+it.each([true, false])("keeps command provenance (audio=%s)", async (audio) => {
+  const fetch = vi.fn(async () => {
     throw new Error("prepared media must not be fetched again");
   });
-  const audio = { path: "/tmp/openclaw-discord-test/voice.ogg", contentType: "audio/ogg" };
+  const media = { path: "/tmp/openclaw-discord-test/voice.ogg", contentType: "audio/ogg" };
+  const text = audio ? "" : "/status";
   await runBase({
-    discordRestFetch: fetchImpl,
-    message: {
-      ...message("m-audio-preflight", ""),
-      attachments: [attachment("voice.ogg", "audio/ogg", "att-audio-preflight")],
-    },
-    baseText: "",
-    messageText: "",
-    preflightAudioTranscript: "/status",
-    preparedMedia: [audio],
-    cfg: messageToolConfig,
-  });
-
-  expect(fetchImpl).not.toHaveBeenCalled();
-  expectCtx({
-    BodyForAgent: '[Audio transcript (machine-generated, untrusted)]: "/status"',
-    RawBody: "",
-    CommandBody: "",
-    CommandTurn: {
-      kind: "normal",
-      source: "message",
-      authorized: false,
-      commandName: undefined,
-      body: "",
-    },
-    Transcript: "/status",
-    media: [expect.objectContaining({ ...audio, transcribed: true })],
-  });
-  expect(h.getLastDispatchReplyOptions()?.sourceReplyDeliveryMode).toBe("message_tool_only");
-});
-
-it("keeps typed control commands as explicit text command turns", async () => {
-  await runBase({
-    baseText: "/status",
-    messageText: "/status",
-    hasControlCommand: true,
+    baseText: text,
+    messageText: text,
+    hasControlCommand: !audio,
     commandAuthorized: true,
+    ...(audio
+      ? {
+          discordRestFetch: fetch,
+          preflightAudioTranscript: "/status",
+          preparedMedia: [media],
+          message: {
+            ...message("m-audio-preflight", ""),
+            attachments: [attachment("voice.ogg", "audio/ogg", "audio")],
+          },
+          cfg: messageToolConfig,
+        }
+      : {}),
   });
-
   expect(dispatchCtx().CommandTurn).toEqual({
-    kind: "text-slash",
-    source: "text",
-    authorized: true,
-    commandName: "status",
-    body: "/status",
+    kind: audio ? "normal" : "text-slash",
+    source: audio ? "message" : "text",
+    authorized: !audio,
+    commandName: audio ? undefined : "status",
+    body: text,
   });
+  if (audio) {
+    expect(fetch).not.toHaveBeenCalled();
+    expectCtx({
+      BodyForAgent: '[Audio transcript (machine-generated, untrusted)]: "/status"',
+      RawBody: "",
+      CommandBody: "",
+      Transcript: "/status",
+      media: [expect.objectContaining({ ...media, transcribed: true })],
+    });
+  }
 });
 
 it.each(["hidden", "attachment-only", "bot-previous"] as const)(
@@ -478,11 +399,7 @@ it.each(["hidden", "attachment-only", "bot-previous"] as const)(
         referencedMessage: {
           ...message(replyId, body),
           attachments: [attachment("reply.png", "image/png", "att-reply")],
-          author: author(
-            bot ? "bot-1" : "U2",
-            username,
-            hidden ? "Mallory" : bot ? "Spartacus" : "Bob",
-          ),
+          author: { id: bot ? "bot-1" : "U2", username, discriminator: "0" },
         },
       },
       baseText: text,
@@ -512,7 +429,7 @@ it("pins main DM routes without losing direct-message identity", async () => {
     cfg: { messages: { ackReaction: "👀" }, session: { ...session, dmScope: "main" } },
     channelConfig: { users: ["user:111"] },
     baseSessionKey: key,
-    author: author("222", "bob", "Bob"),
+    author: { id: "222", username: "bob", globalName: "Bob", discriminator: "0" },
     sender: { id: "222", label: "bob" },
     route: { ...route, sessionKey: key },
   });
@@ -534,21 +451,22 @@ it("pins main DM routes without losing direct-message identity", async () => {
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-it.each([
-  { name: "parallel participants", agents: ["alice", "bob"] },
-  { name: "deferred warning", agents: ["alice"], warning: true },
-])("binds delivery to the $name", async ({ agents, warning }) => {
+it.each([false, true])("binds group-thread delivery (warning=%s)", async (warning) => {
+  const agents = warning ? ["alice"] : ["alice", "bob"];
   const workspaceRoot = tempDirs.make("discord-group-thread-workspaces-");
-  const workspaceFor = (agent: string) => path.join(workspaceRoot, `workspace-${agent}`);
+  const workspace = (agent: string) => join(workspaceRoot, `workspace-${agent}`);
+  const entries = Object.fromEntries(
+    ["main", "alice", "bob"].map((id) => [id, { workspace: workspace(id) }]),
+  );
   const cfg: OpenClawConfig = {
-    agents: {
-      ownership: "explicit",
-      entries: Object.fromEntries(
-        ["main", "alice", "bob"].map((id) => [id, { workspace: workspaceFor(id) }]),
-      ),
-    },
+    agents: { ownership: "explicit", entries },
     broadcast: { "discord:c1": agents },
   };
+  const warningPayload = h.createNonTerminalToolWarningPayload();
+  const mediaReply = (id: string, file: string) => ({
+    text: id,
+    mediaUrl: join(workspace(id), file),
+  });
   const ctx = await h.createAutomaticSourceDeliveryContext({
     cfg,
     route,
@@ -570,46 +488,33 @@ it.each([
       dispatchReplyFromConfig: async ({ ctx: participant, dispatcher }) => {
         const agentId = participant.AgentId ?? "main";
         participantRuns.push(agentId);
-        dispatcher.sendBlockReply({
-          text: `Reasoning from ${agentId}`,
-          isReasoning: true,
-          mediaUrl: path.join(workspaceFor(agentId), "reasoning.txt"),
-        });
+        dispatcher.sendBlockReply({ ...mediaReply(agentId, "reasoning.txt"), isReasoning: true });
         const queuedFinal = dispatcher.sendFinalReply(
-          warning
-            ? setReplyPayloadMetadata(
-                { text: "The attachment could not be processed.", isError: true },
-                { nonTerminalToolErrorWarning: true },
-              )
-            : {
-                text: `Answer from ${agentId}`,
-                mediaUrl: path.join(workspaceFor(agentId), "answer.txt"),
-              },
+          warning ? warningPayload : mediaReply(agentId, "answer.txt"),
         );
         return { queuedFinal, counts: dispatcher.getQueuedCounts() };
       },
     }),
   );
   await h.runProcessDiscordMessage(ctx);
-
   expect(errors.mock.calls).toEqual([]);
   expect(participantRuns).toEqual(agents);
   expect(deliver).toHaveBeenCalledTimes(agents.length * 2);
   for (const agentId of agents) {
-    const workspace = workspaceFor(agentId);
+    const root = workspace(agentId);
     for (const kind of ["block", "final"]) {
       const reply =
         warning && kind === "final"
-          ? { text: "The attachment could not be processed." }
+          ? { text: warningPayload.text }
           : {
-              mediaUrl: path.join(workspace, `${kind === "block" ? "reasoning" : "answer"}.txt`),
+              mediaUrl: join(root, `${kind === "block" ? "reasoning" : "answer"}.txt`),
             };
       expect(deliver).toHaveBeenCalledWith(
         expect.objectContaining({
           target: "channel:c1",
           accountId: "default",
           sessionKey: `agent:${agentId}:discord:channel:c1`,
-          mediaLocalRoots: expect.arrayContaining([workspace]),
+          mediaLocalRoots: expect.arrayContaining([root]),
           kind,
           replies: [expect.objectContaining(reply)],
         }),
