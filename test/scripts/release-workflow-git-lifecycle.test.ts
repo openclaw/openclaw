@@ -11,155 +11,230 @@ const releaseTag = "v2026.8.1";
 type ReleaseMode = "linux" | "macos" | "placeholder";
 type RunOptions = Partial<Parameters<typeof runCiGitStep>[0]>;
 
-const releases: Record<
-  ReleaseMode,
-  [file: string, job: string, step: string, options: RunOptions]
-> = {
-  linux: [
-    "linux-app-release",
-    "validate_release",
-    "Ensure tag commit is reachable from its release branch",
-    {
-      env: { RELEASE_TAG: releaseTag, WORKFLOW_SHA: otherSha },
-      revisions: { [`refs/tags/${releaseTag}^{commit}`]: sha },
+const releases: Record<ReleaseMode, Pick<RunOptions, "workflow" | "env" | "revisions">> = {
+  linux: {
+    workflow: {
+      file: ".github/workflows/linux-app-release.yml",
+      job: "validate_release",
+      step: "Ensure tag commit is reachable from its release branch",
     },
-  ],
-  macos: [
-    "macos-release",
-    "validate_macos_release_request",
-    "Validate release tag and package metadata",
-    { env: { PUBLIC_RELEASE_BRANCH: "main", RELEASE_TAG: releaseTag } },
-  ],
-  placeholder: [
-    "npm-placeholder-bootstrap",
-    "plan",
-    "Validate trusted workflow and target",
-    {
-      env: { EVENT_SHA: sha, SOURCE_REF: sha, WORKFLOW_REF: "refs/heads/main", WORKFLOW_SHA: sha },
+    env: { RELEASE_TAG: releaseTag, WORKFLOW_SHA: otherSha },
+    revisions: { [`refs/tags/${releaseTag}^{commit}`]: sha },
+  },
+  macos: {
+    workflow: {
+      file: ".github/workflows/macos-release.yml",
+      job: "validate_macos_release_request",
+      step: "Validate release tag and package metadata",
     },
-  ],
+    env: { PUBLIC_RELEASE_BRANCH: "main", RELEASE_TAG: releaseTag },
+  },
+  placeholder: {
+    workflow: {
+      file: ".github/workflows/npm-placeholder-bootstrap.yml",
+      job: "plan",
+      step: "Validate trusted workflow and target",
+    },
+    env: { EVENT_SHA: sha, SOURCE_REF: sha, WORKFLOW_REF: "refs/heads/main", WORKFLOW_SHA: sha },
+  },
 };
 
 function releaseRun(signal: AbortSignal, mode: ReleaseMode, options: RunOptions = {}) {
-  const [file, job, step, defaults] = releases[mode];
+  const release = releases[mode];
   return runCiGitStep({
     signal,
-    workflow: { file: `.github/workflows/${file}.yml`, job, step },
+    workflow: release.workflow,
     fetchResults: [],
     ...options,
-    env: { ...defaults.env, ...options.env },
-    revisions: { ...defaults.revisions, ...options.revisions },
+    env: { ...release.env, ...options.env },
+    revisions: { ...release.revisions, ...options.revisions },
   });
 }
 
-type AdmissionCase = [ReleaseMode, RunOptions, Record<string, unknown>];
-const fault = (operation: string, code = 23, occurrence?: number) => ({
+function gitCommands(report: Awaited<ReturnType<typeof releaseRun>>) {
+  return report.commands.filter(({ tool }) => tool === "git").map(({ args }) => args);
+}
+
+const fetchMain = ["fetch", "--no-tags", "origin", "+refs/heads/main:refs/remotes/origin/main"];
+const head = ["rev-parse", "HEAD"];
+const onMain = (revision: string) => ["merge-base", "--is-ancestor", revision, "origin/main"];
+
+posixIt.for([releaseTag, `${releaseTag}-2`])(
+  "Linux admits a stable tag from its matching release branch: %s",
+  { timeout: 55_000 },
+  async (tag, { signal }) => {
+    const report = await releaseRun(signal, "linux", {
+      env: { RELEASE_TAG: tag },
+      revisions: { [`refs/tags/${tag}^{commit}`]: sha },
+      commandResults: {
+        [`merge-base --is-ancestor ${sha} origin/main`]: { code: 1 },
+        [`merge-base --is-ancestor ${sha} refs/remotes/origin/release/2026.8.1`]: { code: 0 },
+      },
+    });
+    expect(report.code, report.output).toBe(0);
+    expect(report.githubOutput).toBe(`tag_sha=${sha}\n`);
+    expect(gitCommands(report)).toContainEqual([
+      ...fetchMain.slice(0, 3),
+      "+refs/heads/release/2026.8.1:refs/remotes/origin/release/2026.8.1",
+    ]);
+  },
+);
+
+posixIt.for([
+  {
+    mode: "linux" as const,
+    commands: [
+      fetchMain,
+      onMain(otherSha),
+      ["rev-parse", `refs/tags/${releaseTag}^{commit}`],
+      onMain(sha),
+    ],
+    output: `tag_sha=${sha}\n`,
+  },
+  {
+    mode: "macos" as const,
+    commands: [head, fetchMain],
+    output: "",
+  },
+  {
+    mode: "placeholder" as const,
+    commands: [head, fetchMain, onMain(sha), onMain(sha)],
+    output: `sha=${sha}\n`,
+  },
+])(
+  "$mode admission drains every Git tree before output or consumer",
+  { timeout: 55_000 },
+  async ({ mode, commands, output }, { signal }) => {
+    const report = await releaseRun(signal, mode);
+    expect(report, report.output).toMatchObject({ code: 0, githubOutput: output });
+    expect(gitCommands(report)).toEqual(commands);
+    expect(report.readyAttempts).toHaveLength(commands.length);
+    if (mode === "macos") {
+      expect(report.commands.filter(({ tool }) => tool === "pnpm").map(({ args }) => args)).toEqual(
+        [["release:openclaw:npm:check"]],
+      );
+    }
+    expect(report.boundaries).toContainEqual(
+      expect.objectContaining({ name: mode === "macos" ? "consumer:pnpm" : "output" }),
+    );
+  },
+);
+
+type FailureCase = { mode: ReleaseMode; options: RunOptions; expected: Record<string, unknown> };
+const failures: FailureCase[] = [];
+const addFailure = (
+  mode: ReleaseMode,
+  options: RunOptions,
+  expected: Record<string, unknown> = {},
+) => failures.push({ mode, options, expected });
+const fault = (operation: string, code: number, occurrence?: number) => ({
   gitFault: { match: `^${operation} `, code, occurrence },
 });
 const ancestry = (revision: string, branch = "origin/main") =>
   `merge-base --is-ancestor ${revision} ${branch}`;
-const rejects = (message: string, expected = {}) => ({
-  code: 1,
-  output: expect.stringContaining(message),
-  ...expected,
-});
+const shaRejection =
+  "NPM placeholder publication requires ref to equal the exact main workflow SHA.";
 // Owner startup, cancellation and drain faults are covered by
 // ci-platform-checkout.test.ts; here retain each workflow's admission decisions.
-const admissions: AdmissionCase[] = [
-  ...(["linux", "macos", "placeholder"] as const).map((mode): AdmissionCase => [
-    mode,
-    {},
-    {
-      code: 0,
-      githubOutput: { linux: `tag_sha=${sha}\n`, macos: "", placeholder: `sha=${sha}\n` }[mode],
-      pnpm: mode === "macos",
-      ...(mode === "macos" ? { pnpmArgs: [["release:openclaw:npm:check"]] } : {}),
-      boundaries: expect.arrayContaining([
-        expect.objectContaining({ name: mode === "macos" ? "consumer:pnpm" : "output" }),
-      ]),
+for (const mode of ["linux", "macos", "placeholder"] as const) {
+  addFailure(mode, { fetchResults: [23] }, { code: 23, operation: "fetch" });
+}
+for (const mode of ["linux", "macos"] as const) {
+  for (const code of [23, 125]) {
+    addFailure(mode, fault("rev-parse", code), { code, operation: "rev-parse" });
+  }
+}
+for (const code of [23, 125]) {
+  addFailure("linux", fault("merge-base", code), { code, operation: "merge-base" });
+  addFailure("placeholder", fault("rev-parse", code), {
+    code: 1,
+    output: expect.stringContaining(shaRejection),
+    gitCount: 1,
+  });
+}
+addFailure(
+  "linux",
+  {
+    commandResults: { [ancestry(sha)]: { code: 1 } },
+    ...fault("fetch", 128, 2),
+  },
+  { code: 128, operation: "fetch" },
+);
+for (const occurrence of [1, 2]) {
+  addFailure("placeholder", fault("merge-base", 23, occurrence), {
+    code: 1,
+    mergeBases: occurrence,
+    output: expect.stringContaining(
+      occurrence === 1 ? "workflow revision is not reachable" : "target must be reachable",
+    ),
+  });
+}
+addFailure(
+  "macos",
+  { env: { PUBLIC_RELEASE_BRANCH: "feature/not-a-release" } },
+  {
+    code: 1,
+    gitCount: 0,
+    output: expect.stringContaining(
+      "public_release_branch must be main or release/YYYY.M.PATCH, got feature/not-a-release.",
+    ),
+  },
+);
+addFailure(
+  "linux",
+  {
+    commandResults: {
+      [ancestry(sha)]: { code: 1 },
+      [ancestry(sha, "refs/remotes/origin/release/2026.8.1")]: { code: 1 },
     },
-  ]),
-  ...[releaseTag, `${releaseTag}-2`].map((tag): AdmissionCase => [
-    "linux",
-    {
-      env: { RELEASE_TAG: tag },
-      revisions: { [`refs/tags/${tag}^{commit}`]: sha },
-      commandResults: {
-        [ancestry(sha)]: { code: 1 },
-        [ancestry(sha, "refs/remotes/origin/release/2026.8.1")]: { code: 0 },
-      },
-    },
-    {
-      code: 0,
-      githubOutput: `tag_sha=${sha}\n`,
-      git: expect.arrayContaining([
-        [
-          "fetch",
-          "--no-tags",
-          "origin",
-          "+refs/heads/release/2026.8.1:refs/remotes/origin/release/2026.8.1",
-        ],
-      ]),
-    },
-  ]),
-  ...(["linux", "macos"] as const).map((mode): AdmissionCase => [
-    mode,
-    { fetchResults: [23] },
-    { code: 23, operation: "fetch" },
-  ]),
-  ["macos", fault("rev-parse"), { code: 23, operation: "rev-parse" }],
-  ["linux", fault("merge-base"), { code: 23, operation: "merge-base" }],
-  ["placeholder", fault("rev-parse"), rejects("exact main workflow SHA", { gitCount: 1 })],
-  ...[1, 2].map((occurrence): AdmissionCase => [
-    "placeholder",
-    fault("merge-base", 23, occurrence),
-    rejects(occurrence === 1 ? "workflow revision is not reachable" : "target must be reachable", {
-      mergeBases: occurrence,
-    }),
-  ]),
-  [
-    "macos",
-    { env: { PUBLIC_RELEASE_BRANCH: "feature/not-a-release" } },
-    rejects("public_release_branch must be main or release/", { gitCount: 0 }),
-  ],
-  [
-    "linux",
-    {
-      commandResults: {
-        [ancestry(sha)]: { code: 1 },
-        [ancestry(sha, "refs/remotes/origin/release/2026.8.1")]: { code: 1 },
-      },
-    },
-    rejects(`Tag ${releaseTag} (${sha}) is not reachable`),
-  ],
-  [
-    "linux",
-    { commandResults: { [ancestry(otherSha)]: { code: 1 } } },
-    rejects("Linux release tooling must be reachable", { candidateInspected: false }),
-  ],
-  [
-    "placeholder",
-    { env: { WORKFLOW_REF: "refs/heads/release/2026.8.1" } },
-    rejects("must run from the trusted main workflow", { gitCount: 0 }),
-  ],
-  [
-    "placeholder",
-    { env: { EVENT_SHA: otherSha } },
-    rejects("exact main workflow SHA", { gitCount: 0 }),
-  ],
-  [
-    "placeholder",
-    { commandResults: { "rev-parse HEAD": { code: 0, output: `${otherSha}\n` } } },
-    rejects("exact main workflow SHA", { git: [["rev-parse", "HEAD"]] }),
-  ],
-];
+  },
+  {
+    code: 1,
+    output: expect.stringContaining(
+      `Tag ${releaseTag} (${sha}) is not reachable from main or release/2026.8.1.`,
+    ),
+  },
+);
+addFailure(
+  "linux",
+  { commandResults: { [ancestry(otherSha)]: { code: 1 } } },
+  {
+    code: 1,
+    candidateInspected: false,
+    output: expect.stringContaining("Linux release tooling must be reachable from current main."),
+  },
+);
+addFailure(
+  "placeholder",
+  { env: { WORKFLOW_REF: "refs/heads/release/2026.8.1" } },
+  {
+    code: 1,
+    gitCount: 0,
+    output: expect.stringContaining("must run from the trusted main workflow"),
+  },
+);
+addFailure(
+  "placeholder",
+  { env: { EVENT_SHA: otherSha } },
+  {
+    code: 1,
+    gitCount: 0,
+    output: expect.stringContaining("requires ref to equal the exact main workflow SHA"),
+  },
+);
+addFailure(
+  "placeholder",
+  { commandResults: { "rev-parse HEAD": { code: 0, output: `${otherSha}\n` } } },
+  { code: 1, git: [head], output: expect.stringContaining(shaRejection) },
+);
 
-posixIt.for(admissions)(
-  "%s admission and Git lifecycle: %j",
+posixIt.for(failures)(
+  "$mode admission rejects $options",
   { timeout: 55_000 },
-  async ([mode, options, expected], { signal }) => {
+  async ({ mode, options, expected }, { signal }) => {
     const report = await releaseRun(signal, mode, options);
-    const git = report.commands.filter(({ tool }) => tool === "git").map(({ args }) => args);
+    const git = gitCommands(report);
+    expect(report.code, report.output).not.toBe(0);
     expect(
       {
         ...report,
@@ -167,8 +242,8 @@ posixIt.for(admissions)(
         gitCount: git.length,
         operation: git.at(-1)?.[0],
         pnpm: report.commands.some(({ tool }) => tool === "pnpm"),
-        pnpmArgs: report.commands.filter(({ tool }) => tool === "pnpm").map(({ args }) => args),
         mergeBases: git.filter(([op]) => op === "merge-base").length,
+        terminalMessage: /not reachable|requires ref to equal/u.test(report.output),
         candidateInspected: git.some(([op]) => op === "rev-parse"),
       },
       report.output,
