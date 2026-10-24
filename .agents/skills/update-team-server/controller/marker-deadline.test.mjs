@@ -9,6 +9,50 @@ import { fileURLToPath } from "node:url";
 const ownerPath = process.env.MARKER_DEADLINE_TEST_OWNER ??
   join(dirname(fileURLToPath(import.meta.url)), "openclaw-release-deploy");
 
+function fixtureRoot(t) {
+  const root = mkdtempSync(join(tmpdir(), "team-marker-deadline-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  return root;
+}
+
+function runShell(root, script, env, timeout, maxBuffer = 256 * 1024) {
+  const result = spawnSync("bash", ["--noprofile", "--norc", "-c", script], {
+    encoding: "utf8", timeout, maxBuffer,
+    env: { PATH: "/usr/bin:/bin", HOME: root, LANG: "C", LC_ALL: "C",
+      OPENCLAW_TEAM_OPERATOR_PROFILE: process.env.OPENCLAW_TEAM_OPERATOR_PROFILE,
+      FIXTURE_ROOT: root, FIXTURE_NODE: process.execPath, ...env },
+  });
+  assert.ifError(result.error);
+  return result;
+}
+
+// Both flows start with the same disabled optional features and private paths.
+const shellSetup = String.raw`
+set -Eeuo pipefail
+unset SECONDS
+verification_budget=600
+root_uid=0
+serving_root="$FIXTURE_ROOT"
+releases_root="$serving_root"
+journal_file="$serving_root/journal.json"
+current_link="$serving_root/current"
+node_bin="$FIXTURE_NODE"
+previous_release="$serving_root/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+candidate_release="$serving_root/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+previous_info='{"buildId":"fixture"}'
+proc_root="$serving_root/proc"
+fixture_defaults() {
+  local value="$1" variable; shift
+  for variable; do printf -v "$variable" '%s' "$value"; done
+}
+fixture_defaults '' reconcile_evidence session_witness session_witness_record \
+  gateway_runtime_snapshot native_update_root profile_operation
+fixture_defaults 0 allow_cpu_degraded arm_steady_profile profile_finished restart_failed
+run_gateway_node() { "$node_bin" "$@"; }
+proof_json() { [[ "$1" == gateway-status ]]; }
+assert_scheduler_owner() { :; }
+`;
+
 // Exercise the actual shell control flow with synthetic external effects and time.
 // This does not prove GNU timeout, process capabilities, or live Gateway behavior.
 function ownerFunction(source, name, optional = false) {
@@ -22,8 +66,7 @@ function ownerFunction(source, name, optional = false) {
 }
 
 function deadlineRecovery(t, terminalAtMs, failure = null, admissionReadyAtMs = 0, options = {}) {
-  const root = mkdtempSync(join(tmpdir(), "team-marker-deadline-"));
-  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const root = fixtureRoot(t);
   const journal = join(root, "journal.json"), events = join(root, "events.jsonl");
   const before = "a".repeat(40), after = "b".repeat(40);
   for (const sha of [before, after]) {
@@ -141,35 +184,16 @@ if(kind==="proof") {
   const functions = ["verification_failure", "verification_step", "wait_for_marker_readiness", "verify_marker",
     "load_journal_witness", "wait_for_live", "recover_journal", "rollback_activation"].map((name) => ownerFunction(source, name, name === "wait_for_marker_readiness")).join("\n");
   const convergenceOwner = ownerFunction(source, "verify_convergence").replace(/^verify_convergence\(\)/, "verify_convergence_owner()");
-  const script = String.raw`
-set -Eeuo pipefail
-unset SECONDS
+  const script = shellSetup + String.raw`
 SECONDS=0
 clock_ms=0
-verification_budget=600
 mode=recover
-reconcile_config_hash=""
-reconcile_journal_hash=""
-reconcile_request=""
-reconcile_evidence=""
+fixture_defaults '' reconcile_config_hash reconcile_journal_hash reconcile_request
 reconcile_stopped=0
-root_uid=0
-serving_root="$FIXTURE_ROOT"
-releases_root="$FIXTURE_ROOT"
-journal_file="$FIXTURE_ROOT/journal.json"
-current_link="$FIXTURE_ROOT/current"
 config_file="$FIXTURE_ROOT/config.json"
 state_database="$FIXTURE_ROOT/state.sqlite"
-session_witness_record=""
-session_witness=""
 session_proof=original-pre-cutover
 policy_identity="$FIXTURE_POLICY"
-node_bin="$FIXTURE_NODE"
-allow_cpu_degraded=0
-gateway_runtime_snapshot=""
-arm_steady_profile=0
-profile_finished=0
-profile_operation=""
 proof() {
   if [[ "$1" == marker-readiness || "$1" == probes || "$1" == channels ]]; then "$node_bin" "$FIXTURE_LIBRARY" "$@"
   else "$node_bin" "$FIXTURE_HELPER" proof "$@"; fi
@@ -186,12 +210,6 @@ assert_single_listener() { :; }
 recheck_generation() { :; }
 rollback_armed=1
 predecessor_stopped=1
-restart_failed=0
-native_update_root=""
-candidate_release="$FIXTURE_ROOT/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-previous_release="$FIXTURE_ROOT/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-previous_info='{"buildId":"fixture"}'
-proc_root="$FIXTURE_ROOT/proc"
 record_failed() { :; }
 predecessor_is_stopped() { :; }
 restore_pointer_topology() { ln -sfn "$previous_release" "$current_link"; }
@@ -203,10 +221,7 @@ verify_convergence() {
   verified_pid=123; verified_generation=456; verified_instance=fixture-instance
   if [[ "$FIXTURE_NATIVE_CONVERGENCE" == 1 ]]; then verify_convergence_owner "$@"; fi
 }
-proof_json() { [[ "$1" == gateway-status ]]; }
-assert_scheduler_owner() { :; }
 run_marker_rpc() { "$node_bin" "$FIXTURE_HELPER" rpc "$2" "$3" "$4" "$clock_ms"; }
-run_gateway_node() { "$node_bin" "$@"; }
 read_probe() {
   local body
   body="$("$node_bin" "$FIXTURE_HELPER" probe "$1" "$clock_ms")" || return "$?"
@@ -230,11 +245,8 @@ bounded() {
 if [[ "$FIXTURE_FLOW" == rollback ]]; then rollback_activation 1; exit "$?"; fi
 if recover_journal; then exit 0; else exit "$?"; fi
 `;
-  const result = spawnSync("bash", ["--noprofile", "--norc", "-c", script], {
-    encoding: "utf8", timeout: options.nativeConvergence ? 90_000 : 20_000, maxBuffer: 256 * 1024,
-    env: { PATH: "/usr/bin:/bin", HOME: root, LANG: "C", LC_ALL: "C",
-      OPENCLAW_TEAM_OPERATOR_PROFILE: process.env.OPENCLAW_TEAM_OPERATOR_PROFILE,
-      FIXTURE_ROOT: root, FIXTURE_HELPER: helper, FIXTURE_NODE: process.execPath,
+  const result = runShell(root, script, {
+      FIXTURE_HELPER: helper,
       FIXTURE_POLICY: JSON.stringify({ model: options.policyModel ?? "fixture/exact-model", fallbacks: options.fallbacks ?? [] }),
       FIXTURE_REQUESTED_MODEL: options.requestedModel ?? "exact-model",
       FIXTURE_EFFECTIVE_MODEL: options.effectiveModel ?? "exact-model",
@@ -253,20 +265,35 @@ if recover_journal; then exit 0; else exit "$?"; fi
       FIXTURE_REFUSAL_CODE: options.refusalCode ?? "", FIXTURE_FLOW: options.flow ?? "recover",
       FIXTURE_NATIVE_CONVERGENCE: options.nativeConvergence ? "1" : "0",
       FIXTURE_BUSY_CPU: options.busyCpu ? "1" : "0",
-      FIXTURE_OTHER_AGENT_PENDING: options.otherAgentPending ? "1" : "0" },
-  });
-  assert.ifError(result.error);
+      FIXTURE_OTHER_AGENT_PENDING: options.otherAgentPending ? "1" : "0",
+  }, options.nativeConvergence ? 90_000 : 20_000);
   assert.ok(existsSync(events), result.stderr || result.stdout);
   const rows = readFileSync(events, "utf8").trim().split("\n").map((line) => JSON.parse(line));
   return { result, rows, journal, original };
 }
 
+function assertRecovered(result, journal, exit = 0) {
+  assert.equal(result.status, exit, result.stderr);
+  assert.equal(existsSync(journal), false);
+}
+
+function assertUnrecovered(result, journal, original) {
+  assert.notEqual(result.status, 0, result.stdout);
+  assert.equal(readFileSync(journal, "utf8"), original);
+  assert.doesNotMatch(result.stdout, /MARKER_VERIFIED|RECOVERED/);
+}
+
+function assertPacedToDeadline(rows) {
+  const pauses = rows.filter(row => row.kind === "pause");
+  assert.ok(pauses.every(row => row.ms >= 500 && row.ms <= 10_000));
+  assert.equal(pauses.at(-1).atMs + pauses.at(-1).ms, 600_000);
+}
+
 test("marker completion in the final window is observed before the original deadline", (t) => {
   const { result, rows, journal } = deadlineRecovery(t, 597_000);
-  assert.equal(result.status, 0, result.stderr);
+  assertRecovered(result, journal);
   assert.match(result.stdout, /MARKER_VERIFIED .*observation=agent.wait/);
   assert.match(result.stdout, /RECOVERED phase=ROLLBACK_FAILED/);
-  assert.equal(existsSync(journal), false);
   assert.equal(rows.filter((row) => row.kind === "agent").length, 1);
   const observations = rows.filter((row) => row.kind === "agent.wait");
   assert.ok(observations.some((row) => row.atMs >= 597_000 && row.atMs < 600_000));
@@ -275,28 +302,24 @@ test("marker completion in the final window is observed before the original dead
 
 test("pending marker expires without a tight polling loop or retiring recovery evidence", (t) => {
   const { result, rows, journal, original } = deadlineRecovery(t, Infinity);
-  assert.notEqual(result.status, 0, result.stdout);
+  assertUnrecovered(result, journal, original);
   assert.match(result.stderr, /stage=marker.wait-budget/);
-  assert.doesNotMatch(result.stdout, /MARKER_VERIFIED|RECOVERED/);
-  assert.equal(readFileSync(journal, "utf8"), original);
   assert.equal(rows.filter((row) => row.kind === "agent").length, 1);
   assert.equal(rows.filter((row) => row.kind === "recovery-finish").length, 0);
   const observations = rows.filter((row) => row.kind === "agent.wait");
   assert.ok(observations.length > 1 && observations.length <= 20);
   assert.ok(observations.every((row) => row.atMs < 600_000 && row.clientBudget <= (600 - Math.floor(row.atMs / 1000)) * 1000));
-  const pauses = rows.filter((row) => row.kind === "pause");
-  assert.ok(pauses.every((row) => row.ms >= 500 && row.ms <= 10_000));
-  assert.equal(pauses.at(-1).atMs + pauses.at(-1).ms, 600_000);
+  assertPacedToDeadline(rows);
 });
 
 for (const failure of [
   { exit: 75, output: "RETRYABLE_OBSERVATION_TRANSPORT", retry: true },
   { exit: 75, output: "unclassified native failure", retry: false },
   { exit: 1, output: "RETRYABLE_OBSERVATION_TRANSPORT", retry: false },
-]) test(`observation failure ${failure.exit}/${failure.retry ? "typed" : "unclassified"} retains the absolute recovery deadline`, t => {
+]) {
+test(`observation failure ${failure.exit}/${failure.retry ? "typed" : "unclassified"} retains the absolute recovery deadline`, t => {
   const { result, rows, journal, original } = deadlineRecovery(t, Infinity, failure);
-  assert.notEqual(result.status, 0); assert.equal(readFileSync(journal, "utf8"), original);
-  assert.doesNotMatch(result.stdout, /MARKER_VERIFIED|RECOVERED/);
+  assertUnrecovered(result, journal, original);
   assert.equal(rows.filter(row => row.kind === "agent").length, 1);
   assert.equal(rows.filter(row => row.kind === "recovery-finish").length, 0);
   const observations = rows.filter(row => row.kind === "agent.wait");
@@ -305,21 +328,19 @@ for (const failure of [
     assert.match(result.stderr, /MARKER_OBSERVATION_RETRY/);
     assert.match(result.stderr, /stage=marker.wait-budget/);
     assert.ok(observations.length > 1 && observations.length <= 20);
-    const pauses = rows.filter(row => row.kind === "pause");
-    assert.ok(pauses.every(row => row.ms >= 500 && row.ms <= 10_000));
-    assert.equal(pauses.at(-1).atMs + pauses.at(-1).ms, 600_000);
+    assertPacedToDeadline(rows);
   } else {
     assert.equal(observations.length, 1);
     assert.doesNotMatch(result.stderr, /MARKER_OBSERVATION_RETRY/);
   }
 });
+}
 
 test("startup admission pending is retried with the identical payload before any dispatch", (t) => {
   const { result, rows, journal } = deadlineRecovery(t, 597_000, null, 596_000);
-  assert.equal(result.status, 0, result.stderr);
+  assertRecovered(result, journal);
   assert.match(result.stderr, /MARKER_ADMISSION_RETRY same-payload=required/);
   assert.match(result.stdout, /MARKER_VERIFIED .*observation=agent.wait/);
-  assert.equal(existsSync(journal), false);
   const dispatches = rows.filter((row) => row.kind === "agent");
   assert.equal(dispatches.length, 3);
   assert.equal(new Set(dispatches.map((row) => row.idempotencyKey)).size, 1);
@@ -331,10 +352,8 @@ test("startup admission pending is retried with the identical payload before any
 
 test("startup admission still pending at the deadline fails without retiring recovery evidence", (t) => {
   const { result, rows, journal, original } = deadlineRecovery(t, Infinity, null, Infinity);
-  assert.notEqual(result.status, 0, result.stdout);
+  assertUnrecovered(result, journal, original);
   assert.match(result.stderr, /stage=marker.admission-budget/);
-  assert.doesNotMatch(result.stdout, /MARKER_VERIFIED|RECOVERED/);
-  assert.equal(readFileSync(journal, "utf8"), original);
   assert.equal(existsSync(join(dirname(journal), "accepted.json")), false);
   assert.equal(rows.filter((row) => row.kind === "agent.wait").length, 0);
   const dispatches = rows.filter((row) => row.kind === "agent");
@@ -346,8 +365,7 @@ test("healthy dispatch timeout reconciles the same native run after fresh readin
   const { result, rows, journal } = deadlineRecovery(t, 596_000, null, 0, {
     dispatchFailure: { exit: 77, output: "RETRYABLE_DISPATCH_TIMEOUT", once: true },
   });
-  assert.equal(result.status, 0, result.stderr);
-  assert.equal(existsSync(journal), false);
+  assertRecovered(result, journal);
   assert.equal(rows.filter(row => row.kind === "native-run").length, 1);
   const dispatches = rows.filter(row => row.kind === "agent");
   assert.equal(dispatches.length, 2);
@@ -371,8 +389,7 @@ test("marker waits for native readiness to recover after convergence without ren
   const { result, rows, journal } = deadlineRecovery(t, 596_000, null, 0, {
     readyzReadyAtMs: 596_000,
   });
-  assert.equal(result.status, 0, result.stderr);
-  assert.equal(existsSync(journal), false);
+  assertRecovered(result, journal);
   const dispatches = rows.filter(row => row.kind === "agent");
   assert.equal(dispatches.length, 1);
   assert.equal(dispatches[0].atMs, 596_000);
@@ -399,9 +416,7 @@ for (const [label, options] of [
 ]) {
   test(`${label} retains evidence and never renews the marker deadline`, (t) => {
   const { result, rows, journal, original } = deadlineRecovery(t, Infinity, null, 0, options);
-  assert.notEqual(result.status, 0, result.stdout);
-  assert.equal(readFileSync(journal, "utf8"), original);
-  assert.doesNotMatch(result.stdout, /MARKER_VERIFIED|RECOVERED/);
+  assertUnrecovered(result, journal, original);
   assert.ok(rows.filter(row => ["agent", "agent.wait"].includes(row.kind)).every(row => row.atMs < 600_000));
   assert.ok(rows.filter(row => row.kind === "native-run").length <= 1);
   });
@@ -422,8 +437,7 @@ test("rollback gives a healthy predecessor the same admission and timeout reconc
 });
 
 test("native RPC runner retries typed dispatch/readiness timeouts and rejects real failures", (t) => {
-  const root = mkdtempSync(join(tmpdir(), "team-marker-transport-"));
-  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const root = fixtureRoot(t);
   mkdirSync(join(root, "dist/plugin-sdk"), { recursive: true });
   writeFileSync(join(root, "package.json"), '{"type":"module"}');
   writeFileSync(join(root, "dist/plugin-sdk/gateway-runtime.js"), `
@@ -443,12 +457,9 @@ run_marker_rpc "$FIXTURE_ROOT" "$FIXTURE_METHOD" '{}' 10000
     ["agent", { name: "GatewayClientRequestError", code: "UNAUTHORIZED" }, 1, ""],
     ["agent", { name: "GatewayClientRequestError", code: "UNAVAILABLE", details: { code: "agent-database-inspection-failed" } }, 1, ""],
   ]) {
-    const result = spawnSync("bash", ["--noprofile", "--norc", "-c", script], {
-      encoding: "utf8", timeout: 5000,
-      env: { PATH: "/usr/bin:/bin", FIXTURE_NODE: process.execPath, FIXTURE_ROOT: root,
-        FIXTURE_METHOD: method, FIXTURE_ERROR: JSON.stringify(error) },
-    });
-    assert.ifError(result.error);
+    const result = runShell(root, script, {
+      FIXTURE_METHOD: method, FIXTURE_ERROR: JSON.stringify(error),
+    }, 5000);
     assert.equal(result.status, exit, result.stderr);
     assert.equal(result.stdout, output);
   }
@@ -462,10 +473,9 @@ for (const [label, options, firstDispatchAtMs] of [
 ]) {
   test(`native convergence: ${label} completes the default marker without a CPU waiver`, (t) => {
     const { result, rows, journal } = deadlineRecovery(t, firstDispatchAtMs, null, 0, { ...options, nativeConvergence: true });
-    assert.equal(result.status, 0, result.stderr);
+    assertRecovered(result, journal);
     assert.match(result.stdout, /MARKER_VERIFIED/);
     assert.doesNotMatch(result.stdout, /CPU_DEGRADED_OPERATOR_WAIVED/);
-    assert.equal(existsSync(journal), false);
     const dispatches = rows.filter(row => row.kind === "agent");
     assert.equal(dispatches.length, 1);
     assert.ok(dispatches[0].atMs >= firstDispatchAtMs && dispatches[0].atMs < 600_000);
@@ -474,8 +484,7 @@ for (const [label, options, firstDispatchAtMs] of [
 
 function successorActivation(t, { stopSeconds = 94, listenerAt = 60, rpcAt = listenerAt,
   fault = "", mode = "deploy", retrySeconds = 2, pointers = false, suspensionState = "DRAINING" } = {}) {
-  const root = mkdtempSync(join(tmpdir(), "team-successor-window-"));
-  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const root = fixtureRoot(t);
   if (pointers) {
     for (const sha of ["a".repeat(40), "b".repeat(40), "c".repeat(40)]) {
       mkdirSync(join(root, sha));
@@ -491,64 +500,32 @@ function successorActivation(t, { stopSeconds = 94, listenerAt = 60, rpcAt = lis
     "rollback_activation", "activate_release"].map(name => ownerFunction(source, name)).join("\n");
   // Run the actual activation and rollback owners. Only external effects, marker
   // completion, and unrelated pre-start admission are synthetic. No wall sleeps.
-  const script = String.raw`
-set -Eeuo pipefail
-unset SECONDS
+  const script = shellSetup + String.raw`
 SECONDS=1000
-verification_budget=600
-verification_deadline=0
-verification_owned_pid=""
-verification_owned_generation=""
-verification_owned_scope=""
+fixture_defaults '' verification_owned_pid verification_owned_generation verification_owned_scope \
+  runtime_target held_suspension suspension_blockers verified_pid verified_generation
+fixture_defaults 0 verification_deadline capture_startup_profile rollback_armed \
+  predecessor_stopped suspension_cleanup_only
 mode="$FIXTURE_MODE"
-serving_root="$FIXTURE_ROOT"
-releases_root="$serving_root"
-previous_release="$serving_root/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-candidate_release="$serving_root/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 [[ "$mode" != runtime ]] || candidate_release="$previous_release"
-current_link="$serving_root/current"
 previous_link="$serving_root/previous"
-journal_file="$serving_root/journal.json"
-previous_info='{"buildId":"fixture"}'
 candidate_info="$previous_info"
-node_bin="$FIXTURE_NODE"
 ss_bin=listener_snapshot
 gateway_port=18789
-proc_root="$serving_root/proc"
-root_uid=0
 runtime_uid=1000
 config_file="$serving_root/config"
 state_database="$serving_root/state"
 protected_identity=identity
 policy_identity=policy
-reconcile_evidence=""
-session_witness=""
-session_witness_record=""
-gateway_runtime_snapshot=""
-runtime_target=""
-native_update_root=""
-capture_startup_profile=0
-arm_steady_profile=0
-profile_operation=""
-profile_finished=0
 interrupt_after_drain=1
-allow_cpu_degraded=0
-rollback_armed=0
-predecessor_stopped=0
-restart_failed=0
-held_suspension=""
 suspension_expiry=expiry
 suspension_state="$FIXTURE_SUSPENSION_STATE"
-suspension_cleanup_only=0
 suspension_scope=system
 suspension_release="$previous_release"
 suspension_pid=111
 suspension_generation=1110
 suspension_write_custody=clear
-suspension_blockers=""
 drain_budget_elapsed=1
-verified_pid=""
-verified_generation=""
 active=predecessor
 successor_started=-1
 record() { printf '%s %s\n' "$SECONDS" "$*" >>"$serving_root/events"; }
@@ -622,7 +599,6 @@ proof() {
     *) return 90 ;;
   esac
 }
-proof_json() { [[ "$1" == gateway-status ]]; }
 run_gateway() {
   if [[ " $* " == *" system.info "* ]]; then
     record "rpc $active"
@@ -632,7 +608,6 @@ run_gateway() {
 }
 read_probe() { probe_body='{}'; probe_status=200; }
 verify_marker() { record marker; recheck_generation "$2" "$verified_pid" "$verified_generation"; }
-assert_scheduler_owner() { :; }
 assert_frozen_predecessor() { :; }
 assert_stop_start_contract() { :; }
 read_process_instance() { printf fixture-instance; }
@@ -658,17 +633,13 @@ realpath() { if [[ -L "$1" ]]; then readlink "$1"; else printf '%s' "$previous_r
 if activate_release system; then exit 0; else activation_exit=$?; fi
 rollback_activation "$activation_exit" || exit "$?"
 `;
-  const result = spawnSync("bash", ["--noprofile", "--norc", "-c", script], {
-    encoding: "utf8", timeout: 90_000, maxBuffer: 512 * 1024,
-    env: { PATH: "/usr/bin:/bin", HOME: root, LANG: "C", LC_ALL: "C",
-      OPENCLAW_TEAM_OPERATOR_PROFILE: process.env.OPENCLAW_TEAM_OPERATOR_PROFILE,
-      FIXTURE_ROOT: root, FIXTURE_NODE: process.execPath, FIXTURE_MODE: mode,
+  const result = runShell(root, script, {
+      FIXTURE_MODE: mode,
       FIXTURE_SUSPENSION_STATE: suspensionState,
       OPENCLAW_TEAM_RETRY_SECONDS: String(retrySeconds),
       FIXTURE_STOP_SECONDS: String(stopSeconds), FIXTURE_LISTENER_AT: String(listenerAt),
-      FIXTURE_RPC_AT: String(rpcAt), FIXTURE_FAULT: fault },
-  });
-  assert.ifError(result.error);
+      FIXTURE_RPC_AT: String(rpcAt), FIXTURE_FAULT: fault,
+  }, 90_000, 512 * 1024);
   const rows = readFileSync(join(root, "events"), "utf8").trim().split("\n").map(line => {
     const [at, ...event] = line.split(" "); return { at: Number(at), event: event.join(" ") };
   });
@@ -707,30 +678,35 @@ for (const suspensionState of ["DRAINING", "READY"]) {
   }
 }
 
-for (const mode of ["runtime", "deploy"]) test(`successor convergence: ${mode} waits for a late listener and RPC after a 94-second stop`, t => {
+for (const mode of ["runtime", "deploy"]) {
+test(`successor convergence: ${mode} waits for a late listener and RPC after a 94-second stop`, t => {
   const rpcAt = mode === "runtime" ? 90 : 60;
   const { result, rows, journal, started, afterStart } = successorActivation(t, { mode, rpcAt });
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /SUCCESS /);
   assert.equal((result.stderr.match(/VERIFICATION_WAITING stage=convergence.listener/g) ?? []).length, 1);
   assert.doesNotMatch(result.stderr, /VERIFICATION_FAILED stage=convergence.generation/);
-  if (rpcAt > 60) assert.match(result.stderr, /stage=convergence.process-rpc/);
+  if (rpcAt > 60) { assert.match(result.stderr, /stage=convergence.process-rpc/); }
   assert.equal(started, 1094);
   assert.equal(rows.find(row => row.event === "marker").at - started, rpcAt);
   assert.equal(rows.some(row => row.event === "rollback-compatibility"), false);
   assert.equal(afterStart.some(row => row.event === "stopped-proof"), false);
   assert.equal(journal, null);
 });
+}
 
-for (const stopSeconds of [0, 94]) test(`successor convergence: ${stopSeconds}-second predecessor stop leaves the full 600-second window`, t => {
+for (const stopSeconds of [0, 94]) {
+test(`successor convergence: ${stopSeconds}-second predecessor stop leaves the full 600-second window`, t => {
   const { result, rows, journal, started } = successorActivation(t, { stopSeconds, listenerAt: 598, retrySeconds: 13 });
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /SUCCESS /);
   assert.equal(rows.find(row => row.event === "marker").at - started, 600 - 2);
   assert.equal(journal, null);
 });
+}
 
-for (const fault of ["", "exit-at-budget"]) test(`successor convergence: missing listener exhausts the budget before one rollback attempt (${fault || "still running"})`, t => {
+for (const fault of ["", "exit-at-budget"]) {
+test(`successor convergence: missing listener exhausts the budget before one rollback attempt (${fault || "still running"})`, t => {
   const { result, rows, journal, started, afterStart } = successorActivation(t, { listenerAt: 9999, fault, retrySeconds: 17 });
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /stage=wait-for-live.budget/);
@@ -751,8 +727,10 @@ for (const fault of ["", "exit-at-budget"]) test(`successor convergence: missing
     assert.equal(rows.some(row => row.event === "restore-pointers"), false);
   }
 });
+}
 
-for (const fault of ["generation", "foreign", "policy", "identity"]) test(`successor convergence: ${fault} drift never gains verification or rollback authority`, t => {
+for (const fault of ["generation", "foreign", "policy", "identity"]) {
+test(`successor convergence: ${fault} drift never gains verification or rollback authority`, t => {
   const { result, rows, journal } = successorActivation(t, { listenerAt: fault === "generation" ? 60 : 0, fault, retrySeconds: 20 });
   assert.notEqual(result.status, 0);
   assert.doesNotMatch(result.stdout, /SUCCESS /);
@@ -763,18 +741,18 @@ for (const fault of ["generation", "foreign", "policy", "identity"]) test(`succe
   assert.equal(journal.phase, "ROLLBACK_FAILED");
   assert.equal(journal.originalWitness, "fixture");
 });
+}
 
 for (const flow of ["recover", "rollback"]) {
 test(`marker configured fallback completes ${flow} with its original run`, (t) => {
   const { result, rows, journal } = deadlineRecovery(t, 590_000, null, 0, {
     flow, fallbacks: ["fixture/fallback"], effectiveModel: "fallback",
   });
-  assert.equal(result.status, flow === "rollback" ? 1 : 0, result.stderr);
+  assertRecovered(result, journal, flow === "rollback" ? 1 : 0);
   assert.match(result.stdout, /MARKER_VERIFIED /);
   if (flow === "rollback") {
     assert.match(result.stderr, /ROLLED_BACK sha=/);
   }
-  assert.equal(existsSync(journal), false);
   assert.equal(rows.filter(row => row.kind === "native-run").length, 1);
 });
 }
@@ -797,9 +775,8 @@ test("marker configured fallback resolves auth profiles through the serving rele
   const { result, rows, journal } = deadlineRecovery(t, 590_000, null, 0, {
     policyModel: "fixture/exact-model@work", fallbacks: ["fixture/fallback@work"], effectiveModel: "fallback",
   });
-  assert.equal(result.status, 0, result.stderr);
+  assertRecovered(result, journal);
   assert.match(result.stdout, /MARKER_VERIFIED /);
-  assert.equal(existsSync(journal), false);
   assert.equal(rows.filter(row => row.kind === "native-run").length, 1);
 });
 
