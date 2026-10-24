@@ -262,11 +262,11 @@ describe("push APNs send semantics", () => {
   it("bounds APNs response body capture", () => {
     const capture = createApnsResponseBodyCapture();
 
-    appendApnsResponseBodyCapture(capture, "abc", 5);
-    appendApnsResponseBodyCapture(capture, "def", 5);
+    appendApnsResponseBodyCapture(capture, "a".repeat(8190));
+    appendApnsResponseBodyCapture(capture, "def");
 
-    expect(getApnsResponseBodyCaptureText(capture)).toBe("abcde");
-    expect(capture).toMatchObject({ capturedBytes: 5, truncated: true });
+    expect(getApnsResponseBodyCaptureText(capture)).toBe("a".repeat(8190) + "de");
+    expect(capture).toMatchObject({ capturedBytes: 8192, truncated: true });
   });
 
   it("preserves UTF-8 across HTTP/2 chunks and drops an incomplete capped suffix", () => {

@@ -79,6 +79,10 @@ function durable(requirements: Parameters<typeof checkDurable>[0]["requirements"
   return checkDurable({ ...discordParams, requirements });
 }
 
+function loadDiscord(fields: object) {
+  loaderMocks.loadPluginRegistryHandle.mockReturnValue(discordRegistry(fields));
+}
+
 describe("bootstrapOutboundChannelPlugin", () => {
   beforeEach(() => setActivePluginRegistry(discordRegistry({}, "setup")));
   afterEach(() => {
@@ -89,10 +93,7 @@ describe("bootstrapOutboundChannelPlugin", () => {
   });
 
   it("uses the admitted agent workspace during outbound preparation", async () => {
-    const handle = discordRegistry({
-      outbound: { ...outbound, extractMarkdownImages: true },
-    });
-    loaderMocks.loadPluginRegistryHandle.mockReturnValue(handle);
+    loadDiscord({ outbound: { ...outbound, extractMarkdownImages: true } });
 
     const sender = await handler(explicitFleetDiscordConfig, "ops");
     await expect(sender.sendText("hello")).resolves.toMatchObject({ messageId: "1" });
@@ -130,11 +131,10 @@ describe("bootstrapOutboundChannelPlugin", () => {
       from: "discord:channel:ops",
       to: "channel:ops",
     }));
-    const handle = discordRegistry({
+    loadDiscord({
       outbound,
       messaging: { targetResolver: { resolveTarget }, resolveOutboundSessionRoute },
     });
-    loaderMocks.loadPluginRegistryHandle.mockReturnValue(handle);
 
     await expect(
       resolveChannelTargetForDelivery({ ...admittedOwner, input: "ops" }),
@@ -181,13 +181,12 @@ describe("bootstrapOutboundChannelPlugin", () => {
   });
 
   it("resolves durable message capabilities inside the scoped handle", async () => {
-    const handle = discordRegistry({
+    loadDiscord({
       message: {
         durableFinal: { capabilities: { text: true, silent: true } },
         send: { text: async () => ({ messageId: "1" }) },
       },
     });
-    loaderMocks.loadPluginRegistryHandle.mockReturnValue(handle);
 
     await expect(durable({ text: true, silent: true })).resolves.toEqual({
       ok: true,

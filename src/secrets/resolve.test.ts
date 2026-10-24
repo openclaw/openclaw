@@ -12,7 +12,6 @@ import {
   type FixtureReceiptChannel,
 } from "../../test/helpers/fixture-receipts.js";
 import { withinTest } from "../../test/helpers/promise.js";
-import type { OpenClawConfig } from "../config/config.js";
 import type {
   FileSecretProviderConfig,
   ManualExecSecretProviderConfig,
@@ -29,6 +28,7 @@ import {
   withMockedWindowsAclVerificationUnavailable,
   withMockedWindowsPlatform,
 } from "../test-utils/vitest-spies.js";
+import { assertSecureExecCommandPath } from "./exec-provider-path-validation.js";
 import {
   describeSecretResolutionError,
   describeSecretResolutionOperatorDiagnostic,
@@ -43,18 +43,11 @@ import {
 } from "./resolve.js";
 
 async function writeSecureFile(filePath: string, content: string, mode = 0o600): Promise<void> {
-  await fs.mkdir(path.dirname(filePath), { recursive: true });
-  const tempPath = `${filePath}.tmp-${process.pid}-${Date.now()}-${Math.random()
-    .toString(16)
-    .slice(2)}`;
-  try {
-    await fs.writeFile(tempPath, content, "utf8");
-    await fs.chmod(tempPath, mode);
-    await fs.rename(tempPath, filePath);
-  } catch (err) {
-    await fs.rm(tempPath, { force: true }).catch(() => {});
-    throw err;
-  }
+  // Case-owned paths make a fixed staging name safe; rename must replace hardlinks.
+  const tempPath = `${filePath}.tmp`;
+  await fs.writeFile(tempPath, content, "utf8");
+  await fs.chmod(tempPath, mode);
+  await fs.rename(tempPath, filePath);
 }
 
 describe("secret ref resolver", () => {
@@ -88,49 +81,37 @@ describe("secret ref resolver", () => {
   };
 
   type ExecProviderConfig = ManualExecSecretProviderConfig & { allowSymlinkCommand?: boolean };
-  type FileProviderConfig = FileSecretProviderConfig;
-
-  function createExecProviderConfig(
-    command: string,
-    overrides: Partial<ExecProviderConfig> = {},
-  ): ExecProviderConfig {
-    return { source: "exec", command, passEnv: ["PATH"], ...overrides };
-  }
 
   function providerOptions(name: string, provider: SecretProviderConfig) {
     return { config: { secrets: { providers: { [name]: provider } } } };
   }
 
-  async function resolveExecSecret(
+  function resolveExecSecret(
     command: string,
     overrides: Partial<ExecProviderConfig> = {},
     id = "openai/api-key",
   ): Promise<string> {
     return resolveSecretRefString(
       { source: "exec", provider: "execmain", id },
-      providerOptions("execmain", createExecProviderConfig(command, overrides)),
+      providerOptions("execmain", { source: "exec", command, passEnv: ["PATH"], ...overrides }),
     );
-  }
-
-  function createFileProviderConfig(
-    filePath: string,
-    overrides: Partial<FileProviderConfig> = {},
-  ): FileProviderConfig {
-    return { source: "file", path: filePath, mode: "json", ...overrides };
   }
 
   function resolveFileSecret(
     filePath: string,
-    overrides: Partial<FileProviderConfig> = {},
+    overrides: Partial<FileSecretProviderConfig> = {},
     id = "/providers/openai/apiKey",
   ) {
     return resolveSecretRefString(
       { source: "file", provider: "filemain", id },
-      providerOptions("filemain", createFileProviderConfig(filePath, overrides)),
+      providerOptions("filemain", { source: "file", path: filePath, mode: "json", ...overrides }),
     );
   }
 
   const filePayload = JSON.stringify({ providers: { openai: { apiKey: "sk-file-value" } } }); // pragma: allowlist secret
+  const execRef = (id = "openai/api-key") =>
+    ({ source: "exec", provider: "execmain", id }) as const;
+  const captureError = (promise: Promise<unknown>) => promise.catch((error: unknown) => error);
 
   function expectWindowsProviderError(error: unknown, kind: "file" | "exec") {
     expect(isProviderScopedSecretResolutionError(error)).toBe(true);
@@ -168,6 +149,58 @@ describe("secret ref resolver", () => {
       return;
     }
     await fs.rm(fixtureRoot, { recursive: true, force: true });
+  });
+
+  describe("command path preflight", () => {
+    const check = (command: string, trustedDirs?: string[]) =>
+      assertSecureExecCommandPath({
+        command,
+        trustedDirs,
+        label: "secrets.providers.execmain.command",
+      });
+
+    describe.each([
+      ["executable", 0o755, false],
+      ["non-executable (startup parity)", 0o600, false],
+      ["trusted executable", 0o755, true],
+    ] as const)("regular %s", (_label, mode, trusted) => {
+      it.skipIf(isWindows && (mode === 0o600 || trusted))("accepts without executing", async () => {
+        const root = await fs.realpath(await createCaseDir("preflight"));
+        const command = path.join(root, "resolver");
+        const marker = path.join(root, "executed");
+        await writeSecureFile(
+          command,
+          `#!/usr/bin/env node\nrequire("node:fs").writeFileSync(${JSON.stringify(marker)}, "executed");\n`,
+          mode,
+        );
+        await expect(check(command, trusted ? [root] : undefined)).resolves.toBe(command);
+        await expect(fs.access(marker)).rejects.toMatchObject({ code: "ENOENT" });
+      });
+    });
+
+    it.skipIf(isWindows).each(["missing", "directory", "writable", "untrusted"] as const)(
+      "rejects a %s command path",
+      async (kind) => {
+        const root = await createCaseDir("preflight-invalid");
+        const command = kind === "directory" ? root : path.join(root, "resolver");
+        if (kind === "writable" || kind === "untrusted") {
+          await writeSecureFile(
+            command,
+            "#!/bin/sh\nexit 0\n",
+            kind === "writable" ? 0o666 : 0o755,
+          );
+        }
+        const errors = {
+          missing: "is not readable",
+          directory: "must be a file",
+          writable: "permissions are too open",
+          untrusted: "is outside trustedDirs",
+        };
+        await expect(
+          check(command, kind === "untrusted" ? [path.join(root, "trusted")] : undefined),
+        ).rejects.toThrow(errors[kind]);
+      },
+    );
   });
 
   it("does not rewrite an explicit default provider to a configured alias", async () => {
@@ -228,7 +261,7 @@ describe("secret ref resolver", () => {
     const ref = { source: "file", provider: "filemain", id: "/providers/0" } as const;
     const error = await resolveSecretRefValue(
       ref,
-      providerOptions("filemain", createFileProviderConfig(filePath)),
+      providerOptions("filemain", { source: "file", path: filePath, mode: "json" }),
     ).catch((caught: unknown) => caught);
 
     expect(isMissingSecretRefResolutionError({ ref, error })).toBe(true);
@@ -237,18 +270,10 @@ describe("secret ref resolver", () => {
   itPosix(
     "classifies omitted and NOT_FOUND exec ids as missing but keeps other errors fail-closed",
     async () => {
-      const ref = { source: "exec", provider: "execmain", id: "openai/api-key" } as const;
-      const configFor = (command: string): OpenClawConfig =>
-        providerOptions("execmain", createExecProviderConfig(command)).config;
-      const omittedError = await resolveSecretRefValue(ref, {
-        config: configFor(execScript("missing")),
-      }).catch((error: unknown) => error);
-      const missingError = await resolveSecretRefValue(ref, {
-        config: configFor(execScript("error")),
-      }).catch((error: unknown) => error);
-      const providerError = await resolveSecretRefValue(ref, {
-        config: configFor(execScript("unsafe")),
-      }).catch((error: unknown) => error);
+      const ref = execRef();
+      const omittedError = await captureError(resolveExecSecret(execScript("missing")));
+      const missingError = await captureError(resolveExecSecret(execScript("error")));
+      const providerError = await captureError(resolveExecSecret(execScript("unsafe")));
 
       expect(isMissingSecretRefResolutionError({ ref, error: omittedError })).toBe(true);
       expect(isMissingSecretRefResolutionError({ ref, error: missingError })).toBe(true);
@@ -391,25 +416,19 @@ describe("secret ref resolver", () => {
     ).rejects.toThrow("must not be a symlink");
   });
 
-  itPosix("rejects exec refs when protocolVersion is not 1", async () => {
-    await expect(resolveExecSecret(execScript("v2"))).rejects.toThrow("protocolVersion must be 1");
-  });
-
-  itPosix("rejects exec refs when missing response id is inherited", async () => {
-    await expect(resolveExecSecret(execScript("missing"), {}, "toString")).rejects.toThrow(
-      'response missing id "toString"',
+  it.skipIf(isWindows).each([
+    ["v2", "openai/api-key", "protocolVersion must be 1"],
+    ["missing", "toString", 'response missing id "toString"'],
+    ["invalid", "openai/api-key", "returned invalid JSON"],
+  ] as const)("rejects %s exec response for %s", async (response, id, error) => {
+    await expect(resolveExecSecret(execScript(response), { jsonOnly: true }, id)).rejects.toThrow(
+      error,
     );
   });
 
   itPosix("ignores inherited exec response errors", async () => {
     await expect(resolveExecSecret(execScript("inherited"), {}, "toString")).resolves.toBe(
       "resolved",
-    );
-  });
-
-  itPosix("rejects exec refs with invalid JSON when jsonOnly is true", async () => {
-    await expect(resolveExecSecret(execScript("invalid"), { jsonOnly: true })).rejects.toThrow(
-      "returned invalid JSON",
     );
   });
 
@@ -453,25 +472,23 @@ describe("secret ref resolver", () => {
     }
   });
 
-  it("rejects invalid env, file, and provider refs before provider resolution", async () => {
-    await expect(
-      resolveSecretRefValue({ source: "env", provider: "default", id: "bad id" }, { config: {} }),
-    ).rejects.toThrow("Env secret reference id must match");
-
-    await expect(
-      resolveSecretRefValue(
-        { source: "file", provider: "default", id: "providers/openai/apiKey" },
-        { config: {} },
-      ),
-    ).rejects.toThrow("File secret reference id must be an absolute JSON pointer");
-
-    await expect(
-      resolveSecretRefValue(
-        { source: "env", provider: "Default", id: "OPENAI_API_KEY" },
-        { config: {} },
-      ),
-    ).rejects.toThrow("Secret reference provider must match");
-  });
+  it.each([
+    ["env", "default", "bad id", "Env secret reference id must match"],
+    [
+      "file",
+      "default",
+      "providers/openai/apiKey",
+      "File secret reference id must be an absolute JSON pointer",
+    ],
+    ["env", "Default", "OPENAI_API_KEY", "Secret reference provider must match"],
+  ] as const)(
+    "rejects invalid %s/%s/%s before provider resolution",
+    async (source, provider, id, error) => {
+      await expect(resolveSecretRefValue({ source, provider, id }, { config: {} })).rejects.toThrow(
+        error,
+      );
+    },
+  );
 
   it("strips UTF-8 BOM from file provider singleValue mode", async () => {
     const dir = await createCaseDir("bom-single");
@@ -483,42 +500,43 @@ describe("secret ref resolver", () => {
     expect(value).toBe("my-secret-value");
   });
 
-  it("fails closed on Windows when file provider ACL source is unknown", async () => {
-    const dir = await createCaseDir("win-acl");
-    await withMockedWindowsAclVerificationUnavailable(
-      path.join(dir, "missing-windows-system-root"),
-      async () => {
-        const filePath = path.join(dir, "secrets.json");
-        await writeSecureFile(filePath, '{"token":"abc123"}');
-
-        const error = await resolveFileSecret(filePath, {}, "/token").catch(
-          (caught: unknown) => caught,
-        );
-        expectWindowsProviderError(error, "file");
-      },
-    );
-  });
-
-  it("fails closed on Windows when exec provider ACL source is unknown", async () => {
-    const dir = await createCaseDir("win-exec-acl");
-    await withMockedWindowsAclVerificationUnavailable(
-      path.join(dir, "missing-windows-system-root"),
-      async () => {
-        const markerPath = path.join(dir, "executed");
-        const commandPath = path.join(dir, "resolver.sh");
-        await writeSecureFile(
-          commandPath,
-          ["#!/bin/sh", `touch ${JSON.stringify(markerPath)}`].join("\n"),
-          0o700,
-        );
-
-        const error = await resolveExecSecret(commandPath).catch((caught: unknown) => caught);
-
-        expectWindowsProviderError(error, "exec");
-        await expect(fs.access(markerPath)).rejects.toThrow();
-      },
-    );
-  });
+  it.each(["file", "exec"] as const)(
+    "fails closed on Windows when %s provider ACL source is unknown",
+    async (kind) => {
+      const dir = await createCaseDir(`win-${kind}-acl`);
+      await withMockedWindowsAclVerificationUnavailable(
+        path.join(dir, "missing-windows-system-root"),
+        async () => {
+          const markerPath = path.join(dir, "executed");
+          const providerPath = path.join(dir, kind === "file" ? "secrets.json" : "resolver.sh");
+          await writeSecureFile(
+            providerPath,
+            kind === "file"
+              ? '{"token":"abc123"}'
+              : `#!/bin/sh\ntouch ${JSON.stringify(markerPath)}`,
+            kind === "file" ? 0o600 : 0o700,
+          );
+          const error = await captureError(
+            kind === "file"
+              ? resolveFileSecret(providerPath, {}, "/token")
+              : resolveExecSecret(providerPath),
+          );
+          expectWindowsProviderError(error, kind);
+          if (kind === "exec") {
+            expect(error).toMatchObject({
+              cause: {
+                code: "permission-unverified",
+                message: expect.stringMatching(
+                  /ACL verification unavailable on Windows.*no provider-level bypass/,
+                ),
+              },
+            });
+            await expect(fs.access(markerPath)).rejects.toThrow();
+          }
+        },
+      );
+    },
+  );
 
   it("keeps a failed Windows exec permission restat as a generic failure", async () => {
     await withMockedWindowsPlatform(async () => {

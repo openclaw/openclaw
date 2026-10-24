@@ -2,12 +2,15 @@
 
 import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import { showInputDialog } from "../../components/input-dialog.ts";
+import { showInputDialog } from "../../components/input-dialog.tsx";
 import { t } from "../../i18n/index.ts";
 import { createInitialDevicesState } from "../../lib/nodes/page-operations.ts";
 import { createDevicesDialogs, type DevicesDialogHost } from "./devices-dialogs.ts";
 
-vi.mock("../../components/input-dialog.ts", () => ({ showInputDialog: vi.fn() }));
+vi.mock("../../components/input-dialog.tsx", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../components/input-dialog.tsx")>()),
+  showInputDialog: vi.fn(),
+}));
 
 function createHost(request = vi.fn(), canManagePairing = () => true): DevicesDialogHost {
   const state = createInitialDevicesState({
@@ -20,6 +23,10 @@ function createHost(request = vi.fn(), canManagePairing = () => true): DevicesDi
     gatewayClient: () => null,
     gatewayUrl: () => "http://gateway.test",
     runPageTask: async (task) => task(state),
+    runInventoryTask: async (task) => {
+      await task(state);
+    },
+    rotateDevice: vi.fn(),
     setDevicesError: vi.fn(),
   };
 }

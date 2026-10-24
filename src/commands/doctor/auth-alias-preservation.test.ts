@@ -29,6 +29,17 @@ import { recordAuthAliasMigration } from "./auth-alias-receipt.js";
 import { runDoctorRepairSequence } from "./repair-sequencing.js";
 import { maybeRepairCodexSessionRoutes } from "./shared/codex-route-session-repair.js";
 
+function writeAuthFixture(
+  env: NodeJS.ProcessEnv,
+  agentDir: string | undefined,
+  value: unknown,
+  writer = writePersistedAuthProfileStoreRaw,
+) {
+  return runAuthProfileWriteTransaction(agentDir, (database) => writer(value, agentDir, database), {
+    env,
+  });
+}
+
 describe("Doctor auth alias preservation", () => {
   it.each([
     "rotation state",
@@ -189,13 +200,7 @@ describe("Doctor auth alias preservation", () => {
           },
         };
         const write = (owner: string | undefined, store: unknown) =>
-          runAuthProfileWriteTransaction(
-            owner,
-            (database) => {
-              writePersistedAuthProfileStoreRaw(store, owner, database);
-            },
-            { env: fixture.env },
-          );
+          writeAuthFixture(fixture.env, owner, store);
         write(undefined, renamed);
         write(agentDir, source);
         const paths = [
@@ -349,26 +354,16 @@ describe("Doctor auth alias preservation", () => {
               order: { "openai-codex": ["openai-codex:work"] },
             },
           };
-          runAuthProfileWriteTransaction(
-            undefined,
-            (database) => {
-              writePersistedAuthProfileStoreRaw(
-                {
-                  version: 1,
-                  profiles: {
-                    "openai-codex:work": {
-                      type: "api_key",
-                      provider: "openai-codex",
-                      key: "synthetic-original-account",
-                    },
-                  },
-                },
-                undefined,
-                database,
-              );
+          writeAuthFixture(fixture.env, undefined, {
+            version: 1,
+            profiles: {
+              "openai-codex:work": {
+                type: "api_key",
+                provider: "openai-codex",
+                key: "synthetic-original-account",
+              },
             },
-            { env: fixture.env },
-          );
+          });
           const workerStore = {
             version: 1,
             profiles: {
@@ -379,13 +374,7 @@ describe("Doctor auth alias preservation", () => {
               },
             },
           };
-          runAuthProfileWriteTransaction(
-            agentDir,
-            (database) => {
-              writePersistedAuthProfileStoreRaw(workerStore, agentDir, database);
-            },
-            { env: fixture.env },
-          );
+          writeAuthFixture(fixture.env, agentDir, workerStore);
           const run = () =>
             runDoctorRepairSequence({
               state: { cfg, candidate: structuredClone(cfg), pendingChanges: false, fixHints: [] },
@@ -398,35 +387,19 @@ describe("Doctor auth alias preservation", () => {
             profiles: { "openai:work": { provider: "openai", key: "synthetic-original-account" } },
           });
           if (replaceAccount) {
-            runAuthProfileWriteTransaction(
-              undefined,
-              (database) => {
-                writePersistedAuthProfileStoreRaw(
-                  {
-                    version: 1,
-                    profiles: {
-                      "openai:work": {
-                        type: "api_key",
-                        provider: "openai",
-                        key: "synthetic-replacement-account",
-                      },
-                    },
-                  },
-                  undefined,
-                  database,
-                );
+            writeAuthFixture(fixture.env, undefined, {
+              version: 1,
+              profiles: {
+                "openai:work": {
+                  type: "api_key",
+                  provider: "openai",
+                  key: "synthetic-replacement-account",
+                },
               },
-              { env: fixture.env },
-            );
+            });
           } else {
             // A stopped multi-store pass can leave one owner at its recorded pre-migration state.
-            runAuthProfileWriteTransaction(
-              agentDir,
-              (database) => {
-                writePersistedAuthProfileStoreRaw(workerStore, agentDir, database);
-              },
-              { env: fixture.env },
-            );
+            writeAuthFixture(fixture.env, agentDir, workerStore);
           }
           const resumed = await run();
           if (replaceAccount) {
@@ -463,20 +436,10 @@ describe("Doctor auth alias preservation", () => {
           agents: { entries: { main: {}, worker: { agentDir } } },
           auth: { profiles: { [id]: { provider, mode: "api_key" } } },
         };
-        runAuthProfileWriteTransaction(
-          owner === "shared" ? undefined : agentDir,
-          (database) => {
-            writePersistedAuthProfileStoreRaw(
-              {
-                version: 1,
-                profiles: { [id]: { type: "api_key", provider, key: "synthetic-session-key" } },
-              },
-              owner === "shared" ? undefined : agentDir,
-              database,
-            );
-          },
-          { env: fixture.env },
-        );
+        writeAuthFixture(fixture.env, owner === "shared" ? undefined : agentDir, {
+          version: 1,
+          profiles: { [id]: { type: "api_key", provider, key: "synthetic-session-key" } },
+        });
         const storePath = path.join(fixture.stateDir, "agents/worker/sessions/sessions.json");
         const sessionKey = "agent:worker:main";
         await replaceSessionEntry(
@@ -524,23 +487,12 @@ describe("Doctor auth alias preservation", () => {
             },
           },
         };
-        runAuthProfileWriteTransaction(
-          undefined,
-          (database) => {
-            writePersistedAuthProfileStoreRaw(shared, undefined, database);
-          },
-          { env: fixture.env },
-        );
-        runAuthProfileWriteTransaction(
+        writeAuthFixture(fixture.env, undefined, shared);
+        writeAuthFixture(
+          fixture.env,
           agentDir,
-          (database) => {
-            writePersistedAuthProfileStateRaw(
-              { version: 1, usageStats: { "openai-codex:work": { errorCount: 2 } } },
-              agentDir,
-              database,
-            );
-          },
-          { env: fixture.env },
+          { version: 1, usageStats: { "openai-codex:work": { errorCount: 2 } } },
+          writePersistedAuthProfileStateRaw,
         );
         const profileIdMap = collectOpenAICodexAuthProfileStoreIdMap({ cfg, env: fixture.env });
         expect(profileIdMap.get("openai-codex:work")).toBe("openai:work");
@@ -551,13 +503,7 @@ describe("Doctor auth alias preservation", () => {
             "openai:work": { errorCount: 99 },
           },
         };
-        runAuthProfileWriteTransaction(
-          agentDir,
-          (database) => {
-            writePersistedAuthProfileStateRaw(currentState, agentDir, database);
-          },
-          { env: fixture.env },
-        );
+        writeAuthFixture(fixture.env, agentDir, currentState, writePersistedAuthProfileStateRaw);
         const result = await maybeRepairLegacyAuthProfileStores({
           cfg,
           env: fixture.env,
@@ -591,24 +537,14 @@ describe("Doctor auth alias preservation", () => {
             order: { "claude-cli": ["work-account"], codex: ["codex:ready"] },
           },
         };
-        runAuthProfileWriteTransaction(
-          undefined,
-          (database) => {
-            writePersistedAuthProfileStoreRaw(
-              {
-                version: 1,
-                profiles: {
-                  "work-account": blocked,
-                  "codex:ready": { type: "api_key", provider: "codex", key: "synthetic-ready-key" },
-                },
-                order: cfg.auth?.order,
-              },
-              undefined,
-              database,
-            );
+        writeAuthFixture(fixture.env, undefined, {
+          version: 1,
+          profiles: {
+            "work-account": blocked,
+            "codex:ready": { type: "api_key", provider: "codex", key: "synthetic-ready-key" },
           },
-          { env: fixture.env },
-        );
+          order: cfg.auth?.order,
+        });
         const result = await runDoctorRepairSequence({
           state: { cfg, candidate: structuredClone(cfg), pendingChanges: false, fixHints: [] },
           doctorFixCommand: "openclaw doctor --fix",

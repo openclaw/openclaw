@@ -6,11 +6,9 @@ import {
   type MockGatewayControls as Gateway,
   waitForControlUiRoute,
 } from "../test-helpers/control-ui-e2e.ts";
-import { requireRecord, requireString } from "./chat-flow.test-support.ts";
-import {
-  createControlUiE2eContextOptions,
-  createControlUiE2eSuite,
-} from "./control-ui-e2e-suite.test-support.ts";
+import { composer, newChatPage, sendChat } from "./chat-flow-fixtures.test-support.ts";
+import { requireString } from "./chat-flow.test-support.ts";
+import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { openHomeFullPage } from "./sidebar-navigation.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -25,6 +23,31 @@ const recoveryTool = {
   name: "read",
   arguments: { path: "README.md" },
 };
+const sessionKey = "agent:main:main";
+const stopButton = (page: Page) => page.getByRole("button", { name: "Stop generating" });
+const threadText = (page: Page, text: string) =>
+  page.locator(".chat-thread-inner").getByText(text, { exact: true });
+const toolData = (phase = "start") => ({
+  toolCallId: recoveryTool.id,
+  name: recoveryTool.name,
+  phase,
+  ...(phase === "start" ? { args: recoveryTool.arguments } : {}),
+});
+const sessionInfo = (
+  runId: string,
+  sessionId: ChatPageHost["currentSessionId"],
+  updatedAt: number,
+  active = true,
+) => ({
+  key: sessionKey,
+  sessionId,
+  kind: "direct",
+  hasActiveRun: active,
+  activeRunIds: active ? [runId] : [],
+  status: active ? "running" : "done",
+  updatedAt,
+  ...(!active ? { lastRunId: runId } : {}),
+});
 type ActiveRunSnapshotOptions = {
   events?: unknown[];
   messages?: unknown[];
@@ -40,15 +63,9 @@ function agentEvent(
   ts = 1_000,
   stream = "tool",
 ) {
-  return { runId, seq, stream, ts, sessionKey: "agent:main:main", data };
+  return { runId, seq, stream, ts, sessionKey, data };
 }
-const toolEvent = (runId: unknown) =>
-  agentEvent(runId, {
-    toolCallId: recoveryTool.id,
-    name: recoveryTool.name,
-    phase: "start",
-    args: recoveryTool.arguments,
-  });
+const toolEvent = (runId: unknown) => agentEvent(runId, toolData());
 
 function chatMessage<Identity extends Record<string, string | number>>(
   role: "user" | "assistant",
@@ -65,11 +82,8 @@ function activeRunSnapshot(
   streamText: string,
   opts?: ActiveRunSnapshotOptions,
 ) {
-  const persistedRead = {
-    content: [{ type: "toolCall", ...recoveryTool }],
-    role: "assistant",
-    timestamp: 950,
-  };
+  const info = sessionInfo(runId, "active-turn-recovery-session", 1_000);
+  const { activeRunIds: _activeRunIds, ...abortableInfo } = info;
   return {
     inFlightRun: {
       runId,
@@ -80,26 +94,18 @@ function activeRunSnapshot(
     },
     messages: opts?.messages ?? [
       chatMessage("user", prompt, { idempotencyKey: `${runId}:user` }, 900),
-      ...(opts?.persistedToolCall ? [persistedRead] : []),
+      ...(opts?.persistedToolCall
+        ? [{ content: [{ type: "toolCall", ...recoveryTool }], role: "assistant", timestamp: 950 }]
+        : []),
     ],
-    sessionId: "active-turn-recovery-session",
-    sessionInfo: {
-      ...(opts?.sessionAbortable ? {} : { activeRunIds: [runId] }),
-      hasActiveRun: true,
-      key: "agent:main:main",
-      kind: "direct",
-      sessionId: "active-turn-recovery-session",
-      status: "running",
-      updatedAt: 1_000,
-    },
+    sessionId: info.sessionId,
+    sessionInfo: opts?.sessionAbortable ? abortableInfo : info,
     thinkingLevel: null,
   };
 }
 
 async function sendPrompt(page: Page, gateway: Gateway, prompt: string) {
-  await page.locator(".agent-chat__composer-combobox textarea").fill(prompt);
-  await page.getByRole("button", { name: "Send message" }).click();
-  const sent = requireRecord((await gateway.waitForRequest("chat.send")).params);
+  const sent = await sendChat(page, gateway, prompt);
   return requireString(sent.idempotencyKey, "sent run ID");
 }
 
@@ -123,11 +129,9 @@ async function installRecoverySnapshot(
 }
 
 async function assertActiveTurnVisible(page: Page, streamText: string): Promise<void> {
-  await expect(
-    page.locator(".chat-thread-inner").getByText(streamText, { exact: true }),
-  ).toHaveCount(1, { timeout: 10_000 });
+  await expect(threadText(page, streamText)).toHaveCount(1, { timeout: 10_000 });
   await page.locator(".chat-tool-row--running").waitFor({ timeout: 10_000 });
-  await page.getByRole("button", { name: "Stop generating" }).waitFor({ timeout: 10_000 });
+  await stopButton(page).waitFor({ timeout: 10_000 });
   await expect(
     page.getByText(
       "Delivery could not be confirmed after reconnect. Check the conversation before retrying.",
@@ -164,11 +168,10 @@ async function waitForGatewayConnected(page: Page): Promise<void> {
 }
 
 async function openActiveTurn(scenario: Parameters<typeof installMockGateway>[1] = {}) {
-  const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
-  const page = await context.newPage();
+  const { page } = await newChatPage(suite);
   const gateway = await installMockGateway(page, scenario);
   await page.goto(`${suite.server.baseUrl}chat`);
-  await page.locator(".agent-chat__composer-combobox textarea").waitFor({ timeout: 10_000 });
+  await composer(page).waitFor({ timeout: 10_000 });
   return { page, gateway };
 }
 
@@ -186,7 +189,7 @@ async function recoverTurn(mode: "navigation" | "reconnect" | "reload") {
       timestamp: 1_100,
     },
     runId,
-    sessionKey: "agent:main:main",
+    sessionKey,
     state: "delta",
   });
   await page.locator(".chat-text").getByText(streamText, { exact: true }).waitFor();
@@ -231,12 +234,7 @@ async function recoverTurn(mode: "navigation" | "reconnect" | "reload") {
     "agent",
     agentEvent(
       runId,
-      {
-        toolCallId: recoveryTool.id,
-        name: recoveryTool.name,
-        phase: "result",
-        result: { content: [{ type: "text", text: "README recovered" }] },
-      },
+      { ...toolData("result"), result: { content: [{ type: "text", text: "README recovered" }] } },
       2,
       1_200,
     ),
@@ -246,9 +244,9 @@ async function recoverTurn(mode: "navigation" | "reconnect" | "reload") {
   const finalText = `${title} delivery complete.`;
   await gateway.emitChatFinal({ runId, text: finalText });
   const visibleFinal = page.getByRole("paragraph").filter({ hasText: finalText });
-  await visibleFinal.waitFor({ timeout: 10_000 });
-  await expect(page.getByRole("button", { name: "Stop generating" })).toHaveCount(0);
-  expect(await visibleFinal.count()).toBe(1);
+  await expect(visibleFinal).toHaveCount(1, { timeout: 10_000 });
+  await expect(visibleFinal).toBeVisible();
+  await expect(stopButton(page)).toHaveCount(0);
 }
 
 async function assertSteeredRecoveryOrder(
@@ -281,11 +279,11 @@ async function assertSteeredRecoveryOrder(
           : node.matches(".chat-bubble") && (node.textContent ?? "").includes(text),
       ),
     );
-    const precedes = (left: number, right: number) =>
-      positions[left]! >= 0 && positions[right]! > positions[left]!;
-    return [...[1, 2, 3, 4, 5].map((right) => precedes(right - 1, right)), precedes(2, 5)];
+    return positions.every(
+      (position, index) => position >= 0 && (index === 0 || position > positions[index - 1]!),
+    );
   }, texts);
-  expect(order).toEqual([true, true, true, true, true, true]);
+  expect(order).toBe(true);
 }
 
 suite.define(() => {
@@ -320,7 +318,7 @@ suite.define(() => {
         });
       await expect.poll(readPane).toMatchObject({ connected: true, loading: false });
       const initial = await readPane();
-      const sessionKey = initial.sessionKey;
+      const selectedSessionKey = initial.sessionKey;
       const prompt = "Keep my reconnect prompt before its answer.";
       const reply = "This durable answer arrived before history recovery.";
       const runId = await sendPrompt(page, gateway, prompt);
@@ -343,18 +341,13 @@ suite.define(() => {
       });
       const userIdentity = { id: "reconnect-user", seq: 1, idempotencyKey: `${runId}:user` };
       const user = chatMessage("user", prompt, userIdentity, Date.now());
-      const sessionInfo = {
-        key: sessionKey,
-        sessionId: initial.sessionId,
-        kind: "direct",
-        hasActiveRun: true,
-        activeRunIds: [runId],
-        status: "running",
-        updatedAt: user.timestamp,
-      };
+      const session = (isActive = true) => ({
+        ...sessionInfo(runId, initial.sessionId, user.timestamp, isActive),
+        key: selectedSessionKey,
+      });
       const history = {
         sessionId: initial.sessionId,
-        sessionInfo,
+        sessionInfo: session(),
         messages: [user],
         pendingInputs: { items: [], total: 0 },
         inFlightRun: { runId, text: "", events: [] },
@@ -363,7 +356,7 @@ suite.define(() => {
       // Reconnect subscriptions do not replay it; both real recovery RPCs still run.
       await gateway.setHistoryMessages([user]);
       await gateway.emitGatewayEvent("session.message", {
-        sessionKey,
+        sessionKey: selectedSessionKey,
         hasActiveRun: true,
         messageId: userIdentity.id,
         messageSeq: userIdentity.seq,
@@ -373,7 +366,7 @@ suite.define(() => {
       const startupCount = (await gateway.getRequests("chat.startup")).length;
       const historyCount = (await gateway.getRequests("chat.history")).length;
       const subscriptionCount = (await gateway.getRequests("sessions.messages.subscribe")).length;
-      await gateway.deferNext("chat.startup", { sessionKey });
+      await gateway.deferNext("chat.startup", { sessionKey: selectedSessionKey });
       await gateway.setOnline(true);
       await waitForGatewayConnected(page);
       await gateway.waitForRequest("sessions.messages.subscribe", { after: subscriptionCount });
@@ -389,11 +382,15 @@ suite.define(() => {
       await oldSubscription.dispose();
       await gateway.waitForRequest("chat.startup", { after: startupCount });
       const recovery = await gateway.waitForRequest("chat.history", { after: historyCount });
-      expect(recovery.params).toMatchObject({ sessionKey, limit: 1000, inputRunIds: [runId] });
+      expect(recovery.params).toMatchObject({
+        sessionKey: selectedSessionKey,
+        limit: 1000,
+        inputRunIds: [runId],
+      });
       await expect.poll(readPane).toMatchObject({
         connected: true,
         loading: true,
-        subscriptionKey: sessionKey,
+        subscriptionKey: selectedSessionKey,
         runId,
         queue: [{ sendRunId: runId, sendState: "waiting-reconnect" }],
         messageCount: initial.messageCount,
@@ -401,13 +398,7 @@ suite.define(() => {
 
       const assistantIdentity = { id: "reconnect-assistant", seq: 2, runId };
       const assistant = chatMessage("assistant", reply, assistantIdentity, Date.now());
-      const replySessionInfo = {
-        ...sessionInfo,
-        hasActiveRun: active,
-        activeRunIds: active ? [runId] : [],
-        status: active ? "running" : "done",
-        ...(!active ? { lastRunId: runId } : {}),
-      };
+      const replySessionInfo = session(active);
       const completeHistory = {
         ...history,
         sessionInfo: replySessionInfo,
@@ -417,7 +408,7 @@ suite.define(() => {
       await gateway.setHistoryMessages(completeHistory.messages);
       await installRecoverySnapshot(gateway, completeHistory, { ts: user.timestamp });
       await gateway.emitGatewayEvent("session.message", {
-        sessionKey,
+        sessionKey: selectedSessionKey,
         runId,
         hasActiveRun: active,
         session: replySessionInfo,
@@ -448,8 +439,8 @@ suite.define(() => {
       await gateway.resolveDeferred("chat.startup", completeHistory);
       await gateway.resolveDeferred("chat.history", completeHistory);
       await expect.poll(readPane).toMatchObject({ loading: false, queue: [] });
-      await gateway.emitChatFinal({ runId, sessionKey, text: reply });
-      await expect(page.getByRole("button", { name: "Stop generating" })).toHaveCount(0);
+      await gateway.emitChatFinal({ runId, sessionKey: selectedSessionKey, text: reply });
+      await expect(stopButton(page)).toHaveCount(0);
       await assertOrder();
       expect(await gateway.getRequests("chat.send")).toHaveLength(1);
     },
@@ -467,7 +458,7 @@ suite.define(() => {
     );
 
     await page.reload();
-    await page.getByRole("button", { name: "Stop generating" }).click();
+    await stopButton(page).click();
 
     const abortRequest = await gateway.waitForRequest("sessions.abort");
     expect(abortRequest.params).toMatchObject({ key: "agent:main:main", runId });
@@ -515,9 +506,8 @@ suite.define(() => {
           2,
           3,
           {
+            ...toolData(),
             toolCallId: "fixture-active-tool",
-            name: "read",
-            phase: "start",
             args: { path: "fixture.txt" },
           },
           "tool",

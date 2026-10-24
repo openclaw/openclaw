@@ -86,6 +86,82 @@ afterEach(() => {
 });
 
 describe("createAgentHarnessToolSurfaceRuntime", () => {
+  it.each(["tools", "directory"] as const)(
+    "preserves selectors across shared harness and worker %s projections",
+    (mode) => {
+      const config: OpenClawConfig = {
+        tools: {
+          codeMode: false,
+          toolSearch: {
+            mode,
+            include: [{ source: "mcp" }],
+            exclude: [{ name: "remote_frequent" }],
+          },
+        },
+      };
+      const presentation = prepareAgentToolSurfacePresentation({
+        config,
+        toolsEnabled: true,
+        isRawModelRun: false,
+        forceDirectMessageTool: false,
+      });
+      for (const supportsDeferredToolCalls of [true, false]) {
+        const runtime = createAgentHarnessToolSurfaceRuntimeCore({
+          presentation: structuredClone(presentation),
+          modelToolsEnabled: true,
+          supportsDeferredToolCalls,
+        });
+        const remote = tools(["remote_deferred", "remote_frequent"]);
+        for (const target of remote) {
+          setPluginToolMeta(target, { pluginId: "bundle-mcp", optional: false });
+        }
+        try {
+          const surface = runtime.compactTools([...tools(["native_direct"]), ...remote], {
+            prepared: { preserveToolNames: [] },
+          });
+          expect(surface.tools.map((tool) => tool.name)).toEqual([
+            "tool_search",
+            "tool_describe",
+            "dispatch_action",
+            "native_direct",
+            "remote_frequent",
+          ]);
+          expect(runtime.toolSearchCatalogRef?.current?.entries.map((entry) => entry.name)).toEqual(
+            ["remote_deferred"],
+          );
+          const policy = surface.promptToolPolicy.apply();
+          expect(policy.callableToolNames).toEqual(
+            expect.arrayContaining(["native_direct", "remote_frequent", "remote_deferred"]),
+          );
+          expect(policy.toolSchemaDirectoryPrompt).not.toContain("native_direct");
+          expect(policy.toolSchemaDirectoryPrompt).toContain(
+            mode === "directory" && supportsDeferredToolCalls
+              ? "Call a unique deferred tool name directly"
+              : "Deferred names are not directly callable",
+          );
+        } finally {
+          runtime.cleanup();
+        }
+      }
+    },
+  );
+
+  it("ignores Tool Search selectors when independent Code Mode is engaged", () => {
+    const runtime = createRuntime({
+      tools: { codeMode: true, toolSearch: { include: [], exclude: [{ name: "*" }] } },
+    });
+    try {
+      const surface = runtime.compactTools(tools(["read", "native_target"]));
+      expect(surface.tools.map((tool) => tool.name)).toEqual(["exec", "wait"]);
+      expect(runtime.toolSearchCatalogRef?.current?.entries.map((entry) => entry.name)).toEqual([
+        "native_target",
+        "read",
+      ]);
+    } finally {
+      runtime.cleanup();
+    }
+  });
+
   it.each([
     ["automatic Code Mode", "auto", true, false, ["exec", "wait", "fixture_direct"]],
     ["direct tools", false, false, false, ["fixture_read", "fixture_direct"]],

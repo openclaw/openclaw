@@ -127,7 +127,11 @@ async function bindToRetiredLeasedOwner() {
     }
     throw new Error(`unexpected method: ${method}`);
   };
-  const owner = createCodexLifecycleHarness({ respond });
+  const owner = createCodexLifecycleHarness({
+    respond,
+    // Without an exact thread/closed receipt, handoff must wait for physical exit.
+    unsubscribe: () => ({ status: "notLoaded" }),
+  });
   const ownerExitCodesAtResume: Array<number | null> = [];
   const healthy = createCodexLifecycleHarness({
     persistedThreads: ["bound-thread"],

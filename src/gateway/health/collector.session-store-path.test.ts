@@ -1,9 +1,13 @@
 import fs from "node:fs";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterAll, afterEach, expect, it as baseIt, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it as baseIt, vi } from "vitest";
 import { stripAnsi } from "../../../packages/terminal-core/src/ansi.js";
-import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../../test/helpers/promise.js";
 import * as diagnosticReadiness from "../../commands/gateway-diagnostic-readiness.js";
 import { healthCommand } from "../../commands/health.js";
 import { collectStatusLocalSnapshot } from "../../commands/status.agent-local.js";
@@ -17,6 +21,7 @@ import {
 import { createTestRuntime } from "../../commands/test-runtime-config-helpers.js";
 import * as configRuntime from "../../config/config.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
+import * as combinedStore from "../../config/sessions/combined-store-gateway-read.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import * as sessionAccessor from "../../config/sessions/session-accessor.js";
 import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.js";
@@ -27,21 +32,33 @@ import { historyLane } from "../../config/sessions/session-transcript-worker-res
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createDefaultProactiveJob } from "../../cron/default-proactive-job.js";
 import { saveProactiveJobsForTest } from "../../cron/proactive-job.test-support.js";
+import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { recordAgentDatabaseAdmissions } from "../../state/agent-database-admission.js";
-import { withAgentDatabaseCloseFence } from "../../state/openclaw-agent-db-resources.js";
+import { closeOpenClawAgentDatabaseByPathAsync } from "../../state/openclaw-agent-db-lifecycle.js";
+import {
+  registerOpenClawAgentDatabaseAsyncResource,
+  withAgentDatabaseCloseFence,
+} from "../../state/openclaw-agent-db-resources.js";
 import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
 } from "../../state/openclaw-agent-db.js";
+import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { prepareStatusSessionStores } from "../../status/session-stores.js";
 import { beginAgentDeletionJournal } from "../../test-utils/agent-deletion-journal.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
+import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import {
   withOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import * as gatewayCall from "../call.js";
+import { createSessionLifecyclePublisher } from "../server-chat-lifecycle-publication.js";
+import { createSessionEventSubscriberRegistry } from "../server-chat-state.js";
+import { drainSessionEventPublications } from "../session-event-prepared-row.js";
+import type { SessionRowProjection } from "../session-row-projection.js";
+import { createTestProjection } from "../session-row-projection.read-fixture.test-support.js";
 import {
   buildHealthAgentSummaries,
   collectGatewayHealthSnapshot,
@@ -67,10 +84,7 @@ const fixtureService = {
 >[0];
 
 async function summarizeStore(storePath: string, agentId: string) {
-  const cfg: OpenClawConfig = {
-    agents: { ownership: "explicit", entries: { [agentId]: {} } },
-    session: { store: storePath },
-  };
+  const cfg = sessionConfig([agentId], storePath);
   const agents = await buildHealthAgentSummaries(cfg, resolveHealthAgentOrder(cfg));
   return expectDefined(agents[0], "health agent summary").sessions;
 }
@@ -125,16 +139,33 @@ function createReadGate() {
       entered.resolve();
       await release.promise;
     },
-    async finish<P extends Promise<unknown>>(pending: P, change: () => void): Promise<Awaited<P>> {
+    async after<T>(pending: Promise<T>, hold = true) {
+      const result = await pending;
+      if (hold) {
+        await this.pause();
+      }
+      return result;
+    },
+    async run<T>(
+      pending: Promise<unknown> | undefined,
+      action: (resume: () => void) => Promise<T>,
+    ): Promise<T> {
       try {
-        await awaitGateBeforeSettlement(entered.promise, pending, "Read skipped publication gate");
-        change();
-        release.resolve();
-        return await pending;
+        if (pending) {
+          await awaitGateBeforeSettlement(entered.promise, pending, "Read skipped gate");
+        }
+        return await action(release.resolve);
       } finally {
         release.resolve();
-        await pending.catch(() => {});
+        await pending?.catch(() => {});
       }
+    },
+    finish<T>(pending: Promise<T>, change: () => void): Promise<T> {
+      return this.run(pending, async (resume) => {
+        change();
+        resume();
+        return await pending;
+      });
     },
   };
 }
@@ -149,13 +180,38 @@ async function seedAgents(cfg: OpenClawConfig, updatedAt = 1) {
   }
 }
 
-function deletionConfig(withDefault = false): OpenClawConfig {
+function writeSession(
+  agentId: string,
+  key: string,
+  updatedAt: number,
+  storePath?: string,
+  sessionId = key,
+) {
+  replaceSessionEntrySync({ agentId, sessionKey: key, storePath }, { sessionId, updatedAt });
+}
+
+function seedWindows(storePath: string, times: Record<string, number>, reverse = false) {
+  const suffixes = Array.from({ length: 12 }, (_, index) => String(index).padStart(2, "0"));
+  for (const [agentId, updatedAt] of Object.entries(times)) {
+    for (const suffix of reverse ? suffixes.toReversed() : suffixes) {
+      writeSession(agentId, `agent:${agentId}:${suffix}`, updatedAt, storePath);
+    }
+  }
+  return suffixes;
+}
+
+function sessionConfig(
+  agentIds = ["deleting", "survivor"],
+  store?: string,
+  defaultAgentId?: string,
+): OpenClawConfig {
   return {
     agents: {
       ownership: "explicit",
-      entries: { deleting: {}, survivor: {} },
-      ...(withDefault ? { defaults: { systemAgent: { agentId: "deleting" } } } : {}),
+      entries: Object.fromEntries(agentIds.map((id) => [id, {}])),
+      ...(defaultAgentId ? { defaults: { systemAgent: { agentId: defaultAgentId } } } : {}),
     },
+    ...(store ? { session: { store } } : {}),
   };
 }
 
@@ -301,14 +357,11 @@ it.for([
   async (timing, { state }) => {
     const late = timing.startsWith("late-");
     const shared = timing === "late-shared-status";
-    const cfg: OpenClawConfig = {
-      agents: {
-        ownership: "explicit",
-        entries: timing === "only-agent" ? { deleting: {} } : { deleting: {}, survivor: {} },
-        ...(timing === "late-health" ? { defaults: { systemAgent: { agentId: "deleting" } } } : {}),
-      },
-      ...(shared ? { session: { store: state.statePath("shared.sqlite") } } : {}),
-    };
+    const cfg = sessionConfig(
+      timing === "only-agent" ? ["deleting"] : undefined,
+      shared ? state.statePath("shared.sqlite") : undefined,
+      timing === "late-health" ? "deleting" : undefined,
+    );
     if (timing === "late-health") {
       await saveProactiveJobsForTest(
         state.statePath("cron", "jobs.json"),
@@ -327,23 +380,16 @@ it.for([
     }
     const preparedLocal =
       timing === "late-health" ? await collectStatusLocalSnapshot(cfg) : undefined;
-    const replied = createDeferred();
-    const release = createDeferred();
+    const gate = createReadGate();
     const read = sessionReadRuntime.withSessionStoreReaderInWorker;
     const laterRead = vi
       .spyOn(sessionReadRuntime, "withSessionStoreReaderInWorker")
-      .mockImplementation(async (...args) => {
-        const result = await read(...args);
-        if (late && args[0].agentId === "survivor") {
-          replied.resolve();
-          await release.promise;
-        }
-        return result;
-      });
+      .mockImplementation((...args) =>
+        gate.after(read(...args), late && args[0].agentId === "survivor"),
+      );
     holdWorkerSummary(async () => {
       if (timing === "during-read") {
-        replied.resolve();
-        await release.promise;
+        await gate.pause();
       }
     });
     const collect = () => collectGatewayHealthSnapshot({ audience: "admin", probe: false });
@@ -353,20 +399,12 @@ it.for([
         : undefined;
     const pendingHealth = timing === "late-health" ? collect() : undefined;
     const pending = pendingStatus ?? pendingHealth;
-    void pending?.catch(() => {});
-    try {
-      if (pending) {
-        await awaitGateBeforeSettlement(
-          replied.promise,
-          pending,
-          "Summary settled before the deletion gate",
-        );
-      }
+    await gate.run(pending, async (resume) => {
       deleteAgent(state, "health-deletion");
       await withAgentDatabaseCloseFence(
         { agentId: "deleting", rootPath: path.dirname(state.agentDir("deleting")) },
         async () => {
-          release.resolve();
+          resume();
           const expectedIds = timing === "only-agent" ? [] : ["survivor"];
           if (pendingStatus) {
             expectStatusSessions(await pendingStatus, expectedIds, shared);
@@ -411,31 +449,24 @@ it.for([
           );
         },
       );
-    } finally {
-      release.resolve();
-      await pending?.catch(() => {});
-      laterRead.mockRestore();
-    }
+    });
+    laterRead.mockRestore();
   },
 );
 
 it.for(["desktop", "certificate"] as const)(
   "publishes status after deletion during the final %s preparation",
   async (phase, { state }) => {
-    const cfg = deletionConfig(phase === "desktop");
+    const cfg = sessionConfig(undefined, undefined, phase === "desktop" ? "deleting" : undefined);
     await seedAgents(cfg);
     const desktop = await import("../desktop/host-source.js");
     const certificate = await import("../../secrets/egress-proxy/registry.js");
     const { getStatusSummary } = await import("../../status/summary.js");
     const gate = createReadGate();
     const inspect = desktop.inspectHostDesktop;
-    vi.spyOn(desktop, "inspectHostDesktop").mockImplementation(async (params) => {
-      const result = await inspect(params);
-      if (phase === "desktop") {
-        await gate.pause();
-      }
-      return result;
-    });
+    vi.spyOn(desktop, "inspectHostDesktop").mockImplementation((params) =>
+      gate.after(inspect(params), phase === "desktop"),
+    );
     vi.spyOn(certificate, "getSecretEgressCertificateStatus").mockImplementation(async () => {
       if (phase === "certificate") {
         await gate.pause();
@@ -469,7 +500,7 @@ it.for(["desktop", "certificate"] as const)(
 it.for(["text", "json"] as const)(
   "publishes local %s status after final backup preparation",
   async (format, { state }) => {
-    const cfg = deletionConfig(true);
+    const cfg = sessionConfig(undefined, undefined, "deleting");
     await seedAgents(cfg);
     const { executeStatusScanFromOverview } = await import("../../commands/status.scan-execute.ts");
     const scan = await executeStatusScanFromOverview({
@@ -490,11 +521,9 @@ it.for(["text", "json"] as const)(
     const jsonWrite = vi.spyOn(runtimeOutput, "writeRuntimeJson");
     const gate = createReadGate();
     const readBackup = backup.readBackupRunFreshness;
-    vi.spyOn(backup, "readBackupRunFreshness").mockImplementation(async (env) => {
-      const result = await readBackup(env);
-      await gate.pause();
-      return result;
-    });
+    vi.spyOn(backup, "readBackupRunFreshness").mockImplementation((env) =>
+      gate.after(readBackup(env)),
+    );
     // The regression owns session publication; unrelated service/engine I/O stays synthetic.
     vi.spyOn(engines, "resolveStatusDatabaseEngines").mockResolvedValue({
       source: "admitted",
@@ -526,7 +555,7 @@ it.for(["text", "json"] as const)(
             runtime: createTestRuntime(),
             opts: { gatewayProbeDeadlineMs: 0 },
           });
-    const result = await gate.finish(pending, () =>
+    const result = await gate.finish<void | string[]>(pending, () =>
       deleteAgent(state, `status-${format}-publication`),
     );
     if (Array.isArray(result)) {
@@ -546,7 +575,7 @@ it.for(["text", "json"] as const)(
 it.for(["engines", "logs", "usage"] as const)(
   "publishes status --all after deletion during %s preparation",
   async (phase, { state }) => {
-    const cfg = deletionConfig();
+    const cfg = sessionConfig();
     await seedAgents(cfg);
     const overview = await prepareDeletionStatusOverview(cfg);
     const scan = await import("../../commands/status.scan-overview.ts");
@@ -614,26 +643,9 @@ it.for([true, false])(
   "refills shared-store recent sessions and excludes deleted namespaces (configured: %s)",
   async (configured, { state }) => {
     const storePath = state.statePath("shared.sqlite");
-    const cfg: OpenClawConfig = {
-      agents: {
-        ownership: "explicit",
-        entries: configured ? { survivor: {}, deleting: {} } : { survivor: {} },
-      },
-      session: { store: storePath },
-    };
+    const cfg = sessionConfig(configured ? ["survivor", "deleting"] : ["survivor"], storePath);
     setRuntimeConfigSnapshot(cfg);
-    for (const agentId of ["survivor", "deleting", "retired"]) {
-      for (let index = 0; index < 12; index++) {
-        const key = `agent:${agentId}:${String(index).padStart(2, "0")}`;
-        replaceSessionEntrySync(
-          { agentId, sessionKey: key, storePath },
-          {
-            sessionId: key,
-            updatedAt: agentId === "deleting" ? 30 : agentId === "survivor" ? 20 : 10,
-          },
-        );
-      }
-    }
+    seedWindows(storePath, { survivor: 20, deleting: 30, retired: 10 });
     deleteAgent(state, "shared-publication");
     const result = await readStatusSessionStores(cfg, resolveHealthAgentOrder(cfg).ordered, 10);
     expect(result.byAgent.map(({ agent }) => agent.id)).toEqual(["survivor"]);
@@ -648,23 +660,16 @@ it.for(["snapshot", "read-error"] as const)(
   "handles deletion of a shared store's sole configured reader (%s)",
   async (outcome, { state }) => {
     const storePath = state.statePath("shared.sqlite");
-    const cfg: OpenClawConfig = {
-      agents: { ownership: "explicit", entries: { deleting: {} } },
-      session: { store: storePath },
-    };
+    const cfg = sessionConfig(["deleting"], storePath);
     setRuntimeConfigSnapshot(cfg);
     for (const agentId of ["deleting", "survivor"]) {
-      replaceSessionEntrySync(
-        { agentId, sessionKey: `agent:${agentId}:main`, storePath },
-        { sessionId: `${agentId}-session`, updatedAt: 1 },
-      );
+      writeSession(agentId, `agent:${agentId}:main`, 1, storePath, `${agentId}-session`);
     }
     const gate = createReadGate();
     const failure = new Error("invalid session state");
     const { calls } = spyOnSessionStoreSummaries();
     calls.mockImplementation(async (read) => {
-      const summary = await read();
-      await gate.pause();
+      const summary = await gate.after(read());
       if (outcome === "read-error") {
         throw failure;
       }
@@ -681,3 +686,350 @@ it.for(["snapshot", "read-error"] as const)(
     }
   },
 );
+
+describe("resident session projection", () => {
+  // Keep WAL maintenance outside the request SQL budget.
+  beforeEach(() => vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] }));
+  afterEach(() => vi.useRealTimers());
+  const test = baseIt.extend<{ state: OpenClawTestState }>({
+    state: async ({ task: _task }, use) => withOpenClawTestState({ scenario: "minimal" }, use),
+  });
+
+  async function settleProjection(projection: SessionRowProjection) {
+    do {
+      await projection.ensureMaterialized();
+    } while (projection.needsMaterialization);
+  }
+
+  function readHealth(cfg: OpenClawConfig, projection: SessionRowProjection) {
+    return buildHealthAgentSummaries(cfg, resolveHealthAgentOrder(cfg), projection);
+  }
+
+  function sessionSummary(count: number, ...entries: [key: string, updatedAt: number][]) {
+    return { count, recent: entries.map(([key, updatedAt]) => ({ key, updatedAt })) };
+  }
+
+  function summarizeStatus(status: Awaited<ReturnType<typeof readStatusSessionStores>>) {
+    const keys = (rows: typeof status.recent) => rows.map((row) => row.sessionKey);
+    return {
+      paths: status.paths.length,
+      count: status.count,
+      recent: keys(status.recent),
+      byAgent: status.byAgent.map(({ agent, count, recent }) => [agent.id, count, keys(recent)]),
+    };
+  }
+
+  test("reuses idle health sessions while refreshing heartbeat, age and changed rows", async ({
+    state,
+  }) => {
+    const cfg = sessionConfig(["main"], undefined, "main");
+    setRuntimeConfigSnapshot(cfg);
+    writeSession("main", "agent:main:first", 100);
+    const job = createDefaultProactiveJob(cfg, "main", 1, 60_000);
+    const cronPath = state.statePath("cron", "jobs.json");
+    await saveProactiveJobsForTest(cronPath, [job]);
+    using projection = await createTestProjection({ cfg });
+    await settleProjection(projection);
+    const select = vi.spyOn(projection, "selectEntries");
+    const now = vi.spyOn(Date, "now").mockReturnValue(1_000);
+    expect(await readHealth(cfg, projection)).toMatchObject([
+      {
+        heartbeat: { enabled: true, everyMs: 60_000 },
+        sessions: { count: 1, recent: [{ key: "agent:main:first", age: 900 }] },
+      },
+    ]);
+    expect(select).toHaveBeenCalledTimes(1);
+
+    job.schedule = { kind: "every", everyMs: 120_000, anchorMs: 1 };
+    await saveProactiveJobsForTest(cronPath, [job]);
+    now.mockReturnValue(2_000);
+    expect(await readHealth(cfg, projection)).toMatchObject([
+      {
+        heartbeat: { enabled: true, everyMs: 120_000 },
+        sessions: { count: 1, recent: [{ key: "agent:main:first", age: 1_900 }] },
+      },
+    ]);
+    expect(select).toHaveBeenCalledTimes(1);
+
+    writeSession("main", "agent:main:second", 200);
+    await settleProjection(projection);
+    select.mockImplementationOnce(() => {
+      throw Object.assign(new Error("database is locked"), { code: "SQLITE_BUSY" });
+    });
+    expect((await readHealth(cfg, projection))[0]?.sessions.count).toBe(0);
+    const current = await readHealth(cfg, projection);
+    expect(current[0]?.sessions).toMatchObject(
+      sessionSummary(2, ["agent:main:second", 200], ["agent:main:first", 100]),
+    );
+    expect(select).toHaveBeenCalledTimes(3);
+    await readHealth(cfg, projection);
+    expect(select).toHaveBeenCalledTimes(3);
+  });
+
+  test("projects receipt-owned jobs for the whole fleet without re-walking the roster per agent", async ({
+    state,
+  }) => {
+    const agentCount = 200;
+    const entries = Object.fromEntries(
+      Array.from({ length: agentCount }, (_, index) => [`agent-${index}`, {}]),
+    );
+    const plain = {
+      agents: { ownership: "explicit", entries },
+      session: { store: state.statePath("health-sessions.sqlite") },
+    } satisfies OpenClawConfig;
+    const job = createDefaultProactiveJob(plain, "agent-7", 1, 45 * 60 * 1000);
+    await saveProactiveJobsForTest(state.statePath("cron", "jobs.json"), [job]);
+    let rosterReads = 0;
+    const agents = new Proxy(plain.agents, {
+      get(target, property, receiver) {
+        if (property === "entries") {
+          rosterReads += 1;
+        }
+        return Reflect.get(target, property, receiver);
+      },
+    });
+
+    const summaries = await buildHealthAgentSummaries(
+      { ...plain, agents },
+      resolveHealthAgentOrder(plain),
+    );
+
+    expect(summaries).toHaveLength(agentCount);
+    expect(rosterReads).toBeLessThan(agentCount);
+    expect(summaries.filter((summary) => summary.heartbeat.enabled)).toMatchObject([
+      { agentId: "agent-7", heartbeat: { enabled: true, everyMs: 2_700_000, target: "owner" } },
+    ]);
+  });
+  test.for(["before-read", "during-topology"])(
+    "reads surviving health summaries when an unrelated agent closes %s",
+    async (phase, { state }) => {
+      const cfg: OpenClawConfig = { agents: { entries: { main: {}, retiring: {} } } };
+      setRuntimeConfigSnapshot(cfg);
+      for (const agentId of ["main", "retiring"]) {
+        writeSession(agentId, `agent:${agentId}:main`, 1, undefined, `${agentId}-session`);
+      }
+      using projection = await createTestProjection({ cfg, modelCatalog: [] });
+      const closing = createDeferred();
+      const release = createDeferred();
+      let closed: Promise<unknown> | undefined;
+      let unregister: (() => void) | undefined;
+      try {
+        await settleProjection(projection);
+        const retiringPath = resolveOpenClawAgentSqlitePath({ agentId: "retiring" });
+        const startClosing = () => {
+          beginAgentDeletionJournal({
+            agentId: "retiring",
+            operationId: "delete-retiring",
+            agentDir: path.dirname(retiringPath),
+            workspaceDir: state.statePath("workspace-retiring"),
+            sessionsDir: state.statePath("agents", "retiring", "sessions"),
+            deleteFiles: false,
+          });
+          unregister = registerOpenClawAgentDatabaseAsyncResource({
+            agentId: "retiring",
+            path: retiringPath,
+            revoke: closing.resolve,
+            close: () => release.promise,
+          });
+          closed = closeOpenClawAgentDatabaseByPathAsync(retiringPath, "retiring");
+        };
+        if (phase === "during-topology") {
+          const prepare = combinedStore.prepareCombinedSessionStoreForGatewayAsync;
+          vi.spyOn(
+            combinedStore,
+            "prepareCombinedSessionStoreForGatewayAsync",
+          ).mockImplementationOnce(async (...args) => {
+            const captured = await prepare(...args);
+            startClosing();
+            await closing.promise;
+            return captured;
+          });
+          sessionChanges.emit({ all: true, scope: "stores" });
+        } else {
+          startClosing();
+          await closing.promise;
+        }
+        const summaries = await readHealth(cfg, projection);
+        expect(summaries.map(({ agentId, sessions }) => [agentId, sessions.count])).toEqual([
+          ["main", 1],
+        ]);
+        expect(summaries[0]?.sessions.recent[0]?.key).toBe("agent:main:main");
+        const subscribers = createSessionEventSubscriberRegistry();
+        subscribers.subscribe("observer");
+        const broadcast = vi.fn();
+        const publisher = createSessionLifecyclePublisher({
+          broadcastToConnIds: broadcast,
+          sessionEventSubscribers: subscribers,
+          getSessionRowProjection: () => projection,
+          persistGatewaySessionLifecycleEventForEvent: async () => {},
+          loadGatewaySessionLifecycleSnapshotForEvent: (key, options) => ({
+            row:
+              options?.sessionRows?.describe({ key, agentId: options.agentId ?? "main" })
+                ?.materialized.row ?? null,
+          }),
+        });
+        publisher.publish({
+          phase: "end",
+          sessionKey: "agent:main:main",
+          agentId: "main",
+          clientRunId: "survivor-run",
+          event: {
+            runId: "survivor-run",
+            sessionId: "main-session",
+            seq: 1,
+            stream: "lifecycle",
+            ts: 2,
+            data: { phase: "end" },
+          },
+          persistence: Promise.resolve(),
+          projection,
+        });
+        await Promise.resolve();
+        await drainSessionEventPublications(projection);
+        expect(broadcast).toHaveBeenCalledWith(
+          "sessions.changed",
+          expect.objectContaining({
+            phase: "end",
+            sessionKey: "agent:main:main",
+            sessionId: "main-session",
+          }),
+          new Set(["observer"]),
+          expect.any(Object),
+        );
+      } finally {
+        release.resolve();
+        await closed;
+        unregister?.();
+      }
+    },
+  );
+
+  test("serves dirty summaries without display joins and clean repeats without SQL", async ({
+    signal,
+    state,
+  }) => {
+    const storePath = state.statePath("health-selection.sqlite");
+    const cfg: OpenClawConfig = {
+      agents: { entries: { main: {} } },
+      session: { store: storePath },
+    };
+    setRuntimeConfigSnapshot(cfg);
+    const first = "agent:main:first";
+    const second = "agent:main:second";
+    const added = "agent:main:added";
+    writeSession("main", first, 10, storePath);
+    writeSession("main", second, 20, storePath);
+    using projection = await createTestProjection({ cfg });
+    const release = createDeferred();
+    const displayJoined = createDeferred();
+    let held: Promise<void> | undefined;
+    let health: ReturnType<typeof buildHealthAgentSummaries> | undefined;
+    try {
+      await settleProjection(projection);
+      writeSession("main", first, 25, storePath);
+      expect(projection.dirtyRowCount).toBeGreaterThan(0);
+      const dirtyStatus = await readStatusSessionStores(cfg, [{ id: "main" }], 10, { projection });
+      expect(dirtyStatus.byAgent[0]?.recent[0]?.entry.updatedAt).toBe(25);
+      await settleProjection(projection);
+      held = projection.withSelectionPreparation(() => release.promise);
+      sessionChanges.emit({ all: true, scope: "catalog" });
+      writeSession("main", first, 30, storePath);
+      writeSession("main", added, 40, storePath);
+      expect(projection.dirtyRowCount).toBeGreaterThan(0);
+      const ensureMaterialized = projection.ensureMaterialized;
+      vi.spyOn(projection, "ensureMaterialized").mockImplementation(() => {
+        // Observe the real blocked join so the regression fails without a wall-clock race.
+        displayJoined.resolve();
+        return ensureMaterialized();
+      });
+      health = readHealth(cfg, projection);
+      const outcome = await withinTest(
+        Promise.race([
+          health.then((agents) => ({ kind: "summary", agents })),
+          displayJoined.promise.then(() => ({ kind: "display-join" })),
+        ]),
+        signal,
+      );
+      expect(outcome).toMatchObject({
+        kind: "summary",
+        agents: [
+          {
+            agentId: "main",
+            sessions: sessionSummary(3, [added, 40], [first, 30], [second, 20]),
+          },
+        ],
+      });
+      expect(projection.dirtyRowCount).toBeGreaterThan(0);
+    } finally {
+      release.resolve();
+      await Promise.allSettled([held, health]);
+      await settleProjection(projection);
+    }
+    const sql = observeMainThreadSql();
+    expect((await readHealth(cfg, projection))[0]?.sessions).toMatchObject(
+      sessionSummary(3, [added, 40], [first, 30], [second, 20]),
+    );
+    await readHealth(cfg, projection);
+    sql.expectIdle();
+  });
+
+  test("keeps shared-store counts and windows SQL-free after agent admission", async ({
+    state,
+  }) => {
+    const storePath = state.statePath("shared-sessions.sqlite");
+    let cfg = sessionConfig(["main"], storePath, "main");
+    setRuntimeConfigSnapshot(cfg);
+    const agentIds = ["main", "worker"];
+    const suffixes = seedWindows(storePath, { main: 10, worker: 20 }, true);
+    const sessionKeys = agentIds.flatMap((id) => suffixes.map((suffix) => `agent:${id}:${suffix}`));
+    using projection = await createTestProjection({ cfg, getConfig: () => cfg });
+    await settleProjection(projection);
+    expect((await readHealth(cfg, projection)).map(({ agentId }) => agentId)).toEqual(["main"]);
+    cfg = sessionConfig(["main", "worker"], storePath, "main");
+    setRuntimeConfigSnapshot(cfg);
+    sessionChanges.emit({ all: true, scope: "config" });
+    await settleProjection(projection);
+    const sql = observeMainThreadSql();
+    const agents = agentIds.map((id) => ({ id }));
+    for (const limit of [-2.5, 0, 0.5, 5, 5.7, 10, Infinity, Number.NaN]) {
+      expect(
+        summarizeStatus(await readStatusSessionStores(cfg, agents, limit, { projection })),
+      ).toEqual({
+        paths: 1,
+        count: 24,
+        recent: [...sessionKeys.slice(12), ...sessionKeys.slice(0, 12)].slice(0, limit),
+        byAgent: agentIds.map((id) => [
+          id,
+          12,
+          suffixes.slice(0, limit).map((s) => `agent:${id}:${s}`),
+        ]),
+      });
+    }
+    for (const limit of [0, 5]) {
+      const subset = await readStatusSessionStores(
+        cfg,
+        [{ id: "main" }, { id: "empty" }, { id: "main" }],
+        limit,
+        { projection },
+      );
+      expect(summarizeStatus(subset)).toMatchObject({
+        count: 24,
+        recent: sessionKeys.slice(12, 12 + limit),
+        byAgent: [
+          ["main", 12, sessionKeys.slice(0, limit)],
+          ["empty", 0, []],
+          ["main", 12, sessionKeys.slice(0, limit)],
+        ],
+      });
+    }
+    const health = await readHealth(cfg, projection);
+    expect(health.map((agent) => agent.agentId)).toEqual(agentIds);
+    for (const agent of health) {
+      expect(agent.sessions.count).toBe(12);
+      expect(agent.sessions.recent.map((row) => row.key)).toEqual(
+        suffixes.slice(0, 5).map((suffix) => `agent:${agent.agentId}:${suffix}`),
+      );
+    }
+    sql.expectIdle();
+  });
+});

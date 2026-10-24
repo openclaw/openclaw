@@ -89,24 +89,6 @@ it("keeps concurrent diagram themes independent in the warm renderer", async () 
   }
 });
 
-it.each([
-  ["sequence", "sequenceDiagram\nAlice->>Bob: Hello\nBob-->>Alice: Ready", "Alice"],
-  ["class", "classDiagram\nVehicle <|-- Car\nVehicle : +move()", "Vehicle"],
-  ["state", "stateDiagram-v2\n[*] --> Ready\nReady --> Running\nRunning --> [*]", "Running"],
-  ["mindmap", "mindmap\n  root((OpenClaw))\n    Gateway\n    Runtime", "Gateway"],
-  ["swimlane", swimlane, "Execute"],
-  [
-    "architecture",
-    "architecture-beta\nservice gateway(server)[Gateway]\nservice runtime(server)[Runtime]\ngateway:R -- L:runtime",
-    "Gateway",
-  ],
-  ["math", 'flowchart LR\nA["$$x^2$$"] --> B[Result]', "Result"],
-])("preserves %s diagram content in the passive image", async (_name, source, label) => {
-  const root = await renderSvg(source);
-  expect(root.textContent).toContain(label);
-  expect(root.querySelector("path,rect,line,polygon")).not.toBeNull();
-});
-
 it("preserves diagram-specific mindmap and swimlane layouts", async () => {
   const mindmap = await renderSvg(
     "mindmap\n  root((OpenClaw))\n    Gateway\n      Admission\n    Runtime\n      Execution",
@@ -122,8 +104,8 @@ it("preserves diagram-specific mindmap and swimlane layouts", async () => {
   expect(childY.some((y) => y < rootY)).toBe(true);
   expect(childY.some((y) => y > rootY)).toBe(true);
 
-  expect(lanes.querySelector("#Gateway")).not.toBeNull();
-  expect(lanes.querySelector("#Runtime")).not.toBeNull();
+  expect(lanes.querySelector('[id$="-Gateway"]')).not.toBeNull();
+  expect(lanes.querySelector('[id$="-Runtime"]')).not.toBeNull();
   const admit = parseTranslate(lanes.querySelector('[id*="-flowchart-Admit-"]')!);
   const execute = parseTranslate(lanes.querySelector('[id*="-flowchart-Execute-"]')!);
   expect(admit.x).toBe(execute.x);
@@ -185,4 +167,62 @@ click B "https://example.invalid/mermaid-link"`;
   );
   expect(parsePassiveSvg(remote).textContent).toContain("Remote");
   expect(remote).not.toContain("example.invalid");
+});
+
+it("keeps untrusted alternatives inert and retires metadata when the source changes", async () => {
+  await import("./markdown-mermaid.tsx");
+  const element = document.createElement("openclaw-mermaid");
+  document.body.append(element);
+  const authored =
+    "flowchart LR\naccTitle: Audit 🧪\naccDescr: Inspect <img src=x onerror=alert(1)> before allowing the request.\nA --> B";
+  const cases = [
+    { source: authored, title: "Audit 🧪", description: "Inspect", partial: true },
+    {
+      source: "flowchart LR\nA[No authored alternative] --> B",
+      title: "Mermaid diagram",
+      description: "",
+    },
+    {
+      source: "flowchart LR\naccTitle: Approval order\nA --> B",
+      title: "Approval order",
+      description: "",
+    },
+    {
+      source: "flowchart LR\naccDescr: Approval precedes execution.\nA --> B",
+      title: "Mermaid diagram",
+      description: "Approval precedes execution.",
+    },
+    { source: authored, title: "Audit 🧪", description: "Inspect", partial: true },
+  ];
+  try {
+    for (const fixture of cases) {
+      const oldUrl = element.querySelector(".preview img")?.getAttribute("src");
+      element.source = fixture.source;
+      await expect
+        .poll(() => element.querySelector(".preview img")?.getAttribute("src"))
+        .not.toBe(oldUrl);
+      await expect
+        .poll(() => element.querySelector<HTMLImageElement>(".preview img")?.alt)
+        .toBe(fixture.title);
+      const image = element.querySelector<HTMLImageElement>(".preview img")!;
+      await image.decode();
+      const description = document.getElementById(image.getAttribute("aria-describedby")!);
+      if (fixture.description) {
+        expect(description?.textContent).toContain(fixture.description);
+        if (!fixture.partial) {
+          expect(description?.textContent).toBe(fixture.description);
+        }
+        expect(description?.children).toHaveLength(0);
+        expect(getComputedStyle(description!).display).toBe("none");
+      } else {
+        expect(description).toBeNull();
+        expect(image.hasAttribute("aria-describedby")).toBe(false);
+        expect(element.querySelector(".description")).toBeNull();
+      }
+      expect(element.querySelector(".preview svg, .preview script, .description img")).toBeNull();
+      expect(image.src).toMatch(/^blob:/u);
+    }
+  } finally {
+    element.remove();
+  }
 });

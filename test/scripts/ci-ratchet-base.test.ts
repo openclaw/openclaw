@@ -121,7 +121,7 @@ it.skipIf(process.platform !== "linux").each([false, true])(
         7,
         { RATCHET_PR_HEAD_SHA: candidate, RATCHET_BASE_REF: base },
       ],
-      ["security-fast", "Check main push ratchets and protocol additions", 6, { BASE_SHA: base }],
+      ["security-fast", "Check main push ratchets and protocol additions", 7, { BASE_SHA: base }],
     ] as const;
     for (const [job, name, count, env] of cases) {
       const script = step(job, name)

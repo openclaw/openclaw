@@ -6,10 +6,7 @@ import { danger } from "../globals.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { defaultRuntime } from "../runtime.js";
 import { isSensitiveEnvName } from "../secrets/secret-env-name.js";
-import type {
-  SecretStoreEntryMetadata,
-  SecretStoreValidationError,
-} from "../secrets/store/secret-store.js";
+import type { SecretStoreValidationError } from "../secrets/store/secret-store.js";
 import { formatDocsHelp } from "./help-format.js";
 import { runWithLocalStateOwner } from "./local-state-owner.js";
 import { runSecretsCommand } from "./secrets-cli-output.js";
@@ -108,34 +105,6 @@ async function runStoreAction<T>(
   }
 }
 
-function renderList(entries: SecretStoreEntryMetadata[], options: OutputOptions): void {
-  if (options.plain) {
-    for (const entry of entries) {
-      defaultRuntime.writeStdout(
-        [
-          entry.name,
-          entry.kind,
-          entry.kind === "env" ? (entry.valuePreview ?? "") : "",
-          entry.kind === "secret" ? (entry.allowedHosts ?? []).join(",") : "",
-        ].join("\t"),
-      );
-    }
-    return;
-  }
-  if (entries.length === 0) {
-    defaultRuntime.log("No team secret store entries.");
-    return;
-  }
-  for (const entry of entries) {
-    const value = entry.kind === "env" ? ` = ${entry.valuePreview ?? ""}` : " (write-only)";
-    const hosts =
-      entry.kind === "secret"
-        ? `; allowed hosts: ${(entry.allowedHosts ?? []).join(", ") || "none"}`
-        : "";
-    defaultRuntime.log(`${entry.name} [${entry.kind}]${value}${hosts}`);
-  }
-}
-
 async function mutateStore(
   method: string,
   input: Record<string, unknown>,
@@ -195,7 +164,33 @@ export function registerSecretStoreCli(secrets: Command): void {
           return listSecretStoreEntries({ scope });
         },
         options.json,
-        (entries) => renderList(entries, options),
+        (entries) => {
+          if (options.plain) {
+            for (const entry of entries) {
+              defaultRuntime.writeStdout(
+                [
+                  entry.name,
+                  entry.kind,
+                  entry.kind === "env" ? (entry.valuePreview ?? "") : "",
+                  entry.kind === "secret" ? (entry.allowedHosts ?? []).join(",") : "",
+                ].join("\t"),
+              );
+            }
+            return;
+          }
+          if (entries.length === 0) {
+            defaultRuntime.log("No team secret store entries.");
+            return;
+          }
+          for (const entry of entries) {
+            const value = entry.kind === "env" ? ` = ${entry.valuePreview ?? ""}` : " (write-only)";
+            const hosts =
+              entry.kind === "secret"
+                ? `; allowed hosts: ${(entry.allowedHosts ?? []).join(", ") || "none"}`
+                : "";
+            defaultRuntime.log(`${entry.name} [${entry.kind}]${value}${hosts}`);
+          }
+        },
       ),
     );
 

@@ -1,5 +1,7 @@
 // Prove sanitization through the delivery hook and actual Urbit HTTP pokes.
+import { once } from "node:events";
 import http from "node:http";
+import { text as readBody } from "node:stream/consumers";
 import { expectDefined } from "@openclaw/normalization-core";
 import { sendDurableMessageBatch } from "openclaw/plugin-sdk/channel-outbound";
 import {
@@ -20,22 +22,6 @@ type CapturedPoke = {
   mark: string;
   json: unknown;
 };
-
-async function listen(server: http.Server): Promise<number> {
-  return await new Promise<number>((resolve) => {
-    server.listen(0, "127.0.0.1", () => {
-      resolve((server.address() as { port: number }).port);
-    });
-  });
-}
-
-async function readBody(request: http.IncomingMessage): Promise<string> {
-  const chunks: Buffer[] = [];
-  for await (const chunk of request) {
-    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-  }
-  return Buffer.concat(chunks).toString("utf8");
-}
 
 let server: http.Server;
 let baseUrl: string;
@@ -72,7 +58,9 @@ beforeEach(async () => {
       response.writeHead(500, { Connection: "close" }).end(String(error));
     });
   });
-  baseUrl = `http://127.0.0.1:${await listen(server)}`;
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  baseUrl = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
 });
 
 afterEach(async () => {

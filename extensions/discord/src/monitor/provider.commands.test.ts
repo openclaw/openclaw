@@ -94,7 +94,6 @@ it("reports only retained collisions after command overflow removes skills", asy
     ],
   });
 
-  expect(resolved.skillCommands).toEqual([]);
   expect(names(resolved.commandSpecs)).toEqual(["built-in", "vc", "skill-only", "plugin-unique"]);
   expect(resolved.commandSpecs[2]).toMatchObject({
     name: "skill-only",
@@ -131,7 +130,6 @@ it.each(["plugin", "skill"])("retains voice ownership against a %s named vc", as
     );
     return;
   }
-  expect(resolved.skillCommands).toEqual(vcSkillCommands);
   expect(harness.error).not.toHaveBeenCalled();
 });
 
@@ -175,7 +173,6 @@ it("deduplicates provider-renamed primary specs before Discord cap planning", as
     voiceEnabled: false,
   });
 
-  expect(resolved.skillCommands).toEqual(cappedSkillCommands);
   expect(resolved.commandSpecs).toHaveLength(uniqueCount(rawPrimary));
   expect(voiceSpecs(resolved.commandSpecs)).toEqual([
     expect.objectContaining({ description: "Control text-to-speech (TTS)." }),

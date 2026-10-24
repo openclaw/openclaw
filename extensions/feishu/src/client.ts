@@ -30,28 +30,13 @@ export function getFeishuUserAgent(): string {
   return FEISHU_USER_AGENT;
 }
 
-function setRequestUserAgent<T>(req: T): T {
-  const request = req as { headers?: unknown };
-  const headers = request.headers;
-  if (!headers) {
-    request.headers = { "User-Agent": getFeishuUserAgent() };
-    return req;
-  }
-
-  const maybeAxiosHeaders = headers as { set?: unknown };
-  if (typeof maybeAxiosHeaders.set === "function") {
-    maybeAxiosHeaders.set("User-Agent", getFeishuUserAgent());
-    return req;
-  }
-
-  (headers as Record<string, string>)["User-Agent"] = getFeishuUserAgent();
-  return req;
-}
-
 // Override the SDK's default User-Agent through the public interceptor API.
 // The SDK fallback interceptor only fills User-Agent when it is absent, so this
 // interceptor can preserve the rest of the SDK's request interceptor stack.
-Lark.defaultHttpInstance.interceptors.request.use(setRequestUserAgent);
+Lark.defaultHttpInstance.interceptors.request.use((req) => {
+  req.headers["User-Agent"] = getFeishuUserAgent();
+  return req;
+});
 
 function readHeader(headers: unknown, name: string): string | undefined {
   if (!isRecord(headers)) {

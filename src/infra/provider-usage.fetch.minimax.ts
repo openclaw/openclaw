@@ -15,10 +15,6 @@ type MinimaxBaseResp = {
   status_msg?: string;
 };
 
-type FetchMinimaxUsageOptions = {
-  baseUrl?: string;
-};
-
 const DEFAULT_MINIMAX_USAGE_ORIGIN = "https://api.minimaxi.com";
 const MINIMAX_USAGE_PATH = "/v1/token_plan/remains";
 
@@ -362,7 +358,9 @@ export async function fetchMinimaxUsage(
   apiKey: string,
   timeoutMs: number,
   fetchFn: typeof fetch,
-  options?: FetchMinimaxUsageOptions,
+  options?: {
+    baseUrl?: string;
+  },
 ): Promise<ProviderUsageSnapshot> {
   const parsed = await fetchUsageJson({
     provider: "minimax",

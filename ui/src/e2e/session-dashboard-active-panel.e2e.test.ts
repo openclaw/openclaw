@@ -1,7 +1,7 @@
 import { expect, it } from "vitest";
 import { buildWidgetDocument } from "../../../src/canvas/wrap.js";
 import { waitForLayoutSettled } from "../pages/chat/chat-layout.browser.test-support.ts";
-import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
+import { openChatPanels, selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
 import {
   controlUiBundledSettingsStorageKey,
   controlUiSessionUrl,
@@ -77,7 +77,12 @@ suite.define(() => {
             ],
             timestamp: 1700000000000 + index,
           })),
-          featureMethods: ["board.get", "chat.metadata", "chat.startup"],
+          featureMethods: [
+            "board.get",
+            "chat.metadata",
+            "chat.startup",
+            "sessions.companion.state",
+          ],
           methodResponses: {
             "board.get": {
               ...boardSnapshot,
@@ -197,10 +202,7 @@ suite.define(() => {
           .getByRole("button", { name: "Close", exact: true })
           .click();
         await mobileHost.waitFor({ state: "hidden" });
-        await page
-          .locator(".agent-chat__header--mobile")
-          .getByRole("button", { name: "Panels", exact: true })
-          .click();
+        await openChatPanels(page, "mobile");
         await mobileHost.waitFor();
         expect(await composer.inputValue()).toBe(draft);
         await page.setViewportSize({ width: 1440, height: 900 });
@@ -240,7 +242,12 @@ suite.define(() => {
               boardPresentation: "split",
             },
           ],
-          featureMethods: ["board.get", "chat.metadata", "chat.startup"],
+          featureMethods: [
+            "board.get",
+            "chat.metadata",
+            "chat.startup",
+            "sessions.companion.state",
+          ],
           methodResponses: {
             "board.get": boardSnapshot,
             "sessions.companion.state": {

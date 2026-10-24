@@ -45,6 +45,7 @@ export class DraftGatewayState {
   private environmentsValue: DraftEnvironment[] | null = null;
   private cloudProfilesReadyValue = false;
   private catalogRetryingValue = false;
+  private catalogRevalidation: Promise<void> | undefined;
   private catalogRevalidationPending = false;
   private gatewaySource: ApplicationContext["gateway"] | null = null;
   private gatewayClientValue: ApplicationContext["gateway"]["snapshot"]["client"] = null;
@@ -301,6 +302,10 @@ export class DraftGatewayState {
     return this.catalogRetryingValue;
   }
 
+  get catalogRetryRead(): Promise<void> | undefined {
+    return this.catalogRevalidation;
+  }
+
   get client(): ApplicationContext["gateway"]["snapshot"]["client"] {
     return this.gatewayClientValue;
   }
@@ -546,6 +551,8 @@ export class DraftGatewayState {
     globalThis.clearTimeout(this.catalogRetryTimer);
     this.catalogRetryTimer = undefined;
     this.catalogRetryingValue = true;
+    // Readiness excludes updateComplete: rendering must not await its own completion.
+    this.catalogRevalidation = revalidation;
     this.callbacks.changed();
     void revalidation
       .catch(() => undefined)

@@ -23,6 +23,7 @@ import { getChatHistoryLoadState } from "./chat-history-state.ts";
 import { buildPendingInputQueueItems, getChatPendingInputs } from "./chat-pending-inputs.ts";
 import type { ChatProviderReviewOwner } from "./chat-provider-review-controller.tsx";
 import { chatStartupStatusLabel } from "./chat-run-startup.ts";
+import { isChatRunWorking } from "./chat-run-working.ts";
 import type { ChatState } from "./chat-state-contract.ts";
 import type { ChatPlacementStartupNoticeProps } from "./chat-view-notices.tsx";
 import type { AsyncQuestionPresentation } from "./components/chat-async-question.types.ts";
@@ -31,7 +32,6 @@ import {
   stagedAttachmentBytes,
 } from "./components/chat-attachments.ts";
 import { resolveChatCommentAnchor } from "./components/chat-comment-anchor.ts";
-import { isChatRunWorking } from "./components/chat-composer-state.ts";
 import type { ChatComposerProps } from "./components/chat-composer-types.ts";
 import type { ChatDetailsProps } from "./components/chat-details-types.ts";
 import { createChatSelectionAttachment } from "./components/chat-selection-attachment.ts";

@@ -58,11 +58,13 @@ async function mount(state: PluginCredentialInspection = { kind: "literal" }, wi
     capture: () => scope,
     isCurrent: (candidate: unknown) => candidate === scope,
   } as unknown as GatewayPageBinding;
+  let presentationLifetime = Promise.withResolvers<void>();
   const context: Context = {
     pluginId: "example",
     baseHash: "revision",
     gateway,
     canInspect: true,
+    getPresentationLifetime: () => presentationLifetime.promise,
     onCommit: vi.fn().mockResolvedValue(true),
     onDiscard: vi.fn().mockResolvedValue(true),
   };
@@ -77,6 +79,8 @@ async function mount(state: PluginCredentialInspection = { kind: "literal" }, wi
     disabled: false,
     descriptionId: "credential-help",
   };
+  let connectionEpoch = gateway.epoch;
+  let connectionClient = gateway.client;
   const [props, setProps] = createSignal({ field: { ...field }, context: { ...context } });
   const { container } = mountSolid(() => (
     <>
@@ -91,6 +95,20 @@ async function mount(state: PluginCredentialInspection = { kind: "literal" }, wi
     contextChanges: Partial<Context> = {},
     fieldChanges: Partial<typeof field> = {},
   ) => {
+    const nextGateway = contextChanges.gateway ?? context.gateway;
+    if (
+      nextGateway.epoch !== connectionEpoch ||
+      nextGateway.client !== connectionClient ||
+      (contextChanges.gateway && contextChanges.gateway !== context.gateway) ||
+      (contextChanges.pluginId && contextChanges.pluginId !== context.pluginId) ||
+      contextChanges.canInspect === false ||
+      (fieldChanges.path && JSON.stringify(fieldChanges.path) !== JSON.stringify(field.path))
+    ) {
+      presentationLifetime.resolve();
+      presentationLifetime = Promise.withResolvers<void>();
+    }
+    connectionEpoch = nextGateway.epoch;
+    connectionClient = nextGateway.client;
     Object.assign(context, contextChanges);
     Object.assign(field, fieldChanges);
     setProps({ field: { ...field }, context: { ...context } });
@@ -179,7 +197,7 @@ it.each(["button", "modal"])("blocks %s dismissal during Save", async (dismissal
   }
   flush();
   expect(modal(editor)).not.toBeNull();
-  expect(button(editor, "Cancel").disabled).toBe(true);
+  await vi.waitFor(() => expect(button(editor, "Cancel").disabled).toBe(true));
   pending.resolve(true);
   await vi.waitFor(() => expect(modal(editor)).toBeNull());
 });
@@ -255,6 +273,20 @@ it("retries a failed inspection without remounting the credential input", async 
     ...inspectParams,
     baseHash: "next-revision",
   });
+});
+
+it("retries inspection after a saved credential without retaining the command error", async () => {
+  const { editor, context, scope, input } = await mount();
+  scope.client.request.mockRejectedValueOnce(new Error("Saved key inspection unavailable"));
+  editInput(input, "synthetic-saved-key");
+  input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+  await vi.waitFor(() => expect(editor.textContent).toContain("Saved key inspection unavailable"));
+
+  button(editor, "Retry").click();
+  await vi.waitFor(() => expect(scope.client.request).toHaveBeenCalledTimes(3));
+  await vi.waitFor(() => expect(editor.querySelector('[role="alert"]')).toBeNull());
+  expect(editor.querySelector("input")).toBe(input);
+  expect(context.onCommit).toHaveBeenCalledExactlyOnceWith(path, "synthetic-saved-key");
 });
 
 it("commits when focus leaves for another credential, but not its own reveal button", async () => {
@@ -378,6 +410,32 @@ it("retains the reference draft and Cancel until a failed write's retry succeeds
     id: "CHANGED_KEY",
   });
   click("Save");
+  await vi.waitFor(() => expect(modal(editor)).toBeNull());
+});
+
+it("clears a rejected discard while retrying without losing the reference draft", async () => {
+  const { editor, context, text } = await mount(reference());
+  const retried = createDeferred<boolean>();
+  vi.mocked(context.onCommit).mockResolvedValueOnce(false);
+  vi.mocked(context.onDiscard)
+    .mockRejectedValueOnce(new Error("Discard unavailable"))
+    .mockReturnValueOnce(retried.promise);
+  await open(editor);
+  const id = dialogInputs(editor)[1]!;
+  editInput(id, "CHANGED_KEY");
+  await vi.waitFor(() => expect(button(editor, "Save").disabled).toBe(false));
+  button(editor, "Save").click();
+  await vi.waitFor(() => expect(text('[role="alert"]')).toContain("could not be saved"));
+  button(editor, "Cancel").click();
+  await vi.waitFor(() => expect(text('[role="alert"]')).toContain("Discard unavailable"));
+
+  button(editor, "Cancel").click();
+  await vi.waitFor(() => expect(button(editor, "Cancel").disabled).toBe(true));
+  await vi.waitFor(() => expect(editor.querySelector('[role="alert"]')).toBeNull());
+  expect(dialogInputs(editor)[1]).toBe(id);
+  expect(id.value).toBe("CHANGED_KEY");
+  expect(modal(editor)).not.toBeNull();
+  retried.resolve(true);
   await vi.waitFor(() => expect(modal(editor)).toBeNull());
 });
 

@@ -233,24 +233,6 @@ it("preserves healthy accounts at the deadline and retains unfinished probe work
   expect(work.active).toBe(0);
 }, 1_000);
 
-it("does not start queued probes after the aggregate deadline", async () => {
-  vi.useFakeTimers();
-  const accountIds = [...blockedAccounts, "queued-1", "queued-2"];
-  const { work } = installBlockedProbes(accountIds);
-
-  const snapshotPromise = collectDeadlineSnapshot("public");
-  await flushHealthPreparation(snapshotPromise);
-  expect(work.started).toEqual(accountIds.slice(0, 5));
-  await vi.advanceTimersByTimeAsync(7_000);
-  const snap = await snapshotPromise;
-  const channel = snap.channels["deadline-test"];
-
-  expect(work.started).toEqual(accountIds.slice(0, 5));
-  for (const accountId of accountIds) {
-    expect(channel?.accounts?.[accountId]?.probe).toEqual(timeoutProbe);
-  }
-}, 1_000);
-
 it.each([60_000, -60_000])(
   "keeps the 7s budget when the wall clock steps %s ms",
   async (stepMs) => {
@@ -276,30 +258,26 @@ it.each([60_000, -60_000])(
   1_000,
 );
 
-it("retains timed-out permits across repeated health collections", async () => {
+it("expires queued probes without releasing occupied permits across collections", async () => {
   vi.useFakeTimers();
-  const accountIds = blockedAccounts;
+  const accountIds = [...blockedAccounts, "queued-1", "queued-2"];
   const { work, release } = installBlockedProbes(accountIds);
 
-  const firstSnapshot = collectDeadlineSnapshot();
-  await flushHealthPreparation(firstSnapshot);
-  expect(work.started).toEqual(accountIds);
-  await vi.advanceTimersByTimeAsync(7_000);
-  await firstSnapshot;
-
-  const secondSnapshot = collectDeadlineSnapshot();
-  await flushHealthPreparation(secondSnapshot);
-  expect(work.started).toEqual(accountIds);
-  await vi.advanceTimersByTimeAsync(7_000);
-  const second = await secondSnapshot;
-
-  expect(work.started).toEqual(accountIds);
-  expect(work).toMatchObject({ active: 5, maxActive: 5 });
-  for (const accountId of accountIds) {
-    expect(second.channels["deadline-test"]?.accounts?.[accountId]?.probe).toEqual(timeoutProbe);
+  for (let collection = 0; collection < 2; collection++) {
+    const pending = collectDeadlineSnapshot("public");
+    await flushHealthPreparation(pending);
+    expect(work.started).toEqual(blockedAccounts);
+    await vi.advanceTimersByTimeAsync(7_000);
+    const snapshot = await pending;
+    expect(work.started).toEqual(blockedAccounts);
+    expect(work).toMatchObject({ active: 5, maxActive: 5 });
+    for (const accountId of accountIds) {
+      expect(snapshot.channels["deadline-test"]?.accounts?.[accountId]?.probe).toEqual(
+        timeoutProbe,
+      );
+    }
   }
   release();
   await vi.advanceTimersByTimeAsync(7_000);
-  await firstSnapshot;
   expect(work.active).toBe(0);
 }, 1_000);

@@ -27,7 +27,6 @@ import {
   readUserTurnRequesterOrigin,
 } from "./user-turn-transcript-admission.js";
 import {
-  buildLateMediaAttachedProjection,
   createUserTurnTranscriptRecorder,
   mergePreparedUserTurnMessageForRuntime,
   resolvePersistedUserTurnText,
@@ -53,14 +52,15 @@ describe("user turn transcript persistence", () => {
       }),
     "openclaw-user-turn-persist-",
   );
-  beforeEach(() => setRuntimeConfigSnapshot({}));
-  const unusedRecorderTarget = {
-    agentId: "main",
-    sessionEntry: undefined,
-    sessionId: "unused-session",
-    sessionKey: "agent:main:unused",
-    storePath: "/tmp/openclaw-unused-sessions.json",
-  };
+  const makeTarget = (sessionId?: string, dir = sessionDirs.make()) =>
+    createSqliteTranscriptTarget({ dir, sessionId });
+  let defaultTarget: ReturnType<typeof makeTarget> | undefined;
+  beforeEach(() => {
+    defaultTarget = undefined;
+    setRuntimeConfigSnapshot({});
+  });
+  const getTarget = () => (defaultTarget ??= makeTarget());
+  const readMessages = () => readTranscriptMessages(getTarget());
 
   function userInput(text: string, idempotencyKey?: string) {
     return { text, timestamp: 123, ...(idempotencyKey ? { idempotencyKey } : {}) };
@@ -68,7 +68,7 @@ describe("user turn transcript persistence", () => {
 
   function record(
     input: UserTurnInput,
-    target: Parameters<typeof createUserTurnTranscriptRecorder>[0]["target"] = unusedRecorderTarget,
+    target: Parameters<typeof createUserTurnTranscriptRecorder>[0]["target"] = getTarget,
     options: Omit<Parameters<typeof createUserTurnTranscriptRecorder>[0], "input" | "target"> = {},
   ) {
     return createUserTurnTranscriptRecorder({ input, target, ...options });
@@ -83,9 +83,30 @@ describe("user turn transcript persistence", () => {
     ]);
   }
 
+  async function startLateMedia(input: UserTurnInput, options: Parameters<typeof record>[2] = {}) {
+    const dir = sessionDirs.make();
+    const target = makeTarget(undefined, dir);
+    const resolverStarted = createDeferred();
+    const mediaInput = createDeferred<UserTurnInput>();
+    const committedEntries: string[] = [];
+    const recorder = record(input, target, {
+      onOriginalInputCommitted: ({ anchor }) => committedEntries.push(anchor.entryId),
+      resolveInput: async () => {
+        resolverStarted.resolve();
+        return await mediaInput.promise;
+      },
+      ...options,
+    });
+    const persistence = recorder.persistFallback();
+    await resolverStarted.promise;
+    const admitted = await persistUserTurnTranscript({ ...target, input });
+    expect(admitted).toBeDefined();
+    return { dir, target, recorder, persistence, admitted, mediaInput, committedEntries };
+  }
+
   describe("trusted human transcript ownership", () => {
     it("keeps producer requester custody through staging, replay, and collection", async () => {
-      const target = createSqliteTranscriptTarget({ dir: sessionDirs.make() });
+      const target = makeTarget();
       await replaceSessionEntry(target, { sessionId: target.sessionId, updatedAt: 1 });
       const requesterOrigin = {
         sessionKey: "agent:main:telegram:group:requesters",
@@ -220,38 +241,47 @@ describe("user turn transcript persistence", () => {
   });
 
   describe("mergePreparedUserTurnMessageForRuntime", () => {
-    it("adds prepared transcript metadata to runtime user messages", () => {
-      const recorder = record({
-        text: "display prompt",
-        media: [{ path: "/tmp/image.png", contentType: "image/png" }],
-        sender: { id: "user-42", name: "Ada" },
-        timestamp: 123,
-      });
-
-      expect(
-        mergePreparedUserTurnMessageForRuntime({
-          runtimeMessage: castAgentMessage({
-            role: "user",
-            content: "runtime prompt",
-            provenance: { sourceChannel: "telegram" },
-            __openclaw: { mirrorIdentity: "run-1:prompt" },
+    const image = { path: "/tmp/image.png", contentType: "image/png" };
+    const multimodal = [
+      { type: "text", text: "canonical image caption" },
+      { type: "image", data: "aGVsbG8=", mimeType: "image/png" },
+    ];
+    it.each([
+      { name: "text", runtimeContent: "runtime prompt", expectedContent: "display prompt" },
+      { name: "multimodal", runtimeContent: multimodal, expectedContent: multimodal },
+    ])(
+      "merges prepared metadata while preserving $name content rules",
+      ({ runtimeContent, expectedContent }) => {
+        const prepared = record({
+          ...userInput("display prompt"),
+          media: [image],
+          sender: { id: "user-42", name: "Ada" },
+        }).message;
+        const provenance = { sourceChannel: "telegram" };
+        expect(
+          mergePreparedUserTurnMessageForRuntime({
+            runtimeMessage: castAgentMessage({
+              role: "user",
+              content: runtimeContent,
+              provenance,
+              __openclaw: { mirrorIdentity: "run-1:prompt" },
+            }),
+            preparedMessage: prepared,
           }),
-          preparedMessage: recorder.message,
-        }),
-      ).toMatchObject({
-        role: "user",
-        content: "display prompt",
-        provenance: { sourceChannel: "telegram" },
-        timestamp: 123,
-        __openclaw: {
-          mirrorIdentity: "run-1:prompt",
-          senderId: "user-42",
-          senderName: "Ada",
-          media: [expect.objectContaining({ path: "/tmp/image.png", contentType: "image/png" })],
-        },
-      });
-    });
-
+        ).toMatchObject({
+          role: "user",
+          content: expectedContent,
+          timestamp: 123,
+          provenance,
+          __openclaw: {
+            mirrorIdentity: "run-1:prompt",
+            senderId: "user-42",
+            senderName: "Ada",
+            media: [expect.objectContaining(image)],
+          },
+        });
+      },
+    );
     it("does not replace blocked before_agent_run user markers", () => {
       const recorder = record({ text: "raw prompt" });
       const blocked = castAgentMessage({
@@ -266,28 +296,6 @@ describe("user turn transcript persistence", () => {
           preparedMessage: recorder.message,
         }),
       ).toBe(blocked);
-    });
-
-    it("preserves runtime multimodal content while merging prepared metadata", () => {
-      const recorder = record(userInput("canonical image caption"));
-      const runtimeContent = [
-        { type: "text", text: "canonical image caption" },
-        { type: "image", data: "aGVsbG8=", mimeType: "image/png" },
-      ];
-
-      expect(
-        mergePreparedUserTurnMessageForRuntime({
-          runtimeMessage: castAgentMessage({
-            role: "user",
-            content: runtimeContent,
-          }),
-          preparedMessage: recorder.message,
-        }),
-      ).toMatchObject({
-        role: "user",
-        content: runtimeContent,
-        timestamp: 123,
-      });
     });
   });
 
@@ -312,49 +320,11 @@ describe("user turn transcript persistence", () => {
     },
   );
 
-  describe("persistUserTurnTranscript", () => {
-    it("resolves the session file and persists the user turn", async () => {
-      const dir = sessionDirs.make();
-      const target = createSqliteTranscriptTarget({ dir });
-      const sessionStore = {
-        [target.sessionKey]: {
-          sessionId: target.sessionId,
-          sessionFile: target.sqliteMarker,
-          updatedAt: 1,
-        },
-      };
-
-      const persisted = await persistUserTurnTranscript({
-        sessionId: target.sessionId,
-        sessionKey: target.sessionKey,
-        sessionEntry: sessionStore[target.sessionKey],
-        sessionStore,
-        storePath: target.storePath,
-        agentId: target.agentId,
-        cwd: dir,
-        input: {
-          text: "hello",
-          timestamp: 123,
-        },
-        updateMode: "none",
-      });
-
-      expect(persisted?.sessionFile).toBe(target.sessionKey);
-      await expect(readTranscriptMessages(target)).resolves.toEqual([
-        expect.objectContaining({
-          role: "user",
-          content: "hello",
-        }),
-      ]);
-    });
-  });
-
   describe("createUserTurnTranscriptRecorder", () => {
     it("adopts a prepared projection only after commitment and reuses it from another recorder", async () => {
-      const target = createSqliteTranscriptTarget({ dir: sessionDirs.make() });
       const input = userInput("original", "shared-projection");
-      const first = record(input, target);
-      const second = record(input, target);
+      const first = record(input);
+      const second = record(input);
       await first.persistApproved();
       await second.persistApproved();
       await rewritePreparedTranscriptMessageAtAnchor(first.getAdmissionReceipt()!, (message) => {
@@ -372,7 +342,7 @@ describe("user turn transcript persistence", () => {
       );
       expect(first.getPersistedMessage?.()).toBe(previous);
       expect(first.getAdmissionReceipt()).toBe(admission);
-      expect(readModelPromptProjection((await readTranscriptMessages(target))[0])).toBeUndefined();
+      expect(readModelPromptProjection((await readMessages())[0])).toBeUndefined();
 
       const committed = await capturePreparedTranscriptModelPromptProjection(
         prepared.intent.anchor,
@@ -390,73 +360,45 @@ describe("user turn transcript persistence", () => {
       await expect(second.captureModelPromptProjection!("changed", () => {})).rejects.toThrow(
         "cannot be changed",
       );
-      await expect(readTranscriptMessages(target)).resolves.toEqual([captured]);
+      await expect(readMessages()).resolves.toEqual([captured]);
     });
 
-    it("freezes the original prompt after initial steering and across reopened recorders", async () => {
-      const target = createSqliteTranscriptTarget({ dir: sessionDirs.make() });
-      const input = userInput("original prompt", "projection:user");
-      const recorder = record(input, target);
-      await recorder.persistApproved();
-      const steering = record(
-        { text: "initial steering", timestamp: 124, idempotencyKey: "steering:user" },
-        target,
-      );
-      const steered = await steering.persistApproved();
-      const text = "prepend\n\nreplacement model prompt\n\nappend";
-      const captured = await recorder.captureModelPromptProjection!(text, () => {});
-      recorder.markSentToProvider?.();
-      const generation = recorder.getAdmissionReceipt()?.generation;
-
-      expect(captured).toMatchObject({ content: input.text, timestamp: input.timestamp });
-      expect(await recorder.captureModelPromptProjection!(text, () => {})).toEqual(captured);
-      expect(recorder.getAdmissionReceipt()?.generation).toBe(generation);
-      await expect(
-        recorder.captureModelPromptProjection!("different hook output", () => {}),
-      ).rejects.toThrow("cannot be changed");
-
-      const reopened = record(input, target);
-      await reopened.persistApproved();
-      expect(readModelPromptProjection(reopened.getPersistedMessage?.())).toBe(text);
-      expect(await reopened.captureModelPromptProjection!(text, () => {})).toEqual(captured);
-      await expect(
-        reopened.captureModelPromptProjection!("different hook output", () => {}),
-      ).rejects.toThrow("cannot be changed");
-      await expect(readTranscriptMessages(target)).resolves.toEqual([captured, steered?.message]);
-    });
-
-    it("preserves capture, dispatch, and replay bytes despite logging patterns", async () => {
-      const target = createSqliteTranscriptTarget({ dir: sessionDirs.make() });
+    it("freezes capture, dispatch, and replay bytes after steering despite logging patterns", async () => {
+      const target = makeTarget();
       const input = userInput("private", "fidelity:user");
       const loggingTarget = { ...target, config: { logging: { redactPatterns: ["private"] } } };
       const recorder = record(input, { ...target, config: { logging: { redactPatterns: [] } } });
       await recorder.persistApproved({ target: loggingTarget });
+      const steered = await record(
+        { text: "initial steering", timestamp: 124, idempotencyKey: "steering:user" },
+        target,
+      ).persistApproved();
       const rawProjection = "prepend\n\nprivate\n\nappend";
       const captured = await recorder.captureModelPromptProjection!(rawProjection, () => {});
-      const expected = rawProjection;
-      expect(captured.content).toBe(input.text);
-      expect(readModelPromptProjection(captured)).toBe(expected);
+      const generation = recorder.getAdmissionReceipt()?.generation;
+      expect(captured).toMatchObject({ content: input.text, timestamp: input.timestamp });
+      expect(readModelPromptProjection(captured)).toBe(rawProjection);
       expect(projectRecordedModelPrompt(makeUserMessage(input.text, 123), captured)).toMatchObject({
-        content: expected,
+        content: rawProjection,
       });
       recorder.markSentToProvider?.();
-      expect(await recorder.captureModelPromptProjection!(rawProjection, () => {})).toEqual(
-        captured,
-      );
-      const stored = await readTranscriptMessages(target);
-      expect(stored).toEqual([captured]);
-      expect(stored[0]?.content).toBe(input.text);
-
       const reopened = record(input, loggingTarget);
       await reopened.persistApproved();
-      const replay = await reopened.captureModelPromptProjection!(rawProjection, () => {});
-      expect(readModelPromptProjection(replay)).toBe(expected);
-      expect(projectRecordedModelPrompt(replay)).toMatchObject({ content: expected });
+      for (const current of [recorder, reopened]) {
+        expect(readModelPromptProjection(current.getPersistedMessage?.())).toBe(rawProjection);
+        const replay = await current.captureModelPromptProjection!(rawProjection, () => {});
+        expect(replay).toEqual(captured);
+        expect(current.getAdmissionReceipt()?.generation).toBe(generation);
+        expect(projectRecordedModelPrompt(replay)).toMatchObject({ content: rawProjection });
+        await expect(
+          current.captureModelPromptProjection!("different hook output", () => {}),
+        ).rejects.toThrow("cannot be changed");
+      }
+      await expect(readTranscriptMessages(target)).resolves.toEqual([captured, steered?.message]);
     });
 
     it("rechecks authority after pending persistence before capturing a projection", async () => {
-      const target = createSqliteTranscriptTarget({ dir: sessionDirs.make() });
-      const recorder = record({ text: "original" }, target);
+      const recorder = record({ text: "original" });
       await recorder.persistApproved();
       const pending = createDeferred();
       recorder.markRuntimePersistencePending(pending.promise);
@@ -471,16 +413,15 @@ describe("user turn transcript persistence", () => {
       pending.resolve();
       await rejection;
 
-      const [stored] = await readTranscriptMessages(target);
+      const [stored] = await readMessages();
       expect(stored).toMatchObject({ content: "original" });
       expect(readModelPromptProjection(stored)).toBeUndefined();
     });
 
     it("never attaches an uncaptured projection to a sent or replaced user turn", async () => {
-      const target = createSqliteTranscriptTarget({ dir: sessionDirs.make() });
-      const recorder = record({ text: "original" }, target);
+      const recorder = record({ text: "original" });
       await recorder.persistApproved();
-      await replaceTranscriptEvents(target, [
+      await replaceTranscriptEvents(getTarget(), [
         {
           type: "message",
           id: "replacement",
@@ -491,11 +432,11 @@ describe("user turn transcript persistence", () => {
       await expect(recorder.captureModelPromptProjection!("enriched", () => {})).rejects.toThrow(
         "session writer claim changed",
       );
-      const [replacement] = await readTranscriptMessages(target);
+      const [replacement] = await readMessages();
       expect(replacement).toMatchObject({ content: "new turn" });
       expect(readModelPromptProjection(replacement)).toBeUndefined();
 
-      const sent = record({ text: "already sent" }, target);
+      const sent = record({ text: "already sent" });
       await sent.persistApproved();
       sent.markSentToProvider?.();
       await expect(sent.captureModelPromptProjection!("too late", () => {})).rejects.toThrow(
@@ -505,9 +446,8 @@ describe("user turn transcript persistence", () => {
     });
 
     it("persists fallback user turns only once", async () => {
-      const target = createSqliteTranscriptTarget({ dir: sessionDirs.make() });
       const persistedMessages: unknown[] = [];
-      const recorder = record(userInput("hello from fallback", "chat-run-1:user"), target, {
+      const recorder = record(userInput("hello from fallback", "chat-run-1:user"), undefined, {
         updateMode: "none",
         onMessagePersisted: (message) => {
           persistedMessages.push(message);
@@ -524,7 +464,7 @@ describe("user turn transcript persistence", () => {
       expect(second?.messageId).toBe(first?.messageId);
       expect(recorder.getPersistedMessage?.()).toEqual(first?.message);
       expect(persistedMessages).toEqual([first?.message]);
-      await expectStored(target, {
+      await expectStored(getTarget(), {
         role: "user",
         content: "hello from fallback",
         idempotencyKey: "chat-run-1:user",
@@ -534,38 +474,17 @@ describe("user turn transcript persistence", () => {
     it.each(["capture", "dispatch"] as const)(
       "appends #99495 media during %s without changing the admitted turn",
       async (timing) => {
-        const dir = sessionDirs.make();
-        const target = createSqliteTranscriptTarget({ dir });
         const admittedInput = {
           text: "describe @Ada",
           timestamp: 123,
           idempotencyKey: "chat-run-late:user",
           mentions: [{ profileId: "ada", start: 9, end: 13 }],
         };
-        const committedEntries: string[] = [];
-        const resolverStarted = createDeferred();
-        const mediaInput = createDeferred<UserTurnInput>();
-        const recorder = createUserTurnTranscriptRecorder({
-          input: admittedInput,
-          onOriginalInputCommitted: ({ anchor }) => committedEntries.push(anchor.entryId),
-          resolveInput: async () => {
-            resolverStarted.resolve();
-            return await mediaInput.promise;
-          },
-          beforeMessageWrite: ({ message }) =>
-            castAgentMessage({
-              ...(message as unknown as Record<string, unknown>),
-              __openclaw: { hookOwned: true },
-            }),
-          target,
-        });
-        const persistence = recorder.persistFallback();
-        await resolverStarted.promise;
-        const admitted = await persistUserTurnTranscript({
-          ...target,
-          input: admittedInput,
-        });
-        expect(admitted).toBeDefined();
+        const { dir, target, recorder, persistence, admitted, mediaInput, committedEntries } =
+          await startLateMedia(admittedInput, {
+            beforeMessageWrite: ({ message }) =>
+              castAgentMessage({ ...message, __openclaw: { hookOwned: true } }),
+          });
         recorder.markRuntimePersisted(recorder.message, admitted?.admission, {
           appended: admitted?.appended === true,
         });
@@ -617,30 +536,14 @@ describe("user turn transcript persistence", () => {
           }),
         ]);
         expect(readModelPromptProjection(messages[1])).toBeUndefined();
-        const lateProjection = buildLateMediaAttachedProjection(castAgentMessage(messages[1]));
-        expect(lateProjection.text).toBe(`[media attached: ${path.join(dir, "image.png")}]`);
-        expect(lateProjection.media).toEqual([
-          expect.objectContaining({
-            path: path.join(dir, "image.png"),
-            contentType: "image/png",
-            kind: "image",
-          }),
-        ]);
       },
     );
 
     it.each(["sent", "blocked"] as const)(
       "retires the pending admission view when %s",
       async (state) => {
-        const dir = sessionDirs.make();
-        const target = createSqliteTranscriptTarget({ dir });
-        const recorder = record(
-          {
-            text: "admit exactly once",
-            idempotencyKey: "receipt:user",
-          },
-          target,
-        );
+        const target = getTarget();
+        const recorder = record({ text: "admit exactly once", idempotencyKey: "receipt:user" });
 
         const persisted = await recorder.persistApproved();
 
@@ -670,7 +573,7 @@ describe("user turn transcript persistence", () => {
     );
 
     it("adds confirmed steering provenance after runtime persistence", async () => {
-      const target = createSqliteTranscriptTarget({ dir: sessionDirs.make() });
+      const target = makeTarget();
       const input = {
         text: "tighten the answer",
         idempotencyKey: "confirm-steer:user",
@@ -708,24 +611,19 @@ describe("user turn transcript persistence", () => {
       expect(work.counts).toEqual({ fts: 0, size: 0 });
 
       expect(recorder.getAdmissionReceipt()?.generation).toBe(initialGeneration);
-      expect(recorder.getPersistedMessage?.()).toMatchObject({
+      const expected = {
         __openclaw: {
           senderId: "operator-1",
           senderName: "Operator",
           steerTargetRunId: "active-run",
         },
-      });
-      await expectStored(target, {
-        __openclaw: {
-          senderId: "operator-1",
-          senderName: "Operator",
-          steerTargetRunId: "active-run",
-        },
-      });
+      };
+      expect(recorder.getPersistedMessage?.()).toMatchObject(expected);
+      await expectStored(target, expected);
     });
 
     it("waits for a deferred projection rebuild before returning admission identity", async () => {
-      const target = createSqliteTranscriptTarget({ dir: sessionDirs.make() });
+      const target = makeTarget();
       const committedEntries: string[] = [];
       await replaceSessionEntry(
         { storePath: target.storePath, sessionKey: target.sessionKey },
@@ -761,22 +659,9 @@ describe("user turn transcript persistence", () => {
     });
 
     it("preserves distinct text supplied with late-resolved media", async () => {
-      const dir = sessionDirs.make();
-      const target = createSqliteTranscriptTarget({ dir });
       const admittedInput = userInput("describe this", "chat-run-late-caption:user");
-      const resolverStarted = createDeferred();
-      const mediaInput = createDeferred<UserTurnInput>();
-      const recorder = createUserTurnTranscriptRecorder({
-        input: admittedInput,
-        resolveInput: async () => {
-          resolverStarted.resolve();
-          return await mediaInput.promise;
-        },
-        target,
-      });
-      const persistence = recorder.persistFallback();
-      await resolverStarted.promise;
-      await persistUserTurnTranscript({ ...target, input: admittedInput });
+      const { dir, target, recorder, persistence, mediaInput } =
+        await startLateMedia(admittedInput);
       recorder.markRuntimePersisted(recorder.message);
       recorder.markSentToProvider?.();
       mediaInput.resolve({
@@ -799,49 +684,57 @@ describe("user turn transcript persistence", () => {
       ]);
     });
 
-    it("falls back to the admitted text message when lazy media resolution fails", async () => {
-      const target = createSqliteTranscriptTarget({ dir: sessionDirs.make() });
-      const errors: unknown[] = [];
-      const recorder = record(userInput("keep the prompt", "chat-run-lazy-failed:user"), target, {
-        resolveInput: async () => {
-          throw new Error("media staging failed");
-        },
-        updateMode: "none",
-        onPersistenceError: (error) => errors.push(error),
-      });
-
-      const persisted = await recorder.persistFallback();
-
-      expect(errors).toHaveLength(1);
-      expect(persisted?.message).toMatchObject({
-        role: "user",
-        content: "keep the prompt",
-        idempotencyKey: "chat-run-lazy-failed:user",
-      });
-      expect(persisted?.message).not.toHaveProperty("MediaPath");
-      await expectStored(target, {
-        role: "user",
-        content: "keep the prompt",
-        idempotencyKey: "chat-run-lazy-failed:user",
-      });
-    });
+    it.each(["lazy media", "pending runtime"] as const)(
+      "fallback-persists when %s fails",
+      async (source) => {
+        const errors: unknown[] = [];
+        const failure = new Error(`${source} failed`);
+        const runtimePersistence = createDeferred();
+        const recorder = record(userInput("keep the prompt", "failed:user"), undefined, {
+          resolveInput:
+            source === "lazy media"
+              ? async () => {
+                  throw failure;
+                }
+              : undefined,
+          updateMode: "none",
+          onPersistenceError: (error) => errors.push(error),
+        });
+        if (source === "pending runtime") {
+          recorder.markRuntimePersistencePending(runtimePersistence.promise);
+        }
+        const fallback = recorder.persistFallback();
+        if (source === "pending runtime") {
+          runtimePersistence.reject(failure);
+        }
+        const persisted = await fallback;
+        const expected = {
+          role: "user",
+          content: "keep the prompt",
+          idempotencyKey: "failed:user",
+        };
+        expect(errors).toHaveLength(1);
+        expect(persisted?.message).toMatchObject(expected);
+        expect(persisted?.message).not.toHaveProperty("MediaPath");
+        await expectStored(getTarget(), expected);
+      },
+    );
 
     it("does not fallback-persist after before_agent_run blocks the turn", async () => {
-      const target = createSqliteTranscriptTarget({ dir: sessionDirs.make() });
-      const recorder = record(userInput("raw blocked prompt"), target, {
+      const recorder = record(userInput("raw blocked prompt"), undefined, {
         updateMode: "none",
       });
 
       recorder.markBlocked();
 
       await expect(recorder.persistFallback()).resolves.toBeUndefined();
-      await expect(readTranscriptMessages(target)).resolves.toEqual([]);
+      await expect(readMessages()).resolves.toEqual([]);
     });
 
     it("uses the runtime target supplied at approved persistence time", async () => {
       const dir = sessionDirs.make();
-      const staleTarget = createSqliteTranscriptTarget({ dir, sessionId: "stale-session" });
-      const admittedTarget = createSqliteTranscriptTarget({ dir, sessionId: "admitted-session" });
+      const staleTarget = makeTarget("stale-session", dir);
+      const admittedTarget = makeTarget("admitted-session", dir);
       const recorder = record(userInput("persist me in the admitted session"), staleTarget, {
         updateMode: "none",
       });
@@ -860,7 +753,7 @@ describe("user turn transcript persistence", () => {
 
     it("keeps concurrent persistence retries single-flight", async () => {
       const dir = sessionDirs.make();
-      const admittedTarget = createSqliteTranscriptTarget({ dir, sessionId: "admitted-session" });
+      const admittedTarget = makeTarget("admitted-session", dir);
       let targetResolutionCount = 0;
       const recorder = createUserTurnTranscriptRecorder({
         input: userInput("persist me once after concurrent retries"),
@@ -887,9 +780,8 @@ describe("user turn transcript persistence", () => {
     });
 
     it("waits for runtime persistence before deciding fallback ownership", async () => {
-      const target = createSqliteTranscriptTarget({ dir: sessionDirs.make() });
       const runtimePersistenceStarted = createDeferred();
-      const recorder = record(userInput("pending runtime turn"), target, {
+      const recorder = record(userInput("pending runtime turn"), undefined, {
         updateMode: "none",
       });
       recorder.markRuntimePersistencePending(
@@ -910,29 +802,7 @@ describe("user turn transcript persistence", () => {
       runtimePersistenceStarted.resolve();
 
       await expect(fallback).resolves.toBeUndefined();
-      await expect(readTranscriptMessages(target)).resolves.toEqual([]);
-    });
-
-    it("fallback-persists when pending runtime persistence fails", async () => {
-      const target = createSqliteTranscriptTarget({ dir: sessionDirs.make() });
-      const errors: unknown[] = [];
-      const runtimePersistence = createDeferred();
-      const recorder = record(userInput("pending failed turn"), target, {
-        updateMode: "none",
-        onPersistenceError: (error) => errors.push(error),
-      });
-      recorder.markRuntimePersistencePending(runtimePersistence.promise);
-
-      const fallback = recorder.persistFallback();
-      runtimePersistence.reject(new Error("runtime append failed"));
-      const persisted = await fallback;
-
-      expect(errors).toHaveLength(1);
-      expect(persisted?.message).toMatchObject({
-        role: "user",
-        content: "pending failed turn",
-      });
-      await expectStored(target, { role: "user", content: "pending failed turn" });
+      await expect(readMessages()).resolves.toEqual([]);
     });
   });
 });

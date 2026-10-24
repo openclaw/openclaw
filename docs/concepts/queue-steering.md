@@ -109,15 +109,18 @@ Visible user turns started through the `agent` RPC can also receive compatible
 steering. A visible subagent announcement in a Control UI conversation requires a
 result (`result-required`), so compatible human input can join that announcement's
 active execution. The execution keeps its existing permissions and required result;
-steering does not cancel the announcement or promote an optional reply obligation.
-The human input keeps its author and must be answered without duplicating the
-announcement. Use `/followup <message>` for a separate turn instead.
+steering does not cancel the announcement. The human input keeps its author and
+must be answered without duplicating the announcement. Use `/followup <message>`
+for a separate turn instead.
 
-Direct background turns with optional replies leave new human messages queued for
-a followup turn that can provide the required answer. Subagent completion and
-command announcements with an optional reply use this fallback too: the message
-runs automatically after the announcement and its cleanup finish. The input
-remains queued and can still be canceled while it waits.
+Visible optional completion turns, including subagent completion and command
+announcements, can accept compatible human input in a supporting embedded runtime.
+Only runtime acceptance promotes that turn to require a visible reply. Hidden
+turns, unsupported backends, and input requiring a different execution route leave
+new human messages queued for a followup turn that can provide the required answer.
+When steering is unavailable, the message runs automatically after the announcement
+and its cleanup finish. The input remains queued and can still be canceled while
+it waits.
 
 The same signed-in person can steer after reconnecting when permissions and model access remain compatible. Browser connections and display names do not define a new requester. The turn keeps its original authority, tool bindings, and approval destination. With collaborative steering disabled, changes to role scopes, session access, sandbox requirements, allowed agents, model access, access grants, tool policy, workspace, or bound tools can require a followup.
 
@@ -143,7 +146,10 @@ after the sending turn finishes. Access revocation can still block an input
 before its transcript commit.
 
 A visible message or send acknowledgment does not mean the active runtime has
-consumed it. The Control UI shows specific notices when an accepted message is
+consumed it. Gateway chat sends acknowledge saved input custody without waiting
+for steering admission behind older queued messages or for the active turn to end.
+Steering and followup delivery retain their original order, and later events report
+the input's outcome. The Control UI shows specific notices when an accepted message is
 waiting for worker setup or workspace sync.
 A steer sent while a turn is creating its worktree or preparing its runtime stays
 pending for that turn. Once the runtime is ready, OpenClaw checks whether it can

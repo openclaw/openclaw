@@ -113,7 +113,7 @@ it("drains the complete parked image turn after active steering rejects it", asy
         sessionCtx: {},
         sessionKey: key,
         touchActiveSessionEntry: async () => {},
-        typingSignals: createTypingSignaler({ typing, mode: "never", isHeartbeat: false }),
+        typingSignals: createTypingSignaler({ typing, mode: "never" }),
       }),
     ).resolves.toBe("handled");
     expect(reject).toHaveBeenCalledOnce();

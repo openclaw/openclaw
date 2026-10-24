@@ -27,7 +27,7 @@ function runError(
   onTestFinished(() => replyOperation.complete());
   return handleReplyAgentRunError(error, {
     resolveVisibleReplyDelivery: async () => false,
-    isHeartbeat: false,
+
     replyExpectation: "required",
     isRestartRecoveryArmed: async () => false,
     replyOperation,

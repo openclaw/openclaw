@@ -20,6 +20,7 @@ import { insertRepositoryGitHubPublicationFixture } from "./github-publication-s
 import { repositoryGitHubPublicationDigest } from "./github-repository-publication.kernel.js";
 import { handleGatewayRequest } from "./server-methods.js";
 import { getSessionRowProjection } from "./session-row-projection-access.js";
+import * as records from "./session-row-projection-record.js";
 
 let state: OpenClawTestState;
 let fixture: Awaited<ReturnType<typeof createFixture>>;
@@ -126,6 +127,8 @@ it("shares lineage work across audiences without sharing visibility or stale des
   await projection.ensureMaterialized();
   const root = projection.describe({ agentId: "main", key: sessionKey })!;
   const reads = vi.spyOn(projection, "selectEntries");
+  const captures = vi.spyOn(projection, "capture");
+  const resolveParent = vi.spyOn(records, "parentReference");
   const expected = (keys: string[]) =>
     keys.map((key) => ({
       agentId: "main",
@@ -136,10 +139,14 @@ it("shares lineage work across audiences without sharing visibility or stale des
     }));
   const allowsAll = () => true;
   const allowsShared = (row: { key: string }) => row.key !== hidden;
+  const selected = selectTaskPublicationSessions(projection, root, allowsAll);
+  expect(selected).toEqual(expected([child, hidden, leaf, sessionKey]));
+  selected.reverse();
   expect(selectTaskPublicationSessions(projection, root, allowsAll)).toEqual(
     expected([child, hidden, leaf, sessionKey]),
   );
   const firstReads = reads.mock.calls.length;
+  const firstCaptures = captures.mock.calls.length;
   expect(firstReads).toBeGreaterThan(0);
   expect(selectTaskPublicationSessions(projection, root, allowsShared)).toEqual(
     expected([child, leaf, sessionKey]),
@@ -148,10 +155,39 @@ it("shares lineage work across audiences without sharing visibility or stale des
     expected([child, hidden, leaf, sessionKey]),
   );
   expect(reads).toHaveBeenCalledTimes(firstReads);
+  expect(captures).toHaveBeenCalledTimes(firstCaptures);
+  expect(resolveParent).not.toHaveBeenCalled();
+
+  await fixture.seed("agent:main:unrelated", fixture.profile.id);
+  await projection.ensureMaterialized();
+  selectTaskPublicationSessions(projection, root, allowsAll);
+  const afterCreation = reads.mock.calls.length;
+  await fixture.seed("agent:main:unrelated", fixture.profile.id, {
+    label: "Updated",
+    updatedAt: 2,
+  });
+  await fixture.seed(child, fixture.profile.id, { parentSessionKey: sessionKey, label: "Updated" });
+  await projection.ensureMaterialized();
+  expect(selectTaskPublicationSessions(projection, root, allowsShared)).toEqual(
+    expected([child, leaf, sessionKey]),
+  );
+  expect(reads).toHaveBeenCalledTimes(afterCreation);
+
+  // Permissions consume the replacement row even when lineage itself is unchanged.
+  await fixture.seed(hidden, fixture.profile.id, {
+    parentSessionKey: sessionKey,
+    visibility: "shared",
+  });
+  await projection.ensureMaterialized();
+  expect(
+    selectTaskPublicationSessions(projection, root, (row) => row.entry.visibility !== "draft"),
+  ).toEqual(expected([child, hidden, leaf, sessionKey]));
+  expect(reads).toHaveBeenCalledTimes(afterCreation);
 
   await fixture.seed(leaf, fixture.profile.id, { parentSessionKey: hidden, updatedAt: 2 });
   await projection.ensureMaterialized();
   const current = projection.describe({ agentId: "main", key: sessionKey })!;
+  resolveParent.mockClear();
   expect(selectTaskPublicationSessions(projection, current, allowsShared)).toEqual(
     expected([child, sessionKey]),
   );
@@ -159,6 +195,7 @@ it("shares lineage work across audiences without sharing visibility or stale des
     expected([child, hidden, leaf, sessionKey]),
   );
   expect(reads.mock.calls.length).toBeGreaterThan(firstReads);
+  expect(resolveParent).not.toHaveBeenCalled();
 
   const runId = "task-pr-registry-lineage";
   subagentRuns.set(
@@ -221,31 +258,8 @@ it("projects three descendant receipts without mixing the parent's current branc
     throw new Error("offline");
   });
   await fixture.subscriptions.pollNow();
-  expect(latest()).toMatchObject({
-    status: "unavailable",
-    taskPullRequestCount: 3,
-  });
+  expect(latest()).toMatchObject({ status: "unavailable", taskPullRequestCount: 3 });
   expect(latest()?.taskPullRequests?.every((pr) => pr.pullRequest?.state === "closed")).toBe(true);
-});
-
-it("counts branch PRs against the complete receipt set, not only the bounded preview", async () => {
-  await fixture.seedRepository();
-  for (let number = 1; number <= 25; number++) {
-    receipt(sessionKey, number);
-  }
-  stubGitHub();
-  await fixture.subscribe();
-  await fixture.subscriptions.pollNow();
-  expect(latest()).toMatchObject({ taskPullRequestCount: 25, pullRequestCount: 26 });
-  expect(latest()?.taskPullRequests).toHaveLength(20);
-  receipt(sessionKey, 40, "older-branch-receipt", { updated_at_ms: 1 });
-  await vi.waitFor(() =>
-    expect(latest()).toMatchObject({
-      taskPullRequestCount: 26,
-      pullRequestCount: 26,
-    }),
-  );
-  expect(taskNumbers()?.includes(40)).toBe(false);
 });
 
 async function passive(client = fixture.client) {
@@ -296,46 +310,54 @@ it("reads own and nested receipts without a checkout, refreshes on commit, and n
   expect(fetcher).not.toHaveBeenCalled();
 });
 
-it("retains an external branch PR when active watching becomes passive without polling", async () => {
-  await fixture.seedRepository();
-  for (let number = 1; number <= 25; number++) {
-    receipt(sessionKey, number);
-  }
-  const fetcher = stubGitHub();
-  await fixture.subscribe();
-  await fixture.subscriptions.pollNow();
-  const active = latest();
-  expect(active).toMatchObject({
-    pullRequests: [{ number: 40 }],
-    taskPullRequestCount: 25,
-    pullRequestCount: 26,
-  });
-  const git = vi.spyOn(gitReads, "runGitReadOperation");
-  const networkCalls = fetcher.mock.calls.length;
-  // Another browser may already retain this profile's passive audience cell.
-  await passive(fixture.addReader("passive-peer").client);
-  await passive();
-  expect(latest()).toMatchObject({
-    branchRead: false,
-    pullRequests: active?.pullRequests,
-    repository: active?.repository,
-    taskPullRequestCount: 25,
-    pullRequestCount: 26,
-  });
-  // This overlap is outside the preview: counting only visible URLs is incorrect.
-  receipt(sessionKey, 40, "passive-overlap", { updated_at_ms: 1 });
-  await vi.waitFor(() =>
-    expect(latest()).toMatchObject({
-      branchRead: false,
-      taskPullRequestCount: 26,
+it.each([false, true])(
+  "counts branch PRs beyond the receipt preview (passive=%s)",
+  async (watchPassively) => {
+    await fixture.seedRepository();
+    for (let number = 1; number <= 25; number++) {
+      receipt(sessionKey, number);
+    }
+    const fetcher = stubGitHub();
+    await fixture.subscribe();
+    await fixture.subscriptions.pollNow();
+    const active = latest();
+    expect(active).toMatchObject({
+      pullRequests: [{ number: 40 }],
+      taskPullRequestCount: 25,
       pullRequestCount: 26,
-    }),
-  );
-  expect(taskNumbers()?.includes(40)).toBe(false);
-  await fixture.subscriptions.pollNow();
-  expect(git).not.toHaveBeenCalled();
-  expect(fetcher).toHaveBeenCalledTimes(networkCalls);
-});
+    });
+    expect(active?.taskPullRequests).toHaveLength(20);
+    const git = vi.spyOn(gitReads, "runGitReadOperation");
+    const networkCalls = fetcher.mock.calls.length;
+    if (watchPassively) {
+      // Another browser may already retain this profile's passive audience cell.
+      await passive(fixture.addReader("passive-peer").client);
+      await passive();
+      expect(latest()).toMatchObject({
+        branchRead: false,
+        pullRequests: active?.pullRequests,
+        repository: active?.repository,
+        taskPullRequestCount: 25,
+        pullRequestCount: 26,
+      });
+    }
+    // This overlap is outside the preview: counting only visible URLs is incorrect.
+    receipt(sessionKey, 40, "passive-overlap", { updated_at_ms: 1 });
+    await vi.waitFor(() =>
+      expect(latest()).toMatchObject({
+        ...(watchPassively ? { branchRead: false } : {}),
+        taskPullRequestCount: 26,
+        pullRequestCount: 26,
+      }),
+    );
+    expect(taskNumbers()?.includes(40)).toBe(false);
+    if (watchPassively) {
+      await fixture.subscriptions.pollNow();
+      expect(git).not.toHaveBeenCalled();
+      expect(fetcher).toHaveBeenCalledTimes(networkCalls);
+    }
+  },
+);
 
 it("keeps personal receipts viewer-scoped and withdraws inaccessible descendants", async () => {
   const child = "agent:main:private-child";

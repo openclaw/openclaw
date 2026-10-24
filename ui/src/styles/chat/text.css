@@ -115,14 +115,19 @@
 }
 
 .markdown-hex-color {
+  margin-inline: 0.2em;
   white-space: nowrap;
+
+  &:not(:is(strong, b) *) {
+    font-weight: 500;
+  }
 }
 
 .markdown-hex-color__swatch {
   display: inline-block;
   width: 0.85em;
   height: 0.85em;
-  margin-inline-start: 0.3em;
+  margin-inline-end: 0.3em;
   vertical-align: -0.05em;
   border: 1px solid var(--muted);
   border-radius: 3px;
@@ -210,7 +215,7 @@
   padding: 10px;
   border: 0;
   background: transparent;
-  color: var(--text);
+  color: color-mix(in srgb, var(--muted) 94%, transparent);
   cursor: var(--cursor-action);
   place-items: center;
 }
@@ -272,6 +277,7 @@
 }
 
 .markdown-table-dialog__close {
+  color: var(--text);
   position: fixed;
   top: 8px;
   right: 8px;
@@ -660,7 +666,8 @@
 }
 
 .chat-text :where(.markdown-link-favicon) {
-  display: none;
+  display: inline-block;
+  visibility: hidden;
   width: 1em;
   height: 1em;
   margin-inline-end: 0.3em;
@@ -668,7 +675,7 @@
 }
 
 .chat-text :where(.markdown-link-favicon.is-loaded) {
-  display: inline-block;
+  visibility: visible;
 }
 
 .chat-text :where(a:has(> .markdown-link-favicon.is-loaded)) {
@@ -1137,7 +1144,9 @@
   overscroll-behavior-inline: contain;
 }
 
-.code-block-viewport :where(pre) {
+/* Outrank passive code and sidebar pre rules: the focused viewport must own
+   horizontal scrolling, not a nested pre that keyboard input cannot reach. */
+.code-block-wrapper .code-block-viewport pre {
   overflow: visible;
 }
 
@@ -1236,12 +1245,14 @@
 }
 
 .code-block-expand:focus-visible,
+.code-block-viewport:focus-visible,
 .code-block-wrap:focus-visible {
   outline: 2px solid var(--ring);
   outline-offset: 2px;
 }
 
-.code-block-expand:focus-visible {
+.code-block-expand:focus-visible,
+.code-block-viewport:focus-visible {
   /* Keep the bottom edge inside the clipped code wrapper. */
   outline-offset: -2px;
 }
@@ -1400,12 +1411,12 @@
   margin-block-start: inherit;
 }
 
-.chat-text > * + *,
-.chat-text > * + .markdown-external-image {
+.chat-text > :where(:not(:first-child)),
+.chat-text > .markdown-external-image:where(:not(:first-child)) {
   margin-block-start: var(--chat-block-gap);
 }
 
-.chat-text > * + :where(h1, h2, h3, h4) {
+.chat-text > :where(h1, h2, h3, h4):where(:not(:first-child)) {
   margin-block-start: calc(var(--chat-block-gap) * 1.5);
 }
 

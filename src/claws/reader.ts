@@ -267,13 +267,6 @@ export async function readClawManifestFile(
         "kind" | "name" | "version" | "packageRoot" | "manifestPath"
       >;
     }) => boolean | Promise<boolean>;
-    authorizeLegacyDynamicToolProfile?: (params: {
-      manifest: ClawManifest;
-      source: Pick<
-        ClawSourceIdentity,
-        "kind" | "name" | "version" | "packageRoot" | "manifestPath"
-      >;
-    }) => boolean | Promise<boolean>;
   } = {},
 ): Promise<ClawReadResult> {
   const sourceResult = await resolveSource(path);
@@ -312,11 +305,7 @@ export async function readClawManifestFile(
       manifestPath: sourceResult.source.manifestPath,
     },
   };
-  const allowLegacyDynamicToolProfile =
-    options.allowLegacyDynamicToolProfile === true ||
-    (options.authorizeLegacyDynamicToolProfile
-      ? await options.authorizeLegacyDynamicToolProfile(legacyAuthorizationContext)
-      : false);
+  const allowLegacyDynamicToolProfile = options.allowLegacyDynamicToolProfile === true;
   const allowLegacyLocalUpdateHostSettings = options.authorizeLegacyLocalUpdateHostSettings
     ? await options.authorizeLegacyLocalUpdateHostSettings(legacyAuthorizationContext)
     : false;

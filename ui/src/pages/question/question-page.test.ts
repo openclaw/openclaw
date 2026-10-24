@@ -15,7 +15,7 @@ import {
 } from "../../test-helpers/gateway-client.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { questionPanelIn } from "../chat/components/chat-question-card.test-support.ts";
-import "./question-page-registration.ts";
+import "./question-page.tsx";
 
 type QuestionPage = HTMLElementTagNameMap["openclaw-question-page"];
 const answers = { answers: { audience: ["The design team"] } };
@@ -76,6 +76,28 @@ it.each(["question", "outside"] as const)("restores only question focus (%s)", a
   expect(request).toHaveBeenCalledTimes(1);
 });
 
+it("keeps focus on the collapsed question so it can be reopened", async () => {
+  const { page } = await mount(vi.fn().mockResolvedValue({ question: question() }));
+  await questionPanelIn(page);
+  const input = page.querySelector("textarea")!;
+  input.value = "The design team";
+  input.dispatchEvent(new InputEvent("input", { bubbles: true }));
+  const collapse = page.querySelector<HTMLButtonElement>(".chat-question-panel__collapse")!;
+  collapse.focus();
+  collapse.click();
+  await waitForSolid(() => {
+    const expand = page.querySelector(".chat-question-panel__collapsed-button");
+    expect(expand).not.toBeNull();
+    expect(document.activeElement).toBe(expand);
+  });
+
+  page.querySelector<HTMLButtonElement>(".chat-question-panel__collapsed-button")!.click();
+  await waitForSolid(() => {
+    expect(document.activeElement).toBe(page.querySelector(".chat-question-panel"));
+    expect(page.querySelector("textarea")?.value).toBe("The design team");
+  });
+});
+
 it("recovers a failed reconnect lookup without losing the typed answer", async () => {
   const request = vi
     .fn()
@@ -92,7 +114,7 @@ it("recovers a failed reconnect lookup without losing the typed answer", async (
   update({ phase: "reconnecting" });
   update({ phase: "connected" });
   await settle(page);
-  expect(retry(page)?.textContent?.trim()).toBe("Retry");
+  await waitForSolid(() => expect(retry(page)?.textContent?.trim()).toBe("Retry"));
   expect(page.textContent).toContain("Could not load this question. Try again.");
   retry(page)!.click();
   await settle(page);
@@ -114,9 +136,12 @@ it.each(["id", "client"] as const)("ignores stale retry rejection (%s)", async (
     .mockReturnValueOnce(pending.promise)
     .mockResolvedValue({ question: question("q2") });
   const { page, update } = await mount(request);
-  expect(retry(page)?.textContent?.trim()).toBe("Retry");
+  await waitForSolid(() => expect(retry(page)?.textContent?.trim()).toBe("Retry"));
   retry(page)!.click();
-  await settle(page);
+  await waitForSolid(() => {
+    expect(page.querySelector("main")?.getAttribute("aria-busy")).toBe("true");
+    expect(retry(page)).toBeNull();
+  });
   if (change === "id") {
     page.questionId = "q2";
     await page.updateComplete;
@@ -140,7 +165,7 @@ it("keeps confirmed missing questions unavailable without a retry", async () => 
     details: { reason: "QUESTION_NOT_FOUND" },
   });
   const { page } = await mount(vi.fn().mockRejectedValue(error));
-  expect(page.textContent).toContain("Unavailable");
+  await waitForSolid(() => expect(page.textContent).toContain("Unavailable"));
   expect(retry(page)).toBeNull();
 });
 
@@ -154,9 +179,35 @@ it("loads only the final question when native IDs change in one turn", async () 
 
   page.questionId = "q2";
   page.questionId = "q3";
-  await settle(page);
+  await waitForSolid(() => expect(page.textContent).toContain("q3"));
   await questionPanelIn(page);
 
   expect(request.mock.calls.map(([, params]) => params)).toEqual([{ id: "q1" }, { id: "q3" }]);
   expect(page.textContent).toContain("q3");
+});
+
+it("releases a held lookup when the native question ID changes", async () => {
+  const oldQuestion = createDeferred<unknown>();
+  const currentQuestion = createDeferred<unknown>();
+  const request = vi
+    .fn()
+    .mockReturnValueOnce(oldQuestion.promise)
+    .mockReturnValueOnce(currentQuestion.promise);
+  const { page } = await mount(request);
+  await waitForSolid(() => {
+    expect(page.querySelector("main")?.getAttribute("aria-busy")).toBe("true");
+    expect(document.title).toContain("Loading");
+  });
+
+  page.questionId = "q2";
+  await waitForSolid(() => expect(request).toHaveBeenCalledTimes(2));
+  currentQuestion.resolve({ question: question("q2") });
+  await waitForSolid(() => expect(page.textContent).toContain("q2"));
+  await questionPanelIn(page);
+  expect(page.querySelector("main")?.getAttribute("aria-busy")).toBe("false");
+
+  oldQuestion.reject(new Error("retired lookup"));
+  await settle(page);
+  expect(page.querySelector("textarea")).not.toBeNull();
+  expect(retry(page)).toBeNull();
 });

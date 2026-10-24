@@ -16,6 +16,7 @@ import { createApplicationGateway } from "../test-helpers/application-context.ts
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { createSolidApplicationContextProvider } from "../test-helpers/solid-application-context.tsx";
 import { flush, waitForSolid } from "../test-helpers/solid-settle.ts";
+import { SessionBackground } from "./session-background-host.tsx";
 import { readBackgroundImage } from "./session-background-image.ts";
 import {
   createBackgroundLayoutRef,
@@ -23,7 +24,6 @@ import {
 } from "./session-background-layout-context.tsx";
 import { backgroundImageOpacityLimit } from "./session-background-opacity.ts";
 import { SessionBackgroundView } from "./session-background-view.tsx";
-import { SessionBackground } from "./session-background.tsx";
 
 const profilePreferences = vi.hoisted(() => ({ ready: true }));
 // mock-isolation: Drive readiness without hydrating the process-wide profile preference cache.
@@ -230,6 +230,7 @@ it("uses registered composers in DOM order and releases a removed draft target",
 it("tracks late and replaced theme owners without recreating the lazy background slot", async () => {
   const warn = vi.spyOn(console, "warn");
   const source = fixture();
+  const subscribe = vi.spyOn(source.context.theme, "subscribe");
   source.settings.background = selectBackgroundSource({ kind: "none" });
   const [context, setContext] = createSignal<ApplicationContext | undefined>(undefined);
   const view = mountSolid(() =>
@@ -252,6 +253,15 @@ it("tracks late and replaced theme owners without recreating the lazy background
     expect(slot.hidden).toBe(false);
     expect(slot.querySelector(".session-background__image--theme")).not.toBeNull();
   });
+
+  const subscriptions = subscribe.mock.calls.length;
+  source.settings.background = selectBackgroundSource({ kind: "none" });
+  source.notify();
+  await waitForSolid(() => expect(slot.hidden).toBe(true));
+  source.settings.background = selectBackgroundSource({ kind: "theme" });
+  source.notify();
+  await waitForSolid(() => expect(slot.hidden).toBe(false));
+  expect(subscribe).toHaveBeenCalledTimes(subscriptions);
 
   const replacement = fixture();
   replacement.settings.background = selectBackgroundSource({ kind: "none" });

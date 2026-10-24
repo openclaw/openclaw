@@ -170,9 +170,9 @@ function makeEvent(params: EventInput): GoogleChatEvent {
     eventTime: params.eventTime,
     message: {
       name: `${params.space?.name ?? "spaces/MEDIA"}/messages/${params.id}`,
-      ...(params.text === undefined ? {} : { text: params.text }),
+      text: params.text,
       sender: params.sender ?? { name: "users/alice", type: "HUMAN" },
-      ...(params.attachments ? { attachment: params.attachments } : {}),
+      attachment: params.attachments,
     },
   };
 }
@@ -448,7 +448,6 @@ it.each([
         id: "1",
         text: "hello",
         space: { name: "spaces/IDENTITY", type: "DM" },
-        sender: { name: "users/alice", displayName: "Alice", type: "HUMAN" },
       },
       {
         account,
@@ -492,8 +491,6 @@ it("drops invalid event timestamps from inbound runtime payloads", async () => {
       id: "2",
       text: "hello",
       eventTime: "not-a-timestamp",
-      space: { name: "spaces/DM", type: "DM" },
-      sender: { name: "users/alice", displayName: "Alice", type: "HUMAN" },
     },
     { account },
   );

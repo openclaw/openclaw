@@ -6,18 +6,13 @@ import type { ConfigFileSnapshot } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { formatPluginPackagingRuntimeOutputRecoveryHint } from "../config-recovery-hints.js";
 
-/** Service lifecycle actions; only start/restart bring the gateway up. */
-type DaemonServiceAction = "start" | "restart" | "stop" | "uninstall";
-
-type ServiceActionPreflightFailure = {
-  message: string;
-  hints?: string[];
-};
-
 /** Startup admission, or a diagnostic to report after recovery actions. */
 export async function getServiceActionPreflightFailure(
-  action: DaemonServiceAction,
-): Promise<ServiceActionPreflightFailure | null> {
+  action: "start" | "restart" | "stop" | "uninstall",
+): Promise<{
+  message: string;
+  hints?: string[];
+} | null> {
   let snapshot: ConfigFileSnapshot;
   try {
     if (action === "restart") {

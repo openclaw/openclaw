@@ -84,7 +84,6 @@ async function prepareIngress(body: string, authorized = true): Promise<Prepared
       defaultProvider: params.provider,
       defaultModel: params.model,
       aliasIndex: { byAlias: new Map(), byKey: new Map() },
-      hasResolvedHeartbeatModelOverride: false,
     });
     expect(routed.kind).toBe("continue");
     if (routed.kind !== "continue") {

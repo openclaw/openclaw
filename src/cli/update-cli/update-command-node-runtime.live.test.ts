@@ -10,7 +10,7 @@ import { DEFAULT_UPDATE_STEP_TIMEOUT_MS } from "../../infra/update-run-timeouts.
 import { withEnvAsync } from "../../test-utils/env.js";
 
 const describeLive = process.env.OPENCLAW_LIVE_TEST === "1" ? describe : describe.skip;
-const nodeVersion = "24.19.0";
+const nodeVersion = "24.22.1";
 
 describeLive("private Node provisioning live", () => {
   it(

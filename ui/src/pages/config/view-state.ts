@@ -6,26 +6,24 @@ export type SettingsMediaDeviceState = {
   permissionRequired: boolean;
   selectedDeviceId: string;
   discovery: Promise<string | null> | null;
-  error: string | null;
+  selection: Promise<void> | null;
 };
 
 export type ConfigFormMode = "form" | "raw";
 
 export type ConfigDiffPath = string[];
 export type ConfigDiffEntry = { path: ConfigDiffPath; from: unknown; to: unknown };
-type RawDiffCache = {
-  original: string;
-  current: string;
-  diff: ConfigDiffEntry[];
-};
-
 export type ConfigViewState = {
   rawRevealed: boolean;
   rawDiffOpen: boolean;
   envRevealed: boolean;
   validityDismissed: boolean;
   revealedSensitivePaths: Set<string>;
-  rawDiffCache?: RawDiffCache;
+  rawDiffCache?: {
+    original: string;
+    current: string;
+    diff: ConfigDiffEntry[];
+  };
   lastConfigContextKey: string | null;
   lastFormModeForScroll: ConfigFormMode | null;
 };
@@ -40,7 +38,7 @@ export function createMediaDeviceState(): Omit<SettingsMediaDeviceState, "select
     permissionRequired: true,
     discovery: null,
     activeDiscovery: null,
-    error: null,
+    selection: null,
     loaded: false,
     requestsPermission: false,
   };

@@ -127,7 +127,7 @@ function buildBoundedDashboardProps(tab: "insights" | "wiki"): DreamingProps {
     onRefreshDiary: () => {},
     onRefreshImports: () => {},
     onRefreshWikiOverview: () => {},
-    onOpenConfig: () => {},
+    onOpenConfig: async () => {},
     onOpenWikiPage: async () => {},
     onCloseWikiPreview: () => {},
     wikiPreview: null,

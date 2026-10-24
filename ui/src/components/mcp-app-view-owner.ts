@@ -356,7 +356,7 @@ export function createMcpAppView(
 
   /** Restarts a torn-down view only when its parent kept the element connected. */
   function restartAfterTeardown() {
-    if (!host.isConnected || activeResources || teardownPromise) {
+    if (!retired || !host.isConnected || activeResources || teardownPromise) {
       return;
     }
     requestAbort = new AbortController();

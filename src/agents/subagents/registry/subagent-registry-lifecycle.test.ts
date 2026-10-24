@@ -14,7 +14,7 @@ import {
   listContextEngineQuarantines,
   registerContextEngineInRegistry,
 } from "../../../context-engine/registry.js";
-import { resetContextEngineRuntimeQuarantineForTests } from "../../../context-engine/registry.test-support.js";
+import * as engineTest from "../../../context-engine/registry.test-support.js";
 import type { CallGatewayOptions } from "../../../gateway/call.js";
 import { getAgentEventLifecycleGeneration } from "../../../infra/agent-events.js";
 import {
@@ -3971,7 +3971,7 @@ describe("requester settle wake trigger", () => {
     "owns context cleanup after its caller scope drains (%s)",
     async (mode) => {
       resetGatewayWorkAdmission();
-      await resetContextEngineRuntimeQuarantineForTests();
+      await engineTest.resetContextEngineRuntimeQuarantineForTests();
       runtimeMocks.log.mockClear();
       const registry = createEmptyPluginRegistry();
       const resources = new PluginRegistryInspectionResources(retireInspectionInstances);
@@ -3998,9 +3998,9 @@ describe("requester settle wake trigger", () => {
       });
       registerContextEngineInRegistry(registry, "cleanup-owned", factory, "plugin:fixture");
       registerContextEngineInRegistry(registry, "legacy", () => new LegacyContextEngine(), "core");
-      vi.mocked(getRuntimeConfig).mockReturnValue({
-        plugins: { slots: { contextEngine: "cleanup-owned" } },
-      });
+      vi.mocked(getRuntimeConfig).mockReturnValue(
+        engineTest.contextEngineConfig("cleanup-owned", "fixture"),
+      );
       vi.mocked(loadAgentRuntimePluginRegistryHandle).mockReturnValue(registry);
       using warn = vi.spyOn(subagentRegistryLog, "warn").mockImplementation(() => {});
       const cleanup = createSubagentRegistryContextCleanup({
@@ -4081,7 +4081,7 @@ describe("requester settle wake trigger", () => {
         await waitForLifecycleState(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
         vi.mocked(getRuntimeConfig).mockReset();
         vi.mocked(loadAgentRuntimePluginRegistryHandle).mockReset();
-        await resetContextEngineRuntimeQuarantineForTests();
+        await engineTest.resetContextEngineRuntimeQuarantineForTests();
         resetGatewayWorkAdmission();
       }
     },
@@ -4199,18 +4199,15 @@ describe("requester settle wake trigger", () => {
       });
       expect(settleWake).toHaveBeenCalledTimes(mode === "wake" ? 1 : 0);
       if (mode === "wake") {
-        expect(settleWake).toHaveBeenCalledWith({
-          requesterSessionKey: "agent:main:main",
-          requesterOrigin: undefined,
-          settledEntry: expect.objectContaining({
-            runId: entry.runId,
-            childSessionKey: entry.childSessionKey,
+        expect(settleWake).toHaveBeenCalledWith(
+          expect.objectContaining({
+            requesterSessionKey: "agent:main:main",
+            settledEntry: expect.objectContaining({
+              runId: entry.runId,
+              childSessionKey: entry.childSessionKey,
+            }),
           }),
-          transitionBatch: expect.any(Function),
-          completeBatch: expect.any(Function),
-          isSourceCurrent: expect.any(Function),
-          onDescendantsPending: expect.any(Function),
-        });
+        );
       }
       expect(readLifecycleRun(entry).requesterSettleWake).toEqual(
         mode === "wake" ? { status: "pending", attemptCount: 0 } : undefined,

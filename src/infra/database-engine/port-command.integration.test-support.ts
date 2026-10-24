@@ -86,7 +86,7 @@ export async function dropPortSchemas(client: Client, manifests: string[], extra
     ),
   ]);
   for (const namespace of namespaces) {
-    assert.match(namespace, /^(port|restore)_[a-f0-9]+$/);
+    assert.match(namespace, /^(?:(port|restore)_[a-f0-9]+|[a-z_][a-z0-9_]*_[a-f0-9]{16})$/);
     await client.query(`DROP SCHEMA IF EXISTS "${namespace}" CASCADE`);
   }
 }

@@ -1,6 +1,5 @@
 import {
   For,
-  Loading,
   Show,
   action,
   createMemo,
@@ -11,20 +10,23 @@ import {
 } from "solid-js";
 import { PanelLoadingSkeleton } from "../../../components/solid/panel-loading-skeleton.tsx";
 import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-composer.ts";
+import { registerChatDetailsEnglish } from "../../../i18n/locales/en-chat-details.ts";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import { formatCompactTokenCount } from "../../../lib/format.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { createTimeout } from "../../../lib/reactive/timers.ts";
-import "../../../styles/chat/context-breakdown.css";
 import { getContextNoticeViewModel } from "./chat-composer-context.tsx";
+import "../../../styles/chat/context-breakdown.css";
 import {
   animateDetailsDesktopEntrance,
   ChatDetailsDesktopSection,
 } from "./chat-details-desktop-section.tsx";
 import type { ChatDetailsProps } from "./chat-details-types.ts";
+import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
 
 registerEnglishCatalog(registerChatComposerEnglish);
 registerEnglishCatalog(registerChatSessionEnglish);
+registerEnglishCatalog(registerChatDetailsEnglish);
 
 // The report is needed only after Context is expanded, not during chat boot.
 const ChatContextBreakdown = lazy(() => import("./chat-context-breakdown.tsx"), {
@@ -165,7 +167,7 @@ export function ChatDetailsContextContent(props: ChatDetailsContextContentProps)
               props.presented && props.details.pullRequestsGateway && props.details.selectedSession
             }
           >
-            <Loading
+            <ChatLazyBoundary
               fallback={
                 <PanelLoadingSkeleton
                   variant="file-list"
@@ -183,7 +185,7 @@ export function ChatDetailsContextContent(props: ChatDetailsContextContentProps)
                 limit={usage().limit}
                 approximate={usage().approximate}
               />
-            </Loading>
+            </ChatLazyBoundary>
           </Show>
           <Show when={budget() && !usage().approximate}>
             <p class="chat-context__note">

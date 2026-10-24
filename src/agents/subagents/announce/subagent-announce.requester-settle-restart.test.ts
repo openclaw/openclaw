@@ -25,6 +25,28 @@ describe("quiet requester restart continuation", () => {
 
   afterEach(() => clearRuntimeConfigSnapshot());
 
+  it("does not reoffer a confirmed interruption notice in a requester-settle wave", async () => {
+    sessionStore[REQUESTER] = { sessionId: "sess-parent" };
+    const child = makeSettledChild({
+      runId: "delivered-interruption",
+      delivery: { status: "delivered", deliveredAt: 4_000 },
+      execution: {
+        status: "terminal",
+        startedAt: 2_000,
+        endedAt: 3_000,
+        interruptionReason: "gateway-restart",
+        outcome: { status: "error", error: "Gateway restarted" },
+      },
+    });
+    registryRuntimeMock.listSubagentRunsForRequester.mockReturnValue([child]);
+
+    expect(
+      await maybeWakeRequesterAfterAllChildrenSettled(wakeParams({ settledEntry: child })),
+    ).toBe(false);
+    expect(deliverSpy).not.toHaveBeenCalled();
+    expect(child.requesterSettleWake).toBeUndefined();
+  });
+
   it.each(["main", "nested", "reset", "cancelled", "successful", "replaced-child"] as const)(
     "keeps a quiet restart continuation private to its original %s parent",
     async (scenario) => {

@@ -83,6 +83,12 @@ const schemaIntegerKeywords = new Set([
   "minProperties",
 ]);
 const schemaBooleanKeywords = new Set(["deprecated", "readOnly", "uniqueItems", "writeOnly"]);
+const schemaKeywordGroups = [
+  [schemaStringKeywords, "string"],
+  [schemaNumberKeywords, "number"],
+  [schemaIntegerKeywords, "non-negative integer"],
+  [schemaBooleanKeywords, "boolean"],
+] as const;
 const JSON_POINTER_ARRAY_INDEX_SEGMENT = /^(0|[1-9]\d*)$/;
 
 function schemaTypeIncludes(schema: Record<string, unknown>, type: string): boolean {
@@ -131,7 +137,7 @@ function parseJsonPointerArrayIndex(segment: string): number | undefined {
 }
 
 function resolveLocalAnchor(
-  schema: JsonSchemaValue,
+  schema: unknown,
   anchor: string,
   isRoot = true,
 ): JsonSchemaValue | undefined {
@@ -234,7 +240,7 @@ function resolveSchemaResourceRef(
   const resolvedRefResource =
     refParts.resource === "" ? refParts.resource : resolveSchemaId(refParts.resource, baseId);
   const seen = new Set<object>();
-  const visit = (current: JsonSchemaValue, baseIdLocal: string | undefined): LocalRefResolution => {
+  const visit = (current: unknown, baseIdLocal: string | undefined): LocalRefResolution => {
     if (!isRecord(current) || seen.has(current)) {
       return { found: false };
     }
@@ -274,25 +280,29 @@ function resolveSchemaRef(
 
 function visitSchemaChildren<T>(
   schema: Record<string, unknown>,
-  visit: (child: JsonSchemaValue) => T | undefined,
+  visit: (child: unknown, key: string, entryKey?: string | number) => T | undefined,
+  invalid?: (key: string, message: string) => T,
 ): T | undefined {
   // Materialize each map before descending; stop before reading later groups on a match.
   for (const key of schemaMapKeywords) {
     const value = schema[key];
     if (!isRecord(value)) {
+      if (value !== undefined && invalid) {
+        return invalid(key, "expected schema map");
+      }
       continue;
     }
-    for (const entry of Object.values(value)) {
-      const resolved = visit(entry as JsonSchemaValue);
+    for (const [entryKey, entry] of Object.entries(value)) {
+      const resolved = visit(entry, key, entryKey);
       if (resolved !== undefined) {
         return resolved;
       }
     }
   }
   if (isRecord(schema.dependencies)) {
-    for (const entry of Object.values(schema.dependencies)) {
+    for (const [key, entry] of Object.entries(schema.dependencies)) {
       if (!isStringArray(entry)) {
-        const resolved = visit(entry as JsonSchemaValue);
+        const resolved = visit(entry, "dependencies", key);
         if (resolved !== undefined) {
           return resolved;
         }
@@ -302,28 +312,36 @@ function visitSchemaChildren<T>(
   for (const key of schemaValueKeywords) {
     const value = schema[key];
     if (typeof value === "boolean" || isRecord(value)) {
-      const resolved = visit(value as JsonSchemaValue);
+      const resolved = visit(value, key);
       if (resolved !== undefined) {
         return resolved;
       }
       continue;
     }
     if (key === "items" && Array.isArray(value)) {
-      for (const entry of value) {
-        const resolved = visit(entry as JsonSchemaValue);
+      for (const [index, entry] of value.entries()) {
+        const resolved = visit(entry, key, index);
         if (resolved !== undefined) {
           return resolved;
         }
       }
+    } else if (value !== undefined && invalid) {
+      return invalid(
+        key,
+        Array.isArray(value) ? "expected schema" : "schema must be an object or boolean",
+      );
     }
   }
   for (const key of schemaArrayKeywords) {
     const value = schema[key];
     if (!Array.isArray(value)) {
+      if (value !== undefined && invalid) {
+        return invalid(key, "expected schema array");
+      }
       continue;
     }
-    for (const entry of value) {
-      const resolved = visit(entry as JsonSchemaValue);
+    for (const [index, entry] of value.entries()) {
+      const resolved = visit(entry, key, index);
       if (resolved !== undefined) {
         return resolved;
       }
@@ -348,31 +366,17 @@ function validateSchemaKeywordShapes(
   schema: Record<string, unknown>,
   path: string,
 ): string | undefined {
-  for (const key of schemaStringKeywords) {
-    const value = schema[key];
-    if (value !== undefined && typeof value !== "string") {
-      return `${path}.${key}: expected string`;
-    }
-  }
-  for (const key of schemaNumberKeywords) {
-    const value = schema[key];
-    if (value !== undefined && typeof value !== "number") {
-      return `${path}.${key}: expected number`;
-    }
-  }
-  for (const key of schemaIntegerKeywords) {
-    const value = schema[key];
-    if (
-      value !== undefined &&
-      (!Number.isInteger(value) || (typeof value === "number" && value < 0))
-    ) {
-      return `${path}.${key}: expected non-negative integer`;
-    }
-  }
-  for (const key of schemaBooleanKeywords) {
-    const value = schema[key];
-    if (value !== undefined && typeof value !== "boolean") {
-      return `${path}.${key}: expected boolean`;
+  for (const [keywords, expected] of schemaKeywordGroups) {
+    for (const key of keywords) {
+      const value = schema[key];
+      if (
+        value !== undefined &&
+        (expected === "non-negative integer"
+          ? !Number.isInteger(value) || (typeof value === "number" && value < 0)
+          : typeof value !== expected)
+      ) {
+        return `${path}.${key}: expected ${expected}`;
+      }
     }
   }
   if (
@@ -471,70 +475,12 @@ function findJsonSchemaNodeError(
       return `${path}.${key}: unresolved ref`;
     }
   }
-  for (const key of schemaMapKeywords) {
-    const value = schema[key];
-    if (value === undefined) {
-      continue;
-    }
-    if (!isRecord(value)) {
-      return `${path}.${key}: expected schema map`;
-    }
-    for (const [entryKey, entry] of Object.entries(value)) {
-      const error = findChildError(entry, `${path}.${key}.${entryKey}`);
-      if (error) {
-        return error;
-      }
-    }
-  }
-  if (isRecord(schema.dependencies)) {
-    for (const [key, value] of Object.entries(schema.dependencies)) {
-      if (isStringArray(value)) {
-        continue;
-      }
-      const error = findChildError(value, `${path}.dependencies.${key}`);
-      if (error) {
-        return error;
-      }
-    }
-  }
-  for (const key of schemaValueKeywords) {
-    const value = schema[key];
-    if (value === undefined || typeof value === "boolean") {
-      continue;
-    }
-    if (Array.isArray(value)) {
-      if (key !== "items") {
-        return `${path}.${key}: expected schema`;
-      }
-      for (const [index, entry] of value.entries()) {
-        const error = findChildError(entry, `${path}.${key}.${index}`);
-        if (error) {
-          return error;
-        }
-      }
-      continue;
-    }
-    const error = findChildError(value, `${path}.${key}`);
-    if (error) {
-      return error;
-    }
-  }
-  for (const key of schemaArrayKeywords) {
-    const value = schema[key];
-    if (value === undefined) {
-      continue;
-    }
-    if (!Array.isArray(value)) {
-      return `${path}.${key}: expected schema array`;
-    }
-    for (const [index, entry] of value.entries()) {
-      const error = findChildError(entry, `${path}.${key}.${index}`);
-      if (error) {
-        return error;
-      }
-    }
-  }
-  return undefined;
+  return visitSchemaChildren(
+    schema,
+    (child, key, entryKey) =>
+      findChildError(child, `${path}.${key}${entryKey === undefined ? "" : `.${entryKey}`}`),
+    (key, message) => `${path}.${key}: ${message}`,
+  );
 }
 
 /** Return the first structural JSON Schema error that would make validation/defaulting unsafe. */
@@ -649,7 +595,7 @@ function schemaMatches(
   }
 }
 
-function countSchemaNodes(schema: JsonSchemaValue, seen = new Set<object>()): number {
+function countSchemaNodes(schema: unknown, seen = new Set<object>()): number {
   if (!isRecord(schema) || seen.has(schema)) {
     return 1;
   }

@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 325081,
-  "reason": "Solid 2 action/optimistic runtime adoption, W-SOLID2-RECIPES; offset tracked by HF-STARTUP-BUDGET",
-  "updatedAt": "2026-10-21"
+  "startupJsGzipBytes": 281233,
+  "reason": "Defer optional root English at consuming routes: matched bf93c438 startup 282747 to 281233 B gzip; 7 JS and 1 CSS request unchanged.",
+  "updatedAt": "2026-10-23"
 }

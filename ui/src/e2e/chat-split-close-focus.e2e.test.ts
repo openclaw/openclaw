@@ -19,11 +19,12 @@ suite.define(() => {
     { count: 2, closed: 1, surviving: 0, presentation: "chat" },
     { count: 2, closed: 0, surviving: 1, presentation: "chat" },
     { count: 3, closed: 2, surviving: 1, presentation: "chat" },
+    { count: 3, closed: 1, surviving: 0, presentation: "chat", inactive: true },
     { count: 2, closed: 1, surviving: 0, presentation: "read-only" },
     { count: 2, closed: 1, surviving: 0, presentation: "dashboard" },
   ])(
     "returns named focus to the surviving $presentation pane after closing pane $closed of $count",
-    async ({ count, closed, surviving, presentation }) => {
+    async ({ count, closed, surviving, presentation, inactive }) => {
       const editable = presentation !== "read-only";
       const composerVisible = presentation !== "dashboard";
       await suite.withPage({ viewport: { width: 1920, height: 1000 } }, async ({ page }) => {
@@ -93,15 +94,20 @@ suite.define(() => {
         if (editable) {
           await homeComposer.fill("Home draft");
         }
-        await paneB.locator(".chat-header-session-menu__trigger").click();
-        const actions = paneB.locator("openclaw-chat-header-session-menu");
-        const view = actions.getByRole("menuitem", { name: "View", exact: true });
-        await view.focus();
-        await view.press("ArrowRight");
-        const close = actions.getByRole("menuitem", { name: "Close pane", exact: true });
-        await close.focus();
-        expect(await close.evaluate((element) => element === document.activeElement)).toBe(true);
-        await page.keyboard.press("Enter");
+        const close = paneB.getByRole("button", { name: "Close pane", exact: true });
+        if (inactive) {
+          await composerA.focus();
+          await expect
+            .poll(() => paneB.getAttribute("class"))
+            .not.toContain("chat-pane-cache__pane--active");
+          await page.mouse.move(0, 0);
+          expect(await close.evaluate((element) => getComputedStyle(element).opacity)).toBe("1");
+          await close.click();
+        } else {
+          await close.focus();
+          expect(await close.evaluate((element) => element === document.activeElement)).toBe(true);
+          await page.keyboard.press("Enter");
+        }
         // Closed logical pane retires; another pane may retain B as an inert cache entry.
         await expect
           .poll(() => page.locator("openclaw-chat-page .chat-split-view__cell").count())
@@ -132,7 +138,14 @@ suite.define(() => {
         expect
           .soft(editable ? await homeComposer.inputValue() : null)
           .toBe(editable ? "Home draft" : null);
+        if (count === 2) {
+          await expect
+            .poll(() => paneA.getByRole("button", { name: "Close pane", exact: true }).count())
+            .toBe(0);
+        }
         expect.soft(await gateway.getRequests("chat.send")).toEqual([]);
+        expect.soft(await gateway.getRequests("sessions.delete")).toEqual([]);
+        expect.soft(await gateway.getRequests("chat.abort")).toEqual([]);
         expect.soft(await gateway.getRequests("sessions.patch")).toEqual([]);
         expect.soft(errors).toEqual([]);
         expect.soft(focusInChat).toBe(true);

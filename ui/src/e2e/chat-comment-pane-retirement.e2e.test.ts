@@ -1,5 +1,3 @@
-import { writeFile } from "node:fs/promises";
-import path from "node:path";
 import type { Locator } from "playwright";
 import { expect, it } from "vitest";
 import {
@@ -103,7 +101,6 @@ suite.define(() => {
             await textbox.fill(unsaved);
             expect(await hasFocus(textbox)).toBe(true);
           }
-          await page.screenshot({ path: path.join(suite.artifactDir, "before-archive.png") });
           const target = archivedPane === "own" ? alpha : beta;
           const archived = { ...target, archived: true, archivedAt: 3, updatedAt: 3 };
           await gateway.setSessionsListResponse(
@@ -129,11 +126,6 @@ suite.define(() => {
               editorFocused: Boolean(input && focus === input),
             };
           });
-          await writeFile(
-            path.join(suite.artifactDir, "observations.json"),
-            JSON.stringify({ editorKind, archivedPane, ...observations, errors }, null, 2),
-          );
-          await page.screenshot({ path: path.join(suite.artifactDir, "after-archive.png") });
           expect(errors).toEqual([]);
           if (archivedPane === "own") {
             expect(observations.editorPresent).toBe(false);

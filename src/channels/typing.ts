@@ -94,10 +94,8 @@ export function createTypingCallbacks(params: CreateTypingCallbacksParams): Typi
   };
 
   const clearTtlTimer = () => {
-    if (ttlTimer) {
-      clearTimeout(ttlTimer);
-      ttlTimer = undefined;
-    }
+    clearTimeout(ttlTimer);
+    ttlTimer = undefined;
   };
 
   const onReplyStart = async () => {

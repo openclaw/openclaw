@@ -275,7 +275,6 @@ vi.mock("./agent-runner-utils.js", async (importOriginal) => ({
           authProfileIdSource:
             params.provider === params.run.provider ? params.run.authProfileIdSource : undefined,
         },
-  resolveQueuedReplyRuntimeConfig: <T>(config: T) => config,
   resolveModelFallbackOptions: vi.fn(
     (run: { provider?: string; model?: string; config?: unknown; agentDir?: string }) => ({
       provider: run.provider,
@@ -528,7 +527,7 @@ export function createAgentTurnExecutionDefaults() {
     shouldEmitToolResult: () => true,
     shouldEmitToolOutput: () => false,
     pendingToolTasks: new Set<Promise<void>>(),
-    isHeartbeat: false,
+
     sessionKey: "main",
     getActiveSessionEntry: () => undefined,
     resolvedVerboseLevel: "off",

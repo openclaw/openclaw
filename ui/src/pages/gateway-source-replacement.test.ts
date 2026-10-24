@@ -31,7 +31,8 @@ import {
   createSessions,
 } from "./sessions/sessions-page.test-support.ts";
 import { SessionsPage } from "./sessions/sessions-page.tsx";
-import { SkillsPage, type SkillsRouteData } from "./skills/skills-page.tsx";
+import { SkillsPage } from "./skills/skills-page.tsx";
+import type { SkillsRouteData } from "./skills/view-types.ts";
 import { createSkill } from "./skills/view.test-support.ts";
 import type { UsageRouteData } from "./usage/types.ts";
 import {
@@ -218,7 +219,6 @@ async function mountUsagePage(
       agentId: null,
     },
     result,
-    costSummary: null,
     loadedAtMs: Date.now(),
     error: null,
   };

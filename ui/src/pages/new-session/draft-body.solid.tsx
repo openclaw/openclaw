@@ -12,7 +12,7 @@ import { Icon } from "../../components/solid/icon.tsx";
 import { LazyViewError } from "../../components/solid/lazy-view-error.tsx";
 import { LoadingState } from "../../components/solid/loading-state.tsx";
 import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
-import { normalizeMessage } from "../../lib/chat/message-normalizer.ts";
+import { resolveMessageSender } from "../../lib/chat/sender-label.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { resolveChatDefaultAvatarPlacement } from "../chat/components/chat-author-avatar.ts";
@@ -81,7 +81,9 @@ export function NewSessionBody(props: NewSessionBodyProps) {
   const avatarPlacement = createMemo(() =>
     resolveChatDefaultAvatarPlacement(
       true,
-      props.pendingMessage && normalizeMessage(props.pendingMessage).sender ? props.userId : null,
+      props.pendingMessage && resolveMessageSender(props.pendingMessage["__openclaw"])
+        ? props.userId
+        : null,
     ),
   );
   // Late cleanup can fail while a replacement submission is still pending.

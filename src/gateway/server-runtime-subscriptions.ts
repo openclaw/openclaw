@@ -584,7 +584,6 @@ export function startGatewayEventSubscriptions(params: GatewayEventSubscriptionP
   };
 
   const transcriptUnsub = onInternalSessionTranscriptUpdate((evt) => {
-    sessionActivitySummaries.handleTranscript(evt);
     // The committing root is a real completion obligation, separate from the
     // bounded presentation job. Capture it before leaving the producer context.
     const releaseRoot = retainGatewayRootWorkAdmissionContinuation();

@@ -61,6 +61,31 @@ export const oauth = createOAuthRefreshCredential;
 export const openAIConfig = providerConfig.bind(null, "openai");
 export const apiRoute = { api: "openai-responses", authRequirement: "api-key" } as const;
 
+export function profilePlan(
+  profileId: string,
+  overrides: Partial<AgentRuntimeAuthPlan> = {},
+): AgentRuntimeAuthPlan {
+  return {
+    ...authProvider,
+    forwardedAuthProfileId: profileId,
+    forwardedAuthProfileSource: "auto",
+    forwardedAuthProfileCandidateIds: [profileId],
+    ...overrides,
+  };
+}
+
+export function subscriptionPlan(
+  overrides: Partial<AgentRuntimeAuthPlan> = {},
+): AgentRuntimeAuthPlan {
+  return {
+    ...authProvider,
+    forwardedAuthProfileId: "openai:subscription",
+    selectedAuthMode: "token",
+    modelRoute: { ...subscriptionRoute },
+    ...overrides,
+  };
+}
+
 export function authStore(
   profiles: AuthProfileStore["profiles"],
   order?: AuthProfileStore["order"],

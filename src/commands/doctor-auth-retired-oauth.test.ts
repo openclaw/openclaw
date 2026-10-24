@@ -110,10 +110,17 @@ it("imports pre-June oauth.json and preserves rejected entries with recovery ins
   expect(listMigratedArchives(authPath)).toHaveLength(1);
 });
 
-it.each(["plaintext", "encrypted", "fallback-key", "missing-key"] as const)(
-  "imports retired OAuth sidecars through SQLite and archives original bytes: %s",
+it.each([
+  "plaintext",
+  "encrypted",
+  "fallback-key",
+  "missing-key",
+  "invalid-key",
+  "invalid-plaintext",
+] as const)(
+  "repairs retired OAuth sidecars while retaining unimportable source bytes: %s",
   async (format) => {
-    const seed = "synthetic-sidecar-key";
+    const seed = format === "invalid-key" ? "synthetic-sidecar-\ufffd" : "synthetic-sidecar-key";
     const env = {
       ...state.env,
       APPDATA: path.join(state.home, "AppData", "Roaming"),
@@ -128,9 +135,16 @@ it.each(["plaintext", "encrypted", "fallback-key", "missing-key"] as const)(
           : ".config/openclaw",
       "auth-profile-secret-key",
     );
-    if (format === "encrypted" || format === "fallback-key") {
+    if (format !== "plaintext" && format !== "missing-key") {
       fs.mkdirSync(path.dirname(primaryKeyPath), { recursive: true });
-      fs.writeFileSync(primaryKeyPath, format === "fallback-key" ? "stale-key" : seed);
+      fs.writeFileSync(
+        primaryKeyPath,
+        format === "invalid-key"
+          ? Buffer.concat([Buffer.from("synthetic-sidecar-"), Buffer.from([0xff])])
+          : format === "fallback-key"
+            ? "stale-key"
+            : seed,
+      );
     }
     if (format === "fallback-key") {
       const fallback = path.join(state.home, ".openclaw-auth-profile-secrets");
@@ -143,7 +157,15 @@ it.each(["plaintext", "encrypted", "fallback-key", "missing-key"] as const)(
       Buffer.alloc(12, 7),
     );
     cipher.setAAD(Buffer.from(`${ref.id}\0${profileId}\0${ref.provider}`));
-    const ciphertext = Buffer.concat([cipher.update(JSON.stringify(material)), cipher.final()]);
+    const plaintext =
+      format === "invalid-plaintext"
+        ? Buffer.concat([
+            Buffer.from('{"access":"'),
+            Buffer.from([0xff]),
+            Buffer.from('","refresh":"fake-refresh"}'),
+          ])
+        : Buffer.from(JSON.stringify(material));
+    const ciphertext = Buffer.concat([cipher.update(plaintext), cipher.final()]);
     const encrypted = {
       algorithm: "aes-256-gcm",
       iv: Buffer.alloc(12, 7).toString("base64url"),
@@ -161,6 +183,15 @@ it.each(["plaintext", "encrypted", "fallback-key", "missing-key"] as const)(
     });
     const authBytes = fs.readFileSync(authPath);
     const result = await migrateAuthProfiles(env);
+    if (format === "invalid-key" || format === "invalid-plaintext") {
+      expect(result.warnings.join("\n")).toContain("UTF-8");
+      expect(readProfiles()?.["openai:legacy"]).toBeUndefined();
+      expect(fs.readFileSync(authPath)).toEqual(authBytes);
+      expect(fs.readFileSync(sidecarPath)).toEqual(sidecarBytes);
+      expect(listMigratedArchives(authPath)).toEqual([]);
+      expect(listMigratedArchives(sidecarPath)).toEqual([]);
+      return;
+    }
     const imported = readProfiles()?.["openai:legacy"];
     expect(imported).toMatchObject({ type: "oauth", provider: "openai", accountId });
     if (format === "missing-key") {

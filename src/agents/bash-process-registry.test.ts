@@ -152,6 +152,57 @@ it("keeps aggregate, pending, and tail suffix cuts on UTF-16 boundaries", () => 
   expect(tail("a🎉bc", 3)).toBe("bc");
 });
 
+it.each([
+  { cap: 4, chunks: ["a界", "🦞", "b"], expected: "界🦞b" },
+  { cap: 3, chunks: ["a\ud83e", "\udd9ebc"], expected: "bc" },
+  { cap: 4, chunks: ["ab", "\ud800", "cd"], expected: "b\ud800cd" },
+  { cap: 5, chunks: ["0123456789", "x", "yz"], expected: "89xyz" },
+  { cap: 0, chunks: ["discard", "🦞"], expected: "" },
+])("keeps exact capped text across reads and completion: $chunks", ({ cap, chunks, expected }) => {
+  const session = makeSession({ maxOutputChars: cap });
+  for (const chunk of chunks) {
+    appendOutput(session, "stdout", chunk);
+    // Reads and poll drains must not consume or freeze the retained log.
+    expect(session.aggregated.length).toBeLessThanOrEqual(cap);
+    drainSession(session);
+  }
+  expect(session.aggregated).toBe(expected);
+  expect(session.tail).toBe(expected);
+  expect(session.totalOutputChars).toBe(chunks.join("").length);
+  expect(session.truncated).toBe(true);
+  markExited(session, 0, null, "completed");
+  appendOutput(session, "stderr", "late");
+  expect(session.aggregated).toBe(expected);
+  expect(session.tail).toBe(expected);
+});
+
+it("cuts a preview at a surrogate pair crossing chunks without truncating the retained log", () => {
+  const session = makeSession({ maxOutputChars: 4_000 });
+  appendOutput(session, "stdout", "prefix\ud83e");
+  appendOutput(session, "stderr", `\udd9e${"z".repeat(1_999)}`);
+  expect(session.aggregated).toBe(`prefix🦞${"z".repeat(1_999)}`);
+  expect(session.tail).toBe("z".repeat(1_999));
+  expect(drainSession(session)).toEqual({
+    output: `prefix🦞${"z".repeat(1_999)}`,
+    outputDropped: false,
+    acknowledge: expect.any(Function),
+  });
+});
+
+it.each([
+  { cap: 4, first: "A", next: "a🦞xyz", expected: "xyz" },
+  { cap: 2, first: "\ud800", next: "a\udc00b", expected: "\udc00b" },
+])(
+  "evicts prior output before keeping an oversized suffix: $next",
+  ({ cap, first, next, expected }) => {
+    const session = makeSession({ maxOutputChars: cap, pendingMaxOutputChars: cap });
+    appendOutput(session, "stdout", first);
+    appendOutput(session, "stdout", next);
+    expect(session.aggregated).toBe(expected);
+    expect(drainSession(session).output).toBe(expected);
+  },
+);
+
 it("only persists finished sessions when backgrounded", () => {
   const session = makeSession({ backgrounded: false });
 

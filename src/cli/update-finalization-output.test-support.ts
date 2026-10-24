@@ -44,6 +44,7 @@ const sourceUrl = (relative: string) =>
 const doctorDeadline = scenario === "doctor-hang" || scenario === "doctor-progress";
 // Keep native/HTTP observations and their full budgets; only recovery polling advances time.
 const recoveryClockUrl = `data:text/javascript,${encodeURIComponent(`
+export * from ${JSON.stringify(sourceUrl("../utils.ts"))};
 const realMonotonicNow = performance.now.bind(performance);
 const realWallNow = Date.now;
 export let elapsed = 0;
@@ -294,15 +295,16 @@ export function captureUpdateFinalizationDoctorOutput(phase) {
   );
 }
 if (scenario === "human-recovery-plugin-error") {
-  stub(
-    "./update-cli/update-command-report.ts",
+  override(
+    "../commands/configure.shared.ts",
     `
 import { mock } from 'node:test';
-export async function runInteractiveUpdateFailureAction({ runtime }) {
+import { defaultRuntime } from ${JSON.stringify(sourceUrl("../runtime.ts"))};
+export async function select() {
   mock.timers.tick(11_000);
   console.error('Fixture advanced watchdog clock.');
-  runtime.log('Interactive recovery completed.');
-  return 'handled';
+  defaultRuntime.log('Interactive recovery completed.');
+  return 'dismiss';
 }`,
   );
 }

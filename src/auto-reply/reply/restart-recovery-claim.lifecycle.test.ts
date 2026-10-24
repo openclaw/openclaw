@@ -32,6 +32,11 @@ import { revokeSqliteDatabaseAdmissionsForPath } from "../../infra/sqlite-databa
 import { createSqliteLifecycleAggregateError } from "../../infra/sqlite-lifecycle-errors.js";
 import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
+import {
+  GatewayDrainingError,
+  markGatewayRestartDraining,
+  resetGatewayWorkAdmission,
+} from "../../process/gateway-work-admission.js";
 import { createReplyOperation, type ReplyOperation } from "../../sessions/session-controller.js";
 import { clearOpenClawAgentDatabaseValidationCache } from "../../state/openclaw-agent-db-validation-cache.js";
 import {
@@ -70,6 +75,40 @@ async function claimFixture(
   );
   return { ...fixture, controller: fixture.controller() };
 }
+
+it("retains an internal child's requester without an outward route or source id", async () => {
+  const requesterOrigin = {
+    sessionKey: "agent:main:discord:channel:requester",
+    messageProvider: "discord",
+    senderId: "requester",
+  };
+  await using fixture = await claimFixture(
+    { restartRecoveryDeliveryRunId: undefined },
+    {
+      sessionKey: "agent:main:dashboard:spawned-child",
+      requesterOrigin,
+      inputProvenance: {
+        kind: "inter_session",
+        sourceTool: "sessions_spawn",
+        sourceSessionKey: "agent:main:main",
+      },
+    },
+  );
+  await expect(fixture.controller.admitUserTurn()).resolves.toBe("admitted");
+  expect(loadSessionEntry(fixture.scope)).toMatchObject({
+    restartRecoveryDeliveryRunId: "recovery-run",
+    restartRecoveryDeliverySourceRunId: "recovery-run",
+    restartRecoverySourceIngress: "internal",
+    restartRecoveryRequesterSource: {
+      agentId: "main",
+      sessionKey: fixture.scope.sessionKey,
+      sessionId: "session",
+      sourceRunId: "recovery-run",
+      requesterOrigin,
+    },
+  });
+  expect(loadSessionEntry(fixture.scope)?.restartRecoveryOperatorSource).toBeUndefined();
+});
 
 it("adopts an exact channel recovery claim before execution starts", async () => {
   setRuntimeConfigSnapshot({});
@@ -115,7 +154,7 @@ async function restartReply(
   let drains = 0;
   const reply = await handleReplyAgentRunError(new Error("Backend stopped"), {
     resolveVisibleReplyDelivery: async () => false,
-    isHeartbeat: false,
+
     replyExpectation: "required",
     isRestartRecoveryArmed: controller.isArmed,
     replyOperation: operation,
@@ -141,6 +180,7 @@ async function withTrackedReply(
     readEntry: () => ReturnType<typeof loadSessionEntry>;
   }) => Promise<void>,
   storage: "durable" | "memory" = "durable",
+  initial: Partial<InternalSessionEntry> = {},
 ) {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const scope = {
@@ -160,6 +200,7 @@ async function withTrackedReply(
       status: undefined,
       restartRecoveryDeliveryRunId: "old-recovery",
       ...(storage === "memory" ? { incognito: true } : {}),
+      ...initial,
     });
     const memory =
       storage === "memory"
@@ -222,6 +263,72 @@ async function withTrackedReply(
   });
 }
 
+it.each(["restart-drain", "stale-drain", "user-stop"] as const)(
+  "preserves the private requester claim only for a live restart refusal (%s)",
+  async (cause) => {
+    const requesterSource = {
+      agentId: "main",
+      sessionKey: "agent:main:retired-readiness",
+      sessionId: "old-session",
+      sourceRunId: "old-recovery",
+      requesterOrigin: {
+        sessionKey: "agent:main:discord:channel:requester",
+        messageProvider: "discord",
+        senderId: "requester",
+      },
+    };
+    await withTrackedReply(
+      async ({ controller, operation, readEntry }) => {
+        expect(readEntry()?.restartRecoveryRequesterSource).toEqual(requesterSource);
+        if (cause === "user-stop") {
+          operation.abort();
+        }
+        if (cause !== "stale-drain") {
+          markGatewayRestartDraining();
+        }
+        try {
+          const reply = await handleReplyAgentRunError(new GatewayDrainingError(), {
+            resolveVisibleReplyDelivery: async () => false,
+            replyExpectation: "required",
+            isRestartRecoveryArmed: controller.isArmed,
+            replyOperation: operation,
+            resolvedVerboseLevel: "off",
+            sessionCtx: {},
+            returnWithQueuedFollowupDrain: (value) => value,
+          });
+          await controller.clear();
+          const preserved = cause === "restart-drain";
+          expect(readEntry()?.restartRecoveryRequesterSource).toEqual(
+            preserved ? requesterSource : undefined,
+          );
+          expect(readEntry()?.restartRecoveryDeliveryRunId).toBe(
+            preserved ? "old-recovery" : undefined,
+          );
+          expect(operation.result).toMatchObject(
+            preserved
+              ? { kind: "aborted", code: "aborted_for_restart" }
+              : cause === "user-stop"
+                ? { kind: "aborted", code: "aborted_by_user" }
+                : { kind: "failed", code: "gateway_draining" },
+          );
+          expect(reply?.text).toBe(
+            cause === "user-stop"
+              ? undefined
+              : "⚠️ Gateway is restarting. Please wait a few seconds and try again.",
+          );
+        } finally {
+          resetGatewayWorkAdmission();
+        }
+      },
+      "durable",
+      {
+        restartRecoveryDeliverySourceRunId: "old-recovery",
+        restartRecoveryRequesterSource: requesterSource,
+      },
+    );
+  },
+);
+
 it("settles incognito recovery through hook checkpoints and restart readiness", async () => {
   await withTrackedReply(async ({ controller, operation, confirmArmed, readEntry }) => {
     await expect(controller.beginBeforeAgentReply()).resolves.toBe(true);
@@ -259,6 +366,7 @@ it.each([
       let assertBoundary: () => void;
       try {
         if (stage === "cold-registration") {
+          operation.abortForRestart();
           await fixture.releaseDatabase();
           await closeOpenClawAgentDatabasesAsync();
           clearOpenClawAgentDatabaseValidationCache();
@@ -280,7 +388,6 @@ it.each([
             expect(witnessed).toBe(1);
             expect(readEntry()).toMatchObject({ sessionId: "old-session" });
           };
-          operation.abortForRestart();
         } else {
           const read = entryReads.readSessionEntryInWorker;
           const reads = vi.spyOn(entryReads, "readSessionEntryInWorker");

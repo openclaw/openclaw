@@ -5,11 +5,10 @@ import { decodeHtmlEntities as decodeHtmlEntity } from "openclaw/plugin-sdk/html
 import { ProviderHttpError, readProviderTextResponse } from "openclaw/plugin-sdk/provider-http";
 import {
   externalContentStamp,
-  DEFAULT_CACHE_TTL_MINUTES,
   DEFAULT_SEARCH_COUNT,
   readCachedSearchPayload,
   readResponseText,
-  resolveCacheTtlMs,
+  resolveSearchCacheTtlMs,
   resolveSearchCount,
   resolveSiteName,
   resolveTimeoutSeconds,
@@ -46,12 +45,6 @@ const DDG_SAFE_SEARCH_PARAM: Record<DdgSafeSearch, string> = {
   off: "-2",
 };
 
-type DuckDuckGoResult = {
-  title: string;
-  url: string;
-  snippet: string;
-};
-
 function decodeHtmlEntities(text: string): string {
   return text.replace(DDG_HTML_ENTITY_RE, (entity) => {
     const decoded = decodeHtmlEntity(entity.startsWith("&#") ? entity : entity.toLowerCase());
@@ -66,58 +59,6 @@ function stripHtml(html: string): string {
     .replace(/<[^>]+>/g, " ")
     .replace(/\s+/g, " ")
     .trim();
-}
-
-function decodeDuckDuckGoUrl(rawUrl: string): string {
-  try {
-    const normalized = rawUrl.startsWith("//") ? `https:${rawUrl}` : rawUrl;
-    const parsed = new URL(normalized);
-    const uddg = parsed.searchParams.get("uddg");
-    if (uddg) {
-      return uddg;
-    }
-  } catch {
-    // Keep the original value when DuckDuckGo already returns a direct link.
-  }
-  return rawUrl;
-}
-
-function isBotChallenge(html: string): boolean {
-  if (/class="[^"]*\bresult__a\b[^"]*"/i.test(html)) {
-    return false;
-  }
-  return /g-recaptcha|are you a human|id="challenge-form"|name="challenge"/i.test(html);
-}
-
-function parseDuckDuckGoHtml(html: string, count: number): DuckDuckGoResult[] {
-  const results: DuckDuckGoResult[] = [];
-  const resultRegex = /<a\b(?=[^>]*\bclass="[^"]*\bresult__a\b[^"]*")([^>]*)>([\s\S]*?)<\/a>/gi;
-  const nextResultRegex = /<a\b(?=[^>]*\bclass="[^"]*\bresult__a\b[^"]*")[^>]*>/i;
-  const snippetRegex = /<a\b(?=[^>]*\bclass="[^"]*\bresult__snippet\b[^"]*")[^>]*>([\s\S]*?)<\/a>/i;
-
-  for (const match of html.matchAll(resultRegex)) {
-    const rawAttributes = match[1] ?? "";
-    const rawTitle = match[2] ?? "";
-    const rawUrl = /\bhref="([^"]*)"/i.exec(rawAttributes)?.[1] ?? "";
-    const matchEnd = (match.index ?? 0) + match[0].length;
-    const trailingHtml = html.slice(matchEnd);
-    const nextResultIndex = trailingHtml.search(nextResultRegex);
-    const scopedTrailingHtml =
-      nextResultIndex >= 0 ? trailingHtml.slice(0, nextResultIndex) : trailingHtml;
-    const rawSnippet = snippetRegex.exec(scopedTrailingHtml)?.[1] ?? "";
-    const title = decodeHtmlEntities(stripHtml(rawTitle));
-    const url = decodeDuckDuckGoUrl(decodeHtmlEntities(rawUrl));
-    const snippet = decodeHtmlEntities(stripHtml(rawSnippet));
-
-    if (title && url) {
-      results.push({ title, url, snippet });
-      if (results.length >= count) {
-        break;
-      }
-    }
-  }
-
-  return results;
 }
 
 export async function runDuckDuckGoSearch(params: {
@@ -143,10 +84,7 @@ export async function runDuckDuckGoSearch(params: {
     safeSearch = normalized === "strict" || normalized === "off" ? normalized : "moderate";
   }
   const timeoutSeconds = resolveTimeoutSeconds(params.timeoutSeconds, DEFAULT_TIMEOUT_SECONDS);
-  const cacheTtlMs = resolveCacheTtlMs(
-    params.config?.tools?.web?.search?.cacheTtlMinutes,
-    DEFAULT_CACHE_TTL_MINUTES,
-  );
+  const cacheTtlMs = resolveSearchCacheTtlMs(params.config?.tools?.web?.search);
   const cacheKey = JSON.stringify({
     provider: "duckduckgo",
     query: params.query,
@@ -189,10 +127,51 @@ export async function runDuckDuckGoSearch(params: {
       }
 
       const html = await readProviderTextResponse(response, "DuckDuckGo search");
-      if (isBotChallenge(html)) {
+      if (
+        !/class="[^"]*\bresult__a\b[^"]*"/i.test(html) &&
+        /g-recaptcha|are you a human|id="challenge-form"|name="challenge"/i.test(html)
+      ) {
         throw new Error("DuckDuckGo returned a bot-detection challenge.");
       }
-      return parseDuckDuckGoHtml(html, count);
+      const parsedResults: { title: string; url: string; snippet: string }[] = [];
+      const resultRegex = /<a\b(?=[^>]*\bclass="[^"]*\bresult__a\b[^"]*")([^>]*)>([\s\S]*?)<\/a>/gi;
+      const nextResultRegex = /<a\b(?=[^>]*\bclass="[^"]*\bresult__a\b[^"]*")[^>]*>/i;
+      const snippetRegex =
+        /<a\b(?=[^>]*\bclass="[^"]*\bresult__snippet\b[^"]*")[^>]*>([\s\S]*?)<\/a>/i;
+
+      for (const match of html.matchAll(resultRegex)) {
+        const rawAttributes = match[1] ?? "";
+        const rawTitle = match[2] ?? "";
+        const rawUrl = /\bhref="([^"]*)"/i.exec(rawAttributes)?.[1] ?? "";
+        const matchEnd = (match.index ?? 0) + match[0].length;
+        const trailingHtml = html.slice(matchEnd);
+        const nextResultIndex = trailingHtml.search(nextResultRegex);
+        const scopedTrailingHtml =
+          nextResultIndex >= 0 ? trailingHtml.slice(0, nextResultIndex) : trailingHtml;
+        const rawSnippet = snippetRegex.exec(scopedTrailingHtml)?.[1] ?? "";
+        const title = decodeHtmlEntities(stripHtml(rawTitle));
+        let resultUrl = decodeHtmlEntities(rawUrl);
+        try {
+          const normalized = resultUrl.startsWith("//") ? `https:${resultUrl}` : resultUrl;
+          const parsed = new URL(normalized);
+          const uddg = parsed.searchParams.get("uddg");
+          if (uddg) {
+            resultUrl = uddg;
+          }
+        } catch {
+          // Keep the original value when DuckDuckGo already returns a direct link.
+        }
+        const snippet = decodeHtmlEntities(stripHtml(rawSnippet));
+
+        if (title && resultUrl) {
+          parsedResults.push({ title, url: resultUrl, snippet });
+          if (parsedResults.length >= count) {
+            break;
+          }
+        }
+      }
+
+      return parsedResults;
     },
   );
 

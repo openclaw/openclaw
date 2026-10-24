@@ -23,41 +23,30 @@ function parseNavigation(eventJson: string): Record<string, unknown> | undefined
     return undefined;
   }
   // SQLite-overdepth rows reach JSON.parse whole; retain only navigation afterward.
-  const {
-    type,
-    id,
-    parentId,
-    targetId,
-    appendParentId,
-    appendMode,
-    firstKeptEntryId,
-    customType,
-    display,
-  } = parsed;
   return {
-    type,
-    id,
-    parentId,
-    targetId,
-    appendParentId,
-    appendMode,
-    firstKeptEntryId,
-    customType,
-    display,
+    type: parsed.type,
+    id: parsed.id,
+    parentId: parsed.parentId,
+    targetId: parsed.targetId,
+    appendParentId: parsed.appendParentId,
+    appendMode: parsed.appendMode,
+    firstKeptEntryId: parsed.firstKeptEntryId,
+    customType: parsed.customType,
+    display: parsed.display,
   };
 }
 
 function navigationCandidatesSql(
   identitySeq: Expression<number | null>,
   event: Expression<string>,
-  candidate: { key: "id"; eventIds: readonly string[] },
+  eventIds: readonly string[],
 ): RawBuilder<SqlBool> {
   const match =
-    candidate.eventIds.length > 32
+    eventIds.length > 32
       ? /* kysely-allow-raw: keep the member guard; callers filter large sets without a quadratic scan. */ sql<SqlBool>`1`
-      : candidate.eventIds.length === 1
-        ? /* kysely-allow-raw: bound instr narrows IDs before exact JavaScript matching. */ sql<SqlBool>`instr(member.value, ${candidate.eventIds[0]}) > 0`
-        : /* kysely-allow-raw: nested json_each matches bound ID sets without row hydration. */ sql<SqlBool>`EXISTS (SELECT 1 FROM json_each(${JSON.stringify(candidate.eventIds)}) AS requested
+      : eventIds.length === 1
+        ? /* kysely-allow-raw: bound instr narrows IDs before exact JavaScript matching. */ sql<SqlBool>`instr(member.value, ${eventIds[0]}) > 0`
+        : /* kysely-allow-raw: nested json_each matches bound ID sets without row hydration. */ sql<SqlBool>`EXISTS (SELECT 1 FROM json_each(${JSON.stringify(eventIds)}) AS requested
         WHERE instr(member.value, requested.value) > 0)`;
   // Admit any duplicate root member; JavaScript applies last-key and full trim semantics.
   // Invalid and SQLite-overdepth rows still reach the existing JSON.parse fallback.
@@ -65,7 +54,7 @@ function navigationCandidatesSql(
   return /* kysely-allow-raw: decoded members only narrow unindexed candidates; JavaScript owns exact matching. */ sql<SqlBool>`CASE WHEN ${identitySeq} IS NOT NULL THEN 0
     WHEN json_valid(${event}) THEN EXISTS (
       SELECT 1 FROM json_each(${event}) AS member
-      WHERE member.key = ${candidate.key} AND member.type = 'text' AND ${match}
+      WHERE member.key = ${"id"} AND member.type = 'text' AND ${match}
     ) ELSE 1 END`;
 }
 
@@ -99,10 +88,7 @@ function unindexedNavigationQuery(
         navigationCandidatesSql(
           eb.ref("identity.seq"),
           transcriptEventNavigationSql(projection.database.db, "event"),
-          {
-            key: "id",
-            eventIds: eventIds!,
-          },
+          eventIds!,
         ),
       ),
     );

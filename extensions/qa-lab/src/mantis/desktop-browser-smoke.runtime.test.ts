@@ -215,11 +215,18 @@ describe("mantis desktop browser smoke runtime", () => {
       htmlFile: "qa-artifacts/timeline.html",
       leaseId,
       now: () => new Date("2026-05-04T12:00:00.000Z"),
-      outputDir: ".artifacts/qa-e2e/mantis/desktop-browser-test",
+      outputDir: leaseId ? ".artifacts/qa-e2e/mantis/desktop-browser-test" : undefined,
     });
     const commands = runner.mock.calls.map(([command, args, { env }]) => ({ command, args, env }));
 
     expect(result.status).toBe("pass");
+    expect(result.outputDir).toBe(
+      path.join(
+        repoRoot,
+        ".artifacts/qa-e2e/mantis",
+        leaseId ? "desktop-browser-test" : "desktop-browser-2026-05-04T12-00-00-000Z",
+      ),
+    );
     expect(ensureManagedCrabboxBinary).toHaveBeenCalledWith({
       binary: "/tmp/outdated-crabbox",
       cwd: repoRoot,

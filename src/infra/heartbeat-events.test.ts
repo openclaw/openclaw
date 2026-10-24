@@ -5,7 +5,6 @@ import {
   getLastHeartbeatEvent,
   heartbeatNotifications,
   resetHeartbeatEventsForTest,
-  resolveIndicatorType,
 } from "./heartbeat-events.js";
 
 type HeartbeatEventsModule = typeof import("./heartbeat-events.js");
@@ -15,14 +14,6 @@ const heartbeatEventsModuleUrl = new URL("./heartbeat-events.ts", import.meta.ur
 async function importHeartbeatEventsModule(cacheBust: string): Promise<HeartbeatEventsModule> {
   return (await import(`${heartbeatEventsModuleUrl}?t=${cacheBust}`)) as HeartbeatEventsModule;
 }
-
-it("maps heartbeat statuses to indicator types", () => {
-  expect(
-    (["ok-empty", "ok-token", "sent", "failed", "skipped"] as const).map((status) =>
-      resolveIndicatorType(status),
-    ),
-  ).toEqual(["ok", "ok", "alert", "error", undefined]);
-});
 
 describe("heartbeat events", () => {
   beforeEach(() => {

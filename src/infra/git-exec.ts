@@ -4,13 +4,11 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { KeyedAsyncQueue } from "../plugin-sdk/keyed-async-queue.js";
 import { createCommandError } from "../process/command-error.js";
 import type { SpawnResult } from "../process/exec-result.js";
-import { runCommandBuffersWithTimeout, type BufferSpawnResult } from "../process/exec-runner.js";
-import {
-  runCommandWithTimeout,
-  runCommandBuffered,
-  type BufferedCommandOptions,
-  type BufferedCommandResult,
-  type CommandOptions,
+import type { BufferSpawnResult } from "../process/exec-runner.js";
+import type {
+  BufferedCommandOptions,
+  BufferedCommandResult,
+  CommandOptions,
 } from "../process/exec.js";
 import { withGitProcessOperation, type GitProcessOperation } from "../process/spawn-diagnostics.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -185,6 +183,7 @@ export async function executeGitCommand(
   args: string[],
   options: GitCommandOptions = {},
 ): Promise<GitCommandResult> {
+  const { runCommandWithTimeout } = await import("../process/exec.js");
   return withGitProcessOperation(options.operation, () =>
     executeGitCommandWithOutput(
       runCommandWithTimeout,
@@ -202,6 +201,7 @@ export async function executeGitCommandBytes(
   args: string[],
   options: GitCommandOptions = {},
 ): Promise<GitCommandBytesResult> {
+  const { runCommandBuffersWithTimeout } = await import("../process/exec-runner.js");
   return withGitProcessOperation(options.operation, () =>
     executeGitCommandWithOutput(
       runCommandBuffersWithTimeout,
@@ -324,6 +324,7 @@ export async function executeGitCommandBuffered(
   args: string[],
   options: GitBufferedCommandOptions = {},
 ): Promise<BufferedCommandResult> {
+  const { runCommandBuffered } = await import("../process/exec.js");
   const env = gitReadOnlyEnvironment(args, options.env ?? {});
   const argv = gitExecutionArgv(cwd, args, {
     ...options,

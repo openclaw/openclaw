@@ -26,6 +26,7 @@ it.each(["added", "renamed", "deleted", "import-edge"])(
       "test/scripts/update-restart-module-outcome.test.ts",
       "test/scripts/type-suppression-inventory.test.ts",
       "test/scripts/plugin-sdk-surface-report.test.ts",
+      "test/scripts/lint-suppressions.test.ts",
     ];
     const testOnly = "src/infra/own.test.ts";
     const cwd = fixture([...guards, ...(change === "deleted" ? [] : [source])]);
@@ -38,7 +39,9 @@ it.each(["added", "renamed", "deleted", "import-edge"])(
     const paths = change === "renamed" ? ["src/infra/old-module.ts", source] : [source];
     expect(select(cwd, paths)).toEqual(guards.toSorted());
     writeFiles(cwd, [testOnly]);
-    expect(select(cwd, [testOnly])).toEqual([testOnly]);
+    expect(select(cwd, [testOnly])).toEqual(
+      [testOnly, "test/scripts/lint-suppressions.test.ts"].toSorted(),
+    );
     expect(resolveCiCheckFamilyScope(paths).additionalGroups).toContain(
       "runtime-topology-architecture",
     );
@@ -142,5 +145,24 @@ it.each([30, 31])(
     expect(selected).toEqual((count <= 30 ? [...matching, ...unrelated] : matching).toSorted());
     expect(selected).not.toContain(nested);
     expect(select(cwd, [source, unrelated[0]!])).toContain(unrelated[0]);
+  },
+);
+
+it.each(["aggressive", "full"] as const)(
+  "keeps opt-in tests outside PR test roots out of %s selection",
+  (selectionMode) => {
+    // #182101: the retention census imports this helper but has its own opt-in config.
+    const helper = "ui/src/test-helpers/control-ui-e2e.ts";
+    const optIn = "scripts/control-ui-retention/dependency-retention.test.ts";
+    const consumer = "ui/src/test-helpers/control-ui-e2e.test.ts";
+    const cwd = fixture({
+      [helper]: "export const helper = 1;\n",
+      [optIn]: 'import "../../ui/src/test-helpers/control-ui-e2e.ts";\n',
+      [consumer]: 'import "./control-ui-e2e.ts";\n',
+    });
+    const selected = select(cwd, [helper], selectionMode);
+    expect(selected).toContain(consumer);
+    expect(selected).not.toContain(optIn);
+    expect(select(cwd, [optIn], selectionMode)).not.toContain(optIn);
   },
 );

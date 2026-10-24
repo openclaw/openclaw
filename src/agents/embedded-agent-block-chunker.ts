@@ -12,7 +12,10 @@ import {
 import { prepareIndentedCode } from "./embedded-agent-block-chunker.code.js";
 import {
   findTableBreakIndex,
-  findUnsplittableTableSpans,
+  findTableContinuationAtBoundary,
+  findTableContinuationHeader,
+  findTableSpans,
+  resolveTableContinuation,
   type BreakSpan,
   type BreakSpans,
 } from "./embedded-agent-block-chunker.tables.js";
@@ -89,6 +92,7 @@ function resolveFenceReopenLine(fence: FenceSpan, maxChars: number): string | un
 export class EmbeddedBlockChunker {
   #buffer = "";
   #reopenPrefix = "";
+  #tableHeader = "";
   #consumedLength = 0;
   #preparedSourceBreaks: number[] = [];
   #sourceBreaks: readonly number[] = [];
@@ -114,6 +118,7 @@ export class EmbeddedBlockChunker {
   reset(sourceBreaks: readonly number[] = [], sourceOffset = 0) {
     this.#buffer = "";
     this.#reopenPrefix = "";
+    this.#tableHeader = "";
     this.#consumedLength = 0;
     this.#preparedSourceBreaks = [];
     this.#sourceBreaks = sourceBreaks;
@@ -124,7 +129,7 @@ export class EmbeddedBlockChunker {
     this.#codeContext = "";
   }
 
-  /** UTF-16 source positions exclude synthetic fences and include skipped whitespace. */
+  /** UTF-16 source positions exclude synthetic framing and include skipped whitespace. */
   get consumedLength() {
     return this.#consumedLength;
   }
@@ -165,6 +170,12 @@ export class EmbeddedBlockChunker {
       this.#codeContext = prepareIndentedCode(text, "", true, maxChars).contextAt(text.length);
     }
     const consumedLength = Math.min(this.#consumedLength, sourceOffset + text.length);
+    if (this.#tableHeader && sourceOffset === 0 && !prefixRetained) {
+      this.#tableHeader = findTableContinuationAtBoundary(
+        text.slice(0, consumedLength),
+        readMaxChars(),
+      );
+    }
     if (!prefixRetained && sourceOffset === 0 && this.#codeContext && consumedLength > 0) {
       const maxChars = readMaxChars();
       this.#codeContext = prepareIndentedCode(text, "", true, maxChars).contextAt(consumedLength);
@@ -186,7 +197,7 @@ export class EmbeddedBlockChunker {
   }
 
   get bufferedText() {
-    return this.#buffer ? `${this.#reopenPrefix}${this.#buffer}` : "";
+    return this.#buffer ? `${this.#reopenPrefix || this.#tableHeader}${this.#buffer}` : "";
   }
 
   hasBuffered(): boolean {
@@ -231,6 +242,14 @@ export class EmbeddedBlockChunker {
     if (!this.#buffer || (!params.force && !chunking)) {
       return;
     }
+    const minChars = Math.max(1, Math.floor(chunking?.minChars ?? 1));
+    const maxChars = Math.max(minChars, Math.floor(chunking?.maxChars ?? Infinity));
+    this.#tableHeader = resolveTableContinuation(
+      this.#tableHeader,
+      this.#buffer,
+      params.force || this.#buffer.length + this.#tableHeader.length >= maxChars,
+    );
+    const syntheticPrefix = this.#reopenPrefix || this.#tableHeader;
     const emitChunk = (chunk: string, from: number, to: number, startsAtLineStart: boolean) => {
       preparedSourceBreaks.push(sourceStart + to);
       emit(chunk, {
@@ -247,17 +266,16 @@ export class EmbeddedBlockChunker {
         this.bufferedText,
         0,
         this.#buffer.length,
-        Boolean(this.#reopenPrefix) || this.#bufferStartsAtLineStart,
+        Boolean(syntheticPrefix) || this.#bufferStartsAtLineStart,
       );
       this.#bufferStartsAtLineStart = this.#buffer.endsWith("\n");
       this.#consumedLength += this.#buffer.length;
       this.#buffer = "";
       this.#reopenPrefix = "";
+      this.#tableHeader = "";
       this.#codeContext = "";
       return;
     }
-    const minChars = Math.max(1, Math.floor(chunking.minChars ?? 1));
-    const maxChars = Math.max(minChars, Math.floor(chunking.maxChars ?? Infinity));
     const force = params.force || availableLength >= maxChars;
     const originalSource = this.bufferedText;
     if (originalSource.length < minChars && !force) {
@@ -266,7 +284,7 @@ export class EmbeddedBlockChunker {
     const indentedCode = prepareIndentedCode(originalSource, this.#codeContext, force, maxChars);
     let source = indentedCode.text;
     const startsAtLineStart =
-      Boolean(this.#reopenPrefix) || indentedCode.startsWithCode || this.#bufferStartsAtLineStart;
+      Boolean(syntheticPrefix) || indentedCode.startsWithCode || this.#bufferStartsAtLineStart;
 
     if (source.length < minChars && !force) {
       return;
@@ -276,7 +294,7 @@ export class EmbeddedBlockChunker {
       atLineStart: startsAtLineStart,
     });
     const openFence = fenceState.open ? fenceSpans.at(-1) : undefined;
-    if (force && source.length <= maxChars && !this.#reopenPrefix && !openFence) {
+    if (force && source.length <= maxChars && !syntheticPrefix && !openFence) {
       if (source.trim().length > 0) {
         emitChunk(source, 0, this.#buffer.length, startsAtLineStart);
       }
@@ -285,6 +303,9 @@ export class EmbeddedBlockChunker {
       this.#consumedLength += this.#buffer.length;
       this.#buffer = "";
       this.#reopenPrefix = "";
+      this.#tableHeader = reconciledSourceBreak
+        ? findTableContinuationAtBoundary(source, maxChars)
+        : "";
       return;
     }
 
@@ -316,7 +337,7 @@ export class EmbeddedBlockChunker {
       fence.end -= removedLength;
       removedFenceInfoLength += removedLength;
     }
-    const tables = findUnsplittableTableSpans(source, fenceSpans, maxChars, !force);
+    const tables = findTableSpans(source, fenceSpans, maxChars, !force);
     const unsafe =
       tables.length > 0
         ? [...fenceSpans, ...tables].toSorted((left, right) => left.start - right.start)
@@ -328,15 +349,17 @@ export class EmbeddedBlockChunker {
         index,
       );
     const sourceOffset = (index: number) =>
-      Math.max(0, indentedCode.toSource(originalIndex(index)) - this.#reopenPrefix.length);
+      Math.max(0, indentedCode.toSource(originalIndex(index)) - syntheticPrefix.length);
     let start = 0;
     let reopenFence: FenceSplit | undefined;
+    let tableHeader = "";
     const emitSourceChunk = (chunk: string, from: number, to: number) =>
       emitChunk(
         chunk,
         sourceOffset(from),
         sourceOffset(to),
-        Boolean(reopenFence) || (from === 0 ? startsAtLineStart : source.charAt(from - 1) === "\n"),
+        Boolean(reopenFence || tableHeader) ||
+          (from === 0 ? startsAtLineStart : source.charAt(from - 1) === "\n"),
       );
     const resumedFence = this.#reopenPrefix ? fenceSpans[0] : undefined;
     if (resumedFence) {
@@ -352,7 +375,7 @@ export class EmbeddedBlockChunker {
     }
 
     while (start < source.length) {
-      const reopenPrefix = reopenFence ? `${reopenFence.reopenFenceLine}\n` : "";
+      const reopenPrefix = reopenFence ? `${reopenFence.reopenFenceLine}\n` : tableHeader;
       const remainingLength = reopenPrefix.length + (source.length - start);
 
       if (!force && remainingLength < minChars) {
@@ -373,6 +396,7 @@ export class EmbeddedBlockChunker {
           }
           start = nextStart;
           reopenFence = undefined;
+          tableHeader = "";
           continue;
         }
         if (remainingLength < maxChars) {
@@ -399,6 +423,7 @@ export class EmbeddedBlockChunker {
           emitSourceChunk(`${reopenPrefix}${source.slice(start)}`, start, source.length);
           start = source.length;
           reopenFence = undefined;
+          tableHeader = "";
         }
         break;
       }
@@ -420,7 +445,8 @@ export class EmbeddedBlockChunker {
       if (breakResult.index <= 0) {
         continue;
       }
-      let nextStart = start + breakResult.index;
+      const cut = start + breakResult.index;
+      let nextStart = cut;
       let chunk = `${reopenPrefix}${source.slice(start, nextStart)}`;
       let nextReopenFence: FenceSplit | undefined;
       const fenceSplit = breakResult.fenceSplit;
@@ -449,9 +475,13 @@ export class EmbeddedBlockChunker {
       }
       start = nextStart;
       reopenFence = nextReopenFence;
+      tableHeader = fenceSplit
+        ? ""
+        : findTableContinuationHeader(source, cut, nextStart, tables, !force);
 
       const nextLength =
-        (reopenFence ? `${reopenFence.reopenFenceLine}\n`.length : 0) + (source.length - start);
+        (reopenFence ? `${reopenFence.reopenFenceLine}\n`.length : tableHeader.length) +
+        (source.length - start);
       if (
         !force &&
         (nextLength < minChars || (nextLength < maxChars && !chunking.flushOnParagraph))
@@ -469,11 +499,15 @@ export class EmbeddedBlockChunker {
     if (consumed > 0) {
       this.#bufferStartsAtLineStart = this.#buffer.charAt(consumed - 1) === "\n";
     }
-    this.#codeContext = indentedCode.contextAt(consumed + this.#reopenPrefix.length);
+    this.#codeContext = indentedCode.contextAt(consumed + syntheticPrefix.length);
     this.#consumedLength += consumed;
     this.#buffer = this.#buffer.slice(consumed);
     this.#reopenPrefix =
       !this.#codeContext && reopenFence ? `${reopenFence.reopenFenceLine}\n` : "";
+    this.#tableHeader = this.#codeContext
+      ? ""
+      : tableHeader ||
+        (reconciledSourceBreak ? findTableContinuationAtBoundary(source, maxChars) : "");
   }
 
   // Forced tails take the first paragraph/newline break; capped windows take the last.

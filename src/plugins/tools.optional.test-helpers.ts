@@ -99,6 +99,7 @@ export function createToolRegistry(
     runPluginRegisterSyncInRegistry(() => {}, api, builder.registry, entry.pluginId);
     const instance = getPluginInstance(record);
     assert(instance, "expected the registry API's plugin instance");
+    instance.admitFactory(entry.factory, "tool");
     const { declaredNames, ...registration } = entry;
     return {
       ...registration,
@@ -109,7 +110,7 @@ export function createToolRegistry(
   return registry;
 }
 
-export function createToolRuntimeRecord(
+function createToolRuntimeRecord(
   id: string,
   source = `/tmp/${id}.js`,
   origin: MockRegistryToolEntry["origin"] = "bundled",

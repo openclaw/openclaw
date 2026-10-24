@@ -11,17 +11,13 @@ import type { ApplicationGateway, ApplicationGatewayConnectOptions } from "./gat
 import { isRemoteControlUiIngress } from "./remote-ingress.ts";
 import { persistSessionToken } from "./settings.ts";
 
-type DeviceCredentialHost = {
+export function createDeviceCredentialMethods(host: {
   /** connect() replaces the store's connection object, so reads must be live. */
   gatewayUrl: () => string;
   connect: (overrides: ApplicationGatewayConnectOptions) => void;
   isStopped: () => boolean;
   retireOfflineAccess: () => void;
-};
-
-export function createDeviceCredentialMethods(
-  host: DeviceCredentialHost,
-): Required<Pick<ApplicationGateway, "hasStoredDeviceToken" | "forgetDeviceToken">> {
+}): Required<Pick<ApplicationGateway, "hasStoredDeviceToken" | "forgetDeviceToken">> {
   const storedOperatorDeviceId = () => {
     if (isRemoteControlUiIngress()) {
       return null;

@@ -213,7 +213,7 @@ export function createWorkerArtifactTest(compilerEnv: CompilerEnv = (env) => env
   return test;
 }
 
-export type WorkerArtifactContext =
+type WorkerArtifactContext =
   ReturnType<typeof createWorkerArtifactTest> extends TestAPI<infer Fixtures>
     ? Fixtures & TestContext
     : never;

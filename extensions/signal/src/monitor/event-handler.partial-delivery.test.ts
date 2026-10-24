@@ -16,25 +16,7 @@ import { resolveSignalApprovalReactionTargetWithPersistence } from "../approval-
 import { signalPlugin } from "../channel.js";
 import type { SignalEventHandlerDeps } from "./event-handler.types.js";
 
-const reactionStores = vi.hoisted(() => new Set<{ clearForTest(): void }>());
-
-vi.mock("openclaw/plugin-sdk/approval-reaction-runtime", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("openclaw/plugin-sdk/approval-reaction-runtime")>();
-  return {
-    ...actual,
-    createApprovalReactionTargetStore: <TTarget>(
-      params: Parameters<typeof actual.createApprovalReactionTargetStore<TTarget>>[0],
-    ) => {
-      const store = actual.createApprovalReactionTargetStore<TTarget>(params);
-      if (params.namespace === "signal.approval-reactions.v2") {
-        reactionStores.add(store);
-      }
-      return store;
-    },
-  };
-});
-
+const reactionStores = await vi.hoisted(() => import("../approval-reactions.test-support.js"));
 const { getReplyFromConfigMock, sendMessageSignalMock } = vi.hoisted(() => ({
   getReplyFromConfigMock: vi.fn(),
   sendMessageSignalMock: vi.fn(),
@@ -158,14 +140,14 @@ describe("Signal partial final delivery ingress boundary", () => {
       stateDir: state.stateDir,
     });
     registerPlugin();
-    reactionStores.forEach((store) => store.clearForTest());
+    reactionStores.clearSignalApprovalReactionStoresForTest();
     getReplyFromConfigMock.mockReset();
     sendMessageSignalMock.mockReset();
   });
 
   afterEach(async () => {
     resetPluginRuntimeStateForTest();
-    reactionStores.forEach((store) => store.clearForTest());
+    reactionStores.clearSignalApprovalReactionStoresForTest();
     vi.restoreAllMocks();
     await state.cleanup();
   });

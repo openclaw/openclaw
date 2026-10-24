@@ -205,6 +205,7 @@ export async function createComposedCatalogFixture(
         url: `ws://127.0.0.1:${address.port}`,
       },
       computerUse: { enabled: false },
+      supervision: { enabled: true },
     };
     const config: OpenClawConfig = {
       agents: { entries: { main: { agentDir, workspace: state.workspaceDir } } },
@@ -375,7 +376,7 @@ export async function createComposedCatalogFixture(
         // Warm responses can precede refresh publication; count that work in the same sample.
         return await work.runWhenIdle(() => {
           const current = result.catalogs.find((value) => value.id === "codex");
-          return current?.error?.code === "catalog_pending" ? (published ?? current) : current;
+          return current?.pending ? (published ?? current) : current;
         });
       } finally {
         listPublications.delete(progressId);

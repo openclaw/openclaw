@@ -154,6 +154,7 @@ describe("ChatAudioPlayer", () => {
     audio(player).dispatchEvent(new Event("error"));
     await player.updateComplete;
     expect(player.querySelector("audio, .chat-audio-player__toggle")).toBeNull();
+    expect(player.querySelectorAll("[role=status]")).toHaveLength(1);
     expect(player.querySelector("[role=status]")?.textContent).toContain("Preview unavailable");
     expect(player.querySelector("a[download]")).toMatchObject({
       href: "https://example.com/voice-note.mp3",
@@ -250,8 +251,10 @@ describe("ChatAudioPlayer", () => {
     expect(player.onExpand).not.toHaveBeenCalled();
   });
 
-  it("releases playback and shows a normal attachment card after an unrecovered media error", async () => {
+  it("announces unavailable audio while preserving its download and recovery", async () => {
     const first = await createPlayer("broken");
+    const status = first.querySelector('[role="status"]');
+    expect(status?.textContent).toBe("");
     const firstMedia = audio(first);
     let paused = true;
     Object.defineProperty(firstMedia, "paused", { configurable: true, get: () => paused });
@@ -274,6 +277,10 @@ describe("ChatAudioPlayer", () => {
     expect(card(first, "--compact")).not.toBeNull();
     expect(card(first, "__reason")).toBeNull();
     expect(first.querySelector(".chat-audio-player")).toBeNull();
+    expect(first.querySelector('[role="status"]')).toBe(status);
+    expect(status?.textContent).toBe("broken.mp3: Preview unavailable");
+    expect(status?.getAttribute("aria-live")).toBe("polite");
+    expect(status?.getAttribute("aria-atomic")).toBe("true");
     expect(
       first
         .querySelector<HTMLAnchorElement>(".chat-assistant-attachment-card__download")
@@ -285,7 +292,54 @@ describe("ChatAudioPlayer", () => {
     const second = await createPlayer("working");
     audio(second).dispatchEvent(new Event("play"));
     expect(pauseFirst).not.toHaveBeenCalled();
+
+    first.src = "https://example.com/broken.mp3?renewed";
+    await waitForSolid(() => expect(control(first, "toggle")).not.toBeNull());
+    expect(first.querySelector('[role="status"]')).toBe(status);
+    expect(status?.textContent).toBe("");
+    audio(first).dispatchEvent(new Event("error"));
+    await first.updateComplete;
+    expect(status?.textContent).toBe("broken.mp3: Preview unavailable");
+
+    first.src = "https://example.com/replacement.mp3";
+    first.sourceIdentity = "media://replacement";
+    first.label = "replacement.mp3";
+    await waitForSolid(() => expect(control(first, "toggle")).not.toBeNull());
+    expect(status?.textContent).toBe("");
+    audio(first).dispatchEvent(new Event("error"));
+    await first.updateComplete;
+    expect(status?.textContent).toBe("replacement.mp3: Preview unavailable");
   });
+
+  it.each([false, true])(
+    "hands departing player focus to Download without taking outside focus (voice note: %s)",
+    async (voiceNote) => {
+      const outside = document.createElement("button");
+      outside.textContent = "Outside player";
+      document.body.append(outside);
+      for (const target of ["toggle", "volume", "seek", "group", "outside", "moved"]) {
+        const player = await createPlayer("focus-" + target, { voiceNote });
+        const focused =
+          target === "outside"
+            ? outside
+            : target === "group"
+              ? player.querySelector<HTMLElement>(".chat-audio-player")!
+              : control(player, target === "moved" ? "toggle" : target);
+        focused.focus();
+        expect(document.activeElement).toBe(focused);
+        audio(player).dispatchEvent(new Event("error"));
+        if (target === "moved") {
+          outside.focus();
+        }
+        await player.updateComplete;
+        const download = player.querySelector<HTMLAnchorElement>("a[download]")!;
+        expect(download.getAttribute("download")).toBe("focus-" + target + ".mp3");
+        expect(document.activeElement).toBe(
+          target === "outside" || target === "moved" ? outside : download,
+        );
+      }
+    },
+  );
 
   it("shows preparing, retries a 202 rendition, and then plays", async () => {
     vi.useFakeTimers();
@@ -305,6 +359,7 @@ describe("ChatAudioPlayer", () => {
     await player.updateComplete;
 
     expect(player.textContent).toContain("Preparing playback…");
+    expect(player.querySelector("[role=status]")?.textContent).toBe("");
     await vi.advanceTimersByTimeAsync(2_000);
     await player.updateComplete;
 
@@ -322,6 +377,56 @@ describe("ChatAudioPlayer", () => {
     expect(play).toHaveBeenCalledOnce();
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
+
+  it("keeps header Download focused when the parent Expand callback changes", async () => {
+    const player = await createPlayer("callback-focus", { onExpand: vi.fn() });
+    const download = player.querySelector<HTMLAnchorElement>(
+      ".chat-assistant-attachment-card__download",
+    )!;
+    download.focus();
+    expect(document.activeElement).toBe(download);
+
+    player.onExpand = vi.fn();
+    await player.updateComplete;
+
+    expect(document.activeElement).toBe(download);
+  });
+
+  it.each(["download", "expand", "outside"])(
+    "preserves %s focus when playback preparation fails",
+    async (target) => {
+      let respond!: (response: Response) => void;
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(
+          () =>
+            new Promise<Response>((resolve) => {
+              respond = resolve;
+            }),
+        ),
+      );
+      const outside = document.createElement("button");
+      outside.textContent = "Outside player";
+      document.body.append(outside);
+      const player = await createPlayer("preparing-focus", {
+        playback: "transcode",
+        onExpand: vi.fn(),
+      });
+      await waitForSolid(() => expect(player.textContent).toContain("Preparing playback…"));
+      const focused =
+        target === "outside"
+          ? outside
+          : player.querySelector<HTMLElement>(`.chat-assistant-attachment-card__${target}`)!;
+      focused.focus();
+      expect(document.activeElement).toBe(focused);
+
+      respond(new Response(null, { status: 500 }));
+      await waitForSolid(() => expect(card(player, "--compact")).not.toBeNull());
+      expect(document.activeElement).toBe(
+        target === "outside" ? outside : player.querySelector("a[download]"),
+      );
+    },
+  );
 
   it("falls back to a normal attachment card after rendition retries are exhausted", async () => {
     vi.useFakeTimers();

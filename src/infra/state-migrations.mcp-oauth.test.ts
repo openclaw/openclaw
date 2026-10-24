@@ -592,6 +592,7 @@ it("fails closed for live, young, and malformed owner evidence", () => {
     [
       vi.spyOn(pidAlive, "isPidDefinitelyDead").mockReturnValue(false),
       vi.spyOn(pidAlive, "getFileLockProcessStartTime").mockReturnValue(456),
+      vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-07-16T00:02:00.000Z")),
     ],
     () => {
       for (const raw of [
@@ -601,12 +602,7 @@ it("fails closed for live, young, and malformed owner evidence", () => {
         lockPayload({ starttime: "456" }),
         "not json",
       ]) {
-        expect(
-          isDefinitelyStaleLegacyMcpOAuthLock({
-            raw,
-            nowMs: Date.parse("2026-07-16T00:02:00.000Z"),
-          }),
-        ).toBe(false);
+        expect(isDefinitelyStaleLegacyMcpOAuthLock({ raw })).toBe(false);
       }
     },
   );

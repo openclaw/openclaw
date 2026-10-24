@@ -7,7 +7,6 @@ import type { resolveAgentTurnExecutionStatus } from "../auto-reply/reply/agent-
 import type { FollowupQueueDisposition } from "../auto-reply/reply/queue-policy.js";
 import type { FollowupRunPayload } from "../auto-reply/reply/queue/followup-run-payload.types.js";
 import type { QueueSettings } from "../auto-reply/reply/queue/queue-settings.types.js";
-import type { ReplyDispatchDeliveryOutcome } from "../auto-reply/reply/reply-dispatch-outcome.types.js";
 import type { ReplyFollowupAdmissionBarrierTimeoutPolicy } from "../auto-reply/reply/reply-dispatcher.types.js";
 import type { ReplyOperationStaleReason } from "../auto-reply/reply/reply-run-finalization-lease.js";
 import type { SessionEntryTargetPatchScope } from "../config/sessions/session-accessor.types.js";
@@ -19,7 +18,6 @@ import type { InternalSessionEntry } from "../config/sessions/types.js";
 import type { AgentRunDelegatedAuthority } from "../infra/agent-run-authority.types.js";
 import type { DiagnosticEmbeddedRunOwner } from "../infra/diagnostic-model-request-provenance.js";
 import type { Deferred, createDeferredCore } from "../shared/deferred.js";
-import type { ReplyPayload } from "../shared/reply-payload.types.js";
 import type { OpenClawAgentDatabaseIdentity } from "../state/openclaw-agent-db-identity.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
 import type {
@@ -74,7 +72,7 @@ export type {
 export type ReplyOperationPhase = ReplyOperationActivePhase | "completed" | "failed" | "aborted";
 type ReplyOperationResult = Exclude<ControllerReplyOperationResult, { kind: "yielded" }>;
 
-export type ReplyTurnKind = "visible" | "heartbeat" | "queued_followup";
+export type ReplyTurnKind = "visible" | "queued_followup";
 
 /** An adapter over one existing execution owner; it never acquires another run slot. */
 type ReplyMessageInjectionOwner = {
@@ -680,15 +678,6 @@ export type ReplyOperationRunState = {
   replyCompletion?: ReplyCompletion;
   /** The source delivery owner can keep spawned completion turns private. */
   sessionEventDelivery?: false;
-  heartbeat?: {
-    prepareReply: (
-      replyResult: ReplyPayload | ReplyPayload[] | undefined,
-      runState: ReplyOperationRunState,
-    ) => Promise<{
-      reply?: ReplyPayload;
-      settle?: (outcome: ReplyDispatchDeliveryOutcome) => Promise<void>;
-    }>;
-  };
   admission?: ReplyOperationAdmissionSnapshot;
   /** Latest queue-owned disposition; original acceptance still records custody. */
   followupQueueDisposition?: FollowupQueueDisposition;
@@ -732,8 +721,6 @@ export type EmbeddedAgentQueueHandle = {
   claimPendingUserInputAnswer?: ReplyBackendHandle["claimPendingUserInputAnswer"];
   /** Cancels this run's pending user-input request before an image is queued as a later turn. */
   cancelPendingUserInput?: (resolvedBy: string) => Promise<boolean>;
-  /** Exact heartbeat owner retained after its reply-operation registration clears. */
-  readonly preemptByVisibleTurn?: () => boolean;
   queueMessage: (
     text: string,
     options?: EmbeddedAgentQueueMessageOptions,
@@ -759,6 +746,7 @@ export type EmbeddedAgentQueueHandle = {
   abort: (reason?: "restart") => void;
   sourceReplyDeliveryMode?: ReplyBackendHandle["sourceReplyDeliveryMode"];
   terminalReplyExpectation?: ReplyExpectation;
+  supportsUserReplyPromotion?: boolean;
   taskSuggestionDeliveryMode?: ReplyBackendHandle["taskSuggestionDeliveryMode"];
 };
 

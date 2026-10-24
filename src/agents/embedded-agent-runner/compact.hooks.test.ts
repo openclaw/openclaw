@@ -339,8 +339,10 @@ function openaiRoute(baseUrl = "https://api.openai.com/v1", modelId = "gpt-5.5")
 
 const compactDirect = (overrides: Record<string, unknown> = {}) =>
   compactEmbeddedAgentSessionDirect(wrappedCompactionArgs(overrides));
-const compactQueued = (overrides: Record<string, unknown> = {}) =>
-  compactEmbeddedAgentSession(wrappedCompactionArgs(overrides));
+const compactQueued = (
+  overrides: Record<string, unknown> = {},
+  host?: Parameters<CompactHooksQueuedCompaction>[1],
+) => compactEmbeddedAgentSession(wrappedCompactionArgs(overrides), host);
 
 const compactWorkspace = (overrides: Record<string, unknown> = {}) =>
   compactEmbeddedAgentSessionDirect({ ...directCompactionArgs(), ...overrides });
@@ -537,9 +539,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
       await racePromiseWithAbortSignal(resume.promise, options?.abortSignal);
       return await acquire(input, options);
     });
-    const pending = compactEmbeddedAgentSessionDirect(
-      wrappedCompactionArgs({ abortSignal: controller.signal }),
-    );
+    const pending = compactDirect({ abortSignal: controller.signal });
     const stopped = pending.then(
       () => "completed",
       (error: unknown) => error,
@@ -566,9 +566,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
       expect(compactionTimeoutReset).toHaveBeenCalledTimes(3);
     });
 
-    const result = await compactEmbeddedAgentSessionDirect(
-      wrappedCompactionArgs({ compactionTimeoutReset }),
-    );
+    const result = await compactDirect({ compactionTimeoutReset });
 
     expect(result).toMatchObject({ ok: true, compacted: true });
     expect(hookRunner.runAfterCompaction).toHaveBeenCalledOnce();
@@ -1777,13 +1775,16 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
     }) as never);
 
     const pending = parent.run(() =>
-      compactEmbeddedAgentSession(wrappedCompactionArgs(), {
-        assertActive: () => {
-          if (!hostActive) {
-            throw new Error("queued compaction host authority expired");
-          }
+      compactQueued(
+        {},
+        {
+          assertActive: () => {
+            if (!hostActive) {
+              throw new Error("queued compaction host authority expired");
+            }
+          },
         },
-      }),
+      ),
     );
     await admissionStarted.promise;
     hostActive = false;
@@ -1801,35 +1802,73 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
     expect(resolveContextEngineMock).not.toHaveBeenCalled();
   });
 
-  it("stops preparation when host authority expires during context-engine resolution", async () => {
-    const resolutionStarted = createDeferred();
-    const releaseResolution = createDeferred();
-    let hostActive = true;
-    resolveContextEngineMock.mockImplementationOnce(async () => {
-      resolutionStarted.resolve(undefined);
-      await releaseResolution.promise;
-      return {
-        info: { ownsCompaction: true },
-        compact: contextEngineCompactMock,
+  it.each(["context-engine", "model"] as const)(
+    "stops preparation when host authority expires during %s resolution",
+    async (stage) => {
+      const resolutionStarted = createDeferred();
+      const releaseResolution = createDeferred();
+      let hostActive = true;
+      const waitForResolution = async () => {
+        resolutionStarted.resolve(undefined);
+        await releaseResolution.promise;
       };
-    });
+      if (stage === "model") {
+        resolveModelAsyncMock.mockImplementationOnce(async (provider, modelId) => {
+          await waitForResolution();
+          return {
+            ...createCompactHooksResolvedModel(provider, modelId),
+            model: {
+              provider: "openai",
+              id: "fake",
+              api: "openai-chatgpt-responses",
+              baseUrl: "https://chatgpt.com/backend-api/codex",
+              input: [],
+            },
+          };
+        });
+      } else {
+        resolveContextEngineMock.mockImplementationOnce(async () => {
+          await waitForResolution();
+          return {
+            info: { ownsCompaction: true },
+            compact: contextEngineCompactMock,
+          };
+        });
+      }
 
-    const pending = compactEmbeddedAgentSession(wrappedCompactionArgs(), {
-      assertActive: () => {
-        if (!hostActive) {
-          throw new Error("queued compaction host authority expired");
-        }
-      },
-    });
-    await resolutionStarted.promise;
-    hostActive = false;
-    releaseResolution.resolve(undefined);
+      const pending = compactQueued(
+        stage === "model"
+          ? {
+              provider: "openai",
+              model: "fake",
+              runtimeAuthPlan: {
+                providerForAuth: "openai",
+                authProfileProviderForAuth: "openai",
+                selectedAuthMode: "api-key",
+                modelRoute: openaiRoute(undefined, "fake"),
+              },
+            }
+          : {},
+        {
+          assertActive: () => {
+            if (!hostActive) {
+              throw new Error("queued compaction host authority expired");
+            }
+          },
+        },
+      );
+      await resolutionStarted.promise;
+      hostActive = false;
+      releaseResolution.resolve(undefined);
 
-    await expect(pending).rejects.toThrow("queued compaction host authority expired");
-    expect(resolveModelAsyncMock).not.toHaveBeenCalled();
-    expect(selectAgentHarnessForPreparedModelProvidersMock).not.toHaveBeenCalled();
-    expect(contextEngineCompactMock).not.toHaveBeenCalled();
-  });
+      await expect(pending).rejects.toThrow("queued compaction host authority expired");
+      expect(resolveModelAsyncMock).toHaveBeenCalledTimes(stage === "model" ? 1 : 0);
+      expectNoCalls(selectAgentHarnessForPreparedModelProvidersMock, contextEngineCompactMock);
+      if (stage === "model") {
+        expectNoCalls(maybeCompactAgentHarnessSessionMock, enqueueCommandInLaneMock);
+      }
+    },
+  );
 
   it("reports budget compaction cancellation during context-engine resolution", async () => {
     const sourceController = new AbortController();
@@ -1844,12 +1883,10 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
       };
     });
 
-    const pending = compactEmbeddedAgentSession(
-      wrappedCompactionArgs({
-        abortSignal: sourceController.signal,
-        trigger: "budget",
-      }),
-    );
+    const pending = compactQueued({
+      abortSignal: sourceController.signal,
+      trigger: "budget",
+    });
     await resolutionStarted.promise;
     sourceController.abort(new Error("request timed out"));
     releaseResolution.resolve(undefined);
@@ -1877,16 +1914,14 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
       );
       hookRunner.hasHooks.mockReturnValue(true);
 
-      const result = await compactEmbeddedAgentSession(
-        wrappedCompactionArgs({
-          agentId: "main",
-          config: { session: { store: storePath } },
-          sessionFile: "",
-          sessionId,
-          sessionKey: undefined,
-          sessionTarget: undefined,
-        }),
-      );
+      const result = await compactQueued({
+        agentId: "main",
+        config: { session: { store: storePath } },
+        sessionFile: "",
+        sessionId,
+        sessionKey: undefined,
+        sessionTarget: undefined,
+      });
 
       expect(result.ok).toBe(true);
       expectRecordFields(mockCallArg(contextEngineCompactMock), {
@@ -1921,24 +1956,22 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
       sessionAgentId: "marie-clawndo",
     });
 
-    const result = await compactEmbeddedAgentSession(
-      wrappedCompactionArgs({
+    const result = await compactQueued({
+      agentId: "marie-clawndo",
+      config: {
+        agents: {
+          ownership: "explicit",
+          list: [{ id: "main" }, { id: "marie-clawndo" }],
+        },
+      },
+      sessionKey: "agent:marie-clawndo:dashboard:session-1",
+      sessionTarget: {
         agentId: "marie-clawndo",
-        config: {
-          agents: {
-            ownership: "explicit",
-            list: [{ id: "main" }, { id: "marie-clawndo" }],
-          },
-        },
+        sessionId: TEST_SESSION_ID,
         sessionKey: "agent:marie-clawndo:dashboard:session-1",
-        sessionTarget: {
-          agentId: "marie-clawndo",
-          sessionId: TEST_SESSION_ID,
-          sessionKey: "agent:marie-clawndo:dashboard:session-1",
-          storePath: TEST_STORE_PATH,
-        },
-      }),
-    );
+        storePath: TEST_STORE_PATH,
+      },
+    });
 
     expect(result.ok).toBe(true);
     expect(acquireAgentRunPreparedModelRuntimeMock).toHaveBeenCalledWith(
@@ -1972,25 +2005,23 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
       .mockRejectedValueOnce(new Error("route materialization failed"));
 
     await expect(
-      compactEmbeddedAgentSession(
-        wrappedCompactionArgs({
-          provider: "openai",
-          model: "fake",
-          runtimeAuthPlan: {
-            providerForAuth: "openai",
-            authProfileProviderForAuth: "openai",
-            selectedAuthMode: "api-key",
-            modelRoute: {
-              provider: "openai",
-              modelId: "fake",
-              api: "openai-responses",
-              baseUrl: "https://api.openai.com/v1",
-              authRequirement: "api-key",
-              requestTransportOverrides: "none",
-            },
+      compactQueued({
+        provider: "openai",
+        model: "fake",
+        runtimeAuthPlan: {
+          providerForAuth: "openai",
+          authProfileProviderForAuth: "openai",
+          selectedAuthMode: "api-key",
+          modelRoute: {
+            provider: "openai",
+            modelId: "fake",
+            api: "openai-responses",
+            baseUrl: "https://api.openai.com/v1",
+            authRequirement: "api-key",
+            requestTransportOverrides: "none",
           },
-        }),
-      ),
+        },
+      }),
     ).rejects.toThrow("route materialization failed");
     const snapshot = await acquiredPreparedModelRuntime();
     expect(
@@ -1999,58 +2030,6 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
     ).toBe(snapshot);
     expect(dispose).toHaveBeenCalledTimes(1);
     expect(enqueueCommandInLaneMock).not.toHaveBeenCalled();
-  });
-
-  it("stops preparation when host authority expires during model resolution before route rematerialization", async () => {
-    const modelResolutionStarted = createDeferred();
-    const releaseModelResolution = createDeferred();
-    let hostActive = true;
-    resolveModelAsyncMock.mockImplementationOnce(async (provider, modelId) => {
-      modelResolutionStarted.resolve(undefined);
-      await releaseModelResolution.promise;
-      return {
-        ...createCompactHooksResolvedModel(provider, modelId),
-        model: {
-          provider: "openai",
-          id: "fake",
-          api: "openai-chatgpt-responses",
-          baseUrl: "https://chatgpt.com/backend-api/codex",
-          input: [],
-        },
-      };
-    });
-
-    const pending = compactEmbeddedAgentSession(
-      wrappedCompactionArgs({
-        provider: "openai",
-        model: "fake",
-        runtimeAuthPlan: {
-          providerForAuth: "openai",
-          authProfileProviderForAuth: "openai",
-          selectedAuthMode: "api-key",
-          modelRoute: openaiRoute(undefined, "fake"),
-        },
-      }),
-      {
-        assertActive: () => {
-          if (!hostActive) {
-            throw new Error("queued compaction host authority expired");
-          }
-        },
-      },
-    );
-    await modelResolutionStarted.promise;
-    hostActive = false;
-    releaseModelResolution.resolve(undefined);
-
-    await expect(pending).rejects.toThrow("queued compaction host authority expired");
-    expect(resolveModelAsyncMock).toHaveBeenCalledTimes(1);
-    expectNoCalls(
-      selectAgentHarnessForPreparedModelProvidersMock,
-      contextEngineCompactMock,
-      maybeCompactAgentHarnessSessionMock,
-      enqueueCommandInLaneMock,
-    );
   });
 
   it("preserves native failures when engine disposal also throws", async () => {
@@ -2594,9 +2573,10 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
       expect(isSessionRunActive(TEST_SESSION_ID)).toBe(true);
       expect(isEmbeddedAgentRunHandleActive(TEST_SESSION_ID)).toBe(false);
       const pending = mockPendingContextEngineCompaction();
-      const resultPromise = compactEmbeddedAgentSession(
-        wrappedCompactionArgs({ abortSignal: replyOperation.abortSignal, trigger: "manual" }),
-      );
+      const resultPromise = compactQueued({
+        abortSignal: replyOperation.abortSignal,
+        trigger: "manual",
+      });
       try {
         await pending.started.promise;
         expect(isSessionRunActive(TEST_SESSION_ID)).toBe(true);
@@ -2661,9 +2641,7 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
     });
     await entered.promise;
     try {
-      const result = await compactEmbeddedAgentSession(
-        wrappedCompactionArgs({ trigger: "manual" }),
-      );
+      const result = await compactQueued({ trigger: "manual" });
       expect(result).toMatchObject(
         active.foreignStore
           ? { ok: true, compacted: true }
@@ -2799,38 +2777,5 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
       });
     },
   );
-  it("resolves the durable session key before engine invocation", async () => {
-    const dir = await realpath(await mkdtemp(join(tmpdir(), "openclaw-compaction-session-key-")));
-    const storePath = join(dir, "sessions.json");
-    const sessionId = "9d6c8436-7cb2-4bd5-a302-e33305bfc8c4";
-    const sessionKey = "agent:main:telegram:direct:reporter";
-    try {
-      await upsertSessionEntryCore(
-        { agentId: "main", sessionKey, storePath },
-        { sessionId, updatedAt: 1 },
-      );
-      hookRunner.hasHooks.mockReturnValue(true);
-
-      const result = await compactQueued({
-        agentId: "main",
-        config: { session: { store: storePath } },
-        sessionFile: "",
-        sessionId,
-        sessionKey: undefined,
-        sessionTarget: undefined,
-      });
-
-      expect(result.ok).toBe(true);
-      expect(mockCallArg(contextEngineCompactMock)).toMatchObject({
-        sessionId,
-        sessionKey,
-        sessionTarget: { agentId: "main", sessionId, sessionKey, storePath },
-      });
-      expectRecordFields(mockCallArg(hookRunner.runBeforeCompaction, 0, 1), { sessionKey });
-      expectRecordFields(mockCallArg(hookRunner.runAfterCompaction, 0, 1), { sessionKey });
-    } finally {
-      await compactionFixture.cleanupDirectory(dir);
-    }
-  });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

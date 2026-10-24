@@ -532,7 +532,7 @@ describe("bootstrapApplication", () => {
     expect(
       [...readinessSubscriptions].filter((listener) => activeSubscriptions.has(listener)),
     ).toHaveLength(0);
-    expect(configRefresh).toHaveBeenCalledWith({ ifNeeded: true });
+    expect(configRefresh).toHaveBeenCalledWith({ ifNeeded: true, signal });
     expect(routerStart).not.toHaveBeenCalled();
   });
 

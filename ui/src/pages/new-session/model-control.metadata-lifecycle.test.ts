@@ -10,6 +10,7 @@ import {
 import { invalidateModelCatalogCache } from "../../lib/model-catalog-cache.ts";
 import { loadModelCatalog } from "../../lib/model-catalog-store.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
+import { flush } from "../../test-helpers/solid-settle.ts";
 import { resetWorktreeMocks } from "./draft-worktree-checks.test-support.ts";
 import { identityPreferences } from "./draft-worktree-preferences.test-support.ts";
 import { disposeWorktreeDraft } from "./draft-worktree-submission.test-support.ts";
@@ -106,7 +107,13 @@ function retainedAccountDraft(mode?: "retire" | "permitted-default" | "provider-
   }
   const draw = (id = "main") => renderControl(control, context, id, { ...agent, id });
   const find = (attribute: string, value?: string) => controlElement(draw(), attribute, value);
-  const select = (value: string) => find("account-option", value)!.click();
+  const select = (value: string) => {
+    if (!find("account-option", value)) {
+      find("account-group-toggle")!.click();
+      flush();
+    }
+    find("account-option", value)!.click();
+  };
   const chooseAccount = async () => {
     await vi.waitFor(() =>
       expect(control.modelSelectionBlockedReason(agent)).toContain("No provider credential"),

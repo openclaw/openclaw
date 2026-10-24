@@ -228,7 +228,12 @@ suite.define(() => {
       },
       async ({ page }) => {
         const gateway = await installMockGateway(page, {
-          featureMethods: ["chat.metadata", "chat.startup", "progressCard.get"],
+          featureMethods: [
+            "chat.metadata",
+            "chat.startup",
+            "progressCard.get",
+            "sessions.companion.state",
+          ],
           historyMessages: [
             {
               id: "progress-receipt",
@@ -691,7 +696,10 @@ suite.define(() => {
           }
           await captureProof(page, "hide-" + name + "-collapsed-before.png");
           await card.getByRole("button", { name: "Task progress options" }).press("Enter");
-          await card.getByRole("menuitem", { name: "Hide this card", exact: true }).press("Enter");
+          const hideCard = card.getByRole("menuitem", { name: "Hide this card", exact: true });
+          await hideCard.press("Enter");
+          // Keyboard selection may wait for the lazy menu runtime; let it finish before resizing.
+          await hideCard.waitFor({ state: "hidden" });
           expect(await card.count()).toBe(1);
           await page.setViewportSize({ width, height: 900 });
           await page.locator(".agent-chat__header--mobile").waitFor({ state: "visible" });

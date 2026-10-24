@@ -37,6 +37,47 @@ describe("serialized cold-load probes", () => {
     }
   });
 
+  it("holds the challenge until connect can leave without an intercepted send", () => {
+    const iframe = document.createElement("iframe");
+    document.body.append(iframe);
+    try {
+      const target = iframe.contentWindow;
+      const doc = iframe.contentDocument;
+      if (!target || !doc) {
+        throw new Error("Probe realm was not created");
+      }
+      const script = doc.createElement("script");
+      script.textContent = `
+        const timers = [];
+        window.setTimeout = (callback, delay) => { timers.push({callback, delay}); return timers.length; };
+        const sent = [];
+        window.WebSocket = class extends EventTarget { send(data) { sent.push(JSON.parse(data).method); } };
+        ${createColdLoadProbeInitScript({ ownerProbes: false, latencyMs: 0, frameGapMs: 0, connectNotBeforeMs: 1e9, events: [] })}
+        const socket = new WebSocket();
+        let challenges = 0;
+        socket.addEventListener("message", () => {
+          challenges++;
+          socket.send(JSON.stringify({type: "req", id: "connect", method: "connect"}));
+        });
+        socket.dispatchEvent(new MessageEvent("message", { data: JSON.stringify({type: "event", event: "connect.challenge", payload: {nonce: "synthetic"}}) }));
+        const before = { challenges, sent: [...sent] };
+        const timer = timers.shift();
+        timer.callback();
+        window.connectDispatchProof = { before, challenges, sent, delayed: timer.delay > 0, pendingTimers: timers.length };
+      `;
+      doc.body.append(script);
+      expect(Reflect.get(target, "connectDispatchProof")).toEqual({
+        before: { challenges: 0, sent: [] },
+        challenges: 1,
+        sent: ["connect"],
+        delayed: true,
+        pendingTimers: 0,
+      });
+    } finally {
+      iframe.remove();
+    }
+  });
+
   it.each([true, false])("restores instrumentation with owner probes %s", async (ownerProbes) => {
     const iframe = document.createElement("iframe");
     document.body.append(iframe);

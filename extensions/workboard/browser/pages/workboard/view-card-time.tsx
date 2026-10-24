@@ -3,8 +3,10 @@ import { createEffect, createSignal, untrack } from "solid-js";
 import { workboardLocale } from "../../host.ts";
 import { t } from "../../i18n/index.ts";
 import { formatDurationCompact } from "../../lib/format.ts";
+import { listen } from "../../lib/listener.ts";
 const subscribers = new Map<() => void, number>();
 let timer: ReturnType<typeof setTimeout> | undefined;
+let stopVisibility: (() => void) | undefined;
 function schedule() {
   clearTimeout(timer);
   timer = undefined;
@@ -61,7 +63,7 @@ export function RelativeTime(props: { timestamp: number; now: number; automation
     () => props.timestamp,
     (timestamp) => {
       if (!subscribers.size) {
-        document.addEventListener("visibilitychange", onVisibilityChange);
+        stopVisibility = listen(document, "visibilitychange", onVisibilityChange);
       }
       subscribers.set(update, timestamp);
       update();
@@ -69,7 +71,8 @@ export function RelativeTime(props: { timestamp: number; now: number; automation
       return () => {
         subscribers.delete(update);
         if (!subscribers.size) {
-          document.removeEventListener("visibilitychange", onVisibilityChange);
+          stopVisibility?.();
+          stopVisibility = undefined;
         }
         schedule();
       };

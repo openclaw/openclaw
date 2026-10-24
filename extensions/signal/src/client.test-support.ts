@@ -1,6 +1,41 @@
+import { once } from "node:events";
+import http from "node:http";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import * as fetchRuntime from "openclaw/plugin-sdk/fetch-runtime";
-import { expect, vi } from "vitest";
+import { afterEach, expect, vi } from "vitest";
+
+export function useSignalHttpServer() {
+  const servers: http.Server[] = [];
+  afterEach(async () => {
+    await Promise.all(
+      servers.splice(0).map(async (server) => {
+        server.closeAllConnections();
+        await new Promise<void>((resolve, reject) => {
+          server.close((error) => (error ? reject(error) : resolve()));
+        });
+      }),
+    );
+  });
+  return async (
+    handler: (req: http.IncomingMessage, res: http.ServerResponse) => void | Promise<void>,
+  ) => {
+    const server = http.createServer((req, res) => {
+      void Promise.resolve(handler(req, res)).catch((error: unknown) => {
+        res.writeHead(500, { "Content-Type": "text/plain" });
+        res.end(error instanceof Error ? error.message : String(error));
+      });
+    });
+    servers.push(server);
+    server.on("clientError", () => {});
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+    const address = server.address();
+    if (!address || typeof address === "string") {
+      throw new Error("expected TCP address");
+    }
+    return `http://127.0.0.1:${address.port}`;
+  };
+}
 
 // Each transport supplies its real wire fixture; only the shared authority interleaving lives here.
 export async function expectPreparedHandoff(

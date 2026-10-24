@@ -5,6 +5,7 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
+import { listStoredChatOutboxes } from "../../lib/chat/outbox-store-projection.ts";
 import { captureChatOutboxAdmission } from "../../lib/chat/outbox-store.ts";
 import type { GatewayRequestHandler } from "../../test-helpers/gateway-client.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
@@ -16,10 +17,7 @@ import {
   installTranscriptDomMocks,
   resetTranscriptTestDom,
 } from "./components/chat-transcript.test-support.ts";
-import {
-  admitStoredChatComposerQueueItem,
-  listStoredChatOutboxes,
-} from "./composer-persistence.ts";
+import { admitStoredChatComposerQueueItemResult } from "./composer-queue-persistence.ts";
 import { getChatSessionProjection } from "./history-merge.ts";
 
 beforeEach(() => {
@@ -113,12 +111,12 @@ it.each([
       createdAt: 1,
     };
     expect(
-      admitStoredChatComposerQueueItem(
+      admitStoredChatComposerQueueItemResult(
         visiblePane.state,
         captureChatOutboxAdmission(visiblePane.state, successor.key),
         input,
       ),
-    ).toBe(true);
+    ).toBe("admitted");
     // Settle startup/admission recovery first: an active successor without a receipt stays queued.
     await chatSendActions.resumeStoredChatOutboxes(visiblePane.state);
     expect(listStoredChatOutboxes(visiblePane.state)).toEqual([

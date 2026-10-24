@@ -44,8 +44,9 @@ const mocks = vi.hoisted(() => ({
   writeOAuthRecord:
     vi.fn<
       (
-        write: (record: GitHubOAuthRecord) => Promise<void>,
+        write: typeof writeGitHubOAuthRecord,
         record: GitHubOAuthRecord,
+        expected?: GitHubOAuthRecord,
       ) => Promise<void>
     >(),
   listOAuthRecords:
@@ -54,7 +55,8 @@ const mocks = vi.hoisted(() => ({
   updateConfig: vi.fn(),
 }));
 
-vi.mock("../agents/github-oauth-client.js", () => ({
+vi.mock("../agents/github-oauth-client.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../agents/github-oauth-client.js")>()),
   clearGitHubCredentialVerificationCache: mocks.clearVerificationCache,
   verifyGitHubCredential: mocks.verifyCredential,
   requestGitHubOAuthDeviceCode: mocks.requestDeviceCode,
@@ -67,8 +69,8 @@ vi.mock("../agents/github-oauth-records.js", async (importOriginal) => {
   return {
     ...actual,
     listGitHubOAuthRecords: () => mocks.listOAuthRecords(actual.listGitHubOAuthRecords),
-    writeGitHubOAuthRecord: (record: GitHubOAuthRecord) =>
-      mocks.writeOAuthRecord(actual.writeGitHubOAuthRecord, record),
+    writeGitHubOAuthRecord: (record: GitHubOAuthRecord, expected?: GitHubOAuthRecord) =>
+      mocks.writeOAuthRecord(actual.writeGitHubOAuthRecord, record, expected),
   };
 });
 
@@ -214,11 +216,12 @@ beforeEach(() => {
   });
   mocks.createProfileId.mockReturnValue(NEW_PROFILE);
   mocks.removeProfile.mockResolvedValue(undefined);
-  mocks.refreshProfile.mockImplementation(async ({ token }) => {
+  mocks.refreshProfile.mockImplementation(async ({ token, assertCurrent }) => {
+    assertCurrent?.();
     refreshedTokens.push(token);
     return ACCOUNT;
   });
-  mocks.writeOAuthRecord.mockImplementation((write, record) => write(record));
+  mocks.writeOAuthRecord.mockImplementation((write, record, expected) => write(record, expected));
   mocks.listOAuthRecords.mockImplementation((read) => read());
   mocks.resolveStatus.mockImplementation(async ({ selectedScope }) => statusResult(selectedScope));
   mocks.installProfile.mockImplementation(async ({ token, commitConfig }) => {
@@ -833,7 +836,7 @@ describe("GitHub OAuth refresh and maintenance", () => {
     await expectStoredOAuth(OLD_PROFILE, { refreshFailure: "expired" });
   });
 
-  it("finishes an accepted refresh for already-admitted runs after config changes", async () => {
+  it("preserves an accepted rotation without publishing a superseded profile after config changes", async () => {
     await selectRefreshIdentity();
     const { upstream, started: refreshStarted } = holdTokenExchange<RefreshedTokens>(
       mocks.refreshToken,
@@ -855,7 +858,11 @@ describe("GitHub OAuth refresh and maintenance", () => {
     expect(mocks.refreshProfile).toHaveBeenCalledWith(
       expect.objectContaining({ profileDir: expect.stringContaining(OLD_PROFILE) }),
     );
-    await expectStoredOAuth(OLD_PROFILE, { refreshToken: TOKENS.refreshToken });
+    expect(refreshedTokens).toEqual([]);
+    await expectStoredOAuth(OLD_PROFILE, {
+      refreshToken: TOKENS.refreshToken,
+      pendingRefresh: true,
+    });
   });
 
   it("rejects a refreshed credential for a different durable account", async () => {
@@ -879,8 +886,13 @@ describe("GitHub OAuth refresh and maintenance", () => {
   it("retries the first durable write from lifecycle-owned memory", async () => {
     await selectRefreshIdentity();
     mocks.refreshToken.mockResolvedValue({ status: "refreshed", tokens: TOKENS });
-    mocks.writeOAuthRecord.mockImplementationOnce(() => {
-      throw new Error("SQLite temporarily unavailable");
+    let failed = false;
+    mocks.writeOAuthRecord.mockImplementation((write, record, expected) => {
+      if (record.pendingRefresh && !failed) {
+        failed = true;
+        throw new Error("SQLite temporarily unavailable");
+      }
+      return write(record, expected);
     });
     const lifecycle = createLifecycle();
 
@@ -946,13 +958,13 @@ describe("GitHub OAuth refresh and maintenance", () => {
   it("recovers a durable pending refresh after final metadata write fails", async () => {
     await selectRefreshIdentity();
     mocks.refreshToken.mockResolvedValue({ status: "refreshed", tokens: TOKENS });
-    let writes = 0;
-    mocks.writeOAuthRecord.mockImplementation((write, record) => {
-      writes += 1;
-      if (writes === 2) {
+    let failed = false;
+    mocks.writeOAuthRecord.mockImplementation((write, record, expected) => {
+      if (record.refreshToken === TOKENS.refreshToken && !record.pendingRefresh && !failed) {
+        failed = true;
         throw new Error("final metadata write failed");
       }
-      return write(record);
+      return write(record, expected);
     });
     const lifecycle = createLifecycle();
 
@@ -1001,6 +1013,7 @@ describe("GitHub OAuth refresh and maintenance", () => {
       profileDir: expect.stringContaining(OLD_PROFILE),
       token: TOKENS.accessToken,
       expectedAccountId: ACCOUNT.accountId,
+      assertCurrent: expect.any(Function),
     });
     expect(selectedIdentity("system")).toEqual(configured);
     expect(mocks.updateConfig).not.toHaveBeenCalled();

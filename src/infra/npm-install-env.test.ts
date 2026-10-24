@@ -1,6 +1,6 @@
 import fsSync from "node:fs";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { withTempDir } from "../test-utils/temp-dir.js";
 import { withMockedPlatform, withRestoredMocks } from "../test-utils/vitest-spies.js";
 import { createNpmFreshnessBypassArgs, createNpmProjectInstallEnv } from "./npm-install-env.js";
@@ -51,10 +51,11 @@ function expectBefore(env: NodeJS.ProcessEnv, dir: string, npmConfigPrefix?: str
 }
 
 describe("npm project install env", () => {
+  afterEach(() => vi.useRealTimers());
   it.each([["NPM_CONFIG_FETCH_RETRIES", "0"]])(
     "preserves explicit network config %s without a competing default",
     (key, value) => {
-      const env = createNpmProjectInstallEnv({ [key]: value }, {}, FROZEN_NOW);
+      const env = createNpmProjectInstallEnv({ [key]: value });
 
       expect(env[key]).toBe(value);
       expect(
@@ -69,9 +70,7 @@ describe("npm project install env", () => {
         .spyOn(fsSync, "existsSync")
         .mockImplementation((candidate) => candidate === "/bin/sh");
       withRestoredMocks([existsSyncSpy], () => {
-        expect(
-          createNpmProjectInstallEnv({ PATH: "/tmp/openclaw-npm-global/bin" }, {}, FROZEN_NOW),
-        ).toEqual({
+        expect(createNpmProjectInstallEnv({ PATH: "/tmp/openclaw-npm-global/bin" })).toEqual({
           ...EXPECTED_PROJECT_ENV,
           NPM_CONFIG_SCRIPT_SHELL: "/bin/sh",
           PATH: "/tmp/openclaw-npm-global/bin",
@@ -82,7 +81,7 @@ describe("npm project install env", () => {
 
   it.each(["NPM_CONFIG_SCRIPT_SHELL", "npm_config_script_shell"])("preserves %s", (key) => {
     withMockedPlatform("linux", () => {
-      expect(createNpmProjectInstallEnv({ [key]: "/custom/sh" }, {}, FROZEN_NOW)).toEqual({
+      expect(createNpmProjectInstallEnv({ [key]: "/custom/sh" })).toEqual({
         ...EXPECTED_PROJECT_ENV,
         [key]: "/custom/sh",
       });
@@ -113,12 +112,13 @@ describe("npm project install env", () => {
   });
 
   it("uses before args for command project npmrc before policies", async () => {
+    vi.useFakeTimers({ now: FROZEN_NOW, toFake: ["Date"] });
     await withNpmConfig((dir, baseEnv) => {
       writePolicy(path.join(dir, ".npmrc"));
 
       expectBefore(baseEnv, dir);
 
-      const env = createNpmProjectInstallEnv(baseEnv, { npmConfigCwd: dir }, FROZEN_NOW);
+      const env = createNpmProjectInstallEnv(baseEnv, { npmConfigCwd: dir });
       expect(env).toMatchObject({
         npm_config_min_release_age: "",
         npm_config_before: FROZEN_NOW.toISOString(),

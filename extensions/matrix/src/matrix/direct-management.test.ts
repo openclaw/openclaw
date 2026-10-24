@@ -156,7 +156,6 @@ describe("promoteMatrixDirectRoomCandidate", () => {
     expect(result).toEqual({
       classifyAsDirect: true,
       repaired: true,
-      roomId: "!fresh:example.org",
       reason: "promoted",
     });
     expectDirectMappingWrite(setAccountData, "@alice:example.org", ["!fresh:example.org"]);
@@ -205,7 +204,6 @@ describe("promoteMatrixDirectRoomCandidate", () => {
     expect(result).toEqual({
       classifyAsDirect: true,
       repaired: false,
-      roomId: "!mapped:example.org",
       reason: "already-mapped",
     });
     expect(setAccountData).not.toHaveBeenCalled();
@@ -228,7 +226,6 @@ describe("promoteMatrixDirectRoomCandidate", () => {
     expect(result).toEqual({
       classifyAsDirect: true,
       repaired: false,
-      roomId: "!fresh:example.org",
       reason: "repair-failed",
     });
   });

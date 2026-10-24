@@ -133,8 +133,23 @@ function applyCustomChoice(opts: ChoiceParams["opts"] = {}, config = nextConfig)
   return applyChoice({ nextConfig: config, opts: { customBaseUrl, ...opts } });
 }
 
-function localConfig(provider: Partial<ModelProviderConfig> = {}): OpenClawConfig {
-  return { models: { providers: { local: { baseUrl: customBaseUrl, models: [], ...provider } } } };
+function localConfig(provider: Partial<ModelProviderConfig> = {}, id = "local"): OpenClawConfig {
+  return { models: { providers: { [id]: { baseUrl: customBaseUrl, models: [], ...provider } } } };
+}
+
+function customProvider(config: OpenClawConfig | null, id = "custom-models-custom-local") {
+  return config?.models?.providers?.[id];
+}
+
+function forbidDiscovery() {
+  return vi
+    .spyOn(fetchGuard, "fetchWithSsrFGuard")
+    .mockRejectedValue(new Error("Unexpected discovery request"));
+}
+
+function expectCleanRuntime() {
+  expect(runtime.error).not.toHaveBeenCalled();
+  expect(runtime.exit).not.toHaveBeenCalled();
 }
 
 function mockDiscovery(response: Response, finalUrl = `${customBaseUrl}/models`) {
@@ -194,42 +209,32 @@ describe("applyNonInteractiveAuthChoice", () => {
     expect(runtime.exit).toHaveBeenCalledWith(1);
   });
 
-  it("continues to apply an enumerated provider auth choice", async () => {
-    const resolvedConfig = { auth: { profiles: { "demo-provider:default": { mode: "api_key" } } } };
-    applyNonInteractivePluginProviderChoice.mockResolvedValueOnce(resolvedConfig as never);
-
-    const result = await applyChoice({
-      nextConfig,
-      authChoice: "demo-provider-api-key",
-    });
-
-    expect(result).toBe(resolvedConfig);
-    expect(applyNonInteractivePluginProviderChoice).toHaveBeenCalledWith(
-      expect.objectContaining({ target }),
-    );
-    expect(runtime.error).not.toHaveBeenCalled();
-    expect(runtime.exit).not.toHaveBeenCalled();
-  });
-
-  it("resolves generic provider auth from the selected agent workspace", async () => {
-    const resolvedConfig = { auth: { profiles: { "demo-provider:default": { mode: "api_key" } } } };
-    applyNonInteractivePluginProviderChoice.mockResolvedValueOnce(resolvedConfig as never);
-    const normalize = vi
-      .spyOn(apiProviderAuthChoices, "normalizeApiKeyTokenProviderAuthChoice")
-      .mockImplementation((params) =>
-        params.workspaceDir === target.workspaceDir ? "demo-provider-api-key" : params.authChoice,
-      );
-    try {
+  it.each(["demo-provider-api-key", "apiKey"])(
+    "dispatches %s from the selected agent workspace",
+    async (authChoice) => {
+      const resolvedConfig = {
+        auth: { profiles: { "demo-provider:default": { mode: "api_key" } } },
+      };
+      applyNonInteractivePluginProviderChoice.mockResolvedValueOnce(resolvedConfig as never);
+      if (authChoice === "apiKey") {
+        vi.spyOn(
+          apiProviderAuthChoices,
+          "normalizeApiKeyTokenProviderAuthChoice",
+        ).mockImplementation((params) =>
+          params.workspaceDir === target.workspaceDir ? "demo-provider-api-key" : params.authChoice,
+        );
+      }
       const result = await applyChoice({
-        authChoice: "apiKey",
-        opts: { tokenProvider: "demo-provider" },
+        authChoice,
+        opts: authChoice === "apiKey" ? { tokenProvider: "demo-provider" } : {},
       });
       expect(result).toBe(resolvedConfig);
-      expect(runtime.error).not.toHaveBeenCalled();
-    } finally {
-      normalize.mockRestore();
-    }
-  });
+      expect(applyNonInteractivePluginProviderChoice).toHaveBeenCalledWith(
+        expect.objectContaining({ target }),
+      );
+      expectCleanRuntime();
+    },
+  );
 
   it("escapes deprecated auth choice guidance for terminal output", async () => {
     resolveManifestDeprecatedProviderAuthChoice.mockReturnValueOnce({
@@ -289,7 +294,7 @@ describe("applyNonInteractiveAuthChoice", () => {
         { customProviderId: "local", customCompatibility: compatibility },
         localConfig({ models: [authored] }),
       );
-      expect(result?.models?.providers?.local?.models).toEqual([
+      expect(customProvider(result, "local")?.models).toEqual([
         authored,
         expect.objectContaining({ id: "local-small" }),
       ]);
@@ -319,10 +324,10 @@ describe("applyNonInteractiveAuthChoice", () => {
       const request = mockAuthenticatedDiscovery("fixture-configured-key");
       const config: OpenClawConfig = localConfig({ apiKey });
       const result = await applyCustomChoice({ customProviderId: "local" }, config);
-      expect(result?.models?.providers?.local?.models).toEqual([
+      expect(customProvider(result, "local")?.models).toEqual([
         expect.objectContaining({ id: "discovered-chat" }),
       ]);
-      expect(result?.models?.providers?.local?.apiKey).toEqual(apiKey);
+      expect(customProvider(result, "local")?.apiKey).toEqual(apiKey);
       expect(request).toHaveBeenCalledOnce();
       expect(runtime.error).not.toHaveBeenCalled();
       expect(JSON.stringify(runtime.log.mock.calls)).not.toContain("fixture-configured-key");
@@ -342,10 +347,10 @@ describe("applyNonInteractiveAuthChoice", () => {
       };
       mockAuthenticatedDiscovery("fixture-file-key");
       const result = await applyCustomChoice({ customProviderId: "local" }, config);
-      expect(result?.models?.providers?.local?.models).toEqual([
+      expect(customProvider(result, "local")?.models).toEqual([
         expect.objectContaining({ id: "discovered-chat" }),
       ]);
-      expect(result?.models?.providers?.local?.apiKey).toEqual(apiKey);
+      expect(customProvider(result, "local")?.apiKey).toEqual(apiKey);
       expect(runtime.error).not.toHaveBeenCalled();
       expect(JSON.stringify(runtime.log.mock.calls)).not.toContain("fixture-file-key");
     });
@@ -389,10 +394,10 @@ describe("applyNonInteractiveAuthChoice", () => {
         },
       );
       if (sameEndpoint) {
-        expect(result?.models?.providers?.local?.models).toEqual([
+        expect(customProvider(result, "local")?.models).toEqual([
           expect.objectContaining({ id: "discovered-chat" }),
         ]);
-        expect(result?.models?.providers?.local?.apiKey).toBe(profileId);
+        expect(customProvider(result, "local")?.apiKey).toBe(profileId);
       } else {
         expect(result).toBeNull();
         expect(request).not.toHaveBeenCalled();
@@ -413,8 +418,8 @@ describe("applyNonInteractiveAuthChoice", () => {
         customModelIds: ["prepared-chat"],
       },
     });
-    expect(result?.models?.providers?.["local-2"]?.apiKey).toBeUndefined();
-    expect(result?.models?.providers?.["local-2"]?.models).toEqual([
+    expect(customProvider(result, "local-2")?.apiKey).toBeUndefined();
+    expect(customProvider(result, "local-2")?.models).toEqual([
       expect.objectContaining({ id: "prepared-chat" }),
     ]);
   });
@@ -439,7 +444,7 @@ describe("applyNonInteractiveAuthChoice", () => {
         nextConfig: config,
         opts: { customBaseUrl: azureBaseUrl, customProviderId: "local", customImageInput },
       });
-      expect(result?.models?.providers?.local?.models).toEqual([
+      expect(customProvider(result, "local")?.models).toEqual([
         { ...model, ...(customImageInput === false ? { input: ["text"] } : {}) },
         {
           id: "new-chat",
@@ -452,10 +457,10 @@ describe("applyNonInteractiveAuthChoice", () => {
           cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
         },
       ]);
-      expect(result?.models?.providers?.local?.apiKey).toEqual(
+      expect(customProvider(result, "local")?.apiKey).toEqual(
         config.models?.providers?.local?.apiKey,
       );
-      expect(result?.models?.providers?.local?.headers).toEqual({
+      expect(customProvider(result, "local")?.headers).toEqual({
         "api-key": config.models?.providers?.local?.apiKey,
       });
       expect(result?.gateway).toEqual(config.gateway);
@@ -464,15 +469,13 @@ describe("applyNonInteractiveAuthChoice", () => {
   );
 
   it("keeps explicit Azure setup normalization", async () => {
-    const request = vi
-      .spyOn(fetchGuard, "fetchWithSsrFGuard")
-      .mockRejectedValue(new Error("Unexpected discovery request"));
+    const request = forbidDiscovery();
     const { config, model } = createAzureCatalogConfig();
     const result = await applyChoice({
       nextConfig: config,
       opts: { customBaseUrl: azureBaseUrl, customProviderId: "local", customModelId: "chat-prod" },
     });
-    expect(result?.models?.providers?.local?.models).toEqual([
+    expect(customProvider(result, "local")?.models).toEqual([
       { ...model, input: ["text"], reasoning: false, compat: { supportsStore: false } },
     ]);
     expect(request).not.toHaveBeenCalled();
@@ -495,13 +498,9 @@ describe("applyNonInteractiveAuthChoice", () => {
   registerCustomCatalogImportTests(applyChoice);
 
   it("uses model ids prepared before reset without rediscovery", async () => {
-    const request = vi
-      .spyOn(fetchGuard, "fetchWithSsrFGuard")
-      .mockRejectedValue(new Error("Unexpected discovery request"));
+    const request = forbidDiscovery();
     const result = await applyCustomChoice({ customModelIds: ["first", "second"] });
-    expect(
-      result?.models?.providers?.["custom-models-custom-local"]?.models.map((model) => model.id),
-    ).toEqual(["second", "first"]);
+    expect(customProvider(result)?.models.map((model) => model.id)).toEqual(["second", "first"]);
     expectModelSelection(result, "custom-models-custom-local/first", [
       "custom-models-custom-local/first",
       "custom-models-custom-local/second",
@@ -517,7 +516,7 @@ describe("applyNonInteractiveAuthChoice", () => {
     );
     expect(Object.keys(result?.models?.providers ?? {})).toEqual(["local", "local-2"]);
     expect(new Headers(request.mock.calls[0]?.[0].init?.headers).has("Authorization")).toBe(false);
-    expect(result?.models?.providers?.["local-2"]?.models.map((model) => model.id)).toEqual([
+    expect(customProvider(result, "local-2")?.models.map((model) => model.id)).toEqual([
       "second",
       "first",
     ]);
@@ -525,11 +524,9 @@ describe("applyNonInteractiveAuthChoice", () => {
   });
 
   it("keeps an explicit model authoritative without discovering", async () => {
-    const request = vi
-      .spyOn(fetchGuard, "fetchWithSsrFGuard")
-      .mockRejectedValue(new Error("Unexpected discovery request"));
+    const request = forbidDiscovery();
     const result = await applyCustomChoice({ customModelId: "manual-model" });
-    expect(result?.models?.providers?.["custom-models-custom-local"]?.models).toEqual([
+    expect(customProvider(result)?.models).toEqual([
       expect.objectContaining({ id: "manual-model" }),
     ]);
     expect(request).not.toHaveBeenCalled();
@@ -545,7 +542,7 @@ describe("applyNonInteractiveAuthChoice", () => {
       customModelId: "local-large",
       secretInputMode: "ref",
     });
-    expect(result?.models?.providers?.["custom-models-custom-local"]?.apiKey).toEqual({
+    expect(customProvider(result)?.apiKey).toEqual({
       source: "env",
       provider: "default",
       id: "CUSTOM_API_KEY",
@@ -606,11 +603,11 @@ describe("applyNonInteractiveAuthChoice", () => {
       );
       expect(authorizationHeaders).toEqual(modelId ? [] : [null]);
       expect(request).toHaveBeenCalledTimes(modelId ? 0 : 1);
-      expect(result?.models?.providers?.local).toMatchObject({
+      expect(customProvider(result, "local")).toMatchObject({
         auth: "none",
         models: [expect.objectContaining({ id: modelId ?? "discovered-chat" })],
       });
-      expect(result?.models?.providers?.local?.apiKey).toEqual(persisted ? apiKey : undefined);
+      expect(customProvider(result, "local")?.apiKey).toEqual(persisted ? apiKey : undefined);
       expect(resolveNonInteractiveApiKey).not.toHaveBeenCalled();
       expect(runtime.error).not.toHaveBeenCalled();
     },
@@ -619,22 +616,16 @@ describe("applyNonInteractiveAuthChoice", () => {
   it("never commits an existing profile key as plaintext during custom secret-ref onboarding", async () => {
     const profileKey = "fixture-custom-profile-secret";
     resolveNonInteractiveApiKey.mockResolvedValueOnce({ key: profileKey, source: "profile" });
-    const result = await applyChoice({
-      opts: {
-        customBaseUrl: "https://models.custom.local/v1",
-        customModelId: "local-large",
-        secretInputMode: "ref",
-      } as never,
+    const result = await applyCustomChoice({
+      customModelId: "local-large",
+      secretInputMode: "ref",
     });
     expect(result).not.toBeNull();
     await commitNonInteractiveOnboardConfig({ nextConfig: result!, baseConfig: nextConfig });
     const persistedConfig = writeWizardConfigFile.mock.calls.at(-1)?.[0];
-    expect(
-      persistedConfig?.models?.providers?.["custom-models-custom-local"]?.apiKey,
-    ).toBeUndefined();
+    expect(customProvider(persistedConfig ?? null)?.apiKey).toBeUndefined();
     expect(JSON.stringify(persistedConfig)).not.toContain(profileKey);
-    expect(runtime.error).not.toHaveBeenCalled();
-    expect(runtime.exit).not.toHaveBeenCalled();
+    expectCleanRuntime();
   });
 
   it.each([
@@ -685,13 +676,7 @@ describe("applyNonInteractiveAuthChoice", () => {
   it("preserves existing custom SecretRefs when reusing an auth profile", async () => {
     const ref = { source: "exec", provider: "vault", id: "custom-provider" } as const;
     const providerId = "custom-models-custom-local";
-    const profileConfig = {
-      models: {
-        providers: {
-          [providerId]: { baseUrl: "https://models.custom.local/v1", apiKey: ref, models: [] },
-        },
-      },
-    } as OpenClawConfig;
+    const profileConfig = localConfig({ apiKey: ref }, providerId);
     resolveNonInteractiveApiKey.mockResolvedValueOnce({
       key: "fixture-existing-profile-secret",
       source: "profile",
@@ -700,40 +685,26 @@ describe("applyNonInteractiveAuthChoice", () => {
       { customModelId: "local-large", secretInputMode: "ref" },
       profileConfig,
     );
-    expect(result?.models?.providers?.[providerId]?.apiKey).toEqual(ref);
+    expect(customProvider(result, providerId)?.apiKey).toEqual(ref);
     expect(runtime.error).not.toHaveBeenCalled();
   });
 
-  it("preserves intentionally keyless custom setup in secret-ref mode", async () => {
-    resolveNonInteractiveApiKey.mockResolvedValueOnce(null);
-
-    const result = await applyChoice({
-      nextConfig,
-      opts: {
-        customBaseUrl: "https://models.custom.local/v1",
-        customModelId: "local-large",
-        secretInputMode: "ref",
-      } as never,
-    });
-
-    expect(result?.models?.providers?.["custom-models-custom-local"]?.apiKey).toBeUndefined();
-    expect(runtime.error).not.toHaveBeenCalled();
-    expect(runtime.exit).not.toHaveBeenCalled();
-  });
-
-  it("preserves existing custom profile serialization in explicit plaintext mode", async () => {
-    resolveNonInteractiveApiKey.mockResolvedValueOnce({
-      key: "fixture-plaintext-profile-key",
-      source: "profile",
-    });
-    const result = await applyCustomChoice({
-      customModelId: "local-large",
-      secretInputMode: "plaintext",
-    });
-    expect(result?.models?.providers?.["custom-models-custom-local"]?.apiKey).toBe(
+  it.each([
+    ["ref", null, undefined],
+    [
+      "plaintext",
+      { key: "fixture-plaintext-profile-key", source: "profile" },
       "fixture-plaintext-profile-key",
-    );
-  });
+    ],
+  ] as const)(
+    "preserves optional custom credentials in %s mode",
+    async (secretInputMode, resolved, expected) => {
+      resolveNonInteractiveApiKey.mockResolvedValueOnce(resolved);
+      const result = await applyCustomChoice({ customModelId: "local-large", secretInputMode });
+      expect(customProvider(result)?.apiKey).toBe(expected);
+      expectCleanRuntime();
+    },
+  );
 
   it.each([
     { source: "profile", key: "fixture-plugin-profile-secret" },
@@ -772,60 +743,27 @@ describe("applyNonInteractiveAuthChoice", () => {
       email: "operator@example.test",
       metadata: { account: "work" },
     });
-    expect(runtime.error).not.toHaveBeenCalled();
-    expect(runtime.exit).not.toHaveBeenCalled();
-  });
-
-  it("infers image-capable non-interactive custom provider models by known model id", async () => {
-    resolveNonInteractiveApiKey.mockResolvedValueOnce(undefined);
-
-    const result = await applyChoice({
-      nextConfig,
-      opts: {
-        customBaseUrl: "https://models.custom.local/v1",
-        customModelId: "gpt-4o",
-      } as never,
-    });
-
-    expect(result?.models?.providers?.["custom-models-custom-local"]?.models?.[0]?.input).toEqual([
-      "text",
-      "image",
-    ]);
-  });
-
-  it("honors explicit text-only override for known custom vision models", async () => {
-    resolveNonInteractiveApiKey.mockResolvedValueOnce(undefined);
-    const result = await applyCustomChoice(
-      { customModelId: "gpt-4o", customImageInput: false },
-      nextConfig,
-    );
-    expect(result?.models?.providers?.["custom-models-custom-local"]?.models?.[0]?.input).toEqual([
-      "text",
-    ]);
+    expectCleanRuntime();
   });
 
   it.each([
-    {
-      name: "warns before dispatching a manifest replacement",
-      authChoice: "claude-cli",
-      hasReplacement: true,
-      expectedError: undefined,
-    },
-    {
-      name: "keeps direct oauth as an unknown choice",
-      authChoice: "oauth",
-      hasReplacement: true,
-      expectedError:
-        'Unknown --auth-choice "oauth". Valid choices: custom-api-key, skip, demo-provider-api-key.',
-    },
-    {
-      name: "rejects the original alias when replacement metadata is missing",
-      authChoice: "claude-cli",
-      hasReplacement: false,
-      expectedError:
-        'Unknown --auth-choice "claude-cli". Valid choices: custom-api-key, skip, demo-provider-api-key.',
-    },
-  ])("$name", async ({ authChoice, hasReplacement, expectedError }) => {
+    [undefined, ["text", "image"]],
+    [false, ["text"]],
+  ] as const)("applies custom vision override %s", async (customImageInput, expected) => {
+    resolveNonInteractiveApiKey.mockResolvedValueOnce(undefined);
+    const result = await applyCustomChoice({ customModelId: "gpt-4o", customImageInput });
+    expect(customProvider(result)?.models[0]?.input).toEqual(expected);
+  });
+
+  it.each([
+    ["claude-cli", true],
+    ["oauth", true],
+    ["claude-cli", false],
+  ] as const)("resolves legacy %s with replacement=%s", async (authChoice, hasReplacement) => {
+    const expectedError =
+      authChoice === "oauth" || !hasReplacement
+        ? `Unknown --auth-choice "${authChoice}". Valid choices: custom-api-key, skip, demo-provider-api-key.`
+        : undefined;
     const resolvedConfig: OpenClawConfig = { agents: { defaults: { workspace: "/tmp/resolved" } } };
     const warning = 'Auth choice "claude-cli" is deprecated; using Fixture Provider setup instead.';
     resolveManifestDeprecatedProviderAuthChoice.mockImplementation((choice, scope) =>
@@ -859,8 +797,7 @@ describe("applyNonInteractiveAuthChoice", () => {
       return;
     }
     expect(result).toBe(resolvedConfig);
-    expect(runtime.error).not.toHaveBeenCalled();
-    expect(runtime.exit).not.toHaveBeenCalled();
+    expectCleanRuntime();
     expect(runtime.log).toHaveBeenCalledExactlyOnceWith(warning);
     expect(applyNonInteractivePluginProviderChoice).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({ authChoice: "demo-provider-api-key", nextConfig, target }),

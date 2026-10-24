@@ -23,7 +23,7 @@ const option = (page: Page, id: string) => page.locator(`[data-chat-model-option
 const absent = (page: Page, id: string) => expect(option(page, id).count()).resolves.toBe(0);
 const visible = (page: Page) => expect.poll(() => option(page, "current").isVisible()).toBe(true);
 async function reveal(page: Page) {
-  await revealChatModelOption(option(page, "current"));
+  await revealChatModelOption(page, "fixture/current");
   await visible(page);
 }
 function catalogScenario(ids = ["alpha", "bravo"]) {

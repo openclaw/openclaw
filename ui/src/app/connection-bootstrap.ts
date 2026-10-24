@@ -71,6 +71,14 @@ export function createConnectionBootstrapCoordinator() {
 
   return {
     reset,
+    /** Retiring a caller releases only its unstarted work, never an active slot. */
+    cancelQueued(this: void, key: string | object) {
+      const task = tasks.get(key);
+      if (task && !task.started) {
+        tasks.delete(key);
+        task.resolve();
+      }
+    },
     get foregroundReady() {
       return !foregroundPending();
     },

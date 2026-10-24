@@ -257,16 +257,14 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicComp
   return stream;
 };
 
-type AnthropicSimpleStreamOptions = SimpleStreamOptions &
-  AnthropicContextManagementOptions & {
-    authProfileId?: string;
-    toolChoice?: AnthropicCompactionOptions["toolChoice"];
-    thinkingDisplay?: AnthropicOptions["thinkingDisplay"];
-  };
-
 export const streamSimpleAnthropic: StreamFunction<
   "anthropic-messages",
-  AnthropicSimpleStreamOptions
+  SimpleStreamOptions &
+    AnthropicContextManagementOptions & {
+      authProfileId?: string;
+      toolChoice?: AnthropicCompactionOptions["toolChoice"];
+      thinkingDisplay?: AnthropicOptions["thinkingDisplay"];
+    }
 > = (model, context, options) => {
   const apiKey = requireApiKey(model.provider, options?.apiKey);
 

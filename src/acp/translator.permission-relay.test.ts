@@ -5,7 +5,6 @@ import { createDeferredCore } from "../shared/deferred.js";
 import type { AcpGatewayAgent } from "./translator.js";
 import { createPromptScenario, expectSingleCall } from "./translator.scenario.test-support.js";
 
-vi.mock("./commands.js", () => ({ getAvailableCommands: () => [] }));
 const SESSION_KEY = "agent:main:main";
 
 function agentEvent(runId: string, stream: string, data: Record<string, unknown>): EventFrame {

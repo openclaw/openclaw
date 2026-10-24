@@ -12,6 +12,7 @@ import {
   optionalStringEnum,
   stringEnum,
 } from "../schema/typebox.js";
+import { CRON_SCOPED_READ_ACTIONS } from "./automations-tool-name.js";
 import { gatewayCallOptionSchemaProperties } from "./gateway-schema.js";
 
 export const REMINDER_CONTEXT_MESSAGES_MAX = 10;
@@ -35,9 +36,6 @@ const CRON_ACTIONS = [
 ] as const;
 
 const CRON_SELF_ACTIONS = ["status", "list", "get", "remove", "runs"] as const;
-
-// Scheduler status exposes global metadata; recovery inspects caller-visible records only.
-export const CRON_SCOPED_READ_ACTIONS: readonly string[] = ["list", "get", "runs"];
 
 const CRON_SCHEDULE_KINDS = ["at", "every", "cron", "stream", "event"] as const;
 // When cron.triggers.enabled is explicitly false, the scheduler rejects

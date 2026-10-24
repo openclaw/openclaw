@@ -553,6 +553,18 @@ describe("skills cli commands", () => {
     ]);
     expect(mocks.workspace).not.toHaveBeenCalled();
   });
+  it("canonicalizes a mixed-case --agent before selecting the configured agent", async () => {
+    mocks.explicitAgent.mockImplementation((_config, agent) =>
+      resolveConfiguredAgentId({ agents: { entries: { main: {}, writer: {} } } }, agent),
+    );
+    mocks.gateway.mockResolvedValue(mocks.report);
+    await run(["check", "--agent", " Writer ", "--json"]);
+    expect(errors).toEqual([]);
+    expect(mocks.explicitAgent).toHaveBeenCalledWith({}, "writer");
+    expect(mocks.gateway).toHaveBeenCalledWith(
+      expect.objectContaining({ method: "skills.status", params: { agentId: "writer" } }),
+    );
+  });
   it("redacts secrets from rendered skills CLI errors", async () => {
     const secret = "sk-abcdefghijklmnopqrstuv";
     mocks.defaultAgent.mockImplementationOnce(() => {

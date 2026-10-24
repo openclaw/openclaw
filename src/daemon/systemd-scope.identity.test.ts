@@ -107,6 +107,23 @@ it.each(["node", "gateway", "gateway-lisa"])("rejects legacy alias %s", async (p
   await expect(findScope(profile)).resolves.toBeNull();
 });
 
+it.each(["user", "system"] as const)(
+  "distinguishes a profile node from a legacy Gateway in %s scope",
+  async (scope) => {
+    const unitPath = (scope === "user" ? userPath : systemPath)("openclaw-node-work");
+    files = [unitPath];
+    const read = vi.spyOn(fs, "readFile");
+    read.mockResolvedValue("[Service]\nEnvironment=OPENCLAW_SERVICE_KIND=gateway\n");
+    await expect(findScope("node-work")).resolves.toMatchObject({ unitPath, scope });
+    read.mockResolvedValue("[Service]\nEnvironment=OPENCLAW_SERVICE_KIND=node\n");
+    await expect(findScope("node-work")).resolves.toBeNull();
+    await expect(findScope("work", "openclaw-node-work")).resolves.toMatchObject({
+      unitPath,
+      scope,
+    });
+  },
+);
+
 it.each([
   ["Command failed: systemctl --user is-enabled openclaw-gateway.service", true],
   ["systemctl is-enabled unavailable: Failed to connect to bus", true],

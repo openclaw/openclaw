@@ -43,3 +43,14 @@ export function isTerminalFailureChatSendAck(
 ): ack is TerminalFailureChatSendAck {
   return ack?.status === "timeout" || ack?.status === "error";
 }
+
+export function formatTerminalChatSendAckError(
+  ack: TerminalFailureChatSendAck,
+  context: "chat" | "detached",
+): string {
+  return ack.status === "error"
+    ? "Chat failed before the run started; try again."
+    : context === "detached"
+      ? "The active run ended before the detached message was accepted."
+      : "The run ended before the message was accepted.";
+}

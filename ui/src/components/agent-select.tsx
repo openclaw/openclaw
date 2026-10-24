@@ -10,7 +10,7 @@ import { generateUUID } from "../lib/uuid.ts";
 import type { AgentSelectOption } from "./agent-select-types.ts";
 import { revealInScrollRegion } from "./scroll-state.ts";
 import { Icon } from "./solid/icon.tsx";
-import { AgentIdentityAvatar } from "./solid/identity-avatar.tsx";
+import { AgentOptionAvatar } from "./solid/identity-avatar.tsx";
 import { Menu, type MenuItem, type MenuHandle } from "./solid/menu.tsx";
 
 type AgentSelectProps = {
@@ -55,7 +55,7 @@ defineSolidBridge<AgentSelectProps>(
               return [
                 option.value,
                 {
-                  identity,
+                  textAvatar: option.agent ? resolveAgentTextAvatar(option.agent, identity) : null,
                   image: url ? loader.resolve(url) : null,
                   onError: url ? loader.imageErrorHandler(url) : undefined,
                 },
@@ -66,30 +66,7 @@ defineSolidBridge<AgentSelectProps>(
     });
     function Avatar(avatarProps: { option: AgentSelectOption }) {
       const resolved = () => avatars().get(avatarProps.option.value);
-      return (
-        <Show
-          when={resolved()?.image ? undefined : avatarProps.option.icon}
-          fallback={
-            <AgentIdentityAvatar
-              class="agent-select__avatar"
-              agent={{
-                id: avatarProps.option.agent?.id ?? avatarProps.option.value,
-                avatar: resolved()?.image ?? null,
-                textAvatar: avatarProps.option.agent
-                  ? resolveAgentTextAvatar(avatarProps.option.agent, resolved()?.identity ?? null)
-                  : null,
-              }}
-              onImageError={resolved()?.onError}
-            />
-          }
-        >
-          {(icon) => (
-            <span class="agent-select__avatar agent-select__avatar--icon" aria-hidden="true">
-              <Icon name={icon()} />
-            </span>
-          )}
-        </Show>
-      );
+      return <AgentOptionAvatar option={avatarProps.option} avatar={resolved()} />;
     }
     const items = createMemo<readonly MenuItem[]>(() =>
       props.options.map((option) => ({

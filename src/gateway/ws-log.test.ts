@@ -261,6 +261,12 @@ test("formatForLog caps cause-chain depth so a self-referential cause cannot loo
   expect(out.length).toBeLessThan(2000);
 });
 
+test("formatForLog omits empty error segments without dropping a false cause", () => {
+  const outer = new Error("", { cause: new Error("leaf", { cause: false }) });
+  outer.name = "";
+  expect(formatForLog(outer)).toBe("Error: leaf <- false");
+});
+
 const longText = `${"a".repeat(239)}😀tail`;
 test.each([
   ["message and code", { name: "Oops", message: "failed", code: "E1" }, "Oops: failed: code=E1"],

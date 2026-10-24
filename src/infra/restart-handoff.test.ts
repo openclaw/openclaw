@@ -41,8 +41,10 @@ function createHandoffEnv(): NodeJS.ProcessEnv {
   };
 }
 
-const consumeHandoff = (env: NodeJS.ProcessEnv, expectedPid = 12_345) =>
-  consumeGatewayRestartHandoffSync({ env, expectedPid });
+const consumeHandoff = (env: NodeJS.ProcessEnv, expectedPid = 12_345) => {
+  vi.stubEnv("OPENCLAW_STATE_DIR", env.OPENCLAW_STATE_DIR);
+  return consumeGatewayRestartHandoffSync({ expectedPid });
+};
 
 function readHandoffRow(env: NodeJS.ProcessEnv) {
   const { db } = openOpenClawStateDatabase({ env });
@@ -116,7 +118,6 @@ function spawnHandoffConsumer(params: {
     Date.now = () => ${params.now};
     const result = mod.consumeGatewayRestartHandoffSync({
       expectedPid: ${params.expectedPid},
-      env: process.env,
     });
     process.stdout.write(JSON.stringify(result) + "\\n");
   `;
@@ -253,22 +254,20 @@ describe("gateway restart handoff", () => {
   });
 
   it("formats a concise, single-line diagnostic", () => {
+    using _ = vi.spyOn(Date, "now").mockReturnValue(12_500);
     expect(
-      formatGatewayRestartHandoffDiagnostic(
-        {
-          kind: "gateway-supervisor-restart-handoff",
-          version: 1,
-          intentId: "intent-1",
-          pid: 12_345,
-          createdAt: 10_000,
-          expiresAt: 70_000,
-          reason: "ok\nFake: bad",
-          source: "operator-restart",
-          restartKind: "full-process",
-          supervisorMode: "external",
-        },
-        12_500,
-      ),
+      formatGatewayRestartHandoffDiagnostic({
+        kind: "gateway-supervisor-restart-handoff",
+        version: 1,
+        intentId: "intent-1",
+        pid: 12_345,
+        createdAt: 10_000,
+        expiresAt: 70_000,
+        reason: "ok\nFake: bad",
+        source: "operator-restart",
+        restartKind: "full-process",
+        supervisorMode: "external",
+      }),
     ).toBe(
       "Recent restart handoff: full-process via external; source=operator-restart; reason=ok Fake: bad; pid=12345; age=2s; expiresIn=57s",
     );

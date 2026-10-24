@@ -11,42 +11,13 @@ import { createTestGatewayScheduler } from "../../../../src/test-utils/gateway-s
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { CronJob } from "../../api/types.ts";
 import { invalidateStaleDeliveryRoute } from "../../pages/cron/delivery-conversations.ts";
-import { addCronJob, cancelCronEdit, createInitialCronState, startCronEdit } from "./index.ts";
-import type { CronFormState, CronState } from "./types.ts";
-
-function createCronJob(overrides: Pick<CronJob, "id" | "name">): CronJob {
-  return {
-    ...overrides,
-    enabled: true,
-    createdAtMs: 0,
-    updatedAtMs: 0,
-    configRevision: "config-revision-1",
-    schedule: { kind: "cron", expr: "0 * * * *" },
-    sessionTarget: "isolated",
-    wakeMode: "next-heartbeat",
-    payload: { kind: "agentTurn", message: "run" },
-    state: {},
-  };
-}
-
-function cronJobsListResponse(jobs: CronJob[]) {
-  return {
-    jobs,
-    snapshotRevision: "editor-jobs",
-    total: jobs.length,
-    offset: 0,
-    limit: 50,
-    hasMore: false,
-    nextOffset: null,
-  };
-}
-
-function createStateWithRequest(request: unknown, overrides: Partial<CronState>): CronState {
-  return {
-    ...createInitialCronState({ connected: true, client: { request } as CronState["client"] }),
-    ...overrides,
-  };
-}
+import {
+  createCronJob,
+  createStateWithRequest,
+  cronJobsListResponse,
+} from "./cron.test-support.ts";
+import { addCronJob, cancelCronEdit, startCronEdit } from "./index.ts";
+import type { CronFormState } from "./types.ts";
 
 function applyWirePatch(stored: CronStoredJob, params: unknown) {
   // Exercise the Gateway's normalization against the serialized UI request.
@@ -73,7 +44,7 @@ function readPublicJob(stored: CronStoredJob): CronJob {
 describe("automation save editor ownership", () => {
   it("edits a migrated ordinary job's policies without retaining its old channel recipient", async () => {
     const job: CronJob = {
-      ...createCronJob({ id: "migrated-job", name: "Evening notes" }),
+      ...createCronJob("migrated-job", "Evening notes"),
       sessionTarget: "session:agent:main:main",
       activeHours: { start: "22:00", end: "06:00", timezone: "Europe/Vienna" },
       idleOnly: true,
@@ -289,7 +260,7 @@ describe("automation save editor ownership", () => {
   it.each(["save", "conflict read", "conflict read failure"] as const)(
     "preserves a reopened editor when an earlier %s settles",
     async (pendingPhase) => {
-      const job = createCronJob({ id: "reopened-job", name: "Saved definition" });
+      const job = createCronJob("reopened-job", "Saved definition");
       const updated = { ...job, name: "Earlier save", configRevision: "earlier-save-revision" };
       const pending = createDeferred<CronJob>();
       const conflict = Object.assign(new Error("Definition changed"), {

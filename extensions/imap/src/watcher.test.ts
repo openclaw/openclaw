@@ -391,6 +391,26 @@ describe("IMAP watcher protocol boundary", () => {
     },
   );
 
+  it("marks a partial fetched source even when the rendered prompt fits its byte budget", async () => {
+    const { server, dispatchHookAgentTurn, waitForCursor } = await startWatcher({
+      account: { includeBody: true, maxBytes: 20_000 },
+    });
+    server.messages.push({
+      uid: 2,
+      raw: "From: trusted@example.com\r\nSubject: Partial source\r\n\r\nhello world",
+      reportedSize: 1_048_577,
+    });
+    server.announce();
+    await waitForCursor(2);
+    expect(dispatchHookAgentTurn).toHaveBeenCalledTimes(1);
+    const prompt = dispatchHookAgentTurn.mock.calls[0]?.[0].message;
+    expect(prompt).toContain("hello world");
+    expect(prompt?.endsWith("[truncated: email content exceeded the configured byte limit]")).toBe(
+      true,
+    );
+    expect(Buffer.byteLength(prompt ?? "")).toBeLessThan(20_000);
+  });
+
   it.each([
     ["From: trusted@example.com, attacker@evil.example", "invalid-from", "unknown"],
     ["From: attacker@evil.example", "sender-not-allowed", "evil.example"],

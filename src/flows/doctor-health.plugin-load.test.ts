@@ -86,7 +86,9 @@ it.each([false, true])(
         });
       }
       expect(runtime.error).toHaveBeenCalledExactlyOnceWith(
-        expect.stringContaining("[error] core/doctor/workspace-status"),
+        expect.stringContaining(
+          `- Plugin ${id}: plugin failed during load: ENOSPC: no space left on device; free space on the filesystem used by the plugin load and rerun Doctor`,
+        ),
       );
       const output = runtime.error.mock.calls.flat().join("\n");
       for (const detail of [id, "ENOSPC", source]) {

@@ -4,8 +4,8 @@ import {
   type ChatFollowUpMode,
 } from "../../../app/settings.ts";
 import { t } from "../../../i18n/index.ts";
-import "../../../components/tooltip.ts";
 import { registerChatGoalsEnglish } from "../../../i18n/locales/en-chat-goals.ts";
+import "../../../components/tooltip.ts";
 import type { HumanMention } from "../../../lib/chat/chat-types.ts";
 import {
   canSubmitBeforeChatHistory,
@@ -16,6 +16,12 @@ import { updateHumanMentions } from "../../../lib/chat/human-mentions.ts";
 import { clearCompositionEnd, recordCompositionEnd } from "../../../lib/ime.ts";
 import { isSessionRunVisuallyActive } from "../../../lib/session-run-state.ts";
 import { detectTextDirection } from "../../../lib/text-direction.ts";
+import { chatGoalCreationObjective } from "../chat-goals.ts";
+import {
+  hasTerminalRunStatus,
+  isChatRunWorking,
+  isCurrentSessionSubmittedProgress,
+} from "../chat-run-working.ts";
 import { insertComposerDictation, type ComposerDictationOwner } from "../composer-dictation.ts";
 import { normalizeChatComposerDraft } from "../composer-draft.ts";
 import type {
@@ -42,9 +48,6 @@ import {
   composerDraftKey,
   consumeComposerInputIntent,
   getChatComposerState,
-  hasTerminalRunStatus,
-  isChatRunWorking,
-  isCurrentSessionSubmittedProgress,
   markComposerInputIntent,
   suppressStaleSubmittedDraftReplay,
 } from "./chat-composer-state.ts";
@@ -532,6 +535,11 @@ export function createChatComposerContext(
       }
     }
   };
+  const replacingRunningGoal =
+    isBusy &&
+    props.selectedSession?.goal?.status === "active" &&
+    (goalComposer.mode?.action === "start" ||
+      chatGoalCreationObjective(visibleDraft) !== undefined);
   const runControlsProps = {
     canAbort: showAbortableUi,
     canSend: canSubmitDraft(visibleDraft),
@@ -546,8 +554,8 @@ export function createChatComposerContext(
     followUpMode: props.followUpMode,
     alternateFollowUpMode,
     suggestionComposer: props.suggestionComposer,
-    submissionLabel: goalComposer.submissionLabel,
-    sending: props.sending,
+    submissionLabel: replacingRunningGoal ? t("chat.goals.replace") : goalComposer.submissionLabel,
+    sending: props.sending && !replacingRunningGoal,
     voiceActive: props.realtimeTalkActive,
     voiceStatus: props.realtimeTalkStatus,
     voiceDetail: props.realtimeTalkDetail,

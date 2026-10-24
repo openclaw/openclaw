@@ -4,6 +4,12 @@ import { resolveGoogleMeetConfig } from "./config.js";
 import { createGoogleMeetChromeNodeInvokePolicy } from "./node-invoke-policy.js";
 import { GOOGLE_MEET_NODE_COMMAND } from "./transports/google-meet-platform-constants.js";
 
+const untrustedCommands = {
+  audioBridgeCommand: ["node", "-e", "process.exit(99)"],
+  audioBridgeHealthCommand: ["node", "-e", "process.exit(98)"],
+};
+const start = { action: "start", url: "https://meet.google.com/abc-defg-hij", mode: "bidi" };
+
 function invoke(params: unknown, config: unknown = {}) {
   const invokeNode = vi.fn<OpenClawPluginNodeInvokePolicyContext["invokeNode"]>(async () => ({
     ok: true,
@@ -29,17 +35,16 @@ describe("Google Meet node invoke policy", () => {
       joinTimeoutMs: 45_000,
       audioInputCommand: ["trusted-capture", "--raw"],
       audioOutputCommand: ["trusted-play", "--raw"],
+      audioBridgeCommand: ["trusted-bridge", "start"],
+      audioBridgeHealthCommand: ["trusted-bridge", "status"],
     };
     const { result, invokeNode } = invoke(
       {
-        action: "start",
-        url: "https://meet.google.com/abc-defg-hij",
-        mode: "bidi",
+        ...start,
         launch: true,
         browserProfile: "Attacker Profile",
         joinTimeoutMs: 1,
-        audioBridgeCommand: ["node", "-e", "process.exit(99)"],
-        audioBridgeHealthCommand: ["node", "-e", "process.exit(98)"],
+        ...untrustedCommands,
         audioInputCommand: ["malicious-capture"],
         audioOutputCommand: ["malicious-play"],
       },
@@ -48,12 +53,9 @@ describe("Google Meet node invoke policy", () => {
 
     await expect(result).resolves.toEqual({ ok: true, payload: { ok: true } });
 
-    expect(invokeNode).toHaveBeenCalledTimes(1);
-    expect(invokeNode).toHaveBeenCalledWith({
+    expect(invokeNode).toHaveBeenCalledExactlyOnceWith({
       params: {
-        action: "start",
-        url: "https://meet.google.com/abc-defg-hij",
-        mode: "bidi",
+        ...start,
         ...trusted,
         audioBackend: "auto",
         audioBufferBytes: 4_096,
@@ -62,37 +64,10 @@ describe("Google Meet node invoke policy", () => {
     });
   });
 
-  it("uses trusted configured external bridge commands for start", async () => {
-    const { result, invokeNode } = invoke(
-      {
-        action: "start",
-        url: "https://meet.google.com/abc-defg-hij",
-        mode: "bidi",
-        audioBridgeHealthCommand: ["node", "-e", "process.exit(98)"],
-        audioBridgeCommand: ["node", "-e", "process.exit(99)"],
-      },
-      {
-        chrome: {
-          audioBridgeHealthCommand: ["trusted-bridge", "status"],
-          audioBridgeCommand: ["trusted-bridge", "start"],
-        },
-      },
-    );
-
-    await result;
-
-    const call = invokeNode.mock.calls[0]?.[0];
-    expect(call?.params).toMatchObject({
-      action: "start",
-      audioBridgeHealthCommand: ["trusted-bridge", "status"],
-      audioBridgeCommand: ["trusted-bridge", "start"],
-    });
-  });
-
   it("keeps direct setup diagnostics but strips extra fields", async () => {
     const { result, invokeNode } = invoke({
       action: "setup",
-      audioBridgeCommand: ["node", "-e", "process.exit(99)"],
+      ...untrustedCommands,
     });
 
     await result;

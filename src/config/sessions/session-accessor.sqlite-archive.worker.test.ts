@@ -31,10 +31,8 @@ import {
 import { writeTranscriptArchive } from "./session-accessor.sqlite-archive-artifact.js";
 import { materializeSessionStateDeletePlans } from "./session-accessor.sqlite-archive.js";
 import { planSessionStateDeleteIfUnreferenced } from "./session-accessor.sqlite-delete-snapshot.js";
-import {
-  deleteMaterializedSessionStatePlans,
-  readSessionGenerationIdsForKeys,
-} from "./session-accessor.sqlite-lifecycle-state.js";
+import { deleteMaterializedSessionStatePlans } from "./session-accessor.sqlite-lifecycle-state.js";
+import { readSessionGenerationIdsForKeys } from "./session-accessor.sqlite-references.js";
 import { touchTranscriptMutationInTransaction } from "./session-accessor.sqlite-transcript-state.js";
 import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
@@ -155,7 +153,6 @@ describe("SQLite transcript archive worker", () => {
     const archivedPath = writeTranscriptArchive({
       archiveDirectory,
       content,
-      reason: "deleted",
       sessionId,
     });
     expect(archivedPath).not.toBe(stagedPath);

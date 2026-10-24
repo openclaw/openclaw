@@ -172,7 +172,6 @@ describe("worker placement read cache", () => {
     const unexpected = async () => {
       throw new Error("unexpected workspace mutation during a disk probe");
     };
-    let nowMs = 1_000;
     const warn = vi.fn();
     const monitor = createWorkerPlacementDiskSpaceMonitor({
       placements: reader,
@@ -189,7 +188,6 @@ describe("worker placement read cache", () => {
       },
       runnerAvailability: { read: () => undefined, version: () => 0 },
       warn,
-      now: () => nowMs,
     });
     const unsubscribe = reader.subscribeChanges(() => monitor.invalidate());
     try {
@@ -214,7 +212,6 @@ describe("worker placement read cache", () => {
         to: "draining",
         expectedGeneration: active.generation,
       });
-      nowMs += 15 * 60_000;
       await monitor.sweep();
       expect(monitor.read(draining)).toBeUndefined();
       expect(runWorkspaceCommand).toHaveBeenCalledOnce();

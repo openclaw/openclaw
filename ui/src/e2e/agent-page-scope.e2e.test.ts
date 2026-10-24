@@ -153,13 +153,16 @@ suite.define(() => {
     async (ordering) => {
       await suite.withPage(pageOptions(), async ({ page }) => {
         const gateway = await installMockGateway(page, {
+          authMode: ordering === "route before hello" ? "token" : undefined,
           deferredMethods: ordering === "route before hello" ? ["connect"] : [],
           methodResponses: {
             "agents.list": roster(),
             "sessions.usage": emptyUsage,
           },
         });
-        await page.goto(`${suite.server.baseUrl}usage`);
+        await page.goto(
+          `${suite.server.baseUrl}usage${ordering === "route before hello" ? "#token=test-token" : ""}`,
+        );
         if (ordering === "route before hello") {
           await gateway.waitForRequest("connect");
           await gateway.resolveDeferred("connect");
@@ -178,6 +181,18 @@ suite.define(() => {
         await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/agents/reviewer");
         await expectAgent(selectedAgent, "reviewer");
         await screenshot(page, "08-palette-selected-agent.png");
+        if (ordering === "route before hello") {
+          // The held hello must restore a real warm boot, without a connect-timeout retry.
+          await expect
+            .poll(() =>
+              page.evaluate(() =>
+                Object.keys(localStorage).some((key) =>
+                  key.startsWith("openclaw.control.bootRecord.v1:"),
+                ),
+              ),
+            )
+            .toBe(true);
+        }
         await page.reload();
         if (ordering === "route before hello") {
           await gateway.waitForRequest("connect");
@@ -185,6 +200,7 @@ suite.define(() => {
             pathname: "/settings/agents/reviewer",
             routeId: "agents",
           });
+          expect(await gateway.getRequests("connect")).toHaveLength(1);
           await gateway.resolveDeferred("connect");
         }
         await expectAgent(selectedAgent, "reviewer");

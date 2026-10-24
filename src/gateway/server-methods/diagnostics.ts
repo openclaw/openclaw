@@ -4,6 +4,7 @@ import {
   validateDiagnosticsHeapProfileParams,
   validateDiagnosticsHeapSnapshotParams,
 } from "../../../packages/gateway-protocol/src/schema/diagnostics.js";
+import { collectRuntimeCapabilities } from "../../infra/runtime-capabilities.js";
 import { getTrackedWorkerPoolSnapshot } from "../../infra/worker-cpu.js";
 import type { DiagnosticProfileOutcome } from "../../logging/diagnostic-profile.js";
 import {
@@ -11,6 +12,7 @@ import {
   normalizeDiagnosticStabilityQuery,
 } from "../../logging/diagnostic-stability.js";
 import { getCommandLaneDiagnostics } from "../../process/command-lane-diagnostics.js";
+import { respondError } from "./response.js";
 import type { GatewayRequestHandler, GatewayRequestHandlers } from "./types.js";
 
 function profileHandler<P>(
@@ -59,6 +61,20 @@ function profileHandler<P>(
 }
 
 export const diagnosticsHandlers: GatewayRequestHandlers = {
+  "diagnostics.capabilities": ({ params, respond }) => {
+    if (params !== undefined && (!isRecord(params) || Object.keys(params).length !== 0)) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          "diagnostics.capabilities accepts only empty params",
+        ),
+      );
+      return;
+    }
+    respond(true, collectRuntimeCapabilities(), undefined);
+  },
   "diagnostics.cpuProfile": profileHandler(
     "CPU profile",
     (params): params is Record<string, unknown> =>
@@ -104,13 +120,10 @@ export const diagnosticsHandlers: GatewayRequestHandlers = {
       const query = normalizeDiagnosticStabilityQuery(params);
       respond(true, getDiagnosticStabilitySnapshot(query), undefined);
     } catch (err) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          err instanceof Error ? err.message : "invalid diagnostics.stability params",
-        ),
+      respondError(
+        respond,
+        ErrorCodes.INVALID_REQUEST,
+        err instanceof Error ? err.message : "invalid diagnostics.stability params",
       );
     }
   },

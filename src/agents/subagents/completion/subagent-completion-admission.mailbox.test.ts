@@ -170,21 +170,27 @@ it("does not resurrect a suspended reservation after the requester lookup finish
     expect(await restoration).toEqual([]);
   }));
 
-// A yielded cohort keeps a retired member's wake so its continuation reports the cancellation;
-// an ordinary wave owes nothing once its members retire.
+// A yielded cohort still reports cancellation, but superseded work must not block new input.
+// An ordinary wave owes nothing once its members retire.
 it.each([
   ["owed", true],
   ["killed", true],
   ["suppressed", true],
-  ["retired during lookup", true],
+  ["killed during lookup", true],
+  ["superseded", true],
+  ["superseded during lookup", true],
   ["killed", false],
   ["suppressed", false],
-  ["retired during lookup", false],
+  ["killed during lookup", false],
+  ["superseded", false],
+  ["superseded during lookup", false],
 ] as const)(
   "restores only owed requester wakes before new human input (%s, yielded: %s)",
   async (scenario, yielded) => {
     await withMailbox(
       async ({ entry, inputs, reserve }) => {
+        const superseded = scenario.startsWith("superseded");
+        const duringLookup = scenario.endsWith("during lookup");
         const retireObligation = () => {
           const current = subagentRuns.get(entry.runId);
           if (!current) {
@@ -195,10 +201,13 @@ it.each([
             suppressCompletionDelivery: true,
             suppressAnnounceReason: "killed",
             endedReason: "subagent-killed",
-            killReconciliation: { killedAt: 3_000, supersededAt: 4_000 },
+            killReconciliation: {
+              killedAt: 3_000,
+              ...(superseded ? { supersededAt: 4_000 } : {}),
+            },
           });
         };
-        if (scenario === "killed") {
+        if (scenario === "killed" || scenario === "superseded") {
           retireObligation();
         } else if (scenario === "suppressed") {
           subagentRuns.set(entry.runId, { ...entry, suppressCompletionDelivery: true });
@@ -222,10 +231,10 @@ it.each([
           >();
         vi.spyOn(requesterLookup, "loadRequesterSessionEntry").mockImplementation(async () => {
           entered.resolve();
-          return scenario === "retired during lookup" ? await lookup.promise : requester;
+          return duringLookup ? await lookup.promise : requester;
         });
         const restoration = reserveRestoredSubagentControllerSources([observed]);
-        if (scenario === "retired during lookup") {
+        if (duringLookup) {
           try {
             await entered.promise;
             retireObligation();
@@ -237,7 +246,7 @@ it.each([
         inputs.push(...restored);
         const human = reserve("new-human-input");
         const claim = tryClaimSessionControllerTask(human, "visible");
-        if (scenario === "owed" || yielded) {
+        if (!superseded && (scenario === "owed" || yielded)) {
           expect(restored).toHaveLength(1);
           expect(restored[0]?.phase).toBe("preparing");
           expect(claim).toBeUndefined();

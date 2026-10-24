@@ -37,6 +37,25 @@ const TestRuntime = MeetingSessionRuntime<
 type RuntimeOptions = ConstructorParameters<typeof TestRuntime>[0];
 export type TestJoinContext = Parameters<RuntimeOptions["joinTransport"]>[0]["context"];
 
+export const testBrowser = (
+  targetId: string,
+  overrides: Partial<NonNullable<TestSession["browser"]>> = {},
+) => ({ launched: true, tab: { targetId, openedByPlugin: true }, ...overrides });
+
+export function releaseTab(session: TestSession) {
+  if (session.browser) {
+    session.browser.tab = undefined;
+  }
+  return true;
+}
+
+export function captionSnapshot(
+  lines: MeetingTranscriptSnapshot["lines"],
+  options: Pick<MeetingTranscriptSnapshot, "epoch" | "pendingLines"> = {},
+): MeetingTranscriptSnapshot {
+  return { droppedLines: 0, epoch: "page-1", ...options, lines };
+}
+
 export function createTestRuntime(
   params: Pick<RuntimeOptions, "joinTransport" | "releaseBrowserTab"> &
     Partial<
@@ -163,11 +182,10 @@ export function createParticipationTestRuntime(
       execute,
     },
     joinTransport: async ({ session }) => {
-      session.browser = {
-        launched: true,
+      session.browser = testBrowser("tracked-tab", {
         tab: { targetId: "tracked-tab", openedByPlugin: false },
         health: { inCall: true },
-      };
+      });
       return {};
     },
     releaseBrowserTab: async () => true,

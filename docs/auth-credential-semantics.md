@@ -213,6 +213,42 @@ During OAuth refresh, the current credential generation is replaced by an inert
 durable marker. Pending markers remain ineligible by default and are ordered only
 by runtime paths that immediately pass them to the settlement-aware resolver.
 Failed markers are terminal and require the operator to authenticate again.
+Native profile refreshes and serialized SDK AuthStorage use the same typed
+provider-boundary recovery contract. They restore an exact claimed credential
+only with positive evidence that dispatch never began, a documented
+provider-specific guarantee that the grant remains reusable, or an explicit
+owner-accepted provider retry policy. A missing response, connection reset,
+timeout after dispatch, or arbitrary 429/5xx response does not prove
+nonconsumption by itself.
+
+- Google (managed Meet accounts and Vertex `authorized_user` ADC) and Microsoft
+  (Teams delegated accounts) document their refresh grants as reusable. A lost
+  or unreadable response, a timeout after dispatch, and an HTTP 429 or 5xx,
+  including an HTML error page, keep the sign-in for a later refresh.
+- xAI is the only owner-accepted retry policy. This changes earlier behavior,
+  where an xAI 429 or 5xx was terminal. An HTTP 429 or 5xx token response now
+  keeps the stored sign-in and a later refresh retries it, including transient
+  or unrecognized OAuth `error` codes such as `temporarily_unavailable`. A lost
+  or unreadable xAI response stays fenced.
+- OpenAI, Anthropic, GitHub, X, MCP, Chutes, MiniMax, Radius and Twitch rotate
+  grants or do not document reuse. A lost or unreadable response, timeout
+  after dispatch or post-dispatch 429/5xx stays fenced and asks for reconnect.
+
+Final OAuth errors, such as `invalid_grant` or `invalid_client`, stay terminal
+at any status for every owner. xAI also treats `invalid_request` and
+`access_denied` as final. Elsewhere a 4xx carrying them fences the sign-in as
+an unknown failure, and a Google or Microsoft 429/5xx carrying them keeps the
+reusable grant.
+Unknown exceptions, invalid returned credentials (including a missing
+`access_token` or an invalid replacement refresh token), and explicit token
+rejection remain terminal. Vertex ADC stores no refresh claim, so it reports an
+invalid returned token as retryable against its externally owned reusable
+grant. A caller timeout does not roll back or
+retry an in-flight owner. Callers already queued for the same owner and exact
+credential share a settled transient failure instead of replaying that attempt;
+a later new admission can retry. The auth-candidate caller owns health recording and the
+normal bounded transient cooldown (initially 30 seconds, at most five minutes);
+read-only runs and local failure policy never persist shared health updates.
 
 Agent-local peers never receive copied rotated refresh material. A peer removes
 its marker and inherits the shared credential only after verifying that the
@@ -229,8 +265,20 @@ deletions do not block a shared-store refresh. Matching generations still requir
 write admission and remain blocked by completed deletion. Unreadable or
 identity-replaced stores fail closed.
 If peer fencing fails before the provider refresh starts, claimed credentials
-are restored. Once the provider request starts, failed refreshes remain terminal
-because the provider may already have consumed the old refresh token.
+are restored. After a native profile refresh finishes with an admitted retryable
+failure, exact owner and peer claims are restored only under current credential
+and caller authority, without replacing a newer login. Personal-account rollback
+retains both the account locator and its current canonical owner's selection
+authority across profile merges. Disconnecting or switching that owner's default
+account during refresh prevents restoration, even for an explicit session pin.
+The failed credential stays terminal and needs reauthentication; a default change
+alone does not invalidate a usable, unrefreshed pin. A lost response may already
+have consumed a rotating refresh token and cannot authorize another attempt with
+that grant. Invalid returned credentials and post-success identity or settlement
+failures remain fail-closed. Where an owner already retains a rotated result for
+storage retry, it retries that storage operation, not the old token exchange.
+External tool homes retain their own refresh authority; this contract does not
+transfer their credentials into OpenClaw ownership.
 
 ## Plugin SDK OAuth validation
 
@@ -250,6 +298,101 @@ existing resolution and fallback behavior.
 `openclaw agent exec` preserves the original shared-store root when switching to temporary run state. Its bounded credential scope reads portable `api_key` and `token` profiles from that shared store without persisting copies; the configured agent's local profiles still win. Shared OAuth profiles are excluded from this temporary scope, even with `copyToAgents: true`, so the run does not acquire another refresh owner. `--auth-env-only` disables stored credential access entirely.
 
 Auth writes that explicitly select a state directory, including isolated QA staging, use that directory's shared store for ownership and OAuth deduplication. Their runtime publication and rollback retain the same owner; another process-local state root is not an inherited base. An unrelated outer database may be older, newer, or unreadable without blocking an isolated write, but an unreadable or newer database in the selected target still blocks the write. Writes without an explicit state directory retain the normal ambient state and agent-directory configuration.
+
+## Provider-boundary OAuth outcomes
+
+`openclaw/plugin-sdk/provider-oauth-runtime` exports `OAuthRefreshOutcome`,
+`createOAuthRefreshError`, `createOAuthRefreshResponseError`, and
+`isRecoverableOAuthRefreshFailure`. Existing `refreshOAuth` and registered
+`OAuthProviderInterface.refreshToken` signatures are unchanged: return the
+refreshed credential or throw. The versioned structural error facts work across
+plugin module graphs; they contain no tokens, raw responses, or client secrets.
+
+An adapter that knows dispatch did not begin can throw:
+
+```ts
+throw createOAuthRefreshError(
+  "OAuth refresh did not start",
+  {
+    version: 1,
+    phase: "before-dispatch",
+    outcome: "not-attempted",
+    recovery: { kind: "later", evidence: "dispatch-not-started" },
+  },
+  { cause },
+);
+```
+
+Use that evidence only when the adapter actually knows no request began. Merely
+catching a fetch rejection before headers is insufficient. Response-level
+`unchanged` outcomes require a documented guarantee for that route and grant;
+status alone is not evidence. `owner-accepted-provider-retry` is not a reuse
+guarantee: claim it only after an explicit product decision by that provider's
+owner, because the classifier cannot verify it. Nested terminal OAuth reasons override recovery
+hints. Unknown versions, contradictory facts, malformed success, and errors
+after successful exchange cannot authorize restoration. Legacy
+`oauthRefreshFailure.retryable` booleans remain presentation metadata but no
+longer grant recovery permission by themselves.
+
+The credential owner still controls exact-generation claims, current authority,
+conditional commit, and cleanup. An adapter cannot manufacture a receipt that
+those durable steps completed. Model profiles, serialized SDK storage, and
+non-model account owners share the classification, not a universal HTTP client
+or a second credential manager.
+
+### Non-model and externally owned routes
+
+GitHub shared/personal accounts, MCP client OAuth, Teams delegated accounts,
+X user OAuth, managed Meet accounts, and refreshable Twitch accounts retain
+their existing account/storage boundaries. Returned rotation must be persisted
+conditionally before access is published. Caller cancellation ends observation,
+not an already-dispatched owner's settlement.
+
+Vertex `authorized_user` ADC remains read-only external input. Its selected file
+and client/grant identity scope the access cache and in-process refresh coalescing.
+OpenClaw does not persist a claim against that externally owned grant. An
+unexpected replacement refresh token is an actionable unsupported-rotation
+error, never silently discarded or written back to gcloud's file. Other ADC
+kinds continue through GoogleAuth. One-shot Meet grants likewise cannot silently
+discard returned rotation; managed Meet accounts have a conditional plugin-state
+owner.
+
+Copilot model credentials are a local projection, not a rotating refresh-token
+HTTP route. Anthropic setup tokens, OpenRouter API-key provisioning, static
+channel tokens, and tool-owned Claude/Codex/Muse/MiniMax homes are not native
+refresh grants. Gemini CLI dispatch is tool-owned; historical Gemini profiles
+lack a native OpenClaw refresh adapter with verified original client provenance.
+That native route remains explicitly unsupported rather than borrowing a
+different Google client or taking over a CLI home.
+
+### Recovering an interrupted rotating refresh
+
+A pending rotating-grant claim left by a crash is not automatically released
+after a timeout. The provider may already have consumed it; restarting or
+deleting a database marker is not evidence that the old grant is safe to retry.
+When an uncertain-outcome error asks for sign-in, obtain a new grant through the
+existing credential owner:
+
+- System or agent model profiles: run `openclaw models auth login --provider <id>`
+  for the affected agent/profile. Personal model accounts reconnect from
+  **Settings → Profile → Connected accounts**, not the system auth store.
+- Shared MCP OAuth: run `openclaw mcp logout <name>`, then
+  `openclaw mcp login <name>`. Per-requester MCP users use their own sign-in flow.
+- GitHub accounts: reconnect the affected shared or personal connection through
+  its existing account setup, preserving the intended account identity.
+- Twitch: reauthorize the configured bot account and replace its configured
+  access/refresh grant together. This includes a Twitch 429/5xx or lost refresh
+  response, because Twitch does not document reuse of the old grant after a
+  possibly completed rotation. Do not clear plugin state to replay the old
+  refresh token. A saved completed rotation retries only identity validation;
+  it does not repeat the token exchange.
+
+Google Meet and Microsoft delegated grants retain their documented reusable
+refresh material for later recovery, including after a lost, unreadable or HTML
+error response, but explicit rejection still requires
+reauthorization. Vertex ADC remains under its external credential owner. No
+recovery procedure should copy a different person’s grant or edit live SQLite
+rows manually.
 
 ## Personal model accounts
 

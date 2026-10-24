@@ -1,18 +1,12 @@
+import {
+  isSessionRunActive,
+  isSessionRunActiveForKey,
+} from "../sessions/session-controller.queries.js";
 import { logMessageProcessed, logMessageQueued, logSessionStateChange } from "./diagnostic.js";
 
 type MessageLifecycleRef = {
   sessionId?: string;
   sessionKey?: string;
-};
-
-type MessageLifecycleOutcome = "completed" | "skipped" | "error";
-
-type MessageLifecycleProcessedOptions = MessageLifecycleRef & {
-  durationMs?: number;
-  reason?: string;
-  error?: string;
-  userPrompt?: string;
-  finalResponse?: string;
 };
 
 export function createDiagnosticMessageLifecycle(
@@ -53,7 +47,14 @@ export function createDiagnosticMessageLifecycle(
       logSessionStateChange({
         sessionId: ref.sessionId,
         sessionKey: ref.sessionKey,
-        state: "processing",
+        // Receiving input precedes admission; retained cleanup may still hold its turn.
+        state: (
+          ref.sessionKey
+            ? isSessionRunActiveForKey(ref.sessionKey)
+            : ref.sessionId && isSessionRunActive(ref.sessionId)
+        )
+          ? "processing"
+          : "waiting",
         reason: params.processingReason,
       });
     },
@@ -72,8 +73,14 @@ export function createDiagnosticMessageLifecycle(
     },
 
     markProcessed(
-      outcome: MessageLifecycleOutcome,
-      options?: MessageLifecycleProcessedOptions,
+      outcome: "completed" | "skipped" | "error",
+      options?: MessageLifecycleRef & {
+        durationMs?: number;
+        reason?: string;
+        error?: string;
+        userPrompt?: string;
+        finalResponse?: string;
+      },
     ): void {
       if (!params.enabled) {
         return;

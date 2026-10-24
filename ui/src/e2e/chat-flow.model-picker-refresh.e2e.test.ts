@@ -73,7 +73,7 @@ suite.define(() => {
     const picker = pickerFor(page);
     await picker.locator("[data-chat-model-select]").click();
     const preparedRow = attr(picker, "model-option", "fixture/prepared");
-    await revealChatModelOption(preparedRow);
+    await revealChatModelOption(picker, "fixture/prepared");
     await expect.poll(() => preparedRow.isVisible()).toBe(true);
     expect(await preparedRow.isEnabled()).toBe(true);
 
@@ -192,7 +192,7 @@ suite.define(() => {
     await page.goto(`${suite.server.baseUrl}chat`);
     const picker = pickerFor(page);
     await attr(picker, "model-select").click();
-    await revealChatModelOption(attr(picker, "model-default"));
+    await revealChatModelOption(picker, "openai/gpt-5.5", { default: true });
 
     await picker.getByRole("option", { name: "Proof Model", exact: true }).click();
     await expectPatch(gateway, { key: session.key, model: null });
@@ -214,7 +214,6 @@ suite.define(() => {
     const picker = pickerFor(page);
     const previous = attr(picker, "model-option", "anthropic/claude-haiku-4-5");
     await attr(picker, "model-select").click();
-    await previous.waitFor({ state: "attached" });
     const discoveryCount = (await gateway.getRequests("models.list")).length;
     await gateway.deferNext("models.list", { view: "configured" });
     const search = picker.locator("[data-chat-model-search]");
@@ -306,7 +305,7 @@ suite.define(() => {
 
     const main = page.getByRole("main");
     await attr(main, "model-select").click();
-    await selectChatModelOption(attr(main, "model-option", "openai/gpt-5.6-sol"));
+    await selectChatModelOption(main, "openai/gpt-5.6-sol");
 
     await expectPatch(gateway, { key: sessionKey, model: "openai/gpt-5.6-sol" });
     const thinkingSlider = attr(main, "thinking-slider");
@@ -417,7 +416,7 @@ suite.define(() => {
       const effort = main.locator("[data-chat-thinking-select]");
       await gateway.deferNext("sessions.patch");
       await model.click();
-      await selectChatModelOption(attr(main, "model-option", "example/example-b"));
+      await selectChatModelOption(main, "example/example-b");
       await expectPatch(gateway, { key, model: "example/example-b" });
       await expect.poll(() => model.textContent()).toContain("Example B");
       expect(await effort.getAttribute("aria-disabled")).toBe("true");

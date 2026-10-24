@@ -32,6 +32,25 @@ repo_root() {
   (cd "$base_dir/.." && pwd)
 }
 
+show_pr_workspace() {
+  local root state
+  root=$(repo_root) || return 1
+  state=$(pr_worktree_state "$root/.worktrees/pr-$1" "" entry) || return 1
+  node - "$root" "$state" <<'EOF_WORKSPACE'
+const path = require("node:path");
+const [canonicalRoot, stateJson] = process.argv.slice(2);
+const state = JSON.parse(stateJson);
+const artifactDirectory = path.join(state.path, ".local");
+process.stdout.write(JSON.stringify({
+  canonicalRoot,
+  commonGitDir: state.common,
+  worktree: state.path,
+  artifactDirectory,
+  reviewJson: path.join(artifactDirectory, "review.json"),
+}) + "\n");
+EOF_WORKSPACE
+}
+
 ensure_gh_api_auth() {
   local context login
   # Keep credential selection in non-exported process memory; never record it in artifacts.
@@ -683,6 +702,22 @@ gc_pr_worktrees() {
       else
         echo "skipping $dir (PR #$pr operation lock state is indeterminate)"
       fi
+      continue
+    fi
+    # A failed clone has no review state or PR registration. Retire only its
+    # directory, even while the PR is open; keep branches for a native retry.
+    local checkout_state
+    if checkout_state=$(pr_worktree_state "$dir" "" entry) &&
+      printf '%s\n' "$checkout_state" | jq -e '.failedTemplateClone' >/dev/null; then
+      if remove_worktree_if_present "$dir" "$dry_run"; then
+        if [ "$dry_run" = true ]; then
+          echo "would remove $dir (failed template clone)"
+        else
+          echo "removed $dir (failed template clone)"
+        fi
+        removed=$((removed + 1))
+      fi
+      release_pr_operation_lock
       continue
     fi
     local state

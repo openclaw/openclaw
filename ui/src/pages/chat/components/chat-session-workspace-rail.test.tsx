@@ -244,6 +244,9 @@ describe("session workspace path actions", () => {
     clipboard();
     const entry = file("README.md");
     const result = { sessionKey: "agent:main:current", root: "/workspace", files: [entry] };
+    const fileRequested = createDeferred();
+    const fileRead = createDeferred();
+    onTestFinished(() => fileRead.resolve());
     const state = {
       client: { request: vi.fn().mockResolvedValue({ artifacts: [] }) },
       connected: true,
@@ -254,9 +257,13 @@ describe("session workspace path actions", () => {
       sidebarContent: null,
       sessions: {
         listFiles: vi.fn().mockResolvedValue(result),
-        getFile: vi.fn().mockResolvedValue({
-          ...result,
-          file: { ...entry, previewKind: "text", contentEncoding: "utf8", content: "# Readme" },
+        getFile: vi.fn(async () => {
+          fileRequested.resolve();
+          await fileRead.promise;
+          return {
+            ...result,
+            file: { ...entry, previewKind: "text", contentEncoding: "utf8", content: "# Readme" },
+          };
         }),
       },
     } as unknown as SessionWorkspaceHost;
@@ -271,9 +278,16 @@ describe("session workspace path actions", () => {
     assert(preview);
     preview.focus();
     preview.click();
-    await vi.waitFor(() =>
-      expect(state.sessionWorkspaceState?.previews[0]?.content.kind).toBe("file"),
-    );
+    const opened = state.sessionWorkspaceState?.previews[0];
+    assert(opened?.readResult);
+    await fileRequested.promise;
+    expect(opened.content.kind).toBe("loading");
+    fileRead.resolve();
+    // This receipt includes the lazy content import, file read, and current-preview publication.
+    await opened.readResult;
+    expect(state.sessionWorkspaceState?.previews[0]).toBe(opened);
+    expect(opened.content.kind).toBe("file");
+    expect(state.sessions.getFile).toHaveBeenCalledOnce();
     renderRows();
     expect(container.querySelector(".chat-workspace-rail__file--active")?.textContent).toContain(
       "README.md",
@@ -523,7 +537,7 @@ function setupDesktopLayout() {
   const previousFonts = Object.getOwnPropertyDescriptor(document, "fonts");
   Object.defineProperty(document, "fonts", {
     configurable: true,
-    value: { ready: Promise.resolve() },
+    value: Object.assign(new EventTarget(), { ready: Promise.resolve() }),
   });
   onTestFinished(() => {
     if (previousFonts) {

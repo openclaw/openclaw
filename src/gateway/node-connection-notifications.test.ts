@@ -44,6 +44,7 @@ function fixture(connected = [node("new-node"), node("desk", 100)]) {
   };
   const dispose = startNodeConnectionNotifications(registryValue as never, scheduler);
   disposers.push(dispose);
+  schedule(registryValue, connected[0]!);
   return { state, invoke, registryValue, dispose, source: connected[0]! };
 }
 
@@ -59,7 +60,6 @@ async function beginBlockedDelivery(f: ReturnType<typeof fixture>) {
     invoked.resolve();
     return await result.promise;
   });
-  schedule(f.registryValue, f.source);
   const delivery = clock.advanceBy(PRIMARY_DELAY_MS);
   await invoked.promise;
   return { delivery, result };
@@ -76,9 +76,7 @@ afterEach(async () => {
 });
 
 it("delivers once to the most recently active Mac after sleep", async () => {
-  const { source, invoke, registryValue } = fixture(activeNodes());
-
-  schedule(registryValue, source);
+  const { invoke } = fixture(activeNodes());
   clock.setTime(60_000);
   await clock.wake();
   await clock.wake();
@@ -91,10 +89,9 @@ it("delivers once to the most recently active Mac after sleep", async () => {
 });
 
 it("waits before falling back to the remaining Macs after primary failure", async () => {
-  const { source, invoke, registryValue } = fixture(activeNodes());
+  const { invoke } = fixture(activeNodes());
   invoke.mockImplementation(async ({ nodeId }) => ({ ok: nodeId !== "laptop" }));
 
-  schedule(registryValue, source);
   await clock.advanceBy(PRIMARY_DELAY_MS);
   expect(invoke.mock.calls.map((call) => call[0].nodeId)).toEqual(["laptop"]);
 
@@ -111,7 +108,6 @@ it("waits before falling back to the remaining Macs after primary failure", asyn
 it("delays fanout without activity and keeps later reconnects silent", async () => {
   const { source, invoke, registryValue } = fixture([node("new-node"), node("desk")]);
 
-  schedule(registryValue, source);
   schedule(registryValue, source);
   await clock.advanceBy(PRIMARY_DELAY_MS);
   await clock.advanceBy(FALLBACK_DELAY_MS - 1);
@@ -139,7 +135,6 @@ it.each([true, false])(
       displayName: "Replacement Mac",
     };
 
-    schedule(registryValue, source);
     state.connected[0] = replacement;
     if (takeOwnership) {
       schedule(registryValue, replacement, false);
@@ -165,7 +160,6 @@ it("drops a delayed alert when the source pairing generation is rotated", async 
   registryValue.isConnectionCurrentPairingState = async (connId) =>
     connId === source.connId && currentPairingGeneration === source.pairingGeneration;
 
-  schedule(registryValue, source);
   currentPairingGeneration = "generation-b";
   await clock.advanceBy(PRIMARY_DELAY_MS + FALLBACK_DELAY_MS);
 
@@ -175,7 +169,6 @@ it("drops a delayed alert when the source pairing generation is rotated", async 
 it("cancels the first-connection claim when the node is gone at delivery", async () => {
   const { source, state, invoke, registryValue } = fixture([node("new-node")]);
 
-  schedule(registryValue, source);
   state.connected = [];
   await clock.advanceBy(PRIMARY_DELAY_MS);
 
@@ -204,7 +197,6 @@ it("does not let an in-flight stale attempt cancel its replacement", async () =>
 it("cancels staged alerts when disposed", async () => {
   const { source, invoke, registryValue, dispose } = fixture([node("new-node")]);
 
-  schedule(registryValue, source);
   dispose();
   schedule(registryValue, source);
   await clock.advanceBy(PRIMARY_DELAY_MS + FALLBACK_DELAY_MS);
@@ -213,7 +205,7 @@ it("cancels staged alerts when disposed", async () => {
 });
 
 it("does not notify after shutdown interrupts the pairing-state read", async () => {
-  const { source, invoke, registryValue } = fixture();
+  const { invoke, registryValue } = fixture();
   const reading = createDeferred();
   const pairing = createDeferred<boolean>();
   registryValue.isConnectionCurrentPairingState = async () => {
@@ -221,7 +213,6 @@ it("does not notify after shutdown interrupts the pairing-state read", async () 
     return await pairing.promise;
   };
 
-  schedule(registryValue, source);
   const delivery = clock.advanceBy(PRIMARY_DELAY_MS);
   await reading.promise;
   scheduler.beginClose();
@@ -256,7 +247,7 @@ it("joins an in-flight delivery during shutdown without scheduling its fallback"
 
 it("retries a primary Mac through its replacement connection", async () => {
   const oldDesk = node("desk", 100);
-  const { source, state, invoke, registryValue } = fixture([
+  const { source, state, invoke } = fixture([
     { ...node("new-node", 50), platform: "linux" },
     oldDesk,
   ]);
@@ -269,7 +260,6 @@ it("retries a primary Mac through its replacement connection", async () => {
     return { ok: true };
   });
 
-  schedule(registryValue, source);
   await clock.advanceBy(PRIMARY_DELAY_MS);
   await clock.advanceBy(FALLBACK_DELAY_MS);
 

@@ -1,11 +1,22 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import type { SessionEntry } from "../config/sessions.js";
+import { contextBudgetStatusFixture } from "../config/sessions/context-budget.test-support.js";
+import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
+import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
+import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   applyModelOverrideToSessionEntry,
   MODEL_SELECTION_LOCKED_MESSAGE,
   ModelSelectionLockedError,
   repairProviderWrappedModelOverride,
 } from "./model-overrides.js";
+import {
+  resolveDirectStoredModelOverride,
+  resolveStoredModelOverride,
+  resolveStoredModelOverrideAsync,
+  resolveStoredModelOverrideCore,
+} from "./stored-model-overrides.js";
 
 const openai = { provider: "openai", model: "gpt-5.4" };
 const anthropic = { provider: "anthropic", model: "claude-sonnet-4-6" };
@@ -19,31 +30,6 @@ function expectCleared(entry: SessionEntry, ...fields: (keyof SessionEntry)[]) {
   for (const field of fields) {
     expect(entry[field], field).toBeUndefined();
   }
-}
-
-function contextBudgetStatus(
-  { provider, model }: typeof openai,
-  contextTokenBudget = 200_000,
-): NonNullable<SessionEntry["contextBudgetStatus"]> {
-  return {
-    schemaVersion: 1,
-    source: "pre-prompt-estimate",
-    updatedAt: before,
-    provider,
-    model,
-    route: "fits",
-    shouldCompact: false,
-    estimatedPromptTokens: Math.floor(contextTokenBudget * 0.6),
-    contextTokenBudget,
-    promptBudgetBeforeReserve: contextTokenBudget - 10_000,
-    reserveTokens: 10_000,
-    effectiveReserveTokens: 10_000,
-    remainingPromptBudgetTokens: Math.floor(contextTokenBudget * 0.4),
-    overflowTokens: 0,
-    toolResultReducibleChars: 0,
-    messageCount: 2,
-    unwindowedMessageCount: 2,
-  };
 }
 
 describe("applyModelOverrideToSessionEntry", () => {
@@ -68,132 +54,106 @@ describe("applyModelOverrideToSessionEntry", () => {
     expect(entry).toEqual(unchanged);
   });
 
-  it("clears stale runtime model fields even when override selection is unchanged", () => {
-    const entry = makeEntry({
-      modelProvider: "anthropic",
-      model: "claude-sonnet-4-6",
-      providerOverride: "openai",
-      modelOverride: "gpt-5.4",
-      contextTokens: 160_000,
-      contextBudgetStatus: contextBudgetStatus(anthropic),
-    });
+  const runtime = {
+    modelProvider: anthropic.provider,
+    model: anthropic.model,
+    contextTokens: 160_000,
+    contextBudgetStatus: contextBudgetStatusFixture(anthropic),
+  };
+  const override = { providerOverride: openai.provider, modelOverride: openai.model };
+  const runtimeFields = ["modelProvider", "model", "contextTokens", "contextBudgetStatus"] as const;
+  const overrideFields = [
+    "providerOverride",
+    "modelOverride",
+    "modelOverrideSource",
+    "modelOverrideRouteResolution",
+  ] as const;
 
-    const result = applyModelOverrideToSessionEntry({ entry, selection: openai });
-
-    expect(result.updated).toBe(true);
-    expect(entry).toMatchObject({ providerOverride: "openai", modelOverride: "gpt-5.4" });
-    expectCleared(entry, "modelProvider", "model", "contextTokens", "contextBudgetStatus");
-    expect(entry.updatedAt).toBeGreaterThan(before);
-  });
-
-  it("clears stale contextTokens when switching back to the default model", () => {
-    const local = { provider: "local", model: "sunapi386/llama-3-lexi-uncensored:8b" };
-    const entry = makeEntry({
-      providerOverride: "local",
-      modelOverride: "sunapi386/llama-3-lexi-uncensored:8b",
-      modelOverrideRouteResolution: "resolved",
-      contextTokens: 4_096,
-      contextBudgetStatus: contextBudgetStatus(local, 4_096),
-    });
-
-    const result = applyModelOverrideToSessionEntry({
-      entry,
-      selection: {
-        provider: "local",
-        model: "llama3.1:8b",
-        isDefault: true,
+  it.each([
+    {
+      name: "unchanged override with stale runtime fields",
+      fields: { ...override, ...runtime },
+      selection: openai,
+      cleared: runtimeFields,
+      expected: override,
+    },
+    {
+      name: "default replacing a local override",
+      fields: {
+        providerOverride: "local",
+        modelOverride: "sunapi386/llama-3-lexi-uncensored:8b",
+        modelOverrideRouteResolution: "resolved" as const,
+        contextTokens: 4_096,
+        contextBudgetStatus: contextBudgetStatusFixture({
+          provider: "local",
+          model: "sunapi386/llama-3-lexi-uncensored:8b",
+          contextTokenBudget: 4_096,
+        }),
       },
-    });
-
-    expect(result.updated).toBe(true);
-    expectCleared(entry, "providerOverride", "modelOverride", "modelOverrideSource");
-    expectCleared(entry, "modelOverrideRouteResolution", "contextTokens", "contextBudgetStatus");
-    expect((entry.updatedAt ?? 0) > before).toBe(true);
+      selection: { provider: "local", model: "llama3.1:8b", isDefault: true },
+      cleared: [...overrideFields, "contextTokens", "contextBudgetStatus"] as const,
+      expected: {},
+    },
+    {
+      name: "default with runtime-only fields and a pending live switch",
+      fields: { ...runtime, contextTokens: 200_000 },
+      selection: { ...openai, isDefault: true },
+      cleared: runtimeFields,
+      expected: { liveModelSwitchPending: true },
+      markLiveSwitchPending: true,
+    },
+    {
+      name: "profile-only pending switch",
+      fields: {
+        ...override,
+        authProfileOverride: "oldprofile",
+        authProfileOverrideSource: "user" as const,
+      },
+      selection: openai,
+      cleared: [],
+      expected: { authProfileOverride: "newprofile", liveModelSwitchPending: true },
+      profileOverride: "newprofile",
+      markLiveSwitchPending: true,
+    },
+  ])("updates $name", ({ name: _name, fields, selection, cleared, expected, ...options }) => {
+    const entry = makeEntry(fields);
+    expect(applyModelOverrideToSessionEntry({ entry, selection, ...options }).updated).toBe(true);
+    expect(entry).toMatchObject(expected);
+    expectCleared(entry, ...cleared);
+    expect(entry.updatedAt).toBeGreaterThan(before);
   });
 
   it("persists an explicit default selection and clears it on a user pin", () => {
     const entry = makeEntry({
-      updatedAt: 1,
-      providerOverride: "anthropic",
-      modelOverride: "claude-sonnet-4-6",
+      providerOverride: anthropic.provider,
+      modelOverride: anthropic.model,
       modelOverrideSource: "user",
     });
-
     applyModelOverrideToSessionEntry({
       entry,
       selection: { ...openai, isDefault: true },
       explicitDefaultSelection: true,
     });
     expect(entry.modelOverrideSource).toBe("default");
-
     applyModelOverrideToSessionEntry({ entry, selection: anthropic });
     expect(entry.modelOverrideSource).toBe("user");
   });
 
-  it("sets liveModelSwitchPending when switching to default with runtime-only fields", () => {
+  it("clears auth profile metadata on an unpreserved model switch", () => {
     const entry = makeEntry({
-      modelProvider: "anthropic",
-      model: "claude-sonnet-4-6",
-      contextTokens: 200_000,
-      contextBudgetStatus: contextBudgetStatus(anthropic),
-    });
-
-    const result = applyModelOverrideToSessionEntry({
-      entry,
-      selection: { ...openai, isDefault: true },
-      markLiveSwitchPending: true,
-    });
-
-    expect(result.updated).toBe(true);
-    expectCleared(entry, "modelProvider", "model", "contextTokens", "contextBudgetStatus");
-    expect(entry.liveModelSwitchPending).toBe(true);
-  });
-
-  it("marks profile-only switches as pending when requested", () => {
-    const entry = makeEntry({
-      providerOverride: "openai",
-      modelOverride: "gpt-5.4",
-      authProfileOverride: "oldprofile",
+      ...override,
+      authProfileOverride: "openai:work",
       authProfileOverrideSource: "user",
+      authProfileOverrideCompactionCount: 2,
     });
-
-    const result = applyModelOverrideToSessionEntry({
+    applyModelOverrideToSessionEntry({ entry, selection: { ...openai, model: "gpt-4.1" } });
+    expectCleared(
       entry,
-      selection: openai,
-      profileOverride: "newprofile",
-      markLiveSwitchPending: true,
-    });
-
-    expect(result.updated).toBe(true);
-    expect(entry.authProfileOverride).toBe("newprofile");
-    expect(entry.liveModelSwitchPending).toBe(true);
+      "authProfileOverride",
+      "authProfileOverrideSource",
+      "authProfileOverrideCompactionCount",
+    );
   });
-
-  it.each([
-    { preserveAuthProfileOverride: undefined, expectedProfile: undefined },
-    { preserveAuthProfileOverride: true, expectedProfile: "openai:work" },
-  ])(
-    "keeps auth profile metadata only when preservation is $preserveAuthProfileOverride",
-    ({ preserveAuthProfileOverride, expectedProfile }) => {
-      const entry = makeEntry({
-        providerOverride: "openai",
-        modelOverride: "gpt-5.4",
-        authProfileOverride: "openai:work",
-        authProfileOverrideSource: "user",
-        authProfileOverrideCompactionCount: 2,
-      });
-
-      applyModelOverrideToSessionEntry({
-        entry,
-        selection: { ...openai, model: "gpt-4.1" },
-        preserveAuthProfileOverride,
-      });
-
-      expect(entry.authProfileOverride).toBe(expectedProfile);
-      expect(entry.authProfileOverrideSource).toBe(expectedProfile ? "user" : undefined);
-      expect(entry.authProfileOverrideCompactionCount).toBe(expectedProfile ? 2 : undefined);
-    },
-  );
 });
 
 describe("repairProviderWrappedModelOverride", () => {
@@ -248,5 +208,160 @@ describe("repairProviderWrappedModelOverride", () => {
     expect(result.updated).toBe(true);
     expectCleared(entry, "providerOverride", "modelOverride", "modelOverrideSource");
     expect((entry.updatedAt ?? 0) > before).toBe(true);
+  });
+});
+
+describe("stored model overrides", () => {
+  function storedEntry(fields: Partial<SessionEntry>): SessionEntry {
+    return makeEntry({ updatedAt: 1, ...fields });
+  }
+
+  const staleDefault = storedEntry({
+    modelOverrideSource: "default",
+    providerOverride: "anthropic",
+    modelOverride: "stale-model",
+  });
+  const userPin = {
+    providerOverride: "anthropic",
+    modelOverride: "claude-sonnet-4-6",
+    modelOverrideSource: "user" as const,
+  };
+  const automatic = {
+    providerOverride: "google-vertex",
+    modelOverride: "gemini-fallback",
+    modelOverrideSource: "auto" as const,
+  };
+  const fallback = {
+    ...automatic,
+    modelOverrideFallbackOriginProvider: "openai",
+    modelOverrideFallbackOriginModel: "gpt-primary",
+  };
+  const parentKey = "agent:main:dashboard:parent";
+
+  function parentChoice(provider: string, model: string) {
+    return { provider, model, source: "parent", routeResolution: "raw" };
+  }
+
+  function resolveParentOverride(parent: Partial<SessionEntry>) {
+    const rootKey = "agent:main:discord:channel:root";
+    return resolveStoredModelOverrideAsync({
+      defaultProvider: "openai",
+      sessionKey: `${rootKey}:thread:child`,
+      sessionStore: { [rootKey]: storedEntry(parent) },
+    });
+  }
+
+  it.each([
+    ["sync", resolveStoredModelOverrideCore],
+    ["async", resolveStoredModelOverrideAsync],
+  ] as const)("does not load a parent for a resolved %s choice", async (_name, resolve) => {
+    const loadSessionEntry = vi.fn(() => {
+      throw new Error("resolved choices must not load a parent");
+    });
+    for (const [sessionEntry, expected] of [
+      [staleDefault, null],
+      [
+        storedEntry(userPin),
+        {
+          provider: "anthropic",
+          model: "claude-sonnet-4-6",
+          source: "session",
+          routeResolution: "raw",
+        },
+      ],
+    ] as const) {
+      const result = await resolve({
+        defaultProvider: "openai",
+        sessionEntry,
+        parentSessionKey: parentKey,
+        loadSessionEntry,
+      });
+      expect(result).toEqual(expected);
+    }
+    expect(loadSessionEntry).not.toHaveBeenCalled();
+  });
+
+  it("recovers resolved provenance for legacy auto-fallback overrides", () => {
+    expect(
+      resolveStoredModelOverride({
+        defaultProvider: "openai",
+        sessionEntry: storedEntry({
+          providerOverride: "cloudflare-ai-gateway",
+          modelOverride: "gemini-2.5-flash-lite",
+          modelOverrideSource: "auto",
+          modelOverrideFallbackOriginProvider: "anthropic",
+          modelOverrideFallbackOriginModel: "claude-sonnet-4-6",
+        }),
+      }),
+    ).toMatchObject({ routeResolution: "resolved" });
+  });
+
+  it("inherits configured automatic choices", async () => {
+    expect(await resolveParentOverride(automatic)).toEqual(
+      parentChoice("google-vertex", "gemini-fallback"),
+    );
+  });
+
+  it.each([
+    ["direct", resolveDirectStoredModelOverride, { sessionEntry: staleDefault }],
+    [
+      "parent",
+      resolveStoredModelOverride,
+      {
+        sessionKey: `${parentKey}:thread:child`,
+        sessionStore: { [parentKey]: staleDefault },
+      },
+    ],
+    [
+      "child",
+      resolveStoredModelOverride,
+      {
+        sessionEntry: { ...staleDefault, providerOverride: "google-vertex" },
+        sessionKey: "agent:main:dashboard:child",
+        parentSessionKey: parentKey,
+        sessionStore: { [parentKey]: storedEntry(userPin) },
+      },
+    ],
+  ] as const)("honors an explicit Default marker on the %s", (_name, resolve, params) => {
+    expect(resolve({ defaultProvider: "openai", ...params })).toBeNull();
+  });
+
+  it("reloads parent model choices after in-process writes", async () => {
+    const state = await createOpenClawTestState({ label: "stored-model-overrides" });
+    const parent = { agentId: "main", sessionKey: "agent:main:telegram:dm:parent" };
+    const resolve = () =>
+      resolveStoredModelOverrideAsync({
+        defaultProvider: "openai",
+        sessionKey: `${parent.sessionKey}:thread:child`,
+        loadSessionEntry: (sessionKey) =>
+          readSessionEntryReadOnlyInWorker({ ...parent, sessionKey }),
+      });
+    try {
+      const config = { agents: { entries: { main: {} } } };
+      await state.writeConfig(config);
+      setRuntimeConfigSnapshot(config);
+      for (const [index, entry] of [
+        userPin,
+        fallback,
+        {
+          providerOverride: "openai",
+          modelOverride: "gpt-primary",
+          modelOverrideSource: "user" as const,
+        },
+      ].entries()) {
+        await replaceSessionEntry(parent, {
+          sessionId: "parent-session",
+          updatedAt: index + 1,
+          ...entry,
+        });
+        const expected =
+          entry.modelOverrideSource === "auto"
+            ? null
+            : parentChoice(entry.providerOverride, entry.modelOverride);
+        expect(await resolve()).toEqual(expected);
+      }
+    } finally {
+      await state.cleanup();
+    }
   });
 });

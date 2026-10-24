@@ -319,7 +319,12 @@ suite.define(() => {
                 (element) => getComputedStyle(element).maskImage,
               );
               await longName.hover();
-              expect(await longName.boundingBox()).toEqual(restBounds);
+              const hoverBounds = (await longName.boundingBox())!;
+              expect(hoverBounds.width).toBe(restBounds.width);
+              expect(hoverBounds.height).toBe(restBounds.height);
+              // Hover can round a coordinate by one browser layout unit (1/64 CSS px).
+              expect(Math.abs(hoverBounds.x - restBounds.x)).toBeLessThanOrEqual(1 / 64);
+              expect(Math.abs(hoverBounds.y - restBounds.y)).toBeLessThanOrEqual(1 / 64);
               expect(
                 await longName.evaluate((element) => getComputedStyle(element).maskImage),
               ).not.toBe(restFade);

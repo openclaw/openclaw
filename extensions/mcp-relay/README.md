@@ -1,6 +1,6 @@
 # MCP Relay
 
-Bundled, disabled-by-default connector for the OpenClaw MCP relay. The Gateway
+Bundled, disabled-by-default plugin for the OpenClaw MCP relay. The Gateway
 opens an outbound WebSocket; no inbound Gateway port or configured Gateway token
 or password is shared with the relay. Enable the plugin, follow any restart or
 reload instruction printed by the command, then run `openclaw mcp-relay pair`.

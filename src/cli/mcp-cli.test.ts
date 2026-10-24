@@ -166,15 +166,19 @@ it("adds a configured MCP server from flags without replacing operator knobs", a
     supportsParallelToolCalls: true,
     codex: { defaultToolsApprovalMode: "approve" },
   });
+  expect(JSON.parse(await fs.readFile(configPath, "utf8")).mcp.servers.docs.headers).toEqual({
+    Authorization: "Bearer token",
+  });
 });
 
 it("redacts MCP registry inspection without changing saved credentials", async () => {
   vi.stubEnv("MCP_DISPLAY_TOKEN", "example-resolved-token-not-real");
+  vi.stubEnv("MCP_DISPLAY_HEADER", "example-header-token-not-real");
   const servers = {
     remote: {
       url: "https://mcp.example.com/mcp",
       headers: {
-        Authorization: "Bearer example-header-token-not-real",
+        Authorization: "Bearer ${MCP_DISPLAY_HEADER}",
         "X-Goog-Api-Key": "example-maps-key-not-real",
         "X-Custom-Credential": "example-custom-header-not-real",
       },
@@ -224,6 +228,25 @@ it("redacts MCP registry inspection without changing saved credentials", async (
   await setServer(await readServer("remote"), "remote");
   await setServer(await readServer("local"), "local");
   expect(JSON.parse(await fs.readFile(configPath, "utf8")).mcp.servers).toEqual(servers);
+});
+
+it.each(["node", " node "])("preserves literal stdio paths from add flags: %j", async (name) => {
+  const command = path.join(workspaceDir, name);
+  const cwd = path.join(workspaceDir, `${name}-workspace `);
+  await mcp(
+    "add",
+    "literal",
+    "--command",
+    command,
+    "--arg",
+    "server.mjs",
+    "--cwd",
+    cwd,
+    "--no-probe",
+  );
+  const saved = JSON.parse(await fs.readFile(configPath, "utf8"));
+  expect(saved.mcp.servers.literal).toEqual({ command, args: ["server.mjs"], cwd });
+  expect(await readServer("literal")).toEqual({ command, args: ["server.mjs"], cwd });
 });
 
 it.each([

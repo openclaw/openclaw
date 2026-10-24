@@ -106,7 +106,6 @@ describe("node.pending handlers", () => {
     expect(await request("drain")).toHaveBeenCalledWith(true, { nodeId, ...drained }, undefined);
     expect(work.drainNodePendingWork).toHaveBeenCalledWith(nodeId, {
       maxItems: 3,
-      includeDefaultStatus: true,
       pairingGeneration: generation.key,
     });
   });

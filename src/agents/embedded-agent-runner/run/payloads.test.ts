@@ -1,9 +1,6 @@
 import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it } from "vitest";
-import { resolveHeartbeatReplyPayload } from "../../../auto-reply/heartbeat-reply-payload.js";
-import { selectHeartbeatToolResponse } from "../../../auto-reply/heartbeat-tool-response.js";
 import { getReplyPayloadMetadata } from "../../../auto-reply/reply-payload.js";
-import { classifyHeartbeatAgentOutcome } from "../../../infra/heartbeat-delivery-normalization.js";
 import type { InteractiveReply, MessagePresentation } from "../../../interactive/payload.js";
 import { observeReplyDelivery } from "../../reply-completion.js";
 import { makeAgentAssistantMessage } from "../../test-helpers/agent-message-fixtures.js";
@@ -13,7 +10,6 @@ import {
   expectSinglePayloadText,
   expectSingleToolErrorPayload,
 } from "./payloads.test-helpers.js";
-import { mergeAttemptToolMediaPayloads } from "./tool-media-payloads.js";
 
 function signedText(text: string, id: string, phase?: "final_answer", type = "text") {
   return { type, text, textSignature: JSON.stringify({ v: 1, id, ...(phase ? { phase } : {}) }) };
@@ -284,7 +280,7 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
     expect(payloads).toEqual([{ text: "Gateway restarting…" }]);
   });
 
-  it("keeps heartbeat exec commands and paths private without full verbosity", () => {
+  it("keeps exec commands and paths private without full verbosity", () => {
     const payloads = buildPayloads({
       lastToolError: {
         toolName: "exec",
@@ -292,7 +288,6 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
         error:
           "tail: cannot open '/home/user/.openclaw/workspace/memory/2026-06-04.md' for reading: No such file or directory",
       },
-      isHeartbeatTrigger: true,
       verboseLevel: "off",
     });
 
@@ -302,9 +297,8 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
     });
   });
 
-  it("adds a tool warning when a heartbeat failure leaves only reasoning", () => {
+  it("adds a tool warning when a tool failure leaves only reasoning", () => {
     const payloads = buildPayloads({
-      isHeartbeatTrigger: true,
       lastAssistant: {
         role: "assistant",
         stopReason: "stop",
@@ -321,35 +315,10 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
 
     expect(payloads).toHaveLength(2);
     expect(payloads[0]).toMatchObject({ text: "Private reasoning only.", isReasoning: true });
-    expect(resolveHeartbeatReplyPayload(payloads)).toMatchObject({
+    expect(payloads[1]).toMatchObject({
       text: "⚠️ Message failed",
       isError: true,
     });
-    for (const payload of payloads) {
-      expect(getReplyPayloadMetadata(payload)?.heartbeatTerminalToolFailure).toEqual({
-        toolName: "message",
-      });
-    }
-  });
-
-  it("does not infer a terminal mutation from a mixed-action tool name", () => {
-    const payloads = buildPayloads({
-      heartbeatToolResponse: {
-        outcome: "no_change",
-        notify: false,
-        summary: "Nothing needs attention.",
-      },
-      isHeartbeatTrigger: true,
-      lastToolError: {
-        toolName: "message",
-        error: "message search failed",
-      },
-    });
-
-    expectSinglePayloadText(payloads, "HEARTBEAT_OK");
-    expect(
-      getReplyPayloadMetadata(payloads[0] as object)?.heartbeatTerminalToolFailure,
-    ).toBeUndefined();
   });
 
   it.each([
@@ -418,7 +387,6 @@ describe("cron completion after a delivered report", () => {
       name: "a send without visible content",
       messagingToolSentTargets: [{ ...deliveredReport, text: "", visible: false }],
     },
-    { name: "a heartbeat", isHeartbeatTrigger: true },
   ])("still reports failure for $name", ({ name: _name, ...overrides }) => {
     expect(buildPayloads({ ...completedRun, ...overrides })).toEqual([
       expect.objectContaining({ isError: true }),
@@ -457,44 +425,6 @@ describe("buildEmbeddedRunPayloads delivery recovery", () => {
       tagged: true,
       text: "Recovered speech",
     });
-  });
-});
-
-describe("quiet heartbeat failures", () => {
-  it.each(["exec"])("does not notify after a failed %s and generated media", (toolName) => {
-    const payloads = buildPayloads({
-      assistantTexts: ["Everything is fine."],
-      heartbeatToolResponse: {
-        outcome: "no_change",
-        notify: false,
-        summary: "Nothing needs attention.",
-      },
-      isHeartbeatTrigger: true,
-      lastToolError: { toolName, error: "operation failed", mutatingAction: true },
-    });
-    const merged = mergeAttemptToolMediaPayloads({
-      payloads,
-      toolMediaUrls: ["/tmp/heartbeat.png"],
-      hostOwnedToolMediaUrls: ["/tmp/heartbeat.png"],
-      toolAutoDeliveryMediaUrls: ["/tmp/heartbeat.opus"],
-      toolAudioAsVoice: true,
-      sourceReplyDeliveryMode: "message_tool_only",
-    });
-    expect(
-      classifyHeartbeatAgentOutcome({
-        agentRun: {
-          agentRunFailed: false,
-          heartbeatToolResponse: selectHeartbeatToolResponse(merged)?.response,
-          heartbeatTerminalToolFailure: { toolName },
-          replyPayload: resolveHeartbeatReplyPayload(merged),
-        },
-        useHeartbeatFailureCopy: true,
-        hasRelayableExecCompletion: false,
-        suppressUnmarkedSourceReplies: false,
-        responsePrefix: undefined,
-        ackMaxChars: 300,
-      }),
-    ).toMatchObject({ kind: "failure", reason: "agent-tool-failure", shouldSkipMain: true });
   });
 });
 

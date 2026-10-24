@@ -1,9 +1,16 @@
-import { describe, expect, it } from "vitest";
+import * as fs from "node:fs";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   resolveCodexAppServerRuntimeOptions,
   withMcpElicitationsApprovalPolicy,
 } from "./config.js";
 import { expectRuntimePolicy, resolveRuntimeForTest } from "./config.test-support.js";
+
+vi.mock("node:fs", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs")>();
+  return { ...actual, readFileSync: vi.fn(actual.readFileSync) };
+});
+afterEach(() => vi.mocked(fs.readFileSync).mockReset());
 
 const guardian = {
   approvalPolicy: "on-request",
@@ -82,24 +89,20 @@ allowed_sandbox_modes = ["read-only", "danger-full-access"]`,
   });
 
   it.each<[Omit<NonNullable<RuntimeParams>, "pluginConfig">, string]>([
-    [{ requirementsPath: "/custom/codex/requirements.toml" }, "/custom/codex/requirements.toml"],
+    [{ platform: "linux" }, "/etc/codex/requirements.toml"],
     [
       { platform: "win32", env: { ProgramData: "D:\\ManagedData" } },
       "D:\\ManagedData\\OpenAI\\Codex\\requirements.toml",
     ],
   ])("reads local requirements with %j", (options, expected) => {
-    const readPaths: string[] = [];
+    const readFile = vi.mocked(fs.readFileSync).mockClear().mockReturnValue(restrictedSandbox);
     const runtime = resolveCodexAppServerRuntimeOptions({
       pluginConfig: {},
       env: {},
       modelProvider: "openai",
       ...options,
-      readRequirementsFile: (requirementsPath) => {
-        readPaths.push(requirementsPath);
-        return restrictedSandbox;
-      },
     });
-    expect(readPaths).toEqual([expected]);
+    expect(readFile).toHaveBeenCalledExactlyOnceWith(expected, "utf8");
     expectRuntimePolicy(runtime, guardian);
   });
 

@@ -1,3 +1,4 @@
+import type { BundledPluginReloadSource } from "./plugin-bundled-reload.js";
 import type { InspectionNativeEsmRetention, PluginModuleLoader } from "./plugin-cache-artifacts.js";
 import type {
   capturePluginGenerationArtifact,
@@ -19,6 +20,8 @@ export type PluginInstanceModuleLoaderParams = {
   rootDir: string;
   devSourceRoot?: string | null;
   standalone?: boolean;
+  reloadBundledCode?: boolean;
+  bundledReloadSource?: BundledPluginReloadSource;
   pluginSdkResolution?: PluginSdkResolutionPreference;
   expectedSourceDigest?: string;
   createHostModuleLoader?: () => PluginModuleLoader;
@@ -39,7 +42,7 @@ export type PluginInstanceModuleLoaderParams = {
 type RecoveryLoadFacts = Pick<
   PluginInstanceModuleLoaderParams,
   "origin" | "source" | "devSourceRoot" | "standalone" | "pluginSdkResolution" | "recoverySourceMap"
-> & { sourceDigest?: string };
+> & { sourceDigest?: string; bundledReloadSource?: BundledPluginReloadSource };
 
 function createRecoverySourceMap(
   resolve: PluginRecoverySource["resolve"],
@@ -56,6 +59,7 @@ function createSourceModuleRecovery(
   bindInstance: (params: PluginInstanceModuleLoaderParams) => void,
 ): PluginModuleLoaderRecovery {
   let state: "available" | "bound" | "disposed" = "available";
+  let disposal: Promise<void> | undefined;
   return {
     bind(instance) {
       if (state !== "available") {
@@ -73,14 +77,17 @@ function createSourceModuleRecovery(
         pluginSdkResolution: facts.pluginSdkResolution,
         recoverySourceMap: createRecoverySourceMap(recovery.resolve, facts.recoverySourceMap),
         nativeRecovery: recovery.native,
+        reloadBundledCode: Boolean(facts.bundledReloadSource),
+        bundledReloadSource: facts.bundledReloadSource,
       });
       instance.sourceDigest = facts.sourceDigest;
     },
-    dispose() {
+    async dispose() {
       if (state === "available") {
         state = "disposed";
-        recovery.dispose();
+        disposal = recovery.disposeAsync();
       }
+      await disposal;
     },
   };
 }
@@ -98,6 +105,7 @@ export function preparePluginModuleLoaderRecovery(
     standalone: params.standalone,
     pluginSdkResolution: params.pluginSdkResolution,
     recoverySourceMap: params.recoverySourceMap,
+    bundledReloadSource: params.bundledReloadSource,
   };
   params.instance.bindModuleLoaderRecovery(() =>
     createSourceModuleRecovery(

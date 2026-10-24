@@ -1,5 +1,6 @@
 import type net from "node:net";
 import type { Duplex } from "node:stream";
+import { buffer as collect } from "node:stream/consumers";
 import { finished } from "node:stream/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
@@ -58,14 +59,6 @@ function pauseAfterPrefix(stream: Duplex) {
       resolve(chunk);
     });
   });
-}
-
-async function collect(stream: Duplex) {
-  const chunks: Buffer[] = [];
-  for await (const chunk of stream) {
-    chunks.push(Buffer.from(chunk));
-  }
-  return Buffer.concat(chunks);
 }
 
 describe("RFB server probe", () => {

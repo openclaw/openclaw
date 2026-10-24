@@ -1,5 +1,4 @@
 import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
-import { stripHeartbeatToken } from "../heartbeat.js";
 import {
   isHostNoticePayload,
   isReplyPayloadTerminalContent,
@@ -15,10 +14,9 @@ export function resolveAutomationReplyState(
   params: {
     opts?: InternalGetReplyOptions;
     terminalFailurePayload?: ReplyPayload;
-    isHeartbeat?: boolean;
   } = {},
 ) {
-  const { opts, isHeartbeat, terminalFailurePayload = execution.terminalFailurePayload } = params;
+  const { opts, terminalFailurePayload = execution.terminalFailurePayload } = params;
   const result = execution.result;
   const blocked =
     result.meta?.error?.kind === "hook_block" || result.didSendDeterministicApprovalPrompt === true;
@@ -34,21 +32,6 @@ export function resolveAutomationReplyState(
     result.meta?.yielded === true ||
     result.meta?.continuationPending === true ||
     (result.meta?.pendingToolCalls?.length ?? 0) > 0;
-  const heartbeatText = isHeartbeat
-    ? (result.meta?.finalAssistantRawText ??
-      result.meta?.finalAssistantVisibleText ??
-      (result.payloads ?? [])
-        .filter(isReplyPayloadTerminalContent)
-        .map((payload) => payload.text ?? "")
-        .join("\n"))
-    : undefined;
-  // Heartbeat acknowledgments are a host-owned non-outcome, not missing answers.
-  // Require authored text: stripHeartbeatToken also skips genuinely empty input.
-  const heartbeatAcknowledgment =
-    successfulTerminal &&
-    !pendingContinuation &&
-    Boolean(heartbeatText?.trim()) &&
-    stripHeartbeatToken(heartbeatText, { mode: "heartbeat" }).shouldSkip;
   const automationNoChange =
     successfulTerminal &&
     !pendingContinuation &&
@@ -58,14 +41,12 @@ export function resolveAutomationReplyState(
       successfulTerminal &&
       !pendingContinuation &&
       !authoredSilence &&
-      !heartbeatAcknowledgment &&
       !automationNoChange
     : opts?.reasoningPayloadsEnabled === true;
   return {
     blocked,
     successfulTerminal,
     authoredSilence,
-    heartbeatAcknowledgment,
     pendingContinuation,
     automationNoChange,
     reasoningPayloadsEnabled,

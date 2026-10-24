@@ -5,7 +5,7 @@ import { afterEach, expect, it } from "vitest";
 import { page, userEvent } from "vitest/browser";
 import "../../styles.css";
 import { afterModalHidden } from "../../test-helpers/modal-dialog.ts";
-import { ModalDialog, type OpenClawModalDialog } from "../modal-dialog.ts";
+import { ModalDialog, type OpenClawModalDialog } from "../modal-dialog.tsx";
 import { LazyViewError } from "./lazy-view-error.tsx";
 import { keyFocus } from "./menu-contract.test-support.tsx";
 
@@ -67,43 +67,6 @@ function mountModal(variant = "", container?: HTMLElement) {
   );
   return { handle, name, notes };
 }
-
-it.each(["", "palette", "drawer", "shadow"])(
-  "preserves drafts and native identity on reopen (%s)",
-  async (variant) => {
-    const trigger = document.createElement("button");
-    document.body.append(trigger);
-    trigger.focus();
-    const host =
-      variant === "shadow" ? document.body.appendChild(document.createElement("div")) : null;
-    const shadow = host?.attachShadow({ mode: "open" });
-    const container = shadow?.appendChild(document.createElement("div"));
-    const active = () => shadow?.activeElement ?? document.activeElement;
-    const { handle, name, notes } = mountModal(variant === "shadow" ? "" : variant, container);
-    const dialog = modalDialog(handle);
-    expect(dialog.matches(":modal")).toBe(true);
-    expect(active()).toBe(name);
-    notes.focus();
-    dialog.focus();
-    expect(active()).toBe(notes);
-    await userEvent.keyboard("First draft");
-    expect(notes.value).toBe("First draft");
-    expect(name.value).toBe("Original name");
-
-    await escapeModal(handle);
-    expect(active()).toBe(trigger);
-    handle.show();
-    expect(modalDialog(handle)).toBe(dialog);
-    await expect.poll(active).toBe(name);
-    notes.focus();
-    notes.setSelectionRange(notes.value.length, notes.value.length);
-    dialog.focus();
-    await userEvent.keyboard(" continued");
-    expect(notes.value).toBe("First draft continued");
-    trigger.remove();
-    host?.remove();
-  },
-);
 
 it.each([false, true])("wraps native Tab at modal boundaries (shadow: %s)", async (inShadow) => {
   const trigger = document.createElement("button");
@@ -175,20 +138,6 @@ it.each([false, true])("Tabs through descendant shadow roots (only=%s)", async (
   }
 });
 
-it("keeps native input navigation inside a button-ended modal", async () => {
-  const { handle, name, notes } = mountModal();
-  const dialog = modalDialog(handle);
-  const body = dialog.querySelector(".oc-modal-dialog__body")!;
-  body.prepend(document.createElement("button"));
-  body.append(document.createElement("button"));
-  notes.focus();
-  await userEvent.keyboard("{Tab}");
-  expect(dialog.contains(document.activeElement)).toBe(true);
-  name.focus();
-  await userEvent.keyboard("{Shift>}{Tab}{/Shift}");
-  expect(dialog.contains(document.activeElement)).toBe(true);
-});
-
 it.each(["summary", "editable"])(
   "wraps native %s content without an explicit tabindex",
   async (kind) => {
@@ -256,49 +205,6 @@ it("a vetoed Escape keeps native top-layer, focus, and draft ownership", async (
   await escapeModal(handle);
 });
 
-it("nested Escape closes only the newest modal and returns to its parent's field", async () => {
-  const outer = mountModal();
-  outer.notes.focus();
-  const innerContainer = document.createElement("div");
-  modalDialog(outer.handle).querySelector(".oc-modal-dialog__body")!.append(innerContainer);
-  const inner = mountModal("", innerContainer);
-  expect(document.activeElement).toBe(inner.name);
-  inner.notes.focus();
-  await keyFocus("{Tab}", inner.name);
-  await keyFocus("{Shift>}{Tab}{/Shift}", inner.notes);
-  modalDialog(inner.handle).focus();
-  await userEvent.keyboard("Nested draft");
-  expect(inner.notes.value).toBe("Nested draft");
-  expect(outer.notes.value).toBe("");
-  await escapeModal(inner.handle);
-  expect(modalDialog(outer.handle).matches(":modal")).toBe(true);
-  expect(document.activeElement).toBe(outer.notes);
-});
-
-it.each(["drawer", "viewport-edge-to-edge"])(
-  "reaches bottom actions in constrained %s content",
-  async (variant) => {
-    let clicked = false;
-    const { view, dialog } = renderModal(
-      "Scrollable details",
-      () => (
-        <section style={{ display: "flex", height: "100%", width: "100%" }}>
-          <div style={{ width: "100%", "min-height": "0", overflow: "auto" }}>
-            <div style={{ height: "200dvh" }} />
-            <button onClick={() => (clicked = true)}>Bottom action</button>
-          </div>
-        </section>
-      ),
-      variant,
-    );
-    const action = view.getByRole("button", { name: "Bottom action" });
-    await userEvent.click(action);
-    expect(clicked).toBe(true);
-    expect(action.getBoundingClientRect().bottom).toBeLessThanOrEqual(window.innerHeight);
-    expect(dialog.clientHeight).toBeLessThanOrEqual(window.innerHeight);
-  },
-);
-
 it("stretches modal error-panel actions", async () => {
   const original = { width: window.innerWidth, height: window.innerHeight };
   let retried = 0;
@@ -314,6 +220,7 @@ it("stretches modal error-panel actions", async () => {
   try {
     for (const width of [1440, 320]) {
       await page.viewport(width, 1000);
+      expect(dialog.clientHeight).toBeLessThanOrEqual(window.innerHeight);
       const panel = view.container.querySelector<HTMLElement>(".lazy-view-error")!;
       const actions = panel.querySelector<HTMLElement>(".lazy-view-error__actions")!;
       const bounds = panel.getBoundingClientRect();

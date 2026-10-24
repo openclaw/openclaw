@@ -45,6 +45,8 @@ export function createDevicesViewProps(overrides: Partial<DevicesProps> = {}): D
   return {
     connected: true,
     loading: false,
+    configRead: { scope: () => undefined, value: () => undefined },
+    execApprovalsRead: { scope: () => undefined, value: () => undefined },
     inventoryRead: () => undefined,
     inventoryScope: {},
     onReloadInventory: () => undefined,
@@ -59,6 +61,7 @@ export function createDevicesViewProps(overrides: Partial<DevicesProps> = {}): D
       pending: [],
       paired: [],
     },
+    devicesDeciding: [],
     canPairDevice: true,
     canManagePairing: true,
     canAdmin: true,

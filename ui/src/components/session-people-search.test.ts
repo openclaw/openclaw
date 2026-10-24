@@ -63,6 +63,9 @@ describe("searchable session people", () => {
     await waitForSolid(() =>
       expect(root.querySelector(".chat-pane__sharing-panel")?.matches(":popover-open")).toBe(true),
     );
+    await waitForSolid(() =>
+      expect(root.querySelector('[aria-label="Search people…"]')).not.toBeNull(),
+    );
     root.querySelector<HTMLButtonElement>('[aria-label="Search people…"]')!.click();
     flush();
     const search = root.querySelector<HTMLInputElement>("input[data-search]");
@@ -75,14 +78,25 @@ describe("searchable session people", () => {
     );
     expect(root.querySelector("input[type='search']")).toBe(search);
     expect(document.activeElement).toBe(search);
-    expect(
-      root.querySelector('[data-value="member:person-100"]')?.getAttribute("aria-checked"),
-    ).toBe("true");
     const selectedMember = root.querySelector<HTMLButtonElement>(
-      '[data-value="member:person-100"]',
+      '[data-value="permission:person-100"]',
     )!;
+    expect(selectedMember.textContent).toBe("Can send");
     selectedMember.focus();
     selectedMember.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }),
+    );
+    await waitForSolid(() => expect(selectedMember.getAttribute("aria-expanded")).toBe("true"));
+    const readOption = root.querySelector<HTMLButtonElement>(
+      '[data-value="permission:read:person-100"]',
+    )!;
+    const sendOption = root.querySelector<HTMLButtonElement>(
+      '[data-value="permission:send:person-100"]',
+    )!;
+    expect(sendOption.getAttribute("aria-checked")).toBe("true");
+    expect(onMemberChange).not.toHaveBeenCalled();
+    await waitForSolid(() => expect(document.activeElement).toBe(readOption));
+    readOption.dispatchEvent(
       new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }),
     );
     await waitForSolid(() => expect(onMemberChange).toHaveBeenCalledWith("person-100", false));

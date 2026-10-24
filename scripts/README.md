@@ -43,6 +43,62 @@ new directory taxonomy.
 | Commits         | `git add <files...>` then `git commit -m "<message>"`                          | Stage only the intended files for each commit.                                                                      |
 | Remote proof    | `node scripts/crabbox-wrapper.mjs ...`                                         | Use when the current host lacks the required isolation, OS, device, or capacity; sync each run and reuse the lease. |
 
+## Exact memory search benchmark
+
+Use `scripts/bench-memory-search.mjs` against a disposable PostgreSQL database
+with pgvector, pg_trgm, and unaccent installed. Set `PGMEMSEARCH_CONNECTION`,
+`PGMEMSEARCH_OUT` (a new directory), and `PGMEMSEARCH_CHUNKS` to 20000 or 50000;
+run it through `node --import ./scripts/tsx.mjs`. The deterministic corpus needs
+no embedding provider. `--help` lists all inputs.
+
+The benchmark interleaves 100 baseline/candidate pairs after five warmups for
+vector, keyword, and hybrid retrieval. It captures every search statement,
+EXPLAIN ANALYZE/BUFFERS, exact result hashes, p50/p95, and five paired blocks.
+The candidate orders by the selected distance; the baseline repeats the bound
+cosine expression. `PGMEMSEARCH_SOURCE_MODE` identifies which SQL shape the
+checkout produces, so that arm executes unchanged. Eligibility, ranking, and
+limits stay fixed. Compare the block deltas and spread at both corpus sizes;
+unchanged hashes and statement counts are required before accepting a speedup.
+
+Run `scripts/bench-memory-search-sqlite.mjs` with a separate fresh output
+directory and the same chunk count for the production sqlite-vec KNN control.
+Both benchmarks create synthetic state; stop and remove only their disposable
+database state after collecting results.
+
+## Control UI warm interactions
+
+Build with `pnpm ui:build`, then collect the production renderer's desktop and
+mobile interactions against the synthetic Gateway:
+
+```sh
+node --import ./scripts/tsx.mjs scripts/bench-control-ui-interactions.ts --trace
+```
+
+The report links each asserted step to its screenshot, explicit-mark trace,
+source-mapped CPU profile, and interval RPC counts. It covers 1,000 sessions,
+two 400-message transcripts, 1,000 models, and 500 Cron jobs. Sessions retains
+its supported pagination; text search uses the command palette, not the sidebar.
+Navigation setup is outside the measured interval. Native clocks and animations
+remain enabled; profiling overhead is included and no live provider is called.
+Cron search pastes one complete query so both builds perform the same Gateway
+request; model and session searches use sequential key input. The separate
+`cron-search-typing` scenario exposes burst-input request coalescing; compare its
+request counts before interpreting latency differences as equal work.
+
+Compare saved production builds serially with at least ten interleaved pairs:
+
+```sh
+node --import ./scripts/tsx.mjs scripts/bench-control-ui-interactions.ts \
+  --bundle-dir <baseline> --compare-bundle-dir <candidate> --pairs 10 \
+  --steps model-picker-open-search
+```
+
+Use `--viewport desktop` or `mobile` to narrow a diagnosis. Comparisons omit
+profiling and report median, p95, and min–max; every cell over 20% worse is marked
+for review. These are report-only measurements, not timing gates. Wall time is
+automation-to-assertion time, not INP. Keep failed attempts alongside successful
+captures and compare only runs with the same fixture, viewport, and collection mode.
+
 ## Control UI development benchmark
 
 Measure CLI-to-listening readiness without a browser or source edits:

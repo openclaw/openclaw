@@ -349,7 +349,7 @@ it.each([
       {
         storedChannel: channel,
         targetVersion: version,
-        failures: [expect.objectContaining({ reason: "node-runtime-preflight" })],
+        failures: [expect.objectContaining({ reason: "preflight-node-runtime-incompatible" })],
       },
     ]);
     await expect(updateCommand(options)).rejects.toBeInstanceOf(Error);

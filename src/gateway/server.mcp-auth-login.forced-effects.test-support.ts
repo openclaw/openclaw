@@ -309,7 +309,8 @@ export function registerMcpAuthForcedEffects(fixture: McpAuthForcedEffectFixture
         expect((await stored()).lastAuthorizationUrl).toBeDefined();
       } else {
         await finishError(await start());
-        expect(await stored()).toEqual(before);
+        // A dispatched rotating-grant refresh may have been consumed, so it stays fenced.
+        expect(await stored()).toEqual({ ...before, refreshClaim: expect.any(String) });
       }
       expect(responseBoundary).toBe(1);
       expect(requestParams?.get("grant_type")).toBe("refresh_token");
@@ -327,6 +328,30 @@ export function registerMcpAuthForcedEffects(fixture: McpAuthForcedEffectFixture
       } else {
         expect(expectDefined(before.tokenExpiresAt, "seed expiry")).toBeLessThanOrEqual(Date.now());
       }
+    });
+
+    it("starts a new sign-in when a lost forced refresh fenced fresh tokens", async () => {
+      await seed();
+      const before = await stored();
+      effects.endpoint = (request, response) =>
+        request.url === "/token" && respond(response, { error: "server_error" }, 500);
+      await expect(
+        oauthCoordinator.resolveMcpOAuthAccessToken({
+          identity: identity(),
+          rejectedAccessToken: "fixture-access",
+        }),
+      ).rejects.toThrow();
+      expect(await stored()).toEqual({ ...before, refreshClaim: expect.any(String) });
+      effects.endpoint = undefined;
+      const resolve = () => oauthCoordinator.resolveMcpOAuthAccessToken({ identity: identity() });
+      await expect(resolve()).rejects.toThrow("refresh outcome is uncertain");
+
+      const started = await begin();
+      expect(await pending(started.state)).toBe(identity().storeKey);
+      expect((await callback(started.state)).status).toBe(200);
+      expect(await terminal(started.sessionId)).toMatchObject({ status: "done" });
+      expect((await stored()).refreshClaim).toBeUndefined();
+      await expect(resolve()).resolves.toBe("fixture-access");
     });
 
     const expectPendingCleared = async (state: string) => {

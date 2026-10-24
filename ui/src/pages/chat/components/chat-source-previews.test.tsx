@@ -1,11 +1,67 @@
 /* @vitest-environment jsdom */
 
-import { createSignal } from "solid-js";
+import { setWriteHook } from "@solidjs/signals";
+import { createRoot, createSignal, onSettled } from "solid-js";
 import { expect, it, vi } from "vitest";
 import type { ChatSourcePreview } from "../../../lib/chat/source-previews.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { ChatSourcePreviews } from "./chat-source-previews.tsx";
+
+it("does not request favicons after disposal before the first settlement", () => {
+  const fetchFavicon = vi.fn(async () => null);
+  let settled = false;
+  const view = mountSolid(() => {
+    createRoot((dispose) => {
+      onSettled(() => {
+        settled = true;
+      });
+      const content = (
+        <ChatSourcePreviews
+          fetchFavicon={fetchFavicon}
+          sources={[{ url: "https://retired.test/page", title: "Retired", domain: "retired.test" }]}
+        />
+      );
+      dispose();
+      return content;
+    });
+    return null;
+  });
+  flush();
+  expect(fetchFavicon).not.toHaveBeenCalled();
+  expect(settled).toBe(false);
+  view.unmount();
+});
+
+it("requests a favicon once after settlement and ignores its result after disposal", async () => {
+  const pending = Promise.withResolvers<string | null>();
+  const fetchFavicon = vi.fn(() => pending.promise);
+  const revoke = vi.spyOn(URL, "revokeObjectURL");
+  const view = mountSolid(() => (
+    <ChatSourcePreviews
+      fetchFavicon={fetchFavicon}
+      sources={[{ url: "https://held.test/page", title: "Held", domain: "held.test" }]}
+    />
+  ));
+  await waitForSolid(() => expect(fetchFavicon).toHaveBeenCalledOnce());
+  expect(view.container.querySelector("img")).toBeNull();
+  view.unmount();
+  const writes = vi.fn();
+  try {
+    setWriteHook(writes);
+    pending.resolve("blob:retired-source-favicon");
+    await pending.promise;
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(writes).not.toHaveBeenCalled();
+    expect(revoke).toHaveBeenCalledWith("blob:retired-source-favicon");
+  } finally {
+    setWriteHook(null);
+    pending.resolve(null);
+    view.unmount();
+    revoke.mockRestore();
+  }
+});
 
 it("opens the matching source dialog and retires it when that source leaves", () => {
   const [sources, setSources] = createSignal<readonly ChatSourcePreview[]>([

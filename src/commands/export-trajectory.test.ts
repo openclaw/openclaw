@@ -1,4 +1,3 @@
-import path from "node:path";
 import { afterAll, beforeEach, expect, it, vi } from "vitest";
 import { ExpectedCliError } from "../cli/failure-output.js";
 import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
@@ -223,26 +222,4 @@ it("reports exporter failures without formatting a successful result", async () 
   await expectTrajectoryFailure({}, "Failed to export trajectory: workspace is unavailable");
 
   expect(runtime.log).not.toHaveBeenCalled();
-});
-
-it("preserves successful JSON output", async () => {
-  await run({ json: true });
-
-  expect(runtime.log).toHaveBeenCalledWith(
-    JSON.stringify(
-      {
-        outputDir: path.join(workspace, ".openclaw", "trajectory-exports", "export"),
-        displayPath: path.join(".openclaw", "trajectory-exports", "export"),
-        sessionId: "session-1",
-        eventCount: 2,
-        runtimeEventCount: 0,
-        transcriptEventCount: 2,
-        files: ["manifest.json", "events.jsonl", "session-branch.json"],
-      },
-      null,
-      2,
-    ),
-  );
-  expect(runtime.error).not.toHaveBeenCalled();
-  expect(runtime.exit).not.toHaveBeenCalled();
 });

@@ -1,29 +1,26 @@
 import {
   asFiniteNumber,
-  isFutureDateTimestampMs,
   resolveNonNegativeIntegerOption,
 } from "@openclaw/normalization-core/number-coercion";
 import type { ChannelAccountSnapshot, ChannelId } from "../channels/plugins/types.public.js";
 
 type ChannelHealthSnapshot = Omit<ChannelAccountSnapshot, "accountId">;
 
-type ChannelHealthEvaluationReason =
-  | "healthy"
-  | "unmanaged"
-  | "not-running"
-  | "terminal-disconnect"
-  | "blocked"
-  | "busy"
-  | "stuck"
-  | "startup-connect-grace"
-  | "reconnect-grace"
-  | "disconnected"
-  | "stale-socket"
-  | "ingress-unavailable";
-
 export type ChannelHealthEvaluation = {
   healthy: boolean;
-  reason: ChannelHealthEvaluationReason;
+  reason:
+    | "healthy"
+    | "unmanaged"
+    | "not-running"
+    | "terminal-disconnect"
+    | "blocked"
+    | "busy"
+    | "stuck"
+    | "startup-connect-grace"
+    | "reconnect-grace"
+    | "disconnected"
+    | "stale-socket"
+    | "ingress-unavailable";
 };
 
 export type ChannelHealthPolicy = {
@@ -42,22 +39,6 @@ export function resolveChannelHealthState(
   return !evaluation.healthy && !(snapshot.lifecycle === "blocked" && snapshot.healthState)
     ? evaluation.reason
     : snapshot.healthState;
-}
-
-type ChannelRestartReason =
-  | "gave-up"
-  | "stopped"
-  | "stale-socket"
-  | "stuck"
-  | "disconnected"
-  | "ingress-unavailable";
-
-function resolveObservedChannelTimestamp(value: unknown, now: number): number | null {
-  return typeof value === "number" &&
-    Number.isFinite(value) &&
-    !isFutureDateTimestampMs(value, { nowMs: now })
-    ? value
-    : null;
 }
 
 const BUSY_ACTIVITY_STALE_THRESHOLD_MS = 25 * 60_000;
@@ -95,13 +76,11 @@ export function evaluateChannelHealth(
     return { healthy: true, reason: "unmanaged" };
   }
   const lastStartAt = asFiniteNumber(snapshot.lastStartAt) ?? null;
-  const currentLifecycleStarted =
-    lastStartAt !== null && !isFutureDateTimestampMs(lastStartAt, { nowMs: policy.now });
   // Trust recorded starting/recovering only inside connect grace. Without a timestamp or after
   // the window, no progress is indistinguishable from a hang, so inference keeps restart authority.
   if (
     (snapshot.lifecycle === "starting" || snapshot.lifecycle === "recovering") &&
-    currentLifecycleStarted &&
+    lastStartAt !== null &&
     policy.now - lastStartAt < policy.channelConnectGraceMs
   ) {
     return { healthy: true, reason: "startup-connect-grace" };
@@ -111,15 +90,9 @@ export function evaluateChannelHealth(
   }
   const activeRuns = resolveNonNegativeIntegerOption(snapshot.activeRuns, 0);
   const isBusy = snapshot.busy === true || activeRuns > 0;
-  const lastRunActivityAt = resolveObservedChannelTimestamp(snapshot.lastRunActivityAt, policy.now);
-  const activeRunStartedAt = resolveObservedChannelTimestamp(
-    snapshot.activeRunStartedAt,
-    policy.now,
-  );
-  const lastTransportActivityAt = resolveObservedChannelTimestamp(
-    snapshot.lastTransportActivityAt,
-    policy.now,
-  );
+  const lastRunActivityAt = asFiniteNumber(snapshot.lastRunActivityAt) ?? null;
+  const activeRunStartedAt = asFiniteNumber(snapshot.activeRunStartedAt) ?? null;
+  const lastTransportActivityAt = asFiniteNumber(snapshot.lastTransportActivityAt) ?? null;
   const busyStateInitializedForLifecycle =
     lastStartAt == null || (lastRunActivityAt != null && lastRunActivityAt >= lastStartAt);
 
@@ -141,7 +114,7 @@ export function evaluateChannelHealth(
     }
     return { healthy: false, reason: "stuck" };
   }
-  if (snapshot.lifecycle === undefined && currentLifecycleStarted) {
+  if (snapshot.lifecycle === undefined && lastStartAt !== null) {
     const upDuration = policy.now - lastStartAt;
     if (upDuration < policy.channelConnectGraceMs) {
       return { healthy: true, reason: "startup-connect-grace" };
@@ -150,7 +123,7 @@ export function evaluateChannelHealth(
   if (snapshot.connected === false) {
     const lastDisconnectAt =
       snapshot.lastDisconnect && typeof snapshot.lastDisconnect !== "string"
-        ? resolveObservedChannelTimestamp(snapshot.lastDisconnect.at, policy.now)
+        ? (asFiniteNumber(snapshot.lastDisconnect.at) ?? null)
         : null;
     // A disconnect is current only when its producer recorded it inside this
     // account lifecycle; patch-merged timestamps from prior runs grant no grace.
@@ -169,7 +142,7 @@ export function evaluateChannelHealth(
   const shouldCheckStaleSocket = snapshot.connected === true && lastTransportActivityAt != null;
   if (shouldCheckStaleSocket) {
     if (lastStartAt != null && lastTransportActivityAt < lastStartAt) {
-      if (currentLifecycleStarted && policy.now - lastStartAt <= policy.staleEventThresholdMs) {
+      if (policy.now - lastStartAt <= policy.staleEventThresholdMs) {
         return { healthy: true, reason: "healthy" };
       }
       return { healthy: false, reason: "stale-socket" };
@@ -185,7 +158,7 @@ export function evaluateChannelHealth(
 export function resolveChannelRestartReason(
   snapshot: ChannelHealthSnapshot,
   evaluation: ChannelHealthEvaluation,
-): ChannelRestartReason {
+): "gave-up" | "stopped" | "stale-socket" | "stuck" | "disconnected" | "ingress-unavailable" {
   // Restart reasons are intentionally coarse: downstream logs/UI need stable
   // categories, while detailed channel state stays in the health snapshot.
   if (

@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { listReservedChatSlashCommandNames } from "../../auto-reply/commands-registry.data.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -17,7 +18,6 @@ import {
 } from "../../test-utils/env.js";
 import { createFixtureSuite } from "../../test-utils/fixture-suite.js";
 import { createTempHomeEnv, type TempHomeEnv } from "../../test-utils/temp-home.js";
-import { listReservedChatSlashCommandNames } from "../discovery/chat-command-invocation.js";
 import { buildWorkspaceSkillCommandSpecs } from "../discovery/command-specs.js";
 import {
   applySkillEnvOverrides,

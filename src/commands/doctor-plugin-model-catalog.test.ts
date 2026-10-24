@@ -392,10 +392,21 @@ describe("doctor generated plugin model catalog migration", () => {
     const contents = generatedCatalog("zai");
     const sourcePath = writeLegacyCatalog(agentDir, "zai", contents);
     fs.chmodSync(path.dirname(sourcePath), 0o755);
-    const params = migrationParams([agentDir], false);
+    const reportFindings = vi.fn();
+    const params = { ...migrationParams([agentDir], false), reportFindings };
 
     await maybeMigrateLegacyPluginModelCatalogs(params);
 
+    expect(reportFindings).toHaveBeenCalledWith(
+      [
+        expect.objectContaining({
+          category: "fix-now",
+          checkId: "core/doctor/plugin-model-catalog/repair-pending",
+          fixHint: expect.stringContaining("openclaw doctor --fix"),
+        }),
+      ],
+      undefined,
+    );
     expect(params.prompter.confirmAutoFix).toHaveBeenCalledOnce();
     expect(fs.readFileSync(sourcePath, "utf8")).toBe(contents);
     if (process.platform !== "win32") {
@@ -513,6 +524,26 @@ describe.each(["JSON", "JSONC"])(
       expect(
         fs.readdirSync(agentDir).filter((name) => name.startsWith("models.json.bak-")),
       ).toEqual(backups);
+    });
+
+    it("preserves malformed UTF-8 root catalogs without rewriting or lossy backups", async () => {
+      const { agentDir } = await seedAgent({
+        "claude-cli": anthropicBlock,
+        authored: { label: "broken" },
+      });
+      const sourcePath = path.join(agentDir, "models.json");
+      const source = fs.readFileSync(sourcePath);
+      source[source.indexOf("broken")] = 0xff;
+      fs.writeFileSync(sourcePath, source);
+      const params = migrationParams([agentDir]);
+
+      await maybeMigrateLegacyPluginModelCatalogs(params);
+
+      expect(fs.readFileSync(sourcePath)).toEqual(source);
+      expect(
+        fs.readdirSync(agentDir).filter((name) => name.startsWith("models.json.bak-")),
+      ).toEqual([]);
+      expect(params.runtime.error).toHaveBeenCalledWith(expect.stringContaining("UTF-8"));
     });
 
     it("keeps edited copies and ids that config declares", async () => {

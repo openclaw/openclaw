@@ -11,6 +11,7 @@ import {
 import { captureSessionEventTargetForHost } from "../../auto-reply/reply/session-event-target.js";
 import { resolveSessionStableReplyMode } from "../../auto-reply/reply/session-stable-reply-mode.js";
 import { resolveAgentMainSessionKey } from "../../config/sessions/main-session.js";
+import { resolveSessionModelOverrideSource } from "../../config/sessions/model-override-provenance.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { resolveCreatorSandbox } from "../../gateway/operator-role-policy.js";
 import { isCronSessionKey, parseAgentSessionKey } from "../../routing/session-key.js";
@@ -243,7 +244,10 @@ async function resolveCronRunPreparation(params: CronRunPreparationParams) {
 
   async function prepareAdmittedSession() {
     const now = Date.now();
-    const sandbox = resolveCreatorSandbox(runtimeCfg, { actor: input.job.createdActor });
+    // A child run never runs looser than its parent.
+    const sandbox =
+      resolveCreatorSandbox(runtimeCfg, { actor: input.job.createdActor }) ??
+      input.occurrence.childParent?.sandbox;
     const usesExactRunSession = usesDetachedRunSession || baseSessionKey.startsWith("cron:");
     const cronSession = await prepareCronSession({
       cfg: runtimeCfg,
@@ -304,6 +308,7 @@ async function resolveCronRunPreparation(params: CronRunPreparationParams) {
         defaultWorkspaceDir: modelOwner.workspaceDir,
         sessionPreparationEffect,
         isFastTestEnv: params.isFastTestEnv,
+        childParent: input.occurrence.childParent,
       });
       workspaceLease = selectedWorkspace.lease;
       const workspaceDir = selectedWorkspace.workspaceDir;
@@ -340,7 +345,7 @@ async function resolveCronRunPreparation(params: CronRunPreparationParams) {
         owner: modelOwner,
         agentConfigOverride,
         sessionEntry: cronSession.sessionEntry,
-        payload: input.job.payload,
+        payloadModel: input.job.payload.kind === "agentTurn" ? input.job.payload.model : undefined,
         isGmailHook,
         agentId,
         agentDir,
@@ -362,6 +367,10 @@ async function resolveCronRunPreparation(params: CronRunPreparationParams) {
       const cfgWithAgentDefaults = resolvedModelSelection.cfgWithAgentDefaults;
       const { useSubagentFallbacks, inheritDefaultFallbacksForAgentStringModel } =
         resolvedModelSelection;
+      const sessionModelOverrideSource =
+        resolvedModelSelection.modelSource === "session"
+          ? (resolveSessionModelOverrideSource(cronSession.sessionEntry) ?? undefined)
+          : undefined;
 
       const preflight = await resolveCronPreflight({
         cfg: cfgWithAgentDefaults,
@@ -371,6 +380,7 @@ async function resolveCronRunPreparation(params: CronRunPreparationParams) {
         model: resolvedModelSelection.model,
         useSubagentFallbacks,
         inheritDefaultFallbacksForAgentStringModel,
+        sessionModelOverrideSource,
       });
       if (!preflight.ok) {
         logWarn(`[cron:${input.job.id}] ${preflight.reason}`);
@@ -538,6 +548,7 @@ async function resolveCronRunPreparation(params: CronRunPreparationParams) {
           sourceSessionKey,
           sourceEntry,
           storePath: cronSession.storePath,
+          cronStorePath: input.cronStorePath,
           assertCurrent: assertPreparationCurrent,
           signal: input.abortSignal ?? input.signal,
           baseSessionKey,
@@ -695,6 +706,7 @@ async function resolveCronRunPreparation(params: CronRunPreparationParams) {
           liveSelection,
           useSubagentFallbacks,
           inheritDefaultFallbacksForAgentStringModel,
+          sessionModelOverrideSource,
           modelFallbacksOverride,
           thinkingSelection,
           timeoutMs,

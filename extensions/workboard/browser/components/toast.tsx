@@ -1,5 +1,5 @@
 /** @jsxImportSource @solidjs/web */
-import { createEffect, createSignal, onCleanup, onSettled, Show } from "solid-js";
+import { createEffect, createSignal, onSettled, Show } from "solid-js";
 import { t } from "../i18n/index.ts";
 import { icons } from "./icons.tsx";
 import "./toast.css";
@@ -23,7 +23,7 @@ type ToastOutcome = {
 
 const outcomes = new WeakMap<object, Partial<Record<ToastTone, ToastOutcome>>>();
 
-export function updateWorkboardToastOutcome(owner: object, props: WorkboardToastProps) {
+function updateWorkboardToastOutcome(owner: object, props: WorkboardToastProps) {
   const { message, key, tone = "info" } = props;
   const ownerOutcomes = outcomes.get(owner) ?? {};
   // Recovery starts a new error lifetime without resurrecting an older result.
@@ -128,8 +128,10 @@ export function WorkboardToast(props: WorkboardToastProps) {
       }
     },
   );
-  onSettled(resume);
-  onCleanup(pause);
+  onSettled(() => {
+    resume();
+    return pause;
+  });
 
   return (
     <openclaw-workboard-toast

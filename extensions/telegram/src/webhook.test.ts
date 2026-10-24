@@ -77,6 +77,10 @@ import { registerTelegramWebhookRegistrationTests } from "./test-support/webhook
 const legacyListenerForRequest = vi.hoisted(() =>
   vi.fn((): { port: number; host?: string } | undefined => undefined),
 );
+vi.mock("openclaw/plugin-sdk/runtime-env", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/runtime-env")>()),
+  computeBackoff: () => 0,
+}));
 vi.mock("openclaw/plugin-sdk/webhook-ingress", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/webhook-ingress")>()),
   getWebhookLegacyListener: legacyListenerForRequest,
@@ -564,12 +568,6 @@ describe("startTelegramWebhook", () => {
       {
         runtime: testRuntime(runtimeLog),
         setStatus,
-        webhookRegistrationRetryPolicy: {
-          initialMs: 0,
-          maxMs: 0,
-          factor: 1,
-          jitter: 0,
-        },
       },
     );
 

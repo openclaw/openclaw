@@ -1,17 +1,16 @@
 import { expect, it } from "vitest";
-import type { PluginDiagnostic } from "./manifest-types.js";
-import { normalizeRegisteredProvider } from "./provider-validation.js";
+import { createOwnershipRecord } from "./registry-ownership.test-support.js";
+import { createTestPluginRegistry } from "./registry-runtime.test-helpers.js";
 import type { ProviderAuthMethod, ProviderPlugin } from "./types.js";
 
 function normalize(overrides: Partial<ProviderPlugin>) {
-  const diagnostics: PluginDiagnostic[] = [];
-  const provider = normalizeRegisteredProvider({
-    pluginId: "demo-plugin",
-    source: "/tmp/demo/index.ts",
-    provider: { id: "demo", label: "Demo", auth: [], ...overrides },
-    pushDiagnostic: (diagnostic) => diagnostics.push(diagnostic),
-  });
-  return { provider, diagnostics };
+  const builder = createTestPluginRegistry();
+  const record = createOwnershipRecord("demo-plugin", { source: "/tmp/demo/index.ts" });
+  builder.registerProvider(record, { id: "demo", label: "Demo", auth: [], ...overrides });
+  return {
+    provider: builder.registry.providers[0]?.provider,
+    diagnostics: builder.registry.diagnostics,
+  };
 }
 
 it("drops invalid and duplicate auth methods, and clears bad wizard method bindings", () => {
@@ -81,7 +80,7 @@ it("drops invalid and duplicate auth methods, and clears bad wizard method bindi
       modelPicker: { label: " Demo models ", methodId: " missing " },
     },
   });
-  expect(provider).toEqual(expected);
+  expect(provider).toEqual({ ...expected, pluginRoot: undefined });
   expect(diagnostics.map(({ level, message }) => [level, message])).toEqual([
     ["error", 'provider "demo" auth method duplicated id "primary"'],
     ["error", 'provider "demo" auth method missing id'],

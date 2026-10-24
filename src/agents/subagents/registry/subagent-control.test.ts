@@ -95,10 +95,7 @@ function writeSessionStoreFixture(label: string, store: Record<string, unknown>)
 type ControlRuntime = typeof import("./subagent-control.runtime.js");
 
 const controlRuntimeMocks = vi.hoisted(() => ({
-  clearSessionQueues: vi.fn<ControlRuntime["clearSessionQueues"]>(() => ({
-    followupCleared: 0,
-    keys: [],
-  })),
+  clearSessionQueues: vi.fn<ControlRuntime["clearSessionQueues"]>(() => []),
 }));
 
 vi.mock("./subagent-control.runtime.js", () => controlRuntimeMocks);

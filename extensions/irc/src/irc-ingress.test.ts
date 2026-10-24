@@ -41,8 +41,6 @@ function startIngress(queue: IrcIngressQueue, dispatch: IrcIngressDispatch) {
     queue,
     dispatch,
     runtime: { error: vi.fn(), log: vi.fn() },
-    pollIntervalMs: 10,
-    adoptionStallTimeoutMs: 5_000,
   });
   ingress.start();
   return ingress;

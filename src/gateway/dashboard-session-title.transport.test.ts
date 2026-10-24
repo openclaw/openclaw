@@ -420,6 +420,83 @@ describe("generated titles over the real OpenAI-compatible transport", () => {
       `Instruction to reply exactly "${"ok ".repeat(15)}"`,
       "Instruction to reply exactly ok ok ok ok ok ok ok ok ok ok",
     ],
+    [
+      "narration before the title",
+      'The task is only to name this session, not to answer it. The field asks whether something could help us, so a fitting title is "Usefulness for our team".\n\nUsefulness for our team',
+      "Usefulness for our team",
+    ],
+    [
+      "explanations before an introduced title",
+      "Generate a short session title from the source message.\n\nI will only return the title.\n\nTitle: Usefulness for our team",
+      "Usefulness for our team",
+    ],
+    [
+      "long title containing a later line without quotes",
+      "Investigate intermittent Docker startup failures caused by Permission denied\n\nPermission denied",
+      "Investigate intermittent Docker startup failures caused by P",
+    ],
+    [
+      "German explanation quoting the title",
+      "Die Aufgabe ist, einen kurzen Sitzungstitel zu erzeugen. Ein passender Titel wäre: „Nützlichkeit für unser Team prüfen“.\n\nNützlichkeit für unser Team prüfen",
+      "Nützlichkeit für unser Team prüfen",
+    ],
+    [
+      "long punctuated title before an explanation",
+      "Fix Docker startup failures on Windows. Restore volume permissions\n\nThis captures the main topic.",
+      "Fix Docker startup failures on Windows. Restore volume permi",
+    ],
+    [
+      "introduction before the title",
+      "A fitting title would be:\n\nUsefulness for our team",
+      "Usefulness for our team",
+    ],
+    [
+      "localized title label",
+      "Titel: Nützlichkeit für unser Team prüfen",
+      "Nützlichkeit für unser Team prüfen",
+    ],
+    [
+      "session title label",
+      "Session title: Gateway Docker state volume",
+      "Gateway Docker state volume",
+    ],
+    [
+      "label before a quoted title",
+      'Suggested title for this chat: "Opinion request on an unspecified subject"',
+      "Opinion request on an unspecified subject",
+    ],
+    [
+      "colon before a quoted detail",
+      'Debug Docker: "Permission denied"',
+      'Debug Docker: "Permission denied"',
+    ],
+    [
+      "subtitle topic",
+      'Fix subtitle parsing: "Invalid cue"',
+      'Fix subtitle parsing: "Invalid cue"',
+    ],
+    ["label topic", "Fix button label: Save changes", "Fix button label: Save changes"],
+    [
+      "long quoted title before an explanation",
+      '"Investigating intermittent authentication failures in Docker"\n\nThis captures the main topic.',
+      "Investigating intermittent authentication failures in Docke",
+    ],
+    [
+      "label before a bold title",
+      "Concise title for this session: **Assessing usefulness for our team**",
+      "Assessing usefulness for our team",
+    ],
+    ["introduction without a title", "Create a concise session title from the message:", null],
+    [
+      "colon inside a title",
+      "PR 177777: Proof for the title fix",
+      "PR 177777: Proof for the title fix",
+    ],
+    [
+      "title before an explanation",
+      "Release planning\n\nThis names the topic.",
+      "Release planning",
+    ],
   ] as const)(
     "persists a usable title for %s through the dashboard owner",
     async (_name, raw, title) => {

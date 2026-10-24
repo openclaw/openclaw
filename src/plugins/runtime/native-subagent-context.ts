@@ -1,6 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import type { NativeSubagentRuntime } from "./types-native-subagent.js";
+import type { PluginCommandScheduledTurns } from "./types-scheduled-turns.js";
 
 export type NativeSubagentRuntimeGuard = {
   pluginId: string;
@@ -14,7 +15,9 @@ type RuntimeGuard = NativeSubagentRuntimeGuard;
 /** Core-only command factory; plugins cannot supply a requester or operator authority. */
 export type NativeSubagentCommandFactory = (
   guard: NativeSubagentRuntimeGuard,
-) => Promise<NativeSubagentRuntime | undefined>;
+) => Promise<
+  (NativeSubagentRuntime & { scheduledTurns?: PluginCommandScheduledTurns }) | undefined
+>;
 type RequestScope = {
   active: boolean;
   abort: AbortController;
@@ -92,5 +95,12 @@ export const nativeSubagentRuntime: NativeSubagentRuntime = {
   },
   async collect(params) {
     return (await currentRuntime()).collect(params);
+  },
+  async list(params) {
+    const runtime = await currentRuntime();
+    if (!runtime.list) {
+      throw new Error("Native subagent listing is unsupported by this runtime.");
+    }
+    return runtime.list(params);
   },
 };

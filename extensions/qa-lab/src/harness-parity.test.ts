@@ -55,6 +55,10 @@ function classify(left: CellOverrides, right: CellOverrides) {
   });
 }
 
+function expectDrift(drift: string, left: CellOverrides, right: CellOverrides) {
+  expect(classify(left, right)).toBe(drift);
+}
+
 function promptReport(overrides: RuntimeParitySystemPromptReport) {
   return { systemPromptReport: { ...BASE_PROMPT_REPORT, ...overrides } };
 }
@@ -81,10 +85,26 @@ describe("harness parity", () => {
       ["system-prompt", promptReport({ skills: { promptChars: 12, hash: "skills-b" } })],
       ["tool-description", toolReport({ summaryHash: "summary-b" })],
       ["tool-description", toolReport({ summaryChars: 10 })],
+      [
+        "tool-description",
+        promptReport({
+          tools: {
+            schemaChars: 20,
+            entries: [{ name: "read", summaryChars: 9, schemaChars: 20, propertiesCount: 1 }],
+          },
+        }),
+      ],
       ["tool-schema", toolReport({ schemaHash: "schema-b" })],
       ["tool-schema", promptReport({ tools: { ...BASE_PROMPT_REPORT.tools, schemaChars: 22 } })],
     ] as const) {
-      expect(classify({}, right)).toBe(drift);
+      expectDrift(
+        drift,
+        {},
+        {
+          ...right,
+          toolCalls: [{ tool: "bash", argsHash: "changed", resultHash: "changed" }],
+        },
+      );
     }
   });
 
@@ -95,18 +115,17 @@ describe("harness parity", () => {
     expect(classify(call("a", "r"), call("b", "r"))).toBe("tool-call-shape");
     expect(classify(call("a", "r1"), call("a", "r2"))).toBe("tool-result-shape");
     expect(classify({ finalText: "same text" }, { finalText: "different text" })).toBe("text-only");
-    expect(
-      classify(
-        {
-          transcriptBytes:
-            '{"type":"model_change","modelId":"gpt-5.6-luna"}\n' +
-            '{"type":"thinking_level_change","thinkingLevel":"off"}\n' +
-            '{"type":"custom","customType":"model-snapshot"}\n' +
-            TEXT,
-        },
-        { transcriptBytes: TEXT },
-      ),
-    ).toBe("none");
+    expectDrift(
+      "none",
+      {
+        transcriptBytes:
+          '{"type":"model_change","modelId":"gpt-5.6-luna"}\n' +
+          '{"type":"thinking_level_change","thinkingLevel":"off"}\n' +
+          '{"type":"custom","customType":"model-snapshot"}\n' +
+          TEXT,
+      },
+      { transcriptBytes: TEXT },
+    );
     for (const [left, right] of [
       [ASSISTANT, ASSISTANT + TOOL],
       [FLAT_TEXT, FLAT_TEXT + '{"role":"tool","content":"same"}\n'],
@@ -114,43 +133,14 @@ describe("harness parity", () => {
       expect(classify({ transcriptBytes: left }, { transcriptBytes: right })).toBe("structural");
     }
     expect(classify({ runtimeErrorClass: "timeout" }, {})).toBe("failure-mode");
-    expect(
-      classify(
-        {},
-        {
-          ...toolReport({ schemaHash: "changed" }),
-          transportErrorClass: "transport",
-          runtimeErrorClass: "runtime",
-        },
-      ),
-    ).toBe("failure-mode");
-  });
-
-  it("keeps prompt and tool surface checks ahead of behavioral drift", () => {
-    expect(
-      classify(
-        {},
-        {
-          ...promptReport({
-            systemPrompt: { chars: 101, projectContextChars: 40, nonProjectContextChars: 61 },
-          }),
-          toolCalls: [{ tool: "bash", argsHash: "changed", resultHash: "changed" }],
-        },
-      ),
-    ).toBe("system-prompt");
-    expect(
-      classify(
-        {},
-        {
-          ...promptReport({
-            tools: {
-              schemaChars: 20,
-              entries: [{ name: "read", summaryChars: 9, schemaChars: 20, propertiesCount: 1 }],
-            },
-          }),
-          toolCalls: [{ tool: "bash", argsHash: "changed", resultHash: "changed" }],
-        },
-      ),
-    ).toBe("tool-description");
+    expectDrift(
+      "failure-mode",
+      {},
+      {
+        ...toolReport({ schemaHash: "changed" }),
+        transportErrorClass: "transport",
+        runtimeErrorClass: "runtime",
+      },
+    );
   });
 });

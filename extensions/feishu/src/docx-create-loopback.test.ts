@@ -36,36 +36,13 @@ async function resolveLoopbackTool(
       }),
   );
   const address = server.address() as AddressInfo;
-  const loopbackHttp = Object.create(Lark.defaultHttpInstance) as Lark.HttpInstance;
-  loopbackHttp.request = async (options) => {
-    const upstream = new URL(options.url ?? "");
-    const target = new URL(
-      `${upstream.pathname}${upstream.search}`,
-      `http://127.0.0.1:${address.port}`,
-    );
-    for (const [key, value] of Object.entries(options.params ?? {})) {
-      if (value !== undefined && value !== null) {
-        target.searchParams.set(key, String(value));
-      }
-    }
-    const method = options.method ?? "GET";
-    const response = await fetch(target, {
-      method,
-      headers: { "content-type": "application/json" },
-      ...(method === "GET" || method === "HEAD"
-        ? {}
-        : { body: JSON.stringify(options.data ?? {}) }),
-    });
-    return response.json();
-  };
   createFeishuClientMock.mockReturnValue(
     new Lark.Client({
       appId: "loopback-test-app",
       appSecret: "loopback-test-placeholder", // pragma: allowlist secret
-      domain: Lark.Domain.Feishu,
+      domain: `http://127.0.0.1:${address.port}`,
       loggerLevel: Lark.LoggerLevel.error,
       disableTokenCache: true,
-      httpInstance: loopbackHttp,
     }),
   );
   const harness = createToolFactoryHarness({
@@ -188,7 +165,7 @@ describe("feishu_doc contract over the real Lark SDK", () => {
         path: "/open-apis/docx/v1/documents/blocks/convert",
         body: { content_type: "markdown", content: markdown },
       },
-      { method: "GET", path: "/open-apis/docx/v1/documents/doc_loopback/blocks" },
+      { method: "GET", path: "/open-apis/docx/v1/documents/doc_loopback/blocks", body: {} },
       {
         method: "POST",
         path: "/open-apis/docx/v1/documents/doc_loopback/blocks/doc_loopback/descendant",

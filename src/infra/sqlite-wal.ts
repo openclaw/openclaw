@@ -14,12 +14,14 @@ import {
 import {
   getSqliteDatabaseAdmission,
   onSqliteDatabaseWriteSettled,
+  peekSqliteDatabaseAdmissionForPath,
   publishSqliteDatabaseAdmission,
   readSqliteDatabaseWriteRevision,
   type SqliteDatabaseAdmissionKey,
 } from "./sqlite-database-admission.js";
 import { isSqliteLockError } from "./sqlite-error-diagnostics.js";
 import { createSqliteLifecycleAggregateError } from "./sqlite-lifecycle-errors.js";
+import { schemaAdmission } from "./sqlite-schema-admission.js";
 import {
   createSqliteWalCheckpoint,
   type SqliteWalCheckpointMode,
@@ -141,6 +143,14 @@ export function configureSqliteSnapshotPragmas(db: DatabaseSync): void {
 // auto_vacuum only takes effect when set before the first page is written.
 // Existing databases require an offline VACUUM owned by doctor/maintenance.
 function enableIncrementalAutoVacuumForFreshDatabase(db: DatabaseSync): void {
+  const location = db.location();
+  const schema = location
+    ? peekSqliteDatabaseAdmissionForPath(location, schemaAdmission)
+    : undefined;
+  // An admitted header or schema object already proves this file has allocated pages.
+  if (schema && (schema.userVersion > 0 || schema.tables.size > 0 || schema.views.size > 0)) {
+    return;
+  }
   const row = db.prepare("PRAGMA page_count").get() as { page_count?: unknown } | undefined;
   if (row?.page_count === 0) {
     db.exec("PRAGMA auto_vacuum = INCREMENTAL;");

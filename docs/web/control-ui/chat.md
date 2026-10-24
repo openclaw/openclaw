@@ -144,6 +144,12 @@ shows the reason before you try to send. This includes sandbox requirements,
 shared-session write restrictions, and read-only operator access. Your existing
 draft stays in place when access changes.
 
+In an expanded optional question, focus the panel or an answer option and use its
+displayed number shortcuts to select an answer. The displayed **Other** shortcut
+focuses the free-form answer instead. These keys preserve any unrelated composer
+draft. Other printable keys still type into the composer; editing an answer field,
+collapsed questions, and disabled controls keep their existing keyboard behavior.
+
 Saved split panes keep their conversation and arrangement. If an older saved pane
 does not identify its agent, it shows **Choose a conversation** instead of opening
 another agent's history. Select that pane, then choose **Home** or a conversation
@@ -154,6 +160,17 @@ When the macOS app embeds a single conversation beside its native sidebar, the c
 In the macOS Web experience and Tauri desktop app on macOS, Linux, and Windows, the navigation panel header and content header share the 52px titlebar row, with back/forward before the conversation title and search in the persistent rail.
 Collapsing the panel leaves only expand-sidebar beside the rail, which keeps New session and search; the content header still starts with back/forward.
 Drag an empty area of the titlebar row to move the window; its buttons keep their normal actions.
+
+## Mobile message input
+
+On iPhone, iPad (including desktop mode), and Android, Return adds a line break;
+use the **Send**, **Start**, **Ask**, or queued-edit save button to submit.
+Keyboard modifiers do not submit either, including while suggestion menus are open.
+
+**Settings → Appearance → Chat → Send shortcut** stays visible and synced on all
+devices, but only controls desktop submission. Narrow windows and touchscreen
+computers retain desktop shortcuts. Android browsers identifying as desktop Linux
+also retain desktop behavior; touch and window size alone cannot distinguish them.
 
 ## Context breakdown
 
@@ -238,13 +255,15 @@ When the agent's primary model runs on a CLI runtime such as `claude-cli`, no ut
 
 Restoring the Side chat thread checks current session visibility without waiting for unrelated session writes. Opening Side chat, reopening its panel, or selecting its tab focuses the question box. If you focus another input or keep typing while Side chat loads or answers, that newer input keeps focus.
 
-Confirming text with an input method does not send the Side chat question. Finish composition, then use your configured send shortcut or the Ask button.
+Confirming text with an input method does not send the Side chat question. Finish composition, then use the Ask button (or your configured send shortcut on desktop).
 
 Editing a Side chat draft does not interrupt loading its earlier answers. On desktop, closing the Side chat tab waits for the Gateway to confirm the reset; a failed reset leaves the tab and its content open. Hiding the panel or switching tabs preserves the thread and draft. When Side chat occupies the main panel, or on mobile, **Clear side chat** remains available. It removes the earlier content after the Gateway confirms it; drafts, images, and questions added after the click remain.
 
+Side chat cancels a question after 60 seconds. Once the canceled model run has finished cleanup, the failed question offers **Retry**. Earlier answers stay intact, and a late answer from the canceled run is not added to the thread.
+
 The Control UI keeps the latest 24 Side chat turns, including failed questions. Sending a follow-up keeps earlier failures in order; **Retry** resends that question in place. Failed questions stay in the current pane through a reconnect, but are not persisted across a page reload.
 
-The question box wraps and grows like the main composer; Enter (or your configured send shortcut) asks the question, and Shift+Enter adds a line. Its toolbar matches the main composer where the control applies to a read-only question: **+** attaches images, `:shortcode:` suggests emoji, the microphone dictates, and the model and effort pickers choose the model, reasoning level, and speed for Side chat's own answers. **Default** is the agent's utility model with its fallbacks; a chosen model answers alone, must be allowed for the agent and your operator role, and never changes the main session's model. Side chat choices apply to that agent's sessions for as long as the page stays open. Slash commands, permissions, and Talk stay in the main composer. Highlighting text in a chat message offers **Ask in side chat**. Add an optional comment in the selection editor, then save it to stage an editable comment in Side chat. An empty question box starts with a short quote; an existing Side chat draft and the main composer stay unchanged. The full selection and comment accompany that question as bounded, temporary context. After the answer, the restored thread keeps the question text, including its quote, but not the attached context. Reselect the passage for a later question.
+The question box wraps and grows like the main composer. On desktop, Enter (or your configured send shortcut) asks the question, and Shift+Enter adds a line. On mobile, Return adds a line and the Ask button sends. Its toolbar matches the main composer where the control applies to a read-only question: **+** attaches images, `:shortcode:` suggests emoji, the microphone dictates, and the model and effort pickers choose the model, reasoning level, and speed for Side chat's own answers. **Default** is the agent's utility model with its fallbacks; a chosen model answers alone, must be allowed for the agent and your operator role, and never changes the main session's model. Side chat choices apply to that agent's sessions for as long as the page stays open. Slash commands, permissions, and Talk stay in the main composer. Highlighting text in a chat message offers **Ask in side chat**. Add an optional comment in the selection editor, then save it to stage an editable comment in Side chat. An empty question box starts with a short quote; an existing Side chat draft and the main composer stay unchanged. The full selection and comment accompany that question as bounded, temporary context. After the answer, the restored thread keeps the question text, including its quote, but not the attached context. Reselect the passage for a later question.
 
 If the selection alone exceeds the context limit, Side chat opens without adding the selection and shows a notification. An empty question box still gets a short quote; an existing draft stays intact. If a comment or the combined selections exceed the limit, the editor stays open so you can shorten the comment or adjust the pending selections.
 
@@ -334,6 +353,12 @@ select a registered project or enter the correct repository path. Select
 **Start in a new worktree** again to continue; no child session is started for
 an invalid source folder.
 
+## Mobile composer
+
+On phones, tapping the compact composer focuses the text field and opens the
+keyboard in the same gesture. The expanded editor keeps your draft and selection
+while you use its controls.
+
 ## Composer predictions
 
 Enable **Settings → Labs → Composer predictions** to try optional next-message
@@ -369,7 +394,7 @@ model configuration, provider credentials, and session access rules still apply.
 Select **+** beside the chat composer to open attachments and session capabilities in one menu:
 
 - **Skills** enables or disables individual skills for this session.
-- **Connectors** enables or disables configured MCP servers for this session. A **session** tag marks values that differ from the inherited configuration.
+- **Plugins** enables or disables configured MCP servers for this session. A **session** tag marks values that differ from the inherited configuration.
 - **Web search** enables or disables managed web search plus native OpenAI and Codex search for this session.
 - **Manage plugins** opens the Plugins page.
 
@@ -388,20 +413,197 @@ unchanged. The encoder loads on demand and runs in a background worker, with
 per-file progress while you keep typing. Remove the file to cancel. Nothing is
 uploaded until preparation finishes and you send the message.
 
-The copy preserves audio and orientation, uses MP4 when the browser supports the
-required codecs or WebM otherwise, and limits the longest edge to 1920 pixels
-and frame rate to 30 fps. The original file is never changed. The final bytes
-must fit the advertised per-file and batch limits; if the browser cannot decode
-or encode the video with its audio, or a smaller copy still cannot fit, the slot
-shows an error. Choose a smaller file, trim the video, or try another browser.
+Compression re-encodes a copy, targets the displayed orientation, and limits the
+longest edge to 1920 pixels and frame rate to 30 fps. The original file is never
+changed. The final bytes must fit the advertised per-file and batch limits. A
+compression failure keeps the card with **Retry compression**; removing it cancels
+preparation. Retrying does not add codec support. Trim the video, choose a smaller
+file, or try another browser if preparation still fails. See
+[Video preparation compatibility](/web/control-ui/chat#video-preparation-compatibility) for output
+formats, evidence, and remaining gaps.
 
-In **Connectors**, administrators can select **Add MCP server…** and choose a scope. **This session** saves the server definition globally but disabled by default, then enables it only for the current session. **Everywhere** saves the definition enabled globally. Transport, authentication, and other server-definition fields are always global. Session policy can override server enablement and deny individual tools through **Tool access**.
+In **Plugins**, administrators can select **Add MCP server…** and choose a scope. **This session** saves the server definition globally but disabled by default, then enables it only for the current session. **Everywhere** saves the definition enabled globally. Transport, authentication, and other server-definition fields are always global. Session policy can override server enablement and deny individual tools through **Tool access**.
 
-**Tool access** lists a connector's tools once a run has discovered them. Before that, it explains why the list is empty rather than reporting zero tools: a newly added server has not connected yet, a connected server has not finished listing its tools, or the runtime catalog predates a config change. Sessions that run on the Codex harness keep their MCP connections inside Codex, so their tools do not appear here.
+**Tool access** lists an MCP server's tools once a run has discovered them. Before that, it explains why the list is empty rather than reporting zero tools: a newly added server has not connected yet, a connected server has not finished listing its tools, or the runtime catalog predates a config change. Sessions that run on the Codex harness keep their MCP connections inside Codex, so their tools do not appear here.
+
+If **Tool access** is already open, it refreshes when the current session's run finishes; you do not need to close and reopen it to see newly discovered tools.
 
 Capability toggles stay disabled until the Gateway, session, and runtime config are loaded, and read-only operators cannot change them. Adding a server requires administrator access. See [Connect MCP servers](/tools/mcp) for the Settings, CLI, and config paths.
 
 Switching capability views focuses the first menu item after the new view renders, while preserving any newer focus choice you make.
+
+## Video preparation compatibility
+
+**Compress to fit** is local, pre-upload preparation in the Control UI's Chat
+and New Session composers. It is separate from the Gateway's post-upload
+[playback renditions](/nodes/media-playback#lazy-playback-renditions). A playable
+original, a visible thumbnail, or successful Gateway playback does not prove
+that this browser can compress the recording. Native composers need their own
+transport and lifecycle proof; a shared worker or embedded WKWebView result is
+not native-app qualification.
+
+### Output and input boundaries
+
+The worker prefers MP4 when its H.264 and, for inputs with audio, AAC encoder
+checks succeed. Otherwise it checks VP9 and Opus for WebM. These are candidate
+paths, not a browser support table:
+
+| Output | Video | Audio, when present | MIME         | Extension |
+| ------ | ----- | ------------------- | ------------ | --------- |
+| MP4    | H.264 | AAC                 | `video/mp4`  | `.mp4`    |
+| WebM   | VP9   | Opus                | `video/webm` | `.webm`   |
+
+Source AAC may be transcoded to Opus on the WebM path. Neither path is lossless
+by default. Usable audio does not establish APAC or spatial-audio preservation;
+HDR/color preservation also needs separate evidence.
+
+A container such as MOV can hold several different tracks. Container recognition
+alone does not establish decoder availability. At the baseline below, the worker
+requires exactly one video track, a finite positive duration, available output
+encoders, and a valid conversion with **no discarded tracks**. A decodable video
+and AAC track can therefore still be refused if another track is unsupported.
+Do not classify every MOV, HEVC recording, or Apple device as unsupported from
+that refusal. See [Mediabunny's format/codec guide](https://mediabunny.dev/guide/supported-formats-and-codecs)
+for the distinction between containers, codecs, and browser capabilities.
+
+### Evidence baseline
+
+Source inspected at OpenClaw
+[`068f9a75733f9f55b8393077729550f3b87d99a3`](https://github.com/openclaw/openclaw/commit/068f9a75733f9f55b8393077729550f3b87d99a3),
+with UI Mediabunny **1.61.4**:
+
+- The [worker](https://github.com/openclaw/openclaw/blob/068f9a75733f9f55b8393077729550f3b87d99a3/ui/src/pages/chat/components/chat-attachment-video.worker.ts)
+  selects the output paths above and rejects discarded tracks. This is source
+  inspection, not a physical-device or current-candidate conversion run.
+- The [existing browser test](https://github.com/openclaw/openclaw/blob/068f9a75733f9f55b8393077729550f3b87d99a3/ui/src/e2e/chat-video-compression.e2e.test.ts)
+  uses a repository MP4 fixture with 256 KiB of padding and a 128 KiB test budget. It
+  exercises real preparation, bounded nonempty output, playback dimensions and
+  duration, draft/IME behavior, retry, and cancellation through a mock Gateway.
+  Playback is **muted**. It does not establish audible audio, A/V synchronization,
+  physical Apple behavior, or a particular output codec merely by accepting
+  either extension. Controlled missing-encoder coverage is not a browser
+  capability measurement. These tests were inspected, not rerun for this baseline.
+- [#172844](https://github.com/openclaw/openclaw/pull/172844) reports a
+  3,091,704-byte input converted to 752,337 bytes under a 1 MiB budget with
+  VP9/Opus, and a rotated case producing 540 × 960 output. Its final head is
+  `8d14e2b5e47fe89a50b5c5304c857f89753f8ca1`, with Mediabunny **1.61.0**.
+  The report does not bind those earlier size/rotation measurements to an exact
+  run revision. These are author-reported historical results, not independently
+  executed qualification here. Exact recording/processing versions, fixture provenance,
+  and listening/sync evidence are incomplete; do not transfer them to current main.
+- The H.264/AAC/additional-APAC rejection reported in
+  [#180550](https://github.com/openclaw/openclaw/issues/180550) used a beta.3-based
+  backport and Mediabunny **1.61.0** in isolated Chromium. Its exact candidate
+  revision was not supplied there. It is a reported **REFUSAL**, not a current-main
+  APAC reproduction, physical-Apple run, or successful compatible copy.
+
+### Qualification outcomes
+
+Use these outcomes separately for each executed input/surface pair:
+
+| Outcome                   | Meaning                                                                          |
+| ------------------------- | -------------------------------------------------------------------------------- |
+| PASS-THROUGH              | Input bytes are unchanged; not compression proof.                                |
+| SUCCESSFUL CONVERSION     | Encoding occurred and the agreed checks passed.                                  |
+| DISCLOSED-LOSS CONVERSION | Encoding and checks passed after accepted, specific loss disclosure and consent. |
+| REFUSAL                   | Preparation actually rejected the input; not compatibility success.              |
+| UNTESTED                  | No qualifying execution exists. Unknown is not unsupported.                      |
+| BLOCKED                   | A named prerequisite is missing; record it and the next owner/action.            |
+
+### Proposed successful-conversion minimum
+
+The following is a **proposal for agreement**, not an accepted support promise
+or completed matrix. No operator/device booking or WKWebView-host access is
+confirmed in this baseline. Input descriptions are targets, not probed track
+facts. Every row still needs the evidence record below; actual versions,
+capabilities, budgets, sizes, and outputs are unmeasured. A pass-through or refusal
+cannot satisfy a row once successful conversion is agreed as required.
+
+| ID  | Recording target → processing surface                                                            | Current outcome and missing prerequisite                                                                  |
+| --- | ------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------- |
+| C1  | iPhone H.264/AAC portrait and HEVC/AAC SDR landscape camera inputs → physical iPhone Safari      | BLOCKED: consenting device operator and fixtures.                                                         |
+| C2  | Audible iPad screen recording, with orientation coverage → physical iPad Safari                  | BLOCKED: consenting device operator and fixture.                                                          |
+| C3  | Apple H.264 and HEVC camera/screen fixtures → macOS Safari                                       | BLOCKED: macOS/browser operator and fixtures.                                                             |
+| C4  | Identified fixture → existing macOS WKWebView host's actual Control UI preparation path          | BLOCKED: identify host, access owner, operator, and fixture.                                              |
+| C5  | Apple camera fixture → Windows Chrome                                                            | BLOCKED: Windows/browser operator and fixture.                                                            |
+| C6  | Apple screen-recording fixture → Windows Edge                                                    | BLOCKED: Windows/browser operator and fixture.                                                            |
+| O1  | Actual MP4/H.264/AAC output in a capable browser; may reuse C1–C6                                | UNTESTED: verify capabilities and execute with audible content.                                           |
+| O2  | Actual WebM/VP9/Opus output, including AAC-source audio, in a capable browser                    | UNTESTED: verify capabilities and execute; existing Linux Chromium infrastructure is only a candidate.    |
+| M1  | Genuine redistributable AAC/APAC input → physical Apple Safari and a qualified WebM-path browser | BLOCKED: mixed-track policy, fixture, and operators; only if that policy is accepted.                     |
+| H1  | Apple HEVC/HDR → physical Apple Safari and macOS Safari                                          | BLOCKED: HDR fixture/operators and preservation proof or separate acceptance of disclosed SDR conversion. |
+
+This is not an exhaustive cross-product. Android, other desktop, VP8/VP9/Opus,
+and native-client qualification remain subsequent umbrella slices, not erased
+requirements. Proposed ownership: Vitor or a maintainer nominates consenting
+physical-device/browser operators; device/access owners approve hands-on tests.
+The preparation
+implementation owner prepares the device runbook and reconciles conversion
+evidence. A documented remote-test route is not an allocated environment.
+
+### Evidence record and runbook
+
+For **each row**, retain one record with:
+
+- Recording device/model and recording OS/version, or synthetic/public provenance
+  and redistribution license; camera versus screen recording.
+- Actual input container and all video/audio tracks, including AAC/APAC where
+  present; orientation/rotation, aspect ratio, and SDR/HDR facts.
+- Separate processing OS, browser/app version, and surface; exact OpenClaw,
+  dependency, and candidate revisions; measured decoder/encoder availability.
+- Applicable budget and input/output byte counts; actual output container, codecs,
+  MIME, and extension. Do not fill these from the requested encoder alone.
+- Exercised boundary, outcome, public-safe evidence link and fixture hash,
+  remaining limitation, operator/access owner, and next action. Label evidence
+  author-reported, independently inspected, or actually executed. Unavailable
+  fields stay unknown with a reason, not an inferred pass.
+
+Use an over-budget recording or the existing controlled test budget. Never raise
+production upload limits to obtain a pass. Padding can exercise admission, but
+does not establish realistic audible content or prove that encoding occurred.
+
+1. Confirm nonempty output within the applicable budget, unchanged admission
+   safeguards, and the actual container/codecs/MIME/extension.
+2. Play the copy on the named target. Listen **unmuted** to known expected content;
+   automated audio checks support, but do not replace, listening. Use beginning
+   and end synchronization markers. Proposed tolerances are at most **100 ms**
+   A/V offset/drift and **250 ms** duration difference; record acceptance or a
+   justified fixture-specific tolerance before declaring success.
+3. Check duration, upright orientation, aspect ratio, no unintended crop, and
+   explicit HDR/color/spatial findings. Keep the original bytes unchanged and
+   recoverable; usable stereo audio does not prove spatial preservation.
+4. Exercise cancellation, removal, retry, failed preparation, draft/session
+   replacement, and the ready-result lifecycle. Preserve text/other attachments
+   and prevent a removed or stale result from being sent.
+
+Synthetic unknown-codec tracks are not genuine APAC reproduction. Publish only
+redistributable fixtures and safe hashes/evidence. Do not publish credentials or
+private originals, recordings, paths, configuration, conversations, screenshots,
+or runtime logs. Keep the checkpoint's source/candidate revisions, evidence
+provenance, proposed/accepted decisions, row outcomes, gaps, owners/access, and
+next action current.
+
+### Outstanding compatibility decisions
+
+[#180550](https://github.com/openclaw/openclaw/issues/180550) still needs an agreed
+mixed-track policy and qualification matrix. Diagnostics and this documentation
+do not make rejected recordings convertible. If maintainers reject an AAC/APAC
+compatible-copy fallback, record that decision and the unresolved compatibility
+gap. All-track preservation through supported capabilities, dependency support,
+or another accepted remedy still require investigation. Missing hardware or a
+fixture does not make that outcome optional. A real platform limitation leaves
+a failed/blocked cell and an outstanding support/scope decision, not a pass.
+
+The [compression foundation](https://github.com/openclaw/openclaw/pull/172844),
+[card/progress/retry flow](https://github.com/openclaw/openclaw/pull/179007),
+[named-error proposal](https://github.com/openclaw/openclaw/pull/180319),
+[picker discovery](https://github.com/openclaw/openclaw/issues/180298), and
+[M4V playback policy](https://github.com/openclaw/openclaw/pull/172163) have distinct
+owners. The closed [cross-client playback foundation](https://github.com/openclaw/openclaw/issues/115590)
+does not qualify pre-upload conversion. Initial diagnostic, compatible-copy, and
+documentation PRs only advance the umbrella. Completion requires the agreed
+compatibility outcomes and successful-conversion cells, or an explicit maintainer
+scope change; implementation gaps, hardware gaps, and optional follow-ups remain
+separate.
 
 ## Emoji shortcodes
 
@@ -596,14 +798,14 @@ Run-error banners offer **Refresh** to reload the conversation without resending
     - The session header shows a small facepile beside the workspace chip when other people are viewing the same session; it lists up to three viewer avatars with an overflow count and disappears when you are alone. On multi-user gateways the header also carries the permanent session owner chip and a facepile of up to four participants who have prompted the session (owner excluded); sidebar rows compress the same information into a pair-stack — owner in front, one peeking participant or a +N count behind (see [Multi-user mode](/concepts/multi-user#reading-the-avatars)).
     - Consecutive duplicate text-only messages render as one bubble with a count badge. Messages that carry images, attachments, tool output, or canvas previews are left uncollapsed.
     - User-message bubbles carry transcript actions: a hover rewind button (confirm popover with a "Don't ask again" option) plus right-click **Rewind to here** and **Fork from here**. Rewind repoints the session to the state just before that message and returns its text to the composer for edit and resend (`sessions.rewind`, `operator.admin`). Files still loading for a draft that rewind replaces are discarded, so they cannot attach to the restored prompt. If you edit the composer or select another file while rewind is pending, your newer draft and attachments stay in place, even if that file is still loading. Fork creates a new session from the active-path prefix before the message, opens it, and seeds its composer with the same text (`sessions.fork`, `operator.write`). Both actions disable with an explanatory tooltip while the agent is working, apply only to persisted user messages, and are rejected for sessions whose conversation is owned by an external agent harness. Rewind moves chat context only — files and other tool side effects are not reverted — and the pre-rewind transcript remains preserved in the append-only session store. When that store contains multiple transcript branches, open **Versions** from the history icon in the active desktop chat header, or from **Details → Versions** on mobile. Each version shows a plain-text preview of its latest message, message count, and recency. A checkmark on the right identifies the current version. The info button beside **Versions** explains that rewinds or repairs preserve conversation copies; this help opens on demand and can be dismissed without changing versions. Each conversation keeps its own help control, and navigating away closes its Versions menu and help, including with browser Back. Selecting an inactive version switches the current session back to that preserved path (`sessions.branches.list`, `operator.read`; `sessions.branches.switch`, `operator.admin`). Generated images and files on preserved branches are kept with their messages, so they load again after you switch back. The branch menu refreshes as messages are saved, including replies after a rewind, without a page reload. Branch switching is also unavailable while the agent is working, and selecting the already-active branch is a typed no-op error at the RPC boundary. Open chats follow rewinds and branch switches from other tabs without losing their unsent drafts.
-    - For GitHub sessions, **Details → Pull requests** lists pull requests associated with the session's working branch instead of placing separate bars above the composer. Mentioning or linking a PR in conversation does not create a banner. The sidebar and session hovercard separately include recorded PR publications from the session and its accessible descendants; these task results do not change which branch the publishing controls target. Branch-based PR rows stop appearing when the checkout becomes detached or returns to the default branch; the publication flow separately retains its applicable recorded result. Compact rows show the PR title and status. Open a row’s actions menu for its repository and number, code changes, **Checks**, and **CI monitoring**. The section lists every returned PR, with live (open/draft) PRs first. **Checks** shows passed/failed/running/skipped totals and named checks, with failed and running work first. Expand a GitHub Actions job to inspect its ordered steps, statuses, and durations; skipped checks stay in a collapsed group. Check details load on demand rather than on every background summary refresh. CI details follow the commit shown on the row until the session PR snapshot refreshes. Job links open GitHub for full logs. Checks from other CI services remain visible without invented step details. Use **Back** to return from Checks or CI monitoring to the PR actions. The Gateway polls only sessions visible in a connected Control UI and pushes changed snapshots through `controlUi.sessionPullRequests.changed`; it uses the explicit Control UI GitHub credential or the shared process-environment fallback for this read-only preview. When the GitHub API rate limit is hit, rows keep the last known status and show a warning that the status may be out of date; dismissing a row hides it for that session in the current browser profile. Before any PR exists, a compact row shows the branch and its publication action. Code changes remain available from the row’s actions, using the diff against the default-branch merge base (committed and uncommitted work). The account arrow beside **Publish PR** appears only when both shared and personal accounts are available, with a compact account menu and a checkmark on the selected account. A sole shared account needs only **Publish PR**; a sole personal account uses **Publish as @account** to explicitly select and publish in one click. If both routes use the same account name, the menu distinguishes their sources. The arrow disappears once publication is locked or has a result. Connection setup stays in Settings; inline guidance appears only for a missing account or a blocked personal publication. Pending status, retry actions, confirmation details, errors, and results stay inline. Account discovery and status reads show **Loading**, not **Publishing**; the controller records read, publish, and confirmation activity separately. Publication only begins after an explicit request. Shared publication status reads the existing receipt instead of replaying Publish. Reconnect restores the latest applicable shared receipt, and a lost acknowledgement can be looked up by its original invocation key. Committed receipt changes refresh that scoped view through session events, without another polling loop. If GitHub cannot refresh a cached PR snapshot, the row marks that state unavailable instead of presenting it as current. Automatic PR refresh hints wait for five seconds of quiet per session; explicit refresh requests are sent immediately. The Gateway coalesces forced refreshes for each watched session within a ten-second window, with one trailing refresh, while switching sessions or hiding the tab updates the watched set immediately. Local Git facts are shared by checkout across sessions and clients; refresh revalidates the relevant refs and staged index instead of discarding unchanged facts. Unstaged-only diff counts update on the five-minute fallback. Recovery keeps an unfinished Git transaction pending without blocking settlement of publication receipts for independent workspaces. The Gateway-owned broker derives the repository and branch from session ownership, verifies the selected connection rather than using the preview credential, and returns the pull request URL or an actionable typed failure. Personal publication requires an idle, reconciled workspace and current write access to the session. Repository-only sessions publish an accepted Git-normalized checkpoint while their worker is idle or after Stop, without creating a Gateway checkout. Remote sessions sourced from a Gateway worktree still require **Stop cloud worker…** first. It never follows another participant's later turn or falls back to another account; unfinished personal publication needs same-owner confirmation after a Gateway restart. See [Publish with your account](/concepts/user-model#publish-with-your-account). The row hides itself while an open or draft PR exists for that branch; for Gateway-source checkouts, once the branch's PR is merged and the pushed tip still matches the merged head, the row disappears too. The branch row comes from local Git or the repository session's recorded URL and branch, so it stays available while GitHub is rate limited and carries the same stale-status warning, since "no PR found" cannot be trusted until the limit resets.
+    - For GitHub sessions, **Details → Pull requests** lists pull requests associated with the session's working branch instead of placing separate bars above the composer. Mentioning or linking a PR in conversation does not create a banner. The sidebar and session hovercard separately include recorded PR publications from the session and its accessible descendants; these task results do not change which branch the publishing controls target. Branch-based PR rows stop appearing when the checkout becomes detached or returns to the default branch; the publication flow separately retains its applicable recorded result. Compact rows show the PR title and status. Open a row’s actions menu for its repository and number, code changes, **Checks**, and **CI monitoring**. The section lists every returned PR, with live (open/draft) PRs first. **Checks** shows passed/failed/running/skipped totals and named checks, with failed and running work first. Expand a GitHub Actions job to inspect its ordered steps, statuses, and durations; skipped checks stay in a collapsed group. Check details load on demand rather than on every background summary refresh. CI details follow the commit shown on the row until the session PR snapshot refreshes. Job links open GitHub for full logs. Checks from other CI services remain visible without invented step details. Use **Back** to return from Checks or CI monitoring to the PR actions. The Gateway polls only sessions visible in a connected Control UI and pushes changed snapshots through `controlUi.sessionPullRequests.changed`; it uses the explicit Control UI GitHub credential or the shared process-environment fallback for this read-only preview. When the GitHub API rate limit is hit, rows keep the last known status and show a warning that the status may be out of date; dismissing a row hides it for that session in the current browser profile. On desktop, **Environment** keeps the branch and Worktree badge on the first line, with available diff counts and **Create PR** below. Its ellipsis menu shows eligible publishers under **Publish as**, with a checkmark on the selected account, plus **Hide**. When counters are unavailable, **Create PR** stays available without invented counts. A sole personal account still requires the explicit **Publish as @account** action in the menu. The menu preserves confirmation details, errors, and recovery for the original request; **Retry** opens those recovery controls rather than creating a new publication. **Review** opens the existing publication details when applicable. After publication succeeds, Environment returns to its branch row and the receipt and detected PR appear in **Pull requests**. Mobile keeps its separate publication page with its account selector and publication controls. Connection setup stays in Settings. The controller records read, publish, and confirmation activity separately. Publication only begins after an explicit request. Shared publication status reads the existing receipt instead of replaying Publish. Reconnect restores the latest applicable shared receipt, and a lost acknowledgement can be looked up by its original invocation key. Committed receipt changes refresh that scoped view through session events, without another polling loop. If GitHub cannot refresh a cached PR snapshot, the row marks that state unavailable instead of presenting it as current. Automatic PR refresh hints wait for five seconds of quiet per session; explicit refresh requests are sent immediately. The Gateway coalesces forced refreshes for each watched session within a ten-second window, with one trailing refresh, while switching sessions or hiding the tab updates the watched set immediately. Local Git facts are shared by checkout across sessions and clients; refresh revalidates the relevant refs and staged index instead of discarding unchanged facts. Unstaged-only diff counts update on the five-minute fallback. Recovery keeps an unfinished Git transaction pending without blocking settlement of publication receipts for independent workspaces. The Gateway-owned broker derives the repository and branch from session ownership, verifies the selected connection rather than using the preview credential, and returns the pull request URL or an actionable typed failure. Personal publication requires an idle, reconciled workspace and current write access to the session. Repository-only sessions publish an accepted Git-normalized checkpoint while their worker is idle or after Stop, without creating a Gateway checkout. Remote sessions sourced from a Gateway worktree still require **Stop cloud worker…** first. It never follows another participant's later turn or falls back to another account; unfinished personal publication needs same-owner confirmation after a Gateway restart. See [Publish with your account](/concepts/user-model#publish-with-your-account). The unpublished controls are hidden while an open or draft PR exists for that branch. For Gateway-source checkouts, they also stay hidden once the branch's PR is merged and the pushed tip still matches the merged head. The branch row comes from local Git or the repository session's recorded URL and branch, so it stays available while GitHub is rate limited and carries the same stale-status warning, since "no PR found" cannot be trusted until the limit resets.
     - The **CI monitoring** page provides **Auto-fix CI & address comments**, **Auto-merge when ready**, and **Auto-archive on merge or close**. Each opt-in creates a separate, durable agent automation for the PR whose monitoring page you opened, checked every five minutes while the Gateway runs. Additional PRs in the session are not included and do not block that PR’s auto-merge. These checks use the session agent and consume model usage; they continue when the browser is closed and survive Gateway restarts. Repair and merge runs use the named session and normal repository workflow, verifying the selected PR’s checkout without disturbing unrelated work. A conversation reset does not change their PR target. Merge readiness includes required reviews and checks—not just the green CI total—and never grants an approval or bypass. Archive runs independently, verifies the PR is merged or closed, uses the archive API’s exact-session-ID guard, and defers if the session has other active work or PRs; normal archive behavior can clean up its managed worktree. Changing a toggle requires automation administration permission. Turning one off requests cancellation of its current run and prevents future runs, but does not undo effects already accepted by GitHub. Toggles update immediately while saving in the background, without adding status rows or reloading the panel. Other toggles remain usable while one saves. The monitoring page reports only errors and blockers, including scheduler pauses and run failures. After an uncertain save, use **Try again** to refresh the saved state before making another change.
     - The session diff panel shows what a session's checkout actually changed: **Changes** in **Details → Environment**, or **Code changes** in a pull request’s actions, opens a per-file viewer with normalized added/deleted/modified counts, collapsible files, wrapping and unified/split layouts with source syntax highlighting, file copy/open/editor actions, and "N unmodified lines" markers between hunks. The scope controls switch between all changes, uncommitted work, and individual commits while showing how far the branch is ahead of its merge base; committed branches also provide a copyable local sync command. For a local managed workspace with an accepted source base, all changes and branch history use that base, including after a base refresh when shared default-branch refs lag. Uncommitted work remains relative to HEAD, and an individual commit shows its actual changes against its first parent. Diffs are computed server-side through the `sessions.diff` Gateway method; binary and oversized files degrade to stats-only entries, and the button only appears when the connected Gateway advertises `sessions.diff`. Incomplete results show a warning even when no files could be displayed; only a complete empty result reports no changes. Review follows the session checkout once a new worktree is prepared and shows no changes before then. It keeps the current diff visible while refreshing. Cold checkouts keep the loading state visible while the Gateway computes one shared diff; reads that exceed two seconds return a pending response and the panel polls for the completed result. API clients can request this behavior with `poll: true` and retry responses marked `computing: true`; those responses do not indicate an empty diff. Poll callers share completed cold responses for up to one second. Once a versioned diff is cached, subsequent polls use the normal blocking freshness check, as do requests without `poll`.
     - Every Chat pane has a title bar. On desktop, click the session title to rename it. On mobile, the title opens Details; use the session actions to rename the conversation. The workspace control copies the checkout path or branch and can reveal local Gateway workspaces in the host file manager. Remote and exec-node sessions keep copy actions but hide reveal.
     - The **Files** tab in each Chat pane's unified side panel lists thread files, project files, and artifacts. Search at the top covers session files, artifacts, and the project tree; surrounding whitespace is ignored while spaces inside the query remain literal; filter chips show changed files, read files, or artifacts, and collapsible groups share one scroll region. **Show in Files** from Review clears search and filters so the destination project directory is visible. For an active repository-only session it reads the node checkout. After Stop it exposes retained changed-file previews; unchanged upstream files, editing, and full diffs require the worker to run again. The stopped diff panel explains this limitation. Reopen it with ⇧⌘B or choose **Files** from the **Panels** launcher or its **+** menu.
     - File paths recognized in chat messages read as their basename with a small glyph for the file type in front — a Markdown page, a `package.json` manifest, a TypeScript source, a `.tsx` component, a config or data file, a shell script, and an image each get their own mark, and anything else falls back to a plain document. When two links in the same message share a basename, each keeps just enough of its trailing path to stay distinct. The full path stays on the link: it is what the tooltip shows, what opens in the file panel, and what the message's **Copy** action returns, since copy hands back the original Markdown. Hover or keyboard-focus a file link to copy its path with the tooltip's copy button. Clicking or tapping the filename still opens the file panel directly; touch does not require opening the tooltip first. Labels you write yourself in a `[label](path)` link are never rewritten. The glyph is drawn from the bundled icon set, never fetched from the network, and is decorative only: it is not read by screen readers and is not part of copied text. Text that is not a recognizable path — anything carrying spaces, parentheses, a `#` fragment, or a `?` query — stays plain prose.
     - Clicking a file reference in chat, a file path in an expanded read/edit/write tool card, or a file row in **Files** opens its own filename tab in the shared side-panel header. Reopening the same file from the same owning session selects its existing tab and rereads its content when there is no unsaved draft. Selecting a filename tab keeps its current preview; unsaved drafts are never replaced by a file reopen. On desktop, **Toggle file tree** shows or hides the catalog beside the reader. Choose **Show in Files** from the file actions menu to reveal the file without closing its preview. The last opened file stays highlighted in both session and project lists, including after refreshing the file list. A pending listing cannot clear a newer file selection or replace results and errors for a different folder or search. If a folder becomes unavailable, use the remaining desktop tree or the parent-folder control on mobile to continue browsing without reloading or changing sessions. Session file labels show the filename and enough parent folders to distinguish matching names; hovering or copying a path keeps the full path. Closing a filename tab closes only its preview, never the underlying file. Closing or replacing a file preview cancels a delayed copy fallback; an already issued native clipboard write may still finish. Open previews are scoped to the current pane, session, agent, and connection, and are not persisted across reconnects. A forwarded file retains its sending session as its read and edit target; identical paths from different sessions have separate tabs and drafts. HTML files open a sandboxed **Preview**, with **Source** in the same filename tab. Other UTF-8 text files use a CodeMirror-based source view with line numbers, jump-to-line, in-file search, copy actions, and an open-in-external-editor menu. Markdown and SVG also offer a formatted preview. On desktop, **Reading mode** or **More file actions** offers **Preview**, **Highlighted source**, and **Plain source** where available; other text files use the **Syntax highlighting** toggle. On mobile, use **Source** or **Preview** where available. The source view includes line-wrapping controls, including in HTML **Source** view. On desktop, code and plain-text previews start with wrapping on; HTML, Markdown, and SVG source views start with it off. Each open desktop preview keeps its own setting. On mobile, wrapping starts off and the browser remembers your choice across files and reloads. Wrapping never changes file contents. Search follows the displayed line numbers for LF, CRLF, and CR line endings; editing preserves the original line endings, including when pasted text uses different line endings. Read-only previews, including files with mixed line endings, do not create unsaved drafts or block interface reloads. Escape closes in-file search and returns keyboard focus to **Search in file** in the toolbar. AVIF, GIF, JPEG, PNG, and WebP images no larger than 256 KiB render inline; other binary files show metadata without lossy text decoding. When the Gateway advertises `sessions.files.set` to an `operator.admin` connection, the text panel provides **Edit file** in its toolbar or, on a narrow desktop panel, **More file actions**, with dirty tracking and Cmd/Ctrl-S save; unsaved drafts survive file, panel, and session navigation in the current browser tab until explicitly saved or discarded. If a server update blocks editing and reloading, choose **Review file drafts** in the reload notification to copy or download the retained edits, then explicitly discard each resolved draft and try **Refresh** again. **Keep drafts** leaves them protected in this tab; recovery never writes files on the disconnected or updated Gateway. An editor opened in a managed workspace also retains that workspace’s identity and file lookup roots. If a reset replaces the workspace or changes its working directory, saving refuses the changed target even when the filename and bytes match. The old draft stays recoverable; close and reopen the file to edit the current workspace. Older API clients that omit the optional source precondition retain their existing behavior. Saves are compare-and-swap on a content hash returned by `sessions.files.get`: if the file changed on disk since it was loaded (for example because the agent kept working), the panel shows a conflict notice with Reload (take the latest content) and Overwrite (keep the local edit) actions. Writes retain fs-safe workspace guards — path containment, symlink/hardlink rejection, and a 256 KiB UTF-8 cap — and only overwrite existing files; the editor never creates or deletes them. If the editor cannot load, use **Retry**. A missing editor chunk after an update offers **Reload**, which waits for the Gateway to become reachable.
-    - Open the side panel and select **Subagents** from its **+** menu to follow child sessions, including swarm workers, or select the subagent count or a subagent's name in the transcript. On desktop, a pane too narrow to show the side panel beside the conversation shows **Subagents** in place of the conversation instead of under it, however the panel was opened; closing the panel returns to the conversation, and a wider pane shows the two side by side again. Keyboard focus moves to the panel's tab when it takes the conversation's place, and returns to the control that had it once the panel is closed, or to the first control in the pane's header when that control is gone. On mobile, Subagents opens in the shared sheet. Its docked state keeps the conversation and composer visible; expand the sheet when you need more room. **Running** and **Finished** keep the list compact: titles and Stop controls sit above available call counts and public activity text, with elapsed time on the right. Activity falls back to the tool’s display name when no public description is available; a count is omitted when the bounded history cannot establish an exact total. All child pages load automatically so older running workers remain visible. The parent’s parallel-tasks view also shows aggregate swarm progress. Selecting a child opens its existing view-only transcript in the panel. **Back to Subagents**, the task title, and the existing **Stop** action appear above the transcript; there is no elapsed-time row, composer, or parent notice in that embedded view. Opening the child directly keeps a compact **View-only subagent** notice naming its parent and an **Open parent session** button. Subagents remain outside left-sidebar navigation. Saved-draft recovery stays in the parent or another ordinary conversation; neither the embedded nor direct subagent view shows its Restore or Delete actions. Message input, reply actions, model and access pickers, microphone, and attachment controls remain unavailable; copy and fork keep their existing behavior. Persistent sessions created with `visible: true` remain ordinary conversations that you can type in and steer.
+    - Open the side panel and select **Subagents** from its **+** menu to follow child sessions, including swarm workers, or select the subagent count or a subagent's name in the transcript. On desktop, a pane too narrow to show the side panel beside the conversation shows **Subagents** in place of the conversation instead of under it, however the panel was opened; closing the panel returns to the conversation, and a wider pane shows the two side by side again. Keyboard focus moves to the panel's tab when it takes the conversation's place, and returns to the control that had it once the panel is closed, or to the first control in the pane's header when that control is gone. On mobile, Subagents opens in the shared sheet. Its docked state keeps the conversation and composer visible; expand the sheet when you need more room. **Running** and **Finished** keep the list compact: titles and Stop controls sit above available call counts and public activity text, with elapsed time on the right. Activity falls back to the tool’s display name when no public description is available; a count is omitted when the bounded history cannot establish an exact total. All child pages load automatically so older running workers remain visible. Delegated tasks appear inline with their launching turn. Up to five tasks use a compact expandable row; larger active batches expand with progress and details. Collected results remain in that turn after completion. Selecting a child opens its existing view-only transcript in the panel. **Back to Subagents**, the task title, and the existing **Stop** action appear above the transcript; there is no elapsed-time row, composer, or parent notice in that embedded view. Opening the child directly keeps a compact **View-only subagent** notice naming its parent and an **Open parent session** button. Subagents remain outside left-sidebar navigation. Saved-draft recovery stays in the parent or another ordinary conversation; neither the embedded nor direct subagent view shows its Restore or Delete actions. Message input, reply actions, model and access pickers, microphone, and attachment controls remain unavailable; copy and fork keep their existing behavior. Persistent sessions created with `visible: true` remain ordinary conversations that you can type in and steer.
     - **Processes** is a separate side-panel tab for the conversation's background exec commands. Open it through **Panels → Processes** or the side-panel **+** menu. On desktop, a narrow pane shows it in place of the conversation, as it does **Subagents**. On mobile, it uses the shared sheet, whose docked state keeps the conversation and composer visible. Its **Running** and **Finished** lists show derived command names, status, elapsed time, and available exit codes. Select a row to inspect the retained output tail without consuming the agent's pending output. **Stop** requests termination of that exact process; **Stopping…** remains until the process owner reports completion. Finished records expire under the normal process retention limits. An unavailable worker or failed read is shown as an error, not an empty process list. The panel refreshes only while visible and preserves the parent draft.
     - **Review** and file tabs retain their own content. A pending file or artifact updates only its own open tab: it cannot select itself over a newer tab, reopen a closed preview, or return after you leave the chat page. Switching tabs or hiding the whole side panel preserves the pending preview without changing your chosen layout when it finishes. Text attachments retain their Preview or View Raw Text mode while switching between open files. Background download-link refreshes keep an unchanged attachment's reader in place, including keyboard focus and code-block controls.
     - Each chat pane has a main view and a unified side panel. When Chat and Desktop are both present, the panel’s **Panel position** menu offers a **Swap** action that exchanges them; Dashboard keeps its own view controls. Expanding or restoring a panel preserves live content and drafts. The header’s **Panels** control hides or reopens the side panel without clearing its tabs, and the browser remembers each session’s arrangement.
@@ -615,10 +817,10 @@ Run-error banners offer **Refresh** to reload the conversation without resending
     - **Split view:** open the session actions menu (**⋯**) and select **Open split view**. For an existing pane, use the menu's **View** group to split it right or down for as many panes as fit. Each pane has its own session title, thread, transcript, composer, and tool stream. Titles stay with their conversations when you focus a pane belonging to another agent.
     - Agents with the `screen` tool can request pane, sidebar, terminal, browser, desktop, portal, focus, and navigation changes in the capable Control UI browser that requested the turn. Other connected browsers keep their own layout; see [Screen](/tools/screen).
     - Drag a session from the sidebar into chat to open it in a pane. An animated drop preview glides between zones and labels the outcome — "Split" over the exact half a new pane will occupy, "Open here" over a whole pane — and drops also work from single-pane mode.
-    - The active split pane drives the sidebar selection and URL. Selecting another pane or closing the active pane uses the surviving conversation's Chat or Dashboard preference; it does not copy the previous pane's view. Closing a pane that holds keyboard focus returns focus to the surviving pane's header, which is labeled with the session title for assistive technology. Its title bar adds split and close controls; dividers resize columns and stacked panes, and the browser stores the layout locally across reloads.
+    - The active split pane drives the sidebar selection and URL. Selecting another pane or closing the active pane uses the surviving conversation's Chat or Dashboard preference; it does not copy the previous pane's view. Closing a pane that holds keyboard focus returns focus to the surviving pane's header, which is labeled with the session title for assistive technology. On desktop, every split pane has an always-visible **Close pane** (×) button at the right edge of its header, including inactive panes. It closes only that view, without deleting the session or stopping its work, and disappears when one pane remains. The session menu’s **View → Close pane** action remains available. Dividers resize columns and stacked panes, and the browser stores the layout locally across reloads.
     - On narrow screens, split view keeps the layout but renders only the active pane at the full available width and height, including its header with the close control. Widening the window restores the saved column and row proportions without losing drafts.
     - If you send a message while a model picker change for the same session is still saving, the composer waits for that session patch before calling `chat.send` so the send uses the selected model.
-    - On the New Session page, submitting opens the created conversation automatically. **Cmd+Enter** on macOS or **Ctrl+Enter** elsewhere is ordinary submit with either send preference. Use **Cmd/Ctrl+Shift+Enter** to explicitly start in the background without leaving the page; a completion notice offers to open that session. The selected local, cloud-profile, or paired-device placement is preserved. Explicit Draft visibility keeps its create-only behavior.
+    - On the New Session page, submitting opens the created conversation automatically. On desktop, **Cmd+Enter** on macOS or **Ctrl+Enter** elsewhere is ordinary submit with either send preference. Use **Cmd/Ctrl+Shift+Enter** to explicitly start in the background without leaving the page; a completion notice offers to open that session. The selected local, cloud-profile, or paired-device placement is preserved. Explicit Draft visibility keeps its create-only behavior.
     - Typing `/new` creates and switches to the same fresh dashboard session as New Chat, except when `session.dmScope: "main"` is configured and the current parent is the agent's main session; then it resets the main session in place. Typing `/reset` keeps the Gateway's explicit in-place reset for the current session.
     - The chat model picker requests the Gateway's configured model view. If `agents.defaults.modelPolicy.allow` is non-empty, that policy drives the picker, including `provider/*` entries that keep provider-scoped catalogs dynamic. Otherwise the picker shows configured entries plus providers with usable auth; aliases and settings under `agents.defaults.models` do not restrict it. The full catalog stays available through the debug `models.list` RPC with `view: "all"`.
     - Expand the **Account** category in the model menu to choose a saved account for the selected provider in Chat or **New Session**, even when **Automatic** has no eligible models. A New Session choice previews eligible models and is attached when the session is created; it does not change the personal new-chat default or saved model preference. See [Per-person model accounts](/concepts/multi-user#per-person-model-accounts).
@@ -649,7 +851,7 @@ Run-error banners offer **Refresh** to reload the conversation without resending
     - If Stop reports incomplete descendant cancellation, inspect the remaining native subagent runs with `/subagents list` and ask the agent to retry their cancellation with `subagents`. Do not treat the parent's stopped state as confirmation that every child stopped or that runtime cleanup was instantaneous. See [Sub-agent stopping](/tools/subagents#stopping) for scope details.
     - While a run is active, normal follow-ups use the Gateway's effective `messages.queue` mode. `steer` injects into the running turn; other modes keep the browser's durable queued delivery. If the Gateway queues an input instead of steering it, the message appears above the composer until consumed or canceled. Reconnecting also recovers queued inputs from older history pages without changing the page you are viewing. Once the Gateway accepts input for an existing session, its database owns the approved input until it reaches the transcript. Collected messages are retired together with their combined transcript entry. Unconsumed input survives a Gateway restart as interrupted input requiring an explicit resend. Click **Steer** on a browser-owned queued message to inject it manually; removing a server-owned queued message requests its cancellation. A message you steer moves once from the queue to the bottom of the transcript when delivery starts. It stays there while acknowledgment and history catch up, until its saved copy replaces it. Accepted messages keep their saved transcript positions: earlier saved output stays above the steer and later output appears below it. This order survives history refreshes, reconnects, and reloading a finished run. Unsaved assistant text remains a single live tail after saved rows until its own transcript entries arrive.
     - Type `/steer <message>` to steer explicitly. Once consumed, the message belongs in the transcript, with no separate command chip waiting for the entire run to finish. If the Gateway defers the input, its queued message remains above the composer until consumed or canceled.
-    - With **Settings → Appearance → Send shortcut** set to **Enter**, **Cmd/Ctrl+Enter** submits the opposite follow-up action while connected to an active run: queue when Enter steers, or steer when Enter queues (including inherited `collect` and `followup` modes). The send button tooltip shows both actions for the current follow-up setting. This affects only that message, not your saved preference. With the **Cmd/Ctrl+Enter** send shortcut selected, modified Enter remains the normal send action and plain Enter inserts a newline. Interrupt mode keeps its normal behavior.
+    - On desktop, with **Settings → Appearance → Send shortcut** set to **Enter**, **Cmd/Ctrl+Enter** submits the opposite follow-up action while connected to an active run: queue when Enter steers, or steer when Enter queues (including inherited `collect` and `followup` modes). The send button tooltip shows both actions for the current follow-up setting. This affects only that message, not your saved preference. With the **Cmd/Ctrl+Enter** send shortcut selected, modified Enter remains the normal send action and plain Enter inserts a newline. Interrupt mode keeps its normal behavior.
     - Reorder the queue from the handle on the left of a queued message: drag it, or focus it and press the up and down arrow keys. The position is stored with the message, so it survives a reload and decides delivery order, not just what the list looks like. Rows already handed to a run — sending, steering, running a command, awaiting settings, or waiting on an uncertain delivery — hold their place and split the queue: a message moves only among the rows between two of them, so it can never reach the Gateway ahead of work already handed over.
     - Edit a queued message with the pencil on its row, or by double-clicking the row. The row becomes its own textarea and stays in place while the main composer remains independent, including any separate draft and attachments. Submit replaces the row in the same slot and preserves its attachments and delivery choice, even when the composer currently defaults to Steer or Interrupt; Cancel or Escape discards the row-local draft and restores the queued message. A normal composer send remains a separate queued item even while a row edit is open. The queue behind an edited row waits rather than delivering a message you are still rewriting, so that row splits the queue for reordering the same way an in-flight row does. Queued slash commands keep the discard-and-retype flow.
     - **Settings → Appearance → Chat → Follow-ups while the agent is working** can override that server default for the current browser. The page marks an override explicitly and offers **Reset to server default**. `Steer into the active run` sends follow-ups immediately, while `Queue until the run ends` holds them until the run finishes.
@@ -848,10 +1050,29 @@ automatically:
 ````markdown
 ```mermaid
 flowchart LR
+  accTitle: Message delivery
+  accDescr {
+    The Gateway sends each accepted message to a Worker.
+    The Worker saves the result in State before delivering the reply.
+  }
   Gateway --> Worker
   Worker --> State
 ```
 ````
+
+When writing diagrams, including agent-authored replies, include a short `accTitle`
+and a plain-language `accDescr` explaining the relationships or outcome. Mermaid
+supports both `accDescr: A one-line description` and the multiline form above.
+The Control UI uses the title as image alternative text and associates the
+longer description with both the inline image and expanded image through an
+invisible text alternative. No caption is added below the diagram. Metadata is
+treated as text, not HTML.
+
+Describe the meaning, not just the shapes. Source code is not a substitute for a
+text equivalent. Without `accDescr`, the image keeps its title without an added
+notice. For diagram types that do not support Mermaid
+accessibility metadata, include the equivalent explanation in the surrounding
+message as well.
 
 Click or tap the diagram to open the image viewer with zoom. With keyboard
 focus on the diagram, press **Enter** or **Space**. The **Diagram options** menu
@@ -940,7 +1161,8 @@ The dedicated card recognizes YouTube video URLs independently of
 iframes in `show_widget`. With `gateway.controlUi.embedSandbox: "strict"`, the card
 offers the watch link without loading a player. Other chat surfaces should use a
 regular YouTube link; the card is a Control UI feature, separate from native inline
-widgets.
+widgets. [Public conversation links](/web/urls#public-session-transcripts) show the
+video as a plain link without loading the player or thumbnail.
 
 Thumbnails load from `i.ytimg.com`, which contacts Google before playback. After
 activation, the player loads from `www.youtube-nocookie.com`. Its frame sends only
@@ -979,7 +1201,9 @@ accounts with session-only access do not request that inventory.
 Running and scheduled states update from automation events. If an inventory
 refresh is already running, later changes share one follow-up refresh.
 Compact activity controls can open related details without duplicating the full
-lists above the composer.
+lists above the composer. The mobile **Publish PR** control appears only for an
+undismissed branch with publishable work or a retained publication result or
+recovery state. An empty workspace or account discovery alone does not show it.
 
 The progress header shows the current step, not a completed-step total. On desktop,
 its options menu stays available when the card is expanded or collapsed and contains

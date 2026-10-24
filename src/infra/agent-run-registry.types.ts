@@ -35,11 +35,15 @@ export type AgentRunContext = {
   eventState?: AgentRunEventState;
   /** Model request numbering survives provider fallback within this registered run. */
   modelCallSequence?: { value: number };
+  /** Accepted human input owns a reply even when the run began as an optional wake. */
+  acceptedUserReply?: {
+    operationalRunInstance: AgentRunDelegatedAuthority["operationalRunInstance"];
+    expectation: "required" | "result-required";
+  };
   /** Active provider-owned local wait; cleared on first response or call settlement. */
   localModelWait?: { requestId: string };
   activeModel?: AgentRunModel;
   verboseLevel?: VerboseLevel;
-  isHeartbeat?: boolean;
   /** Whether control UI clients should receive chat/agent updates for this run. */
   isControlUiVisible?: boolean;
   projectSessionActive?: boolean;

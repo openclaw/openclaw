@@ -129,28 +129,24 @@ suite.define(() => {
           {
             key: controlUiBundledSettingsStorageKey(suite.server.baseUrl),
             gatewayUrl: controlUiBundledGatewayUrl(suite.server.baseUrl),
-            railShortcuts: [
-              "route:cron",
-              "session:agent:main:release-plan",
-              "plugin:reports/reports",
-            ],
+            railShortcuts: ["route:cron", "route:sessions", "plugin:reports/reports"],
           },
         );
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, groupedKey));
         await openDrawer(page);
         const rail = page.locator(".sidebar-rail");
-        const pinned = rail.locator('[data-sidebar-entry="session:agent:main:release-plan"]');
+        const pinned = rail.locator('[data-sidebar-entry="route:sessions"]');
         const plugin = rail.locator('[data-sidebar-entry="plugin:reports/reports"]');
         const session = page.locator(
           '.sidebar-session-content .sidebar-recent-session[data-session-key="agent:main:release-plan"]',
         );
         const group = page.locator('[data-session-section="category:Research"]');
-        await pinned.locator(".session-glyph").waitFor();
+        await pinned.locator(".nav-item__icon").waitFor();
         await plugin.locator(".nav-item__icon").waitFor();
         await group.locator(".sidebar-recent-session").waitFor();
         await session.waitFor();
-        // Pins are flat navigation refs, while session actions stay in Sessions.
-        expect(await pinned.locator(".sidebar-recent-session").count()).toBe(0);
+        // Rail pins are flat navigation refs; sessions and their actions stay in Sessions.
+        expect(await rail.locator(".sidebar-recent-session").count()).toBe(0);
         await rail.locator('[data-navigation-view="pages"]').click();
         await page
           .locator('.sidebar-pages [data-sidebar-entry="plugin:reports/reports"]')

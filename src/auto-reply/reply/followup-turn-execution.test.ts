@@ -5,7 +5,6 @@ import { markReplyOperationExecutionStarted } from "../../sessions/session-contr
 import type { ReplyPayload } from "../types.js";
 import type { AgentTurnExecutionResult, AgentTurnParams } from "./agent-runner-execution.types.js";
 import {
-  createFollowupTurnTestTypingController,
   createFollowupTurnTestTurn,
   executeFollowupTurnForTest,
   getFollowupTurnTestState,
@@ -14,13 +13,12 @@ import {
 import type { AdmittedFollowupTurn } from "./reply-agent-turn-preparation.js";
 import {
   REPLY_OPERATION_RUN_STATE,
-  resolveReplyOperationAgentTurn,
   type ReplyOperationRunState,
 } from "./reply-operation-run-state.js";
-import { createMockReplyOperation } from "./test-helpers.js";
+import { resolveReplyOperationAgentTurn } from "./reply-operation-run-state.test-support.js";
+import { createMockReplyOperation, createMockTypingController } from "./test-helpers.js";
 
 const state = getFollowupTurnTestState();
-const createTypingController = createFollowupTurnTestTypingController;
 const createTurn = createFollowupTurnTestTurn;
 const executeFollowupTurn = executeFollowupTurnForTest;
 
@@ -37,7 +35,7 @@ function executeTestTurn(
   return executeFollowupTurn({
     ...params,
     defaults: {
-      typing: createTypingController(),
+      typing: createMockTypingController(),
       typingMode: "never",
       defaultModel: "claude",
       ...params.defaults,
@@ -164,7 +162,7 @@ describe("executeFollowupTurn", () => {
 
   it("normalizes queued route facts into the canonical execution call", async () => {
     const turn = createTurn();
-    const typing = createTypingController();
+    const typing = createMockTypingController();
     const onAgentRunStart = vi.fn();
     turn.queued.runObservers = { onAgentRunStart };
     state.execute.mockImplementation(async (params: AgentTurnParams) => {
@@ -372,7 +370,7 @@ describe("executeFollowupTurn", () => {
     const turn = createTurn({
       queued: { ...createTurn().queued, currentInboundEventKind: "room_event" },
     });
-    const typing = createTypingController();
+    const typing = createMockTypingController();
     const onToolResult = vi.fn(async () => {});
     const onCompactionStart = vi.fn(async () => {});
     const onCompactionEnd = vi.fn(async () => {});
@@ -559,7 +557,7 @@ describe("executeFollowupTurn lifecycle", () => {
       const pending = executeFollowupTurn({
         turn,
         defaults: {
-          typing: createTypingController(),
+          typing: createMockTypingController(),
           typingMode: "never",
           defaultModel: "claude",
           opts: { abortSignal: sibling.signal },
@@ -597,7 +595,7 @@ describe("executeFollowupTurn lifecycle", () => {
     const result = await executeFollowupTurn({
       turn: createTurn(),
       defaults: {
-        typing: createTypingController(),
+        typing: createMockTypingController(),
         typingMode: "never",
         defaultModel: "claude",
         opts: {
@@ -629,7 +627,7 @@ describe("executeFollowupTurn lifecycle", () => {
     const result = await executeFollowupTurn({
       turn: createTurn(),
       defaults: {
-        typing: createTypingController(),
+        typing: createMockTypingController(),
         typingMode: "never",
         defaultModel: "claude",
         opts: {
@@ -660,7 +658,7 @@ describe("executeFollowupTurn lifecycle", () => {
     const pending = executeFollowupTurn({
       turn,
       defaults: {
-        typing: createTypingController(),
+        typing: createMockTypingController(),
         typingMode: "never",
         defaultModel: "claude",
         opts: {
@@ -720,7 +718,7 @@ describe("executeFollowupTurn lifecycle", () => {
       const pending = executeFollowupTurn({
         turn,
         defaults: {
-          typing: createTypingController(),
+          typing: createMockTypingController(),
           typingMode: "never",
           defaultModel: "claude",
           opts: {
@@ -773,7 +771,11 @@ describe("executeFollowupTurn lifecycle", () => {
     });
     const result = await executeFollowupTurn({
       turn: createTurn(),
-      defaults: { typing: createTypingController(), typingMode: "never", defaultModel: "claude" },
+      defaults: {
+        typing: createMockTypingController(),
+        typingMode: "never",
+        defaultModel: "claude",
+      },
       onToolResult: vi.fn(async () => {}),
       onCompactionNoticePayload: vi.fn(async () => {}),
     });

@@ -1,5 +1,10 @@
+import { readFileSync } from "node:fs";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
+import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
+import setup from "../setup-api.js";
+import { migrateVoiceCallLegacyConfigInput } from "./config-migration.js";
 import {
   resolveTwilioAuthToken,
   resolveVoiceCallEffectiveConfig,
@@ -118,6 +123,8 @@ const providerEnv = [
   "NGROK_AUTHTOKEN",
   "NGROK_DOMAIN",
 ];
+const valid = { valid: true, errors: [] };
+const errorPrefix = "plugins.entries.voice-call.config.";
 
 describe("validateProviderConfig", () => {
   const clearProviderEnv = () => {
@@ -133,7 +140,7 @@ describe("validateProviderConfig", () => {
     for (const { provider, values, env } of providerCredentials) {
       clearProviderEnv();
       const fromConfig = { ...createBaseConfig(provider), [provider]: values };
-      expect(validateProviderConfig(fromConfig)).toEqual({ valid: true, errors: [] });
+      expect(validateProviderConfig(fromConfig)).toEqual(valid);
       clearProviderEnv();
       env.forEach((name, index) => vi.stubEnv(name, Object.values(values)[index]));
       if (provider === "twilio") {
@@ -146,7 +153,7 @@ describe("validateProviderConfig", () => {
       if (provider === "twilio") {
         expect(fromEnv.fromNumber).toBe("+15550001234");
       }
-      expect(validateProviderConfig(fromEnv)).toEqual({ valid: true, errors: [] });
+      expect(validateProviderConfig(fromEnv)).toEqual(valid);
     }
   });
 
@@ -177,14 +184,14 @@ describe("validateProviderConfig", () => {
       Object.keys(values).forEach((key, index) => {
         if (key !== "publicKey") {
           expect(result.errors).toContain(
-            `plugins.entries.voice-call.config.${provider}.${key} is required (or set ${env[index]} env)`,
+            `${errorPrefix}${provider}.${key} is required (or set ${env[index]} env)`,
           );
         }
       });
       if (provider === "twilio") {
         expect(config.fromNumber).toBeUndefined();
         expect(result.errors).toContain(
-          "plugins.entries.voice-call.config.fromNumber is required (or set TWILIO_FROM_NUMBER env)",
+          `${errorPrefix}fromNumber is required (or set TWILIO_FROM_NUMBER env)`,
         );
       }
     }
@@ -210,7 +217,7 @@ describe("validateProviderConfig", () => {
     });
 
     expect(config.twilio?.authToken).toEqual(envRef("TWILIO_AUTH_TOKEN"));
-    expect(validateProviderConfig(config)).toEqual({ valid: true, errors: [] });
+    expect(validateProviderConfig(config)).toEqual(valid);
     expect(() => resolveTwilioAuthToken(config)).toThrow(
       'plugins.entries.voice-call.config.twilio.authToken: unresolved SecretRef "env:default:TWILIO_AUTH_TOKEN"',
     );
@@ -221,7 +228,7 @@ describe("validateProviderConfig", () => {
     const config = resolveVoiceCallConfig(
       createBaseConfig("twilio", { twilio: { accountSid: "AC123" } }),
     );
-    expect(validateProviderConfig(config)).toEqual({ valid: true, errors: [] });
+    expect(validateProviderConfig(config)).toEqual(valid);
   });
   it("requires a public key unless signature verification is skipped", () => {
     const missingPublicKey = createBaseConfig("telnyx", {
@@ -231,30 +238,24 @@ describe("validateProviderConfig", () => {
     const missingPublicKeyResult = validateProviderConfig(missingPublicKey);
     expect(missingPublicKeyResult.valid).toBe(false);
     expect(missingPublicKeyResult.errors).toContain(
-      "plugins.entries.voice-call.config.telnyx.publicKey is required (or set TELNYX_PUBLIC_KEY env)",
+      `${errorPrefix}telnyx.publicKey is required (or set TELNYX_PUBLIC_KEY env)`,
     );
 
     const withPublicKey = {
       ...missingPublicKey,
       telnyx: { ...missingPublicKey.telnyx, publicKey: "public-key" },
     };
-    expect(validateProviderConfig(withPublicKey)).toEqual({ valid: true, errors: [] });
+    expect(validateProviderConfig(withPublicKey)).toEqual(valid);
 
     const skippedVerification = {
       ...missingPublicKey,
       inboundPolicy: "disabled" as const,
       skipSignatureVerification: true,
     };
-    expect(validateProviderConfig(skippedVerification)).toEqual({
-      valid: true,
-      errors: [],
-    });
+    expect(validateProviderConfig(skippedVerification)).toEqual(valid);
   });
   it("skips validation when enabled is false", () => {
-    expect(validateProviderConfig(createBaseConfig("twilio", { enabled: false }))).toEqual({
-      valid: true,
-      errors: [],
-    });
+    expect(validateProviderConfig(createBaseConfig("twilio", { enabled: false }))).toEqual(valid);
   });
   it.each([
     [
@@ -281,29 +282,20 @@ describe("validateProviderConfig", () => {
     const config = normalizeVoiceCallConfig({ ...createBaseConfig("twilio"), ...input });
     const result = validateProviderConfig(config);
     expect(result.valid).toBe(false);
-    expect(result.errors).toContain(`plugins.entries.voice-call.config.${error}`);
+    expect(result.errors).toContain(`${errorPrefix}${error}`);
   });
 
-  it("accepts realtime.enabled with provider=telnyx", () => {
-    const config = createBaseConfig("telnyx");
+  it.each(["telnyx", "mock"] as const)("accepts realtime.enabled with provider=%s", (provider) => {
+    const config = createBaseConfig(provider);
     config.realtime.enabled = true;
     config.inboundPolicy = "allowlist";
-
     const result = validateProviderConfig(config);
-
     expect(result.errors).not.toContain(
       'plugins.entries.voice-call.config.provider must be "twilio", "telnyx", or "mock" when realtime.enabled is true',
     );
-  });
-
-  it("accepts realtime.enabled with provider=mock", () => {
-    const config = createBaseConfig("mock");
-    config.realtime.enabled = true;
-    config.inboundPolicy = "allowlist";
-
-    const result = validateProviderConfig(config);
-
-    expect(result).toEqual({ valid: true, errors: [] });
+    if (provider === "mock") {
+      expect(result).toEqual(valid);
+    }
   });
   it("accepts streaming.enabled with provider=twilio", () => {
     const config = createBaseConfig("twilio");
@@ -313,7 +305,7 @@ describe("validateProviderConfig", () => {
       authToken: { source: "env", provider: "default", id: "TWILIO_AUTH_TOKEN" },
     };
 
-    expect(validateProviderConfig(config)).toEqual({ valid: true, errors: [] });
+    expect(validateProviderConfig(config)).toEqual(valid);
   });
 });
 
@@ -455,30 +447,24 @@ describe("resolveVoiceCallConfig session routing", () => {
   });
 
   it("resolves per-number inbound route overrides over global voice settings", () => {
+    const route = {
+      inboundGreeting: "Silver Fox Cards, how can I help?",
+      agentId: "cards",
+      responseModel: "openai/gpt-5.5",
+      responseSystemPrompt: "You are a baseball card expert.",
+      responseTimeoutMs: 20000,
+    };
     const config = sessionConfig({
       inboundGreeting: "Hello from global.",
       agentId: "main",
       responseModel: "openai/gpt-5.4-mini",
       responseSystemPrompt: "Global voice assistant.",
       responseTimeoutMs: 10000,
-      tts: {
-        provider: "openai",
-        providers: {
-          openai: { voice: "coral", speed: 1 },
-        },
-      },
+      tts: { provider: "openai", providers: { openai: { voice: "coral", speed: 1 } } },
       numbers: {
         "+15550001111": {
-          inboundGreeting: "Silver Fox Cards, how can I help?",
-          agentId: "cards",
-          responseModel: "openai/gpt-5.5",
-          responseSystemPrompt: "You are a baseball card expert.",
-          responseTimeoutMs: 20000,
-          tts: {
-            providers: {
-              openai: { apiKey: "resolved-route-key", voice: "alloy" },
-            },
-          },
+          ...route,
+          tts: { providers: { openai: { apiKey: "resolved-route-key", voice: "alloy" } } },
         },
       },
     });
@@ -486,14 +472,7 @@ describe("resolveVoiceCallConfig session routing", () => {
     const effective = resolveVoiceCallEffectiveConfig(config, "+1 (555) 000-1111");
     expect(effective).toMatchObject({
       numberRouteKey: "+15550001111",
-      config: {
-        inboundGreeting: "Silver Fox Cards, how can I help?",
-        agentId: "cards",
-        responseModel: "openai/gpt-5.5",
-        responseSystemPrompt: "You are a baseball card expert.",
-        responseTimeoutMs: 20000,
-        tts: { provider: "openai" },
-      },
+      config: { ...route, tts: { provider: "openai" } },
     });
     expect(effective.config.tts?.providers?.openai).toEqual({
       apiKey: "resolved-route-key",
@@ -505,11 +484,7 @@ describe("resolveVoiceCallConfig session routing", () => {
   it("falls back to global voice settings when no per-number route matches", () => {
     const config = sessionConfig({
       inboundGreeting: "Hello from global.",
-      numbers: {
-        "+15550001111": {
-          inboundGreeting: "Hello from route.",
-        },
-      },
+      numbers: { "+15550001111": { inboundGreeting: "Hello from route." } },
     });
 
     const effective = resolveVoiceCallEffectiveConfig(config, "+15550002222");
@@ -696,5 +671,124 @@ describe("resolveVoiceCallConfig realtime settings", () => {
 
   it("rejects invalid realtime consult thinking levels", () => {
     expect(() => realtimeConfig({ consultThinkingLevel: "turbo" })).toThrow(/Invalid option/);
+  });
+});
+
+function migrate(value: unknown, configPathPrefix?: string) {
+  return migrateVoiceCallLegacyConfigInput({ value, configPathPrefix });
+}
+
+describe("voice-call config migration", () => {
+  it("declares the setup entry needed to migrate installed packages", () => {
+    const packageJson: unknown = JSON.parse(
+      readFileSync(new URL("../package.json", import.meta.url), "utf8"),
+    );
+    expect(packageJson).toMatchObject({ openclaw: { setupEntry: "./setup-api.ts" } });
+  });
+
+  it("maps deprecated provider and twilio.from fields into canonical config", () => {
+    const migration = migrate({ provider: "log", twilio: { from: "+15550001234" } });
+    expect(migration.config).toMatchObject({ provider: "mock", fromNumber: "+15550001234" });
+  });
+
+  it("migrates through the setup hook without changing its input or sibling plugins", () => {
+    const registerConfigMigration = vi.fn<OpenClawPluginApi["registerConfigMigration"]>();
+    setup.register(createTestPluginApi({ registerConfigMigration }));
+    const other = { config: { nested: { keep: true } } };
+    const pluginConfig = (provider: string) => ({
+      plugins: { entries: { "voice-call": { enabled: true, config: { provider } }, other } },
+    });
+    const config = pluginConfig("log");
+    const before = structuredClone(config);
+    const migration = registerConfigMigration.mock.calls[0]?.[0](config);
+
+    expect(config).toEqual(before);
+    expect(migration?.config).toEqual(pluginConfig("mock"));
+  });
+
+  it("fills only missing streaming provider fields while preserving canonical values", () => {
+    const current = {
+      apiKey: { source: "env", provider: "default", id: "SYNTHETIC_VOICE_KEY" },
+      model: "",
+      vadThreshold: 0,
+      keep: "current",
+    };
+    const value = {
+      streaming: {
+        enabled: true,
+        sttProvider: "openai",
+        openaiApiKey: "synthetic-legacy-key",
+        sttModel: "synthetic-legacy-model",
+        silenceDurationMs: 700,
+        vadThreshold: 0.4,
+        providers: { openai: current, other: { keep: "other-provider" } },
+      },
+    };
+    const before = structuredClone(value);
+    const migration = migrate(value);
+
+    expect(migration.config.streaming).toEqual({
+      enabled: true,
+      provider: "openai",
+      providers: {
+        other: { keep: "other-provider" },
+        openai: { ...before.streaming.providers.openai, silenceDurationMs: 700 },
+      },
+    });
+    const prefix = "plugins.entries.voice-call.config.streaming";
+    expect(migration.changes).toEqual([
+      `Moved ${prefix}.sttProvider → ${prefix}.provider.`,
+      `Removed ${prefix}.openaiApiKey (kept ${prefix}.providers.openai.apiKey).`,
+      `Removed ${prefix}.sttModel (kept ${prefix}.providers.openai.model).`,
+      `Moved ${prefix}.silenceDurationMs → ${prefix}.providers.openai.silenceDurationMs.`,
+      `Removed ${prefix}.vadThreshold (kept ${prefix}.providers.openai.vadThreshold).`,
+    ]);
+    expect(value).toEqual(before);
+    expect(() => normalizeVoiceCallConfig(migration.config)).not.toThrow();
+    expect(migrate(migration.config)).toEqual({ config: migration.config, changes: [] });
+  });
+
+  it("reports removal of legacy selectors while retaining canonical settings", () => {
+    const migration = migrate(
+      {
+        fromNumber: "+15550005678",
+        twilio: { from: "+15550001234", accountSid: "synthetic-account" },
+        streaming: { provider: "other", sttProvider: "openai" },
+      },
+      "voice-config",
+    );
+
+    expect(migration.config.fromNumber).toBe("+15550005678");
+    expect(migration.config.twilio).toEqual({ accountSid: "synthetic-account" });
+    expect(migration.config.streaming).toEqual({ provider: "other" });
+    expect(migration.changes).toEqual([
+      "Removed voice-config.twilio.from (kept voice-config.fromNumber).",
+      "Removed voice-config.streaming.sttProvider (kept voice-config.streaming.provider).",
+    ]);
+  });
+
+  it("does not migrate non-finite legacy streaming numbers", () => {
+    const migration = migrate({
+      streaming: { silenceDurationMs: Number.NaN, vadThreshold: Number.POSITIVE_INFINITY },
+    });
+    expect(migration.config.streaming).not.toHaveProperty("providers.openai");
+    expect(migration.changes).toEqual([
+      "Removed invalid plugins.entries.voice-call.config.streaming.silenceDurationMs.",
+      "Removed invalid plugins.entries.voice-call.config.streaming.vadThreshold.",
+    ]);
+  });
+
+  it("returns doctor migration change lines", () => {
+    const migration = migrate({
+      provider: "log",
+      streaming: { sttProvider: "openai" },
+      realtime: { agentContext: { includeSystemPrompt: true } },
+    });
+
+    expect(migration.changes).toEqual([
+      'Moved plugins.entries.voice-call.config.provider "log" → "mock".',
+      "Moved plugins.entries.voice-call.config.streaming.sttProvider → plugins.entries.voice-call.config.streaming.provider.",
+      "Removed plugins.entries.voice-call.config.realtime.agentContext.includeSystemPrompt.",
+    ]);
   });
 });

@@ -155,15 +155,9 @@ describe("managed attachment branch retention", () => {
       if (switchAt !== "after cleanup") {
         ordering.afterRead = restoreBranch;
       }
-      const cleanup = cleanupManagedOutgoingMediaRecords({ stateDir, sessionKey });
-      if (switchAt === "between hidden-tail pages") {
-        await expect(cleanup).rejects.toMatchObject({
-          name: "SessionTranscriptProjectionUnavailableError",
-          reason: "window-changed",
-        });
-      } else {
-        await cleanup;
-      }
+      // Indexed membership finishes before the branch switch even when unrelated controls
+      // would have forced the old full scan to fetch another page.
+      await cleanupManagedOutgoingMediaRecords({ stateDir, sessionKey });
       expect(switched).toBe(switchAt !== "after cleanup");
       expect(await readManagedImageRecord(attachmentId, stateDir)).not.toBeNull();
       expect(fs.readFileSync(originalPath)).toEqual(body);

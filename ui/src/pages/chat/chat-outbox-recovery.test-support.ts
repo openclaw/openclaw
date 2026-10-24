@@ -2,7 +2,7 @@ import { expect } from "vitest";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { captureChatOutboxAdmission } from "../../lib/chat/outbox-store.ts";
 import type { makeChatHost } from "./chat-host.test-support.ts";
-import { admitStoredChatComposerQueueItem } from "./composer-persistence.ts";
+import { admitStoredChatComposerQueueItemResult } from "./composer-queue-persistence.ts";
 type TestChatHost = ReturnType<typeof makeChatHost>;
 
 export function admitHostQueueItems(host: TestChatHost): void {
@@ -12,7 +12,7 @@ export function admitHostQueueItems(host: TestChatHost): void {
       item.sessionKey ?? host.sessionKey,
       item.agentId,
     );
-    expect(admitStoredChatComposerQueueItem(host, admission, item)).toBe(true);
+    expect(admitStoredChatComposerQueueItemResult(host, admission, item)).toBe("admitted");
   }
 }
 

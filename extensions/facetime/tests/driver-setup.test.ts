@@ -2,6 +2,48 @@ import { describe, expect, it, vi } from "vitest";
 import { installFaceTimeDriver, uninstallFaceTimeDriver } from "../src/driver-setup.js";
 
 describe("FaceTime driver setup", () => {
+  it.each([
+    {
+      install: true,
+      stderr: "denied",
+      stdout: "ignored",
+      expected: "audio driver installation failed: denied",
+    },
+    {
+      install: false,
+      stderr: "denied",
+      stdout: "ignored",
+      expected: "uninstall failed: denied",
+    },
+    { install: false, stderr: "", stdout: "failed", expected: "uninstall failed: failed" },
+    { install: true, stderr: "", stdout: "", expected: "audio driver installation failed: exit 7" },
+  ])("reports the driver failure: $expected", async ({ install, stderr, stdout, expected }) => {
+    const runCommandWithTimeout = vi
+      .fn<Parameters<typeof installFaceTimeDriver>[0]["runCommandWithTimeout"]>()
+      .mockResolvedValue({
+        code: 7,
+        stdout,
+        stderr,
+        signal: null,
+        killed: false,
+        termination: "exit",
+      });
+    if (install) {
+      runCommandWithTimeout.mockResolvedValueOnce({
+        code: 0,
+        stdout: "missing\n",
+        stderr: "",
+        signal: null,
+        killed: false,
+        termination: "exit",
+      });
+    }
+    const operation = install ? installFaceTimeDriver : uninstallFaceTimeDriver;
+    await expect(operation({ pluginRoot: "/tmp/facetime", runCommandWithTimeout })).rejects.toThrow(
+      `FaceTime ${expected}`,
+    );
+  });
+
   it("does not prompt or restart CoreAudio when the driver is current", async () => {
     const runCommandWithTimeout = vi.fn().mockResolvedValue({
       code: 0,

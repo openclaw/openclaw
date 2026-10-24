@@ -26,7 +26,7 @@ RPC method families for gateway status and identity, models and usage, channels 
 
 ## Models and usage
 
-- `models.list` returns the runtime-allowed model catalog. See [`models.list` views](/gateway/protocol/operator-methods#models-list-views).
+- `models.list` returns the runtime-allowed model catalog. See [`models.list` views](/gateway/protocol/operator-methods#models-list-views). A row may carry `family`, the model's canonical developer lineage (for example `anthropic`) from provider or catalog metadata. It is absent when unknown and never inferred from ids; see [model family](/plugins/manifest/models#model-family).
 - `usage.status` returns provider usage windows/remaining quota summaries. Clients advertising `usage-refreshing` receive an immediate `refreshing: true` placeholder on a cold cache and must refetch on a bounded schedule; other callers block for the cold provider read.
 - `usage.cost` returns aggregated cost usage summaries for a date range. Pass `agentId` for one agent, or `agentScope: "all"` to aggregate configured agents.
 - `doctor.memory.status` returns provider health for a native memory provider, or vector-memory / cached embedding readiness for a legacy provider. Pass `{ "probe": true }` or `{ "deep": true }` only for an explicit legacy embedding provider ping. Pass `{ "agentId": "agent-id" }` to scope Dreaming store stats to one agent workspace; omitting it aggregates configured Dreaming workspaces.
@@ -36,6 +36,8 @@ RPC method families for gateway status and identity, models and usage, channels 
   Both usage methods accept `mode: "specific"` with an IANA `timeZone` for DST-aware calendar-day boundaries and buckets. `utcOffset` remains supported for older clients and as a fallback when the Gateway runtime does not recognize the requested zone.
 - `sessions.usage.timeseries` returns timeseries usage for one session.
 - `sessions.usage.logs` returns usage log entries for one session.
+  Its `limit` defaults to 200 entries and is capped at 1000. Non-positive or
+  fractional numeric limits return an empty log list.
   Both detail methods accept the selected row's `key` and optional `agentId`. Preserve both fields when opening details for an unqualified key such as `global`.
 
 ## Memory

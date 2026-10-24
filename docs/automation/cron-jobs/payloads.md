@@ -122,10 +122,20 @@ The stored tool cap, sandbox, and current tool denials still apply. Scheduled
 automation management remains self-scoped.
 
 This source is not inferred for existing jobs, guests, isolated/current targets,
-scripts, or another conversation. Executable edits discard it unless an
-authenticated creator schedules a fresh continuation; display-only edits retain
-it. Disabling, removing, or replacing the job or session retires the active
-occurrence. Re-enabling the job does not revive a revoked occurrence.
+scripts, or another conversation. An authenticated owner update can bind it again
+to the updated task. Executable edits without that authentication discard it.
+Display-only edits and disabling or re-enabling the job preserve its stored
+source; names, schedules, and other executable inputs remain bound. A fresh
+owner capture applies only to the definition captured, even if another manager
+edits the job before the update commits. Disabling or removing a job still
+cancels its active occurrence; re-enabling it does not revive that cancelled
+occurrence.
+
+A continuation waits for its current conversation turn to finish before reading
+the current job and checking its source at launch. Trigger-supplied context does
+not change that stored definition. Existing stored sources remain valid after an
+upgrade, including jobs the scheduler disabled. A rejected source is recorded as
+a terminal failure instead of repeatedly retrying the same authority error.
 
 While an `at` agent-turn continuation in an explicitly named conversation waits
 for a result, it can call `automations` with `action: "next_check"` and `in: "3m"`
@@ -206,6 +216,10 @@ from an explicit user profile pin. Token refresh within the same authorization i
 allowed; deleting, replacing, or revoking that authorization stops the job rather
 than falling back to another account. Model and route compatibility still apply.
 
+At creation, account capture follows scheduled-model selection, including an
+allowed `model@profile` value in per-agent or global `subagents.model`. A disallowed
+scheduled model falls back without retaining that model's account.
+
 To change an account deliberately, update the job with a model/profile selection,
 for example `--model "openai/gpt-4.1@work"`. This captures a fresh authorization.
 For legacy jobs without a recorded inference owner, `openclaw doctor --fix` records
@@ -253,13 +267,15 @@ Model-selection precedence for isolated jobs, highest first:
 3. User-selected stored automation-session model override
 4. Agent/default model selection
 
+A user-selected stored session model is an exact selection, as described in [selection source policy](/concepts/model-failover#selection-source-policy): if it fails, the run reports the failure instead of answering from configured fallbacks. The same applies to an agent turn in a main or custom (`session:<key>`) session and to a main-session system event when the session's model was selected by the user. Per-job `--fallbacks` still apply.
+
 Fast mode follows the resolved live selection. Isolated automation resolves it in this order: stored session `fastMode`, per-agent `agents.entries.*.fastModeDefault`, global `agents.defaults.fastModeDefault`, then selected-model `params.fastMode`. Auto mode uses the model's `params.fastAutoOnSeconds` cutoff, defaulting to 60 seconds.
 
 When a runtime reports token usage without a cost, automation estimates use the selected agent's local `models.json` prices and the model metadata retained for that run.
 
 If a run hits a live model-switch handoff, the scheduler retries with the switched provider/model and persists that model selection for the active run. A job with a recorded inference account retains that account and its compatible authentication route; a switch cannot adopt a different account. Retries are bounded: after the initial attempt plus 2 switch retries, the scheduler aborts instead of looping.
 
-Before an isolated run starts, OpenClaw checks reachable local endpoints for configured `api: "ollama"` and `api: "openai-completions"` providers whose `baseUrl` is loopback, private-network, or `.local`. This preflight walks the job's configured fallback chain and only marks the run `skipped` once every candidate is unreachable; `--fallbacks ""` keeps that walk strict to just the primary model. A down endpoint records the run as `skipped` with a clear error instead of starting a model call. The result is cached for 5 minutes per endpoint (not per job or model), so many due jobs sharing a dead local Ollama/vLLM/SGLang/LM Studio server cost one check instead of a request storm. Skipped preflight runs do not increment execution-error backoff. They use the existing [failure-alert policy](/automation/cron-jobs/delivery#failure-notifications) without requiring `failureAlert.includeSkipped`; recurring jobs remain enabled and recover automatically when a later preflight finds the provider reachable.
+Before an isolated run starts, OpenClaw checks reachable local endpoints for configured `api: "ollama"` and `api: "openai-completions"` providers whose `baseUrl` is loopback, private-network, or `.local`. This preflight walks the job's configured fallback chain and only marks the run `skipped` once every candidate is unreachable; `--fallbacks ""` keeps that walk strict to just the primary model, and a user-selected stored session model keeps it strict to that model. A down endpoint records the run as `skipped` with a clear error instead of starting a model call. The result is cached for 5 minutes per endpoint (not per job or model), so many due jobs sharing a dead local Ollama/vLLM/SGLang/LM Studio server cost one check instead of a request storm. Skipped preflight runs do not increment execution-error backoff. They use the existing [failure-alert policy](/automation/cron-jobs/delivery#failure-notifications) without requiring `failureAlert.includeSkipped`; recurring jobs remain enabled and recover automatically when a later preflight finds the provider reachable.
 
 Client-side preflight timeouts are not cached. The next scheduled run checks the endpoint again instead of inheriting a timeout from another run.
 
@@ -430,13 +446,13 @@ With `announce`, agent, command, and script results belong to the chat or topic 
   <Accordion title="Main session vs current vs isolated vs custom">
     **Main session** jobs run their system event or agent-turn payload through the owning agent’s ordinary session queue, with that session’s existing context and delivery context. The automation remains running until the turn settles; queue acceptance alone is not success. Internal automation turns do not extend daily or idle reset freshness; only visible user activity updates session freshness. **Current-session** jobs execute in a detached run session, read a bounded tail of the conversation captured when the job was created, and deliver the final visible assistant result to the resolved destination (the creating conversation when no external route is configured). **Isolated** jobs run a dedicated agent turn with a fresh session. **Custom sessions** (`session:xxx`) persist context across runs, enabling workflows like daily standups that build on previous summaries.
 
-    `current` binds conversation context, not the original agent execution or its worktree; announce results belong to the resolved delivery destination. The detached run has its own session identity and uses the scheduled agent's workspace and captured tool restrictions. It does not inherit the conversation's cloud worker placement. Messages sent to the job's cron session address its latest detached run, independently of the bound conversation. In-flight turns sent through that stable cron key are canceled if the key is reassigned. A task-specific checkout path in the prompt does not grant access to it. Before using a job to continue repository work, verify that its execution environment can access the required checkout and tools; otherwise keep the work with its existing execution owner. A result committed to the conversation does not itself resume the original agent.
+    `current` binds conversation context, not the original agent execution or its worktree; announce results belong to the resolved delivery destination. The detached run has its own session identity and captured tool restrictions. A `current` or `isolated` job linked to the conversation that created it works in that conversation's saved workspace and working directory while the conversation is current, at the workspace root rather than a subdirectory, and keeps the conversation's required sandbox. An unlinked job, or one whose conversation was reset, uses the scheduled agent's workspace. A job whose conversation was removed or archived, or whose bound worktree is gone, pauses instead of running. Resetting the conversation during a run ends the run: OpenClaw tools refuse further effects, and a CLI backend's process is stopped so its own file tools cannot keep writing to the workspace. It does not inherit the conversation's cloud worker placement. Messages sent to the job's cron session address its latest detached run, independently of the bound conversation. In-flight turns sent through that stable cron key are canceled if the key is reassigned. A task-specific checkout path in the prompt does not grant access to it. Before using a job to continue repository work, verify that its execution environment can access the required checkout and tools; otherwise keep the work with its existing execution owner. A result committed to the conversation does not itself resume the original agent.
 
     Custom-session agent turns enter the session's ordinary turn queue and wait for active work before preparing context, so a scheduled tick cannot invalidate an in-progress compaction. The automation remains running until that turn settles; queue acceptance alone does not count as success. Saved authenticated continuations retain their original source and its current permissions through execution and delivery.
 
     To come back to this conversation later (for example, to recheck CI), add a one-shot `at` job with `payload: { kind: "agentTurn", message: "Instructions for your next turn" }` and `sessionTarget: "session:<your session key from Runtime>"`. It runs inside the existing conversation with the same history and saved workspace/worktree.
 
-    Custom-session agent turns use the existing session’s saved workspace and working directory, including its managed worktree. Requester-scoped jobs may use a saved workspace only for their owning conversation; trusted operator-scheduled jobs can target another conversation’s saved workspace. A missing, retired, or mismatched worktree stops the run instead of falling back to the agent’s default workspace. Filesystem containment and the job’s tool restrictions still apply; a path in the job prompt does not grant access. Persistent-session rollover keeps the saved workspace binding, permission mode, containment root, and inherited tool restrictions; detached runs do not inherit this workspace context. A new `session:custom-id` without an existing session starts in the configured agent workspace. Use `delivery: { mode: "none" }` without an external target for quiet named-session work that needs no runner fallback announcement.
+    Custom-session agent turns use the existing session’s saved workspace and working directory, including its managed worktree. Requester-scoped jobs may use a saved workspace only for their owning conversation; trusted operator-scheduled jobs can target another conversation’s saved workspace. A missing, retired, or mismatched worktree stops the run instead of falling back to the agent’s default workspace. Filesystem containment and the job’s tool restrictions still apply; a path in the job prompt does not grant access. Persistent-session rollover keeps the saved workspace binding, permission mode, containment root, and inherited tool restrictions; other detached runs inherit it only from a current creating conversation, as described for `current` jobs above. A new `session:custom-id` without an existing session starts in the configured agent workspace. Use `delivery: { mode: "none" }` without an external target for quiet named-session work that needs no runner fallback announcement.
 
     Main-session automation events are self-contained reminders. They include their own job scratch and notices assigned to that occurrence, not another monitor’s checklist or unrelated queued events. Put required instructions in the job payload or scratch.
 

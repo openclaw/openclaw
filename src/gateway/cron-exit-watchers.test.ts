@@ -35,8 +35,7 @@ type FixtureHandlers = Omit<CronExitWatcherHandlers, "fireOnExit"> & {
 
 function createWatcherFixture(
   params: Omit<FixtureHandlers, "reserveExit" | "fireOnExit" | "logger"> &
-    Partial<Pick<FixtureHandlers, "reserveExit" | "fireOnExit" | "logger">> &
-    NonNullable<Parameters<typeof createCronExitWatchers>[2]>,
+    Partial<Pick<FixtureHandlers, "reserveExit" | "fireOnExit" | "logger">>,
 ) {
   const {
     reserveExit = vi.fn(async () => {}),
@@ -63,7 +62,6 @@ function createWatcherFixture(
   const watchers = createCronExitWatchers(
     handlers({ ...params, reserveExit, fireOnExit, logger }),
     scheduler,
-    params,
   );
   return {
     ...watchers,
@@ -368,7 +366,6 @@ describe("createCronExitWatchers", () => {
     const newUpdateWatcherState = vi.fn(async () => {});
     const { supervisor, runs, watchers, reserveExit, fireOnExit } = setup({
       updateWatcherState: oldUpdateWatcherState,
-      retryBackoffMs: [1_000],
     });
 
     await reconcile(watchers);
@@ -398,7 +395,7 @@ describe("createCronExitWatchers", () => {
     expect(newUpdateWatcherState).toHaveBeenCalledOnce();
     expect(oldUpdateWatcherState).toHaveBeenCalledOnce();
     await watchers.cancelAll();
-    await clock.advanceBy(1_000);
+    await clock.advanceBy(5_000);
     expect(supervisor.spawn).toHaveBeenCalledTimes(2);
   });
 
@@ -414,7 +411,6 @@ describe("createCronExitWatchers", () => {
         }
       }),
       logger: { ...noopLogger, warn: () => firstRetryScheduled.resolve() },
-      retryBackoffMs: [1_000],
     });
     supervisor.spawn.mockRejectedValue(new Error("spawn failed"));
     watchers.reconcile([onExitJob("job-a")]);
@@ -461,7 +457,6 @@ describe("createCronExitWatchers", () => {
         ...noopLogger,
         warn: () => (restarting ? replacementRetryScheduled : firstRetryScheduled).resolve(),
       },
-      retryBackoffMs: [1_000],
     });
     supervisor.spawn
       .mockRejectedValueOnce(new Error("initial spawn failed"))
@@ -655,7 +650,7 @@ describe("createCronExitWatchers", () => {
       const startError = new Error("command startup failed");
       const cleanupError = new Error("native cleanup identity lost");
       const { watchers, fireOnExit, ...fake } = setup(
-        { logger: { ...noopLogger, warn: () => published.resolve() }, retryBackoffMs: [1_000] },
+        { logger: { ...noopLogger, warn: () => published.resolve() } },
         {
           cleanup: () => {
             cleanupEntered.resolve();

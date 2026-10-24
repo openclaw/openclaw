@@ -366,6 +366,5 @@ export { classifySystemAgentApprovalText } from "./operator-approval.js";
 export { SystemAgentWizardAnswerError } from "./chat-engine.js";
 export type { SystemAgentChatEngineOptions } from "./chat-engine.js";
 export { SystemAgentInferenceUnavailableError } from "./inference-error.js";
-export { verifyConfigAfterSystemAgentWrite } from "./post-write-verification.js";
 export { RuntimeSystemAgentChatEngine, mocks };
 export { operationMocks } from "./chat-engine.mocks.test-support.js";

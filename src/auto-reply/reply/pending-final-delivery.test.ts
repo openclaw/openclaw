@@ -6,10 +6,7 @@ import {
 import { setReplyPayloadMetadata } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
 import { markInboundContextLabel } from "./inbound-context-marker.js";
-import {
-  classifyHeartbeatPendingFinalDelivery,
-  sanitizePendingFinalDeliveryText as sanitizeText,
-} from "./pending-final-delivery-state.js";
+import { sanitizePendingFinalDeliveryText as sanitizeText } from "./pending-final-delivery-state.js";
 import {
   buildRecoverablePendingFinalDeliveryText as recoverText,
   normalizePendingFinalDeliveryPayloads as deliveryPayloads,
@@ -52,16 +49,6 @@ it("persists the session writer authority with durable final custody", () => {
 
   expect(resolvePendingFinalDeliveryCompletion([payload])).toEqual(expected);
 });
-
-it.each(["no_r", "NO_R", "NO_REPLY"])(
-  "keeps pending ordinary reply %s during heartbeat admission",
-  (text) => {
-    expect(classifyHeartbeatPendingFinalDelivery(text, 300)).toEqual({
-      shouldClear: false,
-      replayText: text,
-    });
-  },
-);
 
 it("strips internal metadata from durable pending delivery text", () => {
   const text = [

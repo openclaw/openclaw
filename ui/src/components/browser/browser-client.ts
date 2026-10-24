@@ -120,9 +120,7 @@ export type BrowserInspectedNode = NonNullable<ReturnType<typeof readBrowserInsp
 type BrowserRequestEnvelope = {
   method: "GET" | "POST" | "DELETE";
   path: string;
-  query?: Record<string, unknown>;
   body?: unknown;
-  timeoutMs?: number;
 };
 
 function withoutBrowserTarget(value: unknown): Record<string, unknown> {

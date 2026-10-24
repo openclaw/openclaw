@@ -184,7 +184,8 @@ function ChatSessionRailContent(props: ChatSessionRailProps, host: ChatSessionRa
       if (nextScrollKey !== scrollKey) {
         scrollKey = nextScrollKey;
         scheduleLayout(thread, () => {
-          const bottom = thread.scrollHeight;
+          const bottom =
+            host.companion.loading && !host.companion.turns.length ? 0 : thread.scrollHeight;
           return () => {
             thread.scrollTop = bottom;
           };
@@ -246,6 +247,9 @@ function ChatSessionRailContent(props: ChatSessionRailProps, host: ChatSessionRa
       )}
       <div
         class="chat-session-rail__thread"
+        style={{
+          padding: props.companion.loading && !props.companion.turns.length ? "0" : undefined,
+        }}
         aria-live="polite"
         onClick={handleMarkdownCodeBlockClick}
         ref={(element) => {
@@ -258,8 +262,7 @@ function ChatSessionRailContent(props: ChatSessionRailProps, host: ChatSessionRa
         )}
         {!props.companion.loading && !props.companion.turns.length && (
           <PanelEmptyState
-            // Side chat keeps its native desktop empty; only mobile adopts the shared variant.
-            presentation={props.presentation === "mobile" ? "mobile" : undefined}
+            presentation={props.presentation}
             icon={<Icon name="bot" />}
             heading={t("chat.sidePanel.companion")}
             description={t("chat.rail.empty")}
@@ -373,34 +376,38 @@ function ChatSessionRailContent(props: ChatSessionRailProps, host: ChatSessionRa
   );
 }
 
-defineSolidBridge<ChatSessionRailProps>("openclaw-chat-session-rail", ChatSessionRailContent, {
-  propertyChanged: (host, key) => {
-    if (key === "companion" || key === "focusRequest") {
-      inputHandlers.get(host)?.();
-    }
+export const ChatSessionRail = defineSolidBridge<ChatSessionRailProps>(
+  "openclaw-chat-session-rail",
+  ChatSessionRailContent,
+  {
+    propertyChanged: (host, key) => {
+      if (key === "companion" || key === "focusRequest") {
+        inputHandlers.get(host)?.();
+      }
+    },
+    properties: {
+      presentation: { default: undefined, attribute: false },
+      sessionKey: { default: "", attribute: false },
+      agentId: { default: undefined, attribute: false },
+      assistantName: { default: undefined, attribute: false },
+      digest: { default: null, attribute: false },
+      running: { default: false, attribute: false },
+      activeRunId: { default: null, attribute: false },
+      pullRequests: { default: [], attribute: false },
+      companion: { default: { turns: [], loading: false, draft: "" }, attribute: false },
+      modelControls: { default: undefined, attribute: false },
+      client: { default: null, attribute: false },
+      connected: { default: false, attribute: false },
+      sendShortcut: { default: "enter", attribute: false },
+      inputDeviceId: { default: undefined, attribute: false },
+      onSubmit: { default: undefined, attribute: false },
+      onDraftChange: { default: undefined, attribute: false },
+      onAttachmentsChange: { default: undefined, attribute: false },
+      onOpenImage: { default: undefined, attribute: false },
+      attachmentLimits: { default: undefined, attribute: false },
+      uploadConfig: { default: undefined, attribute: false },
+      presented: { default: false, type: Boolean },
+      focusRequest: { default: undefined, attribute: false },
+    },
   },
-  properties: {
-    presentation: { default: undefined, attribute: false },
-    sessionKey: { default: "", attribute: false },
-    agentId: { default: undefined, attribute: false },
-    assistantName: { default: undefined, attribute: false },
-    digest: { default: null, attribute: false },
-    running: { default: false, attribute: false },
-    activeRunId: { default: null, attribute: false },
-    pullRequests: { default: [], attribute: false },
-    companion: { default: { turns: [], loading: false, draft: "" }, attribute: false },
-    modelControls: { default: undefined, attribute: false },
-    client: { default: null, attribute: false },
-    connected: { default: false, attribute: false },
-    sendShortcut: { default: "enter", attribute: false },
-    inputDeviceId: { default: undefined, attribute: false },
-    onSubmit: { default: undefined, attribute: false },
-    onDraftChange: { default: undefined, attribute: false },
-    onAttachmentsChange: { default: undefined, attribute: false },
-    onOpenImage: { default: undefined, attribute: false },
-    attachmentLimits: { default: undefined, attribute: false },
-    uploadConfig: { default: undefined, attribute: false },
-    presented: { default: false, type: Boolean },
-    focusRequest: { default: undefined, attribute: false },
-  },
-});
+);

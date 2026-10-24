@@ -63,10 +63,7 @@ type ChatQueuedEditProps = {
 /** Destinations and owner facts not already carried by ChatProps. */
 type ChatMobileActivities = {
   onOpenSubagents?: NonNullable<ChatActivityPillsProps["subagents"]>["onOpen"];
-  goal?: Pick<
-    NonNullable<ChatActivityPillsProps["goal"]>,
-    "executionConfirmed" | "hidden" | "onOpen"
-  >;
+  goal?: Pick<NonNullable<ChatActivityPillsProps["goal"]>, "executionConfirmed" | "onOpen">;
   onOpenProgress?: NonNullable<ChatActivityPillsProps["progress"]>["onOpen"];
   onOpenPullRequest?: NonNullable<ChatActivityPillsProps["pullRequests"]>["onOpen"];
   /** Eligibility is decided by the publication owner, including retained outcomes. */
@@ -135,6 +132,8 @@ export type ChatComposerProps = ChatAttachmentControlsProps & {
   submitPending?: boolean;
   disabledReason: string | null;
   disabledReasonTone?: "info" | "danger";
+  /** Optional route that resolves the disabled reason, shown beside it. */
+  disabledReasonAction?: { label: string; href: string; onNavigate: () => void };
   disabledReasonBusy?: boolean;
   disabledBanner?: ChatComposerDisabledBanner;
   runError?: ChatRunError | null;

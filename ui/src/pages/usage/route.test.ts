@@ -10,7 +10,7 @@ import {
   stubGatewayStoreTestGlobals,
 } from "../../app/gateway-store.test-support.ts";
 import { setAvatarGatewayOrigin } from "../../lib/identity-avatar-context.ts";
-import { page } from "./route.ts";
+import { page } from "./route.tsx";
 import type { UsageRouteData } from "./types.ts";
 
 const totals = {
@@ -175,13 +175,7 @@ describe("usage route", () => {
       expect(
         (Date.parse(data!.query.endDate) - Date.parse(data!.query.startDate)) / 86_400_000,
       ).toBe(29);
-      expect(data?.costSummary).toEqual({
-        updatedAt: 1,
-        days: 30,
-        totals,
-        daily: payload.aggregates.costDaily,
-        cacheStatus: payload.cacheStatus,
-      });
+      expect(data?.result).toEqual(payload);
       expect(calls.find(([method]) => method === "sessions.usage")?.[1]).toMatchObject({
         startDate: data?.query.startDate,
         endDate: data?.query.endDate,
@@ -190,6 +184,8 @@ describe("usage route", () => {
         mode: "specific",
         timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
         includeContextWeight: false,
+        sort: "cost",
+        sortDirection: "desc",
       });
     },
   );

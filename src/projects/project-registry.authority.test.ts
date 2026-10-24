@@ -1,20 +1,20 @@
 import path from "node:path";
-import { MessageChannel } from "node:worker_threads";
+import { setImmediate } from "node:timers/promises";
 import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
-import { withWorktreeAllocationLease } from "../agents/worktrees/allocation.js";
 import type { SqliteWorkerAdmissionFactory } from "../infra/sqlite-worker-operation-admission.js";
 import type { SqliteWorkerOperationSettlement } from "../infra/sqlite-worker-operation-settlement.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { expiryAdmission, observe } from "../state/openclaw-state-lease-async.test-support.js";
+import { observe } from "../state/openclaw-state-lease-async.test-support.js";
 import { OpenClawStateLeaseError } from "../state/openclaw-state-lease-error.js";
-import type { startOpenClawStateLeaseHeartbeat } from "../state/openclaw-state-lease-heartbeat.js";
-import type { createOpenClawStateLeaseWorkerStorage } from "../state/openclaw-state-lease-worker-storage.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
 import { removeClonedProjectCheckout } from "./project-clone.js";
 import { selectStoredProjectRegistry } from "./project-registry.js";
 import type { ProjectRegistryRecord } from "./project-registry.types.js";
+
+// Capture before fake timers: settlement needs a real event-loop turn.
+const nextMessageTurn = setImmediate;
 
 const fixture = vi.hoisted(() => ({
   expiresAt: 40_000,
@@ -27,7 +27,6 @@ const fixture = vi.hoisted(() => ({
   captureWorkerGuard: vi.fn<(assertCurrent: () => void) => void>(),
   assertDatabaseCurrent: vi.fn<() => void>(),
   release: vi.fn(),
-  startHeartbeat: vi.fn<typeof startOpenClawStateLeaseHeartbeat>(),
   forbiddenNative: vi.fn(() => {
     throw new Error("Project authority controls must not open SQLite, Git, or heartbeat workers");
   }),
@@ -86,33 +85,7 @@ vi.mock("../state/openclaw-state-db-async-lifecycle.js", async (importOriginal) 
 vi.mock("../state/openclaw-state-lease-worker-storage.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../state/openclaw-state-lease-worker-storage.js")>()),
   acquireLease: async () => ({ kind: "acquired", expiresAt: fixture.expiresAt }),
-  createOpenClawStateLeaseWorkerStorage: (
-    context: OpenClawStateWorkerContext,
-  ): ReturnType<typeof createOpenClawStateLeaseWorkerStorage> => ({
-    path: context.admission.databasePath,
-    assertCurrent: () => context.admission.assertCurrent(),
-    async withRetainedStartup(run, assertCurrent) {
-      context.admission.assertCurrent();
-      assertCurrent();
-      return await run(context);
-    },
-    async acquire(owner) {
-      return await owner.runLifecycle("acquire", async (admission) => {
-        admission.assertCurrent();
-        using observation = expiryAdmission(admission);
-        return { kind: "acquired" as const, expiresAt: observation.publish(fixture.expiresAt) };
-      });
-    },
-    verify: fixture.forbiddenNative,
-    renew: fixture.forbiddenNative,
-    startTimer: fixture.forbiddenNative,
-    async release(owner) {
-      await owner.runLifecycle("release", async (admission) => {
-        admission.assertCurrent();
-        fixture.release();
-      });
-    },
-  }),
+  createOpenClawStateLeaseWorkerStorage: fixture.forbiddenNative,
 }));
 vi.mock("../state/openclaw-state-lease-storage.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../state/openclaw-state-lease-storage.js")>()),
@@ -139,8 +112,9 @@ vi.mock("../state/openclaw-state-lease-storage.js", async (importOriginal) => ({
   },
   releaseOpenClawStateLease: fixture.release,
 }));
+// mock-isolation: project checkout leases must not start native heartbeat workers.
 vi.mock("../state/openclaw-state-lease-heartbeat.js", () => ({
-  startOpenClawStateLeaseHeartbeat: fixture.startHeartbeat,
+  startOpenClawStateLeaseHeartbeat: fixture.forbiddenNative,
 }));
 
 type WorkerOptions = {
@@ -170,10 +144,6 @@ vi.mock("../state/openclaw-state-worker-store.js", () => ({
     try {
       return await operation({
         execute: (command) => {
-          if (command.type === "worktrees.recoverPending") {
-            settled.resolve({ kind: "completed" });
-            return Promise.resolve();
-          }
           settled.resolve(fixture.settlement());
           return command.type === "projects.removeCheckoutReference"
             ? fixture.removeReference()
@@ -208,19 +178,6 @@ async function select(signal?: AbortSignal): Promise<Selection> {
   return selected;
 }
 
-async function nextMessageTurn(): Promise<void> {
-  const { port1, port2 } = new MessageChannel();
-  try {
-    await new Promise<void>((resolve) => {
-      port1.once("message", () => resolve());
-      port2.postMessage(undefined);
-    });
-  } finally {
-    port1.close();
-    port2.close();
-  }
-}
-
 function thrownBy(run: () => void): unknown {
   try {
     run();
@@ -246,7 +203,6 @@ beforeEach(() => {
   fixture.forbiddenNative.mockImplementation(() => {
     throw new Error("Project authority controls must not open SQLite, Git, or heartbeat workers");
   });
-  fixture.startHeartbeat.mockImplementation(fixture.forbiddenNative);
   fixture.resolveProject.mockResolvedValue(project);
   fixture.removeReference.mockResolvedValue("final");
   fixture.removeCheckout.mockResolvedValue();
@@ -379,77 +335,6 @@ it.each([
     } finally {
       retained.resolve({ kind: "completed" });
       await joined;
-    }
-  },
-);
-
-it.each(["known", "unknown", "wrapped-unknown"] as const)(
-  "preserves the selected %s outcome through allocation cancellation",
-  async (outcome) => {
-    fixture.startHeartbeat.mockReturnValueOnce({
-      ready: Promise.resolve(),
-      assertRunning: vi.fn(),
-      verify: async () => fixture.expiresAt,
-      renew: fixture.forbiddenNative,
-      holdOwnerFence: fixture.forbiddenNative,
-      close: fixture.forbiddenNative,
-      stop: async () => 0,
-    });
-    const caller = new AbortController();
-    const abortCause = new Error("Caller canceled the allocated operation");
-    const callbackFailure = new Error("Selected callback failed");
-    const settlementError = new Error("Selected native outcome remained unknown");
-    const cleanupFailure = new Error("Related cleanup failed");
-    const retained = createDeferredCore<SqliteWorkerOperationSettlement>();
-    fixture.settlement.mockReturnValue(retained.promise);
-    let selectedFailure: unknown;
-    const operation = withWorktreeAllocationLease(
-      { env: { OPENCLAW_STATE_DIR: "/synthetic-state" }, signal: caller.signal },
-      async (allocation) => {
-        const selected = await select(allocation.signal);
-        try {
-          return await selected.withCurrent(async () => {
-            caller.abort(abortCause);
-            retained.resolve(
-              outcome === "known"
-                ? { kind: "completed" }
-                : { kind: "unknown", error: settlementError },
-            );
-            throw callbackFailure;
-          });
-        } catch (error) {
-          selectedFailure =
-            outcome === "wrapped-unknown"
-              ? new AggregateError([error, cleanupFailure], "Selected work and cleanup failed", {
-                  cause: error,
-                })
-              : error;
-          throw selectedFailure;
-        }
-      },
-    );
-    const { error: joined } = observeFailure(operation);
-    const error = await joined;
-    const causes = collectNestedErrorCandidates(error);
-    expect(causes).toContain(abortCause);
-    if (outcome === "known") {
-      expect(error).toMatchObject({
-        code: "OPENCLAW_STATE_LEASE_ABORTED",
-        message: "managed worktree allocation lease operation was aborted",
-        cause: abortCause,
-      });
-    } else {
-      expect(error).toMatchObject({ code: "outcome-unknown" });
-      if (outcome === "wrapped-unknown") {
-        expect(causes).toContain(selectedFailure);
-      } else {
-        expect(error).toBe(selectedFailure);
-      }
-      expect(causes).toContain(callbackFailure);
-      expect(causes).toContain(settlementError);
-      if (outcome === "wrapped-unknown") {
-        expect(causes).toContain(cleanupFailure);
-      }
     }
   },
 );

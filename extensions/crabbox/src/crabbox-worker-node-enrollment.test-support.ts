@@ -119,7 +119,15 @@ export async function expectSetupPhases(result: Promise<{ code: number | null; o
   const completed = await result;
   expect(completed.code).toBe(0);
   const lines = completed.output.trim().split("\n");
-  // Crabbox consumes these stream markers; successful bootstrap emits no other data.
-  expect(lines.every((line) => /^CRABBOX_PHASE:[a-z.-]{1,80}$/.test(line))).toBe(true);
-  return lines.map((line) => line.slice("CRABBOX_PHASE:".length));
+  // Successful bootstrap emits only the bounded diagnostics consumed by the Gateway.
+  expect(
+    lines.every((line) =>
+      /^(?:CRABBOX_PHASE:[a-z.-]{1,80}|CRABBOX_TIMING:[a-z.-]{1,80}:\d+|CRABBOX_WARNING:openclaw-bootstrap-unlocked-install:[a-zA-Z0-9 _-]+)$/.test(
+        line,
+      ),
+    ),
+  ).toBe(true);
+  return lines
+    .filter((line) => line.startsWith("CRABBOX_PHASE:"))
+    .map((line) => line.slice("CRABBOX_PHASE:".length));
 }

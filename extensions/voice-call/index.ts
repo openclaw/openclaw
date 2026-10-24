@@ -1,6 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { ErrorCodes, errorShape } from "openclaw/plugin-sdk/gateway-runtime";
 import { resolveGlobalSingleton } from "openclaw/plugin-sdk/global-singleton";
@@ -113,8 +112,7 @@ export default definePluginEntry({
           runtimePromise ??= createVoiceCallRuntime({
             scheduler,
             config,
-            coreConfig: api.config as OpenClawConfig,
-            fullConfig: api.config,
+            coreConfig: api.config,
             agentRuntime: api.runtime.agent,
             stateRuntime: api.runtime.state,
             ttsRuntime: api.runtime.tts,

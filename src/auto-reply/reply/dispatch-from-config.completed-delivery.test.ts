@@ -93,7 +93,7 @@ it.each([
     }
     const { replyPayloads } = await buildReplyPayloads({
       payloads: embedded,
-      isHeartbeat: false,
+
       blockStreamingEnabled: false,
       blockReplyPipeline: null,
       replyToMode: "off",

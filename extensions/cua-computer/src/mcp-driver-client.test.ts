@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { once } from "node:events";
 import fs from "node:fs/promises";
 import net from "node:net";
 import path from "node:path";
@@ -40,16 +41,39 @@ async function createFakeEndpoint(
 ): Promise<FakeEndpoint> {
   // macOS sockaddr_un cannot hold the test runner's nested temporary path.
   const directory = await fs.mkdtemp(path.join(await fs.realpath("/tmp"), "oc-cua-mcp-"));
-  // Registered before the bind so a failed listen still removes the root.
   onTestFinished(async () => await fs.rm(directory, { recursive: true, force: true }));
   const socketPath = path.join(directory, "daemon.sock");
-  // Keep the executable immutable: Linux rejects exec while an inode has a writer.
   const binaryPath = fileURLToPath(new URL("../test/fixtures/mcp-proxy.cjs", import.meta.url));
-
   const requests: RpcRequest[] = [];
   const connections = new Set<net.Socket>();
   const writers = new Map<number, net.Socket>();
-  const endpoint = {} as FakeEndpoint;
+  const writeRaw = (request: RpcRequest, value: string | Buffer) => {
+    if (request.id !== undefined) {
+      writers.get(request.id)?.write(value);
+    }
+  };
+  const endpoint: FakeEndpoint = {
+    binaryPath,
+    socketPath,
+    requests,
+    respond: (request, result) => writeRaw(request, frame(request.id, result)),
+    writeRaw,
+    writeRawStream: async (request, chunks) => {
+      const writer = request.id === undefined ? undefined : writers.get(request.id);
+      if (!writer) {
+        throw new Error("fixture request has no connected writer");
+      }
+      await pipeline(Readable.from(chunks), writer, { end: false });
+    },
+    close: async () => {
+      for (const connection of connections) {
+        connection.destroy();
+      }
+      await new Promise<void>((resolve) => {
+        server.close(() => resolve());
+      });
+    },
+  };
   const server = net.createServer((socket) => {
     connections.add(socket);
     socket.once("close", () => connections.delete(socket));
@@ -68,35 +92,6 @@ async function createFakeEndpoint(
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
     server.listen(socketPath, resolve);
-  });
-
-  Object.assign(endpoint, {
-    binaryPath,
-    socketPath,
-    requests,
-    respond: (request: RpcRequest, result: unknown) => {
-      const writer = request.id === undefined ? undefined : writers.get(request.id);
-      writer?.write(frame(request.id, result));
-    },
-    writeRaw: (request: RpcRequest, value: string | Buffer) => {
-      const writer = request.id === undefined ? undefined : writers.get(request.id);
-      writer?.write(value);
-    },
-    writeRawStream: async (request: RpcRequest, chunks: Iterable<Buffer>) => {
-      const writer = request.id === undefined ? undefined : writers.get(request.id);
-      if (!writer) {
-        throw new Error("fixture request has no connected writer");
-      }
-      await pipeline(Readable.from(chunks), writer, { end: false });
-    },
-    close: async () => {
-      for (const connection of connections) {
-        connection.destroy();
-      }
-      await new Promise<void>((resolve) => {
-        server.close(() => resolve());
-      });
-    },
   });
   // Register first so later driver hooks dispose before socket cleanup, even when a test fails.
   onTestFinished(endpoint.close);
@@ -193,15 +188,8 @@ describe.runIf(process.platform !== "win32")("CUA MCP proxy transport", () => {
     );
     const driver = managedDriver({ ...endpoint, env: process.env });
     const computer = await execution(driver, "darwin");
-    const listed = JSON.parse(await computer.act('{"action":"list_windows"}')) as {
-      details: { windows: Array<{ windowRef: string }> };
-    };
-    const result = computer.act(
-      JSON.stringify({
-        action: "bring_to_front",
-        windowRef: listed.details.windows[0]!.windowRef,
-      }),
-    );
+    const windowRef = await computer.window();
+    const result = computer.send("bring_to_front", { windowRef });
     if (error) {
       await expect(result).rejects.toThrow(error);
     } else {
@@ -238,8 +226,10 @@ describe.runIf(process.platform !== "win32")("CUA MCP proxy transport", () => {
 
     const desktop = await driver.getDesktopState();
     expect(driver.isAvailable()).toBe(true);
-    const details = projectedToolDetails(desktop, "get_desktop_state");
-    expect(details).toMatchObject({ platform: "macos", screenshot_width: 200 });
+    expect(projectedToolDetails(desktop, "get_desktop_state")).toMatchObject({
+      platform: "macos",
+      screenshot_width: 200,
+    });
     expect(desktop.images).toHaveLength(1);
     const cursor = await driver.getCursorPosition();
     expect(projectedToolDetails(cursor, "get_cursor_position")).toMatchObject({ x: 11, y: 12 });
@@ -286,6 +276,29 @@ describe.runIf(process.platform !== "win32")("CUA MCP proxy transport", () => {
       count: 1,
       target: { kind: "desktop", display_id: "primary" },
     });
+  });
+
+  it("retries a rejected session startup before dispatching tools", async () => {
+    let starts = 0;
+    const endpoint = await createFakeEndpoint((request, fake) => {
+      if (request.method === "initialize") {
+        fake.respond(request, { protocolVersion: "2025-06-18" });
+      } else if (request.params?.name === "start_session") {
+        fake.respond(
+          request,
+          starts++ === 0
+            ? { isError: true, content: [{ type: "text", text: "fixture startup failed" }] }
+            : sessionState("desktop"),
+        );
+      } else if (request.method === "tools/call") {
+        fake.respond(request, toolResult({ windows: [] }));
+      }
+    });
+    const driver = managedDriver(endpoint);
+    await expect(driver.callTool("list_windows", {})).rejects.toThrow("fixture startup failed");
+    await expect(driver.callTool("list_windows", {})).resolves.toMatchObject({ isError: false });
+    expect(toolCalls(endpoint, "start_session")).toHaveLength(2);
+    expect(toolCalls(endpoint, "list_windows")).toHaveLength(1);
   });
 
   it("preserves UTF-8 and routes multiple out-of-order responses", async () => {
@@ -363,10 +376,7 @@ describe.runIf(process.platform !== "win32")("CUA MCP proxy transport", () => {
     await driver.dispose();
     const probe = net.createConnection(endpoint.socketPath);
     try {
-      await new Promise<void>((resolve, reject) => {
-        probe.once("connect", resolve);
-        probe.once("error", reject);
-      });
+      await once(probe, "connect");
     } finally {
       probe.destroy();
     }

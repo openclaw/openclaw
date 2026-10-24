@@ -8,8 +8,6 @@ import {
   resolveListedDefaultAccountId,
 } from "./account-helpers.js";
 
-const { resolveDefaultAccountId } = createAccountListHelpers("testchannel");
-
 function cfg(
   accounts: Record<string, unknown>,
   defaultAccount?: string,
@@ -47,18 +45,6 @@ describe("createAccountListHelpers", () => {
     expect(helpers.resolveDefaultAccountId({} as OpenClawConfig)).toBe("default");
   });
 
-  it("combines additional owner-discovered accounts without changing stable order", () => {
-    const helpers = createAccountListHelpers("testchannel", {
-      additionalAccountIds: () => ["bound", "work", "bound"],
-    });
-
-    expect(helpers.listAccountIds(cfg({ work: {}, alerts: {} }))).toEqual([
-      "alerts",
-      "bound",
-      "work",
-    ]);
-  });
-
   it("allows a single-account owner to name its configured implicit account", () => {
     const helpers = createAccountListHelpers("testchannel", {
       fallbackAccountIdWhenEmpty: false,
@@ -76,9 +62,6 @@ describe("createAccountListHelpers", () => {
         channels: { testchannel: { token: "root-token", defaultAccount: "work" } },
       } as unknown as OpenClawConfig),
     ).toEqual(["work"]);
-  });
-  it('returns "default" for empty config', () => {
-    expect(resolveDefaultAccountId({})).toBe("default");
   });
 });
 
@@ -109,9 +92,7 @@ describe("createAccountListHelpers account resolution", () => {
 
   it("merges owner-declared nested fields while omitting account-selection metadata", () => {
     const input = cfg(
-      {
-        "Work Team": { enabled: true, name: "Work", commands: { callbackPath: "/work" } },
-      },
+      { "Work Team": { enabled: true, name: "Work", commands: { callbackPath: "/work" } } },
       "Work Team",
       { enabled: false, commands: { native: true } },
     );

@@ -644,10 +644,9 @@ describe("client credential public update custody", () => {
     await migrate(f, captured);
     {
       using shared = openNodeSqliteDatabase(f.pathname, { readOnly: true });
+      const findTable = shared.prepare("SELECT name FROM sqlite_schema WHERE name=?");
       for (const table of credentialTables) {
-        expect(
-          shared.prepare("SELECT name FROM sqlite_schema WHERE name=?").get(table),
-        ).toBeUndefined();
+        expect(findTable.get(table)).toBeUndefined();
       }
       expect(
         JSON.parse(
@@ -715,6 +714,8 @@ describe("client credential public update custody", () => {
       [
         ...sourceTables,
         "config_machine_state",
+        "local_workspace_projections",
+        "local_workspace_manifest_nodes",
         "schema_meta",
         "sqlite_stat1",
         "sqlite_stat4",

@@ -467,6 +467,43 @@ describe("native UI built-in delegation", () => {
     expect(navigate).toHaveBeenCalledOnce();
   });
 
+  it("reports fatal async errors only for the current mount and disposes synchronous failures", async () => {
+    const contexts: ControlUiViewContext<ControlUiSurfaceProps["workspace"]>[] = [];
+    const dispose = vi.fn();
+    let failSynchronously = true;
+    const { host, reportError } = mountSurface({
+      id: "fatal",
+      label: "Fatal",
+      surface: "workspace",
+      mount(container, context) {
+        contexts.push(context);
+        container.textContent = "Current plugin content";
+        if (failSynchronously) {
+          context.reportError?.(new Error("Initial load failed"));
+        }
+        return { dispose };
+      },
+    });
+    await vi.waitFor(() =>
+      expect(host.querySelector("[role=alert]")?.textContent).toContain("Initial load failed"),
+    );
+    expect(dispose).toHaveBeenCalledOnce();
+    expect(contexts[0]?.signal.aborted).toBe(true);
+    failSynchronously = false;
+    host.querySelector<HTMLButtonElement>("[role=alert] button")!.click();
+    await vi.waitFor(() => expect(contexts).toHaveLength(2));
+    contexts[0]?.reportError?.(new Error("Late retired error"));
+    flush();
+    expect(host.querySelector("[role=alert]")).toBeNull();
+    contexts[1]?.reportError?.(new Error("Current request failed"));
+    await vi.waitFor(() =>
+      expect(host.querySelector("[role=alert]")?.textContent).toContain("Current request failed"),
+    );
+    expect(contexts[1]?.signal.aborted).toBe(true);
+    expect(dispose).toHaveBeenCalledTimes(2);
+    expect(reportError).toHaveBeenCalledTimes(2);
+  });
+
   it("aborts an invalidated view that fails during update and remounts it on retry", async () => {
     const roots: HTMLElement[] = [];
     const signals: AbortSignal[] = [];

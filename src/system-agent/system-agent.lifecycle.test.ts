@@ -1,5 +1,5 @@
 import { PassThrough } from "node:stream";
-import { expect, it } from "vitest";
+import { expect, it, onTestFinished, vi } from "vitest";
 import { fingerprintOpaqueRuntimeOwner } from "../agents/execution-auth-binding.js";
 import { getRegisteredAgentHarness } from "../agents/harness/registry.js";
 import { loadAgentRuntimePluginRegistryHandle } from "../agents/runtime-plugins.js";
@@ -125,23 +125,26 @@ it.each([false, true])(
         const { runtime } = createSystemAgentTestRuntime();
         const input = Object.assign(new PassThrough(), { isTTY: true });
         const output = Object.assign(new PassThrough(), { isTTY: true });
+        const conversation = vi
+          .spyOn(await import("./tui-backend.js"), "runSystemAgentTui")
+          .mockImplementation(async () => {
+            const harness = getRegisteredAgentHarness(id)?.harness;
+            expect(harness?.supports({ provider: route.provider, requestedRuntime: id })).toEqual({
+              supported: true,
+            });
+            started.resolve();
+            await release.promise;
+            if (throws) {
+              throw terminalError;
+            }
+          });
+        onTestFinished(() => conversation.mockRestore());
         process.on(observationEvent, observe);
         const work = runSystemAgent(
           {
             verifiedInference: binding,
             input,
             output,
-            runInteractiveTui: async () => {
-              const harness = getRegisteredAgentHarness(id)?.harness;
-              expect(harness?.supports({ provider: route.provider, requestedRuntime: id })).toEqual(
-                { supported: true },
-              );
-              started.resolve();
-              await release.promise;
-              if (throws) {
-                throw terminalError;
-              }
-            },
           },
           runtime,
         );

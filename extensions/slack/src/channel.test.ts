@@ -83,7 +83,6 @@ beforeEach(() => {
   mocks.sendMessage.mockResolvedValue({ messageId: "msg-1", channelId: "D123" });
   mocks.sessionCall.mockResolvedValue({ ok: true });
   mocks.writeClient.mockClear();
-  setSlackRuntime({ channel: { slack: { handleSlackAction: mocks.handleAction } } } as never);
 });
 
 async function getSlackConfiguredState(cfg: OpenClawConfig) {

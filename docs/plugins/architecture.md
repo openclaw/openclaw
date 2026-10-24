@@ -174,6 +174,8 @@ Plugin reload reconciles config watcher events after asynchronous metadata prepa
 
 Ordinary plugin source captures use independent files, including copies reached through aliases. On filesystems with copy-on-write support, these captures can share storage without sharing file identity, reducing data writes for large plugins. File containment and receipt validation run during capture; later source edits take effect on the next reload rather than invalidating the existing snapshot.
 
+Source capture preserves referenced URL assets, including directory URLs that the plugin uses. Unused standalone URL calculations do not cause the surrounding directory to be copied into the plugin generation.
+
 Asynchronous host loading prepares selected non-bundled plugin sources in a worker before evaluating or registering their code. Selection, trust checks, and entry-path validation happen first; the host checks inventory retirement and the expected source digest before installing the prepared capture. Each live external artifact retains its own worker, so later capture and publication cannot block a loaded sibling's synchronous source resolution. Existing registry and plugin-instance caching provide reuse; recovery retains the original artifact's worker. This isolation uses more worker memory when many external artifacts are active. A failed acquisition records that plugin's load error without discarding successfully prepared siblings. Synchronous CLI loading and loading inside an existing compute worker retain their inline acquisition path. Plugin evaluation and registration still run in their original owner; moving source preparation does not make arbitrary plugin initialization nonblocking.
 
 Legacy session-key migration selects plugins that declare that capability before checking channel presence. Owners already eligible under migration policy do not need a channel-presence check. Scoped selections check persisted credentials only for their channel owners, so unrelated authentication modules stay unloaded during Doctor repairs. This credential scope does not limit environment-based presence signals: configured channels with missing plugins still produce installation and recovery hints.
@@ -226,6 +228,8 @@ A later reload can retry after pending cleanup completes successfully, without c
 
 Missing captured source files produce a replacement warning instead of preventing a fresh plugin load. Recovery snapshots must contain every previously captured input, including companion files. If replacement then fails, recovery restores only plugins with available captured code; it does not substitute changed installed files for a missing snapshot. Existing call-drain and resource-cleanup requirements still apply.
 
+At the end of a reload, the Gateway awaits disposal of unused recovery snapshots without blocking the event loop on their preparation workers. Cleanup attempts every snapshot before reporting failures, so one failed disposal does not strand unrelated captured source.
+
 Gateway shutdown also joins actual harness, MCP, LSP, embedding, and media cleanup after their initial grace periods. When clearing the active registry, plugin host cleanup can advance to later hooks after a timeout, but registry resets and shared database closure wait for its actual completion. These waits preserve resources for cleanup; they do not restore a retired plugin's runtime authority.
 
 Shutdown closes admission before waiting for config reloads to settle. Those reloads can still defer cleanup held by existing consumers. Final Gateway close releases those consumers, joins retained cleanup, and reports its failures before another Gateway can start.
@@ -254,9 +258,25 @@ runtime-store slots. Non-bundled instances also own a captured source artifact.
 Package plugins capture their package inputs when the instance is created.
 Standalone files capture their entry and statically known inputs
 without copying the surrounding workspace. Bundled runtime and setup modules,
-including TypeScript source entries, share the host's code identity; each inventory
-still owns its registered callbacks and cleanup. Loading edited bundled code requires
-a Gateway restart; rebuild first when the installation loads compiled output.
+including TypeScript source entries, share the host's code identity during ordinary
+inventory loading; each inventory owns its registered callbacks and cleanup.
+Explicit reload captures the selected plugin's code and plugin-only build chunks
+while retaining canonical host and SDK modules. Captured Workers reach shared
+host modules through links in their captured namespace, so their native imports
+preserve the same host selection without inheriting the parent's resolver hooks.
+If the filesystem denies file symlinks, ordinary parent resolution remains
+available; captured Workers that need these shared imports retain that limitation.
+Rebuild before reload when the
+installation loads compiled output. Changes to host or SDK code require a Gateway restart.
+
+WebAssembly libraries remain ordinary captured assets even when they use a `.so`
+filename. Directory asset references reuse an active capture walk; filesystem
+directory cycles still fail capture.
+
+Source preparation workers wake synchronous host readers after posting results,
+callback requests, and consumption acknowledgements. The shared sequence is a
+progress hint only: the host still services the transport and checks the actual
+task receipt and deadline. Readers retain bounded polling for worker failures.
 
 Doctor retains an unexecuted source snapshot across its maintenance phases.
 Each phase admits fresh callback instances with private module files and settles
@@ -351,7 +371,9 @@ removes unreferenced captures while preserving installed-index references, warm
 generations, and live owners. System-temp fallback captures are scoped to their
 state directory; captures with unknown ownership are preserved.
 
-Gateway idle cleanup checks capture directories and npm retention markers before
+Gateway idle cleanup runs after startup and repeats hourly after each completed
+pass, deferring while the Gateway is busy and stopping during shutdown. It
+checks capture directories and npm retention markers before
 acquiring the plugin lifecycle lease. An empty scan makes no shared-state writes
 and leaves the Gateway's metadata caches intact. When candidates exist, cleanup
 uses a private operation-scoped cache and one fresh installed-index payload for
@@ -359,7 +381,7 @@ install records and native receipt protection. Invalid receipts still preserve
 captures, and every deletion retains its live lease and custody checks. The
 private cache is disposed before the lease is released. These best-effort scans
 do not freeze the filesystem: artifacts created or retired after inspection
-remain for a later cleanup attempt. Scheduling and deletion criteria are unchanged.
+remain for a later cleanup attempt.
 
 Each captured generation links the selected host `openclaw` package so Workers
 and child processes started from its modules can resolve the host SDK. This link
@@ -452,9 +474,12 @@ and preserves the same cleanup contract for shipped `owner.sqlite` markers.
 Cleanup rechecks directory and token identity before removal. Live leases,
 unreadable entries, symlinks, and invalid tokens preserve files. An aged instance
 left without a token by interrupted allocation or older partial cleanup is
-reclaimed only after a complete process and open-file census proves inactivity,
-followed by a successful rename check. Allocation creates the token before
-creating payload, and disposal removes payload before its token.
+reclaimed directly on all platforms if it has no native payload and is not
+retained by the current process. The plugin source capture directory owner
+rechecks its directory identity and, where available, the current UID before removal.
+Recent tokenless roots and roots containing native payloads are preserved.
+Allocation creates the token before creating payload, and disposal removes
+payload before its token.
 The token belongs to its capture instance; captures do not create a global
 coordination database.
 Removal remains asynchronous and advisory. This subtree is excluded from state
@@ -470,21 +495,15 @@ If its payload directory is removed while the instance still holds custody, the
 next capture recreates that directory under the same lease. This does not restore
 previously deleted captured files or recreate a missing ownership directory.
 
-Startup and hourly cleanup also reclaim tokenless `openclaw-plugin-build-*` and
+Hourly cleanup also reclaims tokenless `openclaw-plugin-build-*` and
 `openclaw-model-catalog-*` roots in the selected state's temporary directory and
 the current system temporary directory. Roots must be older than one hour and
-have no custody token. On macOS and Linux, cleanup rechecks that each legacy root belongs
-to the current UID immediately before its rename, preserving other users' captures even in
-privileged runs. A live OpenClaw producer preserves tokenless roots. On Linux,
-cleanup also inspects process file descriptors, working directories, and mapped
-files, including holders that are not OpenClaw processes. Only a complete census
-with no holder permits removal. Restricted procfs mounts (`hidepid` restrictions
-or `subset=pid`) preserve roots with a `restricted-procfs` warning. Unreadable or incomplete inspection preserves
-the roots and emits one warning per sweep with the reason; cleanup retries on a
-later sweep without interrupting loading or updates. Platforms without complete
-open-file inspection, including macOS and Windows, preserve tokenless roots.
-Managed instances with custody tokens continue to use their native lease on all
-platforms. A rename check alone never establishes inactivity.
+have no custody token or native payload. The same directory identity, current-process
+retention, and UID checks apply on all platforms; no process or open-file census
+is required. Legacy producers that outlive the grace period receive best-effort
+cleanup. Inspection or removal failures are reported once per sweep and retried
+later without interrupting loading or updates. Managed instances with custody
+tokens continue to use their native lease on all platforms.
 
 Older `openclaw-plugin-build-*` directories in the system temporary directory
 have no owner record proving whether their producer is still alive. Doctor reports
@@ -974,6 +993,9 @@ Native OpenClaw plugins run **in-process** with the Gateway. They are not sandbo
 <Warning>
 Native plugin implications: a plugin can register tools, network handlers, hooks, and services; a plugin bug can crash or destabilize the gateway; and a malicious native plugin is equivalent to arbitrary code execution inside the OpenClaw process.
 </Warning>
+
+Plugin authors must handle asynchronous errors from their own clients and sockets;
+see [Handle native client errors](/plugins/sdk-runtime#handle-native-client-errors).
 
 Compatible bundles are safer by default because OpenClaw currently treats them as metadata/content packs. In current releases, that mostly means bundled skills.
 

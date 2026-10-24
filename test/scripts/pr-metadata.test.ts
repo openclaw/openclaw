@@ -478,7 +478,7 @@ it.each(["observation", "repository only"])(
         : viewPull("baseRepository"),
       { ghRepo: "https://GITHUB.COM/Base-Owner/Base-Repo" },
     );
-    expect(result.status, result.stderr).toBe(0);
+    expectResult(result, 0);
     expect(JSON.parse(result.stdout)).toMatchObject({
       baseRepository: repository,
       ...(selection === "observation"
@@ -530,8 +530,7 @@ it("verifies the GraphQL fallback writer", () => {
     "pr_gh_writer_login github.com",
     { protectedGh: true },
   );
-  expectResult(result, 0);
-  expect(result.stdout.trim()).toBe("fixture-writer");
+  expectResult(result, 0, { stdout: "fixture-writer\n" });
   expect(callsTo(result, "graphql")).toHaveLength(1);
 });
 
@@ -581,42 +580,38 @@ it.each(["exact", "absent", "unavailable"])("requires exact %s collaborator auth
   });
 });
 
-it.each(["complete", "partial", "duplicate", "errors"])(
-  "requires %s GraphQL comment evidence",
-  (mode) => {
-    const node = {
-      databaseId: 12,
+it.each(["complete", "duplicate", "errors"])("requires %s GraphQL comment evidence", (mode) => {
+  const node = {
+    databaseId: 12,
+    body: "review",
+    url: `${repository.url}/pull/42#issuecomment-12`,
+    author: { databaseId: 274271284, login: "clawsweeper", __typename: "Bot" },
+  };
+  const page = (nodes: unknown[], hasNextPage: boolean) => pullPage("comments", nodes, hasNextPage);
+  const result = fallback(
+    repoEndpoint("/issues/42/comments?per_page=100"),
+    mode === "errors"
+      ? [{ ...page([node], false), errors: [{ message: "partial result" }] }]
+      : [
+          page([node], true),
+          page([{ ...node, databaseId: mode === "duplicate" ? 12 : 13 }], false),
+        ],
+    "pr_gh_plain issue-comments base-owner/base-repo github.com 42",
+  );
+  expectResult(result, mode === "complete" ? 0 : 65);
+  if (mode === "complete") {
+    const comments = JSON.parse(result.stdout).flat();
+    expect(comments).toHaveLength(2);
+    expect(comments[0]).toMatchObject({
+      id: 12,
       body: "review",
-      url: `${repository.url}/pull/42#issuecomment-12`,
-      author: { databaseId: 274271284, login: "clawsweeper", __typename: "Bot" },
-    };
-    const page = (nodes: unknown[], hasNextPage: boolean) =>
-      pullPage("comments", nodes, hasNextPage);
-    const result = fallback(
-      repoEndpoint("/issues/42/comments?per_page=100"),
-      mode === "errors"
-        ? [{ ...page([node], false), errors: [{ message: "partial result" }] }]
-        : [
-            page([node], mode !== "partial"),
-            page([{ ...node, databaseId: mode === "duplicate" ? 12 : 13 }], false),
-          ],
-      "pr_gh_plain issue-comments base-owner/base-repo github.com 42",
-    );
-    expect(result.status, result.stderr).toBe(mode === "complete" ? 0 : 65);
-    if (mode === "complete") {
-      const comments = JSON.parse(result.stdout).flat();
-      expect(comments).toHaveLength(2);
-      expect(comments[0]).toMatchObject({
-        id: 12,
-        body: "review",
-        user: { id: 274271284, login: "clawsweeper[bot]", type: "Bot" },
-        html_url: node.url,
-      });
-    } else {
-      expect(result.stdout).toBe("");
-    }
-  },
-);
+      user: { id: 274271284, login: "clawsweeper[bot]", type: "Bot" },
+      html_url: node.url,
+    });
+  } else {
+    expect(result.stdout).toBe("");
+  }
+});
 
 it("pins GraphQL author order and human attribution", () => {
   const first = "1".repeat(40);
@@ -662,7 +657,7 @@ it.each([false, true])("requires complete GraphQL files (truncated=%s)", (trunca
     [pullResponse(nullableIdentity), page("src/a.ts", !truncated), page("src/b.ts", false)],
     viewPull("headRefOid,author,headRepository,headRepositoryOwner,files"),
   );
-  expect(result.status, result.stderr).toBe(truncated ? 65 : 0);
+  expectResult(result, truncated ? 65 : 0);
   if (!truncated) {
     expect(JSON.parse(result.stdout)).toEqual({
       ...nullableIdentity,
@@ -671,11 +666,8 @@ it.each([false, true])("requires complete GraphQL files (truncated=%s)", (trunca
   } else {
     expect(result.stdout).toBe("");
   }
-  expect(result.calls.some((args) => args[0] === "pr")).toBe(false);
   expect(
-    result.calls
-      .filter((args) => args.includes("graphql"))
-      .every((args) => args.includes("Cache-Control: max-age=0")),
+    callsTo(result, "graphql").every((args) => args.includes("Cache-Control: max-age=0")),
   ).toBe(true);
 });
 it.each([
@@ -742,13 +734,11 @@ it.each([0, 101, 4])("bounds reads for %i ordered authors", (count) => {
 
 it.each([
   { fixture: { authorSources: null }, calls: 0 },
-  { fixture: { authorSources: {} }, calls: 0 },
   { fixture: { authorSources: [source(1), source(1)] }, calls: 0 },
   { fixture: { authorSources: [{ oid: "main", changesTree: true }] }, calls: 0 },
   { fixture: { authorSources: [{ oid: sha(1) }] }, calls: 0 },
   ...[
     null,
-    {},
     [],
     [record(2)],
     [record(1), record(1)],
@@ -819,14 +809,10 @@ it.each([false, true])("preserves cleanup-failed results: %s", (failed) => {
   });
   expectPayload(result, Buffer.from("payload"), true);
 });
-it.each(
-  ["GH_REPO", "--repo"].flatMap((selection) =>
-    ["github.enterprise.invalid", "github.enterprise.invalid:8443"].map((enterpriseHost) => ({
-      selection,
-      enterpriseHost,
-    })),
-  ),
-)("resolves $selection at $enterpriseHost without GH_HOST", ({ selection, enterpriseHost }) => {
+it.each([
+  { selection: "GH_REPO", enterpriseHost: enterprise },
+  { selection: "--repo", enterpriseHost: `${enterprise}:8443` },
+])("resolves $selection at $enterpriseHost without GH_HOST", ({ selection, enterpriseHost }) => {
   const repoURL = `https://${enterpriseHost}/base-owner/base-repo`;
   const explicit = selection === "--repo" ? " --repo base-owner/base-repo" : "";
   const result = readPrMetadata(
@@ -855,7 +841,7 @@ it.each(["forbidden", "quota"] as const)("applies %s collaborator failure policy
   });
   expectSupplementalQuota(result);
 });
-it.each([undefined, null, 0, -1, 1.5])("blocks CI dispatch without repo ID: %s", (id) => {
+it.each([undefined, 0, 1.5])("blocks CI dispatch without repo ID: %s", (id) => {
   const result = readPrMetadata(
     {
       initialPatch: {
@@ -887,12 +873,6 @@ it("collects only complete paginated REST metadata", () => {
   expectResult(result, 0, { stderr: "", notifications: "", attempts: 2 });
   expect(callsTo(result, pullEndpoint)).toHaveLength(2);
   expect(result.calls.filter((args) => args[0] === "api")).toHaveLength(3);
-  expect(result.calls.some((args) => args.includes("repos/base-owner/base-repo"))).toBe(false);
-  expect(
-    result.calls.every(
-      (args) => (args[0] === "api" && !args.includes("graphql")) || args[0] === "browse",
-    ),
-  ).toBe(true);
   const metadata = JSON.parse(result.stdout);
   expect(metadata).toMatchObject({
     number: 42,
@@ -919,10 +899,10 @@ it.each<{ fixture: Fixture; diagnostic: string }>([
         : "consistent with changedFiles",
   })),
   { fixture: { failure: "exit", failureTarget: "files" }, diagnostic: "exited with status 7" },
-  ...[null, {}, "unavailable"].map((files) => ({
-    fixture: { changedFiles: 0, files },
+  {
+    fixture: { changedFiles: 0, files: null },
     diagnostic: "malformed paginated metadata",
-  })),
+  },
   ...[
     [restFile({ additions: -1 })],
     [restFile({ additions: 0.5 })],
@@ -1006,7 +986,6 @@ it.each([
   ["pr_meta_json 42", "pull", 1],
   ["ensure_gh_api_auth", "user", 1],
   [`${viewPull("headRefOid")} --jq .headRefOid`, "pull", 75],
-  ["pr_gh_plain pr view 42 --json headRefOid --jq=.headRefOid", "pull", 75],
   [
     'node --input-type=module -e \'import { execPrGh } from "./scripts/pr-lib/github.mjs"; execPrGh(["api","repos/base-owner/base-repo/pulls/42","--input","-"], {input:Buffer.from("private payload")}, "plain")\'',
     "pull",

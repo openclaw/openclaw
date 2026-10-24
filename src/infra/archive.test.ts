@@ -1,4 +1,3 @@
-// Tests archive creation and extraction helpers.
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -25,24 +24,24 @@ async function withArchiveCase(
   await run({ workDir, archivePath, extractDir });
 }
 
-async function writePackageArchive(
+async function writeArchive(
   ext: "zip" | "tar",
   workDir: string,
   archivePath: string,
-  fileName = "hello.txt",
+  fileName = "package/hello.txt",
   content = "hi",
 ) {
   if (ext === "zip") {
     const zip = new JSZip();
-    zip.file(`package/${fileName}`, content);
+    zip.file(fileName, content);
     await fs.writeFile(archivePath, await zip.generateAsync({ type: "nodebuffer" }));
     return;
   }
 
-  const packageDir = path.join(workDir, "package");
-  await fs.mkdir(packageDir, { recursive: true });
-  await fs.writeFile(path.join(packageDir, fileName), content);
-  await tar.c({ cwd: workDir, file: archivePath }, ["package"]);
+  const input = path.join(workDir, "input");
+  await fs.mkdir(path.dirname(path.join(input, fileName)), { recursive: true });
+  await fs.writeFile(path.join(input, fileName), content);
+  await tar.c({ cwd: input, file: archivePath }, [fileName.split("/")[0]!]);
 }
 
 async function createDirectorySymlink(targetDir: string, linkPath: string) {
@@ -97,7 +96,7 @@ describe("archive utils", () => {
     ),
   )("extracts $ext archives with durable=$durable", async ({ ext, durable }) => {
     await withArchiveCase(ext, async ({ workDir, archivePath, extractDir }) => {
-      await writePackageArchive(ext, workDir, archivePath);
+      await writeArchive(ext, workDir, archivePath);
       const extractedPath = path.join(await fs.realpath(extractDir), "package", "hello.txt");
       let fileSyncs = 0;
       const originalOpen = fs.open;
@@ -147,7 +146,7 @@ describe("archive utils", () => {
       await withArchiveCase(ext, async ({ workDir, archivePath, extractDir }) => {
         const realExtractDir = path.join(workDir, "real-extract");
         await fs.mkdir(realExtractDir, { recursive: true });
-        await writePackageArchive(ext, workDir, archivePath);
+        await writeArchive(ext, workDir, archivePath);
         await fs.rm(extractDir, { recursive: true, force: true });
         await createDirectorySymlink(realExtractDir, extractDir);
 
@@ -174,21 +173,22 @@ describe("archive utils", () => {
     },
   );
 
-  it("rejects zip entries that traverse pre-existing destination symlinks", async () => {
-    await withArchiveCase("zip", async ({ workDir, archivePath, extractDir }) => {
-      const outsideDir = path.join(workDir, "outside");
-      await fs.mkdir(outsideDir, { recursive: true });
-      await createDirectorySymlink(outsideDir, path.join(extractDir, "escape"));
+  it.each(["zip", "tar"] as const)(
+    "rejects %s entries traversing destination symlinks",
+    async (ext) => {
+      await withArchiveCase(ext, async ({ workDir, archivePath, extractDir }) => {
+        const outsideDir = path.join(workDir, "outside");
+        await fs.mkdir(outsideDir, { recursive: true });
+        await createDirectorySymlink(outsideDir, path.join(extractDir, "escape"));
 
-      const zip = new JSZip();
-      zip.file("escape/pwn.txt", "owned");
-      await fs.writeFile(archivePath, await zip.generateAsync({ type: "nodebuffer" }));
+        await writeArchive(ext, workDir, archivePath, "escape/pwn.txt", "owned");
 
-      await expectRejectedCode(extract(archivePath, extractDir), "destination-symlink-traversal");
+        await expectRejectedCode(extract(archivePath, extractDir), "destination-symlink-traversal");
 
-      await expectPathMissing(path.join(outsideDir, "pwn.txt"));
-    });
-  });
+        await expectPathMissing(path.join(outsideDir, "pwn.txt"));
+      });
+    },
+  );
 
   it("does not clobber an out-of-destination file during a zip symlink-rebind race", async () => {
     await withArchiveCase("zip", async ({ workDir, archivePath, extractDir }) => {
@@ -280,27 +280,11 @@ describe("archive utils", () => {
     },
   );
 
-  it("rejects tar entries that traverse pre-existing destination symlinks", async () => {
-    await withArchiveCase("tar", async ({ workDir, archivePath, extractDir }) => {
-      const outsideDir = path.join(workDir, "outside");
-      const archiveRoot = path.join(workDir, "archive-root");
-      await fs.mkdir(outsideDir, { recursive: true });
-      await fs.mkdir(path.join(archiveRoot, "escape"), { recursive: true });
-      await fs.writeFile(path.join(archiveRoot, "escape", "pwn.txt"), "owned");
-      await createDirectorySymlink(outsideDir, path.join(extractDir, "escape"));
-      await tar.c({ cwd: archiveRoot, file: archivePath }, ["escape"]);
-
-      await expectRejectedCode(extract(archivePath, extractDir), "destination-symlink-traversal");
-
-      await expectPathMissing(path.join(outsideDir, "pwn.txt"));
-    });
-  });
-
   it.each([{ ext: "zip" as const }, { ext: "tar" as const }])(
     "rejects $ext archives that exceed extracted size budget",
     async ({ ext }) => {
       await withArchiveCase(ext, async ({ workDir, archivePath, extractDir }) => {
-        await writePackageArchive(ext, workDir, archivePath, "big.txt", "x".repeat(64));
+        await writeArchive(ext, workDir, archivePath, "package/big.txt", "x".repeat(64));
 
         await expect(
           extract(archivePath, extractDir, { limits: { maxExtractedBytes: 32 } }),
@@ -313,7 +297,7 @@ describe("archive utils", () => {
     "rejects $ext archives that exceed archive size budget",
     async ({ ext }) => {
       await withArchiveCase(ext, async ({ workDir, archivePath, extractDir }) => {
-        await writePackageArchive(ext, workDir, archivePath, "file.txt", "ok");
+        await writeArchive(ext, workDir, archivePath, "package/file.txt", "ok");
         const stat = await fs.stat(archivePath);
 
         await expect(

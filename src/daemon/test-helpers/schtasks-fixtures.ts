@@ -8,7 +8,7 @@ import { vi } from "vitest";
 import type { PortUsage } from "../../infra/ports-types.js";
 import type { killProcessTree as killProcessTreeImpl } from "../../process/kill-tree.js";
 import type { MockFn } from "../../test-utils/vitest-mock-fn.js";
-import { resolveTaskScriptPath } from "../schtasks.js";
+import { resolveTaskScriptPath } from "../schtasks-layout.js";
 
 export const schtasksResponses: Array<{ code: number; stdout: string; stderr: string }> = [];
 export const schtasksCalls: string[][] = [];

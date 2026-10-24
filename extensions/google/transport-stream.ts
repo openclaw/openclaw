@@ -410,10 +410,8 @@ function createChildSignal(parent: AbortSignal | undefined, timeoutMs: number) {
     timeout.unref?.();
   }
   const clearDeadline = () => {
-    if (timeout) {
-      clearTimeout(timeout);
-      timeout = undefined;
-    }
+    clearTimeout(timeout);
+    timeout = undefined;
   };
   return {
     signal,

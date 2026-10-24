@@ -9,6 +9,7 @@ import { resolveSessionAgentId } from "../../agent-scope.js";
 import { reserveChildAdmissionSlot } from "../../child-admission.js";
 import { summarizeSpawnError } from "../../spawn-pipeline.js";
 import { resolveSpawnAdmission, resolveSpawnMode } from "../../spawn-plan.js";
+import { validateName } from "../../worktrees/name.js";
 import { prepareSubagentSessionListReadCache } from "../registry/subagent-registry-state.js";
 import { listSwarmRunsForGroup } from "../registry/subagent-registry.js";
 import { resolveSwarmConfig } from "../swarm/swarm-config.js";
@@ -35,6 +36,13 @@ export async function resolveSubagentSpawnRequest(
   params: SpawnSubagentParams,
   ctx: SpawnSubagentContext,
 ) {
+  if (params.worktreeName !== undefined) {
+    try {
+      validateName(params.worktreeName);
+    } catch (error) {
+      return rejectSubagentSpawnRequest("error", summarizeSpawnError(error));
+    }
+  }
   const requestedAgentId = params.agentId?.trim();
   const taskNameResult = normalizeSubagentTaskName(params.taskName);
   if (taskNameResult.error) {

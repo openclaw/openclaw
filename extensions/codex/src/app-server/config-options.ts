@@ -105,8 +105,6 @@ export function createCodexAppServerConfig({
       agentDir?: string;
       codexConfigToml?: string | null;
       requirementsToml?: string | null;
-      requirementsPath?: string;
-      readRequirementsFile?: (path: string) => string | undefined;
       platform?: NodeJS.Platform;
       hostName?: string;
       openClawSandboxActive?: boolean;

@@ -1,6 +1,6 @@
 import { action, createMemo, createOptimistic, Errored, Loading, onSettled, Show } from "solid-js";
 import { registerDreamingEnglish } from "../../../i18n/locales/en-dreaming.ts";
-import "../../../components/modal-dialog.ts";
+import "../../../components/modal-dialog.tsx";
 import { t } from "../../../lib/reactive/i18n.ts";
 
 registerDreamingEnglish();

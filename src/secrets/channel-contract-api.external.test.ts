@@ -6,33 +6,33 @@ import { cleanupTrackedTempDirs, makeTrackedTempDir } from "../plugins/test-help
 
 const tempDirs: string[] = [];
 
-const {
-  loadPluginMetadataSnapshotMock,
-  loadBundledPublicArtifactMock,
-  shouldRejectHardlinkedPluginFilesMock,
-} = vi.hoisted(() => ({
-  loadPluginMetadataSnapshotMock: vi.fn(),
-  loadBundledPublicArtifactMock: vi.fn(() => null),
-  shouldRejectHardlinkedPluginFilesMock: vi.fn(() => true),
+const mocks = vi.hoisted(() => ({
+  metadata: vi.fn(),
+  artifact: vi.fn(() => null),
+  rejectHardlinks: vi.fn(() => true),
 }));
 
+// mock-isolation: Supply only synthetic plugin records from each temporary fixture.
 vi.mock("../plugins/plugin-metadata-snapshot.js", () => ({
-  loadPluginMetadataSnapshot: loadPluginMetadataSnapshotMock,
+  loadPluginMetadataSnapshot: mocks.metadata,
 }));
 
+// mock-isolation: Keep config discovery scoped to the synthetic plugin registry.
 vi.mock("../config/io.plugin-metadata.js", () => ({
   resolveConfigWidePluginManifestRegistry: (...args: unknown[]) => {
-    const snapshot = loadPluginMetadataSnapshotMock(...args);
+    const snapshot = mocks.metadata(...args);
     return snapshot.manifestRegistry ?? snapshot;
   },
 }));
 
+// mock-isolation: Control bundled fallback without loading installed plugin code.
 vi.mock("../plugins/public-surface-loader.js", () => ({
-  loadBundledPluginPublicArtifactModuleFromCandidatesSync: loadBundledPublicArtifactMock,
+  loadBundledPluginPublicArtifactModuleFromCandidatesSync: mocks.artifact,
 }));
 
+// mock-isolation: Select each filesystem policy branch independently of the host.
 vi.mock("../plugins/hardlink-policy.js", () => ({
-  shouldRejectHardlinkedPluginFiles: shouldRejectHardlinkedPluginFilesMock,
+  shouldRejectHardlinkedPluginFiles: mocks.rejectHardlinks,
 }));
 
 import { loadChannelSecretContractApi } from "./channel-contract-api.js";
@@ -47,39 +47,34 @@ function loadContract(options: Partial<Parameters<typeof loadChannelSecretContra
   });
 }
 
+const contractIds = (api: ReturnType<typeof loadChannelSecretContractApi>) =>
+  api?.secretTargetRegistryEntries?.map(({ id }) => id);
+const usePlugins = (...plugins: ReturnType<typeof writePlugin>[]) =>
+  mocks.metadata.mockReturnValue({ plugins });
+
 function expectOfficialFallback() {
   const api = loadContract({
     channelId: "qqbot",
     config: { channels: { qqbot: { appId: "app" } } },
     loadablePluginOrigins: undefined,
   });
-  expect(api?.secretTargetRegistryEntries?.map((entry) => entry.id)).toEqual([
+  expect(contractIds(api)).toEqual([
     "channels.qqbot.accounts.*.clientSecret",
     "channels.qqbot.clientSecret",
   ]);
   return api;
 }
 
-function channelSecretContractModuleSource(channelId: string) {
-  return `
-module.exports = {
-  secretTargetRegistryEntries: [{ id: "channels.${channelId}.token" }],
-  collectRuntimeConfigAssignments() {}
-};
-`;
-}
-
-function writeExternalChannelPlugin(params: {
-  pluginId?: string;
-  channelId?: string;
-  directory?: string;
-}) {
+function writePlugin(params: { pluginId?: string; channelId?: string; directory?: string }) {
   const rootDir = makeTrackedTempDir("openclaw-channel-secret-contract", tempDirs);
   const contractDir = path.join(rootDir, params.directory ?? "");
   fs.mkdirSync(contractDir, { recursive: true });
   fs.writeFileSync(
     path.join(contractDir, "secret-contract-api.cjs"),
-    channelSecretContractModuleSource(params.channelId ?? "discord"),
+    `module.exports = {
+  secretTargetRegistryEntries: [{ id: "channels.${params.channelId ?? "discord"}.token" }],
+  collectRuntimeConfigAssignments() {}
+};`,
     "utf8",
   );
   return {
@@ -93,43 +88,39 @@ function writeExternalChannelPlugin(params: {
 
 describe("external channel secret contract api", () => {
   beforeEach(() => {
-    loadPluginMetadataSnapshotMock.mockReset();
-    loadBundledPublicArtifactMock.mockClear();
-    shouldRejectHardlinkedPluginFilesMock.mockReset().mockReturnValue(true);
+    mocks.metadata.mockReset();
+    mocks.artifact.mockClear();
+    mocks.rejectHardlinks.mockReset().mockReturnValue(true);
   });
 
   afterEach(() => cleanupTrackedTempDirs(tempDirs));
 
   it("keeps a healthy external contract available when another artifact fails to load", () => {
-    const broken = writeExternalChannelPlugin({ pluginId: "custom", channelId: "custom" });
-    const healthy = writeExternalChannelPlugin({ pluginId: "custom-alt", channelId: "custom" });
+    const broken = writePlugin({ pluginId: "custom", channelId: "custom" });
+    const healthy = writePlugin({ pluginId: "custom-alt", channelId: "custom" });
     fs.writeFileSync(
       path.join(broken.rootDir, "secret-contract-api.cjs"),
       'throw new Error("contract dependency unavailable");\n',
     );
-    loadPluginMetadataSnapshotMock.mockReturnValue({ plugins: [broken, healthy] });
+    usePlugins(broken, healthy);
 
     const api = loadChannelSecretContractApi({ channelId: "custom", config: {}, env: {} });
 
-    expect(api?.secretTargetRegistryEntries?.map((entry) => entry.id)).toEqual([
-      "channels.custom.token",
-    ]);
+    expect(contractIds(api)).toEqual(["channels.custom.token"]);
   });
 
   it("loads dist/ secret-contract-api sidecars for compiled npm-published external channel plugins", () => {
-    const record = writeExternalChannelPlugin({ directory: "dist" });
-    loadPluginMetadataSnapshotMock.mockReturnValue({ plugins: [record] });
+    const record = writePlugin({ directory: "dist" });
+    usePlugins(record);
     const contractApi = loadContract();
-    expect(contractApi?.secretTargetRegistryEntries?.map(({ id }) => id)).toContain(
-      "channels.discord.token",
-    );
+    expect(contractIds(contractApi)).toContain("channels.discord.token");
     expect(contractApi?.collectRuntimeConfigAssignments).toBeTypeOf("function");
   });
 
   it.runIf(process.platform !== "win32")(
     "loads hardlinked external channel contracts when the plugin hardlink policy allows them",
     () => {
-      const record = writeExternalChannelPlugin({});
+      const record = writePlugin({});
       const outsideDir = makeTrackedTempDir(
         "openclaw-channel-secret-contract-hardlink-outside",
         tempDirs,
@@ -138,39 +129,37 @@ describe("external channel secret contract api", () => {
         path.join(record.rootDir, "secret-contract-api.cjs"),
         path.join(outsideDir, "secret-contract-api.cjs"),
       );
-      shouldRejectHardlinkedPluginFilesMock.mockReturnValue(false);
+      mocks.rejectHardlinks.mockReturnValue(false);
       const env = { OPENCLAW_NIX_MODE: "1" };
-      loadPluginMetadataSnapshotMock.mockReturnValue({ plugins: [record] });
+      usePlugins(record);
       const api = loadContract({ env });
 
-      expect(shouldRejectHardlinkedPluginFilesMock).toHaveBeenCalledWith({
+      expect(mocks.rejectHardlinks).toHaveBeenCalledWith({
         origin: "global",
         rootDir: record.rootDir,
         env,
       });
-      expect(api?.secretTargetRegistryEntries?.map(({ id }) => id)).toContain(
-        "channels.discord.token",
-      );
+      expect(contractIds(api)).toContain("channels.discord.token");
     },
   );
 
   it("skips external channel records outside the loadable plugin origin set", () => {
-    const record = writeExternalChannelPlugin({});
-    loadPluginMetadataSnapshotMock.mockReturnValue({ plugins: [record] });
+    const record = writePlugin({});
+    usePlugins(record);
     const api = loadContract({ loadablePluginOrigins: new Map([["other", "global"]]) });
 
     expect(api).toBeUndefined();
   });
 
   it("falls back to official host secret metadata when an external plugin has no artifact", () => {
-    loadPluginMetadataSnapshotMock.mockReturnValue({ plugins: [] });
+    usePlugins();
 
     const api = expectOfficialFallback();
     expect(api?.collectRuntimeConfigAssignments).toBeTypeOf("function");
   });
 
   it("falls back to official host secret metadata when plugin metadata is unavailable", () => {
-    loadPluginMetadataSnapshotMock.mockImplementation(() => {
+    mocks.metadata.mockImplementation(() => {
       throw new Error("metadata unavailable");
     });
 

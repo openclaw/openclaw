@@ -5,7 +5,10 @@ import { Type } from "typebox";
 import { Value } from "typebox/value";
 import { expect, it, vi } from "vitest";
 import { PresenceQueryParamsSchema } from "../../packages/gateway-protocol/src/schema/presence.js";
-import type { WorkerTranscriptCommitParams } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
+import type {
+  WorkerConnectRequestFrame,
+  WorkerTranscriptCommitParams,
+} from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import {
   WorkerToolSurfaceSchema,
   WORKER_GATEWAY_TOOLS_PROTOCOL_FEATURE,
@@ -33,8 +36,9 @@ import {
 } from "../agents/tools/sessions-placement-tool-contract.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createWorkerComputerTool } from "./computer-runtime.js";
-import type { WorkerLaunchDescriptor } from "./launch-descriptor.js";
+import { buildWorkerConnectParams, type WorkerLaunchDescriptor } from "./launch-descriptor.js";
 import { runWorkerCommand } from "./worker-command.runtime.js";
+import { createWorkerConnection } from "./worker-connection.js";
 import { createWorkerPlacementTools } from "./worker-placement-tools.js";
 import {
   buildWorkerProcessTurn,
@@ -42,6 +46,35 @@ import {
   type WorkerProcessResult,
 } from "./worker-process-protocol.js";
 import { runWorkerDescriptor } from "./worker.runtime.js";
+
+export function createWorkerConnectionForTest(
+  launch: WorkerLaunchDescriptor,
+  options: Partial<Parameters<typeof createWorkerConnection>[0]> = {},
+) {
+  return createWorkerConnection({
+    endpoint: launch.connectionEndpoint,
+    connectParams: buildWorkerConnectParams(launch),
+    ...options,
+  });
+}
+export function createWorkerHelloForTest(
+  admission: Omit<WorkerConnectRequestFrame["params"]["admission"], "runId">,
+  toolSurface: WorkerToolSurface,
+  heartbeatIntervalMs = 60_000,
+) {
+  const { environmentId, sessionId, ownerEpoch, rpcSetVersion, handshake } = admission;
+  return {
+    type: "worker-hello-ok" as const,
+    toolSurface,
+    environmentId,
+    sessionId,
+    ownerEpoch,
+    rpcSetVersion,
+    protocolFeatures: [...handshake.protocolFeatures],
+    credentialExpiresAtMs: Date.now() + 60_000,
+    policy: { heartbeatIntervalMs, maxPayload: 25 * 1024 * 1024 },
+  };
+}
 
 type WorkerToolFixture = {
   assignment: WorkerLaunchDescriptor["assignment"];

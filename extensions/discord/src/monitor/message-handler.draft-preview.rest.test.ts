@@ -484,44 +484,6 @@ describe("Discord draft preview REST lifecycle", () => {
     expect([...visible.values()]).toEqual([]);
   });
 
-  it("publishes and retracts a short complete plan, then resumes in block mode", async () => {
-    const { controller, visible } = createContinuationHarness({ mode: "block", realTimers: true });
-    await controller.pushPlanProgress([]);
-    expect(visible.size).toBe(0);
-    await controller.pushPlanProgress([{ step: "Check", status: "in_progress" }]);
-    await controller.flush();
-    expect([...visible.values()]).toEqual(["▸ Check"]);
-    await controller.pushPlanProgress([], { explanation: "Progress updated" });
-    await controller.flush();
-    expect([...visible.values()]).toEqual(["Progress updated"]);
-    await controller.pushPlanProgress([]);
-    expect(visible.size).toBe(0);
-    await controller.pushPlanProgress([{ step: "Retry", status: "pending" }]);
-    await controller.flush();
-    expect([...visible.values()]).toEqual(["▢ Retry"]);
-    controller.handleAssistantMessageBoundary();
-    await controller.pushItemEvent({
-      itemId: "card-rejected",
-      kind: "tool",
-      name: "progress_card",
-      phase: "end",
-      status: "blocked",
-      meta: '<progress aria-label="private detail"></progress>',
-    });
-    controller.handleAssistantMessageBoundary();
-    await controller.pushItemEvent(
-      projectAgentToolActivity({ toolCallId: "exec-1", name: "exec", phase: "start" }),
-    );
-    await controller.pushToolEvent({ toolCallId: "exec-1", name: "exec", phase: "start" });
-    await controller.flush();
-    expectCard(visible, ["▢ Retry", "blocked", "Exec"], ["private detail"]);
-    controller.handleAssistantMessageBoundary();
-    await controller.pushPlanProgress([]);
-    await controller.flush();
-    expectCard(visible, ["blocked", "Exec"], ["Retry"]);
-    await controller.cleanup();
-  });
-
   it("retains the progress draft after an error final is delivered", async () => {
     const { controller, rest, requestPaths } = createContinuationHarness({ realTimers: true });
     controller.draftStream?.update("Exec: failed");

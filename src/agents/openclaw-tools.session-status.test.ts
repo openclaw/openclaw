@@ -12,6 +12,7 @@ import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.
 import { prepareSharedAuthStoreOwnership } from "./auth-profiles/path-resolve.js";
 import {
   createMockConfig,
+  expectSpawnedSessionLookupCalls,
   fixedStoreConfig,
 } from "./openclaw-tools.session-status.test-support.js";
 
@@ -359,16 +360,6 @@ function mockSpawnedSessionList(
     }
     return {};
   });
-}
-
-function expectSpawnedSessionLookupCalls(spawnedBy: string, targetKeys: string[]) {
-  expect(callGatewayMock).toHaveBeenCalledTimes(targetKeys.length);
-  for (const [index, key] of targetKeys.entries()) {
-    expect(callGatewayMock).toHaveBeenNthCalledWith(index + 1, {
-      method: "sessions.resolve",
-      params: { agentId: "main", allowMissing: true, key, spawnedBy },
-    });
-  }
 }
 
 function mockCallArg(mock: ReturnType<typeof vi.fn>, callIndex = 0, argIndex = 0) {
@@ -1134,7 +1125,7 @@ describe("session_status tool", () => {
     });
     expect(childResult.details).toMatchObject({ ok: true, sessionKey: childKey });
 
-    expectSpawnedSessionLookupCalls("main", [childKey]);
+    expectSpawnedSessionLookupCalls(callGatewayMock, "main", [childKey]);
   });
 
   it("rejects a colliding provider-wildcard model change without writing the session", async () => {

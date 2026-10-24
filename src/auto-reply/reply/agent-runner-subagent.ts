@@ -19,7 +19,6 @@ export async function prepareReplySubagentContinuation(
     provenance.sourceSessionKey === turn.sessionKey;
   if (
     !turn.sessionKey ||
-    turn.isHeartbeat ||
     (provenance && provenance.kind !== "external_user" && !operatorRecovery) ||
     !(entry?.spawnedBy || entry?.subagentRole || (entry?.spawnDepth ?? 0) > 0)
   ) {

@@ -77,6 +77,11 @@ that use these surfaces before upgrading the host.
 | `agent-harness-runtime`: `HeartbeatToolResponse`, `HEARTBEAT_RESPONSE_TOOL_NAME`, and `normalizeHeartbeatToolResponse`                                                             | Remove the `heartbeat_respond` tool and fallback. Publish the ordinary terminal reply through the harness completion contract.                                                                            |
 | Private `provider-model-shared`: `GPT5_HEARTBEAT_PROMPT_OVERLAY` and `GPT5_FRIENDLY_PROMPT_OVERLAY`                                                                                | Remove heartbeat overlays. `GPT5_FRIENDLY_CHAT_PROMPT_OVERLAY` remains available to its existing consumers.                                                                                               |
 
+Reply options `isHeartbeat`, `useHeartbeatFailureCopy`, `heartbeatModelOverride`,
+`enableHeartbeatTool`, `forceHeartbeatTool`, and `continuesConversation`, heartbeat
+typing policy, and context-engine `isHeartbeat` callback parameters are also
+removed. Use ordinary admitted turns and automation configuration instead.
+
 For asynchronous plugin work, capture the original destination before awaiting
 that work, then pass the opaque target to `enqueueSessionEvent`. Check the
 receipt's `accepted` result before committing producer bookkeeping and its

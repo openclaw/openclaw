@@ -17,6 +17,7 @@ import {
 } from "../../components/mcp-app-security.ts";
 import { t } from "../../i18n/index.ts";
 import { registerMcpAppEnglish } from "../../i18n/locales/en-mcp-app.ts";
+import type { ChatComposerScope } from "../../lib/chat/outbox-store.ts";
 import { publishMcpAppContext } from "../../lib/mcp-app-context.ts";
 import { mcpAppMessageInput } from "../../lib/mcp-app-message.ts";
 import { listen } from "../../lib/reactive/listener.ts";
@@ -38,7 +39,6 @@ import {
 import { encodeTextAsDataUrl } from "./components/chat-attachment-text.ts";
 import { sessionWorkspaceForHost } from "./components/chat-session-workspace-state.ts";
 import type { SessionWorkspacePreview } from "./components/chat-sidebar-content-types.ts";
-import type { ChatComposerScope } from "./composer-persistence.ts";
 
 registerMcpAppEnglish();
 

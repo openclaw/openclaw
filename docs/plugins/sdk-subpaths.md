@@ -610,7 +610,7 @@ Use `isLoopbackHost(host)` when a plugin must accept only the local machine. It 
     | `plugin-sdk/memory-core-host-embedding-registry` | Private-local after July 2026; Lightweight memory embedding provider registry helpers |
     | `plugin-sdk/memory-core-host-engine-curated` | Private-local focused curated-memory annotation parsing for doctor and promotion paths |
     | `plugin-sdk/memory-core-host-engine-foundation` | Memory host foundation engine exports |
-    | `plugin-sdk/memory-core-host-engine-fs` | Private-local focused filesystem and user-path helpers for doctor migrations |
+    | `plugin-sdk/memory-core-host-engine-fs` | Private-local filesystem, file classification, and extra-path selection helpers for memory workers and doctor migrations; excludes index, database, and embedding runtimes |
     | `plugin-sdk/memory-core-host-engine-embeddings` | Private-local after July 2026; Memory host embedding contracts and batch/remote helpers. Providers register through the generic embedding provider API. |
     | `plugin-sdk/memory-core-host-engine-sessions` | Private-local after July 2026; Memory session transcript and query helpers. Runtime archive inventory uses `loadArchivedSessionsAsync`, `resolveMemorySessionTargetsAsync`; `loadArchivedSessions` retains its synchronous contract. |
     | `plugin-sdk/memory-core-host-engine-schema` | Private-local memory index schema and sqlite-vec operations shared by Doctor, host maintenance, and native publication workers |

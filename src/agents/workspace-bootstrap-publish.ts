@@ -6,8 +6,8 @@ import { lstatIfExists } from "../infra/path-existence.js";
 import { readWorkspaceFileWithGuards } from "./workspace-file-read.js";
 
 export class WorkspaceBootstrapSeedConflictError extends Error {
-  constructor(message: string, options?: ErrorOptions) {
-    super(message, options);
+  constructor(message: string) {
+    super(message);
     this.name = "WorkspaceBootstrapSeedConflictError";
   }
 }

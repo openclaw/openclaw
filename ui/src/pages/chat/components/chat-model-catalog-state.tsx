@@ -1,14 +1,23 @@
-import { createMemo, onCleanup, Show } from "solid-js";
-import { providerDisplayLabel } from "../../../components/provider-icon.ts";
+import { createMemo, onSettled, Show } from "solid-js";
+import { providerDisplayLabel } from "../../../components/provider-icon-data.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
 import "../../../components/tooltip.ts";
 import { registerModelControlsEnglish } from "../../../i18n/locales/en-model-controls.ts";
 import type { ChatModelCatalogState as ModelCatalogState } from "../../../lib/model-catalog-store.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { restoreChatModelRefreshFocus } from "./chat-model-picker-search.ts";
-import type { ChatModelCatalogStateProps } from "./chat-model-types.ts";
 
 registerEnglishCatalog(registerModelControlsEnglish);
+
+type ChatModelCatalogStateProps = {
+  state: ModelCatalogState | undefined;
+  hasOptions: boolean;
+  hasSelectableOptions: boolean;
+  onModelSetup?: () => void;
+  errorLabel?: string;
+  retryTarget?: { disabled: boolean; groupId: string; onRetry: (groupId: string) => unknown };
+  emptyLabel?: string;
+};
 
 export function ChatModelCatalogRefresh(props: { state: ModelCatalogState | undefined }) {
   const label = createMemo(() => {
@@ -28,7 +37,7 @@ export function ChatModelCatalogRefresh(props: { state: ModelCatalogState | unde
     <Show when={label()}>
       {(text) => {
         let indicator: HTMLSpanElement | undefined;
-        onCleanup(() => {
+        onSettled(() => () => {
           // Capture focus before this disappearing control is removed from the DOM.
           if (indicator?.contains(indicator.ownerDocument.activeElement)) {
             restoreChatModelRefreshFocus(

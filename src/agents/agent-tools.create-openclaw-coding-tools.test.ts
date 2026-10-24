@@ -847,13 +847,12 @@ describe("createOpenClawCodingTools", () => {
       }),
     });
 
-    const persistedEnvelopeTools = createToolsForStoredSession(
-      storeTemplate,
-      "agent:main:acp:child",
-    );
-    expectNoSubagentControlTools(persistedEnvelopeTools);
+    const envelopeTools = createToolsForStoredSession(storeTemplate, "agent:main:acp:child");
+    expectNoSubagentControlTools(envelopeTools);
+    expect(lastCoreOptions().requesterIsSubagent).toBe(true);
 
     const restrictedTools = createToolsForStoredSession(storeTemplate, "agent:main:acp:plain");
+    expect(lastCoreOptions().requesterIsSubagent).toBe(false);
     expectToolNames(restrictedTools, ["sessions_spawn", "subagents"]);
 
     const ancestryTools = createToolsForStoredSession(storeTemplate, "agent:writer:acp:child");
@@ -877,16 +876,6 @@ describe("createOpenClawCodingTools", () => {
         allowed ? [] : ["browser"],
       );
     }
-  });
-
-  it("enables heartbeat response when visible replies are message-tool-only", () => {
-    expectToolSurface(
-      {
-        config: { messages: { visibleReplies: "message_tool" }, tools: { profile: "coding" } },
-        trigger: "heartbeat",
-      },
-      ["heartbeat_respond"],
-    );
   });
 
   it("can keep message available when a cron route needs it under a provider coding profile", () => {

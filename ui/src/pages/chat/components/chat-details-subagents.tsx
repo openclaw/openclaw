@@ -1,6 +1,7 @@
 import { For, Show, createMemo } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { useScrollState } from "../../../components/solid/scroll-state.ts";
+import { registerChatDetailsEnglish } from "../../../i18n/locales/en-chat-details.ts";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import { fnv1aUtf16 } from "../../../lib/fnv1a.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
@@ -9,6 +10,7 @@ import "./chat-subagents-working.css";
 import type { ChatSubagentActivity } from "../chat-subagent-wait.ts";
 
 registerEnglishCatalog(registerChatSessionEnglish);
+registerEnglishCatalog(registerChatDetailsEnglish);
 
 type Subagent = Pick<ChatSubagentActivity, "key" | "label" | "status">;
 

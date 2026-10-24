@@ -13,7 +13,7 @@ import {
   registerOnboardGatewayOptions,
   registerOnboardRemoteOptions,
   registerOnboardRuntimeOptions,
-  resolveOnboardCommandOptions,
+  runOnboardCommand,
 } from "./register.onboard.js";
 
 const SYSTEM_AGENT_OPTION_NAMES = new Set(["message", "yes", "json"]);
@@ -126,16 +126,7 @@ export function registerSetupCommand(program: Command): void {
         );
         return;
       }
-      const onboardingOptions = await resolveOnboardCommandOptions(
-        options,
-        commandRuntime,
-        defaultRuntime,
-      );
-      if (!onboardingOptions) {
-        return;
-      }
-      const { setupWizardCommand } = await import("../../commands/onboard.js");
-      await setupWizardCommand(onboardingOptions, defaultRuntime);
+      await runOnboardCommand(options, commandRuntime, defaultRuntime);
     });
   });
 

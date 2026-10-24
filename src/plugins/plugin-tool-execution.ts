@@ -53,7 +53,7 @@ export function createPluginToolExecutionBinding(context: {
         return view;
       }
     }
-    const view = {};
+    const view = Object.create(Object.getPrototypeOf(tool));
     views.set(tool, view);
     views.set(view, view);
     void new ToolExecutionOwner(view, bind);

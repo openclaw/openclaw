@@ -24,6 +24,7 @@ Looking for chat channel docs (WhatsApp/Telegram/Discord/Slack/Mattermost (plugi
 
 ## Provider docs
 
+- [Abliteration](/providers/abliteration)
 - [Alibaba Model Studio](/providers/alibaba)
 - [Amazon Bedrock](/providers/bedrock)
 - [Amazon Bedrock Mantle](/providers/bedrock-mantle)
@@ -76,6 +77,7 @@ Looking for chat channel docs (WhatsApp/Telegram/Discord/Slack/Mattermost (plugi
 - [Qianfan](/providers/qianfan)
 - [Qwen Cloud](/providers/qwen)
 - [Radius](/providers/radius)
+- [Requesty (unified router)](/providers/requesty)
 - [Runway](/providers/runway)
 - [SenseAudio](/providers/senseaudio)
 - [SGLang (local models)](/providers/sglang)

@@ -97,6 +97,10 @@ Behavior notes:
 Slash commands write local overrides to the TTS preferences path. The default is
 `~/.openclaw/settings/tts.json`; override it with `OPENCLAW_TTS_PREFS`. Doctor
 moves the retired global `tts.prefsPath` value into shared machine state.
+Preference updates finish durable persistence before reporting success, while the
+Gateway remains responsive during disk flushes. Concurrent updates retain their
+order and preserve unrelated preferences.
+Legacy synchronous SDK setters use the same queue and wait for earlier updates.
 Advanced multi-agent setups may still set `agents.entries.<id>.tts.prefsPath`
 when agents intentionally use separate preference stores.
 

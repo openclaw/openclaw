@@ -901,16 +901,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
       expectedMode: "automatic",
       text: "visible switched-model reply",
     },
-    {
-      name: "honors heartbeat model overrides before Codex direct source delivery defaults",
-      supportsProvider: "codex",
-      currentEntry: codexEntry,
-      ctx: telegramDirectCtx,
-      cfg: emptyConfig,
-      replyOptions: { isHeartbeat: true, heartbeatModelOverride: "anthropic/claude-sonnet-4.6" },
-      expectedMode: "automatic",
-      text: "visible heartbeat-model reply",
-    },
+
     {
       name: "preserves non-Codex harness direct source delivery defaults",
       harnessId: "custom",

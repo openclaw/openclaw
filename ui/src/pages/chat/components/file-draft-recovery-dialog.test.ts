@@ -6,7 +6,7 @@ import {
   waitForRenderedModalDialog,
 } from "../../../test-helpers/modal-dialog.ts";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
-import { reviewFileDrafts } from "./file-draft-recovery-dialog-view.tsx";
+import { reviewFileDrafts } from "./file-draft-recovery-dialog-loading.tsx";
 
 type FileDraft = Parameters<typeof reviewFileDrafts>[0][number];
 

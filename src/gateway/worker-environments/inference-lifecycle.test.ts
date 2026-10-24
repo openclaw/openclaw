@@ -82,6 +82,25 @@ function expectCancelled(sink: ReturnType<typeof createSink>) {
 }
 
 describe("worker inference manager", () => {
+  it("retains exact physical execution after its cancellation acknowledgment", async () => {
+    const { instance, provider } = await pendingInference();
+    const captured = instance.captureSessionCancellation(REQUEST.sessionId, REQUEST.runId);
+    let physicallySettled = false;
+    void captured.settled.then(() => {
+      physicallySettled = true;
+    });
+    try {
+      expect(captured.executing).toBe(true);
+      expect(await captured.cancel()).toEqual([REQUEST.runId]);
+      expect(physicallySettled).toBe(false);
+      provider.resolve(DONE);
+      await captured.settled;
+      expect(physicallySettled).toBe(true);
+    } finally {
+      provider.resolve(DONE);
+      await instance.stop();
+    }
+  });
   it.each([
     { failureKind: "authority-refused", invalidUsage: false },
     { failureKind: "authority-refused", invalidUsage: true },

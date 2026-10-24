@@ -152,7 +152,7 @@ it.each(
 
     const restored = newInstance();
     withPluginSourceCaptureDirectory(captures, () => recovery.bind(restored));
-    recovery.dispose();
+    await recovery.dispose();
     const restoredModule = restored.loadModule(entry) as FixtureModule;
     expect(restoredModule.next()).toBe(1);
     expect(restoredModule.dependency()).toBe("original dependency");
@@ -206,8 +206,8 @@ it("releases unused recovery custody without disturbing the active loader", asyn
   const before = fs.readdirSync(captures);
   const recovery = capture(instance, captures);
   expect(fs.readdirSync(captures).length).toBeGreaterThan(before.length);
-  recovery.dispose();
-  recovery.dispose();
+  await recovery.dispose();
+  await recovery.dispose();
   expect(fs.readdirSync(captures)).toEqual(before);
   expect((instance.loadModule(entry) as FixtureModule).next()).toBe(1);
   expect(() => recovery.bind(new PluginInstance("recovery-fixture"))).toThrow("released");
@@ -226,7 +226,7 @@ it("captures quiesced code without admitting calls and refuses capture after dis
   fs.rmSync(root, { recursive: true });
   const restored = newInstance(instance.pluginId);
   recovery.bind(restored);
-  recovery.dispose();
+  await recovery.dispose();
   expect((restored.loadModule(entry) as FixtureModule).dependency()).toBe("original dependency");
   expect((restored.loadModule(entry) as FixtureModule).late()).toBe("original late import");
 });
@@ -294,7 +294,7 @@ it.each(["cjs", "mjs"])(
 
     const restored = newInstance(previous.pluginId);
     recovery.bind(restored);
-    recovery.dispose();
+    await recovery.dispose();
     const restoredCallback = (restored.loadModule(entry) as BundledModule).register();
     expect(restoredCallback()).toBe(2);
     expect(getSharedPluginCodeReloadWarning(restored)).toBeUndefined();
@@ -305,7 +305,7 @@ it.each(["cjs", "mjs"])(
     await restored.dispose();
     const final = newInstance(previous.pluginId);
     secondRecovery.bind(final);
-    secondRecovery.dispose();
+    await secondRecovery.dispose();
     expect((final.loadModule(entry) as BundledModule).register()()).toBe(3);
     expect(restoredCallback).toThrow(/reloaded or disabled/);
   },

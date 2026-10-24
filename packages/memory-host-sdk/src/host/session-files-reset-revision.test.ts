@@ -29,10 +29,8 @@ import {
   type BuildSessionEntryOptions,
   type SessionFileEntry,
 } from "./session-files.js";
-import {
-  readSessionResetRecallCutoff as readCutoff,
-  readSessionResetRecallCutoffInProcess as readCutoffInline,
-} from "./session-reset-recall-read.js";
+import { readSessionResetRecallCutoff as readCutoff } from "./session-reset-recall-read.js";
+import { readSessionResetRecallCutoffInProcess as readCutoffInline } from "./session-reset-recall-read.worker.js";
 
 function requireSessionEntry(entry: SessionFileEntry | null): SessionFileEntry {
   assert(entry, "expected session entry");
@@ -61,6 +59,15 @@ const msg = (role: string, content: unknown, metadata?: Record<string, unknown>)
 });
 const internalMessage = (content: string, sourceTool: string) =>
   msg("user", content, { provenance: { kind: "internal_system", sourceTool } });
+const cutoffSymbol = Symbol.for("openclaw.memory.sessionResetRecallCutoff");
+const cutoffDescriptor = (entry: SessionFileEntry) =>
+  Object.getOwnPropertyDescriptor(entry, cutoffSymbol);
+const persist = (scope: ReturnType<typeof sessionScope>, role: string, content: string) =>
+  persistSessionTranscriptTurn(scope, {
+    messages: [{ message: { role, content } }],
+    touchSessionEntry: true,
+    updateMode: "none",
+  });
 const append = (
   scope: ReturnType<typeof sessionScope>,
   eventId: string,
@@ -222,14 +229,9 @@ describe("SQLite session snapshots and reset content revision", () => {
         .map((message) => [message, "timestamp" in message ? 1_000_000 : observedAt]);
       expect(sqliteObserver.mock.calls).toEqual(observations);
       expect(archiveObserver.mock.calls).toEqual(observations);
-      const cutoff = Symbol.for("openclaw.memory.sessionResetRecallCutoff");
       expect(worker).toEqual(sqlite);
-      expect(Object.getOwnPropertyDescriptor(worker, cutoff)).toEqual(
-        Object.getOwnPropertyDescriptor(sqlite, cutoff),
-      );
-      expect(Object.getOwnPropertyDescriptor(sqlite, cutoff)).toEqual(
-        Object.getOwnPropertyDescriptor(archive, cutoff),
-      );
+      expect(cutoffDescriptor(worker)).toEqual(cutoffDescriptor(sqlite));
+      expect(cutoffDescriptor(sqlite)).toEqual(cutoffDescriptor(archive));
     },
   );
 
@@ -343,8 +345,7 @@ describe("SQLite session snapshots and reset content revision", () => {
 
     expect(during).toEqual(before);
     expect(observed).toEqual([first.message, kept.message]);
-    const cutoff = Symbol.for("openclaw.memory.sessionResetRecallCutoff");
-    expect(Object.getOwnPropertyDescriptor(during, cutoff)).toMatchObject({
+    expect(cutoffDescriptor(during)).toMatchObject({
       configurable: false,
       enumerable: false,
       writable: false,
@@ -352,7 +353,7 @@ describe("SQLite session snapshots and reset content revision", () => {
     });
     const after = await exportEntry(scope);
     expect(after.content).toBe("User: first");
-    expect(Object.getOwnPropertyDescriptor(after, cutoff)?.value).toEqual({ state: "absent" });
+    expect(cutoffDescriptor(after)?.value).toEqual({ state: "absent" });
   });
 
   it("carries the admitted input fence through the reset metadata worker", async () => {
@@ -360,9 +361,7 @@ describe("SQLite session snapshots and reset content revision", () => {
     await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
     expect(replaceEvents(scope, [messageEvent("admitted", "user", "input", null)])).toBe(true);
     const anchor = readActiveTranscriptEntryAnchor({ ...scope, entryId: "admitted" });
-    if (!anchor) {
-      throw new Error("expected persisted input anchor");
-    }
+    assert(anchor, "expected persisted input anchor");
     await appendTranscriptEvent(scope, { type: "reset", id: "later-reset", parentId: "admitted" });
     expect(await readCutoff(scope)).toEqual({ state: "valid", cutoffLine: 2 });
     expect(
@@ -378,20 +377,12 @@ describe("SQLite session snapshots and reset content revision", () => {
     const { storePath, sessionKey, sessionId } = scope;
     fsSync.mkdirSync(path.dirname(storePath), { recursive: true });
     await upsertSessionEntryCore(scope, { sessionId, updatedAt: 1 });
-    await persistSessionTranscriptTurn(scope, {
-      messages: [{ message: { role: "user", content: "unchanged exported text" } }],
-      touchSessionEntry: true,
-      updateMode: "none",
-    });
+    await persist(scope, "user", "unchanged exported text");
     const buildOptions = { updatedAtMs: 1 };
     const before = await exportEntry(scope, buildOptions);
     const beforeLineCount = before.content.split("\n").length;
 
-    await persistSessionTranscriptTurn(scope, {
-      messages: [{ message: { role: "assistant", content: "ordinary appended text" } }],
-      touchSessionEntry: true,
-      updateMode: "none",
-    });
+    await persist(scope, "assistant", "ordinary appended text");
     const afterAppend = await exportEntry(scope, buildOptions);
     expect(matchesSessionEntryPrefixHash(afterAppend, beforeLineCount, before.hash)).toBe(true);
 
@@ -409,8 +400,7 @@ describe("SQLite session snapshots and reset content revision", () => {
 
     const after = await exportEntry(scope, buildOptions);
     expect(after).toMatchObject({ content: afterAppend.content, lineMap: afterAppend.lineMap });
-    const cutoffSymbol = Symbol.for("openclaw.memory.sessionResetRecallCutoff");
-    expect(Object.getOwnPropertyDescriptor(after, cutoffSymbol)).toMatchObject({
+    expect(cutoffDescriptor(after)).toMatchObject({
       enumerable: false,
       value: { state: "valid", cutoffLine: expect.any(Number) },
     });

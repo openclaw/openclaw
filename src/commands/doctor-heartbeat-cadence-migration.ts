@@ -1,6 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { note } from "../../packages/terminal-core/src/note.js";
 import { listAgentIds } from "../agents/agent-scope-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -37,7 +36,7 @@ import {
   resolveLegacyHeartbeatAgents,
   resolveLegacyHeartbeatConfig,
   resolveLegacyHeartbeatIntervalMs,
-  resolveLegacyHeartbeatVisibility,
+  resolveLegacyHeartbeatAlertsEnabled,
   migrateHeartbeatPrompt,
   validateLegacyHeartbeatConfig,
 } from "./doctor-heartbeat-legacy.js";
@@ -53,7 +52,10 @@ import {
   resolveHeartbeatSchedulerSeed,
 } from "./doctor-heartbeat-schedule.js";
 import { resolveLegacyHeartbeatSessionKey } from "./doctor-heartbeat-session.js";
-import { isHeartbeatTaskCronJob } from "./doctor-heartbeat-task-identity.js";
+import {
+  isHeartbeatTaskCronJob,
+  resolveHeartbeatTaskPromptRepair,
+} from "./doctor-heartbeat-task-identity.js";
 
 const CHECK_ID = "core/doctor/heartbeat-cadence-migration";
 
@@ -85,8 +87,8 @@ function legacyAlertsEnabled(cfg: OpenClawConfig, target: string, accountId?: st
       const config = cfg.channels?.[channel];
       const accounts =
         isRecord(config) && isRecord(config.accounts) ? Object.keys(config.accounts) : [];
-      return (accountId ? [accountId] : accounts.length ? accounts : [undefined]).map(
-        (id) => resolveLegacyHeartbeatVisibility({ cfg, channel, accountId: id }).showAlerts,
+      return (accountId ? [accountId] : accounts.length ? accounts : [undefined]).map((id) =>
+        resolveLegacyHeartbeatAlertsEnabled({ cfg, channel, accountId: id }),
       );
     }),
   );
@@ -377,6 +379,7 @@ export async function ensureHeartbeatMonitorJobs(
             job.id,
             nowMs,
             "pending",
+            job.enabled,
           );
           result.set(item.agentId, job);
         } else {
@@ -396,7 +399,12 @@ export function hasPendingHeartbeatCadenceMigration(
   env: NodeJS.ProcessEnv = process.env,
 ): boolean {
   const storePath = resolveCronJobsStorePathFromConfig(cfg, env);
-  const loaded = readDoctorHeartbeatJobs(storePath, env);
+  const rows =
+    withExistingOpenClawStateDatabaseReadOnly(
+      ({ db }) => loadCronRows(db, cronStoreKey(storePath)),
+      { env },
+    ) ?? [];
+  const loaded = decodeDoctorHeartbeatJobRows(rows);
   const configured = new Set(
     resolveLegacyHeartbeatAgents(cfg)
       .filter((agent) => agent.heartbeat !== undefined)
@@ -421,7 +429,19 @@ export function hasPendingHeartbeatCadenceMigration(
       ({ db }) =>
         [...agentIds].some((agentId) => {
           const receipt = readDefaultProactiveJobReceiptInDatabase(db, storePath, agentId);
-          return receipt?.phase === "pending" || (configured.has(agentId) && !receipt);
+          return (
+            receipt?.phase === "pending" ||
+            (configured.has(agentId) && !receipt) ||
+            loaded.some(
+              (job) =>
+                job.agentId === agentId &&
+                resolveHeartbeatTaskPromptRepair(
+                  job,
+                  receipt,
+                  rows.find((row) => row.job_id === job.id)?.updated_at,
+                ),
+            )
+          );
         }),
       { env },
     ) ?? configured.size > 0
@@ -458,32 +478,5 @@ export async function collectHeartbeatCadenceMigrationFindings(
         fixHint: "Resolve the state error and rerun openclaw doctor --fix.",
       },
     ];
-  }
-}
-
-export async function maybeMigrateHeartbeatCadenceToCron(params: {
-  cfg: OpenClawConfig;
-  shouldRepair: boolean;
-  env?: NodeJS.ProcessEnv;
-}): Promise<{ changes: string[]; warnings: string[] }> {
-  const findings = await collectHeartbeatCadenceMigrationFindings(params.cfg, params.env);
-  if (!params.shouldRepair || !findings.length) {
-    return { changes: [], warnings: findings.map((finding) => finding.message) };
-  }
-  try {
-    await ensureHeartbeatMonitorJobs(
-      params.cfg,
-      resolveCronJobsStorePathFromConfig(params.cfg, params.env),
-      params.env,
-    );
-    const changes = [
-      "Converted legacy heartbeat cadence to ordinary editable automations; recorded one-way provisioning receipts.",
-    ];
-    note(changes.join("\n"), "Doctor changes");
-    return { changes, warnings: [] };
-  } catch (error) {
-    const warnings = [formatErrorMessage(error)];
-    note(warnings.join("\n"), "Doctor warnings");
-    return { changes: [], warnings };
   }
 }

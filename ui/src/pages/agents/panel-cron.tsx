@@ -107,6 +107,13 @@ export function AgentCron(
       <CronReadBoundary read={params.read().command} reportError>
         {(_pending, message) => (message ? <div class="callout danger">{message}</div> : undefined)}
       </CronReadBoundary>
+      <Show when={params.read().command && params.readState().cronNotice}>
+        {(notice) => (
+          <div class="callout" role="status">
+            {notice()}
+          </div>
+        )}
+      </Show>
       <SettingsSection
         title={t("agents.cronPanel.schedulerTitle")}
         description={t("agents.cronPanel.schedulerSubtitle")}

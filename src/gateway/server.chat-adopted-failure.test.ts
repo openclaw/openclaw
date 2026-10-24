@@ -102,8 +102,7 @@ it("reports an adopted pre-model failure as one visible failure over the Gateway
       idempotencyKey: runId,
     };
     const accepted = await rpcReq(socket, "chat.send", request);
-    expect(accepted.ok).toBe(true);
-    expect(accepted.payload).toMatchObject({ runId, status: "started" });
+    expect(accepted).toMatchObject({ ok: true, payload: { runId, status: "started" } });
     const failed = await terminal;
     expect(failed.payload).toMatchObject({
       state: "error",
@@ -111,8 +110,7 @@ it("reports an adopted pre-model failure as one visible failure over the Gateway
     });
     expect(JSON.stringify(failed)).not.toContain(originalError.message);
     const replay = await rpcReq(socket, "chat.send", request);
-    expect(replay.ok).toBe(false);
-    expect(replay.payload).toMatchObject({ runId, status: "error" });
+    expect(replay).toMatchObject({ ok: false, payload: { runId, status: "error" } });
     expect(gatewayReplyMock).toHaveBeenCalledOnce();
     expect(terminalStates).toEqual(["error"]);
   } finally {

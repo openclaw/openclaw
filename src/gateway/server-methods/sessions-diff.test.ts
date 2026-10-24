@@ -1,3 +1,4 @@
+import "./sessions-files.repository.test-support.js";
 import { execFileSync, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
@@ -28,12 +29,9 @@ import {
   seedManagedReview,
 } from "./sessions-diff.test-support.js";
 
-const hoisted = vi.hoisted(() => ({
-  loadSessionEntry: vi.fn(),
-  patchSessionEntryCore: vi.fn(),
-  resolveAgentWorkspaceDir: vi.fn(),
-  resolveDefaultAgentId: vi.fn(),
-}));
+const { sessionWorkspaceMocks: hoisted } =
+  await import("./sessions-files.repository.test-support.js");
+const patchSessionEntryCore = vi.hoisted(() => vi.fn());
 
 // mock-isolation: Diff RPC cases supply session discovery while exercising real Git reads.
 vi.mock("../session-utils-store-worker.js", () => ({
@@ -41,29 +39,9 @@ vi.mock("../session-utils-store-worker.js", () => ({
     hoisted.loadSessionEntry(params.key, { agentId: params.agentId }),
 }));
 
-vi.mock("../../config/sessions/session-entry-read-facts.js", async (importOriginal) => {
-  const { createRepositorySessionEntryReader } =
-    await import("./sessions-files.repository.test-support.js");
-  const actual =
-    await importOriginal<typeof import("../../config/sessions/session-entry-read-facts.js")>();
-  return {
-    ...actual,
-    readRetainedSessionEntryFacts: createRepositorySessionEntryReader(
-      actual.readRetainedSessionEntryFacts,
-      (key) => hoisted.loadSessionEntry(key),
-    ),
-  };
-});
-
-vi.mock("../../agents/agent-scope.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../agents/agent-scope.js")>()),
-  resolveAgentWorkspaceDir: hoisted.resolveAgentWorkspaceDir,
-  resolveDefaultAgentId: hoisted.resolveDefaultAgentId,
-}));
-
 // mock-isolation: Diff RPC cases control session persistence independently of throwaway Git repos.
 vi.mock("../../config/sessions/session-accessor.js", () => ({
-  patchSessionEntryCore: hoisted.patchSessionEntryCore,
+  patchSessionEntryCore,
 }));
 
 function mockSession(spawnedCwd: string, entry: Record<string, unknown> = {}): void {

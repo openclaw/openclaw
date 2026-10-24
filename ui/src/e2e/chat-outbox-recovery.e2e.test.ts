@@ -531,7 +531,10 @@ suite.define(() => {
 
   it("recovers an ambiguous IndexedDB attachment draft through rendered controls without sending", () =>
     suite.withPage({ ...pageOptions, viewport }, async ({ page }) => {
-      const gateway = await installMockGateway(page);
+      const gateway = await installMockGateway(page, {
+        deferredMethods: ["chat.startup"],
+        historyMessages: [chatMessage("assistant", "Existing conversation is ready.")],
+      });
       const gatewayAddress = controlUiBundledGatewayUrl(suite.server.baseUrl);
       // Seed the legacy database before app boot can open the current version.
       await page.route("**/outbox-recovery-seed", (route) =>
@@ -552,6 +555,13 @@ suite.define(() => {
       await notice
         .locator(".chat-outbox-recovery-row")
         .getByText("Review the attached deployment note", { exact: true })
+        .waitFor();
+      await gateway.waitForRequest("chat.startup");
+      await gateway.resolveDeferred("chat.startup");
+      // Recovery can render before history establishes the destination's identity.
+      await page
+        .locator(".chat-group.assistant")
+        .getByText("Existing conversation is ready.", { exact: true })
         .waitFor();
       await button(notice, "Restore").click();
       await button(page.locator("openclaw-modal-dialog"), "Restore").click();

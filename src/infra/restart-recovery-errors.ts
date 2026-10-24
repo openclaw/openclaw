@@ -32,6 +32,14 @@ export class GatewayOperatorRecoveryAuthorizationError extends Error {
   }
 }
 
+/** Stale input provenance cannot authorize a resend in the current session. */
+export class GatewayOperatorRecoveryOwnershipError extends Error {
+  constructor(message = "Restart recovery operator source no longer owns this input.") {
+    super(message);
+    this.name = "GatewayOperatorRecoveryOwnershipError";
+  }
+}
+
 /** Retry availability failures, never infer renewed authority from error text. */
 export function isTransientRestartRecoveryError(error: unknown): boolean {
   if (hasSqliteWorkerOutcomeUnknown(error)) {

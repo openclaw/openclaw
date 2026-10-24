@@ -1,4 +1,54 @@
 import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
+import type { TelegramChannelConfig } from "./bot.config.test-support.js";
+
+export const openDirect = (): TelegramChannelConfig => ({ dmPolicy: "open", allowFrom: ["*"] });
+
+export function groupCallbackConfig(): TelegramChannelConfig {
+  return {
+    dmPolicy: "open",
+    capabilities: { inlineButtons: "group" },
+    groupPolicy: "open",
+    groups: { "*": { requireMention: false } },
+  };
+}
+export function questionCallbackConfig(): TelegramChannelConfig {
+  return {
+    ...groupCallbackConfig(),
+    allowFrom: ["9"],
+    capabilities: { inlineButtons: "all" },
+    groups: { "*": { requireMention: false, allowFrom: ["9"] } },
+  };
+}
+
+export const ada = { id: 9, is_bot: false, first_name: "Ada", username: "ada_bot" };
+export const botIdentity = {
+  id: 999,
+  is_bot: true,
+  first_name: "OpenClaw",
+  username: "openclaw_bot",
+};
+export function inboundMessage(overrides: Record<string, unknown> = {}) {
+  return {
+    chat: { id: 7, type: "private" },
+    from: ada,
+    message_id: 103,
+    date: 1736380800,
+    ...overrides,
+  };
+}
+
+export function photoReply(chat: Record<string, unknown>) {
+  return inboundMessage({
+    chat,
+    message_id: 101,
+    date: 1736380700,
+    from: { id: 999, is_bot: true, first_name: "OpenClaw" },
+    text: "Done, here is the image",
+    photo: [
+      { file_id: "generated-photo-1", file_unique_id: "generated-photo-u1", width: 1, height: 1 },
+    ],
+  });
+}
 
 export function createReplyPhotoMessage(text: string) {
   return {

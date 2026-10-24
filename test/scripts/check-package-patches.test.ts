@@ -38,8 +38,10 @@ it("allows approved pnpm patches together", () => {
     ["baileys@7.0.0-rc12", "patches/baileys@7.0.0-rc12.patch"],
     ["baileys@7.0.0-rc13", "patches/baileys@7.0.0-rc13.patch"],
     ["baileys@7.0.0-rc14", "patches/baileys@7.0.0-rc14.patch"],
-    ["vitest@5.0.3", "patches/vitest@5.0.3.patch"],
+    ["vitest@5.0.5", "patches/vitest@5.0.5.patch"],
     ["matrix-js-sdk@43.0.0", "patches/matrix-js-sdk@43.0.0.patch"],
+    ["@solidjs/web@2.0.0-rc.18", "patches/@solidjs__web@2.0.0-rc.18.patch"],
+    ["@solidjs/signals@2.0.0-rc.18", "patches/@solidjs__signals@2.0.0-rc.18.patch"],
   ] as const;
   const dir = makeRepo();
   const hash = "a9aea1790d2c65b1ae543c77faca4119bbfb91ee3b6ca6c38d1cad4f5702ada2";

@@ -1,3 +1,4 @@
+import { once as emitted } from "node:events";
 import path from "node:path";
 import { ClientEvent, type MatrixClient as MatrixJsClient } from "matrix-js-sdk/lib/matrix.js";
 import { Room } from "matrix-js-sdk/lib/models/room.js";
@@ -69,7 +70,11 @@ describe("Matrix live encrypted room ownership", () => {
   let sdk: MatrixJsClient;
   let releases: (() => void)[];
   let pending: Promise<unknown>[];
-  function track<T>(operation: Promise<T>) {
+  function run<T>(
+    send: (assertCurrent: () => void) => Promise<T>,
+    options?: Parameters<MatrixClient["withLiveEncryptedRoom"]>[2],
+  ) {
+    const operation = client.withLiveEncryptedRoom(roomId, send, options);
     pending.push(Promise.allSettled([operation]));
     return operation;
   }
@@ -147,7 +152,7 @@ describe("Matrix live encrypted room ownership", () => {
       liveSync();
       const { started, finish } = holdProbe(true);
       const send = vi.fn(async () => "$sent");
-      const operation = track(client.withLiveEncryptedRoom(roomId, send));
+      const operation = run(send);
       await started;
       if (change === "room replacement") {
         fixture.room = makeRoom();
@@ -176,15 +181,14 @@ describe("Matrix live encrypted room ownership", () => {
     fixture.init.mockImplementation(initialization.run);
     await client.stopWithoutPersist();
     makeClient({});
-    const startup = track(client.start());
+    const startup = client.start();
+    pending.push(Promise.allSettled([startup]));
     await initialization.started;
     const abort = new AbortController();
     const canceledSend = vi.fn(async () => "$canceled");
-    const first = track(
-      client.withLiveEncryptedRoom(roomId, canceledSend, { abortSignal: abort.signal }),
-    );
+    const first = run(canceledSend, { abortSignal: abort.signal });
     const siblingSend = vi.fn(async () => "$sibling");
-    const second = track(client.withLiveEncryptedRoom(roomId, siblingSend));
+    const second = run(siblingSend);
     abort.abort();
     await expect(first).rejects.toMatchObject({ name: "AbortError" });
     initialization.finish(undefined);
@@ -204,14 +208,10 @@ describe("Matrix live encrypted room ownership", () => {
       const { started, finish } = holdProbe();
       const abort = new AbortController();
       const send = vi.fn(async () => "$sent");
-      const operation = track(
-        client.withLiveEncryptedRoom(roomId, send, { abortSignal: abort.signal }),
-      );
+      const operation = run(send, { abortSignal: abort.signal });
       const settled = Promise.allSettled([operation]);
-      let outcome: PromiseSettledResult<unknown> | undefined;
-      void settled.then(([result]) => {
-        outcome = result;
-      });
+      const outcome = vi.fn();
+      void settled.then(outcome);
       await started;
       if (cause === "STOPPED") {
         sdk.emit(ClientEvent.Sync, SyncState.Stopped, SyncState.Prepared);
@@ -219,14 +219,15 @@ describe("Matrix live encrypted room ownership", () => {
         abort.abort();
       }
       await vi.advanceTimersByTimeAsync(0);
-      expect(outcome?.status).toBe("rejected");
+      expect(outcome).toHaveBeenCalledWith([expect.objectContaining({ status: "rejected" })]);
       if (cause === "STOPPED") {
         await expect(operation).rejects.toThrow("sync stopped");
         expect(state).toHaveBeenCalledExactlyOnceWith("STOPPED", "PREPARED", undefined);
       } else {
         await expect(operation).rejects.toMatchObject({ name: "AbortError" });
       }
-      const stop = track(client.stopWithoutPersist());
+      const stop = client.stopWithoutPersist();
+      pending.push(Promise.allSettled([stop]));
       await vi.advanceTimersByTimeAsync(0);
       expect(fixture.stopped).not.toHaveBeenCalled();
       finish(true);
@@ -246,21 +247,11 @@ describe("Matrix live encrypted room ownership", () => {
         throw new Error("upload transport has no cancellation signal");
       }
       dispatched.resolve(signal);
-      return await new Promise<Response>((_resolve, reject) => {
-        signal.addEventListener(
-          "abort",
-          () => {
-            const reason: unknown = signal.reason;
-            reject(
-              reason instanceof Error ? reason : new Error("upload aborted", { cause: reason }),
-            );
-          },
-          { once: true },
-        );
-      });
+      await emitted(signal, "abort");
+      throw signal.reason;
     });
     vi.stubGlobal("fetch", fetch);
-    const upload = track(client.withLiveEncryptedRoom(roomId, uploadFixture));
+    const upload = run(uploadFixture);
     const signal = await dispatched.promise;
     client.abortPendingRequests();
     expect(signal.aborted).toBe(true);
@@ -279,15 +270,13 @@ describe("Matrix live encrypted room ownership", () => {
         Response.json({ content_uri: "mxc://matrix.test/image" }),
       );
       vi.stubGlobal("fetch", fetch);
-      const upload = track(
-        client.withLiveEncryptedRoom(roomId, uploadFixture, {
-          assertCurrent: () => {
-            if (!active) {
-              throw new Error("operation stopped");
-            }
-          },
-        }),
-      );
+      const upload = run(uploadFixture, {
+        assertCurrent: () => {
+          if (!active) {
+            throw new Error("operation stopped");
+          }
+        },
+      });
       await resolution.started;
       if (change === "room membership") {
         vi.mocked(fixture.room!).getMyMembership.mockReturnValue("leave");
@@ -318,7 +307,7 @@ describe("Matrix live encrypted room ownership", () => {
       assertCurrent();
       return uri;
     });
-    const operation = track(client.withLiveEncryptedRoom(roomId, send));
+    const operation = run(send);
     await vi.advanceTimersByTimeAsync(0);
     expect(send).not.toHaveBeenCalled();
     sdk.emit(ClientEvent.Sync, SyncState.Catchup, SyncState.Prepared);

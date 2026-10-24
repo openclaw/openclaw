@@ -40,6 +40,7 @@ function fixture(patch: Partial<ControlUiChannelSettingsSnapshot> = {}) {
     mountConfig: vi.fn(() => configDispose),
     refresh: vi.fn().mockResolvedValue(undefined),
     formatRelativeTimestamp: () => "recently",
+    formatPhoneNumber: (phone) => phone,
     formatError: String,
     formatExternalText: String,
     confirm: vi.fn<NonNullable<SettingsContext["confirm"]>>().mockResolvedValue(false),
@@ -121,6 +122,43 @@ it("uses the declared default account for configured fallback and keeps absent s
   expect(f.container.querySelector(".settings-count")).toBeNull();
 });
 
+it("retains fact rows across status refreshes, phone insertion, and locale changes", () => {
+  const f = fixture();
+  const facts = () => [...f.container.querySelectorAll("dt")];
+  const original = facts();
+  const values = original.map((row) => row.nextElementSibling);
+  f.update({ status: { configured: true, running: true } });
+  for (const [index, row] of facts().entries()) {
+    expect(row).toBe(original[index]);
+    expect(row.nextElementSibling).toBe(values[index]);
+  }
+  f.expectFacts({ Configured: "Yes", Running: "Yes" });
+
+  f.update({ status: { configured: true, running: true, self: { e164: "+15555550123" } } });
+  const withPhone = facts();
+  expect(withPhone[2]?.nextElementSibling?.textContent).toBe("+15555550123");
+  for (const [index, row] of original.entries()) {
+    expect(withPhone[index < 2 ? index : index + 1]).toBe(row);
+    expect(row.nextElementSibling).toBe(values[index]);
+  }
+  const phone = withPhone[2];
+  const phoneValue = phone?.nextElementSibling;
+  const labels = withPhone.map((row) => row.textContent);
+  f.update({ locale: "de" });
+  expect(facts().map((row) => row.textContent)).not.toEqual(labels);
+  for (const [index, row] of facts().entries()) {
+    expect(row).toBe(withPhone[index]);
+  }
+  expect(phone?.nextElementSibling).toBe(phoneValue);
+
+  f.update({ status: { configured: true, running: true } });
+  expect(phone?.isConnected).toBe(false);
+  for (const [index, row] of facts().entries()) {
+    expect(row).toBe(original[index]);
+    expect(row.nextElementSibling).toBe(values[index]);
+  }
+});
+
 it("requires the operator's confirmation before invoking the captured account logout", async () => {
   const f = fixture();
   f.button("Logout").click();
@@ -139,6 +177,43 @@ it("requires the operator's confirmation before invoking the captured account lo
   expect(f.logout).not.toHaveBeenCalled();
   decision.resolve(true);
   await vi.waitFor(() => expect(f.logout).toHaveBeenCalledOnce());
+});
+
+it("ignores a superseded refresh failure and keeps command errors retryable", async () => {
+  const f = fixture();
+  const older = createDeferred<void>();
+  const newer = createDeferred<void>();
+  f.refresh.mockReturnValueOnce(older.promise).mockReturnValueOnce(newer.promise);
+  const refresh = f.button("Refresh");
+  refresh.click();
+  refresh.click();
+  newer.resolve();
+  await newer.promise;
+  older.reject(new Error("Superseded refresh failed"));
+  await older.promise.catch(() => undefined);
+  flush();
+  expect(f.container.textContent).not.toContain("Superseded refresh failed");
+
+  f.refresh.mockRejectedValueOnce(new Error("Current refresh failed"));
+  refresh.click();
+  await vi.waitFor(() => {
+    flush();
+    expect(f.container.textContent).toContain("Current refresh failed");
+  });
+  const retry = createDeferred<void>();
+  f.refresh.mockReturnValueOnce(retry.promise);
+  refresh.click();
+  flush();
+  expect(f.container.textContent).not.toContain("Current refresh failed");
+  expect(f.button("Refresh")).toBe(refresh);
+  retry.resolve();
+  await retry.promise;
+  flush();
+  expect(f.container.textContent).not.toContain("Current refresh failed");
+  f.update({ status: { lastError: "Gateway is disconnected" } });
+  expect(f.container.querySelector(".settings-row__desc")?.textContent).toBe(
+    "Gateway is disconnected",
+  );
 });
 
 it("updates translated labels and disposes the host configuration slot without resetting login", () => {

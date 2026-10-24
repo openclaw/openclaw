@@ -197,6 +197,37 @@ describe("Team-scale Gateway fixture", () => {
     expect(secondPage).toMatchObject({ offset: 200, nextOffset: null, hasMore: false });
   });
 
+  it("keeps persistent child details outside both boot root windows", () => {
+    const fixture = createControlUiTeamScaleFixture({ now, sidebarPersistentChildren: true });
+    const { parentKey, childKeys } = fixture.sidebarPersistentChildren!;
+    const owner = createTeamScaleSidebarListOwner(fixture.sidebarListInput);
+    const roots = [
+      owner.list({ rowMode: "sidebar", limit: 200, ownerFirst: true }).result,
+      owner.list({ rowMode: "sidebar", limit: 200, involvingMe: true }).result,
+    ];
+    expect(childKeys).toHaveLength(4);
+    for (const root of roots) {
+      expect(root.sessions.some((row) => row.key === parentKey)).toBe(true);
+      expect(root.sessions.some((row) => childKeys.includes(row.key))).toBe(false);
+    }
+    const children = owner.list({ spawnedBy: parentKey, limit: 100 }).result;
+    expect(children.sessions.map((row) => row.key)).toEqual(childKeys);
+    expect(children.sessions.every((row) => !row.key.includes(":subagent:"))).toBe(true);
+  });
+
+  it("keeps an off-roster deep-link target outside both boot windows and pins", () => {
+    const fixture = createControlUiTeamScaleFixture({ now, offRosterSession: true });
+    const owner = createTeamScaleSidebarListOwner(fixture.sidebarListInput);
+    for (const query of [{ ownerFirst: true }, { involvingMe: true }]) {
+      const result = owner.list({ rowMode: "sidebar", limit: 200, ...query }).result;
+      expect(result.sessions.some((row) => row.key === fixture.selectedSessionKey)).toBe(false);
+    }
+    expect(fixture.pinnedKeys).not.toContain(fixture.selectedSessionKey);
+    expect(fixture.scenario.sessions?.some((row) => row.key === fixture.selectedSessionKey)).toBe(
+      true,
+    );
+  });
+
   it("projects real row modes and bounds transcript enrichment without changing row identity on reread", () => {
     const fixture = createControlUiTeamScaleFixture({ now });
     const owner = createTeamScaleSidebarListOwner(fixture.sidebarListInput);

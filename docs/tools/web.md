@@ -100,6 +100,9 @@ configured tools continue to read current credentials at execution time.
 
 ## Choosing a provider
 
+`tools.web.search.provider` is matched case-insensitively and ignores surrounding
+whitespace. For example, `SearXNG` selects the existing `searxng` provider.
+
 <CardGroup cols={2}>
   <Card title="Brave Search" icon="shield" href="/tools/brave-search">
     Structured results with snippets. Supports `llm-context` mode, country/language filters. Free tier available.

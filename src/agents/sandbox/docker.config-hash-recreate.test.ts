@@ -511,10 +511,8 @@ describe("ensureSandboxContainer recreation and managed mounts", () => {
     cfg.docker.workdir = "/workspace/.";
     cfg.docker.dangerouslyAllowExternalBindSources = true;
     prepareCreation();
-
     const createCall = await createPodman(cfg, workspaceDir);
     const bindArgs = collectDockerFlagValues(createCall.args, "-v");
-
     expect(createCall.command).toBe("podman");
     expect(bindArgs).not.toContain(customMount);
     expect(bindArgs).toContain(`${path.join(workspaceDir, "skills")}:/workspace/skills:ro,z`);

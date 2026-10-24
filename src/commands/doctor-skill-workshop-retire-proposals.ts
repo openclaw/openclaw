@@ -15,6 +15,7 @@ import { isPathInside } from "../infra/path-guards.js";
 import { isPostgresSqlConnection } from "../infra/sql-connection.js";
 import type { MigrationMessages } from "../infra/state-migrations.types.js";
 import { isUpdateRehearsalReadOnlyPath } from "../infra/update-rehearsal-paths.js";
+import { decodeUtf8Input } from "../infra/utf8-input.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import {
   prepareWorkspaceSkillRestoration,
@@ -297,7 +298,9 @@ async function appendLegacyJsonProposals(params: {
         ...readOptions,
         maxBytes: MAX_EXPORT_FILE_BYTES,
       });
-      const record: unknown = JSON.parse(read.buffer.toString("utf8"));
+      const record: unknown = JSON.parse(
+        decodeUtf8Input(read.buffer, `Skill Workshop proposal ${entry.name}`),
+      );
       if (!isRecord(record) || typeof record.status !== "string") {
         throw new Error("proposal record has no status");
       }
@@ -314,7 +317,9 @@ async function appendLegacyJsonProposals(params: {
             throw error;
           });
         if (rollback) {
-          const facts: unknown = JSON.parse(rollback.buffer.toString("utf8"));
+          const facts: unknown = JSON.parse(
+            decodeUtf8Input(rollback.buffer, `Skill Workshop rollback ${entry.name}`),
+          );
           if (!isRecord(facts)) {
             throw new Error("rollback is not an object");
           }

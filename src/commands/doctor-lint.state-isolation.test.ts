@@ -601,7 +601,7 @@ describe("doctor lint state isolation", () => {
             const findings = JSON.parse(String(stdout.mock.calls.at(-1)?.[0])).findings;
             expect(isolated).toBe(true);
             expect(findings).toEqual(
-              exists ? [] : [expect.objectContaining({ severity: "error", path: credentials })],
+              exists ? [] : [expect.objectContaining({ severity: "warning", path: credentials })],
             );
             expect(fs.existsSync(credentials)).toBe(exists);
           } finally {
@@ -884,7 +884,11 @@ describe("doctor lint state isolation", () => {
     await withOpenClawTestState({ prefix: "openclaw-doctor-lint-oauth-" }, async (state) => {
       await state.writeConfig({});
       const identity = operatorMcpOAuthIdentity("oauth-proof", "https://mcp.example.test/rpc");
-      await seedDoctorLintMcpToken(identity);
+      // Fresh stored tokens are read without the flow lease; an expired one must refresh under it.
+      await seedDoctorLintMcpToken(identity, {
+        expires_in: -1,
+        refresh_token: "stored-inspection-refresh-not-real",
+      });
       const databasePath = resolveOpenClawStateSqlitePath(state.env);
       await closeOpenClawStateDatabaseByPathAsync(databasePath);
       const lock = new DatabaseSync(databasePath);

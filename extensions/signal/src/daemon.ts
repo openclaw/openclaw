@@ -17,20 +17,6 @@ import {
 } from "./daemon-env.js";
 import { prepareSignalSocketPath } from "./socket-path.js";
 
-type SignalDaemonOpts = {
-  cliPath: string;
-  configPath?: string;
-  account?: string;
-  httpHost: string;
-  httpPort: number;
-  socketPath?: string;
-  receiveMode?: "on-start" | "manual";
-  ignoreAttachments?: boolean;
-  ignoreStories?: boolean;
-  sendReadReceipts?: boolean;
-  runtime?: RuntimeEnv;
-};
-
 export type SignalDaemonHandle = {
   stop: () => Promise<void>;
   exited: Promise<SignalDaemonExitEvent>;
@@ -197,7 +183,19 @@ function resolveSignalCliConfigPath(raw: string): string {
   return value;
 }
 
-function buildDaemonArgs(opts: SignalDaemonOpts): string[] {
+export function spawnSignalDaemon(opts: {
+  cliPath: string;
+  configPath?: string;
+  account?: string;
+  httpHost: string;
+  httpPort: number;
+  socketPath?: string;
+  receiveMode?: "on-start" | "manual";
+  ignoreAttachments?: boolean;
+  ignoreStories?: boolean;
+  sendReadReceipts?: boolean;
+  runtime?: RuntimeEnv;
+}): SignalDaemonHandle {
   const args: string[] = [];
   if (opts.configPath?.trim()) {
     args.push("--config", resolveSignalCliConfigPath(opts.configPath));
@@ -229,11 +227,6 @@ function buildDaemonArgs(opts: SignalDaemonOpts): string[] {
     args.push("--send-read-receipts");
   }
 
-  return args;
-}
-
-export function spawnSignalDaemon(opts: SignalDaemonOpts): SignalDaemonHandle {
-  const args = buildDaemonArgs(opts);
   warnSignalDaemonDroppedEnvOnce();
   // The executable is operator-selected or setup-discovered signal-cli.
   // Runtime message content only flows through the daemon HTTP API, not argv.

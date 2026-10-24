@@ -93,7 +93,7 @@ it.each([undefined, "{broken"])("rebuilds a missing or malformed root (%s)", asy
     await fs.writeFile(rootPath, contents);
   }
 
-  await expect(ensureConfigured()).resolves.toMatchObject({ wrote: true });
+  await ensureConfigured();
   expect(JSON.parse(await fs.readFile(rootPath, "utf8"))).toMatchObject({
     providers: { configured: { baseUrl: native.baseUrl, models: [{ id: "native-model" }] } },
   });

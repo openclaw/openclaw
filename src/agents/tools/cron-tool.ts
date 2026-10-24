@@ -30,7 +30,7 @@ import { CRON_TOOL_DISPLAY_SUMMARY } from "../tool-description-presets.js";
 import { withToolEffectBoundary } from "../tool-effect-receipt.js";
 import { bindAgentToolReplaySafety } from "../tool-replay-safety.js";
 import { setToolTerminalPresentation } from "../tool-terminal-presentation.js";
-import { AUTOMATIONS_TOOL_NAME } from "./automations-tool-name.js";
+import { AUTOMATIONS_TOOL_NAME, CRON_SCOPED_READ_ACTIONS } from "./automations-tool-name.js";
 import {
   type AnyAgentTool,
   jsonResult,
@@ -62,7 +62,6 @@ import { formatCronTerminalPresentation } from "./cron-tool-presentation.js";
 import {
   assertCronPacingInput,
   createCronToolSchema,
-  CRON_SCOPED_READ_ACTIONS,
   CRON_TOOL_LIST_MAX_LIMIT,
 } from "./cron-tool-schema.js";
 import { listCronSelfJob } from "./cron-tool-self-list.js";

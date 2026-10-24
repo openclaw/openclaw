@@ -40,7 +40,10 @@ import { abortChatRunById } from "./chat-abort.js";
 import { createGatewayServerActiveWorkInspectors } from "./server-active-work.js";
 import type { AgentEventHandlerOptions } from "./server-chat.js";
 import { GatewayConnectionWork } from "./server-connection-work.js";
-import { registerActivitySummaryPublicationTests } from "./server-runtime-subscriptions.activity-summary.test-support.js";
+import {
+  registerActivitySummaryPublicationTests,
+  registerActivitySummaryRunTests,
+} from "./server-runtime-subscriptions.activity-summary.test-support.js";
 import { registerSessionPublicationTests } from "./server-runtime-subscriptions.publication.test-support.js";
 import {
   createSubscriptionTestFixture,
@@ -103,7 +106,8 @@ vi.mock("./session-activity-summaries.js", async (importOriginal) => {
   };
 });
 
-vi.mock("../config/io.js", () => ({
+vi.mock("../config/io.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../config/io.js")>()),
   getRuntimeConfig: () => runtimeConfigState.value,
 }));
 
@@ -989,6 +993,7 @@ describe("startGatewayEventSubscriptions", () => {
     runtimeConfigState,
     warn,
   };
+  registerActivitySummaryRunTests(publicationFixture);
   registerSessionPublicationTests(publicationFixture);
   registerTranscriptScopePublicationTests(publicationFixture);
 
