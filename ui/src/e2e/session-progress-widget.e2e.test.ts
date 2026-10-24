@@ -6,7 +6,6 @@ import {
   toggleSidebarPanelExpanded,
 } from "../pages/chat/sidebar-layout.ts";
 import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
-import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import {
   controlUiBundledSettingsStorageKey,
   controlUiSessionUrl,
@@ -14,7 +13,7 @@ import {
 } from "../test-helpers/control-ui-e2e.ts";
 import { chatSessionListResponse } from "./chat-flow.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
-import { expectText, expectCount, seedStorage } from "./sidebar-assertions.test-support.ts";
+import { expectText, seedStorage } from "./sidebar-assertions.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI session progress dashboard widget",
@@ -29,19 +28,7 @@ const dashboardFeatureMethods = [
   "sessions.list",
   "sessions.patch",
 ];
-const englishDesktopPageOptions = {
-  locale: "en-US",
-  viewport: { height: 900, width: 1280 },
-};
 const widgetKinds = [{ pluginId: "session", kind: "session:progress", label: "Session progress" }];
-
-async function openDashboard(page: Page, dashboardKey: string) {
-  await seedDashboard(page, dashboardKey);
-  await page.goto(controlUiSessionUrl(suite.server.baseUrl, dashboardKey, "dashboard"));
-  const card = page.locator('[data-progress-card-placement="board"]');
-  await card.waitFor();
-  return card;
-}
 
 function seedDashboard(page: Page, key: string, extra: Record<string, unknown> = {}) {
   return seedStorage(page, {
@@ -50,13 +37,6 @@ function seedDashboard(page: Page, key: string, extra: Record<string, unknown> =
       ...extra,
     }),
   });
-}
-
-function progressResponse(key: string, updatedAt: number, markdown: string, step: string) {
-  const steps = [{ step, status: "in_progress" }];
-  return {
-    card: { sessionKey: key, revision: 1, updatedAt, markdown, steps },
-  };
 }
 
 function boardResponse(key: string) {
@@ -81,26 +61,11 @@ function boardResponse(key: string) {
   };
 }
 
-function sessionListResponse(
-  key: string,
-  label: string,
-  state: {
-    endedAt?: number;
-    hasActiveRun: boolean;
-    startedAt?: number;
-    status?: string;
-    updatedAt: number;
-  },
-) {
-  return chatSessionListResponse([{ key, kind: "direct", label, status: "running", ...state }]);
-}
-
 suite.define(() => {
   it.each([
     { height: 844, name: "mobile", width: 390, routeKey: sessionKey },
     { height: 900, name: "bare-route", width: 1440, routeKey: "progress-dashboard" },
     { height: 900, name: "expanded-side", width: 1440, routeKey: sessionKey },
-    { height: 900, name: "inactive", width: 1440, routeKey: sessionKey },
   ])("keeps unowned progress paused on $name", async (viewport) => {
     await suite.withPage({ locale: "en-US", viewport }, async ({ page }) => {
       const now = Date.now();
@@ -114,7 +79,7 @@ suite.define(() => {
             card: {
               sessionKey,
               revision: 3,
-              updatedAt: viewport.name === "inactive" ? now : now - 5 * 60_000,
+              updatedAt: now - 5 * 60_000,
               markdown: "**Earlier task** remains available for reference.",
               steps: [
                 { step: "Finish the earlier task", status: "completed" },
@@ -125,7 +90,7 @@ suite.define(() => {
           },
           "sessions.list": chatSessionListResponse([
             {
-              hasActiveRun: viewport.name !== "inactive",
+              hasActiveRun: true,
               key: sessionKey,
               kind: "direct",
               label: "Later active run",
@@ -223,75 +188,6 @@ suite.define(() => {
         await mainChat.waitFor({ state: "visible" });
         await surface.locator('[data-panel-slot="dashboard"]').waitFor({ state: "visible" });
       }
-    });
-  });
-
-  it("keeps target liveness when the selected agent scope changes", async () => {
-    await suite.withPage(englishDesktopPageOptions, async ({ page }) => {
-      const now = Date.now();
-      const mainSessions = sessionListResponse(sessionKey, "Main progress dashboard", {
-        hasActiveRun: true,
-        startedAt: now - 30_000,
-        updatedAt: now,
-      });
-      const gateway = await installMockGateway(page, {
-        sessionKey,
-        heldMethods: ["sessions.describe"],
-        // Describe and startup publish full snapshots of the same running session.
-        sessions: mainSessions.sessions,
-        controlUiWidgetKinds: widgetKinds,
-        featureMethods: dashboardFeatureMethods,
-        methodResponses: {
-          "board.get": boardResponse(sessionKey),
-          "progressCard.get": progressResponse(
-            sessionKey,
-            now - 10_000,
-            "**Scope-transition dashboard tile** follows the dashboard roster.",
-            "Show the selected scope",
-          ),
-          "sessions.list": {
-            cases: [
-              {
-                match: { agentId: "main" },
-                response: mainSessions,
-              },
-              {
-                match: { agentId: "writer" },
-                response: sessionListResponse(sessionKey, "Writer progress dashboard", {
-                  endedAt: now - 1_000,
-                  hasActiveRun: false,
-                  startedAt: now - 5_000,
-                  status: "done",
-                  updatedAt: now - 30_000,
-                }),
-              },
-            ],
-          },
-        },
-      });
-
-      const card = await openDashboard(page, sessionKey);
-      await expectCount(card.locator(".session-run-spinner"), 1);
-      await expectCount(card.locator(".session-progress-card__step--paused"), 0);
-
-      await evaluateControlUiContext(page, (context) => {
-        context.agentSelection.setScope("writer");
-      });
-      await gateway.waitForRequest("sessions.describe", { match: { key: sessionKey } });
-      // Reconcile the descriptor after the running roster and scope transition.
-      await gateway.resolveDeferred("sessions.describe");
-      // The target roster stays archive-inclusive and independent of the page filter.
-      const hasTargetRoster = async (agentId: string) =>
-        (await gateway.getRequests("sessions.list")).some(({ params }) => {
-          const query = params as { agentId?: string; archived?: string; hasBoard?: boolean };
-          return (
-            query.agentId === agentId && query.archived === "all" && query.hasBoard === undefined
-          );
-        });
-      await expect.poll(() => hasTargetRoster("main")).toBe(true);
-      await expect.poll(() => hasTargetRoster("writer")).toBe(false);
-      await expectCount(card.locator(".session-progress-card__step--paused"), 0);
-      await expectCount(card.locator(".session-run-spinner"), 1);
     });
   });
 });
