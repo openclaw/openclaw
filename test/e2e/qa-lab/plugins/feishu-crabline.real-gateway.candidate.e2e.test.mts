@@ -127,7 +127,9 @@ it("joins two native Feishu accounts through the real Gateway with raw rendering
   };
   await wait(() => accounts.every((account) => stage(account, "websocket.connected").length === 1));
   await entryObservation.verify(gateway.pid, builtEntryHash);
-  expect(await fileHash(builtEntry)).toBe(builtEntryHash);
+  const entryHash = await fileHash(builtEntry);
+  expect(entryHash).toBe(builtEntryHash);
+  const sourceHash = await fileHash(path.join(repoRoot, "extensions/feishu/index.ts"));
   const { cursor } = await json<{ cursor: number }>(`${mock.baseUrl}/debug/request-cursor`, signal);
   const replies = ["中文回复甲", "中文回复乙"];
   for (const [index, account] of accounts.entries()) {
@@ -197,4 +199,32 @@ it("joins two native Feishu accounts through the real Gateway with raw rendering
       `中文入口 ${account === "alpha" ? "beta" : "alpha"}`,
     );
   }
+  // Native loader bytes establish identity; the replies above prove execution.
+  console.log(
+    JSON.stringify({
+      proof: "feishu-native-gateway-candidate",
+      renderMode: "raw",
+      typingIndicator: false,
+      archiveSha256: process.env.CRABLINE_CANDIDATE_ARCHIVE_SHA256,
+      packageSha256: process.env.CRABLINE_CANDIDATE_PACKAGE_SHA256,
+      feishuEntrySha256: entryHash,
+      feishuBuiltEntrySha256: builtEntryHash,
+      feishuSourceSha256: sourceHash,
+      accounts: accounts.map((account) => ({
+        account,
+        admitted: stage(account, "inbound.admitted").length,
+        ack200: stage(account, "sdk.ack").length,
+        nativePosts: stage(account, "outbound.accepted").length,
+      })),
+      unqualified: [
+        "default-cardkit",
+        "typing",
+        "webhook",
+        "media",
+        "cancellation",
+        "published-consumer",
+        "live-account",
+      ],
+    }),
+  );
 }, 180_000);
