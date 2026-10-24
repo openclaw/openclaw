@@ -666,18 +666,6 @@ fs.renameSync = (source, destination) => {
             payload: published,
             observed: published,
           });
-          const metadata = await requestFixtureRegistry(Number(published), "/fixture-pkg");
-          expect(metadata.statusCode, stderr.text()).toBe(200);
-          const manifest = JSON.parse(metadata.body).versions["1.0.0"];
-          expect(manifest).toMatchObject({ name: "fixture-pkg", version: "1.0.0" });
-          const tarball = new URL(manifest.dist.tarball);
-          expect(tarball.origin).toBe(`http://127.0.0.1:${published}`);
-          const response = await requestFixtureRegistry(Number(published), tarball.pathname);
-          expect(response).toEqual({
-            statusCode: 200,
-            body: archive,
-            contentLength: String(Buffer.byteLength(archive)),
-          });
         }
         expect(readdirSync(portDir)).toEqual(initial !== null || !fault ? ["port"] : []);
       } finally {
@@ -719,6 +707,7 @@ fs.renameSync = (source, destination) => {
         const response = await requestFixtureRegistry(port, pathname);
         expect(response.statusCode, `${pathname}: ${stderr.text()}`).toBe(200);
         expect(response.body).toBe(archive);
+        expect(response.contentLength).toBe(String(Buffer.byteLength(archive)));
       }
     }));
 

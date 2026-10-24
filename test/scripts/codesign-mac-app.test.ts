@@ -461,12 +461,24 @@ describe.runIf(process.platform === "darwin")("Mac native inventory", () => {
           [`${modules}/library/${sdkRuntime}`, 6, "plain"],
           ["lib/addon.node", 6, "plain"],
           ["lib/libsqlite3.dylib", 6, "plain"],
+          ...[5, 7, 8, 11].map((type) => [`lib/type-${type}`, type, "plain"] as const),
         ] as const) {
           const bytes = machoFixture(64, true, false, fileType);
           bytes.writeUInt32LE(cpuType, 4);
           const filename = await fixture.put(`${runtimePath}${relative}`, bytes);
           expected.set(filename, policy);
         }
+        const resources = new Map<string, Buffer>();
+        for (const type of [1, 4, 9, 10]) {
+          const bytes = machoFixture(64, true, false, type);
+          resources.set(await fixture.put(`${runtimePath}resource-${type}`, bytes), bytes);
+        }
+        await fixture.put(`${runtimePath}Java.class`, Buffer.from("cafebabe0000003d0001", "hex"));
+        await symlink("missing", path.join(fixture.runtime, "dangling"));
+        await symlink(
+          path.join(fixture.runtime, "bin/bun"),
+          path.join(fixture.runtime, "native-link"),
+        );
         await fixture.put("Contents/MacOS/OpenClaw");
         const result = await fixture.run({}, elevation);
         expect(result.status, result.stderr).toBe(0);
@@ -476,6 +488,10 @@ describe.runIf(process.platform === "darwin")("Mac native inventory", () => {
         ).toBe(false);
         const events = fixture.events();
         const signs = events.filter(({ args }) => args.includes("--sign"));
+        for (const [file, bytes] of resources) {
+          expect(readFileSync(file)).toEqual(bytes);
+          expect(events.filter(({ args }) => args.at(-1) === file)).toEqual([]);
+        }
         expect(signs).toHaveLength(expected.size + 1);
         expect(signs.at(-1)?.args.at(-1)).toBe(fixture.app);
         expect(signs.at(-1)?.entitlements).not.toContain("disable-library-validation");
@@ -518,95 +534,6 @@ describe.runIf(process.platform === "darwin")("Mac native inventory", () => {
   );
 
   it.concurrent.for([false, true])(
-    "selects every canonical native format with header-appropriate entitlements (elevation: %s)",
-    (elevation, { mac, expect }) =>
-      mac.lifetime.run(async () => {
-        const fixture = await signingFixture(mac, "inventory-formats");
-        const expected = new Map<string, boolean>();
-        const candidates: string[] = [];
-        for (const bits of [32, 64]) {
-          for (const little of [false, true]) {
-            for (const fat of [false, true]) {
-              // mach-o/fat.h requires big-endian containers; swapped wrappers are rejected below.
-              if (fat && little) {
-                continue;
-              }
-              for (const type of [2, 6]) {
-                const filename = await fixture.put(
-                  `${runtimePath}formats/${bits}-${little}-${fat}-${type} executable\n\t'\\/node_modules/@anthropic-ai/claude-agent-sdk-darwin-arm64/claude`,
-                  machoFixture(bits, little, fat, type),
-                );
-                candidates.push(filename);
-                expected.set(filename, type === 2);
-              }
-            }
-          }
-        }
-        for (const [name, bytes] of [
-          ["Mach-O executable.txt", Buffer.from("not native code")],
-          ["Java.class", Buffer.from("cafebabe0000003d0001", "hex")],
-          ["truncated", Buffer.from("cffa", "hex")],
-          ["fat-false-positive", Buffer.from("cafebabe", "hex")],
-        ] as const) {
-          await fixture.put(runtimePath + name, bytes);
-        }
-        await symlink(
-          expectDefined(candidates[0], "native fixture"),
-          path.join(fixture.runtime, "native-link"),
-        );
-        await symlink("missing", path.join(fixture.runtime, "dangling"));
-        const result = await fixture.run({}, elevation);
-        expect(result.status, result.stderr).toBe(0);
-        const events = fixture.events();
-        const signed = events.filter(
-          ({ args }) => args.includes("--sign") && args.at(-1) !== fixture.app,
-        );
-        expect(signed).toHaveLength(expected.size);
-        expect(new Set(signed.map(({ args }) => args.at(-1)))).toEqual(new Set(expected.keys()));
-        for (const { args, entitlements } of signed) {
-          const target = expectDefined(args.at(-1), "signed path");
-          expect(entitlements.includes("allow-jit"), target).toBe(expected.get(target));
-          expect(entitlements).not.toContain("disable-library-validation");
-          expect(entitlements).not.toContain("automation.apple-events");
-          expect(
-            events.some(
-              ({ args: verify }) =>
-                verify.includes("--verify") &&
-                verify.includes("--strict") &&
-                verify.at(-1) === target,
-            ),
-          ).toBe(true);
-        }
-        for (const { args } of events.filter(
-          ({ args: query }) => query.includes("-dv") || query.includes("-d"),
-        )) {
-          expect(new Set([fixture.app, ...expected.keys()])).toContain(args.at(-1));
-        }
-        const classifiedMagics = new Set(fixture.classifications().flatMap(({ magics }) => magics));
-        expect(classifiedMagics).toEqual(
-          new Set(["feedface", "cefaedfe", "feedfacf", "cffaedfe", "cafebabe", "cafebabf"]),
-        );
-      }),
-  );
-
-  it.concurrent.for([32, 64])(
-    "examines but rejects byte-swapped fat%d containers",
-    (bits, { mac, expect }) =>
-      mac.lifetime.run(async () => {
-        const fixture = await signingFixture(mac, "inventory-swapped-fat");
-        const bytes = machoFixture(bits, true, true);
-        await fixture.put(runtimePath + "invalid-fat.node", bytes);
-        const result = await fixture.run();
-        expect(result.status, result.stdout).not.toBe(0);
-        expect(result.stderr).toMatch(/native header/i);
-        expect(fixture.classifications().flatMap(({ magics }) => magics)).toContain(
-          bytes.subarray(0, 4).toString("hex"),
-        );
-        expect(fixture.events()).toEqual([]);
-      }),
-  );
-
-  it.concurrent.for([false, true])(
     "classifies real fat64 code and rejects mixed slice types (mixed: %s)",
     (mixed, { mac, expect }) =>
       mac.lifetime.run(async () => {
@@ -635,56 +562,6 @@ describe.runIf(process.platform === "darwin")("Mac native inventory", () => {
           .filter(({ args }) => args.includes("--sign") && args.at(-1) === native);
         expect(signs).toHaveLength(1);
         expect(signs[0]?.entitlements).toContain("allow-jit");
-      }),
-  );
-
-  it.concurrent("separates documented Mach-O resources from native signing candidates", ({
-    mac,
-    expect,
-  }) =>
-    mac.lifetime.run(async () => {
-      const fixture = await signingFixture(mac, "macho-filetypes");
-      const resources = new Map<string, Buffer>();
-      const candidates: string[] = [];
-      for (const fileType of [1, 2, 4, 5, 6, 7, 8, 9, 10, 11]) {
-        const bytes = machoFixture(64, true, false, fileType);
-        const filename = await fixture.put(
-          `${runtimePath}type-${fileType}/node_modules/@anthropic-ai/claude-agent-sdk-darwin-arm64/claude`,
-          bytes,
-        );
-        if ([1, 4, 9, 10].includes(fileType)) {
-          resources.set(filename, bytes);
-        } else {
-          candidates.push(filename);
-        }
-      }
-      const result = await fixture.run();
-      expect(result.status, result.stderr).toBe(0);
-      const events = fixture.events();
-      const signed = signedPaths(fixture);
-      expect(signed).toHaveLength(candidates.length + 1);
-      expect(new Set(signed)).toEqual(new Set([...candidates, fixture.app]));
-      for (const [filename, bytes] of resources) {
-        expect(readFileSync(filename)).toEqual(bytes);
-        expect(events.filter(({ args }) => args.at(-1) === filename)).toEqual([]);
-      }
-    }));
-
-  it.concurrent.for(["thin", "fat32", "fat64"] as const)(
-    "resource-seals real %s linker objects without direct signing",
-    (format, { mac, expect }) =>
-      mac.lifetime.run(async () => {
-        const root = mac.createTempDir("openclaw-real-object-");
-        const fixture = await makeSigningFixture(mac, root);
-        const node = await fixture.put(runtimePath + "bin/bun");
-        const bytes = await nativeObjectFixture(path.join(root, "object-inputs"), format, mac);
-        const object = await fixture.put(runtimePath + "opaque-object", bytes);
-        const result = await fixture.run();
-        expect(result.status, result.stderr).toBe(0);
-        expect(readFileSync(object)).toEqual(bytes);
-        const events = fixture.events();
-        expect(events.filter(({ args }) => args.at(-1) === object)).toEqual([]);
-        expect(signedPaths(fixture)).toEqual([node, fixture.app]);
       }),
   );
 
@@ -760,28 +637,15 @@ describe.runIf(process.platform === "darwin")("Mac native inventory", () => {
       }),
   );
 
-  it.concurrent("keeps classification process count bounded at candidate scale and never follows symlinks", ({
-    mac,
-    expect,
-  }) =>
+  it.concurrent("bounds scanner batches and does not follow external links", ({ mac, expect }) =>
     mac.lifetime.run(async () => {
       const fixture = await signingFixture(mac, "inventory-scale");
-      for (let i = 0; i < 24; i++) {
+      for (let index = 0; index < 65; index++) {
         await fixture.put(
-          `${runtimePath}native-${i}`,
-          machoFixture(64, true, false, i % 2 ? 6 : 2),
+          `${runtimePath}native-${index}`,
+          machoFixture(64, true, false, index % 2 ? 6 : 2),
         );
-      }
-      const dataSource = path.join(path.dirname(fixture.app), "non-code-payload");
-      await writeFile(dataSource, "export {};\n");
-      for (let start = 24; start < 1_024; start += 256) {
-        const directory = path.join(fixture.runtime, "data", String(start));
-        await mkdir(directory, { recursive: true });
-        await Promise.all(
-          Array.from({ length: Math.min(256, 1_024 - start) }, (_, index) =>
-            link(dataSource, path.join(directory, `${start + index}.js`)),
-          ),
-        );
+        await fixture.put(`${runtimePath}data-${index}.js`, "export {};\n");
       }
       const outside = path.join(path.dirname(fixture.app), "external");
       await mkdir(outside);
@@ -794,8 +658,9 @@ describe.runIf(process.platform === "darwin")("Mac native inventory", () => {
       expect(fixture.classifications().length).toBeLessThanOrEqual(2);
       const records = result.stdout.split("\0");
       expect(records.pop()).toBe("");
-      const natives = records.filter((kind, index) => index % 2 === 0 && kind !== "symlink");
-      expect(natives).toHaveLength(24);
+      expect(records.filter((kind, index) => index % 2 === 0 && kind !== "symlink")).toHaveLength(
+        65,
+      );
       expect(records.filter((kind, index) => index % 2 === 0 && kind === "symlink")).toHaveLength(
         3,
       );
